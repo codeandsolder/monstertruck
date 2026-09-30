@@ -246,7 +246,24 @@ struct ProjectedCurve<C> {
     revolution: Revolution,
 }
 
-impl<C: ParametricCurve3D> ParametricCurveTrait for ProjectedCurve<C> {
+impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
+    #[inline(always)]
+    fn fixed_endpoint_sign(&self, t: f64, point: Point3) -> Option<f64> {
+        if !self.revolution.proj_point(point).y.so_small() {
+            return None;
+        }
+        let (t0, t1) = self.curve.range_tuple();
+        if t.near(&t0) && self.revolution.contains(self.curve.front()) {
+            Some(1.0)
+        } else if t.near(&t1) && self.revolution.contains(self.curve.back()) {
+            Some(-1.0)
+        } else {
+            None
+        }
+    }
+}
+
+impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurve<C> {
     type Point = Point2;
     type Vector = Vector2;
     #[inline(always)]
@@ -262,16 +279,36 @@ impl<C: ParametricCurve3D> ParametricCurveTrait for ProjectedCurve<C> {
     fn evaluate(&self, t: f64) -> Self::Point { self.revolution.proj_point(self.curve.evaluate(t)) }
     #[inline(always)]
     fn derivative(&self, t: f64) -> Self::Vector {
-        self.revolution
-            .proj_vector(self.curve.evaluate(t), self.curve.derivative(t))
+        let point = self.curve.evaluate(t);
+        let derivative = self.curve.derivative(t);
+        if let Some(sign) = self.fixed_endpoint_sign(t, point) {
+            let axial = derivative.dot(self.revolution.axis);
+            let radial = derivative - axial * self.revolution.axis;
+            if !radial.so_small() {
+                return Vector2::new(axial, sign * radial.magnitude());
+            }
+        }
+        self.revolution.proj_vector(point, derivative)
     }
     #[inline(always)]
     fn derivative_2(&self, t: f64) -> Self::Vector {
-        self.revolution.proj_vector2(
-            self.curve.evaluate(t),
-            self.curve.derivative(t),
-            self.curve.derivative_2(t),
-        )
+        let point = self.curve.evaluate(t);
+        let derivative = self.curve.derivative(t);
+        let derivative_2 = self.curve.derivative_2(t);
+        if let Some(sign) = self.fixed_endpoint_sign(t, point) {
+            let axial = derivative.dot(self.revolution.axis);
+            let radial = derivative - axial * self.revolution.axis;
+            let radial_speed = radial.magnitude();
+            if !radial_speed.so_small() {
+                let axial_2 = derivative_2.dot(self.revolution.axis);
+                let radial_2 = derivative_2 - axial_2 * self.revolution.axis;
+                return Vector2::new(
+                    axial_2,
+                    sign * radial.dot(radial_2) / radial_speed,
+                );
+            }
+        }
+        self.revolution.proj_vector2(point, derivative, derivative_2)
     }
     #[inline(always)]
     fn parameter_range(&self) -> ParameterRange { self.curve.parameter_range() }

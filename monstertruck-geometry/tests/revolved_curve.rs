@@ -1,5 +1,5 @@
 use monstertruck_geometry::prelude::*;
-use std::f64::consts::PI;
+use std::f64::consts::{FRAC_PI_2, PI};
 
 #[test]
 fn revolve_test() {
@@ -121,6 +121,62 @@ fn search_nearest_parameter_with_fixed_points() {
         .search_nearest_parameter(Point3::new(0.0, -2.0, 0.0), Some((0.5, 0.3)), 10)
         .unwrap();
     assert_near!(Vector2::new(u, v), Vector2::new(1.0, 0.3));
+}
+
+#[test]
+fn search_parameter_near_back_fixed_axis_endpoint() {
+    let line = BsplineCurve::new(
+        KnotVector::bezier_knot(1),
+        vec![Point3::new(2.0, 0.0, 2.0), Point3::new(0.0, 0.0, 2.0)],
+    );
+    let surface =
+        RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let expected = (0.999_95, FRAC_PI_2);
+    let point = surface.subs(expected.0, expected.1);
+
+    let exact = surface
+        .search_parameter(point, Some((1.0, expected.1)), 100)
+        .expect("axis-endpoint seed must converge to the nearby on-surface point");
+    let nearest = surface
+        .search_nearest_parameter(point, Some((1.0, expected.1)), 100)
+        .expect("nearest search must not fail at an axis-endpoint seed");
+
+    assert_near!(
+        Vector2::new(exact.0, exact.1),
+        Vector2::new(expected.0, expected.1)
+    );
+    assert_near!(
+        Vector2::new(nearest.0, nearest.1),
+        Vector2::new(expected.0, expected.1)
+    );
+}
+
+#[test]
+fn search_parameter_near_front_fixed_axis_endpoint() {
+    let line = BsplineCurve::new(
+        KnotVector::bezier_knot(1),
+        vec![Point3::new(0.0, 0.0, 2.0), Point3::new(2.0, 0.0, 2.0)],
+    );
+    let surface =
+        RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let expected = (0.000_05, FRAC_PI_2);
+    let point = surface.subs(expected.0, expected.1);
+
+    let exact = surface
+        .search_parameter(point, Some((0.0, expected.1)), 100)
+        .expect("axis-endpoint seed must converge to the nearby on-surface point");
+    let nearest = surface
+        .search_nearest_parameter(point, Some((0.0, expected.1)), 100)
+        .expect("nearest search must not fail at an axis-endpoint seed");
+
+    assert_near!(
+        Vector2::new(exact.0, exact.1),
+        Vector2::new(expected.0, expected.1)
+    );
+    assert_near!(
+        Vector2::new(nearest.0, nearest.1),
+        Vector2::new(expected.0, expected.1)
+    );
 }
 
 #[test]
