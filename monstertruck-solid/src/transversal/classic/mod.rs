@@ -79,6 +79,29 @@ fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 /// Split one pair of shells into `[and_shell, or_shell]` (0.3.2 verbatim): build
 /// intersection loops, divide faces, classify each divided face as `and`/`or`,
 /// then ray-cast the remaining `unknown` faces against the other shell.
+fn point_in_oriented_shell(
+    shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    point: Point3,
+    direction: Vector3,
+) -> Option<bool> {
+    let volume = shell.to_polygon().volume();
+    if !volume.is_finite() || volume.so_small() {
+        return None;
+    }
+    let crossings = shell.iter().try_fold(0, |count, face| {
+        let mut polygon = face.surface()?;
+        if !face.orientation() {
+            polygon.invert();
+        }
+        Some(count + polygon.signed_crossing_faces(point, direction))
+    })?;
+    Some(if volume > 0.0 {
+        crossings >= 1
+    } else {
+        crossings == 0
+    })
+}
+
 fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell0: &Shell<Point3, C, S>,
     shell1: &Shell<Point3, C, S>,
@@ -106,11 +129,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     unknown0.into_iter().try_for_each(|face| {
         let pt = face.boundaries()[0].vertex_iter().next().unwrap().point();
         let dir = hash::take_one_unit(pt);
-        let count = poly_shell1.iter().try_fold(0, |count, face| {
-            let poly = face.surface()?;
-            Some(count + poly.signed_crossing_faces(pt, dir))
-        })?;
-        if count >= 1 {
+        if point_in_oriented_shell(&poly_shell1, pt, dir)? {
             and0.push(face);
         } else {
             or0.push(face);
@@ -121,11 +140,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     unknown1.into_iter().try_for_each(|face| {
         let pt = face.boundaries()[0].vertex_iter().next().unwrap().point();
         let dir = hash::take_one_unit(pt);
-        let count = poly_shell0.iter().try_fold(0, |count, face| {
-            let poly = face.surface()?;
-            Some(count + poly.signed_crossing_faces(pt, dir))
-        })?;
-        if count >= 1 {
+        if point_in_oriented_shell(&poly_shell0, pt, dir)? {
             and1.push(face);
         } else {
             or1.push(face);
