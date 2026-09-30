@@ -111,3 +111,34 @@ fn construct_polylines_positive3() {
         }
     }
 }
+
+#[test]
+fn duplicate_interference_segments_are_set_like() {
+    let a = Point3::new(0.0, 0.0, 0.0);
+    let b = Point3::new(1.0, 0.0, 0.0);
+
+    for lines in [vec![(a, b), (a, b)], vec![(a, b), (b, a)]] {
+        let polylines = construct_polylines(&lines);
+        assert_eq!(polylines.len(), 1);
+        assert_eq!(polylines[0].len(), 2);
+        let front = polylines[0][0];
+        let back = polylines[0][polylines[0].len() - 1];
+        assert!(
+            (front.near(&a) && back.near(&b)) || (front.near(&b) && back.near(&a)),
+            "deduplicated segment must preserve the two geometric endpoints"
+        );
+    }
+}
+
+#[test]
+fn duplicate_segment_does_not_turn_open_chain_into_closed_walk() {
+    let a = Point3::new(0.0, 0.0, 0.0);
+    let b = Point3::new(1.0, 0.0, 0.0);
+    let c = Point3::new(2.0, 0.0, 0.0);
+    let lines = vec![(a, b), (b, c), (c, b)];
+
+    let polylines = construct_polylines(&lines);
+    assert_eq!(polylines.len(), 1);
+    assert_eq!(polylines[0].len(), 3);
+    assert!(!polylines[0][0].near(&polylines[0][polylines[0].len() - 1]));
+}
