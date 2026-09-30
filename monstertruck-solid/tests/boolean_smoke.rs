@@ -97,3 +97,50 @@ fn cube_minus_column() -> Result<()> {
     let result = monstertruck_solid::difference(&cube, &column, TOL)?;
     assert_solid("cube minus square column", &result, 0.84)
 }
+
+/// Regression for a radial slot cut from a solid of revolution.
+///
+/// The cutter reaches the revolution axis and exits through the top end. This
+/// is the minimal form of the failure reported by downstream STEP recovery:
+/// the classic boolean pipeline used to classify every divided face out of the
+/// AND result and return `EmptyOutputShell`.
+#[test]
+fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
+    let vertices = builder::vertices([
+        Point3::new(0.0, 0.0, -2.0),
+        Point3::new(2.0, 0.0, -2.0),
+        Point3::new(2.0, 0.0, 2.0),
+        Point3::new(0.0, 0.0, 2.0),
+    ]);
+    let profile: Wire = vec![
+        builder::line(&vertices[0], &vertices[1]),
+        builder::line(&vertices[1], &vertices[2]),
+        builder::line(&vertices[2], &vertices[3]),
+        builder::line(&vertices[3], &vertices[0]),
+    ]
+    .into();
+    let profile: Face = builder::try_attach_plane(vec![profile])?;
+    let host: Solid = builder::revolve(
+        &profile,
+        Point3::origin(),
+        Vector3::unit_z(),
+        builder::SweepAngle::Closed,
+        2,
+    );
+
+    let cutter: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(0.0, -0.25, 1.0),
+        Point3::new(2.0001, 0.25, 2.0001),
+    ]));
+
+    let result = monstertruck_solid::difference(&host, &cutter, TOL)?;
+    anyhow::ensure!(
+        !result.boundaries().is_empty(),
+        "radial-slot difference returned an empty solid"
+    );
+    anyhow::ensure!(
+        result.is_geometric_consistent(),
+        "radial-slot difference returned inconsistent topology"
+    );
+    Ok(())
+}
