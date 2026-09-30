@@ -33,14 +33,32 @@ where
         if let Some(parameter) = surface.search_parameter(point, hint, 100) {
             return Some(parameter.into());
         }
-
         let parameter = surface.search_nearest_parameter(point, hint, 100)?;
         let projected = surface.evaluate(parameter.0, parameter.1);
-        (projected.distance2(point) <= tol * tol).then(|| parameter.into())
+        let distance2 = projected.distance2(point);
+        if distance2 <= tol * tol {
+            eprintln!(
+                "classic_trace parameter_boundary nearest_fallback distance={:.9}",
+                distance2.sqrt()
+            );
+            Some(parameter.into())
+        } else {
+            eprintln!(
+                "classic_trace parameter_boundary nearest_rejected distance={:.9} tol={tol:.9}",
+                distance2.sqrt()
+            );
+            None
+        }
     };
 
     let pt = wire.front_vertex().unwrap().point();
-    let p = project(pt, None)?;
+    let Some(p) = project(pt, None) else {
+        eprintln!(
+            "classic_trace parameter_boundary front_search_failed surface={}",
+            std::any::type_name::<S>()
+        );
+        return None;
+    };
     let vec = wire.edge_iter().try_fold(vec![p], |mut vec, edge| {
         let poly = polys.entry(edge.id()).or_insert_with(|| {
             let curve = edge.curve();
@@ -49,7 +67,14 @@ where
         });
         let mut p = *vec.last().unwrap();
         let closure = |q: &Point3| -> Option<Point2> {
-            p = project(*q, Some(p))?;
+            let Some(parameter) = project(*q, Some(p)) else {
+                eprintln!(
+                    "classic_trace parameter_boundary edge_search_failed surface={}",
+                    std::any::type_name::<S>()
+                );
+                return None;
+            };
+            p = parameter;
             Some(p)
         };
         let add: Option<Vec<Point2>> = match edge.orientation() {
@@ -83,18 +108,31 @@ where
 {
     let (mut pre_faces, mut negative_wires) = (Vec::new(), Vec::new());
     let mut map = HashMap::default();
-    loops.iter().try_for_each(|wire| {
-        let poly = create_parameter_boundary(face, wire, &mut map, tol)?;
+    for (wire_index, wire) in loops.iter().enumerate() {
+        let Some(poly) = create_parameter_boundary(face, wire, &mut map, tol) else {
+            eprintln!(
+                "classic_trace divide_one_face parameter_boundary=None wire={} status={:?} surface={}",
+                wire_index,
+                wire.status(),
+                std::any::type_name::<S>()
+            );
+            return None;
+        };
         let area = poly.area();
+        eprintln!(
+            "classic_trace divide_one_face wire={} status={:?} area={:.9}",
+            wire_index,
+            wire.status(),
+            area
+        );
         if area.abs() < tol {
-            return Some(());
+            continue;
         }
         match area > 0.0 {
             true => pre_faces.push(vec![WireChunk { poly, wire }]),
             false => negative_wires.push(WireChunk { poly, wire }),
         }
-        Some(())
-    })?;
+    }
     negative_wires.into_iter().try_for_each(|chunk| {
         let pt = chunk.poly.front();
         let idx = pre_faces.iter().position(|face| face[0].poly.include(pt));
@@ -127,7 +165,15 @@ where
                 .into_iter()
                 .map(|chunk| chunk.wire.deref().clone())
                 .collect();
-            let mut new_face = Face::debug_new(wires, surface).ok()?;
+            let wire_count = wires.len();
+            let Some(mut new_face) = Face::debug_new(wires, surface).ok() else {
+                eprintln!(
+                    "classic_trace divide_one_face Face::debug_new=None wires={} surface={}",
+                    wire_count,
+                    std::any::type_name::<S>()
+                );
+                return None;
+            };
             if !face.orientation() {
                 new_face.invert();
             }
@@ -150,21 +196,35 @@ where
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     let mut res = FacesClassification::<Point3, C, S>::default();
-    shell
-        .iter()
-        .zip(loops_store)
-        .try_for_each(|(face, loops)| {
-            if loops
-                .iter()
-                .all(|wire| wire.status() == ShapesOpStatus::Unknown)
-            {
-                res.push(face.clone(), ShapesOpStatus::Unknown);
-            } else {
-                let vec = divide_one_face(face, loops, tol)?;
-                vec.into_iter()
-                    .for_each(|(face, status)| res.push(face, status));
-            }
-            Some(())
-        })?;
+    for (face_index, (face, loops)) in shell.iter().zip(loops_store).enumerate() {
+        let has_classified = loops
+            .iter()
+            .any(|wire| wire.status() != ShapesOpStatus::Unknown);
+        eprintln!(
+            "classic_trace divide_faces face={} orientation={} loops={} classified={}",
+            face_index,
+            face.orientation(),
+            loops.len(),
+            has_classified
+        );
+        if !has_classified {
+            res.push(face.clone(), ShapesOpStatus::Unknown);
+        } else {
+            let Some(vec) = divide_one_face(face, loops, tol) else {
+                eprintln!(
+                    "classic_trace divide_faces face={} divide_one_face=None",
+                    face_index
+                );
+                return None;
+            };
+            eprintln!(
+                "classic_trace divide_faces face={} produced_faces={}",
+                face_index,
+                vec.len()
+            );
+            vec.into_iter()
+                .for_each(|(face, status)| res.push(face, status));
+        }
+    }
     Some(res)
 }

@@ -86,20 +86,28 @@ fn point_in_oriented_shell(
 ) -> Option<bool> {
     let volume = shell.to_polygon().volume();
     if !volume.is_finite() || volume.so_small() {
+        eprintln!("classic_trace classify refused volume={volume:?} point={point:?}");
         return None;
     }
     let crossings = shell.iter().try_fold(0, |count, face| {
-        let mut polygon = face.surface()?;
+        let Some(mut polygon) = face.surface() else {
+            eprintln!("classic_trace classify missing polygon point={point:?}");
+            return None;
+        };
         if !face.orientation() {
             polygon.invert();
         }
         Some(count + polygon.signed_crossing_faces(point, direction))
     })?;
-    Some(if volume > 0.0 {
+    let inside = if volume > 0.0 {
         crossings >= 1
     } else {
         crossings == 0
-    })
+    };
+    eprintln!(
+        "classic_trace classify volume={volume:.9} crossings={crossings} inside={inside} point={point:?}"
+    );
+    Some(inside)
 }
 
 fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -116,16 +124,42 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         shell0.mapped(|x| *x, |c| Alternative::FirstType(c.clone()), Clone::clone);
     let altshell1: AltCurveShell<C, S> =
         shell1.mapped(|x| *x, |c| Alternative::FirstType(c.clone()), Clone::clone);
+    eprintln!(
+        "classic_trace start shell0_faces={} shell1_faces={} poly0_volume={:.9} poly1_volume={:.9}",
+        shell0.len(),
+        shell1.len(),
+        poly_shell0.to_polygon().volume(),
+        poly_shell1.to_polygon().volume(),
+    );
+    let Some(loops_quad) =
+        loops_store::create_loops_stores(&altshell0, &poly_shell0, &altshell1, &poly_shell1)
+    else {
+        eprintln!("classic_trace create_loops_stores=None");
+        return None;
+    };
     let loops_store::LoopsStoreQuadruple {
         geom_loops_store0: loops_store0,
         geom_loops_store1: loops_store1,
         ..
-    } = loops_store::create_loops_stores(&altshell0, &poly_shell0, &altshell1, &poly_shell1)?;
-    let mut cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)?;
+    } = loops_quad;
+    eprintln!("classic_trace create_loops_stores=Some");
+    let Some(mut cls0) = divide_face::divide_faces(&altshell0, &loops_store0, tol) else {
+        eprintln!("classic_trace divide_faces0=None");
+        return None;
+    };
     cls0.integrate_by_component();
-    let mut cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)?;
+    let Some(mut cls1) = divide_face::divide_faces(&altshell1, &loops_store1, tol) else {
+        eprintln!("classic_trace divide_faces1=None");
+        return None;
+    };
     cls1.integrate_by_component();
     let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
+    eprintln!(
+        "classic_trace classes0 and={} or={} unknown={}",
+        and0.len(),
+        or0.len(),
+        unknown0.len()
+    );
     unknown0.into_iter().try_for_each(|face| {
         let pt = face.boundaries()[0].vertex_iter().next().unwrap().point();
         let dir = hash::take_one_unit(pt);
@@ -137,6 +171,12 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         Some(())
     })?;
     let [mut and1, mut or1, unknown1] = cls1.and_or_unknown();
+    eprintln!(
+        "classic_trace classes1 and={} or={} unknown={}",
+        and1.len(),
+        or1.len(),
+        unknown1.len()
+    );
     unknown1.into_iter().try_for_each(|face| {
         let pt = face.boundaries()[0].vertex_iter().next().unwrap().point();
         let dir = hash::take_one_unit(pt);
@@ -149,7 +189,25 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     })?;
     and0.append(&mut and1);
     or0.append(&mut or1);
-    Some([altshell_to_shell(&and0)?, altshell_to_shell(&or0)?])
+    eprintln!(
+        "classic_trace assembled and_faces={} or_faces={}",
+        and0.len(),
+        or0.len()
+    );
+    let Some(and_shell) = altshell_to_shell(&and0) else {
+        eprintln!("classic_trace altshell_to_shell(and)=None");
+        return None;
+    };
+    let Some(or_shell) = altshell_to_shell(&or0) else {
+        eprintln!("classic_trace altshell_to_shell(or)=None");
+        return None;
+    };
+    eprintln!(
+        "classic_trace converted and_faces={} or_faces={}",
+        and_shell.len(),
+        or_shell.len()
+    );
+    Some([and_shell, or_shell])
 }
 
 fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
