@@ -474,10 +474,8 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchParameter<SurfaceParameter>
             };
             let t = proj_curve.search_parameter(p, hint0, trials)?;
             let p = self.curve.evaluate(t);
-            let ang = nearest_periodic_angle(
-                self.revolution.proj_angle(p, point),
-                angular_hint(hint),
-            );
+            let ang =
+                nearest_periodic_angle(self.revolution.proj_angle(p, point), angular_hint(hint));
             match self.evaluate(t, ang).near(&point) {
                 true => Some((t, ang)),
                 false => None,
@@ -531,10 +529,7 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<SurfaceParamete
             let p = self.curve.evaluate(t);
             Some((
                 t,
-                nearest_periodic_angle(
-                    self.revolution.proj_angle(p, point),
-                    angular_hint(hint),
-                ),
+                nearest_periodic_angle(self.revolution.proj_angle(p, point), angular_hint(hint)),
             ))
         }
     }
