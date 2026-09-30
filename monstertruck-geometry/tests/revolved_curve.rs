@@ -64,6 +64,50 @@ fn search_parameter() {
 }
 
 #[test]
+fn search_parameter_honors_angular_hint_across_seam() {
+    let line = BsplineCurve::new(
+        KnotVector::bezier_knot(1),
+        vec![Point3::new(1.0, 0.0, -1.0), Point3::new(1.0, 0.0, 1.0)],
+    );
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let expected = (0.5, 0.05);
+    let point = surface.subs(expected.0, expected.1);
+    let hinted_angle = expected.1 + 2.0 * PI;
+
+    let got = surface
+        .search_parameter(point, Some((expected.0, hinted_angle)), 100)
+        .expect("exact search must preserve the angular period nearest its hint");
+
+    assert_near!(got.0, expected.0);
+    assert_near!(got.1, hinted_angle);
+    assert_near!(surface.subs(got.0, got.1), point);
+}
+
+#[test]
+fn search_nearest_parameter_honors_angular_hint_across_seam() {
+    let line = BsplineCurve::new(
+        KnotVector::bezier_knot(1),
+        vec![Point3::new(1.0, 0.0, -1.0), Point3::new(1.0, 0.0, 1.0)],
+    );
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let expected = (0.5, 2.0 * PI - 0.05);
+    let point = surface.subs(expected.0, expected.1)
+        + 0.01 * surface.normal(expected.0, expected.1);
+    let hinted_angle = -0.05;
+
+    let got = surface
+        .search_nearest_parameter(point, Some((expected.0, hinted_angle)), 100)
+        .expect("nearest search must preserve the angular period nearest its hint");
+
+    assert_near!(got.0, expected.0);
+    assert_near!(got.1, hinted_angle);
+    assert_near!(
+        surface.subs(got.0, got.1),
+        surface.subs(expected.0, expected.1)
+    );
+}
+
+#[test]
 fn search_parameter_with_fixed_points() {
     let line = BsplineCurve::new(
         KnotVector::bezier_knot(2),
