@@ -91,8 +91,8 @@ fn search_nearest_parameter_honors_angular_hint_across_seam() {
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
     let expected = (0.5, 2.0 * PI - 0.05);
-    let point = surface.subs(expected.0, expected.1)
-        + 0.01 * surface.normal(expected.0, expected.1);
+    let point =
+        surface.subs(expected.0, expected.1) + 0.01 * surface.normal(expected.0, expected.1);
     let hinted_angle = -0.05;
 
     let got = surface
