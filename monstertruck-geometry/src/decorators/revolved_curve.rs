@@ -281,6 +281,9 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
     fn derivative(&self, t: f64) -> Self::Vector {
         let point = self.curve.evaluate(t);
         let derivative = self.curve.derivative(t);
+        // The radial coordinate is a norm, so its ordinary derivative divides
+        // by radius. At a bounded generator endpoint on the axis that derivative
+        // has a finite one-sided limit even though the two-sided formula is 0/0.
         if let Some(sign) = self.fixed_endpoint_sign(t, point) {
             let axial = derivative.dot(self.revolution.axis);
             let radial = derivative - axial * self.revolution.axis;
@@ -302,13 +305,11 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
             if !radial_speed.so_small() {
                 let axial_2 = derivative_2.dot(self.revolution.axis);
                 let radial_2 = derivative_2 - axial_2 * self.revolution.axis;
-                return Vector2::new(
-                    axial_2,
-                    sign * radial.dot(radial_2) / radial_speed,
-                );
+                return Vector2::new(axial_2, sign * radial.dot(radial_2) / radial_speed);
             }
         }
-        self.revolution.proj_vector2(point, derivative, derivative_2)
+        self.revolution
+            .proj_vector2(point, derivative, derivative_2)
     }
     #[inline(always)]
     fn parameter_range(&self) -> ParameterRange { self.curve.parameter_range() }

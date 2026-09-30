@@ -129,8 +129,7 @@ fn search_parameter_near_back_fixed_axis_endpoint() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(2.0, 0.0, 2.0), Point3::new(0.0, 0.0, 2.0)],
     );
-    let surface =
-        RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
     let expected = (0.999_95, FRAC_PI_2);
     let point = surface.subs(expected.0, expected.1);
 
