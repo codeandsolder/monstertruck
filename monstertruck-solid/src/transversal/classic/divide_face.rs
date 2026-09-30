@@ -14,20 +14,33 @@ use monstertruck_topology::*;
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::Deref;
 
-fn create_parameter_boundary<P, C, S>(
-    face: &Face<P, C, S>,
-    wire: &Wire<P, C>,
-    polys: &mut HashMap<EdgeId<C>, PolylineCurve<P>>,
+fn create_parameter_boundary<C, S>(
+    face: &Face<Point3, C, S>,
+    wire: &Wire<Point3, C>,
+    polys: &mut HashMap<EdgeId<C>, PolylineCurve<Point3>>,
     tol: f64,
 ) -> Option<PolylineCurve<Point2>>
 where
-    P: Copy,
-    C: BoundedCurve<Point = P> + ParameterDivision1D<Point = P>,
-    S: Clone + SearchParameter<SurfaceParameter, Point = P>,
+    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
+    S: Clone
+        + ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     let surface = face.surface();
+    let project = |point: Point3, hint: Option<Point2>| -> Option<Point2> {
+        let hint = hint.map(|uv| (uv.x, uv.y));
+        if let Some(parameter) = surface.search_parameter(point, hint, 100) {
+            return Some(parameter.into());
+        }
+
+        let parameter = surface.search_nearest_parameter(point, hint, 100)?;
+        let projected = surface.evaluate(parameter.0, parameter.1);
+        (projected.distance2(point) <= tol * tol).then(|| parameter.into())
+    };
+
     let pt = wire.front_vertex().unwrap().point();
-    let p: Point2 = surface.search_parameter(pt, None, 100)?.into();
+    let p = project(pt, None)?;
     let vec = wire.edge_iter().try_fold(vec![p], |mut vec, edge| {
         let poly = polys.entry(edge.id()).or_insert_with(|| {
             let curve = edge.curve();
@@ -35,8 +48,8 @@ where
             PolylineCurve(div)
         });
         let mut p = *vec.last().unwrap();
-        let closure = |q: &P| -> Option<Point2> {
-            p = surface.search_parameter(*q, Some(p.into()), 100)?.into();
+        let closure = |q: &Point3| -> Option<Point2> {
+            p = project(*q, Some(p))?;
             Some(p)
         };
         let add: Option<Vec<Point2>> = match edge.orientation() {
@@ -63,7 +76,10 @@ fn divide_one_face<C, S>(
 ) -> Option<Vec<FaceWithShapesOpStatus<C, S>>>
 where
     C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
-    S: Clone + SearchParameter<SurfaceParameter, Point = Point3>,
+    S: Clone
+        + ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     let (mut pre_faces, mut negative_wires) = (Vec::new(), Vec::new());
     let mut map = HashMap::default();
@@ -128,7 +144,10 @@ pub(super) fn divide_faces<C, S>(
 ) -> Option<FacesClassification<Point3, C, S>>
 where
     C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
-    S: Clone + SearchParameter<SurfaceParameter, Point = Point3>,
+    S: Clone
+        + ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     let mut res = FacesClassification::<Point3, C, S>::default();
     shell
