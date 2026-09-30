@@ -28,7 +28,7 @@ use crate::alternative::Alternative;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::*;
-use std::iter;
+use std::{collections::VecDeque, iter};
 
 type ClassicResult<T> = std::result::Result<T, ShapeOpsError>;
 
@@ -36,11 +36,13 @@ type AltCurve<C, S> = Alternative<C, IntersectionCurve<PolylineCurve<Point3>, S,
 type AltCurveShell<C, S> = Shell<Point3, AltCurve<C, S>, S>;
 
 /// Convert an Alternative-curve shell back to a target-curve shell, approximating
-/// each intersection-curve arm with a polyline B-spline wrapped in a
-/// `SurfaceCurve` (uses the `From<SurfaceCurve<BsplineCurve<Point3>, ..>>`
-/// conversion the current `ShapeOpsCurve` bound guarantees).
+/// each surface-refined intersection curve with a tolerance-controlled quadratic
+/// B-spline wrapped in a `SurfaceCurve` (uses the
+/// `From<SurfaceCurve<BsplineCurve<Point3>, ..>>` conversion the current
+/// `ShapeOpsCurve` bound guarantees).
 fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     altshell: &AltCurveShell<C, S>,
+    tol: f64,
 ) -> Option<Shell<Point3, C, S>> {
     altshell.try_mapped(
         |p| Some(*p),
@@ -49,19 +51,8 @@ fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             Alternative::SecondType(ic) => {
                 let surface0 = ic.surface0().clone();
                 let surface1 = ic.surface1().clone();
-                let mut points = ic.leader().as_slice().to_vec();
-                points.dedup_by(|lhs, rhs| (*lhs).near(&*rhs));
-                if points.len() < 2 {
-                    return None;
-                }
-                let denominator = (points.len() - 1) as f64;
-                let knot_vec = KnotVector::from(
-                    iter::once(0.0)
-                        .chain((0..points.len()).map(|index| index as f64 / denominator))
-                        .chain(iter::once(1.0))
-                        .collect::<Vec<_>>(),
-                );
-                let bspline = BsplineCurve::new(knot_vec, points);
+                let bspline =
+                    BsplineCurve::quadratic_approximation(ic, ic.range_tuple(), tol, 100)?;
                 let boundary0: Option<ParameterCurve<BoundaryCurve2D, S>> = None;
                 let boundary1: Option<ParameterCurve<BoundaryCurve2D, S>> = None;
                 Some(
@@ -79,10 +70,85 @@ fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 /// Split one pair of shells into `[and_shell, or_shell]` (0.3.2 verbatim): build
 /// intersection loops, divide faces, classify each divided face as `and`/`or`,
 /// then ray-cast the remaining `unknown` faces against the other shell.
+fn classify_inside_with_polyshell(
+    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    point: Point3,
+) -> Option<bool> {
+    let offsets = [
+        Vector3::new(0.0, 0.0, 0.0),
+        Vector3::new(0.613, -0.271, 0.149),
+        Vector3::new(-0.347, 0.509, -0.221),
+        Vector3::new(0.193, 0.401, 0.577),
+        Vector3::new(-0.433, -0.127, 0.389),
+    ];
+    let (inside_votes, outside_votes) = offsets
+        .into_iter()
+        .map(|offset| hash::take_one_unit(point + offset))
+        .try_fold((0usize, 0usize), |(inside, outside), direction| {
+            let count = poly_shell.iter().try_fold(0isize, |count, face| {
+                let polygon = face.surface()?;
+                Some(count + polygon.signed_crossing_faces(point, direction))
+            })?;
+            if count == 0 {
+                Some((inside, outside + 1))
+            } else {
+                Some((inside + 1, outside))
+            }
+        })?;
+    Some(inside_votes > outside_votes)
+}
+
+fn sample_points_on_face<C, S>(face: &Face<Point3, C, S>) -> Option<Vec<Point3>> {
+    let wire = face.absolute_boundaries().first()?;
+    let vertices = wire
+        .vertex_iter()
+        .map(|vertex| vertex.point())
+        .collect::<Vec<_>>();
+    let (sum, count) = vertices
+        .iter()
+        .fold((Vector3::zero(), 0usize), |(sum, count), point| {
+            (sum + point.to_vec(), count + 1)
+        });
+    if count == 0 {
+        return None;
+    }
+    let centroid = Point3::from_vec(sum / count as f64);
+    Some(
+        iter::once(centroid)
+            .chain(vertices.into_iter().map(|vertex| centroid.midpoint(vertex)))
+            .collect(),
+    )
+}
+
+fn classify_unknown_face<C, S>(
+    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    face: &Face<Point3, C, S>,
+) -> Option<bool> {
+    let points = sample_points_on_face(face)?;
+    let (inside, outside) =
+        points
+            .into_iter()
+            .try_fold((0usize, 0usize), |(inside, outside), point| {
+                if classify_inside_with_polyshell(poly_shell, point)? {
+                    Some((inside + 1, outside))
+                } else {
+                    Some((inside, outside + 1))
+                }
+            })?;
+    Some(inside >= outside)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PairMode {
+    AndOr,
+    Difference,
+}
+
 fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell0: &Shell<Point3, C, S>,
     shell1: &Shell<Point3, C, S>,
     tol: f64,
+    mode: PairMode,
 ) -> Option<[Shell<Point3, C, S>; 2]> {
     if tol <= 0.0 {
         return None;
@@ -102,15 +168,45 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     cls0.integrate_by_component();
     let mut cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)?;
     cls1.integrate_by_component();
+
+    if mode == PairMode::Difference {
+        let [and0, or0, unknown0] = cls0.and_or_unknown();
+        let [and1, or1, unknown1] = cls1.and_or_unknown();
+
+        let mut difference_faces0 = AltCurveShell::default();
+        and0.into_iter()
+            .chain(or0)
+            .chain(unknown0)
+            .try_for_each(|face| {
+                if !classify_unknown_face(&poly_shell1, &face)? {
+                    difference_faces0.push(face);
+                }
+                Some(())
+            })?;
+
+        let mut difference_faces1 = AltCurveShell::default();
+        and1.into_iter()
+            .chain(or1)
+            .chain(unknown1)
+            .try_for_each(|mut face| {
+                if classify_unknown_face(&poly_shell0, &face)? {
+                    // B contributes cavity boundaries to A - B, so its global
+                    // orientation is inward. Seam-connected pieces are
+                    // subsequently normalized against their A-side neighbors.
+                    face.invert();
+                    difference_faces1.push(face);
+                }
+                Some(())
+            })?;
+
+        difference_faces0.append(&mut difference_faces1);
+        let difference_shell = altshell_to_shell(&difference_faces0, tol)?;
+        return Some([difference_shell, Shell::default()]);
+    }
+
     let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
     unknown0.into_iter().try_for_each(|face| {
-        let pt = face.boundaries()[0].vertex_iter().next().unwrap().point();
-        let dir = hash::take_one_unit(pt);
-        let count = poly_shell1.iter().try_fold(0, |count, face| {
-            let poly = face.surface()?;
-            Some(count + poly.signed_crossing_faces(pt, dir))
-        })?;
-        if count >= 1 {
+        if classify_unknown_face(&poly_shell1, &face)? {
             and0.push(face);
         } else {
             or0.push(face);
@@ -119,13 +215,8 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     })?;
     let [mut and1, mut or1, unknown1] = cls1.and_or_unknown();
     unknown1.into_iter().try_for_each(|face| {
-        let pt = face.boundaries()[0].vertex_iter().next().unwrap().point();
-        let dir = hash::take_one_unit(pt);
-        let count = poly_shell0.iter().try_fold(0, |count, face| {
-            let poly = face.surface()?;
-            Some(count + poly.signed_crossing_faces(pt, dir))
-        })?;
-        if count >= 1 {
+        let inside = classify_unknown_face(&poly_shell0, &face)?;
+        if inside {
             and1.push(face);
         } else {
             or1.push(face);
@@ -134,27 +225,94 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     })?;
     and0.append(&mut and1);
     or0.append(&mut or1);
-    Some([altshell_to_shell(&and0)?, altshell_to_shell(&or0)?])
+    let and_shell = altshell_to_shell(&and0, tol)?;
+    let or_shell = altshell_to_shell(&or0, tol)?;
+    Some([and_shell, or_shell])
+}
+
+/// Re-orient a regular manifold shell from shared-edge constraints.
+fn orient_regular_shell<P, C, S>(shell: &mut Shell<P, C, S>) -> bool {
+    if shell.shell_condition() != ShellCondition::Regular {
+        return true;
+    }
+
+    let mut adjacency = vec![Vec::<(usize, bool)>::new(); shell.len()];
+    for left in 0..shell.len() {
+        for right in left + 1..shell.len() {
+            let mut relation = None;
+            for left_edge in shell[left].edge_iter() {
+                for right_edge in shell[right].edge_iter() {
+                    if left_edge.id() != right_edge.id() {
+                        continue;
+                    }
+                    let must_differ = left_edge.orientation() == right_edge.orientation();
+                    match relation {
+                        Some(existing) if existing != must_differ => return false,
+                        Some(_) => {}
+                        None => relation = Some(must_differ),
+                    }
+                }
+            }
+            if let Some(must_differ) = relation {
+                adjacency[left].push((right, must_differ));
+                adjacency[right].push((left, must_differ));
+            }
+        }
+    }
+
+    let mut flips = vec![None; shell.len()];
+    for root in 0..shell.len() {
+        if flips[root].is_some() {
+            continue;
+        }
+        flips[root] = Some(false);
+        let mut queue = VecDeque::from([root]);
+        while let Some(face) = queue.pop_front() {
+            let Some(flip) = flips[face] else {
+                return false;
+            };
+            for &(neighbor, must_differ) in &adjacency[face] {
+                let required = flip ^ must_differ;
+                match flips[neighbor] {
+                    Some(existing) if existing != required => return false,
+                    Some(_) => {}
+                    None => {
+                        flips[neighbor] = Some(required);
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+        }
+    }
+
+    for (face, flip) in shell.iter_mut().zip(flips) {
+        if flip == Some(true) {
+            face.invert();
+        }
+    }
+    shell.shell_condition() != ShellCondition::Regular
 }
 
 fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     operation: &'static str,
-    shell: Shell<Point3, C, S>,
+    mut shell: Shell<Point3, C, S>,
 ) -> ClassicResult<Solid<Point3, C, S>> {
+    let _ = orient_regular_shell(&mut shell);
     let boundaries = shell.connected_components();
     Solid::try_new(boundaries)
         .map_err(|source| ShapeOpsError::InvalidOutputShell { operation, source })
 }
 
 /// AND operation between two solids (classic backend).
-pub(crate) fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+fn and_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
     let operation = "and";
     let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol).ok_or(ShapeOpsError::EmptyOutputShell { operation })
+        process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
+            .ok_or(ShapeOpsError::EmptyOutputShell { operation })
     };
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
@@ -172,6 +330,15 @@ pub(crate) fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     finalize(operation, and_shell)
 }
 
+/// AND operation between two solids (classic backend).
+pub(crate) fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    solid0: &Solid<Point3, C, S>,
+    solid1: &Solid<Point3, C, S>,
+    tol: f64,
+) -> ClassicResult<Solid<Point3, C, S>> {
+    and_shells(solid0, solid1, tol)
+}
+
 /// OR operation between two solids (classic backend).
 pub(crate) fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
@@ -180,7 +347,8 @@ pub(crate) fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> ClassicResult<Solid<Point3, C, S>> {
     let operation = "or";
     let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol).ok_or(ShapeOpsError::EmptyOutputShell { operation })
+        process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
+            .ok_or(ShapeOpsError::EmptyOutputShell { operation })
     };
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
@@ -204,9 +372,31 @@ pub(crate) fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
-    let mut neg = solid1.clone();
-    neg.not();
-    and(solid0, &neg, tol)
+    let operation = "difference";
+    let difference_pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
+        process_one_pair_of_shells(a, b, tol, PairMode::Difference)
+            .ok_or(ShapeOpsError::EmptyOutputShell { operation })
+    };
+    let and_pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
+        process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
+            .ok_or(ShapeOpsError::EmptyOutputShell { operation })
+    };
+
+    let mut iter0 = solid0.boundaries().iter();
+    let mut iter1 = solid1.boundaries().iter();
+    let shell0 = iter0.next().unwrap();
+    let shell1 = iter1.next().unwrap();
+    let [mut difference_shell, _] = difference_pair(shell0, shell1)?;
+
+    for shell in iter0 {
+        let [res, _] = and_pair(&difference_shell, shell)?;
+        difference_shell = res;
+    }
+    for shell in iter1 {
+        let [res, _] = difference_pair(&difference_shell, shell)?;
+        difference_shell = res;
+    }
+    finalize(operation, difference_shell)
 }
 
 /// Symmetric difference (XOR): the region inside exactly one solid (classic backend).
