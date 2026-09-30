@@ -246,7 +246,24 @@ struct ProjectedCurve<C> {
     revolution: Revolution,
 }
 
-impl<C: ParametricCurve3D> ParametricCurveTrait for ProjectedCurve<C> {
+impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
+    #[inline(always)]
+    fn fixed_endpoint_sign(&self, t: f64, point: Point3) -> Option<f64> {
+        if !self.revolution.proj_point(point).y.so_small() {
+            return None;
+        }
+        let (t0, t1) = self.curve.range_tuple();
+        if t.near(&t0) && self.revolution.contains(self.curve.front()) {
+            Some(1.0)
+        } else if t.near(&t1) && self.revolution.contains(self.curve.back()) {
+            Some(-1.0)
+        } else {
+            None
+        }
+    }
+}
+
+impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurve<C> {
     type Point = Point2;
     type Vector = Vector2;
     #[inline(always)]
@@ -262,16 +279,37 @@ impl<C: ParametricCurve3D> ParametricCurveTrait for ProjectedCurve<C> {
     fn evaluate(&self, t: f64) -> Self::Point { self.revolution.proj_point(self.curve.evaluate(t)) }
     #[inline(always)]
     fn derivative(&self, t: f64) -> Self::Vector {
-        self.revolution
-            .proj_vector(self.curve.evaluate(t), self.curve.derivative(t))
+        let point = self.curve.evaluate(t);
+        let derivative = self.curve.derivative(t);
+        // The radial coordinate is a norm, so its ordinary derivative divides
+        // by radius. At a bounded generator endpoint on the axis that derivative
+        // has a finite one-sided limit even though the two-sided formula is 0/0.
+        if let Some(sign) = self.fixed_endpoint_sign(t, point) {
+            let axial = derivative.dot(self.revolution.axis);
+            let radial = derivative - axial * self.revolution.axis;
+            if !radial.so_small() {
+                return Vector2::new(axial, sign * radial.magnitude());
+            }
+        }
+        self.revolution.proj_vector(point, derivative)
     }
     #[inline(always)]
     fn derivative_2(&self, t: f64) -> Self::Vector {
-        self.revolution.proj_vector2(
-            self.curve.evaluate(t),
-            self.curve.derivative(t),
-            self.curve.derivative_2(t),
-        )
+        let point = self.curve.evaluate(t);
+        let derivative = self.curve.derivative(t);
+        let derivative_2 = self.curve.derivative_2(t);
+        if let Some(sign) = self.fixed_endpoint_sign(t, point) {
+            let axial = derivative.dot(self.revolution.axis);
+            let radial = derivative - axial * self.revolution.axis;
+            let radial_speed = radial.magnitude();
+            if !radial_speed.so_small() {
+                let axial_2 = derivative_2.dot(self.revolution.axis);
+                let radial_2 = derivative_2 - axial_2 * self.revolution.axis;
+                return Vector2::new(axial_2, sign * radial.dot(radial_2) / radial_speed);
+            }
+        }
+        self.revolution
+            .proj_vector2(point, derivative, derivative_2)
     }
     #[inline(always)]
     fn parameter_range(&self) -> ParameterRange { self.curve.parameter_range() }
@@ -322,6 +360,22 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<CurveParameter>
             }
         };
         algo::curve::search_nearest_parameter(self, point, hint, trials)
+    }
+}
+
+#[inline]
+fn nearest_periodic_angle(angle: f64, hint: Option<f64>) -> f64 {
+    match hint {
+        Some(hint) => angle + 2.0 * PI * ((hint - angle) / (2.0 * PI)).round(),
+        None => angle,
+    }
+}
+
+#[inline]
+fn angular_hint(hint: SearchParameterHint2D) -> Option<f64> {
+    match hint {
+        SearchParameterHint2D::Parameter(_, angle) => Some(angle),
+        SearchParameterHint2D::Range(..) | SearchParameterHint2D::None => None,
     }
 }
 
@@ -391,15 +445,16 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchParameter<SurfaceParameter>
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
+        let hint = hint.into();
         let (t0, t1) = self.curve.range_tuple();
         if self.is_front_fixed() && self.curve.front().near(&point) {
-            match hint.into() {
+            match hint {
                 SearchParameterHint2D::Parameter(_, y) => Some((t0, y)),
                 SearchParameterHint2D::Range((_, y), _) => Some((t0, y)),
                 SearchParameterHint2D::None => Some((t0, 0.0)),
             }
         } else if self.is_back_fixed() && self.curve.back().near(&point) {
-            match hint.into() {
+            match hint {
                 SearchParameterHint2D::Parameter(_, y) => Some((t1, y)),
                 SearchParameterHint2D::Range(_, (_, y)) => Some((t1, y)),
                 SearchParameterHint2D::None => Some((t1, 2.0 * PI)),
@@ -410,7 +465,7 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchParameter<SurfaceParameter>
                 revolution: self.revolution,
             };
             let p = self.revolution.proj_point(point);
-            let hint0 = match hint.into() {
+            let hint0 = match hint {
                 SearchParameterHint2D::Parameter(x, _) => SearchParameterHint1D::Parameter(x),
                 SearchParameterHint2D::Range((x0, _), (x1, _)) => {
                     SearchParameterHint1D::Range(x0, x1)
@@ -419,7 +474,8 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchParameter<SurfaceParameter>
             };
             let t = proj_curve.search_parameter(p, hint0, trials)?;
             let p = self.curve.evaluate(t);
-            let ang = self.revolution.proj_angle(p, point);
+            let ang =
+                nearest_periodic_angle(self.revolution.proj_angle(p, point), angular_hint(hint));
             match self.evaluate(t, ang).near(&point) {
                 true => Some((t, ang)),
                 false => None,
@@ -438,19 +494,20 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<SurfaceParamete
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
+        let hint = hint.into();
         let (t0, t1) = self.curve.range_tuple();
         let on_axis = move |o: Point3, normal: Vector3| {
             let op = point - o;
             op.cross(self.revolution.axis).so_small() && op.dot(normal) >= 0.0
         };
         if self.is_front_fixed() && on_axis(self.curve.front(), self.normal(t0, 0.0)) {
-            match hint.into() {
+            match hint {
                 SearchParameterHint2D::Parameter(_, y) => Some((t0, y)),
                 SearchParameterHint2D::Range((_, y), _) => Some((t0, y)),
                 SearchParameterHint2D::None => Some((t0, 0.0)),
             }
         } else if self.is_back_fixed() && on_axis(self.curve.back(), self.normal(t1, 0.0)) {
-            match hint.into() {
+            match hint {
                 SearchParameterHint2D::Parameter(_, y) => Some((t1, y)),
                 SearchParameterHint2D::Range(_, (_, y)) => Some((t1, y)),
                 SearchParameterHint2D::None => Some((t1, 2.0 * PI)),
@@ -461,7 +518,7 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<SurfaceParamete
                 revolution: self.revolution,
             };
             let p = self.revolution.proj_point(point);
-            let hint0 = match hint.into() {
+            let hint0 = match hint {
                 SearchParameterHint2D::Parameter(x, _) => SearchParameterHint1D::Parameter(x),
                 SearchParameterHint2D::Range((x0, _), (x1, _)) => {
                     SearchParameterHint1D::Range(x0, x1)
@@ -470,7 +527,10 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<SurfaceParamete
             };
             let t = proj_curve.search_nearest_parameter(p, hint0, trials)?;
             let p = self.curve.evaluate(t);
-            Some((t, self.revolution.proj_angle(p, point)))
+            Some((
+                t,
+                nearest_periodic_angle(self.revolution.proj_angle(p, point), angular_hint(hint)),
+            ))
         }
     }
 }
