@@ -99,6 +99,43 @@ fn cube_minus_column() -> Result<()> {
 }
 
 #[test]
+fn profile_generated_box_minus_transformed_column() -> Result<()> {
+    fn rectangle_wire(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Wire {
+        let v = builder::vertices([
+            Point3::new(min_x, min_y, 0.0),
+            Point3::new(max_x, min_y, 0.0),
+            Point3::new(max_x, max_y, 0.0),
+            Point3::new(min_x, max_y, 0.0),
+        ]);
+        vec![
+            builder::line(&v[0], &v[1]),
+            builder::line(&v[1], &v[2]),
+            builder::line(&v[2], &v[3]),
+            builder::line(&v[3], &v[0]),
+        ]
+        .into()
+    }
+
+    // Match the downstream CAD-IR path: build both solids from normalized
+    // planar profiles, then rigidly translate the cutter through the host.
+    let host = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![rectangle_wire(0.0, 0.0, 10.0, 6.0)],
+        Vector3::new(0.0, 0.0, 2.0),
+    )?;
+    let cutter = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![rectangle_wire(3.0, 2.0, 7.0, 4.0)],
+        Vector3::new(0.0, 0.0, 4.0),
+    )?;
+    let cutter = builder::transformed(
+        &cutter,
+        Matrix4::from_translation(Vector3::new(0.0, 0.0, -1.0)),
+    );
+
+    let result = monstertruck_solid::difference(&host, &cutter, TOL)?;
+    assert_solid("profile-generated box minus transformed column", &result, 104.0)
+}
+
+#[test]
 fn cube_minus_enclosed_cube_preserves_inward_cavity_orientation() -> Result<()> {
     let outer = unit_cube(Point3::origin());
     let inner: Solid = primitive::cuboid(BoundingBox::from_iter([
