@@ -192,7 +192,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             Some(())
         })?;
 
-        for face in &mut difference_faces1 {
+        for face in difference_faces1.face_iter_mut() {
             // B contributes the inward-facing boundary of A - B.
             face.invert();
         }
@@ -295,35 +295,7 @@ fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     operation: &'static str,
     mut shell: Shell<Point3, C, S>,
 ) -> ClassicResult<Solid<Point3, C, S>> {
-    let before = shell.shell_condition();
-    let oriented = orient_regular_shell(&mut shell);
-    let after = shell.shell_condition();
-
-    #[cfg(test)]
-    if after != ShellCondition::Closed {
-        let edge_ids = shell.edge_iter().map(|edge| edge.id()).collect::<Vec<_>>();
-        let mut unique = 0;
-        let mut singles = 0;
-        let mut doubles = 0;
-        let mut more = 0;
-        for (index, id) in edge_ids.iter().enumerate() {
-            if edge_ids[..index].contains(id) {
-                continue;
-            }
-            unique += 1;
-            match edge_ids.iter().filter(|other| *other == id).count() {
-                1 => singles += 1,
-                2 => doubles += 1,
-                _ => more += 1,
-            }
-        }
-        eprintln!(
-            "classic_finalize op={operation} before={before:?} orient_ok={oriented} after={after:?} faces={} edge_uses={} unique_edges={unique} singles={singles} doubles={doubles} more={more}",
-            shell.len(),
-            edge_ids.len(),
-        );
-    }
-
+    let _ = orient_regular_shell(&mut shell);
     let boundaries = shell.connected_components();
     Solid::try_new(boundaries)
         .map_err(|source| ShapeOpsError::InvalidOutputShell { operation, source })
