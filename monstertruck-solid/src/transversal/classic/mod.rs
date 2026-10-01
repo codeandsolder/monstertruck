@@ -170,34 +170,32 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     cls1.integrate_by_component();
 
     if mode == PairMode::Difference {
-        let [and0, or0, unknown0] = cls0.and_or_unknown();
-        let [and1, or1, unknown1] = cls1.and_or_unknown();
+        // Face division already classifies pieces adjacent to an intersection:
+        // Or on A is outside B and survives A - B, while And on B is
+        // inside A and becomes the inward-facing cut boundary. Re-raycasting
+        // those known pieces is both redundant and wrong for faces lying
+        // exactly on the other solid's boundary (a through-cut cap can be
+        // misclassified as outside and close the hole back up).
+        let [_inside0, mut difference_faces0, unknown0] = cls0.and_or_unknown();
+        unknown0.into_iter().try_for_each(|face| {
+            if !classify_unknown_face(&poly_shell1, &face)? {
+                difference_faces0.push(face);
+            }
+            Some(())
+        })?;
 
-        let mut difference_faces0 = AltCurveShell::default();
-        and0.into_iter()
-            .chain(or0)
-            .chain(unknown0)
-            .try_for_each(|face| {
-                if !classify_unknown_face(&poly_shell1, &face)? {
-                    difference_faces0.push(face);
-                }
-                Some(())
-            })?;
+        let [mut difference_faces1, _outside1, unknown1] = cls1.and_or_unknown();
+        unknown1.into_iter().try_for_each(|face| {
+            if classify_unknown_face(&poly_shell0, &face)? {
+                difference_faces1.push(face);
+            }
+            Some(())
+        })?;
 
-        let mut difference_faces1 = AltCurveShell::default();
-        and1.into_iter()
-            .chain(or1)
-            .chain(unknown1)
-            .try_for_each(|mut face| {
-                if classify_unknown_face(&poly_shell0, &face)? {
-                    // B contributes cavity boundaries to A - B, so its global
-                    // orientation is inward. Seam-connected pieces are
-                    // subsequently normalized against their A-side neighbors.
-                    face.invert();
-                    difference_faces1.push(face);
-                }
-                Some(())
-            })?;
+        for face in &mut difference_faces1 {
+            // B contributes the inward-facing boundary of A - B.
+            face.invert();
+        }
 
         difference_faces0.append(&mut difference_faces1);
         let difference_shell = altshell_to_shell(&difference_faces0, tol)?;
