@@ -99,40 +99,84 @@ fn cube_minus_column() -> Result<()> {
 }
 
 #[test]
-fn profile_generated_box_minus_transformed_column() -> Result<()> {
-    fn rectangle_wire(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Wire {
+fn profile_generated_difference_matrix() -> Result<()> {
+    fn profile_box(min: Point3, max: Point3) -> Result<Solid> {
         let v = builder::vertices([
-            Point3::new(min_x, min_y, 0.0),
-            Point3::new(max_x, min_y, 0.0),
-            Point3::new(max_x, max_y, 0.0),
-            Point3::new(min_x, max_y, 0.0),
+            Point3::new(min.x, min.y, min.z),
+            Point3::new(max.x, min.y, min.z),
+            Point3::new(max.x, max.y, min.z),
+            Point3::new(min.x, max.y, min.z),
         ]);
-        vec![
+        let wire: Wire = vec![
             builder::line(&v[0], &v[1]),
             builder::line(&v[1], &v[2]),
             builder::line(&v[2], &v[3]),
             builder::line(&v[3], &v[0]),
         ]
-        .into()
+        .into();
+        profile::solid_from_planar_profile::<Curve, Surface>(
+            vec![wire],
+            Vector3::new(0.0, 0.0, max.z - min.z),
+        )
+        .map_err(Into::into)
     }
 
-    // Match the downstream CAD-IR path: build both solids from normalized
-    // planar profiles, then rigidly translate the cutter through the host.
-    let host = profile::solid_from_planar_profile::<Curve, Surface>(
-        vec![rectangle_wire(0.0, 0.0, 10.0, 6.0)],
-        Vector3::new(0.0, 0.0, 2.0),
+    let primitive_host: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(10.0, 6.0, 2.0),
+    ]));
+    let primitive_cutter: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(3.0, 2.0, -1.0),
+        Point3::new(7.0, 4.0, 3.0),
+    ]));
+    let profile_host = profile_box(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(10.0, 6.0, 2.0),
     )?;
-    let cutter = profile::solid_from_planar_profile::<Curve, Surface>(
-        vec![rectangle_wire(3.0, 2.0, 7.0, 4.0)],
-        Vector3::new(0.0, 0.0, 4.0),
+    let profile_cutter = profile_box(
+        Point3::new(3.0, 2.0, -1.0),
+        Point3::new(7.0, 4.0, 3.0),
     )?;
-    let cutter = builder::transformed(
-        &cutter,
+    let profile_cutter_at_origin = profile_box(
+        Point3::new(3.0, 2.0, 0.0),
+        Point3::new(7.0, 4.0, 4.0),
+    )?;
+    let transformed_profile_cutter = builder::transformed(
+        &profile_cutter_at_origin,
         Matrix4::from_translation(Vector3::new(0.0, 0.0, -1.0)),
     );
 
-    let result = monstertruck_solid::difference(&host, &cutter, TOL)?;
-    assert_solid("profile-generated box minus transformed column", &result, 104.0)
+    for (label, host, cutter) in [
+        ("primitive/primitive", &primitive_host, &primitive_cutter),
+        ("profile/primitive", &profile_host, &primitive_cutter),
+        ("primitive/profile", &primitive_host, &profile_cutter),
+        ("profile/profile", &profile_host, &profile_cutter),
+        (
+            "profile/transformed-profile",
+            &profile_host,
+            &transformed_profile_cutter,
+        ),
+    ] {
+        match monstertruck_solid::difference(host, cutter, TOL) {
+            Ok(result) => {
+                eprintln!("{label}: ok");
+                assert_solid(label, &result, 104.0)?;
+            }
+            Err(error) => eprintln!("{label}: {error:?}"),
+        }
+    }
+
+    // Keep the downstream construction as the actual regression assertion.
+    let result = monstertruck_solid::difference(
+        &profile_host,
+        &transformed_profile_cutter,
+        TOL,
+    )?;
+    assert_solid(
+        "profile-generated box minus transformed column",
+        &result,
+        104.0,
+    )
 }
 
 #[test]
