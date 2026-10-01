@@ -172,10 +172,9 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if mode == PairMode::Difference {
         // Face division already classifies pieces adjacent to an intersection:
         // Or on A is outside B and survives A - B, while And on B is
-        // inside A and becomes the inward-facing cut boundary. Re-raycasting
-        // those known pieces is both redundant and wrong for faces lying
-        // exactly on the other solid's boundary (a through-cut cap can be
-        // misclassified as outside and close the hole back up).
+        // inside A and becomes the inward-facing cut boundary. Prefer those
+        // exact topological labels: a ray cast from a face lying exactly on
+        // the other solid's boundary can choose the wrong side.
         let [_inside0, mut difference_faces0, unknown0] = cls0.and_or_unknown();
         unknown0.into_iter().try_for_each(|face| {
             if !classify_unknown_face(&poly_shell1, &face)? {
@@ -196,6 +195,47 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             // B contributes the inward-facing boundary of A - B.
             face.invert();
         }
+
+        difference_faces0.append(&mut difference_faces1);
+        let mut difference_shell = altshell_to_shell(&difference_faces0, tol)?;
+        let _ = orient_regular_shell(&mut difference_shell);
+        let label_result_is_valid = difference_shell
+            .connected_components()
+            .iter()
+            .all(|component| component.check_solid_boundary().is_ok());
+        if label_result_is_valid {
+            return Some([difference_shell, Shell::default()]);
+        }
+
+        // Axis-touching cuts can leave divider labels locally inconsistent even
+        // though geometric classification still reconstructs a valid shell.
+        // Fall back as a whole candidate rather than mixing the two schemes
+        // face-by-face, so shared-edge closure remains the deciding invariant.
+        let [and0, or0, unknown0] = cls0.and_or_unknown();
+        let [and1, or1, unknown1] = cls1.and_or_unknown();
+
+        let mut difference_faces0 = AltCurveShell::default();
+        and0.into_iter()
+            .chain(or0)
+            .chain(unknown0)
+            .try_for_each(|face| {
+                if !classify_unknown_face(&poly_shell1, &face)? {
+                    difference_faces0.push(face);
+                }
+                Some(())
+            })?;
+
+        let mut difference_faces1 = AltCurveShell::default();
+        and1.into_iter()
+            .chain(or1)
+            .chain(unknown1)
+            .try_for_each(|mut face| {
+                if classify_unknown_face(&poly_shell0, &face)? {
+                    face.invert();
+                    difference_faces1.push(face);
+                }
+                Some(())
+            })?;
 
         difference_faces0.append(&mut difference_faces1);
         let difference_shell = altshell_to_shell(&difference_faces0, tol)?;
