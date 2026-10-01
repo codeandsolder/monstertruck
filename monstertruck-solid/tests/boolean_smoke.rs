@@ -95,6 +95,16 @@ fn cube_minus_column() -> Result<()> {
     let cube = unit_cube(Point3::origin());
     let column = square_column(0.5, 0.5, 0.2);
     let result = monstertruck_solid::difference(&cube, &column, TOL)?;
+    anyhow::ensure!(
+        result.boundaries().len() == 1,
+        "through-column subtraction must produce one connected boundary shell, got {}",
+        result.boundaries().len(),
+    );
+    anyhow::ensure!(
+        result.face_iter().count() == 10,
+        "through-column subtraction must produce 10 faces, got {}",
+        result.face_iter().count(),
+    );
     assert_solid("cube minus square column", &result, 0.84)
 }
 
