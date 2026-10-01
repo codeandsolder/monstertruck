@@ -146,6 +146,20 @@ fn profile_generated_difference_matrix() -> Result<()> {
         Matrix4::from_translation(Vector3::new(0.0, 0.0, -1.0)),
     );
 
+    for (label, solid) in [
+        ("primitive_host", &primitive_host),
+        ("primitive_cutter", &primitive_cutter),
+        ("profile_host", &profile_host),
+        ("profile_cutter", &profile_cutter),
+        ("transformed_profile_cutter", &transformed_profile_cutter),
+    ] {
+        eprintln!(
+            "input_shell {label} condition={:?} consistent={}",
+            solid.boundaries()[0].shell_condition(),
+            solid.is_geometric_consistent(),
+        );
+    }
+
     for (label, host, cutter) in [
         ("primitive/primitive", &primitive_host, &primitive_cutter),
         ("profile/primitive", &profile_host, &primitive_cutter),
