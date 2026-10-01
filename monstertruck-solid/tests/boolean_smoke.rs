@@ -139,18 +139,10 @@ fn profile_generated_difference_matrix() -> Result<()> {
         Point3::new(3.0, 2.0, -1.0),
         Point3::new(7.0, 4.0, 3.0),
     ]));
-    let profile_host = profile_box(
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(10.0, 6.0, 2.0),
-    )?;
-    let profile_cutter = profile_box(
-        Point3::new(3.0, 2.0, -1.0),
-        Point3::new(7.0, 4.0, 3.0),
-    )?;
-    let profile_cutter_at_origin = profile_box(
-        Point3::new(3.0, 2.0, 0.0),
-        Point3::new(7.0, 4.0, 4.0),
-    )?;
+    let profile_host = profile_box(Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 6.0, 2.0))?;
+    let profile_cutter = profile_box(Point3::new(3.0, 2.0, -1.0), Point3::new(7.0, 4.0, 3.0))?;
+    let profile_cutter_at_origin =
+        profile_box(Point3::new(3.0, 2.0, 0.0), Point3::new(7.0, 4.0, 4.0))?;
     let transformed_profile_cutter = builder::transformed(
         &profile_cutter_at_origin,
         Matrix4::from_translation(Vector3::new(0.0, 0.0, -1.0)),
@@ -191,11 +183,7 @@ fn profile_generated_difference_matrix() -> Result<()> {
     }
 
     // Keep the downstream construction as the actual regression assertion.
-    let result = monstertruck_solid::difference(
-        &profile_host,
-        &transformed_profile_cutter,
-        TOL,
-    )?;
+    let result = monstertruck_solid::difference(&profile_host, &transformed_profile_cutter, TOL)?;
     assert_solid(
         "profile-generated box minus transformed column",
         &result,
