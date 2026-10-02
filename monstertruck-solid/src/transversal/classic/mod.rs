@@ -35,14 +35,29 @@ type ClassicResult<T> = std::result::Result<T, ShapeOpsError>;
 type AltCurve<C, S> = Alternative<C, IntersectionCurve<PolylineCurve<Point3>, S, S>>;
 type AltCurveShell<C, S> = Shell<Point3, AltCurve<C, S>, S>;
 
-/// Convert an Alternative-curve shell back to a target-curve shell, approximating
-/// each surface-refined intersection curve with a tolerance-controlled quadratic
-/// B-spline wrapped in a `SurfaceCurve` (uses the
-/// `From<SurfaceCurve<BsplineCurve<Point3>, ..>>` conversion the current
-/// `ShapeOpsCurve` bound guarantees).
+/// Convert a polyline leader to an exactly equivalent degree-1 B-spline.
+///
+/// `PolylineCurve` uses integer segment parameters, so scale the uniform knot
+/// vector to the same `[0, segment_count]` domain. This preserves both the
+/// guide geometry and parameterization exactly.
+fn polyline_leader_bspline(polyline: &PolylineCurve<Point3>) -> Option<BsplineCurve<Point3>> {
+    let segment_count = polyline.len().checked_sub(1)?;
+    if segment_count == 0 {
+        return None;
+    }
+    let mut knots = KnotVector::uniform_knot(1, segment_count);
+    knots.transform(segment_count as f64, 0.0);
+    Some(BsplineCurve::new(knots, polyline.iter().copied().collect()))
+}
+
+/// Convert an Alternative-curve shell back to the target curve type.
+///
+/// Surface intersection curves already carry a cleaned polyline leader. Keep
+/// that leader exactly as a degree-1 B-spline and wrap it in `SurfaceCurve`,
+/// whose evaluation refines points against both supporting surfaces. Re-fitting
+/// the refined curve here is both redundant and fragile at tight tolerances.
 fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     altshell: &AltCurveShell<C, S>,
-    tol: f64,
 ) -> Option<Shell<Point3, C, S>> {
     altshell.try_mapped(
         |p| Some(*p),
@@ -51,8 +66,7 @@ fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             Alternative::SecondType(ic) => {
                 let surface0 = ic.surface0().clone();
                 let surface1 = ic.surface1().clone();
-                let bspline =
-                    BsplineCurve::quadratic_approximation(ic, ic.range_tuple(), tol, 100)?;
+                let bspline = polyline_leader_bspline(ic.leader())?;
                 let boundary0: Option<ParameterCurve<BoundaryCurve2D, S>> = None;
                 let boundary1: Option<ParameterCurve<BoundaryCurve2D, S>> = None;
                 Some(
@@ -197,7 +211,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
 
         difference_faces0.append(&mut difference_faces1);
-        let mut difference_shell = altshell_to_shell(&difference_faces0, tol)?;
+        let mut difference_shell = altshell_to_shell(&difference_faces0)?;
         let _ = orient_regular_shell(&mut difference_shell);
         let label_result_is_valid = difference_shell
             .connected_components()
@@ -238,7 +252,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             })?;
 
         difference_faces0.append(&mut difference_faces1);
-        let difference_shell = altshell_to_shell(&difference_faces0, tol)?;
+        let difference_shell = altshell_to_shell(&difference_faces0)?;
         return Some([difference_shell, Shell::default()]);
     }
 
@@ -263,8 +277,8 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     })?;
     and0.append(&mut and1);
     or0.append(&mut or1);
-    let and_shell = altshell_to_shell(&and0, tol)?;
-    let or_shell = altshell_to_shell(&or0, tol)?;
+    let and_shell = altshell_to_shell(&and0)?;
+    let or_shell = altshell_to_shell(&or0)?;
     Some([and_shell, or_shell])
 }
 

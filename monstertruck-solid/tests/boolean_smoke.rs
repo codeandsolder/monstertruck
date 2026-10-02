@@ -24,6 +24,7 @@ use monstertruck_meshing::prelude::*;
 use monstertruck_modeling::*;
 
 const TOL: f64 = 0.05;
+const STRICT_TOL: f64 = 1.0e-6;
 const VOLUME_EPS: f64 = 1.0e-3;
 
 /// Axis-aligned unit cube with its minimum corner at `origin`.
@@ -94,7 +95,7 @@ fn cube_minus_column() -> Result<()> {
     // Unit cube with a `0.4 x 0.4` column punched through: `1 - 0.4^2 = 0.84`.
     let cube = unit_cube(Point3::origin());
     let column = square_column(0.5, 0.5, 0.2);
-    let result = monstertruck_solid::difference(&cube, &column, TOL)?;
+    let result = monstertruck_solid::difference(&cube, &column, STRICT_TOL)?;
     anyhow::ensure!(
         result.boundaries().len() == 1,
         "through-column subtraction must produce one connected boundary shell, got {}",
@@ -173,7 +174,7 @@ fn profile_generated_difference_matrix() -> Result<()> {
             &transformed_profile_cutter,
         ),
     ] {
-        match monstertruck_solid::difference(host, cutter, TOL) {
+        match monstertruck_solid::difference(host, cutter, STRICT_TOL) {
             Ok(result) => {
                 eprintln!("{label}: ok");
                 assert_solid(label, &result, 104.0)?;
@@ -183,7 +184,8 @@ fn profile_generated_difference_matrix() -> Result<()> {
     }
 
     // Keep the downstream construction as the actual regression assertion.
-    let result = monstertruck_solid::difference(&profile_host, &transformed_profile_cutter, TOL)?;
+    let result =
+        monstertruck_solid::difference(&profile_host, &transformed_profile_cutter, STRICT_TOL)?;
     assert_solid(
         "profile-generated box minus transformed column",
         &result,
@@ -247,7 +249,7 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
         Point3::new(2.0001, 0.25, 2.0001),
     ]));
 
-    let result = monstertruck_solid::difference(&host, &cutter, TOL)?;
+    let result = monstertruck_solid::difference(&host, &cutter, STRICT_TOL)?;
     anyhow::ensure!(
         !result.boundaries().is_empty(),
         "radial-slot difference returned an empty solid"
