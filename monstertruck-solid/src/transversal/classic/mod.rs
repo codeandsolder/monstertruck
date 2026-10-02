@@ -167,8 +167,13 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if tol <= 0.0 {
         return None;
     }
-    let poly_shell0 = shell0.triangulation(tol);
-    let poly_shell1 = shell1.triangulation(tol);
+    // The triangulation is only an intersection seed; using the full geometric
+    // tolerance here can massively over-refine curved shells and make SSI
+    // classification less stable without improving the final curve tolerance.
+    // Keep the actual divide/classification tolerance strict below.
+    let seed_tol = tol.max(1.0e-4);
+    let poly_shell0 = shell0.triangulation(seed_tol);
+    let poly_shell1 = shell1.triangulation(seed_tol);
     let altshell0: AltCurveShell<C, S> =
         shell0.mapped(|x| *x, |c| Alternative::FirstType(c.clone()), Clone::clone);
     let altshell1: AltCurveShell<C, S> =
