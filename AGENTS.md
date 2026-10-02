@@ -1,25 +1,5 @@
 # Repository Guidelines
 
-## Blueprint Baseline
-
-This repo adopts the shared [`blueprints`](https://github.com/virtualritz/blueprints)
-baseline via the `.blueprints/` git submodule. Those files are the cross-project
-default for agent behavior, code quality, and microtypography; the
-project-specific rules in this file take precedence wherever they conflict.
-
-Core rules (read first):
-
-- [Agent behavior](.blueprints/base/AGENTS.md)
-- [Rust agent rules](.blueprints/lang/rust/AGENTS.md) and [Rust testing](.blueprints/lang/rust/testing.md)
-- [Git safety](.blueprints/base/git-safety.md) and [test ownership](.blueprints/base/test-ownership.md)
-
-Reference:
-
-- [Microtypography](.blueprints/base/microtypography.md) -- slashes, dashes, quotes, ellipses, spacing.
-- [Documentation standards](.blueprints/base/documentation.md)
-- [Commit messages](.blueprints/base/commit-messages.md)
-- [API change protocol](.blueprints/base/api-changes.md)
-
 ## Build, Test, and Development Commands
 
 **Only use `cargo test` and `cargo run`. NEVER use `cargo check` or `cargo build` for verification.**

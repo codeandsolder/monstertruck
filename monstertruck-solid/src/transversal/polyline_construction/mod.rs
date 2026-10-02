@@ -9,7 +9,7 @@
 
 use monstertruck_core::{cgmath64::*, tolerance::*};
 use monstertruck_meshing::prelude::PolylineCurve;
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::VecDeque;
 
 pub fn construct_polylines(lines: &[(Point3, Point3)]) -> Vec<PolylineCurve<Point3>> {
@@ -46,26 +46,20 @@ impl From<Point3> for PointIndex {
 
 struct Node {
     coord: Point3,
-    adjacency: HashMap<PointIndex, usize>,
+    // Interference lines describe a geometric set. Adjacent triangle pairs can
+    // report the same segment more than once, so parallel edges between the
+    // same tolerance-quantized endpoints must collapse here.
+    adjacency: HashSet<PointIndex>,
 }
 
 impl Node {
     #[inline(always)]
-    fn new(coord: Point3, adjacency: HashMap<PointIndex, usize>) -> Node {
-        Node { coord, adjacency }
-    }
+    fn new(coord: Point3, adjacency: HashSet<PointIndex>) -> Node { Node { coord, adjacency } }
 
     fn pop_one_adjacency(&mut self) -> PointIndex {
         // SAFETY: nodes are removed from the graph when their adjacency set becomes empty.
-        let idx = *self.adjacency.keys().next().unwrap();
-        let mut remove = false;
-        if let Some(count) = self.adjacency.get_mut(&idx) {
-            *count -= 1;
-            remove = *count == 0;
-        }
-        if remove {
-            self.adjacency.remove(&idx);
-        }
+        let idx = *self.adjacency.iter().next().unwrap();
+        self.adjacency.remove(&idx);
         idx
     }
 }
@@ -88,9 +82,9 @@ impl Graph {
         let idx0 = pt0.into();
         let idx1 = pt1.into();
         if let Some(node) = self.get_mut(&idx0) {
-            *node.adjacency.entry(idx1).or_insert(0) += 1;
+            node.adjacency.insert(idx1);
         } else {
-            self.insert(idx0, Node::new(pt0, HashMap::from_iter([(idx1, 1)])));
+            self.insert(idx0, Node::new(pt0, HashSet::from_iter([idx1])));
         }
     }
 
@@ -115,12 +109,7 @@ impl Graph {
             self.remove(&idx);
         }
         let node = self.get_mut(&idx0)?;
-        let count = node.adjacency.get_mut(&idx)?;
-        *count -= 1;
-        let remove = *count == 0;
-        if remove {
-            node.adjacency.remove(&idx);
-        }
+        node.adjacency.remove(&idx);
         let pt = node.coord;
         if node.adjacency.is_empty() {
             self.remove(&idx0);

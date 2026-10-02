@@ -24,6 +24,7 @@ use monstertruck_meshing::prelude::*;
 use monstertruck_modeling::*;
 
 const TOL: f64 = 0.05;
+const STRICT_TOL: f64 = 1.0e-6;
 const VOLUME_EPS: f64 = 1.0e-3;
 
 /// Axis-aligned unit cube with its minimum corner at `origin`.
@@ -94,6 +95,168 @@ fn cube_minus_column() -> Result<()> {
     // Unit cube with a `0.4 x 0.4` column punched through: `1 - 0.4^2 = 0.84`.
     let cube = unit_cube(Point3::origin());
     let column = square_column(0.5, 0.5, 0.2);
-    let result = monstertruck_solid::difference(&cube, &column, TOL)?;
+    let result = monstertruck_solid::difference(&cube, &column, STRICT_TOL)?;
+    anyhow::ensure!(
+        result.boundaries().len() == 1,
+        "through-column subtraction must produce one connected boundary shell, got {}",
+        result.boundaries().len(),
+    );
+    anyhow::ensure!(
+        result.face_iter().count() == 10,
+        "through-column subtraction must produce 10 faces, got {}",
+        result.face_iter().count(),
+    );
     assert_solid("cube minus square column", &result, 0.84)
+}
+
+#[test]
+fn profile_generated_difference_matrix() -> Result<()> {
+    fn profile_box(min: Point3, max: Point3) -> Result<Solid> {
+        let v = builder::vertices([
+            Point3::new(min.x, min.y, min.z),
+            Point3::new(max.x, min.y, min.z),
+            Point3::new(max.x, max.y, min.z),
+            Point3::new(min.x, max.y, min.z),
+        ]);
+        let wire: Wire = vec![
+            builder::line(&v[0], &v[1]),
+            builder::line(&v[1], &v[2]),
+            builder::line(&v[2], &v[3]),
+            builder::line(&v[3], &v[0]),
+        ]
+        .into();
+        profile::solid_from_planar_profile::<Curve, Surface>(
+            vec![wire],
+            Vector3::new(0.0, 0.0, max.z - min.z),
+        )
+        .map_err(Into::into)
+    }
+
+    let primitive_host: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(10.0, 6.0, 2.0),
+    ]));
+    let primitive_cutter: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(3.0, 2.0, -1.0),
+        Point3::new(7.0, 4.0, 3.0),
+    ]));
+    let profile_host = profile_box(Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 6.0, 2.0))?;
+    let profile_cutter = profile_box(Point3::new(3.0, 2.0, -1.0), Point3::new(7.0, 4.0, 3.0))?;
+    let profile_cutter_at_origin =
+        profile_box(Point3::new(3.0, 2.0, 0.0), Point3::new(7.0, 4.0, 4.0))?;
+    let transformed_profile_cutter = builder::transformed(
+        &profile_cutter_at_origin,
+        Matrix4::from_translation(Vector3::new(0.0, 0.0, -1.0)),
+    );
+
+    for (label, solid) in [
+        ("primitive_host", &primitive_host),
+        ("primitive_cutter", &primitive_cutter),
+        ("profile_host", &profile_host),
+        ("profile_cutter", &profile_cutter),
+        ("transformed_profile_cutter", &transformed_profile_cutter),
+    ] {
+        eprintln!(
+            "input_shell {label} condition={:?} consistent={}",
+            solid.boundaries()[0].shell_condition(),
+            solid.is_geometric_consistent(),
+        );
+    }
+
+    for (label, host, cutter) in [
+        ("primitive/primitive", &primitive_host, &primitive_cutter),
+        ("profile/primitive", &profile_host, &primitive_cutter),
+        ("primitive/profile", &primitive_host, &profile_cutter),
+        ("profile/profile", &profile_host, &profile_cutter),
+        (
+            "profile/transformed-profile",
+            &profile_host,
+            &transformed_profile_cutter,
+        ),
+    ] {
+        match monstertruck_solid::difference(host, cutter, STRICT_TOL) {
+            Ok(result) => {
+                eprintln!("{label}: ok");
+                assert_solid(label, &result, 104.0)?;
+            }
+            Err(error) => eprintln!("{label}: {error:?}"),
+        }
+    }
+
+    // Keep the downstream construction as the actual regression assertion.
+    let result =
+        monstertruck_solid::difference(&profile_host, &transformed_profile_cutter, STRICT_TOL)?;
+    assert_solid(
+        "profile-generated box minus transformed column",
+        &result,
+        104.0,
+    )
+}
+
+#[test]
+fn cube_minus_enclosed_cube_preserves_inward_cavity_orientation() -> Result<()> {
+    let outer = unit_cube(Point3::origin());
+    let inner: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(0.25, 0.25, 0.25),
+        Point3::new(0.75, 0.75, 0.75),
+    ]));
+    let result = monstertruck_solid::difference(&outer, &inner, TOL)?;
+    anyhow::ensure!(
+        result.boundaries().len() == 2,
+        "enclosed subtraction must produce outer and cavity boundary shells"
+    );
+    assert_solid("cube minus enclosed cube", &result, 0.875)
+}
+
+/// Regression for a radial slot cut from a solid of revolution.
+///
+/// The cutter reaches the revolution axis and exits through the top end. This
+/// is the minimal form of the failure reported by downstream STEP recovery:
+/// the classic boolean pipeline used to classify every divided face out of the
+/// AND result and return `EmptyOutputShell`.
+#[test]
+fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
+    let vertices = builder::vertices([
+        Point3::new(0.0, 0.0, -2.0),
+        Point3::new(2.0, 0.0, -2.0),
+        Point3::new(2.0, 0.0, 2.0),
+        Point3::new(0.0, 0.0, 2.0),
+    ]);
+    // Use the axis-aware wire revolution path. Generic face revolution would
+    // sweep the closing on-axis edge into zero-length topology, which is not a
+    // valid input for testing the Boolean itself.
+    let profile: Wire = vec![
+        builder::line(&vertices[0], &vertices[1]),
+        builder::line(&vertices[1], &vertices[2]),
+        builder::line(&vertices[2], &vertices[3]),
+    ]
+    .into();
+    let shell: Shell = builder::revolve_wire(
+        &profile,
+        Point3::origin(),
+        Vector3::unit_z(),
+        builder::SweepAngle::Closed,
+        2,
+    );
+    let host = Solid::try_new(vec![shell])?;
+    anyhow::ensure!(
+        host.is_geometric_consistent(),
+        "axis-aware revolved host is not geometrically consistent"
+    );
+
+    let cutter: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(0.0, -0.25, 1.0),
+        Point3::new(2.0001, 0.25, 2.0001),
+    ]));
+
+    let result = monstertruck_solid::difference(&host, &cutter, STRICT_TOL)?;
+    anyhow::ensure!(
+        !result.boundaries().is_empty(),
+        "radial-slot difference returned an empty solid"
+    );
+    anyhow::ensure!(
+        result.is_geometric_consistent(),
+        "radial-slot difference returned inconsistent topology"
+    );
+    Ok(())
 }

@@ -51,10 +51,16 @@ impl<P, C, S> FacesClassification<P, C, S> {
         let components = unknown.connected_components();
         for comp in components {
             let boundary = comp.extract_boundaries();
+            let Some(boundary_edge) = boundary.iter().flatten().next() else {
+                // A closed unknown component has no adjacency boundary from which
+                // a known status can be propagated. Leave it unknown so the
+                // geometric classifier can decide it.
+                continue;
+            };
             if and_boundary
                 .iter()
                 .flatten()
-                .any(|edge| edge.id() == boundary[0][0].id())
+                .any(|edge| edge.id() == boundary_edge.id())
             {
                 comp.iter().for_each(|face| {
                     // SAFETY: face originated from `self.shell` via `and_or_unknown()`.
@@ -63,7 +69,7 @@ impl<P, C, S> FacesClassification<P, C, S> {
             } else if or_boundary
                 .iter()
                 .flatten()
-                .any(|edge| edge.id() == boundary[0][0].id())
+                .any(|edge| edge.id() == boundary_edge.id())
             {
                 comp.iter().for_each(|face| {
                     // SAFETY: face originated from `self.shell` via `and_or_unknown()`.
