@@ -37,7 +37,7 @@ just test-cpu
 cargo test -p monstertruck-geometry test_name
 
 # Format code
-cargo fmt --all
+cargo +nightly fmt --all
 
 # Run clippy linter
 cargo clippy --all-targets -- -W warnings
@@ -50,7 +50,7 @@ cargo clippy --all-targets -- -W warnings
 - Follow standard Rust style: four-space indentation, `snake_case` for modules/functions, `CamelCase` for types.
 - Write idiomatic and canonical Rust code. Avoid patterns common in imperative languages like C/C++/JS/TS that can be expressed more elegantly in Rust.
 - Keep public APIs documented with `///` comments.
-- Run `cargo fmt --all` before committing.
+- Run `cargo +nightly fmt --all` before committing.
 
 ### Functional Style (CRITICAL)
 
