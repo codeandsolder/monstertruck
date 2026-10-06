@@ -39,6 +39,9 @@ pub enum Error {
     /// An internally generated sweep segment did not have the expected single-shell, capped topology.
     #[error("composite sweep produced unexpected intermediate topology.")]
     UnexpectedCompositeSweepTopology,
+    /// A closed composite sweep does not return its final section to the starting section.
+    #[error("closed composite sweep does not return to its starting section.")]
+    CompositeSweepNotClosed,
 }
 
 #[test]
