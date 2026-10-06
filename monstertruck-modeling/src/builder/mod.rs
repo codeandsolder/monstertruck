@@ -17,6 +17,28 @@ pub enum SweepAngle {
     Closed,
 }
 
+/// One exact rigid-motion segment in a composite face sweep.
+///
+/// Translation segments create extrusion surfaces. Rotation segments create
+/// revolution surfaces, so line/arc paths remain analytic instead of being
+/// approximated by a polyline or a sampled skin.
+#[derive(Debug, Clone, Copy)]
+pub enum CompositeSweepSegment {
+    /// Translate the current section by `vector`.
+    Translation(Vector3),
+    /// Rotate the current section around an axis by a partial angle.
+    Rotation {
+        /// A point on the rotation axis.
+        origin: Point3,
+        /// Rotation axis. The vector is normalized internally.
+        axis: Vector3,
+        /// Signed rotation angle. Must be finite, non-zero, and no larger than one full turn.
+        angle: Rad<f64>,
+        /// Number of topological subdivisions for the revolution. Must be non-zero.
+        division: usize,
+    },
+}
+
 type Vertex = monstertruck_topology::Vertex<Point3>;
 type Edge<C> = monstertruck_topology::Edge<Point3, C>;
 type Wire<C> = monstertruck_topology::Wire<Point3, C>;
@@ -620,6 +642,94 @@ pub fn extrude<T, Swept>(elem: &T, vector: Vector3) -> Swept
 where T: Sweep<Matrix4, LineConnector, ExtrudeConnector, Swept> {
     let trsl = Matrix4::from_translation(vector);
     elem.sweep(trsl, LineConnector, ExtrudeConnector { vector })
+}
+
+/// Sweep a face through a sequence of exact translation and rotation segments.
+///
+/// Unlike repeatedly sweeping a face into independent solids and boolean-unioning
+/// the results, this function keeps the section topology shared across segment
+/// boundaries and emits only the two true end caps. That makes it suitable for
+/// bent prismatic parts such as pins, busbars, and pipes whose centerline is a
+/// sequence of straight lines and circular arcs.
+///
+/// Translation segments are represented as exact extrusion surfaces and rotation
+/// segments as exact revolution surfaces. No sampling or tessellation is involved.
+///
+/// # Errors
+///
+/// Returns [`Error::EmptyCompositeSweep`] when `segments` is empty,
+/// [`Error::InvalidCompositeSweepSegment`] for zero/non-finite translations,
+/// zero/non-finite rotations, zero-length rotation axes, or zero subdivisions,
+/// and [`Error::UnexpectedCompositeSweepTopology`] if an internally generated
+/// segment does not have the single-shell capped topology produced by the
+/// primitive sweep builders. The final solid is validated with [`Solid::try_new`].
+pub fn composite_sweep(
+    face: &crate::Face,
+    segments: impl IntoIterator<Item = CompositeSweepSegment>,
+) -> Result<crate::Solid> {
+    let mut output = crate::Shell::from(vec![face.inverse()]);
+    let mut cursor = face.clone();
+    let mut segment_count = 0usize;
+
+    for segment in segments {
+        segment_count += 1;
+        let solid: crate::Solid = match segment {
+            CompositeSweepSegment::Translation(vector) => {
+                let magnitude = vector.magnitude();
+                if !magnitude.is_finite() || magnitude.so_small() {
+                    return Err(Error::InvalidCompositeSweepSegment);
+                }
+                extrude(&cursor, vector)
+            }
+            CompositeSweepSegment::Rotation {
+                origin,
+                axis,
+                angle,
+                division,
+            } => {
+                let axis_magnitude = axis.magnitude();
+                if division == 0
+                    || !axis_magnitude.is_finite()
+                    || axis_magnitude.so_small()
+                    || !angle.0.is_finite()
+                    || angle.0.so_small()
+                    || angle.0.abs() > 2.0 * std::f64::consts::PI
+                {
+                    return Err(Error::InvalidCompositeSweepSegment);
+                }
+                revolve(
+                    &cursor,
+                    origin,
+                    axis / axis_magnitude,
+                    SweepAngle::Partial(angle),
+                    division,
+                )
+            }
+        };
+
+        let mut shells = solid.into_boundaries();
+        if shells.len() != 1 {
+            return Err(Error::UnexpectedCompositeSweepTopology);
+        }
+        let shell = shells
+            .pop()
+            .ok_or(Error::UnexpectedCompositeSweepTopology)?;
+        let mut faces = shell.into_iter();
+        let Some(_start_cap) = faces.next() else {
+            return Err(Error::UnexpectedCompositeSweepTopology);
+        };
+        let Some(end_cap) = faces.next_back() else {
+            return Err(Error::UnexpectedCompositeSweepTopology);
+        };
+        output.extend(faces);
+        cursor = end_cap;
+    }
+
+    if segment_count == 0 {
+        return Err(Error::EmptyCompositeSweep);
+    }
+    output.push(cursor);
+    Ok(crate::Solid::try_new(vec![output])?)
 }
 
 /// Sweeps a vertex, an edge, a wire, a face, or a shell by the rotation.
