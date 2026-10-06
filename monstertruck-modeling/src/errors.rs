@@ -30,6 +30,15 @@ pub enum Error {
     /// so the plane of the arc is under-determined.
     #[error("circular-arc tangent is parallel to the chord between the arc endpoints.")]
     CircularArcTangentParallelToChord,
+    /// A composite sweep was requested without any path segments.
+    #[error("composite sweep requires at least one segment.")]
+    EmptyCompositeSweep,
+    /// A composite sweep segment has zero/invalid motion or an invalid rotation subdivision.
+    #[error("composite sweep contains a degenerate or invalid segment.")]
+    InvalidCompositeSweepSegment,
+    /// An internally generated sweep segment did not have the expected single-shell, capped topology.
+    #[error("composite sweep produced unexpected intermediate topology.")]
+    UnexpectedCompositeSweepTopology,
 }
 
 #[test]
