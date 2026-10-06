@@ -62,3 +62,60 @@ fn composite_sweep_rejects_empty_and_degenerate_paths() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn exact_closed_composite_sweep_has_no_duplicate_caps() -> anyhow::Result<()> {
+    let face = rectangular_face()?;
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let solid = builder::composite_closed_sweep(
+        &face,
+        [
+            builder::CompositeSweepSegment::Rotation {
+                origin: Point3::origin(),
+                axis: Vector3::unit_y(),
+                angle: Rad(quarter),
+                division: 1,
+            },
+            builder::CompositeSweepSegment::Rotation {
+                origin: Point3::origin(),
+                axis: Vector3::unit_y(),
+                angle: Rad(quarter),
+                division: 1,
+            },
+            builder::CompositeSweepSegment::Rotation {
+                origin: Point3::origin(),
+                axis: Vector3::unit_y(),
+                angle: Rad(quarter),
+                division: 1,
+            },
+            builder::CompositeSweepSegment::Rotation {
+                origin: Point3::origin(),
+                axis: Vector3::unit_y(),
+                angle: Rad(quarter),
+                division: 1,
+            },
+        ],
+    )?;
+
+    assert_eq!(solid.boundaries().len(), 1);
+    assert_eq!(solid.boundaries()[0].len(), 16);
+    assert_eq!(
+        solid.boundaries()[0].shell_condition(),
+        shell::ShellCondition::Closed
+    );
+    assert!(solid.is_geometric_consistent());
+    Ok(())
+}
+
+#[test]
+fn closed_composite_sweep_rejects_an_open_path() -> anyhow::Result<()> {
+    let face = rectangular_face()?;
+    let result = builder::composite_closed_sweep(
+        &face,
+        [builder::CompositeSweepSegment::Translation(
+            Vector3::unit_z(),
+        )],
+    );
+    assert_eq!(result.unwrap_err(), errors::Error::CompositeSweepNotClosed);
+    Ok(())
+}
