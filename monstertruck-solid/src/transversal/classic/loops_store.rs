@@ -607,6 +607,53 @@ fn shells_have_full_planar_interface(
     Some(false)
 }
 
+fn shells_have_opposed_full_planar_interface<C, S>(
+    geom_lhs: &Shell<Point3, C, S>,
+    poly_lhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    geom_rhs: &Shell<Point3, C, S>,
+    poly_rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    tol: f64,
+) -> Option<bool>
+where
+    C: Clone,
+    S: ParametricSurface3D
+        + Clone
+        + Invertible
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    for (left_index, left) in poly_lhs.iter().enumerate() {
+        let left_polygon = left.surface()?;
+        for (right_index, right) in poly_rhs.iter().enumerate() {
+            let right_polygon = right.surface()?;
+            if !planar_polygons_same_trimmed_face(&left_polygon, &right_polygon, tol) {
+                continue;
+            }
+            let point = *left_polygon.positions().first()?;
+            let left_surface = geom_lhs[left_index].oriented_surface();
+            let right_surface = geom_rhs[right_index].oriented_surface();
+            let left_parameter = left_surface
+                .search_parameter(point, None, 100)
+                .or_else(|| left_surface.search_nearest_parameter(point, None, 100))?;
+            let right_parameter = right_surface
+                .search_parameter(point, None, 100)
+                .or_else(|| right_surface.search_nearest_parameter(point, None, 100))?;
+            let left_normal = left_surface.normal(left_parameter.0, left_parameter.1);
+            let right_normal = right_surface.normal(right_parameter.0, right_parameter.1);
+            let left_norm = left_normal.magnitude();
+            let right_norm = right_normal.magnitude();
+            if left_norm <= tol || right_norm <= tol {
+                continue;
+            }
+            let cosine = left_normal.dot(right_normal) / (left_norm * right_norm);
+            if cosine <= -1.0 + 1.0e-6 {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
+}
+
 fn shells_have_partial_planar_overlap(
     lhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
@@ -726,6 +773,7 @@ where
         + Invertible,
     S: ParametricSurface3D
         + Clone
+        + Invertible
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
@@ -740,19 +788,26 @@ where
         shells_have_positive_aabb_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
     let full_coplanar_interface = imprint_coplanar
         && shells_have_full_planar_interface(poly_shell0, poly_shell1, coplanar_tol)?;
+    let full_interface_adjacency = full_coplanar_interface
+        && shells_have_opposed_full_planar_interface(
+            geom_shell0,
+            poly_shell0,
+            geom_shell1,
+            poly_shell1,
+            coplanar_tol,
+        )?;
     let partial_coplanar_overlap = imprint_coplanar
         && positive_aabb_overlap
         && shells_have_partial_planar_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
-    let full_interface_adjacency = full_coplanar_interface && !positive_aabb_overlap;
     let coplanar_overlap = full_coplanar_interface || partial_coplanar_overlap;
     (0..store0_len)
         .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
         .try_for_each(|(face_index0, face_index1)| {
-            // Solids that meet on one complete trimmed planar face but have no
-            // positive-volume overlap need no SSI at all. Generic SSI on their
-            // coincident continuation surfaces (e.g. coaxial cylinders) is a
-            // degenerate problem; downstream coplanar classification removes
-            // the shared internal face and topology welding stitches the rim.
+            // Solids that meet on one complete trimmed planar face with
+            // opposite outward normals need no SSI at all. Generic SSI on
+            // their coincident continuation surfaces (e.g. coaxial cylinders)
+            // is degenerate; downstream coplanar classification removes the
+            // shared internal face and topology welding stitches the rim.
             if full_interface_adjacency {
                 return Some(());
             }
