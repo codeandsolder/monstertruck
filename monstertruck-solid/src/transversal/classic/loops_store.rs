@@ -41,9 +41,13 @@ pub(super) struct BoundaryWire<P, C> {
 
 impl<P, C> BoundaryWire<P, C> {
     #[inline(always)]
-    pub(super) fn new(wire: Wire<P, C>, status: ShapesOpStatus) -> Self { Self { wire, status } }
+    pub(super) fn new(wire: Wire<P, C>, status: ShapesOpStatus) -> Self {
+        Self { wire, status }
+    }
     #[inline(always)]
-    pub(super) fn status(&self) -> ShapesOpStatus { self.status }
+    pub(super) fn status(&self) -> ShapesOpStatus {
+        self.status
+    }
     #[inline(always)]
     pub(super) fn inverse(&self) -> Self {
         Self {
@@ -58,7 +62,8 @@ impl ShapesOpStatus {
     where
         C: ParametricCurve3D + BoundedCurve,
         S0: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
-        S1: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>, {
+        S1: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+    {
         let (t0, t1) = curve.range_tuple();
         let t = (t0 + t1) / 2.0;
         let (_, pt0, pt1) = curve.search_triple(t, 100)?;
@@ -75,12 +80,16 @@ impl ShapesOpStatus {
 impl<P, C> std::ops::Deref for BoundaryWire<P, C> {
     type Target = Wire<P, C>;
     #[inline(always)]
-    fn deref(&self) -> &Self::Target { &self.wire }
+    fn deref(&self) -> &Self::Target {
+        &self.wire
+    }
 }
 
 impl<P, C> std::ops::DerefMut for BoundaryWire<P, C> {
     #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.wire }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.wire
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -91,23 +100,31 @@ pub(super) struct LoopsStore<P, C>(Vec<Loops<P, C>>);
 impl<P, C> std::ops::Deref for Loops<P, C> {
     type Target = Vec<BoundaryWire<P, C>>;
     #[inline(always)]
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl<P, C> std::ops::DerefMut for Loops<P, C> {
     #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl<P, C> std::ops::Deref for LoopsStore<P, C> {
     type Target = Vec<Loops<P, C>>;
     #[inline(always)]
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl<P, C> std::ops::DerefMut for LoopsStore<P, C> {
     #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl<P, C> FromIterator<BoundaryWire<P, C>> for Loops<P, C> {
@@ -136,7 +153,9 @@ impl<'a, P: 'a, C: 'a, S: 'a> FromIterator<&'a Face<P, C, S>> for LoopsStore<P, 
 impl<'a, P, C> IntoIterator for &'a LoopsStore<P, C> {
     type Item = <&'a Vec<Loops<P, C>> as IntoIterator>::Item;
     type IntoIter = <&'a Vec<Loops<P, C>> as IntoIterator>::IntoIter;
-    fn into_iter(self) -> Self::IntoIter { self.0.iter() }
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
 }
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -162,7 +181,9 @@ impl ParameterKind {
 
 impl<P: Copy, C: Clone> Loops<P, C> {
     fn search_parameter(&self, pt: P) -> Option<(usize, usize, ParameterKind)>
-    where C: BoundedCurve<Point = P> + SearchParameter<CurveParameter, Point = P> {
+    where
+        C: BoundedCurve<Point = P> + SearchParameter<CurveParameter, Point = P>,
+    {
         self.iter()
             .enumerate()
             .flat_map(move |(i, wire)| wire.iter().enumerate().map(move |(j, edge)| (i, j, edge)))
@@ -521,15 +542,19 @@ fn planar_polygons_coplanar(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> b
         && (rhs_origin - lhs_origin).dot(lhs_normal).abs() <= tol
 }
 
+fn planar_polygons_same_trimmed_face(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> bool {
+    planar_polygons_coplanar(lhs, rhs, tol)
+        && lhs.neighborhood_include(rhs.positions(), tol)
+        && rhs.neighborhood_include(lhs.positions(), tol)
+}
+
 fn planar_polygons_partially_overlap(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> bool {
-    if !planar_polygons_coplanar(lhs, rhs, tol) {
+    if !planar_polygons_coplanar(lhs, rhs, tol) || planar_polygons_same_trimmed_face(lhs, rhs, tol)
+    {
         return false;
     }
-    let same_trimmed_face = lhs.neighborhood_include(rhs.positions(), tol)
-        && rhs.neighborhood_include(lhs.positions(), tol);
-    !same_trimmed_face
-        && (lhs.collide_with_neighborhood_of(rhs.positions(), tol)
-            || rhs.collide_with_neighborhood_of(lhs.positions(), tol))
+    lhs.collide_with_neighborhood_of(rhs.positions(), tol)
+        || rhs.collide_with_neighborhood_of(lhs.positions(), tol)
 }
 
 fn shell_polygon_bounds(
@@ -563,6 +588,23 @@ fn shells_have_positive_aabb_overlap(
             && lhs_max.y.min(rhs_max.y) - lhs_min.y.max(rhs_min.y) > tol
             && lhs_max.z.min(rhs_max.z) - lhs_min.z.max(rhs_min.z) > tol,
     )
+}
+
+fn shells_have_full_planar_interface(
+    lhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    tol: f64,
+) -> Option<bool> {
+    for left in lhs.iter() {
+        let left_polygon = left.surface()?;
+        for right in rhs.iter() {
+            let right_polygon = right.surface()?;
+            if planar_polygons_same_trimmed_face(&left_polygon, &right_polygon, tol) {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
 }
 
 fn shells_have_partial_planar_overlap(
@@ -647,7 +689,8 @@ where
 fn create_independent_loop<P, C, D>(mut poly_curve0: C) -> Wire<P, D>
 where
     C: Cut<Point = P>,
-    D: From<C>, {
+    D: From<C>,
+{
     let (t0, t1) = poly_curve0.range_tuple();
     let t = (t0 + t1) / 2.0;
     let poly_curve1 = poly_curve0.cut(t);
@@ -692,24 +735,49 @@ where
     let mut poly_loops_store1: LoopsStore<_, _> = poly_shell1.face_iter().collect();
     let store0_len = geom_loops_store0.len();
     let store1_len = geom_loops_store1.len();
-    let coplanar_overlap = imprint_coplanar
-        && shells_have_partial_planar_overlap(poly_shell0, poly_shell1, tol.max(1.0e-4) * 2.0)?;
+    let coplanar_tol = tol.max(1.0e-4) * 2.0;
+    let positive_aabb_overlap =
+        shells_have_positive_aabb_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
+    let full_coplanar_interface = imprint_coplanar
+        && shells_have_full_planar_interface(poly_shell0, poly_shell1, coplanar_tol)?;
+    let partial_coplanar_overlap = imprint_coplanar
+        && positive_aabb_overlap
+        && shells_have_partial_planar_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
+    let full_interface_adjacency = full_coplanar_interface && !positive_aabb_overlap;
+    let coplanar_overlap = full_coplanar_interface || partial_coplanar_overlap;
     (0..store0_len)
         .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
         .try_for_each(|(face_index0, face_index1)| {
+            // Solids that meet on one complete trimmed planar face but have no
+            // positive-volume overlap need no SSI at all. Generic SSI on their
+            // coincident continuation surfaces (e.g. coaxial cylinders) is a
+            // degenerate problem; downstream coplanar classification removes
+            // the shared internal face and topology welding stitches the rim.
+            if full_interface_adjacency {
+                return Some(());
+            }
             let ori0 = geom_shell0[face_index0].orientation();
             let ori1 = geom_shell1[face_index1].orientation();
             let surface0 = geom_shell0[face_index0].surface();
             let surface1 = geom_shell1[face_index1].surface();
             let polygon0 = poly_shell0[face_index0].surface()?;
             let polygon1 = poly_shell1[face_index1].surface()?;
-            intersection_curve::intersection_curves(
+            // Exactly coincident trimmed planar faces are already a complete
+            // interface. Running generic SSI on coincident surfaces is both
+            // unnecessary and degenerate; ownership is resolved by the
+            // coplanar face classifier after division.
+            if imprint_coplanar
+                && planar_polygons_same_trimmed_face(&polygon0, &polygon1, coplanar_tol)
+            {
+                return Some(());
+            }
+            let curves = intersection_curve::intersection_curves(
                 surface0.clone(),
                 &polygon0,
                 surface1.clone(),
                 &polygon1,
-            )?
-            .into_iter()
+            )?;
+            curves.into_iter()
             .try_for_each(|(polyline, mut intersection_curve)| {
                 let status = ShapesOpStatus::from_is_curve(&intersection_curve)?;
                 let (status0, status1) = match (ori0, ori1) {
@@ -795,15 +863,23 @@ where
                     poly_loops_store0[face_index0].add_edge(
                         pedge.clone(),
                         status0,
-                        coplanar_overlap,
+                        partial_coplanar_overlap,
                     );
                     geom_loops_store0[face_index0].add_edge(
                         gedge.clone(),
                         status0,
-                        coplanar_overlap,
+                        partial_coplanar_overlap,
                     );
-                    poly_loops_store1[face_index1].add_edge(pedge, status1, coplanar_overlap);
-                    geom_loops_store1[face_index1].add_edge(gedge, status1, coplanar_overlap);
+                    poly_loops_store1[face_index1].add_edge(
+                        pedge,
+                        status1,
+                        partial_coplanar_overlap,
+                    );
+                    geom_loops_store1[face_index1].add_edge(
+                        gedge,
+                        status1,
+                        partial_coplanar_overlap,
+                    );
                 }
                 Some(())
             })
@@ -814,7 +890,7 @@ where
     // intersections, so imprint those existing edge segments onto any face of
     // the opposite operand that contains them. This supplies the missing trim
     // lines for coplanar overlap without manufacturing approximate SSI curves.
-    if coplanar_overlap {
+    if partial_coplanar_overlap {
         let source0 = geom_loops_store0.clone();
         let source1 = geom_loops_store1.clone();
         imprint_edges_on_faces(&source1, poly_shell0, &mut geom_loops_store0, tol)?;

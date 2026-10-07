@@ -44,6 +44,20 @@ fn square_column(cx: f64, cy: f64, half: f64) -> Solid {
     builder::extrude(&f, Vector3::unit_z() * 2.0)
 }
 
+fn unit_cylinder_y(y0: f64) -> Solid {
+    let center = Point3::new(0.0, y0, 0.0);
+    let vertex = builder::vertex(Point3::new(0.0, y0, 1.0));
+    let circle = builder::revolve(
+        &vertex,
+        center,
+        Vector3::unit_y(),
+        builder::SweepAngle::Closed,
+        2,
+    );
+    let disk = builder::try_attach_plane(&[circle]).expect("cylinder disk");
+    builder::extrude(&disk, Vector3::unit_y())
+}
+
 /// Asserts a boolean result is watertight and geometrically correct: it has at
 /// least one boundary shell, tessellates to a non-empty mesh, and that mesh has
 /// the expected (positively oriented) volume.
@@ -257,6 +271,19 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "radial-slot difference returned inconsistent topology"
+    );
+    Ok(())
+}
+
+#[test]
+fn union_of_end_to_end_cylinders_with_full_circular_interface() -> Result<()> {
+    let a = unit_cylinder_y(0.0);
+    let b = unit_cylinder_y(1.0);
+    let result = monstertruck_solid::or(&a, &b, STRICT_TOL)?;
+    anyhow::ensure!(result.boundaries().len() == 1, "union must have one shell");
+    anyhow::ensure!(
+        result.is_geometric_consistent(),
+        "union must be geometrically consistent"
     );
     Ok(())
 }
