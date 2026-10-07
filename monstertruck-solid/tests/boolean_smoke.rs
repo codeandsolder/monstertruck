@@ -260,3 +260,19 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn union_of_coaxial_overlapping_boxes_with_coplanar_sides() -> Result<()> {
+    let a = unit_cube(Point3::origin());
+    let b = unit_cube(Point3::new(0.0, 0.0, 0.5));
+    let result = monstertruck_solid::or(&a, &b, 1.0e-6)?;
+    assert_solid("union of coaxial overlapping boxes", &result, 1.5)
+}
+
+#[test]
+fn intersection_of_coaxial_overlapping_boxes_with_coplanar_sides() -> Result<()> {
+    let a = unit_cube(Point3::origin());
+    let b = unit_cube(Point3::new(0.0, 0.0, 0.5));
+    let result = monstertruck_solid::and(&a, &b, 1.0e-6)?;
+    assert_solid("intersection of coaxial overlapping boxes", &result, 0.5)
+}
