@@ -230,7 +230,76 @@ impl<P: Copy, C: Clone> Loops<P, C> {
         &mut self,
         edge0: Edge<P, C>,
         status: ShapesOpStatus,
-    ) -> [Option<(usize, usize)>; 2] {
+        reuse_coincident: bool,
+    ) -> [Option<(usize, usize)>; 2]
+    where
+        P: Tolerance,
+        C: ParametricCurve<Point = P>
+            + BoundedCurve<Point = P>
+            + SearchNearestParameter<CurveParameter, Point = P>
+            + Invertible,
+    {
+        if reuse_coincident {
+            let curves_match = |edge: &Edge<P, C>| {
+                let lhs = edge.oriented_curve();
+                let rhs = edge0.oriented_curve();
+                let sample_on = |curve: &C, other: &C| {
+                    let (t0, t1) = curve.range_tuple();
+                    [0.25, 0.5, 0.75].into_iter().all(|fraction| {
+                        let point = curve.evaluate(t0 + (t1 - t0) * fraction);
+                        other
+                            .search_nearest_parameter(point, None, 100)
+                            .map(|parameter| other.evaluate(parameter).near(&point))
+                            .unwrap_or(false)
+                    })
+                };
+                let midpoint = |curve: &C| {
+                    let (t0, t1) = curve.range_tuple();
+                    curve.evaluate((t0 + t1) * 0.5)
+                };
+                midpoint(&lhs).near(&midpoint(&rhs))
+                    || (sample_on(&lhs, &rhs) && sample_on(&rhs, &lhs))
+            };
+            let coincident = self.iter().flat_map(|wire| wire.iter()).find_map(|edge| {
+                let same_direction = edge.front().point().near(&edge0.front().point())
+                    && edge.back().point().near(&edge0.back().point());
+                let opposite_direction = edge.front().point().near(&edge0.back().point())
+                    && edge.back().point().near(&edge0.front().point());
+                (same_direction || opposite_direction)
+                    .then(|| curves_match(edge))
+                    .filter(|matched| *matched)
+                    .map(|_| (edge.front().clone(), edge.back().clone(), same_direction))
+            });
+            if let Some((old_front, old_back, same_direction)) = coincident {
+                let (new_front, new_back) = if same_direction {
+                    (edge0.front().clone(), edge0.back().clone())
+                } else {
+                    (edge0.back().clone(), edge0.front().clone())
+                };
+                let mut emap = HashMap::default();
+                if old_front.id() != new_front.id() {
+                    self.change_vertex(&old_front, &new_front, &mut emap);
+                }
+                if old_back.id() != new_back.id() {
+                    self.change_vertex(&old_back, &new_back, &mut emap);
+                }
+                self.iter_mut().for_each(|wire| {
+                    wire.iter_mut().for_each(|edge| {
+                        let same_direction = edge.front().point().near(&edge0.front().point())
+                            && edge.back().point().near(&edge0.back().point());
+                        let opposite_direction = edge.front().point().near(&edge0.back().point())
+                            && edge.back().point().near(&edge0.front().point());
+                        if same_direction {
+                            *edge = edge0.clone();
+                        } else if opposite_direction {
+                            *edge = edge0.inverse();
+                        }
+                    });
+                });
+                return [None, None];
+            }
+        }
+
         let a = self.iter().enumerate().find_map(|(i, wire)| {
             wire.iter().enumerate().find_map(|(j, edge)| {
                 if edge.front() == edge0.back() {
@@ -421,6 +490,160 @@ where
     }
 }
 
+fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vector3)> {
+    let positions = polygon.positions();
+    let origin = *positions.first()?;
+    let mut normal = None;
+    'outer: for i in 1..positions.len() {
+        for j in i + 1..positions.len() {
+            let candidate = (positions[i] - origin).cross(positions[j] - origin);
+            if candidate.magnitude() > tol {
+                normal = Some(candidate.normalize());
+                break 'outer;
+            }
+        }
+    }
+    let normal = normal?;
+    positions
+        .iter()
+        .all(|point| (*point - origin).dot(normal).abs() <= tol)
+        .then_some((origin, normal))
+}
+
+fn planar_polygons_coplanar(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> bool {
+    let Some((lhs_origin, lhs_normal)) = planar_polygon_plane(lhs, tol) else {
+        return false;
+    };
+    let Some((rhs_origin, rhs_normal)) = planar_polygon_plane(rhs, tol) else {
+        return false;
+    };
+    lhs_normal.cross(rhs_normal).magnitude() <= tol
+        && (rhs_origin - lhs_origin).dot(lhs_normal).abs() <= tol
+}
+
+fn planar_polygons_partially_overlap(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> bool {
+    if !planar_polygons_coplanar(lhs, rhs, tol) {
+        return false;
+    }
+    let same_trimmed_face = lhs.neighborhood_include(rhs.positions(), tol)
+        && rhs.neighborhood_include(lhs.positions(), tol);
+    !same_trimmed_face
+        && (lhs.collide_with_neighborhood_of(rhs.positions(), tol)
+            || rhs.collide_with_neighborhood_of(lhs.positions(), tol))
+}
+
+fn shell_polygon_bounds(
+    shell: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+) -> Option<(Point3, Point3)> {
+    let mut points = shell
+        .iter()
+        .filter_map(|face| face.surface())
+        .flat_map(|polygon| polygon.positions().clone());
+    let first = points.next()?;
+    Some(points.fold((first, first), |(mut min, mut max), point| {
+        min.x = min.x.min(point.x);
+        min.y = min.y.min(point.y);
+        min.z = min.z.min(point.z);
+        max.x = max.x.max(point.x);
+        max.y = max.y.max(point.y);
+        max.z = max.z.max(point.z);
+        (min, max)
+    }))
+}
+
+fn shells_have_positive_aabb_overlap(
+    lhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    tol: f64,
+) -> Option<bool> {
+    let (lhs_min, lhs_max) = shell_polygon_bounds(lhs)?;
+    let (rhs_min, rhs_max) = shell_polygon_bounds(rhs)?;
+    Some(
+        lhs_max.x.min(rhs_max.x) - lhs_min.x.max(rhs_min.x) > tol
+            && lhs_max.y.min(rhs_max.y) - lhs_min.y.max(rhs_min.y) > tol
+            && lhs_max.z.min(rhs_max.z) - lhs_min.z.max(rhs_min.z) > tol,
+    )
+}
+
+fn shells_have_partial_planar_overlap(
+    lhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    tol: f64,
+) -> Option<bool> {
+    if !shells_have_positive_aabb_overlap(lhs, rhs, tol)? {
+        return Some(false);
+    }
+    for left in lhs.iter() {
+        let left_polygon = left.surface()?;
+        for right in rhs.iter() {
+            let right_polygon = right.surface()?;
+            if planar_polygons_partially_overlap(&left_polygon, &right_polygon, tol) {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
+}
+
+fn imprint_edges_on_faces<C>(
+    source: &LoopsStore<Point3, C>,
+    target_poly_shell: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    target: &mut LoopsStore<Point3, C>,
+    tol: f64,
+) -> Option<()>
+where
+    C: ParametricCurve3D
+        + BoundedCurve<Point = Point3>
+        + Cut<Point = Point3, Vector = Vector3>
+        + SearchParameter<CurveParameter, Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>
+        + Invertible
+        + Clone,
+{
+    let mut unique = Vec::<Edge<Point3, C>>::new();
+    source
+        .iter()
+        .flat_map(|loops| loops.iter())
+        .flat_map(|wire| wire.iter())
+        .for_each(|edge| {
+            if !unique.iter().any(|candidate| candidate.id() == edge.id()) {
+                unique.push(edge.clone());
+            }
+        });
+
+    let proximity = tol.max(1.0e-4) * 2.0;
+    for face_index in 0..target.len() {
+        let polygon = target_poly_shell[face_index].surface()?;
+        for edge in &unique {
+            let curve = edge.oriented_curve();
+            let (t0, t1) = curve.range_tuple();
+            let samples = [
+                edge.front().point(),
+                curve.subs((t0 + t1) * 0.5),
+                edge.back().point(),
+            ];
+            if !polygon.neighborhood_include(&samples, proximity) {
+                continue;
+            }
+            if target[face_index]
+                .search_parameter(edge.front().point())
+                .is_none()
+                || target[face_index]
+                    .search_parameter(edge.back().point())
+                    .is_none()
+            {
+                continue;
+            }
+
+            let mut emap = HashMap::default();
+            target.add_polygon_vertex(face_index, edge.front(), &mut emap)?;
+            target.add_polygon_vertex(face_index, edge.back(), &mut emap)?;
+            target[face_index].add_edge(edge.clone(), ShapesOpStatus::And, true);
+        }
+    }
+    Some(())
+}
+
 fn create_independent_loop<P, C, D>(mut poly_curve0: C) -> Wire<P, D>
 where
     C: Cut<Point = P>,
@@ -441,6 +664,7 @@ pub(super) struct LoopsStoreQuadruple<C> {
     pub(super) poly_loops_store0: LoopsStore<Point3, PolylineCurve>,
     pub(super) geom_loops_store1: LoopsStore<Point3, C>,
     pub(super) poly_loops_store1: LoopsStore<Point3, PolylineCurve>,
+    pub(super) coplanar_overlap: bool,
 }
 
 pub(super) fn create_loops_stores<C, S>(
@@ -448,12 +672,15 @@ pub(super) fn create_loops_stores<C, S>(
     poly_shell0: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     geom_shell1: &Shell<Point3, C, S>,
     poly_shell1: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    tol: f64,
+    imprint_coplanar: bool,
 ) -> Option<LoopsStoreQuadruple<C>>
 where
     C: SearchNearestParameter<CurveParameter, Point = Point3>
         + SearchParameter<CurveParameter, Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>
-        + From<IntersectionCurve<PolylineCurve, S, S>>,
+        + From<IntersectionCurve<PolylineCurve, S, S>>
+        + Invertible,
     S: ParametricSurface3D
         + Clone
         + SearchParameter<SurfaceParameter, Point = Point3>
@@ -465,6 +692,8 @@ where
     let mut poly_loops_store1: LoopsStore<_, _> = poly_shell1.face_iter().collect();
     let store0_len = geom_loops_store0.len();
     let store1_len = geom_loops_store1.len();
+    let coplanar_overlap = imprint_coplanar
+        && shells_have_partial_planar_overlap(poly_shell0, poly_shell1, tol.max(1.0e-4) * 2.0)?;
     (0..store0_len)
         .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
         .try_for_each(|(face_index0, face_index1)| {
@@ -563,18 +792,40 @@ where
                     }
                     let pedge = Edge::new(&pv0, &pv1, polyline);
                     let gedge = Edge::new(&gv0, &gv1, intersection_curve.into());
-                    poly_loops_store0[face_index0].add_edge(pedge.clone(), status0);
-                    geom_loops_store0[face_index0].add_edge(gedge.clone(), status0);
-                    poly_loops_store1[face_index1].add_edge(pedge, status1);
-                    geom_loops_store1[face_index1].add_edge(gedge, status1);
+                    poly_loops_store0[face_index0].add_edge(
+                        pedge.clone(),
+                        status0,
+                        coplanar_overlap,
+                    );
+                    geom_loops_store0[face_index0].add_edge(
+                        gedge.clone(),
+                        status0,
+                        coplanar_overlap,
+                    );
+                    poly_loops_store1[face_index1].add_edge(pedge, status1, coplanar_overlap);
+                    geom_loops_store1[face_index1].add_edge(gedge, status1, coplanar_overlap);
                 }
                 Some(())
             })
         })?;
+
+    // Mesh/mesh interference intentionally ignores coplanar contact. By this
+    // point ordinary SSI has already split the boundary edges at transverse
+    // intersections, so imprint those existing edge segments onto any face of
+    // the opposite operand that contains them. This supplies the missing trim
+    // lines for coplanar overlap without manufacturing approximate SSI curves.
+    if coplanar_overlap {
+        let source0 = geom_loops_store0.clone();
+        let source1 = geom_loops_store1.clone();
+        imprint_edges_on_faces(&source1, poly_shell0, &mut geom_loops_store0, tol)?;
+        imprint_edges_on_faces(&source0, poly_shell1, &mut geom_loops_store1, tol)?;
+    }
+
     Some(LoopsStoreQuadruple {
         geom_loops_store0,
         poly_loops_store0,
         geom_loops_store1,
         poly_loops_store1,
+        coplanar_overlap,
     })
 }

@@ -35,6 +35,95 @@ type ClassicResult<T> = std::result::Result<T, ShapeOpsError>;
 type AltCurve<C, S> = Alternative<C, IntersectionCurve<PolylineCurve<Point3>, S, S>>;
 type AltCurveShell<C, S> = Shell<Point3, AltCurve<C, S>, S>;
 
+fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell: &AltCurveShell<C, S>,
+) -> AltCurveShell<C, S> {
+    type AltEdge<C, S> = Edge<Point3, AltCurve<C, S>>;
+
+    let mut vertices = Vec::<Vertex<Point3>>::new();
+    let mut edges = Vec::<AltEdge<C, S>>::new();
+    let canonical_vertex = |point: Point3, vertices: &mut Vec<Vertex<Point3>>| {
+        if let Some(vertex) = vertices.iter().find(|vertex| vertex.point().near(&point)) {
+            vertex.clone()
+        } else {
+            let vertex = Vertex::new(point);
+            vertices.push(vertex.clone());
+            vertex
+        }
+    };
+    let curves_coincident = |lhs: &AltEdge<C, S>, rhs: &AltEdge<C, S>| {
+        let lhs_curve = lhs.oriented_curve();
+        let rhs_curve = rhs.oriented_curve();
+        let midpoint = |curve: &AltCurve<C, S>| {
+            let (t0, t1) = curve.range_tuple();
+            curve.evaluate((t0 + t1) * 0.5)
+        };
+        if midpoint(&lhs_curve).near(&midpoint(&rhs_curve)) {
+            return true;
+        }
+        let sampled_on_other = |curve: &AltCurve<C, S>, other: &AltCurve<C, S>| {
+            let (t0, t1) = curve.range_tuple();
+            [0.25, 0.5, 0.75].into_iter().all(|fraction| {
+                let point = curve.evaluate(t0 + (t1 - t0) * fraction);
+                other
+                    .search_nearest_parameter(point, None, 100)
+                    .map(|parameter| other.evaluate(parameter).near(&point))
+                    .unwrap_or(false)
+            })
+        };
+        sampled_on_other(&lhs_curve, &rhs_curve) && sampled_on_other(&rhs_curve, &lhs_curve)
+    };
+
+    let faces = shell
+        .iter()
+        .map(|face| {
+            let wires = face
+                .absolute_boundaries()
+                .iter()
+                .map(|wire| {
+                    let rebuilt = wire
+                        .iter()
+                        .map(|edge| {
+                            let front =
+                                canonical_vertex(edge.absolute_front().point(), &mut vertices);
+                            let back =
+                                canonical_vertex(edge.absolute_back().point(), &mut vertices);
+                            let mut rebuilt = Edge::new(&front, &back, edge.curve());
+                            if !edge.orientation() {
+                                rebuilt.invert();
+                            }
+                            if let Some(canonical) = edges.iter().find(|candidate| {
+                                let same_endpoints = candidate.front() == rebuilt.front()
+                                    && candidate.back() == rebuilt.back();
+                                let opposite_endpoints = candidate.front() == rebuilt.back()
+                                    && candidate.back() == rebuilt.front();
+                                (same_endpoints || opposite_endpoints)
+                                    && curves_coincident(candidate, &rebuilt)
+                            }) {
+                                if canonical.front() == rebuilt.front() {
+                                    canonical.clone()
+                                } else {
+                                    canonical.inverse()
+                                }
+                            } else {
+                                edges.push(rebuilt.clone());
+                                rebuilt
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    Wire::from(rebuilt)
+                })
+                .collect::<Vec<_>>();
+            let mut rebuilt = Face::new_unchecked(wires, face.surface());
+            if !face.orientation() {
+                rebuilt.invert();
+            }
+            rebuilt
+        })
+        .collect::<Vec<_>>();
+    Shell::from(faces)
+}
+
 /// Convert a polyline leader to an exactly equivalent degree-1 B-spline.
 ///
 /// `PolylineCurve` uses integer segment parameters, so scale the uniform knot
@@ -153,6 +242,67 @@ fn classify_unknown_face<C, S>(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FaceRelation {
+    Inside,
+    Outside,
+    CoincidentSameFacing,
+}
+
+fn classify_face_relation<C, S>(
+    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    face: &Face<Point3, C, S>,
+    tol: f64,
+) -> Option<FaceRelation>
+where
+    S: Clone
+        + Invertible
+        + ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let points = sample_points_on_face(face)?;
+    let surface = face.oriented_surface();
+    let offset = tol.max(1.0e-4) * 8.0;
+    let (inside, outside, coincident, total) = points.into_iter().try_fold(
+        (0usize, 0usize, 0usize, 0usize),
+        |(inside, outside, coincident, total), point| {
+            let parameter = surface
+                .search_parameter(point, None, 100)
+                .or_else(|| surface.search_nearest_parameter(point, None, 100));
+            let Some((u, v)) = parameter else {
+                let is_inside = classify_inside_with_polyshell(poly_shell, point)?;
+                return Some((
+                    inside + usize::from(is_inside),
+                    outside + usize::from(!is_inside),
+                    coincident,
+                    total + 1,
+                ));
+            };
+            let normal = surface.normal(u, v);
+            let outward_inside =
+                classify_inside_with_polyshell(poly_shell, point + normal * offset)?;
+            let inward_inside =
+                classify_inside_with_polyshell(poly_shell, point - normal * offset)?;
+            if outward_inside {
+                Some((inside + 1, outside, coincident, total + 1))
+            } else if inward_inside {
+                Some((inside, outside, coincident + 1, total + 1))
+            } else {
+                Some((inside, outside + 1, coincident, total + 1))
+            }
+        },
+    )?;
+    let relation = if total != 0 && coincident > inside && coincident > outside {
+        FaceRelation::CoincidentSameFacing
+    } else if inside > outside {
+        FaceRelation::Inside
+    } else {
+        FaceRelation::Outside
+    };
+    Some(relation)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PairMode {
     AndOr,
     Difference,
@@ -181,8 +331,16 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let loops_store::LoopsStoreQuadruple {
         geom_loops_store0: loops_store0,
         geom_loops_store1: loops_store1,
+        coplanar_overlap,
         ..
-    } = loops_store::create_loops_stores(&altshell0, &poly_shell0, &altshell1, &poly_shell1)?;
+    } = loops_store::create_loops_stores(
+        &altshell0,
+        &poly_shell0,
+        &altshell1,
+        &poly_shell1,
+        tol,
+        mode == PairMode::AndOr,
+    )?;
     let mut cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)?;
     cls0.integrate_by_component();
     let mut cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)?;
@@ -261,27 +419,68 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         return Some([difference_shell, Shell::default()]);
     }
 
-    let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
-    unknown0.into_iter().try_for_each(|face| {
-        if classify_unknown_face(&poly_shell1, &face)? {
-            and0.push(face);
-        } else {
-            or0.push(face);
-        }
-        Some(())
-    })?;
-    let [mut and1, mut or1, unknown1] = cls1.and_or_unknown();
-    unknown1.into_iter().try_for_each(|face| {
-        let inside = classify_unknown_face(&poly_shell0, &face)?;
-        if inside {
-            and1.push(face);
-        } else {
-            or1.push(face);
-        }
-        Some(())
-    })?;
+    if !coplanar_overlap {
+        let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
+        unknown0.into_iter().try_for_each(|face| {
+            if classify_unknown_face(&poly_shell1, &face)? {
+                and0.push(face);
+            } else {
+                or0.push(face);
+            }
+            Some(())
+        })?;
+        let [mut and1, mut or1, unknown1] = cls1.and_or_unknown();
+        unknown1.into_iter().try_for_each(|face| {
+            if classify_unknown_face(&poly_shell0, &face)? {
+                and1.push(face);
+            } else {
+                or1.push(face);
+            }
+            Some(())
+        })?;
+        and0.append(&mut and1);
+        or0.append(&mut or1);
+        let and_shell = altshell_to_shell(&and0)?;
+        let or_shell = altshell_to_shell(&or0)?;
+        return Some([and_shell, or_shell]);
+    }
+
+    let [and0_labeled, or0_labeled, unknown0] = cls0.and_or_unknown();
+    let mut and0 = AltCurveShell::default();
+    let mut or0 = AltCurveShell::default();
+    and0_labeled
+        .into_iter()
+        .chain(or0_labeled)
+        .chain(unknown0)
+        .try_for_each(|face| {
+            let relation = classify_face_relation(&poly_shell1, &face, tol)?;
+            match relation {
+                FaceRelation::Inside => and0.push(face),
+                FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(face),
+            }
+            Some(())
+        })?;
+
+    let [and1_labeled, or1_labeled, unknown1] = cls1.and_or_unknown();
+    let mut and1 = AltCurveShell::default();
+    let mut or1 = AltCurveShell::default();
+    and1_labeled
+        .into_iter()
+        .chain(or1_labeled)
+        .chain(unknown1)
+        .try_for_each(|face| {
+            let relation = classify_face_relation(&poly_shell0, &face, tol)?;
+            match relation {
+                FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(face),
+                FaceRelation::Outside => or1.push(face),
+            }
+            Some(())
+        })?;
+
     and0.append(&mut and1);
     or0.append(&mut or1);
+    and0 = weld_coincident_topology(&and0);
+    or0 = weld_coincident_topology(&or0);
     let and_shell = altshell_to_shell(&and0)?;
     let or_shell = altshell_to_shell(&or0)?;
     Some([and_shell, or_shell])
