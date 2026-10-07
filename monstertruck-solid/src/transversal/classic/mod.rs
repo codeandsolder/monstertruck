@@ -321,7 +321,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // tolerance here can massively over-refine curved shells and make SSI
     // classification less stable without improving the final curve tolerance.
     // Keep the actual divide/classification tolerance strict below.
-    let seed_tol = tol.max(1.0e-4);
+    let seed_tol = tol.max(1.0e-3);
     let poly_shell0 = shell0.triangulation(seed_tol);
     let poly_shell1 = shell1.triangulation(seed_tol);
     let altshell0: AltCurveShell<C, S> =
