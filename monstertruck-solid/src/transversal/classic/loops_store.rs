@@ -542,10 +542,190 @@ fn planar_polygons_coplanar(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> b
         && (rhs_origin - lhs_origin).dot(lhs_normal).abs() <= tol
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PlanarPolygonSignature {
+    area: f64,
+    centroid: Point3,
+    bounds: [f64; 4],
+}
+
+fn planar_basis(normal: Vector3) -> Option<(Vector3, Vector3)> {
+    let reference = if normal.x.abs() <= normal.y.abs() && normal.x.abs() <= normal.z.abs() {
+        Vector3::unit_x()
+    } else if normal.y.abs() <= normal.z.abs() {
+        Vector3::unit_y()
+    } else {
+        Vector3::unit_z()
+    };
+    let u = normal.cross(reference);
+    (!u.magnitude2().so_small()).then(|| {
+        let u = u.normalize();
+        (u, normal.cross(u).normalize())
+    })
+}
+
+fn planar_polygon_set_signature<'a>(
+    polygons: impl IntoIterator<Item = &'a PolygonMesh>,
+    origin: Point3,
+    normal: Vector3,
+) -> Option<PlanarPolygonSignature> {
+    let (u, v) = planar_basis(normal)?;
+    let mut area = 0.0;
+    let mut weighted_centroid = Vector3::new(0.0, 0.0, 0.0);
+    let mut min_u = f64::INFINITY;
+    let mut max_u = f64::NEG_INFINITY;
+    let mut min_v = f64::INFINITY;
+    let mut max_v = f64::NEG_INFINITY;
+    let mut any = false;
+
+    for polygon in polygons {
+        any = true;
+        for triangle in polygon.faces().triangle_iter() {
+            let a = polygon.positions()[triangle[0].pos];
+            let b = polygon.positions()[triangle[1].pos];
+            let c = polygon.positions()[triangle[2].pos];
+            let triangle_area = 0.5 * (b - a).cross(c - a).magnitude();
+            if !triangle_area.is_finite() || triangle_area.so_small() {
+                continue;
+            }
+            area += triangle_area;
+            weighted_centroid +=
+                (a.to_vec() + b.to_vec() + c.to_vec()) * (triangle_area / 3.0);
+        }
+        for point in polygon.positions() {
+            let delta = *point - origin;
+            let pu = delta.dot(u);
+            let pv = delta.dot(v);
+            min_u = min_u.min(pu);
+            max_u = max_u.max(pu);
+            min_v = min_v.min(pv);
+            max_v = max_v.max(pv);
+        }
+    }
+    if !any || !area.is_finite() || area.so_small() {
+        return None;
+    }
+    let centroid = Point3::from_vec(weighted_centroid / area);
+    [min_u, max_u, min_v, max_v]
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(PlanarPolygonSignature {
+            area,
+            centroid,
+            bounds: [min_u, max_u, min_v, max_v],
+        })
+}
+
+fn planar_polygon_signature(
+    polygon: &PolygonMesh,
+    origin: Point3,
+    normal: Vector3,
+) -> Option<PlanarPolygonSignature> {
+    planar_polygon_set_signature(std::iter::once(polygon), origin, normal)
+}
+
+fn planar_signatures_match(
+    lhs: PlanarPolygonSignature,
+    rhs: PlanarPolygonSignature,
+    tol: f64,
+) -> bool {
+    let span = (lhs.bounds[1] - lhs.bounds[0])
+        .abs()
+        .max((lhs.bounds[3] - lhs.bounds[2]).abs())
+        .max((rhs.bounds[1] - rhs.bounds[0]).abs())
+        .max((rhs.bounds[3] - rhs.bounds[2]).abs())
+        .max(tol);
+    let area_tol = 8.0 * tol * span + 16.0 * tol * tol;
+    (lhs.area - rhs.area).abs() <= area_tol
+        && lhs.centroid.distance(rhs.centroid) <= 2.0 * tol
+        && lhs
+            .bounds
+            .iter()
+            .zip(rhs.bounds)
+            .all(|(lhs, rhs)| (*lhs - rhs).abs() <= 2.0 * tol)
+}
+
 fn planar_polygons_same_trimmed_face(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> bool {
-    planar_polygons_coplanar(lhs, rhs, tol)
-        && lhs.neighborhood_include(rhs.positions(), tol)
-        && rhs.neighborhood_include(lhs.positions(), tol)
+    let Some((lhs_origin, lhs_normal)) = planar_polygon_plane(lhs, tol) else {
+        return false;
+    };
+    let Some((rhs_origin, rhs_normal)) = planar_polygon_plane(rhs, tol) else {
+        return false;
+    };
+    if lhs_normal.cross(rhs_normal).magnitude() > tol
+        || (rhs_origin - lhs_origin).dot(lhs_normal).abs() > tol
+    {
+        return false;
+    }
+    let Some(lhs_signature) = planar_polygon_signature(lhs, lhs_origin, lhs_normal) else {
+        return false;
+    };
+    let Some(rhs_signature) = planar_polygon_signature(rhs, lhs_origin, lhs_normal) else {
+        return false;
+    };
+    planar_signatures_match(lhs_signature, rhs_signature, tol)
+}
+
+fn projected_bounds_overlap(lhs: [f64; 4], rhs: [f64; 4], tol: f64) -> bool {
+    lhs[1].min(rhs[1]) + tol >= lhs[0].max(rhs[0])
+        && lhs[3].min(rhs[3]) + tol >= lhs[2].max(rhs[2])
+}
+
+/// Match one trimmed planar face against a partition of the same physical
+/// interface on the other shell. Revolving a radial cap, for example, may
+/// represent one disk as two semicircular faces while a sweep uses one disk.
+fn single_face_matches_planar_partition(
+    target: &PolygonMesh,
+    fragments: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    tol: f64,
+) -> Option<Option<usize>> {
+    let Some((origin, normal)) = planar_polygon_plane(target, tol) else {
+        return Some(None);
+    };
+    let Some(target_signature) = planar_polygon_signature(target, origin, normal) else {
+        return Some(None);
+    };
+    let mut matched = Vec::<PolygonMesh>::new();
+    let mut representative = None;
+    for (index, face) in fragments.iter().enumerate() {
+        let polygon = face.surface()?;
+        if !planar_polygons_coplanar(target, &polygon, tol) {
+            continue;
+        }
+        let signature = planar_polygon_signature(&polygon, origin, normal)?;
+        if !projected_bounds_overlap(target_signature.bounds, signature.bounds, tol) {
+            continue;
+        }
+        matched.push(polygon);
+        representative.get_or_insert(index);
+    }
+    if matched.is_empty() {
+        return Some(None);
+    }
+    let fragment_signature = planar_polygon_set_signature(matched.iter(), origin, normal)?;
+    Some(planar_signatures_match(target_signature, fragment_signature, tol).then_some(
+        representative.expect("non-empty planar fragment group has a representative"),
+    ))
+}
+
+fn shells_full_planar_interface_pair(
+    lhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    tol: f64,
+) -> Option<Option<(usize, usize)>> {
+    for (left_index, left) in lhs.iter().enumerate() {
+        let left_polygon = left.surface()?;
+        if let Some(right_index) = single_face_matches_planar_partition(&left_polygon, rhs, tol)? {
+            return Some(Some((left_index, right_index)));
+        }
+    }
+    for (right_index, right) in rhs.iter().enumerate() {
+        let right_polygon = right.surface()?;
+        if let Some(left_index) = single_face_matches_planar_partition(&right_polygon, lhs, tol)? {
+            return Some(Some((left_index, right_index)));
+        }
+    }
+    Some(None)
 }
 
 fn planar_polygons_partially_overlap(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> bool {
@@ -595,63 +775,7 @@ fn shells_have_full_planar_interface(
     rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     tol: f64,
 ) -> Option<bool> {
-    for left in lhs.iter() {
-        let left_polygon = left.surface()?;
-        for right in rhs.iter() {
-            let right_polygon = right.surface()?;
-            if planar_polygons_same_trimmed_face(&left_polygon, &right_polygon, tol) {
-                return Some(true);
-            }
-        }
-    }
-    Some(false)
-}
-
-fn shells_have_opposed_full_planar_interface<C, S>(
-    geom_lhs: &Shell<Point3, C, S>,
-    poly_lhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
-    geom_rhs: &Shell<Point3, C, S>,
-    poly_rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
-    tol: f64,
-) -> Option<bool>
-where
-    C: Clone,
-    S: ParametricSurface3D
-        + Clone
-        + Invertible
-        + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
-{
-    for (left_index, left) in poly_lhs.iter().enumerate() {
-        let left_polygon = left.surface()?;
-        for (right_index, right) in poly_rhs.iter().enumerate() {
-            let right_polygon = right.surface()?;
-            if !planar_polygons_same_trimmed_face(&left_polygon, &right_polygon, tol) {
-                continue;
-            }
-            let point = *left_polygon.positions().first()?;
-            let left_surface = geom_lhs[left_index].oriented_surface();
-            let right_surface = geom_rhs[right_index].oriented_surface();
-            let left_parameter = left_surface
-                .search_parameter(point, None, 100)
-                .or_else(|| left_surface.search_nearest_parameter(point, None, 100))?;
-            let right_parameter = right_surface
-                .search_parameter(point, None, 100)
-                .or_else(|| right_surface.search_nearest_parameter(point, None, 100))?;
-            let left_normal = left_surface.normal(left_parameter.0, left_parameter.1);
-            let right_normal = right_surface.normal(right_parameter.0, right_parameter.1);
-            let left_norm = left_normal.magnitude();
-            let right_norm = right_normal.magnitude();
-            if left_norm <= tol || right_norm <= tol {
-                continue;
-            }
-            let cosine = left_normal.dot(right_normal) / (left_norm * right_norm);
-            if cosine <= -1.0 + 1.0e-6 {
-                return Some(true);
-            }
-        }
-    }
-    Some(false)
+    Some(shells_full_planar_interface_pair(lhs, rhs, tol)?.is_some())
 }
 
 fn shells_have_partial_planar_overlap(
@@ -783,19 +907,12 @@ where
     let mut poly_loops_store1: LoopsStore<_, _> = poly_shell1.face_iter().collect();
     let store0_len = geom_loops_store0.len();
     let store1_len = geom_loops_store1.len();
-    let coplanar_tol = tol.max(1.0e-4) * 2.0;
+    let coplanar_tol = tol.max(1.0e-3) * 2.0;
     let positive_aabb_overlap =
         shells_have_positive_aabb_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
     let full_coplanar_interface = imprint_coplanar
         && shells_have_full_planar_interface(poly_shell0, poly_shell1, coplanar_tol)?;
-    let full_interface_adjacency = full_coplanar_interface
-        && shells_have_opposed_full_planar_interface(
-            geom_shell0,
-            poly_shell0,
-            geom_shell1,
-            poly_shell1,
-            coplanar_tol,
-        )?;
+    let full_interface_adjacency = full_coplanar_interface && !positive_aabb_overlap;
     let partial_coplanar_overlap = imprint_coplanar
         && positive_aabb_overlap
         && shells_have_partial_planar_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
