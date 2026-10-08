@@ -18,11 +18,11 @@ ci: fmt-check lint-check readme-check test-cpu test-doc meshing-features
 
 # Format code.
 fmt:
-    cargo fmt --all
+    cargo +nightly fmt --all
 
 # Verify formatting without writing.
 fmt-check:
-    cargo fmt --all -- --check
+    cargo +nightly fmt --all -- --check
 
 # Run clippy with autofix (modifies working tree).
 lint:
