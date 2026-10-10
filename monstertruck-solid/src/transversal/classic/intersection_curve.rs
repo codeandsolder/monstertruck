@@ -7,11 +7,11 @@
 //! parameter-space polylines the 0.3.2 wrapper carried are dropped here: the
 //! classic loops-store consumes only the 3D leader.
 
-use monstertruck_core::cgmath64::*;
+use monstertruck_core::{cgmath64::*, tolerance::TOLERANCE};
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 
-use crate::transversal::polyline_construction::construct_polylines;
+use crate::transversal::polyline_construction::{construct_polylines, stitch_nearby_polylines};
 
 type Polyline = PolylineCurve<Point3>;
 
@@ -78,6 +78,7 @@ pub(super) fn intersection_curves<S>(
     polygon0: &PolygonMesh,
     surface1: S,
     polygon1: &PolygonMesh,
+    tol: f64,
 ) -> Option<Vec<IntersectionTuple<S>>>
 where
     S: ParametricSurface3D
@@ -86,7 +87,9 @@ where
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     let interferences = polygon0.extract_interference(polygon1);
-    construct_polylines(&interferences)
+    let stitch_tolerance = 4.0 * tol.max(TOLERANCE);
+    let polylines = stitch_nearby_polylines(construct_polylines(&interferences), stitch_tolerance)?;
+    polylines
         .into_iter()
         .map(|polyline| {
             let curve =
