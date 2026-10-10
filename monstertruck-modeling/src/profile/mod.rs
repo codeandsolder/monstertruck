@@ -244,7 +244,13 @@ where
     Line<Point3>: ToSameGeometry<C>,
     ExtrusionSurface<C, Vector3>: ToSameGeometry<S>,
 {
-    let face = attach_plane_normalized(wires)?;
+    let mut normalized = classify_and_normalize(wires)?;
+    let outer = normalized.first().ok_or(Error::NoOuterLoop)?;
+    let normal = compute_plane_normal(std::slice::from_ref(outer)).ok_or(Error::WireNotInOnePlane)?;
+    if normal.dot(dir) < 0.0 {
+        normalized.iter_mut().for_each(|wire| *wire = wire.inverse());
+    }
+    let face = crate::builder::try_attach_plane(normalized)?;
     let solid: monstertruck_topology::Solid<Point3, C, S> = crate::builder::extrude(&face, dir);
     Ok(solid)
 }
