@@ -1104,6 +1104,54 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
         &holed_boss,
         Matrix4::from_translation(Vector3::new(4.034635930926474, 4.360761830167558, 0.69999)),
     );
+    // A disjoint thin boss can cross several already-partitioned coplanar host
+    // faces. The pairwise SSI segments must share their common endpoint even
+    // when independently solved adjacent face pairs differ by a few tolerances.
+    let with_holed_boss_only = monstertruck_solid::or(&result, &holed_boss, STRICT_TOL)?;
+    let rectilinear_vertices = builder::vertices([
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.10938253279665622, 0.0, 0.0),
+        Point3::new(0.10938253279665622, 0.023186601533788043, 0.0),
+        Point3::new(0.026253887386892494, 0.023186601533788043, 0.0),
+        Point3::new(0.026253887386892494, 0.09160267242710063, 0.0),
+        Point3::new(0.09898495363354964, 0.09160267242710063, 0.0),
+        Point3::new(0.09898495363354964, 0.1148932497523969, 0.0),
+        Point3::new(0.026253887386892494, 0.1148932497523969, 0.0),
+        Point3::new(0.026253887386892494, 0.17998209531452503, 0.0),
+        Point3::new(0.10475561006877543, 0.17998209531452503, 0.0),
+        Point3::new(0.10475561006877543, 0.20337664843133396, 0.0),
+        Point3::new(0.0, 0.20337664843133396, 0.0),
+    ]);
+    let rectilinear_wire: Wire = vec![
+        builder::line(&rectilinear_vertices[0], &rectilinear_vertices[1]),
+        builder::line(&rectilinear_vertices[1], &rectilinear_vertices[2]),
+        builder::line(&rectilinear_vertices[2], &rectilinear_vertices[3]),
+        builder::line(&rectilinear_vertices[3], &rectilinear_vertices[4]),
+        builder::line(&rectilinear_vertices[4], &rectilinear_vertices[5]),
+        builder::line(&rectilinear_vertices[5], &rectilinear_vertices[6]),
+        builder::line(&rectilinear_vertices[6], &rectilinear_vertices[7]),
+        builder::line(&rectilinear_vertices[7], &rectilinear_vertices[8]),
+        builder::line(&rectilinear_vertices[8], &rectilinear_vertices[9]),
+        builder::line(&rectilinear_vertices[9], &rectilinear_vertices[10]),
+        builder::line(&rectilinear_vertices[10], &rectilinear_vertices[11]),
+        builder::line(&rectilinear_vertices[11], &rectilinear_vertices[0]),
+    ]
+    .into();
+    let rectilinear_boss = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![rectilinear_wire],
+        Vector3::new(0.0, 0.0, 0.010010000000000008),
+    )?;
+    let rectilinear_boss = builder::transformed(
+        &rectilinear_boss,
+        Matrix4::from_translation(Vector3::new(3.900871074992246, 4.321874884097263, 0.69999)),
+    );
+    let with_rectilinear_boss =
+        monstertruck_solid::or(&with_holed_boss_only, &rectilinear_boss, STRICT_TOL)?;
+    anyhow::ensure!(
+        with_rectilinear_boss.is_geometric_consistent(),
+        "exact glyph + holed boss + rectilinear boss must stay consistent"
+    );
+
     let with_middle_boss = monstertruck_solid::or(&result, &middle_boss, STRICT_TOL)?;
     let with_holed_boss = monstertruck_solid::or(&with_middle_boss, &holed_boss, STRICT_TOL)?;
     anyhow::ensure!(

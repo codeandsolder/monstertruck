@@ -8,7 +8,7 @@
 #![allow(clippy::many_single_char_names)]
 
 use super::intersection_curve;
-use monstertruck_core::cgmath64::*;
+use monstertruck_core::{cgmath64::*, tolerance::TOLERANCE};
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::{Vertex, *};
@@ -857,6 +857,29 @@ where
     Some(())
 }
 
+fn unique_nearby_loop_point<C>(
+    lhs: &Loops<Point3, C>,
+    rhs: &Loops<Point3, C>,
+    point: Point3,
+    tolerance: f64,
+) -> Option<Point3> {
+    let mut candidate = None;
+    for nearby in lhs
+        .iter()
+        .chain(rhs.iter())
+        .flat_map(|wire| wire.vertex_iter())
+        .map(|vertex| vertex.point())
+        .filter(|nearby| (*nearby - point).magnitude() <= tolerance)
+    {
+        match candidate {
+            None => candidate = Some(nearby),
+            Some(existing) if existing.near(&nearby) => {}
+            Some(_) => return None,
+        }
+    }
+    candidate
+}
+
 fn create_independent_loop<P, C, D>(mut poly_curve0: C) -> Wire<P, D>
 where
     C: Cut<Point = P>,
@@ -951,7 +974,7 @@ where
                 tol,
             )?;
             curves.into_iter()
-            .try_for_each(|(polyline, mut intersection_curve)| {
+            .try_for_each(|(mut polyline, mut intersection_curve)| {
                 let status = ShapesOpStatus::from_is_curve(&intersection_curve)?;
                 let (status0, status1) = match (ori0, ori1) {
                     (true, true) => (status, status.not()),
@@ -971,10 +994,40 @@ where
                     geom_loops_store1[face_index1]
                         .add_independent_loop(BoundaryWire::new(geom_wire, status1));
                 } else {
-                    let pv0 = Vertex::new(polyline.front());
-                    let pv1 = Vertex::new(polyline.back());
-                    let gv0 = Vertex::new(polyline.front());
-                    let gv1 = Vertex::new(polyline.back());
+                    // Adjacent face-pairs solve SSI independently. Their shared
+                    // endpoint can differ by a few Boolean tolerances even though both
+                    // segments belong to one topological intersection. Snap only to a
+                    // unique already-known endpoint on either face; ambiguous nearby
+                    // topology remains fail-closed. Each pairwise polyline stitch uses
+                    // 4x tolerance, so 8x bounds two independently stitched neighbours.
+                    let stitch_tolerance = 8.0 * tol.max(TOLERANCE);
+                    let mut front = polyline.front();
+                    let mut back = polyline.back();
+                    if let Some(point) = unique_nearby_loop_point(
+                        &geom_loops_store0[face_index0],
+                        &geom_loops_store1[face_index1],
+                        front,
+                        stitch_tolerance,
+                    ) {
+                        front = point;
+                    }
+                    if let Some(point) = unique_nearby_loop_point(
+                        &geom_loops_store0[face_index0],
+                        &geom_loops_store1[face_index1],
+                        back,
+                        stitch_tolerance,
+                    ) {
+                        back = point;
+                    }
+                    *polyline.first_mut().unwrap() = front;
+                    *polyline.last_mut().unwrap() = back;
+                    *intersection_curve.leader_mut().first_mut().unwrap() = front;
+                    *intersection_curve.leader_mut().last_mut().unwrap() = back;
+
+                    let pv0 = Vertex::new(front);
+                    let pv1 = Vertex::new(back);
+                    let gv0 = Vertex::new(front);
+                    let gv1 = Vertex::new(back);
                     let mut pemap0 = HashMap::default();
                     let mut pemap1 = HashMap::default();
                     let mut gemap0 = HashMap::default();
