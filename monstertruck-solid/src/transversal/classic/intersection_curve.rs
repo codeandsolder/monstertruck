@@ -91,6 +91,12 @@ where
     let polylines = stitch_nearby_polylines(construct_polylines(&interferences), stitch_tolerance)?;
     polylines
         .into_iter()
+        // Mesh interference can contain isolated point contacts. They do not
+        // define a one-dimensional trim and therefore cannot divide either
+        // face. Keep real intersection branches strict, but discard these
+        // zero-dimensional artifacts instead of letting one make the whole
+        // Boolean look like an SSI failure.
+        .filter(|polyline| polyline.len() >= 2)
         .map(|polyline| {
             let curve =
                 build_intersection_curve(surface0.clone(), surface1.clone(), polyline.clone())?;
