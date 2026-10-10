@@ -1153,10 +1153,22 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     );
 
     let with_middle_boss = monstertruck_solid::or(&result, &middle_boss, STRICT_TOL)?;
+    let with_middle_rect =
+        monstertruck_solid::or(&with_middle_boss, &rectilinear_boss, STRICT_TOL)?;
+    anyhow::ensure!(
+        with_middle_rect.is_geometric_consistent(),
+        "exact glyph + middle boss + rectilinear boss must stay consistent"
+    );
     let with_holed_boss = monstertruck_solid::or(&with_middle_boss, &holed_boss, STRICT_TOL)?;
     anyhow::ensure!(
         with_holed_boss.is_geometric_consistent(),
         "exact glyph + middle boss + holed boss must stay consistent"
+    );
+    let with_middle_holed_rect =
+        monstertruck_solid::or(&with_holed_boss, &rectilinear_boss, STRICT_TOL)?;
+    anyhow::ensure!(
+        with_middle_holed_rect.is_geometric_consistent(),
+        "exact glyph + middle boss + holed boss + rectilinear boss must stay consistent"
     );
 
     let curved_boss_vertices = builder::vertices([
