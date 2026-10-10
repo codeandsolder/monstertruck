@@ -136,6 +136,9 @@ where
     })?;
     negative_wires.into_iter().try_for_each(|mut chunk| {
         let sibling = pre_faces.iter().position(|pre_face| {
+            if pre_face.is_empty() {
+                return false;
+            }
             let outer = &pre_face[0];
             let complementary = matches!(
                 (outer.wire.status(), chunk.wire.status()),
@@ -162,9 +165,31 @@ where
         }
 
         let pt = chunk.poly.front();
+        let chunk_area_abs = chunk.poly.area().abs();
+        // A negative loop may be nested inside several positive loops. The
+        // equal-area opposite-status positive loop is the sibling region on
+        // the other side of the same divider, not its parent. Prefer the
+        // smallest *strictly larger* enclosing loop; fall back to an equal
+        // enclosing loop only when no larger parent exists, preserving the
+        // whole-face cancellation case.
         let idx = pre_faces
             .iter()
-            .position(|pre_face| pre_face[0].poly.include(pt));
+            .enumerate()
+            .filter(|(_, pre_face)| {
+                !pre_face.is_empty()
+                    && pre_face[0].poly.include(pt)
+                    && pre_face[0].poly.area().abs() + tol >= chunk_area_abs
+            })
+            .min_by(|(_, lhs), (_, rhs)| {
+                let lhs_area = lhs[0].poly.area().abs();
+                let rhs_area = rhs[0].poly.area().abs();
+                let lhs_equal = lhs_area <= chunk_area_abs + tol;
+                let rhs_equal = rhs_area <= chunk_area_abs + tol;
+                lhs_equal
+                    .cmp(&rhs_equal)
+                    .then_with(|| lhs_area.total_cmp(&rhs_area))
+            })
+            .map(|(index, _)| index);
         if let Some(i) = idx {
             let outer_area = pre_faces[i][0].poly.area();
             let chunk_area = chunk.poly.area();
