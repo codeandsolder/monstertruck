@@ -108,6 +108,30 @@ fn solid_from_profile_simple() {
 }
 
 #[test]
+fn clockwise_profile_extrusion_is_oriented_with_positive_sweep() {
+    let outer = rect_wire_cw(-1.0, -1.0, 1.0, 1.0);
+    let solid =
+        solid_from_planar_profile::<Curve, Surface>(vec![outer], Vector3::unit_z()).unwrap();
+    let shell = &solid.boundaries()[0];
+    let bottom = shell.first().unwrap().oriented_surface();
+    let top = shell.last().unwrap().oriented_surface();
+    assert_near!(bottom.normal(0.0, 0.0), -Vector3::unit_z());
+    assert_near!(top.normal(0.0, 0.0), Vector3::unit_z());
+}
+
+#[test]
+fn profile_extrusion_is_oriented_with_negative_sweep() {
+    let outer = rect_wire(-1.0, -1.0, 1.0, 1.0);
+    let solid =
+        solid_from_planar_profile::<Curve, Surface>(vec![outer], -Vector3::unit_z()).unwrap();
+    let shell = &solid.boundaries()[0];
+    let bottom = shell.first().unwrap().oriented_surface();
+    let top = shell.last().unwrap().oriented_surface();
+    assert_near!(bottom.normal(0.0, 0.0), Vector3::unit_z());
+    assert_near!(top.normal(0.0, 0.0), -Vector3::unit_z());
+}
+
+#[test]
 fn solid_from_profile_with_hole() {
     let outer = rect_wire(-2.0, -2.0, 2.0, 2.0);
     let hole = rect_wire(-0.5, -0.5, 0.5, 0.5);
