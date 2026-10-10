@@ -141,6 +141,40 @@ fn union_with_thin_overlapping_bezier_protrusion_keeps_host() -> Result<()> {
 }
 
 #[test]
+fn union_with_thin_holed_profile_boss() -> Result<()> {
+    fn rect_wire(x0: f64, y0: f64, x1: f64, y1: f64) -> Wire {
+        let v = builder::vertices([
+            Point3::new(x0, y0, 0.0),
+            Point3::new(x1, y0, 0.0),
+            Point3::new(x1, y1, 0.0),
+            Point3::new(x0, y1, 0.0),
+        ]);
+        vec![
+            builder::line(&v[0], &v[1]),
+            builder::line(&v[1], &v[2]),
+            builder::line(&v[2], &v[3]),
+            builder::line(&v[3], &v[0]),
+        ]
+        .into()
+    }
+
+    let host = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![rect_wire(-6.0, -6.0, 6.0, 6.0)],
+        Vector3::new(0.0, 0.0, 0.7),
+    )?;
+    let boss = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![rect_wire(0.0, 0.0, 1.0, 1.0), rect_wire(0.3, 0.3, 0.7, 0.7)],
+        Vector3::new(0.0, 0.0, 0.01001),
+    )?;
+    let boss = builder::transformed(
+        &boss,
+        Matrix4::from_translation(Vector3::new(4.0, 4.0, 0.69999)),
+    );
+    let result = monstertruck_solid::or(&host, &boss, STRICT_TOL)?;
+    assert_solid("thin holed profile boss", &result, 100.8084)
+}
+
+#[test]
 fn union_of_overlapping_cubes() -> Result<()> {
     // Two unit cubes overlapping in a `0.5` cube: `2 - 0.5^3 = 1.875`.
     let a = unit_cube(Point3::origin());
