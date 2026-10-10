@@ -722,6 +722,395 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
         "exact glyph union volume {volume:.9} dropped the host or added unrelated material"
     );
 
+    // Exact sequential-feature regression from step-redox body #7493.
+    // The final holed boss produces a valid intersection branch plus an
+    // isolated one-point mesh contact. The point contact must not turn the
+    // entire surface/surface intersection into a Boolean failure.
+    let middle_boss_wire_0_vertices = builder::vertices([
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.0, 0.026305875281948055, 0.0),
+        Point3::new(0.04190224402764464, 0.01226914341241958, 0.0),
+        Point3::new(0.07195124780892659, 0.03192056803059273, 0.0),
+        Point3::new(0.0654007729359698, 0.04574934831709587, 0.0),
+        Point3::new(0.038730982383031076, 0.058746322271497675, 0.0),
+        Point3::new(0.0073822812057544596, 0.07798184372361927, 0.0),
+        Point3::new(0.0001559636872716652, 0.10096049367438109, 0.0),
+        Point3::new(0.016480162973559587, 0.13194527957996893, 0.0),
+        Point3::new(0.05671879433491167, 0.14348659245179984, 0.0),
+        Point3::new(0.09113478136529274, 0.1370400933696594, 0.0),
+        Point3::new(0.09113478136529185, 0.11229385496179667, 0.0),
+        Point3::new(0.054223375335825885, 0.12279540991710469, 0.0),
+        Point3::new(0.034156047550903956, 0.11738866875148446, 0.0),
+        Point3::new(0.026409851074157942, 0.10324796109043888, 0.0),
+        Point3::new(0.031972555926355284, 0.08973110817847374, 0.0),
+        Point3::new(0.05671879433491167, 0.07725401318164238, 0.0),
+        Point3::new(0.08957514449051729, 0.05843439489696145, 0.0),
+        Point3::new(0.09810115940430197, 0.03441598702967941, 0.0),
+        Point3::new(0.08172497222225861, 0.003015297956648233, 0.0),
+        Point3::new(0.039406825028559744, -0.008526014913793567, 0.0),
+    ]);
+    let middle_boss_wire_0: Wire = vec![
+        builder::line(
+            &middle_boss_wire_0_vertices[0],
+            &middle_boss_wire_0_vertices[1],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[1],
+            &middle_boss_wire_0_vertices[2],
+            vec![
+                Point3::new(0.012996973953709023, 0.016948054036054927, 0.0),
+                Point3::new(0.026929730032414056, 0.01226914341241958, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[2],
+            &middle_boss_wire_0_vertices[3],
+            vec![
+                Point3::new(0.06191758391681201, 0.01226914341241958, 0.0),
+                Point3::new(0.07195124780892659, 0.018819618284681816, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[3],
+            &middle_boss_wire_0_vertices[4],
+            vec![
+                Point3::new(0.07195124780892659, 0.037535260779240076, 0.0),
+                Point3::new(0.06976775618506892, 0.04211019560998075, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[4],
+            &middle_boss_wire_0_vertices[5],
+            vec![
+                Point3::new(0.06103378968756257, 0.04938850102421721, 0.0),
+                Point3::new(0.05214385950347822, 0.05375548427331722, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[5],
+            &middle_boss_wire_0_vertices[6],
+            vec![
+                Point3::new(0.022666722575524823, 0.0651928213522508, 0.0),
+                Point3::new(0.01216516762090869, 0.07163932043438237, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[6],
+            &middle_boss_wire_0_vertices[7],
+            vec![
+                Point3::new(0.0025474068948492246, 0.08432436701285528, 0.0),
+                Point3::new(0.0001559636872716652, 0.09201857559315485, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[7],
+            &middle_boss_wire_0_vertices[8],
+            vec![
+                Point3::new(0.0001559636872716652, 0.11385349183587934, 0.0),
+                Point3::new(0.0056146927479527875, 0.12414709520816114, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[8],
+            &middle_boss_wire_0_vertices[9],
+            vec![
+                Point3::new(0.02739762109492183, 0.13963948816164962, 0.0),
+                Point3::new(0.04081049821536986, 0.14348659245179984, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[9],
+            &middle_boss_wire_0_vertices[10],
+            vec![
+                Point3::new(0.06909191353884658, 0.14348659245179984, 0.0),
+                Point3::new(0.08052925061847382, 0.1414070766187585, 0.0),
+            ],
+        ),
+        builder::line(
+            &middle_boss_wire_0_vertices[10],
+            &middle_boss_wire_0_vertices[11],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[11],
+            &middle_boss_wire_0_vertices[12],
+            vec![
+                Point3::new(0.08026931113968505, 0.11926023300149868, 0.0),
+                Point3::new(0.06800016772726725, 0.12279540991710469, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[12],
+            &middle_boss_wire_0_vertices[13],
+            vec![
+                Point3::new(0.046009287797269316, 0.12279540991710469, 0.0),
+                Point3::new(0.03930284923634897, 0.12102782145860758, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[13],
+            &middle_boss_wire_0_vertices[14],
+            vec![
+                Point3::new(0.029009245865453614, 0.11385349183587934, 0.0),
+                Point3::new(0.026409851074157942, 0.109070605420726, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[14],
+            &middle_boss_wire_0_vertices[15],
+            vec![
+                Point3::new(0.026409851074157942, 0.09742531675876709, 0.0),
+                Point3::new(0.028281415323478498, 0.09295435771815708, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[15],
+            &middle_boss_wire_0_vertices[16],
+            vec![
+                Point3::new(0.03571568442568207, 0.08640388284589573, 0.0),
+                Point3::new(0.04392977196423775, 0.08224485117982283, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[16],
+            &middle_boss_wire_0_vertices[17],
+            vec![
+                Point3::new(0.07293901782969137, 0.0712234172669417, 0.0),
+                Point3::new(0.08385647595105361, 0.06488089397770569, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[17],
+            &middle_boss_wire_0_vertices[18],
+            vec![
+                Point3::new(0.09524182513422375, 0.05198789581620833, 0.0),
+                Point3::new(0.09810115940430197, 0.04398175985998609, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[18],
+            &middle_boss_wire_0_vertices[19],
+            vec![
+                Point3::new(0.09810115940430197, 0.02110708570074049, 0.0),
+                Point3::new(0.09264243034362085, 0.010605530746819802, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[19],
+            &middle_boss_wire_0_vertices[20],
+            vec![
+                Point3::new(0.07085950199665092, -0.00467891062364334, 0.0),
+                Point3::new(0.05671879433491167, -0.008526014913793567, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &middle_boss_wire_0_vertices[20],
+            &middle_boss_wire_0_vertices[0],
+            vec![
+                Point3::new(0.02433033524181827, -0.008526014913793567, 0.0),
+                Point3::new(0.011229385495904687, -0.0056146927486446785, 0.0),
+            ],
+        ),
+    ]
+    .into();
+    let middle_boss = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![middle_boss_wire_0],
+        Vector3::new(0.0, 0.0, 0.010010000000000008),
+    )?;
+    let middle_boss = builder::transformed(
+        &middle_boss,
+        Matrix4::from_translation(Vector3::new(4.185868719855022, 4.326969697886959, 0.69999)),
+    );
+    let holed_boss_wire_0_vertices = builder::vertices([
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.04819277942112876, 0.04741296098409098, 0.0),
+        Point3::new(0.09123875715681073, 0.05344355689878988, 0.0),
+        Point3::new(0.06181360812530379, 0.08900327763650573, 0.0),
+        Point3::new(0.014192695557494694, 0.0714313688499768, 0.0),
+        Point3::new(0.014192695557494694, 0.09617760725923485, 0.0),
+        Point3::new(0.06420505133288046, 0.10969446017120088, 0.0),
+        Point3::new(0.11671282610665745, 0.05458729060543277, 0.0),
+        Point3::new(0.11671282610665745, -0.03888694607029475, 0.0),
+        Point3::new(0.09123875715680985, -0.03888694607029475, 0.0),
+        Point3::new(0.09123875715680985, -0.016428175078490703, 0.0),
+        Point3::new(0.09056291451128207, -0.016428175078490703, 0.0),
+        Point3::new(0.04606127569302565, -0.04231814719439253, 0.0),
+        Point3::new(0.01247709499613947, -0.030880810115458956, 0.0),
+    ]);
+    let holed_boss_wire_0: Wire = vec![
+        builder::bezier(
+            &holed_boss_wire_0_vertices[0],
+            &holed_boss_wire_0_vertices[1],
+            vec![
+                Point3::new(0.0, 0.027137681615448273, 0.0),
+                Point3::new(0.016064259807507142, 0.04294200194348097, 0.0),
+            ],
+        ),
+        builder::line(
+            &holed_boss_wire_0_vertices[1],
+            &holed_boss_wire_0_vertices[2],
+        ),
+        builder::bezier(
+            &holed_boss_wire_0_vertices[2],
+            &holed_boss_wire_0_vertices[3],
+            vec![
+                Point3::new(0.09123875715681073, 0.07715003739013238, 0.0),
+                Point3::new(0.08141304484772327, 0.08900327763650573, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &holed_boss_wire_0_vertices[3],
+            &holed_boss_wire_0_vertices[4],
+            vec![
+                Point3::new(0.0443976630267402, 0.08900327763650573, 0.0),
+                Point3::new(0.028541354802953833, 0.08307665751332394, 0.0),
+            ],
+        ),
+        builder::line(
+            &holed_boss_wire_0_vertices[4],
+            &holed_boss_wire_0_vertices[5],
+        ),
+        builder::bezier(
+            &holed_boss_wire_0_vertices[5],
+            &holed_boss_wire_0_vertices[6],
+            vec![
+                Point3::new(0.028593342698707502, 0.10522350113058376, 0.0),
+                Point3::new(0.04528145725598787, 0.10969446017120088, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &holed_boss_wire_0_vertices[6],
+            &holed_boss_wire_0_vertices[7],
+            vec![
+                Point3::new(0.09919290521657853, 0.10969446017120088, 0.0),
+                Point3::new(0.11671282610665745, 0.09139472084408151, 0.0),
+            ],
+        ),
+        builder::line(
+            &holed_boss_wire_0_vertices[7],
+            &holed_boss_wire_0_vertices[8],
+        ),
+        builder::line(
+            &holed_boss_wire_0_vertices[8],
+            &holed_boss_wire_0_vertices[9],
+        ),
+        builder::line(
+            &holed_boss_wire_0_vertices[9],
+            &holed_boss_wire_0_vertices[10],
+        ),
+        builder::line(
+            &holed_boss_wire_0_vertices[10],
+            &holed_boss_wire_0_vertices[11],
+        ),
+        builder::bezier(
+            &holed_boss_wire_0_vertices[11],
+            &holed_boss_wire_0_vertices[12],
+            vec![
+                Point3::new(0.08052925061916127, -0.03368815648908807, 0.0),
+                Point3::new(0.06566071241544602, -0.04231814719439253, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &holed_boss_wire_0_vertices[12],
+            &holed_boss_wire_0_vertices[13],
+            vec![
+                Point3::new(0.03197255592704984, -0.04231814719439253, 0.0),
+                Point3::new(0.020795158326205154, -0.0384710429042423, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &holed_boss_wire_0_vertices[13],
+            &holed_boss_wire_0_vertices[0],
+            vec![
+                Point3::new(0.00415903166538012, -0.023290577326676498, 0.0),
+                Point3::new(0.0, -0.012996973954393809, 0.0),
+            ],
+        ),
+    ]
+    .into();
+    let holed_boss_wire_1_vertices = builder::vertices([
+        Point3::new(0.025837984220832055, 0.002079515831654888, 0.0),
+        Point3::new(0.03322026542658829, -0.014868538204408033, 0.0),
+        Point3::new(0.0526637384617441, -0.02141901307666938, 0.0),
+        Point3::new(0.08032129903544849, -0.009565772830296915, 0.0),
+        Point3::new(0.09123875715680985, 0.020067327784236255, 0.0),
+        Point3::new(0.09123875715680985, 0.03400008386363318, 0.0),
+        Point3::new(0.05723867329317667, 0.029425149031508724, 0.0),
+        Point3::new(0.03259641067682306, 0.020483230950289588, 0.0),
+    ]);
+    let holed_boss_wire_1: Wire = vec![
+        builder::bezier(
+            &holed_boss_wire_1_vertices[0],
+            &holed_boss_wire_1_vertices[1],
+            vec![
+                Point3::new(0.025837984220832055, -0.0048868622066615686, 0.0),
+                Point3::new(0.028281415324172166, -0.010501554955308023, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &holed_boss_wire_1_vertices[1],
+            &holed_boss_wire_1_vertices[2],
+            vec![
+                Point3::new(0.03810712763325874, -0.01923552145211982, 0.0),
+                Point3::new(0.04460561460976642, -0.02141901307666938, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &holed_boss_wire_1_vertices[2],
+            &holed_boss_wire_1_vertices[3],
+            vec![
+                Point3::new(0.06384113606188802, -0.02141901307666938, 0.0),
+                Point3::new(0.07309498151695681, -0.017467932995010926, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &holed_boss_wire_1_vertices[3],
+            &holed_boss_wire_1_vertices[4],
+            vec![
+                Point3::new(0.08759960444968762, -0.0017675884584944512, 0.0),
+                Point3::new(0.09123875715681073, 0.008110111746353788, 0.0),
+            ],
+        ),
+        builder::line(
+            &holed_boss_wire_1_vertices[4],
+            &holed_boss_wire_1_vertices[5],
+        ),
+        builder::line(
+            &holed_boss_wire_1_vertices[5],
+            &holed_boss_wire_1_vertices[6],
+        ),
+        builder::bezier(
+            &holed_boss_wire_1_vertices[6],
+            &holed_boss_wire_1_vertices[7],
+            vec![
+                Point3::new(0.045333445151742424, 0.02776153636452694, 0.0),
+                Point3::new(0.037119357612493964, 0.024850214199381604, 0.0),
+            ],
+        ),
+        builder::bezier(
+            &holed_boss_wire_1_vertices[7],
+            &holed_boss_wire_1_vertices[0],
+            vec![
+                Point3::new(0.028125451636205945, 0.016116247702576914, 0.0),
+                Point3::new(0.025837984220832055, 0.009981675996360018, 0.0),
+            ],
+        ),
+    ]
+    .into();
+    let holed_boss = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![holed_boss_wire_0, holed_boss_wire_1],
+        Vector3::new(0.0, 0.0, 0.010010000000000008),
+    )?;
+    let holed_boss = builder::transformed(
+        &holed_boss,
+        Matrix4::from_translation(Vector3::new(4.034635930926474, 4.360761830167558, 0.69999)),
+    );
+    let with_middle_boss = monstertruck_solid::or(&result, &middle_boss, STRICT_TOL)?;
+    let with_holed_boss = monstertruck_solid::or(&with_middle_boss, &holed_boss, STRICT_TOL)?;
+    anyhow::ensure!(
+        with_holed_boss.is_geometric_consistent(),
+        "exact glyph + middle boss + holed boss must stay consistent"
+    );
+
     let curved_boss_vertices = builder::vertices([
         Point3::new(0.0, 0.0, 0.0),
         Point3::new(0.029373161135745285, 0.079021601640144823, 0.0),
