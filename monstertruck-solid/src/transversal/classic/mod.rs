@@ -447,6 +447,14 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         return Some([and_shell, or_shell]);
     }
 
+    // First propagate only unanimous topological evidence through unknown
+    // connected components. This closes thin feature caps from the already
+    // proven side labels without ray-casting points almost on a boundary.
+    // Components touching both And and Or remain Unknown and are classified
+    // geometrically below.
+    cls0.integrate_by_component();
+    cls1.integrate_by_component();
+
     // Exact divider labels are stronger evidence than a mesh ray cast,
     // especially for thin features where a point-in-solid vote can be
     // numerically unstable. Preserve labeled pieces and classify only regions

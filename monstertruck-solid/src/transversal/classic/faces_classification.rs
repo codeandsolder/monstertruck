@@ -51,31 +51,32 @@ impl<P, C, S> FacesClassification<P, C, S> {
         let components = unknown.connected_components();
         for comp in components {
             let boundary = comp.extract_boundaries();
-            let Some(boundary_edge) = boundary.iter().flatten().next() else {
-                // A closed unknown component has no adjacency boundary from which
-                // a known status can be propagated. Leave it unknown so the
-                // geometric classifier can decide it.
-                continue;
+            let touches_and = boundary.iter().flatten().any(|boundary_edge| {
+                and_boundary
+                    .iter()
+                    .flatten()
+                    .any(|edge| edge.id() == boundary_edge.id())
+            });
+            let touches_or = boundary.iter().flatten().any(|boundary_edge| {
+                or_boundary
+                    .iter()
+                    .flatten()
+                    .any(|edge| edge.id() == boundary_edge.id())
+            });
+            let status = match (touches_and, touches_or) {
+                (true, false) => ShapesOpStatus::And,
+                (false, true) => ShapesOpStatus::Or,
+                // Mixed evidence means this connected unknown region bridges
+                // both classified sides. A boundary-less component has no
+                // topological evidence at all. In both cases leave it unknown
+                // for geometric classification instead of letting edge order
+                // pick a status for the whole component.
+                _ => continue,
             };
-            if and_boundary
-                .iter()
-                .flatten()
-                .any(|edge| edge.id() == boundary_edge.id())
-            {
-                comp.iter().for_each(|face| {
-                    // SAFETY: face originated from `self.shell` via `and_or_unknown()`.
-                    *self.status.get_mut(&face.id()).unwrap() = ShapesOpStatus::And;
-                })
-            } else if or_boundary
-                .iter()
-                .flatten()
-                .any(|edge| edge.id() == boundary_edge.id())
-            {
-                comp.iter().for_each(|face| {
-                    // SAFETY: face originated from `self.shell` via `and_or_unknown()`.
-                    *self.status.get_mut(&face.id()).unwrap() = ShapesOpStatus::Or;
-                })
-            }
+            comp.iter().for_each(|face| {
+                // SAFETY: face originated from `self.shell` via `and_or_unknown()`.
+                *self.status.get_mut(&face.id()).unwrap() = status;
+            });
         }
     }
 }
