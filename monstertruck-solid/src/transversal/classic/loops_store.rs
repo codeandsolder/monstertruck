@@ -948,6 +948,7 @@ where
                 &polygon0,
                 surface1.clone(),
                 &polygon1,
+                tol,
             )?;
             curves.into_iter()
             .try_for_each(|(polyline, mut intersection_curve)| {

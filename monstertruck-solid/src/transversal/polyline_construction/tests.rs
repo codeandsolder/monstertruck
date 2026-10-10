@@ -142,3 +142,38 @@ fn duplicate_segment_does_not_turn_open_chain_into_closed_walk() {
     assert_eq!(polylines[0].len(), 3);
     assert!(!polylines[0][0].near(&polylines[0][polylines[0].len() - 1]));
 }
+
+#[test]
+fn nearby_endpoint_fragments_stitch_with_caller_tolerance() {
+    let gap = 2.25e-6;
+    let chains = vec![
+        PolylineCurve(vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]),
+        PolylineCurve(vec![
+            Point3::new(1.0 + gap, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        ]),
+        PolylineCurve(vec![
+            Point3::new(2.0 + gap, 0.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+        ]),
+    ];
+    let stitched = stitch_nearby_polylines(chains, 4.0e-6).expect("unambiguous endpoint stitching");
+    assert_eq!(stitched.len(), 1);
+    assert_eq!(stitched[0].len(), 4);
+}
+
+#[test]
+fn nearby_endpoint_stitching_rejects_ambiguous_branches() {
+    let chains = vec![
+        PolylineCurve(vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]),
+        PolylineCurve(vec![
+            Point3::new(1.0 + 1.0e-6, 1.0e-6, 0.0),
+            Point3::new(2.0, 1.0, 0.0),
+        ]),
+        PolylineCurve(vec![
+            Point3::new(1.0 + 1.0e-6, -1.0e-6, 0.0),
+            Point3::new(2.0, -1.0, 0.0),
+        ]),
+    ];
+    assert!(stitch_nearby_polylines(chains, 4.0e-6).is_none());
+}

@@ -32,6 +32,127 @@ pub fn construct_polylines(lines: &[(Point3, Point3)]) -> Vec<PolylineCurve<Poin
     res
 }
 
+/// Merge separate interference chains whose endpoints agree within the caller's
+/// geometric tolerance. Only endpoints of distinct chains are considered, and
+/// every endpoint must have at most one possible mate. Ambiguous junctions are
+/// rejected rather than guessed.
+pub(super) fn stitch_nearby_polylines(
+    mut polylines: Vec<PolylineCurve<Point3>>,
+    tolerance: f64,
+) -> Option<Vec<PolylineCurve<Point3>>> {
+    if !tolerance.is_finite() || tolerance <= 0.0 {
+        return None;
+    }
+    let tolerance2 = tolerance * tolerance;
+
+    loop {
+        #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+        struct Endpoint {
+            chain: usize,
+            front: bool,
+        }
+        #[derive(Clone, Copy, Debug)]
+        struct Candidate {
+            a: Endpoint,
+            b: Endpoint,
+            distance2: f64,
+        }
+
+        let mut candidates = Vec::<Candidate>::new();
+        for first in 0..polylines.len() {
+            let first_points = &polylines[first].0;
+            if first_points.is_empty() {
+                return None;
+            }
+            for (second, second_chain) in polylines.iter().enumerate().skip(first + 1) {
+                let second_points = &second_chain.0;
+                if second_points.is_empty() {
+                    return None;
+                }
+                for first_front in [true, false] {
+                    let a = if first_front {
+                        first_points[0]
+                    } else {
+                        *first_points.last()?
+                    };
+                    for second_front in [true, false] {
+                        let b = if second_front {
+                            second_points[0]
+                        } else {
+                            *second_points.last()?
+                        };
+                        let distance2 = a.distance2(b);
+                        if distance2 <= tolerance2 {
+                            candidates.push(Candidate {
+                                a: Endpoint {
+                                    chain: first,
+                                    front: first_front,
+                                },
+                                b: Endpoint {
+                                    chain: second,
+                                    front: second_front,
+                                },
+                                distance2,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return Some(polylines);
+        }
+
+        let mut endpoint_counts = HashMap::<Endpoint, usize>::default();
+        for candidate in &candidates {
+            *endpoint_counts.entry(candidate.a).or_default() += 1;
+            *endpoint_counts.entry(candidate.b).or_default() += 1;
+        }
+        if endpoint_counts.values().any(|&count| count != 1) {
+            return None;
+        }
+
+        candidates.sort_by(|left, right| {
+            left.distance2
+                .total_cmp(&right.distance2)
+                .then_with(|| left.a.cmp(&right.a))
+                .then_with(|| left.b.cmp(&right.b))
+        });
+        let candidate = candidates[0];
+        let (low, high, low_front, high_front) = if candidate.a.chain < candidate.b.chain {
+            (
+                candidate.a.chain,
+                candidate.b.chain,
+                candidate.a.front,
+                candidate.b.front,
+            )
+        } else {
+            (
+                candidate.b.chain,
+                candidate.a.chain,
+                candidate.b.front,
+                candidate.a.front,
+            )
+        };
+
+        let mut right = polylines.remove(high).0;
+        let mut left = polylines.remove(low).0;
+        if low_front {
+            left.reverse();
+        }
+        if !high_front {
+            right.reverse();
+        }
+        let left_end = *left.last()?;
+        let right_start = *right.first()?;
+        let midpoint = left_end.midpoint(right_start);
+        *left.last_mut()? = midpoint;
+        *right.first_mut()? = midpoint;
+        left.extend(right.into_iter().skip(1));
+        polylines.push(PolylineCurve(left));
+    }
+}
+
 #[derive(Clone, Debug, Copy, Hash, PartialEq, Eq)]
 struct PointIndex([i64; 3]);
 
@@ -54,7 +175,9 @@ struct Node {
 
 impl Node {
     #[inline(always)]
-    fn new(coord: Point3, adjacency: HashSet<PointIndex>) -> Node { Node { coord, adjacency } }
+    fn new(coord: Point3, adjacency: HashSet<PointIndex>) -> Node {
+        Node { coord, adjacency }
+    }
 
     fn pop_one_adjacency(&mut self) -> PointIndex {
         // SAFETY: nodes are removed from the graph when their adjacency set becomes empty.
@@ -69,12 +192,16 @@ struct Graph(HashMap<PointIndex, Node>);
 impl std::ops::Deref for Graph {
     type Target = HashMap<PointIndex, Node>;
     #[inline(always)]
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl std::ops::DerefMut for Graph {
     #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl Graph {

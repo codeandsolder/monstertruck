@@ -77,6 +77,69 @@ fn assert_solid(label: &str, solid: &Solid, expected_volume: f64) -> Result<()> 
     Ok(())
 }
 
+fn bezier_disk_extrusion(cx: f64, cy: f64, z0: f64, radius: f64, height: f64) -> Result<Solid> {
+    let k = 0.552_284_749_830_793_6 * radius;
+    let p0 = builder::vertex(Point3::new(cx + radius, cy, z0));
+    let p1 = builder::vertex(Point3::new(cx, cy + radius, z0));
+    let p2 = builder::vertex(Point3::new(cx - radius, cy, z0));
+    let p3 = builder::vertex(Point3::new(cx, cy - radius, z0));
+    let wire: Wire = vec![
+        builder::bezier(
+            &p0,
+            &p1,
+            vec![
+                Point3::new(cx + radius, cy + k, z0),
+                Point3::new(cx + k, cy + radius, z0),
+            ],
+        ),
+        builder::bezier(
+            &p1,
+            &p2,
+            vec![
+                Point3::new(cx - k, cy + radius, z0),
+                Point3::new(cx - radius, cy + k, z0),
+            ],
+        ),
+        builder::bezier(
+            &p2,
+            &p3,
+            vec![
+                Point3::new(cx - radius, cy - k, z0),
+                Point3::new(cx - k, cy - radius, z0),
+            ],
+        ),
+        builder::bezier(
+            &p3,
+            &p0,
+            vec![
+                Point3::new(cx + k, cy - radius, z0),
+                Point3::new(cx + radius, cy - k, z0),
+            ],
+        ),
+    ]
+    .into();
+    profile::solid_from_planar_profile::<Curve, Surface>(vec![wire], Vector3::new(0.0, 0.0, height))
+        .map_err(Into::into)
+}
+
+#[test]
+fn union_with_thin_overlapping_bezier_protrusion_keeps_host() -> Result<()> {
+    let host = unit_cube(Point3::origin());
+    let feature = bezier_disk_extrusion(0.5, 0.5, 0.999_99, 0.2, 0.100_01)?;
+    let result = monstertruck_solid::or(&host, &feature, STRICT_TOL)?;
+    anyhow::ensure!(
+        result.is_geometric_consistent(),
+        "union must stay consistent"
+    );
+    let mesh = result.triangulation(0.005).to_polygon();
+    let volume = mesh.volume();
+    anyhow::ensure!(
+        volume > 1.0 && volume < 1.02,
+        "union volume {volume:.9} dropped the host or added unrelated material"
+    );
+    Ok(())
+}
+
 #[test]
 fn union_of_overlapping_cubes() -> Result<()> {
     // Two unit cubes overlapping in a `0.5` cube: `2 - 0.5^3 = 1.875`.
