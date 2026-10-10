@@ -342,11 +342,11 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         mode == PairMode::AndOr,
     )?;
     let mut cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)?;
-    cls0.integrate_by_component();
     let mut cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)?;
-    cls1.integrate_by_component();
 
     if mode == PairMode::Difference {
+        cls0.integrate_by_component();
+        cls1.integrate_by_component();
         // Face division already classifies pieces adjacent to an intersection:
         // Or on A is outside B and survives A - B, while And on B is
         // inside A and becomes the inward-facing cut boundary. Prefer those
@@ -420,6 +420,8 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
 
     if !coplanar_overlap {
+        cls0.integrate_by_component();
+        cls1.integrate_by_component();
         let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
         unknown0.into_iter().try_for_each(|face| {
             if classify_unknown_face(&poly_shell1, &face)? {
@@ -445,6 +447,55 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         return Some([and_shell, or_shell]);
     }
 
+    // Exact divider labels are stronger evidence than a mesh ray cast,
+    // especially for thin features where a point-in-solid vote can be
+    // numerically unstable. Preserve labeled pieces and classify only regions
+    // untouched by the divider. Coincident unknown ownership remains
+    // asymmetric so a shared interface belongs to exactly one OR operand.
+    let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
+    unknown0.into_iter().try_for_each(|face| {
+        let relation = classify_face_relation(&poly_shell1, &face, tol)?;
+        match relation {
+            FaceRelation::Inside => and0.push(face),
+            FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(face),
+        }
+        Some(())
+    })?;
+
+    let [mut and1, mut or1, unknown1] = cls1.and_or_unknown();
+    unknown1.into_iter().try_for_each(|face| {
+        let relation = classify_face_relation(&poly_shell0, &face, tol)?;
+        match relation {
+            FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(face),
+            FaceRelation::Outside => or1.push(face),
+        }
+        Some(())
+    })?;
+
+    and0.append(&mut and1);
+    or0.append(&mut or1);
+    and0 = weld_coincident_topology(&and0);
+    or0 = weld_coincident_topology(&or0);
+    let label_and_shell = altshell_to_shell(&and0)?;
+    let label_or_shell = altshell_to_shell(&or0)?;
+    let shell_is_valid = |shell: &Shell<Point3, C, S>| {
+        shell.is_empty()
+            || shell
+                .connected_components()
+                .iter()
+                .all(|component| component.check_solid_boundary().is_ok())
+    };
+    if !label_or_shell.is_empty()
+        && shell_is_valid(&label_and_shell)
+        && shell_is_valid(&label_or_shell)
+    {
+        return Some([label_and_shell, label_or_shell]);
+    }
+
+    // Some coplanar configurations produce locally useful divider labels that
+    // still cannot form complete output shells (for example overlapping boxes
+    // with coplanar side planes). Fall back to geometric classification of all
+    // divided pieces only after the topology-first candidate fails closure.
     let [and0_labeled, or0_labeled, unknown0] = cls0.and_or_unknown();
     let mut and0 = AltCurveShell::default();
     let mut or0 = AltCurveShell::default();

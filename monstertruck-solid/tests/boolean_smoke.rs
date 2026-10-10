@@ -451,5 +451,46 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     let volume = result.triangulation(0.005).to_polygon().volume();
     eprintln!("exact glyph union faces={} volume={volume:.9}", result.face_iter().count());
     anyhow::ensure!(volume > 100.8 && volume < 101.0, "exact glyph union volume {volume:.9} dropped the host or added unrelated material");
+
+    let boss_vertices = builder::vertices([
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.10725102906855488, 0.0, 0.0),
+        Point3::new(0.10725102906855488, 0.023186601533782714, 0.0),
+        Point3::new(0.026253887386892494, 0.023186601533782714, 0.0),
+        Point3::new(0.026253887386892494, 0.20337664843133396, 0.0),
+        Point3::new(0.0, 0.20337664843133396, 0.0),
+    ]);
+    let boss_wire: Wire = vec![
+        builder::line(&boss_vertices[0], &boss_vertices[1]),
+        builder::line(&boss_vertices[1], &boss_vertices[2]),
+        builder::line(&boss_vertices[2], &boss_vertices[3]),
+        builder::line(&boss_vertices[3], &boss_vertices[4]),
+        builder::line(&boss_vertices[4], &boss_vertices[5]),
+        builder::line(&boss_vertices[5], &boss_vertices[0]),
+    ]
+    .into();
+    let boss = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![boss_wire],
+        Vector3::new(0.0, 0.0, 0.010010000000000008),
+    )?;
+    let boss = builder::transformed(
+        &boss,
+        Matrix4::from_translation(Vector3::new(
+            3.900871074992246,
+            4.644511765530097,
+            0.69999,
+        )),
+    );
+    let result = monstertruck_solid::or(&result, &boss, STRICT_TOL)?;
+    anyhow::ensure!(
+        result.is_geometric_consistent(),
+        "second disjoint boss union must stay consistent"
+    );
+    let volume = result.triangulation(0.005).to_polygon().volume();
+    eprintln!("second boss union faces={} volume={volume:.9}", result.face_iter().count());
+    anyhow::ensure!(
+        volume > 100.8 && volume < 101.0,
+        "second boss union volume {volume:.9} dropped existing material or added unrelated material"
+    );
     Ok(())
 }
