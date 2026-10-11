@@ -116,6 +116,14 @@ impl IncludeCurve<Curve> for Surface {
     fn include(&self, curve: &Curve) -> bool {
         if let Curve::ParameterCurve(curve) = curve {
             same_surface(curve.surface().as_ref(), self)
+        } else if match curve {
+            Curve::IntersectionCurve(curve) => {
+                same_surface(curve.surface0().as_ref(), self)
+                    || same_surface(curve.surface1().as_ref(), self)
+            }
+            _ => false,
+        } {
+            true
         } else {
             match self {
                 Surface::BsplineSurface(surface) => match curve {
