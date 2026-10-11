@@ -275,9 +275,13 @@ fn exact_iso_leader<S: ShapeOpsSurface>(
                 IsoParameter::U => surface_u.map_or(1.0, |(a, b)| (b - a).abs().max(1.0)),
                 IsoParameter::V => surface_v.map_or(1.0, |(a, b)| (b - a).abs().max(1.0)),
             };
+            // Surface inversion of a marching point is only stable to a few
+            // dozen ulps even when the exact intersection is iso-parametric.
+            // Keep this gate at machine precision; the exact candidate is still
+            // proved geometrically against both carrier surfaces below.
             if values
                 .iter()
-                .any(|value| (value - constant).abs() > 64.0 * f64::EPSILON * scale)
+                .any(|value| (value - constant).abs() > 128.0 * f64::EPSILON * scale)
             {
                 continue;
             }
