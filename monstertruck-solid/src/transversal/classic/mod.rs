@@ -139,12 +139,180 @@ fn polyline_leader_bspline(polyline: &PolylineCurve<Point3>) -> Option<BsplineCu
     Some(BsplineCurve::new(knots, polyline.iter().copied().collect()))
 }
 
+#[derive(Clone, Copy)]
+enum IsoParameter {
+    U,
+    V,
+}
+
+fn trim_homogeneous_curve(
+    mut curve: NurbsCurve<Vector4>,
+    start: f64,
+    end: f64,
+) -> Option<NurbsCurve<Vector4>> {
+    if !start.is_finite() || !end.is_finite() || (start - end).abs() <= TOLERANCE {
+        return None;
+    }
+    let reverse = start > end;
+    let (lo, hi) = if reverse { (end, start) } else { (start, end) };
+    let (range0, range1) = curve.range_tuple();
+    if lo < range0 - TOLERANCE || hi > range1 + TOLERANCE {
+        return None;
+    }
+    if lo > range0 + TOLERANCE {
+        curve = curve.cut(lo);
+    }
+    let (_, current_end) = curve.range_tuple();
+    if hi < current_end - TOLERANCE {
+        let _tail = curve.cut(hi);
+    }
+    if reverse {
+        curve.invert();
+    }
+    Some(curve)
+}
+
+fn homogeneous_iso_curve<S: ShapeOpsSurface>(
+    surface: &S,
+    iso: IsoParameter,
+    constant: f64,
+    start: f64,
+    end: f64,
+) -> Option<NurbsCurve<Vector4>> {
+    let mut homogeneous = surface.try_into_homogeneous_bspline_surface()?;
+    let (u_range, v_range) = homogeneous.range_tuple();
+    let ((u0, u1), (v0, v1)) = (u_range, v_range);
+    let curve = match iso {
+        IsoParameter::U => {
+            if constant < u0 - TOLERANCE || constant > u1 + TOLERANCE {
+                return None;
+            }
+            let row = if (constant - u0).abs() <= TOLERANCE {
+                0
+            } else if (constant - u1).abs() <= TOLERANCE {
+                homogeneous.control_points().len().checked_sub(1)?
+            } else {
+                let _right = homogeneous.cut_u(constant);
+                homogeneous.control_points().len().checked_sub(1)?
+            };
+            NurbsCurve::new(homogeneous.curve_v(row))
+        }
+        IsoParameter::V => {
+            if constant < v0 - TOLERANCE || constant > v1 + TOLERANCE {
+                return None;
+            }
+            let column = if (constant - v0).abs() <= TOLERANCE {
+                0
+            } else if (constant - v1).abs() <= TOLERANCE {
+                homogeneous.control_points().first()?.len().checked_sub(1)?
+            } else {
+                let _right = homogeneous.cut_v(constant);
+                homogeneous.control_points().first()?.len().checked_sub(1)?
+            };
+            NurbsCurve::new(homogeneous.curve_u(column))
+        }
+    };
+    trim_homogeneous_curve(curve, start, end)
+}
+
+fn point_on_surface<S: ShapeOpsSurface>(surface: &S, point: Point3) -> bool {
+    surface
+        .search_parameter(point, None, 100)
+        .or_else(|| surface.search_nearest_parameter(point, None, 100))
+        .is_some_and(|(u, v)| surface.evaluate(u, v).distance(point) <= 4.0 * TOLERANCE)
+}
+
+fn prove_iso_candidate<S: ShapeOpsSurface>(
+    candidate: &NurbsCurve<Vector4>,
+    surface0: &S,
+    surface1: &S,
+    leader: &PolylineCurve<Point3>,
+) -> bool {
+    let (t0, t1) = candidate.range_tuple();
+    if candidate.subs(t0).distance(leader.front()) > 8.0 * TOLERANCE
+        || candidate.subs(t1).distance(leader.back()) > 8.0 * TOLERANCE
+    {
+        return false;
+    }
+    (0..=32).all(|index| {
+        let ratio = index as f64 / 32.0;
+        let point = candidate.subs(t0 * (1.0 - ratio) + t1 * ratio);
+        point_on_surface(surface0, point) && point_on_surface(surface1, point)
+    })
+}
+
+fn exact_iso_leader<S: ShapeOpsSurface>(
+    intersection: &IntersectionCurve<PolylineCurve<Point3>, S, S>,
+) -> Option<NurbsCurve<Vector4>> {
+    let leader = intersection.leader();
+    if leader.len() < 2 {
+        return None;
+    }
+    for surface in [intersection.surface0(), intersection.surface1()] {
+        let Some(params) = leader
+            .iter()
+            .copied()
+            .map(|point| {
+                surface
+                    .search_parameter(point, None, 100)
+                    .or_else(|| surface.search_nearest_parameter(point, None, 100))
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        for iso in [IsoParameter::U, IsoParameter::V] {
+            let values = params
+                .iter()
+                .map(|&(u, v)| match iso {
+                    IsoParameter::U => u,
+                    IsoParameter::V => v,
+                })
+                .collect::<Vec<_>>();
+            let constant = values.iter().sum::<f64>() / values.len() as f64;
+            let (surface_u, surface_v) = surface.try_range_tuple();
+            let scale = match iso {
+                IsoParameter::U => surface_u.map_or(1.0, |(a, b)| (b - a).abs().max(1.0)),
+                IsoParameter::V => surface_v.map_or(1.0, |(a, b)| (b - a).abs().max(1.0)),
+            };
+            if values
+                .iter()
+                .any(|value| (value - constant).abs() > 64.0 * f64::EPSILON * scale)
+            {
+                continue;
+            }
+            let start = match iso {
+                IsoParameter::U => params.first()?.1,
+                IsoParameter::V => params.first()?.0,
+            };
+            let end = match iso {
+                IsoParameter::U => params.last()?.1,
+                IsoParameter::V => params.last()?.0,
+            };
+            let Some(candidate) = homogeneous_iso_curve(surface, iso, constant, start, end)
+            else {
+                continue;
+            };
+            if prove_iso_candidate(
+                &candidate,
+                intersection.surface0(),
+                intersection.surface1(),
+                leader,
+            ) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 /// Convert an Alternative-curve shell back to the target curve type.
 ///
-/// Surface intersection curves already carry a cleaned polyline leader. Keep
-/// that leader exactly as a degree-1 B-spline and wrap it in `SurfaceCurve`,
-/// whose evaluation refines points against both supporting surfaces. Re-fitting
-/// the refined curve here is both redundant and fragile at tight tolerances.
+/// Surface intersection curves already carry a cleaned marching leader. When
+/// that leader is provably an iso-parameter curve of either exact carrier,
+/// replace the mesh-derived polyline by the exact homogeneous section before
+/// serialization. Otherwise keep the leader exactly as a degree-1 B-spline.
+/// `SurfaceCurve` still carries both supporting surfaces in either case.
 fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     altshell: &AltCurveShell<C, S>,
 ) -> Option<Shell<Point3, C, S>> {
@@ -155,15 +323,24 @@ fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             Alternative::SecondType(ic) => {
                 let surface0 = ic.surface0().clone();
                 let surface1 = ic.surface1().clone();
-                let bspline = polyline_leader_bspline(ic.leader())?;
                 let boundary0: Option<ParameterCurve<BoundaryCurve2D, S>> = None;
                 let boundary1: Option<ParameterCurve<BoundaryCurve2D, S>> = None;
-                Some(
-                    SurfaceCurve::with_boundaries(
-                        surface0, surface1, bspline, boundary0, boundary1,
+                if let Some(nurbs) = exact_iso_leader(ic) {
+                    Some(
+                        SurfaceCurve::with_boundaries(
+                            surface0, surface1, nurbs, boundary0, boundary1,
+                        )
+                        .into(),
                     )
-                    .into(),
-                )
+                } else {
+                    let bspline = polyline_leader_bspline(ic.leader())?;
+                    Some(
+                        SurfaceCurve::with_boundaries(
+                            surface0, surface1, bspline, boundary0, boundary1,
+                        )
+                        .into(),
+                    )
+                }
             }
         },
         |s| Some(s.clone()),
