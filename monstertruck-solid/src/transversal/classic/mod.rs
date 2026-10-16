@@ -23,7 +23,9 @@ mod faces_classification;
 mod intersection_curve;
 mod loops_store;
 
-use super::integrate::{ShapeOpsCurve, ShapeOpsError, ShapeOpsSurface};
+use super::integrate::{
+    InvalidOutputShellConditionData, ShapeOpsCurve, ShapeOpsError, ShapeOpsSurface,
+};
 use crate::alternative::Alternative;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
@@ -860,6 +862,33 @@ fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> ClassicResult<Solid<Point3, C, S>> {
     let _ = orient_regular_shell(&mut shell);
     let boundaries = shell.connected_components();
+    for (shell_index, boundary) in boundaries.iter().enumerate() {
+        if boundary.check_solid_boundary().is_ok() {
+            continue;
+        }
+        let open_boundaries = boundary.extract_boundaries();
+        let first_boundary = open_boundaries.first();
+        let singular = boundary.singular_vertices();
+        return Err(ShapeOpsError::InvalidOutputShellCondition(Box::new(
+            InvalidOutputShellConditionData {
+                operation,
+                shell_index,
+                empty: boundary.is_empty(),
+                connected: boundary.is_connected(),
+                condition: boundary.shell_condition(),
+                boundary_loops: open_boundaries.len(),
+                first_boundary_len: first_boundary.map(|wire| wire.len()),
+                first_boundary_front: first_boundary
+                    .and_then(Wire::front_vertex)
+                    .map(Vertex::point),
+                first_boundary_back: first_boundary
+                    .and_then(Wire::back_vertex)
+                    .map(Vertex::point),
+                singular_vertices: singular.len(),
+                first_singular: singular.first().map(Vertex::point),
+            },
+        )));
+    }
     Solid::try_new(boundaries)
         .map_err(|source| ShapeOpsError::InvalidOutputShell { operation, source })
 }
