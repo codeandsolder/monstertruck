@@ -1019,6 +1019,14 @@ where
                     ) {
                         back = point;
                     }
+                    // Cross-face endpoint stitching can collapse a numerically
+                    // tiny SSI fragment onto one already-known intersection
+                    // vertex. Such a fragment is a point contact after
+                    // canonicalization, not a one-dimensional trim. Discard it
+                    // before splitting boundary edges or constructing topology.
+                    if front.near(&back) {
+                        return Some(());
+                    }
                     *polyline.first_mut().unwrap() = front;
                     *polyline.last_mut().unwrap() = back;
                     *intersection_curve.leader_mut().first_mut().unwrap() = front;
