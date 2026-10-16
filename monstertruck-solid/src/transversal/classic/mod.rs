@@ -869,10 +869,24 @@ fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let open_boundaries = boundary.extract_boundaries();
         let first_boundary = open_boundaries.first();
         let singular = boundary.singular_vertices();
+        let mut edge_uses = Vec::<(EdgeId<C>, Edge<Point3, C>, usize)>::new();
+        for edge in boundary.edge_iter() {
+            if let Some((_, _, uses)) = edge_uses.iter_mut().find(|(id, _, _)| *id == edge.id()) {
+                *uses += 1;
+            } else {
+                edge_uses.push((edge.id(), edge.clone(), 1));
+            }
+        }
+        let overused = edge_uses
+            .iter()
+            .filter(|(_, _, uses)| *uses > 2)
+            .collect::<Vec<_>>();
+        let first_overused = overused.first();
         return Err(ShapeOpsError::InvalidOutputShellCondition(Box::new(
             InvalidOutputShellConditionData {
                 operation,
                 shell_index,
+                face_count: boundary.len(),
                 empty: boundary.is_empty(),
                 connected: boundary.is_connected(),
                 condition: boundary.shell_condition(),
@@ -884,6 +898,10 @@ fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 first_boundary_back: first_boundary
                     .and_then(Wire::back_vertex)
                     .map(Vertex::point),
+                overused_edges: overused.len(),
+                first_overused_uses: first_overused.map(|(_, _, uses)| *uses),
+                first_overused_front: first_overused.map(|(_, edge, _)| edge.front().point()),
+                first_overused_back: first_overused.map(|(_, edge, _)| edge.back().point()),
                 singular_vertices: singular.len(),
                 first_singular: singular.first().map(Vertex::point),
             },

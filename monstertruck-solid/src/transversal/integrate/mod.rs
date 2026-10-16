@@ -188,13 +188,15 @@ pub enum ShapeOpsError {
 /// Diagnostic data for invalid output shell conditions.
 #[derive(Debug, Error)]
 #[error(
-    "invalid output shell for `{operation}` at index {shell_index}: empty={empty}, connected={connected}, condition={condition:?}, boundary_loops={boundary_loops}, first_boundary_len={first_boundary_len:?}, first_boundary_front={first_boundary_front:?}, first_boundary_back={first_boundary_back:?}, singular_vertices={singular_vertices}, first_singular={first_singular:?}."
+    "invalid output shell for `{operation}` at index {shell_index}: faces={face_count}, empty={empty}, connected={connected}, condition={condition:?}, boundary_loops={boundary_loops}, first_boundary_len={first_boundary_len:?}, first_boundary_front={first_boundary_front:?}, first_boundary_back={first_boundary_back:?}, overused_edges={overused_edges}, first_overused_uses={first_overused_uses:?}, first_overused_front={first_overused_front:?}, first_overused_back={first_overused_back:?}, singular_vertices={singular_vertices}, first_singular={first_singular:?}."
 )]
 pub struct InvalidOutputShellConditionData {
     /// Boolean operation name.
     pub operation: &'static str,
     /// Boundary shell index.
     pub shell_index: usize,
+    /// Number of faces in the invalid connected component.
+    pub face_count: usize,
     /// Whether shell has no faces.
     pub empty: bool,
     /// Whether shell is topologically connected.
@@ -209,6 +211,14 @@ pub struct InvalidOutputShellConditionData {
     pub first_boundary_front: Option<Point3>,
     /// Back point of first open boundary wire.
     pub first_boundary_back: Option<Point3>,
+    /// Number of canonical edges used by more than two faces.
+    pub overused_edges: usize,
+    /// Use count for the first overused canonical edge.
+    pub first_overused_uses: Option<usize>,
+    /// Front point of the first overused canonical edge.
+    pub first_overused_front: Option<Point3>,
+    /// Back point of the first overused canonical edge.
+    pub first_overused_back: Option<Point3>,
     /// Number of singular vertices.
     pub singular_vertices: usize,
     /// First singular vertex point if present.
