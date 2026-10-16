@@ -202,30 +202,53 @@ impl<P: Copy, C: Clone> Loops<P, C> {
         new_vertex: &Vertex<P>,
         emap: &mut HashMap<EdgeId<C>, Edge<P, C>>,
     ) {
-        self.iter_mut()
-            .flat_map(|wire| wire.iter_mut())
-            .for_each(|edge| {
-                let mut new_edge = if edge.absolute_front() == old_vertex {
-                    emap.entry(edge.id()).or_insert_with(|| {
-                        Edge::new(new_vertex, edge.absolute_back(), edge.curve())
-                    })
-                } else if edge.absolute_back() == old_vertex {
-                    emap.entry(edge.id()).or_insert_with(|| {
-                        Edge::new(edge.absolute_front(), new_vertex, edge.curve())
-                    })
-                } else {
-                    return;
+        self.iter_mut().for_each(|wire| {
+            wire.retain_mut(|edge| {
+                let edge_id = edge.id();
+                let absolute_front = edge.absolute_front();
+                let absolute_back = edge.absolute_back();
+                let replaces_front = absolute_front == old_vertex;
+                let replaces_back = absolute_back == old_vertex;
+                if !replaces_front && !replaces_back {
+                    return true;
                 }
-                .clone();
+
+                // Vertex coalescing can make an already-split boundary segment
+                // degenerate. This occurs when coplanar imprinting discovers
+                // that two independently introduced topology vertices are the
+                // same exact boundary point. The correct merged topology omits
+                // that zero-length edge; constructing a self-edge would be both
+                // invalid and, through `Edge::new`, a panic.
+                if (replaces_front && absolute_back == new_vertex)
+                    || (replaces_back && absolute_front == new_vertex)
+                {
+                    if edge.count() == 1 {
+                        emap.remove(&edge_id);
+                    }
+                    return false;
+                }
+
+                let mut new_edge = emap
+                    .entry(edge_id)
+                    .or_insert_with(|| {
+                        if replaces_front {
+                            Edge::new(new_vertex, absolute_back, edge.curve())
+                        } else {
+                            Edge::new(absolute_front, new_vertex, edge.curve())
+                        }
+                    })
+                    .clone();
                 if !edge.orientation() {
                     new_edge.invert();
                 }
                 // Remove the edge from the HashMap when it is no longer there because Id reassignment will occur.
                 if edge.count() == 1 {
-                    emap.remove(&edge.id());
+                    emap.remove(&edge_id);
                 }
                 *edge = new_edge;
-            })
+                true
+            });
+        });
     }
 
     fn swap_edge_into_wire(&mut self, edge_id: EdgeId<C>, new_wire: &Wire<P, C>) {
@@ -1165,6 +1188,28 @@ where
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+
+    #[test]
+    fn change_vertex_removes_edge_collapsed_by_coalescing() {
+        let v0 = Vertex::new(0usize);
+        let v1 = Vertex::new(0usize);
+        let v2 = Vertex::new(1usize);
+        let edge01 = Edge::new(&v0, &v1, ());
+        let edge12 = Edge::new(&v1, &v2, ());
+        let edge20 = Edge::new(&v2, &v0, ());
+        let wire = BoundaryWire::new(
+            vec![edge01, edge12, edge20].into(),
+            ShapesOpStatus::Unknown,
+        );
+        let mut loops = Loops(vec![wire]);
+        let mut emap = HashMap::default();
+
+        loops.change_vertex(&v1, &v0, &mut emap);
+
+        assert_eq!(loops[0].len(), 2);
+        assert!(loops[0].iter().all(|edge| edge.front() != edge.back()));
+        assert!(loops[0].vertex_iter().all(|vertex| vertex != v1));
+    }
 
     #[test]
     fn curve_surface_projection_accepts_agreeing_tangent_projections() {
