@@ -83,16 +83,22 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 .map(|wire| {
                     let rebuilt = wire
                         .iter()
-                        .map(|edge| {
+                        .filter_map(|edge| {
                             let front =
                                 canonical_vertex(edge.absolute_front().point(), &mut vertices);
                             let back =
                                 canonical_vertex(edge.absolute_back().point(), &mut vertices);
+                            // Welding can identify independently-created coincident vertices.
+                            // An edge between two such vertices becomes zero-dimensional in the
+                            // canonical topology and must disappear instead of becoming a self-edge.
+                            if front == back {
+                                return None;
+                            }
                             let mut rebuilt = Edge::new(&front, &back, edge.curve());
                             if !edge.orientation() {
                                 rebuilt.invert();
                             }
-                            if let Some(canonical) = edges.iter().find(|candidate| {
+                            let rebuilt = if let Some(canonical) = edges.iter().find(|candidate| {
                                 let same_endpoints = candidate.front() == rebuilt.front()
                                     && candidate.back() == rebuilt.back();
                                 let opposite_endpoints = candidate.front() == rebuilt.back()
@@ -108,7 +114,8 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                             } else {
                                 edges.push(rebuilt.clone());
                                 rebuilt
-                            }
+                            };
+                            Some(rebuilt)
                         })
                         .collect::<Vec<_>>();
                     Wire::from(rebuilt)
@@ -122,6 +129,48 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         })
         .collect::<Vec<_>>();
     Shell::from(faces)
+}
+
+#[cfg(test)]
+mod weld_tests {
+    use super::*;
+    use monstertruck_modeling::{Curve, Surface};
+
+    fn alt_line(front: Point3, back: Point3) -> AltCurve<Curve, Surface> {
+        Alternative::FirstType(Curve::from(Line(front, back)))
+    }
+
+    #[test]
+    fn weld_drops_edge_collapsed_by_vertex_canonicalization() {
+        let p0 = Point3::origin();
+        let p1 = Point3::new(TOLERANCE * 0.5, 0.0, 0.0);
+        let p2 = Point3::new(1.0, 1.0, 0.0);
+        let v0 = Vertex::new(p0);
+        let v1 = Vertex::new(p1);
+        let v2 = Vertex::new(p2);
+        let wire: Wire<Point3, AltCurve<Curve, Surface>> = vec![
+            Edge::new(&v0, &v1, alt_line(p0, p1)),
+            Edge::new(&v1, &v2, alt_line(p1, p2)),
+            Edge::new(&v2, &v0, alt_line(p2, p0)),
+        ]
+        .into();
+        let face = Face::new_unchecked(
+            vec![wire],
+            Surface::Plane(Plane::new(
+                Point3::origin(),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+            )),
+        );
+        let shell: AltCurveShell<Curve, Surface> = Shell::from(vec![face]);
+
+        let welded = weld_coincident_topology(&shell);
+        let boundary = &welded[0].absolute_boundaries()[0];
+
+        assert_eq!(boundary.len(), 2);
+        assert!(boundary.iter().all(|edge| edge.front() != edge.back()));
+        assert!(boundary.is_cyclic());
+    }
 }
 
 /// Convert a polyline leader to an exactly equivalent degree-1 B-spline.
