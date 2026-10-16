@@ -494,21 +494,42 @@ where
     let pt0 = curve.evaluate(t);
     let (u, v) = surface.search_nearest_parameter(point, surface_hint, 10)?;
     let pt1 = surface.evaluate(u, v);
-    if point.near(&pt0) && point.near(&pt1) && pt0.near(&pt1) {
-        Some((point, t, Point2::new(u, v)))
-    } else {
-        let l = curve.derivative(t);
-        let n = surface.normal(u, v);
-        let t0 = (pt1 - pt0).dot(n) / l.dot(n);
-        curve_surface_projection(
-            curve,
-            Some(t),
-            surface,
-            Some((u, v)),
-            pt0 + t0 * l,
-            trials - 1,
-        )
+
+    // SSI endpoints come from tessellated carrier surfaces, so a seed can be a
+    // few kernel tolerances away from the exact curve/surface intersection even
+    // when the two independent exact projections already agree. Accept that
+    // proof before taking the Newton step below: near tangencies make
+    // `curve.derivative(t).dot(surface.normal(u, v))` singular and an otherwise
+    // solved endpoint can be thrown arbitrarily far away. The 8x envelope is
+    // the same fixed kernel-precision bound used to canonicalize adjacent SSI
+    // endpoints; it deliberately does not grow with the caller's modeling
+    // tolerance.
+    let seed_tolerance = 8.0 * TOLERANCE;
+    if pt0.near(&pt1)
+        && point.distance(pt0) <= seed_tolerance
+        && point.distance(pt1) <= seed_tolerance
+    {
+        // Keep the point exactly on the boundary curve. `pt0.near(pt1)` proves
+        // that it is also on the other surface to kernel precision, while `t`
+        // remains the exact split parameter for the edge below.
+        return Some((pt0, t, Point2::new(u, v)));
     }
+
+    let l = curve.derivative(t);
+    let n = surface.normal(u, v);
+    let denominator = l.dot(n);
+    if !denominator.is_finite() || denominator == 0.0 {
+        return None;
+    }
+    let t0 = (pt1 - pt0).dot(n) / denominator;
+    curve_surface_projection(
+        curve,
+        Some(t),
+        surface,
+        Some((u, v)),
+        pt0 + t0 * l,
+        trials - 1,
+    )
 }
 
 fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vector3)> {
@@ -1138,4 +1159,28 @@ where
         poly_loops_store1,
         coplanar_overlap,
     })
+}
+
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+
+    #[test]
+    fn curve_surface_projection_accepts_agreeing_tangent_projections() {
+        let line = Line(
+            Point3::new(1.0, -1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        );
+        let sphere = Sphere::new(Point3::origin(), 1.0);
+        let seed = Point3::new(1.0 + 1.5 * TOLERANCE, 0.0, 0.0);
+
+        let (point, parameter, _) =
+            curve_surface_projection(&line, None, &sphere, None, seed, 100)
+                .expect("agreeing exact projections should resolve a tangent SSI seed");
+
+        assert!(point.near(&Point3::new(1.0, 0.0, 0.0)));
+        assert!((parameter - 0.5).abs() <= TOLERANCE);
+        assert!(sphere.include(point));
+    }
 }
