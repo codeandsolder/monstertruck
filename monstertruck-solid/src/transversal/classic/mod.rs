@@ -241,6 +241,28 @@ fn prove_iso_candidate<S: ShapeOpsSurface>(
     })
 }
 
+fn leader_matches_iso_locus<S: ShapeOpsSurface>(
+    surface: &S,
+    params: &[(f64, f64)],
+    leader: &PolylineCurve<Point3>,
+    iso: IsoParameter,
+    constant: f64,
+) -> bool {
+    params.len() == leader.len()
+        && constant.is_finite()
+        && params
+            .iter()
+            .copied()
+            .zip(leader.iter().copied())
+            .all(|((u, v), point)| {
+                let (iso_u, iso_v) = match iso {
+                    IsoParameter::U => (constant, v),
+                    IsoParameter::V => (u, constant),
+                };
+                surface.evaluate(iso_u, iso_v).distance(point) <= 4.0 * TOLERANCE
+            })
+}
+
 fn exact_iso_leader<S: ShapeOpsSurface>(
     intersection: &IntersectionCurve<PolylineCurve<Point3>, S, S>,
 ) -> Option<NurbsCurve<Vector4>> {
@@ -270,19 +292,13 @@ fn exact_iso_leader<S: ShapeOpsSurface>(
                 })
                 .collect::<Vec<_>>();
             let constant = values.iter().sum::<f64>() / values.len() as f64;
-            let (surface_u, surface_v) = surface.try_range_tuple();
-            let scale = match iso {
-                IsoParameter::U => surface_u.map_or(1.0, |(a, b)| (b - a).abs().max(1.0)),
-                IsoParameter::V => surface_v.map_or(1.0, |(a, b)| (b - a).abs().max(1.0)),
-            };
-            // Surface inversion of a marching point is only stable to a few
-            // dozen ulps even when the exact intersection is iso-parametric.
-            // Keep this gate at machine precision; the exact candidate is still
-            // proved geometrically against both carrier surfaces below.
-            if values
-                .iter()
-                .any(|value| (value - constant).abs() > 128.0 * f64::EPSILON * scale)
-            {
+            // Inverse parameter search on tightly trimmed B-spline surfaces can
+            // wander by hundreds of ulps even for an exact iso-parameter
+            // intersection. Prove constancy in 3D instead: every marching
+            // sample must lie on the exact iso locus within the Boolean proof
+            // tolerance. The candidate is independently checked against both
+            // carrier surfaces below before it can replace the marching leader.
+            if !leader_matches_iso_locus(surface, &params, leader, iso, constant) {
                 continue;
             }
             let start = match iso {
