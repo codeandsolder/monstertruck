@@ -416,48 +416,132 @@ impl<P: Copy + Tolerance, C: Clone> LoopsStore<P, C> {
         self.iter_mut()
             .for_each(|loops| loops.swap_edge_into_wire(edge_id, new_wire))
     }
+}
+
+impl<C> LoopsStore<Point3, C> {
+    fn search_boundary_parameter(
+        &self,
+        loops_index: usize,
+        point: Point3,
+    ) -> Option<(usize, usize, ParameterKind, Option<Point3>)>
+    where
+        C: Clone
+            + BoundedCurve<Point = Point3>
+            + SearchParameter<CurveParameter, Point = Point3>
+            + SearchNearestParameter<CurveParameter, Point = Point3>,
+    {
+        let loops = &self[loops_index];
+        let exact = loops
+            .iter()
+            .enumerate()
+            .flat_map(|(wire_index, wire)| {
+                wire.iter()
+                    .enumerate()
+                    .map(move |(edge_index, edge)| (wire_index, edge_index, edge))
+            })
+            .find_map(|(wire_index, edge_index, edge)| {
+                let curve = edge.curve();
+                let parameter = curve.search_parameter(point, None, 1)?;
+                let kind = ParameterKind::try_new(parameter, curve.range_tuple())?;
+                Some((wire_index, edge_index, kind, None))
+            });
+        if exact.is_some() {
+            return exact;
+        }
+
+        // SSI endpoints originate from tessellated carrier faces. The cleaned
+        // exact-surface solution can land a few kernel tolerances away from an
+        // exact topological boundary. Admit a bounded nearest projection only
+        // when the nearby topology proves a unique locus. Multiple occurrences
+        // of one edge, or distinct edges meeting at the same VertexId, are one
+        // locus; unrelated nearby edges remain ambiguous and fail closed.
+        let tolerance = 8.0 * TOLERANCE;
+        let mut candidate = None;
+        let mut candidate_identity: Option<(EdgeId<C>, Option<VertexId<Point3>>)> = None;
+        for (wire_index, wire) in loops.iter().enumerate() {
+            for (edge_index, edge) in wire.iter().enumerate() {
+                let curve = edge.curve();
+                let Some(parameter) = curve.search_nearest_parameter(point, None, 10) else {
+                    continue;
+                };
+                let projected = curve.evaluate(parameter);
+                if projected.distance(point) > tolerance {
+                    continue;
+                }
+                let Some(kind) = ParameterKind::try_new(parameter, curve.range_tuple()) else {
+                    continue;
+                };
+                let endpoint_id = match kind {
+                    ParameterKind::Front => Some(edge.absolute_front().id()),
+                    ParameterKind::Back => Some(edge.absolute_back().id()),
+                    ParameterKind::Inner(_) => None,
+                };
+                let canonical_point = match kind {
+                    ParameterKind::Front => edge.absolute_front().point(),
+                    ParameterKind::Back => edge.absolute_back().point(),
+                    ParameterKind::Inner(_) => projected,
+                };
+                if let Some((existing_edge, existing_endpoint)) = candidate_identity {
+                    let same_edge = existing_edge == edge.id();
+                    let same_endpoint =
+                        existing_endpoint.is_some() && existing_endpoint == endpoint_id;
+                    if same_edge || same_endpoint {
+                        continue;
+                    }
+                    return None;
+                }
+                candidate_identity = Some((edge.id(), endpoint_id));
+                candidate = Some((wire_index, edge_index, kind, Some(canonical_point)));
+            }
+        }
+        candidate
+    }
 
     fn add_polygon_vertex(
         &mut self,
         loops_index: usize,
-        v: &Vertex<P>,
-        emap: &mut HashMap<EdgeId<C>, Edge<P, C>>,
+        vertex: &Vertex<Point3>,
+        emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
     ) -> Option<(usize, usize, ParameterKind)>
     where
-        C: Cut<Point = P> + SearchParameter<CurveParameter, Point = P>,
+        C: Clone
+            + Cut<Point = Point3>
+            + SearchParameter<CurveParameter, Point = Point3>
+            + SearchNearestParameter<CurveParameter, Point = Point3>,
     {
-        let pt = v.point();
-        let (wire_index, edge_index, kind) = self[loops_index].search_parameter(pt)?;
+        let (wire_index, edge_index, kind, projected) =
+            self.search_boundary_parameter(loops_index, vertex.point())?;
+        if let Some(projected) = projected {
+            vertex.set_point(projected);
+        }
         match kind {
             ParameterKind::Front => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
                     .absolute_front()
                     .clone();
-                self.change_vertex(&old_vertex, v, emap);
+                self.change_vertex(&old_vertex, vertex, emap);
             }
             ParameterKind::Back => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
                     .absolute_back()
                     .clone();
-                self.change_vertex(&old_vertex, v, emap);
+                self.change_vertex(&old_vertex, vertex, emap);
             }
-            ParameterKind::Inner(t) => {
+            ParameterKind::Inner(parameter) => {
                 let edge = self[loops_index][wire_index][edge_index].absolute_clone();
                 let edge_id = edge.id();
-                let (edge0, edge1) = edge.cut_with_parameter(v, t)?;
+                let (edge0, edge1) = edge.cut_with_parameter(vertex, parameter)?;
                 let new_wire: Wire<_, _> = vec![edge0, edge1].into();
                 self.swap_edge_into_wire(edge_id, &new_wire);
             }
         }
         Some((wire_index, edge_index, kind))
     }
-}
 
-impl<C> LoopsStore<Point3, C> {
     fn add_geom_vertex<S>(
         &mut self,
         (loops_index, wire_index, edge_index): (usize, usize, usize),
-        v: &Vertex<Point3>,
+        vertex: &Vertex<Point3>,
         kind: ParameterKind,
         another_surface: &S,
         emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
@@ -467,31 +551,58 @@ impl<C> LoopsStore<Point3, C> {
             + SearchNearestParameter<CurveParameter, Point = Point3>,
         S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     {
+        let mut coalesce_endpoint = |this: &mut Self, old_vertex: Vertex<Point3>| {
+            vertex.set_point(old_vertex.point());
+            this.change_vertex(&old_vertex, vertex, emap);
+        };
         match kind {
             ParameterKind::Front => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
                     .absolute_front()
                     .clone();
-                v.set_point(old_vertex.point());
-                self.change_vertex(&old_vertex, v, emap);
+                coalesce_endpoint(self, old_vertex);
             }
             ParameterKind::Back => {
                 let old_vertex = self[loops_index][wire_index][edge_index]
                     .absolute_back()
                     .clone();
-                v.set_point(old_vertex.point());
-                self.change_vertex(&old_vertex, v, emap);
+                coalesce_endpoint(self, old_vertex);
             }
             ParameterKind::Inner(_) => {
                 let curve = self[loops_index][wire_index][edge_index].curve();
-                let (pt, t, _) =
-                    curve_surface_projection(&curve, None, another_surface, None, v.point(), 100)?;
-                v.set_point(pt);
-                let edge = self[loops_index][wire_index][edge_index].absolute_clone();
-                let edge_id = edge.id();
-                let (edge0, edge1) = edge.cut_with_parameter(v, t)?;
-                let new_wire: Wire<_, _> = vec![edge0, edge1].into();
-                self.swap_edge_into_wire(edge_id, &new_wire);
+                // Polyline and exact curves can disagree about whether a recovered SSI
+                // point is just inside a trim or exactly on its endpoint. Classify the
+                // solved exact parameter before deciding whether topology needs a cut.
+                let (projected, parameter, _) = curve_surface_projection(
+                    &curve,
+                    None,
+                    another_surface,
+                    None,
+                    vertex.point(),
+                    100,
+                )?;
+                match ParameterKind::try_new(parameter, curve.range_tuple())? {
+                    ParameterKind::Front => {
+                        let old_vertex = self[loops_index][wire_index][edge_index]
+                            .absolute_front()
+                            .clone();
+                        coalesce_endpoint(self, old_vertex);
+                    }
+                    ParameterKind::Back => {
+                        let old_vertex = self[loops_index][wire_index][edge_index]
+                            .absolute_back()
+                            .clone();
+                        coalesce_endpoint(self, old_vertex);
+                    }
+                    ParameterKind::Inner(parameter) => {
+                        vertex.set_point(projected);
+                        let edge = self[loops_index][wire_index][edge_index].absolute_clone();
+                        let edge_id = edge.id();
+                        let (edge0, edge1) = edge.cut_with_parameter(vertex, parameter)?;
+                        let new_wire: Wire<_, _> = vec![edge0, edge1].into();
+                        self.swap_edge_into_wire(edge_id, &new_wire);
+                    }
+                }
             }
         }
         Some(())
@@ -1209,6 +1320,131 @@ mod projection_tests {
         assert_eq!(loops[0].len(), 2);
         assert!(loops[0].iter().all(|edge| edge.front() != edge.back()));
         assert!(loops[0].vertex_iter().all(|vertex| vertex != v1));
+    }
+
+    #[test]
+    fn loop_boundary_search_accepts_unique_bounded_nearest_projection() {
+        let v0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let v1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new(&v0, &v1, Line(v0.point(), v1.point()));
+        let loops = Loops(vec![BoundaryWire::new(
+            vec![edge].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        let store = LoopsStore(vec![loops]);
+        let point = Point3::new(0.5, 1.125 * TOLERANCE, 0.0);
+
+        let (_, _, kind, projected) = store
+            .search_boundary_parameter(0, point)
+            .expect("unique bounded nearest projection should recover the boundary parameter");
+
+        assert!(matches!(kind, ParameterKind::Inner(_)));
+        assert_eq!(projected, Some(Point3::new(0.5, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn loop_boundary_vertex_insertion_snaps_recovered_projection_before_cut() {
+        let v0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let v1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new(&v0, &v1, Line(v0.point(), v1.point()));
+        let loops = Loops(vec![BoundaryWire::new(
+            vec![edge].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        let mut store = LoopsStore(vec![loops]);
+        let vertex = Vertex::new(Point3::new(0.5, 1.125 * TOLERANCE, 0.0));
+        let mut emap = HashMap::default();
+
+        let (_, _, kind) = store
+            .add_polygon_vertex(0, &vertex, &mut emap)
+            .expect("recovered boundary projection should split the exact edge");
+
+        assert!(matches!(kind, ParameterKind::Inner(_)));
+        assert_eq!(vertex.point(), Point3::new(0.5, 0.0, 0.0));
+        assert_eq!(store[0][0].len(), 2);
+    }
+
+    #[test]
+    fn exact_geometry_reclassifies_inner_hint_at_boundary_endpoint() {
+        let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let old_back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new(&front, &old_back, Line(front.point(), old_back.point()));
+        let loops = Loops(vec![BoundaryWire::new(
+            vec![edge].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        let mut store = LoopsStore(vec![loops]);
+        let recovered = Vertex::new(old_back.point());
+        let mut emap = HashMap::default();
+
+        store
+            .add_geom_vertex(
+                (0, 0, 0),
+                &recovered,
+                ParameterKind::Inner(0.999),
+                &Plane::xy(),
+                &mut emap,
+            )
+            .expect("exact endpoint must be reclassified before topology mutation");
+
+        assert_eq!(store[0][0].len(), 1);
+        assert!(store[0][0].vertex_iter().any(|vertex| vertex == recovered));
+        assert!(store[0][0].vertex_iter().all(|vertex| vertex != old_back));
+    }
+
+    #[test]
+    fn loop_boundary_search_deduplicates_inverse_use_of_same_edge() {
+        let v0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let v1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new(&v0, &v1, Line(v0.point(), v1.point()));
+        let loops = Loops(vec![BoundaryWire::new(
+            vec![edge.clone(), edge.inverse()].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        let store = LoopsStore(vec![loops]);
+        let point = Point3::new(0.5, 1.125 * TOLERANCE, 0.0);
+
+        assert!(store.search_boundary_parameter(0, point).is_some());
+    }
+
+    #[test]
+    fn loop_boundary_search_accepts_distinct_edges_at_one_shared_vertex() {
+        let left = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let shared = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let right = Vertex::new(Point3::new(2.0, 0.0, 0.0));
+        let edge_left = Edge::new(&left, &shared, Line(left.point(), shared.point()));
+        let edge_right = Edge::new(&shared, &right, Line(shared.point(), right.point()));
+        let loops = Loops(vec![BoundaryWire::new(
+            vec![edge_left, edge_right].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        let store = LoopsStore(vec![loops]);
+        let point = Point3::new(1.0, 1.125 * TOLERANCE, 0.0);
+
+        let (_, _, kind, projected) = store
+            .search_boundary_parameter(0, point)
+            .expect("incident edges sharing one vertex are one boundary locus");
+
+        assert!(matches!(kind, ParameterKind::Front | ParameterKind::Back));
+        assert_eq!(projected, Some(shared.point()));
+    }
+
+    #[test]
+    fn loop_boundary_search_rejects_ambiguous_bounded_nearest_projection() {
+        let a0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let a1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let b0 = Vertex::new(Point3::new(0.0, 2.25 * TOLERANCE, 0.0));
+        let b1 = Vertex::new(Point3::new(1.0, 2.25 * TOLERANCE, 0.0));
+        let edge_a = Edge::new(&a0, &a1, Line(a0.point(), a1.point()));
+        let edge_b = Edge::new(&b0, &b1, Line(b0.point(), b1.point()));
+        let loops = Loops(vec![
+            BoundaryWire::new(vec![edge_a].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![edge_b].into(), ShapesOpStatus::Unknown),
+        ]);
+        let store = LoopsStore(vec![loops]);
+        let point = Point3::new(0.5, 1.125 * TOLERANCE, 0.0);
+
+        assert!(store.search_boundary_parameter(0, point).is_none());
     }
 
     #[test]
