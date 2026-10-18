@@ -1091,6 +1091,8 @@ where
     Some(())
 }
 
+const CROSS_FACE_STITCH_TOLERANCE: f64 = 8.0 * TOLERANCE;
+
 fn unique_nearby_loop_point<C>(
     lhs: &Loops<Point3, C>,
     rhs: &Loops<Point3, C>,
@@ -1229,12 +1231,12 @@ where
                         .add_independent_loop(BoundaryWire::new(geom_wire, status1));
                 } else {
                     // Adjacent face-pairs solve SSI independently. Their shared
-                    // endpoint can differ by a few Boolean tolerances even though both
+                    // endpoint can differ by a few kernel tolerances even though both
                     // segments belong to one topological intersection. Snap only to a
                     // unique already-known endpoint on either face; ambiguous nearby
-                    // topology remains fail-closed. Each pairwise polyline stitch uses
-                    // 4x tolerance, so 8x bounds two independently stitched neighbours.
-                    let stitch_tolerance = 8.0 * tol.max(TOLERANCE);
+                    // topology remains fail-closed. Topological identity must not scale with
+                    // the caller's modeling tolerance; use a fixed kernel-precision envelope.
+                    let stitch_tolerance = CROSS_FACE_STITCH_TOLERANCE;
                     let mut front = polyline.front();
                     let mut back = polyline.back();
                     if let Some(point) = unique_nearby_loop_point(
@@ -1524,6 +1526,38 @@ mod projection_tests {
         let point = Point3::new(0.5, 1.125 * TOLERANCE, 0.0);
 
         assert!(store.search_boundary_parameter(0, point).is_none());
+    }
+
+    #[test]
+    fn cross_face_endpoint_stitch_rejects_model_scale_nearby_topology() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new(&a, &b, Line(a.point(), b.point()));
+        let lhs = Loops(vec![BoundaryWire::new(
+            vec![edge].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        let rhs = Loops(Vec::new());
+
+        let kernel_near = Point3::new(0.0, 0.0, 4.0 * TOLERANCE);
+        assert_eq!(
+            unique_nearby_loop_point(&lhs, &rhs, kernel_near, CROSS_FACE_STITCH_TOLERANCE),
+            Some(a.point())
+        );
+
+        // The high-Z clip uses a modeling tolerance of 0.05. Scaling the old
+        // 8x stitch envelope by that tolerance made z=0.8 and z=1.0 topology
+        // close enough to be incorrectly canonicalized as one endpoint.
+        let model_scale_distinct = Point3::new(0.0, 0.0, 0.2);
+        assert!(
+            unique_nearby_loop_point(
+                &lhs,
+                &rhs,
+                model_scale_distinct,
+                CROSS_FACE_STITCH_TOLERANCE
+            )
+            .is_none()
+        );
     }
 
     #[test]
