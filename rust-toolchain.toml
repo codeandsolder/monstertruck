@@ -6,6 +6,6 @@
 # project. Keeping rustfmt out of the default toolchain also makes an accidental
 # plain `cargo fmt` fail instead of silently ignoring the unstable options.
 [toolchain]
-channel = "1.99.0"
+channel = "1.99.1"
 components = ["clippy"]
 targets = ["wasm32-unknown-unknown"]

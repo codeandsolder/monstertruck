@@ -2,6 +2,7 @@ use crate::{
     Result,
     errors::Error,
     geom_impls::{self, ArcConnector, ExtrudeConnector, LineConnector, RevoluteConnector},
+    topo_impls::connect_raw_wires,
     topo_traits::*,
 };
 use monstertruck_geometry::prelude::*;
@@ -15,6 +16,28 @@ pub enum SweepAngle {
     Partial(Rad<f64>),
     /// Full 360° closed revolution.
     Closed,
+}
+
+/// One exact rigid-motion segment in a composite face sweep.
+///
+/// Translation segments create extrusion surfaces. Rotation segments create
+/// revolution surfaces, so line/arc paths remain analytic instead of being
+/// approximated by a polyline or a sampled skin.
+#[derive(Debug, Clone, Copy)]
+pub enum CompositeSweepSegment {
+    /// Translate the current section by `vector`.
+    Translation(Vector3),
+    /// Rotate the current section around an axis by a partial angle.
+    Rotation {
+        /// A point on the rotation axis.
+        origin: Point3,
+        /// Rotation axis. The vector is normalized internally.
+        axis: Vector3,
+        /// Signed rotation angle. Must be finite, non-zero, and no larger than one full turn.
+        angle: Rad<f64>,
+        /// Number of topological subdivisions for the revolution. Must be non-zero.
+        division: usize,
+    },
 }
 
 type Vertex = monstertruck_topology::Vertex<Point3>;
@@ -620,6 +643,289 @@ pub fn extrude<T, Swept>(elem: &T, vector: Vector3) -> Swept
 where T: Sweep<Matrix4, LineConnector, ExtrudeConnector, Swept> {
     let trsl = Matrix4::from_translation(vector);
     elem.sweep(trsl, LineConnector, ExtrudeConnector { vector })
+}
+
+fn composite_segment_solid(
+    face: &crate::Face,
+    segment: CompositeSweepSegment,
+) -> Result<crate::Solid> {
+    match segment {
+        CompositeSweepSegment::Translation(vector) => {
+            let magnitude = vector.magnitude();
+            if !magnitude.is_finite() || magnitude.so_small() {
+                return Err(Error::InvalidCompositeSweepSegment);
+            }
+            Ok(extrude(face, vector))
+        }
+        CompositeSweepSegment::Rotation {
+            origin,
+            axis,
+            angle,
+            division,
+        } => {
+            let axis_magnitude = axis.magnitude();
+            if division == 0
+                || !axis_magnitude.is_finite()
+                || axis_magnitude.so_small()
+                || !angle.0.is_finite()
+                || angle.0.so_small()
+                || angle.0.abs() >= 2.0 * std::f64::consts::PI
+            {
+                return Err(Error::InvalidCompositeSweepSegment);
+            }
+            Ok(revolve(
+                face,
+                origin,
+                axis / axis_magnitude,
+                SweepAngle::Partial(angle),
+                division,
+            ))
+        }
+    }
+}
+
+fn append_composite_segment(
+    output: &mut crate::Shell,
+    cursor: &mut crate::Face,
+    segment: CompositeSweepSegment,
+) -> Result<()> {
+    let solid = composite_segment_solid(cursor, segment)?;
+    let mut shells = solid.into_boundaries();
+    if shells.len() != 1 {
+        return Err(Error::UnexpectedCompositeSweepTopology);
+    }
+    let shell = shells
+        .pop()
+        .ok_or(Error::UnexpectedCompositeSweepTopology)?;
+    let mut faces = shell.into_iter();
+    let Some(_start_cap) = faces.next() else {
+        return Err(Error::UnexpectedCompositeSweepTopology);
+    };
+    let Some(end_cap) = faces.next_back() else {
+        return Err(Error::UnexpectedCompositeSweepTopology);
+    };
+    output.extend(faces);
+    *cursor = end_cap;
+    Ok(())
+}
+
+fn composite_segment_transform(segment: CompositeSweepSegment) -> Result<Matrix4> {
+    match segment {
+        CompositeSweepSegment::Translation(vector) => {
+            let magnitude = vector.magnitude();
+            if !magnitude.is_finite() || magnitude.so_small() {
+                return Err(Error::InvalidCompositeSweepSegment);
+            }
+            Ok(Matrix4::from_translation(vector))
+        }
+        CompositeSweepSegment::Rotation {
+            origin,
+            axis,
+            angle,
+            division,
+        } => {
+            let magnitude = axis.magnitude();
+            if division != 1
+                || !magnitude.is_finite()
+                || magnitude.so_small()
+                || !angle.0.is_finite()
+                || angle.0.so_small()
+                || angle.0.abs() >= 2.0 * std::f64::consts::PI
+            {
+                return Err(Error::InvalidCompositeSweepSegment);
+            }
+            let axis = axis / magnitude;
+            Ok(Matrix4::from_translation(origin.to_vec())
+                * Matrix4::from_axis_angle(axis, angle)
+                * Matrix4::from_translation(-origin.to_vec()))
+        }
+    }
+}
+
+fn composite_faces_near(first: &crate::Face, second: &crate::Face, tolerance: f64) -> bool {
+    let first_edges = first.edge_iter().collect::<Vec<_>>();
+    let second_edges = second.edge_iter().collect::<Vec<_>>();
+    if first_edges.len() != second_edges.len() {
+        return false;
+    }
+    first_edges.iter().zip(second_edges.iter()).all(|(a, b)| {
+        let endpoints_near = (a.front().point() - b.front().point()).magnitude() <= tolerance
+            && (a.back().point() - b.back().point()).magnitude() <= tolerance;
+        if !endpoints_near {
+            return false;
+        }
+        let a_curve = a.oriented_curve();
+        let b_curve = b.oriented_curve();
+        let (a0, a1) = a_curve.range_tuple();
+        let (b0, b1) = b_curve.range_tuple();
+        let a_mid = a_curve.subs((a0 + a1) * 0.5);
+        let b_mid = b_curve.subs((b0 + b1) * 0.5);
+        (a_mid - b_mid).magnitude() <= tolerance
+    })
+}
+
+fn append_closing_composite_segment(
+    output: &mut crate::Shell,
+    cursor: &crate::Face,
+    first: &crate::Face,
+    segment: CompositeSweepSegment,
+) -> Result<()> {
+    let transform = composite_segment_transform(segment)?;
+    let mapped = transformed(cursor, transform);
+    if !composite_faces_near(&mapped, first, 1.0e-9) {
+        return Err(Error::CompositeSweepNotClosed);
+    }
+
+    let from = cursor.edge_iter().collect::<Vec<_>>();
+    let to = first.edge_iter().collect::<Vec<_>>();
+    match segment {
+        CompositeSweepSegment::Translation(vector) => output.extend(connect_raw_wires(
+            from,
+            to,
+            LineConnector.connector(),
+            ExtrudeConnector { vector }.connector(),
+        )),
+        CompositeSweepSegment::Rotation {
+            origin,
+            axis,
+            angle,
+            division: 1,
+        } => {
+            let axis = axis / axis.magnitude();
+            output.extend(connect_raw_wires(
+                from,
+                to,
+                ArcConnector {
+                    origin,
+                    axis,
+                    angle,
+                }
+                .connector(),
+                RevoluteConnector { origin, axis }.connector(),
+            ));
+        }
+        CompositeSweepSegment::Rotation { .. } => {
+            return Err(Error::InvalidCompositeSweepSegment);
+        }
+    }
+    Ok(())
+}
+
+/// Sweep a face through a sequence of exact translation and rotation segments.
+///
+/// Unlike repeatedly sweeping a face into independent solids and boolean-unioning
+/// the results, this function keeps the section topology shared across segment
+/// boundaries and emits only the two true end caps. That makes it suitable for
+/// bent prismatic parts such as pins, busbars, and pipes whose centerline is a
+/// sequence of straight lines and circular arcs.
+///
+/// Translation segments are represented as exact extrusion surfaces and rotation
+/// segments as exact revolution surfaces. No sampling or tessellation is involved.
+///
+/// # Errors
+///
+/// Returns [`Error::EmptyCompositeSweep`] when `segments` is empty,
+/// [`Error::InvalidCompositeSweepSegment`] for zero/non-finite translations,
+/// zero/non-finite rotations, zero-length rotation axes, or zero subdivisions,
+/// and [`Error::UnexpectedCompositeSweepTopology`] if an internally generated
+/// segment does not have the single-shell capped topology produced by the
+/// primitive sweep builders. The final solid is validated with [`Solid::try_new`].
+pub fn composite_sweep(
+    face: &crate::Face,
+    segments: impl IntoIterator<Item = CompositeSweepSegment>,
+) -> Result<crate::Solid> {
+    let mut output = crate::Shell::from(vec![face.inverse()]);
+    let mut cursor = face.clone();
+    let mut segment_count = 0usize;
+
+    for segment in segments {
+        segment_count += 1;
+        append_composite_segment(&mut output, &mut cursor, segment)?;
+    }
+
+    if segment_count == 0 {
+        return Err(Error::EmptyCompositeSweep);
+    }
+    output.push(cursor);
+    Ok(crate::Solid::try_new(vec![output])?)
+}
+
+/// Sweep a face around an exactly closed composite path.
+///
+/// This is the cap-free counterpart of [`composite_sweep`]. Intermediate
+/// sections share topology exactly, and the final segment is connected directly
+/// back to the original section instead of creating a duplicate coincident cap.
+/// It is therefore suitable for closed bent tubes, seals, frames, and similar
+/// profiles made from straight and circular path pieces.
+///
+/// Rotation segments may request multiple subdivisions. If the final rotation
+/// is subdivided, all but its last subdivision are emitted normally and the last
+/// one performs the topological closure.
+///
+/// # Errors
+///
+/// Returns the same segment/topology errors as [`composite_sweep`], plus
+/// [`Error::CompositeSweepNotClosed`] when the final rigid motion does not return
+/// the section to its starting geometry within the modeling closure tolerance.
+pub fn composite_closed_sweep(
+    face: &crate::Face,
+    segments: impl IntoIterator<Item = CompositeSweepSegment>,
+) -> Result<crate::Solid> {
+    let mut segments = segments.into_iter().peekable();
+    if segments.peek().is_none() {
+        return Err(Error::EmptyCompositeSweep);
+    }
+
+    let first = face.clone();
+    let mut cursor = face.clone();
+    let mut output = crate::Shell::new();
+
+    while let Some(segment) = segments.next() {
+        let last = segments.peek().is_none();
+        if !last {
+            append_composite_segment(&mut output, &mut cursor, segment)?;
+            continue;
+        }
+
+        match segment {
+            CompositeSweepSegment::Rotation {
+                origin,
+                axis,
+                angle,
+                division,
+            } if division > 1 => {
+                let part_angle = angle / division as f64;
+                for _ in 1..division {
+                    append_composite_segment(
+                        &mut output,
+                        &mut cursor,
+                        CompositeSweepSegment::Rotation {
+                            origin,
+                            axis,
+                            angle: part_angle,
+                            division: 1,
+                        },
+                    )?;
+                }
+                append_closing_composite_segment(
+                    &mut output,
+                    &cursor,
+                    &first,
+                    CompositeSweepSegment::Rotation {
+                        origin,
+                        axis,
+                        angle: part_angle,
+                        division: 1,
+                    },
+                )?;
+            }
+            final_segment => {
+                append_closing_composite_segment(&mut output, &cursor, &first, final_segment)?;
+            }
+        }
+    }
+
+    Ok(crate::Solid::try_new(vec![output])?)
 }
 
 /// Sweeps a vertex, an edge, a wire, a face, or a shell by the rotation.

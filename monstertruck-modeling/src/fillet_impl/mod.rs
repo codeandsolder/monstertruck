@@ -50,34 +50,16 @@ impl From<ParameterCurveLinear> for Curve {
 }
 
 impl From<FilletIntersectionCurve> for Curve {
-    // Convert-back path only: these are intersection curves the fillet
-    // algorithm itself creates between its generated NURBS strips (never
-    // boolean seam input), and they have no exact closed form.
-    fn from(c: FilletIntersectionCurve) -> Self {
-        let range = c.range_tuple();
-        Curve::NurbsCurve(sample_to_nurbs(range, |t| c.subs(t), 16))
+    fn from(curve: FilletIntersectionCurve) -> Self {
+        let (surface0, surface1, leader) = curve.destruct();
+        Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+            Box::new(Surface::NurbsSurface(*surface0)),
+            Box::new(Surface::NurbsSurface(*surface1)),
+            Box::new(leader.into()),
+            None,
+            None,
+        ))
     }
-}
-
-/// Sample a parametric curve into a degree-1 NURBS polyline approximation.
-fn sample_to_nurbs(
-    range: (f64, f64),
-    subs: impl Fn(f64) -> Point3,
-    n: usize,
-) -> NurbsCurve<Vector4> {
-    let (t0, t1) = range;
-    let pts: Vec<Point3> = (0..=n)
-        .map(|i| subs(t0 + (t1 - t0) * (i as f64) / (n as f64)))
-        .collect();
-    let knots: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
-    let knot_vec = KnotVector::from(
-        std::iter::once(0.0)
-            .chain(knots.iter().copied())
-            .chain(std::iter::once(1.0))
-            .collect::<Vec<_>>(),
-    );
-    let bsp = BsplineCurve::new(knot_vec, pts);
-    NurbsCurve::from(bsp)
 }
 
 #[cfg(test)]

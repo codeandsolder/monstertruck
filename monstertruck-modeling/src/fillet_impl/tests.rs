@@ -66,3 +66,36 @@ fn intersection_curve_with_non_exact_leader_refuses() {
     let curve = intersection_curve_with_leader(line_pcurve_on_plane());
     assert!(NurbsCurve::<Vector4>::try_from(curve).is_err());
 }
+
+/// The generic modeling bridge must preserve round-fillet intersection curves
+/// exactly enough for the rebuilt modeling shell to remain geometrically consistent.
+#[test]
+fn generic_round_fillet_preserves_modeling_consistency() {
+    use crate::builder;
+    use monstertruck_fillet::{FilletOptions, fillet_edges_generic};
+
+    let vertex = builder::vertex(Point3::origin());
+    let edge: monstertruck_topology::Edge<Point3, Curve> =
+        builder::extrude(&vertex, Vector3::new(4.0, 0.0, 0.0));
+    let face: monstertruck_topology::Face<Point3, Curve, Surface> =
+        builder::extrude(&edge, Vector3::new(0.0, 3.0, 0.0));
+    let solid: monstertruck_topology::Solid<Point3, Curve, Surface> =
+        builder::extrude(&face, Vector3::new(0.0, 0.0, 2.0));
+    let mut boundaries = solid.into_boundaries();
+    let shell = boundaries.first_mut().expect("box must have one shell");
+    let start = Point3::new(0.0, 0.0, 0.0);
+    let end = Point3::new(4.0, 0.0, 0.0);
+    let selected = shell
+        .edge_iter()
+        .find(|edge| {
+            let front = edge.absolute_front().point();
+            let back = edge.absolute_back().point();
+            (front.near(&start) && back.near(&end)) || (front.near(&end) && back.near(&start))
+        })
+        .expect("box edge must exist")
+        .clone();
+
+    fillet_edges_generic(shell, &[selected], Some(&FilletOptions::constant(0.25)))
+        .expect("round fillet should succeed");
+    assert!(shell.is_geometric_consistent());
+}

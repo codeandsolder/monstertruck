@@ -67,6 +67,19 @@ proptest! {
 }
 
 #[test]
+fn search_parameter_near_zero_preserves_precision() {
+    let circle = UnitCircle::<Point2>::new();
+    let t = 9.621083226117856e-6;
+    let point = circle.evaluate(t);
+
+    let parameter = circle.search_parameter(point, t, 1).unwrap();
+    assert_near2!(parameter, t);
+
+    let nearest = circle.search_nearest_parameter(point, t, 1).unwrap();
+    assert_near2!(nearest, t);
+}
+
+#[test]
 fn parameter_division() {
     let c = UnitCircle::<Point2>::new();
     let (_div, pts) = c.parameter_division(c.range_tuple(), 0.05);
