@@ -44,7 +44,7 @@ jobs:
           # `resources` submodule explicitly below.
           submodules: false
       - run: git submodule update --init resources
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
@@ -62,7 +62,7 @@ jobs:
           # `resources` submodule explicitly below.
           submodules: false
       - run: git submodule update --init resources
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       # Pinned: cargo-rdme's output is not stable across major versions, so an
@@ -86,8 +86,8 @@ jobs:
     with:
       command: |
         git submodule update --init resources
-        cargo +1.99.0 test --workspace --lib
-      rust-toolchain: "1.99.0"
+        cargo +1.99.1 test --workspace --lib
+      rust-toolchain: "1.99.1"
       rustflags: "-D warnings -C target-cpu=x86-64-v2"
 
   meshing-features:
@@ -101,7 +101,7 @@ jobs:
           # `resources` submodule explicitly below.
           submodules: false
       - run: git submodule update --init resources
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just meshing-features
@@ -117,7 +117,7 @@ jobs:
           # `resources` submodule explicitly below.
           submodules: false
       - run: git submodule update --init resources
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
