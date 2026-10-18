@@ -360,8 +360,7 @@ fn exact_iso_leader<S: ShapeOpsSurface>(
                 IsoParameter::U => params.last()?.1,
                 IsoParameter::V => params.last()?.0,
             };
-            let Some(candidate) = homogeneous_iso_curve(surface, iso, constant, start, end)
-            else {
+            let Some(candidate) = homogeneous_iso_curve(surface, iso, constant, start, end) else {
                 continue;
             };
             if prove_iso_candidate(

@@ -67,11 +67,9 @@ fn endpoint_and_inner(
 }
 
 fn point_is_on_surface<S>(surface: &S, point: Point3, tolerance: f64) -> bool
-where
-    S: ParametricSurface3D
+where S: ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
-{
+        + SearchNearestParameter<SurfaceParameter, Point = Point3> {
     let within_tolerance = |parameter: (f64, f64)| {
         surface.evaluate(parameter.0, parameter.1).distance(point) <= tolerance
     };

@@ -41,13 +41,9 @@ pub(super) struct BoundaryWire<P, C> {
 
 impl<P, C> BoundaryWire<P, C> {
     #[inline(always)]
-    pub(super) fn new(wire: Wire<P, C>, status: ShapesOpStatus) -> Self {
-        Self { wire, status }
-    }
+    pub(super) fn new(wire: Wire<P, C>, status: ShapesOpStatus) -> Self { Self { wire, status } }
     #[inline(always)]
-    pub(super) fn status(&self) -> ShapesOpStatus {
-        self.status
-    }
+    pub(super) fn status(&self) -> ShapesOpStatus { self.status }
     #[inline(always)]
     pub(super) fn inverse(&self) -> Self {
         Self {
@@ -62,8 +58,7 @@ impl ShapesOpStatus {
     where
         C: ParametricCurve3D + BoundedCurve,
         S0: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
-        S1: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
-    {
+        S1: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>, {
         let (t0, t1) = curve.range_tuple();
         let t = (t0 + t1) / 2.0;
         let (_, pt0, pt1) = curve.search_triple(t, 100)?;
@@ -80,16 +75,12 @@ impl ShapesOpStatus {
 impl<P, C> std::ops::Deref for BoundaryWire<P, C> {
     type Target = Wire<P, C>;
     #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.wire
-    }
+    fn deref(&self) -> &Self::Target { &self.wire }
 }
 
 impl<P, C> std::ops::DerefMut for BoundaryWire<P, C> {
     #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.wire
-    }
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.wire }
 }
 
 #[derive(Clone, Debug)]
@@ -100,31 +91,23 @@ pub(super) struct LoopsStore<P, C>(Vec<Loops<P, C>>);
 impl<P, C> std::ops::Deref for Loops<P, C> {
     type Target = Vec<BoundaryWire<P, C>>;
     #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+    fn deref(&self) -> &Self::Target { &self.0 }
 }
 
 impl<P, C> std::ops::DerefMut for Loops<P, C> {
     #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
 }
 
 impl<P, C> std::ops::Deref for LoopsStore<P, C> {
     type Target = Vec<Loops<P, C>>;
     #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+    fn deref(&self) -> &Self::Target { &self.0 }
 }
 
 impl<P, C> std::ops::DerefMut for LoopsStore<P, C> {
     #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
 }
 
 impl<P, C> FromIterator<BoundaryWire<P, C>> for Loops<P, C> {
@@ -153,9 +136,7 @@ impl<'a, P: 'a, C: 'a, S: 'a> FromIterator<&'a Face<P, C, S>> for LoopsStore<P, 
 impl<'a, P, C> IntoIterator for &'a LoopsStore<P, C> {
     type Item = <&'a Vec<Loops<P, C>> as IntoIterator>::Item;
     type IntoIter = <&'a Vec<Loops<P, C>> as IntoIterator>::IntoIter;
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
-    }
+    fn into_iter(self) -> Self::IntoIter { self.0.iter() }
 }
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -181,9 +162,7 @@ impl ParameterKind {
 
 impl<P: Copy, C: Clone> Loops<P, C> {
     fn search_parameter(&self, pt: P) -> Option<(usize, usize, ParameterKind)>
-    where
-        C: BoundedCurve<Point = P> + SearchParameter<CurveParameter, Point = P>,
-    {
+    where C: BoundedCurve<Point = P> + SearchParameter<CurveParameter, Point = P> {
         self.iter()
             .enumerate()
             .flat_map(move |(i, wire)| wire.iter().enumerate().map(move |(j, edge)| (i, j, edge)))
@@ -401,12 +380,10 @@ impl<P: Copy, C: Clone> Loops<P, C> {
 
 impl<C> Loops<Point3, C> {
     fn has_partitioned_coincident_path(&self, edge0: &Edge<Point3, C>) -> bool
-    where
-        C: Clone
+    where C: Clone
             + ParametricCurve<Point = Point3>
             + BoundedCurve<Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3>,
-    {
+            + SearchNearestParameter<CurveParameter, Point = Point3> {
         let reference = edge0.curve();
         let reference_range = reference.range_tuple();
         let point_on_reference = |point: Point3| {
@@ -820,8 +797,7 @@ fn planar_polygon_set_signature<'a>(
                 continue;
             }
             area += triangle_area;
-            weighted_centroid +=
-                (a.to_vec() + b.to_vec() + c.to_vec()) * (triangle_area / 3.0);
+            weighted_centroid += (a.to_vec() + b.to_vec() + c.to_vec()) * (triangle_area / 3.0);
         }
         for point in polygon.positions() {
             let delta = *point - origin;
@@ -898,8 +874,7 @@ fn planar_polygons_same_trimmed_face(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: 
 }
 
 fn projected_bounds_overlap(lhs: [f64; 4], rhs: [f64; 4], tol: f64) -> bool {
-    lhs[1].min(rhs[1]) + tol >= lhs[0].max(rhs[0])
-        && lhs[3].min(rhs[3]) + tol >= lhs[2].max(rhs[2])
+    lhs[1].min(rhs[1]) + tol >= lhs[0].max(rhs[0]) && lhs[3].min(rhs[3]) + tol >= lhs[2].max(rhs[2])
 }
 
 /// Match one trimmed planar face against a partition of the same physical
@@ -934,9 +909,11 @@ fn single_face_matches_planar_partition(
         return Some(None);
     }
     let fragment_signature = planar_polygon_set_signature(matched.iter(), origin, normal)?;
-    Some(planar_signatures_match(target_signature, fragment_signature, tol).then_some(
-        representative.expect("non-empty planar fragment group has a representative"),
-    ))
+    Some(
+        planar_signatures_match(target_signature, fragment_signature, tol).then_some(
+            representative.expect("non-empty planar fragment group has a representative"),
+        ),
+    )
 }
 
 fn shells_full_planar_interface_pair(
@@ -1119,8 +1096,7 @@ fn unique_nearby_loop_point<C>(
 fn create_independent_loop<P, C, D>(mut poly_curve0: C) -> Wire<P, D>
 where
     C: Cut<Point = P>,
-    D: From<C>,
-{
+    D: From<C>, {
     let (t0, t1) = poly_curve0.range_tuple();
     let t = (t0 + t1) / 2.0;
     let poly_curve1 = poly_curve0.cut(t);
@@ -1209,150 +1185,151 @@ where
                 &polygon1,
                 tol,
             )?;
-            curves.into_iter()
-            .try_for_each(|(mut polyline, mut intersection_curve)| {
-                let status = ShapesOpStatus::from_is_curve(&intersection_curve)?;
-                let (status0, status1) = match (ori0, ori1) {
-                    (true, true) => (status, status.not()),
-                    (true, false) => (status.not(), status.not()),
-                    (false, true) => (status, status),
-                    (false, false) => (status.not(), status),
-                };
-                if polyline.front().near(&polyline.back()) {
-                    let poly_wire = create_independent_loop(polyline);
-                    poly_loops_store0[face_index0]
-                        .add_independent_loop(BoundaryWire::new(poly_wire.clone(), status0));
-                    poly_loops_store1[face_index1]
-                        .add_independent_loop(BoundaryWire::new(poly_wire, status1));
-                    let geom_wire = create_independent_loop(intersection_curve);
-                    geom_loops_store0[face_index0]
-                        .add_independent_loop(BoundaryWire::new(geom_wire.clone(), status0));
-                    geom_loops_store1[face_index1]
-                        .add_independent_loop(BoundaryWire::new(geom_wire, status1));
-                } else {
-                    // Adjacent face-pairs solve SSI independently. Their shared
-                    // endpoint can differ by a few kernel tolerances even though both
-                    // segments belong to one topological intersection. Snap only to a
-                    // unique already-known endpoint on either face; ambiguous nearby
-                    // topology remains fail-closed. Topological identity must not scale with
-                    // the caller's modeling tolerance; use a fixed kernel-precision envelope.
-                    let stitch_tolerance = CROSS_FACE_STITCH_TOLERANCE;
-                    let mut front = polyline.front();
-                    let mut back = polyline.back();
-                    if let Some(point) = unique_nearby_loop_point(
-                        &geom_loops_store0[face_index0],
-                        &geom_loops_store1[face_index1],
-                        front,
-                        stitch_tolerance,
-                    ) {
-                        front = point;
-                    }
-                    if let Some(point) = unique_nearby_loop_point(
-                        &geom_loops_store0[face_index0],
-                        &geom_loops_store1[face_index1],
-                        back,
-                        stitch_tolerance,
-                    ) {
-                        back = point;
-                    }
-                    // Cross-face endpoint stitching can collapse a numerically
-                    // tiny SSI fragment onto one already-known intersection
-                    // vertex. Such a fragment is a point contact after
-                    // canonicalization, not a one-dimensional trim. Discard it
-                    // before splitting boundary edges or constructing topology.
-                    if front.near(&back) {
-                        return Some(());
-                    }
-                    *polyline.first_mut().unwrap() = front;
-                    *polyline.last_mut().unwrap() = back;
-                    *intersection_curve.leader_mut().first_mut().unwrap() = front;
-                    *intersection_curve.leader_mut().last_mut().unwrap() = back;
+            curves
+                .into_iter()
+                .try_for_each(|(mut polyline, mut intersection_curve)| {
+                    let status = ShapesOpStatus::from_is_curve(&intersection_curve)?;
+                    let (status0, status1) = match (ori0, ori1) {
+                        (true, true) => (status, status.not()),
+                        (true, false) => (status.not(), status.not()),
+                        (false, true) => (status, status),
+                        (false, false) => (status.not(), status),
+                    };
+                    if polyline.front().near(&polyline.back()) {
+                        let poly_wire = create_independent_loop(polyline);
+                        poly_loops_store0[face_index0]
+                            .add_independent_loop(BoundaryWire::new(poly_wire.clone(), status0));
+                        poly_loops_store1[face_index1]
+                            .add_independent_loop(BoundaryWire::new(poly_wire, status1));
+                        let geom_wire = create_independent_loop(intersection_curve);
+                        geom_loops_store0[face_index0]
+                            .add_independent_loop(BoundaryWire::new(geom_wire.clone(), status0));
+                        geom_loops_store1[face_index1]
+                            .add_independent_loop(BoundaryWire::new(geom_wire, status1));
+                    } else {
+                        // Adjacent face-pairs solve SSI independently. Their shared
+                        // endpoint can differ by a few kernel tolerances even though both
+                        // segments belong to one topological intersection. Snap only to a
+                        // unique already-known endpoint on either face; ambiguous nearby
+                        // topology remains fail-closed. Topological identity must not scale with
+                        // the caller's modeling tolerance; use a fixed kernel-precision envelope.
+                        let stitch_tolerance = CROSS_FACE_STITCH_TOLERANCE;
+                        let mut front = polyline.front();
+                        let mut back = polyline.back();
+                        if let Some(point) = unique_nearby_loop_point(
+                            &geom_loops_store0[face_index0],
+                            &geom_loops_store1[face_index1],
+                            front,
+                            stitch_tolerance,
+                        ) {
+                            front = point;
+                        }
+                        if let Some(point) = unique_nearby_loop_point(
+                            &geom_loops_store0[face_index0],
+                            &geom_loops_store1[face_index1],
+                            back,
+                            stitch_tolerance,
+                        ) {
+                            back = point;
+                        }
+                        // Cross-face endpoint stitching can collapse a numerically
+                        // tiny SSI fragment onto one already-known intersection
+                        // vertex. Such a fragment is a point contact after
+                        // canonicalization, not a one-dimensional trim. Discard it
+                        // before splitting boundary edges or constructing topology.
+                        if front.near(&back) {
+                            return Some(());
+                        }
+                        *polyline.first_mut().unwrap() = front;
+                        *polyline.last_mut().unwrap() = back;
+                        *intersection_curve.leader_mut().first_mut().unwrap() = front;
+                        *intersection_curve.leader_mut().last_mut().unwrap() = back;
 
-                    let pv0 = Vertex::new(front);
-                    let pv1 = Vertex::new(back);
-                    let gv0 = Vertex::new(front);
-                    let gv1 = Vertex::new(back);
-                    let mut pemap0 = HashMap::default();
-                    let mut pemap1 = HashMap::default();
-                    let mut gemap0 = HashMap::default();
-                    let mut gemap1 = HashMap::default();
-                    let idx00 =
-                        poly_loops_store0.add_polygon_vertex(face_index0, &pv0, &mut pemap0);
-                    if let Some((wire_index, edge_index, kind)) = idx00 {
-                        geom_loops_store0.add_geom_vertex(
-                            (face_index0, wire_index, edge_index),
-                            &gv0,
-                            kind,
-                            &surface1,
-                            &mut gemap0,
-                        )?;
-                        let polyline = intersection_curve.leader_mut();
-                        *polyline.first_mut().unwrap() = gv0.point();
+                        let pv0 = Vertex::new(front);
+                        let pv1 = Vertex::new(back);
+                        let gv0 = Vertex::new(front);
+                        let gv1 = Vertex::new(back);
+                        let mut pemap0 = HashMap::default();
+                        let mut pemap1 = HashMap::default();
+                        let mut gemap0 = HashMap::default();
+                        let mut gemap1 = HashMap::default();
+                        let idx00 =
+                            poly_loops_store0.add_polygon_vertex(face_index0, &pv0, &mut pemap0);
+                        if let Some((wire_index, edge_index, kind)) = idx00 {
+                            geom_loops_store0.add_geom_vertex(
+                                (face_index0, wire_index, edge_index),
+                                &gv0,
+                                kind,
+                                &surface1,
+                                &mut gemap0,
+                            )?;
+                            let polyline = intersection_curve.leader_mut();
+                            *polyline.first_mut().unwrap() = gv0.point();
+                        }
+                        let idx01 =
+                            poly_loops_store0.add_polygon_vertex(face_index0, &pv1, &mut pemap1);
+                        if let Some((wire_index, edge_index, kind)) = idx01 {
+                            geom_loops_store0.add_geom_vertex(
+                                (face_index0, wire_index, edge_index),
+                                &gv1,
+                                kind,
+                                &surface1,
+                                &mut gemap1,
+                            )?;
+                            let polyline = intersection_curve.leader_mut();
+                            *polyline.last_mut().unwrap() = gv1.point();
+                        }
+                        let idx10 =
+                            poly_loops_store1.add_polygon_vertex(face_index1, &pv0, &mut pemap0);
+                        if let Some((wire_index, edge_index, kind)) = idx10 {
+                            geom_loops_store1.add_geom_vertex(
+                                (face_index1, wire_index, edge_index),
+                                &gv0,
+                                kind,
+                                &surface0,
+                                &mut gemap0,
+                            )?;
+                            let polyline = intersection_curve.leader_mut();
+                            *polyline.first_mut().unwrap() = gv0.point();
+                        }
+                        let idx11 =
+                            poly_loops_store1.add_polygon_vertex(face_index1, &pv1, &mut pemap1);
+                        if let Some((wire_index, edge_index, kind)) = idx11 {
+                            geom_loops_store1.add_geom_vertex(
+                                (face_index1, wire_index, edge_index),
+                                &gv1,
+                                kind,
+                                &surface0,
+                                &mut gemap1,
+                            )?;
+                            let polyline = intersection_curve.leader_mut();
+                            *polyline.last_mut().unwrap() = gv1.point();
+                        }
+                        let pedge = Edge::new(&pv0, &pv1, polyline);
+                        let gedge = Edge::new(&gv0, &gv1, intersection_curve.into());
+                        poly_loops_store0[face_index0].add_edge(
+                            pedge.clone(),
+                            status0,
+                            partial_coplanar_overlap,
+                        );
+                        geom_loops_store0[face_index0].add_edge(
+                            gedge.clone(),
+                            status0,
+                            partial_coplanar_overlap,
+                        );
+                        poly_loops_store1[face_index1].add_edge(
+                            pedge,
+                            status1,
+                            partial_coplanar_overlap,
+                        );
+                        geom_loops_store1[face_index1].add_edge(
+                            gedge,
+                            status1,
+                            partial_coplanar_overlap,
+                        );
                     }
-                    let idx01 =
-                        poly_loops_store0.add_polygon_vertex(face_index0, &pv1, &mut pemap1);
-                    if let Some((wire_index, edge_index, kind)) = idx01 {
-                        geom_loops_store0.add_geom_vertex(
-                            (face_index0, wire_index, edge_index),
-                            &gv1,
-                            kind,
-                            &surface1,
-                            &mut gemap1,
-                        )?;
-                        let polyline = intersection_curve.leader_mut();
-                        *polyline.last_mut().unwrap() = gv1.point();
-                    }
-                    let idx10 =
-                        poly_loops_store1.add_polygon_vertex(face_index1, &pv0, &mut pemap0);
-                    if let Some((wire_index, edge_index, kind)) = idx10 {
-                        geom_loops_store1.add_geom_vertex(
-                            (face_index1, wire_index, edge_index),
-                            &gv0,
-                            kind,
-                            &surface0,
-                            &mut gemap0,
-                        )?;
-                        let polyline = intersection_curve.leader_mut();
-                        *polyline.first_mut().unwrap() = gv0.point();
-                    }
-                    let idx11 =
-                        poly_loops_store1.add_polygon_vertex(face_index1, &pv1, &mut pemap1);
-                    if let Some((wire_index, edge_index, kind)) = idx11 {
-                        geom_loops_store1.add_geom_vertex(
-                            (face_index1, wire_index, edge_index),
-                            &gv1,
-                            kind,
-                            &surface0,
-                            &mut gemap1,
-                        )?;
-                        let polyline = intersection_curve.leader_mut();
-                        *polyline.last_mut().unwrap() = gv1.point();
-                    }
-                    let pedge = Edge::new(&pv0, &pv1, polyline);
-                    let gedge = Edge::new(&gv0, &gv1, intersection_curve.into());
-                    poly_loops_store0[face_index0].add_edge(
-                        pedge.clone(),
-                        status0,
-                        partial_coplanar_overlap,
-                    );
-                    geom_loops_store0[face_index0].add_edge(
-                        gedge.clone(),
-                        status0,
-                        partial_coplanar_overlap,
-                    );
-                    poly_loops_store1[face_index1].add_edge(
-                        pedge,
-                        status1,
-                        partial_coplanar_overlap,
-                    );
-                    geom_loops_store1[face_index1].add_edge(
-                        gedge,
-                        status1,
-                        partial_coplanar_overlap,
-                    );
-                }
-                Some(())
-            })
+                    Some(())
+                })
         })?;
 
     // Mesh/mesh interference intentionally ignores coplanar contact. By this
@@ -1376,7 +1353,6 @@ where
     })
 }
 
-
 #[cfg(test)]
 mod projection_tests {
     use super::*;
@@ -1389,10 +1365,7 @@ mod projection_tests {
         let edge01 = Edge::new(&v0, &v1, ());
         let edge12 = Edge::new(&v1, &v2, ());
         let edge20 = Edge::new(&v2, &v0, ());
-        let wire = BoundaryWire::new(
-            vec![edge01, edge12, edge20].into(),
-            ShapesOpStatus::Unknown,
-        );
+        let wire = BoundaryWire::new(vec![edge01, edge12, edge20].into(), ShapesOpStatus::Unknown);
         let mut loops = Loops(vec![wire]);
         let mut emap = HashMap::default();
 
@@ -1610,16 +1583,12 @@ mod projection_tests {
 
     #[test]
     fn curve_surface_projection_accepts_agreeing_tangent_projections() {
-        let line = Line(
-            Point3::new(1.0, -1.0, 0.0),
-            Point3::new(1.0, 1.0, 0.0),
-        );
+        let line = Line(Point3::new(1.0, -1.0, 0.0), Point3::new(1.0, 1.0, 0.0));
         let sphere = Sphere::new(Point3::origin(), 1.0);
         let seed = Point3::new(1.0 + 1.5 * TOLERANCE, 0.0, 0.0);
 
-        let (point, parameter, _) =
-            curve_surface_projection(&line, None, &sphere, None, seed, 100)
-                .expect("agreeing exact projections should resolve a tangent SSI seed");
+        let (point, parameter, _) = curve_surface_projection(&line, None, &sphere, None, seed, 100)
+            .expect("agreeing exact projections should resolve a tangent SSI seed");
 
         assert!(point.near(&Point3::new(1.0, 0.0, 0.0)));
         assert!((parameter - 0.5).abs() <= TOLERANCE);

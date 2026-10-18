@@ -175,9 +175,7 @@ struct Node {
 
 impl Node {
     #[inline(always)]
-    fn new(coord: Point3, adjacency: HashSet<PointIndex>) -> Node {
-        Node { coord, adjacency }
-    }
+    fn new(coord: Point3, adjacency: HashSet<PointIndex>) -> Node { Node { coord, adjacency } }
 
     fn pop_one_adjacency(&mut self) -> PointIndex {
         // SAFETY: nodes are removed from the graph when their adjacency set becomes empty.
@@ -192,16 +190,12 @@ struct Graph(HashMap<PointIndex, Node>);
 impl std::ops::Deref for Graph {
     type Target = HashMap<PointIndex, Node>;
     #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+    fn deref(&self) -> &Self::Target { &self.0 }
 }
 
 impl std::ops::DerefMut for Graph {
     #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
 }
 
 impl Graph {
