@@ -232,22 +232,42 @@ pub(super) fn same_surface(lhs: &Surface, rhs: &Surface) -> bool {
         false
     } else if content_hash64(lhs) == content_hash64(rhs) {
         true
-    } else if let (Some((lu0, lu1)), Some((lv0, lv1)), Some((ru0, ru1)), Some((rv0, rv1))) = (
+    } else {
+        same_parameter_samples(lhs, rhs)
+            || (surface_samples_lie_on(lhs, rhs) && surface_samples_lie_on(rhs, lhs))
+    }
+}
+
+fn same_parameter_samples(lhs: &Surface, rhs: &Surface) -> bool {
+    let (Some((lu0, lu1)), Some((lv0, lv1)), Some((ru0, ru1)), Some((rv0, rv1))) = (
         lhs.try_range_tuple().0,
         lhs.try_range_tuple().1,
         rhs.try_range_tuple().0,
         rhs.try_range_tuple().1,
-    ) {
-        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)]
-            .into_iter()
-            .all(|(s, t)| {
-                let lp = lhs.evaluate(lu0 + (lu1 - lu0) * s, lv0 + (lv1 - lv0) * t);
-                let rp = rhs.evaluate(ru0 + (ru1 - ru0) * s, rv0 + (rv1 - rv0) * t);
-                lp.near(&rp)
-            })
-    } else {
-        false
-    }
+    ) else {
+        return false;
+    };
+    [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)]
+        .into_iter()
+        .all(|(s, t)| {
+            let lhs_point = lhs.evaluate(lu0 + (lu1 - lu0) * s, lv0 + (lv1 - lv0) * t);
+            let rhs_point = rhs.evaluate(ru0 + (ru1 - ru0) * s, rv0 + (rv1 - rv0) * t);
+            lhs_point.near(&rhs_point)
+        })
+}
+
+fn surface_samples_lie_on(source: &Surface, target: &Surface) -> bool {
+    let (Some((u0, u1)), Some((v0, v1))) = source.try_range_tuple() else {
+        return false;
+    };
+    [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)]
+        .into_iter()
+        .all(|(s, t)| {
+            let point = source.evaluate(u0 + (u1 - u0) * s, v0 + (v1 - v0) * t);
+            target
+                .search_parameter(point, None, 16)
+                .is_some_and(|parameter| target.evaluate(parameter.0, parameter.1).near(&point))
+        })
 }
 
 pub(super) fn exact_line_boundary(
