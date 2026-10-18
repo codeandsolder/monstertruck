@@ -399,6 +399,82 @@ impl<P: Copy, C: Clone> Loops<P, C> {
     }
 }
 
+impl<C> Loops<Point3, C> {
+    fn has_partitioned_coincident_path(&self, edge0: &Edge<Point3, C>) -> bool
+    where
+        C: Clone
+            + ParametricCurve<Point = Point3>
+            + BoundedCurve<Point = Point3>
+            + SearchNearestParameter<CurveParameter, Point = Point3>,
+    {
+        let reference = edge0.curve();
+        let reference_range = reference.range_tuple();
+        let point_on_reference = |point: Point3| {
+            reference
+                .search_nearest_parameter(point, None, 100)
+                .and_then(|parameter| {
+                    ParameterKind::try_new(parameter, reference_range)?;
+                    Some(reference.evaluate(parameter).near(&point))
+                })
+                .unwrap_or(false)
+        };
+
+        let mut edge_ids = Vec::new();
+        let mut candidates = Vec::new();
+        for edge in self.iter().flat_map(|wire| wire.iter()) {
+            let edge_id = edge.id();
+            if edge_ids.contains(&edge_id) {
+                continue;
+            }
+            edge_ids.push(edge_id);
+            let curve = edge.curve();
+            let (t0, t1) = curve.range_tuple();
+            let samples = [
+                edge.absolute_front().point(),
+                curve.evaluate((t1 - t0).mul_add(0.25, t0)),
+                curve.evaluate(f64::midpoint(t0, t1)),
+                curve.evaluate((t1 - t0).mul_add(0.75, t0)),
+                edge.absolute_back().point(),
+            ];
+            if samples.into_iter().all(point_on_reference) {
+                candidates.push(edge.absolute_clone());
+            }
+        }
+
+        let start = edge0.front().id();
+        let goal = edge0.back().id();
+        let mut frontier = vec![start];
+        let mut seen = vec![start];
+        while let Some(current) = frontier.pop() {
+            for edge in &candidates {
+                let front = edge.absolute_front().id();
+                let back = edge.absolute_back().id();
+                // Leave the single-edge case to `add_edge`, which also
+                // canonicalizes the shared EdgeId across the two operands.
+                if (front == start && back == goal) || (front == goal && back == start) {
+                    continue;
+                }
+                let next = if front == current {
+                    Some(back)
+                } else if back == current {
+                    Some(front)
+                } else {
+                    None
+                };
+                let Some(next) = next else { continue };
+                if next == goal {
+                    return true;
+                }
+                if !seen.contains(&next) {
+                    seen.push(next);
+                    frontier.push(next);
+                }
+            }
+        }
+        false
+    }
+}
+
 impl<P: Copy + Tolerance, C: Clone> LoopsStore<P, C> {
     #[inline(always)]
     fn change_vertex(
@@ -1006,6 +1082,9 @@ where
             let mut emap = HashMap::default();
             target.add_polygon_vertex(face_index, edge.front(), &mut emap)?;
             target.add_polygon_vertex(face_index, edge.back(), &mut emap)?;
+            if target[face_index].has_partitioned_coincident_path(edge) {
+                continue;
+            }
             target[face_index].add_edge(edge.clone(), ShapesOpStatus::And, true);
         }
     }
@@ -1445,6 +1524,54 @@ mod projection_tests {
         let point = Point3::new(0.5, 1.125 * TOLERANCE, 0.0);
 
         assert!(store.search_boundary_parameter(0, point).is_none());
+    }
+
+    #[test]
+    fn partitioned_coincident_path_is_already_imprinted() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let c = Vertex::new(Point3::new(2.0, 0.0, 0.0));
+        let d = Vertex::new(Point3::new(3.0, 0.0, 0.0));
+        let e = Vertex::new(Point3::new(3.0, 1.0, 0.0));
+        let f = Vertex::new(Point3::new(0.0, 1.0, 0.0));
+        let wire = BoundaryWire::new(
+            vec![
+                Edge::new(&a, &b, Line(a.point(), b.point())),
+                Edge::new(&b, &c, Line(b.point(), c.point())),
+                Edge::new(&c, &d, Line(c.point(), d.point())),
+                Edge::new(&d, &e, Line(d.point(), e.point())),
+                Edge::new(&e, &f, Line(e.point(), f.point())),
+                Edge::new(&f, &a, Line(f.point(), a.point())),
+            ]
+            .into(),
+            ShapesOpStatus::Or,
+        );
+        let loops = Loops(vec![wire]);
+        let incoming = Edge::new(&a, &d, Line(a.point(), d.point()));
+
+        assert!(loops.has_partitioned_coincident_path(&incoming));
+    }
+
+    #[test]
+    fn single_coincident_edge_still_uses_edge_id_canonicalization_path() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let d = Vertex::new(Point3::new(3.0, 0.0, 0.0));
+        let e = Vertex::new(Point3::new(3.0, 1.0, 0.0));
+        let f = Vertex::new(Point3::new(0.0, 1.0, 0.0));
+        let wire = BoundaryWire::new(
+            vec![
+                Edge::new(&a, &d, Line(a.point(), d.point())),
+                Edge::new(&d, &e, Line(d.point(), e.point())),
+                Edge::new(&e, &f, Line(e.point(), f.point())),
+                Edge::new(&f, &a, Line(f.point(), a.point())),
+            ]
+            .into(),
+            ShapesOpStatus::Or,
+        );
+        let loops = Loops(vec![wire]);
+        let incoming = Edge::new(&a, &d, Line(a.point(), d.point()));
+
+        assert!(!loops.has_partitioned_coincident_path(&incoming));
     }
 
     #[test]
