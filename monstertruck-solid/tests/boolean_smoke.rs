@@ -1556,3 +1556,146 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+#[allow(
+    clippy::excessive_precision,
+    reason = "regression fixture preserves recovered STEP coordinates verbatim"
+)]
+fn step_redox_122_two_core_union_regression() -> Result<()> {
+    fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
+        Matrix4::from_cols(
+            Vector4::new(x.x, x.y, x.z, 0.0),
+            Vector4::new(y.x, y.y, y.z, 0.0),
+            Vector4::new(z.x, z.y, z.z, 0.0),
+            Vector4::new(origin.x, origin.y, origin.z, 1.0),
+        )
+    }
+
+    let small_uv = [
+        [0.0, 0.0],
+        [0.6000000000000001, 0.0],
+        [0.6000000000000001, 0.3966727112955528],
+        [0.399999999999999, 0.5966727112955539],
+        [0.20000000000000018, 0.5966727112955539],
+        [0.0, 0.3966727112955546],
+    ];
+    let small_vertices = small_uv.map(|[x, y]| builder::vertex(Point3::new(x, y, 0.0)));
+    let small_wire: Wire = (0..small_vertices.len())
+        .map(|i| {
+            builder::line(
+                &small_vertices[i],
+                &small_vertices[(i + 1) % small_vertices.len()],
+            )
+        })
+        .collect();
+    let small = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![small_wire],
+        Vector3::unit_z() * 0.4,
+    )?;
+    let small = builder::transformed(
+        &small,
+        frame_matrix(
+            Point3::new(3.5099999999999993, 3.9872458642577024, -0.12608142444673545),
+            Vector3::new(1.0, -3.7854716527663227e-31, 1.0842021724855044e-16),
+            Vector3::new(0.0, 1.0, 3.4914813388431334e-15),
+            Vector3::new(1.0842021724855044e-16, -3.4914813388431334e-15, 1.0),
+        ),
+    );
+
+    let main_uv = [
+        [0.0, -0.40000000000000013],
+        [1.3911086970663307, -0.3999999999999525],
+        [2.0849019179718615, -0.6798257387093453],
+        [2.8118807420625336, -1.3801742612906376],
+        [3.5056739629680655, -1.659999999999988],
+        [3.90234667426362, -1.6599999999999866],
+        [3.9023466742636193, -1.2599999999999865],
+        [3.5056739629680638, -1.259999999999988],
+        [3.089398030424745, -1.0921045567743777],
+        [2.3624192063340725, -0.39175603419308525],
+        [1.3911086970663293, 0.0],
+        [0.0, 0.0],
+    ];
+    let main_vertices = main_uv.map(|[x, y]| builder::vertex(Point3::new(x, y, 0.0)));
+    let arc_mid = |center: [f64; 2], radius: f64, start: f64, end: f64| {
+        let angle = (start + end) * 0.5;
+        Point3::new(
+            center[0] + radius * angle.cos(),
+            center[1] + radius * angle.sin(),
+            0.0,
+        )
+    };
+    let main_wire: Wire = vec![
+        builder::line(&main_vertices[0], &main_vertices[1]),
+        builder::circle_arc::<Curve>(
+            &main_vertices[1],
+            &main_vertices[2],
+            arc_mid(
+                [1.391108697066334, -1.39999999999995],
+                0.9999999999999998,
+                1.5707963267948999,
+                0.8040534579990185,
+            ),
+        ),
+        builder::line(&main_vertices[2], &main_vertices[3]),
+        builder::circle_arc::<Curve>(
+            &main_vertices[3],
+            &main_vertices[4],
+            arc_mid(
+                [3.505673962968062, -0.659999999999879],
+                0.9999999999999998,
+                -2.3375391955907756,
+                -1.570796326794893,
+            ),
+        ),
+        builder::line(&main_vertices[4], &main_vertices[5]),
+        builder::line(&main_vertices[5], &main_vertices[6]),
+        builder::line(&main_vertices[6], &main_vertices[7]),
+        builder::circle_arc::<Curve>(
+            &main_vertices[7],
+            &main_vertices[8],
+            arc_mid(
+                [3.505673962968062, -0.65999999999879],
+                0.599999999999999,
+                -1.5707963267948937,
+                -2.337539195590775,
+            ),
+        ),
+        builder::line(&main_vertices[8], &main_vertices[9]),
+        builder::circle_arc::<Curve>(
+            &main_vertices[9],
+            &main_vertices[10],
+            arc_mid(
+                [1.391108697066334, -1.39999999999995],
+                1.399999999999997,
+                0.8040534579990186,
+                1.5707963267948999,
+            ),
+        ),
+        builder::line(&main_vertices[10], &main_vertices[11]),
+        builder::line(&main_vertices[11], &main_vertices[0]),
+    ]
+    .into();
+    let main = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![main_wire],
+        Vector3::unit_z() * 0.6000000000000001,
+    )?;
+    let main = builder::transformed(
+        &main,
+        frame_matrix(
+            Point3::new(3.5099999999999993, 0.48157190128963684, 1.5339185755532525),
+            Vector3::new(3.7854716527663227e-31, 1.0, 4.10421658981154e-47),
+            Vector3::new(-1.0842021724855044e-16, 0.0, 1.0),
+            Vector3::new(1.0, -3.7854716527663227e-31, 1.0842021724855044e-16),
+        ),
+    );
+
+    let result = monstertruck_solid::or(&main, &small, STRICT_TOL)?;
+    anyhow::ensure!(result.is_geometric_consistent(), "union must be consistent");
+    assert_solid(
+        "step-redox case 122 core union",
+        &result,
+        1.0713717537932466,
+    )
+}

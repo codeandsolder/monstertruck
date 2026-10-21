@@ -5,6 +5,7 @@ use monstertruck_geometry::prelude::{
     TryIntoBsplineSurface, TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface,
 };
 use monstertruck_meshing::prelude::*;
+use monstertruck_traits::SnapCurveEndpoints;
 
 #[derive(Clone, Debug)]
 pub enum Alternative<T, U> {
@@ -107,6 +108,19 @@ where
         match self {
             Self::FirstType(curve) => Self::FirstType(curve.cut(t)),
             Self::SecondType(curve) => Self::SecondType(curve.cut(t)),
+        }
+    }
+}
+
+impl<C0, C1> SnapCurveEndpoints for Alternative<C0, C1>
+where
+    C0: SnapCurveEndpoints,
+    C1: SnapCurveEndpoints,
+{
+    fn snap_endpoints(&mut self, front: Point3, back: Point3) {
+        match self {
+            Self::FirstType(curve) => curve.snap_endpoints(front, back),
+            Self::SecondType(curve) => curve.snap_endpoints(front, back),
         }
     }
 }
