@@ -1699,3 +1699,162 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
         1.0713717537932466,
     )
 }
+
+#[test]
+#[allow(
+    clippy::approx_constant,
+    clippy::excessive_precision,
+    reason = "regression fixture preserves recovered STEP coordinates verbatim"
+)]
+fn step_redox_38_two_core_union_regression() -> Result<()> {
+    fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
+        Matrix4::from_cols(
+            Vector4::new(x.x, x.y, x.z, 0.0),
+            Vector4::new(y.x, y.y, y.z, 0.0),
+            Vector4::new(z.x, z.y, z.z, 0.0),
+            Vector4::new(origin.x, origin.y, origin.z, 1.0),
+        )
+    }
+    let point_on_arc = |center: [f64; 2], radius: f64, angle: f64| {
+        Point3::new(
+            center[0] + radius * angle.cos(),
+            center[1] + radius * angle.sin(),
+            0.0,
+        )
+    };
+    let arc_mid = |center: [f64; 2], radius: f64, start: f64, end: f64| {
+        point_on_arc(center, radius, (start + end) * 0.5)
+    };
+
+    let plate_starts = [
+        Point3::new(0.0, 0.0, 0.0),
+        point_on_arc(
+            [0.5, -0.19999999999999996],
+            0.2000000000000001,
+            1.5707963267948966,
+        ),
+        Point3::new(0.7, -0.19999999999999996, 0.0),
+        Point3::new(0.7, -1.7, 0.0),
+        Point3::new(2.7, -1.7000000000000002, 0.0),
+        point_on_arc(
+            [2.9, -0.19999999999999996],
+            0.2000000000000001,
+            3.141592653589793,
+        ),
+        Point3::new(2.8999999999999995, 0.0, 0.0),
+        Point3::new(3.4, 0.0, 0.0),
+        Point3::new(3.4, 2.5, 0.0),
+        Point3::new(0.0, 2.5, 0.0),
+    ];
+    let plate_vertices = plate_starts.map(builder::vertex);
+    let plate_wire: Wire = vec![
+        builder::line(&plate_vertices[0], &plate_vertices[1]),
+        builder::circle_arc::<Curve>(
+            &plate_vertices[1],
+            &plate_vertices[2],
+            arc_mid(
+                [0.5, -0.19999999999999996],
+                0.2000000000000001,
+                1.5707963267948966,
+                0.0,
+            ),
+        ),
+        builder::line(&plate_vertices[2], &plate_vertices[3]),
+        builder::line(&plate_vertices[3], &plate_vertices[4]),
+        builder::line(&plate_vertices[4], &plate_vertices[5]),
+        builder::circle_arc::<Curve>(
+            &plate_vertices[5],
+            &plate_vertices[6],
+            arc_mid(
+                [2.9, -0.19999999999999996],
+                0.2000000000000001,
+                3.141592653589793,
+                1.5707963267948988,
+            ),
+        ),
+        builder::line(&plate_vertices[6], &plate_vertices[7]),
+        builder::line(&plate_vertices[7], &plate_vertices[8]),
+        builder::line(&plate_vertices[8], &plate_vertices[9]),
+        builder::line(&plate_vertices[9], &plate_vertices[0]),
+    ]
+    .into();
+    let plate = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![plate_wire],
+        Vector3::unit_z() * 0.19999999999999973,
+    )?;
+    let plate = builder::transformed(
+        &plate,
+        frame_matrix(
+            Point3::new(3.075000000000002, -1.3499999999999992, 2.0),
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        ),
+    );
+
+    let hook_starts = [
+        point_on_arc(
+            [0.30000000000000004, 0.0],
+            0.3000000000000329,
+            -3.141592653589793,
+        ),
+        Point3::new(0.30000000000000004, -0.30000000000000027, 0.0),
+        Point3::new(1.8, -0.30000000000000027, 0.0),
+        Point3::new(1.8, -0.10000000000000053, 0.0),
+        point_on_arc(
+            [0.30000000000000004, 0.0],
+            0.10000000000003278,
+            4.712388980384706,
+        ),
+        Point3::new(0.2000000000000001, 0.0, 0.0),
+        Point3::new(0.2000000000000001, 0.39999999999999813, 0.0),
+        Point3::new(0.0, 0.3999999999999977, 0.0),
+    ];
+    let hook_vertices = hook_starts.map(builder::vertex);
+    let hook_wire: Wire = vec![
+        builder::circle_arc::<Curve>(
+            &hook_vertices[0],
+            &hook_vertices[1],
+            arc_mid(
+                [0.30000000000000004, 0.0],
+                0.3000000000000329,
+                -3.141592653589793,
+                -1.5707963267948966,
+            ),
+        ),
+        builder::line(&hook_vertices[1], &hook_vertices[2]),
+        builder::line(&hook_vertices[2], &hook_vertices[3]),
+        builder::line(&hook_vertices[3], &hook_vertices[4]),
+        builder::circle_arc::<Curve>(
+            &hook_vertices[4],
+            &hook_vertices[5],
+            arc_mid(
+                [0.30000000000000004, 0.0],
+                0.10000000000003278,
+                4.712388980384706,
+                3.141592653589793,
+            ),
+        ),
+        builder::line(&hook_vertices[5], &hook_vertices[6]),
+        builder::line(&hook_vertices[6], &hook_vertices[7]),
+        builder::line(&hook_vertices[7], &hook_vertices[0]),
+    ]
+    .into();
+    let hook = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![hook_wire],
+        Vector3::unit_z() * 2.0,
+    )?;
+    let hook = builder::transformed(
+        &hook,
+        frame_matrix(
+            Point3::new(3.375000000000002, -0.6499999999999994, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, -1.2046690805394516e-16, 0.0),
+            Vector3::new(1.2046690805394516e-16, 1.0, 0.0),
+        ),
+    );
+
+    let result = monstertruck_solid::or(&plate, &hook, STRICT_TOL)?;
+    anyhow::ensure!(result.is_geometric_consistent(), "union must be consistent");
+    assert_solid("step-redox case 38 core union", &result, 2.6690973355002896)
+}

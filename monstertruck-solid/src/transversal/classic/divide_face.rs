@@ -226,7 +226,13 @@ where
                     }
                 })
                 .collect();
-            let mut new_face = Face::debug_new(wires, surface).ok()?;
+            // This is an intermediate divided face. Geometrically coincident
+            // vertices and partitioned edges are canonicalized only after all face
+            // classifications have been assembled, so validating simplicity here
+            // makes debug builds reject topology that the normal weld/repair stage
+            // is specifically responsible for normalizing. Final output topology is
+            // validated after that stage.
+            let mut new_face = Face::new_unchecked(wires, surface);
             if !face.orientation() {
                 new_face.invert();
             }

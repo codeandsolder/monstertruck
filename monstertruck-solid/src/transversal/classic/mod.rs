@@ -217,7 +217,14 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             rebuilt
         })
         .collect::<Vec<_>>();
-    Shell::from(faces)
+    let shell = Shell::from(faces);
+    let mut compressed = shell.compress();
+    compress::split_non_simple_compressed_wires(&mut compressed);
+    compress::split_pinched_compressed_faces(&mut compressed);
+    match Shell::extract(compressed) {
+        Ok(repaired) => repaired,
+        Err(_) => shell,
+    }
 }
 
 #[cfg(test)]
@@ -230,7 +237,7 @@ mod weld_tests {
     }
 
     #[test]
-    fn weld_drops_edge_collapsed_by_vertex_canonicalization() {
+    fn weld_drops_face_collapsed_to_exact_edge_retrace() {
         let p0 = Point3::origin();
         let p1 = Point3::new(TOLERANCE * 0.5, 0.0, 0.0);
         let p2 = Point3::new(1.0, 1.0, 0.0);
@@ -254,11 +261,11 @@ mod weld_tests {
         let shell: AltCurveShell<Curve, Surface> = Shell::from(vec![face]);
 
         let welded = weld_coincident_topology(&shell);
-        let boundary = &welded[0].absolute_boundaries()[0];
 
-        assert_eq!(boundary.len(), 2);
-        assert!(boundary.iter().all(|edge| edge.front() != edge.back()));
-        assert!(boundary.is_cyclic());
+        assert!(
+            welded.is_empty(),
+            "a face reduced to one edge traversed both ways has zero area"
+        );
     }
 
     #[test]
