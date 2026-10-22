@@ -30,7 +30,10 @@ use crate::alternative::Alternative;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::*;
-use std::{collections::VecDeque, iter};
+use std::{
+    collections::{HashMap, VecDeque},
+    iter,
+};
 
 type ClassicResult<T> = std::result::Result<T, ShapeOpsError>;
 
@@ -139,53 +142,60 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                                     .or_else(|| curve.search_nearest_parameter(point, None, 100))
                                     .filter(|&parameter| curve.evaluate(parameter).near(&point))
                             };
-                            let partition_supports_vertex = |point: Point3| {
-                                source_edges.iter().any(
-                                    |(candidate_front, candidate_back, candidate_curve)| {
-                                        let front_matches = candidate_front.near(&point);
-                                        let back_matches = candidate_back.near(&point);
-                                        if front_matches == back_matches {
-                                            return false;
-                                        }
-                                        let other = if front_matches {
-                                            *candidate_back
-                                        } else {
-                                            *candidate_front
-                                        };
-                                        if parameter_on_curve(other).is_none() {
-                                            return false;
-                                        }
-                                        let (candidate_t0, candidate_t1) =
-                                            candidate_curve.range_tuple();
-                                        let midpoint = candidate_curve
-                                            .evaluate((candidate_t0 + candidate_t1) * 0.5);
-                                        parameter_on_curve(midpoint).is_some()
-                                    },
-                                )
-                            };
-                            let mut split_vertices = if span.abs() <= f64::EPSILON {
-                                Vec::new()
-                            } else {
-                                vertices
-                                    .iter()
-                                    .filter_map(|vertex| {
-                                        if *vertex == front || *vertex == back {
-                                            return None;
-                                        }
-                                        let point = vertex.point();
-                                        let parameter = parameter_on_curve(point)?;
-                                        if !partition_supports_vertex(point) {
-                                            return None;
-                                        }
+                            // A split point is only useful when an existing source edge proves
+                            // that the reference edge is already partitioned there. Scan those
+                            // source edges directly instead of testing every canonical vertex and,
+                            // for each matching vertex, scanning every source edge again. Besides
+                            // being equivalent evidence, this removes an O(E * V * E) inverse-map
+                            // search from large Boolean results.
+                            let mut split_vertices = Vec::new();
+                            if span.abs() > f64::EPSILON {
+                                for (candidate_front, candidate_back, candidate_curve) in
+                                    &source_edges
+                                {
+                                    let Some(front_parameter) =
+                                        parameter_on_curve(*candidate_front)
+                                    else {
+                                        continue;
+                                    };
+                                    let Some(back_parameter) = parameter_on_curve(*candidate_back)
+                                    else {
+                                        continue;
+                                    };
+                                    let (candidate_t0, candidate_t1) =
+                                        candidate_curve.range_tuple();
+                                    let midpoint = candidate_curve
+                                        .evaluate((candidate_t0 + candidate_t1) * 0.5);
+                                    if parameter_on_curve(midpoint).is_none() {
+                                        continue;
+                                    }
+
+                                    for (point, parameter) in [
+                                        (*candidate_front, front_parameter),
+                                        (*candidate_back, back_parameter),
+                                    ] {
                                         let progress = (parameter - t0) / span;
-                                        (progress > 0.0 && progress < 1.0).then_some((
-                                            progress,
-                                            parameter,
-                                            vertex.clone(),
-                                        ))
-                                    })
-                                    .collect::<Vec<_>>()
-                            };
+                                        if !(progress > 0.0 && progress < 1.0) {
+                                            continue;
+                                        }
+                                        if let Some(vertex) = vertices
+                                            .iter()
+                                            .find(|vertex| vertex.point().near(&point))
+                                            && *vertex != front
+                                            && *vertex != back
+                                            && !split_vertices
+                                                .iter()
+                                                .any(|(_, _, existing)| existing == vertex)
+                                        {
+                                            split_vertices.push((
+                                                progress,
+                                                parameter,
+                                                vertex.clone(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
                             split_vertices.sort_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0));
                             split_vertices.dedup_by(|lhs, rhs| lhs.2 == rhs.2);
 
@@ -692,14 +702,13 @@ where
 
 fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     face: &Face<Point3, AltCurve<C, S>, S>,
+    candidate: &PolygonMesh,
     other_faces: &AltCurveShell<C, S>,
     other_poly: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
     tol: f64,
 ) -> Option<bool> {
-    let candidate_poly = Shell::from(vec![face.clone()]).triangulation(tol);
-    let candidate = candidate_poly.first()?.surface()?;
     let representative =
-        loops_store::single_face_matches_planar_partition(&candidate, other_poly, tol)??;
+        loops_store::single_face_matches_planar_partition(candidate, other_poly, tol)??;
     let other = other_faces.get(representative)?;
     let point = other
         .absolute_boundaries()
@@ -931,6 +940,21 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let partition_tol = tol.max(1.0e-4);
     let divided_poly0 = divided_faces0.triangulation(partition_tol);
     let divided_poly1 = divided_faces1.triangulation(partition_tol);
+    let candidate_poly0 = divided_faces0
+        .iter()
+        .zip(divided_poly0.iter())
+        .filter_map(|(face, poly_face)| poly_face.surface().map(|poly| (face.id(), poly)))
+        .collect::<HashMap<_, _>>();
+    let candidate_poly1 = divided_faces1
+        .iter()
+        .zip(divided_poly1.iter())
+        .filter_map(|(face, poly_face)| poly_face.surface().map(|poly| (face.id(), poly)))
+        .collect::<HashMap<_, _>>();
+    if candidate_poly0.len() != divided_faces0.len()
+        || candidate_poly1.len() != divided_faces1.len()
+    {
+        return None;
+    }
 
     // Some coplanar configurations produce locally useful divider labels that
     // still cannot form complete output shells (for example overlapping boxes
@@ -944,8 +968,10 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .chain(or0_labeled)
         .chain(unknown0)
         .try_for_each(|face| {
+            let candidate = candidate_poly0.get(&face.id())?;
             let relation = if planar_partition_same_facing(
                 &face,
+                candidate,
                 &divided_faces1,
                 &divided_poly1,
                 partition_tol,
@@ -970,8 +996,10 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .chain(or1_labeled)
         .chain(unknown1)
         .try_for_each(|face| {
+            let candidate = candidate_poly1.get(&face.id())?;
             let relation = if planar_partition_same_facing(
                 &face,
+                candidate,
                 &divided_faces0,
                 &divided_poly0,
                 partition_tol,
