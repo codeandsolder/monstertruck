@@ -118,11 +118,19 @@ impl IncludeCurve<Curve> for Surface {
             return same_surface_parameterization(curve.surface().as_ref(), self)
                 || sampled_curve_lies_on_surface(curve, self);
         }
-        if let Curve::IntersectionCurve(curve) = curve
-            && (same_surface_parameterization(curve.surface0().as_ref(), self)
-                || same_surface_parameterization(curve.surface1().as_ref(), self))
-        {
-            return true;
+        if let Curve::IntersectionCurve(curve) = curve {
+            if same_surface_parameterization(curve.surface0().as_ref(), self)
+                || same_surface_parameterization(curve.surface1().as_ref(), self)
+            {
+                return true;
+            }
+            // Geometric containment is weaker than UV identity. A fillet or
+            // Boolean intersection curve can be carried by the same physical
+            // support with a different parameterization; validate its 3-D leader
+            // against this surface instead of reusing either foreign pcurve.
+            if sampled_curve_lies_on_surface(curve.leader().as_ref(), self) {
+                return true;
+            }
         }
         {
             match self {

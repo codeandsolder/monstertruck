@@ -501,4 +501,32 @@ mod surface_identity_tests {
         assert!((last.x + 0.125).abs() < TOLERANCE);
         assert!((last.y + 0.25).abs() < TOLERANCE);
     }
+    #[test]
+    fn intersection_curve_on_coincident_support_validates_without_reusing_foreign_uv() {
+        let source_surface = Surface::Plane(Plane::xy());
+        let target_surface = Surface::Plane(Plane::new(
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(3.0, 1.0, 0.0),
+            Point3::new(1.0, 4.0, 0.0),
+        ));
+        let leader = Curve::ParameterCurve(ParameterCurve::new(
+            Curve2D::Line(Line(Point2::new(0.25, 0.25), Point2::new(0.75, 0.25))),
+            Box::new(source_surface.clone()),
+        ));
+        let curve = Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+            Box::new(source_surface.clone()),
+            Box::new(source_surface),
+            Box::new(leader),
+            None,
+            None,
+        ));
+
+        assert!(target_surface.include(&curve));
+        assert!(curve.exact_parameter_boundary_2d(&target_surface).is_none());
+        assert!(
+            curve
+                .parameter_boundary_2d(&target_surface, TOLERANCE)
+                .is_some()
+        );
+    }
 }
