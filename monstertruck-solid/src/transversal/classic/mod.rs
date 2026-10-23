@@ -30,7 +30,10 @@ use crate::alternative::Alternative;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::*;
-use std::{collections::VecDeque, iter};
+use std::{
+    collections::{HashMap, VecDeque},
+    iter,
+};
 
 type ClassicResult<T> = std::result::Result<T, ShapeOpsError>;
 
@@ -76,6 +79,44 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         sampled_on_other(&lhs_curve, &rhs_curve) && sampled_on_other(&rhs_curve, &lhs_curve)
     };
 
+    let source_edges = shell
+        .iter()
+        .flat_map(|face| face.absolute_boundaries())
+        .flat_map(|wire| wire.iter())
+        .map(|edge| {
+            (
+                edge.front().point(),
+                edge.back().point(),
+                edge.oriented_curve(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    for (front, back, _) in &source_edges {
+        canonical_vertex(*front, &mut vertices);
+        canonical_vertex(*back, &mut vertices);
+    }
+
+    let canonical_edge =
+        |rebuilt: AltEdge<C, S>, edges: &mut Vec<AltEdge<C, S>>| -> AltEdge<C, S> {
+            if let Some(canonical) = edges.iter().find(|candidate| {
+                let same_endpoints =
+                    candidate.front() == rebuilt.front() && candidate.back() == rebuilt.back();
+                let opposite_endpoints =
+                    candidate.front() == rebuilt.back() && candidate.back() == rebuilt.front();
+                (same_endpoints || opposite_endpoints) && curves_coincident(candidate, &rebuilt)
+            }) {
+                if canonical.front() == rebuilt.front() {
+                    canonical.clone()
+                } else {
+                    canonical.inverse()
+                }
+            } else {
+                edges.push(rebuilt.clone());
+                rebuilt
+            }
+        };
+
     let faces = shell
         .iter()
         .map(|face| {
@@ -85,39 +126,95 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 .map(|wire| {
                     let rebuilt = wire
                         .iter()
-                        .filter_map(|edge| {
-                            let front =
-                                canonical_vertex(edge.absolute_front().point(), &mut vertices);
-                            let back =
-                                canonical_vertex(edge.absolute_back().point(), &mut vertices);
-                            // Welding can identify independently-created coincident vertices.
-                            // An edge between two such vertices becomes zero-dimensional in the
-                            // canonical topology and must disappear instead of becoming a self-edge.
+                        .flat_map(|edge| {
+                            let front = canonical_vertex(edge.front().point(), &mut vertices);
+                            let back = canonical_vertex(edge.back().point(), &mut vertices);
                             if front == back {
-                                return None;
+                                return Vec::new();
                             }
-                            let mut rebuilt = Edge::new(&front, &back, edge.curve());
-                            if !edge.orientation() {
-                                rebuilt.invert();
-                            }
-                            let rebuilt = if let Some(canonical) = edges.iter().find(|candidate| {
-                                let same_endpoints = candidate.front() == rebuilt.front()
-                                    && candidate.back() == rebuilt.back();
-                                let opposite_endpoints = candidate.front() == rebuilt.back()
-                                    && candidate.back() == rebuilt.front();
-                                (same_endpoints || opposite_endpoints)
-                                    && curves_coincident(candidate, &rebuilt)
-                            }) {
-                                if canonical.front() == rebuilt.front() {
-                                    canonical.clone()
-                                } else {
-                                    canonical.inverse()
-                                }
-                            } else {
-                                edges.push(rebuilt.clone());
-                                rebuilt
+
+                            let curve = edge.oriented_curve();
+                            let (t0, t1) = curve.range_tuple();
+                            let span = t1 - t0;
+                            let parameter_on_curve = |point: Point3| {
+                                curve
+                                    .search_parameter(point, None, 100)
+                                    .or_else(|| curve.search_nearest_parameter(point, None, 100))
+                                    .filter(|&parameter| curve.evaluate(parameter).near(&point))
                             };
-                            Some(rebuilt)
+                            // A split point is only useful when an existing source edge proves
+                            // that the reference edge is already partitioned there. Scan those
+                            // source edges directly instead of testing every canonical vertex and,
+                            // for each matching vertex, scanning every source edge again. Besides
+                            // being equivalent evidence, this removes an O(E * V * E) inverse-map
+                            // search from large Boolean results.
+                            let mut split_vertices = Vec::new();
+                            if span.abs() > f64::EPSILON {
+                                for (candidate_front, candidate_back, candidate_curve) in
+                                    &source_edges
+                                {
+                                    let Some(front_parameter) =
+                                        parameter_on_curve(*candidate_front)
+                                    else {
+                                        continue;
+                                    };
+                                    let Some(back_parameter) = parameter_on_curve(*candidate_back)
+                                    else {
+                                        continue;
+                                    };
+                                    let (candidate_t0, candidate_t1) =
+                                        candidate_curve.range_tuple();
+                                    let midpoint = candidate_curve
+                                        .evaluate((candidate_t0 + candidate_t1) * 0.5);
+                                    if parameter_on_curve(midpoint).is_none() {
+                                        continue;
+                                    }
+
+                                    for (point, parameter) in [
+                                        (*candidate_front, front_parameter),
+                                        (*candidate_back, back_parameter),
+                                    ] {
+                                        let progress = (parameter - t0) / span;
+                                        if !(progress > 0.0 && progress < 1.0) {
+                                            continue;
+                                        }
+                                        if let Some(vertex) = vertices
+                                            .iter()
+                                            .find(|vertex| vertex.point().near(&point))
+                                            && *vertex != front
+                                            && *vertex != back
+                                            && !split_vertices
+                                                .iter()
+                                                .any(|(_, _, existing)| existing == vertex)
+                                        {
+                                            split_vertices.push((
+                                                progress,
+                                                parameter,
+                                                vertex.clone(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            split_vertices.sort_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0));
+                            split_vertices.dedup_by(|lhs, rhs| lhs.2 == rhs.2);
+
+                            let mut pieces = Vec::with_capacity(split_vertices.len() + 1);
+                            let mut remaining = curve;
+                            let mut segment_front = front;
+                            for (_, parameter, split_vertex) in split_vertices {
+                                let later = remaining.cut(parameter);
+                                remaining
+                                    .snap_endpoints(segment_front.point(), split_vertex.point());
+                                let segment = Edge::new(&segment_front, &split_vertex, remaining);
+                                pieces.push(canonical_edge(segment, &mut edges));
+                                remaining = later;
+                                segment_front = split_vertex;
+                            }
+                            remaining.snap_endpoints(segment_front.point(), back.point());
+                            let segment = Edge::new(&segment_front, &back, remaining);
+                            pieces.push(canonical_edge(segment, &mut edges));
+                            pieces
                         })
                         .collect::<Vec<_>>();
                     Wire::from(rebuilt)
@@ -130,7 +227,14 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             rebuilt
         })
         .collect::<Vec<_>>();
-    Shell::from(faces)
+    let shell = Shell::from(faces);
+    let mut compressed = shell.compress();
+    compress::split_non_simple_compressed_wires(&mut compressed);
+    compress::split_pinched_compressed_faces(&mut compressed);
+    match Shell::extract(compressed) {
+        Ok(repaired) => repaired,
+        Err(_) => shell,
+    }
 }
 
 #[cfg(test)]
@@ -143,7 +247,7 @@ mod weld_tests {
     }
 
     #[test]
-    fn weld_drops_edge_collapsed_by_vertex_canonicalization() {
+    fn weld_drops_face_collapsed_to_exact_edge_retrace() {
         let p0 = Point3::origin();
         let p1 = Point3::new(TOLERANCE * 0.5, 0.0, 0.0);
         let p2 = Point3::new(1.0, 1.0, 0.0);
@@ -167,11 +271,58 @@ mod weld_tests {
         let shell: AltCurveShell<Curve, Surface> = Shell::from(vec![face]);
 
         let welded = weld_coincident_topology(&shell);
-        let boundary = &welded[0].absolute_boundaries()[0];
 
-        assert_eq!(boundary.len(), 2);
-        assert!(boundary.iter().all(|edge| edge.front() != edge.back()));
-        assert!(boundary.is_cyclic());
+        assert!(
+            welded.is_empty(),
+            "a face reduced to one edge traversed both ways has zero area"
+        );
+    }
+
+    #[test]
+    fn weld_partitions_coincident_edges_at_shared_vertices() {
+        let p0 = Point3::new(0.0, 0.0, 0.0);
+        let p1 = Point3::new(1.0, 0.0, 0.0);
+        let p2 = Point3::new(2.0, 0.0, 0.0);
+        let p3 = Point3::new(0.0, 1.0, 0.0);
+        let v0 = Vertex::new(p0);
+        let v1 = Vertex::new(p1);
+        let v2 = Vertex::new(p2);
+        let v3 = Vertex::new(p3);
+
+        let whole: Wire<Point3, AltCurve<Curve, Surface>> = vec![
+            Edge::new(&v0, &v2, alt_line(p0, p2)),
+            Edge::new(&v2, &v3, alt_line(p2, p3)),
+            Edge::new(&v3, &v0, alt_line(p3, p0)),
+        ]
+        .into();
+        let partitioned: Wire<Point3, AltCurve<Curve, Surface>> = vec![
+            Edge::new(&v0, &v1, alt_line(p0, p1)),
+            Edge::new(&v1, &v2, alt_line(p1, p2)),
+            Edge::new(&v2, &v3, alt_line(p2, p3)),
+            Edge::new(&v3, &v0, alt_line(p3, p0)),
+        ]
+        .into();
+        let surface = Surface::Plane(Plane::new(
+            Point3::origin(),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ));
+        let shell: AltCurveShell<Curve, Surface> = Shell::from(vec![
+            Face::new_unchecked(vec![whole], surface.clone()),
+            Face::new_unchecked(vec![partitioned], surface),
+        ]);
+
+        let welded = weld_coincident_topology(&shell);
+        let whole = &welded[0].absolute_boundaries()[0];
+        let partitioned = &welded[1].absolute_boundaries()[0];
+
+        assert_eq!(whole.len(), 4);
+        assert_eq!(partitioned.len(), 4);
+        assert!(whole.iter().all(|edge| {
+            partitioned
+                .iter()
+                .any(|candidate| candidate.id() == edge.id())
+        }));
     }
 }
 
@@ -549,6 +700,33 @@ where
     Some(relation)
 }
 
+fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    face: &Face<Point3, AltCurve<C, S>, S>,
+    candidate: &PolygonMesh,
+    other_faces: &AltCurveShell<C, S>,
+    other_poly: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    tol: f64,
+) -> Option<bool> {
+    let representative =
+        loops_store::single_face_matches_planar_partition(candidate, other_poly, tol)??;
+    let other = other_faces.get(representative)?;
+    let point = other
+        .absolute_boundaries()
+        .first()?
+        .vertex_iter()
+        .next()?
+        .point();
+    let lhs = face.oriented_surface();
+    let rhs = other.oriented_surface();
+    let (lhs_u, lhs_v) = lhs
+        .search_parameter(point, None, 100)
+        .or_else(|| lhs.search_nearest_parameter(point, None, 100))?;
+    let (rhs_u, rhs_v) = rhs
+        .search_parameter(point, None, 100)
+        .or_else(|| rhs.search_nearest_parameter(point, None, 100))?;
+    Some(lhs.normal(lhs_u, lhs_v).dot(rhs.normal(rhs_u, rhs_v)) > 0.0)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PairMode {
     AndOr,
@@ -747,6 +925,37 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         return Some([label_and_shell, label_or_shell]);
     }
 
+    let divided_faces0 = {
+        let [mut and, mut or, mut unknown] = cls0.and_or_unknown();
+        and.append(&mut or);
+        and.append(&mut unknown);
+        and
+    };
+    let divided_faces1 = {
+        let [mut and, mut or, mut unknown] = cls1.and_or_unknown();
+        and.append(&mut or);
+        and.append(&mut unknown);
+        and
+    };
+    let partition_tol = tol.max(1.0e-4);
+    let divided_poly0 = divided_faces0.triangulation(partition_tol);
+    let divided_poly1 = divided_faces1.triangulation(partition_tol);
+    let candidate_poly0 = divided_faces0
+        .iter()
+        .zip(divided_poly0.iter())
+        .filter_map(|(face, poly_face)| poly_face.surface().map(|poly| (face.id(), poly)))
+        .collect::<HashMap<_, _>>();
+    let candidate_poly1 = divided_faces1
+        .iter()
+        .zip(divided_poly1.iter())
+        .filter_map(|(face, poly_face)| poly_face.surface().map(|poly| (face.id(), poly)))
+        .collect::<HashMap<_, _>>();
+    if candidate_poly0.len() != divided_faces0.len()
+        || candidate_poly1.len() != divided_faces1.len()
+    {
+        return None;
+    }
+
     // Some coplanar configurations produce locally useful divider labels that
     // still cannot form complete output shells (for example overlapping boxes
     // with coplanar side planes). Fall back to geometric classification of all
@@ -759,7 +968,19 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .chain(or0_labeled)
         .chain(unknown0)
         .try_for_each(|face| {
-            let relation = classify_face_relation(&poly_shell1, &face, tol)?;
+            let candidate = candidate_poly0.get(&face.id())?;
+            let relation = if planar_partition_same_facing(
+                &face,
+                candidate,
+                &divided_faces1,
+                &divided_poly1,
+                partition_tol,
+            ) == Some(true)
+            {
+                FaceRelation::CoincidentSameFacing
+            } else {
+                classify_face_relation(&poly_shell1, &face, tol)?
+            };
             match relation {
                 FaceRelation::Inside => and0.push(face),
                 FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(face),
@@ -775,7 +996,19 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .chain(or1_labeled)
         .chain(unknown1)
         .try_for_each(|face| {
-            let relation = classify_face_relation(&poly_shell0, &face, tol)?;
+            let candidate = candidate_poly1.get(&face.id())?;
+            let relation = if planar_partition_same_facing(
+                &face,
+                candidate,
+                &divided_faces0,
+                &divided_poly0,
+                partition_tol,
+            ) == Some(true)
+            {
+                FaceRelation::CoincidentSameFacing
+            } else {
+                classify_face_relation(&poly_shell0, &face, tol)?
+            };
             match relation {
                 FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(face),
                 FaceRelation::Outside => or1.push(face),

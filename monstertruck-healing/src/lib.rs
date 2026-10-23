@@ -52,11 +52,11 @@ use split_pass_through_edges::{
     dedup_coincident_pass_through_edges, remap_trimmed_edge_uses_for_dedup,
     split_pass_through_edges, split_pass_through_edges_trimmed,
 };
-// Promoted (doc-hidden) so an external SSI boolean backend can reuse these
-// compressed-shell repair passes; unused inside this crate
-// outside `#[cfg(test)]`.
+// Compatibility re-export: these purely topological repair passes now live at
+// the compressed-topology layer so Boolean backends can use them without a
+// dependency on the full healing crate.
 #[doc(hidden)]
-pub use split_pass_through_edges::{
+pub use monstertruck_topology::compress::{
     split_non_simple_compressed_wires, split_pinched_compressed_faces,
 };
 

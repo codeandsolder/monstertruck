@@ -323,24 +323,42 @@ impl<P: Copy, C: Clone> Loops<P, C> {
             }
         }
 
-        let a = self.iter().enumerate().find_map(|(i, wire)| {
-            wire.iter().enumerate().find_map(|(j, edge)| {
-                if edge.front() == edge0.back() {
-                    Some((i, j))
-                } else {
-                    None
-                }
-            })
+        let matching_occurrences = |vertex: &Vertex<P>| {
+            self.iter()
+                .enumerate()
+                .flat_map(|(wire_index, wire)| {
+                    wire.iter()
+                        .enumerate()
+                        .filter_map(move |(edge_index, edge)| {
+                            (edge.front() == vertex).then_some((wire_index, edge_index))
+                        })
+                })
+                .collect::<Vec<_>>()
+        };
+        let a_occurrences = matching_occurrences(edge0.back());
+        let b_occurrences = matching_occurrences(edge0.front());
+
+        // A divider endpoint can legitimately occur in several sibling wires after
+        // an earlier divider has split a face. Choosing the first occurrence of
+        // each endpoint independently can therefore select two different siblings
+        // even when both endpoints coexist on one sibling, incorrectly merging the
+        // sibling regions into one non-simple walk. Prefer the first deterministic
+        // same-wire pairing; preserve the historical cross-wire behavior only when
+        // no such pairing exists.
+        let same_wire_pair = a_occurrences.iter().find_map(|&a| {
+            b_occurrences
+                .iter()
+                .find(|&&(wire_index, _)| wire_index == a.0)
+                .copied()
+                .map(|b| (a, b))
         });
-        let b = self.iter().enumerate().find_map(|(i, wire)| {
-            wire.iter().enumerate().find_map(|(j, edge)| {
-                if edge.front() == edge0.front() {
-                    Some((i, j))
-                } else {
-                    None
-                }
-            })
-        });
+        let (a, b) = match same_wire_pair {
+            Some((a, b)) => (Some(a), Some(b)),
+            None => (
+                a_occurrences.first().copied(),
+                b_occurrences.first().copied(),
+            ),
+        };
         if let Some((wire_index0, edge_index0)) = a {
             self[wire_index0].rotate_left(edge_index0);
             self[wire_index0].push_front(edge0.clone());
@@ -600,10 +618,27 @@ impl<C> LoopsStore<Point3, C> {
         emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
     ) -> Option<()>
     where
-        C: Cut<Point = Point3, Vector = Vector3>
+        C: BoundedCurve<Point = Point3>
+            + Cut<Point = Point3, Vector = Vector3>
+            + SearchParameter<CurveParameter, Point = Point3>
             + SearchNearestParameter<CurveParameter, Point = Point3>,
-        S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+        S: ParametricSurface3D
+            + SearchParameter<SurfaceParameter, Point = Point3>
+            + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     {
+        let (wire_index, edge_index, kind, projected) = if self
+            .get(loops_index)
+            .and_then(|loops| loops.get(wire_index))
+            .and_then(|wire| wire.get(edge_index))
+            .is_some()
+        {
+            (wire_index, edge_index, kind, None)
+        } else {
+            self.search_boundary_parameter(loops_index, vertex.point())?
+        };
+        if let Some(projected) = projected {
+            vertex.set_point(projected);
+        }
         let mut coalesce_endpoint = |this: &mut Self, old_vertex: Vertex<Point3>| {
             vertex.set_point(old_vertex.point());
             this.change_vertex(&old_vertex, vertex, emap);
@@ -671,15 +706,23 @@ fn curve_surface_projection<C, S>(
     trials: usize,
 ) -> Option<(Point3, f64, Point2)>
 where
-    C: ParametricCurve3D + SearchNearestParameter<CurveParameter, Point = Point3>,
-    S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+    C: ParametricCurve3D
+        + SearchParameter<CurveParameter, Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>,
+    S: ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     if trials == 0 {
         return None;
     }
-    let t = curve.search_nearest_parameter(point, curve_hint, 10)?;
+    let t = curve
+        .search_parameter(point, curve_hint, 10)
+        .or_else(|| curve.search_nearest_parameter(point, curve_hint, 10))?;
     let pt0 = curve.evaluate(t);
-    let (u, v) = surface.search_nearest_parameter(point, surface_hint, 10)?;
+    let (u, v) = surface
+        .search_parameter(point, surface_hint, 10)
+        .or_else(|| surface.search_nearest_parameter(point, surface_hint, 10))?;
     let pt1 = surface.evaluate(u, v);
 
     // SSI endpoints come from tessellated carrier surfaces, so a seed can be a
@@ -874,13 +917,13 @@ fn planar_polygons_same_trimmed_face(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: 
 }
 
 fn projected_bounds_overlap(lhs: [f64; 4], rhs: [f64; 4], tol: f64) -> bool {
-    lhs[1].min(rhs[1]) + tol >= lhs[0].max(rhs[0]) && lhs[3].min(rhs[3]) + tol >= lhs[2].max(rhs[2])
+    lhs[1].min(rhs[1]) - lhs[0].max(rhs[0]) > tol && lhs[3].min(rhs[3]) - lhs[2].max(rhs[2]) > tol
 }
 
 /// Match one trimmed planar face against a partition of the same physical
 /// interface on the other shell. Revolving a radial cap, for example, may
 /// represent one disk as two semicircular faces while a sweep uses one disk.
-fn single_face_matches_planar_partition(
+pub(super) fn single_face_matches_planar_partition(
     target: &PolygonMesh,
     fragments: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     tol: f64,
@@ -1419,6 +1462,81 @@ mod projection_tests {
     }
 
     #[test]
+    fn exact_geometry_prefers_existing_polygon_boundary_hint() {
+        let first_front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let first_back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let hinted_front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let hinted_back = Vertex::new(Point3::new(0.0, 1.0, 0.0));
+        let first_edge = Edge::new(
+            &first_front,
+            &first_back,
+            Line(first_front.point(), first_back.point()),
+        );
+        let hinted_edge = Edge::new(
+            &hinted_front,
+            &hinted_back,
+            Line(hinted_front.point(), hinted_back.point()),
+        );
+        let loops = Loops(vec![
+            BoundaryWire::new(vec![first_edge].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![hinted_edge].into(), ShapesOpStatus::Unknown),
+        ]);
+        let mut store = LoopsStore(vec![loops]);
+        let recovered = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let mut emap = HashMap::default();
+
+        store
+            .add_geom_vertex(
+                (0, 1, 0),
+                &recovered,
+                ParameterKind::Front,
+                &Plane::xy(),
+                &mut emap,
+            )
+            .expect("existing polygon hint should disambiguate coincident exact boundaries");
+
+        assert!(
+            store[0][0]
+                .vertex_iter()
+                .any(|vertex| vertex == first_front)
+        );
+        assert!(store[0][1].vertex_iter().any(|vertex| vertex == recovered));
+        assert!(
+            store[0][1]
+                .vertex_iter()
+                .all(|vertex| vertex != hinted_front)
+        );
+    }
+
+    #[test]
+    fn exact_geometry_falls_back_when_polygon_hint_is_stale() {
+        let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let old_back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new(&front, &old_back, Line(front.point(), old_back.point()));
+        let loops = Loops(vec![BoundaryWire::new(
+            vec![edge].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        let mut store = LoopsStore(vec![loops]);
+        let recovered = Vertex::new(old_back.point());
+        let mut emap = HashMap::default();
+
+        store
+            .add_geom_vertex(
+                (0, 99, 99),
+                &recovered,
+                ParameterKind::Inner(0.999),
+                &Plane::xy(),
+                &mut emap,
+            )
+            .expect("stale polygon hint should fall back to exact boundary search");
+
+        assert_eq!(store[0][0].len(), 1);
+        assert!(store[0][0].vertex_iter().any(|vertex| vertex == recovered));
+        assert!(store[0][0].vertex_iter().all(|vertex| vertex != old_back));
+    }
+
+    #[test]
     fn exact_geometry_reclassifies_inner_hint_at_boundary_endpoint() {
         let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let old_back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
@@ -1530,6 +1648,76 @@ mod projection_tests {
                 CROSS_FACE_STITCH_TOLERANCE
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn planar_partition_ignores_edge_touching_neighbor() {
+        fn rectangle(x0: f64, x1: f64) -> PolygonMesh {
+            PolygonMesh::new(
+                StandardAttributes {
+                    positions: vec![
+                        Point3::new(x0, 0.0, 0.0),
+                        Point3::new(x1, 0.0, 0.0),
+                        Point3::new(x1, 1.0, 0.0),
+                        Point3::new(x0, 1.0, 0.0),
+                    ],
+                    ..Default::default()
+                },
+                Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
+            )
+        }
+
+        let target = rectangle(0.0, 2.0);
+        let fragments: Shell<Point3, PolylineCurve, Option<PolygonMesh>> = Shell::from(vec![
+            Face::new_unchecked(Vec::new(), Some(rectangle(0.0, 1.0))),
+            Face::new_unchecked(Vec::new(), Some(rectangle(1.0, 2.0))),
+            // This face shares x=2 with the target but contributes no target area.
+            Face::new_unchecked(Vec::new(), Some(rectangle(2.0, 3.0))),
+        ]);
+
+        assert!(
+            single_face_matches_planar_partition(&target, &fragments, 1.0e-6)
+                .flatten()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn add_edge_prefers_same_sibling_wire_for_shared_endpoint() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(0.0, -1.0, 0.0));
+        let c = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let d = Vertex::new(Point3::new(1.0, 1.0, 0.0));
+        let e = Vertex::new(Point3::new(0.0, 1.0, 0.0));
+        let f = Vertex::new(Point3::new(1.0, -1.0, 0.0));
+        let line = |front: &Vertex<Point3>, back: &Vertex<Point3>| {
+            Edge::new(front, back, Line(front.point(), back.point()))
+        };
+
+        // C belongs to both sibling regions, while B belongs only to the lower
+        // region. The incoming B->C divider must therefore split the lower
+        // sibling rather than merging the two siblings through C.
+        let upper = BoundaryWire::new(
+            vec![line(&c, &d), line(&d, &e), line(&e, &a), line(&a, &c)].into(),
+            ShapesOpStatus::Or,
+        );
+        let lower = BoundaryWire::new(
+            vec![line(&a, &b), line(&b, &f), line(&f, &c), line(&c, &a)].into(),
+            ShapesOpStatus::And,
+        );
+        let mut loops = Loops(vec![upper, lower]);
+        let incoming = line(&b, &c);
+
+        let result = loops.add_edge(incoming, ShapesOpStatus::And, false);
+
+        assert_eq!(result[0].map(|x| x.0), Some(1));
+        assert_eq!(result[1].map(|x| x.0), Some(1));
+        assert_eq!(loops.len(), 3);
+        assert!(
+            loops
+                .iter()
+                .all(|wire| wire.is_closed() && wire.is_simple())
         );
     }
 

@@ -166,3 +166,75 @@ fn bounding_box_is_bounding_box_with_identity() {
 
     assert_eq!(shell.bounding_box(), shell.bounding_box_with(|point| point),);
 }
+
+#[test]
+fn split_non_simple_wires_drops_complete_same_edge_retrace() {
+    let mut shell = CompressedShell {
+        vertices: vec![(), ()],
+        edges: vec![CompressedEdge {
+            vertices: (0, 1),
+            curve: (),
+        }],
+        faces: vec![CompressedFace {
+            boundaries: vec![vec![
+                CompressedEdgeIndex {
+                    index: 0,
+                    orientation: true,
+                },
+                CompressedEdgeIndex {
+                    index: 0,
+                    orientation: false,
+                },
+            ]],
+            orientation: true,
+            surface: (),
+        }],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
+    };
+
+    split_non_simple_compressed_wires(&mut shell);
+
+    assert!(shell.faces.is_empty());
+}
+
+#[test]
+fn split_non_simple_wires_preserves_distinct_edge_digon() {
+    let mut shell = CompressedShell {
+        vertices: vec![(), ()],
+        edges: vec![
+            CompressedEdge {
+                vertices: (0, 1),
+                curve: (),
+            },
+            CompressedEdge {
+                vertices: (1, 0),
+                curve: (),
+            },
+        ],
+        faces: vec![CompressedFace {
+            boundaries: vec![vec![
+                CompressedEdgeIndex {
+                    index: 0,
+                    orientation: true,
+                },
+                CompressedEdgeIndex {
+                    index: 1,
+                    orientation: true,
+                },
+            ]],
+            orientation: true,
+            surface: (),
+        }],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
+    };
+
+    split_non_simple_compressed_wires(&mut shell);
+
+    assert_eq!(shell.faces.len(), 1);
+    assert_eq!(shell.faces[0].boundaries.len(), 1);
+    assert_eq!(shell.faces[0].boundaries[0].len(), 2);
+}
