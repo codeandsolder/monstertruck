@@ -611,20 +611,29 @@ impl<C> LoopsStore<Point3, C> {
 
     fn add_geom_vertex<S>(
         &mut self,
-        (loops_index, wire_index, edge_index): (usize, usize, usize),
+        loops_index: usize,
         vertex: &Vertex<Point3>,
-        kind: ParameterKind,
         another_surface: &S,
         emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
     ) -> Option<()>
     where
-        C: Cut<Point = Point3, Vector = Vector3>
+        C: BoundedCurve<Point = Point3>
+            + Cut<Point = Point3, Vector = Vector3>
             + SearchParameter<CurveParameter, Point = Point3>
             + SearchNearestParameter<CurveParameter, Point = Point3>,
         S: ParametricSurface3D
             + SearchParameter<SurfaceParameter, Point = Point3>
             + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     {
+        // Polygon and exact loop stores can diverge after an endpoint that is
+        // interior in the tessellated representation is reclassified as an
+        // exact endpoint. Never reuse polygon wire/edge indices here: resolve
+        // the unique exact boundary locus from the endpoint itself.
+        let (wire_index, edge_index, kind, projected) =
+            self.search_boundary_parameter(loops_index, vertex.point())?;
+        if let Some(projected) = projected {
+            vertex.set_point(projected);
+        }
         let mut coalesce_endpoint = |this: &mut Self, old_vertex: Vertex<Point3>| {
             vertex.set_point(old_vertex.point());
             this.change_vertex(&old_vertex, vertex, emap);
@@ -1284,11 +1293,10 @@ where
                         let mut gemap1 = HashMap::default();
                         let idx00 =
                             poly_loops_store0.add_polygon_vertex(face_index0, &pv0, &mut pemap0);
-                        if let Some((wire_index, edge_index, kind)) = idx00 {
+                        if idx00.is_some() {
                             geom_loops_store0.add_geom_vertex(
-                                (face_index0, wire_index, edge_index),
+                                face_index0,
                                 &gv0,
-                                kind,
                                 &surface1,
                                 &mut gemap0,
                             )?;
@@ -1297,11 +1305,10 @@ where
                         }
                         let idx01 =
                             poly_loops_store0.add_polygon_vertex(face_index0, &pv1, &mut pemap1);
-                        if let Some((wire_index, edge_index, kind)) = idx01 {
+                        if idx01.is_some() {
                             geom_loops_store0.add_geom_vertex(
-                                (face_index0, wire_index, edge_index),
+                                face_index0,
                                 &gv1,
-                                kind,
                                 &surface1,
                                 &mut gemap1,
                             )?;
@@ -1310,11 +1317,10 @@ where
                         }
                         let idx10 =
                             poly_loops_store1.add_polygon_vertex(face_index1, &pv0, &mut pemap0);
-                        if let Some((wire_index, edge_index, kind)) = idx10 {
+                        if idx10.is_some() {
                             geom_loops_store1.add_geom_vertex(
-                                (face_index1, wire_index, edge_index),
+                                face_index1,
                                 &gv0,
-                                kind,
                                 &surface0,
                                 &mut gemap0,
                             )?;
@@ -1323,11 +1329,10 @@ where
                         }
                         let idx11 =
                             poly_loops_store1.add_polygon_vertex(face_index1, &pv1, &mut pemap1);
-                        if let Some((wire_index, edge_index, kind)) = idx11 {
+                        if idx11.is_some() {
                             geom_loops_store1.add_geom_vertex(
-                                (face_index1, wire_index, edge_index),
+                                face_index1,
                                 &gv1,
-                                kind,
                                 &surface0,
                                 &mut gemap1,
                             )?;
@@ -1448,7 +1453,7 @@ mod projection_tests {
     }
 
     #[test]
-    fn exact_geometry_reclassifies_inner_hint_at_boundary_endpoint() {
+    fn exact_geometry_resolves_boundary_endpoint_independently() {
         let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let old_back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
         let edge = Edge::new(&front, &old_back, Line(front.point(), old_back.point()));
@@ -1461,13 +1466,7 @@ mod projection_tests {
         let mut emap = HashMap::default();
 
         store
-            .add_geom_vertex(
-                (0, 0, 0),
-                &recovered,
-                ParameterKind::Inner(0.999),
-                &Plane::xy(),
-                &mut emap,
-            )
+            .add_geom_vertex(0, &recovered, &Plane::xy(), &mut emap)
             .expect("exact endpoint must be reclassified before topology mutation");
 
         assert_eq!(store[0][0].len(), 1);
