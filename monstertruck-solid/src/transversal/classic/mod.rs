@@ -833,12 +833,10 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         shell0.mapped(|x| *x, |c| Alternative::FirstType(c.clone()), Clone::clone);
     let altshell1: AltCurveShell<C, S> =
         shell1.mapped(|x| *x, |c| Alternative::FirstType(c.clone()), Clone::clone);
-    let loops_store::LoopsStoreQuadruple {
-        geom_loops_store0: loops_store0,
-        geom_loops_store1: loops_store1,
+    let loops_store::InterfaceLoops {
+        geom: [loops_store0, loops_store1],
         coplanar_overlap,
         full_interface_adjacency,
-        ..
     } = loops_store::create_loops_stores(
         &altshell0,
         &poly_shell0,
