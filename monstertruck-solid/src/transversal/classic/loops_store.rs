@@ -1,13 +1,18 @@
-//! Classic (0.3.2) boolean loops store.
+//! Intersection-loop store for the classic Boolean backend.
 //!
-//! Ported verbatim from the published 0.3.2 crate's `transversal::loops_store`,
-//! adjusted only for the graft: the marching intersection-curve backend now
-//! yields a raw [`IntersectionCurve`] leader (the 0.3.2 parameter wrapper was
-//! dropped), so the `.into()` that unwrapped the wrapper is gone.
+//! This began as the published 0.3.2 loop store, but now also owns exact-boundary
+//! endpoint resolution, coplanar interface matching, and partition stitching.
+//! Geometric equality checks here are deliberately separated from broad-phase
+//! signatures: sampled or summary evidence may select candidates, never prove
+//! trimmed-region identity by itself.
 
 #![allow(clippy::many_single_char_names)]
 
-use super::intersection_curve;
+use super::{
+    curve_equivalence::{CurveCoincidence, validate_sampled_coincidence},
+    intersection_curve,
+    tolerance::BooleanTolerance,
+};
 use monstertruck_core::{cgmath64::*, tolerance::TOLERANCE};
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
@@ -263,25 +268,11 @@ impl<P: Copy, C: Clone> Loops<P, C> {
             + Invertible,
     {
         if reuse_coincident {
-            let curves_match = |edge: &Edge<P, C>| {
-                let lhs = edge.oriented_curve();
-                let rhs = edge0.oriented_curve();
-                let sample_on = |curve: &C, other: &C| {
-                    let (t0, t1) = curve.range_tuple();
-                    [0.25, 0.5, 0.75].into_iter().all(|fraction| {
-                        let point = curve.evaluate(t0 + (t1 - t0) * fraction);
-                        other
-                            .search_nearest_parameter(point, None, 100)
-                            .map(|parameter| other.evaluate(parameter).near(&point))
-                            .unwrap_or(false)
-                    })
-                };
-                let midpoint = |curve: &C| {
-                    let (t0, t1) = curve.range_tuple();
-                    curve.evaluate((t0 + t1) * 0.5)
-                };
-                midpoint(&lhs).near(&midpoint(&rhs))
-                    || (sample_on(&lhs, &rhs) && sample_on(&rhs, &lhs))
+            let curves_sampled_match = |edge: &Edge<P, C>| {
+                validate_sampled_coincidence::<P, _>(
+                    &edge.oriented_curve(),
+                    &edge0.oriented_curve(),
+                ) == CurveCoincidence::SampledValidation
             };
             let coincident = self.iter().flat_map(|wire| wire.iter()).find_map(|edge| {
                 let same_direction = edge.front().point().near(&edge0.front().point())
@@ -289,7 +280,7 @@ impl<P: Copy, C: Clone> Loops<P, C> {
                 let opposite_direction = edge.front().point().near(&edge0.back().point())
                     && edge.back().point().near(&edge0.front().point());
                 (same_direction || opposite_direction)
-                    .then(|| curves_match(edge))
+                    .then(|| curves_sampled_match(edge))
                     .filter(|matched| *matched)
                     .map(|_| (edge.front().clone(), edge.back().clone(), same_direction))
             });
@@ -728,7 +719,7 @@ where
     // SSI endpoints come from tessellated carrier surfaces, so a seed can be a
     // few kernel tolerances away from the exact curve/surface intersection even
     // when the two independent exact projections already agree. Accept that
-    // proof before taking the Newton step below: near tangencies make
+    // validation before taking the Newton step below: near tangencies make
     // `curve.derivative(t).dot(surface.normal(u, v))` singular and an otherwise
     // solved endpoint can be thrown arbitrarily far away. The 8x envelope is
     // the same fixed kernel-precision bound used to canonicalize adjacent SSI
@@ -763,13 +754,14 @@ where
 }
 
 fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vector3)> {
+    let tolerance = BooleanTolerance::new(tol);
     let positions = polygon.positions();
     let origin = *positions.first()?;
     let mut normal = None;
     'outer: for i in 1..positions.len() {
         for j in i + 1..positions.len() {
             let candidate = (positions[i] - origin).cross(positions[j] - origin);
-            if candidate.magnitude() > tol {
+            if candidate.magnitude() > tolerance.area_floor {
                 normal = Some(candidate.normalize());
                 break 'outer;
             }
@@ -778,7 +770,7 @@ fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vect
     let normal = normal?;
     positions
         .iter()
-        .all(|point| (*point - origin).dot(normal).abs() <= tol)
+        .all(|point| (*point - origin).dot(normal).abs() <= tolerance.length)
         .then_some((origin, normal))
 }
 
@@ -789,8 +781,9 @@ fn planar_polygons_coplanar(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> b
     let Some((rhs_origin, rhs_normal)) = planar_polygon_plane(rhs, tol) else {
         return false;
     };
-    lhs_normal.cross(rhs_normal).magnitude() <= tol
-        && (rhs_origin - lhs_origin).dot(lhs_normal).abs() <= tol
+    let tolerance = BooleanTolerance::new(tol);
+    lhs_normal.cross(rhs_normal).magnitude() <= tolerance.angular
+        && (rhs_origin - lhs_origin).dot(lhs_normal).abs() <= tolerance.length
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -879,20 +872,161 @@ fn planar_signatures_match(
     rhs: PlanarPolygonSignature,
     tol: f64,
 ) -> bool {
+    let tolerance = BooleanTolerance::new(tol);
     let span = (lhs.bounds[1] - lhs.bounds[0])
         .abs()
         .max((lhs.bounds[3] - lhs.bounds[2]).abs())
         .max((rhs.bounds[1] - rhs.bounds[0]).abs())
-        .max((rhs.bounds[3] - rhs.bounds[2]).abs())
-        .max(tol);
-    let area_tol = 8.0 * tol * span + 16.0 * tol * tol;
+        .max((rhs.bounds[3] - rhs.bounds[2]).abs());
+    let area_tol = tolerance.area_for_span(span);
     (lhs.area - rhs.area).abs() <= area_tol
-        && lhs.centroid.distance(rhs.centroid) <= 2.0 * tol
+        && lhs.centroid.distance(rhs.centroid) <= 2.0 * tolerance.length
         && lhs
             .bounds
             .iter()
             .zip(rhs.bounds)
-            .all(|(lhs, rhs)| (*lhs - rhs).abs() <= 2.0 * tol)
+            .all(|(lhs, rhs)| (*lhs - rhs).abs() <= 2.0 * tolerance.length)
+}
+
+fn cross2(lhs: Vector2, rhs: Vector2) -> f64 { lhs.x * rhs.y - lhs.y * rhs.x }
+
+fn projected_triangle(
+    polygon: &PolygonMesh,
+    triangle: [StandardVertex; 3],
+    origin: Point3,
+    u: Vector3,
+    v: Vector3,
+) -> [Point2; 3] {
+    triangle.map(|vertex| {
+        let delta = polygon.positions()[vertex.pos] - origin;
+        Point2::new(delta.dot(u), delta.dot(v))
+    })
+}
+
+fn polygon_area2(points: &[Point2]) -> f64 {
+    if points.len() < 3 {
+        return 0.0;
+    }
+    points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .take(points.len())
+        .map(|(lhs, rhs)| lhs.x * rhs.y - lhs.y * rhs.x)
+        .sum()
+}
+
+fn clip_convex_polygon(subject: &[Point2], clip: [Point2; 3], tol: f64) -> Vec<Point2> {
+    let mut clip = clip;
+    if polygon_area2(&clip) < 0.0 {
+        clip.swap(1, 2);
+    }
+    let mut output = subject.to_vec();
+    for edge_index in 0..3 {
+        if output.is_empty() {
+            break;
+        }
+        let a = clip[edge_index];
+        let b = clip[(edge_index + 1) % 3];
+        let edge = b - a;
+        let cross_tol = tol * edge.magnitude().max(tol);
+        let input = std::mem::take(&mut output);
+        let Some(&mut_previous) = input.last() else {
+            break;
+        };
+        let mut previous = mut_previous;
+        let mut previous_distance = cross2(edge, previous - a);
+        let mut previous_inside = previous_distance >= -cross_tol;
+        for current in input {
+            let current_distance = cross2(edge, current - a);
+            let current_inside = current_distance >= -cross_tol;
+            if current_inside != previous_inside {
+                let denominator = previous_distance - current_distance;
+                if denominator.abs() > f64::EPSILON {
+                    let ratio = previous_distance / denominator;
+                    output.push(previous + (current - previous) * ratio);
+                }
+            }
+            if current_inside {
+                output.push(current);
+            }
+            previous = current;
+            previous_distance = current_distance;
+            previous_inside = current_inside;
+        }
+    }
+    output
+}
+
+fn triangle_intersection_area(lhs: [Point2; 3], rhs: [Point2; 3], tol: f64) -> f64 {
+    let clipped = clip_convex_polygon(&lhs, rhs, tol);
+    0.5 * polygon_area2(&clipped).abs()
+}
+
+fn planar_polygon_overlap_area(
+    lhs: &PolygonMesh,
+    rhs: &PolygonMesh,
+    origin: Point3,
+    normal: Vector3,
+    tol: f64,
+) -> Option<f64> {
+    let (u, v) = planar_basis(normal)?;
+    let lhs_triangles = lhs
+        .faces()
+        .triangle_iter()
+        .map(|triangle| projected_triangle(lhs, triangle, origin, u, v))
+        .collect::<Vec<_>>();
+    let rhs_triangles = rhs
+        .faces()
+        .triangle_iter()
+        .map(|triangle| projected_triangle(rhs, triangle, origin, u, v))
+        .collect::<Vec<_>>();
+    Some(
+        lhs_triangles
+            .iter()
+            .flat_map(|lhs| {
+                rhs_triangles
+                    .iter()
+                    .map(move |rhs| triangle_intersection_area(*lhs, *rhs, tol))
+            })
+            .sum(),
+    )
+}
+
+fn planar_area_tolerance(signature: PlanarPolygonSignature, tol: f64) -> f64 {
+    let span = (signature.bounds[1] - signature.bounds[0])
+        .abs()
+        .max((signature.bounds[3] - signature.bounds[2]).abs());
+    BooleanTolerance::new(tol).area_for_span(span)
+}
+
+fn planar_polygon_set_has_interior_overlap(
+    polygons: &[PolygonMesh],
+    origin: Point3,
+    normal: Vector3,
+    tol: f64,
+) -> Option<bool> {
+    for left in 0..polygons.len() {
+        let left_signature = planar_polygon_signature(&polygons[left], origin, normal)?;
+        for right in left + 1..polygons.len() {
+            let right_signature = planar_polygon_signature(&polygons[right], origin, normal)?;
+            if !projected_bounds_overlap(left_signature.bounds, right_signature.bounds, tol) {
+                continue;
+            }
+            let overlap = planar_polygon_overlap_area(
+                &polygons[left],
+                &polygons[right],
+                origin,
+                normal,
+                tol,
+            )?;
+            let area_tol = planar_area_tolerance(left_signature, tol)
+                .max(planar_area_tolerance(right_signature, tol));
+            if overlap > area_tol {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
 }
 
 fn planar_polygons_same_trimmed_face(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> bool {
@@ -902,8 +1036,9 @@ fn planar_polygons_same_trimmed_face(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: 
     let Some((rhs_origin, rhs_normal)) = planar_polygon_plane(rhs, tol) else {
         return false;
     };
-    if lhs_normal.cross(rhs_normal).magnitude() > tol
-        || (rhs_origin - lhs_origin).dot(lhs_normal).abs() > tol
+    let tolerance = BooleanTolerance::new(tol);
+    if lhs_normal.cross(rhs_normal).magnitude() > tolerance.angular
+        || (rhs_origin - lhs_origin).dot(lhs_normal).abs() > tolerance.length
     {
         return false;
     }
@@ -913,7 +1048,16 @@ fn planar_polygons_same_trimmed_face(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: 
     let Some(rhs_signature) = planar_polygon_signature(rhs, lhs_origin, lhs_normal) else {
         return false;
     };
-    planar_signatures_match(lhs_signature, rhs_signature, tol)
+    if !planar_signatures_match(lhs_signature, rhs_signature, tol) {
+        return false;
+    }
+    let Some(overlap) = planar_polygon_overlap_area(lhs, rhs, lhs_origin, lhs_normal, tol) else {
+        return false;
+    };
+    let area_tol =
+        planar_area_tolerance(lhs_signature, tol).max(planar_area_tolerance(rhs_signature, tol));
+    (lhs_signature.area - overlap).abs() <= area_tol
+        && (rhs_signature.area - overlap).abs() <= area_tol
 }
 
 fn projected_bounds_overlap(lhs: [f64; 4], rhs: [f64; 4], tol: f64) -> bool {
@@ -952,10 +1096,23 @@ pub(super) fn single_face_matches_planar_partition(
         return Some(None);
     }
     let fragment_signature = planar_polygon_set_signature(matched.iter(), origin, normal)?;
+    if !planar_signatures_match(target_signature, fragment_signature, tol)
+        || planar_polygon_set_has_interior_overlap(&matched, origin, normal, tol)?
+    {
+        return Some(None);
+    }
+    let overlap = matched.iter().try_fold(0.0, |sum, fragment| {
+        planar_polygon_overlap_area(target, fragment, origin, normal, tol).map(|area| sum + area)
+    })?;
+    let area_tol = planar_area_tolerance(target_signature, tol)
+        .max(planar_area_tolerance(fragment_signature, tol));
+    let Some(representative) = representative else {
+        return Some(None);
+    };
     Some(
-        planar_signatures_match(target_signature, fragment_signature, tol).then_some(
-            representative.expect("non-empty planar fragment group has a representative"),
-        ),
+        ((target_signature.area - overlap).abs() <= area_tol
+            && (fragment_signature.area - overlap).abs() <= area_tol)
+            .then_some(representative),
     )
 }
 
@@ -1075,7 +1232,7 @@ where
             }
         });
 
-    let proximity = tol.max(1.0e-4) * 2.0;
+    let proximity = 2.0 * BooleanTolerance::new(tol).length;
     for face_index in 0..target.len() {
         let polygon = target_poly_shell[face_index].surface()?;
         for edge in &unique {
@@ -1185,7 +1342,7 @@ where
     let mut poly_loops_store1: LoopsStore<_, _> = poly_shell1.face_iter().collect();
     let store0_len = geom_loops_store0.len();
     let store1_len = geom_loops_store1.len();
-    let coplanar_tol = tol.max(1.0e-3) * 2.0;
+    let coplanar_tol = 2.0 * BooleanTolerance::new(tol).length;
     let positive_aabb_overlap =
         shells_have_positive_aabb_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
     let full_coplanar_interface = imprint_coplanar
@@ -1781,5 +1938,77 @@ mod projection_tests {
         assert!(point.near(&Point3::new(1.0, 0.0, 0.0)));
         assert!((parameter - 0.5).abs() <= TOLERANCE);
         assert!(sphere.include(point));
+    }
+}
+
+#[cfg(test)]
+mod planar_region_identity_tests {
+    use super::*;
+
+    fn diamond() -> PolygonMesh {
+        PolygonMesh::new(
+            StandardAttributes {
+                positions: vec![
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(2.0, 1.0, 0.0),
+                    Point3::new(1.0, 2.0, 0.0),
+                    Point3::new(0.0, 1.0, 0.0),
+                ],
+                ..Default::default()
+            },
+            Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
+        )
+    }
+
+    fn disjoint_corner_triangles() -> PolygonMesh {
+        PolygonMesh::new(
+            StandardAttributes {
+                positions: vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(2.0, 0.0, 0.0),
+                    Point3::new(0.0, 1.0, 0.0),
+                    Point3::new(2.0, 2.0, 0.0),
+                    Point3::new(0.0, 2.0, 0.0),
+                    Point3::new(2.0, 1.0, 0.0),
+                ],
+                ..Default::default()
+            },
+            Faces::from_iter(vec![[0, 1, 2], [3, 4, 5]]),
+        )
+    }
+
+    #[test]
+    fn area_centroid_and_bounds_are_not_region_identity() {
+        assert!(!planar_polygons_same_trimmed_face(
+            &diamond(),
+            &disjoint_corner_triangles(),
+            1.0e-8
+        ));
+    }
+
+    #[test]
+    fn duplicate_overlapping_fragments_do_not_fake_partition_coverage() {
+        let target = PolygonMesh::new(
+            StandardAttributes {
+                positions: vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(2.0, 0.0, 0.0),
+                    Point3::new(2.0, 2.0, 0.0),
+                    Point3::new(0.0, 2.0, 0.0),
+                ],
+                ..Default::default()
+            },
+            Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
+        );
+        let diamond = diamond();
+        let fragments: Shell<Point3, PolylineCurve, Option<PolygonMesh>> = Shell::from(vec![
+            Face::new_unchecked(Vec::new(), Some(diamond.clone())),
+            Face::new_unchecked(Vec::new(), Some(diamond)),
+        ]);
+
+        assert_eq!(
+            single_face_matches_planar_partition(&target, &fragments, 1.0e-8),
+            Some(None)
+        );
     }
 }

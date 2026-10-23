@@ -5,7 +5,7 @@ use super::domain_projection::sampled_parameter_boundary;
 use super::parameter_curves::{
     boundary_matches_surface_curve, curve2d_from_sampled_boundary, direct_bspline_boundary_line,
     direct_nurbs_boundary_line, exact_bspline_boundary, exact_line_boundary, exact_nurbs_boundary,
-    line_points, parameter_curve_points, same_surface,
+    line_points, parameter_curve_points, same_surface_parameterization,
 };
 use super::*;
 
@@ -501,8 +501,13 @@ impl ParameterBoundary2D<Surface> for Curve {
                 // Without this the cap arcs yield no parameter curve and drop from
                 // downstream NURBS export. Mirrors the `Line`/`BsplineCurve` arms.
                 .or_else(|| sampled_parameter_boundary(curve, surface, tolerance)),
-            Curve::ParameterCurve(curve) => same_surface(curve.surface().as_ref(), surface)
-                .then(|| parameter_curve_points(curve, tolerance)),
+            Curve::ParameterCurve(curve) => {
+                if same_surface_parameterization(curve.surface().as_ref(), surface) {
+                    Some(parameter_curve_points(curve, tolerance))
+                } else {
+                    sampled_parameter_boundary(curve, surface, tolerance)
+                }
+            }
             Curve::IntersectionCurve(curve) => {
                 if let Some(boundary) = curve.boundary0().filter(|boundary| {
                     boundary_matches_surface_curve(curve.leader().as_ref(), boundary, surface)
@@ -512,12 +517,12 @@ impl ParameterBoundary2D<Surface> for Curve {
                     boundary_matches_surface_curve(curve.leader().as_ref(), boundary, surface)
                 }) {
                     Some(parameter_curve_points(boundary, tolerance))
-                } else if same_surface(curve.surface0().as_ref(), surface) {
+                } else if same_surface_parameterization(curve.surface0().as_ref(), surface) {
                     curve
                         .boundary0()
                         .map(|boundary| parameter_curve_points(boundary, tolerance))
                         .or_else(|| curve.leader().parameter_boundary_2d(surface, tolerance))
-                } else if same_surface(curve.surface1().as_ref(), surface) {
+                } else if same_surface_parameterization(curve.surface1().as_ref(), surface) {
                     curve
                         .boundary1()
                         .map(|boundary| parameter_curve_points(boundary, tolerance))
@@ -538,16 +543,22 @@ impl ExactParameterBoundary2D<Surface> for Curve {
             Curve::Line(curve) => exact_line_boundary(curve, surface),
             Curve::BsplineCurve(curve) => exact_bspline_boundary(curve, surface),
             Curve::NurbsCurve(curve) => exact_nurbs_boundary(curve, surface),
-            Curve::ParameterCurve(curve) if same_surface(curve.surface().as_ref(), surface) => {
+            Curve::ParameterCurve(curve)
+                if same_surface_parameterization(curve.surface().as_ref(), surface) =>
+            {
                 Some(curve.clone())
             }
-            Curve::IntersectionCurve(curve) if same_surface(curve.surface0().as_ref(), surface) => {
+            Curve::IntersectionCurve(curve)
+                if same_surface_parameterization(curve.surface0().as_ref(), surface) =>
+            {
                 curve
                     .boundary0()
                     .cloned()
                     .or_else(|| curve.leader().exact_parameter_boundary_2d(surface))
             }
-            Curve::IntersectionCurve(curve) if same_surface(curve.surface1().as_ref(), surface) => {
+            Curve::IntersectionCurve(curve)
+                if same_surface_parameterization(curve.surface1().as_ref(), surface) =>
+            {
                 curve
                     .boundary1()
                     .cloned()

@@ -227,47 +227,35 @@ pub(super) fn curve2d_from_sampled_boundary(points: Vec<Point2>) -> Option<Curve
     }
 }
 
-pub(super) fn same_surface(lhs: &Surface, rhs: &Surface) -> bool {
-    if std::mem::discriminant(lhs) != std::mem::discriminant(rhs) {
-        false
-    } else if content_hash64(lhs) == content_hash64(rhs) {
-        true
-    } else {
-        same_parameter_samples(lhs, rhs)
-            || (surface_samples_lie_on(lhs, rhs) && surface_samples_lie_on(rhs, lhs))
+pub(super) fn same_surface_parameterization(lhs: &Surface, rhs: &Surface) -> bool {
+    if std::mem::discriminant(lhs) != std::mem::discriminant(rhs)
+        || content_hash64(lhs) != content_hash64(rhs)
+    {
+        return false;
+    }
+    match (serde_json::to_vec(lhs), serde_json::to_vec(rhs)) {
+        (Ok(lhs), Ok(rhs)) => lhs == rhs,
+        _ => false,
     }
 }
 
-fn same_parameter_samples(lhs: &Surface, rhs: &Surface) -> bool {
-    let (Some((lu0, lu1)), Some((lv0, lv1)), Some((ru0, ru1)), Some((rv0, rv1))) = (
-        lhs.try_range_tuple().0,
-        lhs.try_range_tuple().1,
-        rhs.try_range_tuple().0,
-        rhs.try_range_tuple().1,
-    ) else {
-        return false;
-    };
-    [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)]
-        .into_iter()
-        .all(|(s, t)| {
-            let lhs_point = lhs.evaluate(lu0 + (lu1 - lu0) * s, lv0 + (lv1 - lv0) * t);
-            let rhs_point = rhs.evaluate(ru0 + (ru1 - ru0) * s, rv0 + (rv1 - rv0) * t);
-            lhs_point.near(&rhs_point)
-        })
-}
-
-fn surface_samples_lie_on(source: &Surface, target: &Surface) -> bool {
-    let (Some((u0, u1)), Some((v0, v1))) = source.try_range_tuple() else {
-        return false;
-    };
-    [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)]
-        .into_iter()
-        .all(|(s, t)| {
-            let point = source.evaluate(u0 + (u1 - u0) * s, v0 + (v1 - v0) * t);
-            target
-                .search_parameter(point, None, 16)
-                .is_some_and(|parameter| target.evaluate(parameter.0, parameter.1).near(&point))
-        })
+/// Validate that a concrete 3-D curve lies on `surface`.
+///
+/// This is deliberately a sampled geometric validation, not surface identity:
+/// it may authorize approximate containment/projection paths, but never exact
+/// reuse of UV coordinates from another surface parameterization.
+pub(super) fn sampled_curve_lies_on_surface<C>(curve: &C, surface: &Surface) -> bool
+where C: ParametricCurve3D<Point = Point3> + BoundedCurve<Point = Point3> {
+    let (t0, t1) = curve.range_tuple();
+    const SAMPLES: usize = 16;
+    (0..=SAMPLES).all(|index| {
+        let ratio = index as f64 / SAMPLES as f64;
+        let point = curve.evaluate(t0 * (1.0 - ratio) + t1 * ratio);
+        surface
+            .search_parameter(point, None, 32)
+            .or_else(|| surface.search_nearest_parameter(point, None, 32))
+            .is_some_and(|parameter| surface.evaluate(parameter.0, parameter.1).near(&point))
+    })
 }
 
 pub(super) fn exact_line_boundary(
@@ -470,5 +458,47 @@ impl ToCompressedTrimmedParameterCurves for Solid {
     fn compress_with_parameter_curves(&self, tolerance: f64) -> Self::Output {
         let trimmed = self.to_trimmed_with_parameter_curves(tolerance);
         CompressedTrimmedSolid::from(&trimmed)
+    }
+}
+
+#[cfg(test)]
+mod surface_identity_tests {
+    use super::*;
+
+    #[test]
+    fn coincident_support_does_not_reuse_foreign_uv_curve() {
+        let source_surface = Surface::Plane(Plane::xy());
+        let target_surface = Surface::Plane(Plane::new(
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(3.0, 1.0, 0.0),
+            Point3::new(1.0, 4.0, 0.0),
+        ));
+        let curve = Curve::ParameterCurve(ParameterCurve::new(
+            Curve2D::Line(Line(Point2::new(0.25, 0.25), Point2::new(0.75, 0.25))),
+            Box::new(source_surface.clone()),
+        ));
+
+        assert!(target_surface.include(&curve));
+        assert!(
+            curve.exact_parameter_boundary_2d(&source_surface).is_some(),
+            "identical parameterization must preserve exact UV reuse"
+        );
+        assert!(curve.exact_parameter_boundary_2d(&target_surface).is_none());
+
+        let uv = curve.parameter_boundary_2d(&target_surface, TOLERANCE);
+        assert!(uv.is_some(), "coincident support must remain projectable");
+        let uv = uv.unwrap_or_default();
+        let first = uv
+            .first()
+            .copied()
+            .unwrap_or(Point2::new(f64::NAN, f64::NAN));
+        let last = uv
+            .last()
+            .copied()
+            .unwrap_or(Point2::new(f64::NAN, f64::NAN));
+        assert!((first.x + 0.375).abs() < TOLERANCE);
+        assert!((first.y + 0.25).abs() < TOLERANCE);
+        assert!((last.x + 0.125).abs() < TOLERANCE);
+        assert!((last.y + 0.25).abs() < TOLERANCE);
     }
 }

@@ -1,5 +1,8 @@
 use super::*;
 use monstertruck_topology::Shell;
+use monstertruck_topology::repair::{
+    split_non_simple_compressed_wires, split_pinched_compressed_faces,
+};
 
 /// RED reproducer for the cell-8 extraction blocker: a face whose boundary
 /// wires are each SIMPLE but share one vertex (a PINCHED face, e.g. the

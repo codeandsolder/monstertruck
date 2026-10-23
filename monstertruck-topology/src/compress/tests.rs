@@ -4,6 +4,7 @@
 //! path is unchanged.
 
 use super::*;
+use crate::repair::split_non_simple_compressed_wires;
 use monstertruck_core::cgmath64::{Point3, Vector3, Zero};
 
 #[test]

@@ -1,7 +1,9 @@
-//! Classic (0.3.2) boolean pipeline -- the self-contained default backend.
+//! Self-contained classic Boolean pipeline, descended from the published 0.3.2 backend.
 //!
-//! This subtree grafts the proven upstream boolean assembly from the published
-//! 0.3.2 crate. It is compiled only when the marching SSI is the active backend
+//! The historical backend remains the algorithmic base, but this subtree now has
+//! explicit staged analysis/classification, typed failure boundaries, canonical
+//! topology repair, and stricter geometric evidence semantics. It is compiled only
+//! when the marching SSI is the active backend
 //! (default features); a build with an external SSI backend never touches it
 //! and runs the current `integrate` pipeline unchanged. The public entry points in
 //! `transversal::integrate` cfg-dispatch `and`/`or`/`difference`/
@@ -14,26 +16,26 @@
 //! - `altshell_to_shell` converts that arm back to `C` via
 //!   `SurfaceCurve::with_boundaries(..).into()` (the conversion the current
 //!   `ShapeOpsCurve` bound provides), not `IntersectionCurve::new(..).into()`.
-//! - Failures map onto the current `ShapeOpsError` (`EmptyOutputShell` for a
-//!   `None` pipeline result, `InvalidOutputShell` for a rejected solid), since
-//!   the current error enum has no single `Internal` variant.
+//! - Internal stages return typed `ShapeOpsError` variants; only an assembled
+//!   but topologically invalid candidate may select a documented fallback path.
 
+mod curve_equivalence;
 mod divide_face;
 mod faces_classification;
 mod intersection_curve;
 mod loops_store;
+mod tolerance;
 
 use super::integrate::{
     InvalidOutputShellConditionData, ShapeOpsCurve, ShapeOpsError, ShapeOpsSurface,
 };
 use crate::alternative::Alternative;
+use curve_equivalence::{CurveCoincidence, validate_sampled_coincidence};
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::*;
-use std::{
-    collections::{HashMap, VecDeque},
-    iter,
-};
+use std::collections::{HashMap, VecDeque};
+use tolerance::BooleanTolerance;
 
 type ClassicResult<T> = std::result::Result<T, ShapeOpsError>;
 
@@ -45,77 +47,97 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> AltCurveShell<C, S> {
     type AltEdge<C, S> = Edge<Point3, AltCurve<C, S>>;
 
-    let mut vertices = Vec::<Vertex<Point3>>::new();
-    let mut edges = Vec::<AltEdge<C, S>>::new();
-    let canonical_vertex = |point: Point3, vertices: &mut Vec<Vertex<Point3>>| {
-        if let Some(vertex) = vertices.iter().find(|vertex| vertex.point().near(&point)) {
-            vertex.clone()
-        } else {
-            let vertex = Vertex::new(point);
-            vertices.push(vertex.clone());
-            vertex
-        }
+    type VertexCell = [i64; 3];
+    type VertexKey = VertexId<Point3>;
+
+    let mut vertex_cells = HashMap::<VertexCell, Vec<Vertex<Point3>>>::new();
+    let mut edges = HashMap::<(VertexKey, VertexKey), Vec<AltEdge<C, S>>>::new();
+    let vertex_cell = |point: Point3| -> VertexCell {
+        [
+            (point.x / TOLERANCE).floor() as i64,
+            (point.y / TOLERANCE).floor() as i64,
+            (point.z / TOLERANCE).floor() as i64,
+        ]
     };
-    let curves_coincident = |lhs: &AltEdge<C, S>, rhs: &AltEdge<C, S>| {
-        let lhs_curve = lhs.oriented_curve();
-        let rhs_curve = rhs.oriented_curve();
-        let midpoint = |curve: &AltCurve<C, S>| {
-            let (t0, t1) = curve.range_tuple();
-            curve.evaluate((t0 + t1) * 0.5)
-        };
-        if midpoint(&lhs_curve).near(&midpoint(&rhs_curve)) {
-            return true;
+    let canonical_vertex = |point: Point3, cells: &mut HashMap<VertexCell, Vec<Vertex<Point3>>>| {
+        let key = vertex_cell(point);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let neighbor = [
+                        key[0].saturating_add(dx),
+                        key[1].saturating_add(dy),
+                        key[2].saturating_add(dz),
+                    ];
+                    if let Some(vertex) = cells
+                        .get(&neighbor)
+                        .and_then(|bucket| bucket.iter().find(|vertex| vertex.point().near(&point)))
+                    {
+                        return vertex.clone();
+                    }
+                }
+            }
         }
-        let sampled_on_other = |curve: &AltCurve<C, S>, other: &AltCurve<C, S>| {
-            let (t0, t1) = curve.range_tuple();
-            [0.25, 0.5, 0.75].into_iter().all(|fraction| {
-                let point = curve.evaluate(t0 + (t1 - t0) * fraction);
-                other
-                    .search_nearest_parameter(point, None, 100)
-                    .map(|parameter| other.evaluate(parameter).near(&point))
-                    .unwrap_or(false)
-            })
-        };
-        sampled_on_other(&lhs_curve, &rhs_curve) && sampled_on_other(&rhs_curve, &lhs_curve)
+        let vertex = Vertex::new(point);
+        cells.entry(key).or_default().push(vertex.clone());
+        vertex
+    };
+    let curves_sampled_coincident = |lhs: &AltEdge<C, S>, rhs: &AltEdge<C, S>| {
+        validate_sampled_coincidence::<Point3, _>(&lhs.oriented_curve(), &rhs.oriented_curve())
+            == CurveCoincidence::SampledValidation
     };
 
-    let source_edges = shell
+    type SourceEdgeId<C, S> = EdgeId<AltCurve<C, S>>;
+    type SourceVertexId = VertexId<Point3>;
+    let mut source_edges_by_id =
+        HashMap::<SourceEdgeId<C, S>, (SourceVertexId, SourceVertexId, AltCurve<C, S>)>::new();
+    let mut source_vertex_points = HashMap::<SourceVertexId, Point3>::new();
+    for edge in shell
         .iter()
         .flat_map(|face| face.absolute_boundaries())
         .flat_map(|wire| wire.iter())
-        .map(|edge| {
-            (
-                edge.front().point(),
-                edge.back().point(),
-                edge.oriented_curve(),
-            )
-        })
-        .collect::<Vec<_>>();
+    {
+        let absolute = edge.absolute_clone();
+        let front = absolute.absolute_front();
+        let back = absolute.absolute_back();
+        source_vertex_points
+            .entry(front.id())
+            .or_insert(front.point());
+        source_vertex_points
+            .entry(back.id())
+            .or_insert(back.point());
+        source_edges_by_id
+            .entry(absolute.id())
+            .or_insert_with(|| (front.id(), back.id(), absolute.oriented_curve()));
+    }
+    let source_edges = source_edges_by_id.into_values().collect::<Vec<_>>();
 
-    for (front, back, _) in &source_edges {
-        canonical_vertex(*front, &mut vertices);
-        canonical_vertex(*back, &mut vertices);
+    for point in source_vertex_points.values().copied() {
+        canonical_vertex(point, &mut vertex_cells);
     }
 
-    let canonical_edge =
-        |rebuilt: AltEdge<C, S>, edges: &mut Vec<AltEdge<C, S>>| -> AltEdge<C, S> {
-            if let Some(canonical) = edges.iter().find(|candidate| {
-                let same_endpoints =
-                    candidate.front() == rebuilt.front() && candidate.back() == rebuilt.back();
-                let opposite_endpoints =
-                    candidate.front() == rebuilt.back() && candidate.back() == rebuilt.front();
-                (same_endpoints || opposite_endpoints) && curves_coincident(candidate, &rebuilt)
-            }) {
-                if canonical.front() == rebuilt.front() {
-                    canonical.clone()
-                } else {
-                    canonical.inverse()
-                }
+    let canonical_edge = |rebuilt: AltEdge<C, S>,
+                          edges: &mut HashMap<(VertexKey, VertexKey), Vec<AltEdge<C, S>>>|
+     -> AltEdge<C, S> {
+        let forward = (rebuilt.front().id(), rebuilt.back().id());
+        let reverse = (rebuilt.back().id(), rebuilt.front().id());
+        if let Some(canonical) = edges
+            .get(&forward)
+            .into_iter()
+            .chain(edges.get(&reverse))
+            .flatten()
+            .find(|candidate| curves_sampled_coincident(candidate, &rebuilt))
+        {
+            if canonical.front() == rebuilt.front() {
+                canonical.clone()
             } else {
-                edges.push(rebuilt.clone());
-                rebuilt
+                canonical.inverse()
             }
-        };
+        } else {
+            edges.entry(forward).or_default().push(rebuilt.clone());
+            rebuilt
+        }
+    };
 
     let faces = shell
         .iter()
@@ -127,8 +149,8 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                     let rebuilt = wire
                         .iter()
                         .flat_map(|edge| {
-                            let front = canonical_vertex(edge.front().point(), &mut vertices);
-                            let back = canonical_vertex(edge.back().point(), &mut vertices);
+                            let front = canonical_vertex(edge.front().point(), &mut vertex_cells);
+                            let back = canonical_vertex(edge.back().point(), &mut vertex_cells);
                             if front == back {
                                 return Vec::new();
                             }
@@ -150,15 +172,23 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                             // search from large Boolean results.
                             let mut split_vertices = Vec::new();
                             if span.abs() > f64::EPSILON {
+                                let projected_vertices = source_vertex_points
+                                    .iter()
+                                    .filter_map(|(id, point)| {
+                                        parameter_on_curve(*point)
+                                            .map(|parameter| (*id, (*point, parameter)))
+                                    })
+                                    .collect::<HashMap<_, _>>();
                                 for (candidate_front, candidate_back, candidate_curve) in
                                     &source_edges
                                 {
-                                    let Some(front_parameter) =
-                                        parameter_on_curve(*candidate_front)
+                                    let Some(&(front_point, front_parameter)) =
+                                        projected_vertices.get(candidate_front)
                                     else {
                                         continue;
                                     };
-                                    let Some(back_parameter) = parameter_on_curve(*candidate_back)
+                                    let Some(&(back_point, back_parameter)) =
+                                        projected_vertices.get(candidate_back)
                                     else {
                                         continue;
                                     };
@@ -171,27 +201,21 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                                     }
 
                                     for (point, parameter) in [
-                                        (*candidate_front, front_parameter),
-                                        (*candidate_back, back_parameter),
+                                        (front_point, front_parameter),
+                                        (back_point, back_parameter),
                                     ] {
                                         let progress = (parameter - t0) / span;
                                         if !(progress > 0.0 && progress < 1.0) {
                                             continue;
                                         }
-                                        if let Some(vertex) = vertices
-                                            .iter()
-                                            .find(|vertex| vertex.point().near(&point))
-                                            && *vertex != front
-                                            && *vertex != back
+                                        let vertex = canonical_vertex(point, &mut vertex_cells);
+                                        if vertex != front
+                                            && vertex != back
                                             && !split_vertices
                                                 .iter()
-                                                .any(|(_, _, existing)| existing == vertex)
+                                                .any(|(_, _, existing)| existing == &vertex)
                                         {
-                                            split_vertices.push((
-                                                progress,
-                                                parameter,
-                                                vertex.clone(),
-                                            ));
+                                            split_vertices.push((progress, parameter, vertex));
                                         }
                                     }
                                 }
@@ -229,8 +253,8 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .collect::<Vec<_>>();
     let shell = Shell::from(faces);
     let mut compressed = shell.compress();
-    compress::split_non_simple_compressed_wires(&mut compressed);
-    compress::split_pinched_compressed_faces(&mut compressed);
+    repair::split_non_simple_compressed_wires(&mut compressed);
+    repair::split_pinched_compressed_faces(&mut compressed);
     match Shell::extract(compressed) {
         Ok(repaired) => repaired,
         Err(_) => shell,
@@ -497,7 +521,7 @@ fn exact_iso_leader<S: ShapeOpsSurface>(
             // Inverse parameter search on tightly trimmed B-spline surfaces can
             // wander by hundreds of ulps even for an exact iso-parameter
             // intersection. Prove constancy in 3D instead: every marching
-            // sample must lie on the exact iso locus within the Boolean proof
+            // sample must lie on the exact iso locus within the Boolean validation
             // tolerance. The candidate is independently checked against both
             // carrier surfaces below before it can replace the marching leader.
             if !leader_matches_iso_locus(surface, &params, leader, iso, constant) {
@@ -568,9 +592,9 @@ fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     )
 }
 
-/// Split one pair of shells into `[and_shell, or_shell]` (0.3.2 verbatim): build
-/// intersection loops, divide faces, classify each divided face as `and`/`or`,
-/// then ray-cast the remaining `unknown` faces against the other shell.
+/// Classify a tessellated shell point using the signed winding convention shared
+/// with [`IncludingPointInDomain`], with several deterministic ray directions to
+/// avoid a single degenerate ray deciding the result.
 fn classify_inside_with_polyshell(
     poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
     point: Point3,
@@ -590,42 +614,52 @@ fn classify_inside_with_polyshell(
                 let polygon = face.surface()?;
                 Some(count + polygon.signed_crossing_faces(point, direction))
             })?;
-            if count == 0 {
-                Some((inside, outside + 1))
-            } else {
+            if count >= 1 {
                 Some((inside + 1, outside))
+            } else {
+                Some((inside, outside + 1))
             }
         })?;
     Some(inside_votes > outside_votes)
 }
 
-fn sample_points_on_face<C, S>(face: &Face<Point3, C, S>) -> Option<Vec<Point3>> {
-    let wire = face.absolute_boundaries().first()?;
-    let vertices = wire
-        .vertex_iter()
-        .map(|vertex| vertex.point())
+fn sample_points_on_face<C, S>(face: &Face<Point3, C, S>, tol: f64) -> Option<Vec<Point3>>
+where
+    C: PolylineableCurve + Clone,
+    S: MeshableSurface + Clone, {
+    let shell = Shell::from(vec![face.clone()]);
+    let triangulated = shell.triangulation(tol.max(TOLERANCE));
+    let polygon = triangulated.first()?.surface()?;
+    let positions = polygon.positions();
+    let samples = polygon
+        .faces()
+        .triangle_iter()
+        .filter_map(|triangle| {
+            let a = positions[triangle[0].pos];
+            let b = positions[triangle[1].pos];
+            let c = positions[triangle[2].pos];
+            let area2 = (b - a).cross(c - a).magnitude();
+            area2
+                .is_finite()
+                .then_some(Point3::from_vec(
+                    (a.to_vec() + b.to_vec() + c.to_vec()) / 3.0,
+                ))
+                .filter(|_| area2 > TOLERANCE * TOLERANCE)
+        })
         .collect::<Vec<_>>();
-    let (sum, count) = vertices
-        .iter()
-        .fold((Vector3::zero(), 0usize), |(sum, count), point| {
-            (sum + point.to_vec(), count + 1)
-        });
-    if count == 0 {
-        return None;
-    }
-    let centroid = Point3::from_vec(sum / count as f64);
-    Some(
-        iter::once(centroid)
-            .chain(vertices.into_iter().map(|vertex| centroid.midpoint(vertex)))
-            .collect(),
-    )
+    (!samples.is_empty()).then_some(samples)
 }
 
 fn classify_unknown_face<C, S>(
     poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
     face: &Face<Point3, C, S>,
-) -> Option<bool> {
-    let points = sample_points_on_face(face)?;
+    tol: f64,
+) -> Option<bool>
+where
+    C: PolylineableCurve + Clone,
+    S: MeshableSurface + Clone,
+{
+    let points = sample_points_on_face(face, tol)?;
     let (inside, outside) =
         points
             .into_iter()
@@ -652,15 +686,17 @@ fn classify_face_relation<C, S>(
     tol: f64,
 ) -> Option<FaceRelation>
 where
-    S: Clone
+    C: PolylineableCurve + Clone,
+    S: MeshableSurface
+        + Clone
         + Invertible
         + ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    let points = sample_points_on_face(face)?;
+    let points = sample_points_on_face(face, tol)?;
     let surface = face.oriented_surface();
-    let offset = tol.max(1.0e-4) * 8.0;
+    let offset = BooleanTolerance::new(tol).classifier_offset;
     let (inside, outside, coincident, total) = points.into_iter().try_fold(
         (0usize, 0usize, 0usize, 0usize),
         |(inside, outside, coincident, total), point| {
@@ -733,20 +769,28 @@ enum PairMode {
     Difference,
 }
 
-fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+type PolyShell = Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>;
+
+#[derive(Clone, Debug)]
+struct PairAnalysis<C, S> {
+    tolerance: f64,
+    poly_shell0: PolyShell,
+    poly_shell1: PolyShell,
+    cls0: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
+    cls1: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
+    coplanar_overlap: bool,
+}
+
+fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell0: &Shell<Point3, C, S>,
     shell1: &Shell<Point3, C, S>,
     tol: f64,
     mode: PairMode,
-) -> Option<[Shell<Point3, C, S>; 2]> {
-    if tol <= 0.0 {
-        return None;
+) -> ClassicResult<PairAnalysis<C, S>> {
+    if tol < TOLERANCE {
+        return Err(ShapeOpsError::InvalidTolerance);
     }
-    // The triangulation is only an intersection seed; using the full geometric
-    // tolerance here can massively over-refine curved shells and make SSI
-    // classification less stable without improving the final curve tolerance.
-    // Keep the actual divide/classification tolerance strict below.
-    let seed_tol = tol.max(1.0e-3);
+    let seed_tol = BooleanTolerance::new(tol).mesh_seed;
     let poly_shell0 = shell0.triangulation(seed_tol);
     let poly_shell1 = shell1.triangulation(seed_tol);
     let altshell0: AltCurveShell<C, S> =
@@ -765,179 +809,205 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         &poly_shell1,
         tol,
         mode == PairMode::AndOr,
-    )?;
-    let mut cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)?;
-    let mut cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)?;
+    )
+    .ok_or(ShapeOpsError::InterfaceAnalysisFailed)?;
+    let cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)
+        .ok_or(ShapeOpsError::DivideFacesFailed { shell_index: 0 })?;
+    let cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)
+        .ok_or(ShapeOpsError::DivideFacesFailed { shell_index: 1 })?;
+    Ok(PairAnalysis {
+        tolerance: tol,
+        poly_shell0,
+        poly_shell1,
+        cls0,
+        cls1,
+        coplanar_overlap,
+    })
+}
 
-    if mode == PairMode::Difference {
-        cls0.integrate_by_component();
-        cls1.integrate_by_component();
-        // Face division already classifies pieces adjacent to an intersection:
-        // Or on A is outside B and survives A - B, while And on B is
-        // inside A and becomes the inward-facing cut boundary. Prefer those
-        // exact topological labels: a ray cast from a face lying exactly on
-        // the other solid's boundary can choose the wrong side.
-        let [_inside0, mut difference_faces0, unknown0] = cls0.and_or_unknown();
-        unknown0.into_iter().try_for_each(|face| {
-            if !classify_unknown_face(&poly_shell1, &face)? {
-                difference_faces0.push(face);
-            }
-            Some(())
-        })?;
+fn classify_unknown<C, S>(
+    poly_shell: &PolyShell,
+    face: &Face<Point3, C, S>,
+    tol: f64,
+    shell_index: usize,
+) -> ClassicResult<bool>
+where
+    C: PolylineableCurve + Clone,
+    S: MeshableSurface + Clone,
+{
+    classify_unknown_face(poly_shell, face, tol)
+        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
+}
 
-        let [mut difference_faces1, _outside1, unknown1] = cls1.and_or_unknown();
-        unknown1.into_iter().try_for_each(|face| {
-            if classify_unknown_face(&poly_shell0, &face)? {
-                difference_faces1.push(face);
-            }
-            Some(())
-        })?;
+fn classify_relation<C, S>(
+    poly_shell: &PolyShell,
+    face: &Face<Point3, C, S>,
+    tol: f64,
+    shell_index: usize,
+) -> ClassicResult<FaceRelation>
+where
+    C: PolylineableCurve + Clone,
+    S: MeshableSurface
+        + Clone
+        + Invertible
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    classify_face_relation(poly_shell, face, tol)
+        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
+}
 
-        for face in difference_faces1.face_iter_mut() {
-            // B contributes the inward-facing boundary of A - B.
-            face.invert();
-        }
+fn convert_alt_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell: &AltCurveShell<C, S>,
+    operation: &'static str,
+) -> ClassicResult<Shell<Point3, C, S>> {
+    altshell_to_shell(shell).ok_or(ShapeOpsError::AltShellConversionFailed { operation })
+}
 
-        difference_faces0.append(&mut difference_faces1);
-        let mut difference_shell = altshell_to_shell(&difference_faces0)?;
-        let _ = orient_regular_shell(&mut difference_shell);
-        let label_result_is_valid = difference_shell
+fn shell_is_valid<P, C, S>(shell: &Shell<P, C, S>) -> bool {
+    shell.is_empty()
+        || shell
             .connected_components()
             .iter()
-            .all(|component| component.check_solid_boundary().is_ok());
-        if label_result_is_valid {
-            return Some([difference_shell, Shell::default()]);
+            .all(|component| component.check_solid_boundary().is_ok())
+}
+
+fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    mut analysis: PairAnalysis<C, S>,
+) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
+    let tol = analysis.tolerance;
+    analysis.cls0.integrate_by_component();
+    analysis.cls1.integrate_by_component();
+
+    let [_inside0, mut difference_faces0, unknown0] = analysis.cls0.and_or_unknown();
+    for face in unknown0 {
+        if !classify_unknown(&analysis.poly_shell1, &face, tol, 0)? {
+            difference_faces0.push(face);
         }
-
-        // Axis-touching cuts can leave divider labels locally inconsistent even
-        // though geometric classification still reconstructs a valid shell.
-        // Fall back as a whole candidate rather than mixing the two schemes
-        // face-by-face, so shared-edge closure remains the deciding invariant.
-        let [and0, or0, unknown0] = cls0.and_or_unknown();
-        let [and1, or1, unknown1] = cls1.and_or_unknown();
-
-        let mut difference_faces0 = AltCurveShell::default();
-        and0.into_iter()
-            .chain(or0)
-            .chain(unknown0)
-            .try_for_each(|face| {
-                if !classify_unknown_face(&poly_shell1, &face)? {
-                    difference_faces0.push(face);
-                }
-                Some(())
-            })?;
-
-        let mut difference_faces1 = AltCurveShell::default();
-        and1.into_iter()
-            .chain(or1)
-            .chain(unknown1)
-            .try_for_each(|mut face| {
-                if classify_unknown_face(&poly_shell0, &face)? {
-                    face.invert();
-                    difference_faces1.push(face);
-                }
-                Some(())
-            })?;
-
-        difference_faces0.append(&mut difference_faces1);
-        let difference_shell = altshell_to_shell(&difference_faces0)?;
-        return Some([difference_shell, Shell::default()]);
+    }
+    let [mut difference_faces1, _outside1, unknown1] = analysis.cls1.and_or_unknown();
+    for face in unknown1 {
+        if classify_unknown(&analysis.poly_shell0, &face, tol, 1)? {
+            difference_faces1.push(face);
+        }
+    }
+    for face in difference_faces1.face_iter_mut() {
+        face.invert();
+    }
+    difference_faces0.append(&mut difference_faces1);
+    let mut label_shell = convert_alt_shell(&difference_faces0, "difference")?;
+    let _ = orient_regular_shell(&mut label_shell);
+    if label_shell
+        .connected_components()
+        .iter()
+        .all(|component| component.check_solid_boundary().is_ok())
+    {
+        return Ok([label_shell, Shell::default()]);
     }
 
-    if !coplanar_overlap {
-        cls0.integrate_by_component();
-        cls1.integrate_by_component();
-        let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
-        unknown0.into_iter().try_for_each(|face| {
-            if classify_unknown_face(&poly_shell1, &face)? {
-                and0.push(face);
-            } else {
-                or0.push(face);
-            }
-            Some(())
-        })?;
-        let [mut and1, mut or1, unknown1] = cls1.and_or_unknown();
-        unknown1.into_iter().try_for_each(|face| {
-            if classify_unknown_face(&poly_shell0, &face)? {
-                and1.push(face);
-            } else {
-                or1.push(face);
-            }
-            Some(())
-        })?;
-        and0.append(&mut and1);
-        or0.append(&mut or1);
-        let and_shell = altshell_to_shell(&and0)?;
-        let or_shell = altshell_to_shell(&or0)?;
-        return Some([and_shell, or_shell]);
+    // Only invalid assembled topology is retryable. Numeric/classification
+    // failures above are returned to the caller instead of silently selecting a
+    // different algorithm.
+    let [and0, or0, unknown0] = analysis.cls0.and_or_unknown();
+    let [and1, or1, unknown1] = analysis.cls1.and_or_unknown();
+    let mut fallback0 = AltCurveShell::default();
+    for face in and0.into_iter().chain(or0).chain(unknown0) {
+        if !classify_unknown(&analysis.poly_shell1, &face, tol, 0)? {
+            fallback0.push(face);
+        }
     }
+    let mut fallback1 = AltCurveShell::default();
+    for mut face in and1.into_iter().chain(or1).chain(unknown1) {
+        if classify_unknown(&analysis.poly_shell0, &face, tol, 1)? {
+            face.invert();
+            fallback1.push(face);
+        }
+    }
+    fallback0.append(&mut fallback1);
+    Ok([
+        convert_alt_shell(&fallback0, "difference")?,
+        Shell::default(),
+    ])
+}
 
-    // First propagate only unanimous topological evidence through unknown
-    // connected components. This closes thin feature caps from the already
-    // proven side labels without ray-casting points almost on a boundary.
-    // Components touching both And and Or remain Unknown and are classified
-    // geometrically below.
-    cls0.integrate_by_component();
-    cls1.integrate_by_component();
+fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    mut analysis: PairAnalysis<C, S>,
+) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
+    let tol = analysis.tolerance;
+    analysis.cls0.integrate_by_component();
+    analysis.cls1.integrate_by_component();
+    let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
+    for face in unknown0 {
+        if classify_unknown(&analysis.poly_shell1, &face, tol, 0)? {
+            and0.push(face);
+        } else {
+            or0.push(face);
+        }
+    }
+    let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
+    for face in unknown1 {
+        if classify_unknown(&analysis.poly_shell0, &face, tol, 1)? {
+            and1.push(face);
+        } else {
+            or1.push(face);
+        }
+    }
+    and0.append(&mut and1);
+    or0.append(&mut or1);
+    Ok([
+        convert_alt_shell(&and0, "and")?,
+        convert_alt_shell(&or0, "or")?,
+    ])
+}
 
-    // Exact divider labels are stronger evidence than a mesh ray cast,
-    // especially for thin features where a point-in-solid vote can be
-    // numerically unstable. Preserve labeled pieces and classify only regions
-    // untouched by the divider. Coincident unknown ownership remains
-    // asymmetric so a shared interface belongs to exactly one OR operand.
-    let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
-    unknown0.into_iter().try_for_each(|face| {
-        let relation = classify_face_relation(&poly_shell1, &face, tol)?;
-        match relation {
+fn all_classified_faces<C, S>(
+    cls: &faces_classification::FacesClassification<Point3, C, S>,
+) -> Shell<Point3, C, S> {
+    let [mut and, mut or, mut unknown] = cls.and_or_unknown();
+    and.append(&mut or);
+    and.append(&mut unknown);
+    and
+}
+
+fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    mut analysis: PairAnalysis<C, S>,
+) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
+    let tol = analysis.tolerance;
+    analysis.cls0.integrate_by_component();
+    analysis.cls1.integrate_by_component();
+
+    let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
+    for face in unknown0 {
+        match classify_relation(&analysis.poly_shell1, &face, tol, 0)? {
             FaceRelation::Inside => and0.push(face),
             FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(face),
         }
-        Some(())
-    })?;
-
-    let [mut and1, mut or1, unknown1] = cls1.and_or_unknown();
-    unknown1.into_iter().try_for_each(|face| {
-        let relation = classify_face_relation(&poly_shell0, &face, tol)?;
-        match relation {
+    }
+    let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
+    for face in unknown1 {
+        match classify_relation(&analysis.poly_shell0, &face, tol, 1)? {
             FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(face),
             FaceRelation::Outside => or1.push(face),
         }
-        Some(())
-    })?;
-
+    }
     and0.append(&mut and1);
     or0.append(&mut or1);
     and0 = weld_coincident_topology(&and0);
     or0 = weld_coincident_topology(&or0);
-    let label_and_shell = altshell_to_shell(&and0)?;
-    let label_or_shell = altshell_to_shell(&or0)?;
-    let shell_is_valid = |shell: &Shell<Point3, C, S>| {
-        shell.is_empty()
-            || shell
-                .connected_components()
-                .iter()
-                .all(|component| component.check_solid_boundary().is_ok())
-    };
+    let label_and_shell = convert_alt_shell(&and0, "and")?;
+    let label_or_shell = convert_alt_shell(&or0, "or")?;
     if !label_or_shell.is_empty()
         && shell_is_valid(&label_and_shell)
         && shell_is_valid(&label_or_shell)
     {
-        return Some([label_and_shell, label_or_shell]);
+        return Ok([label_and_shell, label_or_shell]);
     }
 
-    let divided_faces0 = {
-        let [mut and, mut or, mut unknown] = cls0.and_or_unknown();
-        and.append(&mut or);
-        and.append(&mut unknown);
-        and
-    };
-    let divided_faces1 = {
-        let [mut and, mut or, mut unknown] = cls1.and_or_unknown();
-        and.append(&mut or);
-        and.append(&mut unknown);
-        and
-    };
-    let partition_tol = tol.max(1.0e-4);
+    // An invalid assembled shell is the one explicit fallback trigger. Rebuild
+    // classification geometrically over every divided fragment, with actual 2-D
+    // planar-region equality used only as positive evidence.
+    let divided_faces0 = all_classified_faces(&analysis.cls0);
+    let divided_faces1 = all_classified_faces(&analysis.cls1);
+    let partition_tol = BooleanTolerance::new(tol).length;
     let divided_poly0 = divided_faces0.triangulation(partition_tol);
     let divided_poly1 = divided_faces1.triangulation(partition_tol);
     let candidate_poly0 = divided_faces0
@@ -953,76 +1023,80 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if candidate_poly0.len() != divided_faces0.len()
         || candidate_poly1.len() != divided_faces1.len()
     {
-        return None;
+        return Err(ShapeOpsError::IncompletePartitionTriangulation);
     }
 
-    // Some coplanar configurations produce locally useful divider labels that
-    // still cannot form complete output shells (for example overlapping boxes
-    // with coplanar side planes). Fall back to geometric classification of all
-    // divided pieces only after the topology-first candidate fails closure.
-    let [and0_labeled, or0_labeled, unknown0] = cls0.and_or_unknown();
+    let [and0_labeled, or0_labeled, unknown0] = analysis.cls0.and_or_unknown();
     let mut and0 = AltCurveShell::default();
     let mut or0 = AltCurveShell::default();
-    and0_labeled
-        .into_iter()
-        .chain(or0_labeled)
-        .chain(unknown0)
-        .try_for_each(|face| {
-            let candidate = candidate_poly0.get(&face.id())?;
-            let relation = if planar_partition_same_facing(
-                &face,
-                candidate,
-                &divided_faces1,
-                &divided_poly1,
-                partition_tol,
-            ) == Some(true)
-            {
-                FaceRelation::CoincidentSameFacing
-            } else {
-                classify_face_relation(&poly_shell1, &face, tol)?
-            };
-            match relation {
-                FaceRelation::Inside => and0.push(face),
-                FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(face),
-            }
-            Some(())
-        })?;
+    for face in and0_labeled.into_iter().chain(or0_labeled).chain(unknown0) {
+        let candidate = candidate_poly0
+            .get(&face.id())
+            .ok_or(ShapeOpsError::IncompletePartitionTriangulation)?;
+        let relation = if planar_partition_same_facing(
+            &face,
+            candidate,
+            &divided_faces1,
+            &divided_poly1,
+            partition_tol,
+        ) == Some(true)
+        {
+            FaceRelation::CoincidentSameFacing
+        } else {
+            classify_relation(&analysis.poly_shell1, &face, tol, 0)?
+        };
+        match relation {
+            FaceRelation::Inside => and0.push(face),
+            FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(face),
+        }
+    }
 
-    let [and1_labeled, or1_labeled, unknown1] = cls1.and_or_unknown();
+    let [and1_labeled, or1_labeled, unknown1] = analysis.cls1.and_or_unknown();
     let mut and1 = AltCurveShell::default();
     let mut or1 = AltCurveShell::default();
-    and1_labeled
-        .into_iter()
-        .chain(or1_labeled)
-        .chain(unknown1)
-        .try_for_each(|face| {
-            let candidate = candidate_poly1.get(&face.id())?;
-            let relation = if planar_partition_same_facing(
-                &face,
-                candidate,
-                &divided_faces0,
-                &divided_poly0,
-                partition_tol,
-            ) == Some(true)
-            {
-                FaceRelation::CoincidentSameFacing
-            } else {
-                classify_face_relation(&poly_shell0, &face, tol)?
-            };
-            match relation {
-                FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(face),
-                FaceRelation::Outside => or1.push(face),
-            }
-            Some(())
-        })?;
-
+    for face in and1_labeled.into_iter().chain(or1_labeled).chain(unknown1) {
+        let candidate = candidate_poly1
+            .get(&face.id())
+            .ok_or(ShapeOpsError::IncompletePartitionTriangulation)?;
+        let relation = if planar_partition_same_facing(
+            &face,
+            candidate,
+            &divided_faces0,
+            &divided_poly0,
+            partition_tol,
+        ) == Some(true)
+        {
+            FaceRelation::CoincidentSameFacing
+        } else {
+            classify_relation(&analysis.poly_shell0, &face, tol, 1)?
+        };
+        match relation {
+            FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(face),
+            FaceRelation::Outside => or1.push(face),
+        }
+    }
     and0.append(&mut and1);
     or0.append(&mut or1);
     and0 = weld_coincident_topology(&and0);
     or0 = weld_coincident_topology(&or0);
-    let and_shell = altshell_to_shell(&and0)?;
-    let or_shell = altshell_to_shell(&or0)?;
-    Some([and_shell, or_shell])
+    Ok([
+        convert_alt_shell(&and0, "and")?,
+        convert_alt_shell(&or0, "or")?,
+    ])
+}
+
+fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell0: &Shell<Point3, C, S>,
+    shell1: &Shell<Point3, C, S>,
+    tol: f64,
+    mode: PairMode,
+) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
+    let analysis = analyze_pair(shell0, shell1, tol, mode)?;
+    match mode {
+        PairMode::Difference => process_difference_analysis(analysis),
+        PairMode::AndOr if analysis.coplanar_overlap => process_coplanar_analysis(analysis),
+        PairMode::AndOr => process_non_coplanar_analysis(analysis),
+    }
 }
 
 /// Re-orient a regular manifold shell from shared-edge constraints.
@@ -1152,7 +1226,6 @@ fn and_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let operation = "and";
     let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
         process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
-            .ok_or(ShapeOpsError::EmptyOutputShell { operation })
     };
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
@@ -1188,7 +1261,6 @@ pub(crate) fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let operation = "or";
     let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
         process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
-            .ok_or(ShapeOpsError::EmptyOutputShell { operation })
     };
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
@@ -1215,11 +1287,9 @@ pub(crate) fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let operation = "difference";
     let difference_pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
         process_one_pair_of_shells(a, b, tol, PairMode::Difference)
-            .ok_or(ShapeOpsError::EmptyOutputShell { operation })
     };
     let and_pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
         process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
-            .ok_or(ShapeOpsError::EmptyOutputShell { operation })
     };
 
     let mut iter0 = solid0.boundaries().iter();
@@ -1248,4 +1318,165 @@ pub(crate) fn symmetric_difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let d0 = difference(solid0, solid1, tol)?;
     let d1 = difference(solid1, solid0, tol)?;
     or(&d0, &d1, tol)
+}
+
+#[cfg(test)]
+mod structural_classification_tests {
+    use super::*;
+    use monstertruck_modeling::Curve;
+
+    fn tetrahedron_mesh(reverse: bool) -> PolygonMesh {
+        let positions = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+        ];
+        let mut faces = vec![[0usize, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        if reverse {
+            faces.iter_mut().for_each(|face| face.swap(1, 2));
+        }
+        PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )
+    }
+
+    #[test]
+    fn signed_winding_does_not_turn_negative_shell_into_inside() {
+        let reversed = tetrahedron_mesh(true);
+        let shell: Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>> =
+            Shell::from(vec![Face::new_unchecked(Vec::new(), Some(reversed))]);
+        assert_eq!(
+            classify_inside_with_polyshell(&shell, Point3::new(0.1, 0.1, 0.1)),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn face_classification_samples_stay_inside_concave_trim() {
+        let points = [
+            (0.0, 0.0),
+            (3.0, 0.0),
+            (3.0, 3.0),
+            (2.0, 3.0),
+            (2.0, 1.0),
+            (1.0, 1.0),
+            (1.0, 3.0),
+            (0.0, 3.0),
+        ];
+        let vertices = points
+            .iter()
+            .map(|&(x, y)| Vertex::new(Point3::new(x, y, 0.0)))
+            .collect::<Vec<_>>();
+        let edges = (0..vertices.len())
+            .map(|index| {
+                let next = (index + 1) % vertices.len();
+                Edge::new(
+                    &vertices[index],
+                    &vertices[next],
+                    Curve::from(Line(vertices[index].point(), vertices[next].point())),
+                )
+            })
+            .collect::<Vec<_>>();
+        let face = Face::new_unchecked(
+            vec![Wire::from(edges)],
+            monstertruck_modeling::Surface::Plane(Plane::xy()),
+        );
+        let boundary = PolylineCurve(
+            points
+                .iter()
+                .map(|&(x, y)| Point2::new(x, y))
+                .chain(std::iter::once(Point2::new(points[0].0, points[0].1)))
+                .collect(),
+        );
+        let samples = sample_points_on_face(&face, 1.0e-6).unwrap_or_default();
+        assert!(!samples.is_empty());
+        assert!(
+            samples
+                .iter()
+                .all(|point| boundary.include(Point2::new(point.x, point.y)))
+        );
+    }
+
+    fn scaled_tetrahedron_mesh(origin: Point3, scale: f64, reverse: bool) -> PolygonMesh {
+        let positions = vec![
+            origin,
+            origin + Vector3::new(scale, 0.0, 0.0),
+            origin + Vector3::new(0.0, scale, 0.0),
+            origin + Vector3::new(0.0, 0.0, scale),
+        ];
+        let mut faces = vec![[0usize, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        if reverse {
+            faces.iter_mut().for_each(|face| face.swap(1, 2));
+        }
+        PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )
+    }
+
+    #[test]
+    fn signed_winding_respects_cavity_orientation() {
+        let outer = scaled_tetrahedron_mesh(Point3::origin(), 4.0, false);
+        let cavity = scaled_tetrahedron_mesh(Point3::new(0.5, 0.5, 0.5), 1.0, true);
+        let shell: Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>> = Shell::from(vec![
+            Face::new_unchecked(Vec::new(), Some(outer)),
+            Face::new_unchecked(Vec::new(), Some(cavity)),
+        ]);
+
+        assert_eq!(
+            classify_inside_with_polyshell(&shell, Point3::new(0.25, 0.25, 0.25)),
+            Some(true)
+        );
+        assert_eq!(
+            classify_inside_with_polyshell(&shell, Point3::new(0.6, 0.6, 0.6)),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn face_classification_samples_avoid_holes() {
+        fn wire(points: &[(f64, f64)]) -> Wire<Point3, Curve> {
+            let vertices = points
+                .iter()
+                .map(|&(x, y)| Vertex::new(Point3::new(x, y, 0.0)))
+                .collect::<Vec<_>>();
+            (0..vertices.len())
+                .map(|index| {
+                    let next = (index + 1) % vertices.len();
+                    Edge::new(
+                        &vertices[index],
+                        &vertices[next],
+                        Curve::from(Line(vertices[index].point(), vertices[next].point())),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into()
+        }
+
+        let outer = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)];
+        let hole = [(1.0, 1.0), (1.0, 3.0), (3.0, 3.0), (3.0, 1.0)];
+        let face = Face::new_unchecked(
+            vec![wire(&outer), wire(&hole)],
+            monstertruck_modeling::Surface::Plane(Plane::xy()),
+        );
+
+        let samples = sample_points_on_face(&face, 1.0e-6).unwrap_or_default();
+        assert!(!samples.is_empty());
+        assert!(samples.iter().all(|point| {
+            let x = point.x;
+            let y = point.y;
+            x <= 1.0 + TOLERANCE
+                || x >= 3.0 - TOLERANCE
+                || y <= 1.0 + TOLERANCE
+                || y >= 3.0 - TOLERANCE
+        }));
+    }
 }

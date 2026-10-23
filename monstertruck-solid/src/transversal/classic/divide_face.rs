@@ -1,16 +1,16 @@
-//! Classic (0.3.2) face division.
+//! Face division for the classic Boolean backend.
 //!
-//! Ported verbatim from the published 0.3.2 crate's `transversal::divide_face`:
-//! projects each loop's edges into the face parameter domain, splits the face
-//! into positively oriented pre-faces with their contained holes, and tags each
-//! with its `and`/`or`/`unknown` status.
+//! The implementation descends from the published 0.3.2 kernel, but split regions
+//! are now arranged by geometric nesting rather than status/shared-vertex cases.
+//! Intermediate regions remain `FaceFragment`s until compressed-topology repair and
+//! extraction establish valid [`Face`] invariants.
 
 #![allow(clippy::many_single_char_names)]
 
 use super::faces_classification::FacesClassification;
-use super::loops_store::*;
+use super::{loops_store::*, tolerance::BooleanTolerance};
 use monstertruck_meshing::prelude::*;
-use monstertruck_topology::*;
+use monstertruck_topology::{compress::*, repair, *};
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::Deref;
 
@@ -100,6 +100,137 @@ struct WireChunk<'a, C> {
 }
 
 type FaceWithShapesOpStatus<C, S> = (Face<Point3, C, S>, ShapesOpStatus);
+#[derive(Clone, Debug)]
+struct FaceFragment<C, S> {
+    wires: Vec<Wire<Point3, C>>,
+    surface: S,
+    orientation: bool,
+}
+
+impl<C: Clone, S: Clone> FaceFragment<C, S> {
+    fn canonicalize(self) -> Option<Vec<Face<Point3, C, S>>> {
+        let mut vertices = Vec::<Point3>::new();
+        let mut vertex_map = HashMap::<VertexId<Point3>, usize>::default();
+        let mut edges = Vec::<CompressedEdge<C>>::new();
+        let mut edge_map = HashMap::<EdgeId<C>, usize>::default();
+
+        let mut vertex_index = |vertex: &Vertex<Point3>| {
+            if let Some(index) = vertex_map.get(&vertex.id()).copied() {
+                index
+            } else {
+                let index = vertices.len();
+                vertices.push(vertex.point());
+                vertex_map.insert(vertex.id(), index);
+                index
+            }
+        };
+
+        let boundaries = self
+            .wires
+            .iter()
+            .map(|wire| {
+                wire.iter()
+                    .map(|edge| {
+                        let index = if let Some(index) = edge_map.get(&edge.id()).copied() {
+                            index
+                        } else {
+                            let index = edges.len();
+                            edges.push(CompressedEdge {
+                                vertices: (
+                                    vertex_index(edge.absolute_front()),
+                                    vertex_index(edge.absolute_back()),
+                                ),
+                                curve: edge.curve(),
+                            });
+                            edge_map.insert(edge.id(), index);
+                            index
+                        };
+                        CompressedEdgeIndex {
+                            index,
+                            orientation: edge.orientation(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let mut compressed = CompressedShell {
+            vertices,
+            edges,
+            faces: vec![CompressedFace {
+                boundaries,
+                orientation: self.orientation,
+                surface: self.surface,
+            }],
+            vertex_stable_ids: None,
+            edge_stable_ids: None,
+            face_stable_ids: None,
+        };
+        repair::split_non_simple_compressed_wires(&mut compressed);
+        repair::split_pinched_compressed_faces(&mut compressed);
+        Shell::extract(compressed)
+            .ok()
+            .map(IntoIterator::into_iter)
+            .map(Iterator::collect)
+    }
+}
+
+fn strict_interior_point(poly: &PolylineCurve<Point2>, tol: f64) -> Option<Point2> {
+    let area = poly.area();
+    if area.abs() <= polyline_area_tolerance(poly, tol) {
+        return None;
+    }
+    let mut domain = poly.clone();
+    if area < 0.0 {
+        domain.invert();
+    }
+    let points = &poly.0;
+    if points.len() < 2 {
+        return None;
+    }
+    for index in 0..points.len() {
+        let a = points[index];
+        let b = points[(index + 1) % points.len()];
+        let edge = b - a;
+        let length = edge.magnitude();
+        if length <= tol {
+            continue;
+        }
+        let left = Vector2::new(-edge.y, edge.x) / length;
+        let inward = if area > 0.0 { left } else { -left };
+        let midpoint = a.midpoint(b);
+        for scale in [4.0, 16.0, 64.0] {
+            let candidate = midpoint + inward * (tol * scale).min(length * 0.125);
+            if domain.include(candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn same_edge_set<C>(lhs: &BoundaryWire<Point3, C>, rhs: &BoundaryWire<Point3, C>) -> bool {
+    lhs.len() == rhs.len()
+        && lhs
+            .edge_iter()
+            .all(|edge| rhs.edge_iter().any(|other| edge.id() == other.id()))
+}
+
+fn polyline_area_tolerance(poly: &PolylineCurve<Point2>, tol: f64) -> f64 {
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for point in poly.iter() {
+        min_x = min_x.min(point.x);
+        max_x = max_x.max(point.x);
+        min_y = min_y.min(point.y);
+        max_y = max_y.max(point.y);
+    }
+    let span = (max_x - min_x).abs().max((max_y - min_y).abs());
+    BooleanTolerance::new(tol).area_for_span(span)
+}
+
 fn divide_one_face<C, S>(
     face: &Face<Point3, C, S>,
     loops: &Loops<Point3, C>,
@@ -117,7 +248,7 @@ where
     loops.iter().try_for_each(|wire| {
         let poly = create_parameter_boundary(face, wire, &mut map, tol)?;
         let area = poly.area();
-        if area.abs() < tol {
+        if area.abs() < polyline_area_tolerance(&poly, tol) {
             return Some(());
         }
         match area > 0.0 {
@@ -135,72 +266,62 @@ where
         Some(())
     })?;
     negative_wires.into_iter().try_for_each(|mut chunk| {
-        let sibling = pre_faces.iter().position(|pre_face| {
+        let witness = strict_interior_point(&chunk.poly, tol)?;
+        let chunk_area_abs = chunk.poly.area().abs();
+
+        // Build the nesting relation from geometry, not Boolean status or shared
+        // vertices. A negative loop is a hole of the smallest strictly larger
+        // positive region containing an interior witness. Boundary contact alone
+        // never establishes containment.
+        let parent = pre_faces
+            .iter()
+            .enumerate()
+            .filter(|(_, pre_face)| !pre_face.is_empty())
+            .filter(|(_, pre_face)| {
+                let outer = &pre_face[0];
+                let area_tol = polyline_area_tolerance(&outer.poly, tol)
+                    .max(polyline_area_tolerance(&chunk.poly, tol));
+                outer.poly.area().abs() > chunk_area_abs + area_tol && outer.poly.include(witness)
+            })
+            .min_by(|(_, lhs), (_, rhs)| {
+                lhs[0]
+                    .poly
+                    .area()
+                    .abs()
+                    .total_cmp(&rhs[0].poly.area().abs())
+            })
+            .map(|(index, _)| index);
+
+        if let Some(index) = parent {
+            pre_faces[index].push(chunk);
+            return Some(());
+        }
+
+        // With no strictly larger parent, an equal inverse boundary cancels the
+        // region. This is intentionally checked after nesting so a duplicated
+        // inner cut becomes "outer-with-hole + inner disk" rather than deleting
+        // the inner disk.
+        let equal = pre_faces.iter().position(|pre_face| {
             if pre_face.is_empty() {
                 return false;
             }
             let outer = &pre_face[0];
-            let complementary = matches!(
-                (outer.wire.status(), chunk.wire.status()),
-                (ShapesOpStatus::And, ShapesOpStatus::Or)
-                    | (ShapesOpStatus::Or, ShapesOpStatus::And)
-            );
-            let same_edge_set = outer.wire.len() == chunk.wire.len()
-                && outer
-                    .wire
-                    .edge_iter()
-                    .all(|edge| chunk.wire.edge_iter().any(|other| edge.id() == other.id()));
-            complementary
-                && !same_edge_set
-                && outer
-                    .wire
-                    .vertex_iter()
-                    .any(|vertex| chunk.wire.vertex_iter().any(|other| vertex == other))
+            let area_tol = polyline_area_tolerance(&outer.poly, tol)
+                .max(polyline_area_tolerance(&chunk.poly, tol));
+            (outer.poly.area().abs() - chunk_area_abs).abs() <= area_tol
+                && same_edge_set(outer.wire, chunk.wire)
         });
-        if sibling.is_some() {
-            chunk.poly.invert();
-            chunk.reverse_for_face = true;
-            pre_faces.push(vec![chunk]);
+        if let Some(index) = equal {
+            pre_faces[index].clear();
             return Some(());
         }
 
-        let pt = chunk.poly.front();
-        let chunk_area_abs = chunk.poly.area().abs();
-        // A negative loop may be nested inside several positive loops. The
-        // equal-area opposite-status positive loop is the sibling region on
-        // the other side of the same divider, not its parent. Prefer the
-        // smallest *strictly larger* enclosing loop; fall back to an equal
-        // enclosing loop only when no larger parent exists, preserving the
-        // whole-face cancellation case.
-        let idx = pre_faces
-            .iter()
-            .enumerate()
-            .filter(|(_, pre_face)| {
-                !pre_face.is_empty()
-                    && pre_face[0].poly.include(pt)
-                    && pre_face[0].poly.area().abs() + tol >= chunk_area_abs
-            })
-            .min_by(|(_, lhs), (_, rhs)| {
-                let lhs_area = lhs[0].poly.area().abs();
-                let rhs_area = rhs[0].poly.area().abs();
-                let lhs_equal = lhs_area <= chunk_area_abs + tol;
-                let rhs_equal = rhs_area <= chunk_area_abs + tol;
-                lhs_equal
-                    .cmp(&rhs_equal)
-                    .then_with(|| lhs_area.total_cmp(&rhs_area))
-            })
-            .map(|(index, _)| index);
-        if let Some(i) = idx {
-            let outer_area = pre_faces[i][0].poly.area();
-            let chunk_area = chunk.poly.area();
-            // If the sum of areas is zero, the face is canceled.
-            // This happens when an intersection loop exactly matches the face boundary.
-            if (outer_area + chunk_area).abs() < tol {
-                pre_faces[i].clear();
-            } else {
-                pre_faces[i].push(chunk);
-            }
-        }
+        // A clockwise region that is not contained by another positive region
+        // is its own sibling cell. Flip it into the canonical positive
+        // orientation; no status-specific special case is required.
+        chunk.poly.invert();
+        chunk.reverse_for_face = true;
+        pre_faces.push(vec![chunk]);
         Some(())
     })?;
     let vec: Vec<_> = pre_faces
@@ -226,19 +347,22 @@ where
                     }
                 })
                 .collect();
-            // This is an intermediate divided face. Geometrically coincident
-            // vertices and partitioned edges are canonicalized only after all face
-            // classifications have been assembled, so validating simplicity here
-            // makes debug builds reject topology that the normal weld/repair stage
-            // is specifically responsible for normalizing. Final output topology is
-            // validated after that stage.
-            let mut new_face = Face::new_unchecked(wires, surface);
-            if !face.orientation() {
-                new_face.invert();
-            }
-            Some((new_face, status))
+            let fragment = FaceFragment {
+                wires,
+                surface,
+                orientation: face.orientation(),
+            };
+            fragment.canonicalize().map(|faces| {
+                faces
+                    .into_iter()
+                    .map(|face| (face, status))
+                    .collect::<Vec<_>>()
+            })
         })
-        .collect::<Option<Vec<_>>>()?;
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     Some(vec)
 }
 

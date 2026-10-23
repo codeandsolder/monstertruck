@@ -1,34 +1,22 @@
-//! Classic (0.3.2) marching intersection-curve backend.
+//! Marching intersection-curve backend, descended from the published 0.3.2 kernel.
 //!
-//! Extracts the mesh-vs-mesh interference segments for a surface pair, chains
-//! them into polylines, and re-samples each polyline onto both surfaces to
-//! produce a cleaned [`IntersectionCurve`] leader. Ported verbatim from the
-//! published 0.3.2 crate's `transversal::intersection_curve`, except that the
-//! parameter-space polylines the 0.3.2 wrapper carried are dropped here: the
-//! classic loops-store consumes only the 3D leader.
+//! It still extracts mesh-vs-mesh interference segments and re-samples them onto
+//! both carrier surfaces, but endpoint stitching is now fail-closed around branch
+//! ambiguity and uses explicit sampled validation for short linear gaps. The old
+//! parameter-space wrapper remains intentionally absent; the loops store consumes
+//! only the cleaned 3-D [`IntersectionCurve`] leader.
 
 use monstertruck_core::{cgmath64::*, tolerance::TOLERANCE};
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 
-use crate::transversal::polyline_construction::{construct_polylines, stitch_nearby_polylines};
+use crate::transversal::polyline_construction::{
+    construct_polylines, enumerate_endpoint_joins, merge_endpoint_join, stitch_nearby_polylines,
+};
 
 type Polyline = PolylineCurve<Point3>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FragmentEndpoint {
-    chain: usize,
-    front: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct FragmentJoin {
-    first: FragmentEndpoint,
-    second: FragmentEndpoint,
-    distance2: f64,
-}
-
-struct FragmentProof<'a, S> {
+struct FragmentValidation<'a, S> {
     surface0: &'a S,
     polygon0: &'a PolygonMesh,
     surface1: &'a S,
@@ -83,22 +71,22 @@ where S: ParametricSurface3D
         .is_some_and(within_tolerance)
 }
 
-fn proven_linear_fragment_join<S>(
+fn validated_linear_fragment_join<S>(
     first: &Polyline,
     first_front: bool,
     second: &Polyline,
     second_front: bool,
-    proof: &FragmentProof<'_, S>,
+    validation: &FragmentValidation<'_, S>,
 ) -> bool
 where
     S: ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    let Some((a, a_inner)) = endpoint_and_inner(first, first_front, proof.tolerance) else {
+    let Some((a, a_inner)) = endpoint_and_inner(first, first_front, validation.tolerance) else {
         return false;
     };
-    let Some((b, b_inner)) = endpoint_and_inner(second, second_front, proof.tolerance) else {
+    let Some((b, b_inner)) = endpoint_and_inner(second, second_front, validation.tolerance) else {
         return false;
     };
 
@@ -109,24 +97,26 @@ where
     let outward_b = b - b_inner;
     let span_a = outward_a.magnitude();
     let span_b = outward_b.magnitude();
-    if span_a <= proof.tolerance || span_b <= proof.tolerance {
+    if span_a <= validation.tolerance || span_b <= validation.tolerance {
         return false;
     }
 
     // The missing interval must continue outward from both fragments and remain
-    // on their endpoint tangents to within the kernel proof tolerance.
+    // on their endpoint tangents to within the kernel validation tolerance.
     let direction_ok = outward_a.dot(bridge) > 0.0 && outward_b.dot(-bridge) > 0.0;
     let line_error_a = outward_a.cross(bridge).magnitude() / span_a;
     let line_error_b = outward_b.cross(bridge).magnitude() / span_b;
-    let line_ok = line_error_a <= proof.tolerance && line_error_b <= proof.tolerance;
+    let line_ok = line_error_a <= validation.tolerance && line_error_b <= validation.tolerance;
     if !(direction_ok && line_ok) {
         return false;
     }
 
-    // Prove the entire short bridge, not just its endpoints. Dense samples must
+    // Validate the entire short bridge, not just its endpoints. Dense samples must
     // stay on both exact carrier surfaces and inside both trimmed polygon faces.
-    // Refuse pathological gaps rather than spending unbounded work proving them.
-    let intervals = (bridge_length / (2.0 * proof.tolerance)).ceil().max(2.0) as usize;
+    // Refuse pathological gaps rather than spending unbounded work validating them.
+    let intervals = (bridge_length / (2.0 * validation.tolerance))
+        .ceil()
+        .max(2.0) as usize;
     if intervals > 4096 {
         return false;
     }
@@ -134,8 +124,8 @@ where
         .map(|i| a + bridge * (i as f64 / intervals as f64))
         .collect();
     let surfaces_ok = samples.iter().copied().all(|point| {
-        point_is_on_surface(proof.surface0, point, proof.tolerance)
-            && point_is_on_surface(proof.surface1, point, proof.tolerance)
+        point_is_on_surface(validation.surface0, point, validation.tolerance)
+            && point_is_on_surface(validation.surface1, point, validation.tolerance)
     });
     if !surfaces_ok {
         return false;
@@ -144,17 +134,17 @@ where
     // The carrier polygons are tessellations, not the exact surfaces above.
     // Adjacent SSI paths already permit an 8x kernel-tolerance endpoint
     // canonicalization; use that same envelope here for trimmed-face membership
-    // while keeping the exact surface/tangent proof at the tighter 4x bound.
-    let polygon_tolerance = 2.0 * proof.tolerance;
-    proof
+    // while keeping the exact surface/tangent validation at the tighter 4x bound.
+    let polygon_tolerance = 2.0 * validation.tolerance;
+    validation
         .polygon0
         .neighborhood_include(&samples, polygon_tolerance)
-        && proof
+        && validation
             .polygon1
             .neighborhood_include(&samples, polygon_tolerance)
 }
 
-fn stitch_proven_linear_intersection_fragments<S>(
+fn stitch_validated_linear_intersection_fragments<S>(
     mut polylines: Vec<Polyline>,
     surface0: &S,
     polygon0: &PolygonMesh,
@@ -167,7 +157,7 @@ where
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    let proof = FragmentProof {
+    let validation = FragmentValidation {
         surface0,
         polygon0,
         surface1,
@@ -175,44 +165,19 @@ where
         tolerance,
     };
     loop {
-        let mut joins = Vec::new();
-        for first in 0..polylines.len() {
-            for second in first + 1..polylines.len() {
-                for first_front in [true, false] {
-                    for second_front in [true, false] {
-                        if proven_linear_fragment_join(
-                            &polylines[first],
-                            first_front,
-                            &polylines[second],
-                            second_front,
-                            &proof,
-                        ) {
-                            let Some((a, _)) =
-                                endpoint_and_inner(&polylines[first], first_front, tolerance)
-                            else {
-                                continue;
-                            };
-                            let Some((b, _)) =
-                                endpoint_and_inner(&polylines[second], second_front, tolerance)
-                            else {
-                                continue;
-                            };
-                            joins.push(FragmentJoin {
-                                first: FragmentEndpoint {
-                                    chain: first,
-                                    front: first_front,
-                                },
-                                second: FragmentEndpoint {
-                                    chain: second,
-                                    front: second_front,
-                                },
-                                distance2: a.distance2(b),
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        let Some(mut joins) =
+            enumerate_endpoint_joins(&polylines, |first, first_front, second, second_front| {
+                validated_linear_fragment_join(
+                    first,
+                    first_front,
+                    second,
+                    second_front,
+                    &validation,
+                )
+            })
+        else {
+            return polylines;
+        };
 
         joins.sort_by(|left, right| {
             left.distance2
@@ -224,7 +189,7 @@ where
             return polylines;
         };
 
-        // Several fragments may lie on one proved straight intersection, so an
+        // Several fragments may lie on one validated straight intersection, so an
         // endpoint can legitimately see more than one farther mate. Continue to
         // the closest one. A near-equal alternative sharing either endpoint is a
         // real branch ambiguity and remains fail-closed.
@@ -240,44 +205,9 @@ where
             return polylines;
         }
 
-        let (low, high, low_front, high_front) = if join.first.chain < join.second.chain {
-            (
-                join.first.chain,
-                join.second.chain,
-                join.first.front,
-                join.second.front,
-            )
-        } else {
-            (
-                join.second.chain,
-                join.first.chain,
-                join.second.front,
-                join.first.front,
-            )
-        };
-        let mut right = polylines.remove(high).0;
-        let mut left = polylines.remove(low).0;
-        if low_front {
-            left.reverse();
-        }
-        if !high_front {
-            right.reverse();
-        }
-        let Some(left_end) = left.last().copied() else {
+        if merge_endpoint_join(&mut polylines, join).is_none() {
             return polylines;
-        };
-        let Some(right_start) = right.first().copied() else {
-            return polylines;
-        };
-        let midpoint = left_end.midpoint(right_start);
-        if let Some(point) = left.last_mut() {
-            *point = midpoint;
         }
-        if let Some(point) = right.first_mut() {
-            *point = midpoint;
-        }
-        left.extend(right.into_iter().skip(1));
-        polylines.push(PolylineCurve(left));
     }
 }
 
@@ -358,14 +288,14 @@ where
     // This pass repairs numerical fragmentation introduced by tessellation.
     // Its admission envelope is a kernel-precision bound, not the caller's
     // potentially much coarser Boolean modeling tolerance.
-    let proof_tolerance = 4.0 * TOLERANCE;
-    let polylines = stitch_proven_linear_intersection_fragments(
+    let validation_tolerance = 4.0 * TOLERANCE;
+    let polylines = stitch_validated_linear_intersection_fragments(
         polylines,
         &surface0,
         polygon0,
         &surface1,
         polygon1,
-        proof_tolerance,
+        validation_tolerance,
     );
     polylines
         .into_iter()
@@ -437,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn proved_linear_stitch_skips_tiny_endpoint_segments() {
+    fn validated_linear_stitch_skips_tiny_endpoint_segments() {
         let tolerance = 4.0e-6;
         let gap = 5.0e-5;
         let fragments = vec![
@@ -452,7 +382,7 @@ mod tests {
                 Point3::new(1.0, 0.0, 0.0),
             ]),
         ];
-        let stitched = stitch_proven_linear_intersection_fragments(
+        let stitched = stitch_validated_linear_intersection_fragments(
             fragments,
             &Plane::xy(),
             &xy_mesh(-1.0, 2.0),
@@ -466,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn proved_linear_stitch_does_not_cross_real_trim_gap() {
+    fn validated_linear_stitch_does_not_cross_real_trim_gap() {
         let tolerance = 4.0e-6;
         let gap = 5.0e-5;
         let fragments = vec![
@@ -476,7 +406,7 @@ mod tests {
             ]),
             PolylineCurve(vec![Point3::new(gap, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]),
         ];
-        let stitched = stitch_proven_linear_intersection_fragments(
+        let stitched = stitch_validated_linear_intersection_fragments(
             fragments,
             &Plane::xy(),
             &disconnected_xy_mesh(gap),

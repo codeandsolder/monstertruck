@@ -32,6 +32,113 @@ pub fn construct_polylines(lines: &[(Point3, Point3)]) -> Vec<PolylineCurve<Poin
     res
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct ChainEndpoint {
+    pub(super) chain: usize,
+    pub(super) front: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ChainJoin {
+    pub(super) first: ChainEndpoint,
+    pub(super) second: ChainEndpoint,
+    pub(super) distance2: f64,
+}
+
+pub(super) fn endpoint_point(polyline: &PolylineCurve<Point3>, front: bool) -> Option<Point3> {
+    if front {
+        polyline.first().copied()
+    } else {
+        polyline.last().copied()
+    }
+}
+
+/// Enumerate endpoint pairs accepted by a caller-supplied geometric validation.
+///
+/// This owns only chain topology: endpoint orientation, deterministic ordering,
+/// and distance metadata. Whether a pair is actually joinable remains the
+/// caller's policy (simple proximity, SSI carrier validation, etc.).
+pub(super) fn enumerate_endpoint_joins(
+    polylines: &[PolylineCurve<Point3>],
+    mut accepts: impl FnMut(&PolylineCurve<Point3>, bool, &PolylineCurve<Point3>, bool) -> bool,
+) -> Option<Vec<ChainJoin>> {
+    let mut joins = Vec::new();
+    for first in 0..polylines.len() {
+        if polylines[first].is_empty() {
+            return None;
+        }
+        for second in first + 1..polylines.len() {
+            if polylines[second].is_empty() {
+                return None;
+            }
+            for first_front in [true, false] {
+                let a = endpoint_point(&polylines[first], first_front)?;
+                for second_front in [true, false] {
+                    if !accepts(
+                        &polylines[first],
+                        first_front,
+                        &polylines[second],
+                        second_front,
+                    ) {
+                        continue;
+                    }
+                    let b = endpoint_point(&polylines[second], second_front)?;
+                    joins.push(ChainJoin {
+                        first: ChainEndpoint {
+                            chain: first,
+                            front: first_front,
+                        },
+                        second: ChainEndpoint {
+                            chain: second,
+                            front: second_front,
+                        },
+                        distance2: a.distance2(b),
+                    });
+                }
+            }
+        }
+    }
+    Some(joins)
+}
+
+/// Apply one selected endpoint join using the canonical orientation/snap rule.
+pub(super) fn merge_endpoint_join(
+    polylines: &mut Vec<PolylineCurve<Point3>>,
+    join: ChainJoin,
+) -> Option<()> {
+    let (low, high, low_front, high_front) = if join.first.chain < join.second.chain {
+        (
+            join.first.chain,
+            join.second.chain,
+            join.first.front,
+            join.second.front,
+        )
+    } else {
+        (
+            join.second.chain,
+            join.first.chain,
+            join.second.front,
+            join.first.front,
+        )
+    };
+    let mut right = polylines.remove(high).0;
+    let mut left = polylines.remove(low).0;
+    if low_front {
+        left.reverse();
+    }
+    if !high_front {
+        right.reverse();
+    }
+    let left_end = *left.last()?;
+    let right_start = *right.first()?;
+    let midpoint = left_end.midpoint(right_start);
+    *left.last_mut()? = midpoint;
+    *right.first_mut()? = midpoint;
+    left.extend(right.into_iter().skip(1));
+    polylines.push(PolylineCurve(left));
+    Some(())
+}
+
 /// Merge separate interference chains whose endpoints agree within the caller's
 /// geometric tolerance. Only endpoints of distinct chains are considered, and
 /// every endpoint must have at most one possible mate. Ambiguous junctions are
@@ -46,67 +153,24 @@ pub(super) fn stitch_nearby_polylines(
     let tolerance2 = tolerance * tolerance;
 
     loop {
-        #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-        struct Endpoint {
-            chain: usize,
-            front: bool,
-        }
-        #[derive(Clone, Copy, Debug)]
-        struct Candidate {
-            a: Endpoint,
-            b: Endpoint,
-            distance2: f64,
-        }
-
-        let mut candidates = Vec::<Candidate>::new();
-        for first in 0..polylines.len() {
-            let first_points = &polylines[first].0;
-            if first_points.is_empty() {
-                return None;
-            }
-            for (second, second_chain) in polylines.iter().enumerate().skip(first + 1) {
-                let second_points = &second_chain.0;
-                if second_points.is_empty() {
-                    return None;
-                }
-                for first_front in [true, false] {
-                    let a = if first_front {
-                        first_points[0]
-                    } else {
-                        *first_points.last()?
-                    };
-                    for second_front in [true, false] {
-                        let b = if second_front {
-                            second_points[0]
-                        } else {
-                            *second_points.last()?
-                        };
-                        let distance2 = a.distance2(b);
-                        if distance2 <= tolerance2 {
-                            candidates.push(Candidate {
-                                a: Endpoint {
-                                    chain: first,
-                                    front: first_front,
-                                },
-                                b: Endpoint {
-                                    chain: second,
-                                    front: second_front,
-                                },
-                                distance2,
-                            });
-                        }
-                    }
-                }
-            }
-        }
+        let mut candidates =
+            enumerate_endpoint_joins(&polylines, |first, first_front, second, second_front| {
+                let Some(a) = endpoint_point(first, first_front) else {
+                    return false;
+                };
+                let Some(b) = endpoint_point(second, second_front) else {
+                    return false;
+                };
+                a.distance2(b) <= tolerance2
+            })?;
         if candidates.is_empty() {
             return Some(polylines);
         }
 
-        let mut endpoint_counts = HashMap::<Endpoint, usize>::default();
+        let mut endpoint_counts = HashMap::<ChainEndpoint, usize>::default();
         for candidate in &candidates {
-            *endpoint_counts.entry(candidate.a).or_default() += 1;
-            *endpoint_counts.entry(candidate.b).or_default() += 1;
+            *endpoint_counts.entry(candidate.first).or_default() += 1;
+            *endpoint_counts.entry(candidate.second).or_default() += 1;
         }
         if endpoint_counts.values().any(|&count| count != 1) {
             return None;
@@ -115,41 +179,10 @@ pub(super) fn stitch_nearby_polylines(
         candidates.sort_by(|left, right| {
             left.distance2
                 .total_cmp(&right.distance2)
-                .then_with(|| left.a.cmp(&right.a))
-                .then_with(|| left.b.cmp(&right.b))
+                .then_with(|| left.first.cmp(&right.first))
+                .then_with(|| left.second.cmp(&right.second))
         });
-        let candidate = candidates[0];
-        let (low, high, low_front, high_front) = if candidate.a.chain < candidate.b.chain {
-            (
-                candidate.a.chain,
-                candidate.b.chain,
-                candidate.a.front,
-                candidate.b.front,
-            )
-        } else {
-            (
-                candidate.b.chain,
-                candidate.a.chain,
-                candidate.b.front,
-                candidate.a.front,
-            )
-        };
-
-        let mut right = polylines.remove(high).0;
-        let mut left = polylines.remove(low).0;
-        if low_front {
-            left.reverse();
-        }
-        if !high_front {
-            right.reverse();
-        }
-        let left_end = *left.last()?;
-        let right_start = *right.first()?;
-        let midpoint = left_end.midpoint(right_start);
-        *left.last_mut()? = midpoint;
-        *right.first_mut()? = midpoint;
-        left.extend(right.into_iter().skip(1));
-        polylines.push(PolylineCurve(left));
+        merge_endpoint_join(&mut polylines, candidates[0])?;
     }
 }
 
