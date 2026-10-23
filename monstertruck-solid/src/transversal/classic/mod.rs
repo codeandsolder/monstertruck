@@ -628,10 +628,10 @@ where
     C: PolylineableCurve + Clone,
     S: MeshableSurface + Clone, {
     let shell = Shell::from(vec![face.clone()]);
-    let triangulated = shell.triangulation(tol.max(TOLERANCE));
+    let triangulated = shell.triangulation(BooleanTolerance::new(tol).mesh_seed);
     let polygon = triangulated.first()?.surface()?;
     let positions = polygon.positions();
-    let samples = polygon
+    let mut candidates = polygon
         .faces()
         .triangle_iter()
         .filter_map(|triangle| {
@@ -639,15 +639,35 @@ where
             let b = positions[triangle[1].pos];
             let c = positions[triangle[2].pos];
             let area2 = (b - a).cross(c - a).magnitude();
-            area2
-                .is_finite()
-                .then_some(Point3::from_vec(
-                    (a.to_vec() + b.to_vec() + c.to_vec()) / 3.0,
-                ))
-                .filter(|_| area2 > TOLERANCE * TOLERANCE)
+            (area2.is_finite() && area2 > TOLERANCE * TOLERANCE).then_some((
+                area2,
+                Point3::from_vec((a.to_vec() + b.to_vec() + c.to_vec()) / 3.0),
+            ))
         })
         .collect::<Vec<_>>();
-    (!samples.is_empty()).then_some(samples)
+    if candidates.is_empty() {
+        return None;
+    }
+
+    const MAX_CLASSIFICATION_SAMPLES: usize = 9;
+    candidates.sort_by(|lhs, rhs| rhs.0.total_cmp(&lhs.0));
+    let mut samples = vec![candidates.swap_remove(0).1];
+    while samples.len() < MAX_CLASSIFICATION_SAMPLES && !candidates.is_empty() {
+        let next = candidates
+            .iter()
+            .enumerate()
+            .map(|(index, (_, point))| {
+                let distance2 = samples
+                    .iter()
+                    .map(|sample| sample.distance2(*point))
+                    .fold(f64::INFINITY, f64::min);
+                (index, distance2)
+            })
+            .max_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1))
+            .map(|(index, _)| index)?;
+        samples.push(candidates.swap_remove(next).1);
+    }
+    Some(samples)
 }
 
 fn classify_unknown_face<C, S>(
@@ -1395,10 +1415,42 @@ mod structural_classification_tests {
         );
         let samples = sample_points_on_face(&face, 1.0e-6).unwrap_or_default();
         assert!(!samples.is_empty());
+        assert!(samples.len() <= 9);
         assert!(
             samples
                 .iter()
                 .all(|point| boundary.include(Point2::new(point.x, point.y)))
+        );
+    }
+
+    #[test]
+    fn face_classification_sampling_keeps_regions_thinner_than_mesh_seed() {
+        let points = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0e-4), (0.0, 1.0e-4)];
+        let vertices = points
+            .iter()
+            .map(|&(x, y)| Vertex::new(Point3::new(x, y, 0.0)))
+            .collect::<Vec<_>>();
+        let edges = (0..vertices.len())
+            .map(|index| {
+                let next = (index + 1) % vertices.len();
+                Edge::new(
+                    &vertices[index],
+                    &vertices[next],
+                    Curve::from(Line(vertices[index].point(), vertices[next].point())),
+                )
+            })
+            .collect::<Vec<_>>();
+        let face = Face::new_unchecked(
+            vec![Wire::from(edges)],
+            monstertruck_modeling::Surface::Plane(Plane::xy()),
+        );
+
+        let samples = sample_points_on_face(&face, 1.0e-6).unwrap_or_default();
+        assert!(!samples.is_empty());
+        assert!(
+            samples
+                .iter()
+                .all(|point| point.x > 0.0 && point.x < 1.0 && point.y > 0.0 && point.y < 1.0e-4)
         );
     }
 
