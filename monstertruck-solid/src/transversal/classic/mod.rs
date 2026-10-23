@@ -763,9 +763,8 @@ fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     other_poly: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
     tol: f64,
 ) -> Option<bool> {
-    let representative =
-        loops_store::single_face_matches_planar_partition(candidate, other_poly, tol)??;
-    let other = other_faces.get(representative)?;
+    let partition = loops_store::single_face_matches_planar_partition(candidate, other_poly, tol)??;
+    let other = other_faces.get(partition.representative)?;
     let point = other
         .absolute_boundaries()
         .first()?
@@ -792,6 +791,22 @@ enum PairMode {
 type PolyShell = Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>;
 
 #[derive(Clone, Debug)]
+struct FullInterfaceAdjacency<S> {
+    shell0: Vec<FaceId<S>>,
+    shell1: Vec<FaceId<S>>,
+}
+
+impl<S> FullInterfaceAdjacency<S> {
+    fn contains(&self, shell_index: usize, face: FaceId<S>) -> bool {
+        match shell_index {
+            0 => self.shell0.contains(&face),
+            1 => self.shell1.contains(&face),
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct PairAnalysis<C, S> {
     tolerance: f64,
     poly_shell0: PolyShell,
@@ -799,6 +814,7 @@ struct PairAnalysis<C, S> {
     cls0: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
     cls1: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
     coplanar_overlap: bool,
+    full_interface_adjacency: Option<FullInterfaceAdjacency<S>>,
 }
 
 fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -821,6 +837,7 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         geom_loops_store0: loops_store0,
         geom_loops_store1: loops_store1,
         coplanar_overlap,
+        full_interface_adjacency,
         ..
     } = loops_store::create_loops_stores(
         &altshell0,
@@ -831,6 +848,31 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         mode == PairMode::AndOr,
     )
     .ok_or(ShapeOpsError::InterfaceAnalysisFailed)?;
+    let full_interface_adjacency = full_interface_adjacency
+        .map(|matched| {
+            let shell0 = matched
+                .lhs_faces
+                .into_iter()
+                .map(|index| {
+                    altshell0
+                        .get(index)
+                        .map(Face::id)
+                        .ok_or(ShapeOpsError::InterfaceAnalysisFailed)
+                })
+                .collect::<ClassicResult<Vec<_>>>()?;
+            let shell1 = matched
+                .rhs_faces
+                .into_iter()
+                .map(|index| {
+                    altshell1
+                        .get(index)
+                        .map(Face::id)
+                        .ok_or(ShapeOpsError::InterfaceAnalysisFailed)
+                })
+                .collect::<ClassicResult<Vec<_>>>()?;
+            Ok::<_, ShapeOpsError>(FullInterfaceAdjacency { shell0, shell1 })
+        })
+        .transpose()?;
     let cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)
         .ok_or(ShapeOpsError::DivideFacesFailed { shell_index: 0 })?;
     let cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)
@@ -842,6 +884,7 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         cls0,
         cls1,
         coplanar_overlap,
+        full_interface_adjacency,
     })
 }
 
@@ -997,6 +1040,13 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 
     let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
     for face in unknown0 {
+        if analysis
+            .full_interface_adjacency
+            .as_ref()
+            .is_some_and(|interface| interface.contains(0, face.id()))
+        {
+            continue;
+        }
         match classify_relation(&analysis.poly_shell1, &face, tol, 0)? {
             FaceRelation::Inside => and0.push(face),
             FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(face),
@@ -1004,6 +1054,13 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
     for face in unknown1 {
+        if analysis
+            .full_interface_adjacency
+            .as_ref()
+            .is_some_and(|interface| interface.contains(1, face.id()))
+        {
+            continue;
+        }
         match classify_relation(&analysis.poly_shell0, &face, tol, 1)? {
             FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(face),
             FaceRelation::Outside => or1.push(face),
@@ -1027,9 +1084,11 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // planar-region equality used only as positive evidence.
     let divided_faces0 = all_classified_faces(&analysis.cls0);
     let divided_faces1 = all_classified_faces(&analysis.cls1);
-    let partition_tol = BooleanTolerance::new(tol).length;
-    let divided_poly0 = divided_faces0.triangulation(partition_tol);
-    let divided_poly1 = divided_faces1.triangulation(partition_tol);
+    let partition_tolerance = BooleanTolerance::new(tol);
+    let partition_geom_tol = partition_tolerance.length;
+    let partition_mesh_tol = partition_tolerance.mesh_seed;
+    let divided_poly0 = divided_faces0.triangulation(partition_mesh_tol);
+    let divided_poly1 = divided_faces1.triangulation(partition_mesh_tol);
     let candidate_poly0 = divided_faces0
         .iter()
         .zip(divided_poly0.iter())
@@ -1058,7 +1117,7 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             candidate,
             &divided_faces1,
             &divided_poly1,
-            partition_tol,
+            partition_geom_tol,
         ) == Some(true)
         {
             FaceRelation::CoincidentSameFacing
@@ -1083,7 +1142,7 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             candidate,
             &divided_faces0,
             &divided_poly0,
-            partition_tol,
+            partition_geom_tol,
         ) == Some(true)
         {
             FaceRelation::CoincidentSameFacing

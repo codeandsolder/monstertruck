@@ -109,6 +109,22 @@ struct FaceFragment<C, S> {
 
 impl<C: Clone, S: Clone> FaceFragment<C, S> {
     fn canonicalize(self) -> Option<Vec<Face<Point3, C, S>>> {
+        let Self {
+            wires,
+            surface,
+            orientation,
+        } = self;
+
+        // Keep already-valid topology on its existing shared vertex/edge identities.
+        // Only fragments that actually violate Face invariants go through compressed
+        // repair, which may need to rebuild topology.
+        if let Ok(mut face) = Face::try_new(wires.clone(), surface.clone()) {
+            if !orientation {
+                face.invert();
+            }
+            return Some(vec![face]);
+        }
+
         let mut vertices = Vec::<Point3>::new();
         let mut vertex_map = HashMap::<VertexId<Point3>, usize>::default();
         let mut edges = Vec::<CompressedEdge<C>>::new();
@@ -125,8 +141,7 @@ impl<C: Clone, S: Clone> FaceFragment<C, S> {
             }
         };
 
-        let boundaries = self
-            .wires
+        let boundaries = wires
             .iter()
             .map(|wire| {
                 wire.iter()
@@ -159,8 +174,8 @@ impl<C: Clone, S: Clone> FaceFragment<C, S> {
             edges,
             faces: vec![CompressedFace {
                 boundaries,
-                orientation: self.orientation,
-                surface: self.surface,
+                orientation,
+                surface,
             }],
             vertex_stable_ids: None,
             edge_stable_ids: None,

@@ -1064,6 +1064,12 @@ fn projected_bounds_overlap(lhs: [f64; 4], rhs: [f64; 4], tol: f64) -> bool {
     lhs[1].min(rhs[1]) - lhs[0].max(rhs[0]) > tol && lhs[3].min(rhs[3]) - lhs[2].max(rhs[2]) > tol
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct PlanarPartitionMatch {
+    pub(super) representative: usize,
+    pub(super) members: Vec<usize>,
+}
+
 /// Match one trimmed planar face against a partition of the same physical
 /// interface on the other shell. Revolving a radial cap, for example, may
 /// represent one disk as two semicircular faces while a sweep uses one disk.
@@ -1071,7 +1077,7 @@ pub(super) fn single_face_matches_planar_partition(
     target: &PolygonMesh,
     fragments: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     tol: f64,
-) -> Option<Option<usize>> {
+) -> Option<Option<PlanarPartitionMatch>> {
     let Some((origin, normal)) = planar_polygon_plane(target, tol) else {
         return Some(None);
     };
@@ -1079,6 +1085,7 @@ pub(super) fn single_face_matches_planar_partition(
         return Some(None);
     };
     let mut matched = Vec::<PolygonMesh>::new();
+    let mut matched_indices = Vec::<usize>::new();
     let mut representative = None;
     for (index, face) in fragments.iter().enumerate() {
         let polygon = face.surface()?;
@@ -1090,6 +1097,7 @@ pub(super) fn single_face_matches_planar_partition(
             continue;
         }
         matched.push(polygon);
+        matched_indices.push(index);
         representative.get_or_insert(index);
     }
     if matched.is_empty() {
@@ -1112,25 +1120,40 @@ pub(super) fn single_face_matches_planar_partition(
     Some(
         ((target_signature.area - overlap).abs() <= area_tol
             && (fragment_signature.area - overlap).abs() <= area_tol)
-            .then_some(representative),
+            .then_some(PlanarPartitionMatch {
+                representative,
+                members: matched_indices,
+            }),
     )
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct FullPlanarInterfaceMatch {
+    pub(super) lhs_faces: Vec<usize>,
+    pub(super) rhs_faces: Vec<usize>,
 }
 
 fn shells_full_planar_interface_pair(
     lhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     tol: f64,
-) -> Option<Option<(usize, usize)>> {
+) -> Option<Option<FullPlanarInterfaceMatch>> {
     for (left_index, left) in lhs.iter().enumerate() {
         let left_polygon = left.surface()?;
-        if let Some(right_index) = single_face_matches_planar_partition(&left_polygon, rhs, tol)? {
-            return Some(Some((left_index, right_index)));
+        if let Some(right) = single_face_matches_planar_partition(&left_polygon, rhs, tol)? {
+            return Some(Some(FullPlanarInterfaceMatch {
+                lhs_faces: vec![left_index],
+                rhs_faces: right.members,
+            }));
         }
     }
     for (right_index, right) in rhs.iter().enumerate() {
         let right_polygon = right.surface()?;
-        if let Some(left_index) = single_face_matches_planar_partition(&right_polygon, lhs, tol)? {
-            return Some(Some((left_index, right_index)));
+        if let Some(left) = single_face_matches_planar_partition(&right_polygon, lhs, tol)? {
+            return Some(Some(FullPlanarInterfaceMatch {
+                lhs_faces: left.members,
+                rhs_faces: vec![right_index],
+            }));
         }
     }
     Some(None)
@@ -1176,14 +1199,6 @@ fn shells_have_positive_aabb_overlap(
             && lhs_max.y.min(rhs_max.y) - lhs_min.y.max(rhs_min.y) > tol
             && lhs_max.z.min(rhs_max.z) - lhs_min.z.max(rhs_min.z) > tol,
     )
-}
-
-fn shells_have_full_planar_interface(
-    lhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
-    rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
-    tol: f64,
-) -> Option<bool> {
-    Some(shells_full_planar_interface_pair(lhs, rhs, tol)?.is_some())
 }
 
 fn shells_have_partial_planar_overlap(
@@ -1314,6 +1329,7 @@ pub(super) struct LoopsStoreQuadruple<C> {
     pub(super) geom_loops_store1: LoopsStore<Point3, C>,
     pub(super) poly_loops_store1: LoopsStore<Point3, PolylineCurve>,
     pub(super) coplanar_overlap: bool,
+    pub(super) full_interface_adjacency: Option<FullPlanarInterfaceMatch>,
 }
 
 pub(super) fn create_loops_stores<C, S>(
@@ -1345,13 +1361,20 @@ where
     let coplanar_tol = 2.0 * BooleanTolerance::new(tol).length;
     let positive_aabb_overlap =
         shells_have_positive_aabb_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
-    let full_coplanar_interface = imprint_coplanar
-        && shells_have_full_planar_interface(poly_shell0, poly_shell1, coplanar_tol)?;
-    let full_interface_adjacency = full_coplanar_interface && !positive_aabb_overlap;
+    let full_coplanar_interface = if imprint_coplanar {
+        shells_full_planar_interface_pair(poly_shell0, poly_shell1, coplanar_tol)?
+    } else {
+        None
+    };
+    let full_interface_adjacency = if positive_aabb_overlap {
+        None
+    } else {
+        full_coplanar_interface.clone()
+    };
     let partial_coplanar_overlap = imprint_coplanar
         && positive_aabb_overlap
         && shells_have_partial_planar_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
-    let coplanar_overlap = full_coplanar_interface || partial_coplanar_overlap;
+    let coplanar_overlap = full_coplanar_interface.is_some() || partial_coplanar_overlap;
     (0..store0_len)
         .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
         .try_for_each(|(face_index0, face_index1)| {
@@ -1360,7 +1383,7 @@ where
             // their coincident continuation surfaces (e.g. coaxial cylinders)
             // is degenerate; downstream coplanar classification removes the
             // shared internal face and topology welding stitches the rim.
-            if full_interface_adjacency {
+            if full_interface_adjacency.is_some() {
                 return Some(());
             }
             let ori0 = geom_shell0[face_index0].orientation();
@@ -1550,6 +1573,7 @@ where
         geom_loops_store1,
         poly_loops_store1,
         coplanar_overlap,
+        full_interface_adjacency,
     })
 }
 
