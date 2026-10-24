@@ -8,7 +8,7 @@
 #![allow(clippy::many_single_char_names)]
 
 use super::faces_classification::FacesClassification;
-use super::{loops_store::*, tolerance::BooleanTolerance};
+use super::loops_store::*;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::{compress::*, repair, *};
 use rustc_hash::FxHashMap as HashMap;
@@ -191,8 +191,8 @@ impl<C: Clone, S: Clone> FaceFragment<C, S> {
 }
 
 fn strict_interior_point(poly: &PolylineCurve<Point2>, tol: f64) -> Option<Point2> {
-    let area = poly.area();
-    if area.abs() <= polyline_area_tolerance(poly, tol) {
+    let area = polyline_signed_area(poly);
+    if area.abs() <= polyline_area_epsilon(poly) {
         return None;
     }
     let mut domain = poly.clone();
@@ -231,7 +231,31 @@ fn same_edge_set<C>(lhs: &BoundaryWire<Point3, C>, rhs: &BoundaryWire<Point3, C>
             .all(|edge| rhs.edge_iter().any(|other| edge.id() == other.id()))
 }
 
-fn polyline_area_tolerance(poly: &PolylineCurve<Point2>, tol: f64) -> f64 {
+fn polyline_signed_area(poly: &PolylineCurve<Point2>) -> f64 {
+    let Some(origin) = poly.first().copied() else {
+        return 0.0;
+    };
+    if poly.len() < 3 {
+        return 0.0;
+    }
+    (1..poly.len() - 1)
+        .map(|index| {
+            let lhs = poly[index] - origin;
+            let rhs = poly[index + 1] - origin;
+            lhs.x * rhs.y - lhs.y * rhs.x
+        })
+        .sum::<f64>()
+        * 0.5
+}
+
+/// Numerical degeneracy threshold in the face's own parameter domain.
+///
+/// Boolean `tol` is a world-space length. UV coordinates can be arbitrarily
+/// scaled or sheared by an equivalent surface parameterization, so feeding that
+/// length directly into a UV-area threshold is not meaningful. Instead compare
+/// signed area with the loop's own UV bounding-box area, yielding a
+/// dimensionless relative test.
+fn polyline_area_epsilon(poly: &PolylineCurve<Point2>) -> f64 {
     let mut min_x = f64::INFINITY;
     let mut max_x = f64::NEG_INFINITY;
     let mut min_y = f64::INFINITY;
@@ -242,8 +266,14 @@ fn polyline_area_tolerance(poly: &PolylineCurve<Point2>, tol: f64) -> f64 {
         min_y = min_y.min(point.y);
         max_y = max_y.max(point.y);
     }
-    let span = (max_x - min_x).abs().max((max_y - min_y).abs());
-    BooleanTolerance::new(tol).area_for_span(span)
+    let width = (max_x - min_x).abs();
+    let height = (max_y - min_y).abs();
+    let bbox_area = width * height;
+    if bbox_area.is_finite() {
+        TOLERANCE * bbox_area
+    } else {
+        f64::INFINITY
+    }
 }
 
 fn divide_one_face<C, S>(
@@ -262,8 +292,8 @@ where
     let mut map = HashMap::default();
     loops.iter().try_for_each(|wire| {
         let poly = create_parameter_boundary(face, wire, &mut map, tol)?;
-        let area = poly.area();
-        if area.abs() < polyline_area_tolerance(&poly, tol) {
+        let area = polyline_signed_area(&poly);
+        if area.abs() <= polyline_area_epsilon(&poly) {
             return Some(());
         }
         match area > 0.0 {
@@ -282,7 +312,7 @@ where
     })?;
     negative_wires.into_iter().try_for_each(|mut chunk| {
         let witness = strict_interior_point(&chunk.poly, tol)?;
-        let chunk_area_abs = chunk.poly.area().abs();
+        let chunk_area_abs = polyline_signed_area(&chunk.poly).abs();
 
         // Build the nesting relation from geometry, not Boolean status or shared
         // vertices. A negative loop is a hole of the smallest strictly larger
@@ -294,16 +324,15 @@ where
             .filter(|(_, pre_face)| !pre_face.is_empty())
             .filter(|(_, pre_face)| {
                 let outer = &pre_face[0];
-                let area_tol = polyline_area_tolerance(&outer.poly, tol)
-                    .max(polyline_area_tolerance(&chunk.poly, tol));
-                outer.poly.area().abs() > chunk_area_abs + area_tol && outer.poly.include(witness)
+                let area_tol =
+                    polyline_area_epsilon(&outer.poly).max(polyline_area_epsilon(&chunk.poly));
+                polyline_signed_area(&outer.poly).abs() > chunk_area_abs + area_tol
+                    && outer.poly.include(witness)
             })
             .min_by(|(_, lhs), (_, rhs)| {
-                lhs[0]
-                    .poly
-                    .area()
+                polyline_signed_area(&lhs[0].poly)
                     .abs()
-                    .total_cmp(&rhs[0].poly.area().abs())
+                    .total_cmp(&polyline_signed_area(&rhs[0].poly).abs())
             })
             .map(|(index, _)| index);
 
@@ -321,9 +350,9 @@ where
                 return false;
             }
             let outer = &pre_face[0];
-            let area_tol = polyline_area_tolerance(&outer.poly, tol)
-                .max(polyline_area_tolerance(&chunk.poly, tol));
-            (outer.poly.area().abs() - chunk_area_abs).abs() <= area_tol
+            let area_tol =
+                polyline_area_epsilon(&outer.poly).max(polyline_area_epsilon(&chunk.poly));
+            (polyline_signed_area(&outer.poly).abs() - chunk_area_abs).abs() <= area_tol
                 && same_edge_set(outer.wire, chunk.wire)
         });
         if let Some(index) = equal {
@@ -379,6 +408,51 @@ where
         .flatten()
         .collect::<Vec<_>>();
     Some(vec)
+}
+
+#[cfg(test)]
+mod uv_area_tests {
+    use super::*;
+
+    #[test]
+    fn real_thin_uv_region_is_not_degenerate() {
+        let poly = PolylineCurve(vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(1.0, 0.0),
+            Point2::new(1.0, 1.0e-9),
+            Point2::new(0.0, 1.0e-9),
+        ]);
+        let area = polyline_signed_area(&poly).abs();
+        assert!(area > polyline_area_epsilon(&poly));
+    }
+
+    #[test]
+    fn collinear_uv_loop_is_degenerate() {
+        let poly = PolylineCurve(vec![
+            Point2::new(-2.0, -2.0),
+            Point2::new(0.0, 0.0),
+            Point2::new(2.0, 2.0),
+        ]);
+        assert!(polyline_signed_area(&poly).abs() <= polyline_area_epsilon(&poly));
+    }
+
+    #[test]
+    fn uv_degeneracy_ratio_is_scale_invariant() {
+        let unit = PolylineCurve(vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(1.0, 0.0),
+            Point2::new(1.0, 0.2),
+            Point2::new(0.0, 0.2),
+        ]);
+        let scaled = PolylineCurve(
+            unit.iter()
+                .map(|point| Point2::new(point.x * 1.0e6, point.y * 1.0e6))
+                .collect(),
+        );
+        let unit_ratio = polyline_signed_area(&unit).abs() / polyline_area_epsilon(&unit);
+        let scaled_ratio = polyline_signed_area(&scaled).abs() / polyline_area_epsilon(&scaled);
+        assert!((unit_ratio / scaled_ratio - 1.0).abs() < TOLERANCE);
+    }
 }
 
 pub(super) fn divide_faces<C, S>(
