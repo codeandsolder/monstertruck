@@ -93,11 +93,50 @@ fn homogeneous_iso_curve<S: ShapeOpsSurface>(
     trim_homogeneous_curve(curve, start, end)
 }
 
-fn point_on_surface<S: ShapeOpsSurface>(surface: &S, point: Point3) -> bool {
-    surface
-        .search_parameter(point, None, 100)
-        .or_else(|| surface.search_nearest_parameter(point, None, 100))
-        .is_some_and(|(u, v)| surface.evaluate(u, v).distance(point) <= 4.0 * TOLERANCE)
+fn surface_parameter_with_hint<S: ShapeOpsSurface>(
+    surface: &S,
+    point: Point3,
+    hint: Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    let search = |search_hint| {
+        surface
+            .search_parameter(point, search_hint, 100)
+            .or_else(|| surface.search_nearest_parameter(point, search_hint, 100))
+    };
+    let hinted = search(hint);
+    if hint.is_some()
+        && hinted.is_some_and(|(u, v)| surface.evaluate(u, v).distance(point) > 4.0 * TOLERANCE)
+    {
+        return search(None);
+    }
+    hinted.or_else(|| hint.and_then(|_| search(None)))
+}
+
+fn parameters_on_surface_along<S: ShapeOpsSurface>(
+    surface: &S,
+    points: impl IntoIterator<Item = Point3>,
+) -> Option<Vec<(f64, f64)>> {
+    let mut hint = None;
+    points
+        .into_iter()
+        .map(|point| {
+            let parameter = surface_parameter_with_hint(surface, point, hint)?;
+            hint = Some(parameter);
+            Some(parameter)
+        })
+        .collect()
+}
+
+fn point_on_surface_with_hint<S: ShapeOpsSurface>(
+    surface: &S,
+    point: Point3,
+    hint: &mut Option<(f64, f64)>,
+) -> bool {
+    let Some(parameter) = surface_parameter_with_hint(surface, point, *hint) else {
+        return false;
+    };
+    *hint = Some(parameter);
+    surface.evaluate(parameter.0, parameter.1).distance(point) <= 4.0 * TOLERANCE
 }
 
 fn prove_iso_candidate<S: ShapeOpsSurface>(
@@ -112,11 +151,24 @@ fn prove_iso_candidate<S: ShapeOpsSurface>(
     {
         return false;
     }
-    (0..=32).all(|index| {
-        let ratio = index as f64 / 32.0;
-        let point = candidate.subs(t0 * (1.0 - ratio) + t1 * ratio);
-        point_on_surface(surface0, point) && point_on_surface(surface1, point)
-    })
+    let points = (0..=32)
+        .map(|index| {
+            let ratio = index as f64 / 32.0;
+            candidate.subs(t0 * (1.0 - ratio) + t1 * ratio)
+        })
+        .collect::<Vec<_>>();
+    let mut hint0 = None;
+    if !points
+        .iter()
+        .copied()
+        .all(|point| point_on_surface_with_hint(surface0, point, &mut hint0))
+    {
+        return false;
+    }
+    let mut hint1 = None;
+    points
+        .into_iter()
+        .all(|point| point_on_surface_with_hint(surface1, point, &mut hint1))
 }
 
 fn leader_matches_iso_locus<S: ShapeOpsSurface>(
@@ -141,7 +193,7 @@ fn leader_matches_iso_locus<S: ShapeOpsSurface>(
             })
 }
 
-fn exact_iso_leader<S: ShapeOpsSurface>(
+pub(super) fn exact_iso_leader<S: ShapeOpsSurface>(
     intersection: &IntersectionCurve<PolylineCurve<Point3>, S, S>,
 ) -> Option<NurbsCurve<Vector4>> {
     let leader = intersection.leader();
@@ -149,16 +201,7 @@ fn exact_iso_leader<S: ShapeOpsSurface>(
         return None;
     }
     for surface in [intersection.surface0(), intersection.surface1()] {
-        let Some(params) = leader
-            .iter()
-            .copied()
-            .map(|point| {
-                surface
-                    .search_parameter(point, None, 100)
-                    .or_else(|| surface.search_nearest_parameter(point, None, 100))
-            })
-            .collect::<Option<Vec<_>>>()
-        else {
+        let Some(params) = parameters_on_surface_along(surface, leader.iter().copied()) else {
             continue;
         };
         for iso in [IsoParameter::U, IsoParameter::V] {

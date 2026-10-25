@@ -414,44 +414,45 @@ impl<C> Loops<Point3, C> {
             + SearchNearestParameter<CurveParameter, Point = Point3> {
         let reference = edge0.curve();
         let reference_range = reference.range_tuple();
-        let point_on_reference = |point: Point3| {
-            reference
-                .search_nearest_parameter(point, None, 100)
-                .and_then(|parameter| {
-                    ParameterKind::try_new(parameter, reference_range)?;
-                    Some(reference.evaluate(parameter).near(&point))
-                })
-                .unwrap_or(false)
-        };
-
-        let mut edge_ids = Vec::new();
-        let mut candidates = Vec::new();
-        for edge in self.iter().flat_map(|wire| wire.iter()) {
-            let edge_id = edge.id();
-            if edge_ids.contains(&edge_id) {
-                continue;
-            }
-            edge_ids.push(edge_id);
-            let curve = edge.curve();
-            let (t0, t1) = curve.range_tuple();
-            let samples = [
-                edge.absolute_front().point(),
-                curve.evaluate((t1 - t0).mul_add(0.25, t0)),
-                curve.evaluate(f64::midpoint(t0, t1)),
-                curve.evaluate((t1 - t0).mul_add(0.75, t0)),
-                edge.absolute_back().point(),
-            ];
-            if samples.into_iter().all(point_on_reference) {
-                candidates.push(edge.absolute_clone());
-            }
-        }
-
         let start = edge0.front().id();
         let goal = edge0.back().id();
+
+        let mut edge_indices = HashMap::default();
+        let mut edges = Vec::new();
+        let mut adjacency = HashMap::<VertexId<Point3>, Vec<usize>>::default();
+        for edge in self.iter().flat_map(|wire| wire.iter()) {
+            let edge_id = edge.id();
+            if edge_indices.contains_key(&edge_id) {
+                continue;
+            }
+            let edge = edge.absolute_clone();
+            let index = edges.len();
+            let front = edge.absolute_front().id();
+            let back = edge.absolute_back().id();
+            edge_indices.insert(edge_id, index);
+            edges.push(edge);
+            adjacency.entry(front).or_default().push(index);
+            adjacency.entry(back).or_default().push(index);
+        }
+
+        if !adjacency.contains_key(&start) || !adjacency.contains_key(&goal) {
+            return false;
+        }
+
+        // Geometric coincidence is expensive for intersection curves. Explore the
+        // topological graph first and prove only edges reachable from the incoming
+        // edge's start. This is equivalent to filtering every edge up front, while
+        // avoiding inverse-mapping unrelated wires and branches.
+        let mut coincident = vec![None; edges.len()];
         let mut frontier = vec![start];
-        let mut seen = vec![start];
+        let mut seen = HashMap::default();
+        seen.insert(start, ());
         while let Some(current) = frontier.pop() {
-            for edge in &candidates {
+            let Some(incident) = adjacency.get(&current) else {
+                continue;
+            };
+            for &index in incident {
+                let edge = &edges[index];
                 let front = edge.absolute_front().id();
                 let back = edge.absolute_back().id();
                 // Leave the single-edge case to `add_edge`, which also
@@ -460,18 +461,69 @@ impl<C> Loops<Point3, C> {
                     continue;
                 }
                 let next = if front == current {
-                    Some(back)
+                    back
                 } else if back == current {
-                    Some(front)
+                    front
                 } else {
-                    None
+                    continue;
                 };
-                let Some(next) = next else { continue };
+                if next != goal && seen.contains_key(&next) {
+                    continue;
+                }
+
+                let is_coincident = *coincident[index].get_or_insert_with(|| {
+                    let curve = edge.curve();
+                    let (t0, t1) = curve.range_tuple();
+                    let forward = front == current;
+                    let parameters = if forward {
+                        [
+                            (t1 - t0).mul_add(0.25, t0),
+                            f64::midpoint(t0, t1),
+                            (t1 - t0).mul_add(0.75, t0),
+                        ]
+                    } else {
+                        [
+                            (t1 - t0).mul_add(0.75, t0),
+                            f64::midpoint(t0, t1),
+                            (t1 - t0).mul_add(0.25, t0),
+                        ]
+                    };
+                    let other_endpoint = if forward {
+                        edge.absolute_back().point()
+                    } else {
+                        edge.absolute_front().point()
+                    };
+                    let points = parameters
+                        .into_iter()
+                        .map(|parameter| curve.evaluate(parameter))
+                        .chain(std::iter::once(other_endpoint));
+                    let mut hint = None;
+                    points.into_iter().all(|point| {
+                        let validated_parameter = |search_hint| {
+                            let parameter =
+                                reference.search_nearest_parameter(point, search_hint, 100)?;
+                            ParameterKind::try_new(parameter, reference_range)?;
+                            reference
+                                .evaluate(parameter)
+                                .near(&point)
+                                .then_some(parameter)
+                        };
+                        let parameter = validated_parameter(hint)
+                            .or_else(|| hint.and_then(|_| validated_parameter(None)));
+                        let Some(parameter) = parameter else {
+                            return false;
+                        };
+                        hint = Some(parameter);
+                        true
+                    })
+                });
+                if !is_coincident {
+                    continue;
+                }
                 if next == goal {
                     return true;
                 }
-                if !seen.contains(&next) {
-                    seen.push(next);
+                if seen.insert(next, ()).is_none() {
                     frontier.push(next);
                 }
             }

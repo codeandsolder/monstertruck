@@ -5,6 +5,41 @@ use super::curve_equivalence::{
 };
 use super::*;
 
+fn certified_homogeneous_curve_box(curve: &NurbsCurve<Vector4>) -> Option<BoundingBox<Point3>> {
+    let mut bounds = BoundingBox::new();
+    let mut any = false;
+    for control in curve.control_points() {
+        let weight = control.w;
+        if !(weight > 0.0 && weight.is_finite()) {
+            return None;
+        }
+        let point = Point3::new(control.x / weight, control.y / weight, control.z / weight);
+        if !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite() {
+            return None;
+        }
+        bounds.push(point);
+        any = true;
+    }
+    any.then_some(bounds)
+}
+
+fn certified_alt_curve_box<C, S>(curve: &AltCurve<C, S>) -> Option<BoundingBox<Point3>>
+where
+    C: BoundedCurve<Point = Point3>,
+    S: ShapeOpsSurface, {
+    match curve {
+        Alternative::FirstType(curve) => curve.certified_spatial_bounds(),
+        Alternative::SecondType(curve) => conversion::exact_iso_leader(curve)
+            .and_then(|exact| certified_homogeneous_curve_box(&exact)),
+    }
+}
+
+fn point_inside_padded_box(bounds: BoundingBox<Point3>, point: Point3, pad: f64) -> bool {
+    let min = bounds.min();
+    let max = bounds.max();
+    (0..3).all(|axis| point[axis] >= min[axis] - pad && point[axis] <= max[axis] + pad)
+}
+
 pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
 ) -> Option<AltCurveShell<C, S>> {
@@ -48,8 +83,9 @@ pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let curves_sampled_coincident = |lhs: &AltEdge<C, S>, rhs: &AltEdge<C, S>| {
         let lhs = lhs.oriented_curve();
         let rhs = rhs.oriented_curve();
-        validate_sampled_coincidence::<Point3, _>(&lhs, &rhs) == CurveCoincidence::SampledValidation
-            || validate_endpoint_aligned_coincidence::<Point3, _>(&lhs, &rhs)
+        validate_endpoint_aligned_coincidence::<Point3, _>(&lhs, &rhs)
+            == CurveCoincidence::SampledValidation
+            || validate_sampled_coincidence::<Point3, _>(&lhs, &rhs)
                 == CurveCoincidence::SampledValidation
     };
 
@@ -76,7 +112,17 @@ pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             .entry(absolute.id())
             .or_insert_with(|| (front.id(), back.id(), absolute.oriented_curve()));
     }
-    let source_edges = source_edges_by_id.into_values().collect::<Vec<_>>();
+    let source_midpoint = |curve: &AltCurve<C, S>| {
+        let (t0, t1) = curve.range_tuple();
+        curve.evaluate(f64::midpoint(t0, t1))
+    };
+    let source_edges = source_edges_by_id
+        .into_values()
+        .map(|(front, back, curve)| {
+            let midpoint = source_midpoint(&curve);
+            (front, back, midpoint, curve)
+        })
+        .collect::<Vec<_>>();
 
     for point in source_vertex_points.values().copied() {
         canonical_vertex(point, &mut vertex_cells);
@@ -122,6 +168,10 @@ pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                             }
 
                             let curve = edge.oriented_curve();
+                            // A certified box may only reject impossible source evidence.
+                            // Every surviving point still goes through the historical inverse-map
+                            // and geometric-nearness proof below; `None` preserves the old scan.
+                            let curve_bounds = certified_alt_curve_box(&curve);
                             let (t0, t1) = curve.range_tuple();
                             let span = t1 - t0;
                             let parameter_on_curve = |point: Point3| {
@@ -138,15 +188,25 @@ pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                             // search from large Boolean results.
                             let mut split_vertices = Vec::new();
                             if span.abs() > f64::EPSILON {
+                                let projection_pad = 2.0 * TOLERANCE;
                                 let projected_vertices = source_vertex_points
                                     .iter()
+                                    .filter(|(_, point)| {
+                                        curve_bounds.is_none_or(|bounds| {
+                                            point_inside_padded_box(bounds, **point, projection_pad)
+                                        })
+                                    })
                                     .filter_map(|(id, point)| {
                                         parameter_on_curve(*point)
                                             .map(|parameter| (*id, (*point, parameter)))
                                     })
                                     .collect::<HashMap<_, _>>();
-                                for (candidate_front, candidate_back, candidate_curve) in
-                                    &source_edges
+                                for (
+                                    candidate_front,
+                                    candidate_back,
+                                    candidate_midpoint,
+                                    _candidate_curve,
+                                ) in &source_edges
                                 {
                                     let Some(&(front_point, front_parameter)) =
                                         projected_vertices.get(candidate_front)
@@ -158,11 +218,16 @@ pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                                     else {
                                         continue;
                                     };
-                                    let (candidate_t0, candidate_t1) =
-                                        candidate_curve.range_tuple();
-                                    let midpoint = candidate_curve
-                                        .evaluate((candidate_t0 + candidate_t1) * 0.5);
-                                    if parameter_on_curve(midpoint).is_none() {
+                                    if curve_bounds.is_some_and(|bounds| {
+                                        !point_inside_padded_box(
+                                            bounds,
+                                            *candidate_midpoint,
+                                            projection_pad,
+                                        )
+                                    }) {
+                                        continue;
+                                    }
+                                    if parameter_on_curve(*candidate_midpoint).is_none() {
                                         continue;
                                     }
 
