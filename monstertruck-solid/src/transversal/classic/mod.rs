@@ -248,6 +248,15 @@ fn convert_alt_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     altshell_to_shell(shell).ok_or(ShapeOpsError::AltShellConversionFailed { operation })
 }
 
+fn convert_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    regions: &[AltRegion<C, S>],
+    operation: &'static str,
+) -> ClassicResult<Shell<Point3, C, S>> {
+    let shell = faces_classification::materialize_regions(regions)
+        .ok_or(ShapeOpsError::RegionMaterializationFailed { operation })?;
+    convert_alt_shell(&shell, operation)
+}
+
 fn weld_and_convert<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
     operation: &'static str,
@@ -339,10 +348,7 @@ fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     and0.append(&mut and1);
     or0.append(&mut or1);
-    Ok([
-        weld_and_convert(&and0, "and")?,
-        weld_and_convert(&or0, "or")?,
-    ])
+    Ok([convert_regions(&and0, "and")?, convert_regions(&or0, "or")?])
 }
 
 fn partition_evidence<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -734,6 +740,18 @@ mod structural_classification_tests {
         let reversed = tetrahedron_mesh(true);
         let shell: Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>> =
             Shell::from(vec![Face::new_unchecked(Vec::new(), Some(reversed))]);
+        assert_eq!(
+            classify_inside_with_polyshell(&shell, Point3::new(0.1, 0.1, 0.1)),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn signed_winding_honors_topological_face_orientation() {
+        let mut face = Face::new_unchecked(Vec::new(), Some(tetrahedron_mesh(false)));
+        face.invert();
+        let shell: Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>> =
+            Shell::from(vec![face]);
         assert_eq!(
             classify_inside_with_polyshell(&shell, Point3::new(0.1, 0.1, 0.1)),
             Some(false)
