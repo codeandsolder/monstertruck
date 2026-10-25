@@ -108,6 +108,54 @@ fn the_production_rational_sphere_net_bounds_the_same_ball() {
     );
 }
 
+/// Composite curve bounds must come from structural carrier evidence, not the
+/// fitted leader. Two spheres intersect in the unit circle at z = 0; their
+/// certified carrier boxes alone therefore enclose the represented curve.
+#[test]
+fn intersection_curve_exposes_its_structural_certified_bound() {
+    let radius = f64::sqrt(2.0);
+    let surface0 = Surface::SphericalSurface(Processor::new(Sphere::new(
+        Point3::new(0.0, 0.0, 1.0),
+        radius,
+    )));
+    let surface1 = Surface::SphericalSurface(Processor::new(Sphere::new(
+        Point3::new(0.0, 0.0, -1.0),
+        radius,
+    )));
+    let leader = Curve::NurbsCurve(
+        TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, std::f64::consts::TAU))
+            .to_same_geometry(),
+    );
+    let curve = Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+        Box::new(surface0),
+        Box::new(surface1),
+        Box::new(leader),
+        None,
+        None,
+    ));
+
+    let direct = certified_curve_bounding_box(&curve)
+        .expect("the two self-bounded carrier surfaces certify the intersection curve");
+    let via_trait = curve
+        .certified_spatial_bounds()
+        .expect("BoundedCurve must expose the same certified structural enclosure");
+    assert_eq!(direct.min(), via_trait.min());
+    assert_eq!(direct.max(), via_trait.max());
+
+    // The exact carrier intersection is the unit circle in z = 0. Check the
+    // structural enclosure against that geometry directly instead of depending
+    // on the iterative intersection evaluator, which has independent singular
+    // convergence behavior at some parameters.
+    for step in 0..64 {
+        let angle = std::f64::consts::TAU * f64::from(step) / 64.0;
+        let point = Point3::new(angle.cos(), angle.sin(), 0.0);
+        assert!(
+            direct.contains(point),
+            "exact sphere-sphere intersection point {point:?} escapes its certified carrier box",
+        );
+    }
+}
+
 /// A non-positive weight voids the rational convex-hull property, so the
 /// bound refuses rather than inventing one.
 #[test]

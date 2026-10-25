@@ -25,7 +25,6 @@ type ModelSurfaceCurve = SurfaceCurve<
     Deserialize,
     From,
     ParametricCurve,
-    BoundedCurve,
     Cut,
     Invertible,
     SearchNearestParameterD1,
@@ -119,6 +118,42 @@ macro_rules! derive_curve_self_method {
             Curve::IntersectionCurve(got) => Curve::IntersectionCurve($method(got, $($ver), *)),
         }
     };
+}
+
+impl BoundedCurve for Curve {
+    fn range_tuple(&self) -> (f64, f64) {
+        match self {
+            Curve::Line(curve) => curve.range_tuple(),
+            Curve::BsplineCurve(curve) => curve.range_tuple(),
+            Curve::NurbsCurve(curve) => curve.range_tuple(),
+            Curve::ParameterCurve(curve) => curve.range_tuple(),
+            Curve::IntersectionCurve(curve) => curve.range_tuple(),
+        }
+    }
+
+    fn front(&self) -> Point3 {
+        match self {
+            Curve::Line(curve) => curve.front(),
+            Curve::BsplineCurve(curve) => curve.front(),
+            Curve::NurbsCurve(curve) => curve.front(),
+            Curve::ParameterCurve(curve) => curve.front(),
+            Curve::IntersectionCurve(curve) => curve.front(),
+        }
+    }
+
+    fn back(&self) -> Point3 {
+        match self {
+            Curve::Line(curve) => curve.back(),
+            Curve::BsplineCurve(curve) => curve.back(),
+            Curve::NurbsCurve(curve) => curve.back(),
+            Curve::ParameterCurve(curve) => curve.back(),
+            Curve::IntersectionCurve(curve) => curve.back(),
+        }
+    }
+
+    fn certified_spatial_bounds(&self) -> Option<BoundingBox<Point3>> {
+        bounding::certified_curve_bounding_box(self)
+    }
 }
 
 fn sample_curve_to_nurbs(curve: &(impl ParametricCurve3D + BoundedCurve)) -> NurbsCurve<Vector4> {
