@@ -9,7 +9,10 @@
 #![allow(clippy::many_single_char_names)]
 
 use super::{
-    curve_equivalence::{CurveCoincidence, validate_sampled_coincidence},
+    curve_equivalence::{
+        CurveCoincidence, validate_endpoint_aligned_coincidence, validate_sampled_coincidence,
+        validate_sampled_containment,
+    },
     intersection_curve,
     tolerance::BooleanTolerance,
 };
@@ -599,8 +602,14 @@ impl<C> LoopsStore<Point3, C> {
                             .point()
                             .near(&edge.absolute_front().point()));
                 let same_curve_copy = same_endpoints
-                    && validate_sampled_coincidence::<Point3, _>(&existing.curve(), &edge.curve())
-                        == CurveCoincidence::SampledValidation;
+                    && (validate_sampled_coincidence::<Point3, _>(
+                        &existing.curve(),
+                        &edge.curve(),
+                    ) == CurveCoincidence::SampledValidation
+                        || validate_endpoint_aligned_coincidence::<Point3, _>(
+                            &existing.curve(),
+                            &edge.curve(),
+                        ) == CurveCoincidence::SampledValidation);
                 if same_edge || same_endpoint || same_curve_copy {
                     return true;
                 }
@@ -691,10 +700,10 @@ impl<C> LoopsStore<Point3, C> {
     {
         let point = vertex.point();
         let mut endpoint_vertices = Vec::<Vertex<Point3>>::new();
-        let mut interior: Option<(EdgeId<C>, usize, usize, f64)> = None;
+        let mut interior = Vec::<(EdgeId<C>, Edge<Point3, C>, f64)>::new();
 
-        for (wire_index, wire) in self[loops_index].iter().enumerate() {
-            for (edge_index, edge) in wire.iter().enumerate() {
+        for wire in self[loops_index].iter() {
+            for edge in wire.iter() {
                 let curve = edge.curve();
                 let Some(parameter) = curve.search_parameter(point, None, 1) else {
                     continue;
@@ -721,24 +730,67 @@ impl<C> LoopsStore<Point3, C> {
                             endpoint_vertices.push(endpoint);
                         }
                     }
-                    ParameterKind::Inner(parameter) => match interior {
-                        Some((edge_id, _, _, _)) if edge_id == edge.id() => {}
-                        Some(_) => return None,
-                        None => {
-                            interior = Some((edge.id(), wire_index, edge_index, parameter));
+                    ParameterKind::Inner(parameter) => {
+                        if interior.iter().any(|(edge_id, _, _)| *edge_id == edge.id()) {
+                            continue;
                         }
-                    },
+                        if let Some((_, reference, _)) = interior.first() {
+                            let same_endpoints = (reference
+                                .absolute_front()
+                                .point()
+                                .near(&edge.absolute_front().point())
+                                && reference
+                                    .absolute_back()
+                                    .point()
+                                    .near(&edge.absolute_back().point()))
+                                || (reference
+                                    .absolute_front()
+                                    .point()
+                                    .near(&edge.absolute_back().point())
+                                    && reference
+                                        .absolute_back()
+                                        .point()
+                                        .near(&edge.absolute_front().point()));
+                            let reference_curve = reference.curve();
+                            let edge_curve = edge.curve();
+                            let same_curve = validate_sampled_coincidence::<Point3, _>(
+                                &reference_curve,
+                                &edge_curve,
+                            ) == CurveCoincidence::SampledValidation
+                                || validate_sampled_containment::<Point3, _>(
+                                    &reference_curve,
+                                    &edge_curve,
+                                ) == CurveCoincidence::SampledValidation
+                                || validate_sampled_containment::<Point3, _>(
+                                    &edge_curve,
+                                    &reference_curve,
+                                ) == CurveCoincidence::SampledValidation
+                                || (same_endpoints
+                                    && validate_endpoint_aligned_coincidence::<Point3, _>(
+                                        &reference_curve,
+                                        &edge_curve,
+                                    ) == CurveCoincidence::SampledValidation);
+                            if !same_curve {
+                                return None;
+                            }
+                        }
+                        interior.push((edge.id(), edge.absolute_clone(), parameter));
+                    }
                 }
             }
         }
 
-        if endpoint_vertices.is_empty() && interior.is_none() {
+        if endpoint_vertices.is_empty() && interior.is_empty() {
             self.add_polygon_vertex(loops_index, vertex, emap)?;
             return Some(());
         }
 
-        if let Some((edge_id, wire_index, edge_index, parameter)) = interior {
-            let edge = self[loops_index][wire_index][edge_index].absolute_clone();
+        // A divided face can contain several topological representations of one
+        // boundary locus, including a full edge beside an already-partitioned
+        // sub-edge. Every proven-coincident copy must receive the split vertex or
+        // the face set becomes unsynchronized. The scan above validates the
+        // carrier relationship before any topology is mutated.
+        for (edge_id, edge, parameter) in interior {
             let (edge0, edge1) = edge.cut_with_parameter(vertex, parameter)?;
             let new_wire: Wire<_, _> = vec![edge0, edge1].into();
             self.swap_edge_into_wire(edge_id, &new_wire);
@@ -1586,6 +1638,79 @@ mod projection_tests {
                 .search_boundary_parameter(0, Point3::new(0.0, 0.0, 0.0), 1.0e-3)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn imprint_splits_all_proven_copies_of_one_boundary_edge() {
+        let a0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let a1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let b0 = Vertex::new(a0.point());
+        let b1 = Vertex::new(a1.point());
+        let edge_a = Edge::new(&a0, &a1, Line(a0.point(), a1.point()));
+        let edge_b = Edge::new(&b0, &b1, Line(b0.point(), b1.point()));
+        let loops = Loops(vec![
+            BoundaryWire::new(vec![edge_a].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![edge_b].into(), ShapesOpStatus::Unknown),
+        ]);
+        let mut store = LoopsStore(vec![loops]);
+        let split = Vertex::new(Point3::new(0.5, 0.0, 0.0));
+        let mut emap = HashMap::default();
+
+        assert!(store.add_imprint_vertex(0, &split, &mut emap).is_some());
+        assert_eq!(store[0][0].len(), 2);
+        assert_eq!(store[0][1].len(), 2);
+        assert!(
+            store[0]
+                .iter()
+                .all(|wire| wire.vertex_iter().any(|v| v == split))
+        );
+    }
+
+    #[test]
+    fn imprint_splits_full_edge_and_partitioned_subedge_on_same_locus() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let d = Vertex::new(Point3::new(3.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let c = Vertex::new(Point3::new(2.0, 0.0, 0.0));
+        let full = Edge::new(&a, &d, Line(a.point(), d.point()));
+        let sub = Edge::new(&b, &c, Line(b.point(), c.point()));
+        let loops = Loops(vec![
+            BoundaryWire::new(vec![full].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![sub].into(), ShapesOpStatus::Unknown),
+        ]);
+        let mut store = LoopsStore(vec![loops]);
+        let split = Vertex::new(Point3::new(1.5, 0.0, 0.0));
+        let mut emap = HashMap::default();
+
+        assert!(store.add_imprint_vertex(0, &split, &mut emap).is_some());
+        assert_eq!(store[0][0].len(), 2);
+        assert_eq!(store[0][1].len(), 2);
+        assert!(
+            store[0]
+                .iter()
+                .all(|wire| wire.vertex_iter().any(|v| v == split))
+        );
+    }
+
+    #[test]
+    fn imprint_rejects_distinct_crossing_boundary_edges() {
+        let h0 = Vertex::new(Point3::new(-1.0, 0.0, 0.0));
+        let h1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let v0 = Vertex::new(Point3::new(0.0, -1.0, 0.0));
+        let v1 = Vertex::new(Point3::new(0.0, 1.0, 0.0));
+        let horizontal = Edge::new(&h0, &h1, Line(h0.point(), h1.point()));
+        let vertical = Edge::new(&v0, &v1, Line(v0.point(), v1.point()));
+        let loops = Loops(vec![
+            BoundaryWire::new(vec![horizontal].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![vertical].into(), ShapesOpStatus::Unknown),
+        ]);
+        let mut store = LoopsStore(vec![loops]);
+        let split = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let mut emap = HashMap::default();
+
+        assert!(store.add_imprint_vertex(0, &split, &mut emap).is_none());
+        assert_eq!(store[0][0].len(), 1);
+        assert_eq!(store[0][1].len(), 1);
     }
 
     #[test]

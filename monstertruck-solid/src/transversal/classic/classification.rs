@@ -21,8 +21,20 @@ pub(super) fn classify_inside_with_polyshell(
         .map(|offset| hash::take_one_unit(point + offset))
         .try_fold((0usize, 0usize), |(inside, outside), direction| {
             let count = poly_shell.iter().try_fold(0isize, |count, face| {
+                // Tessellation stores each polygon in the underlying surface's
+                // orientation and represents topological reversal on the Face.
+                // Apply that orientation to the signed crossing contribution;
+                // cloning and inverting the whole polygon per ray is unnecessary.
                 let polygon = face.surface()?;
-                Some(count + polygon.signed_crossing_faces(point, direction))
+                let crossing = polygon.signed_crossing_faces(point, direction);
+                Some(
+                    count
+                        + if face.orientation() {
+                            crossing
+                        } else {
+                            -crossing
+                        },
+                )
             })?;
             if count >= 1 {
                 Some((inside + 1, outside))
