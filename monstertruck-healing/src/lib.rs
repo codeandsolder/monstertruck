@@ -52,13 +52,6 @@ use split_pass_through_edges::{
     dedup_coincident_pass_through_edges, remap_trimmed_edge_uses_for_dedup,
     split_pass_through_edges, split_pass_through_edges_trimmed,
 };
-// Promoted (doc-hidden) so an external SSI boolean backend can reuse these
-// compressed-shell repair passes; unused inside this crate
-// outside `#[cfg(test)]`.
-#[doc(hidden)]
-pub use split_pass_through_edges::{
-    split_non_simple_compressed_wires, split_pinched_compressed_faces,
-};
 
 mod split_closed_faces;
 use split_closed_faces::split_closed_faces;

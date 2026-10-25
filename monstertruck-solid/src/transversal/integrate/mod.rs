@@ -147,6 +147,12 @@ pub enum ShapeOpsError {
         "no boolean backend available: enable `marching-ssi` (default) or link an external SSI backend."
     )]
     NoBackend,
+    /// Surface/surface interface discovery or loop construction failed.
+    #[error("failed to construct the boolean interface between the input shells.")]
+    InterfaceAnalysisFailed,
+    /// A required divided-face triangulation did not produce one polygon per face.
+    #[error("failed to triangulate every divided face for coplanar classification.")]
+    IncompletePartitionTriangulation,
     /// Face division failed for one shell.
     #[error("failed to divide faces for shell {shell_index}.")]
     DivideFacesFailed {
@@ -158,6 +164,12 @@ pub enum ShapeOpsError {
     UnknownClassificationFailed {
         /// 0 for the first shell, 1 for the second shell.
         shell_index: usize,
+    },
+    /// Selected Boolean arrangement regions could not be repaired into valid B-rep faces.
+    #[error("failed to materialize selected Boolean regions for `{operation}`.")]
+    RegionMaterializationFailed {
+        /// `and`, `or`, or `difference`.
+        operation: &'static str,
     },
     /// Converting temporary intersection curves back to target curves failed.
     #[error("failed to convert temporary shell for `{operation}`.")]

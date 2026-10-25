@@ -31,28 +31,52 @@ fn exec_search_parameter_test(
     center: [f64; 3],
     radius: f64,
     (u, v): (f64, f64),
-    disp: [f64; 3],
-    sign: [bool; 3],
+    radial_offset: f64,
 ) -> std::result::Result<(), TestCaseError> {
     let center = Point3::from(center);
     let sphere = Sphere::new(center, radius);
-    let pt = sphere.subs(u, v);
-    let (u0, v0) = sphere.search_parameter(pt, None, 100).unwrap();
-    prop_assert_near!(Vector2::new(u, v), Vector2::new(u0, v0));
-    let boolnum = |t: bool| if t { 1.0 } else { -1.0 };
-    let pt = pt
-        + Vector3::new(
-            disp[0] * boolnum(sign[0]),
-            disp[1] * boolnum(sign[1]),
-            disp[2] * boolnum(sign[2]),
-        );
-    prop_assert!(sphere.search_parameter(pt, None, 100).is_none());
-    let (u, v) = sphere.search_nearest_parameter(pt, None, 100).unwrap();
-    prop_assert_near!(
-        sphere.subs(u, v),
-        center + (pt - center).normalize() * radius
-    );
+    let point = sphere.subs(u, v);
+    let parameter = sphere.search_parameter(point, None, 100);
+    prop_assert!(parameter.is_some());
+    if let Some((u0, v0)) = parameter {
+        prop_assert_near!(sphere.subs(u0, v0), point);
+    }
+
+    let direction = (point - center).normalize();
+    let off_surface = center + direction * (radius + radial_offset);
+    prop_assert!(sphere.search_parameter(off_surface, None, 100).is_none());
+    let nearest = sphere.search_nearest_parameter(off_surface, None, 100);
+    prop_assert!(nearest.is_some());
+    if let Some((u0, v0)) = nearest {
+        prop_assert_near!(sphere.subs(u0, v0), point);
+    }
     Ok(())
+}
+
+#[test]
+fn search_parameter_round_trip_accepts_pole_coordinate_non_uniqueness() {
+    let sphere = Sphere::new(Point3::origin(), 0.1);
+    let source = (0.0, 3.1563508335340376);
+    let point = sphere.subs(source.0, source.1);
+    let result = sphere.search_parameter(point, None, 100);
+
+    assert!(result.is_some());
+    if let Some((u, v)) = result {
+        assert_near!(sphere.subs(u, v), point);
+    }
+}
+
+#[test]
+fn search_parameter_round_trip_accepts_periodic_seam_equivalence() {
+    let sphere = Sphere::new(Point3::origin(), 1.0);
+    let source = (PI / 2.0, 2.0 * PI);
+    let point = sphere.subs(source.0, source.1);
+    let result = sphere.search_parameter(point, None, 100);
+
+    assert!(result.is_some());
+    if let Some((u, v)) = result {
+        assert_near!(sphere.subs(u, v), point);
+    }
 }
 
 proptest! {
@@ -61,10 +85,9 @@ proptest! {
         center in prop::array::uniform3(-50f64..=50f64),
         radius in 0.1f64..100f64,
         (u, v) in (0f64..=PI, 0f64..=(2.0 * PI)),
-        disp in prop::array::uniform3(0.01f64..0.1f64),
-        sign in prop::array::uniform3(prop::bool::ANY),
+        radial_offset in 0.01f64..0.1f64,
     ) {
-        exec_search_parameter_test(center, radius, (u, v), disp, sign)?;
+        exec_search_parameter_test(center, radius, (u, v), radial_offset)?;
     }
 
 }

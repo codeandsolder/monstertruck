@@ -1,6 +1,7 @@
 use super::*;
 use monstertruck_core::{
     assert_near,
+    bounding_box::BoundingBox,
     cgmath64::{Point2, Point3, Vector2, Vector3},
     tolerance::{TOLERANCE, Tolerance},
 };
@@ -79,6 +80,11 @@ pub trait BoundedCurve: ParametricCurve {
         let (_, y) = self.parameter_range();
         self.evaluate(bound2opt(y).expect(UNBOUNDED_ERROR))
     }
+    /// Returns a certified axis-aligned spatial enclosure when this curve
+    /// representation can prove one cheaply. `None` means callers must not
+    /// infer any spatial bound.
+    #[inline(always)]
+    fn certified_spatial_bounds(&self) -> Option<BoundingBox<Self::Point>> { None }
 }
 
 /// Implementation for the test of topological methods.
@@ -125,6 +131,10 @@ impl<C: BoundedCurve> BoundedCurve for &C {
     fn front(&self) -> Self::Point { (*self).front() }
     #[inline(always)]
     fn back(&self) -> Self::Point { (*self).back() }
+    #[inline(always)]
+    fn certified_spatial_bounds(&self) -> Option<BoundingBox<Self::Point>> {
+        (*self).certified_spatial_bounds()
+    }
 }
 
 impl<C: ParametricCurve> ParametricCurve for Box<C> {
@@ -152,6 +162,10 @@ impl<C: BoundedCurve> BoundedCurve for Box<C> {
     fn front(&self) -> Self::Point { (**self).front() }
     #[inline(always)]
     fn back(&self) -> Self::Point { (**self).back() }
+    #[inline(always)]
+    fn certified_spatial_bounds(&self) -> Option<BoundingBox<Self::Point>> {
+        (**self).certified_spatial_bounds()
+    }
 }
 
 impl<C: Cut> Cut for Box<C> {

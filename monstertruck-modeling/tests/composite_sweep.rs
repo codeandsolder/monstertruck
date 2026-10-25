@@ -119,3 +119,67 @@ fn closed_composite_sweep_rejects_an_open_path() -> anyhow::Result<()> {
     assert_eq!(result.unwrap_err(), errors::Error::CompositeSweepNotClosed);
     Ok(())
 }
+
+#[test]
+fn closed_composite_sweep_normalizes_final_subdivision_before_closure() -> anyhow::Result<()> {
+    let face = rectangular_face()?;
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let solid = builder::composite_closed_sweep(
+        &face,
+        [
+            builder::CompositeSweepSegment::Rotation {
+                origin: Point3::origin(),
+                axis: Vector3::unit_y(),
+                angle: Rad(quarter),
+                division: 1,
+            },
+            builder::CompositeSweepSegment::Rotation {
+                origin: Point3::origin(),
+                axis: Vector3::unit_y(),
+                angle: Rad(quarter),
+                division: 1,
+            },
+            builder::CompositeSweepSegment::Rotation {
+                origin: Point3::origin(),
+                axis: Vector3::unit_y(),
+                angle: Rad(quarter),
+                division: 1,
+            },
+            builder::CompositeSweepSegment::Rotation {
+                origin: Point3::origin(),
+                axis: Vector3::unit_y(),
+                angle: Rad(quarter),
+                division: 3,
+            },
+        ],
+    )?;
+
+    assert_eq!(
+        solid.boundaries()[0].shell_condition(),
+        shell::ShellCondition::Closed
+    );
+    assert!(solid.is_geometric_consistent());
+    Ok(())
+}
+
+#[test]
+fn composite_sweep_rejects_invalid_rotation_before_building_any_segment() -> anyhow::Result<()> {
+    let face = rectangular_face()?;
+    let result = builder::composite_sweep(
+        &face,
+        [
+            builder::CompositeSweepSegment::Translation(Vector3::unit_z()),
+            builder::CompositeSweepSegment::Rotation {
+                origin: Point3::origin(),
+                axis: Vector3::zero(),
+                angle: Rad(0.5),
+                division: 4,
+            },
+        ],
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        errors::Error::InvalidCompositeSweepSegment
+    );
+    Ok(())
+}

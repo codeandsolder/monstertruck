@@ -270,6 +270,19 @@ pub fn face_boundary_hull(face: &Face) -> Option<Vec<Point3>> {
     (!points.is_empty()).then_some(points)
 }
 
+/// A certified axis-aligned box containing every point represented by `curve`,
+/// or [`None`] when this curve class carries no proof-supported finite enclosure.
+///
+/// This is the curve-level counterpart to [`certified_face_bounding_box`]. It
+/// deliberately shares [`push_curve_hull`]'s structural proofs, including the
+/// carrier-surface / exact-boundary treatment for composite curves; fitted
+/// leaders are never treated as enclosures.
+pub(crate) fn certified_curve_bounding_box(curve: &Curve) -> Option<BoundingBox<Point3>> {
+    let mut points = Vec::new();
+    push_curve_hull(curve, &mut points)?;
+    hull_box(&points)
+}
+
 /// Appends points whose convex hull encloses `curve`, or returns [`None`] when
 /// the curve class carries no such finite point set.
 ///

@@ -398,6 +398,8 @@ pub mod attributes;
 pub use attributes::{AttributeValue, ElementAttributes, SolidAttributes};
 
 pub mod compress;
+/// Repair and canonicalization passes for malformed or intermediate topology.
+pub mod repair;
 pub use compress::SolidHashOptions;
 mod edge;
 /// classifies the errors that can occur in this crate.

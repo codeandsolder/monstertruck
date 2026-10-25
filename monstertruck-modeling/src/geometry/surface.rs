@@ -1,6 +1,6 @@
 //! The 3-D [`Surface`] enum and every impl that belongs to it.
 
-use super::parameter_curves::same_surface;
+use super::parameter_curves::{same_surface_parameterization, sampled_curve_lies_on_surface};
 use super::*;
 
 /// 3-dimensional surfaces
@@ -115,16 +115,24 @@ impl IncludeCurve<Curve> for Surface {
     #[inline(always)]
     fn include(&self, curve: &Curve) -> bool {
         if let Curve::ParameterCurve(curve) = curve {
-            same_surface(curve.surface().as_ref(), self)
-        } else if match curve {
-            Curve::IntersectionCurve(curve) => {
-                same_surface(curve.surface0().as_ref(), self)
-                    || same_surface(curve.surface1().as_ref(), self)
+            return same_surface_parameterization(curve.surface().as_ref(), self)
+                || sampled_curve_lies_on_surface(curve, self);
+        }
+        if let Curve::IntersectionCurve(curve) = curve {
+            if same_surface_parameterization(curve.surface0().as_ref(), self)
+                || same_surface_parameterization(curve.surface1().as_ref(), self)
+            {
+                return true;
             }
-            _ => false,
-        } {
-            true
-        } else {
+            // Geometric containment is weaker than UV identity. A fillet or
+            // Boolean intersection curve can be carried by the same physical
+            // support with a different parameterization; validate its 3-D leader
+            // against this surface instead of reusing either foreign pcurve.
+            if sampled_curve_lies_on_surface(curve.leader().as_ref(), self) {
+                return true;
+            }
+        }
+        {
             match self {
                 Surface::BsplineSurface(surface) => match curve {
                     &Curve::Line(curve) => surface.include(&BsplineCurve::from(curve)),
