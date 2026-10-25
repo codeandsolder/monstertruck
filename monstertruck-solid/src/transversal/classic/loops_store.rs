@@ -1044,8 +1044,37 @@ impl<C> OperandLoopStores<C> {
     }
 }
 
+fn loop_stores_are_synchronized<C>(
+    geom: &LoopsStore<Point3, C>,
+    poly: &LoopsStore<Point3, PolylineCurve>,
+) -> bool {
+    geom.len() == poly.len()
+        && geom
+            .iter()
+            .zip(poly.iter())
+            .all(|(geom_loops, poly_loops)| {
+                geom_loops.len() == poly_loops.len()
+                    && geom_loops
+                        .iter()
+                        .zip(poly_loops.iter())
+                        .all(|(geom_wire, poly_wire)| {
+                            geom_wire.len() == poly_wire.len()
+                                && geom_wire.iter().zip(poly_wire.iter()).all(
+                                    |(geom_edge, poly_edge)| {
+                                        geom_edge.front().point().near(&poly_edge.front().point())
+                                            && geom_edge
+                                                .back()
+                                                .point()
+                                                .near(&poly_edge.back().point())
+                                    },
+                                )
+                        })
+            })
+}
+
 pub(super) struct InterfaceLoops<C> {
     pub(super) geom: [LoopsStore<Point3, C>; 2],
+    pub(super) sampled: [Option<LoopsStore<Point3, PolylineCurve>>; 2],
     pub(super) coplanar_overlap: bool,
     pub(super) full_interface_adjacency: Option<FullPlanarInterfaceMatch>,
 }
@@ -1280,8 +1309,15 @@ where
         imprint_edges_on_faces(&source0, poly_shell1, &mut operand1.geom, tol)?;
     }
 
+    let sampled0 = (!partial_coplanar_overlap
+        && loop_stores_are_synchronized(&operand0.geom, &operand0.poly))
+    .then_some(operand0.poly);
+    let sampled1 = (!partial_coplanar_overlap
+        && loop_stores_are_synchronized(&operand1.geom, &operand1.poly))
+    .then_some(operand1.poly);
     Some(InterfaceLoops {
         geom: [operand0.geom, operand1.geom],
+        sampled: [sampled0, sampled1],
         coplanar_overlap,
         full_interface_adjacency,
     })
@@ -1290,6 +1326,42 @@ where
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+
+    #[test]
+    fn synchronized_sampling_evidence_rejects_structural_drift() {
+        let g0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let g1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let geom_edge = Edge::new(&g0, &g1, Line(g0.point(), g1.point()));
+        let geom = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![geom_edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+
+        let p0 = Vertex::new(g0.point());
+        let p1 = Vertex::new(g1.point());
+        let poly_edge = Edge::new(
+            &p0,
+            &p1,
+            PolylineCurve(vec![p0.point(), Point3::new(0.5, 0.0, 2.0e-4), p1.point()]),
+        );
+        let poly = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![poly_edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        assert!(loop_stores_are_synchronized(&geom, &poly));
+
+        let stale_back = Vertex::new(Point3::new(1.0, 0.01, 0.0));
+        let stale_edge = Edge::new(
+            &p0,
+            &stale_back,
+            PolylineCurve(vec![p0.point(), stale_back.point()]),
+        );
+        let stale = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![stale_edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        assert!(!loop_stores_are_synchronized(&geom, &stale));
+    }
 
     #[test]
     fn change_vertex_removes_edge_collapsed_by_coalescing() {

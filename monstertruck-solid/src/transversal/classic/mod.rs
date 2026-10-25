@@ -106,6 +106,7 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         shell1.mapped(|x| *x, |c| Alternative::FirstType(c.clone()), Clone::clone);
     let loops_store::InterfaceLoops {
         geom: [loops_store0, loops_store1],
+        sampled: [sampled_store0, sampled_store1],
         coplanar_overlap,
         full_interface_adjacency,
     } = loops_store::create_loops_stores(
@@ -121,9 +122,9 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         shell0: matched.lhs_faces,
         shell1: matched.rhs_faces,
     });
-    let cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)
+    let cls0 = divide_face::divide_faces(&altshell0, &loops_store0, sampled_store0.as_ref(), tol)
         .ok_or(ShapeOpsError::DivideFacesFailed { shell_index: 0 })?;
-    let cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)
+    let cls1 = divide_face::divide_faces(&altshell1, &loops_store1, sampled_store1.as_ref(), tol)
         .ok_or(ShapeOpsError::DivideFacesFailed { shell_index: 1 })?;
     Ok(PairAnalysis {
         tolerance: tol,

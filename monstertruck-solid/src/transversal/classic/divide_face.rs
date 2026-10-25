@@ -9,6 +9,7 @@
 
 use super::faces_classification::FacesClassification;
 use super::loops_store::*;
+use super::tolerance::BooleanTolerance;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::*;
 use rustc_hash::FxHashMap as HashMap;
@@ -58,6 +59,7 @@ where
 fn create_parameter_boundary_on_surface<C, S>(
     surface: &S,
     wire: &Wire<Point3, C>,
+    sampled_wire: Option<&Wire<Point3, PolylineCurve<Point3>>>,
     polys: &mut HashMap<EdgeId<C>, PolylineCurve<Point3>>,
     tol: f64,
 ) -> Option<PolylineCurve<Point2>>
@@ -67,41 +69,77 @@ where
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
+    let sampling_tol = BooleanTolerance::new(tol).mesh_seed;
+    let projection_tol = if sampled_wire.is_some() {
+        sampling_tol
+    } else {
+        tol
+    };
     let pt = wire.front_vertex()?.point();
-    let p = project_to_parameter(surface, pt, None, tol)?;
-    let vec = wire.edge_iter().try_fold(vec![p], |mut vec, edge| {
+    let p = project_to_parameter(surface, pt, None, projection_tol)?;
+    let mut vec = vec![p];
+    if let Some(sampled) = sampled_wire {
+        for edge in sampled.iter() {
+            let poly = edge.curve();
+            let mut previous = vec.last().copied()?;
+            let mut project = |q: &Point3| -> Option<Point2> {
+                previous = project_to_parameter(surface, *q, Some(previous), sampling_tol)?;
+                Some(previous)
+            };
+            let mut add = match edge.orientation() {
+                true => poly
+                    .iter()
+                    .skip(1)
+                    .map(&mut project)
+                    .collect::<Option<Vec<_>>>()?,
+                false => poly
+                    .iter()
+                    .rev()
+                    .skip(1)
+                    .map(&mut project)
+                    .collect::<Option<Vec<_>>>()?,
+            };
+            vec.append(&mut add);
+        }
+        return Some(PolylineCurve(vec));
+    }
+
+    for edge in wire.iter() {
         let poly = polys.entry(edge.id()).or_insert_with(|| {
             let curve = edge.curve();
-            let div = curve.parameter_division(curve.range_tuple(), tol).1;
-            PolylineCurve(div)
+            PolylineCurve(
+                curve
+                    .parameter_division(curve.range_tuple(), sampling_tol)
+                    .1,
+            )
         });
         let mut previous = vec.last().copied()?;
         let mut project = |q: &Point3| -> Option<Point2> {
             previous = project_to_parameter(surface, *q, Some(previous), tol)?;
             Some(previous)
         };
-        let mut add: Vec<Point2> = match edge.orientation() {
+        let mut add = match edge.orientation() {
             true => poly
                 .iter()
                 .skip(1)
                 .map(&mut project)
-                .collect::<Option<_>>()?,
+                .collect::<Option<Vec<_>>>()?,
             false => poly
                 .iter()
                 .rev()
                 .skip(1)
                 .map(&mut project)
-                .collect::<Option<_>>()?,
+                .collect::<Option<Vec<_>>>()?,
         };
         vec.append(&mut add);
-        Some(vec)
-    })?;
+    }
     Some(PolylineCurve(vec))
 }
 
 fn create_parameter_boundary<C, S>(
     face: &Face<Point3, C, S>,
     wire: &Wire<Point3, C>,
+    sampled_wire: Option<&Wire<Point3, PolylineCurve<Point3>>>,
     polys: &mut HashMap<EdgeId<C>, PolylineCurve<Point3>>,
     tol: f64,
 ) -> Option<PolylineCurve<Point2>>
@@ -112,7 +150,7 @@ where
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    create_parameter_boundary_on_surface(&face.surface(), wire, polys, tol)
+    create_parameter_boundary_on_surface(&face.surface(), wire, sampled_wire, polys, tol)
 }
 
 #[derive(Clone, Debug)]
@@ -248,7 +286,9 @@ where
     let parameter_loops = boundaries
         .iter()
         .flat_map(split_non_simple_wire)
-        .filter_map(|wire| create_parameter_boundary_on_surface(surface, &wire, &mut polys, tol))
+        .filter_map(|wire| {
+            create_parameter_boundary_on_surface(surface, &wire, None, &mut polys, tol)
+        })
         .filter(|poly| polyline_signed_area(poly).abs() > polyline_area_epsilon(poly))
         .collect::<Vec<_>>();
     if parameter_loops.is_empty() {
@@ -338,6 +378,7 @@ fn polyline_area_epsilon(poly: &PolylineCurve<Point2>) -> f64 {
 fn divide_one_face<C, S>(
     face: &Face<Point3, C, S>,
     loops: &Loops<Point3, C>,
+    sampled_loops: Option<&Loops<Point3, PolylineCurve<Point3>>>,
     tol: f64,
 ) -> Option<Vec<(FaceFragment<C, S>, ShapesOpStatus)>>
 where
@@ -349,26 +390,32 @@ where
 {
     let (mut pre_faces, mut negative_wires) = (Vec::new(), Vec::new());
     let mut map = HashMap::default();
-    loops.iter().try_for_each(|wire| {
-        let poly = create_parameter_boundary(face, wire, &mut map, tol)?;
-        let area = polyline_signed_area(&poly);
-        if area.abs() <= polyline_area_epsilon(&poly) {
-            return Some(());
-        }
-        match area > 0.0 {
-            true => pre_faces.push(vec![WireChunk {
-                poly,
-                wire,
-                reverse_for_face: false,
-            }]),
-            false => negative_wires.push(WireChunk {
-                poly,
-                wire,
-                reverse_for_face: false,
-            }),
-        }
-        Some(())
-    })?;
+    loops
+        .iter()
+        .enumerate()
+        .try_for_each(|(wire_index, wire)| {
+            let sampled_wire = sampled_loops
+                .and_then(|sampled| sampled.get(wire_index))
+                .map(Deref::deref);
+            let poly = create_parameter_boundary(face, wire, sampled_wire, &mut map, tol)?;
+            let area = polyline_signed_area(&poly);
+            if area.abs() <= polyline_area_epsilon(&poly) {
+                return Some(());
+            }
+            match area > 0.0 {
+                true => pre_faces.push(vec![WireChunk {
+                    poly,
+                    wire,
+                    reverse_for_face: false,
+                }]),
+                false => negative_wires.push(WireChunk {
+                    poly,
+                    wire,
+                    reverse_for_face: false,
+                }),
+            }
+            Some(())
+        })?;
     negative_wires.into_iter().try_for_each(|mut chunk| {
         let witness = strict_interior_point(&chunk.poly, tol)?;
         let chunk_area_abs = polyline_signed_area(&chunk.poly).abs();
@@ -509,6 +556,7 @@ mod uv_area_tests {
 pub(super) fn divide_faces<C, S>(
     shell: &Shell<Point3, C, S>,
     loops_store: &LoopsStore<Point3, C>,
+    sampled_store: Option<&LoopsStore<Point3, PolylineCurve<Point3>>>,
     tol: f64,
 ) -> Option<FacesClassification<Point3, C, S>>
 where
@@ -524,13 +572,14 @@ where
         .zip(loops_store)
         .enumerate()
         .try_for_each(|(source_face, (face, loops))| {
+            let sampled_loops = sampled_store.and_then(|sampled| sampled.get(source_face));
             if loops
                 .iter()
                 .all(|wire| wire.status() == ShapesOpStatus::Unknown)
             {
                 res.push(face.clone(), ShapesOpStatus::Unknown, source_face);
             } else {
-                divide_one_face(face, loops, tol)?
+                divide_one_face(face, loops, sampled_loops, tol)?
                     .into_iter()
                     .for_each(|(fragment, status)| {
                         res.push_region(
@@ -550,7 +599,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, Plane};
+    use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, Line, Plane};
 
     #[test]
     fn approximate_surface_projection_is_bounded_by_boolean_tolerance() {
@@ -579,6 +628,51 @@ mod tests {
                 vec![front.point(), back.point()],
             ),
         )
+    }
+
+    #[test]
+    fn synchronized_mesh_samples_use_mesh_projection_budget() {
+        let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let exact: Wire<_, _> =
+            vec![Edge::new(&front, &back, Line(front.point(), back.point()))].into();
+        let sampled_front = Vertex::new(front.point());
+        let sampled_back = Vertex::new(back.point());
+        let sampled_curve = PolylineCurve(vec![
+            front.point(),
+            Point3::new(0.5, 0.0, 5.0e-4),
+            back.point(),
+        ]);
+        let sampled: Wire<_, _> =
+            vec![Edge::new(&sampled_front, &sampled_back, sampled_curve)].into();
+        let mut polys = HashMap::default();
+
+        let boundary = create_parameter_boundary_on_surface(
+            &Plane::xy(),
+            &exact,
+            Some(&sampled),
+            &mut polys,
+            1.0e-6,
+        );
+        assert!(
+            boundary.is_some(),
+            "trusted mesh evidence must project within the mesh budget"
+        );
+        if let Some(boundary) = boundary {
+            assert_eq!(boundary.len(), 3);
+            assert!(boundary[1].near(&Point2::new(0.5, 0.0)));
+        }
+    }
+
+    #[test]
+    fn exact_fallback_does_not_inherit_mesh_projection_budget() {
+        let plane = Plane::xy();
+        let point = Point3::new(0.5, 0.0, 5.0e-4);
+        assert!(project_to_parameter(&plane, point, None, 1.0e-6).is_none());
+        assert!(
+            project_to_parameter(&plane, point, None, BooleanTolerance::new(1.0e-6).mesh_seed)
+                .is_some()
+        );
     }
 
     #[test]
@@ -651,7 +745,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let divided = divide_one_face(&face, &loops, 0.01).expect("split must succeed");
+        let divided = divide_one_face(&face, &loops, None, 0.01).expect("split must succeed");
         assert_eq!(divided.len(), 2);
         assert!(divided.iter().all(|(face, _)| face.boundaries().len() == 1));
         assert!(
@@ -700,7 +794,8 @@ mod tests {
         .into_iter()
         .collect();
 
-        let divided = divide_one_face(&face, &loops, 0.01).expect("closed cut must partition");
+        let divided =
+            divide_one_face(&face, &loops, None, 0.01).expect("closed cut must partition");
         assert_eq!(divided.len(), 2);
         assert!(divided.iter().any(|(face, _)| face.boundaries().len() == 2));
         assert!(divided.iter().any(|(face, _)| face.boundaries().len() == 1));
@@ -739,7 +834,8 @@ mod tests {
         .into_iter()
         .collect();
 
-        let divided = divide_one_face(&face, &loops, 0.01).expect("hole nesting must succeed");
+        let divided =
+            divide_one_face(&face, &loops, None, 0.01).expect("hole nesting must succeed");
         assert_eq!(divided.len(), 1);
         assert_eq!(divided[0].0.boundaries().len(), 2);
         assert_eq!(divided[0].1, ShapesOpStatus::And);
