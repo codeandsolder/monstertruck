@@ -10,7 +10,7 @@
 use super::faces_classification::FacesClassification;
 use super::loops_store::*;
 use monstertruck_meshing::prelude::*;
-use monstertruck_topology::{compress::*, repair, *};
+use monstertruck_topology::*;
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::Deref;
 
@@ -55,6 +55,50 @@ where
     None
 }
 
+fn create_parameter_boundary_on_surface<C, S>(
+    surface: &S,
+    wire: &Wire<Point3, C>,
+    polys: &mut HashMap<EdgeId<C>, PolylineCurve<Point3>>,
+    tol: f64,
+) -> Option<PolylineCurve<Point2>>
+where
+    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
+    S: ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let pt = wire.front_vertex()?.point();
+    let p = project_to_parameter(surface, pt, None, tol)?;
+    let vec = wire.edge_iter().try_fold(vec![p], |mut vec, edge| {
+        let poly = polys.entry(edge.id()).or_insert_with(|| {
+            let curve = edge.curve();
+            let div = curve.parameter_division(curve.range_tuple(), tol).1;
+            PolylineCurve(div)
+        });
+        let mut previous = vec.last().copied()?;
+        let mut project = |q: &Point3| -> Option<Point2> {
+            previous = project_to_parameter(surface, *q, Some(previous), tol)?;
+            Some(previous)
+        };
+        let mut add: Vec<Point2> = match edge.orientation() {
+            true => poly
+                .iter()
+                .skip(1)
+                .map(&mut project)
+                .collect::<Option<_>>()?,
+            false => poly
+                .iter()
+                .rev()
+                .skip(1)
+                .map(&mut project)
+                .collect::<Option<_>>()?,
+        };
+        vec.append(&mut add);
+        Some(vec)
+    })?;
+    Some(PolylineCurve(vec))
+}
+
 fn create_parameter_boundary<C, S>(
     face: &Face<Point3, C, S>,
     wire: &Wire<Point3, C>,
@@ -68,28 +112,7 @@ where
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    let surface = face.surface();
-    let pt = wire.front_vertex().unwrap().point();
-    let p = project_to_parameter(&surface, pt, None, tol)?;
-    let vec = wire.edge_iter().try_fold(vec![p], |mut vec, edge| {
-        let poly = polys.entry(edge.id()).or_insert_with(|| {
-            let curve = edge.curve();
-            let div = curve.parameter_division(curve.range_tuple(), tol).1;
-            PolylineCurve(div)
-        });
-        let mut p = *vec.last().unwrap();
-        let closure = |q: &Point3| -> Option<Point2> {
-            p = project_to_parameter(&surface, *q, Some(p), tol)?;
-            Some(p)
-        };
-        let add: Option<Vec<Point2>> = match edge.orientation() {
-            true => poly.iter().skip(1).map(closure).collect(),
-            false => poly.iter().rev().skip(1).map(closure).collect(),
-        };
-        vec.append(&mut add?);
-        Some(vec)
-    })?;
-    Some(PolylineCurve(vec))
+    create_parameter_boundary_on_surface(&face.surface(), wire, polys, tol)
 }
 
 #[derive(Clone, Debug)]
@@ -99,7 +122,6 @@ struct WireChunk<'a, C> {
     reverse_for_face: bool,
 }
 
-type FaceWithShapesOpStatus<C, S> = (Face<Point3, C, S>, ShapesOpStatus);
 #[derive(Clone, Debug)]
 struct FaceFragment<C, S> {
     wires: Vec<Wire<Point3, C>>,
@@ -107,93 +129,21 @@ struct FaceFragment<C, S> {
     orientation: bool,
 }
 
-impl<C: Clone, S: Clone> FaceFragment<C, S> {
-    fn canonicalize(self) -> Option<Vec<Face<Point3, C, S>>> {
-        let Self {
-            wires,
-            surface,
-            orientation,
-        } = self;
-
-        // Keep already-valid topology on its existing shared vertex/edge identities.
-        // Only fragments that actually violate Face invariants go through compressed
-        // repair, which may need to rebuild topology.
-        if let Ok(mut face) = Face::try_new(wires.clone(), surface.clone()) {
-            if !orientation {
-                face.invert();
-            }
-            return Some(vec![face]);
+#[cfg(test)]
+impl<C: Clone, S> FaceFragment<C, S> {
+    fn boundaries(&self) -> Vec<Wire<Point3, C>> {
+        if self.orientation {
+            self.wires.clone()
+        } else {
+            self.wires.iter().map(Wire::inverse).collect()
         }
-
-        let mut vertices = Vec::<Point3>::new();
-        let mut vertex_map = HashMap::<VertexId<Point3>, usize>::default();
-        let mut edges = Vec::<CompressedEdge<C>>::new();
-        let mut edge_map = HashMap::<EdgeId<C>, usize>::default();
-
-        let mut vertex_index = |vertex: &Vertex<Point3>| {
-            if let Some(index) = vertex_map.get(&vertex.id()).copied() {
-                index
-            } else {
-                let index = vertices.len();
-                vertices.push(vertex.point());
-                vertex_map.insert(vertex.id(), index);
-                index
-            }
-        };
-
-        let boundaries = wires
-            .iter()
-            .map(|wire| {
-                wire.iter()
-                    .map(|edge| {
-                        let index = if let Some(index) = edge_map.get(&edge.id()).copied() {
-                            index
-                        } else {
-                            let index = edges.len();
-                            edges.push(CompressedEdge {
-                                vertices: (
-                                    vertex_index(edge.absolute_front()),
-                                    vertex_index(edge.absolute_back()),
-                                ),
-                                curve: edge.curve(),
-                            });
-                            edge_map.insert(edge.id(), index);
-                            index
-                        };
-                        CompressedEdgeIndex {
-                            index,
-                            orientation: edge.orientation(),
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        let mut compressed = CompressedShell {
-            vertices,
-            edges,
-            faces: vec![CompressedFace {
-                boundaries,
-                orientation,
-                surface,
-            }],
-            vertex_stable_ids: None,
-            edge_stable_ids: None,
-            face_stable_ids: None,
-        };
-        repair::split_non_simple_compressed_wires(&mut compressed);
-        repair::split_pinched_compressed_faces(&mut compressed);
-        Shell::extract(compressed)
-            .ok()
-            .map(IntoIterator::into_iter)
-            .map(Iterator::collect)
     }
 }
 
-fn strict_interior_point(poly: &PolylineCurve<Point2>, tol: f64) -> Option<Point2> {
+fn polyline_interior_candidates(poly: &PolylineCurve<Point2>) -> Vec<Point2> {
     let area = polyline_signed_area(poly);
     if area.abs() <= polyline_area_epsilon(poly) {
-        return None;
+        return Vec::new();
     }
     let mut domain = poly.clone();
     if area < 0.0 {
@@ -201,27 +151,136 @@ fn strict_interior_point(poly: &PolylineCurve<Point2>, tol: f64) -> Option<Point
     }
     let points = &poly.0;
     if points.len() < 2 {
-        return None;
+        return Vec::new();
     }
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for point in points {
+        min_x = min_x.min(point.x);
+        max_x = max_x.max(point.x);
+        min_y = min_y.min(point.y);
+        max_y = max_y.max(point.y);
+    }
+    let scale = (max_x - min_x).abs().max((max_y - min_y).abs());
+    if !scale.is_finite() || scale <= f64::EPSILON {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
     for index in 0..points.len() {
         let a = points[index];
         let b = points[(index + 1) % points.len()];
         let edge = b - a;
         let length = edge.magnitude();
-        if length <= tol {
+        if length <= f64::EPSILON {
             continue;
         }
         let left = Vector2::new(-edge.y, edge.x) / length;
         let inward = if area > 0.0 { left } else { -left };
         let midpoint = a.midpoint(b);
-        for scale in [4.0, 16.0, 64.0] {
-            let candidate = midpoint + inward * (tol * scale).min(length * 0.125);
+        for relative in [1.0e-8, 1.0e-6, 1.0e-4, 1.0e-2] {
+            let distance = (scale * relative).min(length * 0.125);
+            let candidate = midpoint + inward * distance;
             if domain.include(candidate) {
-                return Some(candidate);
+                candidates.push(candidate);
+                break;
             }
         }
     }
-    None
+    candidates
+}
+
+fn strict_interior_point(poly: &PolylineCurve<Point2>, _tol: f64) -> Option<Point2> {
+    polyline_interior_candidates(poly).into_iter().next()
+}
+
+fn split_non_simple_wire<P: Clone, C: Clone>(wire: &Wire<P, C>) -> Vec<Wire<P, C>> {
+    let mut pending = vec![wire.iter().cloned().collect::<Vec<_>>()];
+    let mut simple = Vec::new();
+    while let Some(edges) = pending.pop() {
+        if edges.len() < 2 {
+            continue;
+        }
+        let starts = edges
+            .iter()
+            .map(|edge| edge.front().id())
+            .collect::<Vec<_>>();
+        let mut seen = HashMap::default();
+        let revisit = starts
+            .iter()
+            .enumerate()
+            .find_map(|(j, vertex)| seen.insert(*vertex, j).map(|i| (i, j)));
+        let Some((i, j)) = revisit else {
+            simple.push(Wire::from(edges));
+            continue;
+        };
+        let sub = edges[i..j].to_vec();
+        let outer = edges[..i]
+            .iter()
+            .chain(edges[j..].iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        if sub.len() >= 2 {
+            pending.push(sub);
+        }
+        if outer.len() >= 2 {
+            pending.push(outer);
+        }
+    }
+    simple
+}
+
+pub(super) fn sample_points_on_region<C, S>(
+    boundaries: &[Wire<Point3, C>],
+    surface: &S,
+    tol: f64,
+) -> Option<Vec<Point3>>
+where
+    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3> + Clone,
+    S: ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let mut polys = HashMap::default();
+    let parameter_loops = boundaries
+        .iter()
+        .flat_map(split_non_simple_wire)
+        .filter_map(|wire| create_parameter_boundary_on_surface(surface, &wire, &mut polys, tol))
+        .filter(|poly| polyline_signed_area(poly).abs() > polyline_area_epsilon(poly))
+        .collect::<Vec<_>>();
+    if parameter_loops.is_empty() {
+        return None;
+    }
+    let winding_at = |point: Point2| {
+        parameter_loops.iter().fold(0isize, |winding, poly| {
+            if poly.include(point) {
+                winding
+                    + if polyline_signed_area(poly) > 0.0 {
+                        1
+                    } else {
+                        -1
+                    }
+            } else {
+                winding
+            }
+        })
+    };
+    let mut points = Vec::new();
+    for poly in parameter_loops
+        .iter()
+        .filter(|poly| polyline_signed_area(poly) > 0.0)
+    {
+        for uv in polyline_interior_candidates(poly) {
+            if winding_at(uv) > 0 {
+                points.push(surface.evaluate(uv.x, uv.y));
+                break;
+            }
+        }
+    }
+    (!points.is_empty()).then_some(points)
 }
 
 fn same_edge_set<C>(lhs: &BoundaryWire<Point3, C>, rhs: &BoundaryWire<Point3, C>) -> bool {
@@ -280,7 +339,7 @@ fn divide_one_face<C, S>(
     face: &Face<Point3, C, S>,
     loops: &Loops<Point3, C>,
     tol: f64,
-) -> Option<Vec<FaceWithShapesOpStatus<C, S>>>
+) -> Option<Vec<(FaceFragment<C, S>, ShapesOpStatus)>>
 where
     C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
     S: Clone
@@ -368,46 +427,38 @@ where
         pre_faces.push(vec![chunk]);
         Some(())
     })?;
-    let vec: Vec<_> = pre_faces
-        .into_iter()
-        .filter(|pre_face| !pre_face.is_empty())
-        .map(|pre_face| {
-            let surface = face.surface();
-            let op = pre_face
-                .iter()
-                .find(|chunk| chunk.wire.status() != ShapesOpStatus::Unknown);
-            let status = match op {
-                Some(chunk) => chunk.wire.status(),
-                None => ShapesOpStatus::Unknown,
-            };
-            let wires: Vec<Wire<Point3, C>> = pre_face
-                .into_iter()
-                .map(|chunk| {
-                    let wire = chunk.wire.deref().clone();
-                    if chunk.reverse_for_face {
-                        wire.inverse()
-                    } else {
-                        wire
-                    }
-                })
-                .collect();
-            let fragment = FaceFragment {
-                wires,
-                surface,
-                orientation: face.orientation(),
-            };
-            fragment.canonicalize().map(|faces| {
-                faces
+    Some(
+        pre_faces
+            .into_iter()
+            .filter(|pre_face| !pre_face.is_empty())
+            .map(|pre_face| {
+                let surface = face.surface();
+                let status = pre_face
+                    .iter()
+                    .find(|chunk| chunk.wire.status() != ShapesOpStatus::Unknown)
+                    .map_or(ShapesOpStatus::Unknown, |chunk| chunk.wire.status());
+                let wires = pre_face
                     .into_iter()
-                    .map(|face| (face, status))
-                    .collect::<Vec<_>>()
+                    .map(|chunk| {
+                        let wire = chunk.wire.deref().clone();
+                        if chunk.reverse_for_face {
+                            wire.inverse()
+                        } else {
+                            wire
+                        }
+                    })
+                    .collect();
+                (
+                    FaceFragment {
+                        wires,
+                        surface,
+                        orientation: face.orientation(),
+                    },
+                    status,
+                )
             })
-        })
-        .collect::<Option<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    Some(vec)
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -471,16 +522,25 @@ where
     shell
         .iter()
         .zip(loops_store)
-        .try_for_each(|(face, loops)| {
+        .enumerate()
+        .try_for_each(|(source_face, (face, loops))| {
             if loops
                 .iter()
                 .all(|wire| wire.status() == ShapesOpStatus::Unknown)
             {
-                res.push(face.clone(), ShapesOpStatus::Unknown);
+                res.push(face.clone(), ShapesOpStatus::Unknown, source_face);
             } else {
-                let vec = divide_one_face(face, loops, tol)?;
-                vec.into_iter()
-                    .for_each(|(face, status)| res.push(face, status));
+                divide_one_face(face, loops, tol)?
+                    .into_iter()
+                    .for_each(|(fragment, status)| {
+                        res.push_region(
+                            fragment.wires,
+                            fragment.surface,
+                            fragment.orientation,
+                            status,
+                            source_face,
+                        );
+                    });
             }
             Some(())
         })?;
@@ -519,6 +579,37 @@ mod tests {
                 vec![front.point(), back.point()],
             ),
         )
+    }
+
+    #[test]
+    fn non_simple_region_sampling_respects_touching_negative_notch() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(4.0, 0.0, 0.0));
+        let c = Vertex::new(Point3::new(4.0, 4.0, 0.0));
+        let d = Vertex::new(Point3::new(0.0, 4.0, 0.0));
+        let e = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let f = Vertex::new(Point3::new(0.0, 1.0, 0.0));
+        let boundary: Wire<_, _> = vec![
+            test_line(&a, &b),
+            test_line(&b, &c),
+            test_line(&c, &d),
+            test_line(&d, &a),
+            test_line(&a, &f),
+            test_line(&f, &e),
+            test_line(&e, &a),
+        ]
+        .into();
+
+        let samples =
+            sample_points_on_region(&[boundary], &Plane::xy(), 1.0e-6).unwrap_or_default();
+        assert!(!samples.is_empty());
+        assert!(samples.iter().all(|point| {
+            point.x >= 0.0
+                && point.x <= 4.0
+                && point.y >= 0.0
+                && point.y <= 4.0
+                && !(point.x > 0.0 && point.y > 0.0 && point.x + point.y < 1.0)
+        }));
     }
 
     #[test]

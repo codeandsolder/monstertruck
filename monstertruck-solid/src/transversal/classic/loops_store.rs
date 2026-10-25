@@ -254,6 +254,58 @@ impl<P: Copy, C: Clone> Loops<P, C> {
         self.push(r#loop);
     }
 
+    fn reuse_coincident_edge(&mut self, edge0: &Edge<P, C>) -> bool
+    where
+        P: Tolerance,
+        C: ParametricCurve<Point = P>
+            + BoundedCurve<Point = P>
+            + SearchNearestParameter<CurveParameter, Point = P>
+            + Invertible, {
+        let curves_sampled_match = |edge: &Edge<P, C>| {
+            validate_sampled_coincidence::<P, _>(&edge.oriented_curve(), &edge0.oriented_curve())
+                == CurveCoincidence::SampledValidation
+        };
+        let coincident = self.iter().flat_map(|wire| wire.iter()).find_map(|edge| {
+            let same_direction = edge.front().point().near(&edge0.front().point())
+                && edge.back().point().near(&edge0.back().point());
+            let opposite_direction = edge.front().point().near(&edge0.back().point())
+                && edge.back().point().near(&edge0.front().point());
+            (same_direction || opposite_direction)
+                .then(|| curves_sampled_match(edge))
+                .filter(|matched| *matched)
+                .map(|_| (edge.front().clone(), edge.back().clone(), same_direction))
+        });
+        let Some((old_front, old_back, same_direction)) = coincident else {
+            return false;
+        };
+        let (new_front, new_back) = if same_direction {
+            (edge0.front().clone(), edge0.back().clone())
+        } else {
+            (edge0.back().clone(), edge0.front().clone())
+        };
+        let mut emap = HashMap::default();
+        if old_front.id() != new_front.id() {
+            self.change_vertex(&old_front, &new_front, &mut emap);
+        }
+        if old_back.id() != new_back.id() {
+            self.change_vertex(&old_back, &new_back, &mut emap);
+        }
+        self.iter_mut().for_each(|wire| {
+            wire.iter_mut().for_each(|edge| {
+                let same_direction = edge.front().point().near(&edge0.front().point())
+                    && edge.back().point().near(&edge0.back().point());
+                let opposite_direction = edge.front().point().near(&edge0.back().point())
+                    && edge.back().point().near(&edge0.front().point());
+                if same_direction {
+                    *edge = edge0.clone();
+                } else if opposite_direction {
+                    *edge = edge0.inverse();
+                }
+            });
+        });
+        true
+    }
+
     fn add_edge(
         &mut self,
         edge0: Edge<P, C>,
@@ -267,51 +319,8 @@ impl<P: Copy, C: Clone> Loops<P, C> {
             + SearchNearestParameter<CurveParameter, Point = P>
             + Invertible,
     {
-        if reuse_coincident {
-            let curves_sampled_match = |edge: &Edge<P, C>| {
-                validate_sampled_coincidence::<P, _>(
-                    &edge.oriented_curve(),
-                    &edge0.oriented_curve(),
-                ) == CurveCoincidence::SampledValidation
-            };
-            let coincident = self.iter().flat_map(|wire| wire.iter()).find_map(|edge| {
-                let same_direction = edge.front().point().near(&edge0.front().point())
-                    && edge.back().point().near(&edge0.back().point());
-                let opposite_direction = edge.front().point().near(&edge0.back().point())
-                    && edge.back().point().near(&edge0.front().point());
-                (same_direction || opposite_direction)
-                    .then(|| curves_sampled_match(edge))
-                    .filter(|matched| *matched)
-                    .map(|_| (edge.front().clone(), edge.back().clone(), same_direction))
-            });
-            if let Some((old_front, old_back, same_direction)) = coincident {
-                let (new_front, new_back) = if same_direction {
-                    (edge0.front().clone(), edge0.back().clone())
-                } else {
-                    (edge0.back().clone(), edge0.front().clone())
-                };
-                let mut emap = HashMap::default();
-                if old_front.id() != new_front.id() {
-                    self.change_vertex(&old_front, &new_front, &mut emap);
-                }
-                if old_back.id() != new_back.id() {
-                    self.change_vertex(&old_back, &new_back, &mut emap);
-                }
-                self.iter_mut().for_each(|wire| {
-                    wire.iter_mut().for_each(|edge| {
-                        let same_direction = edge.front().point().near(&edge0.front().point())
-                            && edge.back().point().near(&edge0.back().point());
-                        let opposite_direction = edge.front().point().near(&edge0.back().point())
-                            && edge.back().point().near(&edge0.front().point());
-                        if same_direction {
-                            *edge = edge0.clone();
-                        } else if opposite_direction {
-                            *edge = edge0.inverse();
-                        }
-                    });
-                });
-                return [None, None];
-            }
+        if reuse_coincident && self.reuse_coincident_edge(&edge0) {
+            return [None, None];
         }
 
         let matching_occurrences = |vertex: &Vertex<P>| {
@@ -606,6 +615,81 @@ impl<C> LoopsStore<Point3, C> {
         candidate
     }
 
+    fn add_imprint_vertex(
+        &mut self,
+        loops_index: usize,
+        vertex: &Vertex<Point3>,
+        emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
+    ) -> Option<()>
+    where
+        C: Clone
+            + Cut<Point = Point3>
+            + SearchParameter<CurveParameter, Point = Point3>
+            + SearchNearestParameter<CurveParameter, Point = Point3>,
+    {
+        let point = vertex.point();
+        let mut endpoint_vertices = Vec::<Vertex<Point3>>::new();
+        let mut interior: Option<(EdgeId<C>, usize, usize, f64)> = None;
+
+        for (wire_index, wire) in self[loops_index].iter().enumerate() {
+            for (edge_index, edge) in wire.iter().enumerate() {
+                let curve = edge.curve();
+                let Some(parameter) = curve.search_parameter(point, None, 1) else {
+                    continue;
+                };
+                let Some(kind) = ParameterKind::try_new(parameter, curve.range_tuple()) else {
+                    continue;
+                };
+                match kind {
+                    ParameterKind::Front => {
+                        let endpoint = edge.absolute_front().clone();
+                        if !endpoint_vertices
+                            .iter()
+                            .any(|known| known.id() == endpoint.id())
+                        {
+                            endpoint_vertices.push(endpoint);
+                        }
+                    }
+                    ParameterKind::Back => {
+                        let endpoint = edge.absolute_back().clone();
+                        if !endpoint_vertices
+                            .iter()
+                            .any(|known| known.id() == endpoint.id())
+                        {
+                            endpoint_vertices.push(endpoint);
+                        }
+                    }
+                    ParameterKind::Inner(parameter) => match interior {
+                        Some((edge_id, _, _, _)) if edge_id == edge.id() => {}
+                        Some(_) => return None,
+                        None => {
+                            interior = Some((edge.id(), wire_index, edge_index, parameter));
+                        }
+                    },
+                }
+            }
+        }
+
+        if endpoint_vertices.is_empty() && interior.is_none() {
+            self.add_polygon_vertex(loops_index, vertex, emap)?;
+            return Some(());
+        }
+
+        if let Some((edge_id, wire_index, edge_index, parameter)) = interior {
+            let edge = self[loops_index][wire_index][edge_index].absolute_clone();
+            let (edge0, edge1) = edge.cut_with_parameter(vertex, parameter)?;
+            let new_wire: Wire<_, _> = vec![edge0, edge1].into();
+            self.swap_edge_into_wire(edge_id, &new_wire);
+        }
+
+        for old_vertex in endpoint_vertices {
+            if old_vertex.id() != vertex.id() {
+                self.change_vertex(&old_vertex, vertex, emap);
+            }
+        }
+        Some(())
+    }
+
     fn add_polygon_vertex(
         &mut self,
         loops_index: usize,
@@ -647,9 +731,48 @@ impl<C> LoopsStore<Point3, C> {
         Some((wire_index, edge_index, kind))
     }
 
+    fn resolve_boundary_hint(
+        &self,
+        loops_index: usize,
+        (wire_index, edge_index): (usize, usize),
+        point: Point3,
+        nearest_tolerance: f64,
+    ) -> Option<(usize, usize, ParameterKind, Option<Point3>)>
+    where
+        C: BoundedCurve<Point = Point3>
+            + SearchParameter<CurveParameter, Point = Point3>
+            + SearchNearestParameter<CurveParameter, Point = Point3>,
+    {
+        let edge = self.get(loops_index)?.get(wire_index)?.get(edge_index)?;
+        let curve = edge.curve();
+        let classify = |parameter: f64| {
+            let projected = curve.evaluate(parameter);
+            if projected.distance(point) > nearest_tolerance {
+                return None;
+            }
+            let kind = ParameterKind::try_new(parameter, curve.range_tuple())?;
+            let canonical_point = match kind {
+                ParameterKind::Front => edge.absolute_front().point(),
+                ParameterKind::Back => edge.absolute_back().point(),
+                ParameterKind::Inner(_) => projected,
+            };
+            Some((wire_index, edge_index, kind, Some(canonical_point)))
+        };
+
+        curve
+            .search_parameter(point, None, 1)
+            .and_then(classify)
+            .or_else(|| {
+                curve
+                    .search_nearest_parameter(point, None, 10)
+                    .and_then(classify)
+            })
+    }
+
     fn add_geom_vertex<S>(
         &mut self,
         loops_index: usize,
+        boundary_hint: Option<(usize, usize)>,
         vertex: &Vertex<Point3>,
         another_surface: &S,
         nearest_tolerance: f64,
@@ -664,12 +787,17 @@ impl<C> LoopsStore<Point3, C> {
             + SearchParameter<SurfaceParameter, Point = Point3>
             + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     {
-        // Polygon and exact loop stores can diverge after an endpoint that is
-        // interior in the tessellated representation is reclassified as an
-        // exact endpoint. Never reuse polygon wire/edge indices here: resolve
-        // the unique exact boundary locus from the endpoint itself.
-        let (wire_index, edge_index, kind, projected) =
-            self.search_boundary_parameter(loops_index, vertex.point(), nearest_tolerance)?;
+        // Polygon and exact loop stores can diverge after earlier endpoint
+        // canonicalization. A polygon boundary index is therefore only a
+        // candidate hint: accept it when the corresponding exact edge still
+        // resolves the endpoint within the tessellation budget, otherwise fall
+        // back to the global ambiguity-safe exact-boundary search.
+        let hinted = boundary_hint.and_then(|hint| {
+            self.resolve_boundary_hint(loops_index, hint, vertex.point(), nearest_tolerance)
+        });
+        let (wire_index, edge_index, kind, projected) = hinted.or_else(|| {
+            self.search_boundary_parameter(loops_index, vertex.point(), nearest_tolerance)
+        })?;
         if let Some(projected) = projected {
             vertex.set_point(projected);
         }
@@ -1113,6 +1241,20 @@ pub(super) struct PlanarPartitionMatch {
     pub(super) members: Vec<usize>,
 }
 
+pub(super) fn direct_planar_face_match(
+    target: &PolygonMesh,
+    fragments: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    tol: f64,
+) -> Option<Option<usize>> {
+    for (index, face) in fragments.iter().enumerate() {
+        let polygon = face.surface()?;
+        if planar_polygons_same_trimmed_face(target, &polygon, tol) {
+            return Some(Some(index));
+        }
+    }
+    Some(None)
+}
+
 /// Match one trimmed planar face against a partition of the same physical
 /// interface on the other shell. Revolving a radial cap, for example, may
 /// represent one disk as two semicircular faces while a sweep uses one disk.
@@ -1314,9 +1456,12 @@ where
                 continue;
             }
 
+            if target[face_index].reuse_coincident_edge(edge) {
+                continue;
+            }
             let mut emap = HashMap::default();
-            target.add_polygon_vertex(face_index, edge.front(), &mut emap)?;
-            target.add_polygon_vertex(face_index, edge.back(), &mut emap)?;
+            target.add_imprint_vertex(face_index, edge.front(), &mut emap)?;
+            target.add_imprint_vertex(face_index, edge.back(), &mut emap)?;
             if target[face_index].has_partitioned_coincident_path(edge) {
                 continue;
             }
@@ -1370,14 +1515,18 @@ struct OperandLoopStores<C> {
     poly: LoopsStore<Point3, PolylineCurve>,
 }
 
+struct BoundaryEndpoint<'a, S> {
+    face_index: usize,
+    poly_vertex: &'a Vertex<Point3>,
+    geom_vertex: &'a Vertex<Point3>,
+    other_surface: &'a S,
+    nearest_tolerance: f64,
+}
+
 impl<C> OperandLoopStores<C> {
     fn add_boundary_endpoint<S>(
         &mut self,
-        face_index: usize,
-        poly_vertex: &Vertex<Point3>,
-        geom_vertex: &Vertex<Point3>,
-        other_surface: &S,
-        nearest_tolerance: f64,
+        endpoint: BoundaryEndpoint<'_, S>,
         poly_edge_map: &mut HashMap<EdgeId<PolylineCurve>, Edge<Point3, PolylineCurve>>,
         geom_edge_map: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
     ) -> Option<bool>
@@ -1391,15 +1540,22 @@ impl<C> OperandLoopStores<C> {
             + SearchParameter<SurfaceParameter, Point = Point3>
             + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     {
-        if self
-            .poly
-            .add_polygon_vertex(face_index, poly_vertex, poly_edge_map)
-            .is_none()
-        {
+        let BoundaryEndpoint {
+            face_index,
+            poly_vertex,
+            geom_vertex,
+            other_surface,
+            nearest_tolerance,
+        } = endpoint;
+        let Some((wire_index, edge_index, _)) =
+            self.poly
+                .add_polygon_vertex(face_index, poly_vertex, poly_edge_map)
+        else {
             return Some(false);
-        }
+        };
         self.geom.add_geom_vertex(
             face_index,
+            Some((wire_index, edge_index)),
             geom_vertex,
             other_surface,
             nearest_tolerance,
@@ -1584,38 +1740,46 @@ where
                         let mut gemap0 = HashMap::default();
                         let mut gemap1 = HashMap::default();
                         operand0.add_boundary_endpoint(
-                            face_index0,
-                            &pv0,
-                            &gv0,
-                            &surface1,
-                            boundary_search_tolerance,
+                            BoundaryEndpoint {
+                                face_index: face_index0,
+                                poly_vertex: &pv0,
+                                geom_vertex: &gv0,
+                                other_surface: &surface1,
+                                nearest_tolerance: boundary_search_tolerance,
+                            },
                             &mut pemap0,
                             &mut gemap0,
                         )?;
                         operand0.add_boundary_endpoint(
-                            face_index0,
-                            &pv1,
-                            &gv1,
-                            &surface1,
-                            boundary_search_tolerance,
+                            BoundaryEndpoint {
+                                face_index: face_index0,
+                                poly_vertex: &pv1,
+                                geom_vertex: &gv1,
+                                other_surface: &surface1,
+                                nearest_tolerance: boundary_search_tolerance,
+                            },
                             &mut pemap1,
                             &mut gemap1,
                         )?;
                         operand1.add_boundary_endpoint(
-                            face_index1,
-                            &pv0,
-                            &gv0,
-                            &surface0,
-                            boundary_search_tolerance,
+                            BoundaryEndpoint {
+                                face_index: face_index1,
+                                poly_vertex: &pv0,
+                                geom_vertex: &gv0,
+                                other_surface: &surface0,
+                                nearest_tolerance: boundary_search_tolerance,
+                            },
                             &mut pemap0,
                             &mut gemap0,
                         )?;
                         operand1.add_boundary_endpoint(
-                            face_index1,
-                            &pv1,
-                            &gv1,
-                            &surface0,
-                            boundary_search_tolerance,
+                            BoundaryEndpoint {
+                                face_index: face_index1,
+                                poly_vertex: &pv1,
+                                geom_vertex: &gv1,
+                                other_surface: &surface0,
+                                nearest_tolerance: boundary_search_tolerance,
+                            },
                             &mut pemap1,
                             &mut gemap1,
                         )?;
@@ -1740,8 +1904,14 @@ mod projection_tests {
         let recovered = Vertex::new(old_back.point());
         let mut emap = HashMap::default();
 
-        let inserted =
-            store.add_geom_vertex(0, &recovered, &Plane::xy(), 8.0 * TOLERANCE, &mut emap);
+        let inserted = store.add_geom_vertex(
+            0,
+            None,
+            &recovered,
+            &Plane::xy(),
+            8.0 * TOLERANCE,
+            &mut emap,
+        );
         assert!(
             inserted.is_some(),
             "exact endpoint must be reclassified before topology mutation"

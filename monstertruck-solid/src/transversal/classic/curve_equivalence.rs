@@ -32,6 +32,35 @@ where
     }
 }
 
+/// Validate two curves by normalized parameter samples in either traversal.
+///
+/// The caller must already have established that the two edge endpoints are the
+/// same canonical topological pair. This fallback exists for curve types
+/// (notably SSI curves) whose inverse/nearest-parameter solver can fail even
+/// when their forward evaluations agree. It is sampled validation, not analytic
+/// equality.
+pub(super) fn validate_endpoint_aligned_coincidence<P, C>(lhs: &C, rhs: &C) -> CurveCoincidence
+where
+    P: Tolerance,
+    C: ParametricCurve<Point = P> + BoundedCurve<Point = P>, {
+    let (l0, l1) = lhs.range_tuple();
+    let (r0, r1) = rhs.range_tuple();
+    let fractions = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
+    let aligned = fractions.into_iter().all(|fraction| {
+        lhs.evaluate(l0 + (l1 - l0) * fraction)
+            .near(&rhs.evaluate(r0 + (r1 - r0) * fraction))
+    });
+    let reversed = fractions.into_iter().all(|fraction| {
+        lhs.evaluate(l0 + (l1 - l0) * fraction)
+            .near(&rhs.evaluate(r1 - (r1 - r0) * fraction))
+    });
+    if aligned || reversed {
+        CurveCoincidence::SampledValidation
+    } else {
+        CurveCoincidence::Distinct
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,6 +87,24 @@ mod tests {
         assert_eq!(
             validate_sampled_coincidence::<Point3, _>(&lhs, &rhs),
             CurveCoincidence::Distinct
+        );
+        assert_eq!(
+            validate_endpoint_aligned_coincidence::<Point3, _>(&lhs, &rhs),
+            CurveCoincidence::Distinct
+        );
+    }
+    #[test]
+    fn endpoint_aligned_validation_accepts_reversed_parameterization() {
+        let lhs = PolylineCurve(vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.5, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        ]);
+        let rhs = PolylineCurve(lhs.iter().rev().copied().collect());
+
+        assert_eq!(
+            validate_endpoint_aligned_coincidence::<Point3, _>(&lhs, &rhs),
+            CurveCoincidence::SampledValidation
         );
     }
 }

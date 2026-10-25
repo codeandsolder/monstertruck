@@ -165,6 +165,12 @@ pub enum ShapeOpsError {
         /// 0 for the first shell, 1 for the second shell.
         shell_index: usize,
     },
+    /// Selected Boolean arrangement regions could not be repaired into valid B-rep faces.
+    #[error("failed to materialize selected Boolean regions for `{operation}`.")]
+    RegionMaterializationFailed {
+        /// `and`, `or`, or `difference`.
+        operation: &'static str,
+    },
     /// Converting temporary intersection curves back to target curves failed.
     #[error("failed to convert temporary shell for `{operation}`.")]
     AltShellConversionFailed {

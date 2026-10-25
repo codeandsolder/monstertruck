@@ -30,7 +30,9 @@ use super::integrate::{
     InvalidOutputShellConditionData, ShapeOpsCurve, ShapeOpsError, ShapeOpsSurface,
 };
 use crate::alternative::Alternative;
-use curve_equivalence::{CurveCoincidence, validate_sampled_coincidence};
+use curve_equivalence::{
+    CurveCoincidence, validate_endpoint_aligned_coincidence, validate_sampled_coincidence,
+};
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::*;
@@ -41,10 +43,11 @@ type ClassicResult<T> = std::result::Result<T, ShapeOpsError>;
 
 type AltCurve<C, S> = Alternative<C, IntersectionCurve<PolylineCurve<Point3>, S, S>>;
 type AltCurveShell<C, S> = Shell<Point3, AltCurve<C, S>, S>;
+type AltRegion<C, S> = faces_classification::BooleanRegion<Point3, AltCurve<C, S>, S>;
 
-fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    shell: &AltCurveShell<C, S>,
-) -> AltCurveShell<C, S> {
+fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    regions: &[AltRegion<C, S>],
+) -> Option<AltCurveShell<C, S>> {
     type AltEdge<C, S> = Edge<Point3, AltCurve<C, S>>;
 
     type VertexCell = [i64; 3];
@@ -83,8 +86,11 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         vertex
     };
     let curves_sampled_coincident = |lhs: &AltEdge<C, S>, rhs: &AltEdge<C, S>| {
-        validate_sampled_coincidence::<Point3, _>(&lhs.oriented_curve(), &rhs.oriented_curve())
-            == CurveCoincidence::SampledValidation
+        let lhs = lhs.oriented_curve();
+        let rhs = rhs.oriented_curve();
+        validate_sampled_coincidence::<Point3, _>(&lhs, &rhs) == CurveCoincidence::SampledValidation
+            || validate_endpoint_aligned_coincidence::<Point3, _>(&lhs, &rhs)
+                == CurveCoincidence::SampledValidation
     };
 
     type SourceEdgeId<C, S> = EdgeId<AltCurve<C, S>>;
@@ -92,9 +98,9 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let mut source_edges_by_id =
         HashMap::<SourceEdgeId<C, S>, (SourceVertexId, SourceVertexId, AltCurve<C, S>)>::new();
     let mut source_vertex_points = HashMap::<SourceVertexId, Point3>::new();
-    for edge in shell
+    for edge in regions
         .iter()
-        .flat_map(|face| face.absolute_boundaries())
+        .flat_map(|region| region.absolute_boundaries())
         .flat_map(|wire| wire.iter())
     {
         let absolute = edge.absolute_clone();
@@ -139,10 +145,10 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
     };
 
-    let faces = shell
+    let rebuilt_regions = regions
         .iter()
-        .map(|face| {
-            let wires = face
+        .map(|region| {
+            let wires = region
                 .absolute_boundaries()
                 .iter()
                 .map(|wire| {
@@ -244,21 +250,36 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                     Wire::from(rebuilt)
                 })
                 .collect::<Vec<_>>();
-            let mut rebuilt = Face::new_unchecked(wires, face.surface());
-            if !face.orientation() {
-                rebuilt.invert();
-            }
-            rebuilt
+            faces_classification::BooleanRegion::new(
+                wires,
+                region.surface(),
+                region.orientation(),
+                region.key(),
+                region.source_face(),
+            )
         })
         .collect::<Vec<_>>();
-    let shell = Shell::from(faces);
-    let mut compressed = shell.compress();
-    repair::split_non_simple_compressed_wires(&mut compressed);
-    repair::split_pinched_compressed_faces(&mut compressed);
-    match Shell::extract(compressed) {
-        Ok(repaired) => repaired,
-        Err(_) => shell,
-    }
+    faces_classification::materialize_regions(&rebuilt_regions)
+}
+
+#[cfg(test)]
+fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell: &AltCurveShell<C, S>,
+) -> AltCurveShell<C, S> {
+    let regions = shell
+        .iter()
+        .enumerate()
+        .map(|(key, face)| {
+            faces_classification::BooleanRegion::new(
+                face.absolute_boundaries().clone(),
+                face.surface(),
+                face.orientation(),
+                key,
+                key,
+            )
+        })
+        .collect::<Vec<_>>();
+    weld_coincident_regions(&regions).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -299,6 +320,52 @@ mod weld_tests {
         assert!(
             welded.is_empty(),
             "a face reduced to one edge traversed both ways has zero area"
+        );
+    }
+
+    #[test]
+    fn weld_materializes_touching_negative_notch_as_simple_boundary() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(4.0, 0.0, 0.0);
+        let c = Point3::new(4.0, 4.0, 0.0);
+        let d = Point3::new(0.0, 4.0, 0.0);
+        let e = Point3::new(1.0, 0.0, 0.0);
+        let f = Point3::new(0.0, 1.0, 0.0);
+        let va = Vertex::new(a);
+        let vb = Vertex::new(b);
+        let vc = Vertex::new(c);
+        let vd = Vertex::new(d);
+        let ve = Vertex::new(e);
+        let vf = Vertex::new(f);
+        let wire: Wire<Point3, AltCurve<Curve, Surface>> = vec![
+            Edge::new(&va, &vb, alt_line(a, b)),
+            Edge::new(&vb, &vc, alt_line(b, c)),
+            Edge::new(&vc, &vd, alt_line(c, d)),
+            Edge::new(&vd, &va, alt_line(d, a)),
+            Edge::new(&va, &vf, alt_line(a, f)),
+            Edge::new(&vf, &ve, alt_line(f, e)),
+            Edge::new(&ve, &va, alt_line(e, a)),
+        ]
+        .into();
+        let surface = Surface::Plane(Plane::new(
+            Point3::origin(),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ));
+        let shell: AltCurveShell<Curve, Surface> =
+            Shell::from(vec![Face::new_unchecked(vec![wire], surface)]);
+
+        let welded = weld_coincident_topology(&shell);
+
+        assert_eq!(welded.len(), 1);
+        assert_eq!(welded[0].absolute_boundaries().len(), 1);
+        let boundary = &welded[0].absolute_boundaries()[0];
+        assert!(boundary.is_simple());
+        assert_eq!(boundary.len(), 5);
+        assert!(
+            boundary
+                .vertex_iter()
+                .all(|vertex| !vertex.point().near(&a))
         );
     }
 
@@ -757,22 +824,34 @@ where
 }
 
 fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    face: &Face<Point3, AltCurve<C, S>, S>,
+    region: &AltRegion<C, S>,
     candidate: &PolygonMesh,
-    other_faces: &AltCurveShell<C, S>,
-    other_poly: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    other_regions: &[AltRegion<C, S>],
+    other_poly: &PolyShell,
     tol: f64,
 ) -> Option<bool> {
-    let partition = loops_store::single_face_matches_planar_partition(candidate, other_poly, tol)??;
-    let other = other_faces.get(partition.representative)?;
+    let representative = match loops_store::direct_planar_face_match(candidate, other_poly, tol)? {
+        Some(index) => index,
+        None => {
+            loops_store::single_face_matches_planar_partition(candidate, other_poly, tol)??
+                .representative
+        }
+    };
+    let other = other_regions.get(representative)?;
     let point = other
         .absolute_boundaries()
         .first()?
         .vertex_iter()
         .next()?
         .point();
-    let lhs = face.oriented_surface();
-    let rhs = other.oriented_surface();
+    let mut lhs = region.surface();
+    if !region.orientation() {
+        lhs.invert();
+    }
+    let mut rhs = other.surface();
+    if !other.orientation() {
+        rhs.invert();
+    }
     let (lhs_u, lhs_v) = lhs
         .search_parameter(point, None, 100)
         .or_else(|| lhs.search_nearest_parameter(point, None, 100))?;
@@ -791,16 +870,16 @@ enum PairMode {
 type PolyShell = Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>;
 
 #[derive(Clone, Debug)]
-struct FullInterfaceAdjacency<S> {
-    shell0: Vec<FaceId<S>>,
-    shell1: Vec<FaceId<S>>,
+struct FullInterfaceAdjacency {
+    shell0: Vec<usize>,
+    shell1: Vec<usize>,
 }
 
-impl<S> FullInterfaceAdjacency<S> {
-    fn contains(&self, shell_index: usize, face: FaceId<S>) -> bool {
+impl FullInterfaceAdjacency {
+    fn contains(&self, shell_index: usize, source_face: usize) -> bool {
         match shell_index {
-            0 => self.shell0.contains(&face),
-            1 => self.shell1.contains(&face),
+            0 => self.shell0.contains(&source_face),
+            1 => self.shell1.contains(&source_face),
             _ => false,
         }
     }
@@ -814,7 +893,7 @@ struct PairAnalysis<C, S> {
     cls0: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
     cls1: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
     coplanar_overlap: bool,
-    full_interface_adjacency: Option<FullInterfaceAdjacency<S>>,
+    full_interface_adjacency: Option<FullInterfaceAdjacency>,
 }
 
 fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -846,31 +925,10 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         mode == PairMode::AndOr,
     )
     .ok_or(ShapeOpsError::InterfaceAnalysisFailed)?;
-    let full_interface_adjacency = full_interface_adjacency
-        .map(|matched| {
-            let shell0 = matched
-                .lhs_faces
-                .into_iter()
-                .map(|index| {
-                    altshell0
-                        .get(index)
-                        .map(Face::id)
-                        .ok_or(ShapeOpsError::InterfaceAnalysisFailed)
-                })
-                .collect::<ClassicResult<Vec<_>>>()?;
-            let shell1 = matched
-                .rhs_faces
-                .into_iter()
-                .map(|index| {
-                    altshell1
-                        .get(index)
-                        .map(Face::id)
-                        .ok_or(ShapeOpsError::InterfaceAnalysisFailed)
-                })
-                .collect::<ClassicResult<Vec<_>>>()?;
-            Ok::<_, ShapeOpsError>(FullInterfaceAdjacency { shell0, shell1 })
-        })
-        .transpose()?;
+    let full_interface_adjacency = full_interface_adjacency.map(|matched| FullInterfaceAdjacency {
+        shell0: matched.lhs_faces,
+        shell1: matched.rhs_faces,
+    });
     let cls0 = divide_face::divide_faces(&altshell0, &loops_store0, tol)
         .ok_or(ShapeOpsError::DivideFacesFailed { shell_index: 0 })?;
     let cls1 = divide_face::divide_faces(&altshell1, &loops_store1, tol)
@@ -888,33 +946,106 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 
 fn classify_unknown<C, S>(
     poly_shell: &PolyShell,
-    face: &Face<Point3, C, S>,
+    region: &faces_classification::BooleanRegion<Point3, C, S>,
     tol: f64,
     shell_index: usize,
 ) -> ClassicResult<bool>
 where
-    C: PolylineableCurve + Clone,
-    S: MeshableSurface + Clone,
+    C: PolylineableCurve + ParameterDivision1D<Point = Point3> + Clone,
+    S: MeshableSurface
+        + Clone
+        + ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    classify_unknown_face(poly_shell, face, tol)
-        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
+    if let Some(face) = region.try_face() {
+        return classify_unknown_face(poly_shell, &face, tol)
+            .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index });
+    }
+    let points =
+        divide_face::sample_points_on_region(region.absolute_boundaries(), &region.surface(), tol)
+            .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
+    let (inside, outside) = points
+        .into_iter()
+        .try_fold((0usize, 0usize), |(inside, outside), point| {
+            let is_inside = classify_inside_with_polyshell(poly_shell, point)?;
+            Some((
+                inside + usize::from(is_inside),
+                outside + usize::from(!is_inside),
+            ))
+        })
+        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
+    Ok(inside >= outside)
 }
 
 fn classify_relation<C, S>(
     poly_shell: &PolyShell,
-    face: &Face<Point3, C, S>,
+    region: &faces_classification::BooleanRegion<Point3, C, S>,
     tol: f64,
     shell_index: usize,
 ) -> ClassicResult<FaceRelation>
 where
-    C: PolylineableCurve + Clone,
+    C: PolylineableCurve + ParameterDivision1D<Point = Point3> + Clone,
     S: MeshableSurface
         + Clone
         + Invertible
+        + ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    classify_face_relation(poly_shell, face, tol)
-        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
+    if let Some(face) = region.try_face() {
+        return classify_face_relation(poly_shell, &face, tol)
+            .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index });
+    }
+    let points =
+        divide_face::sample_points_on_region(region.absolute_boundaries(), &region.surface(), tol)
+            .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
+    let mut surface = region.surface();
+    if !region.orientation() {
+        surface.invert();
+    }
+    let offset = BooleanTolerance::new(tol).classifier_offset;
+    let (inside, outside, coincident, total) = points
+        .into_iter()
+        .try_fold(
+            (0usize, 0usize, 0usize, 0usize),
+            |(inside, outside, coincident, total), point| {
+                let parameter = surface
+                    .search_parameter(point, None, 100)
+                    .or_else(|| surface.search_nearest_parameter(point, None, 100));
+                let Some((u, v)) = parameter else {
+                    let is_inside = classify_inside_with_polyshell(poly_shell, point)?;
+                    return Some((
+                        inside + usize::from(is_inside),
+                        outside + usize::from(!is_inside),
+                        coincident,
+                        total + 1,
+                    ));
+                };
+                let normal = surface.normal(u, v);
+                let outward_inside =
+                    classify_inside_with_polyshell(poly_shell, point + normal * offset)?;
+                let inward_inside =
+                    classify_inside_with_polyshell(poly_shell, point - normal * offset)?;
+                if outward_inside {
+                    Some((inside + 1, outside, coincident, total + 1))
+                } else if inward_inside {
+                    Some((inside, outside, coincident + 1, total + 1))
+                } else {
+                    Some((inside, outside + 1, coincident, total + 1))
+                }
+            },
+        )
+        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
+    Ok(
+        if total != 0 && coincident > inside && coincident > outside {
+            FaceRelation::CoincidentSameFacing
+        } else if inside > outside {
+            FaceRelation::Inside
+        } else {
+            FaceRelation::Outside
+        },
+    )
 }
 
 fn convert_alt_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -922,6 +1053,15 @@ fn convert_alt_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     operation: &'static str,
 ) -> ClassicResult<Shell<Point3, C, S>> {
     altshell_to_shell(shell).ok_or(ShapeOpsError::AltShellConversionFailed { operation })
+}
+
+fn weld_and_convert<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    regions: &[AltRegion<C, S>],
+    operation: &'static str,
+) -> ClassicResult<Shell<Point3, C, S>> {
+    let shell = weld_coincident_regions(regions)
+        .ok_or(ShapeOpsError::RegionMaterializationFailed { operation })?;
+    convert_alt_shell(&shell, operation)
 }
 
 fn shell_is_valid<P, C, S>(shell: &Shell<P, C, S>) -> bool {
@@ -939,23 +1079,23 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     analysis.cls0.integrate_by_component();
     analysis.cls1.integrate_by_component();
 
-    let [_inside0, mut difference_faces0, unknown0] = analysis.cls0.and_or_unknown();
-    for face in unknown0 {
-        if !classify_unknown(&analysis.poly_shell1, &face, tol, 0)? {
-            difference_faces0.push(face);
+    let [_inside0, mut difference0, unknown0] = analysis.cls0.and_or_unknown();
+    for region in unknown0 {
+        if !classify_unknown(&analysis.poly_shell1, &region, tol, 0)? {
+            difference0.push(region);
         }
     }
-    let [mut difference_faces1, _outside1, unknown1] = analysis.cls1.and_or_unknown();
-    for face in unknown1 {
-        if classify_unknown(&analysis.poly_shell0, &face, tol, 1)? {
-            difference_faces1.push(face);
+    let [mut difference1, _outside1, unknown1] = analysis.cls1.and_or_unknown();
+    for region in unknown1 {
+        if classify_unknown(&analysis.poly_shell0, &region, tol, 1)? {
+            difference1.push(region);
         }
     }
-    for face in difference_faces1.face_iter_mut() {
-        face.invert();
+    for region in &mut difference1 {
+        region.invert();
     }
-    difference_faces0.append(&mut difference_faces1);
-    let mut label_shell = convert_alt_shell(&difference_faces0, "difference")?;
+    difference0.append(&mut difference1);
+    let mut label_shell = weld_and_convert(&difference0, "difference")?;
     let _ = orient_regular_shell(&mut label_shell);
     if label_shell
         .connected_components()
@@ -965,29 +1105,21 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         return Ok([label_shell, Shell::default()]);
     }
 
-    // Only invalid assembled topology is retryable. Numeric/classification
-    // failures above are returned to the caller instead of silently selecting a
-    // different algorithm.
     let [and0, or0, unknown0] = analysis.cls0.and_or_unknown();
     let [and1, or1, unknown1] = analysis.cls1.and_or_unknown();
-    let mut fallback0 = AltCurveShell::default();
-    for face in and0.into_iter().chain(or0).chain(unknown0) {
-        if !classify_unknown(&analysis.poly_shell1, &face, tol, 0)? {
-            fallback0.push(face);
+    let mut fallback = Vec::new();
+    for region in and0.into_iter().chain(or0).chain(unknown0) {
+        if !classify_unknown(&analysis.poly_shell1, &region, tol, 0)? {
+            fallback.push(region);
         }
     }
-    let mut fallback1 = AltCurveShell::default();
-    for mut face in and1.into_iter().chain(or1).chain(unknown1) {
-        if classify_unknown(&analysis.poly_shell0, &face, tol, 1)? {
-            face.invert();
-            fallback1.push(face);
+    for mut region in and1.into_iter().chain(or1).chain(unknown1) {
+        if classify_unknown(&analysis.poly_shell0, &region, tol, 1)? {
+            region.invert();
+            fallback.push(region);
         }
     }
-    fallback0.append(&mut fallback1);
-    Ok([
-        convert_alt_shell(&fallback0, "difference")?,
-        Shell::default(),
-    ])
+    Ok([weld_and_convert(&fallback, "difference")?, Shell::default()])
 }
 
 fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -997,36 +1129,52 @@ fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     analysis.cls0.integrate_by_component();
     analysis.cls1.integrate_by_component();
     let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
-    for face in unknown0 {
-        if classify_unknown(&analysis.poly_shell1, &face, tol, 0)? {
-            and0.push(face);
+    for region in unknown0 {
+        if classify_unknown(&analysis.poly_shell1, &region, tol, 0)? {
+            and0.push(region);
         } else {
-            or0.push(face);
+            or0.push(region);
         }
     }
     let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
-    for face in unknown1 {
-        if classify_unknown(&analysis.poly_shell0, &face, tol, 1)? {
-            and1.push(face);
+    for region in unknown1 {
+        if classify_unknown(&analysis.poly_shell0, &region, tol, 1)? {
+            and1.push(region);
         } else {
-            or1.push(face);
+            or1.push(region);
         }
     }
     and0.append(&mut and1);
     or0.append(&mut or1);
     Ok([
-        convert_alt_shell(&and0, "and")?,
-        convert_alt_shell(&or0, "or")?,
+        weld_and_convert(&and0, "and")?,
+        weld_and_convert(&or0, "or")?,
     ])
 }
 
-fn all_classified_faces<C, S>(
-    cls: &faces_classification::FacesClassification<Point3, C, S>,
-) -> Shell<Point3, C, S> {
-    let [mut and, mut or, mut unknown] = cls.and_or_unknown();
-    and.append(&mut or);
-    and.append(&mut unknown);
-    and
+fn partition_evidence<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    regions: &[AltRegion<C, S>],
+    mesh_tol: f64,
+) -> (Vec<AltRegion<C, S>>, PolyShell, HashMap<usize, PolygonMesh>) {
+    let mut valid_regions = Vec::new();
+    let mut poly_faces = Vec::new();
+    let mut by_key = HashMap::new();
+    for region in regions {
+        let Some(face) = region.try_face() else {
+            continue;
+        };
+        let triangulated = Shell::from(vec![face]).triangulation(mesh_tol);
+        let Some(poly_face) = triangulated.first() else {
+            continue;
+        };
+        let Some(polygon) = poly_face.surface() else {
+            continue;
+        };
+        by_key.insert(region.key(), polygon.clone());
+        valid_regions.push(region.clone());
+        poly_faces.push(poly_face.clone());
+    }
+    (valid_regions, Shell::from(poly_faces), by_key)
 }
 
 fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -1037,39 +1185,37 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     analysis.cls1.integrate_by_component();
 
     let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
-    for face in unknown0 {
+    for region in unknown0 {
         if analysis
             .full_interface_adjacency
             .as_ref()
-            .is_some_and(|interface| interface.contains(0, face.id()))
+            .is_some_and(|interface| interface.contains(0, region.source_face()))
         {
             continue;
         }
-        match classify_relation(&analysis.poly_shell1, &face, tol, 0)? {
-            FaceRelation::Inside => and0.push(face),
-            FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(face),
+        match classify_relation(&analysis.poly_shell1, &region, tol, 0)? {
+            FaceRelation::Inside => and0.push(region),
+            FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
         }
     }
     let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
-    for face in unknown1 {
+    for region in unknown1 {
         if analysis
             .full_interface_adjacency
             .as_ref()
-            .is_some_and(|interface| interface.contains(1, face.id()))
+            .is_some_and(|interface| interface.contains(1, region.source_face()))
         {
             continue;
         }
-        match classify_relation(&analysis.poly_shell0, &face, tol, 1)? {
-            FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(face),
-            FaceRelation::Outside => or1.push(face),
+        match classify_relation(&analysis.poly_shell0, &region, tol, 1)? {
+            FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
+            FaceRelation::Outside => or1.push(region),
         }
     }
     and0.append(&mut and1);
     or0.append(&mut or1);
-    and0 = weld_coincident_topology(&and0);
-    or0 = weld_coincident_topology(&or0);
-    let label_and_shell = convert_alt_shell(&and0, "and")?;
-    let label_or_shell = convert_alt_shell(&or0, "or")?;
+    let label_and_shell = weld_and_convert(&and0, "and")?;
+    let label_or_shell = weld_and_convert(&or0, "or")?;
     if !label_or_shell.is_empty()
         && shell_is_valid(&label_and_shell)
         && shell_is_valid(&label_or_shell)
@@ -1077,88 +1223,56 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         return Ok([label_and_shell, label_or_shell]);
     }
 
-    // An invalid assembled shell is the one explicit fallback trigger. Rebuild
-    // classification geometrically over every divided fragment, with actual 2-D
-    // planar-region equality used only as positive evidence.
-    let divided_faces0 = all_classified_faces(&analysis.cls0);
-    let divided_faces1 = all_classified_faces(&analysis.cls1);
+    let all0 = analysis.cls0.all_regions();
+    let all1 = analysis.cls1.all_regions();
     let partition_tolerance = BooleanTolerance::new(tol);
     let partition_geom_tol = partition_tolerance.length;
     let partition_mesh_tol = partition_tolerance.mesh_seed;
-    let divided_poly0 = divided_faces0.triangulation(partition_mesh_tol);
-    let divided_poly1 = divided_faces1.triangulation(partition_mesh_tol);
-    let candidate_poly0 = divided_faces0
-        .iter()
-        .zip(divided_poly0.iter())
-        .filter_map(|(face, poly_face)| poly_face.surface().map(|poly| (face.id(), poly)))
-        .collect::<HashMap<_, _>>();
-    let candidate_poly1 = divided_faces1
-        .iter()
-        .zip(divided_poly1.iter())
-        .filter_map(|(face, poly_face)| poly_face.surface().map(|poly| (face.id(), poly)))
-        .collect::<HashMap<_, _>>();
-    if candidate_poly0.len() != divided_faces0.len()
-        || candidate_poly1.len() != divided_faces1.len()
-    {
-        return Err(ShapeOpsError::IncompletePartitionTriangulation);
-    }
+    let (valid0, poly0, candidate0) = partition_evidence(&all0, partition_mesh_tol);
+    let (valid1, poly1, candidate1) = partition_evidence(&all1, partition_mesh_tol);
 
     let [and0_labeled, or0_labeled, unknown0] = analysis.cls0.and_or_unknown();
-    let mut and0 = AltCurveShell::default();
-    let mut or0 = AltCurveShell::default();
-    for face in and0_labeled.into_iter().chain(or0_labeled).chain(unknown0) {
-        let candidate = candidate_poly0
-            .get(&face.id())
-            .ok_or(ShapeOpsError::IncompletePartitionTriangulation)?;
-        let relation = if planar_partition_same_facing(
-            &face,
-            candidate,
-            &divided_faces1,
-            &divided_poly1,
-            partition_geom_tol,
-        ) == Some(true)
-        {
+    let mut and0 = Vec::new();
+    let mut or0 = Vec::new();
+    for region in and0_labeled.into_iter().chain(or0_labeled).chain(unknown0) {
+        let coincident = candidate0.get(&region.key()).is_some_and(|candidate| {
+            planar_partition_same_facing(&region, candidate, &valid1, &poly1, partition_geom_tol)
+                == Some(true)
+        });
+        let relation = if coincident {
             FaceRelation::CoincidentSameFacing
         } else {
-            classify_relation(&analysis.poly_shell1, &face, tol, 0)?
+            classify_relation(&analysis.poly_shell1, &region, tol, 0)?
         };
         match relation {
-            FaceRelation::Inside => and0.push(face),
-            FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(face),
+            FaceRelation::Inside => and0.push(region),
+            FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
         }
     }
 
     let [and1_labeled, or1_labeled, unknown1] = analysis.cls1.and_or_unknown();
-    let mut and1 = AltCurveShell::default();
-    let mut or1 = AltCurveShell::default();
-    for face in and1_labeled.into_iter().chain(or1_labeled).chain(unknown1) {
-        let candidate = candidate_poly1
-            .get(&face.id())
-            .ok_or(ShapeOpsError::IncompletePartitionTriangulation)?;
-        let relation = if planar_partition_same_facing(
-            &face,
-            candidate,
-            &divided_faces0,
-            &divided_poly0,
-            partition_geom_tol,
-        ) == Some(true)
-        {
+    let mut and1 = Vec::new();
+    let mut or1 = Vec::new();
+    for region in and1_labeled.into_iter().chain(or1_labeled).chain(unknown1) {
+        let coincident = candidate1.get(&region.key()).is_some_and(|candidate| {
+            planar_partition_same_facing(&region, candidate, &valid0, &poly0, partition_geom_tol)
+                == Some(true)
+        });
+        let relation = if coincident {
             FaceRelation::CoincidentSameFacing
         } else {
-            classify_relation(&analysis.poly_shell0, &face, tol, 1)?
+            classify_relation(&analysis.poly_shell0, &region, tol, 1)?
         };
         match relation {
-            FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(face),
-            FaceRelation::Outside => or1.push(face),
+            FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
+            FaceRelation::Outside => or1.push(region),
         }
     }
     and0.append(&mut and1);
     or0.append(&mut or1);
-    and0 = weld_coincident_topology(&and0);
-    or0 = weld_coincident_topology(&or0);
     Ok([
-        convert_alt_shell(&and0, "and")?,
-        convert_alt_shell(&or0, "or")?,
+        weld_and_convert(&and0, "and")?,
+        weld_and_convert(&or0, "or")?,
     ])
 }
 
