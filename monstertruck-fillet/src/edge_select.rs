@@ -13,7 +13,7 @@ use smallvec::SmallVec;
 use super::convert::{FilletableCurve, FilletableSurface, convert_shell_in, convert_shell_out};
 use super::error::FilletError;
 use super::ops;
-use super::params::{FilletOptions, RadiusSpec};
+use super::params::{FilletOptions, FilletProfile, RadiusSpec};
 use super::types::*;
 
 type Result<T> = std::result::Result<T, FilletError>;
@@ -414,6 +414,9 @@ pub fn fillet_edges(
 ) -> Result<()> {
     let default_options = FilletOptions::default();
     let options = params.unwrap_or(&default_options);
+    if matches!(&options.profile, FilletProfile::AsymmetricChamfer { .. }) && edge_ids.len() != 1 {
+        return Err(FilletError::AsymmetricChamferWireUnsupported);
+    }
 
     // Validate all requested edges exist and are manifold up-front.
     {
@@ -436,8 +439,10 @@ pub fn fillet_edges(
         });
     }
 
-    // Reject edges that are too short for the requested fillet radius.
-    {
+    // Reject edges that are too short for the requested rolling radius.
+    // Asymmetric chamfer setbacks are perpendicular to the seam and do not
+    // impose this along-edge radius bound.
+    if !matches!(&options.profile, FilletProfile::AsymmetricChamfer { .. }) {
         let variable_radius_upper_bound = if let RadiusSpec::Variable(f) = &options.radius {
             sampled_variable_radius_upper_bound(f.as_ref(), 32)
         } else {

@@ -341,6 +341,7 @@ pub(super) fn fillet_surfaces_along_wire(
             let surface = match profile {
                 FilletProfile::Round => expand_fillet(&rs, surface0, surface1),
                 FilletProfile::Chamfer => expand_chamfer(&rs, surface0, surface1),
+                FilletProfile::AsymmetricChamfer { .. } => return None,
                 FilletProfile::Ridge => expand_ridge(&rs, surface0, surface1),
                 FilletProfile::Custom(curve) => expand_custom(&rs, surface0, surface1, curve),
             };

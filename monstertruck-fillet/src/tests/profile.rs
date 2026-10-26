@@ -501,3 +501,76 @@ fn custom_profile_bump() {
     assert!(shell.len() > initial_face_count);
     let _poly = shell.robust_triangulation(0.001).to_polygon();
 }
+
+#[test]
+fn asymmetric_chamfer_uses_independent_carrier_setbacks() {
+    let (shell, edge, _) = build_box_shell();
+    let params = FilletOptions {
+        radius: RadiusSpec::Constant(0.1),
+        profile: FilletProfile::AsymmetricChamfer {
+            first_setback_mm: 0.2,
+            second_setback_mm: 0.35,
+        },
+        ..Default::default()
+    };
+    let (_, _, chamfer) = fillet(&shell[0], &shell[1], edge[0].id(), &params).unwrap();
+    let boundary = chamfer.absolute_boundaries();
+    let first_contact = &boundary[0][0];
+    let second_contact = &boundary[0][2];
+    for vertex in [first_contact.front(), first_contact.back()] {
+        let point = vertex.point();
+        assert!((point.y - 0.2).abs() < 1.0e-8);
+        assert!((point.z - 1.0).abs() < 1.0e-8);
+    }
+    for vertex in [second_contact.front(), second_contact.back()] {
+        let point = vertex.point();
+        assert!(point.y.abs() < 1.0e-8);
+        assert!((point.z - 0.65).abs() < 1.0e-8);
+    }
+}
+
+#[test]
+fn asymmetric_chamfer_does_not_use_round_radius_length_guard() {
+    let (mut shell, edge, _) = build_box_shell();
+    let initial_face_count = shell.len();
+    let params = FilletOptions {
+        radius: RadiusSpec::Constant(10.0),
+        profile: FilletProfile::AsymmetricChamfer {
+            first_setback_mm: 0.2,
+            second_setback_mm: 0.35,
+        },
+        ..Default::default()
+    };
+    fillet_edges(&mut shell, &[edge[0].id()], Some(&params)).unwrap();
+    assert!(shell.len() > initial_face_count);
+}
+
+#[test]
+fn asymmetric_chamfer_rejects_invalid_setback_and_multi_edge_selection() {
+    let (mut shell, edge, _) = build_box_shell();
+    let invalid = FilletOptions {
+        radius: RadiusSpec::Constant(0.1),
+        profile: FilletProfile::AsymmetricChamfer {
+            first_setback_mm: 0.0,
+            second_setback_mm: 0.2,
+        },
+        ..Default::default()
+    };
+    assert!(matches!(
+        fillet(&shell[0], &shell[1], edge[0].id(), &invalid),
+        Err(FilletError::InvalidAsymmetricChamferSetback)
+    ));
+
+    let multi = FilletOptions {
+        radius: RadiusSpec::Constant(0.1),
+        profile: FilletProfile::AsymmetricChamfer {
+            first_setback_mm: 0.2,
+            second_setback_mm: 0.3,
+        },
+        ..Default::default()
+    };
+    assert!(matches!(
+        fillet_edges(&mut shell, &[edge[0].id(), edge[2].id()], Some(&multi)),
+        Err(FilletError::AsymmetricChamferWireUnsupported)
+    ));
+}

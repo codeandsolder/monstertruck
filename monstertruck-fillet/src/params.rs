@@ -7,8 +7,20 @@ pub enum FilletProfile {
     /// Circular arc cross-section (traditional fillet).
     #[default]
     Round,
-    /// Flat ruled surface (chamfer/bevel).
+    /// Flat ruled surface (chamfer/bevel) using the ordinary symmetric radius.
     Chamfer,
+    /// Flat ruled surface with independent setbacks from the two carrier surfaces.
+    ///
+    /// `first_setback_mm` applies to the first face passed to the single-edge
+    /// fillet operation and `second_setback_mm` to the second. This variant is
+    /// intentionally single-edge only until wire ordering has equally explicit
+    /// per-carrier semantics.
+    AsymmetricChamfer {
+        /// Setback measured along the first carrier surface normal construction.
+        first_setback_mm: f64,
+        /// Setback measured along the second carrier surface normal construction.
+        second_setback_mm: f64,
+    },
     /// V-shaped ridge: two straight segments meeting at the transit point.
     Ridge,
     /// User-provided 2D profile curve. Domain `[0, 1]`, maps `(0, 0)` -> `contact0`,

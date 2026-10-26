@@ -356,6 +356,64 @@ pub(super) fn expand_fillet(
     NurbsSurface::new(bsp_surface)
 }
 
+pub(super) fn asymmetric_chamfer_contacts(
+    surface0: &NurbsSurface<Vector4>,
+    surface1: &NurbsSurface<Vector4>,
+    curve: &impl FilletCurve,
+    division: usize,
+    setbacks_mm: [f64; 2],
+    extend: bool,
+    flip_side: bool,
+) -> Option<Vec<RelaySphere>> {
+    let [first_setback_mm, second_setback_mm] = setbacks_mm;
+    let (t0, t1) = curve.range_tuple();
+    let reference_radius = first_setback_mm.min(second_setback_mm);
+    let generator = move |i: isize| {
+        let a = i as f64 / division as f64;
+        let delta = 0.25 / division as f64;
+        [0.0, -delta, delta, -2.0 * delta, 2.0 * delta]
+            .into_iter()
+            .find_map(|offset| {
+                let b = a + offset;
+                let t = (1.0 - b) * t0 + b * t1;
+                let point = curve.subs(t);
+                let reference = RelaySphere::generate(
+                    (point, curve.der(t)),
+                    surface0,
+                    surface1,
+                    reference_radius,
+                    flip_side,
+                )?;
+                let direction0 = (reference.contact0.0 - point).normalize();
+                let direction1 = (reference.contact1.0 - point).normalize();
+                let target0 = point + first_setback_mm * direction0;
+                let target1 = point + second_setback_mm * direction1;
+                let parameter0 = surface0
+                    .search_parameter(target0, None, 20)
+                    .or_else(|| surface0.search_nearest_parameter(target0, None, 50))?;
+                let parameter1 = surface1
+                    .search_parameter(target1, None, 20)
+                    .or_else(|| surface1.search_nearest_parameter(target1, None, 50))?;
+                let contact0 = surface0.subs(parameter0.0, parameter0.1);
+                let contact1 = surface1.subs(parameter1.0, parameter1.1);
+                if !contact0.near(&target0) || !contact1.near(&target1) {
+                    return None;
+                }
+                Some(RelaySphere {
+                    center: point,
+                    contact0: (contact0, parameter0.into()),
+                    contact1: (contact1, parameter1.into()),
+                    transit: contact0.midpoint(contact1),
+                })
+            })
+    };
+    let range = match extend {
+        true => -1..=(division as isize + 1),
+        false => 0..=division as isize,
+    };
+    range.map(generator).collect()
+}
+
 pub(super) fn expand_chamfer(
     relay_spheres: &[RelaySphere],
     surface0: &NurbsSurface<Vector4>,
