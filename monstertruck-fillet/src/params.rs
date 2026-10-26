@@ -28,6 +28,35 @@ pub enum FilletProfile {
     Custom(Box<BsplineCurve<Point2>>),
 }
 
+impl FilletProfile {
+    /// Whether this profile consumes [`FilletOptions::radius`].
+    ///
+    /// Asymmetric chamfers are fully defined by their two carrier setbacks; an
+    /// unrelated radius specification must not affect validation or geometry.
+    pub(crate) const fn uses_radius(&self) -> bool {
+        !matches!(self, Self::AsymmetricChamfer { .. })
+    }
+}
+
+#[cfg(test)]
+mod profile_contract_tests {
+    use super::*;
+
+    #[test]
+    fn asymmetric_chamfer_does_not_consume_radius() {
+        assert!(
+            !FilletProfile::AsymmetricChamfer {
+                first_setback_mm: 0.2,
+                second_setback_mm: 0.3,
+            }
+            .uses_radius()
+        );
+        assert!(FilletProfile::Round.uses_radius());
+        assert!(FilletProfile::Chamfer.uses_radius());
+        assert!(FilletProfile::Ridge.uses_radius());
+    }
+}
+
 /// Radius specification for fillet operations.
 pub enum RadiusSpec {
     /// Constant radius along the entire edge/wire.

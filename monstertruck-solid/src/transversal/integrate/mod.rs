@@ -133,8 +133,8 @@ where
 /// Errors for boolean shape operations.
 #[derive(Debug, Error)]
 pub enum ShapeOpsError {
-    /// `tol` was not positive enough for robust meshing and projection.
-    #[error("`tol` must be at least `TOLERANCE`.")]
+    /// `tol` was non-finite or too small for robust meshing and projection.
+    #[error("`tol` must be finite and at least `TOLERANCE`.")]
     InvalidTolerance,
     /// `world_to_clip` could not be inverted.
     #[error("`world_to_clip` must be invertible for `clip_half_space_z`.")]
@@ -238,6 +238,14 @@ pub struct InvalidOutputShellConditionData {
 }
 
 type ShapeOpsResult<T> = std::result::Result<T, ShapeOpsError>;
+
+pub(super) fn validate_tolerance(tol: f64) -> std::result::Result<(), ShapeOpsError> {
+    if !tol.is_finite() || tol < TOLERANCE {
+        Err(ShapeOpsError::InvalidTolerance)
+    } else {
+        Ok(())
+    }
+}
 
 const HALF_SPACE_CLIP_OPERATION: &str = "clip_half_space_z";
 
@@ -509,9 +517,7 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    if tol < TOLERANCE {
-        return Err(ShapeOpsError::InvalidTolerance);
-    }
+    validate_tolerance(tol)?;
     let clip_to_world = world_to_clip
         .invert()
         .ok_or(ShapeOpsError::NonInvertibleClipTransform)?;

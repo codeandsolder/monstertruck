@@ -430,7 +430,8 @@ pub fn fillet_edges(
     }
 
     // Validate per-edge radius count.
-    if let RadiusSpec::PerEdge(ref radii) = options.radius
+    if options.profile.uses_radius()
+        && let RadiusSpec::PerEdge(ref radii) = options.radius
         && radii.len() != edge_ids.len()
     {
         return Err(FilletError::PerEdgeRadiusMismatch {
@@ -442,7 +443,7 @@ pub fn fillet_edges(
     // Reject edges that are too short for the requested rolling radius.
     // Asymmetric chamfer setbacks are perpendicular to the seam and do not
     // impose this along-edge radius bound.
-    if !matches!(&options.profile, FilletProfile::AsymmetricChamfer { .. }) {
+    if options.profile.uses_radius() {
         let variable_radius_upper_bound = if let RadiusSpec::Variable(f) = &options.radius {
             sampled_variable_radius_upper_bound(f.as_ref(), 32)
         } else {
@@ -563,7 +564,9 @@ pub fn fillet_edges(
 
         if chain.edge_ids.len() == 1 {
             let chain_opts;
-            let opts = if let RadiusSpec::PerEdge(radii) = &options.radius {
+            let opts = if options.profile.uses_radius()
+                && let RadiusSpec::PerEdge(radii) = &options.radius
+            {
                 let original_eid = chain.edge_ids[0];
                 chain_opts = FilletOptions {
                     radius: RadiusSpec::Constant(radii[edge_id_to_idx[&original_eid]]),
@@ -605,7 +608,9 @@ pub fn fillet_edges(
             };
 
             let chain_opts;
-            let opts = if let RadiusSpec::PerEdge(radii) = &options.radius {
+            let opts = if options.profile.uses_radius()
+                && let RadiusSpec::PerEdge(radii) = &options.radius
+            {
                 let chain_radii: Vec<f64> = wire
                     .edge_iter()
                     .map(|edge| {
@@ -677,7 +682,9 @@ pub fn fillet_edges(
                     fallback_used_ids.insert(resolved_eid);
 
                     let single_edge_opts;
-                    let opts = if let RadiusSpec::PerEdge(radii) = &options.radius {
+                    let opts = if options.profile.uses_radius()
+                        && let RadiusSpec::PerEdge(radii) = &options.radius
+                    {
                         single_edge_opts = FilletOptions {
                             radius: RadiusSpec::Constant(radii[edge_id_to_idx[&original_eid]]),
                             divisions: options.divisions,
