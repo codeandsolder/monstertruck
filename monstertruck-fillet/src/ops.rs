@@ -42,6 +42,18 @@ fn fillet_on_side(
                 context: "filleted edge not found in face0",
             })?;
 
+    if let FilletProfile::AsymmetricChamfer {
+        first_setback_mm,
+        second_setback_mm,
+    } = &options.profile
+        && (!first_setback_mm.is_finite()
+            || *first_setback_mm <= 0.0
+            || !second_setback_mm.is_finite()
+            || *second_setback_mm <= 0.0)
+    {
+        return Err(FilletError::InvalidAsymmetricChamferSetback);
+    }
+
     let division = options.divisions.get();
     let surface0 = face0.oriented_surface();
     let surface1 = face1.oriented_surface();
@@ -54,6 +66,19 @@ fn fillet_on_side(
             FilletProfile::Chamfer => chamfer_fillet_surface(
                 &surface0, &surface1, &curve, division, radius, extend, flip_side,
             ),
+            FilletProfile::AsymmetricChamfer {
+                first_setback_mm,
+                second_setback_mm,
+            } => asymmetric_chamfer_contacts(
+                &surface0,
+                &surface1,
+                &curve,
+                division,
+                [*first_setback_mm, *second_setback_mm],
+                extend,
+                flip_side,
+            )
+            .map(|contacts| expand_chamfer(&contacts, &surface0, &surface1)),
             FilletProfile::Ridge => ridge_fillet_surface(
                 &surface0, &surface1, &curve, division, radius, extend, flip_side,
             ),
@@ -167,6 +192,9 @@ pub fn fillet_with_side(
 /// Supports both open and closed wires. Modifies `shell` in place by replacing
 /// filleted faces and adding new fillet faces.
 pub fn fillet_along_wire(shell: &mut Shell, wire: &Wire, options: &FilletOptions) -> Result<()> {
+    if matches!(&options.profile, FilletProfile::AsymmetricChamfer { .. }) {
+        return Err(FilletError::AsymmetricChamferWireUnsupported);
+    }
     let division = options.divisions.get();
 
     // Validate variable radius constraint for closed wire fillets.

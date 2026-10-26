@@ -6,6 +6,12 @@ pub enum FilletError {
     /// Variable radius on closed wires requires `f(0.0) ~= f(1.0)`.
     #[error("Variable radius on closed wire requires f(0.0) ~= f(1.0).")]
     VariableRadiusUnsupported,
+    /// Asymmetric chamfer setbacks currently require a single selected edge.
+    #[error("Asymmetric chamfer setbacks are only supported for single-edge fillets.")]
+    AsymmetricChamferWireUnsupported,
+    /// An asymmetric chamfer setback is non-finite or non-positive.
+    #[error("Asymmetric chamfer setbacks must be finite and positive.")]
+    InvalidAsymmetricChamferSetback,
     /// The wire is not continuous.
     #[error("Wire must be continuous.")]
     DiscontinuousWire,
