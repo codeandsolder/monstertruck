@@ -1,9 +1,8 @@
 use cgmath::num_traits::{Float, FromPrimitive};
 
-// SAFETY: Converts finite f64 constants to `S`. All constants used in this
-// module are well within the representable range of any `Float + FromPrimitive`
-// type (f32, f64), so `from_f64` will never return `None`.
-fn f64_to<S: Float + FromPrimitive>(val: f64) -> S { S::from_f64(val).unwrap() }
+// Built-in float types can represent every constant used here. A custom `Float`
+// implementation that declines the conversion receives NaN instead of aborting.
+fn f64_to<S: Float + FromPrimitive>(val: f64) -> S { S::from_f64(val).unwrap_or_else(S::nan) }
 
 /// Deterministic hash generator
 pub trait HashGen<S> {

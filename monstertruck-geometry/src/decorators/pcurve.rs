@@ -31,7 +31,9 @@ where
 {
     fn der3(&self, t: f64) -> S::Vector {
         let cders = self.curve.derivatives(3, t);
-        let [Vector2 { x: u, y: v }, der, der2, der3] = cders.to_array::<4>();
+        let Some([Vector2 { x: u, y: v }, der, der2, der3]) = cders.to_array::<4>() else {
+            return S::Vector::zero() * f64::NAN;
+        };
         let surface = self.surface();
         surface.derivative_mn(3, 0, u, v) * (der[0] * der[0] * der[0])
             + surface.derivative_mn(2, 1, u, v) * (der[0] * der[0] * der[1] * 3.0)
@@ -86,13 +88,17 @@ where
     }
     #[inline(always)]
     fn derivative(&self, t: f64) -> Self::Vector {
-        let [pt, der] = self.curve.derivatives(1, t).to_array::<2>();
+        let Some([pt, der]) = self.curve.derivatives(1, t).to_array::<2>() else {
+            return S::Vector::zero() * f64::NAN;
+        };
         self.surface.derivative_u(pt[0], pt[1]) * der[0]
             + self.surface.derivative_v(pt[0], pt[1]) * der[1]
     }
     #[inline(always)]
     fn derivative_2(&self, t: f64) -> Self::Vector {
-        let [pt, der, der2] = self.curve.derivatives(2, t).to_array::<3>();
+        let Some([pt, der, der2]) = self.curve.derivatives(2, t).to_array::<3>() else {
+            return S::Vector::zero() * f64::NAN;
+        };
         self.surface.derivative_uu(pt[0], pt[1]) * (der[0] * der[0])
             + self.surface.derivative_uv(pt[0], pt[1]) * (der[0] * der[1] * 2.0)
             + self.surface.derivative_vv(pt[0], pt[1]) * (der[1] * der[1])

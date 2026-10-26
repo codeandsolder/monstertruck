@@ -59,11 +59,8 @@ impl StableId {
     /// Reserved sentinel for unassigned IDs.
     pub const UNASSIGNED: StableId = StableId(0);
 
-    /// Create a new StableId.
-    pub fn new(val: u64) -> Self {
-        debug_assert!(val != 0, "StableId 0 is reserved for UNASSIGNED");
-        StableId(val)
-    }
+    /// Create a new StableId. Zero denotes [`Self::UNASSIGNED`].
+    pub const fn new(val: u64) -> Self { StableId(val) }
 
     /// Get the raw u64 value.
     pub fn raw(self) -> u64 { self.0 }
@@ -96,15 +93,18 @@ impl StableIdAllocator {
 
     /// Allocate the next [`StableId`].
     pub fn allocate(&mut self) -> StableId {
+        if self.next == 0 {
+            return StableId::UNASSIGNED;
+        }
         let id = StableId::new(self.next);
-        self.next += 1;
+        self.next = self.next.checked_add(1).unwrap_or(0);
         id
     }
 
     /// Advance the counter past `ceil` to avoid collisions.
     pub fn ensure_above(&mut self, ceil: u64) {
-        if self.next <= ceil {
-            self.next = ceil + 1;
+        if self.next != 0 && self.next <= ceil {
+            self.next = ceil.checked_add(1).unwrap_or(0);
         }
     }
 
@@ -141,4 +141,14 @@ fn stable_id_allocator() {
     assert_ne!(a, b);
     assert_eq!(a.raw(), 1);
     assert_eq!(b.raw(), 2);
+}
+
+#[test]
+fn stable_id_allocator_exhaustion_is_total() {
+    assert_eq!(StableId::new(0), StableId::UNASSIGNED);
+    let mut alloc = StableIdAllocator::new();
+    alloc.ensure_above(u64::MAX - 1);
+    assert_eq!(alloc.allocate().raw(), u64::MAX);
+    assert_eq!(alloc.allocate(), StableId::UNASSIGNED);
+    assert_eq!(alloc.peek(), 0);
 }

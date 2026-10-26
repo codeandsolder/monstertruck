@@ -69,7 +69,11 @@ pub trait RadiusFunction: Clone {
     /// Returns all derivatives at parameter `t` with order `0..=max_order`.
     #[inline]
     fn derivatives(&self, max_order: usize, t: f64) -> CurveDerivatives<f64> {
-        (0..=max_order).map(|n| self.derivative_n(n, t)).collect()
+        let mut derivatives = CurveDerivatives::new(max_order);
+        for (order, derivative) in derivatives.iter_mut().enumerate() {
+            *derivative = self.derivative_n(order, t);
+        }
+        derivatives
     }
 }
 

@@ -395,7 +395,9 @@ where
             surface1,
             leader,
         } = self;
-        let [l, l_der, l_der2] = leader.derivatives(2, t).to_array::<3>();
+        let Some([l, l_der, l_der2]) = leader.derivatives(2, t).to_array::<3>() else {
+            return leader.derivative(t);
+        };
         let (c, uv0, uv1) = match self.search_triple(t, 100) {
             Some(triple) => triple,
             None => return leader.derivative(t),

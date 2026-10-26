@@ -1,5 +1,20 @@
 use cgmath::*;
 
+pub(crate) fn scalar_from_u128<S: BaseNum>(mut value: u128) -> S {
+    let mut result = S::zero();
+    let mut bit = S::one();
+    while value != 0 {
+        if value & 1 == 1 {
+            result += bit;
+        }
+        value >>= 1;
+        if value != 0 {
+            bit += bit;
+        }
+    }
+    result
+}
+
 /// declare control point
 pub mod control_point {
     use super::*;
@@ -168,7 +183,7 @@ pub fn rational_derivative<V: Homogeneous>(ders: &[V]) -> <V::Point as Euclidean
         let (d, dw) = (ders[1].truncate(), ders[1].weight());
         let (d2, d2w) = (ders[2].truncate(), ders[2].weight());
         // SAFETY: The integer 2 is representable in any numeric type.
-        let two = <V::Scalar as num_traits::NumCast>::from(2).unwrap();
+        let two = scalar_from_u128(2);
         let sw2 = sw * sw;
         d2 / sw - d * (dw / sw2 * two) + s * (dw * dw * two / (sw2 * sw) - d2w / sw2)
     } else if len < 32 {
@@ -212,17 +227,13 @@ pub fn rational_derivatives<V: Homogeneous>(
     ders: &[V],
     evals: &mut [<V::Point as EuclideanSpace>::Diff],
 ) {
-    assert!(
-        evals.len() >= ders.len(),
-        "evals must be no shorter than ders."
-    );
-    let from = <V::Scalar as num_traits::NumCast>::from;
-    for i in 0..ders.len() {
+    let len = ders.len().min(evals.len());
+    for i in 0..len {
         let mut c = 1;
         let sum = (1..i).fold(evals[0] * ders[i].weight(), |sum, j| {
             c = c * (i - j + 1) / j;
             // SAFETY: `c` is a small binomial coefficient that fits in any numeric type.
-            sum + evals[j] * (ders[i - j].weight() * from(c).unwrap())
+            sum + evals[j] * (ders[i - j].weight() * scalar_from_u128(c as u128))
         });
         evals[i] = (ders[i].truncate() - sum) / ders[0].weight();
     }
@@ -273,7 +284,8 @@ where
     if ders.is_empty() {
         return zero;
     }
-    let (m, n) = (ders.len(), ders[0].as_ref().len());
+    let m = ders.len();
+    let n = ders.iter().map(|row| row.as_ref().len()).min().unwrap_or(0);
     if n == 0 {
         zero
     } else if (m, n) == (1, 1) {
@@ -296,7 +308,7 @@ where
         rational_derivative(&vders)
     } else if (m, n) == (2, 2) {
         // SAFETY: The integer 2 is representable in any numeric type.
-        let two = <V::Scalar as num_traits::NumCast>::from(2).unwrap();
+        let two = scalar_from_u128(2);
         let (der0, der1) = (ders[0].as_ref(), ders[1].as_ref());
         let (s, u, v, uv) = (der0[0], der1[0], der0[1], der1[1]);
         let (s, sw) = (s.truncate(), s.weight());
@@ -310,7 +322,7 @@ where
         multi_rational_derivatives(ders, &mut evals);
         evals[m - 1][n - 1]
     } else {
-        let mut evals = vec![vec![zero; m]; n];
+        let mut evals = vec![vec![zero; n]; m];
         multi_rational_derivatives(ders, &mut evals);
         evals[m - 1][n - 1]
     }
@@ -318,8 +330,8 @@ where
 /// Store the multi-orders derivations of the rational surface in `evals`.
 /// # Remarks
 /// - `evals` must be initialized by zero.
-/// - `ders` and `evals` are must be rectangulars.
-/// - The lengths of `evals` must not be shorter than the ones of `ders`.
+/// - Jagged or short inputs are evaluated over their common rectangular prefix.
+/// - Extra rows or columns in either input are ignored.
 /// # Examples
 /// ```
 /// use monstertruck_core::cgmath64::*;
@@ -390,8 +402,19 @@ where
     V: Homogeneous,
     A0: AsRef<[V]>,
     A1: AsMut<[<V::Point as EuclideanSpace>::Diff]>, {
-    let from = <V::Scalar as num_traits::NumCast>::from;
-    let (m_max, n_max) = (ders.len(), ders[0].as_ref().len());
+    let m_max = ders.len().min(evals.len());
+    if m_max == 0 {
+        return;
+    }
+    let n_max = ders[..m_max]
+        .iter()
+        .map(|row| row.as_ref().len())
+        .chain(evals[..m_max].iter_mut().map(|row| row.as_mut().len()))
+        .min()
+        .unwrap_or(0);
+    if n_max == 0 {
+        return;
+    }
     for m in 0..m_max {
         for n in 0..n_max {
             let mut sum = <V::Point as EuclideanSpace>::Diff::zero();
@@ -401,7 +424,7 @@ where
                 let (evals, ders) = (evals[i].as_mut(), ders[m - i].as_ref());
                 for j in 0..=n {
                     // SAFETY: `c0` and `c1` are small binomial coefficients.
-                    let (c0_s, c1_s) = (from(c0).unwrap(), from(c1).unwrap());
+                    let (c0_s, c1_s) = (scalar_from_u128(c0 as u128), scalar_from_u128(c1 as u128));
                     sum = sum + evals[j] * (ders[n - j].weight() * c0_s * c1_s);
                     c1 = c1 * (n - j) / (j + 1);
                 }
@@ -468,11 +491,7 @@ impl<S: BaseFloat> Homogeneous for Vector4<S> {
 /// ```
 pub fn absolute_derivatives<V>(ders: &[V], evals: &mut [f64])
 where V: InnerSpace<Scalar = f64> {
-    assert!(
-        evals.len() >= ders.len(),
-        "evals must be no shorter than ders."
-    );
-    let n = ders.len();
+    let n = ders.len().min(evals.len());
     evals.iter_mut().for_each(|o| *o = 0.0);
 
     if n == 0 {
@@ -490,4 +509,18 @@ where V: InnerSpace<Scalar = f64> {
         });
         evals[m] = sum / evals[0];
     });
+}
+
+#[test]
+fn multi_rational_derivatives_accept_short_jagged_buffers() {
+    let ders = [
+        vec![Vector3::new(2.0, 4.0, 2.0), Vector3::new(1.0, 0.0, 0.0)],
+        vec![Vector3::new(0.0, 2.0, 0.0)],
+    ];
+    let mut evals = [
+        vec![Vector2::zero()],
+        vec![Vector2::zero(), Vector2::zero()],
+    ];
+    multi_rational_derivatives(&ders, &mut evals);
+    assert_eq!(evals[0][0], Vector2::new(1.0, 2.0));
 }

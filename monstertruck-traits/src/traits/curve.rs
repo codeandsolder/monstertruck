@@ -31,7 +31,11 @@ pub trait ParametricCurve: Clone {
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector;
     /// Returns all derivatives at parameter `t` with order `0..=n`.
     fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector> {
-        (0..=n).map(|i| self.derivative_n(i, t)).collect()
+        let mut derivatives = CurveDerivatives::new(n);
+        for (order, derivative) in derivatives.iter_mut().enumerate() {
+            *derivative = self.derivative_n(order, t);
+        }
+        derivatives
     }
     /// Deprecated: use [`evaluate`](ParametricCurve::evaluate).
     #[inline(always)]
