@@ -96,16 +96,18 @@ where
     Some(samples)
 }
 
-pub(super) fn classify_unknown_face<C, S>(
+fn strict_majority(inside: usize, outside: usize) -> Option<bool> {
+    match inside.cmp(&outside) {
+        std::cmp::Ordering::Greater => Some(true),
+        std::cmp::Ordering::Less => Some(false),
+        std::cmp::Ordering::Equal => None,
+    }
+}
+
+pub(super) fn classify_points_inside(
     poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
-    face: &Face<Point3, C, S>,
-    tol: f64,
-) -> Option<bool>
-where
-    C: PolylineableCurve + Clone,
-    S: MeshableSurface + Clone,
-{
-    let points = sample_points_on_face(face, tol)?;
+    points: impl IntoIterator<Item = Point3>,
+) -> Option<bool> {
     let (inside, outside) =
         points
             .into_iter()
@@ -116,7 +118,19 @@ where
                     Some((inside, outside + 1))
                 }
             })?;
-    Some(inside >= outside)
+    strict_majority(inside, outside)
+}
+
+pub(super) fn classify_unknown_face<C, S>(
+    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    face: &Face<Point3, C, S>,
+    tol: f64,
+) -> Option<bool>
+where
+    C: PolylineableCurve + Clone,
+    S: MeshableSurface + Clone,
+{
+    classify_points_inside(poly_shell, sample_points_on_face(face, tol)?)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +138,65 @@ pub(super) enum FaceRelation {
     Inside,
     Outside,
     CoincidentSameFacing,
+}
+
+fn unique_relation(inside: usize, outside: usize, coincident: usize) -> Option<FaceRelation> {
+    let max = inside.max(outside).max(coincident);
+    let winners =
+        usize::from(inside == max) + usize::from(outside == max) + usize::from(coincident == max);
+    if max == 0 || winners != 1 {
+        return None;
+    }
+    Some(if inside == max {
+        FaceRelation::Inside
+    } else if outside == max {
+        FaceRelation::Outside
+    } else {
+        FaceRelation::CoincidentSameFacing
+    })
+}
+
+pub(super) fn classify_points_relation<S>(
+    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    points: impl IntoIterator<Item = Point3>,
+    surface: &S,
+    tol: f64,
+) -> Option<FaceRelation>
+where
+    S: ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let offset = BooleanTolerance::new(tol).classifier_offset;
+    let (inside, outside, coincident) = points.into_iter().try_fold(
+        (0usize, 0usize, 0usize),
+        |(inside, outside, coincident), point| {
+            let parameter = surface
+                .search_parameter(point, None, 100)
+                .or_else(|| surface.search_nearest_parameter(point, None, 100));
+            let Some((u, v)) = parameter else {
+                let is_inside = classify_inside_with_polyshell(poly_shell, point)?;
+                return Some((
+                    inside + usize::from(is_inside),
+                    outside + usize::from(!is_inside),
+                    coincident,
+                ));
+            };
+            let normal = surface.normal(u, v);
+            let outward_inside =
+                classify_inside_with_polyshell(poly_shell, point + normal * offset)?;
+            let inward_inside =
+                classify_inside_with_polyshell(poly_shell, point - normal * offset)?;
+            if outward_inside {
+                Some((inside + 1, outside, coincident))
+            } else if inward_inside {
+                Some((inside, outside, coincident + 1))
+            } else {
+                Some((inside, outside + 1, coincident))
+            }
+        },
+    )?;
+    unique_relation(inside, outside, coincident)
 }
 
 pub(super) fn classify_face_relation<C, S>(
@@ -142,44 +215,7 @@ where
 {
     let points = sample_points_on_face(face, tol)?;
     let surface = face.oriented_surface();
-    let offset = BooleanTolerance::new(tol).classifier_offset;
-    let (inside, outside, coincident, total) = points.into_iter().try_fold(
-        (0usize, 0usize, 0usize, 0usize),
-        |(inside, outside, coincident, total), point| {
-            let parameter = surface
-                .search_parameter(point, None, 100)
-                .or_else(|| surface.search_nearest_parameter(point, None, 100));
-            let Some((u, v)) = parameter else {
-                let is_inside = classify_inside_with_polyshell(poly_shell, point)?;
-                return Some((
-                    inside + usize::from(is_inside),
-                    outside + usize::from(!is_inside),
-                    coincident,
-                    total + 1,
-                ));
-            };
-            let normal = surface.normal(u, v);
-            let outward_inside =
-                classify_inside_with_polyshell(poly_shell, point + normal * offset)?;
-            let inward_inside =
-                classify_inside_with_polyshell(poly_shell, point - normal * offset)?;
-            if outward_inside {
-                Some((inside + 1, outside, coincident, total + 1))
-            } else if inward_inside {
-                Some((inside, outside, coincident + 1, total + 1))
-            } else {
-                Some((inside, outside + 1, coincident, total + 1))
-            }
-        },
-    )?;
-    let relation = if total != 0 && coincident > inside && coincident > outside {
-        FaceRelation::CoincidentSameFacing
-    } else if inside > outside {
-        FaceRelation::Inside
-    } else {
-        FaceRelation::Outside
-    };
-    Some(relation)
+    classify_points_relation(poly_shell, points, &surface, tol)
 }
 
 pub(super) fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -218,4 +254,30 @@ pub(super) fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurfa
         .search_parameter(point, None, 100)
         .or_else(|| rhs.search_nearest_parameter(point, None, 100))?;
     Some(lhs.normal(lhs_u, lhs_v).dot(rhs.normal(rhs_u, rhs_v)) > 0.0)
+}
+
+#[cfg(test)]
+mod vote_tests {
+    use super::*;
+
+    #[test]
+    fn binary_ties_are_inconclusive() {
+        assert_eq!(strict_majority(2, 2), None);
+        assert_eq!(strict_majority(3, 2), Some(true));
+        assert_eq!(strict_majority(2, 3), Some(false));
+    }
+
+    #[test]
+    fn relation_ties_are_inconclusive() {
+        assert_eq!(unique_relation(2, 2, 0), None);
+        assert_eq!(unique_relation(2, 0, 2), None);
+        assert_eq!(unique_relation(0, 2, 2), None);
+        assert_eq!(unique_relation(0, 0, 0), None);
+        assert_eq!(unique_relation(3, 2, 1), Some(FaceRelation::Inside));
+        assert_eq!(unique_relation(1, 3, 2), Some(FaceRelation::Outside));
+        assert_eq!(
+            unique_relation(1, 2, 3),
+            Some(FaceRelation::CoincidentSameFacing)
+        );
+    }
 }

@@ -59,48 +59,50 @@ fn fillet_on_side(
     let surface1 = face1.oriented_surface();
     let fillet_surface = {
         let curve = filleted_edge.oriented_curve();
-        let make_with_extend = |radius: &dyn Fn(f64) -> f64, extend: bool| match &options.profile {
-            FilletProfile::Round => rolling_ball_fillet_surface(
-                &surface0, &surface1, &curve, division, radius, extend, flip_side,
-            ),
-            FilletProfile::Chamfer => chamfer_fillet_surface(
-                &surface0, &surface1, &curve, division, radius, extend, flip_side,
-            ),
-            FilletProfile::AsymmetricChamfer {
-                first_setback_mm,
-                second_setback_mm,
-            } => asymmetric_chamfer_contacts(
-                &surface0,
-                &surface1,
-                &curve,
-                division,
-                [*first_setback_mm, *second_setback_mm],
-                extend,
-                flip_side,
-            )
-            .map(|contacts| expand_chamfer(&contacts, &surface0, &surface1)),
-            FilletProfile::Ridge => ridge_fillet_surface(
-                &surface0, &surface1, &curve, division, radius, extend, flip_side,
-            ),
-            FilletProfile::Custom(profile) => custom_fillet_surface(
-                &surface0, &surface1, &curve, division, radius, extend, flip_side, profile,
-            ),
-        };
-        let make = |radius: &dyn Fn(f64) -> f64| {
+        let make_with_extend =
+            |radius: Option<&dyn Fn(f64) -> f64>, extend: bool| match &options.profile {
+                FilletProfile::Round => rolling_ball_fillet_surface(
+                    &surface0, &surface1, &curve, division, radius?, extend, flip_side,
+                ),
+                FilletProfile::Chamfer => chamfer_fillet_surface(
+                    &surface0, &surface1, &curve, division, radius?, extend, flip_side,
+                ),
+                FilletProfile::AsymmetricChamfer {
+                    first_setback_mm,
+                    second_setback_mm,
+                } => asymmetric_chamfer_contacts(
+                    &surface0,
+                    &surface1,
+                    &curve,
+                    division,
+                    [*first_setback_mm, *second_setback_mm],
+                    extend,
+                    flip_side,
+                )
+                .map(|contacts| expand_chamfer(&contacts, &surface0, &surface1)),
+                FilletProfile::Ridge => ridge_fillet_surface(
+                    &surface0, &surface1, &curve, division, radius?, extend, flip_side,
+                ),
+                FilletProfile::Custom(profile) => custom_fillet_surface(
+                    &surface0, &surface1, &curve, division, radius?, extend, flip_side, profile,
+                ),
+            };
+        let make = |radius: Option<&dyn Fn(f64) -> f64>| {
             make_with_extend(radius, true).or_else(|| make_with_extend(radius, false))
         };
-        match &options.radius {
-            RadiusSpec::Constant(r) => {
-                let r = *r;
-                make(&|_| r)
+        let surface = if options.profile.uses_radius() {
+            match &options.radius {
+                RadiusSpec::Constant(r) => {
+                    let r = *r;
+                    make(Some(&|_| r))
+                }
+                RadiusSpec::Variable(f) => make(Some(f.as_ref())),
+                RadiusSpec::PerEdge(radii) => radii.first().and_then(|&r| make(Some(&|_| r))),
             }
-            RadiusSpec::Variable(f) => make(f.as_ref()),
-            RadiusSpec::PerEdge(radii) => match radii.first() {
-                Some(&r) => make(&|_| r),
-                None => None,
-            },
-        }
-        .ok_or(FilletError::GeometryFailed {
+        } else {
+            make(None)
+        };
+        surface.ok_or(FilletError::GeometryFailed {
             context: "fillet surface computation",
         })?
     };

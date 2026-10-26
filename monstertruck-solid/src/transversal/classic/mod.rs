@@ -31,13 +31,14 @@ mod weld;
 
 use super::integrate::{
     InvalidOutputShellConditionData, ShapeOpsCurve, ShapeOpsError, ShapeOpsSurface,
+    validate_tolerance,
 };
 use crate::alternative::Alternative;
 #[cfg(test)]
 use classification::sample_points_on_face;
 use classification::{
-    FaceRelation, classify_face_relation, classify_inside_with_polyshell, classify_unknown_face,
-    planar_partition_same_facing,
+    FaceRelation, classify_face_relation, classify_points_inside, classify_points_relation,
+    classify_unknown_face, planar_partition_same_facing,
 };
 use conversion::altshell_to_shell;
 use monstertruck_geometry::prelude::*;
@@ -94,9 +95,7 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
     mode: PairMode,
 ) -> ClassicResult<PairAnalysis<C, S>> {
-    if tol < TOLERANCE {
-        return Err(ShapeOpsError::InvalidTolerance);
-    }
+    validate_tolerance(tol)?;
     let seed_tol = BooleanTolerance::new(tol).mesh_seed;
     let poly_shell0 = shell0.triangulation(seed_tol);
     let poly_shell1 = shell1.triangulation(seed_tol);
@@ -158,17 +157,8 @@ where
     let points =
         divide_face::sample_points_on_region(region.absolute_boundaries(), &region.surface(), tol)
             .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
-    let (inside, outside) = points
-        .into_iter()
-        .try_fold((0usize, 0usize), |(inside, outside), point| {
-            let is_inside = classify_inside_with_polyshell(poly_shell, point)?;
-            Some((
-                inside + usize::from(is_inside),
-                outside + usize::from(!is_inside),
-            ))
-        })
-        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
-    Ok(inside >= outside)
+    classify_points_inside(poly_shell, points)
+        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
 }
 
 fn classify_relation<C, S>(
@@ -197,48 +187,8 @@ where
     if !region.orientation() {
         surface.invert();
     }
-    let offset = BooleanTolerance::new(tol).classifier_offset;
-    let (inside, outside, coincident, total) = points
-        .into_iter()
-        .try_fold(
-            (0usize, 0usize, 0usize, 0usize),
-            |(inside, outside, coincident, total), point| {
-                let parameter = surface
-                    .search_parameter(point, None, 100)
-                    .or_else(|| surface.search_nearest_parameter(point, None, 100));
-                let Some((u, v)) = parameter else {
-                    let is_inside = classify_inside_with_polyshell(poly_shell, point)?;
-                    return Some((
-                        inside + usize::from(is_inside),
-                        outside + usize::from(!is_inside),
-                        coincident,
-                        total + 1,
-                    ));
-                };
-                let normal = surface.normal(u, v);
-                let outward_inside =
-                    classify_inside_with_polyshell(poly_shell, point + normal * offset)?;
-                let inward_inside =
-                    classify_inside_with_polyshell(poly_shell, point - normal * offset)?;
-                if outward_inside {
-                    Some((inside + 1, outside, coincident, total + 1))
-                } else if inward_inside {
-                    Some((inside, outside, coincident + 1, total + 1))
-                } else {
-                    Some((inside, outside + 1, coincident, total + 1))
-                }
-            },
-        )
-        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
-    Ok(
-        if total != 0 && coincident > inside && coincident > outside {
-            FaceRelation::CoincidentSameFacing
-        } else if inside > outside {
-            FaceRelation::Inside
-        } else {
-            FaceRelation::Outside
-        },
-    )
+    classify_points_relation(poly_shell, points, &surface, tol)
+        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
 }
 
 fn convert_alt_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -619,8 +569,12 @@ fn and_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     };
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
-    let shell0 = iter0.next().unwrap();
-    let shell1 = iter1.next().unwrap();
+    let Some(shell0) = iter0.next() else {
+        return Ok(Solid::empty());
+    };
+    let Some(shell1) = iter1.next() else {
+        return Ok(Solid::empty());
+    };
     let [mut and_shell, _] = pair(shell0, shell1)?;
     for shell in iter0 {
         let [res, _] = pair(&and_shell, shell)?;
@@ -639,6 +593,7 @@ pub(crate) fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
+    validate_tolerance(tol)?;
     and_shells(solid0, solid1, tol)
 }
 
@@ -648,14 +603,19 @@ pub(crate) fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
+    validate_tolerance(tol)?;
     let operation = "or";
     let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
         process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
     };
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
-    let shell0 = iter0.next().unwrap();
-    let shell1 = iter1.next().unwrap();
+    let Some(shell0) = iter0.next() else {
+        return Ok(solid1.clone());
+    };
+    let Some(shell1) = iter1.next() else {
+        return Ok(solid0.clone());
+    };
     let [_, mut or_shell] = pair(shell0, shell1)?;
     for shell in iter0 {
         let [_, res] = pair(&or_shell, shell)?;
@@ -674,6 +634,7 @@ pub(crate) fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
+    validate_tolerance(tol)?;
     let operation = "difference";
     let difference_pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
         process_one_pair_of_shells(a, b, tol, PairMode::Difference)
@@ -684,8 +645,12 @@ pub(crate) fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
-    let shell0 = iter0.next().unwrap();
-    let shell1 = iter1.next().unwrap();
+    let Some(shell0) = iter0.next() else {
+        return Ok(Solid::empty());
+    };
+    let Some(shell1) = iter1.next() else {
+        return Ok(solid0.clone());
+    };
     let [mut difference_shell, _] = difference_pair(shell0, shell1)?;
 
     for shell in iter0 {
@@ -712,8 +677,59 @@ pub(crate) fn symmetric_difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 
 #[cfg(test)]
 mod structural_classification_tests {
+    use super::classification::classify_inside_with_polyshell;
     use super::*;
-    use monstertruck_modeling::Curve;
+    use monstertruck_modeling::{Curve, Surface, builder};
+
+    fn unit_cube() -> Solid<Point3, Curve, Surface> {
+        let vertex = builder::vertex(Point3::origin());
+        let edge = builder::extrude(&vertex, Vector3::unit_x());
+        let face = builder::extrude(&edge, Vector3::unit_y());
+        builder::extrude(&face, Vector3::unit_z())
+    }
+
+    #[test]
+    fn empty_set_boolean_identities_are_total() {
+        let empty = Solid::<Point3, Curve, Surface>::empty();
+        let cube = unit_cube();
+        let cube_faces = cube.face_iter().count();
+
+        assert!(matches!(and(&empty, &cube, 1.0e-6), Ok(solid) if solid.is_empty()));
+        assert!(matches!(and(&cube, &empty, 1.0e-6), Ok(solid) if solid.is_empty()));
+        assert!(
+            matches!(or(&empty, &cube, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
+        );
+        assert!(
+            matches!(or(&cube, &empty, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
+        );
+        assert!(matches!(difference(&empty, &cube, 1.0e-6), Ok(solid) if solid.is_empty()));
+        assert!(
+            matches!(difference(&cube, &empty, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
+        );
+        assert!(
+            matches!(symmetric_difference(&empty, &cube, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
+        );
+    }
+
+    #[test]
+    fn invalid_tolerance_is_rejected_before_empty_set_shortcuts() {
+        let empty = Solid::<Point3, Curve, Surface>::empty();
+        let cube = unit_cube();
+        for tol in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(matches!(
+                and(&empty, &cube, tol),
+                Err(ShapeOpsError::InvalidTolerance)
+            ));
+            assert!(matches!(
+                or(&empty, &cube, tol),
+                Err(ShapeOpsError::InvalidTolerance)
+            ));
+            assert!(matches!(
+                difference(&cube, &empty, tol),
+                Err(ShapeOpsError::InvalidTolerance)
+            ));
+        }
+    }
 
     fn tetrahedron_mesh(reverse: bool) -> PolygonMesh {
         let positions = vec![
@@ -784,10 +800,7 @@ mod structural_classification_tests {
                 )
             })
             .collect::<Vec<_>>();
-        let face = Face::new_unchecked(
-            vec![Wire::from(edges)],
-            monstertruck_modeling::Surface::Plane(Plane::xy()),
-        );
+        let face = Face::new_unchecked(vec![Wire::from(edges)], Surface::Plane(Plane::xy()));
         let boundary = PolylineCurve(
             points
                 .iter()
@@ -822,10 +835,7 @@ mod structural_classification_tests {
                 )
             })
             .collect::<Vec<_>>();
-        let face = Face::new_unchecked(
-            vec![Wire::from(edges)],
-            monstertruck_modeling::Surface::Plane(Plane::xy()),
-        );
+        let face = Face::new_unchecked(vec![Wire::from(edges)], Surface::Plane(Plane::xy()));
 
         let samples = sample_points_on_face(&face, 1.0e-6).unwrap_or_default();
         assert!(!samples.is_empty());
@@ -897,10 +907,8 @@ mod structural_classification_tests {
 
         let outer = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)];
         let hole = [(1.0, 1.0), (1.0, 3.0), (3.0, 3.0), (3.0, 1.0)];
-        let face = Face::new_unchecked(
-            vec![wire(&outer), wire(&hole)],
-            monstertruck_modeling::Surface::Plane(Plane::xy()),
-        );
+        let face =
+            Face::new_unchecked(vec![wire(&outer), wire(&hole)], Surface::Plane(Plane::xy()));
 
         let samples = sample_points_on_face(&face, 1.0e-6).unwrap_or_default();
         assert!(!samples.is_empty());
