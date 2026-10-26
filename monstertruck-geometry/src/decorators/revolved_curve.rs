@@ -723,6 +723,36 @@ where C: ParametricCurve3D + ParameterDivision1D<Point = Point3>
     }
 }
 
+fn from_axis_angle_derivation(n: usize, axis: Vector3, angle: Rad<f64>) -> Matrix3 {
+    let (s, c) = Rad::sin_cos(angle);
+    let (s, c) = match n % 4 {
+        0 => (s, c),
+        1 => (c, -s),
+        2 => (-s, -c),
+        _ => (-c, s),
+    };
+    let _1subc = match n {
+        0 => 1.0 - c,
+        _ => -c,
+    };
+
+    #[allow(clippy::deprecated_cfg_attr)]
+    #[cfg_attr(rustfmt, rustfmt_skip)]
+    Matrix3::new(
+        _1subc * axis.x * axis.x + c,
+        _1subc * axis.x * axis.y + s * axis.z,
+        _1subc * axis.x * axis.z - s * axis.y,
+
+        _1subc * axis.x * axis.y - s * axis.z,
+        _1subc * axis.y * axis.y + c,
+        _1subc * axis.y * axis.z + s * axis.x,
+
+        _1subc * axis.x * axis.z + s * axis.y,
+        _1subc * axis.y * axis.z - s * axis.x,
+        _1subc * axis.z * axis.z + c,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,34 +794,4 @@ mod tests {
         assert_near!(projected.derivative_n(3, 0.0), Vector2::zero());
         assert_near!(projected.derivative_n(4, 0.0), Vector2::zero());
     }
-}
-
-fn from_axis_angle_derivation(n: usize, axis: Vector3, angle: Rad<f64>) -> Matrix3 {
-    let (s, c) = Rad::sin_cos(angle);
-    let (s, c) = match n % 4 {
-        0 => (s, c),
-        1 => (c, -s),
-        2 => (-s, -c),
-        _ => (-c, s),
-    };
-    let _1subc = match n {
-        0 => 1.0 - c,
-        _ => -c,
-    };
-
-    #[allow(clippy::deprecated_cfg_attr)]
-    #[cfg_attr(rustfmt, rustfmt_skip)]
-    Matrix3::new(
-        _1subc * axis.x * axis.x + c,
-        _1subc * axis.x * axis.y + s * axis.z,
-        _1subc * axis.x * axis.z - s * axis.y,
-
-        _1subc * axis.x * axis.y - s * axis.z,
-        _1subc * axis.y * axis.y + c,
-        _1subc * axis.y * axis.z + s * axis.x,
-
-        _1subc * axis.x * axis.z + s * axis.y,
-        _1subc * axis.y * axis.z - s * axis.x,
-        _1subc * axis.z * axis.z + c,
-    )
 }
