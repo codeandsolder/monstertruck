@@ -149,8 +149,7 @@ impl PolyBoundary {
         let mut point_cache = HashMap::<UvKey, Point3>::default();
         match open.len() {
             1 => {
-                // SAFETY: open.len() == 1 was matched above.
-                let mut curve = open.pop().unwrap();
+                let mut curve = open.remove(0);
                 if let Some((axis, _)) = periodic_open_axis_full_span(&curve, surface)
                     && let Some(singular_curve) = close_open_periodic_curve_to_singular(
                         curve.clone(),
@@ -240,9 +239,8 @@ impl PolyBoundary {
                 }
             }
             2 => {
-                // SAFETY: open.len() == 2 was matched above.
-                let mut curve1 = open.pop().unwrap();
-                let mut curve0 = open.pop().unwrap();
+                let mut curve1 = open.remove(1);
+                let mut curve0 = open.remove(0);
                 fn end_pts<T: Copy>(vec: &[T]) -> (T, T) { (vec[0], vec[vec.len() - 1]) }
                 let full_period_pair_aligned =
                     align_full_period_open_pair(&mut curve0, &mut curve1, surface);

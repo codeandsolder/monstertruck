@@ -39,3 +39,27 @@ fn loop_subdivision() {
         ],
     );
 }
+
+#[test]
+fn loop_subdivision_leaves_invalid_index_mesh_unchanged() {
+    let positions = vec![
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+    ];
+    let faces = Faces::from_tri_and_quad_faces(vec![[0.into(), 1.into(), 3.into()]], Vec::new());
+    let mut polygon = PolygonMesh::new_unchecked(
+        StandardAttributes {
+            positions,
+            ..Default::default()
+        },
+        faces,
+    );
+    let before_positions = polygon.positions().to_vec();
+    let before_faces = polygon.faces().clone();
+
+    polygon.loop_subdivision();
+
+    assert_eq!(polygon.positions().as_slice(), before_positions.as_slice());
+    assert_eq!(polygon.faces(), &before_faces);
+}

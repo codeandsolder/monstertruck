@@ -290,7 +290,10 @@ fn create_blocks<T: SameAttr>(attrs: &[T], tol: f64) -> BlockMap<'_, T> {
         if attr.has_nan() {
             return;
         }
-        attr.round(tol).neighborhood().into_iter().for_each(|idx| {
+        let Some(block) = attr.round(tol) else {
+            return;
+        };
+        block.neighborhood().into_iter().for_each(|idx| {
             map.entry(idx).or_insert_with(Vec::new).push(i);
         });
     });
@@ -367,8 +370,8 @@ fn split_into_nondegenerate(poly: Vec<Vertex>) -> Vec<Vec<Vertex>> {
 trait CastIntVector:
     Sized + ElementWise<Self> + Mul<f64, Output = Self> + Div<f64, Output = Self> {
     type IntVector: IntVector;
-    fn cast_int(self) -> Self::IntVector;
-    fn round(self, tol: f64) -> Self::IntVector;
+    fn cast_int(self) -> Option<Self::IntVector>;
+    fn round(self, tol: f64) -> Option<Self::IntVector>;
     fn zero() -> Self;
     fn has_nan(&self) -> bool;
 }
@@ -377,12 +380,8 @@ macro_rules! impl_cast_int {
     ($typename: ident, $n: expr) => {
         impl CastIntVector for $typename {
             type IntVector = [i64; $n];
-            fn cast_int(self) -> [i64; $n] {
-                self.cast::<i64>()
-                    .unwrap_or_else(|| panic!("failed to cast: {self:?}"))
-                    .into()
-            }
-            fn round(self, tol: f64) -> Self::IntVector { (self / tol).cast_int() }
+            fn cast_int(self) -> Option<[i64; $n]> { self.cast::<i64>().map(Into::into) }
+            fn round(self, tol: f64) -> Option<Self::IntVector> { (self / tol).cast_int() }
             fn zero() -> Self { Self::from([0.0; $n]) }
             fn has_nan(&self) -> bool {
                 let arr: [f64; $n] = (*self).into();

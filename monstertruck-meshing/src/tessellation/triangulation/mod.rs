@@ -19,7 +19,6 @@ mod diagnostics;
 mod mesh;
 
 use boundary::{PolyBoundary, PolyBoundaryPiece};
-pub(crate) use diagnostics::classify_face_drop;
 use diagnostics::observe_face_drop;
 pub use diagnostics::{FaceDropReason, face_drop_count, reset_face_drop_count};
 use mesh::{trimming_tessellation, untrimmed_tessellation};
@@ -500,37 +499,40 @@ where
         .map(|v| (v.id(), v.mapped(Point3::clone)))
         .collect();
     let eset: HashMap<_, _> = shell.edge_par_iter().map(move |e| (e.id(), e)).collect();
-    let edge_map: HashMap<_, _> = eset
+    let edge_pairs: Vec<_> = eset
         .into_par_iter()
-        .map(move |(id, edge)| {
-            // SAFETY: vmap was built from all vertices in the shell.
-            let v0 = vmap.get(&edge.absolute_front().id()).unwrap();
-            let v1 = vmap.get(&edge.absolute_back().id()).unwrap();
+        .map(|(id, edge)| {
+            let v0 = vmap.get(&edge.absolute_front().id())?;
+            let v1 = vmap.get(&edge.absolute_back().id())?;
             let curve = edge.curve();
             let poly = PolylineCurve::from_curve(&curve, curve.range_tuple(), tolerance);
-            // Spec 012 U4: `Edge::debug_new` is fallible now and this
-            // `par_iter().map()` has no channel; `new_unchecked` is what the
-            // release arm of `debug_new` already did.
-            (id, Edge::new_unchecked(v0, v1, poly))
+            Some((id, Edge::new_unchecked(v0, v1, poly)))
         })
         .collect();
-    let create_edge = |edge: &Edge<Point3, C>| -> Edge<_, _> {
-        // SAFETY: edge_map was built from all edges in the shell.
-        let new_edge = edge_map.get(&edge.id()).unwrap();
-        match edge.orientation() {
+    let Some(edge_map) = edge_pairs.into_iter().collect::<Option<HashMap<_, _>>>() else {
+        return shell_tessellation_single_thread(shell, tolerance, sp, primitive_config);
+    };
+    let create_edge = |edge: &Edge<Point3, C>| -> Option<Edge<_, _>> {
+        let new_edge = edge_map.get(&edge.id())?;
+        Some(match edge.orientation() {
             true => new_edge.clone(),
             false => new_edge.inverse(),
-        }
+        })
     };
-    let create_boundary =
-        |wire: &Wire<Point3, C>| -> Wire<_, _> { wire.edge_iter().map(create_edge).collect() };
-    let create_face = move |(face_idx, face): (usize, &Face<Point3, C, S>)| -> Face<_, _, _> {
-        let wires: Vec<_> = face
+    let create_boundary = |wire: &Wire<Point3, C>| -> Option<Wire<_, _>> {
+        let edges = wire
+            .edge_iter()
+            .map(create_edge)
+            .collect::<Option<Vec<_>>>()?;
+        Some(edges.into_iter().collect())
+    };
+    let create_face = |(face_idx, face): (usize, &Face<Point3, C, S>)| -> Option<Face<_, _, _>> {
+        let wires = face
             .absolute_boundaries()
             .iter()
             .map(create_boundary)
-            .collect();
-        shell_create_polygon(
+            .collect::<Option<Vec<_>>>()?;
+        Some(shell_create_polygon(
             &face.surface(),
             wires,
             face.orientation(),
@@ -538,13 +540,16 @@ where
             &sp,
             primitive_config,
             Some(face_idx),
-        )
+        ))
     };
-    shell.face_par_iter().enumerate().map(create_face).collect()
+    let faces: Vec<_> = shell.face_par_iter().enumerate().map(create_face).collect();
+    match faces.into_iter().collect::<Option<Vec<_>>>() {
+        Some(faces) => faces.into_iter().collect(),
+        None => shell_tessellation_single_thread(shell, tolerance, sp, primitive_config),
+    }
 }
 
 /// Tessellates faces.
-#[cfg(any(target_arch = "wasm32", test))]
 pub(super) fn shell_tessellation_single_thread<'a, C, S>(
     shell: &'a Shell<Point3, C, S>,
     tolerance: f64,

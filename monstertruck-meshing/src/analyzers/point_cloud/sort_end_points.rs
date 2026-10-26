@@ -103,13 +103,9 @@ pub fn pointcloud_in_polygon_neighborhood(
                 true
             }
             EndPointType::Back => {
-                // SAFETY: every Back endpoint has a matching Front that pushed this index.
-                let i = current
-                    .iter()
-                    .enumerate()
-                    .find(|(_, idx)| **idx == index)
-                    .unwrap()
-                    .0;
+                let Some(i) = current.iter().position(|idx| *idx == index) else {
+                    return false;
+                };
                 current.swap_remove(i);
                 true
             }

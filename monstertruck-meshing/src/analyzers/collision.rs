@@ -118,13 +118,7 @@ fn colliding_segment_pairs(sort_endpoints: Vec<EndPoint>) -> impl Iterator<Item 
                     )
                 }
                 EndPointType::Back => {
-                    // SAFETY: every Back endpoint has a matching Front that pushed this index.
-                    let i = current[segnum]
-                        .iter()
-                        .enumerate()
-                        .find(|(_, idx)| **idx == index)
-                        .unwrap()
-                        .0;
+                    let i = current[segnum].iter().position(|idx| *idx == index)?;
                     current[segnum].swap_remove(i);
                     None
                 }

@@ -42,7 +42,7 @@ impl Boundaries {
             & match (self.checked.insert(edge), self.boundary.insert(edge, ori)) {
                 (true, None) => ShellCondition::Oriented,
                 (false, None) => ShellCondition::Irregular,
-                (true, Some(_)) => panic!("unexpected case!"),
+                (true, Some(_)) => ShellCondition::Irregular,
                 (false, Some(ori0)) => {
                     self.boundary.remove(&edge);
                     match ori == ori0 {
@@ -90,9 +90,10 @@ impl Topology for Faces {
         let mut res = Vec::new();
         while !vemap.is_empty() {
             let mut wire = Vec::new();
-            // SAFETY: the while loop condition ensures vemap is non-empty.
-            let front = vemap.iter().next().unwrap();
-            let front = (*front.0, *front.1);
+            let Some((&front0, &front1)) = vemap.iter().next() else {
+                break;
+            };
+            let front = (front0, front1);
             vemap.remove(&front.0);
             wire.push(front.0);
             let mut cursor = front.1;

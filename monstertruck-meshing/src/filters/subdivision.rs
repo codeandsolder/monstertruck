@@ -46,37 +46,59 @@ impl Subdivision for PolygonMesh {
     fn loop_subdivision(&mut self) -> &mut Self {
         let mut edges = HashMap::default();
         let mut vertex_adjacency = vec![Vec::new(); self.positions().len()];
-        self.tri_faces().iter().for_each(|face| {
+        for face in self.tri_faces() {
+            if face
+                .iter()
+                .any(|vertex| vertex.pos >= vertex_adjacency.len())
+            {
+                return self;
+            }
             let face = [face[0].pos, face[1].pos, face[2].pos];
             add_vertex_edge(&mut edges, &mut vertex_adjacency, face[1], face[2], face[0]);
             add_vertex_edge(&mut edges, &mut vertex_adjacency, face[2], face[0], face[1]);
             add_vertex_edge(&mut edges, &mut vertex_adjacency, face[0], face[1], face[2]);
-        });
-        let positions = vertex_adjacency
+        }
+
+        let Some(mut positions) = vertex_adjacency
             .iter()
             .enumerate()
-            .map(|t| calc_new_position(t.0, t.1, &edges, self.positions()))
-            .chain(edge_positions(&edges, &vertex_adjacency, self.positions()))
-            .collect::<Vec<_>>();
-        let tri_faces = self
-            .tri_faces()
-            .iter()
-            .flat_map(|v| {
-                let len = self.positions().len();
-                // SAFETY: all edges were inserted from the same set of triangle faces.
-                let e: [StandardVertex; 3] = [
-                    (edges.get(&Edge::new(v[1].pos, v[2].pos)).unwrap().idx + len).into(),
-                    (edges.get(&Edge::new(v[2].pos, v[0].pos)).unwrap().idx + len).into(),
-                    (edges.get(&Edge::new(v[0].pos, v[1].pos)).unwrap().idx + len).into(),
-                ];
-                vec![
-                    [v[0], e[2], e[1]],
-                    [e[0], v[2], e[1]],
-                    [e[0], e[2], v[1]],
-                    [e[0], e[1], e[2]],
-                ]
+            .map(|(vertex, adjacency)| {
+                calc_new_position(vertex, adjacency, &edges, self.positions())
             })
-            .collect::<Vec<_>>();
+            .collect::<Option<Vec<_>>>()
+        else {
+            return self;
+        };
+        let Some(new_edge_positions) = edge_positions(&edges, &vertex_adjacency, self.positions())
+        else {
+            return self;
+        };
+        positions.extend(new_edge_positions);
+
+        let len = self.positions().len();
+        let mut tri_faces = Vec::with_capacity(self.tri_faces().len() * 4);
+        for v in self.tri_faces() {
+            let Some(edge0) = edges.get(&Edge::new(v[1].pos, v[2].pos)) else {
+                return self;
+            };
+            let Some(edge1) = edges.get(&Edge::new(v[2].pos, v[0].pos)) else {
+                return self;
+            };
+            let Some(edge2) = edges.get(&Edge::new(v[0].pos, v[1].pos)) else {
+                return self;
+            };
+            let e: [StandardVertex; 3] = [
+                (edge0.idx + len).into(),
+                (edge1.idx + len).into(),
+                (edge2.idx + len).into(),
+            ];
+            tri_faces.extend([
+                [v[0], e[2], e[1]],
+                [e[0], v[2], e[1]],
+                [e[0], e[2], v[1]],
+                [e[0], e[1], e[2]],
+            ]);
+        }
         {
             let editor = self.debug_editor();
             editor.attributes.positions = positions;
@@ -113,17 +135,17 @@ enum VertexBoundaryCondition {
 }
 
 impl VertexBoundaryCondition {
-    fn new(v: usize, adjacency: &[usize], edges: &HashMap<Edge, EdgeInfo>) -> Self {
-        let binfo = adjacency.iter().copied().fold((None, None), |binfo, w| {
-            // SAFETY: the adjacency list was built from the same edge set.
-            let edge = edges.get(&Edge::new(v, w)).unwrap();
-            match (edge.second_wing, binfo) {
+    fn new(v: usize, adjacency: &[usize], edges: &HashMap<Edge, EdgeInfo>) -> Option<Self> {
+        let mut binfo = (None, None);
+        for &w in adjacency {
+            let edge = edges.get(&Edge::new(v, w))?;
+            binfo = match (edge.second_wing, binfo) {
                 (None, (None, _)) => (Some(w), None),
                 (None, (Some(x), None)) => (Some(x), Some(w)),
                 _ => binfo,
-            }
-        });
-        if let (Some(x), Some(y)) = binfo {
+            };
+        }
+        Some(if let (Some(x), Some(y)) = binfo {
             if adjacency.len() == 2 {
                 Self::Corner(x, y)
             } else {
@@ -131,7 +153,7 @@ impl VertexBoundaryCondition {
             }
         } else {
             Self::Inner
-        }
+        })
     }
 }
 
@@ -140,62 +162,68 @@ fn calc_new_position(
     adjacency: &[usize],
     edges: &HashMap<Edge, EdgeInfo>,
     positions: &[Point3],
-) -> Point3 {
+) -> Option<Point3> {
     use VertexBoundaryCondition::*;
-    let point = positions[v];
-    match VertexBoundaryCondition::new(v, adjacency, edges) {
+    let point = *positions.get(v)?;
+    if adjacency.is_empty() {
+        return Some(point);
+    }
+    Some(match VertexBoundaryCondition::new(v, adjacency, edges)? {
         Corner(_, _) => point,
-        Boundary(w0, w1) => point + ((positions[w0] - point) + (positions[w1] - point)) / 8.0,
+        Boundary(w0, w1) => {
+            point + ((*positions.get(w0)? - point) + (*positions.get(w1)? - point)) / 8.0
+        }
         Inner => {
             let alpha = 3.0 / 8.0 + f64::cos(2.0 * PI / adjacency.len() as f64) / 4.0;
             let alpha = (5.0 / 8.0 - alpha * alpha) / adjacency.len() as f64;
-            point
-                + adjacency
-                    .iter()
-                    .copied()
-                    .map(|w| positions[w] - point)
-                    .sum::<Vector3>()
-                    * alpha
+            let mut delta = Vector3::zero();
+            for &w in adjacency {
+                delta += *positions.get(w)? - point;
+            }
+            point + delta * alpha
         }
-    }
+    })
 }
 
 fn edge_positions(
     edges: &HashMap<Edge, EdgeInfo>,
     vertex_adjacency: &[Vec<usize>],
     positions: &[Point3],
-) -> Vec<Point3> {
+) -> Option<Vec<Point3>> {
     use VertexBoundaryCondition::*;
     let mut res = vec![Point3::origin(); edges.len()];
-    edges.iter().for_each(|tuple| {
-        let Edge(v0, v1) = *tuple.0;
+    for (edge, info) in edges {
+        let Edge(v0, v1) = *edge;
         let EdgeInfo {
             idx,
             first_wing,
             second_wing,
-        } = *tuple.1;
+        } = *info;
+        let p0 = *positions.get(v0)?;
+        let p1 = *positions.get(v1)?;
         res[idx] = match second_wing {
             Some(second_wing) => {
-                let gamma = match VertexBoundaryCondition::new(v0, &vertex_adjacency[v0], edges) {
+                let gamma = match VertexBoundaryCondition::new(v0, &vertex_adjacency[v0], edges)? {
                     Boundary(_, _) => {
                         5.0 / 8.0 - f64::cos(PI / vertex_adjacency[v0].len() as f64) / 4.0
                     }
-                    Inner => match VertexBoundaryCondition::new(v1, &vertex_adjacency[v1], edges) {
-                        Boundary(_, _) => {
-                            3.0 / 8.0 + f64::cos(PI / vertex_adjacency[v1].len() as f64) / 4.0
+                    Inner => {
+                        match VertexBoundaryCondition::new(v1, &vertex_adjacency[v1], edges)? {
+                            Boundary(_, _) => {
+                                3.0 / 8.0 + f64::cos(PI / vertex_adjacency[v1].len() as f64) / 4.0
+                            }
+                            Inner => 0.5,
+                            Corner(_, _) => return None,
                         }
-                        Inner => 0.5,
-                        Corner(_, _) => unreachable!(),
-                    },
-                    Corner(_, _) => unreachable!(),
+                    }
+                    Corner(_, _) => return None,
                 };
-                positions[v0]
-                    + (positions[v1] - positions[v0]) * gamma
-                    + (positions[first_wing] - positions[v0]) / 8.0
-                    + (positions[second_wing] - positions[v1]) / 8.0
+                p0 + (p1 - p0) * gamma
+                    + (*positions.get(first_wing)? - p0) / 8.0
+                    + (*positions.get(second_wing)? - p1) / 8.0
             }
-            None => positions[v0].midpoint(positions[v1]),
+            None => p0.midpoint(p1),
         };
-    });
-    res
+    }
+    Some(res)
 }

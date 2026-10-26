@@ -13,13 +13,18 @@ const DEFAULT_SINGULAR_PARAMETER_PROBE: f64 = 1.0;
 
 fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> std::cmp::Ordering {
     let f = move |x: &f64| f64::abs(x - previous);
-    // SAFETY: UV parameters from surface evaluation are finite, so comparison succeeds.
-    move |x: &f64, y: &f64| f(x).partial_cmp(&f(y)).unwrap()
+    move |x: &f64, y: &f64| f(x).total_cmp(&f(y))
 }
 pub(super) fn periodic_min_difference(u: f64, u0: f64, up: f64) -> f64 {
     let closure = |i| u + i as f64 * up;
-    // SAFETY: the iterator (-2..=2) is non-empty, containing five elements.
-    (-2..=2).map(closure).min_by(abs_diff(u0)).unwrap()
+    let mut best = closure(-2);
+    for i in -1..=2 {
+        let candidate = closure(i);
+        if abs_diff(u0)(&candidate, &best).is_lt() {
+            best = candidate;
+        }
+    }
+    best
 }
 
 pub(super) fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0, u1): (f64, f64)) {

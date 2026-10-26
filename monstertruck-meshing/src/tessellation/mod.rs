@@ -245,8 +245,10 @@ pub fn shell_to_polygon_strict<C: PolylineableCurve, S: MeshableSurface>(
                     .absolute_boundaries()
                     .iter()
                     .all(|wire| wire.is_empty());
-                let reason = triangulation::classify_face_drop(None, is_untrimmed)
-                    .expect("a `None` face is always a drop");
+                let reason = match is_untrimmed {
+                    true => FaceDropReason::UnboundedDomain,
+                    false => FaceDropReason::BoundaryProjectionFailed,
+                };
                 return Err(TessellationError::FaceDropped {
                     face: index as i64,
                     surface,

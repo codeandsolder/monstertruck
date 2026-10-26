@@ -752,8 +752,7 @@ impl PolyBoundaryPiece {
             let quot = f64::floor((grav.y - v0) / vp);
             vec.iter_mut().for_each(|p| p.y -= quot * vp);
         }
-        // SAFETY: vec is non-empty because it was built from a non-empty boundary.
-        let last = *vec.last().unwrap();
+        let last = *vec.last()?;
         if !vec[0].near(&last) {
             let Point2 { x: u0, y: v0 } = last.uv;
             if surface.derivative_u(u0, v0).so_small() || surface.derivative_v(u0, v0).so_small() {
