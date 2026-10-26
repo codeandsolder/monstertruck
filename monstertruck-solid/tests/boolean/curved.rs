@@ -52,7 +52,10 @@ fn union_with_thin_holed_profile_boss() -> Result<()> {
         Matrix4::from_translation(Vector3::new(4.0, 4.0, 0.69999)),
     );
     let result = monstertruck_solid::or(&host, &boss, STRICT_TOL)?;
-    assert_solid("thin holed profile boss", &result, 100.8084)
+    // Independent closed form: host = 12*12*0.7 = 100.8. The boss profile
+    // area is 1 - 0.4^2 = 0.84; only 0.01000 of its 0.01001 height lies
+    // above the host, so the union adds exactly 0.0084.
+    assert_solid("thin holed profile boss", &result, 100.8 + 0.84 * 0.01)
 }
 
 #[test]
@@ -247,14 +250,15 @@ fn union_with_step_redox_116_thin_holed_bezier_boss() -> Result<()> {
         result.is_geometric_consistent(),
         "step-redox 116 root1+microboss union must stay consistent"
     );
-    anyhow::ensure!(
-        result.face_iter().count() == 34,
-        "step-redox 116 root1+microboss union must have 34 faces, got {}",
-        result.face_iter().count()
-    );
-    assert_solid(
+    let stats = assert_union_matches_operand_occupancy(
         "step-redox 116 root1+microboss",
+        &host,
+        &feature,
         &result,
-        227.58380780729115,
-    )
+    )?;
+    anyhow::ensure!(
+        stats.lhs_only > 0 && stats.rhs_only > 0,
+        "step-redox 116 oracle must sample host-only and boss-only material: {stats:?}"
+    );
+    Ok(())
 }

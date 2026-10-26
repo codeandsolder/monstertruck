@@ -49,26 +49,55 @@ fn csolid_is_closed() {
     }
 }
 
-#[test]
-fn compare_occt_mesh() {
-    let jsons = read_jsons();
-    let solid: Solid = serde_json::from_slice(jsons[2].as_slice()).unwrap();
-    let res = solid.triangulation(0.005).to_polygon();
-    let path = concat!(dir!(), "../obj/by_occt.obj");
-    let ans = obj::read(std::fs::read(path).unwrap().as_slice()).unwrap();
-    assert!(res.is_clung_to_by(ans.positions(), 0.05));
-    assert!(ans.is_clung_to_by(res.positions(), 0.05));
+fn assert_torus_punched_cube_mesh(mut mesh: PolygonMesh) {
+    mesh.put_together_same_attrs(TOLERANCE * 2.0)
+        .remove_degenerate_faces()
+        .remove_unused_attrs();
+
+    assert_eq!(mesh.shell_condition(), ShellCondition::Closed);
+
+    // The fixture is constructed in `monstertruck-modeling/examples/torus-punched-cube.rs`:
+    // a unit cube with a quarter of a torus tube removed.  The torus has
+    // major radius 1/2 and minor radius 1/4, so the removed quarter-volume is
+    // (1/4) * 2*pi^2*R*r^2 = pi^2/64.  This is an independent geometric
+    // oracle; no mesh from OCCT/FreeCAD participates in the expected answer.
+    let expected_volume = 1.0 - std::f64::consts::PI.powi(2) / 64.0;
+    let volume = mesh.volume();
+    assert!(
+        (volume - expected_volume).abs() < 3.0e-3,
+        "torus-punched cube mesh volume {volume:.9}, expected about {expected_volume:.9}"
+    );
+
+    // Every tessellation vertex must lie on one of the six cube planes or on
+    // the exact torus surface (sqrt(x^2+y^2)-R)^2 + (z-z0)^2 = r^2.
+    // This catches a mesh that has roughly the right volume but wanders off the
+    // modeled boundary.
+    for &point in mesh.positions() {
+        let on_cube = [point.x, point.y, point.z]
+            .into_iter()
+            .any(|coordinate| coordinate.abs() < 1.0e-7 || (coordinate - 1.0).abs() < 1.0e-7);
+        let radial = (point.x * point.x + point.y * point.y).sqrt();
+        let torus_distance =
+            (((radial - 0.5).powi(2) + (point.z - 0.5).powi(2)).sqrt() - 0.25).abs();
+        assert!(
+            on_cube || torus_distance < 1.0e-7,
+            "mesh vertex {point:?} lies on neither the cube nor the analytic torus"
+        );
+    }
 }
 
 #[test]
-fn compare_occt_mesh_csolid() {
+fn torus_punched_cube_mesh_matches_analytic_geometry() {
+    let jsons = read_jsons();
+    let solid: Solid = serde_json::from_slice(jsons[2].as_slice()).unwrap();
+    assert_torus_punched_cube_mesh(solid.triangulation(0.005).to_polygon());
+}
+
+#[test]
+fn compressed_torus_punched_cube_mesh_matches_analytic_geometry() {
     let jsons = read_jsons();
     let solid: CompressedSolid = serde_json::from_slice(jsons[2].as_slice()).unwrap();
-    let res = solid.triangulation(0.005).to_polygon();
-    let path = concat!(dir!(), "../obj/by_occt.obj");
-    let ans = obj::read(std::fs::read(path).unwrap().as_slice()).unwrap();
-    assert!(res.is_clung_to_by(ans.positions(), 0.05));
-    assert!(ans.is_clung_to_by(res.positions(), 0.05));
+    assert_torus_punched_cube_mesh(solid.triangulation(0.005).to_polygon());
 }
 
 #[test]

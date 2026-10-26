@@ -113,10 +113,18 @@ fn clockwise_profile_extrusion_is_oriented_with_positive_sweep() {
     let solid =
         solid_from_planar_profile::<Curve, Surface>(vec![outer], Vector3::unit_z()).unwrap();
     let shell = &solid.boundaries()[0];
-    let bottom = shell.first().unwrap().oriented_surface();
-    let top = shell.last().unwrap().oriented_surface();
-    assert_near!(bottom.normal(0.0, 0.0), -Vector3::unit_z());
-    assert_near!(top.normal(0.0, 0.0), Vector3::unit_z());
+    let cap_normal_at = |z: f64| {
+        shell
+            .iter()
+            .find(|face| {
+                face.vertex_iter()
+                    .all(|vertex| (vertex.point().z - z).abs() < TOLERANCE)
+            })
+            .map(|face| face.oriented_surface().normal(0.0, 0.0))
+            .expect("extrusion must have a cap at the requested z")
+    };
+    assert_near!(cap_normal_at(0.0), -Vector3::unit_z());
+    assert_near!(cap_normal_at(1.0), Vector3::unit_z());
 }
 
 #[test]
@@ -125,10 +133,18 @@ fn profile_extrusion_is_oriented_with_negative_sweep() {
     let solid =
         solid_from_planar_profile::<Curve, Surface>(vec![outer], -Vector3::unit_z()).unwrap();
     let shell = &solid.boundaries()[0];
-    let bottom = shell.first().unwrap().oriented_surface();
-    let top = shell.last().unwrap().oriented_surface();
-    assert_near!(bottom.normal(0.0, 0.0), Vector3::unit_z());
-    assert_near!(top.normal(0.0, 0.0), -Vector3::unit_z());
+    let cap_normal_at = |z: f64| {
+        shell
+            .iter()
+            .find(|face| {
+                face.vertex_iter()
+                    .all(|vertex| (vertex.point().z - z).abs() < TOLERANCE)
+            })
+            .map(|face| face.oriented_surface().normal(0.0, 0.0))
+            .expect("extrusion must have a cap at the requested z")
+    };
+    assert_near!(cap_normal_at(0.0), Vector3::unit_z());
+    assert_near!(cap_normal_at(-1.0), -Vector3::unit_z());
 }
 
 #[test]

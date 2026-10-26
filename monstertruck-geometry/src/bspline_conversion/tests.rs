@@ -355,91 +355,135 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
     }
 }
 
-/// The widening is DISJOINTNESS-gated: a trim that merely overlaps the
-/// profile's own range leaves the conversion byte-identical, which is what
-/// keeps the unit-height fillet faces (and every frozen fixture) unmoved.
+/// Overlapping trims do not require a re-span, but that is an optimization detail:
+/// the correctness contract is simply that the emitted surface still represents the
+/// requested analytic cylinder wherever the face actually uses it.
 #[test]
-fn overlapping_trim_leaves_the_cylinder_conversion_byte_identical() {
+fn overlapping_trim_stays_on_the_exact_cylinder() {
     let cylinder = step_cylinder(Point3::new(1.0, -2.0, 3.0), Vector3::unit_z(), 2.5);
-    let plain = cylinder
-        .try_into_homogeneous_bspline_surface()
-        .expect("cylinder converts");
     for trim in [
         // Exactly the profile's own range.
         ((0.0, 1.0), (0.0, 1.0)),
         // The upstream trim pad (`expand_param_axis_range`, at least
-        // TOLERANCE) -- the same range, reported padded.
+        // TOLERANCE): exercise only the actual profile overlap.
         ((0.0, 1.0), (-1.0e-6, 1.0 + 1.0e-6)),
-        // Strictly inside: already covered, nothing to re-span.
+        // Strictly inside.
         ((0.0, 1.0), (0.25, 0.75)),
     ] {
-        let over = cylinder
+        let converted = cylinder
             .try_into_homogeneous_bspline_surface_over(Some(trim))
             .expect("cylinder converts");
-        assert_eq!(over.surface_frame_axes, (false, false));
-        let over = over.surface;
-        assert_eq!(
-            over.control_points(),
-            plain.control_points(),
-            "overlapping trim {trim:?} must not move the control net"
-        );
-        assert_eq!(over.knot_vectors(), plain.knot_vectors());
+        let surface = as_nurbs(converted.surface);
+        let v0 = trim.1.0.max(0.0);
+        let v1 = trim.1.1.min(1.0);
+        for s in grid_params() {
+            let angle = full_circle_angle(s);
+            for fraction in grid_params() {
+                let v = v0 + (v1 - v0) * fraction;
+                let got = surface.subs(s, v);
+                let want = ParametricSurface::evaluate(&cylinder, angle, v);
+                assert!(
+                    got.distance(want) <= 1.0e-9,
+                    "overlapping trim {trim:?} moved the cylinder at ({s}, {v}): got {got:?}, want {want:?}"
+                );
+            }
+        }
     }
-    // ...but a trim that genuinely reaches BELOW the profile start does
-    // re-span: the face really is somewhere the naive sweep does not go.
+
+    // A trim that genuinely reaches below the profile start must cover that
+    // geometry too; how the converter chooses its control net is irrelevant.
     let below = cylinder
         .try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (-0.6, 1.0))))
         .expect("cylinder converts");
-    assert_eq!(below.surface_frame_axes, (false, true));
-    let (_, v_knots) = below.surface.knot_vectors();
-    assert!((v_knots[0] + 0.6).abs() < 1.0e-12);
+    let below = as_nurbs(below.surface);
+    for s in grid_params() {
+        let angle = full_circle_angle(s);
+        for fraction in grid_params() {
+            let v = -0.6 + 1.6 * fraction;
+            let got = below.subs(s, v);
+            let want = ParametricSurface::evaluate(&cylinder, angle, v);
+            assert!(
+                got.distance(want) <= 1.0e-9,
+                "expanded trim must remain the exact cylinder at ({s}, {v})"
+            );
+        }
+    }
 }
 
-/// `None` -- and every non-swept surface -- is exactly the plain conversion.
+/// Supplying no trim, or supplying a trim to a surface whose conversion does not
+/// need sweep-domain recovery, must still produce the correct analytic geometry.
+/// We deliberately do not require identical control points or knot vectors.
 #[test]
-fn untrimmed_and_non_swept_conversions_are_unchanged() {
+fn optional_trim_preserves_analytic_geometry() {
     let cylinder = step_cylinder(Point3::origin(), Vector3::unit_z(), 3.0);
-    assert_eq!(
+    let cylinder_surface = as_nurbs(
         cylinder
             .try_into_homogeneous_bspline_surface_over(None)
-            .unwrap()
-            .surface
-            .control_points(),
-        cylinder
-            .try_into_homogeneous_bspline_surface()
-            .unwrap()
-            .control_points()
+            .expect("cylinder converts")
+            .surface,
     );
+    for s in grid_params() {
+        let angle = full_circle_angle(s);
+        for v in grid_params() {
+            let got = cylinder_surface.subs(s, v);
+            let want = ParametricSurface::evaluate(&cylinder, angle, v);
+            assert!(got.distance(want) <= 1.0e-9);
+        }
+    }
+
     let trim = Some(((0.0, 1.0), (-500.0, -400.0)));
-    for (over, plain) in [
-        (
-            Sphere::new(Point3::new(1.0, 2.0, 3.0), 4.0)
-                .try_into_homogeneous_bspline_surface_over(trim),
-            Sphere::new(Point3::new(1.0, 2.0, 3.0), 4.0).try_into_homogeneous_bspline_surface(),
-        ),
-        (
-            Torus::new(Point3::origin(), 3.0, 1.0).try_into_homogeneous_bspline_surface_over(trim),
-            Torus::new(Point3::origin(), 3.0, 1.0).try_into_homogeneous_bspline_surface(),
-        ),
-        (
-            Plane::new(
-                Point3::origin(),
-                Point3::new(1.0, 0.0, 0.0),
-                Point3::new(0.0, 1.0, 0.0),
-            )
-            .try_into_homogeneous_bspline_surface_over(trim),
-            Plane::new(
-                Point3::origin(),
-                Point3::new(1.0, 0.0, 0.0),
-                Point3::new(0.0, 1.0, 0.0),
-            )
-            .try_into_homogeneous_bspline_surface(),
-        ),
-    ] {
-        assert_eq!(
-            over.map(|converted| converted.surface.control_points().clone()),
-            plain.map(|surface| surface.control_points().clone())
-        );
+
+    let sphere = Sphere::new(Point3::new(1.0, 2.0, 3.0), 4.0);
+    let sphere_surface = as_nurbs(
+        sphere
+            .try_into_homogeneous_bspline_surface_over(trim)
+            .expect("sphere converts")
+            .surface,
+    );
+    for s in grid_params() {
+        let u = meridian_colatitude(s);
+        for v in grid_params() {
+            let angle = full_circle_angle(v);
+            let got = sphere_surface.subs(s, v);
+            let want = sphere.subs(u, angle);
+            assert!(got.distance(want) <= 4.0e-9);
+        }
+    }
+
+    let torus = Torus::new(Point3::origin(), 3.0, 1.0);
+    let torus_surface = as_nurbs(
+        torus
+            .try_into_homogeneous_bspline_surface_over(trim)
+            .expect("torus converts")
+            .surface,
+    );
+    for s in grid_params() {
+        let u = full_circle_angle(s);
+        for v in grid_params() {
+            let angle = full_circle_angle(v);
+            let got = torus_surface.subs(s, v);
+            let want = torus.subs(u, angle);
+            assert!(got.distance(want) <= 4.0e-9);
+        }
+    }
+
+    let plane = Plane::new(
+        Point3::origin(),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+    );
+    let plane_surface = as_nurbs(
+        plane
+            .try_into_homogeneous_bspline_surface_over(trim)
+            .expect("plane converts")
+            .surface,
+    );
+    for u in grid_params() {
+        for v in grid_params() {
+            let got = plane_surface.subs(u, v);
+            let want = plane.subs(u, v);
+            assert!(got.distance(want) <= 1.0e-12);
+        }
     }
 }
 

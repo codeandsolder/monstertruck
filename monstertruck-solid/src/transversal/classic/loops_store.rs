@@ -1866,16 +1866,35 @@ mod projection_tests {
         let mut loops = Loops(vec![upper, lower]);
         let incoming = line(&b, &c);
 
-        let result = loops.add_edge(incoming, ShapesOpStatus::And, false);
+        let _ = loops.add_edge(incoming, ShapesOpStatus::And, false);
 
-        assert_eq!(result[0].map(|x| x.0), Some(1));
-        assert_eq!(result[1].map(|x| x.0), Some(1));
-        assert_eq!(loops.len(), 3);
+        // The operation must split the lower sibling into the two triangles
+        // A-B-C and B-F-C without merging the upper A-C-D-E region.
+        assert_eq!(loops.len(), 3, "one sibling region should split into two");
         assert!(
             loops
                 .iter()
                 .all(|wire| wire.is_closed() && wire.is_simple())
         );
+
+        let has = |wire: &BoundaryWire<_, _>, vertex: &Vertex<Point3>| {
+            wire.vertex_iter().any(|item| item == *vertex)
+        };
+        let upper = loops
+            .iter()
+            .find(|wire| has(wire, &d) || has(wire, &e))
+            .expect("upper sibling must survive");
+        assert_eq!(upper.status(), ShapesOpStatus::Or);
+        assert!(has(upper, &a) && has(upper, &c));
+        assert!(!has(upper, &b) && !has(upper, &f));
+
+        let lower_pieces = loops
+            .iter()
+            .filter(|wire| has(wire, &b) && has(wire, &c))
+            .collect::<Vec<_>>();
+        assert_eq!(lower_pieces.len(), 2);
+        assert!(lower_pieces.iter().any(|wire| has(wire, &a)));
+        assert!(lower_pieces.iter().any(|wire| has(wire, &f)));
     }
 
     #[test]

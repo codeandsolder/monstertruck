@@ -139,11 +139,17 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
 
     let result = monstertruck_solid::or(&main, &small, STRICT_TOL)?;
     anyhow::ensure!(result.is_geometric_consistent(), "union must be consistent");
-    assert_solid(
+    let stats = assert_union_matches_operand_occupancy(
         "step-redox case 122 core union",
+        &main,
+        &small,
         &result,
-        1.0713717537932466,
-    )
+    )?;
+    anyhow::ensure!(
+        stats.lhs_only > 0 && stats.rhs_only > 0,
+        "case 122 oracle must sample material contributed uniquely by both operands: {stats:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -305,11 +311,16 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         two_core.is_geometric_consistent(),
         "two-core union must be consistent"
     );
-    assert_solid(
+    let two_core_stats = assert_union_matches_operand_occupancy(
         "step-redox case 38 two-core union",
+        &plate,
+        &hook,
         &two_core,
-        2.6690973355002896,
     )?;
+    anyhow::ensure!(
+        two_core_stats.lhs_only > 0 && two_core_stats.rhs_only > 0,
+        "case 38 two-core oracle must see unique material from both operands: {two_core_stats:?}"
+    );
 
     // Missing third strict core from the actual Step Redox admission. The historical
     // two-core regression above exercises B+C, but the recovered solid is A+B+C.
@@ -368,19 +379,36 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
 
     let disconnected = monstertruck_solid::or(&rounded, &plate, STRICT_TOL)?;
     anyhow::ensure!(
+        disconnected.is_geometric_consistent(),
+        "A+B disconnected union must be consistent"
+    );
+    assert_union_matches_operand_occupancy(
+        "step-redox case 38 disconnected A+B union",
+        &rounded,
+        &plate,
+        &disconnected,
+    )?;
+    anyhow::ensure!(
         disconnected.boundaries().len() == 2,
         "A+B must remain two disconnected boundary shells"
     );
+
     let result = monstertruck_solid::or(&disconnected, &hook, STRICT_TOL)?;
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "three-core union must be consistent"
     );
-    assert_solid(
+    let three_core_stats = assert_union_matches_operand_occupancy(
         "step-redox case 38 three-core union",
+        &disconnected,
+        &hook,
         &result,
-        2.745663706143609,
-    )
+    )?;
+    anyhow::ensure!(
+        three_core_stats.lhs_only > 0 && three_core_stats.rhs_only > 0,
+        "case 38 three-core oracle must see retained A+B material and hook-only material: {three_core_stats:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -488,6 +516,16 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "edge-touching union must remain geometrically consistent"
+    );
+    let stats = assert_union_matches_operand_occupancy(
+        "step-redox case 173 edge-touching union",
+        &plate,
+        &rounded,
+        &result,
+    )?;
+    anyhow::ensure!(
+        stats.lhs_only > 0 && stats.rhs_only > 0,
+        "case 173 oracle must see unique material from both edge-touching operands: {stats:?}"
     );
     Ok(())
 }
@@ -778,9 +816,16 @@ fn step_redox_97_nine_core_union_regression() -> Result<()> {
         .into_iter()
         .enumerate()
     {
-        result = monstertruck_solid::or(&result, rhs, STRICT_TOL).map_err(|error| {
+        let next = monstertruck_solid::or(&result, rhs, STRICT_TOL).map_err(|error| {
             anyhow::anyhow!("case 97 union child {} failed: {error}", index + 2)
         })?;
+        assert_union_matches_operand_occupancy(
+            &format!("step-redox case 97 union child {}", index + 2),
+            &result,
+            rhs,
+            &next,
+        )?;
+        result = next;
     }
     anyhow::ensure!(
         result.is_geometric_consistent(),

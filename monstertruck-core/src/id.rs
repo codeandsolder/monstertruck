@@ -117,7 +117,7 @@ impl Default for StableIdAllocator {
 }
 
 #[test]
-fn debug_backward_compatibility() {
+fn debug_formats_id_as_pointer_address() {
     let x: f64 = 3.0;
     let id = Id::new(&x);
     let a = format!("{id:?}");
