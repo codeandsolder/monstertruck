@@ -8,7 +8,7 @@ use super::*;
 #[test]
 fn arc_length_reparameterization_straight_line() {
     // A straight line should have uniform arc-length parameterization.
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(3.0, 4.0, 0.0)],
     );
@@ -34,7 +34,7 @@ fn fair_curve_reduces_noise() {
         Point3::new(7.0, 0.2, 0.0),
         Point3::new(8.0, 0.0, 0.0),
     ];
-    let noisy = BsplineCurve::new(knot, points);
+    let noisy = BsplineCurve::new_unchecked(knot, points);
     let smooth = fair_curve(&noisy, 3, 5, 30).unwrap();
 
     // The smoothed curve has fewer control points.

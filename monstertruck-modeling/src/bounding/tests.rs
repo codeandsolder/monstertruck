@@ -152,7 +152,7 @@ fn a_non_positive_weight_refuses() {
         ],
     ];
     let knots = KnotVector::from(vec![0.0, 0.0, 1.0, 1.0]);
-    let surface = Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new(
+    let surface = Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new_unchecked(
         (knots.clone(), knots),
         net,
     )));
@@ -235,7 +235,8 @@ fn a_cylinder_without_wires_refuses() {
 fn a_ring_torus_is_bounded_by_its_own_radii() {
     let (large, small) = (5.0, 1.5);
     let center = Point3::new(1.0, 2.0, 3.0);
-    let surface = Surface::ToroidalSurface(Processor::new(Torus::new(center, large, small)));
+    let surface =
+        Surface::ToroidalSurface(Processor::new(Torus::new_unchecked(center, large, small)));
     let bound = certified_surface_bounding_box(&surface, None).expect("a torus bounds itself");
     let diagonal = bound.diagonal();
     assert!(

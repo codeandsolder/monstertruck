@@ -338,14 +338,13 @@ pub(super) fn fillet_surfaces_along_wire(
             if last_wire {
                 rs.remove(0);
             }
-            let surface = match profile {
+            match profile {
                 FilletProfile::Round => expand_fillet(&rs, surface0, surface1),
                 FilletProfile::Chamfer => expand_chamfer(&rs, surface0, surface1),
-                FilletProfile::AsymmetricChamfer { .. } => return None,
+                FilletProfile::AsymmetricChamfer { .. } => None,
                 FilletProfile::Ridge => expand_ridge(&rs, surface0, surface1),
                 FilletProfile::Custom(curve) => expand_custom(&rs, surface0, surface1, curve),
-            };
-            Some(surface)
+            }
         };
     wire_faces_iter.map(create_fillet_surface).collect()
 }
@@ -372,7 +371,7 @@ pub(super) fn concat_fillet_surface(
     let knot_vector_v = long_beziers[0].knot_vector().clone();
     let destruct_bezier = |bezier: NurbsCurve<Vector4>| BsplineCurve::from(bezier).destruct().1;
     let control_points = long_beziers.into_iter().map(destruct_bezier).collect();
-    Some(NurbsSurface::new(BsplineSurface::new(
+    Some(NurbsSurface::new(BsplineSurface::new_unchecked(
         (knot_vector_u, knot_vector_v),
         control_points,
     )))

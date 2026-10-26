@@ -136,7 +136,7 @@ pub trait SupportsExactPatchDomains {
 impl TryIntoHomogeneousBsplineCurve for Line<Point3> {
     #[inline]
     fn try_into_homogeneous_bspline_curve(&self) -> Option<BsplineCurve<Vector4>> {
-        Some(BsplineCurve::lift_up(BsplineCurve::new(
+        Some(BsplineCurve::lift_up(BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(1),
             vec![self.0, self.1],
         )))
@@ -157,7 +157,7 @@ impl TryIntoHomogeneousBsplineCurve for Line<Point3> {
             return None;
         }
         let direction = self.1 - self.0;
-        Some(BsplineCurve::lift_up(BsplineCurve::new(
+        Some(BsplineCurve::lift_up(BsplineCurve::new_unchecked(
             KnotVector::from(vec![start, start, end, end]),
             vec![self.0 + direction * start, self.0 + direction * end],
         )))
@@ -270,7 +270,10 @@ impl TryIntoBsplineSurface for NurbsSurface<Vector4> {
             .iter()
             .map(|row| row.iter().map(|v| v.to_point()).collect())
             .collect();
-        Some(BsplineSurface::new(self.knot_vectors().clone(), pts))
+        Some(BsplineSurface::new_unchecked(
+            self.knot_vectors().clone(),
+            pts,
+        ))
     }
 }
 
@@ -631,7 +634,7 @@ where C: TryIntoHomogeneousBsplineCurve
                 ]
             })
             .collect();
-        Some(BsplineSurface::new(knot_vecs, control_points))
+        Some(BsplineSurface::new_unchecked(knot_vecs, control_points))
     }
 }
 
@@ -659,7 +662,10 @@ where C: TryIntoHomogeneousBsplineCurve
             .iter()
             .map(|row| row.iter().map(|v| v.to_point()).collect())
             .collect();
-        Some(BsplineSurface::new(hom.knot_vectors().clone(), pts))
+        Some(BsplineSurface::new_unchecked(
+            hom.knot_vectors().clone(),
+            pts,
+        ))
     }
 }
 

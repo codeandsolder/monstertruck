@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn offset_2d_straight_line() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point2::new(0.0, 0.0), Point2::new(4.0, 0.0)],
     );
@@ -32,7 +32,7 @@ fn offset_2d_straight_line() {
 
 #[test]
 fn offset_3d_straight_line_z_normal() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 0.0, 0.0)],
     );
@@ -50,7 +50,7 @@ fn offset_3d_straight_line_z_normal() {
 
 #[test]
 fn surface_offset_flat_plane() {
-    let surface = BsplineSurface::new(
+    let surface = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
         vec![
             vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 3.0, 0.0)],

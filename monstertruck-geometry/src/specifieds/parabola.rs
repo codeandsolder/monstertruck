@@ -73,11 +73,9 @@ impl SearchNearestParameter<CurveParameter> for UnitParabola<Point2> {
                 true => Some(x.re),
                 false => None,
             })
-            // SAFETY: distances are non-negative finite `f64`, so `partial_cmp` always returns `Some`.
             .min_by(|s, t| {
                 pt.distance2(self.subs(*s))
-                    .partial_cmp(&pt.distance2(self.subs(*t)))
-                    .unwrap()
+                    .total_cmp(&pt.distance2(self.subs(*t)))
             })
     }
 }

@@ -53,22 +53,18 @@ where
 
 impl<S: Clone> BoundaryCurveFromSamples<S> for ParameterCurve<Line<Point2>, S> {
     fn boundary_curve_from_samples(surface: &S, points: Vec<Point2>) -> Option<Self> {
-        (points.len() >= 2).then(|| {
-            let front = points.first().copied().unwrap();
-            let back = points.last().copied().unwrap();
-            ParameterCurve::new(Line(front, back), surface.clone())
-        })
+        let (front, rest) = points.split_first()?;
+        let back = rest.last()?;
+        Some(ParameterCurve::new(Line(*front, *back), surface.clone()))
     }
 }
 
 impl<S: Clone> BoundaryCurveFromSamples<S> for ParameterCurve<BoundaryCurve2D, S> {
     fn boundary_curve_from_samples(surface: &S, points: Vec<Point2>) -> Option<Self> {
-        if points.len() < 2 {
-            None
-        } else {
-            let front = points.first().copied().unwrap();
-            let back = points.last().copied().unwrap();
-            let line = Line(front, back);
+        let (front, rest) = points.split_first()?;
+        let back = rest.last()?;
+        {
+            let line = Line(*front, *back);
             let is_linear = points.iter().copied().all(|point| {
                 line.search_nearest_parameter(point, None, 1)
                     .is_some_and(|t| line.subs(t).near(&point))
@@ -84,7 +80,7 @@ impl<S: Clone> BoundaryCurveFromSamples<S> for ParameterCurve<BoundaryCurve2D, S
                             .chain(std::iter::once(1.0))
                             .collect::<Vec<_>>(),
                     );
-                    BoundaryCurve2D::BsplineCurve(BsplineCurve::new(knot_vec, points))
+                    BoundaryCurve2D::BsplineCurve(BsplineCurve::new_unchecked(knot_vec, points))
                 },
                 surface.clone(),
             ))

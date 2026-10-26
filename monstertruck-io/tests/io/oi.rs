@@ -77,21 +77,23 @@ fn oi() {
         Point2::new(1.0, 2.0),
         Point2::new(3.0, 4.0),
     ]));
-    oitest_tryfrom::<BsplineCurve<Point2>, BsplineCurveWithKnotsHolder>(BsplineCurve::new(
-        KnotVector::uniform_knot(3, 4),
-        vec![
-            Point2::new(1.0, 2.0),
-            Point2::new(3.0, 4.0),
-            Point2::new(5.0, 6.0),
-            Point2::new(7.0, 8.0),
-            Point2::new(9.0, 10.0),
-            Point2::new(11.0, 12.0),
-            Point2::new(13.0, 14.0),
-            Point2::new(15.0, 16.0),
-        ],
-    ));
+    oitest_tryfrom::<BsplineCurve<Point2>, BsplineCurveWithKnotsHolder>(
+        BsplineCurve::new_unchecked(
+            KnotVector::uniform_knot(3, 4),
+            vec![
+                Point2::new(1.0, 2.0),
+                Point2::new(3.0, 4.0),
+                Point2::new(5.0, 6.0),
+                Point2::new(7.0, 8.0),
+                Point2::new(9.0, 10.0),
+                Point2::new(11.0, 12.0),
+                Point2::new(13.0, 14.0),
+                Point2::new(15.0, 16.0),
+            ],
+        ),
+    );
     itest_tryfrom::<BsplineCurve<Point2>, BezierCurveHolder>(
-        BsplineCurve::new(
+        BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(2),
             vec![
                 Point2::new(0.0, 1.0),
@@ -104,7 +106,7 @@ fn oi() {
 #4 = CARTESIAN_POINT('', (4.0, 5.0)); ENDSEC;",
     );
     itest_tryfrom::<BsplineCurve<Point2>, QuasiUniformCurveHolder>(
-        BsplineCurve::new(
+        BsplineCurve::new_unchecked(
             KnotVector::from(vec![0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0]),
             vec![
                 Point2::new(0.0, 1.0),
@@ -118,7 +120,7 @@ fn oi() {
 #4 = CARTESIAN_POINT('', (4.0, 5.0)); #5 = CARTESIAN_POINT('', (6.0, 7.0)); ENDSEC;",
     );
     oitest_tryfrom::<NurbsCurve<Vector3>, RationalBsplineCurveHolder>(NurbsCurve::new(
-        BsplineCurve::new(
+        BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(3),
             vec![
                 Vector3::new(0.0, 1.0, 2.0),
@@ -227,7 +229,7 @@ fn oi() {
     // the degenerate self-intersecting regime instead of panicking in
     // `Torus::new`. A ring torus (15 > 9) round-trips exactly as before.
     oitest_tryfrom::<Processor<Torus, Matrix4>, ToroidalSurfaceHolder>(
-        Processor::new(Torus::new(Point3::new(0.0, 0.0, 0.0), 15.0, 9.0)).transformed(
+        Processor::new(Torus::new_unchecked(Point3::new(0.0, 0.0, 0.0), 15.0, 9.0)).transformed(
             Matrix4::from_cols(
                 Vector4::new(0.0, 1.0, 0.0, 0.0),
                 Vector4::new(-1.0, 0.0, 0.0, 0.0),
@@ -252,29 +254,31 @@ fn oi() {
             )),
         )),
     ));
-    oitest_tryfrom::<BsplineSurface<Point3>, BsplineSurfaceWithKnotsHolder>(BsplineSurface::new(
-        (KnotVector::bezier_knot(3), KnotVector::bezier_knot(2)),
-        vec![
+    oitest_tryfrom::<BsplineSurface<Point3>, BsplineSurfaceWithKnotsHolder>(
+        BsplineSurface::new_unchecked(
+            (KnotVector::bezier_knot(3), KnotVector::bezier_knot(2)),
             vec![
-                Point3::new(0.0, 1.0, 2.0),
-                Point3::new(3.0, 4.0, 5.0),
-                Point3::new(6.0, 7.0, 8.0),
+                vec![
+                    Point3::new(0.0, 1.0, 2.0),
+                    Point3::new(3.0, 4.0, 5.0),
+                    Point3::new(6.0, 7.0, 8.0),
+                ],
+                vec![
+                    Point3::new(0.0, 1.0, 2.0),
+                    Point3::new(3.0, 4.0, 5.0),
+                    Point3::new(6.0, 7.0, 8.0),
+                ],
+                vec![
+                    Point3::new(0.0, 1.0, 2.0),
+                    Point3::new(3.0, 4.0, 5.0),
+                    Point3::new(6.0, 7.0, 8.0),
+                ],
+                vec![
+                    Point3::new(0.0, 1.0, 2.0),
+                    Point3::new(3.0, 4.0, 5.0),
+                    Point3::new(6.0, 7.0, 8.0),
+                ],
             ],
-            vec![
-                Point3::new(0.0, 1.0, 2.0),
-                Point3::new(3.0, 4.0, 5.0),
-                Point3::new(6.0, 7.0, 8.0),
-            ],
-            vec![
-                Point3::new(0.0, 1.0, 2.0),
-                Point3::new(3.0, 4.0, 5.0),
-                Point3::new(6.0, 7.0, 8.0),
-            ],
-            vec![
-                Point3::new(0.0, 1.0, 2.0),
-                Point3::new(3.0, 4.0, 5.0),
-                Point3::new(6.0, 7.0, 8.0),
-            ],
-        ],
-    ));
+        ),
+    );
 }

@@ -23,7 +23,7 @@ fn non_riding_boundary_shell() -> Shell {
         Point3::new(-1.0, 0.0, 1.0),
     ];
     let v = Vertex::from_points(p);
-    let bsp0: Curve = BsplineCurve::new(
+    let bsp0: Curve = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(3),
         vec![
             p[0],
@@ -33,7 +33,7 @@ fn non_riding_boundary_shell() -> Shell {
         ],
     )
     .into();
-    let bsp1: Curve = BsplineCurve::new(
+    let bsp1: Curve = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(3),
         vec![
             p[3],

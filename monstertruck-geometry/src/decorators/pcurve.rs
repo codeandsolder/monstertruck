@@ -55,8 +55,9 @@ where
     type Point = S::Point;
     type Vector = S::Vector;
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
-        if n >= 32 {
-            panic!("the order of derivation must be under 32.");
+        if n > MAX_DER_ORDER {
+            let pt = self.curve.evaluate(t);
+            return self.surface.derivative_u(pt.x, pt.y) * f64::NAN;
         }
         match n {
             0 => return self.evaluate(t).to_vec(),
@@ -72,9 +73,7 @@ where
         sders.composite_der(&cders, n)
     }
     fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector> {
-        if n > MAX_DER_ORDER {
-            panic!("the order of derivation must be under {MAX_DER_ORDER}.");
-        }
+        let n = n.min(MAX_DER_ORDER);
         let cders = self.curve.derivatives(n, t);
         let Vector2 { x: u, y: v } = cders[0];
         let sders = self.surface.derivatives(n, u, v);

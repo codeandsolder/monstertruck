@@ -13,45 +13,35 @@ impl<P> Tmesh<P> {
     ///  0|   |1
     /// ```
     pub fn new(points: [P; 4], edge_knot_interval: f64) -> Tmesh<P> {
-        // Convert points into control points
         let control_points: Vec<Arc<RwLock<TmeshControlPoint<P>>>> = Vec::from(points)
             .into_iter()
-            .map(|p| {
-                let cont_point = TmeshControlPoint::new(p, edge_knot_interval);
-                Arc::new(RwLock::new(cont_point))
+            .map(|point| {
+                Arc::new(RwLock::new(TmeshControlPoint::new(
+                    point,
+                    edge_knot_interval,
+                )))
             })
             .collect();
 
-        // Set the first point as the "knot origin". This may result in some negative components in the
-        // knot vectors of the points near the left and bottom edge condition, but this should not matter (test?)
-        control_points[0]
-            .write()
-            .set_knot_coordinates(0.0, 0.0)
-            .expect("No connections have been created for the current mesh");
+        // The four-point constructor has a fixed topology, so build it directly
+        // instead of routing through the fallible mutation API. This also makes
+        // the constructor independent of intermediate half-connected states.
+        let coordinates = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        for (point, coordinates) in control_points.iter().zip(coordinates) {
+            point.write().knot_coordinates = coordinates;
+        }
 
-        // Connect control points according to the diagram in the docs
-        let mut dir = TmeshDirection::Right;
-        for i in 0..4 {
-            control_points[i]
-                .write()
-                .remove_edge_condition(dir)
-                .expect("Point edge conditions are known at compile time");
-
-            control_points[(i + 1) % 4]
-                .write()
-                .remove_edge_condition(dir.flip())
-                .expect("Point edge conditions are known at compile time");
-
-            // Connect the point i to the point i plus one
-            TmeshControlPoint::connect(
-                Arc::clone(&control_points[i % 4]),
-                Arc::clone(&control_points[(i + 1) % 4]),
-                dir,
-                1.0,
-            )
-            .expect("T-mesh connections are known valid at compile time");
-
-            dir = dir.anti_clockwise();
+        let links = [
+            (0, TmeshDirection::Right, 1),
+            (1, TmeshDirection::Up, 2),
+            (2, TmeshDirection::Left, 3),
+            (3, TmeshDirection::Down, 0),
+        ];
+        for (from, direction, to) in links {
+            control_points[from].write().connections[direction as usize] =
+                Some((Some(Arc::clone(&control_points[to])), 1.0));
+            control_points[to].write().connections[direction.flip() as usize] =
+                Some((Some(Arc::clone(&control_points[from])), 1.0));
         }
 
         Tmesh {
@@ -148,17 +138,11 @@ impl<P> Tmesh<P> {
         }
 
         // Break connections between con_point and other_point
-        con.write()
-            .remove_connection(connection_side)
-            .expect("Guaranteed by previous checks");
+        con.write().remove_connection(connection_side)?;
 
         // Remove edge conditions for p
-        p.write()
-            .remove_edge_condition(connection_side)
-            .expect("New control point has known edge conditions");
-        p.write()
-            .remove_edge_condition(connection_side.flip())
-            .expect("New control point has known edge conditions");
+        p.write().remove_edge_condition(connection_side)?;
+        p.write().remove_edge_condition(connection_side.flip())?;
 
         // Insert p with the proper knot intervals.
         // con <-> other becomes con <-> p <-> other
@@ -191,11 +175,10 @@ impl<P> Tmesh<P> {
             let edge_weight = con
                 .read()
                 .connection_knot(connection_side.clockwise())
-                .expect("Edges must have a weight");
+                .ok_or(Error::TmeshConnectionNotFound)?;
 
             p.write()
-                .set_edge_con_weight(connection_side.clockwise(), edge_weight)
-                .expect("New points have edge conditions as default connection type.");
+                .set_edge_con_weight(connection_side.clockwise(), edge_weight)?;
         } else {
             // Remove the edge condition created by the constructor.
             let _ = p.write().remove_edge_condition(connection_side.clockwise());
@@ -210,11 +193,10 @@ impl<P> Tmesh<P> {
             let edge_weight = con
                 .read()
                 .connection_knot(connection_side.anti_clockwise())
-                .expect("Edges must have a weight");
+                .ok_or(Error::TmeshConnectionNotFound)?;
 
             p.write()
-                .set_edge_con_weight(connection_side.anti_clockwise(), edge_weight)
-                .expect("New points have edge conditions as default connection type.");
+                .set_edge_con_weight(connection_side.anti_clockwise(), edge_weight)?;
         } else {
             // Remove the edge condition created by the constructor.
             let _ = p
@@ -776,15 +758,17 @@ impl<P> Tmesh<P> {
 
                 TmeshConnectionType::Point => {
                     // Store knot interval
-                    knot_intervals[i] += cur_point.read().connection_knot(dir).expect(
-                        "All point connections and edge conditions must have a knot interval",
-                    );
+                    knot_intervals[i] += cur_point
+                        .read()
+                        .connection_knot(dir)
+                        .ok_or(Error::TmeshConnectionNotFound)?;
 
-                    // Traverse to the next point
-                    cur_point = {
+                    // Traverse to the next point.
+                    let next_point = {
                         let borrow = cur_point.read();
-                        Arc::clone(&borrow.connected_point(dir))
+                        borrow.try_connected_point(dir)?
                     };
+                    cur_point = next_point;
                 }
 
                 TmeshConnectionType::Edge => {
@@ -794,9 +778,10 @@ impl<P> Tmesh<P> {
                     }
 
                     // Store knot interval
-                    knot_intervals[i] += cur_point.read().connection_knot(dir).expect(
-                        "All point connections and edge conditions must have a knot interval",
-                    );
+                    knot_intervals[i] += cur_point
+                        .read()
+                        .connection_knot(dir)
+                        .ok_or(Error::TmeshConnectionNotFound)?;
 
                     // Flag to store zeros for remaining deltas
                     edge_condition_found = true;

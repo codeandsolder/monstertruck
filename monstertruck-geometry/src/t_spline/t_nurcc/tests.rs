@@ -105,7 +105,10 @@ fn verify_tnurcc_control_points(t: &Tnurcc<Point3>) {
                 p.read().index,
             )
         });
-        let final_edge = next.read().acw_edge_from_end(next_point_end);
+        let final_edge = next
+            .read()
+            .acw_edge_from_end(next_point_end)
+            .expect("closed point fan must have a next edge");
         assert!(
             std::ptr::eq(final_edge.as_ref(), point_edge.as_ref()),
             "Iter does not rotate around point {} correctly. Reached {}, expected {}",
@@ -179,7 +182,10 @@ fn verify_tnurcc_edges(t: &Tnurcc<Point3>) {
         .enumerate()
         {
             // Get edge in the direction under investigation
-            let con = e.read().connection(dir);
+            let con = e
+                .read()
+                .connection(dir)
+                .expect("closed T-NURCC edge must have all four connections");
 
             // Check the face between the two is the same and correct
             let common_face = e
@@ -248,7 +254,10 @@ fn verify_tnurcc_faces(t: &Tnurcc<Point3>) {
             .read()
             .face_side(Arc::clone(face))
             .expect("Edges reached through a face iter should be connected to that face");
-        let final_edge = last_edge.read().acw_edge_from_side(next_face_side);
+        let final_edge = last_edge
+            .read()
+            .acw_edge_from_side(next_face_side)
+            .expect("closed face boundary must have a next edge");
         assert!(
             std::ptr::eq(final_edge.as_ref(), face_edge.as_ref()),
             "Iter does not rotate around face correctly. Reached {}, expected {}",
@@ -396,10 +405,12 @@ fn t_nurcc_test_subdivide_faces() {
                 match side {
                     TnurccFaceSide::Left => acw_traverse_edge
                         .read()
-                        .connection(TnurccConnection::LeftAcw),
+                        .connection(TnurccConnection::LeftAcw)
+                        .expect("closed face must have a left ACW connection"),
                     TnurccFaceSide::Right => acw_traverse_edge
                         .read()
-                        .connection(TnurccConnection::RightAcw),
+                        .connection(TnurccConnection::RightAcw)
+                        .expect("closed face must have a right ACW connection"),
                 }
             };
         }
@@ -416,10 +427,12 @@ fn t_nurcc_test_subdivide_faces() {
                 match side {
                     TnurccFaceSide::Left => cw_traverse_edge
                         .read()
-                        .connection(TnurccConnection::LeftCw),
+                        .connection(TnurccConnection::LeftCw)
+                        .expect("closed face must have a left CW connection"),
                     TnurccFaceSide::Right => cw_traverse_edge
                         .read()
-                        .connection(TnurccConnection::RightCw),
+                        .connection(TnurccConnection::RightCw)
+                        .expect("closed face must have a right CW connection"),
                 }
             };
         }

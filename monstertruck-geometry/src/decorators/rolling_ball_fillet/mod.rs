@@ -50,11 +50,10 @@ impl<C, S0, S1, R> RollingBallFilletSurface<C, S0, S1, R> {
 /// Trait for radius functions.
 pub trait RadiusFunction: Clone {
     /// Returns the `n`-th derivative at parameter `t`.
-    fn derivative_n(&self, n: usize, t: f64) -> f64 { self.der_n(n, t) }
-    /// Returns the `n`-th derivative at parameter `t`.
-    fn der_n(&self, _n: usize, _t: f64) -> f64 {
-        panic!("`RadiusFunction` implementors must override `derivative_n` or `der_n`.")
-    }
+    fn derivative_n(&self, n: usize, t: f64) -> f64;
+    /// Compatibility alias for [`RadiusFunction::derivative_n`].
+    #[inline]
+    fn der_n(&self, n: usize, t: f64) -> f64 { self.derivative_n(n, t) }
     /// Evaluates the radius at parameter `t`.
     #[inline]
     fn evaluate(&self, t: f64) -> f64 { self.derivative_n(0, t) }
@@ -130,6 +129,30 @@ pub struct ContactCircle {
 mod algo;
 mod contact_circle;
 
+#[inline]
+fn undefined_vector() -> Vector3 { Vector3::new(f64::NAN, f64::NAN, f64::NAN) }
+
+#[inline]
+fn undefined_point() -> Point3 { Point3::new(f64::NAN, f64::NAN, f64::NAN) }
+
+fn undefined_curve_derivatives(max_order: usize) -> CurveDerivatives<Vector3> {
+    let mut derivatives = CurveDerivatives::new(max_order);
+    for order in 0..=max_order {
+        derivatives[order] = undefined_vector();
+    }
+    derivatives
+}
+
+fn undefined_surface_derivatives(max_order: usize) -> SurfaceDerivatives<Vector3> {
+    let mut derivatives = SurfaceDerivatives::new(max_order);
+    for m in 0..=max_order {
+        for n in 0..=max_order - m {
+            derivatives[m][n] = undefined_vector();
+        }
+    }
+    derivatives
+}
+
 impl<C, S0, S1, R> RollingBallFilletSurface<C, S0, S1, R>
 where
     C: ParametricCurve3D,
@@ -137,11 +160,11 @@ where
     S1: ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
     R: RadiusFunction,
 {
-    fn sub_der_mn(&self, m: usize, n: usize, u: f64, cc: ContactCircle) -> Vector3 {
+    fn sub_der_mn(&self, m: usize, n: usize, u: f64, cc: ContactCircle) -> Option<Vector3> {
         if n == 0 {
-            return cc.derivative_n(m, u);
+            return Some(cc.derivative_n(m, u));
         }
-        self.vder_info(cc, n).derivative_mn(m, n, u)
+        Some(self.vder_info(cc, n)?.derivative_mn(m, n, u))
     }
 }
 
@@ -154,40 +177,57 @@ where
 {
     type Point = Point3;
     type Vector = Vector3;
-    // SAFETY (all `contact_circle().unwrap()` below): the `ParametricSurface` trait
-    // requires `v` to lie within the parameter range of the edge curve, where a valid
-    // contact circle always exists.
     fn derivatives(&self, max_order: usize, u: f64, v: f64) -> SurfaceDerivatives<Vector3> {
-        let cc = self.contact_circle(v).unwrap();
+        let Some(cc) = self.contact_circle(v) else {
+            return undefined_surface_derivatives(max_order);
+        };
         let mut out = SurfaceDerivatives::new(max_order);
-        (0..=max_order).for_each(|i| {
-            (0..=max_order - i).for_each(|j| {
-                out[i][j] = self.sub_der_mn(i, j, u, cc);
-            });
-        });
+        for i in 0..=max_order {
+            for j in 0..=max_order - i {
+                out[i][j] = self
+                    .sub_der_mn(i, j, u, cc)
+                    .unwrap_or_else(undefined_vector);
+            }
+        }
         out
     }
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
-        self.sub_der_mn(m, n, u, self.contact_circle(v).unwrap())
+        self.contact_circle(v)
+            .and_then(|cc| self.sub_der_mn(m, n, u, cc))
+            .unwrap_or_else(undefined_vector)
     }
-    fn evaluate(&self, u: f64, v: f64) -> Point3 { self.contact_circle(v).unwrap().evaluate(u) }
+    fn evaluate(&self, u: f64, v: f64) -> Point3 {
+        self.contact_circle(v)
+            .map(|cc| cc.evaluate(u))
+            .unwrap_or_else(undefined_point)
+    }
     fn derivative_u(&self, u: f64, v: f64) -> Vector3 {
-        self.contact_circle(v).unwrap().derivative(u)
+        self.contact_circle(v)
+            .map(|cc| cc.derivative(u))
+            .unwrap_or_else(undefined_vector)
     }
     fn derivative_v(&self, u: f64, v: f64) -> Vector3 {
-        self.vder_info(self.contact_circle(v).unwrap(), 1)
-            .derivative_v(u)
+        self.contact_circle(v)
+            .and_then(|cc| self.vder_info(cc, 1))
+            .map(|info| info.derivative_v(u))
+            .unwrap_or_else(undefined_vector)
     }
     fn derivative_uu(&self, u: f64, v: f64) -> Self::Vector {
-        self.contact_circle(v).unwrap().derivative_2(u)
+        self.contact_circle(v)
+            .map(|cc| cc.derivative_2(u))
+            .unwrap_or_else(undefined_vector)
     }
     fn derivative_uv(&self, u: f64, v: f64) -> Self::Vector {
-        self.vder_info(self.contact_circle(v).unwrap(), 1)
-            .derivative_uv(u)
+        self.contact_circle(v)
+            .and_then(|cc| self.vder_info(cc, 1))
+            .map(|info| info.derivative_uv(u))
+            .unwrap_or_else(undefined_vector)
     }
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector {
-        self.vder_info(self.contact_circle(v).unwrap(), 2)
-            .derivative_vv(u)
+        self.contact_circle(v)
+            .and_then(|cc| self.vder_info(cc, 2))
+            .map(|info| info.derivative_vv(u))
+            .unwrap_or_else(undefined_vector)
     }
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
         use std::ops::Bound::*;
@@ -230,9 +270,9 @@ where
         tol: f64,
     ) -> (Vec<f64>, Vec<f64>) {
         nonpositive_tolerance!(tol);
-        // SAFETY: `parameter_division_u` returns `None` only when `contact_circle` fails;
-        // within a valid parameter range, this always succeeds.
-        let udiv = self.parameter_division_u(range, tol).unwrap();
+        let udiv = self
+            .parameter_division_u(range, tol)
+            .unwrap_or_else(|| vec![range.0.0, range.0.1]);
         let mut vdiv = vec![range.1.0, range.1.1];
         algo::parameter_division_v_for_fillet(self, &udiv, &mut vdiv, tol);
         (udiv, vdiv)
@@ -292,13 +332,17 @@ where
     type Vector = Vector3;
     fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Vector3> {
         if n == 0 {
-            // SAFETY: a single-element array always produces a valid `CurveDerivatives`.
-            return CurveDerivatives::try_from([self.evaluate(t).to_vec()]).unwrap();
+            let mut derivatives = CurveDerivatives::new(0);
+            derivatives[0] = self.evaluate(t).to_vec();
+            return derivatives;
         }
-        // SAFETY: `t` is within the edge curve parameter range, so `contact_circle` succeeds.
-        let cc = self.surface.contact_circle(t).unwrap();
+        let Some(cc) = self.surface.contact_circle(t) else {
+            return undefined_curve_derivatives(n);
+        };
         let rders = self.surface.radius.derivatives(n, t);
-        let cc_ders = self.surface.sub_center_contacts_ders(cc, &rders, n);
+        let Some(cc_ders) = self.surface.sub_center_contacts_ders(cc, &rders, n) else {
+            return undefined_curve_derivatives(n);
+        };
         match self.index {
             0 => cc_ders.contact0_ders,
             _ => cc_ders.contact1_ders,
@@ -306,12 +350,13 @@ where
     }
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector { self.derivatives(n, t)[n] }
     fn evaluate(&self, t: f64) -> Self::Point {
-        // SAFETY: `t` is within the edge curve parameter range, so `contact_circle` succeeds.
-        let cc = self.surface.contact_circle(t).unwrap();
-        match self.index {
-            0 => cc.contact_point0.point,
-            _ => cc.contact_point1.point,
-        }
+        self.surface
+            .contact_circle(t)
+            .map(|cc| match self.index {
+                0 => cc.contact_point0.point,
+                _ => cc.contact_point1.point,
+            })
+            .unwrap_or_else(undefined_point)
     }
     fn derivative(&self, t: f64) -> Self::Vector { self.derivative_n(1, t) }
     fn derivative_2(&self, t: f64) -> Self::Vector { self.derivative_n(2, t) }

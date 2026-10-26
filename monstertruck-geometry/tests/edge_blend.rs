@@ -19,7 +19,7 @@ fn test_edge_blend_ders_by_bspline_surface(
             ]
         })
         .collect();
-    let surface0 = BsplineSurface::new(
+    let surface0 = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(4), KnotVector::bezier_knot(1)),
         control_points0,
     );
@@ -32,7 +32,7 @@ fn test_edge_blend_ders_by_bspline_surface(
             ]
         })
         .collect();
-    let surface1 = BsplineSurface::new(
+    let surface1 = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(4), KnotVector::bezier_knot(1)),
         control_points1,
     );
@@ -41,9 +41,9 @@ fn test_edge_blend_ders_by_bspline_surface(
     let pcurve1 = ParameterCurve::new(Line(Point2::new(1.0, 0.0), Point2::new(0.0, 0.0)), surface1);
 
     let tangent_controls0 = (0..=4).rev().map(|i| Vector1::new(tangent0[i])).collect();
-    let tangent_curve0 = BsplineCurve::new(KnotVector::bezier_knot(4), tangent_controls0);
+    let tangent_curve0 = BsplineCurve::new_unchecked(KnotVector::bezier_knot(4), tangent_controls0);
     let tangent_controls1 = (0..=4).rev().map(|i| Vector1::new(tangent1[i])).collect();
-    let tangent_curve1 = BsplineCurve::new(KnotVector::bezier_knot(4), tangent_controls1);
+    let tangent_curve1 = BsplineCurve::new_unchecked(KnotVector::bezier_knot(4), tangent_controls1);
 
     let surface = EdgeBlendSurface::new(pcurve0, tangent_curve0, pcurve1, tangent_curve1);
 
@@ -58,7 +58,7 @@ fn test_edge_blend_ders_by_bspline_surface(
             ]
         })
         .collect();
-    let bsp_surface = BsplineSurface::new(
+    let bsp_surface = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(4), KnotVector::bezier_knot(3)),
         control_points,
     );
@@ -75,7 +75,7 @@ fn test_edge_blend_ends_by_bezier_surface(
         .into_iter()
         .map(|p| p.into_iter().map(Point3::from).collect())
         .collect();
-    let surface0 = BsplineSurface::new(
+    let surface0 = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(3), KnotVector::bezier_knot(3)),
         control_points0,
     );
@@ -84,7 +84,7 @@ fn test_edge_blend_ends_by_bezier_surface(
         .into_iter()
         .map(|p| p.into_iter().map(Point3::from).collect())
         .collect();
-    let surface1 = BsplineSurface::new(
+    let surface1 = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(3), KnotVector::bezier_knot(3)),
         control_points1,
     );
@@ -126,14 +126,14 @@ fn test_edge_blend_ends_by_bezier_surface(
 fn test_edge_blend_g1_continuity_along_rails() {
     // Planar patch tilted about the y-axis: normal has a nonzero x-component so
     // that G1 continuity is a nontrivial constraint on the blend.
-    let surface0 = BsplineSurface::new(
+    let surface0 = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
         vec![
             vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.3, 0.0, 1.0)],
             vec![Point3::new(0.0, 1.0, 0.0), Point3::new(0.3, 1.0, 1.0)],
         ],
     );
-    let surface1 = BsplineSurface::new(
+    let surface1 = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
         vec![
             vec![Point3::new(1.0, 0.0, 0.0), Point3::new(0.7, 0.0, 1.0)],

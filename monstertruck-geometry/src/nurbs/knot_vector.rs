@@ -111,13 +111,14 @@ impl KnotVector {
     }
 
     /// Calculates B-spline basis functions at `t` with degree `degree` and `der_rank`th-order derivation.
-    /// # Panics
-    /// If the length of `self` is not more than `degree`, panic occurs.
+    /// # Errors
+    /// Returns an error for a zero-range knot vector or a degree too large for the vector.
     /// # Remarks
     /// In this package, the B-spline basis function is based on the characteristic function of
     /// the right-open intervals [s, t). So, the value corresponding to the end point t = t_n is always 0.0.
     /// # Examples
     /// ```
+    /// # fn main() -> monstertruck_geometry::errors::Result<()> {
     /// use monstertruck_geometry::prelude::*;
     ///
     /// // sample size in tests.
@@ -128,12 +129,15 @@ impl KnotVector {
     /// let degree = 2;
     /// for i in 0..N {
     ///     let t = 2.0 + 4.0 / (N as f64) * (i as f64);
-    ///     let res = knot_vec.bspline_basis_functions(degree, 0, t);
+    ///     let res = knot_vec.bspline_basis_functions(degree, 0, t)?;
     ///     let sum = res.values().iter().sum::<f64>();
     ///     assert_near2!(sum, 1.0);
     /// }
+    /// # Ok(())
+    /// # }
     /// ```
     /// ```
+    /// # fn main() -> monstertruck_geometry::errors::Result<()> {
     /// use monstertruck_geometry::prelude::*;
     ///
     /// // sample size in tests.
@@ -145,7 +149,7 @@ impl KnotVector {
     /// for i in 0..=N {
     ///     let t = 1.0 / (N as f64) * (i as f64);
     ///     // substitution
-    ///     let res = knot_vec.bspline_basis_functions(degree, 0, t).to_full_values();
+    ///     let res = knot_vec.bspline_basis_functions(degree, 0, t)?.to_full_values();
     ///     let ans = [
     ///         1.0 * (1.0 - t) * (1.0 - t) * (1.0 - t),
     ///         3.0 * t * (1.0 - t) * (1.0 - t),
@@ -155,7 +159,7 @@ impl KnotVector {
     ///     for i in 0..4 { assert_near2!(res[i], ans[i]); }
     ///
     ///     // 2nd-order derivation
-    ///     let res = knot_vec.bspline_basis_functions(degree, 2, t).to_full_values();
+    ///     let res = knot_vec.bspline_basis_functions(degree, 2, t)?.to_full_values();
     ///     let ans = [
     ///         6.0 * (1.0 - t),
     ///         6.0 * (3.0 * t - 2.0),
@@ -164,12 +168,16 @@ impl KnotVector {
     ///     ];
     ///     for i in 0..4 { assert_near2!(res[i], ans[i]); }
     /// }
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn bspline_basis_functions(&self, degree: usize, der_rank: usize, t: f64) -> BasisWindow {
-        match self.try_bspline_basis_functions(degree, der_rank, t) {
-            Ok(got) => got,
-            Err(error) => panic!("{}", error),
-        }
+    pub fn bspline_basis_functions(
+        &self,
+        degree: usize,
+        der_rank: usize,
+        t: f64,
+    ) -> Result<BasisWindow> {
+        self.try_bspline_basis_functions(degree, der_rank, t)
     }
 
     /// Calculates B-spline basis functions at `t` with degree `degree` and `der_rank`th-order derivation.
@@ -240,21 +248,37 @@ impl KnotVector {
         der_rank: usize,
         t: f64,
     ) -> Result<BasisWindow> {
+        if self.is_empty() {
+            return Err(Error::ZeroRange);
+        }
         let n = self.len() - 1;
         if self[0] == self[n] {
             return Err(Error::ZeroRange);
         } else if n < degree {
             return Err(Error::TooLargeDegree(n + 1, degree));
         }
+        Ok(self.bspline_basis_functions_unchecked(degree, der_rank, t))
+    }
+
+    /// Evaluates a basis window for a knot vector already validated by its owning spline.
+    pub(crate) fn bspline_basis_functions_unchecked(
+        &self,
+        degree: usize,
+        der_rank: usize,
+        t: f64,
+    ) -> BasisWindow {
+        let n = self.len() - 1;
         if degree < der_rank {
-            return Ok(BasisWindow::empty(n - degree));
+            return BasisWindow::empty(n - degree);
         }
 
         let idx = {
+            // For a parameter below the range, use the final occurrence of the
+            // first knot. This is exactly what `floor(self[0])` returned before,
+            // but does not make a second partial lookup on an invariant.
             let idx = self
                 .floor(t)
-                // SAFETY: `self[0]` is always in the knot vector, so `floor` succeeds.
-                .unwrap_or_else(|| self.floor(self[0]).unwrap());
+                .unwrap_or_else(|| self.strict_multiplicity(0).saturating_sub(1));
             if idx == n {
                 n.saturating_sub(self.strict_multiplicity(n))
             } else {
@@ -298,13 +322,18 @@ impl KnotVector {
         // when the evaluation lands near the end of the parameter range.
         eval.truncate(usize::min(degree + 1, (n - degree) - start));
 
-        Ok(BasisWindow::new(start, eval, n - degree))
+        BasisWindow::new(start, eval, n - degree)
     }
 
     #[doc(hidden)]
-    pub fn maximum_points(&self, degree: usize) -> Vec<f64> {
+    pub fn maximum_points(&self, degree: usize) -> Result<Vec<f64>> {
+        if self.is_empty() {
+            return Err(Error::ZeroRange);
+        }
         let n = self.len();
-        let m = n - degree - 1;
+        let Some(m) = n.checked_sub(degree + 1) else {
+            return Err(Error::TooLargeDegree(n, degree));
+        };
         let range = self.range_length();
         const N: i32 = 100;
 
@@ -312,9 +341,7 @@ impl KnotVector {
         let mut max = vec![0.0; m];
         for i in 1..N {
             let t = self[0] + range * (i as f64) / (N as f64);
-            // SAFETY: `t` is within the knot vector range, `degree` is valid for
-            // this knot vector, and the range is non-zero.
-            let basis = self.try_bspline_basis_functions(degree, 0, t).unwrap();
+            let basis = self.try_bspline_basis_functions(degree, 0, t)?;
             let start = basis.start_index();
             for (offset, &value) in basis.values().iter().enumerate() {
                 let j = start + offset;
@@ -325,7 +352,7 @@ impl KnotVector {
             }
         }
 
-        res
+        Ok(res)
     }
 
     /// Transforms the knot vector
@@ -371,8 +398,8 @@ impl KnotVector {
     }
 
     /// Normalizes the knot vector i.e. makes the first value 0 and the last value 1.
-    /// # Panics
-    /// Panic occurs if the range of the knot vector is so small.
+    /// # Errors
+    /// Returns [`Error::ZeroRange`] if the knot range is too small.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::KnotVector;
@@ -382,9 +409,11 @@ impl KnotVector {
     /// assert_eq!(res, vec![0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0]);
     /// ```
     #[inline(always)]
-    pub fn normalize(&mut self) -> &mut Self {
-        self.try_normalize()
-            .unwrap_or_else(|error| panic!("{}", error))
+    pub fn normalize(&mut self) -> Result<&mut Self> { self.try_normalize() }
+
+    pub(crate) fn normalize_unchecked(&mut self) -> &mut Self {
+        let range = self.range_length();
+        self.transform(1.0 / range, -self[0] / range)
     }
 
     /// Translates the knot vector
@@ -433,6 +462,9 @@ impl KnotVector {
     /// ```
     #[inline(always)]
     pub fn is_clamped(&self, degree: usize) -> bool {
+        if self.is_empty() || self.len() <= degree {
+            return false;
+        }
         self.multiplicity(0) > degree && self.multiplicity(self.len() - 1) > degree
     }
 
@@ -455,9 +487,9 @@ impl KnotVector {
         if !self.is_clamped(degree) || !other.is_clamped(degree) {
             return Err(Error::NotClampedKnotVector);
         }
-        // SAFETY: knot vectors are always non-empty by construction.
-        let back = self.0.last().unwrap();
-        let front = other.0.first().unwrap();
+        let Some((back, front)) = self.0.last().zip(other.0.first()) else {
+            return Err(Error::NotClampedKnotVector);
+        };
         if front < back || !front.near(back) {
             return Err(Error::DifferentBackFront(*back, *front));
         }
@@ -477,14 +509,11 @@ impl KnotVector {
     /// knot_vec0.concat(&knot_vec1, 2);
     /// assert_eq!(knot_vec0.as_slice(), &[0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0]);
     /// ```
-    /// # Panics
-    /// Panic occurs if:
-    /// - at least one of `self` or `other` is not clamped.
-    /// - the last knot of `self` and the first knot of `other` are different.
+    /// # Errors
+    /// Returns the same validation errors as [`KnotVector::try_concat`].
     #[inline(always)]
-    pub fn concat(&mut self, other: &KnotVector, degree: usize) -> &mut Self {
+    pub fn concat(&mut self, other: &KnotVector, degree: usize) -> Result<&mut Self> {
         self.try_concat(other, degree)
-            .unwrap_or_else(|error| panic!("{}", error))
     }
 
     /// Returns trimmed vector by the specified range.
@@ -610,8 +639,7 @@ impl From<Vec<f64>> for KnotVector {
     /// assert_eq!(arr, vec![0.0, 1.0, 2.0, 3.0]);
     /// ```
     fn from(mut vec: Vec<f64>) -> KnotVector {
-        // SAFETY: knot values are finite `f64` (not NaN), so `partial_cmp` always returns `Some`.
-        vec.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        vec.sort_by(f64::total_cmp);
         KnotVector(vec)
     }
 }
@@ -627,8 +655,7 @@ impl From<&[f64]> for KnotVector {
     #[inline(always)]
     fn from(vec: &[f64]) -> KnotVector {
         let mut copy_vec = vec.to_vec();
-        // SAFETY: knot values are finite `f64` (not NaN), so `partial_cmp` always returns `Some`.
-        copy_vec.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        copy_vec.sort_by(f64::total_cmp);
         KnotVector(copy_vec)
     }
 }
@@ -644,8 +671,7 @@ impl From<&Vec<f64>> for KnotVector {
     #[inline(always)]
     fn from(vec: &Vec<f64>) -> KnotVector {
         let mut copy_vec = vec.clone();
-        // SAFETY: knot values are finite `f64` (not NaN), so `partial_cmp` always returns `Some`.
-        copy_vec.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        copy_vec.sort_by(f64::total_cmp);
         KnotVector(copy_vec)
     }
 }
@@ -666,8 +692,7 @@ impl From<KnotVector> for Vec<f64> {
 impl FromIterator<f64> for KnotVector {
     #[inline(always)]
     fn from_iter<I: IntoIterator<Item = f64>>(iter: I) -> KnotVector {
-        // SAFETY: panicking convenience impl; callers must provide sorted, non-NaN values.
-        KnotVector::try_from(iter.into_iter().collect::<Vec<_>>()).unwrap()
+        KnotVector::from(iter.into_iter().collect::<Vec<_>>())
     }
 }
 

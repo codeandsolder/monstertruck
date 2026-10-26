@@ -68,7 +68,7 @@ impl<V> NurbsSurface<V> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let mut iter = bspsurface.control_points_row_iter(1);
     /// assert_eq!(iter.next(), Some(&Vector3::new(1.0, 0.0, 1.0)));
     /// assert_eq!(iter.next(), Some(&Vector3::new(1.0, 1.0, 1.0)));
@@ -93,7 +93,7 @@ impl<V> NurbsSurface<V> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let mut iter = bspsurface.control_points_column_iter(1);
     /// assert_eq!(iter.next(), Some(&Vector3::new(0.0, 1.0, 0.0)));
     /// assert_eq!(iter.next(), Some(&Vector3::new(1.0, 1.0, 1.0)));
@@ -127,7 +127,7 @@ impl<V> NurbsSurface<V> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// assert_eq!(bspsurface.udegree(), 1);
     /// ```
     #[inline(always)]
@@ -144,7 +144,7 @@ impl<V> NurbsSurface<V> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// assert_eq!(bspsurface.vdegree(), 2);
     /// ```
     #[inline(always)]
@@ -161,7 +161,7 @@ impl<V> NurbsSurface<V> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// assert_eq!(bspsurface.degrees(), (1, 2));
     /// ```
     #[inline(always)]
@@ -266,7 +266,7 @@ where V::Point: Tolerance
     ///     vec![pt.clone(), pt.clone() * 2.0, pt.clone() * 3.0],
     ///     vec![pt.clone() * 0.5, pt.clone() * 0.25, pt.clone() * 0.125],
     /// ];
-    /// let mut surface = NurbsSurface::new(BsplineSurface::new((knot_vector_u, knot_vector_v), control_points));
+    /// let mut surface = NurbsSurface::new(BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points));
     /// assert!(surface.is_const());
     ///
     /// *surface.control_point_mut(1, 2) = Vector3::new(2.0, 3.0, 1.0);
@@ -296,7 +296,7 @@ where V::Point: Tolerance
     ///     vec![Vector3::new(0.0, 2.0, 1.0), Vector3::new(0.5, 2.0, 3.0), Vector3::new(1.0, 2.0, 1.0)],
     ///     vec![Vector3::new(0.0, 3.0, 1.0), Vector3::new(0.5, 3.5, 2.0), Vector3::new(1.0, 3.0, 1.0)],
     /// ];
-    /// let surface0 = NurbsSurface::new(BsplineSurface::new(knot_vecs, control_points));
+    /// let surface0 = NurbsSurface::new(BsplineSurface::new_unchecked(knot_vecs, control_points));
     /// let mut surface1 = surface0.clone();
     /// assert!(surface0.near_as_surface(&surface1));
     ///
@@ -324,7 +324,7 @@ where V::Point: Tolerance
     ///     vec![Vector3::new(0.0, 2.0, 1.0), Vector3::new(0.5, 2.0, 3.0), Vector3::new(1.0, 2.0, 1.0)],
     ///     vec![Vector3::new(0.0, 3.0, 1.0), Vector3::new(0.5, 3.5, 2.0), Vector3::new(1.0, 3.0, 1.0)],
     /// ];
-    /// let surface0 = NurbsSurface::new(BsplineSurface::new(knot_vecs, control_points));
+    /// let surface0 = NurbsSurface::new(BsplineSurface::new_unchecked(knot_vecs, control_points));
     /// let mut surface1 = surface0.clone();
     /// assert!(surface0.near_as_surface(&surface1));
     ///
@@ -448,7 +448,7 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Tolerance> Nur
     ///     vec![Vector3::new(0.0, 2.0, 2.0), Vector3::new(0.5, 2.0, 3.0), Vector3::new(1.0, 2.0, 2.0)],
     ///     vec![Vector3::new(0.0, 3.0, 1.0), Vector3::new(0.5, 3.5, 2.0), Vector3::new(1.0, 3.0, 1.0)],
     /// ];
-    /// let bspsurface = NurbsSurface::new(BsplineSurface::new(knot_vecs, control_points));
+    /// let bspsurface = NurbsSurface::new(BsplineSurface::new_unchecked(knot_vecs, control_points));
     /// let curves = bspsurface.splitted_boundary();
     /// assert_eq!(
     ///     curves[0].control_points(),
@@ -487,16 +487,7 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Tolerance> Nur
     /// ```
     #[inline(always)]
     pub fn splitted_boundary(&self) -> [NurbsCurve<V>; 4] {
-        // SAFETY: `splitted_boundary` returns exactly 4 elements, matching `[NurbsCurve; 4]`.
-        TryFrom::try_from(
-            self.0
-                .splitted_boundary()
-                .iter()
-                .cloned()
-                .map(NurbsCurve::new)
-                .collect::<Vec<_>>(),
-        )
-        .unwrap()
+        self.0.splitted_boundary().map(NurbsCurve::new)
     }
 
     /// Extracts the boundary of surface
@@ -547,7 +538,7 @@ where V::Point: MetricSpace<Metric = f64> + Copy
             .map(|j| {
                 let q = j as f64 / division as f64;
                 let v = v0 * (1.0 - q) + v1 * q;
-                knot_v.bspline_basis_functions(degree1, 0, v)
+                knot_v.bspline_basis_functions_unchecked(degree1, 0, v)
             })
             .collect();
         let mut res = (0.0, 0.0);
@@ -557,7 +548,7 @@ where V::Point: MetricSpace<Metric = f64> + Copy
             let u = u0 * (1.0 - p) + u1 * p;
             // This grid row's u-basis window, computed once and reused for
             // every column below.
-            let ubasis = knot_u.bspline_basis_functions(degree0, 0, u);
+            let ubasis = knot_u.bspline_basis_functions_unchecked(degree0, 0, u);
             for (j, vb) in vbasis.iter().enumerate() {
                 let q = j as f64 / division as f64;
                 let v = v0 * (1.0 - q) + v1 * q;
@@ -594,7 +585,7 @@ where
     ///     vec![Vector3::new(0.0, 4.0, 2.0), Vector3::new(2.0, 8.0, 4.0), Vector3::new(2.0, 4.0, 2.0)],
     ///     vec![Vector3::new(0.0, 3.0, 1.0), Vector3::new(1.0, 7.0, 2.0), Vector3::new(1.0, 3.0, 1.0)],
     /// ];
-    /// let surface = NurbsSurface::new(BsplineSurface::new(knot_vecs, control_points));
+    /// let surface = NurbsSurface::new(BsplineSurface::new_unchecked(knot_vecs, control_points));
     /// let pt = surface.subs(0.3, 0.7);
     /// let (u, v) = surface.search_nearest_parameter(pt, Some((0.5, 0.5)), 100).unwrap();
     /// assert!(u.near(&0.3) && v.near(&0.7));
@@ -995,7 +986,7 @@ where
     ///     vec![Vector4::new(0.0, 1.5, 1.2, 3.0), Vector4::new(1.02, 2.04, 1.7, 3.4), Vector4::new(0.42, 0.28, 0.7, 0.7), Vector4::new(0.6, 0.3, 0.0, 0.6)],
     ///     vec![Vector4::new(0.0, 1.0, 1.0, 1.0), Vector4::new(0.2, 2.0, 2.0, 2.0), Vector4::new(0.85, 1.7, 0.85, 1.7), Vector4::new(1.0, 1.0, 0.3, 1.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
     /// let surface = NurbsSurface::new(bspsurface);
     ///
     /// let pt = surface.subs(0.3, 0.7);
@@ -1069,7 +1060,7 @@ fn test_include2d() {
             Vector3::new(0.3, 0.3, 0.3),
         ],
     ];
-    let surface = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+    let surface = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
     let bnd_box = BoundingBox::from_iter(&[Vector2::new(0.2, 0.3), Vector2::new(0.8, 0.6)]);
     let mut curve = surface.sectional_curve(bnd_box);
     curve.control_points_mut().for_each(|pt| *pt *= 3.0);
@@ -1098,7 +1089,7 @@ fn test_include3d() {
             Vector4::new(1.0, 1.0, 2.0, 1.0),
         ],
     ];
-    let surface = NurbsSurface::new(BsplineSurface::new(
+    let surface = NurbsSurface::new(BsplineSurface::new_unchecked(
         (knot_vec.clone(), knot_vec),
         control_points,
     ));
@@ -1118,7 +1109,7 @@ fn test_include3d() {
         Vector4::new(-1.0, -1.0, 1.0, 1.0),
         Vector4::new(0.0, -2.0, 2.0, 2.0),
     ];
-    let mut curve = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    let mut curve = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
     assert!(surface.include(&curve));
     *curve.control_point_mut(1) += Vector4::new(0.0, 0.0, 0.00001, 0.0);
     assert!(!surface.include(&curve));

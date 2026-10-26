@@ -134,7 +134,7 @@ impl AsRef<[f64]> for BasisWindow {
 /// ];
 ///
 /// // construct the B-spline curve
-/// let bspline = BsplineCurve::new(knot_vec, control_points);
+/// let bspline = BsplineCurve::new_unchecked(knot_vec, control_points);
 ///
 /// // This B-spline curve is a nurbs representation of the unit circle.
 /// const N : usize = 100; // sample size in test
@@ -196,7 +196,7 @@ pub struct BsplineCurve<P> {
 /// v[3][6] = v[3][0].clone();
 ///
 /// // cunstruct the B-spline curve
-/// let bspline = BsplineSurface::new(knot_vecs, v);
+/// let bspline = BsplineSurface::new_unchecked(knot_vecs, v);
 ///
 /// // This B-spline curve is a nurbs representation of the unit sphere.
 /// for i in 0..N {

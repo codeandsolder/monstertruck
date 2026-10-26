@@ -41,17 +41,18 @@ impl ContactCircle {
         let (mut p0, mut p1) = (p, p);
         let (mut u0, mut v0) = surface0.search_parameter(p0, None, 10)?;
         let (mut u1, mut v1) = surface1.search_parameter(p1, None, 10)?;
-        let center = (0..100).find_map(|_| {
+        let mut center = None;
+        for _ in 0..100 {
             let (n0, n1) = (surface0.normal(u0, v0), surface1.normal(u1, v1));
-            let (c, q0, q1) = contact_points((p, der), (p0, n0), (p1, n1), radius);
+            let (c, q0, q1) = contact_points((p, der), (p0, n0), (p1, n1), radius)?;
             if p0.near(&q0) && p1.near(&q1) {
-                Some(c)
-            } else {
-                (p0, (u0, v0)) = next_point(surface0, (u0, v0), (p0, q0));
-                (p1, (u1, v1)) = next_point(surface1, (u1, v1), (p1, q1));
-                None
+                center = Some(c);
+                break;
             }
-        })?;
+            (p0, (u0, v0)) = next_point(surface0, (u0, v0), (p0, q0))?;
+            (p1, (u1, v1)) = next_point(surface1, (u1, v1), (p1, q1))?;
+        }
+        let center = center?;
         let (vec0, vec1) = (p0 - center, p1 - center);
         Some(Self {
             center,
@@ -116,7 +117,7 @@ fn contact_points(
     // origin and normal
     plane1: (Point3, Vector3),
     radius: f64,
-) -> (Point3, Point3, Point3) {
+) -> Option<(Point3, Point3, Point3)> {
     let ((p, der), (p0, n0), (p1, n1)) = (point_on_curve, plane0, plane1);
     let sign = f64::signum(n0.cross(n1).dot(der));
     let mat = Matrix3::from_cols(der, n0, n1).transpose();
@@ -125,19 +126,17 @@ fn contact_points(
         n0.dot(p0.to_vec()) - sign * radius,
         n1.dot(p1.to_vec()) - sign * radius,
     );
-    // SAFETY: the matrix columns are the edge curve tangent and two plane normals,
-    // which are linearly independent when the surfaces are not coplanar.
-    let center = Point3::from_vec(mat.invert().unwrap() * vec);
+    let center = Point3::from_vec(mat.invert()? * vec);
     let q0 = center + sign * radius * n0;
     let q1 = center + sign * radius * n1;
-    (center, q0, q1)
+    Some((center, q0, q1))
 }
 
 fn next_point(
     surface: &impl FilletableSurface,
     (u, v): (f64, f64),
     (p, q): (Point3, Point3),
-) -> (Point3, (f64, f64)) {
+) -> Option<(Point3, (f64, f64))> {
     let ders = surface.derivatives(2, u, v);
     let (uder, vder) = (ders[1][0], ders[0][1]);
     let d = q - p;
@@ -146,9 +145,7 @@ fn next_point(
     let vv = vder.dot(vder);
     let mat = Matrix2::new(uu, uv, uv, vv);
     let vec = Vector2::new(uder.dot(d), vder.dot(d));
-    // SAFETY: the matrix is the first fundamental form of a regular surface,
-    // which is positive definite and therefore invertible.
-    let del = mat.invert().unwrap() * vec;
+    let del = mat.invert()? * vec;
     let (u, v) = (u + del.x, v + del.y);
-    (surface.evaluate(u, v), (u, v))
+    Some((surface.evaluate(u, v), (u, v)))
 }

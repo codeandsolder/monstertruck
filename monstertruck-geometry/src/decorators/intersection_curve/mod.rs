@@ -319,16 +319,14 @@ fn curve_der_n(
     leaders: &CurveDerivatives<Vector3>,
     cders: &CurveDerivatives<Vector3>,
     n: usize,
-) -> Vector3 {
+) -> Option<Vector3> {
     let mat = Matrix3::from_cols(s0normal, s1normal, leaders[1]).transpose();
     let sub = leaders.element_wise_derivatives(cders, |x, y| x - y);
     let suml = leaders
         .derivative()
         .combinatorial_derivative(&sub, Vector3::dot, n);
     let b = Vector3::new(s0normal.dot(sum0), s1normal.dot(sum1), suml);
-    // SAFETY: the matrix columns are two surface normals and the leader curve tangent,
-    // which are linearly independent at a transversal intersection point.
-    mat.invert().unwrap() * b
+    Some(mat.invert()? * b)
 }
 
 fn uv_der_n(
@@ -337,14 +335,12 @@ fn uv_der_n(
     sum: Vector3,
     normal: Vector3,
     cder_n: Vector3,
-) -> Vector2 {
+) -> Option<Vector2> {
     let mat = Matrix3::from_cols(uder, vder, normal);
     let b = cder_n - sum;
-    // SAFETY: the matrix columns are the surface partial derivatives and normal,
-    // which are linearly independent at a regular surface point.
-    let uv_der_n = mat.invert().unwrap() * b;
+    let uv_der_n = mat.invert()? * b;
     debug_assert!(uv_der_n.z.abs() < 1.0e-4, "{}", uv_der_n.z.abs());
-    Vector2::new(uv_der_n.x, uv_der_n.y)
+    Some(Vector2::new(uv_der_n.x, uv_der_n.y))
 }
 
 fn der_routine(
@@ -359,14 +355,15 @@ fn der_routine(
     uv1ders: &mut CurveDerivatives<Vector2>,
     cders: &mut CurveDerivatives<Vector3>,
     n: usize,
-) {
+) -> Option<()> {
     let sum0 = s0ders.composite_der(uv0ders, n);
     let sum1 = s1ders.composite_der(uv1ders, n);
-    cders[n] = curve_der_n(sum0, *s0normal, sum1, *s1normal, leaders, cders, n);
+    cders[n] = curve_der_n(sum0, *s0normal, sum1, *s1normal, leaders, cders, n)?;
     let (uder0, vder0) = (s0ders[1][0], s0ders[0][1]);
-    uv0ders[n] = uv_der_n(uder0, vder0, sum0, *s0normal, cders[n]);
+    uv0ders[n] = uv_der_n(uder0, vder0, sum0, *s0normal, cders[n])?;
     let (uder1, vder1) = (s1ders[1][0], s1ders[0][1]);
-    uv1ders[n] = uv_der_n(uder1, vder1, sum1, *s1normal, cders[n]);
+    uv1ders[n] = uv_der_n(uder1, vder1, sum1, *s1normal, cders[n])?;
+    Some(())
 }
 
 impl<C, S0, S1> ParametricCurveTrait for IntersectionCurve<C, S0, S1>
@@ -448,7 +445,14 @@ where
             s1normal: surface1.normal(uv1.x, uv1.y),
             leaders: leader.derivatives(n + 1, t),
         };
-        (1..=n).for_each(|i| der_routine(&info, &mut uv0ders, &mut uv1ders, &mut cders, i));
+        for i in 1..=n {
+            if der_routine(&info, &mut uv0ders, &mut uv1ders, &mut cders, i).is_none() {
+                for order in i..=n {
+                    cders[order] = Vector3::new(f64::NAN, f64::NAN, f64::NAN);
+                }
+                break;
+            }
+        }
         cders
     }
     #[inline(always)]

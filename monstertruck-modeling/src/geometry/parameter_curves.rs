@@ -222,7 +222,9 @@ pub(super) fn curve2d_from_sampled_boundary(points: Vec<Point2>) -> Option<Curve
                     .chain(iter::once(1.0))
                     .collect::<Vec<_>>(),
             );
-            Some(Curve2D::BsplineCurve(BsplineCurve::new(knot_vec, points)))
+            Some(Curve2D::BsplineCurve(BsplineCurve::new_unchecked(
+                knot_vec, points,
+            )))
         }
     }
 }

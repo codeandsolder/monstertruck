@@ -21,7 +21,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     Vector2::new(0.0, 2.5), Vector2::new(0.5, 2.5), Vector2::new(2.0, 2.5), Vector2::new(2.5, 2.5),
     /// ];
     /// let control_points = vec![control_points0, control_points1, control_points2, control_points3];
-    /// let bspsurface = BsplineSurface::new((knot_vec0, knot_vec1), control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked((knot_vec0, knot_vec1), control_points);
     ///
     /// let mut part0 = bspsurface.clone();
     /// let part1 = part0.cut_u(0.68);
@@ -71,7 +71,8 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
                 let knot_vector_u = KnotVector::from(vec![u, self.knot_vector_u()[0]]);
                 let knot_vector_v = self.knot_vector_v().clone();
                 let control_points = vec![vec![P::origin(); knot_vector_v.len()]];
-                *self = BsplineSurface::new((knot_vector_u, knot_vector_v), control_points);
+                *self =
+                    BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points);
                 return bspline;
             }
         };
@@ -82,13 +83,12 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
             0
         };
 
+        let mut k = idx;
         for _ in s..=degree {
-            self.add_knot_u(u);
+            k = self.add_knot_u_with_index(u);
         }
 
         let knot_vector_v = self.knot_vector_v().clone();
-        // SAFETY: `u` was just added with full multiplicity, so it exists in the knot vector.
-        let k = self.knot_vector_u().floor(u).unwrap();
         let m = self.knot_vector_u().len();
         let n = self.control_points.len();
         let knot_vec0 = self.knot_vector_u().sub_vec(0..=k);
@@ -118,7 +118,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     Vector2::new(0.0, 2.5), Vector2::new(0.5, 2.5), Vector2::new(2.0, 2.5), Vector2::new(2.5, 2.5),
     /// ];
     /// let control_points = vec![control_points0, control_points1, control_points2, control_points3];
-    /// let bspsurface = BsplineSurface::new((knot_vec0, knot_vec1), control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked((knot_vec0, knot_vec1), control_points);
     ///
     /// let mut part0 = bspsurface.clone();
     /// let part1 = part0.cut_v(0.68);
@@ -158,7 +158,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     vec![Vector3::new(0.0, -1.0, 0.0), Vector3::new(0.0, 0.0, -2.0), Vector3::new(0.0, 1.0, 0.0)],
     ///     vec![Vector3::new(1.0, -1.0, 2.0), Vector3::new(1.0, 0.0, 0.0), Vector3::new(1.0, 1.0, 2.0)],
     /// ];
-    /// let mut bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let mut bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     ///
     /// // add some knots for the test!
     /// bspsurface.add_knot_u(0.26);
@@ -221,11 +221,9 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
                     })
                 })
                 .collect();
-            cc.concat(&BsplineCurve::new(knot_vec, control_points));
-            if p + 1 != knots.len() {
-                // SAFETY: `backup` is always `Some` here because it was set
-                // in the identical `p + 1 != knots.len()` guard above.
-                bspsurface = backup.unwrap().cut_v(knots[p]);
+            cc.concat(&BsplineCurve::new_unchecked(knot_vec, control_points));
+            if let Some(mut backup) = backup {
+                bspsurface = backup.cut_v(knots[p]);
             }
         }
         // SAFETY: `knots.len() >= 2` for any valid B-spline surface, so the loop
@@ -246,7 +244,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     vec![Vector2::new(0.0, 2.0), Vector2::new(0.5, 2.0), Vector2::new(1.0, 2.0)],
     ///     vec![Vector2::new(0.0, 3.0), Vector2::new(0.5, 3.5), Vector2::new(1.0, 3.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let curves = bspsurface.splitted_boundary();
     /// assert_eq!(
     ///     curves[0].control_points(),
@@ -268,13 +266,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     pub fn splitted_boundary(&self) -> [BsplineCurve<P>; 4] {
         let (knot_vector_u, knot_vector_v) = self.knot_vecs.clone();
         let control_points0 = self.control_points.iter().map(|x| x[0]).collect();
-        // SAFETY: a valid `BsplineSurface` always has non-empty control points.
-        let control_points1 = self.control_points.last().unwrap().clone();
+        let control_points1 = self.control_points[self.control_points.len() - 1].clone();
         let control_points2 = self
             .control_points
             .iter()
-            // SAFETY: each inner vec is non-empty by the `BsplineSurface` invariant.
-            .map(|x| *x.last().unwrap())
+            .map(|row| row[row.len() - 1])
             .collect();
         let control_points3 = self.control_points[0].clone();
         let curve0 = BsplineCurve::new_unchecked(knot_vector_u.clone(), control_points0);

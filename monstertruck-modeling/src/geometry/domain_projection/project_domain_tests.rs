@@ -36,7 +36,7 @@ fn extruded_nurbs_circle() -> Surface {
         0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
     ]);
     let v_knots = KnotVector::from(vec![0.0, 0.0, 1.0, 1.0]);
-    Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new(
+    Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new_unchecked(
         (u_knots, v_knots),
         control_points,
     )))

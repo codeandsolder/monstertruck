@@ -7,7 +7,7 @@ proptest! {
     fn sphere_case(t in 0f64..=1.0) {
         let sphere0 = Sphere::new(Point3::new(0.0, 0.0, 1.0), f64::sqrt(2.0));
         let sphere1 = Sphere::new(Point3::new(0.0, 0.0, -1.0), f64::sqrt(2.0));
-        let bsp = BsplineCurve::new(
+        let bsp = BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(2),
             vec![
                 Point3::new(1.0, 0.0, 0.0),

@@ -8,12 +8,15 @@ impl TnurccConnection {
     /// # Panics
     /// Panics if `i % 4 >= 4` (impossible?).
     pub fn from_usize(i: usize) -> TnurccConnection {
-        match i % 4 {
-            0 => TnurccConnection::LeftCw,
-            1 => TnurccConnection::LeftAcw,
-            2 => TnurccConnection::RightCw,
-            3 => TnurccConnection::RightAcw,
-            _ => panic!("Modulo 4 returned result greater than 3"),
+        let remainder = i % 4;
+        if remainder == 0 {
+            TnurccConnection::LeftCw
+        } else if remainder == 1 {
+            TnurccConnection::LeftAcw
+        } else if remainder == 2 {
+            TnurccConnection::RightCw
+        } else {
+            TnurccConnection::RightAcw
         }
     }
 }

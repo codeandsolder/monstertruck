@@ -798,7 +798,7 @@ fn report_file(table: &Table) {
 fn extrusion_fixture(control_points: Vec<Point3>, degree: usize, axis: Vector3) -> Surface {
     use monstertruck_io::step::load::step_geometry::re_exports::{BsplineCurve, KnotVector};
     let divisions = control_points.len() - degree;
-    let profile = Curve3D::BsplineCurve(BsplineCurve::new(
+    let profile = Curve3D::BsplineCurve(BsplineCurve::new_unchecked(
         KnotVector::uniform_knot(degree, divisions),
         control_points,
     ));

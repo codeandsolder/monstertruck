@@ -9,7 +9,7 @@ fn nurbs_circle() {
         Vector3::new(1.0, 1.0, 1.0),
         Vector3::new(0.0, 2.0, 2.0),
     ];
-    let curve = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    let curve = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
 
     const N: usize = 10;
     for i in 0..=N {
@@ -38,7 +38,7 @@ proptest! {
             .zip(weights)
             .map(|(&p, w)| Vector4::new(p[0], p[1], p[2], w))
             .collect::<Vec<_>>();
-        let bsp = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+        let bsp = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
 
         const EPS: f64 = 1.0e-4;
         let der0 = bsp.der_n(n + 1, t);
@@ -62,7 +62,7 @@ proptest! {
             .zip(weights)
             .map(|(&p, w)| Vector4::new(p[0], p[1], p[2], w))
             .collect::<Vec<_>>();
-        let bsp = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+        let bsp = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
 
         let ders0 = (0..=n).map(|i| bsp.der_n(i, t)).collect::<Vec<_>>();
 
@@ -84,7 +84,7 @@ fn exec_concat_positive_test(
     t: f64,
     w: f64,
 ) -> std::result::Result<(), TestCaseError> {
-    let mut part0 = NurbsCurve::new(BsplineCurve::new(
+    let mut part0 = NurbsCurve::new(BsplineCurve::new_unchecked(
         KnotVector::uniform_knot(4, 4),
         v0.into_iter()
             .zip(v1)
@@ -124,7 +124,7 @@ fn test_parameter_division() {
         Vector4::new(0.0, 0.0, 2.0, 2.0),
         Vector4::new(1.0, 1.0, 1.0, 1.0),
     ];
-    let curve = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    let curve = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
     let tol = 0.01;
     let (div, pts) = curve.parameter_division(curve.range_tuple(), tol * 0.5);
     let knot_vec = curve.knot_vector();

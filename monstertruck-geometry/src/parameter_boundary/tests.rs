@@ -20,7 +20,7 @@ fn plane_line_pcurve_converts_to_bspline_curve() {
 
 #[test]
 fn revolution_surface_exact_boundary_recovers_internal_iso_angle_line() {
-    let profile = BsplineCurve::new(
+    let profile = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)],
     );
@@ -44,13 +44,13 @@ fn revolution_surface_exact_boundary_recovers_internal_iso_angle_line() {
 
 #[test]
 fn revolution_surface_exact_boundary_recovers_iso_angle_nurbs_with_fixed_endpoint() {
-    let profile = BsplineCurve::new(
+    let profile = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::origin(), Point3::new(1.0, 0.0, 1.0)],
     );
     let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
     let angle = FRAC_PI_4;
-    let curve = NurbsCurve::<Vector4>::from(BsplineCurve::new(
+    let curve = NurbsCurve::<Vector4>::from(BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![surface.subs(0.0, angle), surface.subs(1.0, angle)],
     ));
@@ -83,7 +83,7 @@ fn nurbs_extrusion_exact_boundary_recovers_generator_line() {
             Vector4::new(0.0, 1.0, 2.0, 1.0),
         ],
     ];
-    let surface = NurbsSurface::new(BsplineSurface::new(
+    let surface = NurbsSurface::new(BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
         control_points,
     ));

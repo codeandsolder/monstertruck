@@ -990,7 +990,7 @@ impl StepFormat for ModelingSurface {
                 }
             }
             ModelingSurface::TsplineSurface(t_mesh) => {
-                let bsp = t_mesh.to_bspline_surface(4);
+                let bsp = t_mesh.to_bspline_surface(4).map_err(|_| std::fmt::Error)?;
                 StepFormat::fmt(&bsp, idx, f)
             }
             // Saved as the exact rational net, which is BYTE-IDENTICAL to what
@@ -1027,10 +1027,9 @@ impl StepLength for ModelingSurface {
                     x.entity().step_length()
                 }
             }
-            ModelingSurface::TsplineSurface(t_mesh) => {
-                let bsp = t_mesh.to_bspline_surface(4);
-                bsp.step_length()
-            }
+            ModelingSurface::TsplineSurface(t_mesh) => t_mesh
+                .to_bspline_surface(4)
+                .map_or(0, |bsp| bsp.step_length()),
             // Must agree with `StepFormat::fmt` above, which emits the net.
             ModelingSurface::SphericalSurface(_) | ModelingSurface::ToroidalSurface(_) => self
                 .try_into_homogeneous_bspline_surface()

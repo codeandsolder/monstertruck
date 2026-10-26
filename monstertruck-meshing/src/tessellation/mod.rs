@@ -419,7 +419,7 @@ pub trait RobustMeshableShape {
     /// // vertices
     /// let v = Vertex::from_points(&p);
     /// // Curves that do not ride on a cylinder
-    /// let bsp0: Curve = BsplineCurve::new(
+    /// let bsp0: Curve = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(3),
     ///     vec![
     ///         p[0],
@@ -429,7 +429,7 @@ pub trait RobustMeshableShape {
     ///     ],
     /// )
     /// .into();
-    /// let bsp1: Curve = BsplineCurve::new(
+    /// let bsp1: Curve = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(3),
     ///     vec![
     ///         p[3],

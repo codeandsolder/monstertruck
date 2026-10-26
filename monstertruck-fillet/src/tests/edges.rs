@@ -27,7 +27,7 @@ fn fillet_semi_cube() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
         Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
@@ -49,7 +49,7 @@ fn fillet_semi_cube() {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
         let knot_vecs = (knot_vec.clone(), knot_vec);
-        let bsp = BsplineSurface::new(knot_vecs, control_points);
+        let bsp = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
         let wire: Wire = [i, j, k, l]
             .into_iter()
@@ -147,7 +147,7 @@ fn fillet_closed_wire_box_top() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
         Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
@@ -169,7 +169,7 @@ fn fillet_closed_wire_box_top() {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
         let knot_vecs = (knot_vec.clone(), knot_vec);
-        let bsp = BsplineSurface::new(knot_vecs, control_points);
+        let bsp = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
         let wire: Wire = [i, j, k, l]
             .into_iter()
@@ -257,7 +257,7 @@ fn fillet_edges_rejects_missing() {
 
     // Create a bogus edge not in the shell.
     let bogus = {
-        let bsp = BsplineCurve::new(
+        let bsp = BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(1),
             vec![
                 Point3::new(99.0, 99.0, 99.0),
@@ -286,14 +286,14 @@ fn fillet_edges_rejects_boundary() {
     ];
     let v = Vertex::from_points(p);
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
         Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
 
     let edge = [line(0, 1), line(1, 2), line(2, 3), line(3, 0)];
 
     let knot_vec = KnotVector::bezier_knot(1);
-    let surface: NurbsSurface<_> = BsplineSurface::new(
+    let surface: NurbsSurface<_> = BsplineSurface::new_unchecked(
         (knot_vec.clone(), knot_vec),
         vec![vec![p[0], p[3]], vec![p[1], p[2]]],
     )
@@ -360,7 +360,7 @@ fn fillet_edges_multi_chain() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
         Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
@@ -382,7 +382,7 @@ fn fillet_edges_multi_chain() {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
         let knot_vecs = (knot_vec.clone(), knot_vec);
-        let bsp = BsplineSurface::new(knot_vecs, control_points);
+        let bsp = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
         let wire: Wire = [i, j, k, l]
             .into_iter()
@@ -471,7 +471,7 @@ fn cut_face_five_edge_boundary() {
     let v = Vertex::from_points(&pts);
 
     let line_edge = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![pts[i], pts[j]]);
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![pts[i], pts[j]]);
         Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
 
@@ -487,7 +487,7 @@ fn cut_face_five_edge_boundary() {
     let wire: Wire = edges.iter().cloned().collect();
 
     // Simple planar surface covering the pentagon area.
-    let surface: NurbsSurface<_> = BsplineSurface::new(
+    let surface: NurbsSurface<_> = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
         vec![
             vec![Point3::new(-1.5, -1.5, 0.0), Point3::new(-1.5, 1.5, 0.0)],
@@ -505,7 +505,7 @@ fn cut_face_five_edge_boundary() {
     let mid1 = (pts[1] + pts[2].to_vec()) / 2.0;
     let mid3 = (pts[3] + pts[4].to_vec()) / 2.0;
     let mid_control = (mid1 + mid3.to_vec()) / 2.0;
-    let bezier: NurbsCurve<Vector4> = NurbsCurve::from(BsplineCurve::new(
+    let bezier: NurbsCurve<Vector4> = NurbsCurve::from(BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![mid1, mid_control, mid3],
     ));

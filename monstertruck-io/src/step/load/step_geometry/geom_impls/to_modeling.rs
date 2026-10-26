@@ -426,7 +426,7 @@ fn u1_step_sphere(radius: f64) -> Surface {
 #[cfg(test)]
 fn u1_step_torus(large_radius: f64, small_radius: f64) -> Surface {
     Surface::ElementarySurface(ElementarySurface::ToroidalSurface(Processor::new(
-        Torus::new(Point3::new(1.0, -2.0, 3.0), large_radius, small_radius),
+        Torus::new_unchecked(Point3::new(1.0, -2.0, 3.0), large_radius, small_radius),
     )))
 }
 

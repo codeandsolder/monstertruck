@@ -21,7 +21,7 @@ fn nurbs_sphere() {
             Vector4::new(0.0, 4.0, 0.0, 4.0),
         ],
     ];
-    let surface = NurbsSurface::new(BsplineSurface::new(
+    let surface = NurbsSurface::new(BsplineSurface::new_unchecked(
         (knot_vec.clone(), knot_vec),
         control_points,
     ));
@@ -67,7 +67,7 @@ proptest! {
                     .collect()
             })
             .collect::<Vec<Vec<_>>>();
-        let bsp = NurbsSurface::new(BsplineSurface::new((knot_vector_u, knot_vector_v), control_points));
+        let bsp = NurbsSurface::new(BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points));
 
         const EPS: f64 = 1.0e-4;
         let (der0, der1) = if u_derivate {
@@ -97,7 +97,7 @@ fn endpoint_test_surface() -> NurbsSurface<Vector4> {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    NurbsSurface::new(BsplineSurface::new(
+    NurbsSurface::new(BsplineSurface::new_unchecked(
         (knot_vector_u, knot_vector_v),
         control_points,
     ))

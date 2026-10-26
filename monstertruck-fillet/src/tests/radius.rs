@@ -27,7 +27,7 @@ fn variable_radius_closed_wire() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
         Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
@@ -48,7 +48,7 @@ fn variable_radius_closed_wire() {
     let plane = |i: usize, j: usize, k: usize, l: usize| {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()
@@ -122,7 +122,7 @@ fn variable_radius_open_wire() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
         Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
@@ -143,7 +143,7 @@ fn variable_radius_open_wire() {
     let plane = |i: usize, j: usize, k: usize, l: usize| {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()
@@ -235,7 +235,7 @@ fn per_edge_radius_two_edges() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
         Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
@@ -256,7 +256,7 @@ fn per_edge_radius_two_edges() {
     let plane = |i: usize, j: usize, k: usize, l: usize| {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()

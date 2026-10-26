@@ -71,6 +71,18 @@ where P: Debug
         let mut tnurcc_faces = Vec::new();
         let mut edges: Vec<Arc<RwLock<TnurccEdge<P>>>> = Vec::new();
         for face in faces {
+            if face.iter().any(|(_, connections)| connections.is_empty()) {
+                return Err(Error::TnurccIncompleteFaceEdge);
+            }
+            if face.iter().any(|(origin, connections)| {
+                *origin >= control_points.len()
+                    || connections
+                        .iter()
+                        .any(|(index, _)| *index >= control_points.len())
+            }) {
+                return Err(Error::TnurccMalformedFace);
+            }
+
             // Verify that the face has the same knot interval on opposing faces by summing interval for each side
             let dimensions: Vec<f64> = face
                 .iter()
@@ -139,7 +151,7 @@ where P: Debug
                             Arc::clone(
                                 existing_edges[con_index - 1]
                                     .as_ref()
-                                    .expect("Previous edge should always exist"),
+                                    .ok_or(Error::TnurccMalformedFace)?,
                             ),
                         );
                         // Map success types
@@ -167,7 +179,7 @@ where P: Debug
                             Arc::clone(
                                 existing_edges[con_index - 1]
                                     .as_ref()
-                                    .expect("Previous edge should always exist"),
+                                    .ok_or(Error::TnurccMalformedFace)?,
                             ),
                         );
                         // Map success types
@@ -178,19 +190,17 @@ where P: Debug
                 }
             }
 
-            let first_edge = Arc::clone(
-                existing_edges[0]
-                    .as_ref()
-                    .expect("All edges should exist after loop"),
-            );
+            let first_edge = existing_edges
+                .first()
+                .and_then(Option::as_ref)
+                .map(Arc::clone)
+                .ok_or(Error::TnurccMalformedFace)?;
 
-            let last_edge = Arc::clone(
-                existing_edges
-                    .last()
-                    .expect("existing_edges should contain multiple edges")
-                    .as_ref()
-                    .expect("All edges should exist after loop"),
-            );
+            let last_edge = existing_edges
+                .last()
+                .and_then(Option::as_ref)
+                .map(Arc::clone)
+                .ok_or(Error::TnurccMalformedFace)?;
 
             // Connect the first and the last edge
             let con_res = TnurccEdge::connect(Arc::clone(&first_edge), Arc::clone(&last_edge));
@@ -220,14 +230,10 @@ where P: Debug
         })
     }
 
-    /// Creates a new `Tnurcc` instance using `try_new`, panicking if it fails. See [`Tnurcc::try_new`] for details on the constructor.
-    ///
-    /// # Panics
-    /// Panics if construction fails.
+    /// Creates a checked `Tnurcc` instance. Alias for [`Tnurcc::try_new`].
     #[allow(clippy::type_complexity)]
-    pub fn new(points: Vec<P>, faces: Vec<[(usize, Vec<(usize, f64)>); 4]>) -> Self {
-        // SAFETY: panicking convenience wrapper; callers must ensure valid inputs.
-        Tnurcc::try_new(points, faces).unwrap()
+    pub fn new(points: Vec<P>, faces: Vec<[(usize, Vec<(usize, f64)>); 4]>) -> Result<Self> {
+        Tnurcc::try_new(points, faces)
     }
 
     /// Creates a new `Tnurcc` from a quad mesh. All knot intervals are set to 1.0.
@@ -280,29 +286,32 @@ where P: ControlPoint<f64>
         // Used for creation of empty edges whose control points are not yet known
         let dummy_point = Arc::new(RwLock::new(TnurccControlPoint::new(0, P::origin())));
 
-        // Some wrapped functions which apply in the specific case here where edges are being
-        // retrieved from control points, guaranteeing membership.
-        let nth_acw_int = |e, p, n| {
-            TnurccEdge::nth_acw_edge_from_point(e, p, n)
-                .expect("Edge should contain point it was synthesized from")
-                .read()
-                .knot_interval
-        };
-        let nth_cw_int = |e, p, n| {
-            TnurccEdge::nth_cw_edge_from_point(e, p, n)
-                .expect("Edge should contain point it was synthesized from")
-                .read()
-                .knot_interval
-        };
+        // Keep the subdivision equations readable while preserving topology errors.
+        macro_rules! nth_acw_int {
+            ($edge:expr, $point:expr, $n:expr) => {{
+                let edge = TnurccEdge::nth_acw_edge_from_point($edge, $point, $n)
+                    .ok_or(Error::TnurccMalformedFace)?;
+                let interval = edge.read().knot_interval;
+                interval
+            }};
+        }
+        macro_rules! nth_cw_int {
+            ($edge:expr, $point:expr, $n:expr) => {{
+                let edge = TnurccEdge::nth_cw_edge_from_point($edge, $point, $n)
+                    .ok_or(Error::TnurccMalformedFace)?;
+                let interval = edge.read().knot_interval;
+                interval
+            }};
+        }
 
         // Calculate new face points
         for face in self.faces.iter() {
             let mut w_vec = Vec::with_capacity(self.faces.len());
             let mut w_points = Vec::with_capacity(self.faces.len());
 
-            let mut cir_points = TnurccFace::boundary_vertices(Arc::clone(face));
+            let mut cir_points = TnurccFace::boundary_vertices(Arc::clone(face))?;
             // If there are no points defining a face, that is a problem.
-            if cir_points.is_empty() {
+            if cir_points.len() < 4 {
                 return Err(Error::TnurccMalformedFace);
             }
             // Copy the first 4 points to the end of the array to extend the windows of the array so that the
@@ -322,23 +331,23 @@ where P: ControlPoint<f64>
                             Arc::clone(&a[0]),
                             Arc::clone(&a[1]),
                         )
-                        .expect("adjacent vertices in a face should be connected by an edge")
+                        .ok_or(Error::TnurccMalformedFace)
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>>>()?;
 
                 let first_sum = edges[2].read().knot_interval                 // d_{i+1, i}^{0}
-                    + nth_acw_int(Arc::clone(&edges[2]), Arc::clone(&win[3]), 2)  // d_{i+1, i}^{2}
-                    + nth_cw_int(Arc::clone(&edges[2]), Arc::clone(&win[3]), 2)   // d_{i+1, i}^{-2}
+                    + nth_acw_int!(Arc::clone(&edges[2]), Arc::clone(&win[3]), 2)  // d_{i+1, i}^{2}
+                    + nth_cw_int!(Arc::clone(&edges[2]), Arc::clone(&win[3]), 2)   // d_{i+1, i}^{-2}
                     + edges[0].read().knot_interval                           // d_{i-2, i-1}^{0}
-                    + nth_acw_int(Arc::clone(&edges[0]), Arc::clone(&win[0]), 2)  // d_{i-2, i-1}^{2}
-                    + nth_cw_int(Arc::clone(&edges[0]), Arc::clone(&win[0]), 2); // d_{i-2, i-1}^{-2}
+                    + nth_acw_int!(Arc::clone(&edges[0]), Arc::clone(&win[0]), 2)  // d_{i-2, i-1}^{2}
+                    + nth_cw_int!(Arc::clone(&edges[0]), Arc::clone(&win[0]), 2); // d_{i-2, i-1}^{-2}
 
                 let second_sum = edges[1].read().knot_interval                 // d_{i-1, i}^{0}
-                    + nth_acw_int(Arc::clone(&edges[1]), Arc::clone(&win[1]), 2)  // d_{i-1, i}^{2}
-                    + nth_cw_int(Arc::clone(&edges[1]), Arc::clone(&win[1]), 2)   // d_{i-1, i}^{-2}
+                    + nth_acw_int!(Arc::clone(&edges[1]), Arc::clone(&win[1]), 2)  // d_{i-1, i}^{2}
+                    + nth_cw_int!(Arc::clone(&edges[1]), Arc::clone(&win[1]), 2)   // d_{i-1, i}^{-2}
                     + edges[3].read().knot_interval                           // d_{i+2, i+1}^{0}
-                    + nth_acw_int(Arc::clone(&edges[3]), Arc::clone(&win[4]), 2)  // d_{i+2, i+1}^{2}
-                    + nth_cw_int(Arc::clone(&edges[3]), Arc::clone(&win[4]), 2); // d_{i+2, i+1}^{-2}
+                    + nth_acw_int!(Arc::clone(&edges[3]), Arc::clone(&win[4]), 2)  // d_{i+2, i+1}^{2}
+                    + nth_cw_int!(Arc::clone(&edges[3]), Arc::clone(&win[4]), 2); // d_{i+2, i+1}^{-2}
 
                 let w = first_sum * second_sum;
                 let w_p = win[2].read().point * w;
@@ -361,7 +370,8 @@ where P: ControlPoint<f64>
                 .read()
                 .face_left
                 .as_ref()
-                .expect("All edges should have faces on both sides")
+                .map(Arc::clone)
+                .ok_or(Error::TnurccMissingFace)?
                 .read()
                 .index];
             // Equivalent to F_{ji} in Equation 13 of \[Sederberg et al. 1998\]
@@ -369,20 +379,21 @@ where P: ControlPoint<f64>
                 .read()
                 .face_right
                 .as_ref()
-                .expect("All edges should have faces on both sides")
+                .map(Arc::clone)
+                .ok_or(Error::TnurccMissingFace)?
                 .read()
                 .index];
 
             // Denominator of equation 14 in \[Sederberg et al. 1998\]
-            let a_denom: f64 = (0..4)
-                .map(|n| {
-                    edge.read()
-                        .connection(TnurccConnection::from_usize(n))
-                        .read()
-                        .knot_interval
-                })
-                .sum::<f64>()
-                * 2.0;
+            let mut connection_sum = 0.0;
+            for n in 0..4 {
+                let connection = edge
+                    .read()
+                    .connection(TnurccConnection::from_usize(n))
+                    .ok_or(Error::TnurccMalformedFace)?;
+                connection_sum += connection.read().knot_interval;
+            }
+            let a_denom = connection_sum * 2.0;
 
             // Equation 14 in \[Sederberg et al. 1998\] for alpha_{ij}
             // TODO: Check that the TnurccConnection parity is correct (L/R)
@@ -390,11 +401,15 @@ where P: ControlPoint<f64>
                 if a_denom.so_small() {
                     0.0
                 } else {
-                    [LeftAcw, LeftCw]
-                        .iter()
-                        .map(|c| edge.read().connection(*c).read().knot_interval)
-                        .sum::<f64>()
-                        / a_denom
+                    let mut sum = 0.0;
+                    for connection in [LeftAcw, LeftCw] {
+                        let connected = edge
+                            .read()
+                            .connection(connection)
+                            .ok_or(Error::TnurccMalformedFace)?;
+                        sum += connected.read().knot_interval;
+                    }
+                    sum / a_denom
                 }
             };
             // Equation 14 in \[Sederberg et al. 1998\] for alpha_{ji}
@@ -403,21 +418,25 @@ where P: ControlPoint<f64>
                 if a_denom.so_small() {
                     0.0
                 } else {
-                    [RightAcw, RightCw]
-                        .iter()
-                        .map(|c| edge.read().connection(*c).read().knot_interval)
-                        .sum::<f64>()
-                        / a_denom
+                    let mut sum = 0.0;
+                    for connection in [RightAcw, RightCw] {
+                        let connected = edge
+                            .read()
+                            .connection(connection)
+                            .ok_or(Error::TnurccMalformedFace)?;
+                        sum += connected.read().knot_interval;
+                    }
+                    sum / a_denom
                 }
             };
             // Equation 15 in \[Sederberg et al. 1998\]
             let m: P = {
                 let num_dest_sum = edge.read().knot_interval
-                    + nth_acw_int(Arc::clone(edge), Arc::clone(&edge.read().origin), 2)
-                    + nth_cw_int(Arc::clone(edge), Arc::clone(&edge.read().origin), 2);
+                    + nth_acw_int!(Arc::clone(edge), Arc::clone(&edge.read().origin), 2)
+                    + nth_cw_int!(Arc::clone(edge), Arc::clone(&edge.read().origin), 2);
                 let num_origin_sum = edge.read().knot_interval
-                    + nth_acw_int(Arc::clone(edge), Arc::clone(&edge.read().dest), 2)
-                    + nth_cw_int(Arc::clone(edge), Arc::clone(&edge.read().dest), 2);
+                    + nth_acw_int!(Arc::clone(edge), Arc::clone(&edge.read().dest), 2)
+                    + nth_cw_int!(Arc::clone(edge), Arc::clone(&edge.read().dest), 2);
                 let m_denom = num_dest_sum + num_origin_sum;
 
                 let origin = edge.read().origin.read().point;
@@ -443,7 +462,7 @@ where P: ControlPoint<f64>
             let valence = vertex.read().valence as f64;
 
             // Get radial edges and push first again as last for last window
-            let mut radial_edges = TnurccControlPoint::radial_edges(Arc::clone(vertex));
+            let mut radial_edges = TnurccControlPoint::radial_edges(Arc::clone(vertex))?;
             if radial_edges.is_empty() {
                 // Probably needs its own error
                 // TODO: Fix the Tnurcc errors?
@@ -458,35 +477,35 @@ where P: ControlPoint<f64>
             // the equations specified in \[Sederberg et al. 1998\]. The accumulator variable is a tuple
             // containing the numerator and denominator from equation 16 in \[Sederberg et al. 1998\],
             // respectively, sans the integer multiples 3 and n.
-            let factional_components =
-                radial_edges
-                    .windows(2)
-                    .fold((P::origin(), 0.0), |acc, win| {
-                        let face = win[0]
-                            .read()
-                            .common_face(Arc::clone(&win[1]))
-                            .expect("Adjacent edges should share a face");
-                        // Get the face point calculated in equation 11 in \[Sederberg et al. 1998\]
-                        let f_point = face_points[face.read().index];
-                        // Equation 18 in \[Sederberg et al. 1998\]. Radial faces are in ACW order, so win[0] is the
-                        // edge from which the next ACW edge is retrieved, and vice-versa
-                        let f_scalar = nth_acw_int(Arc::clone(&win[0]), Arc::clone(vertex), 1)
-                            * nth_cw_int(Arc::clone(&win[1]), Arc::clone(vertex), 1);
+            let factional_components = radial_edges.windows(2).try_fold(
+                (P::origin(), 0.0),
+                |acc, win| -> Result<(P, f64)> {
+                    let face = win[0]
+                        .read()
+                        .common_face(Arc::clone(&win[1]))
+                        .ok_or(Error::TnurccMalformedFace)?;
+                    // Get the face point calculated in equation 11 in \[Sederberg et al. 1998\]
+                    let f_point = face_points[face.read().index];
+                    // Equation 18 in \[Sederberg et al. 1998\]. Radial faces are in ACW order, so win[0] is the
+                    // edge from which the next ACW edge is retrieved, and vice-versa
+                    let f_scalar = nth_acw_int!(Arc::clone(&win[0]), Arc::clone(vertex), 1)
+                        * nth_cw_int!(Arc::clone(&win[1]), Arc::clone(vertex), 1);
 
-                        // Get the edge point calculated in equation 15 in \[Sederberg et al. 1998\]
-                        let m_point = edge_points[win[0].read().index];
-                        // Equation 17 in \[Sederberg et al. 1998\]
-                        let m_scalar = 0.5
-                            * (nth_acw_int(Arc::clone(&win[0]), Arc::clone(vertex), 1)
-                                + nth_cw_int(Arc::clone(&win[0]), Arc::clone(vertex), 1))
-                            * (nth_acw_int(Arc::clone(&win[0]), Arc::clone(vertex), 2)
-                                + nth_cw_int(Arc::clone(&win[0]), Arc::clone(vertex), 2));
+                    // Get the edge point calculated in equation 15 in \[Sederberg et al. 1998\]
+                    let m_point = edge_points[win[0].read().index];
+                    // Equation 17 in \[Sederberg et al. 1998\]
+                    let m_scalar = 0.5
+                        * (nth_acw_int!(Arc::clone(&win[0]), Arc::clone(vertex), 1)
+                            + nth_cw_int!(Arc::clone(&win[0]), Arc::clone(vertex), 1))
+                        * (nth_acw_int!(Arc::clone(&win[0]), Arc::clone(vertex), 2)
+                            + nth_cw_int!(Arc::clone(&win[0]), Arc::clone(vertex), 2));
 
-                        (
-                            acc.0 + (m_point * m_scalar).to_vec() + (f_point * f_scalar).to_vec(),
-                            acc.1 + m_scalar + f_scalar,
-                        )
-                    });
+                    Ok((
+                        acc.0 + (m_point * m_scalar).to_vec() + (f_point * f_scalar).to_vec(),
+                        acc.1 + m_scalar + f_scalar,
+                    ))
+                },
+            )?;
 
             // Equation 16 in \[Sederberg et al. 1998\], with help from equation 19 from the same.
             vertex.write().point = if factional_components.1.so_small() {
@@ -506,7 +525,7 @@ where P: ControlPoint<f64>
             // vector such that a given index maps the face to and from the face point.
             let face = Arc::clone(&self.faces[face_i]);
             // perim will only contain the edges which were originally part of the perimiter for the face
-            let perim = TnurccFace::border_edges(Arc::clone(&face))
+            let perim = TnurccFace::border_edges(Arc::clone(&face))?
                 .into_iter()
                 .filter(|e| split_edge.get(e.read().index).is_some())
                 .collect::<Vec<_>>();
@@ -566,11 +585,12 @@ where P: ControlPoint<f64>
                 let edge_index = edge.read().index;
 
                 // Only split edge if it has not been split before.
-                if *split_edge
+                if split_edge
                     .get(edge_index)
-                    .expect("All out of bounds edges should have been filtered out on construction of perim") 
+                    .copied()
+                    .ok_or(Error::TnurccMalformedFace)?
                 {
-                    // If the edge is already split, then the edge which was generated by the split is connected to the 
+                    // If the edge is already split, then the edge which was generated by the split is connected to the
                     // current edge, since none of the radial edges have been connected yet. The match is necessary
                     // because the conjugate may be located in different positions depending on which face we are
                     // currently iterating.
@@ -578,15 +598,21 @@ where P: ControlPoint<f64>
                         match edge
                             .read()
                             .face_side(Arc::clone(&face))
-                            .expect("Edge on face perimiter should be connected to face")
+                            .ok_or(Error::TnurccMalformedFace)?
                         {
-                            TnurccFaceSide::Left => edge.read().connection(LeftAcw),
-                            TnurccFaceSide::Right => edge.read().connection(RightCw),
+                            TnurccFaceSide::Left => edge
+                                .read()
+                                .connection(LeftAcw)
+                                .ok_or(Error::TnurccMalformedFace)?,
+                            TnurccFaceSide::Right => edge
+                                .read()
+                                .connection(RightCw)
+                                .ok_or(Error::TnurccMalformedFace)?,
                         },
                     );
 
                     // If the edge has been split, that means that the edge's destination is the center of the split (by convention)
-                    // Guaranteed to be the case because new edges created by this algorithm were filtered out. Set the corresponding radial edge's destination to the 
+                    // Guaranteed to be the case because new edges created by this algorithm were filtered out. Set the corresponding radial edge's destination to the
                     radial_edges[perim_i].write().dest = Arc::clone(&edge.read().dest);
                 } else {
                     // If it is not split, split it
@@ -598,10 +624,12 @@ where P: ControlPoint<f64>
                         edge_points[edge_index],
                         self.control_points.len(),
                         0.5,
-                    )
-                    .expect("Subdivide should always be able to split an edge");
+                    )?;
                     // The edge that results from the split
-                    let pair = edge.read().connection(LeftAcw);
+                    let pair = edge
+                        .read()
+                        .connection(LeftAcw)
+                        .ok_or(Error::TnurccMalformedFace)?;
 
                     // Push split edge and new control point
                     self.edges.push(Arc::clone(&pair));
@@ -619,7 +647,7 @@ where P: ControlPoint<f64>
                 let edge_face_side = edge
                     .read()
                     .face_side(Arc::clone(&self.faces[face_i]))
-                    .expect("Edge on face perimiter should be connected to face");
+                    .ok_or(Error::TnurccMalformedFace)?;
 
                 // Depending on the orientation of the current edge, different points must be assigned to be the corners of the face.
                 // Recall that corners[0] was set in the constructor. Also note that corners are assigned in an anti-clockwise fashion,
@@ -708,22 +736,22 @@ where P: ControlPoint<f64>
                 let next_perim_index = (perim_i + 1) % perim.len();
 
                 // Connect radial to the perimiter
-                TnurccEdge::connect(Arc::clone(edge), Arc::clone(&radial_edges[perim_i]))
-                    .expect("Edges around the perimeter should always successfuly connect to the radial edge");
-                TnurccEdge::connect(Arc::clone(&edge_conjugates[perim_i]), Arc::clone(&radial_edges[perim_i]))
-                    .expect("Edges around the perimeter should always successfuly connect to the radial edge");
+                TnurccEdge::connect(Arc::clone(edge), Arc::clone(&radial_edges[perim_i]))?;
+                TnurccEdge::connect(
+                    Arc::clone(&edge_conjugates[perim_i]),
+                    Arc::clone(&radial_edges[perim_i]),
+                )?;
 
-                // Connect the radials between each other
+                // Connect the radials between each other.
                 TnurccEdge::connect(
                     Arc::clone(&radial_edges[next_perim_index]),
                     Arc::clone(&radial_edges[perim_i]),
-                )
-                .expect("Radial edges should always successfuly connect between each other");
+                )?;
 
-                // Update valence of edge point
+                // Update valence of edge point.
                 edge.read()
                     .common_point(Arc::clone(&edge_conjugates[perim_i]))
-                    .expect("Edges should have a common point with their split conjugates")
+                    .ok_or(Error::TnurccMalformedFace)?
                     .write()
                     .valence += 1;
 
@@ -927,8 +955,8 @@ where P: ControlPoint<f64> + Debug + Clone
         // Seed from face 0. CCW vertex order: V0(bottom-left), V1(bottom-right),
         // V2(top-right), V3(top-left). Edge 0 is horizontal, edge 1 is vertical.
         let seed = Arc::clone(&tnurcc.faces[0]);
-        let seed_verts = TnurccFace::boundary_vertices(Arc::clone(&seed));
-        let seed_edges = TnurccFace::border_edges(Arc::clone(&seed));
+        let seed_verts = TnurccFace::boundary_vertices(Arc::clone(&seed))?;
+        let seed_edges = TnurccFace::border_edges(Arc::clone(&seed))?;
         if seed_verts.len() != 4 || seed_edges.len() != 4 {
             return Err(Error::TmeshMalformedMesh);
         }
@@ -971,8 +999,8 @@ where P: ControlPoint<f64> + Debug + Clone
                 continue;
             }
 
-            let verts = TnurccFace::boundary_vertices(Arc::clone(&face));
-            let edges = TnurccFace::border_edges(Arc::clone(&face));
+            let verts = TnurccFace::boundary_vertices(Arc::clone(&face))?;
+            let edges = TnurccFace::border_edges(Arc::clone(&face))?;
             if verts.len() != 4 || edges.len() != 4 {
                 continue;
             }

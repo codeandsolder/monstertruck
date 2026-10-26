@@ -126,8 +126,8 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
         let mut rhs = vec![P::origin(); size];
 
         for &((u, v), point) in parameter_points {
-            let ubasis = uknot_vec.bspline_basis_functions(udegree, 0, u);
-            let vbasis = vknot_vec.bspline_basis_functions(vdegree, 0, v);
+            let ubasis = uknot_vec.bspline_basis_functions_unchecked(udegree, 0, u);
+            let vbasis = vknot_vec.bspline_basis_functions_unchecked(vdegree, 0, v);
             for (local_ui, &ubasis_i) in ubasis.values().iter().enumerate() {
                 for (local_vi, &vbasis_i) in vbasis.values().iter().enumerate() {
                     let i = (ubasis.start_index() + local_ui) * vcontrol_count
@@ -189,7 +189,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     vec![Vector2::new(0.0, 2.0), Vector2::new(0.5, 2.0), Vector2::new(1.0, 2.0)],
     ///     vec![Vector2::new(0.0, 3.0), Vector2::new(0.5, 3.5), Vector2::new(1.0, 3.0)],
     /// ];
-    /// let bspsurface0 = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface0 = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let mut bspsurface1 = bspsurface0.clone();
     /// assert!(bspsurface0.near_as_surface(&bspsurface1));
     ///
@@ -215,7 +215,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     vec![Vector2::new(0.0, 2.0), Vector2::new(0.5, 2.0), Vector2::new(1.0, 2.0)],
     ///     vec![Vector2::new(0.0, 3.0), Vector2::new(0.5, 3.5), Vector2::new(1.0, 3.0)],
     /// ];
-    /// let bspsurface0 = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface0 = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let mut bspsurface1 = bspsurface0.clone();
     /// assert!(bspsurface0.near_as_surface(&bspsurface1));
     ///
@@ -269,7 +269,7 @@ fn test_include_bspcurve2() {
             Point2::new(1.0, 1.0),
         ],
     ];
-    let surface = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+    let surface = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
 
     let knot_vec0 = KnotVector::bezier_knot(2);
     let control_points0 = vec![
@@ -277,7 +277,7 @@ fn test_include_bspcurve2() {
         Point2::new(1.0, 1.0),
         Point2::new(0.0, 1.0),
     ];
-    let curve0 = BsplineCurve::new(knot_vec0, control_points0);
+    let curve0 = BsplineCurve::new_unchecked(knot_vec0, control_points0);
     assert!(surface.include(&curve0));
 
     let knot_vec1 = KnotVector::bezier_knot(2);
@@ -286,7 +286,7 @@ fn test_include_bspcurve2() {
         Point2::new(2.5, 1.0),
         Point2::new(0.0, 1.0),
     ];
-    let curve1 = BsplineCurve::new(knot_vec1, control_points1);
+    let curve1 = BsplineCurve::new_unchecked(knot_vec1, control_points1);
     assert!(!surface.include(&curve1));
 }
 
@@ -319,7 +319,7 @@ fn test_include_bspcurve3() {
             Point3::new(1.0, 1.0, 0.3),
         ],
     ];
-    let surface = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+    let surface = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
     let bnd_box = BoundingBox::from_iter(&[Vector2::new(0.2, 0.3), Vector2::new(0.8, 0.6)]);
     let mut curve = surface.sectional_curve(bnd_box);
     assert!(surface.include(&curve));
@@ -334,7 +334,7 @@ fn cut_at_boundary_snapping_parameter_leaves_empty_net_but_does_not_panic() {
     // an empty `control_points[0..0]`. The subsequent `swap_axes` inside `cut_v`
     // then indexed `control_points[0]` on the empty net -- an out-of-bounds
     // panic. `swap_axes` must survive an empty control net gracefully.
-    let mut surface = BsplineSurface::new(
+    let mut surface = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
         vec![
             vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],

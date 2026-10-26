@@ -48,7 +48,10 @@ fn cylinder() -> NurbsSurface<Vector4> {
         TAU,
     ]);
     let v_knots = KnotVector::bezier_knot(1);
-    NurbsSurface::new(BsplineSurface::new((u_knots, v_knots), control_points))
+    NurbsSurface::new(BsplineSurface::new_unchecked(
+        (u_knots, v_knots),
+        control_points,
+    ))
 }
 
 /// Projects both evaluations of `trim`'s meeting point -- a neighbouring
@@ -78,7 +81,7 @@ fn circle_trim(
     to: f64,
     v: f64,
 ) -> ParameterCurve<BsplineCurve<Point2>, NurbsSurface<Vector4>> {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point2::new(from, v), Point2::new(to, v)],
     );

@@ -76,7 +76,7 @@ impl<P: ControlPoint<f64> + Tolerance> From<HermiteSegment<P>> for BsplineCurve<
         let c1 = h.p0 + h.t0 / 3.0;
         let c2 = h.p1 - h.t1 / 3.0;
         let c3 = h.p1;
-        BsplineCurve::new(KnotVector::bezier_knot(3), vec![c0, c1, c2, c3])
+        BsplineCurve::new_unchecked(KnotVector::bezier_knot(3), vec![c0, c1, c2, c3])
     }
 }
 
@@ -184,7 +184,7 @@ impl<P: ControlPoint<f64> + Tolerance> From<PowerBasisCurve<P>> for BsplineCurve
             })
             .collect();
 
-        BsplineCurve::new(KnotVector::bezier_knot(n), bernstein)
+        BsplineCurve::new_unchecked(KnotVector::bezier_knot(n), bernstein)
     }
 }
 
@@ -204,7 +204,7 @@ impl<P: ControlPoint<f64> + Tolerance> From<PowerBasisCurve<P>> for BsplineCurve
 /// use monstertruck_geometry::prelude::*;
 /// use monstertruck_geometry::nurbs::basis::PiecewiseBezier;
 ///
-/// let seg1 = BsplineCurve::new(
+/// let seg1 = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(3),
 ///     vec![
 ///         Point3::new(0.0, 0.0, 0.0),
@@ -213,7 +213,7 @@ impl<P: ControlPoint<f64> + Tolerance> From<PowerBasisCurve<P>> for BsplineCurve
 ///         Point3::new(3.0, 0.0, 0.0),
 ///     ],
 /// );
-/// let seg2 = BsplineCurve::new(
+/// let seg2 = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(3),
 ///     vec![
 ///         Point3::new(3.0, 0.0, 0.0),
@@ -231,15 +231,14 @@ pub struct PiecewiseBezier<P>(pub Vec<BsplineCurve<P>>);
 
 impl<P: ControlPoint<f64> + Tolerance> From<PiecewiseBezier<P>> for BsplineCurve<P> {
     fn from(pb: PiecewiseBezier<P>) -> Self {
-        let segments = pb.0;
+        let mut segments = pb.0;
         assert!(
             !segments.is_empty(),
             "PiecewiseBezier requires at least one segment"
         );
 
         if segments.len() == 1 {
-            // SAFETY: We just checked len() == 1.
-            return segments.into_iter().next().unwrap();
+            return segments.swap_remove(0);
         }
 
         let degree = segments[0].degree();
@@ -261,7 +260,7 @@ impl<P: ControlPoint<f64> + Tolerance> From<PiecewiseBezier<P>> for BsplineCurve
             control_points.extend_from_slice(&seg.control_points()[1..]);
         });
 
-        BsplineCurve::new(KnotVector::from(knots), control_points)
+        BsplineCurve::new_unchecked(KnotVector::from(knots), control_points)
     }
 }
 

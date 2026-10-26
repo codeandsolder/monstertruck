@@ -9,19 +9,19 @@ impl Tmesh<Point3> {
     ///
     /// Supports analytical derivatives up to 2nd order in each parameter direction.
     /// Falls back to finite differences for higher orders.
-    pub(super) fn analytical_der_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
-        // Generate knot vectors if stale.
+    pub(super) fn try_analytical_der_mn(
+        &self,
+        m: usize,
+        n: usize,
+        u: f64,
+        v: f64,
+    ) -> Result<Vector3> {
         if self.knot_vectors.read().is_none() {
-            // SAFETY: `analytical_der_mn` is only called from trait impls and internal methods
-            // that assume a well-formed mesh. Generation failure is unrecoverable here.
-            self.generate_knot_vectors()
-                .expect("T-mesh evaluation failed");
+            self.generate_knot_vectors()?;
         }
 
         let borrow = self.knot_vectors.read();
-        // SAFETY: The `is_none` check above guarantees generation ran; if it succeeded the
-        // value is `Some`.
-        let all_kvs = borrow.as_ref().expect("Knot vectors should be generated");
+        let all_kvs = borrow.as_ref().ok_or(Error::TmeshMalformedMesh)?;
 
         let num_points = self.control_points.len();
         let n_cols = n + 1;
@@ -97,20 +97,26 @@ impl Tmesh<Point3> {
             }
         }
 
-        s_derivs[m * n_cols + n]
+        Ok(s_derivs[m * n_cols + n])
     }
 
-    /// Computes the Gaussian curvature K at `(u, v)` from the first and second fundamental forms.
-    pub(super) fn gaussian_curvature(&self, u: f64, v: f64) -> f64 {
-        let su = self.analytical_der_mn(1, 0, u, v);
-        let sv = self.analytical_der_mn(0, 1, u, v);
-        let suu = self.analytical_der_mn(2, 0, u, v);
-        let suv = self.analytical_der_mn(1, 1, u, v);
-        let svv = self.analytical_der_mn(0, 2, u, v);
+    pub(super) fn analytical_der_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
+        match self.try_analytical_der_mn(m, n, u, v) {
+            Ok(derivative) => derivative,
+            Err(_) => Vector3::new(f64::NAN, f64::NAN, f64::NAN),
+        }
+    }
+
+    fn try_gaussian_curvature(&self, u: f64, v: f64) -> Result<f64> {
+        let su = self.try_analytical_der_mn(1, 0, u, v)?;
+        let sv = self.try_analytical_der_mn(0, 1, u, v)?;
+        let suu = self.try_analytical_der_mn(2, 0, u, v)?;
+        let suv = self.try_analytical_der_mn(1, 1, u, v)?;
+        let svv = self.try_analytical_der_mn(0, 2, u, v)?;
 
         let normal = su.cross(sv);
         let normal_len = normal.magnitude();
-        if normal_len.so_small() {
+        let curvature = if normal_len.so_small() {
             0.0
         } else {
             let n = normal / normal_len;
@@ -131,7 +137,14 @@ impl Tmesh<Point3> {
             } else {
                 (e * g - f * f) / denom
             }
-        }
+        };
+        Ok(curvature)
+    }
+
+    /// Computes the Gaussian curvature K at `(u, v)`.
+    #[cfg(test)]
+    pub(super) fn gaussian_curvature(&self, u: f64, v: f64) -> f64 {
+        self.try_gaussian_curvature(u, v).unwrap_or(f64::NAN)
     }
 
     /// Adaptively refines the T-mesh by inserting knots where Gaussian curvature exceeds the threshold.
@@ -175,13 +188,16 @@ impl Tmesh<Point3> {
 
             // Sample curvature on a grid and collect cells that exceed the threshold.
             let step = 1.0 / samples as f64;
-            let high_curvature_cells: Vec<(f64, f64)> = (0..samples)
-                .flat_map(|i| {
-                    let u = (i as f64 + 0.5) * step;
-                    (0..samples).map(move |j| (u, (j as f64 + 0.5) * step))
-                })
-                .filter(|&(u, v)| self.gaussian_curvature(u, v).abs() > curvature_threshold)
-                .collect();
+            let mut high_curvature_cells = Vec::new();
+            for i in 0..samples {
+                let u = (i as f64 + 0.5) * step;
+                for j in 0..samples {
+                    let v = (j as f64 + 0.5) * step;
+                    if self.try_gaussian_curvature(u, v)?.abs() > curvature_threshold {
+                        high_curvature_cells.push((u, v));
+                    }
+                }
+            }
 
             if high_curvature_cells.is_empty() {
                 break;
@@ -249,7 +265,10 @@ impl ParametricSurface for Tmesh<Point3> {
     type Vector = Vector3;
 
     fn evaluate(&self, u: f64, v: f64) -> Point3 {
-        Tmesh::subs(self, u, v).expect("T-mesh evaluation failed")
+        match Tmesh::subs(self, u, v) {
+            Ok(point) => point,
+            Err(_) => Point3::new(f64::NAN, f64::NAN, f64::NAN),
+        }
     }
 
     fn derivative_u(&self, u: f64, v: f64) -> Vector3 { self.derivative_mn(1, 0, u, v) }
@@ -402,21 +421,20 @@ impl Serialize for Tmesh<Point3> {
 
             let mut cons = [None; 4];
             for dir in TmeshDirection::iter() {
-                cons[dir as usize] = match r.con_type(dir) {
-                    TmeshConnectionType::Tjunction => None,
-                    // SAFETY: `Edge` connections always have a knot interval.
-                    TmeshConnectionType::Edge => Some((None, r.connection_knot(dir).unwrap())),
-                    TmeshConnectionType::Point => {
-                        let connected = r.connected_point(dir);
-                        // SAFETY: the connected point came from this mesh,
-                        // so it must exist in `self.control_points`.
-                        let idx = self
+                cons[dir as usize] = match r.get(dir).as_ref() {
+                    None => None,
+                    Some((None, interval)) => Some((None, *interval)),
+                    Some((Some(connected), interval)) => {
+                        let index = self
                             .control_points
                             .iter()
-                            .position(|p| std::ptr::eq(p.as_ref(), connected.as_ref()))
-                            .unwrap();
-                        // SAFETY: `Point` connections always have a knot interval.
-                        Some((Some(idx), r.connection_knot(dir).unwrap()))
+                            .position(|point| Arc::ptr_eq(point, connected))
+                            .ok_or_else(|| {
+                                serde::ser::Error::custom(
+                                    "T-mesh connection points outside the serialized mesh",
+                                )
+                            })?;
+                        Some((Some(index), *interval))
                     }
                 };
             }
@@ -512,7 +530,7 @@ impl Tmesh<Point3> {
     /// `division` controls the number of spans in each parametric direction.
     /// Higher values give better approximation at the cost of more control
     /// points: `division + 3` control points per direction.
-    pub fn to_bspline_surface(&self, division: usize) -> BsplineSurface<Point3> {
+    pub fn to_bspline_surface(&self, division: usize) -> Result<BsplineSurface<Point3>> {
         let u_knots = KnotVector::uniform_knot(3, division);
         let v_knots = KnotVector::uniform_knot(3, division);
         let n = division + 3;
@@ -538,9 +556,8 @@ impl Tmesh<Point3> {
                 let params: Vec<(f64, Point3)> =
                     v_grev.iter().copied().zip(row.iter().copied()).collect();
                 BsplineCurve::try_interpolate(v_knots.clone(), params)
-                    .expect("V-direction interpolation failed")
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
         // Collect intermediate control points (one row per u-sample).
         let intermediate: Vec<Vec<Point3>> = row_curves
@@ -557,17 +574,16 @@ impl Tmesh<Point3> {
                     .copied()
                     .zip(intermediate.iter().map(|row| row[j]))
                     .collect();
-                let col_curve = BsplineCurve::try_interpolate(u_knots.clone(), params)
-                    .expect("U-direction interpolation failed");
-                col_curve.control_points().to_vec()
+                BsplineCurve::try_interpolate(u_knots.clone(), params)
+                    .map(|curve| curve.control_points().to_vec())
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
         // Transpose from [V][U] to [U][V] for BsplineSurface.
         let control_points: Vec<Vec<Point3>> = (0..n)
             .map(|i| (0..n).map(|j| col_cps[j][i]).collect())
             .collect();
 
-        BsplineSurface::new((u_knots, v_knots), control_points)
+        BsplineSurface::try_new((u_knots, v_knots), control_points)
     }
 }

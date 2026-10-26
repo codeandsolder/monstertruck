@@ -20,7 +20,7 @@ use monstertruck_geometry::prelude::*;
 #[allow(deprecated)]
 fn deprecated_period_aliases_match_their_replacements() {
     // Torus: periodic in BOTH u and v (2*pi each). Catches a wrong value.
-    let torus = Torus::new(Point3::origin(), 3.0, 1.0);
+    let torus = Torus::new_unchecked(Point3::origin(), 3.0, 1.0);
     assert_eq!(torus.u_period(), torus.period_u());
     assert_eq!(torus.v_period(), torus.period_v());
     assert_eq!(torus.period_u(), Some(2.0 * std::f64::consts::PI));
@@ -92,7 +92,7 @@ fn deprecated_sectional_curve_aliases_match_their_replacements() {
             Point3::new(2.0, 1.0, 2.0),
         ],
     ];
-    let surface = BsplineSurface::new(knot_vecs, control_points);
+    let surface = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
     // The aliases forward to the same curve...
     assert_eq!(surface.row_curve(1), surface.curve_u(1));

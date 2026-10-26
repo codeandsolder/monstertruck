@@ -177,7 +177,7 @@ fn to_same_geometry_2d_bspline_curve_round_trip() {
         Point2::new(2.0, 0.0),
         Point2::new(3.0, 1.0),
     ];
-    let spline = BsplineCurve::new(knots, control);
+    let spline = BsplineCurve::new_unchecked(knots, control);
     let curve: Curve2D = spline.to_same_geometry();
     match curve {
         Curve2D::BsplineCurve(rebuilt) => assert_eq!(rebuilt, spline),

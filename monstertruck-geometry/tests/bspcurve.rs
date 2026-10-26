@@ -2,6 +2,15 @@ use monstertruck_geometry::prelude::*;
 use proptest::prelude::*;
 
 #[test]
+fn checked_constructor_rejects_empty_control_points() {
+    let result = BsplineCurve::<Point2>::new(KnotVector::bezier_knot(1), Vec::new());
+    assert!(matches!(
+        result,
+        Err(monstertruck_geometry::errors::Error::EmptyControlPoints)
+    ));
+}
+
+#[test]
 fn test_substitution() {
     let knot_vec = KnotVector::from(vec![-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]);
     let control_points = vec![
@@ -9,7 +18,7 @@ fn test_substitution() {
         Vector2::new(0.0, -1.0),
         Vector2::new(1.0, 1.0),
     ];
-    let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
 
     // bspcurve coincides with (t, t * t) in the range [-1.0..1.0].
     const N: usize = 100; // sample size
@@ -27,7 +36,7 @@ fn test_derivation() {
         Vector2::new(0.5, 0.0),
         Vector2::new(1.0, 1.0),
     ];
-    let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
 
     // `bpscurve = (t, t^2), derived = (1, 2t)`
     const N: usize = 100; // sample size
@@ -46,7 +55,7 @@ fn test_2nd_derivation() {
         Vector2::new(0.0, 1.0),
         Vector2::new(1.0, 0.0),
     ];
-    let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
 
     // bpscurve = (4t^3 - 6t^2 + 3t, -3t^2 + 3t), derived2 = (24t - 12, -6)
     const N: usize = 100; // sample size
@@ -71,7 +80,7 @@ proptest! {
             .iter()
             .map(|&p| Point3::from(p))
             .collect::<Vec<_>>();
-        let bsp = BsplineCurve::new(knot_vec, control_points);
+        let bsp = BsplineCurve::new_unchecked(knot_vec, control_points);
 
         const EPS: f64 = 1.0e-4;
         let der0 = bsp.der_n(n + 1, t);
@@ -83,7 +92,7 @@ proptest! {
 proptest! {
     #[test]
     fn parameter_random_tests(c in prop::array::uniform8(prop::array::uniform3(-10f64..10f64))) {
-        let curve = BsplineCurve::new(
+        let curve = BsplineCurve::new_unchecked(
             KnotVector::uniform_knot(4, 4),
             c.into_iter().map(Point3::from).collect(),
         );
@@ -98,11 +107,11 @@ proptest! {
 
 #[test]
 fn concat_negative_test() {
-    let curve0 = BsplineCurve::new(
+    let curve0 = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point2::new(0.0, 0.0), Point2::new(0.0, 1.0)],
     );
-    let mut curve1 = BsplineCurve::new(
+    let mut curve1 = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point2::new(1.0, 1.0), Point2::new(1.0, 1.0)],
     );
@@ -135,7 +144,7 @@ fn test_near_as_curve() {
         Vector4::new(1.0, 0.0, 0.0, 1.0),
         Vector4::new(1.0, 1.0, 1.0, 0.0),
     ];
-    let bspline0 = BsplineCurve::new(knot_vec, control_points.clone());
+    let bspline0 = BsplineCurve::new_unchecked(knot_vec, control_points.clone());
     let knot_vec = KnotVector::from(vec![
         0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 2.5, 3.0, 4.0, 5.0, 5.0, 5.0, 5.0,
     ]);
@@ -150,7 +159,7 @@ fn test_near_as_curve() {
         control_points[6],
         control_points[7],
     ];
-    let bspline1 = BsplineCurve::new(knot_vec, control_points);
+    let bspline1 = BsplineCurve::new_unchecked(knot_vec, control_points);
     let knot_vec = KnotVector::from(vec![
         0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 5.0, 5.0, 5.0,
     ]);
@@ -164,7 +173,7 @@ fn test_near_as_curve() {
         Vector4::new(1.0, 0.0, 0.0, 1.0),
         Vector4::new(1.0, 1.0, 1.0, 0.0),
     ];
-    let bspline2 = BsplineCurve::new(knot_vec, control_points);
+    let bspline2 = BsplineCurve::new_unchecked(knot_vec, control_points);
     assert!(bspline0.near_as_curve(&bspline1));
     assert!(!bspline0.near_as_curve(&bspline2));
 }
@@ -179,7 +188,7 @@ fn test_parameter_division() {
         Point3::new(0.0, 0.0, 1.0),
         Point3::new(1.0, 1.0, 1.0),
     ];
-    let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     let tol = 0.01;
     let (div, pts) = bspcurve.parameter_division(bspcurve.range_tuple(), tol);
     let knot_vec = bspcurve.knot_vector();
@@ -205,7 +214,7 @@ fn test_invert() {
         Vector2::new(3.0, 4.0),
         Vector2::new(4.0, 5.0),
     ];
-    let bspcurve0 = BsplineCurve::new(knot_vec, control_points);
+    let bspcurve0 = BsplineCurve::new_unchecked(knot_vec, control_points);
     let mut bspcurve1 = bspcurve0.clone();
     bspcurve1.invert();
 
@@ -233,7 +242,7 @@ fn bsp_bench() {
 }
 
 fn near_endpoint_cut_test_curve() -> BsplineCurve<Point3> {
-    BsplineCurve::new(
+    BsplineCurve::new_unchecked(
         KnotVector::from(vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]),
         vec![
             Point3::new(0.0, 0.0, 0.0),

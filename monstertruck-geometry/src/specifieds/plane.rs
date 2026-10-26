@@ -57,7 +57,7 @@ impl Plane {
     /// );
     ///
     /// let pt = Point3::new(2.1, -6.5, 4.7);
-    /// let prm = plane.parameter(pt);
+    /// let prm = plane.parameter(pt).expect("valid plane basis");
     /// let rev = plane.origin()
     ///     + prm[0] * plane.axis_u()
     ///     + prm[1] * plane.axis_v()
@@ -65,14 +65,13 @@ impl Plane {
     /// assert_near!(pt, rev);
     /// ```
     #[inline(always)]
-    pub fn parameter(&self, pt: Point3) -> Vector3 {
+    pub fn parameter(&self, pt: Point3) -> Option<Vector3> {
         let a = self.axis_u();
         let b = self.axis_v();
         let c = self.normal();
-        // SAFETY: `u_axis`, `v_axis`, and `normal` are linearly independent by
-        // the `Plane` construction invariant.
-        let mat = Matrix3::from_cols(a, b, c).invert().unwrap();
-        mat * (pt - self.o)
+        Matrix3::from_cols(a, b, c)
+            .invert()
+            .map(|mat| mat * (pt - self.o))
     }
     /// xy-plane
     #[inline(always)]
@@ -282,7 +281,7 @@ impl SearchParameter<SurfaceParameter> for Plane {
         _: H,
         _: usize,
     ) -> Option<(f64, f64)> {
-        let v = self.parameter(point);
+        let v = self.parameter(point)?;
         match v[2].so_small() {
             true => Some((v[0], v[1])),
             false => None,
@@ -299,14 +298,14 @@ impl SearchNearestParameter<SurfaceParameter> for Plane {
         _: H,
         _: usize,
     ) -> Option<(f64, f64)> {
-        let v = self.parameter(point);
+        let v = self.parameter(point)?;
         Some((v[0], v[1]))
     }
 }
 
 impl From<Plane> for BsplineSurface<Point3> {
     fn from(Plane { o, p, q }: Plane) -> Self {
-        BsplineSurface::debug_new(
+        BsplineSurface::new_unchecked(
             (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
             vec![vec![o, q], vec![p, p + (q - o)]],
         )

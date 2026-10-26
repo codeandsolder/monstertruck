@@ -100,7 +100,10 @@ where P: ControlPoint<f64>
         center_points.push({
             match p.read().con_type(dir.flip()) {
                 // Retrieve connected point
-                TmeshConnectionType::Point => Arc::clone(&p.read().connected_point(dir.flip())),
+                TmeshConnectionType::Point => {
+                    let borrow = p.read();
+                    borrow.try_connected_point(dir.flip())?
+                }
                 TmeshConnectionType::Edge => return Err(Error::TmeshControlPointNotFound),
                 TmeshConnectionType::Tjunction => {
                     return Err(Error::TmeshConnectionNotFound);
@@ -110,15 +113,14 @@ where P: ControlPoint<f64>
         center_points.push(Arc::clone(&p));
         center_points.push({
             let borrow = p.read();
-            // Checked in the beginning of the function with match
-            Arc::clone(&borrow.connected_point(dir))
+            borrow.try_connected_point(dir)?
         });
         center_points.push({
             let borrow = center_points[2].read();
 
             match borrow.con_type(dir.flip()) {
                 // Retrieve connected point
-                TmeshConnectionType::Point => Arc::clone(&borrow.connected_point(dir)),
+                TmeshConnectionType::Point => borrow.try_connected_point(dir)?,
                 TmeshConnectionType::Edge => return Err(Error::TmeshControlPointNotFound),
                 TmeshConnectionType::Tjunction => {
                     return Err(Error::TmeshConnectionNotFound);
@@ -178,8 +180,9 @@ where P: ControlPoint<f64>
                 .ok_or(Error::TmeshConnectionNotFound)?
                 * knot_ratio,
         );
-        // d4
-        d.push(d.last().expect("Vector should not be empty") * ((1.0 / knot_ratio) - 1.0));
+        // d4. `d3` was appended immediately above.
+        let d3 = d[2];
+        d.push(d3 * ((1.0 / knot_ratio) - 1.0));
         // d5 and d6
         for point in center_points[2..4].iter() {
             d.push(
@@ -404,7 +407,7 @@ where P: ControlPoint<f64>
         }
         // Sort bottom-to-top so inferred connections chain upwards.
         // SAFETY: knot coordinates are finite `f64` values, so `partial_cmp` always returns `Some`.
-        h_t_levels.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        h_t_levels.sort_by(f64::total_cmp);
         h_t_levels.dedup_by(|a, b| (*a - *b).so_small());
 
         if h_t_levels.len() >= 2 {
@@ -429,7 +432,7 @@ where P: ControlPoint<f64>
             }
         }
         // SAFETY: knot coordinates are finite `f64` values, so `partial_cmp` always returns `Some`.
-        v_s_levels.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v_s_levels.sort_by(f64::total_cmp);
         v_s_levels.dedup_by(|a, b| (*a - *b).so_small());
 
         if v_s_levels.len() >= 2 {
@@ -465,9 +468,7 @@ where P: ControlPoint<f64>
         }
 
         let borrow = self.knot_vectors.read();
-        let all_kvs = borrow
-            .as_ref()
-            .expect("Knot vectors should have successfully generated or an error returned");
+        let all_kvs = borrow.as_ref().ok_or(Error::TmeshMalformedMesh)?;
 
         let num = self.control_points.len();
         let basis_evaluations: Vec<f64> = all_kvs
@@ -513,12 +514,7 @@ impl<P> fmt::Display for Tmesh<P> {
                 let point_vec: &mut Vec<Arc<RwLock<TmeshControlPoint<P>>>> = s_level.1.as_mut();
                 point_vec.push(Arc::clone(point));
             } else {
-                s_levels.push((coords.0, Vec::new()));
-                s_levels
-                    .last_mut()
-                    .expect("Pushed element on previous line.")
-                    .1
-                    .push(Arc::clone(point));
+                s_levels.push((coords.0, vec![Arc::clone(point)]));
             }
 
             if let Some(t_level) = t_levels
@@ -528,12 +524,7 @@ impl<P> fmt::Display for Tmesh<P> {
                 let point_vec: &mut Vec<Arc<RwLock<TmeshControlPoint<P>>>> = t_level.1.as_mut();
                 point_vec.push(Arc::clone(point));
             } else {
-                t_levels.push((coords.1, Vec::new()));
-                t_levels
-                    .last_mut()
-                    .expect("Pushed element on previous line.")
-                    .1
-                    .push(Arc::clone(point));
+                t_levels.push((coords.1, vec![Arc::clone(point)]));
             }
         }
 
@@ -641,9 +632,7 @@ impl<P> fmt::Display for Tmesh<P> {
             }
         }
 
-        if *vertical_cons
-            .last()
-            .expect("All T-meshes have at least 2 S-levels")
+        if vertical_cons.last().is_some_and(|connected| *connected)
             && s_levels.len().is_multiple_of(2)
         {
             s_demarcations.0.push('|');
@@ -688,14 +677,13 @@ where P: Clone
         // Split all the connections in two
         for cont_p in righties {
             // Get the new control point using the caller supplied closure
+            let connected = {
+                let borrow = cont_p.read();
+                borrow.try_connected_point(TmeshDirection::Right)?
+            };
             let p = f(
                 cont_p.read().point().clone(),
-                cont_p
-                    .read()
-                    .connected_point(TmeshDirection::Right)
-                    .read()
-                    .point()
-                    .clone(),
+                connected.read().point().clone(),
             );
 
             self.add_control_point(p, Arc::clone(&cont_p), TmeshDirection::Right, 0.5)?;
@@ -711,14 +699,13 @@ where P: Clone
             .collect();
 
         for cont_p in uppies {
+            let connected = {
+                let borrow = cont_p.read();
+                borrow.try_connected_point(TmeshDirection::Up)?
+            };
             let p = f(
                 cont_p.read().point().clone(),
-                cont_p
-                    .read()
-                    .connected_point(TmeshDirection::Up)
-                    .read()
-                    .point()
-                    .clone(),
+                connected.read().point().clone(),
             );
 
             self.add_control_point(p, Arc::clone(&cont_p), TmeshDirection::Up, 0.5)?;
@@ -732,132 +719,34 @@ impl<P> Clone for Tmesh<P>
 where P: Clone
 {
     fn clone(&self) -> Tmesh<P> {
-        // Vector containing new point objects which have the same positions as the points in the original mesh
-        let mut points_copy = Vec::new();
-        // Vector containing the connections for each point with the corresponding index in points_copy.
-        // Each sub-vector will be 4 elements long, and each element of the sub-vector will be None if the
-        // connection is a T-junction, Some((None, f64)) for an Edge condition, and Some((Some(index), f64))
-        // for a Point connection, where index is the index of the connected point in self.control_points,
-        // and thus points_copy by extension.
-        #[allow(clippy::type_complexity)]
-        let mut point_connections: Vec<Vec<Option<(Option<usize>, f64)>>> = Vec::new();
+        let points_copy = self
+            .control_points
+            .iter()
+            .map(|point| {
+                let point = point.read();
+                let mut copy = TmeshControlPoint::new(point.point().clone(), 0.0);
+                copy.knot_coordinates = point.knot_coordinates();
+                Arc::new(RwLock::new(copy))
+            })
+            .collect::<Vec<_>>();
 
-        // Copy all the points into points_copy and all connections into point_connections
-        for point in self.control_points.iter() {
-            // Clone the cartesian point
-            let cart_point = {
-                let borrow = point.read();
-                borrow.point().clone()
-            };
-            // Push a new control point corresponding to the control point in self.control_points to points_copy
-            // The edge interval is 1.0, however, this can be any value, since establishing connections will
-            // overwrite this with the correct value.
-            points_copy.push(Arc::new(RwLock::new(TmeshControlPoint::new(
-                cart_point, 1.0,
-            ))));
-
-            // Push a new set of connections
-            point_connections.push(Vec::new());
-            // Retrieve the previously pushed set of connections for ease of use.
-            let last = point_connections
-                .last_mut()
-                .expect("Previously pushed item");
-
-            // TmeshDirection::iter() produces the same order of directions every time, so all connection
-            // sub-vectors in point_connections will be ordered in the same way, and will be read the same
-            // way during connection establishment.
-            for dir in TmeshDirection::iter() {
-                match point.read().con_type(dir) {
-                    // Some((None, f64))
-                    TmeshConnectionType::Edge => last.push(Some((
-                        None,
-                        point
-                            .read()
-                            .connection_knot(dir)
-                            .expect("Edge connection types must have a knot interval."),
-                    ))),
-                    // Some((Some(Index), f64))
-                    TmeshConnectionType::Point => {
-                        let connected_point = point.read().connected_point(dir);
-
-                        last.push(Some(
-                        (Some(
-                            self.control_points
-                                .iter()
-                                .position(|p| std::ptr::eq(p.as_ref(), connected_point.as_ref())).expect("All connected points must be stored in tmesh control_points vector"),
-                        ), point.read().connection_knot(dir).expect("Point connection types must have a knot interval.")),
-                    ))
-                    }
-                    // None
-                    TmeshConnectionType::Tjunction => {
-                        last.push(None);
-                    }
-                };
-            }
-        }
-
-        // Establish connections
-        // 'points_loop:
-        for (point_index, connections) in point_connections.iter().enumerate() {
-            // Zip direction with corresponding connections to index the direction for modification
-            'connections_loop: for (connection, dir) in
-                connections.iter().zip(TmeshDirection::iter())
-            {
-                if let Some(con) = connection {
-                    // Point connection
-                    if let Some(con_index) = con.0 {
-                        // Connections has already been established. Connect will also add the connection to points_copy[con_index],
-                        // so when points_copy[con_index] is reached by 'points_loop, the connection will already exist, so we skip it.
-                        if points_copy[point_index].read().con_type(dir)
-                            == TmeshConnectionType::Point
-                        {
-                            continue 'connections_loop;
-                        }
-
-                        // Remove existing edge conditions from both points to be connected.
-                        {
-                            points_copy[point_index]
-                                .write()
-                                .remove_connection(dir)
-                                .expect("Connections are only modified once.");
-                            points_copy[con_index]
-                                .write()
-                                .remove_connection(dir.flip())
-                                .expect("Connections are only modified once.");
-                        }
-
-                        // Connect points to each other
-                        TmeshControlPoint::connect(
-                            Arc::clone(&points_copy[point_index]),
-                            Arc::clone(&points_copy[con_index]),
-                            dir,
-                            con.1,
-                        )
-                        .expect("Control points have no connections between each other.")
-                    // Edge condition
-                    } else {
-                        points_copy[point_index]
-                            .write()
-                            .set_edge_con_weight(dir, con.1)
-                            .expect(
-                                "Unmodified control points have edge conditions in all directions.",
-                            );
-                    }
-                // T-junction
-                } else {
-                    points_copy[point_index]
-                        .write()
-                        .remove_connection(dir)
-                        .expect(
-                            "Unmodified control points have edge conditions in all directions.",
-                        );
-                }
-            }
-        }
-
-        // Set absolute knot coordinates
-        for (i, p) in self.control_points().iter().enumerate() {
-            points_copy[i].write().knot_coordinates = p.read().knot_coordinates();
+        for (index, point) in self.control_points.iter().enumerate() {
+            let point = point.read();
+            let connections = std::array::from_fn(|direction| {
+                point.connections[direction]
+                    .as_ref()
+                    .and_then(|(connected, interval)| match connected {
+                        None => Some((None, *interval)),
+                        Some(connected) => self
+                            .control_points
+                            .iter()
+                            .position(|candidate| Arc::ptr_eq(candidate, connected))
+                            .map(|connected_index| {
+                                (Some(Arc::clone(&points_copy[connected_index])), *interval)
+                            }),
+                    })
+            });
+            points_copy[index].write().connections = connections;
         }
 
         Tmesh {
@@ -892,11 +781,14 @@ where T: Debug + Clone
                 let borrow = point.read();
                 (*borrow.point()).clone()
             };
-            let knot_vectors =
-                Tmesh::point_knot_vectors(Arc::clone(point)).expect("Mesh should not be malformed");
             println!("{:?}", cart);
-            println!("\tS: {:?}", knot_vectors.0);
-            println!("\tT: {:?}", knot_vectors.1);
+            match Tmesh::point_knot_vectors(Arc::clone(point)) {
+                Ok(knot_vectors) => {
+                    println!("\tS: {:?}", knot_vectors.0);
+                    println!("\tT: {:?}", knot_vectors.1);
+                }
+                Err(error) => println!("\t<malformed mesh: {error}>"),
+            }
             println!();
         }
     }

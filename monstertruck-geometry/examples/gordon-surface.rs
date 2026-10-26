@@ -3,7 +3,7 @@
 
 use monstertruck_geometry::prelude::*;
 
-fn main() {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // A 3x3 grid of intersection points on a curved surface.
     let grid: Vec<Vec<Point3>> = (0..3)
         .map(|i| {
@@ -21,18 +21,18 @@ fn main() {
     // U-curves: connect grid points along the x-direction (j varies).
     let u_curves: Vec<BsplineCurve<Point3>> = grid
         .iter()
-        .map(|row| BsplineCurve::new(KnotVector::bezier_knot(2), row.clone()))
+        .map(|row| BsplineCurve::new_unchecked(KnotVector::bezier_knot(2), row.clone()))
         .collect();
 
     // V-curves: connect grid points along the y-direction (i varies).
     let v_curves: Vec<BsplineCurve<Point3>> = (0..3)
         .map(|j| {
             let pts: Vec<Point3> = (0..3).map(|i| grid[i][j]).collect();
-            BsplineCurve::new(KnotVector::bezier_knot(2), pts)
+            BsplineCurve::new_unchecked(KnotVector::bezier_knot(2), pts)
         })
         .collect();
 
-    let surface = BsplineSurface::gordon(u_curves, v_curves, &grid);
+    let surface = BsplineSurface::gordon(u_curves, v_curves, &grid)?;
 
     println!("Gordon surface from 3x3 curve network:");
     println!("  u-degree = {}", surface.udegree());
@@ -55,4 +55,5 @@ fn main() {
             );
         });
     });
+    Ok(())
 }

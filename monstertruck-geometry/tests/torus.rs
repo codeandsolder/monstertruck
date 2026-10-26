@@ -13,7 +13,7 @@ proptest! {
     ) {
         const EPS: f64 = 1.0e-2;
         let large_radius = 2.0 * small_radius + radius_diff;
-        let torus = Torus::new(Point3::origin(), large_radius, small_radius);
+        let torus = Torus::new_unchecked(Point3::origin(), large_radius, small_radius);
 
         let p = torus.subs(u, v);
         let r = large_radius * Point3::new(f64::cos(u), f64::sin(u), 0.0);
@@ -81,7 +81,7 @@ proptest! {
         small_radius in 0.1f64..=5.0,
         u_derivate in prop::bool::ANY,
     ) {
-        let torus = Torus::new(Point3::from(center), large_radius, small_radius);
+        let torus = Torus::new_unchecked(Point3::from(center), large_radius, small_radius);
 
         const EPS: f64 = 1.0e-4;
         let (der0, der1) = if u_derivate {
@@ -147,7 +147,7 @@ fn spindle_torus_parameter_recovery_is_unsound_while_ring_and_horn_are_exact() {
     ];
     const N: usize = 24;
     for (label, large_radius, small_radius, sound) in cases {
-        let torus = Torus::new(Point3::origin(), large_radius, small_radius);
+        let torus = Torus::new_unchecked(Point3::origin(), large_radius, small_radius);
         let tol = 1.0e-9 * (large_radius + small_radius);
         let mut exact_recovered = 0usize;
         let mut nearest_landed_elsewhere = 0usize;
@@ -209,7 +209,7 @@ fn spindle_torus_parameter_recovery_is_unsound_while_ring_and_horn_are_exact() {
 /// the first attempt at this did.
 #[test]
 fn a_seam_point_takes_the_periodic_spelling_its_hint_asks_for() {
-    let torus = Torus::new(Point3::new(1.0, -2.0, 3.0), 7.0, 2.0);
+    let torus = Torus::new_unchecked(Point3::new(1.0, -2.0, 3.0), 7.0, 2.0);
     // Straddle the seam so the answers must NOT all collapse to one end.
     for v in [0.0, 0.7, PI, 5.0] {
         let seam = torus.subs(0.0, v);
@@ -258,7 +258,7 @@ fn a_seam_point_takes_the_periodic_spelling_its_hint_asks_for() {
 /// branch's numeric answer is part of the contract.
 #[test]
 fn unhinted_search_recovers_point_in_declared_period() {
-    let torus = Torus::new(Point3::origin(), 7.0, 2.0);
+    let torus = Torus::new_unchecked(Point3::origin(), 7.0, 2.0);
     for u in [0.0, 0.3, 1.9, PI, 4.4, 2.0 * PI - 0.3] {
         for v in [0.0, 0.4, 2.2, PI, 5.9] {
             let point = torus.subs(u, v);

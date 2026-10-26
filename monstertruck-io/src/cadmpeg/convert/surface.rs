@@ -139,11 +139,12 @@ pub(super) fn convert(geometry: &SurfaceGeometry, context: &Context<'_>) -> Resu
             let frame = frame::frame(center, axis, ref_direction, "torus", context)?;
             let major = finite_radius(*major_radius, "torus major radius", context)?;
             let minor = finite_radius(*minor_radius, "torus minor radius", context)?;
-            // `Torus::new` PANICS on a non-positive radius. `finite_radius` has
-            // already refused those, so this call cannot reach the panic -- which
-            // is the point of checking here rather than trusting the file.
+            // Keep construction checked at the external-data boundary even though
+            // `finite_radius` already validates the radii; this prevents future loader
+            // changes from reintroducing an unchecked torus.
             let torus = Processor::with_transform(
-                Torus::new(Point3::origin(), major, minor),
+                Torus::new(Point3::origin(), major, minor)
+                    .map_err(|error| context.malformed(error.to_string()))?,
                 frame.placement(1.0),
             );
             admissible(&torus, "torus", context)?;

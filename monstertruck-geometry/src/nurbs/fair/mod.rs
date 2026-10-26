@@ -26,7 +26,7 @@ type Result<T> = StdResult<T, Error>;
 /// use monstertruck_geometry::nurbs::fair;
 ///
 /// // A quadratic Bezier curve: the original parameterization is non-uniform.
-/// let curve = BsplineCurve::new(
+/// let curve = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(2),
 ///     vec![
 ///         Point3::new(0.0, 0.0, 0.0),
@@ -125,7 +125,7 @@ where
 ///     Point3::new(7.0, -0.01, 0.0),
 ///     Point3::new(8.0, 0.0, 0.0),
 /// ];
-/// let noisy = BsplineCurve::new(knot, points);
+/// let noisy = BsplineCurve::new_unchecked(knot, points);
 /// // Fair to a smoother cubic with fewer control points.
 /// let smooth = fair::fair_curve(&noisy, 3, 5, 30).unwrap();
 /// // The smoothed curve should still roughly follow the original path.

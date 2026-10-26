@@ -3,9 +3,9 @@
 
 use monstertruck_geometry::prelude::*;
 
-fn main() {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // A curved rail (quadratic arc rising in z).
-    let rail = BsplineCurve::new(
+    let rail = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
             Point3::new(0.0, 0.0, 0.0),
@@ -15,12 +15,12 @@ fn main() {
     );
 
     // A small square profile centered at the rail origin.
-    let profile = BsplineCurve::new(
+    let profile = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(-0.5, 0.0, -0.5), Point3::new(0.5, 0.0, -0.5)],
     );
 
-    let surface = BsplineSurface::sweep_rail(profile, &rail, 15);
+    let surface = BsplineSurface::sweep_rail(profile, &rail, 15)?;
 
     println!("Sweep rail surface:");
     println!("  u-degree = {}", surface.udegree());
@@ -33,4 +33,5 @@ fn main() {
         let pt = surface.subs(0.0, v);
         println!("  v={:.1}: ({:.2}, {:.2}, {:.2})", v, pt.x, pt.y, pt.z);
     }
+    Ok(())
 }

@@ -17,8 +17,8 @@ fn identical_curves_hash_the_same() {
         Point3::new(1.0, 0.0, 0.0),
         Point3::new(1.0, 1.0, 0.0),
     ];
-    let a = BsplineCurve::new(knots.clone(), pts.clone());
-    let b = BsplineCurve::new(knots, pts);
+    let a = BsplineCurve::new_unchecked(knots.clone(), pts.clone());
+    let b = BsplineCurve::new_unchecked(knots, pts);
     assert_eq!(a.content_hash64(), b.content_hash64());
 }
 
@@ -35,8 +35,8 @@ fn changed_curve_parameter_changes_hash() {
         Point3::new(2.0, 0.0, 0.0),
         Point3::new(1.0, 1.0, 0.0),
     ];
-    let a = BsplineCurve::new(knots.clone(), pts_a);
-    let b = BsplineCurve::new(knots, pts_b);
+    let a = BsplineCurve::new_unchecked(knots.clone(), pts_a);
+    let b = BsplineCurve::new_unchecked(knots, pts_b);
     assert_ne!(a.content_hash64(), b.content_hash64());
 }
 
@@ -47,8 +47,8 @@ fn identical_surfaces_hash_the_same() {
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
         vec![Point3::new(0.0, 1.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
     ];
-    let a = BsplineSurface::new(knots.clone(), pts.clone());
-    let b = BsplineSurface::new(knots, pts);
+    let a = BsplineSurface::new_unchecked(knots.clone(), pts.clone());
+    let b = BsplineSurface::new_unchecked(knots, pts);
     assert_eq!(a.content_hash64(), b.content_hash64());
 }
 

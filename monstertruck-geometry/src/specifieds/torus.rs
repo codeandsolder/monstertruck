@@ -4,10 +4,27 @@ use std::f64::consts::PI;
 impl Torus {
     /// constructor
     #[inline(always)]
-    pub fn new(center: Point3, large_radius: f64, small_radius: f64) -> Self {
-        if large_radius <= 0.0 || small_radius <= 0.0 {
-            panic!("radius must be larger than 0");
+    pub fn new(center: Point3, large_radius: f64, small_radius: f64) -> Result<Self> {
+        if !large_radius.is_finite()
+            || !small_radius.is_finite()
+            || large_radius <= 0.0
+            || small_radius <= 0.0
+        {
+            return Err(Error::InvalidTorusRadii(large_radius, small_radius));
         }
+        Ok(Self {
+            center,
+            large_radius,
+            small_radius,
+        })
+    }
+
+    /// Constructs a torus without validating its radii.
+    ///
+    /// Use this only when the caller has already established that both radii
+    /// are finite and strictly positive (for example, fixed test geometry).
+    #[inline(always)]
+    pub const fn new_unchecked(center: Point3, large_radius: f64, small_radius: f64) -> Self {
         Self {
             center,
             large_radius,

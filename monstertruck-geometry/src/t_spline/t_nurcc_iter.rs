@@ -67,7 +67,7 @@ impl<P> Iterator for TnurccAcwPointIter<P> {
         let end = edge.read().point_end(Arc::clone(&self.point))?;
 
         // Get the next ACW edge for point
-        let new_edge = edge.read().acw_edge_from_end(end);
+        let new_edge = edge.read().acw_edge_from_end(end)?;
 
         // If the new edge is the starting edge, stop the iterator by setting cur to none
         // Otherwise, keep going
@@ -92,7 +92,7 @@ impl<P> Iterator for TnurccAcwFaceIter<P> {
         let side = edge.read().face_side(Arc::clone(&self.face))?;
 
         // Get the next ACW edge for point
-        let new_edge = edge.read().acw_edge_from_side(side);
+        let new_edge = edge.read().acw_edge_from_side(side)?;
 
         // If the new edge is the starting edge, stop the iterator by setting cur to none
         // Otherwise, keep going

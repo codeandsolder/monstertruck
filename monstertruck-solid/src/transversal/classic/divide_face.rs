@@ -623,7 +623,7 @@ mod tests {
         Edge::new(
             front,
             back,
-            BsplineCurve::new(
+            BsplineCurve::new_unchecked(
                 KnotVector::bezier_knot(1),
                 vec![front.point(), back.point()],
             ),

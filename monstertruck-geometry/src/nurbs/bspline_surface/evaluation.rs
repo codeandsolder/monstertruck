@@ -14,7 +14,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, -1.0), Vector2::new(1.0, 0.0)],
     ///     vec![Vector2::new(0.0, 1.0), Vector2::new(0.5, 2.0), Vector2::new(1.0, 1.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let uderivation = bspsurface.uderivation();
     ///
     /// // bspsurface: (v, 2v(1 - v)(2u - 1) + u), uderivation: (0.0, 4v(1 - v) + 1)
@@ -62,7 +62,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, -1.0), Vector2::new(1.0, 0.0)],
     ///     vec![Vector2::new(0.0, 1.0), Vector2::new(0.5, 2.0), Vector2::new(1.0, 1.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let vderivation = bspsurface.vderivation();
     ///
     /// // bspsurface: (v, 2v(1 - v)(2u - 1) + u), vderivation: (1, -2(2u - 1)(2v - 1))
@@ -151,7 +151,7 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
             }
         } else if u_range_is_zero {
             if m == 0 {
-                let basis1 = knot_vector_v.bspline_basis_functions(degree1, n, v);
+                let basis1 = knot_vector_v.bspline_basis_functions_unchecked(degree1, n, v);
                 control_points[0][basis1.start_index()..]
                     .iter()
                     .zip(basis1.values())
@@ -163,7 +163,7 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
             }
         } else if v_range_is_zero {
             if n == 0 {
-                let basis0 = knot_vector_u.bspline_basis_functions(degree0, m, u);
+                let basis0 = knot_vector_u.bspline_basis_functions_unchecked(degree0, m, u);
                 control_points[basis0.start_index()..]
                     .iter()
                     .zip(basis0.values())
@@ -172,8 +172,8 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
                 P::Diff::zero()
             }
         } else {
-            let basis0 = knot_vector_u.bspline_basis_functions(degree0, m, u);
-            let basis1 = knot_vector_v.bspline_basis_functions(degree1, n, v);
+            let basis0 = knot_vector_u.bspline_basis_functions_unchecked(degree0, m, u);
+            let basis1 = knot_vector_v.bspline_basis_functions_unchecked(degree1, n, v);
             self.combine_basis(&basis0, &basis1)
         }
     }

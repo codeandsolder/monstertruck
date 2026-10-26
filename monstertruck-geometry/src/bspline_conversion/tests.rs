@@ -98,25 +98,29 @@ fn assert_sphere_grid(sphere: Sphere) {
 
 #[test]
 fn torus_ring_matches_analytic_on_grid() {
-    assert_torus_grid(Torus::new(Point3::new(1.0, -2.0, 0.5), 3.0, 1.0));
+    assert_torus_grid(Torus::new_unchecked(Point3::new(1.0, -2.0, 0.5), 3.0, 1.0));
 }
 
 #[test]
 fn torus_horn_matches_analytic_on_grid() {
-    assert_torus_grid(Torus::new(Point3::origin(), 2.0, 2.0));
+    assert_torus_grid(Torus::new_unchecked(Point3::origin(), 2.0, 2.0));
 }
 
 #[test]
 fn torus_tiny_pi_scale_matches_analytic() {
     // Pi horn-fillet scale (0.1 mm).
-    assert_torus_grid(Torus::new(Point3::new(0.03, -0.01, 0.02), 0.1, 0.1));
+    assert_torus_grid(Torus::new_unchecked(
+        Point3::new(0.03, -0.01, 0.02),
+        0.1,
+        0.1,
+    ));
 }
 
 #[test]
 fn torus_fp_near_horn_is_representable() {
     // Pi torus #1: large radius a few ulps below small radius. Must NOT be
     // rejected as a spindle and must convert geometrically-exactly.
-    let torus = Torus::new(
+    let torus = Torus::new_unchecked(
         Point3::origin(),
         0.099_999_999_992_725,
         0.099_999_999_999_987_88,
@@ -127,7 +131,7 @@ fn torus_fp_near_horn_is_representable() {
 
 #[test]
 fn torus_horn_inner_equator_collapses_to_center() {
-    let torus = Torus::new(Point3::new(0.5, 0.5, 0.5), 1.5, 1.5);
+    let torus = Torus::new_unchecked(Point3::new(0.5, 0.5, 0.5), 1.5, 1.5);
     let conv = as_nurbs(torus.try_into_homogeneous_bspline_surface().unwrap());
     // Tube angle pi (v-knot 0.5) is the inner equator -> a single point at
     // the center for a horn torus.
@@ -142,7 +146,7 @@ fn torus_horn_inner_equator_collapses_to_center() {
 
 #[test]
 fn torus_seams_are_periodic() {
-    let torus = Torus::new(Point3::origin(), 4.0, 1.0);
+    let torus = Torus::new_unchecked(Point3::origin(), 4.0, 1.0);
     let conv = as_nurbs(torus.try_into_homogeneous_bspline_surface().unwrap());
     let tol = 1.0e-9 * (torus.large_radius() + torus.small_radius());
     for g in grid_params() {
@@ -161,14 +165,14 @@ fn torus_seams_are_periodic() {
 fn torus_spindle_is_rejected() {
     // Small radius exceeds large radius: a self-intersecting spindle torus,
     // not a valid B-rep face.
-    let torus = Torus::new(Point3::origin(), 1.0, 2.0);
+    let torus = Torus::new_unchecked(Point3::origin(), 1.0, 2.0);
     assert!(torus.try_into_homogeneous_bspline_surface().is_none());
     assert!(torus.try_into_bspline_surface().is_none());
 }
 
 #[test]
 fn torus_is_rational_not_polynomial() {
-    let torus = Torus::new(Point3::origin(), 3.0, 1.0);
+    let torus = Torus::new_unchecked(Point3::origin(), 3.0, 1.0);
     assert!(torus.try_into_bspline_surface().is_none());
 }
 
@@ -450,7 +454,7 @@ fn optional_trim_preserves_analytic_geometry() {
         }
     }
 
-    let torus = Torus::new(Point3::origin(), 3.0, 1.0);
+    let torus = Torus::new_unchecked(Point3::origin(), 3.0, 1.0);
     let torus_surface = as_nurbs(
         torus
             .try_into_homogeneous_bspline_surface_over(trim)
@@ -525,7 +529,7 @@ fn trimmed_cone_stays_an_exact_cone() {
 fn transformed_torus_via_processor_lies_on_surface() {
     // General placement rides the pre-existing `Processor<_, Matrix4>` arm;
     // confirm the composed surface is the correctly reoriented torus.
-    let torus = Torus::new(Point3::origin(), 3.0, 1.0);
+    let torus = Torus::new_unchecked(Point3::origin(), 3.0, 1.0);
     // Rotate about x by 0.6 rad (tilts the torus axis off +z), then translate.
     let (sn, cs) = 0.6f64.sin_cos();
     let rot_x = Matrix4::from_cols(

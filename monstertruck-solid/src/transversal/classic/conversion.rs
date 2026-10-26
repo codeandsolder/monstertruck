@@ -14,7 +14,10 @@ fn polyline_leader_bspline(polyline: &PolylineCurve<Point3>) -> Option<BsplineCu
     }
     let mut knots = KnotVector::uniform_knot(1, segment_count);
     knots.transform(segment_count as f64, 0.0);
-    Some(BsplineCurve::new(knots, polyline.iter().copied().collect()))
+    Some(BsplineCurve::new_unchecked(
+        knots,
+        polyline.iter().copied().collect(),
+    ))
 }
 
 #[derive(Clone, Copy)]

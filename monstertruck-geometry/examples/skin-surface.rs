@@ -3,12 +3,12 @@
 
 use monstertruck_geometry::prelude::*;
 
-fn main() {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Three quadratic arcs at different y-positions.
     let sections: Vec<BsplineCurve<Point3>> = (0..3)
         .map(|i| {
             let y = i as f64 * 2.0;
-            BsplineCurve::new(
+            BsplineCurve::new_unchecked(
                 KnotVector::bezier_knot(2),
                 vec![
                     Point3::new(-1.0, y, 0.0),
@@ -19,7 +19,7 @@ fn main() {
         })
         .collect();
 
-    let surface = BsplineSurface::skin(sections);
+    let surface = BsplineSurface::skin(sections)?;
 
     // Verify corners.
     let p00 = surface.subs(0.0, 0.0);
@@ -39,4 +39,5 @@ fn main() {
         let pt = surface.subs(0.5, v);
         println!("  v={:.2}: ({:.2}, {:.2}, {:.2})", v, pt.x, pt.y, pt.z);
     }
+    Ok(())
 }

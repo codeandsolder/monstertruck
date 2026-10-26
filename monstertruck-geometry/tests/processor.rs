@@ -9,7 +9,7 @@ fn exec_compatible_with_bspcurve(ycoords: [f64; 7], mat: [f64; 9]) -> PResult {
         .enumerate()
         .map(|(i, y)| Point3::new(i as f64, y, 0.0))
         .collect();
-    let mut curve = BsplineCurve::new(knot_vec, control_points);
+    let mut curve = BsplineCurve::new_unchecked(knot_vec, control_points);
     let mut processor = Processor::new(curve.clone());
     let mat = *<&Matrix3>::from(&mat);
     prop_assume!(!mat.determinant().so_small(), "omitted: {:?}", mat);
@@ -66,7 +66,7 @@ fn exec_compatible_with_bspsurface(
         })
         .collect();
 
-    let mut surface = BsplineSurface::new(knot_vecs, control_points);
+    let mut surface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     let mut processor = Processor::new(surface.clone());
     let mat = *<&Matrix3>::from(&mat);
     prop_assume!(!mat.determinant().so_small(), "omitted: {:?}", mat);

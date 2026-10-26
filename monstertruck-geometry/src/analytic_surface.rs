@@ -269,7 +269,11 @@ fn planar_points(points: &[Point3]) -> Option<Plane> {
     points
         .iter()
         .copied()
-        .all(|point| plane.parameter(point).z.abs() <= PLANE_IDENTITY_TOLERANCE)
+        .all(|point| {
+            plane
+                .parameter(point)
+                .is_some_and(|parameter| parameter.z.abs() <= PLANE_IDENTITY_TOLERANCE)
+        })
         .then_some(plane)
 }
 

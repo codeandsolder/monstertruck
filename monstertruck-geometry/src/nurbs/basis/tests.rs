@@ -58,7 +58,7 @@ fn power_basis_quadratic() {
 
 #[test]
 fn concat_two_cubic_segments() {
-    let seg1 = BsplineCurve::new(
+    let seg1 = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(3),
         vec![
             Point3::new(0.0, 0.0, 0.0),
@@ -67,7 +67,7 @@ fn concat_two_cubic_segments() {
             Point3::new(3.0, 0.0, 0.0),
         ],
     );
-    let seg2 = BsplineCurve::new(
+    let seg2 = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(3),
         vec![
             Point3::new(3.0, 0.0, 0.0),

@@ -111,8 +111,7 @@ where
         let (mut div, _) = self.curve0.parameter_division(urange, tol);
         let (div0, _) = self.curve1.parameter_division(urange, tol);
         div.extend(div0);
-        // SAFETY: division parameters are finite `f64` values, so `partial_cmp` always returns `Some`.
-        div.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        div.sort_by(f64::total_cmp);
         div.dedup();
         (div, vec![vrange.0, vrange.1])
     }

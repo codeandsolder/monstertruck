@@ -19,7 +19,7 @@ fn plane_cylinder(#[strategy = 0.0..=1.0] u: f64, #[strategy = 0.0..=1.0] v: f64
         weights: vec![(1.0 + f64::sqrt(2.0)) / 3.0; 2],
     };
     let w = 1.0 / f64::sqrt(2.0);
-    let nurbs_surface = NurbsSurface::new(BsplineSurface::<Vector4>::new(
+    let nurbs_surface = NurbsSurface::new(BsplineSurface::<Vector4>::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
         vec![
             vec![(-1.0, 0.0, 0.0, 1.0).into(), (-1.0, 1.0, 0.0, 1.0).into()],
@@ -38,7 +38,7 @@ fn plane_cylinder(#[strategy = 0.0..=1.0] u: f64, #[strategy = 0.0..=1.0] v: f64
 #[property_test]
 fn test_ders(#[strategy = 0.0..=1.0] u: f64, #[strategy = 0.0..=1.0] v: f64) {
     #[rustfmt::skip]
-    let surface0 = &BsplineSurface::<Point3>::new(
+    let surface0 = &BsplineSurface::<Point3>::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(2)),
         vec![
             vec![(-1.0, 0.0, 0.0).into(), (-1.0, 0.5, 0.0).into(), (-1.0, 1.0, 0.0).into()],
@@ -47,7 +47,7 @@ fn test_ders(#[strategy = 0.0..=1.0] u: f64, #[strategy = 0.0..=1.0] v: f64) {
         ]
     );
     #[rustfmt::skip]
-    let surface1 = &BsplineSurface::<Point3>::new(
+    let surface1 = &BsplineSurface::<Point3>::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(2)),
         vec![
             vec![(0.0, 0.0, -1.0).into(), (0.0, 0.0, -0.5).into(), (0.0, 0.0, 0.0).into()],

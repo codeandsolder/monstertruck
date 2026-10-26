@@ -390,8 +390,14 @@ fn test_tnurcc_split_edge() {
     .expect("Splitting is designed to succeed");
 
     // Get the new edge, other_left and other_right should be the same
-    let other_left = edge.read().connection(TnurccConnection::LeftAcw);
-    let other_right = edge.read().connection(TnurccConnection::RightCw);
+    let other_left = edge
+        .read()
+        .connection(TnurccConnection::LeftAcw)
+        .expect("split edge must install its left ACW conjugate");
+    let other_right = edge
+        .read()
+        .connection(TnurccConnection::RightCw)
+        .expect("split edge must install its right CW conjugate");
 
     // Check that edge is correctly connected to an edge
     assert!(
@@ -519,7 +525,10 @@ fn test_tnurcc_split_edge_connected_edges() {
     );
 
     // Get the new edge
-    let new_edge = edge.read().connection(TnurccConnection::LeftAcw);
+    let new_edge = edge
+        .read()
+        .connection(TnurccConnection::LeftAcw)
+        .expect("split edge must install its conjugate");
 
     // Test that left_edge was reconnected to the new edge
     assert!(
@@ -527,6 +536,7 @@ fn test_tnurcc_split_edge_connected_edges() {
             left_edge
                 .read()
                 .connection(TnurccConnection::RightCw)
+                .expect("left edge must be reconnected")
                 .as_ref(),
             new_edge.as_ref()
         ),
@@ -538,6 +548,7 @@ fn test_tnurcc_split_edge_connected_edges() {
             right_edge
                 .read()
                 .connection(TnurccConnection::LeftAcw)
+                .expect("right edge must be reconnected")
                 .as_ref(),
             new_edge.as_ref()
         ),
@@ -550,6 +561,7 @@ fn test_tnurcc_split_edge_connected_edges() {
             new_edge
                 .read()
                 .connection(TnurccConnection::RightCw)
+                .expect("new edge must connect to the right edge")
                 .as_ref()
         ),
         "Edge's right clockwise connection was not correctly transfered."
@@ -561,6 +573,7 @@ fn test_tnurcc_split_edge_connected_edges() {
             new_edge
                 .read()
                 .connection(TnurccConnection::LeftAcw)
+                .expect("new edge must connect to the left edge")
                 .as_ref()
         ),
         "Edge's left anti-clockwise connection was not correctly transfered."

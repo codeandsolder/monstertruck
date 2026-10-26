@@ -33,30 +33,18 @@ impl<P> TnurccEdge<P> {
         edge
     }
 
-    /// Returns the connected edge.
-    ///
-    /// # Panics
-    /// Panics if `self` was not correctly initialized or was mangled, resulting in a `None` connection.
-    pub fn connection(&self, con: TnurccConnection) -> Arc<RwLock<TnurccEdge<P>>> {
-        Arc::clone(
-            self.connections[con as usize]
-                .as_ref()
-                .expect("TnurccEdge should always have a Some(connection)"),
-        )
+    /// Returns the connected edge, or `None` while the edge is incomplete.
+    pub fn connection(&self, con: TnurccConnection) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+        self.connections[con as usize].as_ref().map(Arc::clone)
     }
 
-    /// Replaces the connection `con` with the new edge `other`, returning the old connection
-    ///
-    /// # Panics
-    /// Panics if `self` was not correctly initialized or was mangled, resulting in a `None` connection.
+    /// Replaces the connection `con` with the new edge `other`, returning the old connection.
     pub fn set_connection(
         &mut self,
         other: Arc<RwLock<TnurccEdge<P>>>,
         con: TnurccConnection,
-    ) -> Arc<RwLock<TnurccEdge<P>>> {
-        self.connections[con as usize]
-            .replace(other)
-            .expect("TnurccEdge should always have a Some(connection)")
+    ) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+        self.connections[con as usize].replace(other)
     }
 
     /// Returns the next anti-clockwise edge around `self`'s vertex `p`.
@@ -75,7 +63,7 @@ impl<P> TnurccEdge<P> {
             TnurccVertexEnd::Dest => TnurccConnection::RightCw,
         };
 
-        Some(self.connection(dir))
+        self.connection(dir)
     }
 
     /// Returns the next clockwise edge around `self`'s vertex `p`.
@@ -94,7 +82,7 @@ impl<P> TnurccEdge<P> {
             TnurccVertexEnd::Dest => TnurccConnection::LeftAcw,
         };
 
-        Some(self.connection(dir))
+        self.connection(dir)
     }
 
     /// Returns the `n`th anti-clockwise edge around `e`'s vertex `p`.
@@ -148,7 +136,7 @@ impl<P> TnurccEdge<P> {
     }
 
     /// Returns the next anti-clockwise edge around `self`'s vertex `end`.
-    pub fn acw_edge_from_end(&self, end: TnurccVertexEnd) -> Arc<RwLock<TnurccEdge<P>>> {
+    pub fn acw_edge_from_end(&self, end: TnurccVertexEnd) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
         // Determine which end the point is connected to on incoming_edge.
         let dir = match end {
             TnurccVertexEnd::Origin => TnurccConnection::LeftCw,
@@ -160,7 +148,7 @@ impl<P> TnurccEdge<P> {
 
     /// Returns the next clockwise edge around `self`'s vertex `end`.
     #[allow(dead_code)]
-    pub fn cw_edge_from_end(&self, end: TnurccVertexEnd) -> Arc<RwLock<TnurccEdge<P>>> {
+    pub fn cw_edge_from_end(&self, end: TnurccVertexEnd) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
         // Determine which end the point is connected to on incoming_edge.
         let dir = match end {
             TnurccVertexEnd::Origin => TnurccConnection::RightAcw,
@@ -187,7 +175,7 @@ impl<P> TnurccEdge<P> {
             TnurccFaceSide::Right => TnurccConnection::RightAcw,
         };
 
-        Some(self.connection(dir))
+        self.connection(dir)
     }
 
     /// Returns the next clockwise edge around `self`'s face `f`.
@@ -207,11 +195,11 @@ impl<P> TnurccEdge<P> {
             TnurccFaceSide::Right => TnurccConnection::RightCw,
         };
 
-        Some(self.connection(dir))
+        self.connection(dir)
     }
 
     /// Returns the next anti-clockwise edge around `self`'s face `side`.
-    pub fn acw_edge_from_side(&self, side: TnurccFaceSide) -> Arc<RwLock<TnurccEdge<P>>> {
+    pub fn acw_edge_from_side(&self, side: TnurccFaceSide) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
         // Determine which end the point is connected to on incoming_edge.
         let dir = match side {
             TnurccFaceSide::Left => TnurccConnection::LeftAcw,
@@ -223,7 +211,7 @@ impl<P> TnurccEdge<P> {
 
     /// Returns the next clockwise edge around `self`'s face `side`.
     #[allow(dead_code)]
-    pub fn cw_edge_from_side(&self, side: TnurccFaceSide) -> Arc<RwLock<TnurccEdge<P>>> {
+    pub fn cw_edge_from_side(&self, side: TnurccFaceSide) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
         // Determine which end the point is connected to on incoming_edge.
         let dir = match side {
             TnurccFaceSide::Left => TnurccConnection::LeftCw,
@@ -311,14 +299,10 @@ impl<P> TnurccEdge<P> {
         self.connections
             .iter()
             .enumerate()
-            .filter(|(_, r)| {
-                std::ptr::eq(
-                r
-                .as_ref()
-                .expect("Edges should have Some(connection) in connections in all circumstances")
-                .as_ref(),
-                other.as_ref()
-            )
+            .filter(|(_, connection)| {
+                connection
+                    .as_ref()
+                    .is_some_and(|edge| Arc::ptr_eq(edge, &other))
             })
             .map(|(i, _)| TnurccConnection::from_usize(i))
             .collect()
@@ -376,8 +360,8 @@ impl<P> TnurccEdge<P> {
         conjugate.read().dest.write().incoming_edge = Some(Arc::clone(&conjugate));
 
         for con in [TnurccConnection::LeftAcw, TnurccConnection::RightCw] {
-            let other = e.read().connection(con);
-            TnurccEdge::connect(Arc::clone(&other), Arc::clone(&conjugate))
+            let other = e.read().connection(con).ok_or(Error::TnurccMalformedFace)?;
+            TnurccEdge::connect(other, Arc::clone(&conjugate))
                 .map_err(|_| Error::TnurccMalformedFace)?;
         }
 

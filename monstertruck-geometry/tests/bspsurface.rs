@@ -2,6 +2,21 @@ use monstertruck_geometry::prelude::*;
 use proptest::prelude::*;
 
 #[test]
+fn checked_constructor_rejects_irregular_control_net() {
+    let result = BsplineSurface::<Point2>::new(
+        (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
+        vec![
+            vec![Point2::new(0.0, 0.0), Point2::new(0.0, 1.0)],
+            vec![Point2::new(1.0, 0.0)],
+        ],
+    );
+    assert!(matches!(
+        result,
+        Err(monstertruck_geometry::errors::Error::IrregularControlPoints)
+    ));
+}
+
+#[test]
 fn test_substitution() {
     let knot_vecs = (KnotVector::bezier_knot(1), KnotVector::bezier_knot(2));
     let control_points = vec![
@@ -16,7 +31,7 @@ fn test_substitution() {
             Vector2::new(1.0, 1.0),
         ],
     ];
-    let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
     // bspsurface: (v, 2v(1 - v)(2u - 1) + u)
     const N: usize = 100; // sample size
@@ -47,7 +62,7 @@ fn test_uderivation() {
             Vector2::new(1.0, 1.0),
         ],
     ];
-    let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
     // bspsurface: (v, 2v(1 - v)(2u - 1) + u), uderivation: (0.0, 4v(1 - v) + 1)
     const N: usize = 100; // sample size
@@ -78,7 +93,7 @@ fn test_vderivation() {
             Vector2::new(1.0, 1.0),
         ],
     ];
-    let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
     // bspsurface: (v, 2v(1 - v)(2u - 1) + u), vderivation: (1, -2(2u - 1)(2v - 1))
     const N: usize = 100; // sample size
@@ -114,7 +129,7 @@ fn test_uuderivation() {
             Vector2::new(1.0, 1.0),
         ],
     ];
-    let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
     // bspsurface: (v, 2 u^2 v^2 - 2 u^2 v - 6 u v^2 + 6uv + 2v^2 + u - 2v)
     // uuder: (0, 4v(v - 1))
@@ -151,7 +166,7 @@ fn test_uvderivation() {
             Vector2::new(1.0, 1.0),
         ],
     ];
-    let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
     // bspsurface: (v, 2 u^2 v^2 - 2 u^2 v - 6 u v^2 + 6uv + 2v^2 + u - 2v)
     // uvder: (0, 8uv - 4u - 12v + 6)
@@ -188,7 +203,7 @@ fn test_vvderivation() {
             Vector2::new(1.0, 1.0),
         ],
     ];
-    let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
     // bspsurface: (v, 2 u^2 v^2 - 2 u^2 v - 6 u v^2 + 6uv + 2v^2 + u - 2v)
     // vvder: (0, 4(u^2 - 3u + 1))
@@ -228,7 +243,7 @@ proptest! {
                     .collect()
             })
             .collect::<Vec<Vec<_>>>();
-        let bsp = BsplineSurface::new((knot_vector_u, knot_vector_v), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points);
 
         const EPS: f64 = 1.0e-4;
         let (der0, der1) = if u_derivate {
@@ -258,7 +273,7 @@ fn endpoint_test_surface() -> BsplineSurface<Point3> {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    BsplineSurface::new((knot_vector_u, knot_vector_v), control_points)
+    BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points)
 }
 
 fn seam_samples() -> impl Iterator<Item = f64> { (0..=20).map(|i| i as f64 / 20.0) }

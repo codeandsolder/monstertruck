@@ -35,7 +35,7 @@ fn uniform_knot_control_point_count() {
 }
 
 fn sample_curve() -> BsplineCurve<Point3> {
-    BsplineCurve::new(
+    BsplineCurve::new_unchecked(
         KnotVector::uniform_knot(3, 5),
         vec![
             Point3::new(0.0, 0.0, 0.0),

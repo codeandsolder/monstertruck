@@ -2,6 +2,50 @@ use super::*;
 use algo::surface::SearchNearestParameterVector;
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 
+#[inline]
+fn undefined_vector3() -> Vector3 { Vector3::new(f64::NAN, f64::NAN, f64::NAN) }
+
+fn matrix3_scale_bound(a: Matrix3) -> f64 {
+    if let Some((_, k, _)) = a.iwasawa_decomposition() {
+        return f64::abs(k[0][0])
+            .max(f64::abs(k[1][1]))
+            .max(f64::abs(k[2][2]))
+            .max(f64::EPSILON);
+    }
+    let linear_norm =
+        (a[0][0].powi(2) + a[0][1].powi(2) + a[1][0].powi(2) + a[1][1].powi(2)).sqrt();
+    if linear_norm.is_finite() {
+        linear_norm.max(f64::EPSILON)
+    } else {
+        1.0
+    }
+}
+
+fn matrix4_scale_bound(a: Matrix4) -> f64 {
+    if let Some((_, k, _)) = a.iwasawa_decomposition() {
+        let homogeneous = f64::abs(k[3][3]);
+        if homogeneous > f64::EPSILON {
+            return f64::abs(k[0][0])
+                .max(f64::abs(k[1][1]))
+                .max(f64::abs(k[2][2]))
+                / homogeneous;
+        }
+    }
+    let mut sum = 0.0;
+    for column in 0..3 {
+        for row in 0..3 {
+            sum += a[column][row] * a[column][row];
+        }
+    }
+    let homogeneous = f64::abs(a[3][3]);
+    let linear_norm = sum.sqrt();
+    if linear_norm.is_finite() && homogeneous > f64::EPSILON {
+        (linear_norm / homogeneous).max(f64::EPSILON)
+    } else {
+        1.0
+    }
+}
+
 impl<E, T: One> Processor<E, T> {
     /// Creates new processor
     #[inline(always)]
@@ -291,10 +335,14 @@ where
             true => self.entity.normal(u, v),
             false => -self.entity.normal(v, u),
         };
-        let n = transtrans
-            .inverse_transform_vector(n)
-            .expect("invalid transform");
-        (n / self.transform.determinant()).normalize()
+        let Some(n) = transtrans.inverse_transform_vector(n) else {
+            return undefined_vector3();
+        };
+        let determinant = self.transform.determinant();
+        if determinant.abs() <= f64::EPSILON {
+            return undefined_vector3();
+        }
+        (n / determinant).normalize()
     }
 }
 
@@ -474,10 +522,9 @@ where
     T: Transform<C::Point>,
 {
     fn include(&self, curve: &C) -> bool {
-        let inv = self
-            .transform
-            .inverse_transform()
-            .expect("irregular transform");
+        let Some(inv) = self.transform.inverse_transform() else {
+            return false;
+        };
         let curve = curve.clone().transformed(inv);
         self.entity.include(&curve)
     }
@@ -522,12 +569,7 @@ where C: ParameterDivision1D<Point = Point2> + BoundedCurve<Point = Point2>
             true => range,
             false => (self.curve_parameter(range.1), self.curve_parameter(range.0)),
         };
-        let (_, k, _) = a
-            .iwasawa_decomposition()
-            .expect("transform matrix must be invertible!");
-        let n = f64::abs(k[0][0])
-            .max(f64::abs(k[1][1]))
-            .max(f64::abs(k[2][2]));
+        let n = matrix3_scale_bound(a);
         let (mut params, mut points) = self.entity.parameter_division(range, tol / n);
         points
             .iter_mut()
@@ -583,13 +625,7 @@ where C: ParameterDivision1D<Point = Point3> + BoundedCurve<Point = Point3>
             true => range,
             false => (self.curve_parameter(range.1), self.curve_parameter(range.0)),
         };
-        let (_, k, _) = a
-            .iwasawa_decomposition()
-            .expect("transform matrix must be invertible!");
-        let n = f64::abs(k[0][0])
-            .max(f64::abs(k[1][1]))
-            .max(f64::abs(k[2][2]))
-            / f64::abs(k[3][3]);
+        let n = matrix4_scale_bound(a);
         let (mut params, mut points) = self.entity.parameter_division(range, tol / n);
         points
             .iter_mut()
@@ -616,12 +652,7 @@ impl<S: ParameterDivision2D> ParameterDivision2D for Processor<S, Matrix3> {
             true => range,
             false => (range.1, range.0),
         };
-        let (_, k, _) = a
-            .iwasawa_decomposition()
-            .expect("transform matrix must be invertible!");
-        let n = f64::abs(k[0][0])
-            .max(f64::abs(k[1][1]))
-            .max(f64::abs(k[2][2]));
+        let n = matrix3_scale_bound(a);
         let (udiv, vdiv) = self.entity.parameter_division(range, tol / n);
         match self.orientation {
             true => (udiv, vdiv),
@@ -641,13 +672,7 @@ impl<S: ParameterDivision2D> ParameterDivision2D for Processor<S, Matrix4> {
             true => range,
             false => (range.1, range.0),
         };
-        let (_, k, _) = a
-            .iwasawa_decomposition()
-            .expect("transform matrix must be invertible!");
-        let n = f64::abs(k[0][0])
-            .max(f64::abs(k[1][1]))
-            .max(f64::abs(k[2][2]))
-            / f64::abs(k[3][3]);
+        let n = matrix4_scale_bound(a);
         let (udiv, vdiv) = self.entity.parameter_division(range, tol / n);
         match self.orientation {
             true => (udiv, vdiv),
@@ -669,8 +694,7 @@ where
         hint: H,
         trials: usize,
     ) -> Option<f64> {
-        // SAFETY: the transform is guaranteed invertible by the `Processor` contract.
-        let inv = self.transform.inverse_transform().unwrap();
+        let inv = self.transform.inverse_transform()?;
         let t = self
             .entity
             .search_parameter(inv.transform_point(point), hint, trials)?;
@@ -691,8 +715,7 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        // SAFETY: the transform is guaranteed invertible by the `Processor` contract.
-        let inv = self.transform.inverse_transform().unwrap();
+        let inv = self.transform.inverse_transform()?;
         let (u, v) = self
             .entity
             .search_parameter(inv.transform_point(point), hint, trials)?;
@@ -717,8 +740,7 @@ where
         hint: H,
         trials: usize,
     ) -> Option<f64> {
-        // SAFETY: the transform is guaranteed invertible by the `Processor` contract.
-        let inv = self.transform.inverse_transform().unwrap();
+        let inv = self.transform.inverse_transform()?;
         let hint =
             self.entity
                 .search_nearest_parameter(inv.transform_point(point), hint, trials)?;
@@ -741,8 +763,7 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        // SAFETY: the transform is guaranteed invertible by the `Processor` contract.
-        let inv = self.transform.inverse_transform().unwrap();
+        let inv = self.transform.inverse_transform()?;
         let hint =
             self.entity
                 .search_nearest_parameter(inv.transform_point(point), hint, trials)?;

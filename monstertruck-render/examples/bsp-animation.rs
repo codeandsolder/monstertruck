@@ -41,7 +41,7 @@ impl MyApp {
             }
             control_points.push(vec);
         }
-        BsplineSurface::new((knot_vec.clone(), knot_vec), control_points)
+        BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points)
     }
     fn init_camera() -> Camera {
         let mut vec0 = Vector4::new(1.5, 0.0, -1.5, 0.0);

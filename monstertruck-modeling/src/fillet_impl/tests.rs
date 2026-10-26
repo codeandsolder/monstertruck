@@ -14,7 +14,7 @@ fn plane_surface() -> Surface {
 }
 
 fn exact_quadratic_leader() -> NurbsCurve<Vector4> {
-    NurbsCurve::new(BsplineCurve::new(
+    NurbsCurve::new(BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
             Vector4::new(0.0, 0.0, 0.0, 1.0),

@@ -96,8 +96,7 @@ impl Default for FilletOptions {
     fn default() -> Self {
         Self {
             radius: RadiusSpec::Constant(0.1),
-            // SAFETY: 5 is a non-zero constant.
-            divisions: NonZeroUsize::new(5).unwrap(),
+            divisions: NonZeroUsize::new(5).unwrap_or(NonZeroUsize::MIN),
             profile: FilletProfile::default(),
         }
     }

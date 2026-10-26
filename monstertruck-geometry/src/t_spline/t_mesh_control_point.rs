@@ -244,15 +244,7 @@ impl<P> TmeshControlPoint<P> {
     ///
     /// - `Some(f64)` otherwise.
     pub fn connection_knot(&self, dir: TmeshDirection) -> Option<f64> {
-        match self.con_type(dir) {
-            TmeshConnectionType::Edge | TmeshConnectionType::Point => Some(
-                self.get(dir)
-                    .as_ref()
-                    .expect("Edge and Point connection types must have a Some(TmeshConnection<P>)")
-                    .1,
-            ),
-            TmeshConnectionType::Tjunction => None,
-        }
+        self.get(dir).as_ref().map(|connection| connection.1)
     }
 
     /// Navigates from `self` in the direction `traverse` until a connection is found in the direction `monitor`,
@@ -344,25 +336,12 @@ impl<P> TmeshControlPoint<P> {
         Ok(Arc::clone(connected_point))
     }
 
-    /// Returns the connected control point in the direction `dir`, panicking if it does not exist.
-    ///
-    /// # Returns
-    /// The point connected to `self`
-    ///
-    /// # Panics
-    /// If there is no point connected to self in direction `dir`.
-    pub fn connected_point(&self, dir: TmeshDirection) -> Arc<RwLock<TmeshControlPoint<P>>> {
-        let connected_point = &self
-            .get(dir)
-            .as_ref()
-            .ok_or(Error::TmeshConnectionNotFound)
-            .expect("Point connections require a connection")
-            .0
-            .as_ref()
-            .ok_or(Error::TmeshControlPointNotFound)
-            .expect("Point connections require a connected point");
-
-        Arc::clone(connected_point)
+    /// Returns the connected control point in the direction `dir`.
+    pub fn connected_point(
+        &self,
+        dir: TmeshDirection,
+    ) -> Result<Arc<RwLock<TmeshControlPoint<P>>>> {
+        self.try_connected_point(dir)
     }
 }
 

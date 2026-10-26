@@ -170,7 +170,7 @@ fn sample_curve_to_nurbs(curve: &(impl ParametricCurve3D + BoundedCurve)) -> Nur
             .chain(iter::once(1.0))
             .collect::<Vec<_>>(),
     );
-    NurbsCurve::from(BsplineCurve::new(knot_vec, points))
+    NurbsCurve::from(BsplineCurve::new_unchecked(knot_vec, points))
 }
 
 fn linear_bspline_division(
@@ -348,7 +348,7 @@ impl Curve {
     pub fn lift_up(&self) -> BsplineCurve<Vector4> {
         match self {
             Curve::Line(curve) => Curve::BsplineCurve((*curve).into()).lift_up(),
-            Curve::BsplineCurve(curve) => BsplineCurve::new(
+            Curve::BsplineCurve(curve) => BsplineCurve::new_unchecked(
                 curve.knot_vector().clone(),
                 curve
                     .control_points()

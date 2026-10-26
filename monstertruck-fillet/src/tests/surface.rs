@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn create_fillet_surface() {
     #[rustfmt::skip]
-    let surface0 = BsplineSurface::new(
+    let surface0 = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(2)),
         vec![
             vec![Point3::new(0.2, 0.0, 0.0), Point3::new(0.0, 0.5, 0.0), Point3::new(-0.2, 1.0, 0.0)],
@@ -13,7 +13,7 @@ fn create_fillet_surface() {
     )
     .into();
     #[rustfmt::skip]
-    let surface1 = BsplineSurface::new(
+    let surface1 = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(2)),
         vec![
             vec![Point3::new(0.2, 0.0, 0.0),  Point3::new(0.0, 0.0, -0.5), Point3::new(-0.2, 0.0, -1.0)],
@@ -30,7 +30,7 @@ fn create_fillet_surface() {
 
     dump_surface_pair_step("edged", &surface0, &surface1);
 
-    let curve = BsplineCurve::new(
+    let curve = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
             Point3::new(-0.2, 1.0, 0.0),
@@ -47,7 +47,7 @@ fn create_fillet_surface() {
 #[test]
 fn create_fillet() {
     #[rustfmt::skip]
-    let surface0: NurbsSurface<_> = BsplineSurface::new(
+    let surface0: NurbsSurface<_> = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(2)),
         vec![
             vec![Point3::new(-1.0, 0.0, 0.0), Point3::new(-1.0, 0.5, 0.0), Point3::new(-1.0, 1.0, 1.0)],
@@ -57,7 +57,7 @@ fn create_fillet() {
     )
     .into();
     #[rustfmt::skip]
-    let surface1: NurbsSurface<_> = BsplineSurface::new(
+    let surface1: NurbsSurface<_> = BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(2)),
         vec![
             vec![Point3::new(1.0, 0.0, 0.0),  Point3::new(1.0, 0.0, -0.5),  Point3::new(1.0, 1.0, -1.0)],
@@ -134,7 +134,7 @@ fn create_fillet_with_side() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
         Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
 
@@ -157,7 +157,7 @@ fn create_fillet_with_side() {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
         let knot_vecs = (knot_vec.clone(), knot_vec);
-        let bsp = BsplineSurface::new(knot_vecs, control_points);
+        let bsp = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
         let wire: Wire = [i, j, k, l]
             .into_iter()
@@ -213,7 +213,7 @@ fn fillet_to_nurbs() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
         Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
@@ -242,7 +242,7 @@ fn fillet_to_nurbs() {
             .into(),
         ),
     ];
-    let bsp0 = NurbsSurface::new(BsplineSurface::new(
+    let bsp0 = NurbsSurface::new(BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
         vec![
             vec![
@@ -255,7 +255,7 @@ fn fillet_to_nurbs() {
             ],
         ],
     ));
-    let bsp1 = NurbsSurface::new(BsplineSurface::new(
+    let bsp1 = NurbsSurface::new(BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(1), unit_circle_knot_vec()),
         vec![
             circle_arc_by_three_points(

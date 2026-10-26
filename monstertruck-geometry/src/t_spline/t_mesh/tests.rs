@@ -1028,7 +1028,7 @@ fn points_eq(a: Point3, b: Point3) -> bool { (a.x + a.y + a.z - (b.x + b.y + b.z
 /// performed mathematics, which can be seen in desmos links in some of the inline comments on top of the manual
 /// confirmation through the use of `subs`.
 #[test]
-fn test_t_mesh_local_knot_insertion_no_edge_conditions() {
+fn test_t_mesh_local_knot_insertion_no_edge_conditions() -> Result<()> {
     const N: usize = 25;
     let points = [
         Point3::from((0.0, 0.0, 0.0)),
@@ -1085,13 +1085,13 @@ fn test_t_mesh_local_knot_insertion_no_edge_conditions() {
 
     let p4_prime = *ins_point
         .read()
-        .connected_point(TmeshDirection::Right)
+        .connected_point(TmeshDirection::Right)?
         .read()
         .point();
 
     let p2_prime = *ins_point
         .read()
-        .connected_point(TmeshDirection::Left)
+        .connected_point(TmeshDirection::Left)?
         .read()
         .point();
 
@@ -1123,6 +1123,8 @@ fn test_t_mesh_local_knot_insertion_no_edge_conditions() {
             );
         }
     }
+
+    Ok(())
 }
 
 /// Test illegal local knot insertion by creating two identical surfaces, then performing LKI on one of
@@ -1327,7 +1329,7 @@ fn test_t_mesh_local_knot_insertion_force_ray_casting() {
 
 /// Tests that `to_bspline_surface` produces a B-spline that closely approximates the original T-mesh.
 #[test]
-fn test_to_bspline_surface_accuracy() {
+fn test_to_bspline_surface_accuracy() -> Result<()> {
     use monstertruck_core::cgmath64::*;
 
     let points = [
@@ -1342,7 +1344,7 @@ fn test_to_bspline_surface_accuracy() {
     mesh.subdivide(average_points)
         .expect("Subdivision should succeed");
 
-    let bsp = mesh.to_bspline_surface(8);
+    let bsp = mesh.to_bspline_surface(8)?;
 
     // Sample both surfaces on an interior grid and check max deviation.
     let n = 20;
@@ -1361,6 +1363,8 @@ fn test_to_bspline_surface_accuracy() {
         max_err < 1.0e-3,
         "Max deviation between T-mesh and B-spline: {max_err:.2e} (expected < 1e-3)."
     );
+
+    Ok(())
 }
 
 /// Constructs a non-planar T-mesh for derivative testing.
@@ -1688,7 +1692,7 @@ fn test_from_bspline_surface_round_trip() {
                 .collect()
         })
         .collect();
-    let bsp = BsplineSurface::new((u_knots, v_knots), cps);
+    let bsp = BsplineSurface::new_unchecked((u_knots, v_knots), cps);
 
     let tmesh = Tmesh::from_bspline_surface(&bsp).expect("Conversion should succeed");
 
@@ -1726,7 +1730,7 @@ fn test_from_bspline_surface_structure() {
                 .collect()
         })
         .collect();
-    let bsp = BsplineSurface::new((u_knots, v_knots), cps);
+    let bsp = BsplineSurface::new_unchecked((u_knots, v_knots), cps);
 
     let tmesh = Tmesh::from_bspline_surface(&bsp).expect("Conversion should succeed");
 
@@ -1769,7 +1773,7 @@ fn test_from_bspline_surface_non_cubic() {
                 .collect()
         })
         .collect();
-    let bsp = BsplineSurface::new((u_knots, v_knots), cps);
+    let bsp = BsplineSurface::new_unchecked((u_knots, v_knots), cps);
 
     let result = Tmesh::from_bspline_surface(&bsp);
     assert!(result.is_err(), "Non-cubic surface should be rejected");

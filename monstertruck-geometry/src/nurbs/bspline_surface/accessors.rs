@@ -7,17 +7,14 @@ impl<P> BsplineSurface<P> {
     /// # Arguments
     /// * `knot_vecs` - the knot vectors
     /// * `control_points` - the vector of the control points
-    /// # Panics
-    /// There are 3 rules for construct B-spline curve.
-    /// * The number of knots is less than or equal to the one of control points.
-    /// * There exist at least two different knots.
-    /// * There are at least one control point.
+    /// # Errors
+    /// Returns an error for an empty/irregular control net or invalid knot vectors.
     #[inline(always)]
     pub fn new(
         knot_vecs: (KnotVector, KnotVector),
         control_points: Vec<Vec<P>>,
-    ) -> BsplineSurface<P> {
-        BsplineSurface::try_new(knot_vecs, control_points).unwrap_or_else(|e| panic!("{}", e))
+    ) -> Result<BsplineSurface<P>> {
+        BsplineSurface::try_new(knot_vecs, control_points)
     }
 
     /// constructor.
@@ -88,10 +85,10 @@ impl<P> BsplineSurface<P> {
     pub fn debug_new(
         knot_vecs: (KnotVector, KnotVector),
         control_points: Vec<Vec<P>>,
-    ) -> BsplineSurface<P> {
+    ) -> Result<BsplineSurface<P>> {
         match cfg!(debug_assertions) {
-            true => Self::new(knot_vecs, control_points),
-            false => Self::new_unchecked(knot_vecs, control_points),
+            true => Self::try_new(knot_vecs, control_points),
+            false => Ok(Self::new_unchecked(knot_vecs, control_points)),
         }
     }
     /// Returns the reference of the knot vectors.
@@ -141,7 +138,7 @@ impl<P> BsplineSurface<P> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let mut iter = bspsurface.control_points_row_iter(1);
     /// assert_eq!(iter.next(), Some(&Vector3::new(1.0, 0.0, 1.0)));
     /// assert_eq!(iter.next(), Some(&Vector3::new(1.0, 1.0, 1.0)));
@@ -166,7 +163,7 @@ impl<P> BsplineSurface<P> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let mut iter = bspsurface.control_points_column_iter(1);
     /// assert_eq!(iter.next(), Some(&Vector3::new(0.0, 1.0, 0.0)));
     /// assert_eq!(iter.next(), Some(&Vector3::new(1.0, 1.0, 1.0)));
@@ -200,7 +197,7 @@ impl<P> BsplineSurface<P> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// assert_eq!(bspsurface.udegree(), 1);
     /// ```
     #[inline(always)]
@@ -217,7 +214,7 @@ impl<P> BsplineSurface<P> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// assert_eq!(bspsurface.vdegree(), 2);
     /// ```
     #[inline(always)]
@@ -234,7 +231,7 @@ impl<P> BsplineSurface<P> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// assert_eq!(bspsurface.degrees(), (1, 2));
     /// ```
     #[inline(always)]
@@ -254,7 +251,7 @@ impl<P> BsplineSurface<P> {
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, -1.0), Vector2::new(1.0, 0.0)],
     ///     vec![Vector2::new(0.0, 1.0), Vector2::new(0.5, 2.0), Vector2::new(1.0, 1.0)],
     /// ];
-    /// let mut bspsurface0 = BsplineSurface::new(knot_vecs0, control_points0);
+    /// let mut bspsurface0 = BsplineSurface::new_unchecked(knot_vecs0, control_points0);
     ///
     /// let knot_vecs1 = (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1));
     /// let control_points1 = vec![
@@ -262,7 +259,7 @@ impl<P> BsplineSurface<P> {
     ///     vec![Vector2::new(0.5, -1.0), Vector2::new(0.5, 2.0)],
     ///     vec![Vector2::new(1.0, 0.0), Vector2::new(1.0, 1.0)],
     /// ];
-    /// let mut bspsurface1 = BsplineSurface::new(knot_vecs1, control_points1);
+    /// let mut bspsurface1 = BsplineSurface::new_unchecked(knot_vecs1, control_points1);
     /// assert_eq!(bspsurface0.swap_axes(), &bspsurface1);
     /// ```
     pub fn swap_axes(&mut self) -> &mut Self
@@ -321,7 +318,7 @@ impl<P> BsplineSurface<P> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let bspcurve = bspsurface.curve_v(1);
     ///
     /// assert_eq!(bspcurve.knot_vector(), &KnotVector::bezier_knot(2));
@@ -359,7 +356,7 @@ impl<P> BsplineSurface<P> {
     ///     vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 1.0), Vector3::new(2.0, 0.0, 2.0)],
     ///     vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let bspcurve = bspsurface.curve_u(1);
     ///
     /// assert_eq!(bspcurve.knot_vector(), &KnotVector::bezier_knot(1));
@@ -413,7 +410,7 @@ impl<V: Tolerance> BsplineSurface<V> {
     ///     vec![pt.clone(), pt.clone(), pt.clone()],
     ///     vec![pt.clone(), pt.clone(), pt.clone()],
     /// ];
-    /// let mut bspsurface = BsplineSurface::new((knot_vector_u, knot_vector_v), control_points);
+    /// let mut bspsurface = BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points);
     /// assert!(bspsurface.is_const());
     ///
     /// *bspsurface.control_point_mut(1, 2) = Vector2::new(2.0, 3.0);
@@ -431,7 +428,7 @@ impl<V: Tolerance> BsplineSurface<V> {
     ///     vec![pt.clone(), pt.clone(), pt.clone()],
     ///     vec![pt.clone(), pt.clone(), pt.clone()],
     /// ];
-    /// let mut bspsurface = BsplineSurface::new((knot_vector_u, knot_vector_v), control_points);
+    /// let mut bspsurface = BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points);
     ///
     /// // bspsurface is not constant.
     /// assert_eq!(bspsurface.subs(0.0, 0.0), Vector2::new(0.0, 0.0));

@@ -32,7 +32,7 @@ impl Connector<Point3, Line> for Connection {
 impl Connector<Line, Surface> for Connection {
     fn connector(self) -> impl Fn(&Line, &Line) -> Surface {
         |line0, line1| {
-            Surface::new(
+            Surface::new_unchecked(
                 (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
                 vec![vec![line0.0, line1.0], vec![line0.1, line1.1]],
             )

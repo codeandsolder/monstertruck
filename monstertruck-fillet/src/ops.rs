@@ -79,7 +79,7 @@ fn fillet_on_side(
                     extend,
                     flip_side,
                 )
-                .map(|contacts| expand_chamfer(&contacts, &surface0, &surface1)),
+                .and_then(|contacts| expand_chamfer(&contacts, &surface0, &surface1)),
                 FilletProfile::Ridge => ridge_fillet_surface(
                     &surface0, &surface1, &curve, division, radius?, extend, flip_side,
                 ),

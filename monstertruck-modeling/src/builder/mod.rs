@@ -245,7 +245,7 @@ where BsplineCurve<Point3>: ToSameGeometry<C> {
     control_points.append(&mut inter_points);
     control_points.push(pt1);
     let knot_vec = KnotVector::bezier_knot(control_points.len() - 1);
-    let curve = BsplineCurve::new(knot_vec, control_points);
+    let curve = BsplineCurve::new_unchecked(knot_vec, control_points);
     Edge::new(vertex0, vertex1, curve.to_same_geometry())
 }
 

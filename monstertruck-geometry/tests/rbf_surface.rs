@@ -41,7 +41,7 @@ fn fillet_between_two_spheres() {
     #[derive(Clone, Copy, Debug)]
     struct Radius;
     impl RadiusFunction for Radius {
-        fn der_n(&self, n: usize, t: f64) -> f64 {
+        fn derivative_n(&self, n: usize, t: f64) -> f64 {
             let o = if n == 0 { 1.0 } else { 0.0 };
             let x = match n % 4 {
                 0 => f64::cos(t),

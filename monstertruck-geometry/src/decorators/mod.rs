@@ -21,7 +21,7 @@ struct Revolution {
 ///     Vector4::new(-1.0, 0.0, 0.0, 1.0),
 /// ];
 /// // upper half circle on xy-plane
-/// let uhcircle = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+/// let uhcircle = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
 /// // sphere constructed by revolving circle
 /// let sphere = RevolutionSurface::by_revolution(
 ///     uhcircle, Point3::origin(), Vector3::unit_x(),
@@ -60,13 +60,13 @@ pub struct RevolutionSurface<C> {
 ///     vec![Point3::new(0.0, 1.0, 0.0), Point3::new(0.0, 1.0, 1.0)],
 ///     vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)],
 /// ];
-/// let curve = BsplineCurve::new(KnotVector::bezier_knot(2), cpts);
+/// let curve = BsplineCurve::new_unchecked(KnotVector::bezier_knot(2), cpts);
 ///
 /// // create extruded surface
 /// let surface0 = ExtrusionSurface::by_extrusion(curve, Vector3::unit_z());
 ///
 /// // same surface defined by B-spline description
-/// let surface1 = BsplineSurface::new((KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)), spts);
+/// let surface1 = BsplineSurface::new_unchecked((KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)), spts);
 ///
 /// assert_eq!(surface0.range_tuple(), surface1.range_tuple());
 ///
@@ -100,7 +100,7 @@ pub struct ExtrusionSurface<C, V> {
 /// ```
 /// use monstertruck_geometry::prelude::*;
 ///
-/// let curve: BsplineCurve<Point3> = BsplineCurve::new(
+/// let curve: BsplineCurve<Point3> = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(2),
 ///     vec![
 ///         Point3::new(0.0, 0.0, 0.0),
@@ -167,7 +167,7 @@ pub struct Processor<E, T> {
 /// use monstertruck_geometry::prelude::*;
 ///
 /// // parameter curve
-/// let curve = BsplineCurve::new(
+/// let curve = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(2),
 ///     vec![
 ///         Point2::new(1.0, 1.0),
@@ -176,7 +176,7 @@ pub struct Processor<E, T> {
 ///     ],
 /// );
 /// // surface
-/// let surface = BsplineSurface::new(
+/// let surface = BsplineSurface::new_unchecked(
 ///     (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
 ///     vec![
 ///         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
@@ -253,7 +253,7 @@ pub struct EdgeBlendSurface<C0, S0, F0, C1, S1, F1> {
 /// let sphere1 = Sphere::new(Point3::new(0.0, 0.0, -1.0), f64::sqrt(2.0));
 ///
 /// // Approximating a semicircle with a parabola
-/// let bspcurve = BsplineCurve::new(
+/// let bspcurve = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(2),
 ///     vec![
 ///         Point3::new(1.0, 0.0, 0.0),
@@ -539,8 +539,7 @@ where
     let (t00, t01) = (range0.start_bound(), range0.end_bound());
     let (t10, t11) = (range1.start_bound(), range1.end_bound());
     let t0 = match (bound2opt(t00), bound2opt(t10)) {
-        // SAFETY: parameter range bounds are finite `f64` values, so `partial_cmp` always returns `Some`.
-        (Some(x), Some(y)) => match x.partial_cmp(y).unwrap() {
+        (Some(x), Some(y)) => match x.total_cmp(y) {
             Ordering::Greater => t00,
             Ordering::Less => t10,
             Ordering::Equal => match matches!(t00, Bound::Excluded(_)) {
@@ -552,8 +551,7 @@ where
         (None, _) => t10,
     };
     let t1 = match (bound2opt(t01), bound2opt(t11)) {
-        // SAFETY: parameter range bounds are finite `f64` values, so `partial_cmp` always returns `Some`.
-        (Some(x), Some(y)) => match x.partial_cmp(y).unwrap() {
+        (Some(x), Some(y)) => match x.total_cmp(y) {
             Ordering::Less => t01,
             Ordering::Greater => t11,
             Ordering::Equal => match matches!(t01, Bound::Excluded(_)) {

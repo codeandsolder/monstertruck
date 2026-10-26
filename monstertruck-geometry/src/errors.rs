@@ -95,7 +95,7 @@ the degree: {1}"
     /// use monstertruck_geometry::errors::Error;
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points = vec![Vector2::new(-1.0, 1.0), Vector2::new(0.0, -1.0), Vector2::new(1.0, 1.0)];
-    /// let mut bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let mut bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let org_curve = bspcurve.clone();
     /// bspcurve.add_knot(0.5).add_knot(0.5).add_knot(0.25).add_knot(0.75);
     /// assert!(bspcurve.try_remove_knot(3).is_ok());
@@ -118,6 +118,12 @@ the degree: {1}"
     /// ```
     #[error("The control point must not be empty.")]
     EmptyControlPoints,
+    /// A surface-construction algorithm received structurally invalid input.
+    #[error("invalid surface builder input: {0}")]
+    InvalidSurfaceBuilderInput(&'static str),
+    /// A torus requires finite positive major and minor radii.
+    #[error("invalid torus radii: major={0}, minor={1}; both must be finite and positive")]
+    InvalidTorusRadii(f64, f64),
     /// The knot vector of B-spline curves or B-spline surfaces must be longer than the corresponded
     /// array of control points.
     /// # Examples
@@ -159,7 +165,7 @@ the number of control points: {1}"
     /// ```
     /// use monstertruck_geometry::prelude::*;
     /// use monstertruck_geometry::errors::Error;
-    /// let bspcurve = BsplineCurve::new(
+    /// let bspcurve = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(2),
     ///     vec![Point2::new(0.0, 1.0), Point2::new(2.0, 3.0), Point2::new(4.0, 5.0)],
     /// );

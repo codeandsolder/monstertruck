@@ -392,6 +392,9 @@ where
 /// Error for concat curves
 #[derive(Clone, Copy, PartialEq, Debug, Error)]
 pub enum ConcatError<Point: Debug> {
+    /// Failed to concatenate because one curve has no control points.
+    #[error("Cannot concatenate a curve with no control points.")]
+    EmptyControlPoints,
     /// Failed to concat curves since the end parameter of the first curve is different form the start parameter of the second curve.
     #[error(
         "The end parameter {0} of the first curve is different from the start parameter {1} of the second curve."
@@ -410,6 +413,7 @@ impl<T: Debug> ConcatError<T> {
     pub fn point_map<U: Debug, F>(self, f: F) -> ConcatError<U>
     where F: Fn(T) -> U {
         match self {
+            ConcatError::EmptyControlPoints => ConcatError::EmptyControlPoints,
             ConcatError::DisconnectedParameters(a, b) => ConcatError::DisconnectedParameters(a, b),
             ConcatError::DisconnectedPoints(p, q) => ConcatError::DisconnectedPoints(f(p), f(q)),
         }

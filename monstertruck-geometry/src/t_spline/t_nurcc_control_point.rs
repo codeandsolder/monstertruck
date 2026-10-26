@@ -18,17 +18,20 @@ impl<P> TnurccControlPoint<P> {
     ///
     /// # Panics
     /// Panics if `p`'s `incoming_edge` does not have `p` as an end.
-    pub fn radial_edges(p: Arc<RwLock<TnurccControlPoint<P>>>) -> Vec<Arc<RwLock<TnurccEdge<P>>>> {
-        if let Some(edge) = p.read().incoming_edge.as_ref().map(Arc::clone) {
-            let point_end = edge
-                .read()
-                .point_end(Arc::clone(&p))
-                .expect("Vertex should be on either end of reference edge.");
-
-            TnurccAcwPointIter::from_edge(Arc::clone(&edge), point_end).collect()
-        } else {
-            Vec::new()
-        }
+    pub fn radial_edges(
+        p: Arc<RwLock<TnurccControlPoint<P>>>,
+    ) -> Result<Vec<Arc<RwLock<TnurccEdge<P>>>>> {
+        let edge = p
+            .read()
+            .incoming_edge
+            .as_ref()
+            .map(Arc::clone)
+            .ok_or(Error::TnurccMalformedFace)?;
+        let point_end = edge
+            .read()
+            .point_end(Arc::clone(&p))
+            .ok_or(Error::TnurccMalformedFace)?;
+        Ok(TnurccAcwPointIter::from_edge(edge, point_end).collect())
     }
 
     /// Returns the edge connecting two points, if it exists.

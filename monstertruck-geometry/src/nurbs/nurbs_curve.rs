@@ -73,9 +73,7 @@ impl<V> NurbsCurve<V> {
     /// Normalizes the knot vector. cf.[`BsplineCurve::knot_normalize`]
     #[inline(always)]
     pub fn knot_normalize(&mut self) -> &mut Self {
-        // SAFETY: a valid `NurbsCurve` always has a non-zero-range knot vector,
-        // so normalization cannot fail.
-        self.0.knot_vec.try_normalize().unwrap();
+        self.0.knot_vec.normalize_unchecked();
         self
     }
 
@@ -131,13 +129,13 @@ where V::Point: Tolerance
     /// let pt = Vector3::new(1.0, 2.0, 1.0);
     /// // allows differences upto scalars
     /// let mut control_points = vec![pt.clone(), pt.clone() * 2.0, pt.clone() * 3.0];
-    /// let bspcurve = BsplineCurve::new(knot_vec.clone(), control_points.clone());
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec.clone(), control_points.clone());
     /// assert!(!bspcurve.is_const());
     /// let const_curve = NurbsCurve::new(bspcurve);
     /// assert!(const_curve.is_const());
     ///
     /// control_points.push(Vector3::new(2.0, 3.0, 1.0));
-    /// let curve = NurbsCurve::new(BsplineCurve::new(knot_vec.clone(), control_points.clone()));
+    /// let curve = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec.clone(), control_points.clone()));
     /// assert!(!curve.is_const());
     /// ```
     /// # Remarks
@@ -147,7 +145,7 @@ where V::Point: Tolerance
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::uniform_knot(1, 5);
     /// let control_points = vec![Vector2::new(1.0, 2.0), Vector2::new(1.0, 2.0)];
-    /// let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     ///
     /// // bspcurve is not constant.
     /// assert_eq!(bspcurve.subs(0.0), Vector2::new(0.0, 0.0));
@@ -181,7 +179,7 @@ where V::Point: Tolerance
     ///     Vector3::new(5.0, 4.0, 1.0),
     ///     Vector3::new(1.0, 1.0, 2.0),
     /// ];
-    /// let curve0 = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    /// let curve0 = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
     /// let mut curve1 = curve0.clone();
     /// assert!(curve0.near_as_curve(&curve1));
     /// *curve1.control_point_mut(1) += Vector3::new(0.01, 0.0002, 0.0);
@@ -211,7 +209,7 @@ where V::Point: Tolerance
     ///     Vector3::new(5.0, 4.0, 1.0),
     ///     Vector3::new(1.0, 1.0, 2.0),
     /// ];
-    /// let curve0 = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    /// let curve0 = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
     /// let mut curve1 = curve0.clone();
     /// assert!(curve0.near_as_curve(&curve1));
     /// *curve1.control_point_mut(1) += Vector3::new(0.01, TOLERANCE, 0.0);
@@ -319,9 +317,15 @@ where <V as Homogeneous>::Point: Debug + Tolerance
                 Error::DifferentBackFront(a, b) => ConcatError::DisconnectedParameters(a, b),
                 _ => unreachable!(),
             })?;
-        // SAFETY: both curves have non-empty control points by `NurbsCurve` invariant.
-        let front = curve0.0.control_points.last().unwrap().to_point();
-        let back = curve1.0.control_points.first().unwrap().to_point();
+        let Some((front, back)) = curve0
+            .0
+            .control_points
+            .last()
+            .zip(curve1.0.control_points.first())
+            .map(|(front, back)| (front.to_point(), back.to_point()))
+        else {
+            return Err(ConcatError::EmptyControlPoints);
+        };
         if !front.near(&back) {
             return Err(ConcatError::DisconnectedPoints(front, back));
         }
@@ -350,7 +354,7 @@ where V::Point: Tolerance
     ///     Vector4::new(0.0, 0.0, 3.0, 3.0),
     /// ];
     ///
-    /// let mut curve = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    /// let mut curve = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
     /// let mut flag = false;
     /// for i in 0..N {
     ///     let t = 4.0 * (i as f64) / (N as f64);
@@ -383,7 +387,7 @@ where V::Point: Tolerance
     ///     Vector3::new(3.0, 3.0, 3.0),
     ///     Vector3::new(4.0, 4.0, 4.0),
     /// ];
-    /// let mut curve = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    /// let mut curve = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
     /// let org_curve = curve.clone();
     /// curve.make_locally_injective();
     /// assert_eq!(curve, org_curve);
@@ -401,9 +405,14 @@ where V::Point: Tolerance
             if bezier.is_const() {
                 x += bezier.0.knot_vec.range_length();
             } else {
-                // SAFETY: control points are non-empty by `NurbsCurve` invariant.
-                let s0 = self.0.control_points.last().unwrap().weight();
-                let s1 = bezier.0.control_points[0].weight();
+                let Some(last) = self.0.control_points.last() else {
+                    continue;
+                };
+                let Some(first) = bezier.0.control_points.first() else {
+                    continue;
+                };
+                let s0 = last.weight();
+                let s1 = first.weight();
                 bezier
                     .0
                     .control_points
@@ -443,7 +452,7 @@ where
     /// // Defines the half unit circle in x > 0.
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points = vec![Vector3::new(0.0, -1.0, 1.0), Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 1.0)];
-    /// let curve = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    /// let curve = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
     ///
     /// // search rational nearest parameter
     /// let pt = Point2::new(1.0, 2.0);
@@ -463,7 +472,7 @@ where
     /// // Same curve and point as above example
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points = vec![Vector3::new(0.0, -1.0, 1.0), Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 1.0)];
-    /// let curve = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    /// let curve = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
     /// let pt = Point2::new(1.0, 2.0);
     ///
     /// // another hint

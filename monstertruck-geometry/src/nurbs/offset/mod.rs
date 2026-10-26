@@ -30,7 +30,7 @@ type Result<T> = StdResult<T, Error>;
 /// use monstertruck_geometry::nurbs::offset;
 ///
 /// // A straight line along x from (0,0) to (4,0).
-/// let line = BsplineCurve::new(
+/// let line = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(1),
 ///     vec![Point2::new(0.0, 0.0), Point2::new(4.0, 0.0)],
 /// );
@@ -98,7 +98,7 @@ pub fn curve_offset_2d(
 /// use monstertruck_geometry::nurbs::offset;
 ///
 /// // A straight line along x at z=0.
-/// let line = BsplineCurve::new(
+/// let line = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(1),
 ///     vec![Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 0.0, 0.0)],
 /// );
@@ -181,7 +181,7 @@ pub fn curve_offset_3d(
 /// use monstertruck_geometry::nurbs::offset;
 ///
 /// // Flat surface at z=0 spanning [0,2] x [0,3].
-/// let surface = BsplineSurface::new(
+/// let surface = BsplineSurface::new_unchecked(
 ///     (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
 ///     vec![
 ///         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 3.0, 0.0)],
@@ -239,7 +239,7 @@ pub fn surface_offset(
         .collect::<Result<Vec<_>>>()?;
 
     // Now skin the rows into a surface.
-    Ok(BsplineSurface::skin(rows))
+    BsplineSurface::skin(rows)
 }
 
 #[cfg(test)]

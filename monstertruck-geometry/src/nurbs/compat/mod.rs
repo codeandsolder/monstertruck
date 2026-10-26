@@ -26,11 +26,11 @@ use crate::errors::{Error, Result};
 /// use monstertruck_geometry::prelude::*;
 /// use monstertruck_geometry::nurbs::compat;
 ///
-/// let mut c0 = BsplineCurve::new(
+/// let mut c0 = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(1),
 ///     vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 1.0)],
 /// );
-/// let mut c1 = BsplineCurve::new(
+/// let mut c1 = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(2),
 ///     vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, 1.0), Vector2::new(1.0, 0.0)],
 /// );
@@ -57,8 +57,7 @@ where P: ControlPoint<f64> + Tolerance {
         .iter()
         .map(|c| c.degree())
         .max()
-        // SAFETY: `curves` is non-empty, checked above.
-        .unwrap();
+        .ok_or(Error::EmptyControlPoints)?;
     curves.iter_mut().for_each(|c| {
         for _ in c.degree()..max_degree {
             c.elevate_degree();
@@ -108,14 +107,14 @@ where P: ControlPoint<f64> + Tolerance {
 /// use monstertruck_geometry::prelude::*;
 /// use monstertruck_geometry::nurbs::compat;
 ///
-/// let s0 = BsplineSurface::new(
+/// let s0 = BsplineSurface::new_unchecked(
 ///     (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
 ///     vec![
 ///         vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 0.0)],
 ///         vec![Vector2::new(0.0, 1.0), Vector2::new(1.0, 1.0)],
 ///     ],
 /// );
-/// let s1 = BsplineSurface::new(
+/// let s1 = BsplineSurface::new_unchecked(
 ///     (KnotVector::bezier_knot(2), KnotVector::bezier_knot(2)),
 ///     vec![
 ///         vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, 0.0), Vector2::new(1.0, 0.0)],
@@ -147,14 +146,12 @@ where P: ControlPoint<f64> + Tolerance {
         .iter()
         .map(|s| s.udegree())
         .max()
-        // SAFETY: `surfaces` is non-empty, checked above.
-        .unwrap();
+        .ok_or(Error::EmptyControlPoints)?;
     let max_vdeg = surfaces
         .iter()
         .map(|s| s.vdegree())
         .max()
-        // SAFETY: `surfaces` is non-empty, checked above.
-        .unwrap();
+        .ok_or(Error::EmptyControlPoints)?;
     surfaces.iter_mut().for_each(|s| {
         for _ in s.udegree()..max_udeg {
             s.elevate_udegree();
@@ -278,8 +275,7 @@ where V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Tolerance {
         .iter()
         .map(|c| c.degree())
         .max()
-        // SAFETY: `curves` is non-empty, checked above.
-        .unwrap();
+        .ok_or(Error::EmptyControlPoints)?;
     curves.iter_mut().for_each(|c| {
         for _ in c.degree()..max_degree {
             c.elevate_degree();

@@ -263,6 +263,71 @@ impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
     }
 }
 
+impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
+    /// Computes an arbitrary derivative of the meridian projection from the
+    /// generator's Taylor jet. The axial component is linear. The radial
+    /// component is the norm of the transverse jet, so after factoring any
+    /// leading zero at a bounded axis endpoint its coefficients follow from
+    /// the power-series identity `r(t)^2 = h(t) · h(t)`.
+    fn derivative_n_from_jet(&self, n: usize, t: f64) -> Vector2 {
+        let point = self.curve.evaluate(t);
+        let mut factorials = Vec::with_capacity(n + 1);
+        factorials.push(1.0);
+        let mut factorial = 1.0;
+        for order in 1..=n {
+            factorial *= order as f64;
+            factorials.push(factorial);
+        }
+
+        let axis = self.revolution.axis;
+        let mut transverse = Vec::with_capacity(n + 1);
+        let displacement = point - self.revolution.origin;
+        let axial0 = displacement.dot(axis);
+        transverse.push(displacement - axial0 * axis);
+        for (order, &factorial) in factorials.iter().enumerate().skip(1) {
+            let derivative = self.curve.derivative_n(order, t);
+            let axial = derivative.dot(axis);
+            transverse.push((derivative - axial * axis) / factorial);
+        }
+
+        let axial = self.curve.derivative_n(n, t).dot(axis);
+        let Some(leading_order) = transverse.iter().position(|value| !value.so_small()) else {
+            return Vector2::new(axial, 0.0);
+        };
+
+        let radial_order = n - leading_order;
+        let shifted = &transverse[leading_order..=n];
+        let mut squared = vec![0.0; radial_order + 1];
+        for order in 0..=radial_order {
+            squared[order] = (0..=order)
+                .map(|i| shifted[i].dot(shifted[order - i]))
+                .sum();
+        }
+
+        let mut radial = vec![0.0; radial_order + 1];
+        radial[0] = squared[0].sqrt();
+        if radial[0].so_small() {
+            return Vector2::new(axial, 0.0);
+        }
+        for order in 1..=radial_order {
+            let cross_terms: f64 = (1..order).map(|i| radial[i] * radial[order - i]).sum();
+            radial[order] = (squared[order] - cross_terms) / (2.0 * radial[0]);
+        }
+
+        let side = if leading_order == 0 {
+            1.0
+        } else {
+            let Some(sign) = self.fixed_endpoint_sign(t, point) else {
+                // The norm has a cusp when the generator crosses the axis in
+                // the interior. The ordinary derivative does not exist there.
+                return Vector2::new(axial, f64::NAN);
+            };
+            sign.powi(leading_order as i32)
+        };
+        Vector2::new(axial, side * radial[radial_order] * factorials[n])
+    }
+}
+
 impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurve<C> {
     type Point = Point2;
     type Vector = Vector2;
@@ -272,7 +337,7 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
             0 => self.evaluate(t).to_vec(),
             1 => self.derivative(t),
             2 => self.derivative_2(t),
-            _ => unimplemented!(),
+            _ => self.derivative_n_from_jet(n, t),
         }
     }
     #[inline(always)]
@@ -407,7 +472,7 @@ impl<C: ParametricCurve3D + BoundedCurve> RevolutionSurface<C> {
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
-    /// let line = BsplineCurve::new(
+    /// let line = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 1.0)],
     /// );
@@ -422,7 +487,7 @@ impl<C: ParametricCurve3D + BoundedCurve> RevolutionSurface<C> {
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
-    /// let line = BsplineCurve::new(
+    /// let line = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(0.0, 0.0, 1.0), Point3::new(0.0, 0.0, 0.0)],
     /// );
@@ -655,6 +720,49 @@ where C: ParametricCurve3D + ParameterDivision1D<Point = Point3>
             .map(|j| vrange.0 + (vrange.1 - vrange.0) * j as f64 / div as f64)
             .collect();
         (curve_division.0, circle_division)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projected_curve_third_derivative_matches_finite_difference() {
+        let curve = BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(4),
+            vec![
+                Point3::new(1.0, -1.0, 0.3),
+                Point3::new(1.4, -0.4, 0.8),
+                Point3::new(0.7, 0.2, 1.2),
+                Point3::new(1.8, 0.8, 0.5),
+                Point3::new(1.1, 1.3, 1.4),
+            ],
+        );
+        let projected = ProjectedCurve {
+            curve,
+            revolution: Revolution::new(Point3::origin(), Vector3::unit_y()),
+        };
+        let t = 0.43;
+        let h = 1.0e-5;
+        let exact = projected.derivative_n(3, t);
+        let finite_difference =
+            (projected.derivative_2(t + h) - projected.derivative_2(t - h)) / (2.0 * h);
+        assert!((exact - finite_difference).magnitude() < 1.0e-4);
+    }
+
+    #[test]
+    fn projected_curve_higher_derivative_is_total_at_fixed_axis_endpoint() {
+        let curve = BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(1),
+            vec![Point3::new(0.0, 0.0, 2.0), Point3::new(2.0, 1.0, 2.0)],
+        );
+        let projected = ProjectedCurve {
+            curve,
+            revolution: Revolution::new(Point3::origin(), Vector3::unit_z()),
+        };
+        assert_near!(projected.derivative_n(3, 0.0), Vector2::zero());
+        assert_near!(projected.derivative_n(4, 0.0), Vector2::zero());
     }
 }
 
