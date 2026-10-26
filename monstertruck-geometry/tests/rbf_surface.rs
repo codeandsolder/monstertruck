@@ -116,3 +116,53 @@ fn fillet_between_two_spheres() {
         }
     }
 }
+
+#[test]
+fn rolling_ball_fillet_supports_third_order_mixed_derivatives() {
+    let sphere0 = Sphere::new(Point3::new(0.0, 0.0, 1.0), 2.0);
+    let sphere1 = Sphere::new(Point3::new(0.0, 0.0, -1.0), 2.0);
+    let edge_circle = Processor::with_transform(
+        UnitCircle::<Point3>::new(),
+        Matrix4::from_scale(f64::sqrt(3.0)),
+    );
+
+    #[derive(Clone, Copy, Debug)]
+    struct Radius;
+    impl RadiusFunction for Radius {
+        fn derivative_n(&self, n: usize, t: f64) -> f64 {
+            let constant = if n == 0 { 1.0 } else { 0.0 };
+            let oscillation = match n % 4 {
+                0 => f64::cos(t),
+                1 => -f64::sin(t),
+                2 => -f64::cos(t),
+                _ => f64::sin(t),
+            };
+            constant + 0.2 * oscillation
+        }
+    }
+
+    let fillet = RbfSurface::new(edge_circle, sphere0, sphere1, Radius);
+    let (u, v) = (0.37, 1.1);
+    let derivatives = fillet.derivatives(3, u, v);
+    let epsilon = 1.0e-4;
+
+    let plus_v = fillet.derivatives(2, u, v + epsilon);
+    let minus_v = fillet.derivatives(2, u, v - epsilon);
+    for (m, n) in [(0, 3), (1, 2), (2, 1)] {
+        let approximation = (plus_v[m][n - 1] - minus_v[m][n - 1]) / (2.0 * epsilon);
+        assert!(
+            (derivatives[m][n] - approximation).magnitude() < 2.0e-3,
+            "third derivative ({m}, {n}) differs: exact={:?}, finite_difference={approximation:?}",
+            derivatives[m][n],
+        );
+    }
+
+    let plus_u = fillet.derivatives(2, u + epsilon, v);
+    let minus_u = fillet.derivatives(2, u - epsilon, v);
+    let u_approximation = (plus_u[2][0] - minus_u[2][0]) / (2.0 * epsilon);
+    assert!(
+        (derivatives[3][0] - u_approximation).magnitude() < 2.0e-3,
+        "third derivative (3, 0) differs: exact={:?}, finite_difference={u_approximation:?}",
+        derivatives[3][0],
+    );
+}

@@ -138,15 +138,10 @@ where
     R: RadiusFunction,
 {
     fn sub_der_mn(&self, m: usize, n: usize, u: f64, cc: ContactCircle) -> Vector3 {
-        match (m, n) {
-            (_, 0) => cc.derivative_n(m, u),
-            (0, 1) => self.vder_info(cc, 1).derivative_v(u),
-            (1, 1) => self.vder_info(cc, 1).derivative_uv(u),
-            (0, 2) => self.vder_info(cc, 2).derivative_vv(u),
-            _ => unimplemented!(
-                "higher order derivation of RollingBallFilletSurface is not implemented."
-            ),
+        if n == 0 {
+            return cc.derivative_n(m, u);
         }
+        self.vder_info(cc, n).derivative_mn(m, n, u)
     }
 }
 

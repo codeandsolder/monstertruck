@@ -672,25 +672,73 @@ impl ToSameGeometry<Surface> for HomotopySurface<Curve, Curve> {
 
 impl ToSameGeometry<Surface> for ExtrusionSurface<Curve, Vector3> {
     fn to_same_geometry(&self) -> Surface {
-        let (curve0, vector) = (self.entity_curve(), self.extruding_vector());
-        let trsl = Matrix4::from_translation(vector);
-        let curve1 = self.entity_curve().transformed(trsl);
-        match (curve0, curve1) {
-            (Curve::Line(line), Curve::Line(_)) => {
-                Plane::new(line.0, line.1, line.0 + vector).into()
+        let vector = self.extruding_vector();
+        let translation = Matrix4::from_translation(vector);
+        match self.entity_curve() {
+            Curve::Line(line) => Plane::new(line.0, line.1, line.0 + vector).into(),
+            Curve::BsplineCurve(curve0) => {
+                BsplineSurface::homotopy(curve0.clone(), curve0.transformed(translation)).into()
             }
-            (Curve::BsplineCurve(curve0), Curve::BsplineCurve(curve1)) => {
-                BsplineSurface::homotopy(curve0.clone(), curve1.clone()).into()
-            }
-            (Curve::NurbsCurve(curve0), Curve::NurbsCurve(curve1)) => {
+            Curve::NurbsCurve(curve0) => {
+                let curve1 = curve0.transformed(translation);
                 NurbsSurface::new(BsplineSurface::homotopy(
                     curve0.non_rationalized().clone(),
                     curve1.non_rationalized().clone(),
                 ))
                 .into()
             }
-            (Curve::IntersectionCurve(_), Curve::IntersectionCurve(_)) => unimplemented!(),
-            _ => unreachable!(),
+            Curve::ParameterCurve(_) | Curve::IntersectionCurve(_) => {
+                // Dynamic modeling curves normalize through their 3-D leader/image.
+                // This is the same representation boundary already used by the
+                // generic homotopy conversion above, and keeps the conversion total
+                // without degrading the analytic/spline variants handled above.
+                let curve0 = self.entity_curve().lift_up();
+                let mut curve1 = curve0.clone();
+                curve1
+                    .control_points_mut()
+                    .for_each(|point| *point = translation * *point);
+                NurbsSurface::new(BsplineSurface::homotopy(curve0, curve1)).into()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod extrusion_same_geometry_tests {
+    use super::*;
+
+    fn plane_surface() -> Surface {
+        Surface::Plane(Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ))
+    }
+
+    #[test]
+    fn line_extrusion_stays_analytic_plane() {
+        let curve = Curve::Line(Line(Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 1.0, 0.0)));
+        let extrusion = ExtrusionSurface::by_extrusion(curve, Vector3::new(0.0, 0.0, 3.0));
+        assert!(matches!(extrusion.to_same_geometry(), Surface::Plane(_)));
+    }
+
+    #[test]
+    fn intersection_curve_extrusion_is_total_and_preserves_geometry() {
+        let leader = Curve::Line(Line(Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 1.0, 0.0)));
+        let curve = Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+            Box::new(plane_surface()),
+            Box::new(plane_surface()),
+            Box::new(leader),
+            None,
+            None,
+        ));
+        let extrusion = ExtrusionSurface::by_extrusion(curve, Vector3::new(0.0, 0.0, 3.0));
+        let converted: Surface = extrusion.to_same_geometry();
+
+        for (u, v) in [(0.0, 0.0), (0.25, 0.75), (0.8, 0.4), (1.0, 1.0)] {
+            let expected = extrusion.evaluate(u, v);
+            let actual = converted.evaluate(u, v);
+            assert!((actual - expected).magnitude() < TOLERANCE);
         }
     }
 }

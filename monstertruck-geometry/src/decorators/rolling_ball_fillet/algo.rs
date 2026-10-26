@@ -183,7 +183,200 @@ pub(super) struct VderInfo {
     angle_ders: CurveDerivatives<f64>,
 }
 
+/// Truncated Taylor series with coefficients normalized by `1 / n!`.
+///
+/// Using normalized coefficients makes products ordinary convolutions. The
+/// rolling-ball surface only needs a univariate jet in the edge parameter:
+/// after taking `m` derivatives in the circle parameter `u`, its remaining
+/// dependence on `v` is
+///
+/// `center(v) + angle(v)^m * d^mR/dphi^m(axis(v), angle(v) * u) * radius(v)`.
+///
+/// This lets the existing exact center/contact/axis/angle derivative machinery
+/// extend to every mixed order without numerical differencing.
+#[derive(Clone, Debug)]
+struct Taylor {
+    coeffs: Vec<f64>,
+}
+
+impl Taylor {
+    fn from_derivatives(order: usize, mut derivative: impl FnMut(usize) -> f64) -> Self {
+        let mut coeffs = Vec::with_capacity(order + 1);
+        let mut factorial = 1.0;
+        let mut next_factor = 2.0;
+        for index in 0..=order {
+            if index > 1 {
+                factorial *= next_factor;
+                next_factor += 1.0;
+            }
+            coeffs.push(derivative(index) / factorial);
+        }
+        Self { coeffs }
+    }
+
+    fn constant(value: f64, order: usize) -> Self {
+        let mut coeffs = vec![0.0; order + 1];
+        coeffs[0] = value;
+        Self { coeffs }
+    }
+
+    const fn order(&self) -> usize { self.coeffs.len() - 1 }
+
+    fn add(&self, rhs: &Self) -> Self {
+        let order = self.order().min(rhs.order());
+        Self {
+            coeffs: (0..=order)
+                .map(|index| self.coeffs[index] + rhs.coeffs[index])
+                .collect(),
+        }
+    }
+
+    fn sub(&self, rhs: &Self) -> Self {
+        let order = self.order().min(rhs.order());
+        Self {
+            coeffs: (0..=order)
+                .map(|index| self.coeffs[index] - rhs.coeffs[index])
+                .collect(),
+        }
+    }
+
+    fn mul(&self, rhs: &Self) -> Self {
+        let order = self.order().min(rhs.order());
+        let mut coeffs = vec![0.0; order + 1];
+        for (degree, coefficient) in coeffs.iter_mut().enumerate() {
+            *coefficient = (0..=degree)
+                .map(|left| self.coeffs[left] * rhs.coeffs[degree - left])
+                .sum();
+        }
+        Self { coeffs }
+    }
+
+    fn powu(&self, exponent: usize) -> Self {
+        let mut result = Self::constant(1.0, self.order());
+        for _ in 0..exponent {
+            result = result.mul(self);
+        }
+        result
+    }
+
+    fn sin_cos(&self) -> (Self, Self) {
+        let order = self.order();
+        let mut sin = vec![0.0; order + 1];
+        let mut cos = vec![0.0; order + 1];
+        (sin[0], cos[0]) = self.coeffs[0].sin_cos();
+        let mut degree_f = 1.0;
+        for degree in 1..=order {
+            let mut sin_derivative = 0.0;
+            let mut cos_derivative = 0.0;
+            let mut index_f = 1.0;
+            for index in 1..=degree {
+                let factor = index_f * self.coeffs[index];
+                sin_derivative = factor.mul_add(cos[degree - index], sin_derivative);
+                cos_derivative = factor.mul_add(-sin[degree - index], cos_derivative);
+                index_f += 1.0;
+            }
+            sin[degree] = sin_derivative / degree_f;
+            cos[degree] = cos_derivative / degree_f;
+            degree_f += 1.0;
+        }
+        (Self { coeffs: sin }, Self { coeffs: cos })
+    }
+
+    fn derivative_value(&self, order: usize) -> f64 {
+        let mut factorial = 1.0;
+        let mut factor = 2.0;
+        for _ in 2..=order {
+            factorial *= factor;
+            factor += 1.0;
+        }
+        self.coeffs[order] * factorial
+    }
+}
+
+fn vector_component_taylor(
+    derivatives: &CurveDerivatives<Vector3>,
+    order: usize,
+    component: usize,
+) -> Taylor {
+    Taylor::from_derivatives(order, |index| derivatives[index][component])
+}
+
+fn rotation_derivative_times_vector(
+    axis_ders: &CurveDerivatives<Vector3>,
+    angle_ders: &CurveDerivatives<f64>,
+    vector_ders: &CurveDerivatives<Vector3>,
+    u_order: usize,
+    v_order: usize,
+    u: f64,
+) -> Vector3 {
+    let axis = std::array::from_fn::<_, 3, _>(|component| {
+        vector_component_taylor(axis_ders, v_order, component)
+    });
+    let mut phase = Taylor::from_derivatives(v_order, |index| angle_ders[index] * u);
+    for _ in 0..u_order {
+        phase.coeffs[0] += PI / 2.0;
+    }
+    let (sin, cos) = phase.sin_cos();
+    let k = Taylor::constant(if u_order == 0 { 1.0 } else { 0.0 }, v_order).sub(&cos);
+    let angle_power = Taylor::from_derivatives(v_order, |index| angle_ders[index]).powu(u_order);
+    let vector = std::array::from_fn::<_, 3, _>(|component| {
+        vector_component_taylor(vector_ders, v_order, component)
+    });
+
+    let x_times_y = axis[0].mul(&axis[1]);
+    let x_times_z = axis[0].mul(&axis[2]);
+    let y_times_z = axis[1].mul(&axis[2]);
+    let xx = k.mul(&axis[0].mul(&axis[0])).add(&cos);
+    let yy = k.mul(&axis[1].mul(&axis[1])).add(&cos);
+    let zz = k.mul(&axis[2].mul(&axis[2])).add(&cos);
+    let xy = k.mul(&x_times_y);
+    let xz = k.mul(&x_times_z);
+    let yz = k.mul(&y_times_z);
+    let sx = sin.mul(&axis[0]);
+    let sy = sin.mul(&axis[1]);
+    let sz = sin.mul(&axis[2]);
+
+    let rotated = [
+        xx.mul(&vector[0])
+            .add(&xy.sub(&sz).mul(&vector[1]))
+            .add(&xz.add(&sy).mul(&vector[2])),
+        xy.add(&sz)
+            .mul(&vector[0])
+            .add(&yy.mul(&vector[1]))
+            .add(&yz.sub(&sx).mul(&vector[2])),
+        xz.sub(&sy)
+            .mul(&vector[0])
+            .add(&yz.add(&sx).mul(&vector[1]))
+            .add(&zz.mul(&vector[2])),
+    ];
+
+    Vector3::new(
+        angle_power.mul(&rotated[0]).derivative_value(v_order),
+        angle_power.mul(&rotated[1]).derivative_value(v_order),
+        angle_power.mul(&rotated[2]).derivative_value(v_order),
+    )
+}
+
 impl VderInfo {
+    pub(super) fn derivative_mn(&self, m: usize, n: usize, u: f64) -> Vector3 {
+        let radius_ders = self
+            .cc_ders
+            .contact0_ders
+            .element_wise_derivatives(&self.cc_ders.center_ders, |point, center| point - center);
+        let rotated = rotation_derivative_times_vector(
+            &self.axis_ders,
+            &self.angle_ders,
+            &radius_ders,
+            m,
+            n,
+            u,
+        );
+        if m == 0 {
+            rotated + self.cc_ders.center_ders[n]
+        } else {
+            rotated
+        }
+    }
     pub(super) fn derivative_v(&self, u: f64) -> Vector3 {
         let VderInfo {
             cc_ders,
