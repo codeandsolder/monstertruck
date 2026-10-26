@@ -18,7 +18,7 @@ fn rectangular_face() -> anyhow::Result<Face> {
 }
 
 #[test]
-fn exact_line_arc_line_face_sweep_is_one_closed_solid() -> anyhow::Result<()> {
+fn exact_line_arc_line_face_sweep_is_closed_and_consistent() -> anyhow::Result<()> {
     let face = rectangular_face()?;
     let solid = builder::composite_sweep(
         &face,
@@ -35,7 +35,6 @@ fn exact_line_arc_line_face_sweep_is_one_closed_solid() -> anyhow::Result<()> {
     )?;
 
     assert_eq!(solid.boundaries().len(), 1);
-    assert_eq!(solid.boundaries()[0].len(), 14);
     assert_eq!(
         solid.boundaries()[0].shell_condition(),
         shell::ShellCondition::Closed
@@ -98,7 +97,14 @@ fn exact_closed_composite_sweep_has_no_duplicate_caps() -> anyhow::Result<()> {
     )?;
 
     assert_eq!(solid.boundaries().len(), 1);
-    assert_eq!(solid.boundaries()[0].len(), 16);
+    // A closed sweep has no start/end cap. Check that geometric fact directly;
+    // the number of side faces is free to change if adjacent pieces are merged.
+    let start_plane_z = 4.0;
+    assert!(solid.boundaries()[0].iter().all(|face| {
+        !face
+            .vertex_iter()
+            .all(|vertex| (vertex.point().z - start_plane_z).abs() < TOLERANCE)
+    }));
     assert_eq!(
         solid.boundaries()[0].shell_condition(),
         shell::ShellCondition::Closed

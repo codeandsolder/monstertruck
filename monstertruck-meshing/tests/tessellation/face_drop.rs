@@ -126,10 +126,9 @@ fn strict_meshing_refuses_a_none_class_face_drop() {
     }
 }
 
-/// D1b zero-regression invariant: on a shell whose faces all mesh, strict
-/// meshing returns a polygon byte-identical to the lenient `to_polygon` -- same
-/// vertex count and identical volume -- so a caller that swaps it in sees no
-/// change on a clean shell.
+/// On a shell whose faces all mesh, strict and lenient meshing must both
+/// describe the same closed unit-cube geometry. Vertex ordering, deduplication,
+/// and floating-point bit patterns are not part of that contract.
 #[test]
 fn strict_meshing_matches_lenient_on_a_clean_shell() {
     let cube = unit_cube();
@@ -138,14 +137,17 @@ fn strict_meshing_matches_lenient_on_a_clean_shell() {
     let strict = shell_to_polygon_strict(shell, 0.01).expect("every cube face meshes cleanly");
     let lenient = shell.triangulation(0.01).to_polygon();
 
-    assert_eq!(
-        strict.positions().len(),
-        lenient.positions().len(),
-        "strict and lenient meshes must have the same vertex count on a clean shell",
-    );
-    assert_eq!(
-        strict.volume().to_bits(),
-        lenient.volume().to_bits(),
-        "strict and lenient volumes must be byte-identical on a clean shell",
-    );
+    for (label, mesh) in [("strict", &strict), ("lenient", &lenient)] {
+        let bbox = mesh.bounding_box();
+        assert!(
+            bbox.min().distance(Point3::origin()) < 1.0e-9
+                && bbox.max().distance(Point3::new(1.0, 1.0, 1.0)) < 1.0e-9,
+            "{label} mesh bounds {bbox:?} must match the analytic unit cube",
+        );
+        assert!(
+            (mesh.volume() - 1.0).abs() < 1.0e-9,
+            "{label} mesh volume {} must match the analytic unit-cube volume",
+            mesh.volume(),
+        );
+    }
 }

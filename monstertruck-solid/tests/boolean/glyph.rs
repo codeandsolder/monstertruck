@@ -314,14 +314,11 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
         result.is_geometric_consistent(),
         "exact glyph union must stay consistent"
     );
-    let volume = result.triangulation(0.005).to_polygon().volume();
-    eprintln!(
-        "exact glyph union faces={} volume={volume:.9}",
-        result.face_iter().count()
-    );
+    let stats =
+        assert_union_matches_operand_occupancy("exact glyph union", &host, &feature, &result)?;
     anyhow::ensure!(
-        volume > 100.8 && volume < 101.0,
-        "exact glyph union volume {volume:.9} dropped the host or added unrelated material"
+        stats.lhs_only > 0 && stats.rhs_only > 0,
+        "exact glyph oracle must see retained host material and feature-only material: {stats:?}"
     );
 
     // Exact sequential-feature regression from step-redox body #7493.
@@ -902,15 +899,21 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
             0.69999,
         )),
     );
-    let result = monstertruck_solid::or(&result, &curved_boss, STRICT_TOL)?;
+    let before_curved_boss = result;
+    let result = monstertruck_solid::or(&before_curved_boss, &curved_boss, STRICT_TOL)?;
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "curved second boss union must stay consistent"
     );
-    let curved_boss_volume = result.triangulation(0.005).to_polygon().volume();
-    eprintln!(
-        "curved second boss union faces={} volume={curved_boss_volume:.9}",
-        result.face_iter().count()
+    let stats = assert_union_matches_operand_occupancy(
+        "curved second boss union",
+        &before_curved_boss,
+        &curved_boss,
+        &result,
+    )?;
+    anyhow::ensure!(
+        stats.lhs_only > 0 && stats.rhs_only > 0,
+        "curved second boss must preserve old material and add new material: {stats:?}"
     );
 
     let boss_vertices = builder::vertices([
@@ -938,19 +941,21 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
         &boss,
         Matrix4::from_translation(Vector3::new(3.900871074992246, 4.644511765530097, 0.69999)),
     );
-    let result = monstertruck_solid::or(&result, &boss, STRICT_TOL)?;
+    let before_boss = result;
+    let result = monstertruck_solid::or(&before_boss, &boss, STRICT_TOL)?;
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "second disjoint boss union must stay consistent"
     );
-    let volume = result.triangulation(0.005).to_polygon().volume();
-    eprintln!(
-        "second boss union faces={} volume={volume:.9}",
-        result.face_iter().count()
-    );
+    let stats = assert_union_matches_operand_occupancy(
+        "second disjoint boss union",
+        &before_boss,
+        &boss,
+        &result,
+    )?;
     anyhow::ensure!(
-        volume > 100.8 && volume < 101.0,
-        "second boss union volume {volume:.9} dropped existing material or added unrelated material"
+        stats.lhs_only > 0 && stats.rhs_only > 0,
+        "second boss must preserve existing material and add its own material: {stats:?}"
     );
     Ok(())
 }

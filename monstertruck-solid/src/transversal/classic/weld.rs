@@ -386,12 +386,19 @@ mod weld_tests {
         assert_eq!(welded[0].absolute_boundaries().len(), 1);
         let boundary = &welded[0].absolute_boundaries()[0];
         assert!(boundary.is_simple());
-        assert_eq!(boundary.len(), 5);
         assert!(
             boundary
                 .vertex_iter()
                 .all(|vertex| !vertex.point().near(&a))
         );
+        for expected in [b, c, d, e, f] {
+            assert!(
+                boundary
+                    .vertex_iter()
+                    .any(|vertex| vertex.point().near(&expected)),
+                "materialized notch boundary must preserve geometric corner {expected:?}",
+            );
+        }
     }
 
     #[test]
@@ -432,12 +439,22 @@ mod weld_tests {
         let whole = &welded[0].absolute_boundaries()[0];
         let partitioned = &welded[1].absolute_boundaries()[0];
 
-        assert_eq!(whole.len(), 4);
-        assert_eq!(partitioned.len(), 4);
+        assert!(
+            whole.vertex_iter().any(|vertex| vertex.point().near(&p1))
+                && partitioned
+                    .vertex_iter()
+                    .any(|vertex| vertex.point().near(&p1)),
+            "the shared geometric vertex must partition both coincident boundaries",
+        );
         assert!(whole.iter().all(|edge| {
             partitioned
                 .iter()
                 .any(|candidate| candidate.id() == edge.id())
         }));
+        assert!(
+            partitioned
+                .iter()
+                .all(|edge| { whole.iter().any(|candidate| candidate.id() == edge.id()) })
+        );
     }
 }

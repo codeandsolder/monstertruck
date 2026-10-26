@@ -251,14 +251,13 @@ fn a_seam_point_takes_the_periodic_spelling_its_hint_asks_for() {
     }
 }
 
-/// An UNHINTED call is byte-identical to the pre-W1 arithmetic.
+/// Without a hint, parameter recovery must return a member of the declared
+/// periodic domain that reconstructs the original on-surface point.
 ///
-/// The seam disambiguation above is a no-op without a hint, so every call site
-/// that existed before spec 012 routed tori onto the analytic variant sees the
-/// same numbers it always saw. Asserted against the branch formula spelled out
-/// here rather than a frozen array, so this stays honest if the radii change.
+/// Seam points have multiple valid parameter representations, so no particular
+/// branch's numeric answer is part of the contract.
 #[test]
-fn an_unhinted_search_is_unchanged_by_the_seam_disambiguation() {
+fn unhinted_search_recovers_point_in_declared_period() {
     let torus = Torus::new(Point3::origin(), 7.0, 2.0);
     for u in [0.0, 0.3, 1.9, PI, 4.4, 2.0 * PI - 0.3] {
         for v in [0.0, 0.4, 2.2, PI, 5.9] {
@@ -266,8 +265,8 @@ fn an_unhinted_search_is_unchanged_by_the_seam_disambiguation() {
             let (recovered_u, recovered_v) = torus
                 .search_parameter(point, None, 100)
                 .expect("an on-surface point must be recovered");
-            // The pre-W1 routine's guarantee: the answer lies in [0, 2 pi] and
-            // reproduces the point. Nothing weaker, nothing shifted.
+            // Semantic guarantee: stay in the declared periodic domain and
+            // reproduce the original point.
             assert!(
                 (0.0..=2.0 * PI).contains(&recovered_u) && (0.0..=2.0 * PI).contains(&recovered_v),
                 "unhinted ({u}, {v}) left the declared range: \

@@ -20,7 +20,8 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 /// the coverage is the same, the verdict is reproducible.
 ///
 /// Changing the seed re-rolls the sample and is a real change to what is
-/// measured; do it deliberately, and re-measure the pass counts below.
+/// exercised. The minimum success rates below are the explicit robustness
+/// contract; they are not copied from the current solver's exact failure count.
 fn trial_rng() -> StdRng { StdRng::seed_from_u64(0x5445_5354_5F52_4E47) }
 
 #[test]
@@ -134,16 +135,14 @@ fn exec_polysurface_snp_on_surface(rng: &mut StdRng) -> bool {
 #[test]
 fn polysurface_snp_on_surface() {
     let mut rng = trial_rng();
-    let flag = (0..10).any(|_| {
-        let count = (0..100)
-            .filter(|_| exec_polysurface_snp_on_surface(&mut rng))
-            .count();
-        if count <= 90 {
-            eprintln!("wrong answer: {:?}", 100 - count);
-        }
-        count > 90
-    });
-    assert!(flag, "too many failure");
+    let trials = 200;
+    let successes = (0..trials)
+        .filter(|_| exec_polysurface_snp_on_surface(&mut rng))
+        .count();
+    assert!(
+        successes >= 180,
+        "nearest-parameter search must reconstruct the on-surface point in at least 90% of the deterministic trials: {successes}/{trials} succeeded",
+    );
 }
 
 fn exec_polysurface_sp_on_surface(rng: &mut StdRng) -> bool {
@@ -196,16 +195,14 @@ fn exec_polysurface_sp_on_surface(rng: &mut StdRng) -> bool {
 #[test]
 fn polysurface_sp_on_surface() {
     let mut rng = trial_rng();
-    let flag = (0..10).any(|_| {
-        let count = (0..100)
-            .filter(|_| exec_polysurface_sp_on_surface(&mut rng))
-            .count();
-        if count <= 90 {
-            eprintln!("wrong answer: {:?}", 100 - count);
-        }
-        count > 90
-    });
-    assert!(flag, "too many failure");
+    let trials = 200;
+    let successes = (0..trials)
+        .filter(|_| exec_polysurface_sp_on_surface(&mut rng))
+        .count();
+    assert!(
+        successes >= 180,
+        "parameter search must reconstruct the on-surface point in at least 90% of the deterministic trials: {successes}/{trials} succeeded",
+    );
 }
 
 fn exec_polysurface_intersection_point(rng: &mut StdRng) -> bool {

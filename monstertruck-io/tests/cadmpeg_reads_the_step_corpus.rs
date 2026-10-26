@@ -14,32 +14,43 @@
 //! `MANIFOLD_SOLID_BREP`, because one parameter-space `CIRCLE` failed
 //! (cadmpeg/cadmpeg#79, fixed in cadmpeg/cadmpeg#83).
 //!
-//! The expected counts below are MEASURED against cadmpeg 0.4, not guessed, and
-//! they are exact: STEP decoding is deterministic, so a change in either the
-//! fixture or the decoder trips this row rather than passing quietly.
+//! The expected topology is read independently from the STEP entities in each
+//! fixture. The cadmpeg decoder therefore never supplies its own oracle.
 
 #![cfg(feature = "cadmpeg")]
 
 use monstertruck_io::cadmpeg::step::decode_file_to_ir;
 use std::path::{Path, PathBuf};
 
-/// `(fixture, bodies, faces, edges, vertices)`, measured against cadmpeg 0.4.
-///
-/// `occt-cube` is the one to sanity-check by hand: 6 faces, 12 edges, 8 vertices
-/// gives Euler 8 - 12 + 6 = 2, a closed genus-0 solid. A sphere and a torus are
-/// single seam-degenerate faces, hence zero edges.
-const EXPECTED: [(&str, usize, usize, usize, usize); 10] = [
-    ("abc-0000.step", 6, 25, 33, 32),
-    ("abc-0006.step", 1, 15, 32, 20),
-    ("abc-0008.step", 1, 21, 34, 26),
-    ("abc-0035.step", 1, 82, 188, 122),
-    ("occt-assy.step", 2, 9, 15, 10),
-    ("occt-cone.step", 1, 3, 3, 2),
-    ("occt-cube.step", 1, 6, 12, 8),
-    ("occt-cylinder.step", 1, 3, 3, 2),
-    ("occt-sphere.step", 1, 1, 0, 1),
-    ("occt-torus.step", 1, 1, 0, 1),
+const FIXTURES: [&str; 10] = [
+    "abc-0000.step",
+    "abc-0006.step",
+    "abc-0008.step",
+    "abc-0035.step",
+    "occt-assy.step",
+    "occt-cone.step",
+    "occt-cube.step",
+    "occt-cylinder.step",
+    "occt-sphere.step",
+    "occt-torus.step",
 ];
+
+fn occurrence_count(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
+fn encoded_topology(path: &Path) -> (usize, usize, usize, usize) {
+    let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    (
+        occurrence_count(&bytes, b"MANIFOLD_SOLID_BREP("),
+        occurrence_count(&bytes, b"ADVANCED_FACE("),
+        occurrence_count(&bytes, b"EDGE_CURVE("),
+        occurrence_count(&bytes, b"VERTEX_POINT("),
+    )
+}
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -51,13 +62,14 @@ fn fixture(name: &str) -> PathBuf {
 fn cadmpeg_recovers_the_expected_topology_from_every_fixture() {
     let mut failures = Vec::new();
 
-    for (name, bodies, faces, edges, vertices) in EXPECTED {
+    for name in FIXTURES {
         let path = fixture(name);
         assert!(
             path.is_file(),
             "fixture {} is missing -- it moved, or a rename left this path behind",
             path.display(),
         );
+        let expected = encoded_topology(&path);
 
         let ir = match decode_file_to_ir(&path) {
             Ok(ir) => ir,
@@ -73,20 +85,18 @@ fn cadmpeg_recovers_the_expected_topology_from_every_fixture() {
             ir.model.edges.len(),
             ir.model.vertices.len(),
         );
-        if got != (bodies, faces, edges, vertices) {
+        if got != expected {
             failures.push(format!(
-                "{name}: bodies/faces/edges/vertices = {got:?}, expected \
-                 {:?}",
-                (bodies, faces, edges, vertices)
+                "{name}: decoded bodies/faces/edges/vertices = {got:?}, but the STEP file encodes {expected:?}"
             ));
         }
     }
 
     assert!(
         failures.is_empty(),
-        "{} of {} fixtures did not match:\n  {}",
+        "{} of {} fixtures did not match their encoded topology:\n  {}",
         failures.len(),
-        EXPECTED.len(),
+        FIXTURES.len(),
         failures.join("\n  "),
     );
 }

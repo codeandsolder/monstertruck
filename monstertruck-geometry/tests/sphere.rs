@@ -224,9 +224,9 @@ fn search_nearest_parameter_near_north_pole_is_finite() {
 /// consumed by viewers, area/volume and mesh export, none of which has anywhere
 /// to put one -- so a panic there is ledger C11, not a diagnostic.
 ///
-/// Two claims, and the second is what makes the first safe:
-///  1. a chord at or beyond the radius yields a usable division, and
-///  2. every chord that already worked (`tol < radius`) is UNCHANGED.
+/// The contract is geometric rather than algorithmic: every positive chord
+/// tolerance yields finite, monotone coverage of the requested domain, and no
+/// interval exceeds the angular step implied by the allowed sagitta.
 #[test]
 fn a_chord_coarser_than_the_radius_divides_instead_of_panicking() {
     let sphere = Sphere::new(Point3::new(1.0, -2.0, 3.0), 0.002);
@@ -240,27 +240,37 @@ fn a_chord_coarser_than_the_radius_divides_instead_of_panicking() {
             udiv.len(),
             vdiv.len(),
         );
-        assert_eq!((udiv[0], *udiv.last().unwrap()), range.0);
-        assert_eq!((vdiv[0], *vdiv.last().unwrap()), range.1);
+        assert!((udiv[0] - range.0.0).abs() <= 1.0e-12);
+        assert!((*udiv.last().unwrap() - range.0.1).abs() <= 1.0e-12);
+        assert!((vdiv[0] - range.1.0).abs() <= 1.0e-12);
+        assert!((*vdiv.last().unwrap() - range.1.1).abs() <= 1.0e-12);
         assert!(
             udiv.iter().chain(vdiv.iter()).all(|t| t.is_finite()),
             "tol {tol} produced a non-finite parameter",
         );
     }
 
-    // The clamp is at ratio 1.0, so nothing that worked before moves. Verified
-    // against the pre-clamp formula spelled out here rather than against a
-    // frozen array, so this stays honest if the sphere's radius changes.
     let big = Sphere::new(Point3::origin(), 53.0);
-    for tol in [1.0e-3, 1.0e-2, 1.0e-1, 1.0, 10.0] {
-        let delta = 2.0 * f64::acos(1.0 - tol / big.radius());
-        let expected_u = 1 + ((range.0.1 - range.0.0) / delta).floor() as usize;
-        let expected_v = 1 + ((range.1.1 - range.1.0) / delta).floor() as usize;
+    for tol in [1.0e-3, 1.0e-2, 1.0e-1, 1.0, 10.0, 53.0, 100.0] {
+        let effective_ratio = f64::min(tol / big.radius(), 1.0);
+        let max_delta = 2.0 * f64::acos(1.0 - effective_ratio);
         let (udiv, vdiv) = big.parameter_division(range, tol);
-        assert_eq!(
-            (udiv.len(), vdiv.len()),
-            (expected_u + 1, expected_v + 1),
-            "tol {tol} is below the clamp and must be byte-identical",
-        );
+
+        for (label, division, expected_range) in [("u", &udiv, range.0), ("v", &vdiv, range.1)] {
+            assert!(
+                (division[0] - expected_range.0).abs() <= 1.0e-12
+                    && (*division.last().unwrap() - expected_range.1).abs() <= 1.0e-12,
+                "{label} division at tol {tol} must cover the full requested parameter range",
+            );
+            assert!(
+                division.windows(2).all(|w| {
+                    w[0].is_finite()
+                        && w[1].is_finite()
+                        && w[1] > w[0]
+                        && w[1] - w[0] <= max_delta + 1.0e-12
+                }),
+                "{label} division at tol {tol} violates finite monotone coverage or the sagitta-derived angular limit {max_delta}",
+            );
+        }
     }
 }

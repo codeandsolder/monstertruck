@@ -3,7 +3,7 @@ use monstertruck_io::step::save::*;
 use monstertruck_modeling::*;
 
 #[test]
-fn step_model_default_measurement_context_is_unchanged() {
+fn step_model_default_measurement_context_is_millimetres() {
     let cshell = Shell::new().compress();
     let text = StepModel::from(&cshell).to_string();
     assert!(
@@ -42,7 +42,7 @@ fn step_model_custom_measurement_context_appears() {
 }
 
 #[test]
-fn step_models_default_measurement_context_is_unchanged() {
+fn step_models_default_measurement_context_is_millimetres() {
     let json = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../resources/shape/cube.json"
