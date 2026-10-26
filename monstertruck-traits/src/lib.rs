@@ -96,6 +96,13 @@ macro_rules! nonpositive_tolerance {
 /// Abstract traits: `Curve` and `Surface`.
 pub mod traits;
 pub use traits::*;
+
+#[doc(hidden)]
+pub mod __private {
+    pub use monstertruck_core::cgmath64::{
+        CurveDerivatives, Matrix3, Matrix4, Point3, SurfaceDerivatives, Vector3,
+    };
+}
 /// Checked continuity requests and capability diagnostics.
 pub mod surface_continuity;
 pub use surface_continuity::*;
@@ -113,3 +120,19 @@ pub use monstertruck_derive::{
 #[cfg(feature = "polynomial")]
 /// Implementation sample using polynomials as an example
 pub mod polynomial;
+
+#[cfg(all(test, feature = "derive"))]
+mod derive_regression_tests {
+    use super::{Transformed, TransformedM3};
+    use monstertruck_core::cgmath64::{Matrix3, Point2, Vector2};
+
+    #[derive(Clone, TransformedM3)]
+    struct WrappedPoint(Point2);
+
+    #[test]
+    fn transformed_newtype_mutates_in_place() {
+        let mut point = WrappedPoint(Point2::new(1.0, 2.0));
+        point.transform_by(Matrix3::from_translation(Vector2::new(3.0, 4.0)));
+        assert_eq!(point.0, Point2::new(4.0, 6.0));
+    }
+}
