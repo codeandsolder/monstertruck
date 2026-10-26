@@ -43,36 +43,142 @@
 )]
 
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro_error::proc_macro_error;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::*;
 use syn::*;
+
+macro_rules! derive_try {
+    ($result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => return error.into_compile_error().into(),
+        }
+    };
+}
+
+fn single_variant_field(variant: &Variant) -> Result<&syn::Field> {
+    let mut fields = variant.fields.iter();
+    let field = fields.next().ok_or_else(|| {
+        Error::new_spanned(
+            variant,
+            "derive variants must contain exactly one delegated field",
+        )
+    })?;
+    if fields.next().is_some() {
+        Err(Error::new_spanned(
+            variant,
+            "derive variants must contain exactly one delegated field",
+        ))
+    } else {
+        Ok(field)
+    }
+}
+
+fn enum_field_type<'a>(
+    variants: &'a punctuated::Punctuated<Variant, token::Comma>,
+    ty: &Ident,
+) -> Result<&'a Type> {
+    let mut variants = variants.iter();
+    let first_variant = variants
+        .next()
+        .ok_or_else(|| Error::new_spanned(ty, "derive requires at least one enum variant"))?;
+    let first = single_variant_field(first_variant)?;
+    for variant in variants {
+        single_variant_field(variant)?;
+    }
+    Ok(&first.ty)
+}
+
+fn tuple_struct_field(fields: &Fields) -> Result<&Type> {
+    let Fields::Unnamed(fields) = fields else {
+        return Err(Error::new_spanned(
+            fields,
+            "derive supports only single-field tuple structs",
+        ));
+    };
+    let mut fields_iter = fields.unnamed.iter();
+    let field = fields_iter.next().ok_or_else(|| {
+        Error::new_spanned(fields, "derive supports only single-field tuple structs")
+    })?;
+    if fields_iter.next().is_some() {
+        Err(Error::new_spanned(
+            fields,
+            "derive supports only single-field tuple structs",
+        ))
+    } else {
+        Ok(&field.ty)
+    }
+}
+
+fn unsupported_input(ty: &Ident) -> TokenStream2 {
+    Error::new_spanned(
+        ty,
+        "derive supports only enums and single-field tuple structs",
+    )
+    .into_compile_error()
+}
+
+fn dependency_path(package: &str) -> Result<TokenStream2> {
+    match crate_name(package) {
+        Ok(FoundCrate::Itself) => Ok(quote! { crate }),
+        Ok(FoundCrate::Name(name)) => {
+            let ident = Ident::new(&name, Span::call_site());
+            Ok(quote! { ::#ident })
+        }
+        Err(error) => Err(Error::new(
+            Span::call_site(),
+            format!("cannot resolve `{package}` for generated derive code: {error}"),
+        )),
+    }
+}
+
+fn dependency_scope(
+    package: &str,
+    alias: &str,
+    implementation: TokenStream2,
+) -> Result<TokenStream2> {
+    let path = dependency_path(package)?;
+    let alias = Ident::new(alias, Span::call_site());
+    Ok(quote! {
+        const _: () = {
+            use #path as #alias;
+            #implementation
+        };
+    })
+}
+
+fn traits_scope(implementation: TokenStream2) -> Result<TokenStream2> {
+    dependency_scope("monstertruck-traits", "monstertruck_traits", implementation)
+}
+
+fn io_scope(implementation: TokenStream2) -> Result<TokenStream2> {
+    dependency_scope("monstertruck-io", "monstertruck_io", implementation)
+}
 
 fn enumerate_impl_return_something<'a>(
     variants: impl IntoIterator<Item = &'a Variant> + 'a,
     method: TokenStream2,
     method_variants: TokenStream2,
 ) -> TokenStream2 {
-    let impls: Vec<_> = variants
+    let impls = variants
         .into_iter()
         .map(|variant| {
+            let field = single_variant_field(variant)?;
             let variant_name = &variant.ident;
-            let vec: Vec<_> = variant.fields.iter().collect();
-            match vec.len() {
-                0 => panic!("empty field!"),
-                1 => match &vec[0].ident {
-                    Some(ident) => quote! {
-                        Self::#variant_name { #ident } => #method(#ident, #method_variants)
-                    },
-                    None => quote! {
-                        Self::#variant_name(got) => #method(got, #method_variants)
-                    },
-                },
-                _ => unimplemented!(),
-            }
+            Ok(match &field.ident {
+                Some(ident) => {
+                    quote! { Self::#variant_name { #ident } => #method(#ident, #method_variants) }
+                }
+                None => quote! { Self::#variant_name(got) => #method(got, #method_variants) },
+            })
         })
-        .collect();
-    quote! { match self { #(#impls),* } }
+        .collect::<Result<Vec<_>>>();
+    match impls {
+        Ok(impls) => quote! { match self { #(#impls),* } },
+        Err(error) => error.into_compile_error(),
+    }
 }
 
 fn enumerate_impl_return_self<'a>(
@@ -80,33 +186,22 @@ fn enumerate_impl_return_self<'a>(
     method: TokenStream2,
     method_variants: TokenStream2,
 ) -> TokenStream2 {
-    let impls: Vec<_> = variants
+    let impls = variants
         .into_iter()
         .map(|variant| {
+            let field = single_variant_field(variant)?;
             let variant_name = &variant.ident;
-            let vec: Vec<_> = variant.fields.iter().collect();
-            match vec.len() {
-                0 => panic!("empty field!"),
-                1 => match &vec[0].ident {
-                    Some(ident) => {
-                        quote! {
-                            Self::#variant_name { #ident } => Self::#variant_name { #ident: #method(#ident, #method_variants) }
-                        }
-                    }
-                    None => {
-                        quote! {
-                            Self::#variant_name(got) => Self::#variant_name(#method(got, #method_variants))
-                        }
-                    }
+            Ok(match &field.ident {
+                Some(ident) => quote! {
+                    Self::#variant_name { #ident } => Self::#variant_name { #ident: #method(#ident, #method_variants) }
                 },
-                _ => unimplemented!(),
-            }
+                None => quote! { Self::#variant_name(got) => Self::#variant_name(#method(got, #method_variants)) },
+            })
         })
-        .collect();
-    quote! {
-        match self {
-            #(#impls),*
-        }
+        .collect::<Result<Vec<_>>>();
+    match impls {
+        Ok(impls) => quote! { match self { #(#impls),* } },
+        Err(error) => error.into_compile_error(),
     }
 }
 
@@ -225,16 +320,9 @@ pub fn derive_bounded_curve(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant
-                .fields
-                .iter()
-                .map(|field| &field.ty)
-                .collect();
-            let top_ty = &tys[0];
-            let tys = &tys[1..];
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods! {
                 variants, trait_name,
                 fn range_tuple(&self,) -> (f64, f64),
@@ -247,18 +335,14 @@ pub fn derive_bounded_curve(input: TokenStream) -> TokenStream {
                 where
                     #(#where_predicates,)*
                     #top_ty: #trait_name,
-                    #(#tys: #trait_name<Point = <#top_ty as ParametricCurve>::Point>,)*
-                    Self: monstertruck_traits::ParametricCurve<Point = <#top_ty as ParametricCurve>::Point>, {
+
+                    Self: monstertruck_traits::ParametricCurve<Point = <#top_ty as monstertruck_traits::ParametricCurve>::Point>, {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -273,9 +357,9 @@ pub fn derive_bounded_curve(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `BoundedSurface` for Enums or single field tuple structs.
@@ -290,10 +374,9 @@ pub fn derive_bounded_surface(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods! {
                 variants, trait_name,
                 fn range_tuple(&self,) -> ((f64, f64), (f64, f64)),
@@ -303,17 +386,14 @@ pub fn derive_bounded_surface(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -326,9 +406,9 @@ pub fn derive_bounded_surface(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `Cut` for Enums or single field tuple structs.
@@ -343,10 +423,9 @@ pub fn derive_cut(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods! {
                 variants, trait_name,
                 fn cut(&mut self, t: f64) -> Self,
@@ -356,17 +435,14 @@ pub fn derive_cut(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -377,9 +453,9 @@ pub fn derive_cut(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `Invertible` for Enums or single field tuple structs.
@@ -394,10 +470,9 @@ pub fn derive_invertible(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods! {
                 variants, trait_name,
                 fn invert(&mut self,) -> (),
@@ -408,18 +483,16 @@ pub fn derive_invertible(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)*
+                    #top_ty: #trait_name,
+                    #top_ty: #trait_name,
+
                     Self: Clone {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -432,9 +505,9 @@ pub fn derive_invertible(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ParameterDivision1D` for Enums or single field tuple structs.
@@ -449,16 +522,9 @@ pub fn derive_parameter_division_1d(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
-            let top_ty = match tys.len() {
-                0 => panic!("empty field!"),
-                1 => tys[0].clone(),
-                _ => unimplemented!(),
-            };
-            let tys = &tys[1..];
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods! {
                 variants, trait_name,
                 fn try_parameter_division(&self, range: (f64, f64), tol: f64) -> Option<(Vec<f64>, Vec<Self::Point>)>,
@@ -470,18 +536,14 @@ pub fn derive_parameter_division_1d(input: TokenStream) -> TokenStream {
                 where
                     #(#where_predicates,)*
                     #top_ty: #trait_name,
-                    #(#tys: #trait_name<Point = <#top_ty as #trait_name>::Point>,)* {
+                    {
                     type Point = <#top_ty as #trait_name>::Point;
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -498,9 +560,9 @@ pub fn derive_parameter_division_1d(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ParameterDivision2D` for Enums or single field tuple structs.
@@ -515,10 +577,9 @@ pub fn derive_parameter_division_2d(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods! {
                 variants, trait_name,
                 fn parameter_division(&self, range: ((f64, f64), (f64, f64)), tol: f64) -> (Vec<f64>, Vec<f64>),
@@ -528,17 +589,14 @@ pub fn derive_parameter_division_2d(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -551,9 +609,9 @@ pub fn derive_parameter_division_2d(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ParametricCurve` for Enums or single field tuple structs.
@@ -568,11 +626,9 @@ pub fn derive_parametric_curve(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
-            let top_ty = &tys[0];
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods!(
                 variants,
                 trait_name,
@@ -580,15 +636,17 @@ pub fn derive_parametric_curve(input: TokenStream) -> TokenStream {
                 fn derivative(&self, t: f64) -> Self::Vector,
                 fn derivative_2(&self, t: f64) -> Self::Vector,
                 fn derivative_n(&self, n: usize, t: f64) -> Self::Vector,
-                fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector>,
-                fn parameter_range(&self,) -> ParameterRange,
+                fn derivatives(&self, n: usize, t: f64) -> monstertruck_traits::__private::CurveDerivatives<Self::Vector>,
+                fn parameter_range(&self,) -> monstertruck_traits::ParameterRange,
                 fn period(&self,) -> Option<f64>,
             );
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
                 where #(#where_predicates,)*
-                      #(#tys: #trait_name,)*
+                      #top_ty: #trait_name,
+                      #top_ty: #trait_name,
+
                       Self: Clone {
                     type Point = <#top_ty as #trait_name>::Point;
                     type Vector = <#top_ty as #trait_name>::Vector;
@@ -597,11 +655,7 @@ pub fn derive_parametric_curve(input: TokenStream) -> TokenStream {
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -614,15 +668,15 @@ pub fn derive_parametric_curve(input: TokenStream) -> TokenStream {
                     fn derivative(&self, t: f64) -> Self::Vector { self.0.derivative(t) }
                     fn derivative_2(&self, t: f64) -> Self::Vector { self.0.derivative_2(t) }
                     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector { self.0.derivative_n(n, t) }
-                    fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector> { self.0.derivatives(n, t) }
-                    fn parameter_range(&self) -> ParameterRange { self.0.parameter_range() }
+                    fn derivatives(&self, n: usize, t: f64) -> monstertruck_traits::__private::CurveDerivatives<Self::Vector> { self.0.derivatives(n, t) }
+                    fn parameter_range(&self) -> monstertruck_traits::ParameterRange { self.0.parameter_range() }
                     fn period(&self) -> Option<f64> { self.0.period() }
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ParametricSurface` for Enums or single field tuple structs.
@@ -637,11 +691,9 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
-            let top_ty = &tys[0];
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods!(
                 variants,
                 trait_name,
@@ -652,7 +704,7 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
                 fn derivative_uv(&self, s: f64, t: f64) -> Self::Vector,
                 fn derivative_vv(&self, s: f64, t: f64) -> Self::Vector,
                 fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector,
-                fn derivatives(&self, max_order: usize, u: f64, v: f64) -> SurfaceDerivatives<Self::Vector>,
+                fn derivatives(&self, max_order: usize, u: f64, v: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector>,
                 fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange),
                 fn period_u(&self,) -> Option<f64>,
                 fn period_v(&self,) -> Option<f64>,
@@ -662,7 +714,8 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     type Point = <#top_ty as #trait_name>::Point;
                     type Vector = <#top_ty as #trait_name>::Vector;
                     #(#methods)*
@@ -670,11 +723,7 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -698,7 +747,7 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
                     #[inline(always)]
                     fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector { self.0.derivative_mn(m, n, s, t) }
                     #[inline(always)]
-                    fn derivatives(&self, max_order: usize, s: f64, t: f64) -> SurfaceDerivatives<Self::Vector> {
+                    fn derivatives(&self, max_order: usize, s: f64, t: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector> {
                         self.0.derivatives(max_order, s, t)
                     }
                     #[inline(always)]
@@ -712,9 +761,9 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ParametricSurface3D` for Enums or single field tuple structs.
@@ -731,10 +780,9 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
         .iter()
         .flat_map(|x| &x.predicates)
         .collect::<Vec<_>>();
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods0 = methods!(
                 variants,
                 trait_name0,
@@ -745,7 +793,7 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                 fn derivative_uv(&self, s: f64, t: f64) -> Self::Vector,
                 fn derivative_vv(&self, s: f64, t: f64) -> Self::Vector,
                 fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector,
-                fn derivatives(&self, max_order: usize, u: f64, v: f64) -> SurfaceDerivatives<Self::Vector>,
+                fn derivatives(&self, max_order: usize, u: f64, v: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector>,
                 fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange),
                 fn period_u(&self,) -> Option<f64>,
                 fn period_v(&self,) -> Option<f64>,
@@ -753,16 +801,17 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
             let methods1 = methods!(
                 variants,
                 trait_name1,
-                fn normal(&self, u: f64, v: f64) -> Vector3,
+                fn normal(&self, u: f64, v: f64) -> monstertruck_traits::__private::Vector3,
             );
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name0 for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name0,)* {
-                    type Point = Point3;
-                    type Vector = Vector3;
+                    #top_ty: #trait_name0,
+                    {
+                    type Point = monstertruck_traits::__private::Point3;
+                    type Vector = monstertruck_traits::__private::Vector3;
                     #(#methods0)*
                 }
 
@@ -770,25 +819,22 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name1 for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name0,)* {
+                    #top_ty: #trait_name0,
+                    {
                     #(#methods1)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name0 for #ty #generics_params
                 where
                     #(#where_predicates,)*
                     #field_type: #trait_name0, {
-                    type Point = Point3;
-                    type Vector = Vector3;
+                    type Point = monstertruck_traits::__private::Point3;
+                    type Vector = monstertruck_traits::__private::Vector3;
                     fn evaluate(&self, s: f64, t: f64) -> Self::Point { self.0.evaluate(s, t) }
                     fn derivative_u(&self, s: f64, t: f64) -> Self::Vector { self.0.derivative_u(s, t) }
                     fn derivative_v(&self, s: f64, t: f64) -> Self::Vector { self.0.derivative_v(s, t) }
@@ -796,7 +842,7 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                     fn derivative_uv(&self, s: f64, t: f64) -> Self::Vector { self.0.derivative_uv(s, t) }
                     fn derivative_vv(&self, s: f64, t: f64) -> Self::Vector { self.0.derivative_vv(s, t) }
                     fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector { self.0.derivative_mn(m, n, s, t) }
-                    fn derivatives(&self, max_order: usize, u: f64, v: f64) -> SurfaceDerivatives<Self::Vector> {
+                    fn derivatives(&self, max_order: usize, u: f64, v: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector> {
                         self.0.derivatives(max_order, u, v)
                     }
                     fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange) {
@@ -810,13 +856,13 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                 where
                     #(#where_predicates,)*
                     #field_type: #trait_name0, {
-                    fn normal(&self, u: f64, v: f64) -> Vector3 { self.0.normal(u, v) }
+                    fn normal(&self, u: f64, v: f64) -> monstertruck_traits::__private::Vector3 { self.0.normal(u, v) }
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `SearchNearestParameter<CurveParameter>` for Enums or single field tuple structs.
@@ -824,157 +870,20 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(SearchNearestParameterD1)]
 pub fn derive_snp_d1(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let trait_name = quote! { monstertruck_traits::SearchNearestParameter::<D1> };
+    let trait_name = quote! { monstertruck_traits::SearchNearestParameter::<monstertruck_traits::CurveParameter> };
     let ty = input.ident;
     let generics_params = input.generics;
     let where_predicates = generics_params
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
-            let top_ty = &tys[0];
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods!(
                 variants,
                 trait_name,
-                fn search_nearest_parameter<H: Into<SearchParameterHint1D>>(
-                    &self,
-                    pt: Self::Point,
-                    hint: H,
-                    trials: usize,
-                ) -> Option<f64>,
-            );
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
-                    type Point = <#top_ty as #trait_name>::Point;
-                    #(#methods)*
-                }
-            }
-        }
-        Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #field_type: #trait_name, {
-                    type Point = <#field_type as #trait_name>::Point;
-                    fn search_nearest_parameter<H: Into<SearchParameterHint1D>>(
-                        &self,
-                        pt: Self::Point,
-                        hint: H,
-                        trials: usize,
-                    ) -> Option<f64> {
-                        self.0.search_nearest_parameter(pt, hint, trials)
-                    }
-                }
-            }
-        }
-        _ => unimplemented!(),
-    }
-    .into()
-}
-
-/// Derive macro generating an impl of the trait `SearchNearestParameter<SurfaceParameter>` for Enums or single field tuple structs.
-#[proc_macro_error]
-#[proc_macro_derive(SearchNearestParameterD2)]
-pub fn derive_snp_d2(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let trait_name = quote! { monstertruck_traits::SearchNearestParameter::<D2> };
-    let ty = input.ident;
-    let generics_params = input.generics;
-    let where_predicates = generics_params
-        .where_clause
-        .iter()
-        .flat_map(|x| &x.predicates);
-    match input.data {
-        Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
-            let top_ty = &tys[0];
-            let methods = methods!(
-                variants,
-                trait_name,
-                fn search_nearest_parameter<H: Into<SearchParameterHint2D>>(
-                    &self,
-                    pt: Self::Point,
-                    hint: H,
-                    trials: usize,
-                ) -> Option<(f64, f64)>,
-            );
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
-                    type Point = <#top_ty as #trait_name>::Point;
-                    #(#methods)*
-                }
-            }
-        }
-        Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #field_type: #trait_name, {
-                    type Point = <#field_type as #trait_name>::Point;
-                    fn search_nearest_parameter<H: Into<SearchParameterHint2D>>(
-                        &self,
-                        pt: Self::Point,
-                        hint: H,
-                        trials: usize,
-                    ) -> Option<(f64, f64)> {
-                        self.0.search_nearest_parameter(pt, hint, trials)
-                    }
-                }
-            }
-        }
-        _ => unimplemented!(),
-    }
-    .into()
-}
-
-/// Derive macro generating an impl of the trait `SearchParameter<CurveParameter>` for Enums or single field tuple structs.
-#[proc_macro_error]
-#[proc_macro_derive(SearchParameterD1)]
-pub fn derive_sp_d1(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let trait_name = quote! { monstertruck_traits::SearchParameter::<D1> };
-    let ty = input.ident;
-    let generics_params = input.generics;
-    let where_predicates = generics_params
-        .where_clause
-        .iter()
-        .flat_map(|x| &x.predicates);
-    match input.data {
-        Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
-            let top_ty = &tys[0];
-            let tys = &tys[1..];
-            let methods = methods!(
-                variants,
-                trait_name,
-                fn search_parameter<H: Into<SearchParameterHint1D>>(
+                fn search_nearest_parameter<H: Into<monstertruck_traits::SearchParameterHint1D>>(
                     &self,
                     pt: Self::Point,
                     hint: H,
@@ -987,18 +896,14 @@ pub fn derive_sp_d1(input: TokenStream) -> TokenStream {
                 where
                     #(#where_predicates,)*
                     #top_ty: #trait_name,
-                    #(#tys: #trait_name<Point = <#top_ty as #trait_name>::Point>,)* {
+                    {
                     type Point = <#top_ty as #trait_name>::Point;
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -1006,43 +911,41 @@ pub fn derive_sp_d1(input: TokenStream) -> TokenStream {
                     #(#where_predicates,)*
                     #field_type: #trait_name, {
                     type Point = <#field_type as #trait_name>::Point;
-                    fn search_parameter<H: Into<SearchParameterHint1D>>(
+                    fn search_nearest_parameter<H: Into<monstertruck_traits::SearchParameterHint1D>>(
                         &self,
                         pt: Self::Point,
                         hint: H,
                         trials: usize,
                     ) -> Option<f64> {
-                        self.0.search_parameter(pt, hint, trials)
+                        self.0.search_nearest_parameter(pt, hint, trials)
                     }
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
-/// Derive macro generating an impl of the trait `SearchParameter<SurfaceParameter>` for Enums or single field tuple structs.
+/// Derive macro generating an impl of the trait `SearchNearestParameter<SurfaceParameter>` for Enums or single field tuple structs.
 #[proc_macro_error]
-#[proc_macro_derive(SearchParameterD2)]
-pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(SearchNearestParameterD2)]
+pub fn derive_snp_d2(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let trait_name = quote! { monstertruck_traits::SearchParameter::<D2> };
+    let trait_name = quote! { monstertruck_traits::SearchNearestParameter::<monstertruck_traits::SurfaceParameter> };
     let ty = input.ident;
     let generics_params = input.generics;
     let where_predicates = generics_params
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
-            let top_ty = &tys[0];
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods!(
                 variants,
                 trait_name,
-                fn search_parameter<H: Into<SearchParameterHint2D>>(
+                fn search_nearest_parameter<H: Into<monstertruck_traits::SearchParameterHint2D>>(
                     &self,
                     pt: Self::Point,
                     hint: H,
@@ -1054,18 +957,15 @@ pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     type Point = <#top_ty as #trait_name>::Point;
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -1073,7 +973,133 @@ pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
                     #(#where_predicates,)*
                     #field_type: #trait_name, {
                     type Point = <#field_type as #trait_name>::Point;
-                    fn search_parameter<H: Into<SearchParameterHint2D>>(
+                    fn search_nearest_parameter<H: Into<monstertruck_traits::SearchParameterHint2D>>(
+                        &self,
+                        pt: Self::Point,
+                        hint: H,
+                        trials: usize,
+                    ) -> Option<(f64, f64)> {
+                        self.0.search_nearest_parameter(pt, hint, trials)
+                    }
+                }
+            }
+        }
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
+}
+
+/// Derive macro generating an impl of the trait `SearchParameter<CurveParameter>` for Enums or single field tuple structs.
+#[proc_macro_error]
+#[proc_macro_derive(SearchParameterD1)]
+pub fn derive_sp_d1(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let trait_name =
+        quote! { monstertruck_traits::SearchParameter::<monstertruck_traits::CurveParameter> };
+    let ty = input.ident;
+    let generics_params = input.generics;
+    let where_predicates = generics_params
+        .where_clause
+        .iter()
+        .flat_map(|x| &x.predicates);
+    let implementation = match input.data {
+        Data::Enum(DataEnum { ref variants, .. }) => {
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
+            let methods = methods!(
+                variants,
+                trait_name,
+                fn search_parameter<H: Into<monstertruck_traits::SearchParameterHint1D>>(
+                    &self,
+                    pt: Self::Point,
+                    hint: H,
+                    trials: usize,
+                ) -> Option<f64>,
+            );
+            quote! {
+                #[automatically_derived]
+                impl #generics_params #trait_name for #ty #generics_params
+                where
+                    #(#where_predicates,)*
+                    #top_ty: #trait_name,
+                    {
+                    type Point = <#top_ty as #trait_name>::Point;
+                    #(#methods)*
+                }
+            }
+        }
+        Data::Struct(DataStruct { ref fields, .. }) => {
+            let field_type = derive_try!(tuple_struct_field(fields));
+            quote! {
+                #[automatically_derived]
+                impl #generics_params #trait_name for #ty #generics_params
+                where
+                    #(#where_predicates,)*
+                    #field_type: #trait_name, {
+                    type Point = <#field_type as #trait_name>::Point;
+                    fn search_parameter<H: Into<monstertruck_traits::SearchParameterHint1D>>(
+                        &self,
+                        pt: Self::Point,
+                        hint: H,
+                        trials: usize,
+                    ) -> Option<f64> {
+                        self.0.search_parameter(pt, hint, trials)
+                    }
+                }
+            }
+        }
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
+}
+
+/// Derive macro generating an impl of the trait `SearchParameter<SurfaceParameter>` for Enums or single field tuple structs.
+#[proc_macro_error]
+#[proc_macro_derive(SearchParameterD2)]
+pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let trait_name =
+        quote! { monstertruck_traits::SearchParameter::<monstertruck_traits::SurfaceParameter> };
+    let ty = input.ident;
+    let generics_params = input.generics;
+    let where_predicates = generics_params
+        .where_clause
+        .iter()
+        .flat_map(|x| &x.predicates);
+    let implementation = match input.data {
+        Data::Enum(DataEnum { ref variants, .. }) => {
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
+            let methods = methods!(
+                variants,
+                trait_name,
+                fn search_parameter<H: Into<monstertruck_traits::SearchParameterHint2D>>(
+                    &self,
+                    pt: Self::Point,
+                    hint: H,
+                    trials: usize,
+                ) -> Option<(f64, f64)>,
+            );
+            quote! {
+                #[automatically_derived]
+                impl #generics_params #trait_name for #ty #generics_params
+                where
+                    #(#where_predicates,)*
+                    #top_ty: #trait_name,
+                    {
+                    type Point = <#top_ty as #trait_name>::Point;
+                    #(#methods)*
+                }
+            }
+        }
+        Data::Struct(DataStruct { ref fields, .. }) => {
+            let field_type = derive_try!(tuple_struct_field(fields));
+            quote! {
+                #[automatically_derived]
+                impl #generics_params #trait_name for #ty #generics_params
+                where
+                    #(#where_predicates,)*
+                    #field_type: #trait_name, {
+                    type Point = <#field_type as #trait_name>::Point;
+                    fn search_parameter<H: Into<monstertruck_traits::SearchParameterHint2D>>(
                         &self,
                         pt: Self::Point,
                         hint: H,
@@ -1084,9 +1110,9 @@ pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `Transformed<Matrix3>` for enums or single field tuple structs.
@@ -1094,57 +1120,54 @@ pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(TransformedM3)]
 pub fn derive_transform_m3(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let trait_name = quote! { monstertruck_traits::Transformed::<Matrix3> };
+    let trait_name =
+        quote! { monstertruck_traits::Transformed::<monstertruck_traits::__private::Matrix3> };
     let ty = input.ident;
     let generics_params = input.generics;
     let where_predicates = generics_params
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods!(
                 variants,
                 trait_name,
-                fn transform_by(&mut self, mat: monstertruck_geometry::prelude::Matrix3) -> (),
-                fn transformed(&self, mat: monstertruck_geometry::prelude::Matrix3) -> Self,
+                fn transform_by(&mut self, mat: monstertruck_traits::__private::Matrix3) -> (),
+                fn transformed(&self, mat: monstertruck_traits::__private::Matrix3) -> Self,
             );
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
                     #field_type: #trait_name, {
-                    fn transform_by(&mut self, mat: monstertruck_geometry::prelude::Matrix3) {
-                        self.0.transformed(mat)
+                    fn transform_by(&mut self, mat: monstertruck_traits::__private::Matrix3) {
+                        self.0.transform_by(mat)
                     }
-                    fn transformed(&self, mat: monstertruck_geometry::prelude::Matrix3) -> Self {
+                    fn transformed(&self, mat: monstertruck_traits::__private::Matrix3) -> Self {
                         Self(self.0.transformed(mat))
                     }
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `Transformed<Matrix4>` for enums or single field tuple structs.
@@ -1152,57 +1175,54 @@ pub fn derive_transform_m3(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(TransformedM4)]
 pub fn derive_transform_m4(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let trait_name = quote! { monstertruck_traits::Transformed::<Matrix4> };
+    let trait_name =
+        quote! { monstertruck_traits::Transformed::<monstertruck_traits::__private::Matrix4> };
     let ty = input.ident;
     let generics_params = input.generics;
     let where_predicates = generics_params
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods!(
                 variants,
                 trait_name,
-                fn transform_by(&mut self, mat: monstertruck_geometry::prelude::Matrix4) -> (),
-                fn transformed(&self, mat: monstertruck_geometry::prelude::Matrix4) -> Self,
+                fn transform_by(&mut self, mat: monstertruck_traits::__private::Matrix4) -> (),
+                fn transformed(&self, mat: monstertruck_traits::__private::Matrix4) -> Self,
             );
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
                     #field_type: #trait_name, {
-                    fn transform_by(&mut self, mat: monstertruck_geometry::prelude::Matrix4) {
-                        self.0.transformed(mat)
+                    fn transform_by(&mut self, mat: monstertruck_traits::__private::Matrix4) {
+                        self.0.transform_by(mat)
                     }
-                    fn transformed(&self, mat: monstertruck_geometry::prelude::Matrix4) -> Self {
+                    fn transformed(&self, mat: monstertruck_traits::__private::Matrix4) -> Self {
                         Self(self.0.transformed(mat))
                     }
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(traits_scope(implementation)).into()
 }
 /// Derive macro generating an impl of the trait `StepLength` for enums or single field tuple structs.
 #[proc_macro_error]
@@ -1216,10 +1236,9 @@ pub fn derive_step_length(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods!(
                 variants,
                 trait_name,
@@ -1230,17 +1249,14 @@ pub fn derive_step_length(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -1251,9 +1267,9 @@ pub fn derive_step_length(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(io_scope(implementation)).into()
 }
 
 // Internal generator shared by the `StepFormat` derive and its
@@ -1267,10 +1283,9 @@ fn derive_step_format_impl(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods!(
                 variants,
                 trait_name,
@@ -1281,17 +1296,14 @@ fn derive_step_format_impl(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -1304,9 +1316,9 @@ fn derive_step_format_impl(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(io_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `StepFormat` for enums or single field tuple structs.
@@ -1337,10 +1349,9 @@ pub fn derive_step_curve(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods!(
                 variants,
                 trait_name,
@@ -1351,17 +1362,14 @@ pub fn derive_step_curve(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -1372,9 +1380,9 @@ pub fn derive_step_curve(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(io_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `StepSurface` for enums or single field tuple structs.
@@ -1389,10 +1397,9 @@ pub fn derive_step_surface(input: TokenStream) -> TokenStream {
         .where_clause
         .iter()
         .flat_map(|x| &x.predicates);
-    match input.data {
+    let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
-            let variant = variants.into_iter().next().expect("empty enum!");
-            let tys: Vec<_> = variant.fields.iter().map(|field| &field.ty).collect();
+            let top_ty = derive_try!(enum_field_type(variants, &ty));
             let methods = methods!(
                 variants,
                 trait_name,
@@ -1403,17 +1410,14 @@ pub fn derive_step_surface(input: TokenStream) -> TokenStream {
                 impl #generics_params #trait_name for #ty #generics_params
                 where
                     #(#where_predicates,)*
-                    #(#tys: #trait_name,)* {
+                    #top_ty: #trait_name,
+                    {
                     #(#methods)*
                 }
             }
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
-            let field: Vec<_> = fields.iter().collect();
-            if field.len() != 1 || field[0].ident.is_some() {
-                unimplemented!();
-            }
-            let field_type = &field[0].ty;
+            let field_type = derive_try!(tuple_struct_field(fields));
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name for #ty #generics_params
@@ -1424,9 +1428,9 @@ pub fn derive_step_surface(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unimplemented!(),
-    }
-    .into()
+        _ => unsupported_input(&ty),
+    };
+    derive_try!(io_scope(implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ToSameGeometry<Self>` for structs.
@@ -1436,12 +1440,50 @@ pub fn derive_self_same_geometry(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let ident = input.ident;
     let generics_params = input.generics;
-    quote! {
+    let implementation = quote! {
         #[automatically_derived]
-        impl #generics_params ToSameGeometry<Self> for #ident #generics_params where Self: Clone {
+        impl #generics_params monstertruck_traits::ToSameGeometry<Self> for #ident #generics_params where Self: Clone {
             #[inline(always)]
             fn to_same_geometry(&self) -> Self { self.clone() }
         }
+    };
+    derive_try!(traits_scope(implementation)).into()
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn enum_validation_checks_every_variant_shape() {
+        let valid: DeriveInput = parse_quote! { enum Example { First(u8), Second(u16) } };
+        let Data::Enum(data) = &valid.data else {
+            unreachable!()
+        };
+        let Ok(first) = enum_field_type(&data.variants, &valid.ident) else {
+            unreachable!()
+        };
+        assert_eq!(quote! { #first }.to_string(), "u8");
+
+        let invalid: DeriveInput = parse_quote! { enum Invalid { First(u8), Second(u16, u32) } };
+        let Data::Enum(data) = &invalid.data else {
+            unreachable!()
+        };
+        assert!(enum_field_type(&data.variants, &invalid.ident).is_err());
     }
-    .into()
+
+    #[test]
+    fn invalid_delegation_shapes_return_syn_errors() {
+        let empty: DeriveInput = parse_quote! { enum Empty {} };
+        let Data::Enum(data) = &empty.data else {
+            unreachable!()
+        };
+        assert!(enum_field_type(&data.variants, &empty.ident).is_err());
+
+        let named: DeriveInput = parse_quote! { struct Named { value: u8 } };
+        let Data::Struct(data) = &named.data else {
+            unreachable!()
+        };
+        assert!(tuple_struct_field(&data.fields).is_err());
+    }
 }

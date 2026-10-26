@@ -51,6 +51,7 @@ naga = { version = "29", features = ["wgsl-in"] }
 parking_lot = "0.12"
 pollster = "0.4"
 proc-macro-error = "1"
+proc-macro-crate = "3"
 proc-macro2 = "1"
 proptest = "1"
 quote = "1"
