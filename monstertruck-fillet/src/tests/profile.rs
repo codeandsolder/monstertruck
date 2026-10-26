@@ -530,6 +530,22 @@ fn asymmetric_chamfer_uses_independent_carrier_setbacks() {
 }
 
 #[test]
+fn asymmetric_chamfer_does_not_use_round_radius_length_guard() {
+    let (mut shell, edge, _) = build_box_shell();
+    let initial_face_count = shell.len();
+    let params = FilletOptions {
+        radius: RadiusSpec::Constant(10.0),
+        profile: FilletProfile::AsymmetricChamfer {
+            first_setback_mm: 0.2,
+            second_setback_mm: 0.35,
+        },
+        ..Default::default()
+    };
+    fillet_edges(&mut shell, &[edge[0].id()], Some(&params)).unwrap();
+    assert!(shell.len() > initial_face_count);
+}
+
+#[test]
 fn asymmetric_chamfer_rejects_invalid_setback_and_multi_edge_selection() {
     let (mut shell, edge, _) = build_box_shell();
     let invalid = FilletOptions {

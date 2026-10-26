@@ -439,8 +439,10 @@ pub fn fillet_edges(
         });
     }
 
-    // Reject edges that are too short for the requested fillet radius.
-    {
+    // Reject edges that are too short for the requested rolling radius.
+    // Asymmetric chamfer setbacks are perpendicular to the seam and do not
+    // impose this along-edge radius bound.
+    if !matches!(&options.profile, FilletProfile::AsymmetricChamfer { .. }) {
         let variable_radius_upper_bound = if let RadiusSpec::Variable(f) = &options.radius {
             sampled_variable_radius_upper_bound(f.as_ref(), 32)
         } else {
