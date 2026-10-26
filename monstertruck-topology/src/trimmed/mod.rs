@@ -47,10 +47,18 @@ impl<P, C, S, T> TrimmedFace<P, C, S, T> {
     }
 
     /// Creates a trimmed face from a face and per-edge-use trims.
-    /// # Panics
-    /// Panics if the trim layout does not match [`Face::absolute_boundaries`].
-    pub fn new(face: Face<P, C, S>, trims: Vec<Vec<Option<T>>>) -> Self {
-        Self::try_new(face, trims).expect("TrimmedFace::new: trim layout mismatch")
+    /// # Failures
+    /// Returns an error if the trim layout does not match [`Face::absolute_boundaries`].
+    pub fn new(face: Face<P, C, S>, trims: Vec<Vec<Option<T>>>) -> Result<Self> {
+        Self::try_new(face, trims)
+    }
+
+    /// Creates a trimmed face without validating the trim layout.
+    ///
+    /// The caller must guarantee that `trims` matches [`Face::absolute_boundaries`].
+    #[inline(always)]
+    pub fn new_unchecked(face: Face<P, C, S>, trims: Vec<Vec<Option<T>>>) -> Self {
+        Self { face, trims }
     }
 
     /// Returns the wrapped face.
@@ -224,7 +232,7 @@ impl<P: Clone, C: Clone, S: Clone> Shell<P, C, S> {
                     .iter()
                     .map(|wire| wire.iter().map(|edge| trim_curve(edge, &surface)).collect())
                     .collect();
-                TrimmedFace::new(face.clone(), trims)
+                TrimmedFace::new_unchecked(face.clone(), trims)
             })
             .collect()
     }

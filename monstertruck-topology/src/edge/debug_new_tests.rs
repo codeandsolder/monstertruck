@@ -43,7 +43,7 @@ fn debug_new_accepts_a_well_formed_edge() {
 #[test]
 fn mapped_ends_are_distinct_vertices_even_when_the_points_collapse() {
     let v = Vertex::from_points([0_i32, 1]);
-    let edge = Edge::new(&v[0], &v[1], ());
+    let edge = Edge::new_unchecked(&v[0], &v[1], ());
     let collapsed = edge.mapped(|_| 0_i32, |()| ());
     assert_eq!(collapsed.front().point(), collapsed.back().point());
     assert_ne!(

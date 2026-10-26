@@ -261,13 +261,14 @@ pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                                 let later = remaining.cut(parameter);
                                 remaining
                                     .snap_endpoints(segment_front.point(), split_vertex.point());
-                                let segment = Edge::new(&segment_front, &split_vertex, remaining);
+                                let segment =
+                                    Edge::new_unchecked(&segment_front, &split_vertex, remaining);
                                 pieces.push(canonical_edge(segment, &mut edges));
                                 remaining = later;
                                 segment_front = split_vertex;
                             }
                             remaining.snap_endpoints(segment_front.point(), back.point());
-                            let segment = Edge::new(&segment_front, &back, remaining);
+                            let segment = Edge::new_unchecked(&segment_front, &back, remaining);
                             pieces.push(canonical_edge(segment, &mut edges));
                             pieces
                         })
@@ -325,9 +326,9 @@ mod weld_tests {
         let v1 = Vertex::new(p1);
         let v2 = Vertex::new(p2);
         let wire: Wire<Point3, AltCurve<Curve, Surface>> = vec![
-            Edge::new(&v0, &v1, alt_line(p0, p1)),
-            Edge::new(&v1, &v2, alt_line(p1, p2)),
-            Edge::new(&v2, &v0, alt_line(p2, p0)),
+            Edge::new_unchecked(&v0, &v1, alt_line(p0, p1)),
+            Edge::new_unchecked(&v1, &v2, alt_line(p1, p2)),
+            Edge::new_unchecked(&v2, &v0, alt_line(p2, p0)),
         ]
         .into();
         let face = Face::new_unchecked(
@@ -363,13 +364,13 @@ mod weld_tests {
         let ve = Vertex::new(e);
         let vf = Vertex::new(f);
         let wire: Wire<Point3, AltCurve<Curve, Surface>> = vec![
-            Edge::new(&va, &vb, alt_line(a, b)),
-            Edge::new(&vb, &vc, alt_line(b, c)),
-            Edge::new(&vc, &vd, alt_line(c, d)),
-            Edge::new(&vd, &va, alt_line(d, a)),
-            Edge::new(&va, &vf, alt_line(a, f)),
-            Edge::new(&vf, &ve, alt_line(f, e)),
-            Edge::new(&ve, &va, alt_line(e, a)),
+            Edge::new_unchecked(&va, &vb, alt_line(a, b)),
+            Edge::new_unchecked(&vb, &vc, alt_line(b, c)),
+            Edge::new_unchecked(&vc, &vd, alt_line(c, d)),
+            Edge::new_unchecked(&vd, &va, alt_line(d, a)),
+            Edge::new_unchecked(&va, &vf, alt_line(a, f)),
+            Edge::new_unchecked(&vf, &ve, alt_line(f, e)),
+            Edge::new_unchecked(&ve, &va, alt_line(e, a)),
         ]
         .into();
         let surface = Surface::Plane(Plane::new(
@@ -413,16 +414,16 @@ mod weld_tests {
         let v3 = Vertex::new(p3);
 
         let whole: Wire<Point3, AltCurve<Curve, Surface>> = vec![
-            Edge::new(&v0, &v2, alt_line(p0, p2)),
-            Edge::new(&v2, &v3, alt_line(p2, p3)),
-            Edge::new(&v3, &v0, alt_line(p3, p0)),
+            Edge::new_unchecked(&v0, &v2, alt_line(p0, p2)),
+            Edge::new_unchecked(&v2, &v3, alt_line(p2, p3)),
+            Edge::new_unchecked(&v3, &v0, alt_line(p3, p0)),
         ]
         .into();
         let partitioned: Wire<Point3, AltCurve<Curve, Surface>> = vec![
-            Edge::new(&v0, &v1, alt_line(p0, p1)),
-            Edge::new(&v1, &v2, alt_line(p1, p2)),
-            Edge::new(&v2, &v3, alt_line(p2, p3)),
-            Edge::new(&v3, &v0, alt_line(p3, p0)),
+            Edge::new_unchecked(&v0, &v1, alt_line(p0, p1)),
+            Edge::new_unchecked(&v1, &v2, alt_line(p1, p2)),
+            Edge::new_unchecked(&v2, &v3, alt_line(p2, p3)),
+            Edge::new_unchecked(&v3, &v0, alt_line(p3, p0)),
         ]
         .into();
         let surface = Surface::Plane(Plane::new(

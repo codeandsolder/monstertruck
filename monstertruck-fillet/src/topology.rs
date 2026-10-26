@@ -109,7 +109,8 @@ pub(super) fn cut_face_by_bezier(
         cut.1
     };
 
-    let fillet_edge = Edge::new(new_front_edge.back(), new_back_edge.front(), bezier.into());
+    let fillet_edge =
+        Edge::new_unchecked(new_front_edge.back(), new_back_edge.front(), bezier.into());
     let new_boundaries = face
         .absolute_boundaries()
         .iter()
@@ -155,7 +156,7 @@ pub(super) fn create_pcurve_edge(
     let uv0 = fillet_surface.search_parameter(v0.point(), hint0, 100)?;
     let uv1 = fillet_surface.search_parameter(v1.point(), hint1, 100)?;
     let curve = ParameterCurve::new(Line(uv0.into(), uv1.into()), fillet_surface.clone());
-    Some(Edge::new(v0, v1, curve.into()))
+    Some(Edge::new_unchecked(v0, v1, curve.into()))
 }
 
 pub(super) fn create_new_side(
@@ -380,7 +381,7 @@ pub(super) fn concat_fillet_surface(
 pub(super) fn create_free_edge(curve: Curve) -> Edge {
     let v0 = Vertex::new(curve.front());
     let v1 = Vertex::new(curve.back());
-    Edge::new(&v0, &v1, curve)
+    Edge::new_unchecked(&v0, &v1, curve)
 }
 
 pub(super) fn cut_face_by_last_bezier(

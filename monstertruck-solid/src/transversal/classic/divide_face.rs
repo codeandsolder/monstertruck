@@ -620,7 +620,7 @@ mod tests {
         front: &Vertex<Point3>,
         back: &Vertex<Point3>,
     ) -> Edge<Point3, BsplineCurve<Point3>> {
-        Edge::new(
+        Edge::new_unchecked(
             front,
             back,
             BsplineCurve::new_unchecked(
@@ -634,8 +634,12 @@ mod tests {
     fn synchronized_mesh_samples_use_mesh_projection_budget() {
         let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
-        let exact: Wire<_, _> =
-            vec![Edge::new(&front, &back, Line(front.point(), back.point()))].into();
+        let exact: Wire<_, _> = vec![Edge::new_unchecked(
+            &front,
+            &back,
+            Line(front.point(), back.point()),
+        )]
+        .into();
         let sampled_front = Vertex::new(front.point());
         let sampled_back = Vertex::new(back.point());
         let sampled_curve = PolylineCurve(vec![
@@ -643,8 +647,12 @@ mod tests {
             Point3::new(0.5, 0.0, 5.0e-4),
             back.point(),
         ]);
-        let sampled: Wire<_, _> =
-            vec![Edge::new(&sampled_front, &sampled_back, sampled_curve)].into();
+        let sampled: Wire<_, _> = vec![Edge::new_unchecked(
+            &sampled_front,
+            &sampled_back,
+            sampled_curve,
+        )]
+        .into();
         let mut polys = HashMap::default();
 
         let boundary = create_parameter_boundary_on_surface(

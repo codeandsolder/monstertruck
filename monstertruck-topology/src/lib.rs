@@ -12,12 +12,12 @@
 //!
 //! // Create edges. Vertex is implemented the Copy trait.
 //! let edge = [
-//!     Edge::new(&v[0], &v[1], ()),
-//!     Edge::new(&v[0], &v[2], ()),
-//!     Edge::new(&v[0], &v[3], ()),
-//!     Edge::new(&v[1], &v[2], ()),
-//!     Edge::new(&v[1], &v[3], ()),
-//!     Edge::new(&v[2], &v[3], ()),
+//!     Edge::new_unchecked(&v[0], &v[1], ()),
+//!     Edge::new_unchecked(&v[0], &v[2], ()),
+//!     Edge::new_unchecked(&v[0], &v[3], ()),
+//!     Edge::new_unchecked(&v[1], &v[2], ()),
+//!     Edge::new_unchecked(&v[1], &v[3], ()),
+//!     Edge::new_unchecked(&v[2], &v[3], ()),
 //! ];
 //!
 //! // Create boundaries of faces as the wire.
@@ -31,7 +31,7 @@
 //!
 //! // Create faces by the boundary wires.
 //! // The boundary of face must be simple and closed.
-//! let mut face: Vec<Face> = wire.into_iter().map(|wire| Face::new(vec![wire], ())).collect();
+//! let mut face: Vec<Face> = wire.into_iter().map(|wire| Face::new_unchecked(vec![wire], ())).collect();
 //! face[3].invert();
 //!
 //! // Create shell of faces. Shell can be created by `Vec<Face>``.
@@ -39,7 +39,7 @@
 //!
 //! // Create a tetrahedron solid by the boundary shell.
 //! // The boundaries of a solid must be closed and oriented.
-//! let solid = Solid::new(vec![shell]);
+//! let solid = Solid::new_unchecked(vec![shell]);
 //! ```
 //! ## Elements and containers
 //! Main structures in `monstertruck_topology` consist 4 topological elements and 2 topological containers.
@@ -114,14 +114,14 @@ pub struct Vertex<P> {
 
 /// Edge, which consists two vertices.
 ///
-/// The constructors `Edge::new()`, `Edge::try_new()`, and `Edge::new_unchecked()`
+/// The constructors `Edge::new_unchecked()`, `Edge::try_new()`, and `Edge::new_unchecked()`
 /// create a different edge each time, even if the end vertices are the same one.
 /// An edge is uniquely identified by their `id`.
 /// ```
 /// use monstertruck_topology::*;
 /// let v = Vertex::from_points(&[(), ()]);
-/// let edge0 = Edge::new(&v[0], &v[1], ());
-/// let edge1 = Edge::new(&v[0], &v[1], ());
+/// let edge0 = Edge::new_unchecked(&v[0], &v[1], ());
+/// let edge1 = Edge::new_unchecked(&v[0], &v[1], ());
 /// assert_ne!(edge0.id(), edge1.id());
 /// ```
 #[derive(Debug)]
@@ -143,17 +143,17 @@ pub struct Wire<P, C> {
 
 /// Face, attached to a simple and closed wire.
 ///
-/// The constructors `Face::new()`, `Face::try_new()`, and `Face::new_unchecked()`
+/// The constructors `Face::new_unchecked()`, `Face::try_new()`, and `Face::new_unchecked()`
 /// create a different faces each time, even if the boundary wires are the same one.
 /// A face is uniquely identified by their `id`.
 /// ```
 /// use monstertruck_topology::*;
 /// let v = Vertex::from_points(&[(), ()]);
-/// let edge0 = Edge::new(&v[0], &v[1], ());
-/// let edge1 = Edge::new(&v[1], &v[0], ());
+/// let edge0 = Edge::new_unchecked(&v[0], &v[1], ());
+/// let edge1 = Edge::new_unchecked(&v[1], &v[0], ());
 /// let wire = wire![&edge0, &edge1];
-/// let face0 = Face::new(vec![wire.clone()], ());
-/// let face1 = Face::new(vec![wire], ());
+/// let face0 = Face::new_unchecked(vec![wire.clone()], ());
+/// let face1 = Face::new_unchecked(vec![wire], ());
 /// assert_ne!(face0.id(), face1.id());
 /// ```
 #[derive(Debug)]
@@ -222,7 +222,7 @@ pub type VertexId<P> = Id<Mutex<P>>;
 /// ```
 /// use monstertruck_topology::*;
 /// let v = Vertex::from_points(&[(), ()]);
-/// let edge0 = Edge::new(&v[0], &v[1], ());
+/// let edge0 = Edge::new_unchecked(&v[0], &v[1], ());
 /// let edge1 = edge0.inverse();
 /// assert_ne!(edge0, edge1);
 /// assert_eq!(edge0.id(), edge1.id());
@@ -235,13 +235,13 @@ pub type EdgeId<C> = Id<Mutex<C>>;
 /// use monstertruck_topology::*;
 /// let v = Vertex::from_points(&[(); 3]);
 /// let wire = Wire::from(vec![
-///     Edge::new(&v[0], &v[1], ()),
-///     Edge::new(&v[1], &v[2], ()),
-///     Edge::new(&v[2], &v[0], ()),
+///     Edge::new_unchecked(&v[0], &v[1], ()),
+///     Edge::new_unchecked(&v[1], &v[2], ()),
+///     Edge::new_unchecked(&v[2], &v[0], ()),
 /// ]);
-/// let face0 = Face::new(vec![wire.clone()], ());
+/// let face0 = Face::new_unchecked(vec![wire.clone()], ());
 /// let face1 = face0.inverse();
-/// let face2 = Face::new(vec![wire], ());
+/// let face2 = Face::new_unchecked(vec![wire], ());
 /// assert_ne!(face0, face1);
 /// assert_ne!(face0, face2);
 /// assert_eq!(face0.id(), face1.id());
@@ -461,9 +461,9 @@ pub mod imported;
 /// use monstertruck_topology::*;
 /// let v: Vec<Vertex<()>> = Vertex::from_points([(); 3]);
 /// let wire: Wire<(), ()> = wire![
-///     Edge::new(&v[0], &v[1], ()),
-///     Edge::new(&v[1], &v[2], ()),
-///     Edge::new(&v[2], &v[0], ()),
+///     Edge::new_unchecked(&v[0], &v[1], ()),
+///     Edge::new_unchecked(&v[1], &v[2], ()),
+///     Edge::new_unchecked(&v[2], &v[0], ()),
 /// ];
 /// ```
 #[macro_export]
@@ -476,18 +476,18 @@ macro_rules! wire { ($($t:tt)*) => { $crate::Wire::from_iter([$($t)*]) }; }
 /// use monstertruck_topology::*;
 /// let v: Vec<Vertex<()>> = Vertex::from_points([(); 4]);
 /// let wire0: Wire<(), ()> = wire![
-///     Edge::new(&v[0], &v[1], ()),
-///     Edge::new(&v[1], &v[2], ()),
-///     Edge::new(&v[2], &v[0], ()),
+///     Edge::new_unchecked(&v[0], &v[1], ()),
+///     Edge::new_unchecked(&v[1], &v[2], ()),
+///     Edge::new_unchecked(&v[2], &v[0], ()),
 /// ];
 /// let wire1: Wire<(), ()> = wire![
 ///     wire0[0].inverse(),
-///     Edge::new(&v[0], &v[3], ()),
-///     Edge::new(&v[3], &v[1], ()),
+///     Edge::new_unchecked(&v[0], &v[3], ()),
+///     Edge::new_unchecked(&v[3], &v[1], ()),
 /// ];
 /// let shell = shell![
-///     Face::new(vec![wire0], ()),
-///     Face::new(vec![wire1], ()),
+///     Face::new_unchecked(vec![wire0], ()),
+///     Face::new_unchecked(vec![wire1], ()),
 /// ];
 /// ```
 #[macro_export]

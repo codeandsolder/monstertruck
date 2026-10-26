@@ -235,7 +235,7 @@ fn vertex_default_stable_id_is_unassigned() {
 #[test]
 fn edge_stable_id_survives_inverse() {
     let v = Vertex::from_points([(), ()]);
-    let mut edge = Edge::new(&v[0], &v[1], ());
+    let mut edge = Edge::new_unchecked(&v[0], &v[1], ());
     edge.set_stable_id(StableId::new(42));
     let inv = edge.inverse();
     assert_eq!(edge.stable_id(), inv.stable_id());
@@ -246,11 +246,11 @@ fn face_stable_id_survives_clone() {
     use crate::Wire;
     let v = Vertex::from_points([(), (), ()]);
     let wire = Wire::from(vec![
-        Edge::new(&v[0], &v[1], ()),
-        Edge::new(&v[1], &v[2], ()),
-        Edge::new(&v[2], &v[0], ()),
+        Edge::new_unchecked(&v[0], &v[1], ()),
+        Edge::new_unchecked(&v[1], &v[2], ()),
+        Edge::new_unchecked(&v[2], &v[0], ()),
     ]);
-    let mut face = Face::new(vec![wire], ());
+    let mut face = Face::new_unchecked(vec![wire], ());
     face.set_stable_id(StableId::new(99));
     let face2 = face.clone();
     assert_eq!(face.stable_id(), face2.stable_id());
@@ -260,18 +260,18 @@ fn face_stable_id_survives_clone() {
 fn solid_alloc_id() {
     let v = Vertex::from_points([(); 8]);
     let edge = [
-        Edge::new(&v[0], &v[1], ()),
-        Edge::new(&v[1], &v[2], ()),
-        Edge::new(&v[2], &v[3], ()),
-        Edge::new(&v[3], &v[0], ()),
-        Edge::new(&v[0], &v[4], ()),
-        Edge::new(&v[1], &v[5], ()),
-        Edge::new(&v[2], &v[6], ()),
-        Edge::new(&v[3], &v[7], ()),
-        Edge::new(&v[4], &v[5], ()),
-        Edge::new(&v[5], &v[6], ()),
-        Edge::new(&v[6], &v[7], ()),
-        Edge::new(&v[7], &v[4], ()),
+        Edge::new_unchecked(&v[0], &v[1], ()),
+        Edge::new_unchecked(&v[1], &v[2], ()),
+        Edge::new_unchecked(&v[2], &v[3], ()),
+        Edge::new_unchecked(&v[3], &v[0], ()),
+        Edge::new_unchecked(&v[0], &v[4], ()),
+        Edge::new_unchecked(&v[1], &v[5], ()),
+        Edge::new_unchecked(&v[2], &v[6], ()),
+        Edge::new_unchecked(&v[3], &v[7], ()),
+        Edge::new_unchecked(&v[4], &v[5], ()),
+        Edge::new_unchecked(&v[5], &v[6], ()),
+        Edge::new_unchecked(&v[6], &v[7], ()),
+        Edge::new_unchecked(&v[7], &v[4], ()),
     ];
     let wire0 = wire![&edge[0], &edge[1], &edge[2], &edge[3]];
     let wire1 = wire![&edge[4], &edge[8], &edge[5].inverse(), &edge[0].inverse()];
@@ -284,14 +284,14 @@ fn solid_alloc_id() {
         &edge[9].inverse(),
         &edge[8].inverse(),
     ];
-    let face0 = Face::new(vec![wire0], ());
-    let face1 = Face::new(vec![wire1], ());
-    let face2 = Face::new(vec![wire2], ());
-    let face3 = Face::new(vec![wire3], ());
-    let face4 = Face::new(vec![wire4], ());
-    let face5 = Face::new(vec![wire5], ());
+    let face0 = Face::new_unchecked(vec![wire0], ());
+    let face1 = Face::new_unchecked(vec![wire1], ());
+    let face2 = Face::new_unchecked(vec![wire2], ());
+    let face3 = Face::new_unchecked(vec![wire3], ());
+    let face4 = Face::new_unchecked(vec![wire4], ());
+    let face5 = Face::new_unchecked(vec![wire5], ());
     let shell: Shell<(), (), ()> = vec![face0, face1, face2, face3, face4, face5].into();
-    let mut solid = Solid::new(vec![shell]);
+    let mut solid = Solid::new_unchecked(vec![shell]);
     let a = solid.alloc_id();
     let b = solid.alloc_id();
     assert_ne!(a, b);

@@ -56,7 +56,7 @@ fn main() {
     face.add_boundary(bdd.inverse())
         .expect("torus x-boundary should attach to cube face");
     shell.extend(torus);
-    let solid = Solid::new(vec![shell]);
+    let solid = Solid::new_unchecked(vec![shell]);
     let json = serde_json::to_vec_pretty(&solid).unwrap();
     std::fs::write("torus-punched-cube.json", json).unwrap();
 }

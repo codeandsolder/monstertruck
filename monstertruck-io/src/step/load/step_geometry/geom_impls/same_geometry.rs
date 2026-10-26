@@ -214,7 +214,7 @@ fn builder() {
     assert_eq!(boundaries.len(), 2);
     shell.push(builder::try_attach_plane([boundaries[0].inverse()]).unwrap());
     shell.push(builder::try_attach_plane([boundaries[1].inverse()]).unwrap());
-    let cylinder = Solid::new(vec![shell]);
+    let cylinder = Solid::new_unchecked(vec![shell]);
     let mut poly = cylinder.triangulation(0.1).to_polygon();
     poly.put_together_same_attrs(1.0e-3).remove_unused_attrs();
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
@@ -267,7 +267,7 @@ fn builder() {
         let _ = shell[5].add_boundary(boundary[0].inverse());
     }
     shell.extend(hole);
-    let solid = Solid::new(vec![shell]);
+    let solid = Solid::new_unchecked(vec![shell]);
     let mut poly = solid.triangulation(0.1).to_polygon();
     poly.put_together_same_attrs(1.0e-3).remove_unused_attrs();
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);

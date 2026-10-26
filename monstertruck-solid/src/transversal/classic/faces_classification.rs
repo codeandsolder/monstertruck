@@ -268,8 +268,8 @@ mod materialization_tests {
     fn distinct_edge_digon_is_not_treated_as_retrace() {
         let front = Vertex::new(());
         let back = Vertex::new(());
-        let edge0 = Edge::new(&front, &back, ());
-        let edge1 = Edge::new(&back, &front, ());
+        let edge0 = Edge::new_unchecked(&front, &back, ());
+        let edge1 = Edge::new_unchecked(&back, &front, ());
         let region = BooleanRegion::new(vec![Wire::from(vec![edge0, edge1])], (), true, 0, 0);
 
         let materialized = materialize_regions(&[region]);

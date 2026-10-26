@@ -51,9 +51,11 @@ impl<P, C, S> Solid<P, C, S> {
 
     /// Create a solid whose boundaries must be non-empty, connected,
     /// and closed manifold.
+    /// # Failures
+    /// Returns the same validation errors as [`Solid::try_new`].
     #[inline(always)]
-    pub fn new(boundaries: Vec<Shell<P, C, S>>) -> Solid<P, C, S> {
-        Self::try_new(boundaries).unwrap_or_else(|error| panic!("Solid::new: {error}"))
+    pub fn new(boundaries: Vec<Shell<P, C, S>>) -> Result<Solid<P, C, S>> {
+        Self::try_new(boundaries)
     }
 
     /// Create without validation (for performance-critical code).
@@ -455,7 +457,7 @@ impl<P, C, S> Solid<P, C, S> {
             .iter_mut()
             .find_map(|shell| shell.cut_edge(edge_id, vertex));
         #[cfg(debug_assertions)]
-        let _ = Solid::new(self.boundaries.clone());
+        let _ = Solid::new_unchecked(self.boundaries.clone());
         res
     }
     /// Removes `vertex` from `self` by concat two edges on both sides.
@@ -469,7 +471,7 @@ impl<P, C, S> Solid<P, C, S> {
             .iter_mut()
             .find_map(|shell| shell.remove_vertex_by_concat_edges(vertex_id));
         #[cfg(debug_assertions)]
-        let _ = Solid::new(self.boundaries.clone());
+        let _ = Solid::new_unchecked(self.boundaries.clone());
         res
     }
 
@@ -560,40 +562,40 @@ pub(super) fn cube() -> Solid<(), (), ()> {
     use crate::*;
     let v = Vertex::from_points([(); 8]);
     let edge = [
-        Edge::new(&v[0], &v[1], ()), // 0
-        Edge::new(&v[1], &v[2], ()), // 1
-        Edge::new(&v[2], &v[3], ()), // 2
-        Edge::new(&v[3], &v[0], ()), // 3
-        Edge::new(&v[0], &v[4], ()), // 4
-        Edge::new(&v[1], &v[5], ()), // 5
-        Edge::new(&v[2], &v[6], ()), // 6
-        Edge::new(&v[3], &v[7], ()), // 7
-        Edge::new(&v[4], &v[5], ()), // 8
-        Edge::new(&v[5], &v[6], ()), // 9
-        Edge::new(&v[6], &v[7], ()), // 10
-        Edge::new(&v[7], &v[4], ()), // 11
+        Edge::new_unchecked(&v[0], &v[1], ()), // 0
+        Edge::new_unchecked(&v[1], &v[2], ()), // 1
+        Edge::new_unchecked(&v[2], &v[3], ()), // 2
+        Edge::new_unchecked(&v[3], &v[0], ()), // 3
+        Edge::new_unchecked(&v[0], &v[4], ()), // 4
+        Edge::new_unchecked(&v[1], &v[5], ()), // 5
+        Edge::new_unchecked(&v[2], &v[6], ()), // 6
+        Edge::new_unchecked(&v[3], &v[7], ()), // 7
+        Edge::new_unchecked(&v[4], &v[5], ()), // 8
+        Edge::new_unchecked(&v[5], &v[6], ()), // 9
+        Edge::new_unchecked(&v[6], &v[7], ()), // 10
+        Edge::new_unchecked(&v[7], &v[4], ()), // 11
     ];
 
     let wire0 = wire![&edge[0], &edge[1], &edge[2], &edge[3]];
-    let face0 = Face::new(vec![wire0], ());
+    let face0 = Face::new_unchecked(vec![wire0], ());
 
     let wire1 = wire![&edge[4], &edge[8], &edge[5].inverse(), &edge[0].inverse(),];
-    let face1 = Face::new(vec![wire1], ());
+    let face1 = Face::new_unchecked(vec![wire1], ());
 
     let wire2 = wire![&edge[5], &edge[9], &edge[6].inverse(), &edge[1].inverse(),];
-    let face2 = Face::new(vec![wire2], ());
+    let face2 = Face::new_unchecked(vec![wire2], ());
 
     let wire3 = wire![&edge[6], &edge[10], &edge[7].inverse(), &edge[2].inverse(),];
-    let face3 = Face::new(vec![wire3], ());
+    let face3 = Face::new_unchecked(vec![wire3], ());
     let wire4 = wire![&edge[7], &edge[11], &edge[4].inverse(), &edge[3].inverse(),];
-    let face4 = Face::new(vec![wire4], ());
+    let face4 = Face::new_unchecked(vec![wire4], ());
     let wire5 = wire![
         &edge[11].inverse(),
         &edge[10].inverse(),
         &edge[9].inverse(),
         &edge[8].inverse(),
     ];
-    let face5 = Face::new(vec![wire5], ());
+    let face5 = Face::new_unchecked(vec![wire5], ());
 
     let mut shell = Shell::new();
     shell.push(face0);
@@ -606,7 +608,7 @@ pub(super) fn cube() -> Solid<(), (), ()> {
     shell.push(face3);
     shell.push(face4);
 
-    Solid::new(vec![shell])
+    Solid::new_unchecked(vec![shell])
 }
 
 #[test]

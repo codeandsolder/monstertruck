@@ -45,9 +45,9 @@ fn non_riding_boundary_shell() -> Shell {
     .into();
     let w: Wire = vec![
         builder::line(&v[2], &v[0]),
-        Edge::new(&v[0], &v[1], bsp0),
+        Edge::new_unchecked(&v[0], &v[1], bsp0),
         builder::line(&v[1], &v[3]),
-        Edge::new(&v[3], &v[2], bsp1),
+        Edge::new_unchecked(&v[3], &v[2], bsp1),
     ]
     .into();
     let surface_raw = RevolutionSurface::by_revolution(
@@ -56,7 +56,7 @@ fn non_riding_boundary_shell() -> Shell {
         Vector3::unit_z(),
     );
     let surface: Surface = Processor::new(surface_raw).into();
-    vec![Face::new(vec![w], surface)].into()
+    vec![Face::new_unchecked(vec![w], surface)].into()
 }
 
 /// A closed unit-cube solid whose every (planar) face meshes cleanly.

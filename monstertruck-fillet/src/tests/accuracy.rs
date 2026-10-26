@@ -91,7 +91,7 @@ fn continuity_at_wire_joins() {
 
     let line = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1),
@@ -129,7 +129,7 @@ fn continuity_at_wire_joins() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let mut shell: Shell = [

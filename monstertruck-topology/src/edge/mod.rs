@@ -20,12 +20,12 @@ impl<P, C> Edge<P, C> {
             Ok(Edge::new_unchecked(front, back, curve))
         }
     }
-    /// Generates the edge from `front` to `back`.
-    /// # Panics
-    /// Panics if `front == back`.
+    /// Generates the edge from `front` to `back`, validating that the vertices differ.
+    /// # Failures
+    /// Returns [`Error::SameVertex`] if `front == back`.
     #[inline(always)]
-    pub fn new(front: &Vertex<P>, back: &Vertex<P>, curve: C) -> Edge<P, C> {
-        Self::try_new(front, back, curve).expect("Edge::new: front and back vertices must differ")
+    pub fn new(front: &Vertex<P>, back: &Vertex<P>, curve: C) -> Result<Edge<P, C>> {
+        Self::try_new(front, back, curve)
     }
     /// Generates the edge from `front` to `back`.
     /// # Remarks
@@ -80,7 +80,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge0 = Edge::new(&v[0], &v[1], ());
+    /// let edge0 = Edge::new_unchecked(&v[0], &v[1], ());
     /// let edge1 = edge0.inverse();
     /// assert!(edge0.orientation());
     /// assert!(!edge1.orientation());
@@ -92,7 +92,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge = Edge::new(&v[0], &v[1], ());
+    /// let edge = Edge::new_unchecked(&v[0], &v[1], ());
     /// let mut inv_edge = edge.clone();
     /// inv_edge.invert();
     ///
@@ -113,7 +113,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge = Edge::new(&v[0], &v[1], ());
+    /// let edge = Edge::new_unchecked(&v[0], &v[1], ());
     /// let inv_edge = edge.inverse();
     ///
     /// // Two edges are the same edge.
@@ -140,7 +140,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge = Edge::new(&v[0], &v[1], ());
+    /// let edge = Edge::new_unchecked(&v[0], &v[1], ());
     /// assert_eq!(edge.front(), &v[0]);
     /// ```
     #[inline(always)]
@@ -155,7 +155,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge = Edge::new(&v[0], &v[1], ());
+    /// let edge = Edge::new_unchecked(&v[0], &v[1], ());
     /// assert_eq!(edge.back(), &v[1]);
     /// ```
     #[inline(always)]
@@ -170,7 +170,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge = Edge::new(&v[0], &v[1], ());
+    /// let edge = Edge::new_unchecked(&v[0], &v[1], ());
     /// assert_eq!(edge.ends(), (&v[0], &v[1]));
     /// ```
     #[inline(always)]
@@ -185,7 +185,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge = Edge::new(&v[0], &v[1], ()).inverse();
+    /// let edge = Edge::new_unchecked(&v[0], &v[1], ()).inverse();
     /// assert_eq!(edge.front(), &v[1]);
     /// assert_eq!(edge.absolute_front(), &v[0]);
     /// ```
@@ -195,7 +195,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge = Edge::new(&v[0], &v[1], ()).inverse();
+    /// let edge = Edge::new_unchecked(&v[0], &v[1], ()).inverse();
     /// assert_eq!(edge.back(), &v[0]);
     /// assert_eq!(edge.absolute_back(), &v[1]);
     /// ```
@@ -206,7 +206,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let mut edge = Edge::new(&v[0], &v[1], ());
+    /// let mut edge = Edge::new_unchecked(&v[0], &v[1], ());
     /// edge.invert();
     /// assert_eq!(edge.ends(), (&v[1], &v[0]));
     /// assert_eq!(edge.absolute_ends(), (&v[0], &v[1]));
@@ -221,7 +221,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::{Vertex, Edge};
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge0 = Edge::new(&v[0], &v[1], ());
+    /// let edge0 = Edge::new_unchecked(&v[0], &v[1], ());
     /// let edge1 = edge0.inverse();
     /// let edge2 = edge1.absolute_clone();
     /// assert_eq!(edge0, edge2);
@@ -242,8 +242,8 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::{Vertex, Edge};
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge0 = Edge::new(&v[0], &v[1], ());
-    /// let edge1 = Edge::new(&v[0], &v[1], ());
+    /// let edge0 = Edge::new_unchecked(&v[0], &v[1], ());
+    /// let edge1 = Edge::new_unchecked(&v[0], &v[1], ());
     /// let edge2 = edge0.clone();
     /// let edge3 = edge0.inverse();
     /// assert!(!edge0.is_same(&edge1)); // edges whose ids are different are not the same.
@@ -260,7 +260,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[0, 1]);
-    /// let mut edge = Edge::new(&v[0], &v[1], (0, 1));
+    /// let mut edge = Edge::new_unchecked(&v[0], &v[1], (0, 1));
     /// edge.invert();
     ///
     /// // absolute curve
@@ -283,7 +283,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge0 = Edge::new(&v[0], &v[1], 0);
+    /// let edge0 = Edge::new_unchecked(&v[0], &v[1], 0);
     /// let edge1 = edge0.clone();
     ///
     /// // Two edges have the same content.
@@ -305,7 +305,7 @@ impl<P, C> Edge<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let edge0 = Edge::new(&v[0], &v[1], ());
+    /// let edge0 = Edge::new_unchecked(&v[0], &v[1], ());
     /// let edge1 = edge0.inverse();
     /// assert_ne!(edge0, edge1);
     /// assert_eq!(edge0.id(), edge1.id());
@@ -321,11 +321,11 @@ impl<P, C> Edge<P, C> {
     ///
     /// // Create one edge
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let e0 = Edge::new(&v[0], &v[1], ());
+    /// let e0 = Edge::new_unchecked(&v[0], &v[1], ());
     /// assert_eq!(e0.count(), 1);
     ///
     /// // Create another edge, independent from e0
-    /// let e1 = Edge::new(&v[0], &v[1], ());
+    /// let e1 = Edge::new_unchecked(&v[0], &v[1], ());
     /// assert_eq!(e0.count(), 1);
     ///
     /// // Clone e0, count will be 2
@@ -385,7 +385,7 @@ impl<P, C> Edge<P, C> {
     /// use monstertruck_topology::*;
     /// let v0 = Vertex::new(0);
     /// let v1 = Vertex::new(1);
-    /// let edge0 = Edge::new(&v0, &v1, 2);
+    /// let edge0 = Edge::new_unchecked(&v0, &v1, 2);
     /// let edge1 = edge0.mapped(
     ///     &move |i: &usize| *i as f64 + 0.5,
     ///     &move |j: &usize| *j as f64 + 0.5,
@@ -531,7 +531,7 @@ impl<P, C> Edge<P, C> {
     /// use EdgeDisplayFormat as Edf;
     ///
     /// let vertex_format = VertexDisplayFormat::AsPoint;
-    /// let edge = Edge::new(&Vertex::new(0), &Vertex::new(1), 2);
+    /// let edge = Edge::new_unchecked(&Vertex::new(0), &Vertex::new(1), 2);
     /// let id = edge.id();
     ///
     /// assert_eq!(

@@ -80,24 +80,24 @@ fn create_fillet() {
     let boundary1 = surface1.splitted_boundary();
 
     let wire0: Wire = [
-        Edge::new(&v[0], &v[1], boundary0[0].clone().into()),
-        Edge::new(&v[1], &v[2], boundary0[1].clone().into()),
-        Edge::new(&v[2], &v[3], boundary0[2].clone().into()),
-        Edge::new(&v[3], &v[0], boundary0[3].clone().into()),
+        Edge::new_unchecked(&v[0], &v[1], boundary0[0].clone().into()),
+        Edge::new_unchecked(&v[1], &v[2], boundary0[1].clone().into()),
+        Edge::new_unchecked(&v[2], &v[3], boundary0[2].clone().into()),
+        Edge::new_unchecked(&v[3], &v[0], boundary0[3].clone().into()),
     ]
     .into();
 
     let wire1: Wire = [
         wire0[0].inverse(),
-        Edge::new(&v[0], &v[4], boundary1[1].clone().into()),
-        Edge::new(&v[4], &v[5], boundary1[2].clone().into()),
-        Edge::new(&v[5], &v[1], boundary1[3].clone().into()),
+        Edge::new_unchecked(&v[0], &v[4], boundary1[1].clone().into()),
+        Edge::new_unchecked(&v[4], &v[5], boundary1[2].clone().into()),
+        Edge::new_unchecked(&v[5], &v[1], boundary1[3].clone().into()),
     ]
     .into();
 
     let shared_edge_id = wire0[0].id();
-    let face0 = Face::new(vec![wire0], surface0);
-    let face1 = Face::new(vec![wire1], surface1);
+    let face0 = Face::new_unchecked(vec![wire0], surface0);
+    let face1 = Face::new_unchecked(vec![wire1], surface1);
 
     let shell: Shell = [face0.clone(), face1.clone()].into();
     let _poly = shell.robust_triangulation(0.001).to_polygon();
@@ -135,7 +135,7 @@ fn create_fillet_with_side() {
 
     let line = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
 
     let edge = [
@@ -176,7 +176,7 @@ fn create_fillet_with_side() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let face = [plane(0, 1, 2, 3), plane(0, 3, 7, 4), plane(0, 4, 5, 1)];
@@ -214,11 +214,11 @@ fn fillet_to_nurbs() {
 
     let line = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1),
-        Edge::new(
+        Edge::new_unchecked(
             &v[1],
             &v[2],
             circle_arc_by_three_points(
@@ -231,7 +231,7 @@ fn fillet_to_nurbs() {
         line(2, 0),
         line(1, 4),
         line(2, 5),
-        Edge::new(
+        Edge::new_unchecked(
             &v[4],
             &v[5],
             circle_arc_by_three_points(
@@ -275,11 +275,11 @@ fn fillet_to_nurbs() {
         ],
     ));
     let shell: Shell = [
-        Face::new(
+        Face::new_unchecked(
             vec![[edge[0].clone(), edge[1].clone(), edge[2].clone()].into()],
             bsp0,
         ),
-        Face::new(
+        Face::new_unchecked(
             vec![
                 [
                     edge[3].clone(),

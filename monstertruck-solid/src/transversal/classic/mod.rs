@@ -793,7 +793,7 @@ mod structural_classification_tests {
         let edges = (0..vertices.len())
             .map(|index| {
                 let next = (index + 1) % vertices.len();
-                Edge::new(
+                Edge::new_unchecked(
                     &vertices[index],
                     &vertices[next],
                     Curve::from(Line(vertices[index].point(), vertices[next].point())),
@@ -828,7 +828,7 @@ mod structural_classification_tests {
         let edges = (0..vertices.len())
             .map(|index| {
                 let next = (index + 1) % vertices.len();
-                Edge::new(
+                Edge::new_unchecked(
                     &vertices[index],
                     &vertices[next],
                     Curve::from(Line(vertices[index].point(), vertices[next].point())),
@@ -895,7 +895,7 @@ mod structural_classification_tests {
             (0..vertices.len())
                 .map(|index| {
                     let next = (index + 1) % vertices.len();
-                    Edge::new(
+                    Edge::new_unchecked(
                         &vertices[index],
                         &vertices[next],
                         Curve::from(Line(vertices[index].point(), vertices[next].point())),

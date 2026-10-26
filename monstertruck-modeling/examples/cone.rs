@@ -16,7 +16,7 @@ fn main() {
         builder::SweepAngle::Closed,
         4,
     );
-    let cone = Solid::new(vec![shell]);
+    let cone = Solid::new_unchecked(vec![shell]);
     let json = serde_json::to_vec_pretty(&cone).unwrap();
     std::fs::write("cone.json", json).unwrap();
 }

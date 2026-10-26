@@ -98,7 +98,7 @@ fn vertex() {
 
 #[test]
 fn edge() {
-    let edge = Edge::new(
+    let edge = Edge::new_unchecked(
         &Vertex::new(Point3::new(0.0, 0.0, 0.0)),
         &Vertex::new(Point3::new(0.0, 1.0, 0.0)),
         PolylineCurve(vec![
@@ -159,9 +159,9 @@ fn wire() {
     let v = Vertex::from_points(p);
     let q = Point3::new(2.0, 0.0, 0.0);
     let wire: Wire<Point3, PolylineCurve<Point3>> = vec![
-        Edge::new(&v[0], &v[1], PolylineCurve(vec![p[0], p[1]])),
-        Edge::new(&v[2], &v[1], PolylineCurve(vec![p[2], q, p[1]])).inverse(),
-        Edge::new(&v[3], &v[0], PolylineCurve(vec![p[3], p[0]])),
+        Edge::new_unchecked(&v[0], &v[1], PolylineCurve(vec![p[0], p[1]])),
+        Edge::new_unchecked(&v[2], &v[1], PolylineCurve(vec![p[2], q, p[1]])).inverse(),
+        Edge::new_unchecked(&v[3], &v[0], PolylineCurve(vec![p[3], p[0]])),
     ]
     .into();
     let data = wire.to_data_set();
@@ -213,17 +213,17 @@ fn shell_topology() -> Shell<Point3, PolylineCurve<Point3>, PolygonMesh> {
         Point3::new(0.25, 0.25, 0.0),
     ];
     let e = [
-        Edge::new(&v[0], &v[1], PolylineCurve(vec![p[0], p[1]])),
-        Edge::new(&v[1], &v[3], PolylineCurve(vec![p[1], p[3]])),
-        Edge::new(&v[3], &v[2], PolylineCurve(vec![p[3], p[2]])),
-        Edge::new(&v[2], &v[0], PolylineCurve(vec![p[2], p[0]])),
-        Edge::new(&v[0], &v[4], PolylineCurve(vec![p[0], p[4]])),
-        Edge::new(&v[4], &v[5], PolylineCurve(vec![p[4], p[5]])),
-        Edge::new(&v[5], &v[1], PolylineCurve(vec![p[5], p[1]])),
-        Edge::new(&v[6], &v[7], PolylineCurve(vec![p[6], q[0], p[7]])),
-        Edge::new(&v[7], &v[8], PolylineCurve(vec![p[7], q[1], p[8]])),
-        Edge::new(&v[8], &v[9], PolylineCurve(vec![p[8], q[2], p[9]])),
-        Edge::new(&v[9], &v[6], PolylineCurve(vec![p[9], q[3], p[6]])),
+        Edge::new_unchecked(&v[0], &v[1], PolylineCurve(vec![p[0], p[1]])),
+        Edge::new_unchecked(&v[1], &v[3], PolylineCurve(vec![p[1], p[3]])),
+        Edge::new_unchecked(&v[3], &v[2], PolylineCurve(vec![p[3], p[2]])),
+        Edge::new_unchecked(&v[2], &v[0], PolylineCurve(vec![p[2], p[0]])),
+        Edge::new_unchecked(&v[0], &v[4], PolylineCurve(vec![p[0], p[4]])),
+        Edge::new_unchecked(&v[4], &v[5], PolylineCurve(vec![p[4], p[5]])),
+        Edge::new_unchecked(&v[5], &v[1], PolylineCurve(vec![p[5], p[1]])),
+        Edge::new_unchecked(&v[6], &v[7], PolylineCurve(vec![p[6], q[0], p[7]])),
+        Edge::new_unchecked(&v[7], &v[8], PolylineCurve(vec![p[7], q[1], p[8]])),
+        Edge::new_unchecked(&v[8], &v[9], PolylineCurve(vec![p[8], q[2], p[9]])),
+        Edge::new_unchecked(&v[9], &v[6], PolylineCurve(vec![p[9], q[3], p[6]])),
     ];
     let polygon0 = PolygonMesh::new(
         StandardAttributes {

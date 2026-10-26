@@ -338,7 +338,7 @@ fn fillet_along_wire_open(
             let (u, v) = fillet_surface.search_parameter(v1.point(), (1.0, 1.0), 100)?;
             let param_line = Line((0.0, 1.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let edge3 = {
@@ -346,7 +346,7 @@ fn fillet_along_wire_open(
             let (u, v) = fillet_surface.search_parameter(v1.point(), (1.0, 2.0), 100)?;
             let param_line = Line((0.0, 2.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let boundary = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
@@ -386,7 +386,7 @@ fn fillet_along_wire_open(
             bezier = bezier.cut(t0);
             let v0 = Vertex::new(bezier.front());
             let v1 = Vertex::new(bezier.back());
-            Edge::new(&v0, &v1, bezier.into())
+            Edge::new_unchecked(&v0, &v1, bezier.into())
         };
 
         let edge1 = cut_face_by_last_bezier(shell, adjacent_faces[0], &fillet_surface).ok_or(
@@ -405,7 +405,7 @@ fn fillet_along_wire_open(
                 })?;
             let param_line = Line((0.0, t0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let edge3 = {
@@ -417,7 +417,7 @@ fn fillet_along_wire_open(
                 })?;
             let param_line = Line((0.0, 1.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let wire = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
@@ -446,7 +446,7 @@ fn fillet_along_wire_open(
             bezier.cut(t0);
             let v0 = Vertex::new(bezier.front());
             let v1 = Vertex::new(bezier.back());
-            Edge::new(&v0, &v1, bezier.into())
+            Edge::new_unchecked(&v0, &v1, bezier.into())
         };
 
         let fillet_surface = concat_fillet_surface(&fillet_surfaces[len - 2..len]).ok_or(
@@ -469,7 +469,7 @@ fn fillet_along_wire_open(
                 })?;
             let param_line = Line((0.0, 1.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let edge3 = {
@@ -482,7 +482,7 @@ fn fillet_along_wire_open(
                 })?;
             let param_line = Line((0.0, t0 + 1.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let wire = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
@@ -501,7 +501,7 @@ fn fillet_along_wire_open(
                     Some(v) => Vertex::clone(v),
                     None => Vertex::new(edge.back().point()),
                 };
-                let new_edge = Edge::new(&v0, &v1, edge.oriented_curve());
+                let new_edge = Edge::new_unchecked(&v0, &v1, edge.oriented_curve());
                 previous_vertex = Some(v0);
                 new_edge.inverse()
             })
@@ -616,7 +616,7 @@ fn fillet_along_wire_closed(
                 })?;
             let param_line = Line((0.0, 1.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let edge3 = {
@@ -628,7 +628,7 @@ fn fillet_along_wire_closed(
                 })?;
             let param_line = Line((0.0, 2.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let boundary = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
@@ -653,7 +653,7 @@ fn fillet_along_wire_closed(
             } else {
                 Vertex::new(edge.front().point())
             };
-            let new_edge = Edge::new(&v0, &v1, edge.oriented_curve());
+            let new_edge = Edge::new_unchecked(&v0, &v1, edge.oriented_curve());
             wire_edges.push(new_edge.inverse());
             previous_vertex = v0;
         }

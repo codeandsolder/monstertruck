@@ -442,9 +442,9 @@ pub trait RobustMeshableShape {
     /// // wire
     /// let w: Wire = vec![
     ///     builder::line(&v[2], &v[0]),
-    ///     Edge::new(&v[0], &v[1], bsp0),
+    ///     Edge::new_unchecked(&v[0], &v[1], bsp0),
     ///     builder::line(&v[1], &v[3]),
-    ///     Edge::new(&v[3], &v[2], bsp1),
+    ///     Edge::new_unchecked(&v[3], &v[2], bsp1),
     /// ]
     /// .into();
     /// // revoluted curve
@@ -455,7 +455,7 @@ pub trait RobustMeshableShape {
     /// );
     /// let surface: Surface = Processor::new(surface_raw).into();
     /// // shell
-    /// let shell: Shell = vec![Face::new(vec![w], surface)].into();
+    /// let shell: Shell = vec![Face::new_unchecked(vec![w], surface)].into();
     ///
     /// // Simple triangulation fails since some edges do not ride on a cylinder
     /// let poly_shell = shell.triangulation(0.01);

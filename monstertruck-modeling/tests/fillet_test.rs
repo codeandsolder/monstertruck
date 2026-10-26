@@ -17,8 +17,9 @@ fn fillet_box_edge() {
     ];
     let v: Vec<Vertex> = Vertex::from_points(p);
 
-    let line_edge =
-        |i: usize, j: usize| -> Edge { Edge::new(&v[i], &v[j], Curve::Line(Line(p[i], p[j]))) };
+    let line_edge = |i: usize, j: usize| -> Edge {
+        Edge::new_unchecked(&v[i], &v[j], Curve::Line(Line(p[i], p[j])))
+    };
 
     let edge = [
         line_edge(0, 1),
@@ -54,7 +55,7 @@ fn fillet_box_edge() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], Surface::Plane(plane))
+        Face::new_unchecked(vec![wire], Surface::Plane(plane))
     };
 
     let mut shell: Shell = [
@@ -95,13 +96,13 @@ fn fillet_refuses_non_exact_curve_typed() {
         Box::new(Surface::Plane(plane)),
     ));
     let edge = [
-        Edge::new(&v[0], &v[1], pcurve),
-        Edge::new(&v[1], &v[2], Curve::Line(Line(p[1], p[2]))),
-        Edge::new(&v[2], &v[3], Curve::Line(Line(p[2], p[3]))),
-        Edge::new(&v[3], &v[0], Curve::Line(Line(p[3], p[0]))),
+        Edge::new_unchecked(&v[0], &v[1], pcurve),
+        Edge::new_unchecked(&v[1], &v[2], Curve::Line(Line(p[1], p[2]))),
+        Edge::new_unchecked(&v[2], &v[3], Curve::Line(Line(p[2], p[3]))),
+        Edge::new_unchecked(&v[3], &v[0], Curve::Line(Line(p[3], p[0]))),
     ];
     let wire: Wire = edge.iter().cloned().collect();
-    let face = Face::new(vec![wire], Surface::Plane(plane));
+    let face = Face::new_unchecked(vec![wire], Surface::Plane(plane));
     let mut shell: Shell = vec![face].into();
 
     let params = FilletOptions {

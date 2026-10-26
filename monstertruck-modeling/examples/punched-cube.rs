@@ -27,7 +27,7 @@ fn main() {
         2,
     );
     let back_edge = wire3.pop_back().unwrap();
-    let tmp = Edge::new(back_edge.front(), edge0.front(), back_edge.curve());
+    let tmp = Edge::new_unchecked(back_edge.front(), edge0.front(), back_edge.curve());
     wire3.push_back(tmp);
     let mut wire = Wire::from_iter(
         std::iter::once(edge0)

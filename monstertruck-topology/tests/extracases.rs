@@ -5,23 +5,23 @@ use monstertruck_topology::{shell::ShellCondition, *};
 fn singular_vertices_in_certain_boundaries() {
     let v = Vertex::from_points([(); 12]);
     let edge = [
-        Edge::new(&v[0], &v[1], ()),
-        Edge::new(&v[1], &v[2], ()),
-        Edge::new(&v[0], &v[7], ()),
-        Edge::new(&v[1], &v[8], ()),
-        Edge::new(&v[2], &v[9], ()),
-        Edge::new(&v[3], &v[4], ()),
-        Edge::new(&v[4], &v[3], ()),
-        Edge::new(&v[5], &v[6], ()),
-        Edge::new(&v[6], &v[5], ()),
-        Edge::new(&v[7], &v[8], ()),
-        Edge::new(&v[8], &v[9], ()),
-        Edge::new(&v[7], &v[10], ()),
-        Edge::new(&v[9], &v[11], ()),
-        Edge::new(&v[10], &v[11], ()),
+        Edge::new_unchecked(&v[0], &v[1], ()),
+        Edge::new_unchecked(&v[1], &v[2], ()),
+        Edge::new_unchecked(&v[0], &v[7], ()),
+        Edge::new_unchecked(&v[1], &v[8], ()),
+        Edge::new_unchecked(&v[2], &v[9], ()),
+        Edge::new_unchecked(&v[3], &v[4], ()),
+        Edge::new_unchecked(&v[4], &v[3], ()),
+        Edge::new_unchecked(&v[5], &v[6], ()),
+        Edge::new_unchecked(&v[6], &v[5], ()),
+        Edge::new_unchecked(&v[7], &v[8], ()),
+        Edge::new_unchecked(&v[8], &v[9], ()),
+        Edge::new_unchecked(&v[7], &v[10], ()),
+        Edge::new_unchecked(&v[9], &v[11], ()),
+        Edge::new_unchecked(&v[10], &v[11], ()),
     ];
     let shell: Shell<(), (), ()> = vec![
-        Face::new(
+        Face::new_unchecked(
             vec![
                 wire![
                     edge[9].inverse(),
@@ -33,7 +33,7 @@ fn singular_vertices_in_certain_boundaries() {
             ],
             (),
         ),
-        Face::new(
+        Face::new_unchecked(
             vec![
                 wire![
                     edge[3].inverse(),
@@ -45,7 +45,7 @@ fn singular_vertices_in_certain_boundaries() {
             ],
             (),
         ),
-        Face::new(
+        Face::new_unchecked(
             vec![wire![
                 edge[10].clone(),
                 edge[12].clone(),

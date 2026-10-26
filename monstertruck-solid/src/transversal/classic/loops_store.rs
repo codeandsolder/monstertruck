@@ -229,9 +229,9 @@ impl<P: Copy, C: Clone> Loops<P, C> {
                     .entry(edge_id)
                     .or_insert_with(|| {
                         if replaces_front {
-                            Edge::new(new_vertex, absolute_back, edge.curve())
+                            Edge::new_unchecked(new_vertex, absolute_back, edge.curve())
                         } else {
-                            Edge::new(absolute_front, new_vertex, edge.curve())
+                            Edge::new_unchecked(absolute_front, new_vertex, edge.curve())
                         }
                     })
                     .clone();
@@ -1070,8 +1070,8 @@ where
     let poly_curve1 = poly_curve0.cut(t);
     let v0 = Vertex::new(poly_curve0.front());
     let v1 = Vertex::new(poly_curve1.front());
-    let edge0 = Edge::new(&v0, &v1, poly_curve0.into());
-    let edge1 = Edge::new(&v1, &v0, poly_curve1.into());
+    let edge0 = Edge::new_unchecked(&v0, &v1, poly_curve0.into());
+    let edge1 = Edge::new_unchecked(&v1, &v0, poly_curve1.into());
     wire![edge0, edge1]
 }
 
@@ -1380,8 +1380,8 @@ where
                         *intersection_curve.leader_mut().first_mut()? = gv0.point();
                         *intersection_curve.leader_mut().last_mut()? = gv1.point();
 
-                        let pedge = Edge::new(&pv0, &pv1, polyline);
-                        let gedge = Edge::new(&gv0, &gv1, intersection_curve.into());
+                        let pedge = Edge::new_unchecked(&pv0, &pv1, polyline);
+                        let gedge = Edge::new_unchecked(&gv0, &gv1, intersection_curve.into());
                         operand0.add_intersection_edge(
                             face_index0,
                             pedge.clone(),
@@ -1435,7 +1435,7 @@ mod projection_tests {
     fn synchronized_sampling_evidence_rejects_structural_drift() {
         let g0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let g1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
-        let geom_edge = Edge::new(&g0, &g1, Line(g0.point(), g1.point()));
+        let geom_edge = Edge::new_unchecked(&g0, &g1, Line(g0.point(), g1.point()));
         let geom = LoopsStore(vec![Loops(vec![BoundaryWire::new(
             vec![geom_edge].into(),
             ShapesOpStatus::Unknown,
@@ -1443,7 +1443,7 @@ mod projection_tests {
 
         let p0 = Vertex::new(g0.point());
         let p1 = Vertex::new(g1.point());
-        let poly_edge = Edge::new(
+        let poly_edge = Edge::new_unchecked(
             &p0,
             &p1,
             PolylineCurve(vec![p0.point(), Point3::new(0.5, 0.0, 2.0e-4), p1.point()]),
@@ -1455,7 +1455,7 @@ mod projection_tests {
         assert!(loop_stores_are_synchronized(&geom, &poly));
 
         let stale_back = Vertex::new(Point3::new(1.0, 0.01, 0.0));
-        let stale_edge = Edge::new(
+        let stale_edge = Edge::new_unchecked(
             &p0,
             &stale_back,
             PolylineCurve(vec![p0.point(), stale_back.point()]),
@@ -1472,9 +1472,9 @@ mod projection_tests {
         let v0 = Vertex::new(0usize);
         let v1 = Vertex::new(0usize);
         let v2 = Vertex::new(1usize);
-        let edge01 = Edge::new(&v0, &v1, ());
-        let edge12 = Edge::new(&v1, &v2, ());
-        let edge20 = Edge::new(&v2, &v0, ());
+        let edge01 = Edge::new_unchecked(&v0, &v1, ());
+        let edge12 = Edge::new_unchecked(&v1, &v2, ());
+        let edge20 = Edge::new_unchecked(&v2, &v0, ());
         let wire = BoundaryWire::new(vec![edge01, edge12, edge20].into(), ShapesOpStatus::Unknown);
         let mut loops = Loops(vec![wire]);
         let mut emap = HashMap::default();
@@ -1490,7 +1490,7 @@ mod projection_tests {
     fn loop_boundary_search_accepts_unique_bounded_nearest_projection() {
         let v0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let v1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
-        let edge = Edge::new(&v0, &v1, Line(v0.point(), v1.point()));
+        let edge = Edge::new_unchecked(&v0, &v1, Line(v0.point(), v1.point()));
         let loops = Loops(vec![BoundaryWire::new(
             vec![edge].into(),
             ShapesOpStatus::Unknown,
@@ -1510,7 +1510,7 @@ mod projection_tests {
     fn loop_boundary_vertex_insertion_snaps_recovered_projection_before_cut() {
         let v0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let v1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
-        let edge = Edge::new(&v0, &v1, Line(v0.point(), v1.point()));
+        let edge = Edge::new_unchecked(&v0, &v1, Line(v0.point(), v1.point()));
         let loops = Loops(vec![BoundaryWire::new(
             vec![edge].into(),
             ShapesOpStatus::Unknown,
@@ -1532,7 +1532,7 @@ mod projection_tests {
     fn exact_geometry_resolves_boundary_endpoint_independently() {
         let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let old_back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
-        let edge = Edge::new(&front, &old_back, Line(front.point(), old_back.point()));
+        let edge = Edge::new_unchecked(&front, &old_back, Line(front.point(), old_back.point()));
         let loops = Loops(vec![BoundaryWire::new(
             vec![edge].into(),
             ShapesOpStatus::Unknown,
@@ -1563,7 +1563,7 @@ mod projection_tests {
     fn loop_boundary_search_uses_explicit_tessellation_candidate_budget() {
         let v0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let v1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
-        let edge = Edge::new(&v0, &v1, Line(v0.point(), v1.point()));
+        let edge = Edge::new_unchecked(&v0, &v1, Line(v0.point(), v1.point()));
         let loops = Loops(vec![BoundaryWire::new(
             vec![edge].into(),
             ShapesOpStatus::Unknown,
@@ -1592,8 +1592,8 @@ mod projection_tests {
         let a1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
         let b0 = Vertex::new(a0.point());
         let b1 = Vertex::new(a1.point());
-        let edge_a = Edge::new(&a0, &a1, Line(a0.point(), a1.point()));
-        let edge_b = Edge::new(&b0, &b1, Line(b0.point(), b1.point()));
+        let edge_a = Edge::new_unchecked(&a0, &a1, Line(a0.point(), a1.point()));
+        let edge_b = Edge::new_unchecked(&b0, &b1, Line(b0.point(), b1.point()));
         let loops = Loops(vec![BoundaryWire::new(
             vec![edge_a, edge_b].into(),
             ShapesOpStatus::Unknown,
@@ -1617,12 +1617,12 @@ mod projection_tests {
         let horizontal_back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
         let vertical_front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let vertical_back = Vertex::new(Point3::new(0.0, 1.0, 0.0));
-        let horizontal = Edge::new(
+        let horizontal = Edge::new_unchecked(
             &horizontal_front,
             &horizontal_back,
             Line(horizontal_front.point(), horizontal_back.point()),
         );
-        let vertical = Edge::new(
+        let vertical = Edge::new_unchecked(
             &vertical_front,
             &vertical_back,
             Line(vertical_front.point(), vertical_back.point()),
@@ -1646,8 +1646,8 @@ mod projection_tests {
         let a1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
         let b0 = Vertex::new(a0.point());
         let b1 = Vertex::new(a1.point());
-        let edge_a = Edge::new(&a0, &a1, Line(a0.point(), a1.point()));
-        let edge_b = Edge::new(&b0, &b1, Line(b0.point(), b1.point()));
+        let edge_a = Edge::new_unchecked(&a0, &a1, Line(a0.point(), a1.point()));
+        let edge_b = Edge::new_unchecked(&b0, &b1, Line(b0.point(), b1.point()));
         let loops = Loops(vec![
             BoundaryWire::new(vec![edge_a].into(), ShapesOpStatus::Unknown),
             BoundaryWire::new(vec![edge_b].into(), ShapesOpStatus::Unknown),
@@ -1672,8 +1672,8 @@ mod projection_tests {
         let d = Vertex::new(Point3::new(3.0, 0.0, 0.0));
         let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
         let c = Vertex::new(Point3::new(2.0, 0.0, 0.0));
-        let full = Edge::new(&a, &d, Line(a.point(), d.point()));
-        let sub = Edge::new(&b, &c, Line(b.point(), c.point()));
+        let full = Edge::new_unchecked(&a, &d, Line(a.point(), d.point()));
+        let sub = Edge::new_unchecked(&b, &c, Line(b.point(), c.point()));
         let loops = Loops(vec![
             BoundaryWire::new(vec![full].into(), ShapesOpStatus::Unknown),
             BoundaryWire::new(vec![sub].into(), ShapesOpStatus::Unknown),
@@ -1698,8 +1698,8 @@ mod projection_tests {
         let h1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
         let v0 = Vertex::new(Point3::new(0.0, -1.0, 0.0));
         let v1 = Vertex::new(Point3::new(0.0, 1.0, 0.0));
-        let horizontal = Edge::new(&h0, &h1, Line(h0.point(), h1.point()));
-        let vertical = Edge::new(&v0, &v1, Line(v0.point(), v1.point()));
+        let horizontal = Edge::new_unchecked(&h0, &h1, Line(h0.point(), h1.point()));
+        let vertical = Edge::new_unchecked(&v0, &v1, Line(v0.point(), v1.point()));
         let loops = Loops(vec![
             BoundaryWire::new(vec![horizontal].into(), ShapesOpStatus::Unknown),
             BoundaryWire::new(vec![vertical].into(), ShapesOpStatus::Unknown),
@@ -1717,7 +1717,7 @@ mod projection_tests {
     fn loop_boundary_search_deduplicates_inverse_use_of_same_edge() {
         let v0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let v1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
-        let edge = Edge::new(&v0, &v1, Line(v0.point(), v1.point()));
+        let edge = Edge::new_unchecked(&v0, &v1, Line(v0.point(), v1.point()));
         let loops = Loops(vec![BoundaryWire::new(
             vec![edge.clone(), edge.inverse()].into(),
             ShapesOpStatus::Unknown,
@@ -1737,8 +1737,8 @@ mod projection_tests {
         let left = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let shared = Vertex::new(Point3::new(1.0, 0.0, 0.0));
         let right = Vertex::new(Point3::new(2.0, 0.0, 0.0));
-        let edge_left = Edge::new(&left, &shared, Line(left.point(), shared.point()));
-        let edge_right = Edge::new(&shared, &right, Line(shared.point(), right.point()));
+        let edge_left = Edge::new_unchecked(&left, &shared, Line(left.point(), shared.point()));
+        let edge_right = Edge::new_unchecked(&shared, &right, Line(shared.point(), right.point()));
         let loops = Loops(vec![BoundaryWire::new(
             vec![edge_left, edge_right].into(),
             ShapesOpStatus::Unknown,
@@ -1760,8 +1760,8 @@ mod projection_tests {
         let a1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
         let b0 = Vertex::new(Point3::new(0.0, 2.25 * TOLERANCE, 0.0));
         let b1 = Vertex::new(Point3::new(1.0, 2.25 * TOLERANCE, 0.0));
-        let edge_a = Edge::new(&a0, &a1, Line(a0.point(), a1.point()));
-        let edge_b = Edge::new(&b0, &b1, Line(b0.point(), b1.point()));
+        let edge_a = Edge::new_unchecked(&a0, &a1, Line(a0.point(), a1.point()));
+        let edge_b = Edge::new_unchecked(&b0, &b1, Line(b0.point(), b1.point()));
         let loops = Loops(vec![
             BoundaryWire::new(vec![edge_a].into(), ShapesOpStatus::Unknown),
             BoundaryWire::new(vec![edge_b].into(), ShapesOpStatus::Unknown),
@@ -1780,7 +1780,7 @@ mod projection_tests {
     fn cross_face_endpoint_stitch_rejects_model_scale_nearby_topology() {
         let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
-        let edge = Edge::new(&a, &b, Line(a.point(), b.point()));
+        let edge = Edge::new_unchecked(&a, &b, Line(a.point(), b.point()));
         let lhs = Loops(vec![BoundaryWire::new(
             vec![edge].into(),
             ShapesOpStatus::Unknown,
@@ -1849,7 +1849,7 @@ mod projection_tests {
         let e = Vertex::new(Point3::new(0.0, 1.0, 0.0));
         let f = Vertex::new(Point3::new(1.0, -1.0, 0.0));
         let line = |front: &Vertex<Point3>, back: &Vertex<Point3>| {
-            Edge::new(front, back, Line(front.point(), back.point()))
+            Edge::new_unchecked(front, back, Line(front.point(), back.point()))
         };
 
         // C belongs to both sibling regions, while B belongs only to the lower
@@ -1907,18 +1907,18 @@ mod projection_tests {
         let f = Vertex::new(Point3::new(0.0, 1.0, 0.0));
         let wire = BoundaryWire::new(
             vec![
-                Edge::new(&a, &b, Line(a.point(), b.point())),
-                Edge::new(&b, &c, Line(b.point(), c.point())),
-                Edge::new(&c, &d, Line(c.point(), d.point())),
-                Edge::new(&d, &e, Line(d.point(), e.point())),
-                Edge::new(&e, &f, Line(e.point(), f.point())),
-                Edge::new(&f, &a, Line(f.point(), a.point())),
+                Edge::new_unchecked(&a, &b, Line(a.point(), b.point())),
+                Edge::new_unchecked(&b, &c, Line(b.point(), c.point())),
+                Edge::new_unchecked(&c, &d, Line(c.point(), d.point())),
+                Edge::new_unchecked(&d, &e, Line(d.point(), e.point())),
+                Edge::new_unchecked(&e, &f, Line(e.point(), f.point())),
+                Edge::new_unchecked(&f, &a, Line(f.point(), a.point())),
             ]
             .into(),
             ShapesOpStatus::Or,
         );
         let loops = Loops(vec![wire]);
-        let incoming = Edge::new(&a, &d, Line(a.point(), d.point()));
+        let incoming = Edge::new_unchecked(&a, &d, Line(a.point(), d.point()));
 
         assert!(loops.has_partitioned_coincident_path(&incoming));
     }
@@ -1931,16 +1931,16 @@ mod projection_tests {
         let f = Vertex::new(Point3::new(0.0, 1.0, 0.0));
         let wire = BoundaryWire::new(
             vec![
-                Edge::new(&a, &d, Line(a.point(), d.point())),
-                Edge::new(&d, &e, Line(d.point(), e.point())),
-                Edge::new(&e, &f, Line(e.point(), f.point())),
-                Edge::new(&f, &a, Line(f.point(), a.point())),
+                Edge::new_unchecked(&a, &d, Line(a.point(), d.point())),
+                Edge::new_unchecked(&d, &e, Line(d.point(), e.point())),
+                Edge::new_unchecked(&e, &f, Line(e.point(), f.point())),
+                Edge::new_unchecked(&f, &a, Line(f.point(), a.point())),
             ]
             .into(),
             ShapesOpStatus::Or,
         );
         let loops = Loops(vec![wire]);
-        let incoming = Edge::new(&a, &d, Line(a.point(), d.point()));
+        let incoming = Edge::new_unchecked(&a, &d, Line(a.point(), d.point()));
 
         assert!(!loops.has_partitioned_coincident_path(&incoming));
     }

@@ -1171,7 +1171,10 @@ pub fn normalize_trimmed_shell_orientation<P: Clone, C: Clone, S: Clone, T: Clon
             if flip {
                 let mut face = trimmed_face.face().clone();
                 face.invert();
-                monstertruck_topology::trimmed::TrimmedFace::new(face, trimmed_face.trims().clone())
+                monstertruck_topology::trimmed::TrimmedFace::new_unchecked(
+                    face,
+                    trimmed_face.trims().clone(),
+                )
             } else {
                 trimmed_face.clone()
             }

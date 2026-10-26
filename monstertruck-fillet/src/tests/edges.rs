@@ -28,7 +28,7 @@ fn fillet_semi_cube() {
 
     let line = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1),
@@ -68,7 +68,7 @@ fn fillet_semi_cube() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
     let mut shell: Shell = [
         plane(0, 1, 2, 3),
@@ -148,7 +148,7 @@ fn fillet_closed_wire_box_top() {
 
     let line = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1), // 0: top front
@@ -188,7 +188,7 @@ fn fillet_closed_wire_box_top() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let mut shell: Shell = [
@@ -264,7 +264,7 @@ fn fillet_edges_rejects_missing() {
                 Point3::new(100.0, 100.0, 100.0),
             ],
         );
-        Edge::new(&v[0], &v[1], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[0], &v[1], NurbsCurve::from(bsp).into())
     };
 
     let params = FilletOptions {
@@ -287,7 +287,7 @@ fn fillet_edges_rejects_boundary() {
     let v = Vertex::from_points(p);
     let line = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
 
     let edge = [line(0, 1), line(1, 2), line(2, 3), line(3, 0)];
@@ -306,7 +306,7 @@ fn fillet_edges_rejects_boundary() {
         edge[3].clone(),
     ]
     .into();
-    let face = Face::new(vec![wire], surface);
+    let face = Face::new_unchecked(vec![wire], surface);
     let mut shell: Shell = vec![face].into();
 
     // edge[0] is a boundary edge (shared by only 1 face).
@@ -361,7 +361,7 @@ fn fillet_edges_multi_chain() {
 
     let line = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1), // 0: top front
@@ -401,7 +401,7 @@ fn fillet_edges_multi_chain() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let mut shell: Shell = [
@@ -472,7 +472,7 @@ fn cut_face_five_edge_boundary() {
 
     let line_edge = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![pts[i], pts[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
 
     // 5 edges: e0(0→1), e1(1→2), e2(2→3), e3(3→4), e4(4→0)
@@ -496,7 +496,7 @@ fn cut_face_five_edge_boundary() {
     )
     .into();
 
-    let face = Face::new(vec![wire], surface);
+    let face = Face::new_unchecked(vec![wire], surface);
 
     // Pick edge[2] (2→3) as the filleted edge.
     // Adjacent edges: front=edge[1] (1→2), back=edge[3] (3→4).

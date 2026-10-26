@@ -21,7 +21,7 @@ fn main() {
         builder::SweepAngle::Closed,
         4,
     );
-    let sphere = Solid::new(vec![shell]);
+    let sphere = Solid::new_unchecked(vec![shell]);
     let json = serde_json::to_vec_pretty(&sphere).unwrap();
     std::fs::write("sphere.json", json).unwrap();
 }

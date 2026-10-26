@@ -124,7 +124,7 @@ fn bottle(height: f64, width: f64, thickness: f64) -> Solid {
         .add_boundary(wire)
         .expect("inner hat boundary should attach to bottle body");
     body.extend(inner_body.into_iter().map(|face| face.inverse()));
-    Solid::new(vec![body])
+    Solid::new_unchecked(vec![body])
 }
 
 fn main() {

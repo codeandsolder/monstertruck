@@ -20,7 +20,7 @@ fn modeling(radius0: f64, radius1: f64) -> Solid {
         builder::SweepAngle::Closed,
         2,
     );
-    Solid::new(vec![shell])
+    Solid::new_unchecked(vec![shell])
 }
 
 fn main() {

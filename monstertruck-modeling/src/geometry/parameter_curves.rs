@@ -398,7 +398,7 @@ impl ToTrimmedParameterCurves for Shell {
                             .collect()
                     })
                     .collect();
-                TrimmedFace::new(face, trims)
+                TrimmedFace::new_unchecked(face, trims)
             })
             .collect::<Vec<_>>()
             .into_iter()

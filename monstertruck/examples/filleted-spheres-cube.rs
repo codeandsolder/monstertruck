@@ -261,7 +261,7 @@ fn sphere(center: Point3, radius: f64) -> Solid {
         builder::SweepAngle::Closed,
         4,
     );
-    let s = Solid::new(vec![shell]);
+    let s = Solid::new_unchecked(vec![shell]);
     builder::translated(&s, center.to_vec())
 }
 

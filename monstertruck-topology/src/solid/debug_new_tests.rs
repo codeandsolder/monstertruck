@@ -10,12 +10,12 @@ use crate::*;
 fn open_shell() -> Shell<(), (), ()> {
     let v = Vertex::from_points([(); 3]);
     let wire: Wire<(), ()> = vec![
-        Edge::new(&v[0], &v[1], ()),
-        Edge::new(&v[1], &v[2], ()),
-        Edge::new(&v[2], &v[0], ()),
+        Edge::new_unchecked(&v[0], &v[1], ()),
+        Edge::new_unchecked(&v[1], &v[2], ()),
+        Edge::new_unchecked(&v[2], &v[0], ()),
     ]
     .into();
-    std::iter::once(Face::new(vec![wire], ())).collect()
+    std::iter::once(Face::new_unchecked(vec![wire], ())).collect()
 }
 
 /// The constructor REPORTS instead of aborting. Under `debug_assertions`

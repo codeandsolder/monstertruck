@@ -62,8 +62,8 @@ pub(super) trait NotStrictlyCut: Sized {
 impl NotStrictlyCut for Edge {
     fn pre_cut(&self, vertex: &Vertex, mut curve0: Curve, t: f64) -> (Self, Self) {
         let curve1 = curve0.cut(t);
-        let mut edge0 = Edge::new(self.absolute_front(), vertex, curve0);
-        let mut edge1 = Edge::new(vertex, self.absolute_back(), curve1);
+        let mut edge0 = Edge::new_unchecked(self.absolute_front(), vertex, curve0);
+        let mut edge1 = Edge::new_unchecked(vertex, self.absolute_back(), curve1);
         match self.orientation() {
             true => (edge0, edge1),
             false => {

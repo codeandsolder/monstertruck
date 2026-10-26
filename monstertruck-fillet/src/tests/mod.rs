@@ -138,7 +138,7 @@ fn build_box_shell() -> (Shell, [Edge; 12], Vec<Vertex>) {
 
     let line = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1), // 0
@@ -178,7 +178,7 @@ fn build_box_shell() -> (Shell, [Edge; 12], Vec<Vertex>) {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     // Top, front, right, back (partial box -- 4 faces sharing edges).
@@ -209,7 +209,7 @@ fn build_5face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
 
     let line = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1), // 0: top front
@@ -247,7 +247,7 @@ fn build_5face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let shell: Shell = [
@@ -278,7 +278,7 @@ fn build_6face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
 
     let line = |i: usize, j: usize| {
         let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1), // 0: top front
@@ -316,7 +316,7 @@ fn build_6face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let shell: Shell = [

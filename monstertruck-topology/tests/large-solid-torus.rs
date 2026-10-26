@@ -7,14 +7,14 @@ fn large_torus() -> Solid {
     let row_edge: Vec<Vec<Edge>> = (0..N)
         .map(|i| {
             (0..N)
-                .map(|j| Edge::new(&v[i * N + j], &v[i * N + (j + 1) % N], ()))
+                .map(|j| Edge::new_unchecked(&v[i * N + j], &v[i * N + (j + 1) % N], ()))
                 .collect()
         })
         .collect();
     let col_edge: Vec<Vec<Edge>> = (0..N)
         .map(|i| {
             (0..N)
-                .map(|j| Edge::new(&v[i * N + j], &v[((i + 1) % N) * N + j], ()))
+                .map(|j| Edge::new_unchecked(&v[i * N + j], &v[((i + 1) % N) * N + j], ()))
                 .collect()
         })
         .collect();
@@ -28,10 +28,10 @@ fn large_torus() -> Solid {
                 row_edge[(i + 1) % N][j].inverse(),
                 col_edge[i][j].inverse(),
             ];
-            Face::new(vec![wire], ())
+            Face::new_unchecked(vec![wire], ())
         })
         .collect();
-    Solid::new(vec![shell])
+    Solid::new_unchecked(vec![shell])
 }
 
 #[test]

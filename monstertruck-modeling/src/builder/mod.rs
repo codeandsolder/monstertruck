@@ -104,7 +104,7 @@ pub fn line<C>(vertex0: &Vertex, vertex1: &Vertex) -> Edge<C>
 where Line<Point3>: ToSameGeometry<C> {
     let pt0 = vertex0.point();
     let pt1 = vertex1.point();
-    Edge::new(vertex0, vertex1, Line(pt0, pt1).to_same_geometry())
+    Edge::new_unchecked(vertex0, vertex1, Line(pt0, pt1).to_same_geometry())
 }
 
 /// Additional constraint that, together with the two endpoints, determines a circular arc.
@@ -216,7 +216,11 @@ where
             geom_impls::try_circle_arc_by_start_tangent(pt0, pt1, tangent)?
         }
     };
-    Ok(Edge::new(vertex0, vertex1, curve.to_same_geometry()))
+    Ok(Edge::new_unchecked(
+        vertex0,
+        vertex1,
+        curve.to_same_geometry(),
+    ))
 }
 
 /// Returns a Bezier curve from `vertex0` to `vertex1` with inter control points `inter_points`.
@@ -246,7 +250,7 @@ where BsplineCurve<Point3>: ToSameGeometry<C> {
     control_points.push(pt1);
     let knot_vec = KnotVector::bezier_knot(control_points.len() - 1);
     let curve = BsplineCurve::new_unchecked(knot_vec, control_points);
-    Edge::new(vertex0, vertex1, curve.to_same_geometry())
+    Edge::new_unchecked(vertex0, vertex1, curve.to_same_geometry())
 }
 
 /// Returns a homotopic face from `edge0` to `edge1`.
@@ -943,7 +947,7 @@ pub fn composite_closed_sweep(
 /// let v = builder::vertex(Point3::new(3.0, 0.0, 0.0));
 /// let circle = builder::revolve(&v, Point3::new(2.0, 0.0, 0.0), Vector3::unit_z(), SweepAngle::Closed, 2);
 /// let torus = builder::revolve(&circle, Point3::origin(), Vector3::unit_y(), SweepAngle::Closed, 2);
-/// let solid: Solid = Solid::new(vec![torus]);
+/// let solid: Solid = Solid::new_unchecked(vec![torus]);
 /// #
 /// # assert!(solid.is_geometric_consistent());
 /// # const N: usize = 100;
@@ -1134,7 +1138,7 @@ fn whole_revolve<T: ClosedSweep<Matrix4, ArcConnector, RevoluteConnector, Swept>
 /// // Degenerate edges are removed -- faces have 3 edges, not 4.
 /// assert_eq!(shell[0].boundaries()[0].len(), 3);
 /// // The result is a valid closed shell.
-/// Solid::new(vec![shell]);
+/// Solid::new_unchecked(vec![shell]);
 /// ```
 pub fn revolve_wire<C, S>(
     wire: &Wire<C>,

@@ -80,19 +80,19 @@ fn test_face() -> Face<Point3, Line, Surface> {
     let v = Vertex::from_points(p);
     let wire: Vec<Wire<_, _>> = vec![
         wire![
-            Edge::new(&v[0], &v[1], Line(p[0], p[1])),
-            Edge::new(&v[2], &v[1], Line(p[2], p[1])).inverse(),
-            Edge::new(&v[2], &v[3], Line(p[2], p[3])),
-            Edge::new(&v[3], &v[0], Line(p[3], p[0])),
+            Edge::new_unchecked(&v[0], &v[1], Line(p[0], p[1])),
+            Edge::new_unchecked(&v[2], &v[1], Line(p[2], p[1])).inverse(),
+            Edge::new_unchecked(&v[2], &v[3], Line(p[2], p[3])),
+            Edge::new_unchecked(&v[3], &v[0], Line(p[3], p[0])),
         ],
         wire![
-            Edge::new(&v[7], &v[4], Line(p[7], p[4])).inverse(),
-            Edge::new(&v[7], &v[6], Line(p[7], p[6])),
-            Edge::new(&v[5], &v[6], Line(p[5], p[6])).inverse(),
-            Edge::new(&v[4], &v[5], Line(p[4], p[5])).inverse(),
+            Edge::new_unchecked(&v[7], &v[4], Line(p[7], p[4])).inverse(),
+            Edge::new_unchecked(&v[7], &v[6], Line(p[7], p[6])),
+            Edge::new_unchecked(&v[5], &v[6], Line(p[5], p[6])).inverse(),
+            Edge::new_unchecked(&v[4], &v[5], Line(p[4], p[5])).inverse(),
         ],
     ];
-    Face::new(wire, Plane::new(p[0], p[1], p[3]).into())
+    Face::new_unchecked(wire, Plane::new(p[0], p[1], p[3]).into())
 }
 
 fn test_shell() -> Shell<Point3, Line, Surface> {
@@ -109,16 +109,16 @@ fn test_shell() -> Shell<Point3, Line, Surface> {
     ];
     let v = Vertex::from_points(p);
     let e = [
-        Edge::new(&v[0], &v[1], Line(p[0], p[1])),
-        Edge::new(&v[1], &v[2], Line(p[1], p[2])),
-        Edge::new(&v[3], &v[2], Line(p[3], p[2])),
-        Edge::new(&v[3], &v[4], Line(p[3], p[4])),
-        Edge::new(&v[4], &v[0], Line(p[4], p[0])),
-        Edge::new(&v[1], &v[3], Line(p[1], p[3])),
-        Edge::new(&v[5], &v[6], Line(p[5], p[6])),
-        Edge::new(&v[6], &v[7], Line(p[6], p[7])),
-        Edge::new(&v[7], &v[8], Line(p[7], p[8])),
-        Edge::new(&v[8], &v[5], Line(p[8], p[5])),
+        Edge::new_unchecked(&v[0], &v[1], Line(p[0], p[1])),
+        Edge::new_unchecked(&v[1], &v[2], Line(p[1], p[2])),
+        Edge::new_unchecked(&v[3], &v[2], Line(p[3], p[2])),
+        Edge::new_unchecked(&v[3], &v[4], Line(p[3], p[4])),
+        Edge::new_unchecked(&v[4], &v[0], Line(p[4], p[0])),
+        Edge::new_unchecked(&v[1], &v[3], Line(p[1], p[3])),
+        Edge::new_unchecked(&v[5], &v[6], Line(p[5], p[6])),
+        Edge::new_unchecked(&v[6], &v[7], Line(p[6], p[7])),
+        Edge::new_unchecked(&v[7], &v[8], Line(p[7], p[8])),
+        Edge::new_unchecked(&v[8], &v[5], Line(p[8], p[5])),
     ];
     let w: Vec<Wire<_, _>> = vec![
         wire![e[0].clone(), e[5].clone(), e[3].clone(), e[4].clone()],
@@ -131,8 +131,8 @@ fn test_shell() -> Shell<Point3, Line, Surface> {
         wire![e[5].clone(), e[2].clone(), e[1].inverse()],
     ];
     shell![
-        Face::new(w[..2].to_vec(), Plane::new(p[0], p[1], p[4]).into()),
-        Face::new(w[2..].to_vec(), Plane::new(p[1], p[3], p[2]).into()).inverse(),
+        Face::new_unchecked(w[..2].to_vec(), Plane::new(p[0], p[1], p[4]).into()),
+        Face::new_unchecked(w[2..].to_vec(), Plane::new(p[1], p[3], p[2]).into()).inverse(),
     ]
 }
 
@@ -150,7 +150,7 @@ fn vertex_sweep() {
 fn edge_sweep() {
     let p = Point3::new(0.0, 0.0, 0.0);
     let q = Point3::new(1.0, 0.0, 0.0);
-    let edge = Edge::new(&Vertex::new(p), &Vertex::new(q), Line(p, q));
+    let edge = Edge::new_unchecked(&Vertex::new(p), &Vertex::new(q), Line(p, q));
 
     let face = sweep(&edge);
     let surface = face.oriented_surface();
@@ -175,8 +175,8 @@ fn wire_sweep() {
 
     let v = Vertex::from_points([p, q, r]);
     let wire: Wire<_, _> = vec![
-        Edge::new(&v[0], &v[1], Line(p, q)),
-        Edge::new(&v[2], &v[1], Line(r, q)).inverse(),
+        Edge::new_unchecked(&v[0], &v[1], Line(p, q)),
+        Edge::new_unchecked(&v[2], &v[1], Line(r, q)).inverse(),
     ]
     .into();
     let shell = sweep(&wire);
@@ -330,7 +330,7 @@ fn vertex_multi_sweep() {
 fn edge_multi_sweep() {
     let p = Point3::new(0.0, 0.0, 0.0);
     let q = Point3::new(1.0, 0.0, 0.0);
-    let edge = Edge::new(&Vertex::new(p), &Vertex::new(q), Line(p, q));
+    let edge = Edge::new_unchecked(&Vertex::new(p), &Vertex::new(q), Line(p, q));
 
     let shell = multi_sweep(&edge);
     assert_eq!(shell.len(), 2);
@@ -365,8 +365,8 @@ fn wire_multi_sweep() {
 
     let v = Vertex::from_points([p, q, r]);
     let wire: Wire<_, _> = vec![
-        Edge::new(&v[0], &v[1], Line(p, q)),
-        Edge::new(&v[2], &v[1], Line(r, q)).inverse(),
+        Edge::new_unchecked(&v[0], &v[1], Line(p, q)),
+        Edge::new_unchecked(&v[2], &v[1], Line(r, q)).inverse(),
     ]
     .into();
     let shell = multi_sweep(&wire);
@@ -548,7 +548,7 @@ fn vertex_closed_sweep() {
 #[test]
 fn edge_closed_sweep() {
     let p = [Point3::new(0.0, 1.0, 1.0), Point3::new(0.0, 0.0, 1.0)];
-    let edge = Edge::new(&Vertex::new(p[0]), &Vertex::new(p[1]), Line(p[0], p[1]));
+    let edge = Edge::new_unchecked(&Vertex::new(p[0]), &Vertex::new(p[1]), Line(p[0], p[1]));
 
     let shell = closed_sweep(&edge);
     assert_eq!(shell.len(), 4);
@@ -596,8 +596,8 @@ fn wire_closed_sweep() {
     ];
     let v = Vertex::from_points(p);
     let wire: Wire<_, _> = vec![
-        Edge::new(&v[0], &v[1], Line(p[0], p[1])),
-        Edge::new(&v[2], &v[1], Line(p[2], p[1])).inverse(),
+        Edge::new_unchecked(&v[0], &v[1], Line(p[0], p[1])),
+        Edge::new_unchecked(&v[2], &v[1], Line(p[2], p[1])).inverse(),
     ]
     .into();
 
@@ -633,19 +633,19 @@ fn face_closed_sweep() {
         Point3::new(0.0, 0.75, 1.75),
     ];
     let v = Vertex::from_points(p);
-    let face = Face::new(
+    let face = Face::new_unchecked(
         vec![
             wire![
-                Edge::new(&v[0], &v[1], Line(p[0], p[1])),
-                Edge::new(&v[2], &v[1], Line(p[2], p[1])).inverse(),
-                Edge::new(&v[2], &v[3], Line(p[2], p[3])),
-                Edge::new(&v[3], &v[0], Line(p[3], p[0])),
+                Edge::new_unchecked(&v[0], &v[1], Line(p[0], p[1])),
+                Edge::new_unchecked(&v[2], &v[1], Line(p[2], p[1])).inverse(),
+                Edge::new_unchecked(&v[2], &v[3], Line(p[2], p[3])),
+                Edge::new_unchecked(&v[3], &v[0], Line(p[3], p[0])),
             ],
             wire![
-                Edge::new(&v[7], &v[6], Line(p[7], p[6])),
-                Edge::new(&v[6], &v[5], Line(p[6], p[5])),
-                Edge::new(&v[4], &v[5], Line(p[4], p[5])).inverse(),
-                Edge::new(&v[4], &v[7], Line(p[4], p[7])),
+                Edge::new_unchecked(&v[7], &v[6], Line(p[7], p[6])),
+                Edge::new_unchecked(&v[6], &v[5], Line(p[6], p[5])),
+                Edge::new_unchecked(&v[4], &v[5], Line(p[4], p[5])).inverse(),
+                Edge::new_unchecked(&v[4], &v[7], Line(p[4], p[7])),
             ],
         ],
         Plane::new(p[0], p[1], p[3]).into(),
@@ -765,26 +765,26 @@ fn shell_closed_sweep() {
     ];
     let v = Vertex::from_points(p);
     let e = [
-        Edge::new(&v[0], &v[1], Line(p[0], p[1])),
-        Edge::new(&v[1], &v[2], Line(p[1], p[2])),
-        Edge::new(&v[3], &v[2], Line(p[3], p[2])).inverse(),
-        Edge::new(&v[3], &v[4], Line(p[3], p[4])),
-        Edge::new(&v[0], &v[4], Line(p[0], p[4])).inverse(),
-        Edge::new(&v[1], &v[4], Line(p[1], p[4])),
-        Edge::new(&v[8], &v[7], Line(p[8], p[7])),
-        Edge::new(&v[7], &v[6], Line(p[7], p[6])),
-        Edge::new(&v[6], &v[5], Line(p[6], p[5])),
-        Edge::new(&v[8], &v[5], Line(p[8], p[5])).inverse(),
+        Edge::new_unchecked(&v[0], &v[1], Line(p[0], p[1])),
+        Edge::new_unchecked(&v[1], &v[2], Line(p[1], p[2])),
+        Edge::new_unchecked(&v[3], &v[2], Line(p[3], p[2])).inverse(),
+        Edge::new_unchecked(&v[3], &v[4], Line(p[3], p[4])),
+        Edge::new_unchecked(&v[0], &v[4], Line(p[0], p[4])).inverse(),
+        Edge::new_unchecked(&v[1], &v[4], Line(p[1], p[4])),
+        Edge::new_unchecked(&v[8], &v[7], Line(p[8], p[7])),
+        Edge::new_unchecked(&v[7], &v[6], Line(p[7], p[6])),
+        Edge::new_unchecked(&v[6], &v[5], Line(p[6], p[5])),
+        Edge::new_unchecked(&v[8], &v[5], Line(p[8], p[5])).inverse(),
     ];
     let shell: Shell<_, _, _> = vec![
-        Face::new(
+        Face::new_unchecked(
             vec![
                 wire![e[1].clone(), e[2].clone(), e[3].clone(), e[5].inverse()],
                 wire![e[6].clone(), e[7].clone(), e[8].clone(), e[9].clone()],
             ],
             Plane::new(p[1], p[2], p[4]).into(),
         ),
-        Face::new(
+        Face::new_unchecked(
             vec![vec![e[4].inverse(), e[5].inverse(), e[0].inverse()].into()],
             Plane::new(p[1], p[0], p[4]).into(),
         )

@@ -74,8 +74,8 @@ impl<P, C> Wire<P, C> {
     /// let v = Vertex::from_points(&[(), (), ()]);
     /// let mut wire = Wire::new();
     /// assert_eq!(wire.front_vertex(), None);
-    /// wire.push_back(Edge::new(&v[1], &v[2], ()));
-    /// wire.push_front(Edge::new(&v[0], &v[1], ()));
+    /// wire.push_back(Edge::new_unchecked(&v[1], &v[2], ()));
+    /// wire.push_front(Edge::new_unchecked(&v[0], &v[1], ()));
     /// assert_eq!(wire.front_vertex(), Some(&v[0]));
     /// ```
     #[inline(always)]
@@ -93,8 +93,8 @@ impl<P, C> Wire<P, C> {
     /// let v = Vertex::from_points(&[(), (), ()]);
     /// let mut wire = Wire::new();
     /// assert_eq!(wire.back_vertex(), None);
-    /// wire.push_back(Edge::new(&v[1], &v[2], ()));
-    /// wire.push_front(Edge::new(&v[0], &v[1], ()));
+    /// wire.push_back(Edge::new_unchecked(&v[1], &v[2], ()));
+    /// wire.push_front(Edge::new_unchecked(&v[0], &v[1], ()));
     /// assert_eq!(wire.back_vertex(), Some(&v[2]));
     /// ```
     #[inline(always)]
@@ -106,8 +106,8 @@ impl<P, C> Wire<P, C> {
     /// let v = Vertex::from_points(&[(); 3]);
     /// let mut wire = Wire::new();
     /// assert_eq!(wire.back_vertex(), None);
-    /// wire.push_back(Edge::new(&v[1], &v[2], ()));
-    /// wire.push_front(Edge::new(&v[0], &v[1], ()));
+    /// wire.push_back(Edge::new_unchecked(&v[1], &v[2], ()));
+    /// wire.push_front(Edge::new_unchecked(&v[0], &v[1], ()));
     /// assert_eq!(wire.ends_vertices(), Some((&v[0], &v[2])));
     /// ```
     #[inline(always)]
@@ -129,7 +129,7 @@ impl<P, C> Wire<P, C> {
     /// let v = Vertex::from_points(&[(); 7]);
     /// let mut wire = Wire::new();
     /// for i in 0..6 {
-    ///    wire.push_back(Edge::new(&v[i], &v[i + 1], ()));
+    ///    wire.push_back(Edge::new_unchecked(&v[i], &v[i + 1], ()));
     /// }
     /// let original_wire = wire.clone();
     /// let mut wire1 = wire.split_off(4);
@@ -153,9 +153,9 @@ impl<P, C> Wire<P, C> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 4]);
     /// let mut wire = Wire::from(vec![
-    ///     Edge::new(&v[3], &v[2], ()),
-    ///     Edge::new(&v[2], &v[1], ()),
-    ///     Edge::new(&v[1], &v[0], ()),
+    ///     Edge::new_unchecked(&v[3], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[0], ()),
     /// ]);
     /// wire.invert();
     /// for (i, vert) in wire.vertex_iter().enumerate() {
@@ -174,9 +174,9 @@ impl<P, C> Wire<P, C> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 4]);
     /// let mut wire = Wire::from(vec![
-    ///     Edge::new(&v[3], &v[2], ()),
-    ///     Edge::new(&v[2], &v[1], ()),
-    ///     Edge::new(&v[1], &v[0], ()),
+    ///     Edge::new_unchecked(&v[3], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[0], ()),
     /// ]);
     /// let inverse = wire.inverse();
     /// wire.invert();
@@ -196,11 +196,11 @@ impl<P, C> Wire<P, C> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 4]);
     /// let mut wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[2], &v[3], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[2], &v[3], ()),
     /// ]);
     /// assert!(!wire.is_continuous());
-    /// wire.insert(1, Edge::new(&v[1], &v[2], ()));
+    /// wire.insert(1, Edge::new_unchecked(&v[1], &v[2], ()));
     /// assert!(wire.is_continuous());
     /// ```
     /// ```
@@ -228,11 +228,11 @@ impl<P, C> Wire<P, C> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 4]);
     /// let mut wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[2], &v[3], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[2], &v[3], ()),
     /// ]);
     /// assert!(!wire.is_cyclic());
-    /// wire.push_back(Edge::new(&v[3], &v[0], ()));
+    /// wire.push_back(Edge::new_unchecked(&v[3], &v[0], ()));
     /// assert!(wire.is_cyclic());
     /// ```
     /// ```
@@ -254,11 +254,11 @@ impl<P, C> Wire<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 4]);
-    /// let edge0 = Edge::new(&v[0], &v[1], ());
-    /// let edge1 = Edge::new(&v[1], &v[2], ());
-    /// let edge2 = Edge::new(&v[2], &v[3], ());
-    /// let edge3 = Edge::new(&v[3], &v[1], ());
-    /// let edge4 = Edge::new(&v[3], &v[0], ());
+    /// let edge0 = Edge::new_unchecked(&v[0], &v[1], ());
+    /// let edge1 = Edge::new_unchecked(&v[1], &v[2], ());
+    /// let edge2 = Edge::new_unchecked(&v[2], &v[3], ());
+    /// let edge3 = Edge::new_unchecked(&v[3], &v[1], ());
+    /// let edge4 = Edge::new_unchecked(&v[3], &v[0], ());
     ///
     /// let wire0 = wire![&edge0, &edge1, &edge2, &edge3];
     /// let wire1 = wire![edge0, edge1, edge2, edge4];
@@ -283,10 +283,10 @@ impl<P, C> Wire<P, C> {
     /// use monstertruck_topology::*;
     ///
     /// let v = Vertex::from_points(&[(), (), (), (), ()]);
-    /// let edge0 = Edge::new(&v[0], &v[1], ());
-    /// let edge1 = Edge::new(&v[1], &v[2], ());
-    /// let edge2 = Edge::new(&v[2], &v[3], ());
-    /// let edge3 = Edge::new(&v[3], &v[4], ());
+    /// let edge0 = Edge::new_unchecked(&v[0], &v[1], ());
+    /// let edge1 = Edge::new_unchecked(&v[1], &v[2], ());
+    /// let edge2 = Edge::new_unchecked(&v[2], &v[3], ());
+    /// let edge3 = Edge::new_unchecked(&v[3], &v[4], ());
     ///
     /// let wire0 = Wire::from(vec![edge0, edge1]);
     /// let wire1 = Wire::from(vec![edge2]);
@@ -318,11 +318,11 @@ impl<P, C> Wire<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), (), (), ()]);
-    /// let edge0 = Edge::new(&v[0], &v[1], 0);
-    /// let edge1 = Edge::new(&v[1], &v[3], 1);
-    /// let edge2 = Edge::new(&v[3], &v[4], 2);
-    /// let edge3 = Edge::new(&v[1], &v[2], 3);
-    /// let edge4 = Edge::new(&v[2], &v[3], 4);
+    /// let edge0 = Edge::new_unchecked(&v[0], &v[1], 0);
+    /// let edge1 = Edge::new_unchecked(&v[1], &v[3], 1);
+    /// let edge2 = Edge::new_unchecked(&v[3], &v[4], 2);
+    /// let edge3 = Edge::new_unchecked(&v[1], &v[2], 3);
+    /// let edge4 = Edge::new_unchecked(&v[2], &v[3], 4);
     /// let mut wire0 = Wire::from(vec![
     ///     edge0.clone(), edge1, edge2.clone()
     /// ]);
@@ -342,11 +342,11 @@ impl<P, C> Wire<P, C> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), (), (), ()]);
-    /// let edge0 = Edge::new(&v[0], &v[1], 0);
-    /// let edge1 = Edge::new(&v[1], &v[3], 1);
-    /// let edge2 = Edge::new(&v[3], &v[4], 2);
-    /// let edge3 = Edge::new(&v[1], &v[2], 3);
-    /// let edge4 = Edge::new(&v[2], &v[1], 4);
+    /// let edge0 = Edge::new_unchecked(&v[0], &v[1], 0);
+    /// let edge1 = Edge::new_unchecked(&v[1], &v[3], 1);
+    /// let edge2 = Edge::new_unchecked(&v[3], &v[4], 2);
+    /// let edge3 = Edge::new_unchecked(&v[1], &v[2], 3);
+    /// let edge4 = Edge::new_unchecked(&v[2], &v[1], 4);
     /// let mut wire0 = Wire::from(vec![
     ///     edge0.clone(), edge1, edge2.clone()
     /// ]);
@@ -358,8 +358,10 @@ impl<P, C> Wire<P, C> {
     /// assert_eq!(wire0, backup);
     /// ```
     pub fn swap_edge_into_wire(&mut self, idx: usize, wire: Wire<P, C>) -> bool {
-        // SAFETY: wire is checked non-empty above, so ends_vertices always returns Some.
-        if wire.is_empty() || self[idx].ends() != wire.ends_vertices().unwrap() {
+        let Some(ends) = wire.ends_vertices() else {
+            return false;
+        };
+        if self[idx].ends() != ends {
             return false;
         }
         let mut new_wire: Vec<_> = self.drain(0..idx).collect();
@@ -447,10 +449,10 @@ impl<P, C> Wire<P, C> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[0, 1, 2, 3, 4]);
     /// let wire0: Wire<usize, usize> = vec![
-    ///     Edge::new(&v[0], &v[1], 100),
-    ///     Edge::new(&v[2], &v[1], 110).inverse(),
-    ///     Edge::new(&v[3], &v[4], 120),
-    ///     Edge::new(&v[4], &v[0], 130),
+    ///     Edge::new_unchecked(&v[0], &v[1], 100),
+    ///     Edge::new_unchecked(&v[2], &v[1], 110).inverse(),
+    ///     Edge::new_unchecked(&v[3], &v[4], 120),
+    ///     Edge::new_unchecked(&v[4], &v[0], 130),
     /// ].into();
     /// let wire1 = wire0.mapped(
     ///     &move |i: &usize| *i as f64 + 0.5,
@@ -512,9 +514,9 @@ impl<P, C> Wire<P, C> {
     /// use WireDisplayFormat as WDF;
     /// let v = Vertex::from_points(&[0, 1, 2, 3, 4]);
     /// let wire: Wire<usize, usize> = vec![
-    ///     Edge::new(&v[0], &v[1], 100),
-    ///     Edge::new(&v[2], &v[1], 110).inverse(),
-    ///     Edge::new(&v[3], &v[4], 120),
+    ///     Edge::new_unchecked(&v[0], &v[1], 100),
+    ///     Edge::new_unchecked(&v[2], &v[1], 110).inverse(),
+    ///     Edge::new_unchecked(&v[3], &v[4], 120),
     /// ].into();
     ///
     /// let vertex_format = VertexDisplayFormat::AsPoint;
@@ -655,9 +657,9 @@ pub type EdgeParallelIntoIter<P, C> = <VecDeque<Edge<P, C>> as IntoParallelItera
 /// use monstertruck_topology::*;
 /// let v = Vertex::from_points(&[(); 6]);
 /// let wire = Wire::from(vec![
-///     Edge::new(&v[0], &v[1], ()),
-///     Edge::new(&v[2], &v[3], ()),
-///     Edge::new(&v[4], &v[5], ()),
+///     Edge::new_unchecked(&v[0], &v[1], ()),
+///     Edge::new_unchecked(&v[2], &v[3], ()),
+///     Edge::new_unchecked(&v[4], &v[5], ()),
 /// ]);
 /// let mut viter = wire.vertex_iter();
 /// assert_eq!(viter.next().as_ref(), Some(&v[0]));
@@ -674,10 +676,10 @@ pub type EdgeParallelIntoIter<P, C> = <VecDeque<Edge<P, C>> as IntoParallelItera
 /// use monstertruck_topology::*;
 /// let v = Vertex::from_points(&[(); 6]);
 /// let wire = Wire::from(vec![
-///     Edge::new(&v[0], &v[1], ()),
-///     Edge::new(&v[2], &v[3], ()),
-///     Edge::new(&v[3], &v[4], ()),
-///     Edge::new(&v[4], &v[5], ()),
+///     Edge::new_unchecked(&v[0], &v[1], ()),
+///     Edge::new_unchecked(&v[2], &v[3], ()),
+///     Edge::new_unchecked(&v[3], &v[4], ()),
+///     Edge::new_unchecked(&v[4], &v[5], ()),
 /// ]);
 /// let mut viter = wire.vertex_iter();
 /// assert_eq!(viter.next().as_ref(), Some(&v[0]));
@@ -693,10 +695,10 @@ pub type EdgeParallelIntoIter<P, C> = <VecDeque<Edge<P, C>> as IntoParallelItera
 /// use monstertruck_topology::*;
 /// let v = Vertex::from_points(&[(); 5]);
 /// let wire = Wire::from(vec![
-///     Edge::new(&v[0], &v[1], ()),
-///     Edge::new(&v[1], &v[2], ()),
-///     Edge::new(&v[3], &v[4], ()),
-///     Edge::new(&v[4], &v[0], ()),
+///     Edge::new_unchecked(&v[0], &v[1], ()),
+///     Edge::new_unchecked(&v[1], &v[2], ()),
+///     Edge::new_unchecked(&v[3], &v[4], ()),
+///     Edge::new_unchecked(&v[4], &v[0], ()),
 /// ]);
 /// let mut viter = wire.vertex_iter();
 /// assert_eq!(viter.next().as_ref(), Some(&v[0]));

@@ -168,34 +168,34 @@ fn solid_cut_edge() -> anyhow::Result<()> {
     ];
     let v = Vertex::from_points(&p);
     let edge = [
-        Edge::new(&v[0], &v[1], Segment::new(p[0], p[1])),
-        Edge::new(&v[0], &v[2], Segment::new(p[0], p[2])),
-        Edge::new(&v[0], &v[3], Segment::new(p[0], p[3])),
-        Edge::new(&v[1], &v[2], Segment::new(p[1], p[2])),
-        Edge::new(&v[1], &v[3], Segment::new(p[1], p[3])),
-        Edge::new(&v[2], &v[3], Segment::new(p[2], p[3])),
+        Edge::new_unchecked(&v[0], &v[1], Segment::new(p[0], p[1])),
+        Edge::new_unchecked(&v[0], &v[2], Segment::new(p[0], p[2])),
+        Edge::new_unchecked(&v[0], &v[3], Segment::new(p[0], p[3])),
+        Edge::new_unchecked(&v[1], &v[2], Segment::new(p[1], p[2])),
+        Edge::new_unchecked(&v[1], &v[3], Segment::new(p[1], p[3])),
+        Edge::new_unchecked(&v[2], &v[3], Segment::new(p[2], p[3])),
     ];
     let shell: Shell<_, _, _> = vec![
-        Face::new(
+        Face::new_unchecked(
             vec![vec![edge[0].clone(), edge[3].clone(), edge[1].inverse()].into()],
             (),
         ),
-        Face::new(
+        Face::new_unchecked(
             vec![vec![edge[1].clone(), edge[5].clone(), edge[2].inverse()].into()],
             (),
         ),
-        Face::new(
+        Face::new_unchecked(
             vec![vec![edge[2].clone(), edge[4].inverse(), edge[0].inverse()].into()],
             (),
         ),
-        Face::new(
+        Face::new_unchecked(
             vec![vec![edge[3].clone(), edge[5].clone(), edge[4].inverse()].into()],
             (),
         )
         .inverse(),
     ]
     .into();
-    let mut tri = Solid::new(vec![shell]);
+    let mut tri = Solid::new_unchecked(vec![shell]);
     assert!(tri.cut_edge(edge[1].id(), &v[4]).is_some());
     let count = tri.edge_iter().count();
     assert_eq!(count, 14);
@@ -206,12 +206,12 @@ fn solid_cut_edge() -> anyhow::Result<()> {
         .map(|shell| -> Result<Shell<_, _, _>> {
             let faces: Vec<_> = shell
                 .into_iter()
-                .map(|face| Face::new(face.boundaries(), ()))
+                .map(|face| Face::new_unchecked(face.boundaries(), ()))
                 .collect();
             Ok(faces.into())
         })
         .collect::<Result<Vec<_>>>()?;
-    Solid::new(new_shells);
+    Solid::new_unchecked(new_shells);
 
     assert!(tri.remove_vertex_by_concat_edges(v[4].id()).is_some());
     let count = tri.edge_iter().count();

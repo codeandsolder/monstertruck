@@ -18,10 +18,10 @@ impl<P, C, S> Face<P, C, S> {
     /// use errors::Error;
     /// let v = Vertex::from_points(&[(); 4]);
     /// let mut wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[3], ()),
-    ///     Edge::new(&v[3], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[3], ()),
+    ///     Edge::new_unchecked(&v[3], &v[0], ()),
     /// ]);
     /// assert!(Face::try_new(vec![wire], ()).is_ok());
     /// ```
@@ -43,11 +43,12 @@ impl<P, C, S> Face<P, C, S> {
         }
     }
 
-    /// Creates a new face by a wire.
-    /// All wires in `boundaries` must be non-empty, simple and closed.
+    /// Creates a new face from validated boundary wires.
+    /// # Failures
+    /// Returns the same validation errors as [`Face::try_new`].
     #[inline(always)]
-    pub fn new(boundaries: Vec<Wire<P, C>>, surface: S) -> Face<P, C, S> {
-        Self::try_new(boundaries, surface).unwrap_or_else(|error| panic!("Face::new: {error}"))
+    pub fn new(boundaries: Vec<Wire<P, C>>, surface: S) -> Result<Face<P, C, S>> {
+        Self::try_new(boundaries, surface)
     }
 
     /// Creates a new face by a wire.
@@ -91,11 +92,11 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 3]);
     /// let wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
-    /// let mut face = Face::new(vec![wire], ());
+    /// let mut face = Face::new_unchecked(vec![wire], ());
     /// let boundaries = face.boundaries();
     /// for (i, vert) in boundaries[0].vertex_iter().enumerate() {
     ///     assert_eq!(vert, v[i]);
@@ -118,11 +119,11 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), ()]);
     /// let wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
-    /// let mut face = Face::new(vec![wire], ());
+    /// let mut face = Face::new_unchecked(vec![wire], ());
     /// let boundaries = face.clone().into_boundaries();
     /// for (i, vert) in boundaries[0].vertex_iter().enumerate() {
     ///     assert_eq!(vert, v[i]);
@@ -146,11 +147,11 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), ()]);
     /// let wire = Wire::from(vec![
-    ///      Edge::new(&v[0], &v[1], ()),
-    ///      Edge::new(&v[1], &v[2], ()),
-    ///      Edge::new(&v[2], &v[0], ()),
+    ///      Edge::new_unchecked(&v[0], &v[1], ()),
+    ///      Edge::new_unchecked(&v[1], &v[2], ()),
+    ///      Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
-    /// let mut face = Face::new(vec![wire], ());
+    /// let mut face = Face::new_unchecked(vec![wire], ());
     /// let boundaries = face.boundaries();
     /// face.invert();
     ///
@@ -169,11 +170,11 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), ()]);
     /// let wire = Wire::from(vec![
-    ///      Edge::new(&v[0], &v[1], ()),
-    ///      Edge::new(&v[1], &v[2], ()),
-    ///      Edge::new(&v[2], &v[0], ()),
+    ///      Edge::new_unchecked(&v[0], &v[1], ()),
+    ///      Edge::new_unchecked(&v[1], &v[2], ()),
+    ///      Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
-    /// let face0 = Face::new(vec![wire], ());
+    /// let face0 = Face::new_unchecked(vec![wire], ());
     /// let face1 = face0.inverse();
     /// let face2 = face1.absolute_clone();
     /// assert_eq!(face0, face2);
@@ -196,11 +197,11 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), ()]);
     /// let wire = Wire::from(vec![
-    ///      Edge::new(&v[0], &v[1], ()),
-    ///      Edge::new(&v[1], &v[2], ()),
-    ///      Edge::new(&v[2], &v[0], ()),
+    ///      Edge::new_unchecked(&v[0], &v[1], ()),
+    ///      Edge::new_unchecked(&v[1], &v[2], ()),
+    ///      Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
-    /// let mut face = Face::new(vec![wire], ());
+    /// let mut face = Face::new_unchecked(vec![wire], ());
     /// face.invert();
     /// let boundaries = face.boundaries().clone();
     /// let edge_iter0 = boundaries.iter().flat_map(Wire::edge_iter);
@@ -246,18 +247,18 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), (), (), (), ()]);
     /// let wire0 = Wire::from(vec![
-    ///      Edge::new(&v[0], &v[1], ()),
-    ///      Edge::new(&v[1], &v[2], ()),
-    ///      Edge::new(&v[2], &v[0], ()),
+    ///      Edge::new_unchecked(&v[0], &v[1], ()),
+    ///      Edge::new_unchecked(&v[1], &v[2], ()),
+    ///      Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
     /// let wire1 = Wire::from(vec![
-    ///      Edge::new(&v[3], &v[4], ()),
-    ///      Edge::new(&v[4], &v[5], ()),
-    ///      Edge::new(&v[5], &v[3], ()),
+    ///      Edge::new_unchecked(&v[3], &v[4], ()),
+    ///      Edge::new_unchecked(&v[4], &v[5], ()),
+    ///      Edge::new_unchecked(&v[5], &v[3], ()),
     /// ]);
-    /// let mut face0 = Face::new(vec![wire0.clone()], ());
+    /// let mut face0 = Face::new_unchecked(vec![wire0.clone()], ());
     /// face0.try_add_boundary(wire1.clone())?;
-    /// let face1 = Face::new(vec![wire0, wire1], ());
+    /// let face1 = Face::new_unchecked(vec![wire0, wire1], ());
     /// assert_eq!(face0.boundaries(), face1.boundaries());
     /// # Ok(())
     /// # }
@@ -269,16 +270,16 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), (), (), (), ()]);
     /// let wire0 = Wire::from(vec![
-    ///      Edge::new(&v[0], &v[1], ()),
-    ///      Edge::new(&v[1], &v[2], ()),
-    ///      Edge::new(&v[2], &v[0], ()),
+    ///      Edge::new_unchecked(&v[0], &v[1], ()),
+    ///      Edge::new_unchecked(&v[1], &v[2], ()),
+    ///      Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
     /// let wire1 = Wire::from(vec![
-    ///      Edge::new(&v[3], &v[4], ()),
-    ///      Edge::new(&v[5], &v[4], ()).inverse(),
-    ///      Edge::new(&v[5], &v[3], ()),
+    ///      Edge::new_unchecked(&v[3], &v[4], ()),
+    ///      Edge::new_unchecked(&v[5], &v[4], ()).inverse(),
+    ///      Edge::new_unchecked(&v[5], &v[3], ()),
     /// ]);
-    /// let mut face = Face::new(vec![wire0], ());
+    /// let mut face = Face::new_unchecked(vec![wire0], ());
     /// face.invert();
     /// face.try_add_boundary(wire1.clone())?;
     ///
@@ -301,16 +302,16 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), (), (), (), ()]);
     /// let wire0 = Wire::from(vec![
-    ///      Edge::new(&v[0], &v[1], ()),
-    ///      Edge::new(&v[1], &v[2], ()),
-    ///      Edge::new(&v[2], &v[0], ()),
+    ///      Edge::new_unchecked(&v[0], &v[1], ()),
+    ///      Edge::new_unchecked(&v[1], &v[2], ()),
+    ///      Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
     /// let wire1 = Wire::from(vec![
-    ///      Edge::new(&v[3], &v[4], ()),
-    ///      Edge::new(&v[5], &v[4], ()).inverse(),
-    ///      Edge::new(&v[5], &v[3], ()),
+    ///      Edge::new_unchecked(&v[3], &v[4], ()),
+    ///      Edge::new_unchecked(&v[5], &v[4], ()).inverse(),
+    ///      Edge::new_unchecked(&v[5], &v[3], ()),
     /// ]);
-    /// let mut face0 = Face::new(vec![wire0], ());
+    /// let mut face0 = Face::new_unchecked(vec![wire0], ());
     /// let face1 = face0.clone();
     /// assert_eq!(face0.id(), face1.id());
     /// face0.try_add_boundary(wire1)?;
@@ -346,18 +347,18 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), (), (), (), ()]);
     /// let wire0 = Wire::from(vec![
-    ///      Edge::new(&v[0], &v[1], ()),
-    ///      Edge::new(&v[1], &v[2], ()),
-    ///      Edge::new(&v[2], &v[0], ()),
+    ///      Edge::new_unchecked(&v[0], &v[1], ()),
+    ///      Edge::new_unchecked(&v[1], &v[2], ()),
+    ///      Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
     /// let wire1 = Wire::from(vec![
-    ///      Edge::new(&v[3], &v[4], ()),
-    ///      Edge::new(&v[4], &v[5], ()),
-    ///      Edge::new(&v[5], &v[3], ()),
+    ///      Edge::new_unchecked(&v[3], &v[4], ()),
+    ///      Edge::new_unchecked(&v[4], &v[5], ()),
+    ///      Edge::new_unchecked(&v[5], &v[3], ()),
     /// ]);
-    /// let mut face0 = Face::new(vec![wire0.clone()], ());
+    /// let mut face0 = Face::new_unchecked(vec![wire0.clone()], ());
     /// face0.add_boundary(wire1.clone());
-    /// let face1 = Face::new(vec![wire0, wire1], ());
+    /// let face1 = Face::new_unchecked(vec![wire0, wire1], ());
     /// assert_eq!(face0.boundaries(), face1.boundaries());
     /// ```
     /// # Remarks
@@ -366,16 +367,16 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), (), (), (), ()]);
     /// let wire0 = Wire::from(vec![
-    ///      Edge::new(&v[0], &v[1], ()),
-    ///      Edge::new(&v[1], &v[2], ()),
-    ///      Edge::new(&v[2], &v[0], ()),
+    ///      Edge::new_unchecked(&v[0], &v[1], ()),
+    ///      Edge::new_unchecked(&v[1], &v[2], ()),
+    ///      Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
     /// let wire1 = Wire::from(vec![
-    ///      Edge::new(&v[3], &v[4], ()),
-    ///      Edge::new(&v[5], &v[4], ()).inverse(),
-    ///      Edge::new(&v[5], &v[3], ()),
+    ///      Edge::new_unchecked(&v[3], &v[4], ()),
+    ///      Edge::new_unchecked(&v[5], &v[4], ()).inverse(),
+    ///      Edge::new_unchecked(&v[5], &v[3], ()),
     /// ]);
-    /// let mut face = Face::new(vec![wire0], ());
+    /// let mut face = Face::new_unchecked(vec![wire0], ());
     /// face.invert();
     /// face.add_boundary(wire1.clone());
     ///
@@ -395,16 +396,16 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), (), (), (), ()]);
     /// let wire0 = Wire::from(vec![
-    ///      Edge::new(&v[0], &v[1], ()),
-    ///      Edge::new(&v[1], &v[2], ()),
-    ///      Edge::new(&v[2], &v[0], ()),
+    ///      Edge::new_unchecked(&v[0], &v[1], ()),
+    ///      Edge::new_unchecked(&v[1], &v[2], ()),
+    ///      Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
     /// let wire1 = Wire::from(vec![
-    ///      Edge::new(&v[3], &v[4], ()),
-    ///      Edge::new(&v[5], &v[4], ()).inverse(),
-    ///      Edge::new(&v[5], &v[3], ()),
+    ///      Edge::new_unchecked(&v[3], &v[4], ()),
+    ///      Edge::new_unchecked(&v[5], &v[4], ()).inverse(),
+    ///      Edge::new_unchecked(&v[5], &v[3], ()),
     /// ]);
-    /// let mut face0 = Face::new(vec![wire0], ());
+    /// let mut face0 = Face::new_unchecked(vec![wire0], ());
     /// let face1 = face0.clone();
     /// assert_eq!(face0.id(), face1.id());
     /// face0.add_boundary(wire1);
@@ -448,17 +449,17 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[0, 1, 2, 3, 4, 5, 6]);
     /// let wire0 = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], 100),
-    ///     Edge::new(&v[1], &v[2], 200),
-    ///     Edge::new(&v[2], &v[3], 300),
-    ///     Edge::new(&v[3], &v[0], 400),
+    ///     Edge::new_unchecked(&v[0], &v[1], 100),
+    ///     Edge::new_unchecked(&v[1], &v[2], 200),
+    ///     Edge::new_unchecked(&v[2], &v[3], 300),
+    ///     Edge::new_unchecked(&v[3], &v[0], 400),
     /// ]);
     /// let wire1 = Wire::from(vec![
-    ///     Edge::new(&v[4], &v[5], 500),
-    ///     Edge::new(&v[6], &v[5], 600).inverse(),
-    ///     Edge::new(&v[6], &v[4], 700),
+    ///     Edge::new_unchecked(&v[4], &v[5], 500),
+    ///     Edge::new_unchecked(&v[6], &v[5], 600).inverse(),
+    ///     Edge::new_unchecked(&v[6], &v[4], 700),
     /// ]);
-    /// let face0 = Face::new(vec![wire0, wire1], 10000);
+    /// let face0 = Face::new_unchecked(vec![wire0, wire1], 10000);
     /// let face1 = face0.mapped(
     ///     &move |i: &usize| *i + 10,
     ///     &move |j: &usize| *j + 1000,
@@ -533,11 +534,11 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), ()]);
     /// let wire = Wire::from(vec![
-    ///      Edge::new(&v[0], &v[1], ()),
-    ///      Edge::new(&v[1], &v[2], ()),
-    ///      Edge::new(&v[2], &v[0], ()),
+    ///      Edge::new_unchecked(&v[0], &v[1], ()),
+    ///      Edge::new_unchecked(&v[1], &v[2], ()),
+    ///      Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
-    /// let face0 = Face::new(vec![wire], 0);
+    /// let face0 = Face::new_unchecked(vec![wire], 0);
     /// let face1 = face0.clone();
     ///
     /// // Two faces have the same content.
@@ -561,11 +562,11 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::errors::Error;
     /// let v = Vertex::from_points(&[(), (), ()]);
     /// let wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
-    /// let mut face = Face::new(vec![wire], ());
+    /// let mut face = Face::new_unchecked(vec![wire], ());
     /// let org_face = face.clone();
     /// let org_bdry = face.boundaries();
     /// face.invert();
@@ -592,11 +593,11 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 3]);
     /// let wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
-    /// let face0 = Face::new(vec![wire], ());
+    /// let face0 = Face::new_unchecked(vec![wire], ());
     /// let face1 = face0.inverse();
     /// assert_ne!(face0, face1);
     /// assert!(face0.is_same(&face1));
@@ -612,13 +613,13 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 3]);
     /// let wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
-    /// let face0 = Face::new(vec![wire.clone()], ());
+    /// let face0 = Face::new_unchecked(vec![wire.clone()], ());
     /// let face1 = face0.inverse();
-    /// let face2 = Face::new(vec![wire], ());
+    /// let face2 = Face::new_unchecked(vec![wire], ());
     /// assert_ne!(face0, face1);
     /// assert_ne!(face0, face2);
     /// assert_eq!(face0.id(), face1.id());
@@ -634,16 +635,16 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 3]);
     /// let wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
     ///
     /// // Create one face
-    /// let face0 = Face::new(vec![wire.clone()], ());
+    /// let face0 = Face::new_unchecked(vec![wire.clone()], ());
     /// assert_eq!(face0.count(), 1);
     /// // Create another face, independent from face0
-    /// let face1 = Face::new(vec![wire.clone()], ());
+    /// let face1 = Face::new_unchecked(vec![wire.clone()], ());
     /// assert_eq!(face0.count(), 1);
     /// // Clone face0, the result will be 2.
     /// let face2 = face0.clone();
@@ -663,11 +664,11 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::errors::Error;
     /// let v = Vertex::from_points(&[(), (), ()]);
     /// let wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
-    /// let mut face = Face::new(vec![wire], ());
+    /// let mut face = Face::new_unchecked(vec![wire], ());
     /// let inverted = face.inverse();
     ///
     /// // Two faces are the same face.
@@ -695,16 +696,16 @@ impl<P, C, S> Face<P, C, S> {
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points([(); 4]);
-    /// let shared_edge = Edge::new(&v[0], &v[1], ());
-    /// let another_edge = Edge::new(&v[0], &v[1], ());
+    /// let shared_edge = Edge::new_unchecked(&v[0], &v[1], ());
+    /// let another_edge = Edge::new_unchecked(&v[0], &v[1], ());
     /// let inversed_edge = shared_edge.inverse();
     /// let wire = vec![
-    ///     wire![&Edge::new(&v[2], &v[0], ()), &shared_edge, &Edge::new(&v[1], &v[2], ())],
-    ///     wire![&Edge::new(&v[2], &v[0], ()), &another_edge, &Edge::new(&v[1], &v[2], ())],
-    ///     wire![&Edge::new(&v[3], &v[0], ()), &shared_edge, &Edge::new(&v[1], &v[3], ())],
-    ///     wire![&Edge::new(&v[3], &v[1], ()), &inversed_edge, &Edge::new(&v[0], &v[3], ())],
+    ///     wire![&Edge::new_unchecked(&v[2], &v[0], ()), &shared_edge, &Edge::new_unchecked(&v[1], &v[2], ())],
+    ///     wire![&Edge::new_unchecked(&v[2], &v[0], ()), &another_edge, &Edge::new_unchecked(&v[1], &v[2], ())],
+    ///     wire![&Edge::new_unchecked(&v[3], &v[0], ()), &shared_edge, &Edge::new_unchecked(&v[1], &v[3], ())],
+    ///     wire![&Edge::new_unchecked(&v[3], &v[1], ()), &inversed_edge, &Edge::new_unchecked(&v[0], &v[3], ())],
     /// ];
-    /// let face: Vec<_> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
+    /// let face: Vec<_> = wire.into_iter().map(|w| Face::new_unchecked(vec![w], ())).collect();
     /// assert!(face[0].border_on(&face[2]));
     /// assert!(!face[1].border_on(&face[2]));
     /// assert!(face[0].border_on(&face[3]));
@@ -722,28 +723,28 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points([(); 5]);
     /// let shared_edge = [
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[2], &v[3], ()),
-    ///     Edge::new(&v[3], &v[4], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[2], &v[3], ()),
+    ///     Edge::new_unchecked(&v[3], &v[4], ()),
     /// ];
     ///
     /// let boundary0 = wire![
     ///     shared_edge[0].clone(),
-    ///     Edge::new(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
     ///     shared_edge[1].clone(),
     ///     shared_edge[2].clone(),
-    ///     Edge::new(&v[4], &v[0], ()),
+    ///     Edge::new_unchecked(&v[4], &v[0], ()),
     /// ];
-    /// let face0 = Face::new(vec![boundary0], ());
+    /// let face0 = Face::new_unchecked(vec![boundary0], ());
     ///
     /// let boundary1 = wire![
     ///     shared_edge[1].inverse(),
-    ///     Edge::new(&v[2], &v[1], ()),
+    ///     Edge::new_unchecked(&v[2], &v[1], ()),
     ///     shared_edge[0].inverse(),
-    ///     Edge::new(&v[0], &v[4], ()),
+    ///     Edge::new_unchecked(&v[0], &v[4], ()),
     ///     shared_edge[2].inverse(),
     /// ];
-    /// let face1 = Face::new(vec![boundary1], ());
+    /// let face1 = Face::new_unchecked(vec![boundary1], ());
     ///
     /// let borders0 = face0.border_wires(&face1);
     /// assert_eq!(
@@ -772,8 +773,9 @@ impl<P, C, S> Face<P, C, S> {
             for edge in boundary {
                 if hashset.contains(&edge.id()) {
                     if conti {
-                        let wire = border_wires.last_mut().unwrap();
-                        wire.push_back(edge);
+                        if let Some(wire) = border_wires.last_mut() {
+                            wire.push_back(edge);
+                        }
                     } else {
                         border_wires.push(wire![edge]);
                         conti = true;
@@ -783,11 +785,13 @@ impl<P, C, S> Face<P, C, S> {
                 }
             }
             if conti && border_wires.len() > 1 {
-                let first = border_wires.first().unwrap().front_vertex().unwrap();
-                let back = border_wires.last().unwrap().back_vertex().unwrap();
-                if first == back {
+                let first = border_wires.first().and_then(Wire::front_vertex);
+                let back = border_wires.last().and_then(Wire::back_vertex);
+                if first.is_some() && first == back {
                     let first = border_wires.remove(0);
-                    border_wires.last_mut().unwrap().extend(first);
+                    if let Some(last) = border_wires.last_mut() {
+                        last.extend(first);
+                    }
                 }
             }
             border_wires
@@ -804,13 +808,13 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), (), ()]);
     /// let wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[3], ()),
-    ///     Edge::new(&v[3], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[3], ()),
+    ///     Edge::new_unchecked(&v[3], &v[0], ()),
     /// ]);
-    /// let face = Face::new(vec![wire], ());
-    /// let (face0, face1) = face.cut_by_edge(Edge::new(&v[1], &v[3], ())).unwrap();
+    /// let face = Face::new_unchecked(vec![wire], ());
+    /// let (face0, face1) = face.cut_by_edge(Edge::new_unchecked(&v[1], &v[3], ())).unwrap();
     ///
     /// // The front vertex of face0's boundary becomes the back of cutting edge.
     /// let v0: Vec<Vertex<()>> = face0.boundaries()[0].vertex_iter().collect();
@@ -827,29 +831,29 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 6]);
     /// let wire0 = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[0], ()),
     /// ]);
     /// let wire1 = Wire::from(vec![
-    ///     Edge::new(&v[3], &v[4], ()),
-    ///     Edge::new(&v[4], &v[5], ()),
-    ///     Edge::new(&v[5], &v[3], ()),
+    ///     Edge::new_unchecked(&v[3], &v[4], ()),
+    ///     Edge::new_unchecked(&v[4], &v[5], ()),
+    ///     Edge::new_unchecked(&v[5], &v[3], ()),
     /// ]);
-    /// let face = Face::new(vec![wire0, wire1], ());
-    /// assert!(face.cut_by_edge(Edge::new(&v[1], &v[2], ())).is_none());
+    /// let face = Face::new_unchecked(vec![wire0, wire1], ());
+    /// assert!(face.cut_by_edge(Edge::new_unchecked(&v[1], &v[2], ())).is_none());
     /// ```
     /// ```
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(), (), (), (), ()]);
     /// let wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[3], ()),
-    ///     Edge::new(&v[3], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[3], ()),
+    ///     Edge::new_unchecked(&v[3], &v[0], ()),
     /// ]);
-    /// let face = Face::new(vec![wire], ());
-    /// assert!(face.cut_by_edge(Edge::new(&v[1], &v[4], ())).is_none());
+    /// let face = Face::new_unchecked(vec![wire], ());
+    /// assert!(face.cut_by_edge(Edge::new_unchecked(&v[1], &v[4], ())).is_none());
     pub fn cut_by_edge(&self, edge: Edge<P, C>) -> Option<(Self, Self)>
     where S: Clone {
         self.cut_by_wire([edge].into())
@@ -861,15 +865,15 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points([(); 5]);
     /// let boundary = Wire::from([
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[3], ()),
-    ///     Edge::new(&v[3], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[3], ()),
+    ///     Edge::new_unchecked(&v[3], &v[0], ()),
     /// ]);
-    /// let face = Face::new(vec![boundary], ());
+    /// let face = Face::new_unchecked(vec![boundary], ());
     /// let wire = Wire::from([
-    ///     Edge::new(&v[1], &v[4], ()),
-    ///     Edge::new(&v[4], &v[3], ()),
+    ///     Edge::new_unchecked(&v[1], &v[4], ()),
+    ///     Edge::new_unchecked(&v[4], &v[3], ()),
     /// ]);
     /// let (face0, face1) = face.cut_by_wire(wire).unwrap();
     ///
@@ -930,16 +934,16 @@ impl<P, C, S> Face<P, C, S> {
     /// use monstertruck_topology::*;
     /// let v = Vertex::from_points(&[(); 8]);
     /// let edge = vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[0], ()),
-    ///     Edge::new(&v[3], &v[4], ()),
-    ///     Edge::new(&v[4], &v[5], ()),
-    ///     Edge::new(&v[5], &v[3], ()),
-    ///     Edge::new(&v[6], &v[2], ()),
-    ///     Edge::new(&v[1], &v[6], ()),
-    ///     Edge::new(&v[7], &v[5], ()),
-    ///     Edge::new(&v[4], &v[7], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[0], ()),
+    ///     Edge::new_unchecked(&v[3], &v[4], ()),
+    ///     Edge::new_unchecked(&v[4], &v[5], ()),
+    ///     Edge::new_unchecked(&v[5], &v[3], ()),
+    ///     Edge::new_unchecked(&v[6], &v[2], ()),
+    ///     Edge::new_unchecked(&v[1], &v[6], ()),
+    ///     Edge::new_unchecked(&v[7], &v[5], ()),
+    ///     Edge::new_unchecked(&v[4], &v[7], ()),
     /// ];
     /// let wire0 = Wire::from(vec![
     ///     edge[0].clone(),
@@ -961,8 +965,8 @@ impl<P, C, S> Face<P, C, S> {
     ///     edge[4].inverse(),
     ///     edge[9].clone(),
     /// ]);
-    /// let face0 = Face::new(vec![wire0, wire1], ());
-    /// let face1 = Face::new(vec![wire2, wire3], ());
+    /// let face0 = Face::new_unchecked(vec![wire0, wire1], ());
+    /// let face1 = Face::new_unchecked(vec![wire2, wire3], ());
     /// let face = face0.glue_at_boundaries(&face1).unwrap();
     /// let boundaries = face.boundary_iters();
     /// assert_eq!(boundaries.len(), 2);
@@ -1007,8 +1011,12 @@ impl<P, C, S> Face<P, C, S> {
         let mut boundaries = Vec::new();
         while !vemap.is_empty() {
             let mut wire = Wire::new();
-            let v = *vemap.iter().next().unwrap().0;
-            let mut edge = vemap.remove(&v).unwrap();
+            let Some(v) = vemap.keys().next().copied() else {
+                break;
+            };
+            let Some(mut edge) = vemap.remove(&v) else {
+                break;
+            };
             wire.push_back(edge.clone());
             while let Some(edge0) = vemap.remove(&edge.back().id()) {
                 wire.push_back(edge0.clone());
@@ -1033,12 +1041,12 @@ impl<P, C, S> Face<P, C, S> {
     /// use FaceDisplayFormat as FDF;
     /// let v = Vertex::from_points(&[0, 1, 2, 3, 4, 5]);
     /// let edge = vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[0], ()),
-    ///     Edge::new(&v[3], &v[4], ()),
-    ///     Edge::new(&v[4], &v[5], ()),
-    ///     Edge::new(&v[5], &v[3], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[0], ()),
+    ///     Edge::new_unchecked(&v[3], &v[4], ()),
+    ///     Edge::new_unchecked(&v[4], &v[5], ()),
+    ///     Edge::new_unchecked(&v[5], &v[3], ()),
     /// ];
     /// let wire0 = Wire::from(vec![
     ///     edge[0].clone(),
@@ -1050,7 +1058,7 @@ impl<P, C, S> Face<P, C, S> {
     ///     edge[4].clone(),
     ///     edge[5].clone(),
     /// ]);
-    /// let face = Face::new(vec![wire0, wire1], 120);
+    /// let face = Face::new_unchecked(vec![wire0, wire1], 120);
     ///
     /// let vertex_format = VertexDisplayFormat::AsPoint;
     /// let edge_format = EdgeDisplayFormat::VerticesTuple { vertex_format };
@@ -1158,12 +1166,12 @@ impl<P, C, S> Hash for Face<P, C, S> {
 /// use monstertruck_topology::*;
 /// let v = Vertex::from_points(&[(); 4]);
 /// let wire = Wire::from(vec![
-///     Edge::new(&v[0], &v[1], ()),
-///     Edge::new(&v[1], &v[2], ()),
-///     Edge::new(&v[2], &v[3], ()),
-///     Edge::new(&v[3], &v[0], ()),
+///     Edge::new_unchecked(&v[0], &v[1], ()),
+///     Edge::new_unchecked(&v[1], &v[2], ()),
+///     Edge::new_unchecked(&v[2], &v[3], ()),
+///     Edge::new_unchecked(&v[3], &v[0], ()),
 /// ]);
-/// let face = Face::new(vec![wire.clone()], ());
+/// let face = Face::new_unchecked(vec![wire.clone()], ());
 ///
 /// let iter = &mut face.boundary_iters()[0];
 /// assert_eq!(iter.next().as_ref(), Some(&wire[0]));
@@ -1287,17 +1295,17 @@ impl<P: Debug, C: Debug, S: Debug> Debug for DebugDisplay<'_, Face<P, C, S>, Fac
 fn invert_mapped_face() {
     let v = Vertex::from_points([0, 1, 2, 3, 4, 5, 6]);
     let wire0 = Wire::from(vec![
-        Edge::new(&v[0], &v[1], 100),
-        Edge::new(&v[1], &v[2], 200),
-        Edge::new(&v[2], &v[3], 300),
-        Edge::new(&v[3], &v[0], 400),
+        Edge::new_unchecked(&v[0], &v[1], 100),
+        Edge::new_unchecked(&v[1], &v[2], 200),
+        Edge::new_unchecked(&v[2], &v[3], 300),
+        Edge::new_unchecked(&v[3], &v[0], 400),
     ]);
     let wire1 = Wire::from(vec![
-        Edge::new(&v[4], &v[5], 500),
-        Edge::new(&v[6], &v[5], 600).inverse(),
-        Edge::new(&v[6], &v[4], 700),
+        Edge::new_unchecked(&v[4], &v[5], 500),
+        Edge::new_unchecked(&v[6], &v[5], 600).inverse(),
+        Edge::new_unchecked(&v[6], &v[4], 700),
     ]);
-    let face0 = Face::new(vec![wire0, wire1], 10000).inverse();
+    let face0 = Face::new_unchecked(vec![wire0, wire1], 10000).inverse();
     let face1 = face0.mapped(
         &move |i: &usize| *i + 10,
         &move |j: &usize| *j + 1000,

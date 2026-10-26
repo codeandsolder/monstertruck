@@ -18,7 +18,7 @@ fn main() {
     let mut boundaries = cube0.into_boundaries();
     boundaries.extend(cube1.into_boundaries());
 
-    let solid = Solid::new(boundaries);
+    let solid = Solid::new_unchecked(boundaries);
     let json = serde_json::to_string_pretty(&solid).unwrap();
     std::fs::write("cube-in-cube.json", json).unwrap();
 }

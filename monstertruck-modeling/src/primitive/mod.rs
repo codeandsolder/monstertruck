@@ -111,7 +111,7 @@ where Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C> {
         let trimmed = TrimmedCurve::new(unit_circle, (t0, t1));
         let mut arc = Processor::new(trimmed);
         arc.transform_by(mat);
-        Edge::new(&v[i], &v[(i + 1) % division], arc.to_same_geometry())
+        Edge::new_unchecked(&v[i], &v[(i + 1) % division], arc.to_same_geometry())
     };
     (0..division).map(make_edges).collect()
 }
@@ -187,7 +187,7 @@ where
     let plane5 = Plane::new(v[4].point(), v[5].point(), v[7].point());
     shell.push(Face::new_unchecked(vec![wire5], plane5.to_same_geometry()));
 
-    Solid::new(vec![shell])
+    Solid::new_unchecked(vec![shell])
 }
 
 #[cfg(test)]

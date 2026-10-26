@@ -26,7 +26,7 @@ fn main() {
             .unwrap()
             .inverse(),
     );
-    let solid = Solid::new(vec![shell]);
+    let solid = Solid::new_unchecked(vec![shell]);
     let json = serde_json::to_vec_pretty(&solid).unwrap();
     std::fs::write("tsudumi.json", json).unwrap();
 }

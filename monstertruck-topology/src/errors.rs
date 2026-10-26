@@ -28,7 +28,7 @@ pub enum Error {
     /// use monstertruck_topology::*;
     /// use monstertruck_topology::errors::Error;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let wire: Wire<(), ()> = vec![Edge::new(&v[0], &v[1], ())].into();
+    /// let wire: Wire<(), ()> = vec![Edge::new_unchecked(&v[0], &v[1], ())].into();
     /// assert_eq!(Face::try_new(vec![wire], ()), Err(Error::NotClosedWire));
     /// ```
     #[error("This wire is not closed.")]
@@ -40,11 +40,11 @@ pub enum Error {
     /// use monstertruck_topology::errors::Error;
     /// let v = Vertex::from_points(&[(); 4]);
     /// let wire: Wire<(), ()> = vec![
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[3], ()),
-    ///     Edge::new(&v[3], &v[1], ()),
-    ///     Edge::new(&v[1], &v[0], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[3], ()),
+    ///     Edge::new_unchecked(&v[3], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[0], ()),
     /// ].into();
     /// assert_eq!(Face::try_new(vec![wire], ()), Err(Error::NotSimpleWire));
     /// ```
@@ -69,10 +69,10 @@ pub enum Error {
     /// use monstertruck_topology::errors::Error;
     /// let v = Vertex::from_points(&[(), (), (), ()]);
     /// let wire = vec![
-    ///     Wire::from(vec![Edge::new(&v[0], &v[1], ()), Edge::new(&v[1], &v[0], ())]),
-    ///     Wire::from(vec![Edge::new(&v[2], &v[3], ()), Edge::new(&v[3], &v[2], ())]),
+    ///     Wire::from(vec![Edge::new_unchecked(&v[0], &v[1], ()), Edge::new_unchecked(&v[1], &v[0], ())]),
+    ///     Wire::from(vec![Edge::new_unchecked(&v[2], &v[3], ()), Edge::new_unchecked(&v[3], &v[2], ())]),
     /// ];
-    /// let shell: Shell<(), (), ()> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
+    /// let shell: Shell<(), (), ()> = wire.into_iter().map(|w| Face::new_unchecked(vec![w], ())).collect();
     /// assert_eq!(Solid::try_new(vec![shell]), Err(Error::NotConnected));
     /// ```
     #[error("This shell is not connected.")]
@@ -83,8 +83,8 @@ pub enum Error {
     /// use monstertruck_topology::*;
     /// use monstertruck_topology::errors::Error;
     /// let v = Vertex::from_points(&[(), ()]);
-    /// let wire = Wire::from(vec![Edge::new(&v[0], &v[1], ()), Edge::new(&v[1], &v[0], ())]);
-    /// let shell: Shell<(), (), ()> = vec![Face::new(vec![wire], ())].into();
+    /// let wire = Wire::from(vec![Edge::new_unchecked(&v[0], &v[1], ()), Edge::new_unchecked(&v[1], &v[0], ())]);
+    /// let shell: Shell<(), (), ()> = vec![Face::new_unchecked(vec![wire], ())].into();
     /// assert_eq!(Solid::try_new(vec![shell]), Err(Error::NotClosedShell));
     /// ```
     #[error("This shell is not oriented and closed.")]
@@ -97,10 +97,10 @@ pub enum Error {
     /// use monstertruck_topology::errors::Error;
     /// let v = Vertex::from_points(&[(), (), ()]);
     /// let edge = [
-    ///     Edge::new(&v[0], &v[1], ()),
-    ///     Edge::new(&v[1], &v[0], ()),
-    ///     Edge::new(&v[1], &v[2], ()),
-    ///     Edge::new(&v[2], &v[1], ()),
+    ///     Edge::new_unchecked(&v[0], &v[1], ()),
+    ///     Edge::new_unchecked(&v[1], &v[0], ()),
+    ///     Edge::new_unchecked(&v[1], &v[2], ()),
+    ///     Edge::new_unchecked(&v[2], &v[1], ()),
     /// ];
     /// let wire = vec![
     ///     wire![&edge[0], &edge[1]],
@@ -108,7 +108,7 @@ pub enum Error {
     ///     wire![&edge[2], &edge[3]],
     ///     wire![&edge[3].inverse(), &edge[2].inverse()],
     /// ];
-    /// let shell: Shell<(), (), ()> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
+    /// let shell: Shell<(), (), ()> = wire.into_iter().map(|w| Face::new_unchecked(vec![w], ())).collect();
     /// assert_eq!(Solid::try_new(vec![shell]), Err(Error::NotManifold));
     /// ```
     #[error("This shell is not a manifold.")]
