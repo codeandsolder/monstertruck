@@ -139,7 +139,7 @@ fn segment_test() {
         ConcatError::DisconnectedParameters(1.0, 0.0)
     );
     seg0.parameter_transform(1.0, 1.0);
-    concat_random_test(&seg, &seg0, 100);
+    concat_random_test(&seg, &seg0, 100).expect("segments concatenate");
     seg0.ends.0 += Vector3::new(1.0, 0.0, 0.0);
     seg0.ends.1 += Vector3::new(1.0, 0.0, 0.0);
     assert_eq!(

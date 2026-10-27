@@ -71,18 +71,18 @@ pub trait ParametricCurve: Clone {
 pub trait BoundedCurve: ParametricCurve {
     /// Return the ends of `parameter_range` by tuple.
     #[inline(always)]
-    fn range_tuple(&self) -> (f64, f64) { self.try_range_tuple().expect(UNBOUNDED_ERROR) }
+    fn range_tuple(&self) -> (f64, f64) { self.try_range_tuple().unwrap_or((f64::NAN, f64::NAN)) }
     /// The front end point of the curve.
     #[inline(always)]
     fn front(&self) -> Self::Point {
         let (x, _) = self.parameter_range();
-        self.evaluate(bound2opt(x).expect(UNBOUNDED_ERROR))
+        self.evaluate(bound2opt(x).unwrap_or(f64::NAN))
     }
     /// The back end point of the curve.
     #[inline(always)]
     fn back(&self) -> Self::Point {
         let (_, y) = self.parameter_range();
-        self.evaluate(bound2opt(y).expect(UNBOUNDED_ERROR))
+        self.evaluate(bound2opt(y).unwrap_or(f64::NAN))
     }
     /// Returns a certified axis-aligned spatial enclosure when this curve
     /// representation can prove one cheaply. `None` means callers must not
@@ -372,12 +372,6 @@ where Self::Point: Debug {
     /// # Failure
     /// Returns `None` if `self.range_tuple().1 != rhs.range_tuple().0`.
     fn try_concat(&self, rhs: &Rhs) -> Result<Self::Output, ConcatError<Self::Point>>;
-    /// Try concat two curves.
-    /// # Panic
-    /// Panic occurs if `self.range_tuple().1 != rhs.range_tuple().0`.
-    fn concat(&self, rhs: &Rhs) -> Self::Output {
-        self.try_concat(rhs).unwrap_or_else(|err| panic!("{}", err))
-    }
 }
 
 impl<Rhs, C> Concat<Rhs> for Box<C>
@@ -390,7 +384,6 @@ where
     fn try_concat(&self, rhs: &Rhs) -> Result<Self::Output, ConcatError<C::Point>> {
         (**self).try_concat(rhs)
     }
-    fn concat(&self, rhs: &Rhs) -> Self::Output { (**self).concat(rhs) }
 }
 
 /// Error for concat curves
@@ -451,17 +444,6 @@ impl<C> CurveCollector<C> {
         }
         Ok(self)
     }
-    /// Concats two B-spline curves.
-    #[inline(always)]
-    pub fn concat<Rhs>(&mut self, curve: &Rhs) -> &mut Self
-    where
-        C: Concat<Rhs, Output = C>,
-        C::Point: Debug,
-        Rhs: BoundedCurve<Point = C::Point, Vector = C::Vector> + Into<C>, {
-        self.try_concat(curve)
-            .unwrap_or_else(|error| panic!("{}", error))
-    }
-
     /// Whether `self` is the singleton or not.
     #[inline(always)]
     pub fn is_singleton(&self) -> bool {
@@ -470,14 +452,12 @@ impl<C> CurveCollector<C> {
             CurveCollector::Curve(_) => false,
         }
     }
-    /// Returns the entity curve.
-    /// # Panics
-    /// If `self` is `Singleton`, then panics occurs.
+    /// Returns the collected curve, or `None` when no curve was added.
     #[inline(always)]
-    pub fn unwrap(self) -> C {
+    pub fn into_curve(self) -> Option<C> {
         match self {
-            CurveCollector::Curve(curve) => curve,
-            CurveCollector::Singleton => panic!("This curve collector is singleton."),
+            CurveCollector::Curve(curve) => Some(curve),
+            CurveCollector::Singleton => None,
         }
     }
 }
@@ -557,26 +537,38 @@ where
 }
 
 /// positive test implementation for `Concat`.
-pub fn concat_random_test<C0, C1>(curve0: &C0, curve1: &C1, trials: usize)
+pub fn concat_random_test<C0, C1>(
+    curve0: &C0,
+    curve1: &C1,
+    trials: usize,
+) -> Result<(), ConcatError<C0::Point>>
 where
     C0: Concat<C1>,
     C0::Point: Debug + Tolerance,
     C0::Vector: Debug + Tolerance,
     C0::Output: BoundedCurve<Point = C0::Point, Vector = C0::Vector> + Debug,
-    C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>, {
+    C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>,
+{
     let mut rng = trial_rng();
-    (0..trials).for_each(|_| exec_concat_random_test(curve0, curve1, &mut rng))
+    for _ in 0..trials {
+        exec_concat_random_test(curve0, curve1, &mut rng)?;
+    }
+    Ok(())
 }
 
-fn exec_concat_random_test<C0, C1>(curve0: &C0, curve1: &C1, rng: &mut StdRng)
+fn exec_concat_random_test<C0, C1>(
+    curve0: &C0,
+    curve1: &C1,
+    rng: &mut StdRng,
+) -> Result<(), ConcatError<C0::Point>>
 where
     C0: Concat<C1>,
     C0::Point: Debug + Tolerance,
     C0::Vector: Debug + Tolerance,
     C0::Output: BoundedCurve<Point = C0::Point, Vector = C0::Vector> + Debug,
-    C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>, {
-    // SAFETY: this is a test utility; panicking on concat failure is the intended behavior.
-    let concatted = curve0.try_concat(curve1).unwrap();
+    C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>,
+{
+    let concatted = curve0.try_concat(curve1)?;
     let (t0, t1) = curve0.range_tuple();
     let (_, t2) = curve1.range_tuple();
     assert_near!(concatted.range_tuple().0, t0);
@@ -595,6 +587,7 @@ where
     assert_near!(concatted.derivative(t), curve1.derivative(t));
     assert_near!(concatted.derivative_2(t), curve1.derivative_2(t));
     assert_near!(concatted.back(), curve1.back());
+    Ok(())
 }
 
 /// positive test implementation for `Cut` by random transformation

@@ -359,12 +359,12 @@ pub(super) fn concat_fillet_surface(
     let len = surfaces[0].control_points().len();
     let concat_beziers = |i: usize| -> Option<NurbsCurve<Vector4>> {
         let mut collector = CurveCollector::<NurbsCurve<Vector4>>::Singleton;
-        (0..surfaces.len()).for_each(|n| {
-            let mut curve = surfaces[n].curve_v(i);
+        for (n, surface) in surfaces.iter().enumerate() {
+            let mut curve = surface.curve_v(i);
             curve.knot_translate(n as f64);
-            collector.concat(&curve);
-        });
-        collector.into()
+            collector.try_concat(&curve).ok()?;
+        }
+        collector.into_curve()
     };
     let long_beziers = (0..len).map(concat_beziers).collect::<Option<Vec<_>>>()?;
 

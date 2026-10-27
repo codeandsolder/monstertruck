@@ -222,8 +222,8 @@ pub trait BoundedSurface: ParametricSurface {
     fn range_tuple(&self) -> SurfaceParameterRange {
         let (urange, vrange) = self.try_range_tuple();
         (
-            urange.expect(UNBOUNDED_ERROR),
-            vrange.expect(UNBOUNDED_ERROR),
+            urange.unwrap_or((f64::NAN, f64::NAN)),
+            vrange.unwrap_or((f64::NAN, f64::NAN)),
         )
     }
 }

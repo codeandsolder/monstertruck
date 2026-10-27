@@ -492,7 +492,7 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Tolerance> Nur
 
     /// Extracts the boundary of surface
     #[inline(always)]
-    pub fn boundary(&self) -> NurbsCurve<V> { NurbsCurve::new(self.0.boundary()) }
+    pub fn boundary(&self) -> Option<NurbsCurve<V>> { self.0.boundary().map(NurbsCurve::new) }
 }
 
 impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> NurbsSurface<V>
@@ -1062,7 +1062,7 @@ fn test_include2d() {
     ];
     let surface = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
     let bnd_box = BoundingBox::from_iter(&[Vector2::new(0.2, 0.3), Vector2::new(0.8, 0.6)]);
-    let mut curve = surface.sectional_curve(bnd_box);
+    let mut curve = surface.sectional_curve(bnd_box).expect("section is valid");
     curve.control_points_mut().for_each(|pt| *pt *= 3.0);
     let surface = NurbsSurface::new(surface);
     let curve = NurbsCurve::new(curve);

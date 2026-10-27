@@ -321,7 +321,7 @@ fn test_include_bspcurve3() {
     ];
     let surface = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
     let bnd_box = BoundingBox::from_iter(&[Vector2::new(0.2, 0.3), Vector2::new(0.8, 0.6)]);
-    let mut curve = surface.sectional_curve(bnd_box);
+    let mut curve = surface.sectional_curve(bnd_box).expect("section is valid");
     assert!(surface.include(&curve));
     *curve.control_point_mut(2) += Vector3::new(0.0, 0.0, 0.001);
     assert!(!surface.include(&curve));

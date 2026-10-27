@@ -101,7 +101,7 @@ proptest! {
 
         let mut part0 = curve.clone();
         let part1 = part0.cut(0.56);
-        monstertruck_traits::concat_random_test(&part0, &part1, 10);
+        monstertruck_traits::concat_random_test(&part0, &part1, 10).expect("curves concatenate");
     }
 }
 
@@ -285,4 +285,26 @@ fn cut_near_domain_end_regression() {
         let t = i as f64 / 20.0;
         assert_near!(front.subs(t), curve.subs(t));
     }
+}
+
+#[test]
+fn make_locally_injective_keeps_later_nonconstant_segments() {
+    let mut curve = BsplineCurve::new_unchecked(
+        KnotVector::from(vec![0.0, 0.0, 1.0, 2.0, 3.0, 3.0]),
+        vec![
+            Vector2::new(0.0, 0.0),
+            Vector2::new(1.0, 0.0),
+            Vector2::new(1.0, 0.0),
+            Vector2::new(2.0, 0.0),
+        ],
+    );
+    let front = curve.front();
+    let back = curve.back();
+
+    curve.make_locally_injective();
+
+    assert_near!(curve.front(), front);
+    assert_near!(curve.back(), back);
+    assert_near!(curve.subs(curve.range_tuple().0), front);
+    assert_near!(curve.subs(curve.range_tuple().1), back);
 }

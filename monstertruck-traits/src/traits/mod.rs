@@ -17,7 +17,6 @@ fn bound2opt<T>(x: Bound<T>) -> Option<T> {
         Bound::Unbounded => None,
     }
 }
-const UNBOUNDED_ERROR: &str = "Parameter range is unbounded.";
 
 /// Oriented and reversible
 pub trait Invertible: Clone {

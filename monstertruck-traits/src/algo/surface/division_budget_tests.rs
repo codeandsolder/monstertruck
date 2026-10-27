@@ -131,6 +131,10 @@ fn the_work_meter_charges_what_the_division_spends() {
     assert_eq!(work.cells, budgeted.cells);
     assert!(work.truncated);
     let (total, truncations) = take_division_totals();
-    assert_eq!(total, budgeted.cells);
-    assert_eq!(truncations, 1);
+    // These counters are deliberately process-wide, so other tests running in
+    // parallel may contribute work between the two snapshots. The per-thread
+    // meter above is the exact accounting check; here we verify that the global
+    // aggregate includes at least this call rather than assuming test isolation.
+    assert!(total >= budgeted.cells);
+    assert!(truncations >= 1);
 }

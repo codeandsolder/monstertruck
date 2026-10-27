@@ -393,6 +393,7 @@ where V::Point: Tolerance
     /// assert_eq!(curve, org_curve);
     /// ```
     pub fn make_locally_injective(&mut self) -> &mut Self {
+        let original = self.clone();
         let mut iter = self.0.bezier_decomposition().into_iter();
         while let Some(bezier) = iter.next().map(NurbsCurve::new) {
             if !bezier.is_const() {
@@ -418,7 +419,13 @@ where V::Point: Tolerance
                     .control_points
                     .iter_mut()
                     .for_each(move |vec| *vec *= s0 / s1);
-                self.concat(bezier.knot_translate(-x));
+                match self.try_concat(bezier.knot_translate(-x)) {
+                    Ok(concatted) => *self = concatted,
+                    Err(_) => {
+                        *self = original;
+                        return self;
+                    }
+                }
             }
         }
         self

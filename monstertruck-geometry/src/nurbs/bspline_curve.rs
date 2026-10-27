@@ -814,11 +814,13 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     pub fn elevate_degree(&mut self) -> &mut Self {
         let mut result = CurveCollector::Singleton;
         for mut bezier in self.bezier_decomposition() {
-            result.concat(bezier.elevate_degree_bezier());
+            if result.try_concat(bezier.elevate_degree_bezier()).is_err() {
+                return self;
+            }
         }
-        // SAFETY: `bezier_decomposition` of a valid B-spline always yields at least
-        // one segment, so the collector is never `Singleton`.
-        *self = result.unwrap();
+        if let Some(curve) = result.into_curve() {
+            *self = curve;
+        }
         self
     }
 
@@ -1052,6 +1054,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// assert_eq!(bspcurve, org_curve);
     /// ```
     pub fn make_locally_injective(&mut self) -> &mut Self {
+        let original = self.clone();
         let mut iter = self.bezier_decomposition().into_iter();
         for bezier in iter.by_ref() {
             if !bezier.is_const() {
@@ -1064,7 +1067,13 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
             if bezier.is_const() {
                 x += bezier.knot_vec.range_length();
             } else {
-                self.concat(bezier.knot_translate(-x));
+                match self.try_concat(bezier.knot_translate(-x)) {
+                    Ok(concatted) => *self = concatted,
+                    Err(_) => {
+                        *self = original;
+                        return self;
+                    }
+                }
             }
         }
         self

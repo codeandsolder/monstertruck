@@ -167,7 +167,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// # bspsurface.add_knot_v(0.82);
     ///
     /// let bnd_box = BoundingBox::from_iter(&[Vector2::new(0.2, 0.3), Vector2::new(0.8, 0.6)]);
-    /// let curve = bspsurface.sectional_curve(bnd_box);
+    /// let curve = bspsurface.sectional_curve(bnd_box).expect("section is valid");
     /// const N: usize = 100;
     /// assert_near2!(curve.subs(0.0), bspsurface.subs(0.2, 0.3));
     /// assert_near2!(curve.subs(1.0), bspsurface.subs(0.8, 0.6));
@@ -178,7 +178,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     assert_near2!(pt[2], pt[0] * pt[0] + pt[1] * pt[1]);
     /// }
     /// ```
-    pub fn sectional_curve(&self, bnd_box: BoundingBox<Vector2>) -> BsplineCurve<P> {
+    pub fn sectional_curve(&self, bnd_box: BoundingBox<Vector2>) -> Option<BsplineCurve<P>> {
         let p = bnd_box.min();
         let q = bnd_box.max();
         let mut bspsurface = self.clone();
@@ -221,16 +221,15 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
                     })
                 })
                 .collect();
-            cc.concat(&BsplineCurve::new_unchecked(knot_vec, control_points));
+            cc.try_concat(&BsplineCurve::new_unchecked(knot_vec, control_points))
+                .ok()?;
             if let Some(mut backup) = backup {
                 bspsurface = backup.cut_v(knots[p]);
             }
         }
-        // SAFETY: `knots.len() >= 2` for any valid B-spline surface, so the loop
-        // always executes at least once and the collector is never `Singleton`.
-        let mut curve: BsplineCurve<P> = cc.unwrap();
+        let mut curve: BsplineCurve<P> = cc.into_curve()?;
         curve.knot_normalize();
-        curve
+        Some(curve)
     }
 
     /// Gets the boundary by four splitted curves.
@@ -283,16 +282,19 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     }
 
     /// Extracts the boundary of surface
-    pub fn boundary(&self) -> BsplineCurve<P> {
+    pub fn boundary(&self) -> Option<BsplineCurve<P>> {
         let (knot_vector_u, knot_vector_v) = self.knot_vecs.clone();
         let (range0, range1) = (knot_vector_u.range_length(), knot_vector_v.range_length());
         let [bspline0, mut bspline1, mut bspline2, mut bspline3] = self.splitted_boundary();
         bspline2.invert();
         bspline3.invert();
-        bspline0
-            .concat(bspline1.knot_translate(range0))
-            .concat(bspline2.knot_translate(range0 + range1))
-            .concat(bspline3.knot_translate(range0 * 2.0 + range1))
+        let curve = bspline0.try_concat(bspline1.knot_translate(range0)).ok()?;
+        let curve = curve
+            .try_concat(bspline2.knot_translate(range0 + range1))
+            .ok()?;
+        curve
+            .try_concat(bspline3.knot_translate(range0 * 2.0 + range1))
+            .ok()
     }
 }
 

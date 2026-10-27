@@ -94,7 +94,7 @@ fn exec_concat_positive_test(
     let mut part1 = part0.cut(t);
     part1.transform_control_points(|vec| *vec *= w);
     prop_assert_near!(part0.back(), part1.front());
-    concat_random_test(&part0, &part1, 10);
+    concat_random_test(&part0, &part1, 10).expect("curves concatenate");
     Ok(())
 }
 
