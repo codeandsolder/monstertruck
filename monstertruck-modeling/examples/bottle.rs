@@ -21,7 +21,7 @@ fn body_shell(bottom: f64, height: f64, width: f64, thickness: f64) -> Shell {
     let vertex0 = builder::vertex(Point3::new(-width / 2.0, bottom, thickness / 4.0));
     let vertex1 = builder::vertex(Point3::new(width / 2.0, bottom, thickness / 4.0));
     let transit = Point3::new(0.0, bottom, thickness / 2.0);
-    let arc0 = builder::circle_arc(&vertex0, &vertex1, transit);
+    let arc0 = builder::circle_arc(&vertex0, &vertex1, transit).expect("valid bottle profile arc");
     let arc1 = builder::rotated(&arc0, Point3::origin(), Vector3::unit_y(), Rad(PI));
     let face = builder::homotopy(&arc0, &arc1.inverse());
     let solid = builder::extrude(&face, Vector3::new(0.0, height, 0.0));

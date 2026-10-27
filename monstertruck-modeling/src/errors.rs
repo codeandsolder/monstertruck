@@ -23,6 +23,9 @@ pub enum Error {
     /// No outer loop found among the provided wires.
     #[error("no outer loop found; at least one wire must have positive signed area.")]
     NoOuterLoop,
+    /// Projected profile geometry contains non-finite coordinates or area.
+    #[error("profile geometry contains non-finite projected values.")]
+    NonFiniteProfileGeometry,
     /// A circular-arc tangent vector is zero or near zero, so it cannot define a direction.
     #[error("circular-arc tangent is degenerate (zero or near-zero).")]
     DegenerateCircularArcTangent,
@@ -30,6 +33,9 @@ pub enum Error {
     /// so the plane of the arc is under-determined.
     #[error("circular-arc tangent is parallel to the chord between the arc endpoints.")]
     CircularArcTangentParallelToChord,
+    /// Three points supplied for a circular arc are coincident, collinear, or non-finite.
+    #[error("circular-arc points do not define a finite circle.")]
+    DegenerateCircularArcPoints,
     /// A composite sweep was requested without any path segments.
     #[error("composite sweep requires at least one segment.")]
     EmptyCompositeSweep,

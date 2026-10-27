@@ -161,12 +161,15 @@ where C: ParametricCurve3D + BoundedCurve + Clone + Invertible {
     let projections: Vec<Vec<Point2>> = wires.iter().map(|w| project_wire_to_2d(w, u, v)).collect();
 
     let areas: Vec<f64> = projections.iter().map(|pts| signed_area_2d(pts)).collect();
+    if areas.iter().any(|area| !area.is_finite()) {
+        return Err(Error::NonFiniteProfileGeometry);
+    }
 
     // Find the outer loop: the one with the largest absolute area.
     let (outer_idx, _) = areas
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
+        .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
         .ok_or(Error::NoOuterLoop)?;
 
     // Ensure the outer wire is CCW (positive area).

@@ -7,12 +7,27 @@ pub(super) fn circle_arc_by_three_points(
     point0: Point3,
     point1: Point3,
     transit: Point3,
-) -> Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4> {
-    let origin = circum_center(point0, point1, transit);
+) -> std::result::Result<Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>, Error> {
+    let finite = |point: Point3| point.x.is_finite() && point.y.is_finite() && point.z.is_finite();
+    if !finite(point0) || !finite(point1) || !finite(transit) {
+        return Err(Error::DegenerateCircularArcPoints);
+    }
+
     let (vec0, vec1) = (point0 - transit, point1 - transit);
-    let axis = vec1.cross(vec0).normalize();
+    let axis_raw = vec1.cross(vec0);
+    if axis_raw.magnitude2().so_small() {
+        return Err(Error::DegenerateCircularArcPoints);
+    }
+    let origin = circum_center(point0, point1, transit);
+    if !finite(origin) {
+        return Err(Error::DegenerateCircularArcPoints);
+    }
+    let axis = axis_raw.normalize();
     let angle = Rad(PI) - vec0.angle(vec1);
-    circle_arc(point0, origin, axis, angle * 2.0)
+    if !angle.0.is_finite() {
+        return Err(Error::DegenerateCircularArcPoints);
+    }
+    Ok(circle_arc(point0, origin, axis, angle * 2.0))
 }
 
 /// Constructs the unique circular arc that starts at `point0` with the
@@ -111,9 +126,10 @@ pub(super) fn attach_plane(mut pts: Vec<Vec<Point3>>) -> Option<Plane> {
     };
     let a = take_one_axis_by_normal(n);
     let mat: Matrix4 = Matrix3::from_cols(a, n.cross(a), n).into();
+    let inverse = mat.invert()?;
     pts.iter_mut()
         .flatten()
-        .for_each(|pt| *pt = mat.invert().unwrap().transform_point(*pt));
+        .for_each(|pt| *pt = inverse.transform_point(*pt));
     let bnd_box: BoundingBox<Point3> = pts.iter().flatten().collect();
     let diag = bnd_box.diagonal();
     if !diag[2].so_small() {

@@ -137,21 +137,18 @@ pub enum CircularArcConstraint {
 /// [`Vector3`] the arc must have as its tangent at `vertex0`. See
 /// [`CircularArcConstraint`] for the precise interpretation.
 ///
-/// # Panics
-///
-/// Panics if the inputs are degenerate. Specifically, when `constraint`
-/// is [`CircularArcConstraint::StartTangent`], the tangent must be
-/// non-zero and not parallel to the chord between the endpoints. Use
-/// [`try_circle_arc`] to handle these cases as recoverable errors.
+/// Returns an error if the supplied point/tangent constraint is degenerate
+/// or cannot define a finite, non-degenerate circular arc.
 ///
 /// # Examples
 /// ```
 /// use monstertruck_modeling::*;
+/// # fn main() -> Result<()> {
 ///
 /// // The upper unit semicircle, specified by a through-point.
 /// let vertex0 = builder::vertex(Point3::new(1.0, 0.0, 0.0));
 /// let vertex1 = builder::vertex(Point3::new(-1.0, 0.0, 0.0));
-/// let semi_circle = builder::circle_arc(&vertex0, &vertex1, Point3::new(0.0, 1.0, 0.0));
+/// let semi_circle = builder::circle_arc(&vertex0, &vertex1, Point3::new(0.0, 1.0, 0.0))?;
 /// # let curve = match semi_circle.oriented_curve() {
 /// #       Curve::NurbsCurve(curve) => curve,
 /// #       _ => unreachable!(),
@@ -161,15 +158,18 @@ pub enum CircularArcConstraint {
 /// #       let t = curve.knot_vector()[0] + curve.knot_vector().range_length() * i as f64 / N as f64;
 /// #       assert!(curve.subs(t).to_vec().magnitude().near(&1.0));
 /// # }
+/// # Ok(())
+/// # }
 /// ```
 /// ```
 /// use monstertruck_modeling::*;
+/// # fn main() -> Result<()> {
 ///
 /// // A quarter of the unit circle, specified by the start tangent direction.
 /// let vertex0 = builder::vertex(Point3::new(1.0, 0.0, 0.0));
 /// let vertex1 = builder::vertex(Point3::new(0.0, 1.0, 0.0));
 /// let tangent = Vector3::new(0.0, 1.0, 0.0);
-/// let quarter = builder::circle_arc(&vertex0, &vertex1, tangent);
+/// let quarter = builder::circle_arc(&vertex0, &vertex1, tangent)?;
 /// # let curve = match quarter.oriented_curve() {
 /// #       Curve::NurbsCurve(curve) => curve,
 /// #       _ => unreachable!(),
@@ -179,16 +179,18 @@ pub enum CircularArcConstraint {
 /// #       let t = curve.knot_vector()[0] + curve.knot_vector().range_length() * i as f64 / N as f64;
 /// #       assert!(curve.evaluate(t).to_vec().magnitude().near(&1.0));
 /// # }
+/// # Ok(())
+/// # }
 /// ```
 pub fn circle_arc<C>(
     vertex0: &Vertex,
     vertex1: &Vertex,
     constraint: impl Into<CircularArcConstraint>,
-) -> Edge<C>
+) -> Result<Edge<C>>
 where
     Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C>,
 {
-    try_circle_arc(vertex0, vertex1, constraint).expect("degenerate circular-arc constraint.")
+    try_circle_arc(vertex0, vertex1, constraint)
 }
 
 /// Fallible variant of [`circle_arc`].
@@ -210,7 +212,7 @@ where
     let pt1 = vertex1.point();
     let curve = match constraint.into() {
         CircularArcConstraint::ThroughPoint(transit) => {
-            geom_impls::circle_arc_by_three_points(pt0, pt1, transit)
+            geom_impls::circle_arc_by_three_points(pt0, pt1, transit)?
         }
         CircularArcConstraint::StartTangent(tangent) => {
             geom_impls::try_circle_arc_by_start_tangent(pt0, pt1, tangent)?
