@@ -82,7 +82,7 @@ impl PolygonState {
     /// ```
     #[inline(always)]
     pub fn matrix_buffer(&self, device: &Device) -> BufferHandler {
-        let matrix_data: [[f32; 4]; 4] = self.matrix.cast::<f32>().unwrap().into();
+        let matrix_data = matrix4_to_f32(self.matrix);
         BufferHandler::from_slice(&matrix_data, device, BufferUsages::UNIFORM)
     }
 
@@ -127,8 +127,8 @@ impl PolygonState {
     /// layout(set = 1, binding = 2) uniform texture2D texture_view;
     /// layout(set = 1, binding = 3) uniform sampler texture_sampler;
     /// ```
-    pub fn textureview_and_sampler(&self, device: &Device) -> (TextureView, Sampler) {
-        let texture = self.texture.as_ref().unwrap();
+    pub fn textureview_and_sampler(&self, device: &Device) -> Option<(TextureView, Sampler)> {
+        let texture = self.texture.as_ref()?;
         let view = texture.create_view(&Default::default());
         let sampler = device.create_sampler(&SamplerDescriptor {
             mag_filter: FilterMode::Linear,
@@ -138,7 +138,7 @@ impl PolygonState {
             lod_max_clamp: 100.0,
             ..Default::default()
         });
-        (view, sampler)
+        Some((view, sampler))
     }
 
     #[doc(hidden)]

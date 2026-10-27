@@ -58,8 +58,21 @@ impl PolygonInstance {
         )
     }
     #[inline(always)]
-    fn textured_bg(&self, device: &Device, layout: &BindGroupLayout) -> BindGroup {
-        let (view, sampler) = self.state.textureview_and_sampler(device);
+    fn textured_bg(
+        &self,
+        device: &Device,
+        layout: &BindGroupLayout,
+        texture: &Texture,
+    ) -> BindGroup {
+        let view = texture.create_view(&Default::default());
+        let sampler = device.create_sampler(&SamplerDescriptor {
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Nearest,
+            mipmap_filter: MipmapFilterMode::Nearest,
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 100.0,
+            ..Default::default()
+        });
         bind_group_util::create_bind_group(
             device,
             layout,
@@ -94,9 +107,9 @@ impl Rendered for PolygonInstance {
         device_handler: &DeviceHandler,
         layout: &BindGroupLayout,
     ) -> Arc<BindGroup> {
-        Arc::new(match self.state.texture.is_some() {
-            true => self.textured_bg(device_handler.device(), layout),
-            false => self.non_textured_bg(device_handler.device(), layout),
+        Arc::new(match self.state.texture.as_ref() {
+            Some(texture) => self.textured_bg(device_handler.device(), layout, texture),
+            None => self.non_textured_bg(device_handler.device(), layout),
         })
     }
     #[inline(always)]

@@ -11,6 +11,7 @@
 //! ```
 //! use monstertruck_gpu::*;
 //! use monstertruck_render::*;
+//! # let mesh = PolygonMesh::default();
 //!
 //! let handler = pollster::block_on(DeviceHandler::default_device()).expect("GPU device is available");
 //! let mut scene = Scene::new(handler, &Default::default());
@@ -48,6 +49,35 @@ use bytemuck::{Pod, Zeroable};
 use image::DynamicImage;
 use monstertruck_gpu::{wgpu::*, *};
 use std::sync::Arc;
+
+fn matrix4_to_f32(matrix: Matrix4) -> [[f32; 4]; 4] {
+    [
+        [
+            matrix.x.x as f32,
+            matrix.x.y as f32,
+            matrix.x.z as f32,
+            matrix.x.w as f32,
+        ],
+        [
+            matrix.y.x as f32,
+            matrix.y.y as f32,
+            matrix.y.z as f32,
+            matrix.y.w as f32,
+        ],
+        [
+            matrix.z.x as f32,
+            matrix.z.y as f32,
+            matrix.z.z as f32,
+            matrix.z.w as f32,
+        ],
+        [
+            matrix.w.x as f32,
+            matrix.w.y as f32,
+            matrix.w.z as f32,
+            matrix.w.w as f32,
+        ],
+    ]
+}
 
 /// Re-exports `monstertruck_mesh`.
 pub mod polymesh {
