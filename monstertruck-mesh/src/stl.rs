@@ -235,10 +235,8 @@ impl Iterator for PolygonMeshStlFaceIterator<'_> {
         self.faces.next().map(|face| {
             let p = array![i => self.positions[face[i].pos]; 3];
             let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize();
-            // SAFETY: cast from f64 to f32 only fails for NaN, which valid geometry never produces.
-            let normal = n.cast().unwrap().into();
-            // SAFETY: cast from f64 to f32 only fails for NaN, which valid geometry never produces.
-            let vertices = array![i => p[i].cast().unwrap().into(); 3];
+            let normal = [n.x as f32, n.y as f32, n.z as f32];
+            let vertices = array![i => [p[i].x as f32, p[i].y as f32, p[i].z as f32]; 3];
             StlFace { normal, vertices }
         })
     }
@@ -297,7 +295,7 @@ impl FromIterator<StlFace> for PolygonMesh {
         let mut normals: Vec<([i64; 3], usize)> = normals.into_iter().collect();
         normals.sort_by_key(|a| a.1);
         let normals: Vec<Vector3> = normals.into_iter().map(decode_vector).collect();
-        PolygonMesh::debug_new(
+        PolygonMesh::new_unchecked(
             StandardAttributes {
                 positions,
                 uv_coords: Vec::new(),

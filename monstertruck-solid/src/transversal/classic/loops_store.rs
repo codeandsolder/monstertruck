@@ -1823,6 +1823,7 @@ mod projection_tests {
                 },
                 Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
             )
+            .expect("fixture mesh is valid")
         }
 
         let target = rectangle(0.0, 2.0);

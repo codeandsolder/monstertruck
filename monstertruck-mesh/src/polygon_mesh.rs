@@ -3,24 +3,15 @@ use crate::*;
 use std::fmt::Debug;
 
 impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
-    /// complete constructor
-    /// # Panics
-    /// Panic occurs if there is an index is out of range.
-    /// # Remarks
-    /// This method does not check whether the normal is normalized or not.
-    pub fn new(attributes: A, faces: Faces<V>) -> Self {
-        Self::try_new(attributes, faces).unwrap_or_else(|e| panic!("{e:?}"))
-    }
-
-    /// complete constructor
+    /// Complete checked constructor.
     /// # Errors
-    /// Returns [`Error::OutOfRange`] if there is an index is out of range.
+    /// Returns [`Error::OutOfRange`] if an attribute index is out of range.
     ///
     /// [`Error::OutOfRange`]: ./errors/enum.Error.html#variant.OutOfRange
     ///
     /// # Remarks
     /// This method does not check whether the normal is normalized or not.
-    pub fn try_new(attributes: A, faces: Faces<V>) -> Result<Self, Error<V>> {
+    pub fn new(attributes: A, faces: Faces<V>) -> Result<Self, Error<V>> {
         faces
             .is_compatible(&attributes)
             .map(|_| Self::new_unchecked(attributes, faces))
@@ -32,12 +23,13 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
         Self { attributes, faces }
     }
 
-    /// constructor, boundary check is acrivated only in debug mode.
+    /// Constructor that validates in debug builds and preserves the same fallible API in release builds.
     #[inline(always)]
-    pub fn debug_new(attributes: A, faces: Faces<V>) -> Self {
-        match cfg!(debug_assertions) {
-            true => Self::new(attributes, faces),
-            false => Self::new_unchecked(attributes, faces),
+    pub fn debug_new(attributes: A, faces: Faces<V>) -> Result<Self, Error<V>> {
+        if cfg!(debug_assertions) {
+            Self::new(attributes, faces)
+        } else {
+            Ok(Self::new_unchecked(attributes, faces))
         }
     }
 
@@ -78,10 +70,13 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
     pub fn face_iter_mut(&mut self) -> impl Iterator<Item = &mut [V]> { self.faces.face_iter_mut() }
     /// Creates an editor that performs boundary checking on dropped.
     #[inline(always)]
-    pub fn editor(&mut self) -> PolygonMeshEditor<'_, V, A> {
+    pub fn editor(&mut self) -> PolygonMeshEditor<'_, V, A>
+    where A: Clone {
+        let backup = Some((self.attributes.clone(), self.faces.clone()));
         PolygonMeshEditor {
             attributes: &mut self.attributes,
             faces: &mut self.faces,
+            backup,
             bound_check: true,
         }
     }
@@ -91,16 +86,18 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
         PolygonMeshEditor {
             attributes: &mut self.attributes,
             faces: &mut self.faces,
+            backup: None,
             bound_check: false,
         }
     }
     /// Creates an editor that performs boundary checking on dropped ONLY in debug build.
     #[inline(always)]
-    pub fn debug_editor(&mut self) -> PolygonMeshEditor<'_, V, A> {
-        PolygonMeshEditor {
-            attributes: &mut self.attributes,
-            faces: &mut self.faces,
-            bound_check: cfg!(debug_assertions),
+    pub fn debug_editor(&mut self) -> PolygonMeshEditor<'_, V, A>
+    where A: Clone {
+        if cfg!(debug_assertions) {
+            self.editor()
+        } else {
+            self.uncheck_editor()
         }
     }
 }
@@ -249,7 +246,7 @@ where
             faces: Faces<V>,
         }
         let PolygonMesh_ { attributes, faces } = PolygonMesh_::<V, A>::deserialize(deserializer)?;
-        Self::try_new(attributes, faces).map_err(serde::de::Error::custom)
+        Self::new(attributes, faces).map_err(serde::de::Error::custom)
     }
 }
 
@@ -268,13 +265,15 @@ impl<V: Clone, A: TransformedAttributes> Transformed<Matrix4> for PolygonMesh<V,
 /// Editor of polygon mesh
 ///
 /// It has mutable references to all member variables of the polygon mesh as public variables,
-/// allowing for any destructive changes for optimization.
-/// At drop time, the indices of each vertex are judged to be within the range of
-/// the array of attributes, and a panic occurs if there is one outside the range (boundary check).
+/// allowing for destructive changes for optimization.
+/// A checked editor validates on drop. Invalid edits are rolled back to the mesh state
+/// captured when the editor was created. Use [`PolygonMeshEditor::try_drop`] to observe
+/// the validation error explicitly.
 ///
 /// # Examples
 /// ```
 /// use monstertruck_mesh::*;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// let positions = vec![
 ///     Point3::new(1.0, 0.0, 0.0),
@@ -288,7 +287,7 @@ impl<V: Clone, A: TransformedAttributes> Transformed<Matrix4> for PolygonMesh<V,
 ///         ..Default::default()
 ///     },
 ///     faces,
-/// );
+/// )?;
 ///
 /// // create editor
 /// let editor = mesh.editor();
@@ -296,9 +295,12 @@ impl<V: Clone, A: TransformedAttributes> Transformed<Matrix4> for PolygonMesh<V,
 /// // destructive changes
 /// editor.attributes.uv_coords.push(Vector2::new(0.0, 0.0));
 /// editor.faces.tri_faces_mut()[0][0].uv = Some(0);
+/// # Ok(())
+/// # }
 /// ```
-/// ```should_panic
+/// ```
 /// use monstertruck_mesh::*;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// let positions = vec![
 ///     Point3::new(1.0, 0.0, 0.0),
@@ -312,7 +314,7 @@ impl<V: Clone, A: TransformedAttributes> Transformed<Matrix4> for PolygonMesh<V,
 ///         ..Default::default()    
 ///     },
 ///     faces,
-/// );
+/// )?;
 ///
 /// // create editor
 /// let editor = mesh.editor();
@@ -320,7 +322,9 @@ impl<V: Clone, A: TransformedAttributes> Transformed<Matrix4> for PolygonMesh<V,
 /// // destructive changes
 /// editor.faces.tri_faces_mut()[0][0].uv = Some(0);
 ///
-/// // Panic occurs since no uv coord is added.
+/// // The invalid edit is rolled back when the editor is dropped.
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug)]
 pub struct PolygonMeshEditor<'a, V: Copy + Debug, A: Attributes<V>> {
@@ -328,6 +332,7 @@ pub struct PolygonMeshEditor<'a, V: Copy + Debug, A: Attributes<V>> {
     pub attributes: &'a mut A,
     /// mutable reference to the faces of the polygon mesh
     pub faces: &'a mut Faces<V>,
+    backup: Option<(A, Faces<V>)>,
     bound_check: bool,
 }
 
@@ -335,19 +340,93 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMeshEditor<'_, V, A> {
     #[inline(always)]
     fn is_compatible(&self) -> Result<(), Error<V>> { self.faces.is_compatible(&*self.attributes) }
 
-    /// Drops with boundary check and returns `Result`.
+    fn rollback(&mut self) {
+        if let Some((attributes, faces)) = self.backup.take() {
+            *self.attributes = attributes;
+            *self.faces = faces;
+        }
+    }
+
+    /// Finishes editing with boundary validation.
+    ///
+    /// Invalid edits are rolled back before the validation error is returned.
     #[inline(always)]
     pub fn try_drop(mut self) -> Result<(), Error<V>> {
         self.bound_check = false;
-        self.is_compatible()
+        match self.is_compatible() {
+            Ok(()) => {
+                self.backup = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.rollback();
+                Err(error)
+            }
+        }
     }
 }
 
 impl<V: Copy + Debug, A: Attributes<V>> Drop for PolygonMeshEditor<'_, V, A> {
     #[inline(always)]
     fn drop(&mut self) {
-        if self.bound_check {
-            self.is_compatible().unwrap_or_else(|e| panic!("{e:?}"));
+        if self.bound_check && self.is_compatible().is_err() {
+            self.rollback();
         }
+    }
+}
+
+#[cfg(test)]
+mod totality_tests {
+    use super::*;
+
+    fn triangle() -> PolygonMesh {
+        PolygonMesh::new(
+            StandardAttributes {
+                positions: vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(0.0, 1.0, 0.0),
+                ],
+                ..Default::default()
+            },
+            Faces::from_iter([[0usize, 1, 2]]),
+        )
+        .expect("fixture mesh is valid")
+    }
+
+    #[test]
+    fn checked_constructor_rejects_out_of_range_vertex() {
+        let result = PolygonMesh::new(
+            StandardAttributes {
+                positions: vec![Point3::origin()],
+                ..Default::default()
+            },
+            Faces::from_iter([[0usize, 1, 2]]),
+        );
+        assert!(matches!(result, Err(Error::OutOfRange(vertex)) if vertex.pos == 1));
+    }
+
+    #[test]
+    fn checked_editor_rolls_back_invalid_indices_on_drop() {
+        let mut mesh = triangle();
+        let original = mesh.clone();
+        {
+            let editor = mesh.editor();
+            editor.faces.tri_faces_mut()[0][0].uv = Some(7);
+        }
+        assert_eq!(mesh, original);
+    }
+
+    #[test]
+    fn checked_editor_reports_and_rolls_back_invalid_indices() {
+        let mut mesh = triangle();
+        let original = mesh.clone();
+        let result = {
+            let editor = mesh.editor();
+            editor.faces.tri_faces_mut()[0][0].nor = Some(9);
+            editor.try_drop()
+        };
+        assert!(matches!(result, Err(Error::OutOfRange(vertex)) if vertex.nor == Some(9)));
+        assert_eq!(mesh, original);
     }
 }

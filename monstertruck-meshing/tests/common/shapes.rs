@@ -28,4 +28,5 @@ pub fn sphere(center: Point3, radius: f64, udiv: usize, vdiv: usize) -> PolygonM
         },
         faces,
     )
+    .expect("fixture mesh is valid")
 }

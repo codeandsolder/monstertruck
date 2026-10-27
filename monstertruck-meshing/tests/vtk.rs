@@ -32,6 +32,7 @@ fn truck_simple_cube() -> PolygonMesh {
         },
         faces,
     )
+    .expect("fixture mesh is valid")
 }
 
 fn vtk_simple_cube() -> DataSet {
@@ -306,7 +307,8 @@ fn shell_topology() -> Shell<Point3, PolylineCurve<Point3>, PolygonMesh> {
                 (7, Some(7), Some(0)),
             ],
         ]),
-    );
+    )
+    .expect("fixture mesh is valid");
     let polygon1 = PolygonMesh::new(
         StandardAttributes {
             positions: vec![p[0], p[1], p[4], p[5]],
@@ -324,7 +326,8 @@ fn shell_topology() -> Shell<Point3, PolylineCurve<Point3>, PolygonMesh> {
             (2, Some(0), Some(0)),
             (0, Some(2), Some(0)),
         ]]),
-    );
+    )
+    .expect("fixture mesh is valid");
 
     vec![
         Face::try_new(

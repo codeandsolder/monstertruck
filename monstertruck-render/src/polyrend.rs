@@ -10,16 +10,29 @@ impl CreateBuffers for PolygonMesh {
         device: &Device,
     ) -> (BufferHandler, BufferHandler) {
         let expanded = self.expands(|attr| AttrVertex {
-            position: attr.position.cast().unwrap().into(),
+            position: [
+                attr.position.x as f32,
+                attr.position.y as f32,
+                attr.position.z as f32,
+            ],
             uv_coord: attr
                 .uv_coord
-                .and_then(|v| Some(v.cast()?.into()))
-                .unwrap_or([0.0, 0.0]),
+                .map_or([0.0, 0.0], |v| [v.x as f32, v.y as f32]),
             normal: attr
                 .normal
-                .and_then(|v| Some(v.cast()?.into()))
-                .unwrap_or([0.0, 0.0, 0.0]),
+                .map_or([0.0, 0.0, 0.0], |v| [v.x as f32, v.y as f32, v.z as f32]),
         });
+        let expanded = match expanded {
+            Ok(expanded) => expanded,
+            Err(_) => {
+                let vertices = Vec::<AttrVertex>::new();
+                let indices = Vec::<u32>::new();
+                return (
+                    BufferHandler::from_slice(&vertices, device, vertex_usage),
+                    BufferHandler::from_slice(&indices, device, index_usage),
+                );
+            }
+        };
         let indices = expanded
             .faces()
             .triangle_iter()
@@ -71,7 +84,7 @@ impl ToInstance<WireFrameInstance> for PolygonMesh {
         let positions: Vec<[f32; 3]> = self
             .positions()
             .iter()
-            .map(|p| p.cast().unwrap().into())
+            .map(|p| [p.x as f32, p.y as f32, p.z as f32])
             .collect();
         let mut strips = Vec::<u32>::new();
         self.faces().face_iter().for_each(|face| {
@@ -100,16 +113,25 @@ impl CreateBuffers for StructuredMesh {
         device: &Device,
     ) -> (BufferHandler, BufferHandler) {
         let mut vertices = Vec::new();
-        let (m, n) = (self.positions().len(), self.positions()[0].len());
+        let m = self.positions().len();
+        let n = self.positions().first().map_or(0, Vec::len);
         iproduct!(0..m, 0..n).for_each(|(i, j)| {
             vertices.push(AttrVertex {
-                position: self.positions()[i][j].cast().unwrap().into(),
+                position: [
+                    self.positions()[i][j].x as f32,
+                    self.positions()[i][j].y as f32,
+                    self.positions()[i][j].z as f32,
+                ],
                 uv_coord: match self.uv_division() {
                     Some((udiv, vdiv)) => [udiv[i] as f32, vdiv[j] as f32],
                     None => [0.0, 0.0],
                 },
                 normal: match self.normals() {
-                    Some(normals) => normals[i][j].cast().unwrap().into(),
+                    Some(normals) => [
+                        normals[i][j].x as f32,
+                        normals[i][j].y as f32,
+                        normals[i][j].z as f32,
+                    ],
                     None => [0.0, 0.0, 0.0],
                 },
             });
@@ -164,10 +186,10 @@ impl ToInstance<WireFrameInstance> for StructuredMesh {
             .positions()
             .iter()
             .flatten()
-            .map(|p| p.cast().unwrap().into())
+            .map(|p| [p.x as f32, p.y as f32, p.z as f32])
             .collect();
         let mut strips = Vec::<u32>::new();
-        let len = self.positions()[0].len() as u32;
+        let len = self.positions().first().map_or(0, Vec::len) as u32;
         for i in 1..positions.len() as u32 {
             strips.push((i - 1) * len);
             strips.push(i * len);
@@ -205,7 +227,10 @@ impl ToInstance<WireFrameInstance> for PolylineCurve<Point3> {
         state: &WireFrameState,
     ) -> WireFrameInstance {
         let device = handler.device();
-        let positions: Vec<[f32; 3]> = self.iter().map(|p| p.cast().unwrap().into()).collect();
+        let positions: Vec<[f32; 3]> = self
+            .iter()
+            .map(|p| [p.x as f32, p.y as f32, p.z as f32])
+            .collect();
         let strips: Vec<u32> = (1..positions.len())
             .flat_map(|i| vec![i as u32 - 1, i as u32])
             .collect();
@@ -233,7 +258,7 @@ impl ToInstance<WireFrameInstance> for Vec<PolylineCurve<Point3>> {
         let positions: Vec<[f32; 3]> = self
             .iter()
             .flat_map(|poly| poly.iter())
-            .map(|p| p.cast().unwrap().into())
+            .map(|p| [p.x as f32, p.y as f32, p.z as f32])
             .collect();
         let mut counter = 0;
         let strips: Vec<u32> = self

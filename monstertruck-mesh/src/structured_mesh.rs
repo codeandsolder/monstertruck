@@ -15,12 +15,7 @@ impl StandardVertex {
 impl StructuredMesh {
     /// Creates a structured polygon without `uv_division` and `normal`.
     #[inline(always)]
-    pub fn from_positions(positions: Vec<Vec<Point3>>) -> StructuredMesh {
-        StructuredMesh::try_from_positions(positions).unwrap_or_else(|e| panic!("{e:?}"))
-    }
-    /// Creates a structured polygon without `uv_division` and `normal`.
-    #[inline(always)]
-    pub fn try_from_positions(positions: Vec<Vec<Point3>>) -> Result<StructuredMesh> {
+    pub fn from_positions(positions: Vec<Vec<Point3>>) -> Result<StructuredMesh> {
         check_matrix_regularity(&positions)?;
         Ok(StructuredMesh::from_positions_unchecked(positions))
     }
@@ -37,16 +32,6 @@ impl StructuredMesh {
     /// Creates a structured polygon without normals.
     #[inline(always)]
     pub fn from_positions_and_uvs(
-        positions: Vec<Vec<Point3>>,
-        (u_div, v_div): (Vec<f64>, Vec<f64>),
-    ) -> StructuredMesh {
-        StructuredMesh::try_from_positions_and_uvs(positions, (u_div, v_div))
-            .unwrap_or_else(|e| panic!("{e:?}"))
-    }
-
-    /// Creates a structured polygon without normals.
-    #[inline(always)]
-    pub fn try_from_positions_and_uvs(
         positions: Vec<Vec<Point3>>,
         (u_div, v_div): (Vec<f64>, Vec<f64>),
     ) -> Result<StructuredMesh> {
@@ -74,15 +59,6 @@ impl StructuredMesh {
     pub fn from_positions_and_normals(
         positions: Vec<Vec<Point3>>,
         normals: Vec<Vec<Vector3>>,
-    ) -> StructuredMesh {
-        StructuredMesh::try_from_positions_and_normals(positions, normals)
-            .unwrap_or_else(|e| panic!("{e:?}"))
-    }
-    /// Creates a structured polygon without uv divisions.
-    #[inline(always)]
-    pub fn try_from_positions_and_normals(
-        positions: Vec<Vec<Point3>>,
-        normals: Vec<Vec<Vector3>>,
     ) -> Result<StructuredMesh> {
         check_matrix_regularity(&positions)?;
         check_matrices_compatibility(&positions, &normals)?;
@@ -107,16 +83,6 @@ impl StructuredMesh {
     /// Checks whether the size of vectors are compatible before creation.
     #[inline(always)]
     pub fn new(
-        positions: Vec<Vec<Point3>>,
-        uv_division: (Vec<f64>, Vec<f64>),
-        normals: Vec<Vec<Vector3>>,
-    ) -> StructuredMesh {
-        StructuredMesh::try_new(positions, uv_division, normals).unwrap_or_else(|e| panic!("{e:?}"))
-    }
-    /// Creates new structured mesh.
-    /// Checks whether the size of vectors are compatible before creation.
-    #[inline(always)]
-    pub fn try_new(
         positions: Vec<Vec<Point3>>,
         (u_div, v_div): (Vec<f64>, Vec<f64>),
         normals: Vec<Vec<Vector3>>,
@@ -191,7 +157,7 @@ impl StructuredMesh {
             normals,
         } = self;
         let m = positions.len();
-        let n = positions[0].len();
+        let n = positions.first().map_or(0, Vec::len);
         let positions = positions.into_iter().flatten().collect();
         let uv_coords = uv_division
             .map(move |(udiv, vdiv)| {
@@ -245,10 +211,10 @@ impl<'de> Deserialize<'de> for StructuredMesh {
             normals,
         } = StructuredMesh_::deserialize(deserializer)?;
         match (uv_division, normals) {
-            (Some(uv_division), Some(normals)) => Self::try_new(positions, uv_division, normals),
-            (Some(uv_division), None) => Self::try_from_positions_and_uvs(positions, uv_division),
-            (None, Some(normals)) => Self::try_from_positions_and_normals(positions, normals),
-            (None, None) => Self::try_from_positions(positions),
+            (Some(uv_division), Some(normals)) => Self::new(positions, uv_division, normals),
+            (Some(uv_division), None) => Self::from_positions_and_uvs(positions, uv_division),
+            (None, Some(normals)) => Self::from_positions_and_normals(positions, normals),
+            (None, None) => Self::from_positions(positions),
         }
         .map_err(serde::de::Error::custom)
     }
@@ -256,8 +222,11 @@ impl<'de> Deserialize<'de> for StructuredMesh {
 
 #[inline(always)]
 fn check_matrix_regularity<T>(matrix: &[Vec<T>]) -> Result<()> {
+    let Some(first) = matrix.first() else {
+        return Ok(());
+    };
     for arr in matrix {
-        if arr.len() != matrix[0].len() {
+        if arr.len() != first.len() {
             return Err(Error::IrregularArray);
         }
     }
@@ -269,10 +238,15 @@ fn check_matrices_compatibility<S, T>(matrix0: &[Vec<S>], matrix1: &[Vec<T>]) ->
     if matrix0.len() != matrix1.len() {
         return Err(Error::DifferentLengthArrays);
     }
-    for arr in matrix0 {
-        if arr.len() != matrix1[0].len() {
-            return Err(Error::DifferentLengthArrays);
-        }
+    let width0 = matrix0.first().map_or(0, Vec::len);
+    let width1 = matrix1.first().map_or(0, Vec::len);
+    if width0 != width1 {
+        return Err(Error::DifferentLengthArrays);
+    }
+    if matrix0.iter().any(|row| row.len() != width0)
+        || matrix1.iter().any(|row| row.len() != width1)
+    {
+        return Err(Error::DifferentLengthArrays);
     }
     Ok(())
 }
@@ -307,4 +281,18 @@ fn check_matrix_vectors_compatibility<T>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod totality_tests {
+    use super::*;
+
+    #[test]
+    fn empty_structured_mesh_destructs_to_empty_polygon() {
+        let mesh =
+            StructuredMesh::from_positions(Vec::new()).expect("empty structured mesh is valid");
+        let polygon = mesh.destruct();
+        assert!(polygon.positions().is_empty());
+        assert!(polygon.faces().is_empty());
+    }
 }

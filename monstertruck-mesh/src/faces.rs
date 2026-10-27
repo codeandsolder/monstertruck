@@ -307,7 +307,9 @@ impl<V: Copy> Faces<V> {
     /// ```
     #[inline(always)]
     pub fn triangle_iter(&self) -> TriangleIterator<'_, V> {
-        let len = self.face_iter().fold(0, |sum, face| sum + face.len() - 2);
+        let len = self
+            .face_iter()
+            .fold(0, |sum, face| sum + face.len().saturating_sub(2));
         TriangleIterator {
             tri_faces: self.tri_faces.iter(),
             quad_faces: self.quad_faces.iter(),
@@ -415,18 +417,17 @@ impl<V: Copy> Iterator for TriangleIterator<'_, V> {
                 *current_face = quad_faces
                     .next()
                     .map(AsRef::as_ref)
-                    .or_else(|| other_faces.next().map(AsRef::as_ref));
+                    .or_else(|| other_faces.find(|face| face.len() >= 3).map(AsRef::as_ref));
             }
-            // SAFETY: set from quad_faces or other_faces above; len > 0 guarantees remaining faces.
-            let face = current_face.unwrap();
-            let res = [
-                face[0],
-                face[*current_vertex + 1],
-                face[*current_vertex + 2],
-            ];
+            let face = (*current_face)?;
+            let (&a, &b, &c) = (
+                face.first()?,
+                face.get(*current_vertex + 1)?,
+                face.get(*current_vertex + 2)?,
+            );
+            let res = [a, b, c];
             *current_vertex += 1;
-            // SAFETY: current_face was verified as Some on the preceding line.
-            if current_face.unwrap().len() == *current_vertex + 2 {
+            if face.len() == *current_vertex + 2 {
                 *current_face = None;
                 *current_vertex = 0;
             }
@@ -438,3 +439,21 @@ impl<V: Copy> Iterator for TriangleIterator<'_, V> {
 }
 
 impl<V: Copy> ExactSizeIterator for TriangleIterator<'_, V> {}
+
+#[cfg(test)]
+mod totality_tests {
+    use super::*;
+
+    #[test]
+    fn triangle_iter_skips_malformed_ngons() {
+        let faces = Faces {
+            tri_faces: Vec::new(),
+            quad_faces: Vec::new(),
+            other_faces: vec![vec![0, 1], vec![2, 3, 4, 5]],
+        };
+        assert_eq!(
+            faces.triangle_iter().collect::<Vec<_>>(),
+            vec![[2, 3, 4], [2, 4, 5]]
+        );
+    }
+}

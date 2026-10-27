@@ -170,7 +170,7 @@ where
             .collect();
         (Vec::new(), quad_faces)
     };
-    let mut mesh = PolygonMesh::debug_new(
+    let mut mesh = PolygonMesh::new_unchecked(
         StandardAttributes {
             positions,
             uv_coords,
@@ -359,7 +359,7 @@ where
     if interior_quads.is_empty() {
         None
     } else {
-        let mut interior_mesh = PolygonMesh::debug_new(
+        let mut interior_mesh = PolygonMesh::new_unchecked(
             StandardAttributes {
                 positions,
                 uv_coords,
@@ -999,7 +999,7 @@ fn triangulation_into_polymesh<'a>(
             array![i => [idcs[i], idcs[i], idcs[i]].into(); 3]
         })
         .collect();
-    PolygonMesh::debug_new(
+    PolygonMesh::new_unchecked(
         StandardAttributes {
             positions,
             uv_coords,

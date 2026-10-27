@@ -28,7 +28,7 @@ pub trait Splitting {
     ///         &[3, 2, 1, 0], &[0, 1, 5, 4], &[1, 2, 6, 5],
     ///         &[2, 3, 7, 6], &[3, 0, 4, 7], &[4, 5, 6, 7],
     ///     ]),
-    /// );
+    /// ).expect("fixture mesh is valid");
     ///
     /// let submesh = mesh.create_mesh_by_face_indices(&[0, 3, 5]);
     ///
@@ -77,7 +77,7 @@ pub trait Splitting {
     ///         &[(0, None, Some(0)), (1, None, Some(0)), (2, None, Some(0)), (3, None, Some(0))],
     ///         &[(2, None, Some(0)), (1, None, Some(0)), (4, None, Some(1)), (5, None, Some(1))],
     ///     ]),
-    /// );
+    /// ).expect("fixture mesh is valid");
     /// let (plane, remained) = mesh.extract_planes(TOLERANCE); // TOLERANCE == 1.0e-7
     /// assert_eq!(plane.len(), 1); assert_eq!(plane[0], 0);
     /// assert_eq!(remained.len(), 1); assert_eq!(remained[0], 1);
@@ -112,7 +112,7 @@ pub trait Splitting {
     ///         &[1, 2, 5], &[6, 5, 2], &[2, 3, 6], &[7, 6, 3],
     ///         &[3, 0, 7], &[4, 7, 0], &[4, 5, 7], &[6, 7, 5],
     ///     ]),
-    /// );
+    /// ).expect("fixture mesh is valid");
     ///
     /// // sign up normals
     /// mesh.add_naive_normals(true).put_together_same_attrs(TOLERANCE);
@@ -136,7 +136,7 @@ impl Splitting for PolygonMesh {
         let uv_coords = self.uv_coords().clone();
         let normals = self.normals().clone();
         let faces: Faces = indices.iter().map(|i| &self.faces()[*i]).collect();
-        PolygonMesh::new(
+        PolygonMesh::new_unchecked(
             StandardAttributes {
                 positions,
                 uv_coords,
@@ -335,7 +335,8 @@ fn into_components_test() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("fixture mesh is valid");
     let comp = mesh.components(true);
     assert_eq!(comp.len(), 2);
     assert_eq!(comp[0], vec![0, 1, 4]);

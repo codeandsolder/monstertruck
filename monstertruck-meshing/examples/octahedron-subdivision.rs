@@ -31,7 +31,8 @@ fn main() {
             ],
             Vec::new(),
         ),
-    );
+    )
+    .expect("fixture mesh is valid");
     let mut buf = Vec::<u8>::new();
     obj::write(&polymesh, &mut buf).unwrap();
     std::fs::write("octahedron.obj", &buf).unwrap();

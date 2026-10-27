@@ -123,7 +123,8 @@ fn positions_obj_oi_test() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("test mesh is valid");
     let mut gened_obj: Vec<u8> = Vec::new();
     obj::write(&mesh, &mut gened_obj).unwrap();
     let read_mesh = obj::read(AsRef::<[u8]>::as_ref(&gened_obj)).unwrap();
@@ -161,7 +162,8 @@ fn withtexcoords_obj_oi_test() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("test mesh is valid");
     let mut gened_obj: Vec<u8> = Vec::new();
     obj::write(&mesh, &mut gened_obj).unwrap();
     let read_mesh = obj::read(AsRef::<[u8]>::as_ref(&gened_obj)).unwrap();
@@ -199,7 +201,8 @@ fn withnormals_obj_oi_test() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("test mesh is valid");
     let mut gened_obj: Vec<u8> = Vec::new();
     obj::write(&mesh, &mut gened_obj).unwrap();
     let read_mesh = obj::read(AsRef::<[u8]>::as_ref(&gened_obj)).unwrap();
@@ -268,7 +271,8 @@ fn incomplete_obj_oi_test() {
             normals: cube::NORMALS.to_vec(),
         },
         faces,
-    );
+    )
+    .expect("test mesh is valid");
     let mut gened_obj: Vec<u8> = Vec::new();
     obj::write(&mesh, &mut gened_obj).unwrap();
     let read_mesh = obj::read(AsRef::<[u8]>::as_ref(&gened_obj)).unwrap();

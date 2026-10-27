@@ -20,7 +20,8 @@ fn loop_subdivision() {
             normals: Vec::new(),
         },
         Faces::from_tri_and_quad_faces(tri_faces, Vec::new()),
-    );
+    )
+    .expect("fixture mesh is valid");
     polygon.loop_subdivision();
     assert_eq!(polygon.positions().len(), 9);
     assert_eq!(

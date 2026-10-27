@@ -572,6 +572,7 @@ mod planar_region_identity_tests {
             },
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
         )
+        .expect("fixture mesh is valid")
     }
 
     fn disjoint_corner_triangles() -> PolygonMesh {
@@ -589,6 +590,7 @@ mod planar_region_identity_tests {
             },
             Faces::from_iter(vec![[0, 1, 2], [3, 4, 5]]),
         )
+        .expect("fixture mesh is valid")
     }
 
     #[test]
@@ -613,7 +615,8 @@ mod planar_region_identity_tests {
                 ..Default::default()
             },
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
-        );
+        )
+        .expect("fixture mesh is valid");
         let diamond = diamond();
         let fragments: Shell<Point3, PolylineCurve, Option<PolygonMesh>> = Shell::from(vec![
             Face::new_unchecked(Vec::new(), Some(diamond.clone())),

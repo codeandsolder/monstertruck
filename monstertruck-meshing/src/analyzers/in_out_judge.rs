@@ -54,7 +54,7 @@ pub trait IncludingPointInDomain {
     ///         [0, 3, 2],
     ///         [1, 2, 3],
     ///     ]),
-    /// );
+    /// ).expect("fixture mesh is valid");
     ///
     /// assert_eq!(simplex.signed_crossing_faces(Point3::new(0.1, 0.1, 0.1), Vector3::unit_x()), 1);
     /// assert_eq!(simplex.signed_crossing_faces(Point3::new(-0.1, 0.1, 0.1), Vector3::unit_x()), 0);
@@ -81,7 +81,7 @@ pub trait IncludingPointInDomain {
     ///         [0, 3, 2],
     ///         [1, 2, 3],
     ///     ]),
-    /// );
+    /// ).expect("fixture mesh is valid");
     ///
     /// assert!(simplex.inside(Point3::new(0.1, 0.1, 0.1)));
     /// assert!(!simplex.inside(Point3::new(-0.1, 0.1, 0.1)));
@@ -132,7 +132,8 @@ fn inside100() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("fixture mesh is valid");
 
     for _ in 0..100 {
         assert!(simplex.inside(Point3::new(0.1, 0.1, 0.1)));

@@ -176,7 +176,10 @@ impl ToDataSet for PolygonMesh {
                     };
                     (attr.position, uv)
                 })
-                .to_data_set(),
+                .map_or_else(
+                    |_| self.to_positions_mesh().to_data_set(),
+                    |mesh| mesh.to_data_set(),
+                ),
             (true, false) => self
                 .expands(|attr| {
                     let normal = match attr.normal {
@@ -185,8 +188,14 @@ impl ToDataSet for PolygonMesh {
                     };
                     (attr.position, normal)
                 })
-                .to_data_set(),
-            (false, false) => self.expands(identity).to_data_set(),
+                .map_or_else(
+                    |_| self.to_positions_mesh().to_data_set(),
+                    |mesh| mesh.to_data_set(),
+                ),
+            (false, false) => self.expands(identity).map_or_else(
+                |_| self.to_positions_mesh().to_data_set(),
+                |mesh| mesh.to_data_set(),
+            ),
         }
     }
 }
@@ -302,8 +311,8 @@ impl ToDataSet for Wire<Point3, PolylineCurve<Point3>> {
 
 fn face_piece(
     face: &Face<Point3, PolylineCurve<Point3>, PolygonMesh>,
-) -> Piece<UnstructuredGridPiece> {
-    let polygon = face.oriented_surface().expands(identity);
+) -> Option<Piece<UnstructuredGridPiece>> {
+    let polygon = face.oriented_surface().expands(identity).ok()?;
     let mut length = 0;
     let map: HashMap<Option<[i64; 3]>, usize> = polygon
         .attributes()
@@ -374,21 +383,21 @@ fn face_piece(
         }
         Some(())
     });
-    Piece::Inline(Box::new(UnstructuredGridPiece {
+    Some(Piece::Inline(Box::new(UnstructuredGridPiece {
         points: IOBuffer::F64(flatten_points),
         cells: Cells { cell_verts, types },
         data: Attributes {
             point: vec![uvs, normals],
             ..Default::default()
         },
-    }))
+    })))
 }
 
 impl ToDataSet for Face<Point3, PolylineCurve<Point3>, PolygonMesh> {
     fn to_data_set(&self) -> DataSet {
         DataSet::UnstructuredGrid {
             meta: None,
-            pieces: vec![face_piece(self)],
+            pieces: face_piece(self).into_iter().collect(),
         }
     }
 }
@@ -397,7 +406,7 @@ impl ToDataSet for Shell<Point3, PolylineCurve<Point3>, PolygonMesh> {
     fn to_data_set(&self) -> DataSet {
         DataSet::UnstructuredGrid {
             meta: None,
-            pieces: self.face_iter().map(face_piece).collect(),
+            pieces: self.face_iter().filter_map(face_piece).collect(),
         }
     }
 }
@@ -410,7 +419,8 @@ fn cface_piece(
     let polygon = match face.orientation {
         true => face.surface.expands(identity),
         false => face.surface.inverse().expands(identity),
-    };
+    }
+    .ok()?;
     let mut length = 0;
     let map: HashMap<Option<[i64; 3]>, usize> = polygon
         .attributes()

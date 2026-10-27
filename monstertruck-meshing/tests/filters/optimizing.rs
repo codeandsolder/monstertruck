@@ -37,7 +37,8 @@ fn remove_unused_attrs_test() {
             normals,
         },
         faces,
-    );
+    )
+    .expect("fixture mesh is valid");
     mesh.remove_unused_attrs();
     assert_eq!(mesh.positions().len(), 7);
     assert_eq!(mesh.uv_coords().len(), 7);
@@ -85,7 +86,8 @@ fn remove_degenerate_faces_test() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("fixture mesh is valid");
     mesh.remove_degenerate_faces();
     assert_eq!(
         mesh.faces().tri_faces().len(),
@@ -151,7 +153,8 @@ fn put_together_same_attrs_test() {
             normals,
         },
         faces,
-    );
+    )
+    .expect("fixture mesh is valid");
     let attrs: Vec<_> = mesh
         .faces()
         .face_iter()

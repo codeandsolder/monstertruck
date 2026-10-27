@@ -90,23 +90,26 @@ impl PolygonMesh {
         Some(res)
     }
     /// Returns polygon buffer
-    pub fn to_buffer(&self) -> PolygonBuffer {
-        let exp = self.0.expands(|attr| {
-            let position = attr.position;
-            let uv_coord = attr.uv_coord.unwrap_or_else(Vector2::zero);
-            let normal = attr.normal.unwrap_or_else(Vector3::zero);
-            [
-                position[0] as f32,
-                position[1] as f32,
-                position[2] as f32,
-                uv_coord[0] as f32,
-                uv_coord[1] as f32,
-                normal[0] as f32,
-                normal[1] as f32,
-                normal[2] as f32,
-            ]
-        });
-        PolygonBuffer {
+    pub fn to_buffer(&self) -> Option<PolygonBuffer> {
+        let exp = self
+            .0
+            .expands(|attr| {
+                let position = attr.position;
+                let uv_coord = attr.uv_coord.unwrap_or_else(Vector2::zero);
+                let normal = attr.normal.unwrap_or_else(Vector3::zero);
+                [
+                    position[0] as f32,
+                    position[1] as f32,
+                    position[2] as f32,
+                    uv_coord[0] as f32,
+                    uv_coord[1] as f32,
+                    normal[0] as f32,
+                    normal[1] as f32,
+                    normal[2] as f32,
+                ]
+            })
+            .ok()?;
+        Some(PolygonBuffer {
             vertices: exp.attributes().iter().flatten().copied().collect(),
             indices: exp
                 .faces()
@@ -114,7 +117,7 @@ impl PolygonMesh {
                 .flatten()
                 .map(|x| x as u32)
                 .collect(),
-        }
+        })
     }
     /// meshing shell
     pub fn from_shell(shell: Shell, tol: f64) -> PolygonMesh { shell.to_polygon(tol) }

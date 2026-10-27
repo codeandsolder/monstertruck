@@ -19,7 +19,7 @@ pub enum Error<V: std::fmt::Debug = crate::StandardVertex> {
     ///     &[1, 2, 4],
     /// ]);
     ///
-    /// let res = PolygonMesh::try_new(
+    /// let res = PolygonMesh::new(
     ///     StandardAttributes {
     ///         positions,
     ///         ..Default::default()
@@ -52,7 +52,7 @@ pub enum Error<V: std::fmt::Debug = crate::StandardVertex> {
     ///     vec![Point3::new(0.0, 1.0, 0.0)],
     /// ];
     ///
-    /// match StructuredMesh::try_from_positions(positions) {
+    /// match StructuredMesh::from_positions(positions) {
     ///     Err(Error::IrregularArray) => {}
     ///     _ => panic!("wrong result!"),
     /// }
@@ -73,7 +73,7 @@ pub enum Error<V: std::fmt::Debug = crate::StandardVertex> {
     /// let udiv = vec![1.0, 0.0];
     /// let vdiv = vec![0.0, 1.0];
     ///
-    /// match StructuredMesh::try_from_positions_and_uvs(positions, (udiv, vdiv)) {
+    /// match StructuredMesh::from_positions_and_uvs(positions, (udiv, vdiv)) {
     ///     Err(Error::UnsortedDivision) => {}
     ///     _ => panic!("wrong result!"),
     /// }

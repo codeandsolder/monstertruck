@@ -330,6 +330,7 @@ mod tests {
             },
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
         )
+        .expect("fixture mesh is valid")
     }
 
     fn disconnected_xy_mesh(gap: f64) -> PolygonMesh {
@@ -349,6 +350,7 @@ mod tests {
             },
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]]),
         )
+        .expect("fixture mesh is valid")
     }
 
     fn zx_mesh(x0: f64, x1: f64) -> PolygonMesh {
@@ -364,6 +366,7 @@ mod tests {
             },
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
         )
+        .expect("fixture mesh is valid")
     }
 
     #[test]

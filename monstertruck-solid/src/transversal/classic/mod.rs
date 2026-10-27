@@ -749,6 +749,7 @@ mod structural_classification_tests {
             },
             Faces::from_iter(faces),
         )
+        .expect("fixture mesh is valid")
     }
 
     #[test]
@@ -864,6 +865,7 @@ mod structural_classification_tests {
             },
             Faces::from_iter(faces),
         )
+        .expect("fixture mesh is valid")
     }
 
     #[test]

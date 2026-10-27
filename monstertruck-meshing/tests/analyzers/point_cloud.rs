@@ -26,7 +26,8 @@ fn in_sphere() {
             ..Default::default()
         },
         Faces::from_iter(vec![[0, 1, 2], [3, 4, 5]]),
-    );
+    )
+    .expect("fixture mesh is valid");
     assert!(!polygon.is_clung_to_by(sphere.positions(), 0.1));
 }
 
@@ -44,7 +45,8 @@ fn tetrahedron_distance() {
             ..Default::default()
         },
         Faces::from_iter(tri_faces),
-    );
+    )
+    .expect("fixture mesh is valid");
     let tri_faces = vec![[0, 2, 1], [0, 3, 2], [0, 1, 3], [1, 2, 3]];
     let mesh1 = PolygonMesh::new(
         StandardAttributes {
@@ -57,7 +59,8 @@ fn tetrahedron_distance() {
             ..Default::default()
         },
         Faces::from_iter(tri_faces),
-    );
+    )
+    .expect("fixture mesh is valid");
     assert!(mesh0.is_clung_to_by(mesh1.positions(), 1.0 + TOLERANCE));
     assert!(!mesh0.is_clung_to_by(mesh1.positions(), 1.0 - TOLERANCE));
 }

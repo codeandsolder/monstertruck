@@ -47,7 +47,7 @@ type Result<T> = std::result::Result<T, errors::Error>;
 ///         ..Default::default()
 ///     },
 ///     faces,
-/// );
+/// ).expect("mesh is valid");
 /// obj::write(&mesh, std::fs::File::create("meshdata.obj")?);
 /// # Ok(())
 /// # }
@@ -186,7 +186,7 @@ pub fn read<R: Read>(reader: R) -> Result<PolygonMesh> {
             }
         }
     }
-    PolygonMesh::try_new(
+    PolygonMesh::new(
         StandardAttributes {
             positions,
             uv_coords,

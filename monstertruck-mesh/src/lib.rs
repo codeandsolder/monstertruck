@@ -4,6 +4,7 @@
 //!
 //! ```
 //! use monstertruck_mesh::*;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!
 //! let positions = vec![
 //!     Point3::new(0.0, 0.0, 0.0),
@@ -14,10 +15,12 @@
 //! let mesh = PolygonMesh::new(
 //!     StandardAttributes { positions, ..Default::default() },
 //!     faces,
-//! );
+//! ).expect("mesh is valid");
 //!
 //! assert_eq!(mesh.positions().len(), 3);
 //! assert_eq!(mesh.tri_faces().len(), 1);
+//! # Ok(())
+//! # }
 //! ```
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]

@@ -38,7 +38,8 @@ fn in_plane() {
             ..Default::default()
         },
         faces.clone(),
-    );
+    )
+    .expect("fixture mesh is valid");
     let positions: Vec<_> = (0..300)
         .map(|_| Point3::new(rand::random::<f64>(), 0.0, rand::random::<f64>()))
         .collect();
@@ -48,7 +49,8 @@ fn in_plane() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("fixture mesh is valid");
     assert!(polygon0.collide_with(&polygon1).is_none());
 }
 
