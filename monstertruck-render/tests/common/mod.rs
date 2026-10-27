@@ -125,7 +125,8 @@ impl Rendered for Plane<'_> {
 
 pub fn render_one<R: Rendered>(scene: &mut Scene, object: &R) -> Vec<u8> {
     scene.add_object(object);
-    let res = pollster::block_on(scene.render_to_buffer());
+    let res = pollster::block_on(scene.render_to_buffer())
+        .expect("GPU readback should succeed during render test");
     scene.remove_object(object);
     res
 }

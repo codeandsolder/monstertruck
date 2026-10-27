@@ -115,7 +115,9 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &desc).await;
+        let mut scene = WindowScene::from_window(window, &desc)
+            .await
+            .expect("GPU window scene is available");
         let creator = scene.instance_creator();
         let surface = Self::init_surface(3, 4);
         let object = StructuredMesh::from_surface(&surface, surface.range_tuple(), 0.01);

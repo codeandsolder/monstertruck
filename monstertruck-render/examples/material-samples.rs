@@ -78,7 +78,9 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &scene_desc).await;
+        let mut scene = WindowScene::from_window(window, &scene_desc)
+            .await
+            .expect("GPU window scene is available");
         let v = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
         let e = builder::extrude(&v, Vector3::unit_x());
         let f = builder::extrude(&e, Vector3::unit_y());

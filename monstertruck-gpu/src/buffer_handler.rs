@@ -40,14 +40,21 @@ impl BufferHandler {
     }
 
     /// Copy the values of buffer to `dest`.
-    /// # Panic
-    /// Panic occurs if the size of `dest` is smaller than the one of `self`.
+    /// # Errors
+    /// Returns [`GpuError::BufferTooSmall`] when `dest` cannot hold the source buffer.
     #[inline(always)]
-    pub fn copy_buffer(&self, encoder: &mut CommandEncoder, dest: &BufferHandler) {
-        assert!(
-            self.size <= dest.size,
-            "The destination buffer size must be no less than the source buffer size."
-        );
+    pub fn copy_buffer(
+        &self,
+        encoder: &mut CommandEncoder,
+        dest: &BufferHandler,
+    ) -> Result<(), GpuError> {
+        if self.size > dest.size {
+            return Err(GpuError::BufferTooSmall {
+                source_size: self.size,
+                destination_size: dest.size,
+            });
+        }
         encoder.copy_buffer_to_buffer(&self.buffer, 0, &dest.buffer, 0, self.size);
+        Ok(())
     }
 }

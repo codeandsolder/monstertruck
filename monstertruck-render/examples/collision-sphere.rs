@@ -60,7 +60,9 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &scene_desc).await;
+        let mut scene = WindowScene::from_window(window, &scene_desc)
+            .await
+            .expect("GPU window scene is available");
         let sphere0 = sphere(Point3::new(0.0, 0.0, 0.7), 1.0, 50, 50);
         let sphere1 = sphere(Point3::new(0.0, 0.0, -0.7), 1.0, 50, 50);
         let intersect = sphere0.extract_interference(&sphere1);

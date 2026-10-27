@@ -264,7 +264,13 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 use plane::Plane;
 
 async fn run(event_loop: EventLoop<()>, window: winit::window::Window) {
-    let mut scene = WindowScene::from_window(Arc::new(window), &Default::default()).await;
+    let mut scene = match WindowScene::from_window(Arc::new(window), &Default::default()).await {
+        Ok(scene) => scene,
+        Err(error) => {
+            eprintln!("failed to initialize GPU scene: {error}");
+            return;
+        }
+    };
     let args: Vec<_> = std::env::args().collect();
     let source = if args.len() > 1 {
         match std::fs::read_to_string(&args[1]) {

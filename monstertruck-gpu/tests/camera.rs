@@ -30,7 +30,7 @@ proptest! {
         });
         prop_assume!(!same_plane);
 
-        let camera = Camera::parallel_view_fitting(rot, aspect, near_clip, &points);
+        let camera = Camera::parallel_view_fitting(rot, aspect, near_clip, &points).expect("rotation is invertible");
         let nvolume = points
             .iter()
             .map(|p| camera.projection(aspect).transform_point(*p))
@@ -64,7 +64,7 @@ proptest! {
         });
         prop_assume!(!same_plane);
 
-        let camera = Camera::perspective_view_fitting(rot, aspect, Rad(fov), &points);
+        let camera = Camera::perspective_view_fitting(rot, aspect, Rad(fov), &points).expect("rotation is invertible");
         prop_assume!(camera.near_clip > TOLERANCE);
 
         let nvolume = points
@@ -78,4 +78,24 @@ proptest! {
         prop_assert_near!(min.z, 0.0);
         prop_assert_near!(max.z, 1.0);
     }
+}
+
+#[test]
+fn singular_camera_is_undefined_instead_of_aborting() {
+    let camera = Camera {
+        matrix: Matrix4::from_value(0.0),
+        ..Camera::default()
+    };
+    assert!(camera.try_projection(1.0).is_none());
+    assert!(camera.projection(1.0).x.x.is_nan());
+    let ray = camera.ray(Point2::origin());
+    assert!(ray.direction().x.is_nan());
+}
+
+#[test]
+fn singular_view_basis_is_rejected() {
+    let direction = Matrix3::from_value(0.0);
+    let points = [Point3::origin(), Point3::new(1.0, 1.0, 1.0)];
+    assert!(Camera::parallel_view_fitting(direction, 1.0, 0.1, &points).is_none());
+    assert!(Camera::perspective_view_fitting(direction, 1.0, Rad(1.0), &points).is_none());
 }

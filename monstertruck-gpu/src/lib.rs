@@ -7,7 +7,7 @@
 //! use monstertruck_core::cgmath64::*;
 //! use monstertruck_gpu::*;
 //!
-//! let handler = pollster::block_on(DeviceHandler::default_device());
+//! let handler = pollster::block_on(DeviceHandler::default_device()).expect("GPU device is available");
 //! let scene = Scene::new(handler, &SceneDescriptor {
 //!     studio: StudioConfig {
 //!         camera: Camera {
@@ -87,6 +87,42 @@ struct SceneInfo {
     num_of_lights: u32,
 }
 
+/// Runtime failures from GPU initialization and readback.
+#[derive(Debug, thiserror::Error)]
+pub enum GpuError {
+    /// A window surface could not be created.
+    #[error("failed to create GPU surface: {0}")]
+    CreateSurface(#[from] CreateSurfaceError),
+    /// No compatible adapter could be requested.
+    #[error("failed to request GPU adapter: {0}")]
+    RequestAdapter(#[from] RequestAdapterError),
+    /// The selected adapter could not create a device.
+    #[error("failed to request GPU device: {0}")]
+    RequestDevice(#[from] RequestDeviceError),
+    /// Waiting for submitted GPU work failed.
+    #[error("GPU polling failed: {0}")]
+    Poll(#[from] PollError),
+    /// Mapping a GPU buffer for CPU readback failed.
+    #[error("GPU buffer mapping failed: {0}")]
+    BufferMap(#[from] BufferAsyncError),
+    /// The asynchronous map callback disappeared before delivering a result.
+    #[error("GPU buffer mapping callback was dropped")]
+    BufferMapChannelClosed,
+    /// Window initialization completed without the surface that was requested.
+    #[error("window GPU initialization did not produce a surface")]
+    MissingSurface,
+    /// A requested GPU buffer copy would overrun the destination.
+    #[error(
+        "destination GPU buffer is too small: source={source_size} bytes, destination={destination_size} bytes"
+    )]
+    BufferTooSmall {
+        /// Source buffer size in bytes.
+        source_size: u64,
+        /// Destination buffer size in bytes.
+        destination_size: u64,
+    },
+}
+
 /// safe handler of GPU buffer
 /// [`Buffer`](https://docs.rs/wgpu/0.10.1/wgpu/struct.Buffer.html)
 #[derive(Debug)]
@@ -106,7 +142,7 @@ pub struct BufferHandler {
 /// use std::sync::{Arc, Mutex};
 /// use monstertruck_gpu::*;
 /// use wgpu::*;
-/// let handler = pollster::block_on(DeviceHandler::default_device());
+/// let handler = pollster::block_on(DeviceHandler::default_device()).expect("GPU device is available");
 /// let entries = [
 ///     PreBindGroupLayoutEntry {
 ///         visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,

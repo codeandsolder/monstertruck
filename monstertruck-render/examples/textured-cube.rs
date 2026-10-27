@@ -71,7 +71,9 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &desc).await;
+        let mut scene = WindowScene::from_window(window, &desc)
+            .await
+            .expect("GPU window scene is available");
         let texture = image::load_from_memory(TEXTURE_BYTES).unwrap();
         let texture = image2texture::image2texture(scene.device_handler(), &texture);
         let state = PolygonState {

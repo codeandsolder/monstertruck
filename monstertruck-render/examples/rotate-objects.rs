@@ -140,7 +140,9 @@ impl App for MyRender {
             },
         };
         let mut app = MyRender {
-            scene: WindowScene::from_window(window, &scene_desc).await,
+            scene: WindowScene::from_window(window, &scene_desc)
+                .await
+                .expect("GPU window scene is available"),
             instances: Vec::new(),
             rotate_flag: false,
             prev_cursor: None,

@@ -12,7 +12,7 @@
 //! use monstertruck_gpu::*;
 //! use monstertruck_render::*;
 //!
-//! let handler = pollster::block_on(DeviceHandler::default_device());
+//! let handler = pollster::block_on(DeviceHandler::default_device()).expect("GPU device is available");
 //! let mut scene = Scene::new(handler, &Default::default());
 //!
 //! // Create render instances from a mesh

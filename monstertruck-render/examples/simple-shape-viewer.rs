@@ -179,7 +179,9 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &scene_desc).await;
+        let mut scene = WindowScene::from_window(window, &scene_desc)
+            .await
+            .expect("GPU window scene is available");
         let creator = scene.instance_creator();
         let (instance, wireframe) = Self::load_shape(&creator, PUNCHED_CUBE_BYTES);
         scene.add_object(&instance);

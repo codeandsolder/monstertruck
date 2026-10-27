@@ -12,7 +12,7 @@ impl RenderId {
 
 async fn init_default_device(
     window: Option<Arc<Window>>,
-) -> (DeviceHandler, Option<WindowHandler>) {
+) -> Result<(DeviceHandler, Option<WindowHandler>), GpuError> {
     #[cfg(not(feature = "webgl"))]
     let backends = Backends::PRIMARY;
     #[cfg(feature = "webgl")]
@@ -22,11 +22,10 @@ async fn init_default_device(
         ..InstanceDescriptor::new_without_display_handle()
     });
 
-    let surface = window.as_ref().map(|window| {
-        instance
-            .create_surface(Arc::clone(window))
-            .expect("Failed to create `Surface`")
-    });
+    let surface = match window.as_ref() {
+        Some(window) => Some(instance.create_surface(Arc::clone(window))?),
+        None => None,
+    };
 
     let adapter = instance
         .request_adapter(&RequestAdapterOptions {
@@ -37,8 +36,7 @@ async fn init_default_device(
             compatible_surface: surface.as_ref(),
             force_fallback_adapter: false,
         })
-        .await
-        .expect("Failed to find an appropriate adapter");
+        .await?;
 
     let (device, queue) = adapter
         .request_device(&DeviceDescriptor {
@@ -52,15 +50,17 @@ async fn init_default_device(
             trace: Default::default(),
             experimental_features: ExperimentalFeatures::disabled(),
         })
-        .await
-        .expect("Failed to create device");
+        .await?;
     let device_handler = DeviceHandler::new(adapter, device, queue);
-    let window_handler = window.map(|window| WindowHandler {
-        window,
-        // SAFETY: surface is Some because window was Some when creating the surface above.
-        surface: Arc::new(surface.unwrap()),
-    });
-    (device_handler, window_handler)
+    let window_handler = match (window, surface) {
+        (Some(window), Some(surface)) => Some(WindowHandler {
+            window,
+            surface: Arc::new(surface),
+        }),
+        (None, None) => None,
+        _ => return Err(GpuError::MissingSurface),
+    };
+    Ok((device_handler, window_handler))
 }
 
 impl DeviceHandler {
@@ -84,7 +84,9 @@ impl DeviceHandler {
     pub const fn queue(&self) -> &Queue { &self.queue }
 
     /// Creates default device handler.
-    pub async fn default_device() -> Self { init_default_device(None).await.0 }
+    pub async fn default_device() -> Result<Self, GpuError> {
+        Ok(init_default_device(None).await?.0)
+    }
 }
 
 impl Default for StudioConfig {
@@ -339,8 +341,11 @@ impl Scene {
     /// Construct scene from default GPU device.
     /// # Arguments
     /// - `size`: (width, height)
-    pub async fn from_default_device(scene_desc: &SceneDescriptor) -> Scene {
-        Scene::new(DeviceHandler::default_device().await, scene_desc)
+    pub async fn from_default_device(scene_desc: &SceneDescriptor) -> Result<Scene, GpuError> {
+        Ok(Scene::new(
+            DeviceHandler::default_device().await?,
+            scene_desc,
+        ))
     }
 
     /// Creates compatible texture for render attachment.
@@ -734,7 +739,7 @@ impl Scene {
     }
 
     /// Render image to buffer.
-    pub async fn render_to_buffer(&self) -> Vec<u8> {
+    pub async fn render_to_buffer(&self) -> Result<Vec<u8>, GpuError> {
         let texture = self.compatible_texture();
         let view = texture.create_view(&Default::default());
         self.render(&view);
@@ -773,29 +778,34 @@ impl Scene {
         queue.submit(Some(encoder.finish()));
         let buffer_slice = buffer.slice(..);
         let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
-        // SAFETY: the oneshot channel receiver is alive and has not been sent to yet.
-        buffer_slice.map_async(MapMode::Read, move |v| sender.send(v).unwrap());
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            // If the receiver was dropped there is nobody left to observe the map result.
+            let _ = sender.send(result);
+        });
         let poll_type = PollType::Wait {
             submission_index: None,
             timeout: None,
         };
-        // SAFETY: poll with Wait should not fail on a valid device.
-        device.poll(poll_type).unwrap();
+        device.poll(poll_type)?;
         match receiver.receive().await {
-            Some(Ok(_)) => buffer_slice.get_mapped_range().iter().copied().collect(),
-            Some(Err(e)) => panic!("{}", e),
-            None => panic!("Asynchronous processing fails"),
+            Some(Ok(())) => Ok(buffer_slice.get_mapped_range().iter().copied().collect()),
+            Some(Err(error)) => Err(error.into()),
+            None => Err(GpuError::BufferMapChannelClosed),
         }
     }
 }
 
 impl WindowScene {
     /// Initialize scene compatible with `window`.
-    pub async fn from_window(window: Arc<Window>, scene_desc: &WindowSceneDescriptor) -> Self {
+    pub async fn from_window(
+        window: Arc<Window>,
+        scene_desc: &WindowSceneDescriptor,
+    ) -> Result<Self, GpuError> {
         let size = window.inner_size();
-        let got = init_default_device(Some(window)).await;
-        // SAFETY: got.1 is Some because init_default_device was called with Some(window).
-        let (device_handler, window_handler) = (got.0, got.1.unwrap());
+        let (device_handler, window_handler) = init_default_device(Some(window)).await?;
+        let Some(window_handler) = window_handler else {
+            return Err(GpuError::MissingSurface);
+        };
         let (device, surface) = (&device_handler.device, &window_handler.surface);
         let render_texture = RenderTextureConfig {
             canvas_size: size.into(),
@@ -804,7 +814,7 @@ impl WindowScene {
         let config = render_texture.compatible_surface_config();
         surface.configure(device, &config);
 
-        Self {
+        Ok(Self {
             scene: Scene::new(
                 device_handler,
                 &SceneDescriptor {
@@ -814,7 +824,7 @@ impl WindowScene {
                 },
             ),
             window_handler,
-        }
+        })
     }
     /// Get the reference of initializing window.
     #[inline(always)]
@@ -856,8 +866,10 @@ impl WindowScene {
                     .render_texture
                     .compatible_surface_config();
                 surface.configure(self.device(), &config);
-                usable(surface.get_current_texture())
-                    .expect("Failed to acquire next surface texture!")
+                let Some(texture) = usable(surface.get_current_texture()) else {
+                    return;
+                };
+                texture
             }
         };
         let view = surface_texture

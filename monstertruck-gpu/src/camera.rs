@@ -11,6 +11,35 @@ pub const OPENGL_TO_WGPU_MATRIX: Matrix4 = Matrix4::new(
     0.0, 0.0, 0.5, 1.0,
 );
 
+fn matrix4_to_f32(matrix: Matrix4) -> [[f32; 4]; 4] {
+    [
+        [
+            matrix.x.x as f32,
+            matrix.x.y as f32,
+            matrix.x.z as f32,
+            matrix.x.w as f32,
+        ],
+        [
+            matrix.y.x as f32,
+            matrix.y.y as f32,
+            matrix.y.z as f32,
+            matrix.y.w as f32,
+        ],
+        [
+            matrix.z.x as f32,
+            matrix.z.y as f32,
+            matrix.z.z as f32,
+            matrix.z.w as f32,
+        ],
+        [
+            matrix.w.x as f32,
+            matrix.w.y as f32,
+            matrix.w.z as f32,
+            matrix.w.w as f32,
+        ],
+    ]
+}
+
 impl Ray {
     /// Returns the origin of the ray
     #[inline(always)]
@@ -155,6 +184,13 @@ impl Camera {
     /// ```
     #[inline(always)]
     pub fn projection(&self, aspect: f64) -> Matrix4 {
+        self.try_projection(aspect)
+            .unwrap_or_else(|| Matrix4::from_value(f64::NAN))
+    }
+
+    /// Returns the projection matrix, or `None` when the public camera matrix is singular.
+    #[inline(always)]
+    pub fn try_projection(&self, aspect: f64) -> Option<Matrix4> {
         let (near, far) = (self.near_clip, self.far_clip);
         let normal_projection = match self.method {
             ProjectionMethod::Perspective { fov } => perspective(fov, aspect, near, far),
@@ -164,17 +200,16 @@ impl Camera {
                 ortho(-x, x, -y, y, near, far)
             }
         };
-        // SAFETY: camera matrix is a rigid-body transform (Euclidean group), always invertible.
-        OPENGL_TO_WGPU_MATRIX * normal_projection * self.matrix.invert().unwrap()
+        self.matrix
+            .invert()
+            .map(|inverse| OPENGL_TO_WGPU_MATRIX * normal_projection * inverse)
     }
 
     #[inline(always)]
     fn camera_info(&self, aspect: f64) -> CameraInfo {
         CameraInfo {
-            // SAFETY: f64-to-f32 cast is always valid for finite values in a camera matrix.
-            camera_matrix: self.matrix.cast().unwrap().into(),
-            // SAFETY: f64-to-f32 cast is always valid for finite values in a projection matrix.
-            camera_projection: self.projection(aspect).cast().unwrap().into(),
+            camera_matrix: matrix4_to_f32(self.matrix),
+            camera_projection: matrix4_to_f32(self.projection(aspect)),
         }
     }
 
@@ -267,10 +302,15 @@ impl Camera {
     pub fn ray(&self, coord: Point2) -> Ray {
         match self.method {
             ProjectionMethod::Perspective { .. } => {
-                let mat = self
-                    .projection(1.0)
-                    .invert()
-                    .expect("non-invertible projection");
+                let Some(mat) = self
+                    .try_projection(1.0)
+                    .and_then(|projection| projection.invert())
+                else {
+                    return Ray {
+                        origin: self.position(),
+                        direction: Vector3::new(f64::NAN, f64::NAN, f64::NAN),
+                    };
+                };
                 let x = mat.transform_point(Point3::new(coord.x, coord.y, 0.5));
                 let y = mat.transform_point(Point3::new(coord.x, coord.y, 1.0));
                 Ray {
@@ -319,7 +359,7 @@ impl Camera {
     ///     aspect,
     ///     near_clip,
     ///     points,
-    /// );
+    /// ).expect("direction matrix is invertible");
     ///
     /// assert_eq!(camera.near_clip, near_clip);
     /// assert_near!(
@@ -340,9 +380,8 @@ impl Camera {
         aspect: f64,
         near_clip: f64,
         points: &[Point3],
-    ) -> Self {
-        // SAFETY: direction is an orthonormal basis (rotation matrix), always invertible.
-        let inv_dir = direction.invert().unwrap();
+    ) -> Option<Self> {
+        let inv_dir = direction.invert()?;
         let bbox = points
             .iter()
             .map(|p| inv_dir.transform_point(*p))
@@ -350,12 +389,12 @@ impl Camera {
         let (center, diag) = (bbox.center(), bbox.diagonal());
         let screen_size = f64::max(diag.x / aspect, diag.y);
         let position = Vector3::new(center.x, center.y, center.z + diag.z / 2.0 + near_clip);
-        Self {
+        Some(Self {
             matrix: Matrix4::from(direction) * Matrix4::from_translation(position),
             method: ProjectionMethod::Parallel { screen_size },
             near_clip,
             far_clip: near_clip + diag.z,
-        }
+        })
     }
 
     /// Creates a perspective projection camera that fits the point cloud perfectly into the view volume.
@@ -387,7 +426,7 @@ impl Camera {
     ///     aspect,
     ///     fov,
     ///     points,
-    /// );
+    /// ).expect("direction matrix is invertible");
     ///
     /// assert_near!(
     ///     camera.near_clip,
@@ -413,9 +452,8 @@ impl Camera {
         aspect: f64,
         fov: Rad<f64>,
         points: &[Point3],
-    ) -> Camera {
-        // SAFETY: direction is an orthonormal basis (rotation matrix), always invertible.
-        let inv_dir = direction.invert().unwrap();
+    ) -> Option<Camera> {
+        let inv_dir = direction.invert()?;
         let tan = (fov / 2.0).tan();
 
         let mut x_min = f64::INFINITY;
@@ -438,12 +476,12 @@ impl Camera {
         let z_x = (x_max - x_min) / (2.0 * tan) / aspect;
         let z_y = (y_max - y_min) / (2.0 * tan);
         let position = Vector3::new((x_min + x_max) / 2.0, (y_min + y_max) / 2.0, z_x.max(z_y));
-        Camera {
+        Some(Camera {
             matrix: Matrix4::from(direction) * Matrix4::from_translation(position),
             method: ProjectionMethod::Perspective { fov },
             near_clip: position.z - z_max,
             far_clip: position.z - z_min,
-        }
+        })
     }
 }
 
