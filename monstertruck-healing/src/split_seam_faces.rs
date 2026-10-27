@@ -19,11 +19,12 @@ fn use_endpoints<C, T>(
 /// A run of edge-uses forms a non-empty closed loop (each back meets the next
 /// front, and the last back meets the first front).
 fn is_closed_loop<C, T>(arc: &[CompressedEdgeUse<T>], edges: &[CompressedEdge<C>]) -> bool {
-    !arc.is_empty()
-        && arc
-            .windows(2)
-            .all(|pair| use_endpoints(&pair[0], edges).1 == use_endpoints(&pair[1], edges).0)
-        && use_endpoints(arc.last().unwrap(), edges).1 == use_endpoints(&arc[0], edges).0
+    let (Some(first), Some(last)) = (arc.first(), arc.last()) else {
+        return false;
+    };
+    arc.windows(2)
+        .all(|pair| use_endpoints(&pair[0], edges).1 == use_endpoints(&pair[1], edges).0)
+        && use_endpoints(last, edges).1 == use_endpoints(first, edges).0
 }
 
 /// All endpoint vertices touched by a run of edge-uses.

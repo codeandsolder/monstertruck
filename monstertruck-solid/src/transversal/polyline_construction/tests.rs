@@ -177,3 +177,17 @@ fn nearby_endpoint_stitching_rejects_ambiguous_branches() {
     ];
     assert!(stitch_nearby_polylines(chains, 4.0e-6).is_none());
 }
+
+#[test]
+fn non_finite_interference_segments_are_ignored() {
+    let finite = (Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+    for bad in [
+        Point3::new(f64::NAN, 0.0, 0.0),
+        Point3::new(f64::INFINITY, 0.0, 0.0),
+        Point3::new(0.0, f64::NEG_INFINITY, 0.0),
+    ] {
+        let polylines = construct_polylines(&[finite, (finite.1, bad)]);
+        assert_eq!(polylines.len(), 1);
+        assert_eq!(polylines[0].len(), 2);
+    }
+}
