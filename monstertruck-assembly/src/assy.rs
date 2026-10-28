@@ -222,9 +222,14 @@ impl<Shape, NodeAttrs, Matrix, EdgeAttrs> Assembly<Shape, NodeAttrs, Matrix, Edg
         NodeAttrs: Default,
         EdgeAttrs: Default, {
         self.node_indices().for_each(|index| {
-            let node = self.node(index);
-            if !(node.is_terminal() || node.entity().shape.is_taken()) {
-                let shape = self.node_mut(index).entity().shape.take();
+            let should_split = self
+                .node(index)
+                .is_some_and(|node| !(node.is_terminal() || node.entity().shape.is_taken()));
+            if should_split {
+                let Some(mut node) = self.node_mut(index) else {
+                    return;
+                };
+                let shape = node.entity().shape.take();
                 let new_index = self.create_node(NodeEntity {
                     shape,
                     attrs: Default::default(),

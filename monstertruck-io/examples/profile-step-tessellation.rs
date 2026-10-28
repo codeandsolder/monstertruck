@@ -177,8 +177,8 @@ fn main() {
         .flat_map(|top| assy.paths_iter(top.index()))
         .flat_map(|path| {
             path.terminal_node()
-                .shape()
-                .iter()
+                .into_iter()
+                .flat_map(|node| node.shape().iter())
                 .filter_map(|idx| {
                     if let Some(step_solid) = table.manifold_solid_brep.get(idx) {
                         table

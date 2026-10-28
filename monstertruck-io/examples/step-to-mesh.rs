@@ -103,7 +103,9 @@ fn step_to_mesh(table: &Table) -> Vec<MeshedCShell> {
         .flat_map(|top| meshed_assy.paths_iter(top.index()))
         .flat_map(|path| {
             let matrix = path.matrix();
-            let shapes = path.terminal_node().shape().clone();
+            let shapes = path
+                .terminal_node()
+                .map_or_else(Vec::new, |node| node.shape().clone());
             shapes.into_iter().flatten().map(move |mut shell| {
                 shell.vertices.iter_mut().for_each(|v| {
                     *v = matrix.transform_point(*v);
