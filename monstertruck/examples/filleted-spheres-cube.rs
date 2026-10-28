@@ -245,7 +245,7 @@ fn max_step_override() -> Option<usize> {
 }
 
 /// Create a sphere solid centered at `center` with the given `radius`.
-fn sphere(center: Point3, radius: f64) -> Solid {
+fn sphere(center: Point3, radius: f64) -> Result<Solid> {
     let top = builder::vertex(Point3::new(0.0, radius, 0.0));
     let wire: Wire = builder::revolve(
         &top,
@@ -260,9 +260,9 @@ fn sphere(center: Point3, radius: f64) -> Solid {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         4,
-    );
+    )?;
     let s = Solid::new_unchecked(vec![shell]);
-    builder::translated(&s, center.to_vec())
+    Ok(builder::translated(&s, center.to_vec()))
 }
 
 fn main() -> Result<()> {
@@ -314,11 +314,11 @@ fn main() -> Result<()> {
             }
             let (op_name, center, next) = match *operation {
                 Operation::Difference(center) => {
-                    let sphere = sphere(center, r);
+                    let sphere = sphere(center, r)?;
                     ("difference", center, difference(&body, &sphere, tol))
                 }
                 Operation::Union(center) => {
-                    let sphere = sphere(center, r);
+                    let sphere = sphere(center, r)?;
                     ("union", center, or(&body, &sphere, tol))
                 }
             };

@@ -5,7 +5,7 @@
 use monstertruck_modeling::*;
 use std::f64::consts::PI;
 
-fn main() {
+fn main() -> Result<()> {
     let v0 = builder::vertex(Point3::new(0.0, 0.5, 0.0));
     let wire: Wire = builder::revolve(
         &v0,
@@ -20,8 +20,9 @@ fn main() {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         4,
-    );
+    )?;
     let sphere = Solid::new_unchecked(vec![shell]);
     let json = serde_json::to_vec_pretty(&sphere).unwrap();
     std::fs::write("sphere.json", json).unwrap();
+    Ok(())
 }

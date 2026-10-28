@@ -1122,6 +1122,7 @@ fn whole_revolve<T: ClosedSweep<Matrix4, ArcConnector, RevoluteConnector, Swept>
 /// ```
 /// use monstertruck_modeling::*;
 /// use std::f64::consts::PI;
+/// # fn main() -> Result<()> {
 ///
 /// let v0 = builder::vertex(Point3::new(0.0, 1.0, 0.0));
 /// let v1 = builder::vertex(Point3::new(0.0, 0.0, 1.0));
@@ -1136,11 +1137,13 @@ fn whole_revolve<T: ClosedSweep<Matrix4, ArcConnector, RevoluteConnector, Swept>
 ///     Vector3::unit_y(),
 ///     builder::SweepAngle::Closed,
 ///     4,
-/// );
+/// )?;
 /// // Degenerate edges are removed -- faces have 3 edges, not 4.
 /// assert_eq!(shell[0].boundaries()[0].len(), 3);
 /// // The result is a valid closed shell.
 /// Solid::new_unchecked(vec![shell]);
+/// # Ok(())
+/// # }
 /// ```
 pub fn revolve_wire<C, S>(
     wire: &Wire<C>,
@@ -1148,27 +1151,43 @@ pub fn revolve_wire<C, S>(
     axis: Vector3,
     sweep: SweepAngle,
     division: usize,
-) -> Shell<C, S>
+) -> Result<Shell<C, S>>
 where
     C: ParametricCurve3D + BoundedCurve + Cut + Invertible + Transformed<Matrix4>,
     S: Invertible,
     Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C>,
     RevolutionSurface<C>: ToSameGeometry<S>,
 {
-    let closed = matches!(sweep, SweepAngle::Closed);
-    let mut wire = wire.clone();
     if wire.is_empty() {
-        return Shell::new();
+        return Ok(Shell::new());
     }
 
-    let on_axis = |pt: Point3| (pt - origin).cross(axis).so_small();
-    let front_on_axis = on_axis(wire.front_vertex().unwrap().point());
-    let back_on_axis = on_axis(wire.back_vertex().unwrap().point());
+    let finite_point =
+        |point: Point3| point.x.is_finite() && point.y.is_finite() && point.z.is_finite();
+    let finite_vector =
+        |vector: Vector3| vector.x.is_finite() && vector.y.is_finite() && vector.z.is_finite();
+    let valid_sweep = match sweep {
+        SweepAngle::Closed => division >= 2,
+        SweepAngle::Partial(angle) => division >= 1 && angle.0.is_finite() && !angle.0.so_small(),
+    };
+    if !finite_point(origin) || !finite_vector(axis) || !axis.magnitude().near(&1.0) || !valid_sweep
+    {
+        return Err(Error::InvalidRevolveParameters);
+    }
+
+    let closed = matches!(sweep, SweepAngle::Closed);
+    let mut wire = wire.clone();
+    let (front_vertex, back_vertex) = wire
+        .ends_vertices()
+        .ok_or(Error::UnexpectedRevolveTopology)?;
+    let on_axis = |point: Point3| (point - origin).cross(axis).so_small();
+    let front_on_axis = on_axis(front_vertex.point());
+    let back_on_axis = on_axis(back_vertex.point());
 
     // If the wire is a single edge with the back vertex on-axis,
     // split it at the midpoint so the revolve can produce proper faces.
     if wire.len() == 1 && back_on_axis {
-        let edge = wire.pop_back().unwrap();
+        let edge = wire.pop_back().ok_or(Error::UnexpectedRevolveTopology)?;
         let v0 = edge.front().clone();
         let v2 = edge.back().clone();
         let mut curve = edge.curve();
@@ -1176,69 +1195,103 @@ where
         let t = (t0 + t1) * 0.5;
         let v1 = Vertex::new(curve.subs(t));
         let curve1 = curve.cut(t);
-        // Spec 012 U4: `v1` is a freshly allocated `Vertex`, and `Vertex`
-        // equality is `Arc` pointer identity, so neither of these two edges can
-        // be degenerate. Vacuous check, infallible caller: stated, not
-        // profile-switched.
         wire.push_back(Edge::new_unchecked(&v0, &v1, curve));
         wire.push_back(Edge::new_unchecked(&v1, &v2, curve1));
     }
 
     let mut shell = revolve(&wire, origin, axis, sweep, division);
+    if shell.is_empty() || shell.len() % wire.len() != 0 {
+        return Err(Error::UnexpectedRevolveTopology);
+    }
+    let sweep_count = shell.len() / wire.len();
 
     // Collapse degenerate edges at the front of the wire (on-axis).
     if front_on_axis {
-        let mut edge = shell[0].boundaries()[0][0].clone();
-        for i in 0..shell.len() / wire.len() {
+        let closing_edge = shell
+            .first()
+            .and_then(|face| face.boundaries().into_iter().next())
+            .and_then(|wire| wire.front_edge().cloned())
+            .ok_or(Error::UnexpectedRevolveTopology)?;
+        let mut edge = closing_edge.clone();
+        for i in 0..sweep_count {
             let idx = i * wire.len();
-            let face = shell[idx].clone();
+            let face = shell
+                .get(idx)
+                .cloned()
+                .ok_or(Error::UnexpectedRevolveTopology)?;
             let surface = face.oriented_surface();
-            let old_wire = face.into_boundaries().pop().unwrap();
+            let old_wire = face
+                .into_boundaries()
+                .pop()
+                .ok_or(Error::UnexpectedRevolveTopology)?;
+            let side = old_wire
+                .get(1)
+                .cloned()
+                .ok_or(Error::UnexpectedRevolveTopology)?;
+            let trailing = old_wire
+                .get(2)
+                .cloned()
+                .ok_or(Error::UnexpectedRevolveTopology)?;
             let mut new_wire = Wire::new();
             new_wire.push_back(edge.clone());
-            new_wire.push_back(old_wire[1].clone());
-            let new_edge = if closed && i + 1 == shell.len() / wire.len() {
-                shell[0].boundaries()[0][0].inverse()
+            new_wire.push_back(side);
+            let new_edge = if closed && i + 1 == sweep_count {
+                closing_edge.inverse()
             } else {
-                let curve = old_wire[2].oriented_curve();
-                // Spec 012 U4: `revolve_wire` returns a bare `Shell`, so there
-                // is no channel. Unlike the two above this is NOT provably
-                // vacuous -- both vertices come out of the revolve's own shell.
-                // Stated as unchecked rather than profile-switched (abort in
-                // debug, this exact call in release); the check it drops is on
-                // the builder's own output and has never fired in-gate.
-                Edge::new_unchecked(old_wire[2].front(), new_wire[0].front(), curve)
+                let curve = trailing.oriented_curve();
+                Edge::new_unchecked(trailing.front(), edge.front(), curve)
             };
             new_wire.push_back(new_edge.clone());
-            shell[idx] = Face::new_unchecked(vec![new_wire], surface);
+            *shell.get_mut(idx).ok_or(Error::UnexpectedRevolveTopology)? =
+                Face::new_unchecked(vec![new_wire], surface);
             edge = new_edge.inverse();
         }
     }
 
     // Collapse degenerate edges at the back of the wire (on-axis).
     if back_on_axis {
-        let mut edge = shell[wire.len() - 1].boundaries()[0][0].clone();
-        for i in 0..shell.len() / wire.len() {
+        let boundary_face = wire.len() - 1;
+        let closing_edge = shell
+            .get(boundary_face)
+            .and_then(|face| face.boundaries().into_iter().next())
+            .and_then(|wire| wire.front_edge().cloned())
+            .ok_or(Error::UnexpectedRevolveTopology)?;
+        let mut edge = closing_edge.clone();
+        for i in 0..sweep_count {
             let idx = (i + 1) * wire.len() - 1;
-            let face = shell[idx].clone();
+            let face = shell
+                .get(idx)
+                .cloned()
+                .ok_or(Error::UnexpectedRevolveTopology)?;
             let surface = face.oriented_surface();
-            let old_wire = face.into_boundaries().pop().unwrap();
+            let old_wire = face
+                .into_boundaries()
+                .pop()
+                .ok_or(Error::UnexpectedRevolveTopology)?;
+            let trailing = old_wire
+                .get(2)
+                .cloned()
+                .ok_or(Error::UnexpectedRevolveTopology)?;
+            let side = old_wire
+                .get(3)
+                .cloned()
+                .ok_or(Error::UnexpectedRevolveTopology)?;
             let mut new_wire = Wire::new();
             new_wire.push_back(edge.clone());
-            let new_edge = if closed && i + 1 == shell.len() / wire.len() {
-                shell[wire.len() - 1].boundaries()[0][0].inverse()
+            let new_edge = if closed && i + 1 == sweep_count {
+                closing_edge.inverse()
             } else {
-                let curve = old_wire[2].oriented_curve();
-                // Spec 012 U4, mirror of the front-collapse case above.
-                Edge::new_unchecked(new_wire[0].back(), old_wire[2].back(), curve)
+                let curve = trailing.oriented_curve();
+                Edge::new_unchecked(edge.back(), trailing.back(), curve)
             };
             new_wire.push_back(new_edge.clone());
-            new_wire.push_back(old_wire[3].clone());
-            shell[idx] = Face::new_unchecked(vec![new_wire], surface);
+            new_wire.push_back(side);
+            *shell.get_mut(idx).ok_or(Error::UnexpectedRevolveTopology)? =
+                Face::new_unchecked(vec![new_wire], surface);
             edge = new_edge.inverse();
         }
     }
-    shell
+    Ok(shell)
 }
 
 /// Use [`revolve_wire`] instead, which takes an explicit `origin` parameter
@@ -1249,7 +1302,7 @@ pub fn cone<C, S>(
     axis: Vector3,
     sweep: SweepAngle,
     division: usize,
-) -> Shell<C, S>
+) -> Result<Shell<C, S>>
 where
     C: ParametricCurve3D + BoundedCurve + Cut + Invertible + Transformed<Matrix4>,
     S: Invertible,
@@ -1258,6 +1311,74 @@ where
 {
     let origin = wire.front_vertex().map_or(Point3::origin(), |v| v.point());
     revolve_wire(wire, origin, axis, sweep, division)
+}
+
+#[cfg(test)]
+mod revolve_wire_tests {
+    use super::*;
+
+    fn profile_wire() -> Wire<crate::Curve> {
+        let v0 = vertex(Point3::new(1.0, 0.0, 0.0));
+        let v1 = vertex(Point3::new(1.0, 0.0, 1.0));
+        vec![line::<crate::Curve>(&v0, &v1)].into()
+    }
+
+    #[test]
+    fn rejects_invalid_parameters_without_entering_generic_revolve() {
+        let wire = profile_wire();
+        let bad_axis = revolve_wire::<crate::Curve, crate::Surface>(
+            &wire,
+            Point3::origin(),
+            Vector3::new(0.0, 0.0, 2.0),
+            SweepAngle::Closed,
+            4,
+        );
+        assert!(matches!(bad_axis, Err(Error::InvalidRevolveParameters)));
+
+        let bad_division = revolve_wire::<crate::Curve, crate::Surface>(
+            &wire,
+            Point3::origin(),
+            Vector3::unit_z(),
+            SweepAngle::Closed,
+            1,
+        );
+        assert!(matches!(bad_division, Err(Error::InvalidRevolveParameters)));
+
+        let zero_sweep = revolve_wire::<crate::Curve, crate::Surface>(
+            &wire,
+            Point3::origin(),
+            Vector3::unit_z(),
+            SweepAngle::Partial(Rad(0.0)),
+            1,
+        );
+        assert!(matches!(zero_sweep, Err(Error::InvalidRevolveParameters)));
+    }
+
+    #[test]
+    fn on_axis_endpoints_are_collapsed_without_panics() -> Result<()> {
+        let v0 = vertex(Point3::new(0.0, 1.0, 0.0));
+        let v1 = vertex(Point3::new(0.0, 0.0, 1.0));
+        let v2 = vertex(Point3::origin());
+        let wire: Wire<crate::Curve> = vec![
+            line::<crate::Curve>(&v0, &v1),
+            line::<crate::Curve>(&v1, &v2),
+        ]
+        .into();
+        let shell = revolve_wire::<crate::Curve, crate::Surface>(
+            &wire,
+            Point3::origin(),
+            Vector3::unit_y(),
+            SweepAngle::Closed,
+            4,
+        )?;
+        assert!(!shell.is_empty());
+        assert!(shell.iter().all(|face| {
+            face.boundaries()
+                .into_iter()
+                .all(|boundary| boundary.len() >= 3)
+        }));
+        Ok(())
+    }
 }
 
 #[cfg(test)]

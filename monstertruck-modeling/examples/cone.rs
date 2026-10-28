@@ -4,7 +4,7 @@
 
 use monstertruck_modeling::*;
 
-fn main() {
+fn main() -> Result<()> {
     let v0 = builder::vertex(Point3::new(0.0, 0.5, 0.0));
     let v1 = builder::vertex(Point3::new(0.0, -0.5, 0.5));
     let v2 = builder::vertex(Point3::new(0.0, -0.5, 0.0));
@@ -15,8 +15,9 @@ fn main() {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         4,
-    );
+    )?;
     let cone = Solid::new_unchecked(vec![shell]);
     let json = serde_json::to_vec_pretty(&cone).unwrap();
     std::fs::write("cone.json", json).unwrap();
+    Ok(())
 }

@@ -177,7 +177,7 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
         Vector3::unit_z(),
         builder::SweepAngle::Closed,
         2,
-    );
+    )?;
     let host = Solid::try_new(vec![shell])?;
     anyhow::ensure!(
         host.is_geometric_consistent(),

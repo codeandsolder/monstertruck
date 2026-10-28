@@ -36,6 +36,12 @@ pub enum Error {
     /// Three points supplied for a circular arc are coincident, collinear, or non-finite.
     #[error("circular-arc points do not define a finite circle.")]
     DegenerateCircularArcPoints,
+    /// A wire revolution requested a non-unit/non-finite axis, invalid angle, or invalid subdivision count.
+    #[error("wire revolution parameters are invalid.")]
+    InvalidRevolveParameters,
+    /// The generic sweep produced topology that cannot be reduced to the axis-aware wire form.
+    #[error("wire revolution produced unexpected intermediate topology.")]
+    UnexpectedRevolveTopology,
     /// A composite sweep was requested without any path segments.
     #[error("composite sweep requires at least one segment.")]
     EmptyCompositeSweep,
