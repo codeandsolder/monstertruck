@@ -107,7 +107,7 @@ fn large_number_meshing() {
     let _ = torus.triangulation(1.0).to_polygon();
 }
 
-fn special_cylinder_model() -> Shell {
+fn special_cylinder_model() -> Result<Shell> {
     let v0 = builder::vertex(Point3::new(0.0, 1.0, 0.0));
     let v1 = builder::vertex(Point3::new(0.0, 1.0, 1.0));
     let v2 = builder::vertex(Point3::new(0.0, -1.0, 0.0));
@@ -115,14 +115,13 @@ fn special_cylinder_model() -> Shell {
 
     let edge0 = builder::line(&v0, &v1);
     let edge1 = builder::line(&v2, &v3);
-    let edge2 = builder::circle_arc(&v0, &v2, Point3::new(-1.0, 0.0, 0.0));
-    let edge3 = builder::circle_arc(&v2, &v0, Point3::new(1.0, 0.0, 0.0));
-    let edge4 = builder::circle_arc(&v1, &v3, Point3::new(-1.0, 0.0, 1.0));
-    let edge5 = builder::circle_arc(&v3, &v1, Point3::new(1.0, 0.0, 1.0));
+    let edge2 = builder::circle_arc(&v0, &v2, Point3::new(-1.0, 0.0, 0.0))?;
+    let edge3 = builder::circle_arc(&v2, &v0, Point3::new(1.0, 0.0, 0.0))?;
+    let edge4 = builder::circle_arc(&v1, &v3, Point3::new(-1.0, 0.0, 1.0))?;
+    let edge5 = builder::circle_arc(&v3, &v1, Point3::new(1.0, 0.0, 1.0))?;
 
-    let face0 =
-        builder::try_attach_plane(&[vec![edge2.inverse(), edge3.inverse()].into()]).unwrap();
-    let face1 = builder::try_attach_plane(&[vec![edge4.clone(), edge5.clone()].into()]).unwrap();
+    let face0 = builder::try_attach_plane(&[vec![edge2.inverse(), edge3.inverse()].into()])?;
+    let face1 = builder::try_attach_plane(&[vec![edge4.clone(), edge5.clone()].into()])?;
 
     let surface_row = RevolutionSurface::<Curve>::by_revolution(
         Line(Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 0.0, 0.0)).into(),
@@ -134,35 +133,35 @@ fn special_cylinder_model() -> Shell {
     let face2 = Face::try_new(
         vec![vec![edge2, edge1.clone(), edge4.inverse(), edge0.inverse()].into()],
         surface.clone(),
-    )
-    .unwrap();
+    )?;
     let face3 = Face::try_new(
         vec![vec![edge3, edge0, edge5.inverse(), edge1.inverse()].into()],
         surface,
-    )
-    .unwrap();
+    )?;
 
-    vec![face0, face1, face2, face3].into()
+    Ok(vec![face0, face1, face2, face3].into())
 }
 
 #[test]
-fn special_cylinder() {
-    let shell = special_cylinder_model();
+fn special_cylinder() -> Result<()> {
+    let shell = special_cylinder_model()?;
     let mut mesh = shell.triangulation(0.01).to_polygon();
     mesh.put_together_same_attrs(TOLERANCE)
         .remove_degenerate_faces()
         .remove_unused_attrs();
     assert_eq!(mesh.shell_condition(), ShellCondition::Closed);
+    Ok(())
 }
 
 #[test]
-fn special_cylinder_csolid() {
-    let shell = special_cylinder_model().compress();
+fn special_cylinder_csolid() -> Result<()> {
+    let shell = special_cylinder_model()?.compress();
     let mut mesh = shell.triangulation(0.01).to_polygon();
     mesh.put_together_same_attrs(TOLERANCE)
         .remove_degenerate_faces()
         .remove_unused_attrs();
     assert_eq!(mesh.shell_condition(), ShellCondition::Closed);
+    Ok(())
 }
 
 #[test]
@@ -202,7 +201,7 @@ fn robust_closed() {
 /// Verifies that every face mesh from a tessellated solid has consistent
 /// winding — all triangles within a face agree on the normal direction.
 #[test]
-fn per_face_winding_consistency() {
+fn per_face_winding_consistency() -> Result<()> {
     let shapes: Vec<(&str, Shell)> = vec![
         ("cube", {
             let v = builder::vertex(Point3::origin());
@@ -211,7 +210,7 @@ fn per_face_winding_consistency() {
             let solid: Solid = builder::extrude(&f, Vector3::unit_z());
             solid.into_boundaries().pop().unwrap()
         }),
-        ("cylinder", special_cylinder_model()),
+        ("cylinder", special_cylinder_model()?),
     ];
     for (name, shell) in &shapes {
         let meshed = shell.triangulation(0.01);
@@ -244,4 +243,5 @@ fn per_face_winding_consistency() {
             }
         }
     }
+    Ok(())
 }
