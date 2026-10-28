@@ -1,6 +1,7 @@
 use crate::*;
 use js_sys::JsString;
 use monstertruck_meshing::tessellation::*;
+use wasm_bindgen::JsValue;
 
 macro_rules! toporedef {
     ($($type: ident, $is: ident, $into: ident, $to: ident),*) => {
@@ -159,11 +160,9 @@ macro_rules! impl_shape {
                 .map(|res| res.into_wasm())
             }
             /// write shape to json
-            pub fn to_json(&self) -> Vec<u8> {
-                // SAFETY: serialization of valid shape data to JSON should not fail.
+            pub fn to_json(&self) -> std::result::Result<Vec<u8>, JsValue> {
                 serde_json::to_vec_pretty(&self.0)
-                    .map_err(|e| { gloo::console::error!(format!("{e}")); })
-                    .unwrap()
+                    .map_err(|error| JsValue::from_str(&error.to_string()))
             }
             /// write shape to STEP
             pub fn to_step(&self, header: StepHeaderDescriptor) -> String {
