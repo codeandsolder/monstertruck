@@ -358,18 +358,18 @@ where
         for node in self.assembly.all_nodes() {
             for (i, edge) in node.edges().enumerate() {
                 let (node_idx0, node_idx1) = edge.nodes();
-                // SAFETY: `node_map` was filled in the loop above for every
-                // node returned by `all_nodes`, and the edge endpoints
-                // came from that same iterator.
-                let nodes = (
-                    *node_map.get(&node_idx0).unwrap(),
-                    *node_map.get(&node_idx1).unwrap(),
-                );
+                let Some(&node0) = node_map.get(&node_idx0) else {
+                    return Err(std::fmt::Error);
+                };
+                let Some(&node1) = node_map.get(&node_idx1) else {
+                    return Err(std::fmt::Error);
+                };
+                let nodes = (node0, node1);
 
                 let matrix_key = (node.index(), i);
-                // SAFETY: `matrix_map` was filled in the loop above for every
-                // (node, edge_index) pair we visit here.
-                let matrix_idx = *matrix_map.get(&matrix_key).unwrap();
+                let Some(&matrix_idx) = matrix_map.get(&matrix_key) else {
+                    return Err(std::fmt::Error);
+                };
 
                 let edge_display = EdgeDisplay {
                     nodes,

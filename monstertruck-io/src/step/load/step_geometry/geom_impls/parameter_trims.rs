@@ -14,9 +14,7 @@ where
 {
     fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> Ordering {
         let distance = move |value: &f64| f64::abs(*value - previous);
-        // SAFETY: All compared values are finite after the finiteness check in
-        // `normalize_axis`.
-        move |lhs: &f64, rhs: &f64| distance(lhs).partial_cmp(&distance(rhs)).unwrap()
+        move |lhs: &f64, rhs: &f64| distance(lhs).total_cmp(&distance(rhs))
     }
 
     /// `surface` and `axis` are carried for the `MT_STEP_DEBUG_UV_CLAMP` lens
