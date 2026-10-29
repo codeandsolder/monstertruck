@@ -136,7 +136,7 @@ impl MyApp {
                         vec![bdb.max(), bdb.min()].into_iter().collect()
                     }
                     Curve::NurbsCurve(curve) => curve.roughly_bounding_box(),
-                    Curve::IntersectionCurve(_) => BoundingBox::new(),
+                    Curve::Intersection(_) => BoundingBox::new(),
                     Curve::ParameterCurve(_) => BoundingBox::new(),
                 };
             });

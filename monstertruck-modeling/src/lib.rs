@@ -70,6 +70,7 @@ pub mod topo_traits {
         /// curves are mapped by `curve_closure`,
         /// and surfaces are mapped by `surface_closure`.
         #[doc(hidden)]
+        #[must_use]
         fn mapped(&self, trans: T) -> Self;
     }
 

@@ -1,4 +1,8 @@
 use super::*;
+use crate::{
+    BsplineSurface, EuclideanSpace, Invertible, KnotVector, Line, MetricSpace, NurbsSurface, Plane,
+    Processor, RevolutionSurface, Vector3, Vector4,
+};
 use std::f64::consts::TAU;
 
 /// A rational-quadratic FULL circle in `u` (the era-standard nine-point
@@ -465,7 +469,7 @@ fn a_loaded_cylinders_axial_axis_is_not_a_bound_but_its_angular_axis_is() {
         axis,
     ));
     cylinder.invert();
-    let surface = Surface::RevolutionSurface(cylinder);
+    let surface = Surface::Revolution(cylinder);
 
     assert_eq!(
         surface.try_range_tuple(),

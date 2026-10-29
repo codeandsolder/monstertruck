@@ -17,7 +17,7 @@ fn modeling_cylinder(
         Point3::new(radius, 0.0, -half_height),
         Point3::new(radius, 0.0, half_height),
     ));
-    ModelingSurface::RevolutionSurface(Processor::new(RevolutionSurface::by_revolution(
+    ModelingSurface::Revolution(Processor::new(RevolutionSurface::by_revolution(
         profile, origin, axis,
     )))
 }

@@ -1,5 +1,5 @@
-use crate::topo_traits::*;
-use monstertruck_topology::*;
+use crate::topo_traits::{GeometricMapping, Mapped};
+use monstertruck_topology::{Edge, Face, Shell, Solid, Vertex, Wire};
 
 impl<P, T> Mapped<T> for Vertex<P>
 where T: GeometricMapping<P> + Copy

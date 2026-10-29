@@ -1,6 +1,6 @@
 use crate::builder;
 use monstertruck_geometry::prelude::*;
-use monstertruck_topology::*;
+use monstertruck_topology::{Edge, Face, Solid, Vertex, Wire, shell, wire};
 use std::f64::consts::PI;
 
 /// rectangle
@@ -176,14 +176,17 @@ where
     let mut shell = shell![Face::new_unchecked(vec![wire0], plane0.to_same_geometry())];
 
     (0..4).for_each(|i| {
-        let wirei = wire![
+        let side_wire = wire![
             e[i].clone(),
             e[(i + 1) % 4 + 4].clone(),
             e[i + 8].inverse(),
             e[i + 4].inverse(),
         ];
-        let planei = Plane::new(v[i].point(), v[i + 1].point(), v[i + 4].point());
-        shell.push(Face::new_unchecked(vec![wirei], planei.to_same_geometry()));
+        let side_plane = Plane::new(v[i].point(), v[i + 1].point(), v[i + 4].point());
+        shell.push(Face::new_unchecked(
+            vec![side_wire],
+            side_plane.to_same_geometry(),
+        ));
     });
 
     let wire5 = wire![e[8].clone(), e[9].clone(), e[10].clone(), e[11].clone(),];

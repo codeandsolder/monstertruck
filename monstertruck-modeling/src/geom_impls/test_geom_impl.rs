@@ -4,6 +4,7 @@
 //! name is unchanged, so every test keeps its path and its identity.
 
 use super::*;
+use crate::{BoundedCurve, MetricSpace, ParametricCurve, TOLERANCE, Tolerance, prop_assert_near};
 use proptest::*;
 
 fn pole_to_normal(pole: [f64; 2]) -> Vector3 {

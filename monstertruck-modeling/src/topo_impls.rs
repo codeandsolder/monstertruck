@@ -1,4 +1,4 @@
-use monstertruck_topology::*;
+use monstertruck_topology::{Edge, Face, Vertex, VertexId, Wire};
 use rustc_hash::FxHashMap as HashMap;
 
 pub fn create_edge<P: Clone, C: Clone, CP: Fn(&P, &P) -> C>(

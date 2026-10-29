@@ -590,7 +590,7 @@ impl StepFormat for ModelingCurve {
             ModelingCurve::BsplineCurve(x) => StepFormat::fmt(x, idx, f),
             ModelingCurve::NurbsCurve(x) => StepFormat::fmt(x, idx, f),
             ModelingCurve::ParameterCurve(x) => StepFormat::fmt(x, idx, f),
-            ModelingCurve::IntersectionCurve(x) => StepFormat::fmt(x, idx, f),
+            ModelingCurve::Intersection(x) => StepFormat::fmt(x, idx, f),
         }
     }
 }
@@ -602,7 +602,7 @@ impl StepLength for ModelingCurve {
             ModelingCurve::BsplineCurve(x) => x.step_length(),
             ModelingCurve::NurbsCurve(x) => x.step_length(),
             ModelingCurve::ParameterCurve(x) => x.step_length(),
-            ModelingCurve::IntersectionCurve(x) => x.step_length(),
+            ModelingCurve::Intersection(x) => x.step_length(),
         }
     }
 }
@@ -979,7 +979,7 @@ impl StepFormat for ModelingSurface {
             ModelingSurface::Plane(x) => StepFormat::fmt(x, idx, f),
             ModelingSurface::BsplineSurface(x) => StepFormat::fmt(x, idx, f),
             ModelingSurface::NurbsSurface(x) => StepFormat::fmt(x, idx, f),
-            ModelingSurface::RevolutionSurface(x) => {
+            ModelingSurface::Revolution(x) => {
                 if let Some(cylinder) = cylindrical_surface_from_revolution(x) {
                     StepFormat::fmt(&cylinder, idx, f)
                 } else if let Some(bsp) = x.try_into_homogeneous_bspline_surface() {
@@ -989,7 +989,7 @@ impl StepFormat for ModelingSurface {
                     StepFormat::fmt(x, idx, f)
                 }
             }
-            ModelingSurface::TsplineSurface(t_mesh) => {
+            ModelingSurface::Tspline(t_mesh) => {
                 let bsp = t_mesh.to_bspline_surface(4).map_err(|_| std::fmt::Error)?;
                 StepFormat::fmt(&bsp, idx, f)
             }
@@ -999,7 +999,7 @@ impl StepFormat for ModelingSurface {
             // `SPHERICAL_SURFACE` / `TOROIDAL_SURFACE` would be better save
             // fidelity and is recorded as follow-on work, but it is a save
             // OUTPUT change and this track is the tessellation one.
-            ModelingSurface::SphericalSurface(_) | ModelingSurface::ToroidalSurface(_) => {
+            ModelingSurface::Sphere(_) | ModelingSurface::Torus(_) => {
                 match self.try_into_homogeneous_bspline_surface() {
                     Some(bsp) => StepFormat::fmt(&NurbsSurface::new(bsp), idx, f),
                     // Unreachable through the loader: the variant is only built
@@ -1018,7 +1018,7 @@ impl StepLength for ModelingSurface {
             ModelingSurface::Plane(_) => Plane::LENGTH,
             ModelingSurface::BsplineSurface(x) => x.step_length(),
             ModelingSurface::NurbsSurface(x) => x.step_length(),
-            ModelingSurface::RevolutionSurface(x) => {
+            ModelingSurface::Revolution(x) => {
                 if cylindrical_surface_from_revolution(x).is_some() {
                     CylindricalSurfaceData::LENGTH
                 } else if let Some(bsp) = x.try_into_homogeneous_bspline_surface() {
@@ -1027,11 +1027,11 @@ impl StepLength for ModelingSurface {
                     x.entity().step_length()
                 }
             }
-            ModelingSurface::TsplineSurface(t_mesh) => t_mesh
+            ModelingSurface::Tspline(t_mesh) => t_mesh
                 .to_bspline_surface(4)
                 .map_or(0, |bsp| bsp.step_length()),
             // Must agree with `StepFormat::fmt` above, which emits the net.
-            ModelingSurface::SphericalSurface(_) | ModelingSurface::ToroidalSurface(_) => self
+            ModelingSurface::Sphere(_) | ModelingSurface::Torus(_) => self
                 .try_into_homogeneous_bspline_surface()
                 .map_or(0, |bsp| NurbsSurface::new(bsp).step_length()),
         }

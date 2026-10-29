@@ -513,7 +513,7 @@ fn a_cylinder_stays_a_surface_of_revolution() {
     let carrier = builder.ir.model.surfaces[0].geometry.clone();
     let context = context_over(&builder.ir);
     let converted = surface::convert(&carrier, &context).expect("a cylinder converts");
-    let Surface::RevolutionSurface(revolution) = &converted else {
+    let Surface::Revolution(revolution) = &converted else {
         panic!("a cylinder must stay analytic, got {converted:?}");
     };
     // On the surface: every point at parameter (u, v) is `radius` from the axis.
@@ -542,7 +542,7 @@ fn a_sphere_stays_analytic_and_carries_its_radius() {
     let carrier = builder.ir.model.surfaces[0].geometry.clone();
     let context = context_over(&builder.ir);
     let converted = surface::convert(&carrier, &context).expect("a sphere converts");
-    let Surface::SphericalSurface(sphere) = &converted else {
+    let Surface::Sphere(sphere) = &converted else {
         panic!("a sphere must stay analytic, got {converted:?}");
     };
     assert_eq!(sphere.entity().radius(), 7.0);
@@ -565,7 +565,7 @@ fn a_torus_keeps_the_axis_it_was_given() {
     let carrier = builder.ir.model.surfaces[0].geometry.clone();
     let context = context_over(&builder.ir);
     let converted = surface::convert(&carrier, &context).expect("a torus converts");
-    let Surface::ToroidalSurface(torus) = &converted else {
+    let Surface::Torus(torus) = &converted else {
         panic!("a torus must stay analytic, got {converted:?}");
     };
     // Every point is `minor` away from the ring of radius `major` in the plane

@@ -2,15 +2,22 @@
 //!
 //! Generated json file can be visualized by `simple-shape-viewer`, an example of `monstertruck-render`.
 
-use monstertruck_modeling::*;
+use monstertruck_modeling::{
+    EuclideanSpace, Face, ParametricSurface3D, Point3, Rad, Result, Shell, Solid, Tolerance,
+    Vector3, Wire, builder,
+};
 use std::f64::consts::PI;
 
-fn cube_shell() -> Shell {
+type ExampleResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+fn cube_shell() -> ExampleResult<Shell> {
     let v = builder::vertex(Point3::origin());
     let e = builder::extrude(&v, Vector3::unit_x());
     let f = builder::extrude(&e, Vector3::unit_y());
     let s = builder::extrude(&f, Vector3::unit_z());
-    s.into_boundaries().pop().unwrap()
+    s.into_boundaries()
+        .pop()
+        .ok_or_else(|| std::io::Error::other("cube extrusion produced no shell").into())
 }
 
 fn torus_shell() -> Result<Shell> {
@@ -39,22 +46,26 @@ fn find_cube_face(cube_shell: &mut Shell, normal: Vector3) -> Option<&mut Face> 
 }
 
 fn find_torus_boundary(bdds: &[Wire], idx: usize) -> Option<&Wire> {
-    bdds.iter()
-        .find(|wire| wire[0].front().point()[idx].near(&0.0))
+    bdds.iter().find(|wire| {
+        wire.front_vertex()
+            .is_some_and(|vertex| vertex.point()[idx].near(&0.0))
+    })
 }
 
-fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut shell = cube_shell();
+fn main() -> ExampleResult<()> {
+    let mut shell = cube_shell()?;
     let torus = torus_shell()?;
     let bdds = torus.extract_boundaries();
-    let face = find_cube_face(&mut shell, -Vector3::unit_y()).unwrap();
-    let bdd = find_torus_boundary(&bdds, 1).unwrap();
-    face.add_boundary(bdd.inverse())
-        .expect("torus y-boundary should attach to cube face");
-    let face = find_cube_face(&mut shell, -Vector3::unit_x()).unwrap();
-    let bdd = find_torus_boundary(&bdds, 0).unwrap();
-    face.add_boundary(bdd.inverse())
-        .expect("torus x-boundary should attach to cube face");
+    let face = find_cube_face(&mut shell, -Vector3::unit_y())
+        .ok_or_else(|| std::io::Error::other("cube has no -Y face"))?;
+    let bdd = find_torus_boundary(&bdds, 1)
+        .ok_or_else(|| std::io::Error::other("torus has no Y-plane boundary"))?;
+    face.add_boundary(bdd.inverse())?;
+    let face = find_cube_face(&mut shell, -Vector3::unit_x())
+        .ok_or_else(|| std::io::Error::other("cube has no -X face"))?;
+    let bdd = find_torus_boundary(&bdds, 0)
+        .ok_or_else(|| std::io::Error::other("torus has no X-plane boundary"))?;
+    face.add_boundary(bdd.inverse())?;
     shell.extend(torus);
     let solid = Solid::new_unchecked(vec![shell]);
     let json = serde_json::to_vec_pretty(&solid)?;

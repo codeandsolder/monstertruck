@@ -7,7 +7,7 @@ use crate::*;
 fn test_surface_orientation(surface: &Surface, sign: f64) {
     let rev = match surface {
         Surface::Plane(_) => return,
-        Surface::RevolutionSurface(rev) => rev,
+        Surface::Revolution(rev) => rev,
         _ => panic!(),
     };
     let (Some((u0, u1)), Some((v0, v1))) = rev.try_range_tuple() else {

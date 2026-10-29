@@ -1,5 +1,9 @@
 use crate::errors::Error;
-use crate::*;
+use crate::{
+    BoundingBox, Connector, EuclideanSpace, ExtrusionSurface, GeometricMapping, InnerSpace, Line,
+    Matrix3, Matrix4, Origin, Plane, Point3, Processor, Rad, RevolutionSurface, SquareMatrix,
+    ToSameGeometry, Transform, Transformed, TrimmedCurve, UnitCircle, Vector3, Zero,
+};
 use itertools::Itertools;
 use std::f64::consts::PI;
 
@@ -61,7 +65,7 @@ pub fn try_circle_arc_by_start_tangent(
     let (vec0, vec1) = (point0 - origin, point1 - origin);
     let mut angle = f64::atan2(axis.dot(vec0.cross(vec1)), vec0.dot(vec1));
     if angle <= 0.0 {
-        angle += 2.0 * PI;
+        angle = 2.0f64.mul_add(PI, angle);
     }
     Ok(circle_arc(point0, origin, axis, Rad(angle)))
 }

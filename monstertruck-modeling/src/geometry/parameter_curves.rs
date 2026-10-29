@@ -3,7 +3,15 @@
 //! traits that build trimmed topology out of them.
 
 use super::content_hash::content_hash64;
-use super::*;
+use super::{
+    BoundedCurve, BsplineCurve, BsplineSurface, CompressedTrimmedShell, CompressedTrimmedSolid,
+    Curve, Curve2D, ExactParameterBoundary2D, HashMap, InnerSpace, IntoParallelIterator,
+    IntoParallelRefIterator, KnotVector, Line, Matrix4, MetricSpace, NurbsCurve, NurbsSurface,
+    ParallelIterator, ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D,
+    ParametricSurface, Point2, Point3, Processor, RefCell, RevolutionSurface,
+    SearchNearestParameter, SearchParameter, Shell, Solid, Surface, TOLERANCE, Tolerance,
+    TrimmedFace, TrimmedShell, TrimmedSolid, Vector3, Vector4, iter,
+};
 
 type ModelTrimCurve = ParameterCurve<Curve2D, Box<Surface>>;
 type ExactTrimCacheKey = (u64, u64);
@@ -98,8 +106,8 @@ pub(super) fn boundary_matches_surface_curve(
     let leader_range = leader.range_tuple();
     let boundary_range = boundary.curve().range_tuple();
     [0.0, 0.5, 1.0].into_iter().all(|s| {
-        let leader_t = leader_range.0 + (leader_range.1 - leader_range.0) * s;
-        let boundary_t = boundary_range.0 + (boundary_range.1 - boundary_range.0) * s;
+        let leader_t = (leader_range.1 - leader_range.0).mul_add(s, leader_range.0);
+        let boundary_t = (boundary_range.1 - boundary_range.0).mul_add(s, boundary_range.0);
         let uv = boundary.curve().subs(boundary_t);
         surface.subs(uv.x, uv.y).near(&leader.subs(leader_t))
     })
@@ -110,8 +118,8 @@ where C: ParametricCurve<Point = Point3> + BoundedCurve<Point = Point3> {
     let curve_range = curve.range_tuple();
     let boundary_range = boundary.range_tuple();
     let samples = [0.0, 0.25, 0.5, 0.75, 1.0];
-    let curve_t = |s: f64| curve_range.0 + (curve_range.1 - curve_range.0) * s;
-    let boundary_t = |s: f64| boundary_range.0 + (boundary_range.1 - boundary_range.0) * s;
+    let curve_t = |s: f64| (curve_range.1 - curve_range.0).mul_add(s, curve_range.0);
+    let boundary_t = |s: f64| (boundary_range.1 - boundary_range.0).mul_add(s, boundary_range.0);
     let forward = samples.iter().copied().all(|s| {
         curve
             .evaluate(curve_t(s))
@@ -249,11 +257,11 @@ pub(super) fn same_surface_parameterization(lhs: &Surface, rhs: &Surface) -> boo
 /// reuse of UV coordinates from another surface parameterization.
 pub(super) fn sampled_curve_lies_on_surface<C>(curve: &C, surface: &Surface) -> bool
 where C: ParametricCurve3D<Point = Point3> + BoundedCurve<Point = Point3> {
-    let (t0, t1) = curve.range_tuple();
     const SAMPLES: usize = 16;
+    let (t0, t1) = curve.range_tuple();
     (0..=SAMPLES).all(|index| {
         let ratio = crate::usize_to_f64(index) / crate::usize_to_f64(SAMPLES);
-        let point = curve.evaluate(t0 * (1.0 - ratio) + t1 * ratio);
+        let point = curve.evaluate(t1.mul_add(ratio, t0 * (1.0 - ratio)));
         surface
             .search_parameter(point, None, 32)
             .or_else(|| surface.search_nearest_parameter(point, None, 32))
@@ -288,15 +296,10 @@ pub(super) fn exact_line_boundary(
                 )
             })
         }
-        Surface::RevolutionSurface(surface) => {
-            line.exact_parameter_boundary_2d(surface).map(|boundary| {
-                let (curve, surface) = boundary.decompose();
-                ParameterCurve::new(
-                    Curve2D::Line(curve),
-                    Box::new(Surface::RevolutionSurface(surface)),
-                )
-            })
-        }
+        Surface::Revolution(surface) => line.exact_parameter_boundary_2d(surface).map(|boundary| {
+            let (curve, surface) = boundary.decompose();
+            ParameterCurve::new(Curve2D::Line(curve), Box::new(Surface::Revolution(surface)))
+        }),
         _ => None,
     }
 }
@@ -315,13 +318,10 @@ pub(super) fn exact_bspline_boundary(
                 )
             })
         }
-        Surface::RevolutionSurface(surface) => {
+        Surface::Revolution(surface) => {
             curve.exact_parameter_boundary_2d(surface).map(|boundary| {
                 let (curve, surface) = boundary.decompose();
-                ParameterCurve::new(
-                    Curve2D::Line(curve),
-                    Box::new(Surface::RevolutionSurface(surface)),
-                )
+                ParameterCurve::new(Curve2D::Line(curve), Box::new(Surface::Revolution(surface)))
             })
         }
         _ => None,
@@ -342,7 +342,7 @@ pub(super) fn exact_nurbs_boundary(
                 )
             })
         }
-        Surface::RevolutionSurface(surface) => {
+        Surface::Revolution(surface) => {
             cached_exact_nurbs_boundary_on_revolution_surface(curve, surface)
         }
         _ => None,
@@ -359,10 +359,7 @@ fn cached_exact_nurbs_boundary_on_revolution_surface(
         cached.unwrap_or_else(|| {
             let result = curve.exact_parameter_boundary_2d(surface).map(|boundary| {
                 let (curve, surface) = boundary.decompose();
-                ParameterCurve::new(
-                    Curve2D::Line(curve),
-                    Box::new(Surface::RevolutionSurface(surface)),
-                )
+                ParameterCurve::new(Curve2D::Line(curve), Box::new(Surface::Revolution(surface)))
             });
             cache.borrow_mut().insert(key, result.clone());
             result
@@ -467,6 +464,7 @@ impl ToCompressedTrimmedParameterCurves for Solid {
 #[cfg(test)]
 mod surface_identity_tests {
     use super::*;
+    use crate::{IncludeCurve, ParameterBoundary2D, Plane, SurfaceCurve};
 
     #[test]
     fn coincident_support_does_not_reuse_foreign_uv_curve() {
@@ -516,7 +514,7 @@ mod surface_identity_tests {
             Curve2D::Line(Line(Point2::new(0.25, 0.25), Point2::new(0.75, 0.25))),
             Box::new(source_surface.clone()),
         ));
-        let curve = Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+        let curve = Curve::Intersection(SurfaceCurve::with_boundaries(
             Box::new(source_surface.clone()),
             Box::new(source_surface),
             Box::new(leader),

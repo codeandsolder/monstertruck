@@ -3,11 +3,11 @@ use crate::{
     errors::Error,
     geom_impls::{self, ArcConnector, ExtrudeConnector, LineConnector, RevoluteConnector},
     topo_impls::connect_raw_wires,
-    topo_traits::*,
+    topo_traits::{ClosedSweep, Connector, Mapped, MultiSweep, Sweep},
 };
 use monstertruck_core::tolerance::TOLERANCE;
 use monstertruck_geometry::prelude::*;
-use monstertruck_topology::*;
+use monstertruck_topology::wire;
 const PI: Rad<f64> = Rad(std::f64::consts::PI);
 
 /// Sweep angle for revolve operations.
@@ -183,6 +183,10 @@ pub enum CircularArcConstraint {
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Errors
+///
+/// Returns the same geometric validation errors as [`try_circle_arc`].
 pub fn circle_arc<C>(
     vertex0: &Vertex,
     vertex1: &Vertex,
@@ -195,6 +199,8 @@ where
 }
 
 /// Fallible variant of [`circle_arc`].
+///
+/// # Errors
 ///
 /// Returns:
 /// - [`Error::DegenerateCircularArcTangent`] if the tangent is zero or
@@ -386,6 +392,10 @@ where
 ///     Err(Error::NotSameNumberOfEdges),
 /// ));
 /// ```
+///
+/// # Errors
+///
+/// Returns [`Error::NotSameNumberOfEdges`] when the wires have different edge counts.
 pub fn try_wire_homotopy<C, S>(wire0: &Wire<C>, wire1: &Wire<C>) -> Result<Shell<C, S>>
 where
     C: Invertible,
@@ -502,8 +512,10 @@ where
 /// # Ok(())
 /// # }
 /// ```
-/// # Failures
-/// If `wires`` are not in one plane, then return `Error::WireNotInOnePlane`.
+/// # Errors
+///
+/// Returns a topology error for invalid/open boundaries and [`Error::WireNotInOnePlane`]
+/// when the sampled boundary points are not coplanar.
 /// ```
 /// use monstertruck_modeling::{*, errors::Error};
 /// let v0 = builder::vertex(Point3::new(0.0, 0.0, 0.0));
@@ -557,9 +569,8 @@ where
         })
         .collect::<Vec<_>>();
 
-    let plane = match geom_impls::attach_plane(pts) {
-        Some(got) => got,
-        None => return Err(Error::WireNotInOnePlane),
+    let Some(plane) = geom_impls::attach_plane(pts) else {
+        return Err(Error::WireNotInOnePlane);
     };
     Ok(Face::new_unchecked(wires, plane.to_same_geometry()))
 }
@@ -740,11 +751,11 @@ fn composite_edges_near(first: &crate::Edge, second: &crate::Edge, tolerance: f6
     let (a0, a1) = first_curve.range_tuple();
     let (b0, b1) = second_curve.range_tuple();
     [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().all(|fraction| {
-        let first_t = a0 + (a1 - a0) * fraction;
+        let first_t = (a1 - a0).mul_add(fraction, a0);
         let second_t = if same_direction {
-            b0 + (b1 - b0) * fraction
+            (b1 - b0).mul_add(fraction, b0)
         } else {
-            b1 + (b0 - b1) * fraction
+            (b0 - b1).mul_add(fraction, b1)
         };
         first_curve
             .subs(first_t)
@@ -1132,6 +1143,36 @@ fn whole_revolve<T: ClosedSweep<Matrix4, ArcConnector, RevoluteConnector, Swept>
     )
 }
 
+fn wire_endpoints_on_axis<C>(
+    wire: &Wire<C>,
+    origin: Point3,
+    axis: Vector3,
+) -> Result<(bool, bool)> {
+    let (front, back) = wire
+        .ends_vertices()
+        .ok_or(Error::UnexpectedRevolveTopology)?;
+    let on_axis = |point: Point3| (point - origin).cross(axis).so_small();
+    Ok((on_axis(front.point()), on_axis(back.point())))
+}
+
+fn split_single_edge_at_back_axis<C>(wire: &mut Wire<C>, back_on_axis: bool) -> Result<()>
+where C: ParametricCurve3D + BoundedCurve + Cut {
+    if wire.len() != 1 || !back_on_axis {
+        return Ok(());
+    }
+    let edge = wire.pop_back().ok_or(Error::UnexpectedRevolveTopology)?;
+    let front = edge.front().clone();
+    let back = edge.back().clone();
+    let mut curve = edge.curve();
+    let (start, end) = curve.range_tuple();
+    let midpoint = f64::midpoint(start, end);
+    let middle = Vertex::new(curve.subs(midpoint));
+    let trailing_curve = curve.cut(midpoint);
+    wire.push_back(Edge::new_unchecked(&front, &middle, curve));
+    wire.push_back(Edge::new_unchecked(&middle, &back, trailing_curve));
+    Ok(())
+}
+
 /// Revolves a wire around an axis, automatically collapsing degenerate edges
 /// where wire endpoints lie on the rotation axis.
 ///
@@ -1167,6 +1208,12 @@ fn whole_revolve<T: ClosedSweep<Matrix4, ArcConnector, RevoluteConnector, Swept>
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidRevolveParameters`] for invalid axis/sweep/division input and
+/// [`Error::UnexpectedRevolveTopology`] if the generated sweep topology violates the
+/// face/edge structure required for endpoint collapse.
 pub fn revolve_wire<C, S>(
     wire: &Wire<C>,
     origin: Point3,
@@ -1188,27 +1235,9 @@ where
 
     let closed = matches!(sweep, SweepAngle::Closed);
     let mut wire = wire.clone();
-    let (front_vertex, back_vertex) = wire
-        .ends_vertices()
-        .ok_or(Error::UnexpectedRevolveTopology)?;
-    let on_axis = |point: Point3| (point - origin).cross(axis).so_small();
-    let front_on_axis = on_axis(front_vertex.point());
-    let back_on_axis = on_axis(back_vertex.point());
+    let (front_on_axis, back_on_axis) = wire_endpoints_on_axis(&wire, origin, axis)?;
 
-    // If the wire is a single edge with the back vertex on-axis,
-    // split it at the midpoint so the revolve can produce proper faces.
-    if wire.len() == 1 && back_on_axis {
-        let edge = wire.pop_back().ok_or(Error::UnexpectedRevolveTopology)?;
-        let v0 = edge.front().clone();
-        let v2 = edge.back().clone();
-        let mut curve = edge.curve();
-        let (t0, t1) = curve.range_tuple();
-        let t = f64::midpoint(t0, t1);
-        let v1 = Vertex::new(curve.subs(t));
-        let curve1 = curve.cut(t);
-        wire.push_back(Edge::new_unchecked(&v0, &v1, curve));
-        wire.push_back(Edge::new_unchecked(&v1, &v2, curve1));
-    }
+    split_single_edge_at_back_axis(&mut wire, back_on_axis)?;
 
     let mut shell = revolve(&wire, origin, axis, sweep, division)?;
     if shell.is_empty() || shell.len() % wire.len() != 0 {

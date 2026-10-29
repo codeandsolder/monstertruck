@@ -2,7 +2,7 @@
 //!
 //! Generated json file can be visualized by `simple-shape-viewer`, an example of `monstertruck-render`.
 
-use monstertruck_modeling::*;
+use monstertruck_modeling::{EuclideanSpace, Point3, Rad, Solid, Vector3, Wire, builder};
 use std::f64::consts::PI;
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {

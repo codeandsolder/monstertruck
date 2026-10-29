@@ -123,7 +123,7 @@ pub(super) fn convert(geometry: &SurfaceGeometry, context: &Context<'_>) -> Resu
             let radius = finite_radius(*radius, "sphere", context)?;
             let sphere = Processor::new(Sphere::new(frame::point(center), radius));
             admissible(&sphere, "sphere", context)?;
-            Ok(Surface::SphericalSurface(sphere))
+            Ok(Surface::Sphere(sphere))
         }
 
         SurfaceGeometry::Torus {
@@ -148,7 +148,7 @@ pub(super) fn convert(geometry: &SurfaceGeometry, context: &Context<'_>) -> Resu
                 frame.placement(1.0),
             );
             admissible(&torus, "torus", context)?;
-            Ok(Surface::ToroidalSurface(torus))
+            Ok(Surface::Torus(torus))
         }
 
         SurfaceGeometry::Nurbs(surface) => nurbs(surface, context),
@@ -182,7 +182,7 @@ pub(super) fn convert(geometry: &SurfaceGeometry, context: &Context<'_>) -> Resu
 
 /// Revolve a profile line about a frame's axis.
 fn revolution(profile: Line<Point3>, frame: frame::Frame) -> Result<Surface> {
-    Ok(Surface::RevolutionSurface(Processor::new(
+    Ok(Surface::Revolution(Processor::new(
         RevolutionSurface::by_revolution(Curve::Line(profile), frame.origin, frame.axis),
     )))
 }

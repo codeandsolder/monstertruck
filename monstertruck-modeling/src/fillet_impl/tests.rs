@@ -32,7 +32,7 @@ fn line_pcurve_on_plane() -> Curve {
 }
 
 fn intersection_curve_with_leader(leader: Curve) -> Curve {
-    Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+    Curve::Intersection(SurfaceCurve::with_boundaries(
         Box::new(plane_surface()),
         Box::new(plane_surface()),
         Box::new(leader),

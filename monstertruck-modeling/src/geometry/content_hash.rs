@@ -1,6 +1,6 @@
 //! Deterministic content hashing for the modeling geometry enums.
 
-use super::*;
+use super::{Conic2D, ContentHasher, Curve, Curve2D, DeterministicContentHash, Hasher, Surface};
 
 pub(super) fn content_hash64<T: DeterministicContentHash>(value: &T) -> u64 {
     let mut hasher = ContentHasher::default();
@@ -77,7 +77,7 @@ impl DeterministicContentHash for Curve {
                 state.write_u8(3);
                 v.content_hash(state);
             }
-            Self::IntersectionCurve(v) => {
+            Self::Intersection(v) => {
                 state.write_u8(4);
                 v.content_hash(state);
             }
@@ -100,21 +100,21 @@ impl DeterministicContentHash for Surface {
                 state.write_u8(2);
                 v.content_hash(state);
             }
-            Self::RevolutionSurface(v) => {
+            Self::Revolution(v) => {
                 state.write_u8(3);
                 v.content_hash(state);
             }
-            Self::TsplineSurface(v) => {
+            Self::Tspline(v) => {
                 state.write_u8(4);
                 v.content_hash(state);
             }
             // New tags only. 0..=4 keep their meaning, so every solid that
             // carries no sphere and no torus hashes byte-identically.
-            Self::SphericalSurface(v) => {
+            Self::Sphere(v) => {
                 state.write_u8(5);
                 v.content_hash(state);
             }
-            Self::ToroidalSurface(v) => {
+            Self::Torus(v) => {
                 state.write_u8(6);
                 v.content_hash(state);
             }

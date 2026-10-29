@@ -99,7 +99,7 @@ fn curve_kind(curve: &Curve) -> &'static str {
         Curve::BsplineCurve(_) => "BsplineCurve",
         Curve::NurbsCurve(_) => "NurbsCurve",
         Curve::ParameterCurve(_) => "ParameterCurve",
-        Curve::IntersectionCurve(_) => "IntersectionCurve",
+        Curve::Intersection(_) => "IntersectionCurve",
     }
 }
 
@@ -109,7 +109,7 @@ fn same_surface_kind(lhs: &Surface, rhs: &Surface) -> bool {
         (Surface::Plane(_), Surface::Plane(_))
             | (Surface::BsplineSurface(_), Surface::BsplineSurface(_))
             | (Surface::NurbsSurface(_), Surface::NurbsSurface(_))
-            | (Surface::RevolutionSurface(_), Surface::RevolutionSurface(_))
-            | (Surface::TsplineSurface(_), Surface::TsplineSurface(_))
+            | (Surface::Revolution(_), Surface::Revolution(_))
+            | (Surface::Tspline(_), Surface::Tspline(_))
     )
 }

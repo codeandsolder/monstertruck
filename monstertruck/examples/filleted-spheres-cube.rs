@@ -89,15 +89,13 @@ fn curve3d_only_curve(curve: &Curve) -> Curve {
         Curve::ParameterCurve(parameter_curve) => Curve::NurbsCurve(NurbsCurve::new(
             Curve::ParameterCurve(parameter_curve.clone()).lift_up(),
         )),
-        Curve::IntersectionCurve(surface_curve) => {
-            Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
-                surface_curve.surface0().clone(),
-                surface_curve.surface1().clone(),
-                Box::new(curve3d_only_curve(surface_curve.leader())),
-                None,
-                None,
-            ))
-        }
+        Curve::Intersection(surface_curve) => Curve::Intersection(SurfaceCurve::with_boundaries(
+            surface_curve.surface0().clone(),
+            surface_curve.surface1().clone(),
+            Box::new(curve3d_only_curve(surface_curve.leader())),
+            None,
+            None,
+        )),
     }
 }
 

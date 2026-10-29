@@ -49,8 +49,8 @@ fn curve3d_only_curve(curve: &monstertruck_modeling::Curve) -> monstertruck_mode
                 monstertruck_modeling::Curve::ParameterCurve(parameter_curve.clone()).lift_up(),
             ))
         }
-        monstertruck_modeling::Curve::IntersectionCurve(surface_curve) => {
-            monstertruck_modeling::Curve::IntersectionCurve(
+        monstertruck_modeling::Curve::Intersection(surface_curve) => {
+            monstertruck_modeling::Curve::Intersection(
                 monstertruck_modeling::SurfaceCurve::with_boundaries(
                     surface_curve.surface0().clone(),
                     surface_curve.surface1().clone(),

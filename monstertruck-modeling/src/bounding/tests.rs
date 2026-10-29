@@ -4,6 +4,10 @@
 //! path is unchanged.
 
 use super::*;
+use crate::{
+    BoundedCurve, BsplineSurface, EuclideanSpace, KnotVector, NurbsSurface, Processor,
+    RevolutionSurface, Sphere, SurfaceCurve, ToSameGeometry, Torus, TrimmedCurve, UnitCircle,
+};
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineSurface;
 
 /// The bound around a ball is the ball's own box, and it is looser than the
@@ -13,7 +17,7 @@ use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineSurface;
 fn an_analytic_sphere_is_bounded_by_its_own_box_and_by_6_over_pi() {
     let center = Point3::new(3.0, -4.0, 0.5);
     let radius = 12.5;
-    let surface = Surface::SphericalSurface(Processor::new(Sphere::new(center, radius)));
+    let surface = Surface::Sphere(Processor::new(Sphere::new(center, radius)));
     let bound = certified_surface_bounding_box(&surface, None)
         .expect("an analytic sphere bounds itself without a boundary hull");
     let diagonal = bound.diagonal();
@@ -94,11 +98,11 @@ fn rational_sphere_control_hull_certifies_the_entire_sphere() {
 #[test]
 fn intersection_curve_exposes_its_structural_certified_bound() {
     let radius = f64::sqrt(2.0);
-    let surface0 = Surface::SphericalSurface(Processor::new(Sphere::new(
+    let surface0 = Surface::Sphere(Processor::new(Sphere::new(
         Point3::new(0.0, 0.0, 1.0),
         radius,
     )));
-    let surface1 = Surface::SphericalSurface(Processor::new(Sphere::new(
+    let surface1 = Surface::Sphere(Processor::new(Sphere::new(
         Point3::new(0.0, 0.0, -1.0),
         radius,
     )));
@@ -106,7 +110,7 @@ fn intersection_curve_exposes_its_structural_certified_bound() {
         TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, std::f64::consts::TAU))
             .to_same_geometry(),
     );
-    let curve = Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+    let curve = Curve::Intersection(SurfaceCurve::with_boundaries(
         Box::new(surface0),
         Box::new(surface1),
         Box::new(leader),
@@ -170,7 +174,7 @@ fn a_cylinder_face_is_bounded_by_its_boundary_wires() {
     let origin = Point3::new(0.0, 0.0, 0.0);
     let axis = Vector3::unit_z();
     let profile = Line(Point3::new(radius, 0.0, 0.0), Point3::new(radius, 0.0, 1.0));
-    let surface = Surface::RevolutionSurface(Processor::new(RevolutionSurface::by_revolution(
+    let surface = Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
         Curve::Line(profile),
         origin,
         axis,
@@ -219,7 +223,7 @@ fn a_cylinder_face_is_bounded_by_its_boundary_wires() {
 /// Without a boundary hull a cylinder cannot be bounded at all, and says so.
 #[test]
 fn a_cylinder_without_wires_refuses() {
-    let surface = Surface::RevolutionSurface(Processor::new(RevolutionSurface::by_revolution(
+    let surface = Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
         Curve::Line(Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0))),
         Point3::origin(),
         Vector3::unit_z(),
@@ -235,8 +239,7 @@ fn a_cylinder_without_wires_refuses() {
 fn a_ring_torus_is_bounded_by_its_own_radii() {
     let (large, small) = (5.0, 1.5);
     let center = Point3::new(1.0, 2.0, 3.0);
-    let surface =
-        Surface::ToroidalSurface(Processor::new(Torus::new_unchecked(center, large, small)));
+    let surface = Surface::Torus(Processor::new(Torus::new_unchecked(center, large, small)));
     let bound = certified_surface_bounding_box(&surface, None).expect("a torus bounds itself");
     let diagonal = bound.diagonal();
     assert!(
@@ -275,8 +278,7 @@ fn the_certified_box_contains_a_volume_the_vertex_box_does_not() {
         "the witness requires the correct volume {closed_form} to EXCEED the \
          vertex box {vertex_box}",
     );
-    let surface =
-        Surface::SphericalSurface(Processor::new(Sphere::new(Point3::origin(), big_radius)));
+    let surface = Surface::Sphere(Processor::new(Sphere::new(Point3::origin(), big_radius)));
     let bound = certified_surface_bounding_box(&surface, None).expect("sphere bounds itself");
     let diagonal = bound.diagonal();
     let certified = diagonal.x * diagonal.y * diagonal.z;
