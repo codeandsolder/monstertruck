@@ -208,14 +208,17 @@ pub fn split_singular_compressed_trimmed_vertices<P: Clone, C, S, T>(
 /// Diagnostics from a transactional same-domain face-unification pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SameDomainUnification {
-    /// Candidate adjacent face pairs whose supports were reported equivalent.
+    /// Candidate face states whose supports were reported equivalent and were
+    /// actually attempted. An unchanged locally-invalid pair is not counted
+    /// again merely because an unrelated merge committed elsewhere in the shell.
     pub proposals: usize,
     /// Face-pair merges that passed trim reconstruction and complete shell validation.
     pub accepted: usize,
     /// Candidates whose surviving directed boundary could not be traced unambiguously.
     pub rejected_ambiguous_boundary: usize,
-    /// Candidates for which at least one surviving 3D edge could not be represented
-    /// on the chosen reference surface.
+    /// Distinct candidate face states for which at least one surviving 3D edge
+    /// could not be represented on the chosen reference surface. Unchanged
+    /// local failures are cached across unrelated successful merges.
     pub rejected_missing_trim: usize,
     /// Candidates whose rebuilt shell failed face, closure, connectivity, or
     /// manifold validation.
@@ -428,6 +431,16 @@ where
     original.check_solid_boundary()?;
 
     let mut report = SameDomainUnification::default();
+    // Face indices are compacted after every committed merge, so an index pair is
+    // not a stable identity for memoizing a failed candidate. Keep a tiny sidecar
+    // identity + generation for each current face instead. A face generation only
+    // changes when that face is replaced by a merged face; therefore a local
+    // AmbiguousBoundary/MissingTrim result is still valid after an unrelated merge,
+    // while any candidate touching the changed face is retried.
+    let mut face_states = (0..shell.faces.len())
+        .map(|identity| (identity, 0usize))
+        .collect::<Vec<_>>();
+    let mut locally_rejected = BTreeSet::<((usize, usize), (usize, usize))>::new();
     loop {
         let mut edge_face_uses = HashMap::<usize, Vec<(usize, bool)>>::default();
         for (face_index, face) in shell.faces.iter().enumerate() {
@@ -462,6 +475,10 @@ where
             if !orientation_compatible {
                 continue;
             }
+            let state_key = (face_states[face_index0], face_states[face_index1]);
+            if locally_rejected.contains(&state_key) {
+                continue;
+            }
             report.proposals += 1;
             let merged = match merged_same_domain_face(
                 &shell.edges,
@@ -473,10 +490,12 @@ where
             ) {
                 Ok(merged) => merged,
                 Err(SameDomainMergeFailure::AmbiguousBoundary) => {
+                    locally_rejected.insert(state_key);
                     report.rejected_ambiguous_boundary += 1;
                     continue;
                 }
                 Err(SameDomainMergeFailure::MissingTrim) => {
+                    locally_rejected.insert(state_key);
                     report.rejected_missing_trim += 1;
                     continue;
                 }
@@ -492,6 +511,8 @@ where
                 continue;
             }
             *shell = candidate;
+            face_states[face_index0].1 += 1;
+            face_states.remove(face_index1);
             report.accepted += 1;
             committed = true;
             break;
@@ -762,5 +783,89 @@ mod trimmed_tests {
         after
             .check_solid_boundary()
             .expect("normalized shell must stay a solid boundary");
+    }
+
+    #[test]
+    fn same_domain_unification_does_not_retry_unchanged_local_failure() {
+        use std::cell::Cell;
+
+        fn use_(index: usize, orientation: bool) -> CompressedEdgeUse<u32> {
+            CompressedEdgeUse {
+                index,
+                orientation,
+                trim_curve: Some(index as u32),
+            }
+        }
+        fn face(surface: u8, uses: &[(usize, bool)]) -> CompressedTrimmedFace<u8, u32> {
+            CompressedTrimmedFace {
+                boundaries: vec![
+                    uses.iter()
+                        .map(|&(index, orientation)| use_(index, orientation))
+                        .collect(),
+                ],
+                orientation: true,
+                surface,
+            }
+        }
+
+        let edge_vertices = [
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
+            (4, 6),
+        ];
+        let mut shell = CompressedTrimmedShell {
+            vertices: vec![(); 8],
+            edges: edge_vertices
+                .into_iter()
+                .enumerate()
+                .map(|(index, vertices)| CompressedEdge {
+                    vertices,
+                    curve: index as u32,
+                })
+                .collect(),
+            faces: vec![
+                face(0, &[(3, false), (2, false), (1, false), (0, false)]),
+                // These two adjacent side faces deliberately report the same support.
+                // Their merge fails immediately because edge 0 cannot be retrimmed.
+                face(1, &[(0, true), (9, true), (4, false), (8, false)]),
+                face(1, &[(1, true), (10, true), (5, false), (9, false)]),
+                face(3, &[(2, true), (11, true), (6, false), (10, false)]),
+                face(4, &[(3, true), (8, true), (7, false), (11, false)]),
+                // This independent top partition succeeds, forcing a rescan.
+                face(9, &[(4, true), (5, true), (12, false)]),
+                face(9, &[(12, true), (6, true), (7, true)]),
+            ],
+        };
+
+        let failed_curve_calls = Cell::new(0usize);
+        let report = unify_same_domain_compressed_trimmed_faces(
+            &mut shell,
+            |a, b| (a == b).then_some(SurfaceDomainRelation::SameOrientation),
+            |curve, surface| {
+                if *surface == 1 && *curve == 0 {
+                    failed_curve_calls.set(failed_curve_calls.get() + 1);
+                    None
+                } else {
+                    Some(*curve + 100)
+                }
+            },
+        )
+        .expect("normalizer must preserve the valid shell");
+
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.rejected_missing_trim, 1);
+        assert_eq!(report.proposals, 2);
+        assert_eq!(failed_curve_calls.get(), 1);
+        assert_eq!(shell.faces.len(), 6);
     }
 }
