@@ -97,93 +97,91 @@ proptest! {
     }
 }
 
-/// **Why the STEP loader refuses the degenerate (spindle) torus** -- spec 011 T1.
+/// Ring, horn, and spindle tori all need a sound inverse map.
 ///
-/// The proptests above only ever build RING tori (`large_radius` is derived as
-/// `2 * small_radius + diff`), so nothing here has ever exercised
-/// `|large_radius| < small_radius`, the self-intersecting regime real STEP files
-/// carry in three different spellings (460 corpus records).
-///
-/// The tempting conclusion is that the regime is refused because the analytic
-/// rational-NURBS conversion would be inexact there. It would not: with the
-/// builder's spindle guard bypassed, the emitted control net measures exact to a
-/// relative 8e-16..9e-16 against `Torus::evaluate` over the whole domain, with the
-/// control hull still a superset of the analytic bbox.
-///
-/// What actually breaks is the INVERSE map, which is what places a face's trims:
-/// on a spindle, the surface passes through itself, and both parameter searches
-/// go wrong. `search_parameter` cannot find a quarter to a third of its own
-/// on-surface points, and `search_nearest_parameter` answers those points with
-/// parameters that evaluate somewhere else entirely -- silently. Horn tori
-/// (`large == small`, the fillet form) and ring tori are unaffected, which is why
-/// the loader's refusal predicate is exactly the builder's and no wider.
-///
-/// Measured 2026-07-30 on a 24x24 parameter grid, at radii taken from
-/// `Rocky_House.stp` and `NissanGT-R.STEP`.
+/// The spindle used to lose roughly a quarter of its own parameter domain
+/// because the inverse derived `v` from unsigned cylindrical radius and could
+/// not represent the negative signed-radial branch.  The solver now enumerates
+/// the meridian branches explicitly; every point produced by the forward map
+/// must therefore round-trip, and nearest-point recovery of an on-surface point
+/// must land on that point rather than on the other sheet.
 #[test]
-fn spindle_torus_parameter_recovery_is_unsound_while_ring_and_horn_are_exact() {
-    // (label, large, small, expect_sound)
-    let cases: [(&str, f64, f64, bool); 5] = [
-        (
-            "Rocky_House witness spindle",
-            0.633_974_596_215_563,
-            1.0,
-            false,
-        ),
-        (
-            "NissanGT-R spindle |major|",
-            20.852_342_325_613_467,
-            29.5,
-            false,
-        ),
-        ("ring", 3.0, 1.0, true),
-        ("exact horn (Ai-14R fillet)", 3.0, 3.0, true),
+fn torus_parameter_recovery_is_sound_in_ring_horn_and_spindle_regimes() {
+    let cases: [(&str, f64, f64); 5] = [
+        ("Rocky_House witness spindle", 0.633_974_596_215_563, 1.0),
+        ("NissanGT-R spindle |major|", 20.852_342_325_613_467, 29.5),
+        ("ring", 3.0, 1.0),
+        ("exact horn (Ai-14R fillet)", 3.0, 3.0),
         (
             "fp near-horn (Pi fillet)",
             0.099_999_999_992_725,
             0.099_999_999_999_987_88,
-            true,
         ),
     ];
     const N: usize = 24;
-    for (label, large_radius, small_radius, sound) in cases {
+    for (label, large_radius, small_radius) in cases {
         let torus = Torus::new_unchecked(Point3::origin(), large_radius, small_radius);
         let tol = 1.0e-9 * (large_radius + small_radius);
-        let mut exact_recovered = 0usize;
-        let mut nearest_landed_elsewhere = 0usize;
-        let mut total = 0usize;
         for i in 0..N {
-            // Offsets keep the samples off the seams and off the apex.
+            // Offsets keep the samples off periodic seams and singular axis points.
             let u = 2.0 * PI * (i as f64 + 0.37) / N as f64;
             for j in 0..N {
                 let v = 2.0 * PI * (j as f64 + 0.21) / N as f64;
                 let point = torus.evaluate(u, v);
-                total += 1;
-                if torus.search_parameter(point, None, 100).is_some() {
-                    exact_recovered += 1;
-                }
-                if let Some((ru, rv)) = torus.search_nearest_parameter(point, None, 100)
-                    && torus.evaluate(ru, rv).distance(point) > tol
-                {
-                    nearest_landed_elsewhere += 1;
-                }
+                let (eu, ev) = torus
+                    .search_parameter(point, Some((u, v)), 100)
+                    .unwrap_or_else(|| panic!("{label}: exact inverse refused ({u}, {v})"));
+                assert!(
+                    torus.evaluate(eu, ev).distance(point) <= tol,
+                    "{label}: exact inverse landed elsewhere at ({u}, {v}) -> ({eu}, {ev})",
+                );
+                let (nu, nv) = torus
+                    .search_nearest_parameter(point, Some((u, v)), 100)
+                    .unwrap_or_else(|| panic!("{label}: nearest inverse refused ({u}, {v})"));
+                assert!(
+                    torus.evaluate(nu, nv).distance(point) <= tol,
+                    "{label}: nearest inverse landed elsewhere at ({u}, {v}) -> ({nu}, {nv})",
+                );
             }
         }
-        if sound {
-            assert_eq!(
-                (exact_recovered, nearest_landed_elsewhere),
-                (total, 0),
-                "{label} ({large_radius}, {small_radius}) must recover every on-surface point",
-            );
-        } else {
-            assert!(
-                exact_recovered < total && nearest_landed_elsewhere > 0,
-                "{label} ({large_radius}, {small_radius}): the spindle regime is expected to \
-                 be UNSOUND here -- if this now passes, the inverse map was fixed and spec \
-                 011 T1's refusal can be revisited. recovered {exact_recovered}/{total}, \
-                 nearest landed elsewhere {nearest_landed_elsewhere}",
-            );
+    }
+}
+
+/// The analytic nearest-point solver is global even in the spindle regime.
+/// A dense meridian sweep is an intentionally independent lower-resolution
+/// oracle: the exact solver may beat it, but must never be measurably worse.
+#[test]
+fn spindle_torus_nearest_parameter_matches_dense_meridian_reference() {
+    let torus = Torus::new_unchecked(Point3::new(0.2, -0.4, 0.7), 0.7, 1.3);
+    let queries = [
+        Point3::new(0.2, -0.4, 0.7),
+        Point3::new(0.8, -0.1, 0.2),
+        Point3::new(-1.1, 0.5, 1.9),
+        Point3::new(2.7, -0.4, 0.7),
+        Point3::new(0.2, -0.4, 3.1),
+        Point3::new(-0.3, -0.9, 0.65),
+    ];
+    const SAMPLES: usize = 16_384;
+    for point in queries {
+        let (u, v) = torus
+            .search_nearest_parameter(point, None, 100)
+            .expect("spindle nearest-point solver must return a candidate");
+        let got = torus.evaluate(u, v).distance2(point);
+        let relative = point - torus.center();
+        let rho = (relative.x * relative.x + relative.y * relative.y).sqrt();
+        let mut sampled = f64::INFINITY;
+        for i in 0..SAMPLES {
+            let sv = 2.0 * PI * i as f64 / SAMPLES as f64;
+            let q = torus.large_radius() + torus.small_radius() * sv.cos();
+            let dz = relative.z - torus.small_radius() * sv.sin();
+            let dr = rho - q.abs();
+            sampled = sampled.min(dr * dr + dz * dz);
         }
+        let scale = (torus.large_radius() + torus.small_radius() + relative.magnitude()).max(1.0);
+        assert!(
+            got <= sampled + (2.0 * PI / SAMPLES as f64 * scale).powi(2),
+            "nearest point worse than dense meridian reference: got {got}, sampled {sampled}, point {point:?}",
+        );
     }
 }
 

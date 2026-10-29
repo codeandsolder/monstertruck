@@ -42,20 +42,20 @@ pub enum ElementarySurfaceAny {
     CylindricalSurface(Box<CylindricalSurface>),
     #[holder(use_place_holder)]
     ToroidalSurface(Box<ToroidalSurface>),
-    /// The self-intersecting torus subtype. Present so the record deserializes
-    /// into a NAMED class instead of `Table::dummy`; its geometry is refused with
-    /// the class named (see [`refuse_degenerate_torus`]).
+    /// STEP's sheet-selecting degenerate torus subtype. Present so the record
+    /// deserializes into a named class instead of `Table::dummy`; true spindle
+    /// instances remain typed refusals until the selected sheet is represented.
     #[holder(use_place_holder)]
     DegenerateToroidalSurface(Box<DegenerateToroidalSurface>),
     #[holder(use_place_holder)]
     ConicalSurface(Box<ConicalSurface>),
 }
 
-/// Fallible since spec 011 T1: two of the five elementary surfaces carry radii a
-/// STEP file can put outside the representable domain, and the torus arm used to
-/// hand them to a constructor that PANICS (`Torus::new`, on
-/// `major_radius <= 0.0`). 207 corpus faces reached that panic and took 11 solids
-/// -- 15,191 faces -- down with them. The refusal now happens here, typed.
+/// Fallible because STEP input can carry non-finite/non-positive elementary
+/// surface parameters and because `DEGENERATE_TOROIDAL_SURFACE` has sheet
+/// semantics that a plain full torus does not encode. Invalid scalar domains and
+/// unsupported sheet selection therefore refuse typed before reaching geometry
+/// constructors.
 impl TryFrom<&ElementarySurfaceAny> for ElementarySurface {
     type Error = StepConvertingError;
     #[inline(always)]
@@ -155,103 +155,34 @@ pub struct ToroidalSurface {
     minor_radius: f64,
 }
 
-/// The DEGENERATE (self-intersecting) toroidal regime, refused with the class
-/// named -- for BOTH spellings real exporters use for it.
+/// Validate the scalar domain shared by the STEP torus spellings.
 ///
-/// # The regime, and why it is one regime with two spellings
-///
-/// A torus whose `minor_radius` exceeds its `major_radius` self-intersects: the
-/// tube circle crosses the axis of revolution, so the swept surface passes
-/// through itself and closes into an apex (the "spindle" or "lemon" torus).
-/// ISO 10303-42 splits `degenerate_toroidal_surface` out of `toroidal_surface`
-/// precisely for it (`WHERE major_radius < minor_radius`, plus `select_outer` to
-/// pick a sheet). Measured over the 8-file corpus (spec 011 T1), it arrives
-/// THREE ways:
-///
-/// | spelling | records | files |
-/// |---|---|---|
-/// | `DEGENERATE_TOROIDAL_SURFACE` | 253 | Rocky_House 156, Cruise_Assembly 63, Ai-14R 34 |
-/// | `TOROIDAL_SURFACE` with NEGATIVE `major_radius` | 207 | NissanGT-R 201, ROTOR 6 |
-/// | `TOROIDAL_SURFACE` with `0 < major_radius < minor_radius` | 136 | NissanGT-R 126, UMC-500 10 |
-///
-/// A negative major radius is out-of-schema (`positive_length_measure`), and it
-/// is the same surface: `(-R, r)` at `(u, v)` equals `(R, r)` at
-/// `(u + pi, pi - v)`. That reparameterisation is NOT a placement change, so it
-/// cannot be normalised away without invalidating the face's trims (C2).
-/// In every one of the 207 measured records `|major| < minor`, i.e. all three
-/// spellings are the SAME degenerate regime.
-///
-/// # Why refuse rather than represent (measured, not assumed)
-///
-/// The rational-NURBS control net IS exact here -- with the builder's spindle
-/// guard bypassed, the emitted net matches the analytic torus to a relative
-/// 8e-16..9e-16 over the whole domain, with the control hull a superset of the
-/// analytic bbox (the 7y standard, at the witness radii `0.633974596215563/1.0`
-/// and at both negative-major samples). Exactness is not what fails.
-///
-/// What fails is everything that has to invert the parameterisation. On a
-/// spindle, `Torus::search_parameter` returns `None` for 168 of 576 on-surface
-/// grid points (29%; 144/576 = 25% at the NissanGT-R radii), and
-/// `search_nearest_parameter` answers those same points with parameters that
-/// evaluate to a DIFFERENT point -- silently, because the implicit form
-/// `(sqrt(x^2+y^2) - R)^2 + z^2 = r^2` does not describe the sheet swept through
-/// the axis. The ring control scores 576/576 on both. Converting would therefore
-/// trade a typed refusal for a face whose trims can be placed wrongly on a
-/// quarter of its domain -- worse than no fix, by the correct-or-typed standard.
-/// `monstertruck_geometry`'s builder already encodes the same verdict by
-/// returning `None` (`bspline_conversion.rs`, `torus_spindle_is_rejected`).
-///
-/// # What is NOT refused
-///
-/// HORN tori (`major_radius == minor_radius`, and the fp-near-horn fillets where
-/// the two differ by a few ulps) are representable and stay so: the inner
-/// equator pinches to a point on the axis, nothing self-intersects, and
-/// parameter recovery measures 576/576. The rule below is deliberately the same
-/// predicate the geometry builder uses, so the STEP layer refuses exactly what
-/// the geometry layer cannot build -- no wider. `Ai-14R.stp` writes an exact
-/// horn torus (`3., 3.`) as a `DEGENERATE_TOROIDAL_SURFACE`, so the spelling
-/// cannot be trusted to imply the regime; the RADII decide.
-fn refuse_degenerate_torus(
+/// A positive-major spindle (`0 < R < r`) is a perfectly well-defined
+/// parametric surface. Monstertruck used to refuse it only because `Torus` could
+/// not invert the negative signed-radial branch; the analytic inverse is now
+/// branch-complete, so ordinary `TOROIDAL_SURFACE` records may use the full
+/// positive `(R, r)` domain. A negative major radius remains out of schema and
+/// would require an explicit UV reparameterisation of any source pcurves.
+fn validate_torus_radii(
     entity: &str,
     major_radius: f64,
     minor_radius: f64,
 ) -> Result<(), StepConvertingError> {
     if !major_radius.is_finite() || !minor_radius.is_finite() {
         return Err(format!(
-            "{entity} refused: non-finite radii (major_radius {major_radius}, \
-             minor_radius {minor_radius})."
+            "{entity} refused: non-finite radii (major_radius {major_radius}, minor_radius {minor_radius})."
         )
         .into());
     }
     if minor_radius <= 0.0 {
         return Err(format!(
-            "{entity} refused: non-positive minor_radius {minor_radius} \
-             (major_radius {major_radius}); ISO 10303-42 declares it a \
-             positive_length_measure."
+            "{entity} refused: non-positive minor_radius {minor_radius} (major_radius {major_radius}); ISO 10303-42 declares it a positive_length_measure."
         )
         .into());
     }
     if major_radius <= 0.0 {
         return Err(format!(
-            "{entity} refused: non-positive major_radius {major_radius} with minor_radius \
-             {minor_radius} -- ISO 10303-42 declares major_radius a positive_length_measure. \
-             Negating it names the SAME surface as ({}, {minor_radius}) under a \
-             (u + pi, pi - v) reparameterisation that no placement can absorb, and that \
-             surface is the degenerate self-intersecting (spindle/lemon) torus monstertruck \
-             cannot represent.",
-            -major_radius
-        )
-        .into());
-    }
-    // Exactly the geometry builder's predicate (`TryIntoHomogeneousBsplineSurface
-    // for Torus`): horn and fp-near-horn stay representable, true spindles do not.
-    if minor_radius - major_radius > TOLERANCE * (major_radius + minor_radius) {
-        return Err(format!(
-            "{entity} refused: degenerate self-intersecting torus -- major_radius \
-             {major_radius} < minor_radius {minor_radius} (the spindle/lemon regime \
-             ISO 10303-42 splits degenerate_toroidal_surface out for). monstertruck has no \
-             representation for it: the rational-NURBS builder rejects it, and analytic \
-             parameter recovery is silently wrong on ~29% of its domain."
+            "{entity} refused: non-positive major_radius {major_radius} with minor_radius {minor_radius}; ISO 10303-42 declares major_radius a positive_length_measure. Supporting this exporter extension safely requires carrying the equivalent (u + pi, pi - v) UV reparameterisation into face-local trims."
         )
         .into());
     }
@@ -269,7 +200,7 @@ impl TryFrom<&ToroidalSurface> for step_geometry::ToroidalSurface {
             ..
         }: &ToroidalSurface,
     ) -> Result<Self, Self::Error> {
-        refuse_degenerate_torus("TOROIDAL_SURFACE", *major_radius, *minor_radius)?;
+        validate_torus_radii("TOROIDAL_SURFACE", *major_radius, *minor_radius)?;
         let mat = Matrix4::from(position);
         let torus = Torus::new(Point3::origin(), *major_radius, *minor_radius)?;
         Ok(Processor::new(torus).transformed(mat))
@@ -288,7 +219,8 @@ impl TryFrom<&ToroidalSurface> for step_geometry::ToroidalSurface {
 /// The entity exists in the schema, so it deserializes here rather than falling
 /// into `Table::dummy`: a record that lands in `dummy` can only ever be refused
 /// as a lookup miss (`Lookup failed for #145`), which names neither the class nor
-/// the reason. See [`refuse_degenerate_torus`] for the fate of the geometry.
+/// the reason. Conversion keeps the subtype distinct so its selected-sheet
+/// semantics cannot silently become a full immersed torus.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = degenerate_toroidal_surface)]
@@ -313,11 +245,20 @@ impl TryFrom<&DegenerateToroidalSurface> for step_geometry::ToroidalSurface {
             ..
         }: &DegenerateToroidalSurface,
     ) -> Result<Self, Self::Error> {
-        refuse_degenerate_torus("DEGENERATE_TOROIDAL_SURFACE", *major_radius, *minor_radius)?;
-        // Past the radii check the surface is a horn torus (or a ring one, if an
-        // exporter mis-spells one as degenerate): `select_outer = .T.` is then the
-        // whole surface and converts, while `.F.` selects the sheet that has
-        // pinched to a single point on the axis -- which is not a surface.
+        validate_torus_radii("DEGENERATE_TOROIDAL_SURFACE", *major_radius, *minor_radius)?;
+        // Unlike plain TOROIDAL_SURFACE, the STEP subtype carries `select_outer`:
+        // in the true spindle regime the entity denotes ONE sheet, not the whole
+        // immersed torus. Until that sheet domain is represented explicitly,
+        // accepting it as a full Torus would add geometry the file did not name.
+        if *minor_radius - *major_radius > TOLERANCE * (*major_radius + *minor_radius) {
+            return Err(format!(
+                "DEGENERATE_TOROIDAL_SURFACE refused: spindle sheet selection (major_radius {major_radius} < minor_radius {minor_radius}, select_outer = {select_outer}) needs an explicit sheet domain; the full analytic spindle surface is representable but would not preserve this entity's semantics."
+            )
+            .into());
+        }
+        // At the horn limit the inner sheet collapses to the axis point. A ring
+        // surface mis-spelled as degenerate is likewise only meaningful here for
+        // the outer selection.
         if !select_outer {
             return Err(format!(
                 "DEGENERATE_TOROIDAL_SURFACE refused: select_outer = .F. selects the inner \

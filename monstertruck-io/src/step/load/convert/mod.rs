@@ -8,6 +8,8 @@ use super::*;
 use monstertruck_topology::compress::*;
 use std::collections::HashSet;
 
+mod missing_edge;
+
 /// A compressed shell in the STEP loader's concrete geometry types.
 ///
 /// The `*_reported` conversions (spec 011 T7) return the value paired with a
@@ -180,6 +182,7 @@ impl Table {
     ) -> (Vec<CompressedEdge<Curve3D>>, HashMap<u64, usize>) {
         use PlaceHolder::Ref;
         let mut eidx_map = HashMap::<u64, usize>::new();
+        let recovered_missing_edges = self.recover_missing_edge_curves(shell);
         // Same split as `shell_vertices`, for the same reason: a failed edge used
         // to consume an index and shift every later edge's `eidx_map` entry.
         let mut attempted = HashSet::<u64>::new();
@@ -203,6 +206,19 @@ impl Table {
             };
             let curve = match edge_curve.parse_curve3d() {
                 Ok(curve) => curve,
+                Err(e) if edge_curve.edge_geometry.is_none() => {
+                    let Some(curve) = recovered_missing_edges.get(&idx).cloned() else {
+                        eprintln!("{e}");
+                        sink.lost(
+                            Cat::Edge,
+                            Why::EdgeGeometryMissing,
+                            Some(idx),
+                            Some(e.to_string()),
+                        );
+                        return None;
+                    };
+                    curve
+                }
                 Err(e) => {
                     eprintln!("{e}");
                     sink.lost(
@@ -421,6 +437,7 @@ impl Table {
         bound: FaceBoundHolder,
         face_sense: bool,
         face_surface: &Surface,
+        edges: &[CompressedEdge<Curve3D>],
         eidx_map: &HashMap<u64, usize>,
         sink: &LossSink,
     ) -> Option<Vec<CompressedEdgeUse<step_geometry::StepParameterCurve>>> {
@@ -441,7 +458,7 @@ impl Table {
                     );
                     return None;
                 };
-                let Some((edge_entity_idx, edge_curve_holder)) =
+                let Some((edge_entity_idx, _)) =
                     self.place_holder_edge_any_to_index_and_edge_curve(&Ref(Name::Entity(idx)))
                 else {
                     sink.lost(Cat::EdgeUse, Why::EdgeUseUnresolved, Some(idx), None);
@@ -452,40 +469,15 @@ impl Table {
                     .get(&idx)
                     .map(|oriented_edge| oriented_edge.orientation == ori)
                     .unwrap_or(ori);
-                let edge_curve = match edge_curve_holder.into_owned(self) {
-                    Ok(edge_curve) => edge_curve,
-                    Err(e) => {
-                        eprintln!("{e}");
-                        sink.lost(
-                            Cat::EdgeUse,
-                            Why::EdgeUnresolved,
-                            Some(idx),
-                            Some(e.to_string()),
-                        );
-                        return None;
-                    }
-                };
-                let curve = match edge_curve.parse_curve3d() {
-                    Ok(curve) => curve,
-                    Err(e) => {
-                        eprintln!("{e}");
-                        sink.lost(
-                            Cat::EdgeUse,
-                            Why::EdgeCurveRefused,
-                            Some(idx),
-                            Some(e.to_string()),
-                        );
-                        return None;
-                    }
-                };
                 let Some(index) = eidx_map.get(&edge_entity_idx).copied() else {
                     sink.lost(Cat::EdgeUse, Why::EdgeUseUnresolved, Some(idx), None);
                     return None;
                 };
+                let curve = &edges[index].curve;
                 Some(CompressedEdgeUse {
                     index,
                     orientation,
-                    trim_curve: Self::exact_trim_curve_on(&curve, face_surface, orientation),
+                    trim_curve: Self::exact_trim_curve_on(curve, face_surface, orientation),
                 })
             })
             .collect::<Vec<_>>();
@@ -591,6 +583,7 @@ impl Table {
     fn shell_trimmed_faces(
         &self,
         shell: &ShellHolder,
+        edges: &[CompressedEdge<Curve3D>],
         eidx_map: &HashMap<u64, usize>,
         sink: &LossSink,
     ) -> Vec<CompressedTrimmedFace<Surface, step_geometry::StepParameterCurve>> {
@@ -601,7 +594,7 @@ impl Table {
                 // not two: see `absolute_bound_orientation`.
                 let face_sense = orientation == face.same_sense;
                 let boundaries = self.face_boundaries_or_report(&face, sink, |bound| {
-                    self.face_bound_to_edge_uses(bound, face_sense, &surface, eidx_map, sink)
+                    self.face_bound_to_edge_uses(bound, face_sense, &surface, edges, eidx_map, sink)
                 });
                 sink.kept(Cat::Face, 1);
                 Some(CompressedTrimmedFace {
@@ -1415,7 +1408,7 @@ impl StepShell for ShellHolder {
         let sink = LossSink::default();
         let (vertices, vidx_map) = table.shell_vertices(self, &sink);
         let (edges, eidx_map) = table.shell_edges(self, &vidx_map, &sink);
-        let faces = table.shell_trimmed_faces(self, &eidx_map, &sink);
+        let faces = table.shell_trimmed_faces(self, &edges, &eidx_map, &sink);
         Ok((
             CompressedTrimmedShell {
                 vertices,

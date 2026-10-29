@@ -30,7 +30,7 @@ impl<P> BsplineSurface<P> {
                 knot_vecs.1.len(),
                 control_points[0].len(),
             ))
-        } else if knot_vecs.0.range_length().so_small() || knot_vecs.1.range_length().so_small() {
+        } else if knot_vecs.0.range_length() == 0.0 || knot_vecs.1.range_length() == 0.0 {
             Err(Error::ZeroRange)
         } else {
             let len = control_points[0].len();

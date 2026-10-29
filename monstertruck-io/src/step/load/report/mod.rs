@@ -166,6 +166,12 @@ pub enum LossReason {
     EdgeUseUnresolved,
     /// An `EDGE_CURVE`'s children could not be resolved out of the table.
     EdgeUnresolved,
+    /// An `EDGE_CURVE` is present and its endpoints resolve, but the required
+    /// `edge_geometry` field is `$`. Some exporters emit this malformed record
+    /// for surface/surface intersection edges; retaining the edge entity lets a
+    /// later geometry-aware repair attempt reconstruction instead of losing its
+    /// topology during deserialization.
+    EdgeGeometryMissing,
     /// An `EDGE_CURVE` resolved but its geometry refused conversion to `Curve3D`.
     EdgeCurveRefused,
     /// An `EDGE_CURVE`'s start or end vertex is not a reference, or its vertex was
@@ -215,6 +221,7 @@ impl LossReason {
             }
             Self::EdgeUseUnresolved => "the wire's edge reference has no kept edge",
             Self::EdgeUnresolved => "the edge's children could not be resolved",
+            Self::EdgeGeometryMissing => "the EDGE_CURVE has no edge_geometry",
             Self::EdgeCurveRefused => "the edge's geometry refused conversion to a curve",
             Self::EdgeEndpointUnresolved => "the edge's start or end vertex has no kept vertex",
             Self::VertexUnresolved => "the vertex's children could not be resolved",

@@ -6,7 +6,14 @@ impl ParametricSurface for Sphere {
     type Vector = Vector3;
     #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
-        self.0.derivative_mn(m, n, PI / 2.0 - v, u) * (-1f64).powi(m as i32)
+        // STEP's spherical parameterization is the geometry sphere with its
+        // arguments remapped as `base(pi/2 - v, u)`. Therefore wrapper `u`
+        // derivatives are base `v` derivatives, wrapper `v` derivatives are
+        // base `u` derivatives, and only each wrapper `v` differentiation adds
+        // a minus sign. Keeping this generic path consistent with the explicit
+        // `derivative_u`/`derivative_v` methods matters because `derivatives()`
+        // is what surface/surface Newton solvers consume.
+        self.0.derivative_mn(n, m, PI / 2.0 - v, u) * (-1f64).powi(n as i32)
     }
     #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 { self.0.evaluate(PI / 2.0 - v, u) }
@@ -34,6 +41,18 @@ impl ParametricSurface3D for Sphere {
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 { self.0.normal(PI / 2.0 - v, u) }
 }
+#[inline]
+fn to_geometry_sphere_hint(hint: SearchParameterHint2D) -> SearchParameterHint2D {
+    match hint {
+        // Wrapper `S(u, v) = base(pi/2 - v, u)`.
+        SearchParameterHint2D::Parameter(u, v) => SearchParameterHint2D::Parameter(PI / 2.0 - v, u),
+        SearchParameterHint2D::Range((u0, u1), (v0, v1)) => {
+            SearchParameterHint2D::Range((PI / 2.0 - v1, PI / 2.0 - v0), (u0, u1))
+        }
+        SearchParameterHint2D::None => SearchParameterHint2D::None,
+    }
+}
+
 impl SearchNearestParameter<SurfaceParameter> for Sphere {
     type Point = Point3;
     #[inline]
@@ -44,7 +63,7 @@ impl SearchNearestParameter<SurfaceParameter> for Sphere {
         trials: usize,
     ) -> Option<(f64, f64)> {
         self.0
-            .search_nearest_parameter(point, hint, trials)
+            .search_nearest_parameter(point, to_geometry_sphere_hint(hint.into()), trials)
             .map(|(u, v)| (v, PI / 2.0 - u))
     }
 }
@@ -58,7 +77,7 @@ impl SearchParameter<SurfaceParameter> for Sphere {
         trials: usize,
     ) -> Option<(f64, f64)> {
         self.0
-            .search_parameter(point, hint, trials)
+            .search_parameter(point, to_geometry_sphere_hint(hint.into()), trials)
             .map(|(u, v)| (v, PI / 2.0 - u))
     }
 }

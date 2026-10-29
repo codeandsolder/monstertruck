@@ -231,20 +231,15 @@ fn analytic_sphere_is_representable(sphere: &monstertruck_geometry::prelude::Sph
 
 /// Whether the analytic torus route is admissible.
 ///
-/// Restates `TryIntoHomogeneousBsplineSurface for Torus`
-/// (`bspline_conversion.rs`) verbatim, INCLUDING its spindle rejection. Spec
-/// 011 T1: on a spindle torus (`small - large` above the relative tolerance)
-/// the surface passes through itself and `search_parameter` is silently wrong
-/// on roughly a third of the domain, so the class refuses typed. Horn tori
-/// (`large == small`, including the near-horn fillets real STEP files carry a
-/// few ulps below) ARE representable and must keep converting.
+/// Ring, horn, and positive-major spindle tori all have exact forward and
+/// inverse parameterisations now. This guard therefore rejects only scalar
+/// domains the geometry type cannot represent at all.
 fn analytic_torus_is_representable(torus: &Torus) -> bool {
     let (large_radius, small_radius) = (torus.large_radius(), torus.small_radius());
     large_radius.is_finite()
         && small_radius.is_finite()
         && small_radius > TOLERANCE
         && large_radius > TOLERANCE
-        && small_radius - large_radius <= TOLERANCE * (large_radius + small_radius)
 }
 
 /// STEP surface -> modeling surface.
@@ -302,19 +297,14 @@ fn analytic_torus_is_representable(torus: &Torus) -> bool {
 /// dispatch cost is confined to `monstertruck-modeling`'s own `geometry.rs`,
 /// this crate's save side, and `fillet_impl.rs`.
 ///
-/// # The degenerate torus stays refused (spec 011 T1)
+/// # Torus routing
 ///
-/// The refusal for `|large| < small` lives in the BUILDER
-/// (`bspline_conversion.rs`), so a routing change that stops calling the
-/// builder would silently reopen it -- and it must not: on a spindle the
-/// FORWARD map is exact to 8e-16 while `search_parameter` is wrong on ~29% of
-/// the domain, which is what places trims. [`analytic_torus_is_representable`]
-/// therefore restates the builder's predicate verbatim, and a torus that fails
-/// it falls through to the generic arm, where the builder returns `None` and
-/// the conversion refuses exactly as it does today. Pinned by
-/// `spindle_torus_parameter_recovery_is_unsound_while_ring_and_horn_are_exact`
-/// (`monstertruck-geometry/tests/torus.rs`) and by
-/// `a_spindle_torus_is_still_refused_by_the_analytic_route` below.
+/// Positive-major ring, horn, and spindle tori all stay analytic. The torus
+/// inverse map explicitly handles both signed-radial branches, so retaining the
+/// analytic carrier preserves the same point set and gives exact trim projection.
+/// STEP's `DEGENERATE_TOROIDAL_SURFACE` sheet selection is handled earlier in
+/// the STEP conversion layer and never reaches this generic surface router until
+/// its semantics are representable.
 impl TryFrom<&Surface> for ModelingSurface {
     type Error = StepConvertingError;
     fn try_from(value: &Surface) -> std::result::Result<Self, Self::Error> {
@@ -382,8 +372,8 @@ impl TryFrom<&Surface> for ModelingSurface {
             // that SUCCEEDS against a closed-form volume, so the capability is
             // covered rather than only its refusal.
             //
-            // The guard below is the T1 spindle predicate restated verbatim, so
-            // spec 011's degenerate-torus refusal survives this unchanged.
+            // Keep every finite positive torus analytic; STEP-specific sheet
+            // selection was already resolved or refused before this layer.
             Surface::ElementarySurface(ElementarySurface::ToroidalSurface(surface))
                 if analytic_torus_is_representable(surface.entity()) =>
             {
@@ -505,32 +495,23 @@ fn the_analytic_route_spends_no_adaptive_refinement_cells() {
     }
 }
 
-/// Spec 011 T1 must survive the routing change.
-///
-/// The spindle refusal lives in the BUILDER, so an analytic route that stopped
-/// calling the builder would reopen it silently. On a spindle the FORWARD map
-/// stays exact while `search_parameter` is wrong on ~29% of the domain, which
-/// is what places trims -- so the class must keep refusing typed in every
-/// encoding, and horn tori (the fillet form) must keep converting.
+/// Positive-major spindle tori use the same analytic route as ring and horn tori.
 #[test]
-fn a_spindle_torus_is_still_refused_by_the_analytic_route() {
-    // |large| < small in each of the spellings the corpus carries.
-    for (large_radius, small_radius) in [(1.0, 3.0), (0.5, 20.0), (1.0e-3, 1.0)] {
-        let step = u1_step_torus(large_radius, small_radius);
-        assert!(
-            ModelingSurface::try_from(&step).is_err(),
-            "spindle torus (R = {large_radius}, r = {small_radius}) must refuse typed",
-        );
-    }
-    // Horn (R == r) and ring (R > r) are unaffected and must still convert.
-    for (large_radius, small_radius) in [(2.0, 2.0), (7.0, 2.0)] {
+fn a_positive_major_spindle_torus_uses_the_analytic_route() {
+    for (large_radius, small_radius) in [
+        (1.0, 3.0),
+        (0.5, 20.0),
+        (1.0e-3, 1.0),
+        (2.0, 2.0),
+        (7.0, 2.0),
+    ] {
         let step = u1_step_torus(large_radius, small_radius);
         assert!(
             matches!(
                 ModelingSurface::try_from(&step),
                 Ok(ModelingSurface::Torus(_))
             ),
-            "torus (R = {large_radius}, r = {small_radius}) must convert typed",
+            "torus (R = {large_radius}, r = {small_radius}) must convert analytically",
         );
     }
 }
@@ -542,7 +523,6 @@ fn a_spindle_torus_is_still_refused_by_the_analytic_route() {
 fn the_analytic_guard_matches_the_builders_own_predicate() {
     for step in [
         u1_step_sphere(f64::INFINITY),
-        u1_step_torus(1.0, 3.0),
         u1_step_torus(f64::INFINITY, 1.0),
     ] {
         assert_eq!(

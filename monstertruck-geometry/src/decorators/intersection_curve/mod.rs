@@ -213,6 +213,37 @@ where
         )
         .or_else(|| self.search_nearest_point(point, None, None, trials))
     }
+    /// Searches this surface/surface intersection in a slicing plane.
+    ///
+    /// The returned point simultaneously satisfies both support surfaces and the
+    /// plane through `plane_point` with normal `plane_normal`. Supplying the UV
+    /// coordinates of a nearby already-known intersection point makes this a
+    /// useful continuation corrector: successive transverse planes can trace one
+    /// local branch without turning the problem into a global nearest-point
+    /// search.
+    ///
+    /// Returns `None` when Newton cannot prove a common point (for example at a
+    /// singular/tangent intersection or when the supplied branch hints are too
+    /// far from the requested slice).
+    pub fn search_intersection_in_plane(
+        &self,
+        plane_point: Point3,
+        plane_normal: Vector3,
+        hint0: Option<(f64, f64)>,
+        hint1: Option<(f64, f64)>,
+        trials: usize,
+    ) -> Option<(Point3, Point2, Point2)> {
+        double_projection(
+            self.surface0(),
+            hint0,
+            self.surface1(),
+            hint1,
+            plane_point,
+            plane_normal,
+            trials,
+        )
+    }
+
     /// Search triple value of the point nearest to `point`.
     /// - the coordinate on 3D space
     /// - the uv coordinate on `self.surface0()`

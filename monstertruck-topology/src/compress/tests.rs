@@ -240,3 +240,84 @@ fn split_non_simple_wires_preserves_distinct_edge_digon() {
     assert_eq!(shell.faces[0].boundaries.len(), 1);
     assert_eq!(shell.faces[0].boundaries[0].len(), 2);
 }
+
+#[test]
+fn split_non_simple_wires_preserves_distinct_edge_digon_subloop() {
+    // The boundary touches vertex 0 twice. The first lobe is a legitimate
+    // two-edge digon (two DISTINCT edges), and the second lobe is a triangle.
+    // Splitting the repeated vertex must keep both loops; it must not mistake
+    // the digon for one edge retraced backwards merely because the endpoints
+    // are the same.
+    let mut shell = CompressedShell {
+        vertices: vec![(), (), (), ()],
+        edges: vec![
+            CompressedEdge {
+                vertices: (0, 1),
+                curve: (),
+            },
+            CompressedEdge {
+                vertices: (1, 0),
+                curve: (),
+            },
+            CompressedEdge {
+                vertices: (0, 2),
+                curve: (),
+            },
+            CompressedEdge {
+                vertices: (2, 3),
+                curve: (),
+            },
+            CompressedEdge {
+                vertices: (3, 0),
+                curve: (),
+            },
+        ],
+        faces: vec![CompressedFace {
+            boundaries: vec![vec![
+                CompressedEdgeIndex {
+                    index: 0,
+                    orientation: true,
+                },
+                CompressedEdgeIndex {
+                    index: 1,
+                    orientation: true,
+                },
+                CompressedEdgeIndex {
+                    index: 2,
+                    orientation: true,
+                },
+                CompressedEdgeIndex {
+                    index: 3,
+                    orientation: true,
+                },
+                CompressedEdgeIndex {
+                    index: 4,
+                    orientation: true,
+                },
+            ]],
+            orientation: true,
+            surface: (),
+        }],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
+    };
+
+    split_non_simple_compressed_wires(&mut shell);
+
+    assert_eq!(shell.faces.len(), 1);
+    let mut lengths = shell.faces[0]
+        .boundaries
+        .iter()
+        .map(Vec::len)
+        .collect::<Vec<_>>();
+    lengths.sort_unstable();
+    assert_eq!(lengths, vec![2, 3]);
+    let kept = shell.faces[0]
+        .boundaries
+        .iter()
+        .flatten()
+        .map(|edge_use| edge_use.index)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(kept, std::collections::BTreeSet::from([0, 1, 2, 3, 4]));
+}

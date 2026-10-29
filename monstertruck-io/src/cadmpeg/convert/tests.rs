@@ -786,32 +786,26 @@ fn a_mixed_dimensional_body_is_refused_by_name() {
     );
 }
 
-/// A spindle torus must not reach the analytic variant: its forward map is exact
-/// while `search_parameter` is wrong over roughly a third of the domain, and the
-/// inverse is the direction that places face trims. Spec 011 T1.
+/// A positive-major spindle torus is representable analytically once the torus
+/// inverse map handles the negative signed-radial branch.
 #[test]
-fn a_spindle_torus_is_refused_rather_than_routed_analytically() {
+fn a_spindle_torus_is_routed_analytically() {
     let mut builder = Builder::default();
     builder.surface(SurfaceGeometry::Torus {
         center: IrPoint3::new(0.0, 0.0, 0.0),
         axis: IrVector3::new(0.0, 0.0, 1.0),
         ref_direction: IrVector3::new(1.0, 0.0, 0.0),
-        // Minor exceeds major: the tube swallows the axis and self-intersects.
         major_radius: 1.0,
         minor_radius: 4.0,
     });
     let carrier = builder.ir.model.surfaces[0].geometry.clone();
     let context = context_over(&builder.ir);
-    let error = surface::convert(&carrier, &context).expect_err("a spindle must be refused");
     assert!(
         matches!(
-            error,
-            Error::UnsupportedSurfaceKind {
-                kind: "degenerate torus",
-                ..
-            }
+            surface::convert(&carrier, &context),
+            Ok(Surface::ToroidalSurface(_))
         ),
-        "got {error}"
+        "a finite positive-major spindle must stay analytic",
     );
 }
 

@@ -135,11 +135,19 @@ fn the_work_meter_charges_what_the_division_spends() {
     let work = take_division_work();
     assert_eq!(work.cells, budgeted.cells);
     assert!(work.truncated);
+    // These counters are process-wide by design. The Rust test harness runs
+    // sibling surface-division tests concurrently, so their legitimate work may
+    // be charged between our reset and read. The thread-local meter above pins
+    // this call's exact cost; the global contract here is inclusion, not
+    // exclusivity.
     let (total, truncations) = take_division_totals();
-    // These counters are deliberately process-wide, so other tests running in
-    // parallel may contribute work between the two snapshots. The per-thread
-    // meter above is the exact accounting check; here we verify that the global
-    // aggregate includes at least this call rather than assuming test isolation.
-    assert!(total >= budgeted.cells);
-    assert!(truncations >= 1);
+    assert!(
+        total >= budgeted.cells,
+        "process-wide total {total} must include this division's {} cells",
+        budgeted.cells,
+    );
+    assert!(
+        truncations >= 1,
+        "process-wide truncation count must include this truncated division",
+    );
 }

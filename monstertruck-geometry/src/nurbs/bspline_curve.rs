@@ -29,7 +29,7 @@ impl<P> BsplineCurve<P> {
                 knot_vec.len(),
                 control_points.len(),
             ))
-        } else if knot_vec.range_length().so_small() {
+        } else if knot_vec.range_length() == 0.0 {
             Err(Error::ZeroRange)
         } else {
             Ok(Self::new_unchecked(knot_vec, control_points))

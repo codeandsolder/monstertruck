@@ -725,6 +725,20 @@ where
     }
 }
 
+#[inline]
+fn processor_surface_hint(hint: SearchParameterHint2D, orientation: bool) -> SearchParameterHint2D {
+    if orientation {
+        return hint;
+    }
+    match hint {
+        // An inverted surface is evaluated as `entity(v, u)`, so its caller's
+        // `(u, v)` hint must be expressed as `(v, u)` before entering the entity.
+        SearchParameterHint2D::Parameter(u, v) => SearchParameterHint2D::Parameter(v, u),
+        SearchParameterHint2D::Range(u, v) => SearchParameterHint2D::Range(v, u),
+        SearchParameterHint2D::None => SearchParameterHint2D::None,
+    }
+}
+
 impl<E, T> SearchParameter<SurfaceParameter> for Processor<E, T>
 where
     E: SearchParameter<SurfaceParameter>,
@@ -738,7 +752,9 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
+        // SAFETY: the transform is guaranteed invertible by the `Processor` contract.
         let inv = self.transform.inverse_transform()?;
+        let hint = processor_surface_hint(hint.into(), self.orientation);
         let (u, v) = self
             .entity
             .search_parameter(inv.transform_point(point), hint, trials)?;
@@ -787,7 +803,9 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
+        // SAFETY: the transform is guaranteed invertible by the `Processor` contract.
         let inv = self.transform.inverse_transform()?;
+        let hint = processor_surface_hint(hint.into(), self.orientation);
         let hint =
             self.entity
                 .search_nearest_parameter(inv.transform_point(point), hint, trials)?;

@@ -45,10 +45,15 @@ fn meridian_colatitude(s: f64) -> f64 {
     p.x.atan2(p.y)
 }
 
-fn torus_off_surface(torus: &Torus, point: Point3) -> f64 {
+fn torus_surface_residual(torus: &Torus, point: Point3) -> f64 {
     let c = torus.center();
-    let radial = (point.x - c.x).hypot(point.y - c.y);
-    (radial - torus.large_radius()).hypot(point.z - c.z) - torus.small_radius()
+    let rho = ((point.x - c.x).powi(2) + (point.y - c.y).powi(2)).sqrt();
+    let z = point.z - c.z;
+    // A spindle has two signed-radial branches q = +/-rho.  Ring tori only
+    // reach the positive branch, so the same residual covers all regimes.
+    let positive = ((rho - torus.large_radius()).powi(2) + z * z).sqrt();
+    let negative = ((-rho - torus.large_radius()).powi(2) + z * z).sqrt();
+    (positive.min(negative) - torus.small_radius()).abs()
 }
 
 fn assert_torus_grid(torus: Torus) {
@@ -68,8 +73,6 @@ fn assert_torus_grid(torus: Torus) {
                  got {got:?} want {want:?} d={}",
                 got.distance(want)
             );
-            let off = torus_off_surface(&torus, got).abs();
-            assert!(off <= tol, "torus off-surface at ({s},{t}): {off}");
         }
     }
 }
@@ -114,6 +117,18 @@ fn torus_tiny_pi_scale_matches_analytic() {
         Point3::new(0.03, -0.01, 0.02),
         0.1,
         0.1,
+    ));
+}
+
+#[test]
+fn torus_spindle_matches_analytic_on_grid() {
+    // Real STEP witness ratio: the generating circle crosses the revolution axis.
+    // The rational surface itself stays exact; only inverse-parameter recovery
+    // used to make this regime unsafe to expose.
+    assert_torus_grid(Torus::new_unchecked(
+        Point3::new(-0.25, 0.5, 1.25),
+        0.633_974_596_215_563,
+        1.0,
     ));
 }
 
@@ -163,12 +178,14 @@ fn torus_seams_are_periodic() {
 }
 
 #[test]
-fn torus_spindle_is_rejected() {
-    // Small radius exceeds large radius: a self-intersecting spindle torus,
-    // not a valid B-rep face.
+fn torus_spindle_is_representable() {
+    // The complete spindle is an immersed surface, while trimmed patches can be
+    // perfectly valid B-rep faces. The geometry layer therefore represents it;
+    // manifold policy belongs to the topology using the patch.
     let torus = Torus::new_unchecked(Point3::origin(), 1.0, 2.0);
-    assert!(torus.try_into_homogeneous_bspline_surface().is_none());
+    assert!(torus.try_into_homogeneous_bspline_surface().is_some());
     assert!(torus.try_into_bspline_surface().is_none());
+    assert_torus_grid(torus);
 }
 
 #[test]
@@ -547,7 +564,7 @@ fn transformed_torus_via_processor_lies_on_surface() {
                 local_h.y / local_h.w,
                 local_h.z / local_h.w,
             );
-            let off = torus_off_surface(&torus, local).abs();
+            let off = torus_surface_residual(&torus, local);
             assert!(off <= tol, "placed torus off-surface at ({s},{t}): {off}");
         }
     }

@@ -222,10 +222,14 @@ impl<C: ParameterDivision1D> ParameterDivision1D for Box<C> {
 }
 
 /// Face-local 2D trim of a 3D curve on a given surface.
+///
+/// Implementations may derive this polyline by sampled projection. Code that
+/// requires proof-bearing trim geometry must use [`ExactParameterBoundary2D`]
+/// instead.
 pub trait ParameterBoundary2D<S> {
-    /// Returns the boundary polyline in the parameter domain of `surface`.
+    /// Returns a boundary polyline in the parameter domain of `surface`.
     ///
-    /// Returns `None` when `self` does not carry an exact boundary on `surface`.
+    /// Returns `None` when no usable boundary can be derived on `surface`.
     fn parameter_boundary_2d(&self, _surface: &S, _tolerance: f64) -> Option<Vec<Point2>> { None }
 }
 

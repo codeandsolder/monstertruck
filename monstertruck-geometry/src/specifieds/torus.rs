@@ -298,6 +298,164 @@ fn nearest_periodic_angle(angle: f64, hint: Option<f64>) -> f64 {
     })
 }
 
+#[inline]
+fn periodic_parameter_distance2((u, v): (f64, f64), hint: (f64, f64)) -> f64 {
+    fn delta(a: f64, b: f64) -> f64 {
+        let mut d = (a - b).rem_euclid(2.0 * PI);
+        if d > PI {
+            d -= 2.0 * PI;
+        }
+        d
+    }
+    delta(u, hint.0).powi(2) + delta(v, hint.1).powi(2)
+}
+
+fn choose_parameter_candidate(
+    mut candidates: Vec<(f64, f64, f64)>,
+    hint: Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    if candidates.is_empty() {
+        return None;
+    }
+    candidates.sort_by(|a, b| {
+        let distance_order = a.2.total_cmp(&b.2);
+        if distance_order != std::cmp::Ordering::Equal {
+            return distance_order;
+        }
+        match hint {
+            Some(hint) => periodic_parameter_distance2((a.0, a.1), hint)
+                .total_cmp(&periodic_parameter_distance2((b.0, b.1), hint)),
+            None => a.1.total_cmp(&b.1).then_with(|| a.0.total_cmp(&b.0)),
+        }
+    });
+    Some((candidates[0].0, candidates[0].1))
+}
+
+impl Torus {
+    /// Exact inverse candidates for the torus parameterisation.
+    ///
+    /// A spindle torus is not one-to-one in the meridian projection: when
+    /// `R + r cos(v)` is negative, the same world-space azimuth is represented
+    /// by `u + pi`. Solving only from `rho = hypot(x, y)` therefore loses the
+    /// inner branch. Enumerating the two sine-compatible `v` values and using
+    /// the signed radial factor recovers both ring and spindle regimes without
+    /// weakening the final point-on-surface check.
+    fn exact_parameter_candidates(
+        &self,
+        point: Point3,
+        hint: Option<(f64, f64)>,
+    ) -> Vec<(f64, f64, f64)> {
+        let relative = point - self.center();
+        let rho = Vector2::new(relative.x, relative.y).magnitude();
+        let scale = (self.large_radius() + self.small_radius() + relative.magnitude()).max(1.0);
+        let eps = 128.0 * f64::EPSILON * scale;
+        let sine = relative.z / self.small_radius();
+        if !sine.is_finite() || sine < -1.0 - eps || sine > 1.0 + eps {
+            return Vec::new();
+        }
+        let alpha = f64::asin(sine.clamp(-1.0, 1.0));
+        let mut v_candidates = vec![
+            alpha.rem_euclid(2.0 * PI),
+            (PI - alpha).rem_euclid(2.0 * PI),
+        ];
+        if (v_candidates[0] - v_candidates[1]).abs() <= eps {
+            v_candidates.truncate(1);
+        }
+        let azimuth = if rho > eps {
+            relative.y.atan2(relative.x).rem_euclid(2.0 * PI)
+        } else {
+            hint.map(|h| h.0).unwrap_or(0.0)
+        };
+        let mut candidates = Vec::with_capacity(v_candidates.len());
+        for v0 in v_candidates {
+            let signed_radius = self.large_radius() + self.small_radius() * v0.cos();
+            if (rho - signed_radius.abs()).abs() > eps.max(TOLERANCE * scale) {
+                continue;
+            }
+            let u0 = if signed_radius < 0.0 {
+                azimuth + PI
+            } else {
+                azimuth
+            };
+            let u = nearest_periodic_angle(u0.rem_euclid(2.0 * PI), hint.map(|h| h.0));
+            let v = nearest_periodic_angle(v0, hint.map(|h| h.1));
+            let distance2 = self.subs(u, v).distance2(point);
+            if distance2 <= (TOLERANCE * scale).powi(2) {
+                candidates.push((u, v, distance2));
+            }
+        }
+        candidates
+    }
+
+    /// Global nearest-point candidates reduced to the generating circle.
+    ///
+    /// For a world point with cylindrical radius `rho`, minimising over `u`
+    /// turns the torus distance into the minimum of two 2D circle problems:
+    /// target signed radii `+rho` and `-rho`. Each branch is valid only where
+    /// the generating circle has the matching sign; if its unconstrained
+    /// optimum crosses the axis, the branch boundary `R + r cos(v) = 0` is also
+    /// tested. This remains exact in the spindle regime and degenerates to the
+    /// familiar single positive-radial branch for a ring torus.
+    fn nearest_parameter_candidates(
+        &self,
+        point: Point3,
+        hint: Option<(f64, f64)>,
+    ) -> Vec<(f64, f64, f64)> {
+        let relative = point - self.center();
+        let rho = Vector2::new(relative.x, relative.y).magnitude();
+        let scale = (self.large_radius() + self.small_radius() + relative.magnitude()).max(1.0);
+        let eps = 128.0 * f64::EPSILON * scale;
+        let azimuth = if rho > eps {
+            relative.y.atan2(relative.x).rem_euclid(2.0 * PI)
+        } else {
+            hint.map(|h| h.0).unwrap_or(0.0)
+        };
+        let mut raw = Vec::<(f64, f64)>::new();
+        for sign in [1.0_f64, -1.0] {
+            let target_q = sign * rho;
+            let dx = target_q - self.large_radius();
+            let dz = relative.z;
+            let norm = dx.hypot(dz);
+            if norm > eps {
+                let v = dz.atan2(dx).rem_euclid(2.0 * PI);
+                let q = self.large_radius() + self.small_radius() * v.cos();
+                if sign * q >= -eps {
+                    let u = if sign > 0.0 { azimuth } else { azimuth + PI };
+                    raw.push((u.rem_euclid(2.0 * PI), v));
+                }
+            } else {
+                let v = hint.map(|h| h.1.rem_euclid(2.0 * PI)).unwrap_or(0.0);
+                let q = self.large_radius() + self.small_radius() * v.cos();
+                if sign * q >= -eps {
+                    let u = if sign > 0.0 { azimuth } else { azimuth + PI };
+                    raw.push((u.rem_euclid(2.0 * PI), v));
+                }
+            }
+        }
+        if self.large_radius() <= self.small_radius() + eps {
+            let c = (-self.large_radius() / self.small_radius()).clamp(-1.0, 1.0);
+            let axis_v = c.acos();
+            raw.push((azimuth, axis_v));
+            raw.push((azimuth, (2.0 * PI - axis_v).rem_euclid(2.0 * PI)));
+        }
+
+        let mut candidates = Vec::with_capacity(raw.len());
+        for (u0, v0) in raw {
+            let u = nearest_periodic_angle(u0, hint.map(|h| h.0));
+            let v = nearest_periodic_angle(v0, hint.map(|h| h.1));
+            let distance2 = self.subs(u, v).distance2(point);
+            if distance2.is_finite()
+                && !candidates.iter().any(|candidate: &(f64, f64, f64)| {
+                    periodic_parameter_distance2((candidate.0, candidate.1), (u, v)) <= 1.0e-24
+                })
+            {
+                candidates.push((u, v, distance2));
+            }
+        }
+        candidates
+    }
+}
+
 impl SearchParameter<SurfaceParameter> for Torus {
     type Point = Point3;
     fn search_parameter<H: Into<SearchParameterHint2D>>(
@@ -307,32 +465,7 @@ impl SearchParameter<SurfaceParameter> for Torus {
         _: usize,
     ) -> Option<(f64, f64)> {
         let hint = hint_parameter(hint.into());
-        let r = point - self.center();
-        let rxy = Vector2::new(r.x, r.y);
-        let v = f64::asin(f64::clamp(r.z / self.small_radius(), -1.0, 1.0));
-        let minus = rxy.magnitude2() < self.large_radius() * self.large_radius();
-        let v = match (minus, v < 0.0) {
-            (true, _) => PI - v,
-            (false, false) => v,
-            (false, true) => 2.0f64.mul_add(PI, v),
-        };
-        let v = nearest_periodic_angle(v, hint.map(|hint| hint.1));
-        let rxy_n = rxy.normalize();
-        let u = f64::acos(f64::clamp(rxy_n.x, -1.0, 1.0));
-        let u = if rxy_n.y < 0.0 {
-            2.0f64.mul_add(PI, -u)
-        } else {
-            u
-        };
-        let u = nearest_periodic_angle(u, hint.map(|hint| hint.0));
-        // Still the SAME acceptance test on the SAME surface: `evaluate` is
-        // `2 * PI`-periodic, so a re-spelled parameter evaluates to the very
-        // same point and this check is unweakened by the re-spelling.
-        if self.evaluate(u, v).near(&point) {
-            Some((u, v))
-        } else {
-            None
-        }
+        choose_parameter_candidate(self.exact_parameter_candidates(point, hint), hint)
     }
 }
 
@@ -345,39 +478,7 @@ impl SearchNearestParameter<SurfaceParameter> for Torus {
         _: usize,
     ) -> Option<(f64, f64)> {
         let hint = hint_parameter(hint.into());
-        let r = point - self.center();
-        let rxy = Vector2::new(r.x, r.y);
-        if rxy.so_small() {
-            return None;
-        }
-        let rxy_n = rxy.normalize();
-        let large_r = self.large_radius() * rxy_n.extend(0.0);
-        let diff = r - large_r;
-        if diff.so_small() {
-            return None;
-        }
-        let small_r = diff.normalize();
-
-        let u = f64::acos(f64::clamp(rxy_n.x, -1.0, 1.0));
-        let u = if rxy_n.y < 0.0 {
-            2.0f64.mul_add(PI, -u)
-        } else {
-            u
-        };
-        // The same seam disambiguation as the exact solver above -- see
-        // [`nearest_periodic_angle`]. The two are twins over the same branch
-        // arithmetic and `project_onto_surface_domain` ALTERNATES between them
-        // (attempts 0/2 exact, 1/3 nearest), so teaching only one would leave
-        // the defect reachable on every other attempt.
-        let u = nearest_periodic_angle(u, hint.map(|hint| hint.0));
-        let v = f64::asin(f64::clamp(small_r.z, -1.0, 1.0));
-        let v = match (small_r.dot(large_r) < 0.0, v < 0.0) {
-            (true, _) => PI - v,
-            (false, false) => v,
-            (false, true) => 2.0f64.mul_add(PI, v),
-        };
-        let v = nearest_periodic_angle(v, hint.map(|hint| hint.1));
-        Some((u, v))
+        choose_parameter_candidate(self.nearest_parameter_candidates(point, hint), hint)
     }
 }
 

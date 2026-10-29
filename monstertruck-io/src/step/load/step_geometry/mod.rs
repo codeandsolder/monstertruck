@@ -106,7 +106,10 @@ pub struct SurfaceCurve3D {
 }
 
 impl SurfaceCurve3D {
-    fn parameter_curve_matches_leader_on_surface(
+    // Numeric defense in depth for source/transported pcurves. Exact callers
+    // must establish carrier/chart identity independently; these samples are
+    // not allowed to promote a heuristic candidate into exact geometry.
+    fn parameter_curve_sanity_matches_leader_on_surface(
         &self,
         curve: &StepParameterCurve,
         surface: &Surface,
@@ -188,8 +191,38 @@ impl SurfaceCurve3D {
             .find(|curve| {
                 (curve.surface().as_ref() == surface
                     || Self::same_surface(curve.surface().as_ref(), surface))
-                    && self.parameter_curve_matches_leader_on_surface(curve, surface)
+                    && self.parameter_curve_sanity_matches_leader_on_surface(curve, surface)
             })
+    }
+
+    /// Returns an associated parameter curve expressed in `surface`'s chart.
+    ///
+    /// Existing STEP pcurves are preferred over reconstructing trims from 3-D
+    /// geometry. When the stored basis surface is the same support but uses a
+    /// different affine chart (plane/cylinder/cone/torus), transport the entire
+    /// 2-D curve through the proven chart map and then verify it against the 3-D
+    /// leader on the target surface. Spherical chart changes are intentionally
+    /// excluded because a changed polar axis is generally nonlinear in UV.
+    pub(crate) fn parameter_curve_reparameterized_on(
+        &self,
+        surface: &Surface,
+    ) -> Option<StepParameterCurve> {
+        self.associated_geometry.iter().find_map(|entry| {
+            let SurfaceCurveAssociatedGeometry::ParameterCurve(curve) = entry else {
+                return None;
+            };
+            let source = curve.surface().as_ref();
+            if source == surface {
+                return self
+                    .parameter_curve_sanity_matches_leader_on_surface(curve, surface)
+                    .then(|| curve.clone());
+            }
+            let map = same_domain::affine_same_domain_parameter_map(source, surface)?;
+            let candidate =
+                StepParameterCurve::new(curve.curve().transformed(map), Box::new(surface.clone()));
+            self.parameter_curve_sanity_matches_leader_on_surface(&candidate, surface)
+                .then_some(candidate)
+        })
     }
 }
 
@@ -426,6 +459,10 @@ mod from_pcurve {
         }
     }
 }
+
+/// Analytic support equivalence for safe same-domain face normalization.
+mod same_domain;
+pub use same_domain::same_surface_domain;
 
 /// implementation for trait `monstertruck_modeling::builder`.
 mod geom_impls;

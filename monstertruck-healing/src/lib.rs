@@ -16,12 +16,11 @@ pub(crate) use ahash::AHashSet as HashSet;
 
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::rexport_polymesh::PolylineCurve;
-use monstertruck_topology::compress::{
-    CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace, CompressedShell,
-    CompressedSolid, CompressedTrimmedFace, CompressedTrimmedShell, CompressedTrimmedSolid,
-};
+use monstertruck_topology::compress::*;
 use monstertruck_topology::repair::{
+    SameDomainUnification, SurfaceDomainRelation, split_non_simple_compressed_trimmed_wires,
     split_non_simple_compressed_wires, split_pinched_compressed_faces,
+    split_singular_compressed_trimmed_vertices, unify_same_domain_compressed_trimmed_faces,
 };
 use monstertruck_topology::trimmed::{TrimmedShell, TrimmedSolid};
 use monstertruck_traits::SnapCurveEndpoints;
@@ -36,6 +35,111 @@ type EdgeIndex = CompressedEdgeIndex;
 type Wire = Vec<EdgeIndex>;
 type Face<S> = CompressedFace<S>;
 type Shell<P, C, S> = CompressedShell<P, C, S>;
+
+fn curves_cover_same_span<C>(left: &C, right: &C, tol: f64) -> bool
+where C: ParametricCurve3D<Point = Point3>
+        + BoundedCurve<Point = Point3>
+        + ParameterDivision1D<Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3> {
+    if !tol.is_finite() || tol < TOLERANCE {
+        return false;
+    }
+    let tol2 = tol * tol;
+    let direction_is_covered = |source: &C, target: &C| {
+        let Some(range) = source.try_range_tuple() else {
+            return false;
+        };
+        if !range.0.is_finite() || !range.1.is_finite() || range.0 == range.1 {
+            return false;
+        }
+        let Some((_, points)) = source.try_parameter_division(range, tol) else {
+            return false;
+        };
+        let mut hint = None;
+        points.into_iter().all(|point| {
+            let parameter = target
+                .search_nearest_parameter(point, hint, 100)
+                .or_else(|| target.search_nearest_parameter(point, None, 100));
+            let Some(parameter) = parameter else {
+                return false;
+            };
+            hint = Some(parameter);
+            target.evaluate(parameter).distance2(point) <= tol2
+        })
+    };
+    direction_is_covered(left, right) && direction_is_covered(right, left)
+}
+
+fn geometric_slit<C>(edges: &[CompressedEdge<C>], wire: &[CompressedEdgeIndex], tol: f64) -> bool
+where C: ParametricCurve3D<Point = Point3>
+        + BoundedCurve<Point = Point3>
+        + ParameterDivision1D<Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3> {
+    if wire.len() != 2 || wire[0].index == wire[1].index {
+        return false;
+    }
+    let Some(left) = edges.get(wire[0].index) else {
+        return false;
+    };
+    let Some(right) = edges.get(wire[1].index) else {
+        return false;
+    };
+    let (l0, l1) = left.vertices;
+    let (r0, r1) = right.vertices;
+    if !((l0 == r0 && l1 == r1) || (l0 == r1 && l1 == r0)) {
+        return false;
+    }
+    curves_cover_same_span(&left.curve, &right.curve, tol)
+}
+
+fn remove_geometric_trimmed_slit_boundaries<C, S, T>(
+    shell: &mut CompressedTrimmedShell<Point3, C, S, T>,
+    tol: f64,
+) where
+    C: ParametricCurve3D<Point = Point3>
+        + BoundedCurve<Point = Point3>
+        + ParameterDivision1D<Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>,
+    T: Clone + Invertible + PartialEq,
+{
+    let edges = &shell.edges;
+    shell.faces.iter_mut().for_each(|face| {
+        face.boundaries.retain(|wire| {
+            if wire.len() != 2 || wire[0].index == wire[1].index {
+                return true;
+            }
+            let plain = [
+                CompressedEdgeIndex {
+                    index: wire[0].index,
+                    orientation: wire[0].orientation,
+                },
+                CompressedEdgeIndex {
+                    index: wire[1].index,
+                    orientation: wire[1].orientation,
+                },
+            ];
+            if !geometric_slit(edges, &plain, tol) {
+                return true;
+            }
+
+            // Two distinct topological edges may be geometrically coincident for
+            // a legitimate periodic seam. 3-D coincidence is therefore only a
+            // candidate. A removable slit also needs face-local proof: both
+            // stored trims must exist and retrace the same UV curve in opposite
+            // directions. Literal trim equality after inversion is deliberately
+            // a sufficient-only test; equivalent but differently represented
+            // trims fail closed rather than deleting topology.
+            let (Some(left_trim), Some(right_trim)) = (&wire[0].trim_curve, &wire[1].trim_curve)
+            else {
+                return true;
+            };
+            let mut reversed = right_trim.clone();
+            reversed.invert();
+            left_trim != &reversed
+        });
+    });
+    shell.faces.retain(|face| !face.boundaries.is_empty());
+}
 
 trait SP<S>: Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> {}
 impl<S, F> SP<S> for F where F: Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> {}
@@ -737,7 +841,8 @@ where
         + BoundaryCurveFromSamples<S>
         + Cut
         + Clone
-        + Invertible,
+        + Invertible
+        + PartialEq,
 {
     fn split_closed_edges_and_faces(&mut self, tol: f64) {
         let debug_trace = env::var("MT_BOOL_TRACE").is_ok();
@@ -851,6 +956,13 @@ where
                 started.elapsed().as_secs_f64() * 1000.0,
             );
         }
+        // The STEP/boolean split passes above may leave (or expose) a boundary walk
+        // that revisits a vertex. The plain compressed path has always had a
+        // general repair for this; apply the same topology operation here while
+        // retaining each edge-use's exact face-local trim curve.
+        split_non_simple_compressed_trimmed_wires(self);
+        remove_geometric_trimmed_slit_boundaries(self, tol);
+        split_singular_compressed_trimmed_vertices(self);
     }
 }
 
@@ -876,7 +988,8 @@ where
         + BoundaryCurveFromSamples<S>
         + Cut
         + Clone
-        + Invertible,
+        + Invertible
+        + PartialEq,
 {
     fn split_closed_edges_and_faces(&mut self, tol: f64) {
         let fs = SplitClosedEdgesAndFaces::split_closed_edges_and_faces;
@@ -939,7 +1052,8 @@ where
         + BoundaryCurveFromSamples<S>
         + Cut
         + Clone
-        + Invertible,
+        + Invertible
+        + PartialEq,
 {
     if let Ok(shell) = TrimmedShell::try_from(cshell.clone()) {
         Ok(shell)
@@ -947,6 +1061,19 @@ where
         cshell.split_closed_edges_and_faces(tol);
         TrimmedShell::try_from(cshell)
     }
+}
+
+fn validate_trimmed_solid_candidate<C: Clone, S: Clone, T: Clone>(
+    csolid: CompressedTrimmedSolid<Point3, C, S, T>,
+) -> monstertruck_topology::Result<TrimmedSolid<Point3, C, S, T>> {
+    let solid = TrimmedSolid::try_from(csolid)?;
+    TrimmedSolid::try_new(
+        solid
+            .into_boundaries()
+            .into_iter()
+            .map(|shell| normalize_trimmed_shell_orientation(shell).0)
+            .collect(),
+    )
 }
 
 /// Convenience function: heal a compressed trimmed solid and extract it while
@@ -999,28 +1126,77 @@ where
         + BoundaryCurveFromSamples<S>
         + Cut
         + Clone
-        + Invertible,
+        + Invertible
+        + PartialEq,
 {
-    let solid = if let Ok(solid) = TrimmedSolid::try_from(csolid.clone()) {
-        solid
-    } else {
-        csolid.split_closed_edges_and_faces(tol);
-        TrimmedSolid::try_from(csolid)?
-    };
-    // Real-world STEP files routinely ship shells whose faces disagree on
-    // edge direction (shell condition `Regular`); heal them to `Closed`.
-    //
-    // `try_new` and not `new`: orientation healing is the LAST repair this
-    // function has, so whatever is still wrong after it is not repairable
-    // here and must leave as a typed refusal rather than as an `Ok` that
-    // violates `Solid`'s precondition. See the C11 note on the item docs.
-    TrimmedSolid::new(
-        solid
-            .into_boundaries()
-            .into_iter()
-            .map(|shell| normalize_trimmed_shell_orientation(shell).0)
-            .collect(),
-    )
+    // Admit the least invasive representation that satisfies the complete solid
+    // invariant.  In particular, a repeated-vertex STEP wire often needs only
+    // topological loop/fan separation; running the geometric closed-edge/face
+    // splitter first can manufacture unnecessary partitions and new ambiguity.
+    if let Ok(solid) = validate_trimmed_solid_candidate(csolid.clone()) {
+        return Ok(solid);
+    }
+
+    let mut topology_repaired = csolid.clone();
+    for shell in &mut topology_repaired.boundaries {
+        split_non_simple_compressed_trimmed_wires(shell);
+        split_singular_compressed_trimmed_vertices(shell);
+    }
+    if let Ok(solid) = validate_trimmed_solid_candidate(topology_repaired) {
+        return Ok(solid);
+    }
+
+    // Only geometry that still cannot satisfy the solid invariant reaches the
+    // heavier repair machinery.  Its result is validated independently below;
+    // a failed repair therefore cannot leak a partial/non-manifold solid.
+    csolid.split_closed_edges_and_faces(tol);
+    validate_trimmed_solid_candidate(csolid)
+}
+
+/// Transactionally simplify a valid trimmed solid by removing same-domain face partitions.
+///
+/// `same_domain` is deliberately supplied by the geometry layer: topology does
+/// not guess whether two differently parameterized surfaces are the same support.
+/// For each proposed adjacent pair, every surviving edge trim is rebuilt exactly
+/// on the chosen reference surface via [`ExactParameterBoundary2D`], and the
+/// complete candidate shell must still be an extractable closed manifold before
+/// the merge is committed. A too-permissive support predicate therefore produces
+/// rejected proposals rather than a damaged solid.
+///
+/// This is intended to run *after* [`extract_healed_trimmed_solid`], when the
+/// structural healer has already established the solid invariant.
+pub fn normalize_same_domain_trimmed_solid<C, S, T, D>(
+    solid: TrimmedSolid<Point3, C, S, T>,
+    same_domain: D,
+) -> monstertruck_topology::Result<(TrimmedSolid<Point3, C, S, T>, SameDomainUnification)>
+where
+    C: ExactParameterBoundary2D<S, BoundaryCurve = T> + Clone,
+    S: Clone,
+    T: ParametricCurve3D<Point = Point3>
+        + BoundedCurve<Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>
+        + Cut
+        + Clone
+        + Invertible,
+    D: Fn(&S, &S) -> Option<SurfaceDomainRelation>,
+{
+    let mut compressed = CompressedTrimmedSolid::from(&solid);
+    let mut total = SameDomainUnification::default();
+    for shell in &mut compressed.boundaries {
+        let report = unify_same_domain_compressed_trimmed_faces(
+            shell,
+            |left, right| same_domain(left, right),
+            |curve, surface| curve.exact_parameter_boundary_2d(surface),
+        )?;
+        total.proposals += report.proposals;
+        total.accepted += report.accepted;
+        total.rejected_ambiguous_boundary += report.rejected_ambiguous_boundary;
+        total.rejected_missing_trim += report.rejected_missing_trim;
+        total.rejected_topology += report.rejected_topology;
+    }
+    let normalized = TrimmedSolid::try_from(compressed)?;
+    let normalized = TrimmedSolid::try_new(normalized.into_boundaries())?;
+    Ok((normalized, total))
 }
 
 /// Outcome of [`normalize_shell_orientation`].

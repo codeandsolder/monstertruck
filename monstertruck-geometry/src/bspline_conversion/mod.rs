@@ -534,15 +534,13 @@ impl TryIntoHomogeneousBsplineSurface for Torus {
         {
             return None;
         }
-        // Spindle tori (small radius exceeds large radius) self-intersect near
-        // the axis and are not valid B-rep faces, so reject them. Horn tori
-        // (R == r, including the floating-point near-horn fillets found in real
-        // STEP data where R may sit a few ulps below r) ARE representable: the
-        // inner equator pinches to a single point on the axis and every
-        // control-point weight stays positive.
-        if small_radius - large_radius > TOLERANCE * (large_radius + small_radius) {
-            return None;
-        }
+        // The rational tensor-product construction is exact for ring, horn,
+        // and spindle tori alike. Spindle support used to be disabled here only
+        // because the analytic inverse map could not recover the negative
+        // signed-radial branch; `Torus` now handles that branch explicitly.
+        // Keep this builder concerned with representation validity, not B-rep
+        // manifold policy: a caller may legitimately use a trimmed patch of a
+        // spindle even though the complete immersed surface is self-intersecting.
         let center = self.center();
         let circle = full_unit_circle_curve();
         // Projected unit-circle control polygon + weights, shared by the ring

@@ -50,6 +50,23 @@ fn revolution_surface_exact_boundary_recovers_internal_iso_angle_line() {
 }
 
 #[test]
+fn revolution_line_profile_exact_boundary_extends_beyond_placeholder_range() {
+    let profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let angle = FRAC_PI_4;
+    let curve = Line(surface.subs(-3.0, angle), surface.subs(4.0, angle));
+
+    let boundary = curve
+        .exact_parameter_boundary_2d(&surface)
+        .expect("analytic line profile must extend exactly beyond its placeholder range");
+    let line = boundary.curve();
+    assert!((line.0.x + 3.0).abs() <= TOLERANCE);
+    assert!((line.1.x - 4.0).abs() <= TOLERANCE);
+    assert!((line.0.y - angle).abs() <= TOLERANCE);
+    assert!((line.1.y - angle).abs() <= TOLERANCE);
+}
+
+#[test]
 fn revolution_surface_exact_boundary_recovers_iso_angle_nurbs_with_fixed_endpoint() {
     let profile = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
@@ -70,6 +87,42 @@ fn revolution_surface_exact_boundary_recovers_iso_angle_nurbs_with_fixed_endpoin
     assert!((line.1.x - 1.0).abs() <= TOLERANCE);
     assert!((line.0.y - angle).abs() <= TOLERANCE);
     assert!((line.1.y - angle).abs() <= TOLERANCE);
+}
+
+#[test]
+fn exact_bspline_boundary_rejects_five_checkpoint_false_positive() {
+    let surface = BsplineSurface::new(
+        (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
+        vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+            vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+        ],
+    );
+    // z(t) = t(t-1/4)(t-1/2)(t-3/4)(t-1).  Its degree-5 Bernstein
+    // coefficients below make the curve coincide with the y=0 surface edge at
+    // exactly the five checkpoints used by the removed sampled "exact" test,
+    // while the nonzero interior control values prove it is not that edge.
+    let z = [
+        0.0,
+        3.0 / 160.0,
+        -13.0 / 320.0,
+        13.0 / 320.0,
+        -3.0 / 160.0,
+        0.0,
+    ];
+    let curve = BsplineCurve::new(
+        KnotVector::bezier_knot(5),
+        z.into_iter()
+            .enumerate()
+            .map(|(index, z)| Point3::new(index as f64 / 5.0, 0.0, z))
+            .collect(),
+    );
+
+    for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        assert!(curve.subs(t).z.abs() <= TOLERANCE);
+    }
+    assert!(curve.subs(0.125).z.abs() > TOLERANCE);
+    assert!(curve.exact_parameter_boundary_2d(&surface).is_none());
 }
 
 #[test]

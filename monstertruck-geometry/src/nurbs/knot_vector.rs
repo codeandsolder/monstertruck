@@ -407,7 +407,7 @@ impl KnotVector {
     /// ```
     pub fn try_normalize(&mut self) -> Result<&mut Self> {
         let range = self.range_length();
-        if range.so_small() {
+        if range == 0.0 {
             return Err(Error::ZeroRange);
         }
         Ok(self.transform(1.0 / range, -self[0] / range))

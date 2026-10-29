@@ -1,5 +1,4 @@
 use crate::prelude::*;
-use smallvec::SmallVec;
 
 /// Face-local 2D trim curve used to preserve better boundary structure than a
 /// raw UV polyline.
@@ -243,67 +242,171 @@ fn exact_line_boundary_on_homogeneous_extrusion_surface(
         .then(|| ParameterCurve::new(boundary, surface.clone()))
 }
 
-fn exact_boundary_segment<C, B, P>(curve: &C, boundary: &B) -> Option<(f64, f64)>
+fn restricted_bspline_segment<P>(
+    boundary: &BsplineCurve<P>,
+    start: f64,
+    end: f64,
+) -> Option<BsplineCurve<P>>
 where
-    C: ParametricCurve<Point = P> + BoundedCurve<Point = P>,
-    B: ParametricCurve<Point = P>
-        + BoundedCurve<Point = P>
-        + SearchParameter<CurveParameter, Point = P>,
-    P: Copy, {
-    let (t0, t1) = curve.range_tuple();
-    let samples = [
-        t0,
-        3.0f64.mul_add(t0, t1) * 0.25,
-        f64::midpoint(t0, t1),
-        3.0f64.mul_add(t1, t0) * 0.25,
-        t1,
-    ];
-    samples
-        .into_iter()
-        .all(|t| {
-            boundary
-                .search_parameter(curve.evaluate(t), None, 100)
-                .is_some()
-        })
-        .then(|| {
-            let front = boundary.search_parameter(curve.front(), None, 100)?;
-            let back = boundary
-                .search_parameter(curve.back(), Some(front), 100)
-                .or_else(|| boundary.search_parameter(curve.back(), None, 100))?;
-            Some((front, back))
-        })
-        .flatten()
+    P: Clone + control_point::ControlPoint<f64> + Tolerance,
+{
+    if !start.is_finite() || !end.is_finite() || start.near(&end) {
+        return None;
+    }
+    let (lo, hi, reversed) = if start < end {
+        (start, end, false)
+    } else {
+        (end, start, true)
+    };
+    let (b0, b1) = boundary.range_tuple();
+    if lo < b0 - TOLERANCE || hi > b1 + TOLERANCE {
+        return None;
+    }
+    let lo = lo.clamp(b0, b1);
+    let hi = hi.clamp(b0, b1);
+    let mut segment = if lo.near(&b0) {
+        boundary.clone()
+    } else {
+        boundary.clone().cut(lo)
+    };
+    if !hi.near(&b1) {
+        segment.cut(hi);
+    }
+    if reversed {
+        segment.invert();
+    }
+    Some(segment)
 }
 
-fn exact_boundary_line_on_surface<C, B, P>(
-    curve: &C,
+fn compatible_polynomial_control_nets(
+    curve: &BsplineCurve<Point3>,
+    boundary: &BsplineCurve<Point3>,
+) -> bool {
+    let mut curve = curve.clone();
+    let mut boundary = boundary.clone();
+    curve.knot_normalize();
+    boundary.knot_normalize();
+    curve.syncro_degree(&mut boundary);
+    curve.syncro_knots(&mut boundary);
+    curve.control_points().len() == boundary.control_points().len()
+        && curve
+            .control_points()
+            .iter()
+            .zip(boundary.control_points())
+            .all(|(left, right)| {
+                let scale = left
+                    .to_vec()
+                    .magnitude()
+                    .max(right.to_vec().magnitude())
+                    .max(1.0);
+                left.distance(*right) <= TOLERANCE * scale
+            })
+}
+
+fn compatible_homogeneous_control_nets(
+    curve: &BsplineCurve<Vector4>,
+    boundary: &BsplineCurve<Vector4>,
+) -> bool {
+    let mut curve = curve.clone();
+    let mut boundary = boundary.clone();
+    curve.knot_normalize();
+    boundary.knot_normalize();
+    curve.syncro_degree(&mut boundary);
+    curve.syncro_knots(&mut boundary);
+    if curve.control_points().len() != boundary.control_points().len() {
+        return false;
+    }
+
+    // Rational homogeneous control nets are unique for a fixed basis up to one
+    // global non-zero scale.  Recover that scale from the largest-magnitude
+    // component, then compare the complete synchronized nets.
+    let mut pivot = None::<(f64, f64)>;
+    for (left, right) in curve.control_points().iter().zip(boundary.control_points()) {
+        for (l, r) in [
+            (left.x, right.x),
+            (left.y, right.y),
+            (left.z, right.z),
+            (left.w, right.w),
+        ] {
+            if r.abs() > pivot.map_or(0.0, |(_, best)| best.abs()) {
+                pivot = Some((l, r));
+            }
+        }
+    }
+    let Some((left_pivot, right_pivot)) = pivot else {
+        return false;
+    };
+    if right_pivot.abs() <= TOLERANCE {
+        return false;
+    }
+    let ratio = left_pivot / right_pivot;
+    if !ratio.is_finite() || ratio.abs() <= TOLERANCE {
+        return false;
+    }
+    curve
+        .control_points()
+        .iter()
+        .zip(boundary.control_points())
+        .all(|(left, right)| {
+            let scaled = *right * ratio;
+            let scale = left.magnitude().max(scaled.magnitude()).max(1.0);
+            (*left - scaled).magnitude() <= TOLERANCE * scale
+        })
+}
+
+fn exact_bspline_boundary_segment(
+    curve: &BsplineCurve<Point3>,
+    boundary: &BsplineCurve<Point3>,
+) -> Option<(f64, f64)> {
+    let start = boundary.search_parameter(curve.front(), None, 100)?;
+    let end = boundary
+        .search_parameter(curve.back(), Some(start), 100)
+        .or_else(|| boundary.search_parameter(curve.back(), None, 100))?;
+    let segment = restricted_bspline_segment(boundary, start, end)?;
+    compatible_polynomial_control_nets(curve, &segment).then_some((start, end))
+}
+
+fn exact_homogeneous_boundary_segment(
+    curve: &BsplineCurve<Vector4>,
+    boundary: &BsplineCurve<Vector4>,
+) -> Option<(f64, f64)> {
+    let curve_nurbs = NurbsCurve::new(curve.clone());
+    let boundary_nurbs = NurbsCurve::new(boundary.clone());
+    let start = boundary_nurbs.search_parameter(curve_nurbs.front(), None, 100)?;
+    let end = boundary_nurbs
+        .search_parameter(curve_nurbs.back(), Some(start), 100)
+        .or_else(|| boundary_nurbs.search_parameter(curve_nurbs.back(), None, 100))?;
+    let segment = restricted_bspline_segment(boundary, start, end)?;
+    compatible_homogeneous_control_nets(curve, &segment).then_some((start, end))
+}
+
+fn exact_nurbs_boundary_segment(
+    curve: &NurbsCurve<Vector4>,
+    boundary: &NurbsCurve<Vector4>,
+) -> Option<(f64, f64)> {
+    exact_homogeneous_boundary_segment(curve.non_rationalized(), boundary.non_rationalized())
+}
+
+fn exact_boundary_line_on_surface<B>(
     last_u: usize,
     last_v: usize,
     column_curve: impl Fn(usize) -> B,
     row_curve: impl Fn(usize) -> B,
     ((u0, u1), (v0, v1)): ((f64, f64), (f64, f64)),
-) -> Option<Line<Point2>>
-where
-    C: ParametricCurve<Point = P>
-        + BoundedCurve<Point = P>
-        + SearchParameter<CurveParameter, Point = P>,
-    P: Copy,
-    B: ParametricCurve<Point = P>
-        + BoundedCurve<Point = P>
-        + SearchParameter<CurveParameter, Point = P>,
-{
-    exact_boundary_segment(curve, &column_curve(0))
+    match_segment: impl Fn(&B) -> Option<(f64, f64)>,
+) -> Option<Line<Point2>> {
+    match_segment(&column_curve(0))
         .map(|(s0, s1)| Line(Point2::new(u0, s0), Point2::new(u0, s1)))
         .or_else(|| {
-            exact_boundary_segment(curve, &column_curve(last_u))
+            match_segment(&column_curve(last_u))
                 .map(|(s0, s1)| Line(Point2::new(u1, s0), Point2::new(u1, s1)))
         })
         .or_else(|| {
-            exact_boundary_segment(curve, &row_curve(0))
+            match_segment(&row_curve(0))
                 .map(|(s0, s1)| Line(Point2::new(s0, v0), Point2::new(s1, v0)))
         })
         .or_else(|| {
-            exact_boundary_segment(curve, &row_curve(last_v))
+            match_segment(&row_curve(last_v))
                 .map(|(s0, s1)| Line(Point2::new(s0, v1), Point2::new(s1, v1)))
         })
 }
@@ -317,12 +420,12 @@ fn exact_bspline_boundary_on_surface(
     let last_u = surface.control_points().len().checked_sub(1)?;
     let last_v = surface.control_points().first()?.len().checked_sub(1)?;
     let boundary = exact_boundary_line_on_surface(
-        curve,
         last_u,
         last_v,
         |index| surface.curve_v(index),
         |index| surface.curve_u(index),
         ((u0, u1), (v0, v1)),
+        |boundary| exact_bspline_boundary_segment(curve, boundary),
     )?;
     Some(ParameterCurve::new(boundary, surface.clone()))
 }
@@ -336,236 +439,144 @@ fn exact_nurbs_boundary_on_surface(
     let last_u = surface.control_points().len().checked_sub(1)?;
     let last_v = surface.control_points().first()?.len().checked_sub(1)?;
     let boundary = exact_boundary_line_on_surface(
-        curve,
         last_u,
         last_v,
         |index| surface.curve_v(index),
         |index| surface.curve_u(index),
         ((u0, u1), (v0, v1)),
+        |boundary| exact_nurbs_boundary_segment(curve, boundary),
     )?;
     Some(ParameterCurve::new(boundary, surface.clone()))
 }
 
-fn nearest_periodic_component(value: f64, reference: f64, period: Option<f64>) -> f64 {
-    period.map_or(value, |period| {
-        ((reference - value) / period)
-            .round()
-            .mul_add(period, value)
-    })
+fn nearest_periodic_angle(value: f64, reference: f64) -> f64 {
+    value
+        + ((reference - value) / (2.0 * std::f64::consts::PI)).round()
+            * (2.0 * std::f64::consts::PI)
 }
 
-fn nearest_periodic_surface_parameter(
-    point: Point2,
-    reference: Point2,
-    periods: (Option<f64>, Option<f64>),
-) -> Point2 {
-    Point2::new(
-        nearest_periodic_component(point.x, reference.x, periods.0),
-        nearest_periodic_component(point.y, reference.y, periods.1),
-    )
-}
-
-fn exact_linear_boundary_by_surface_search<C, S>(
-    curve: &C,
-    surface: &S,
-) -> Option<ParameterCurve<Line<Point2>, S>>
-where
-    C: ParametricCurve3D + BoundedCurve<Point = Point3>,
-    S: Clone + ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
-{
-    let (t0, t1) = curve.range_tuple();
-    exact_linear_boundary_by_surface_search_with_parameters(
-        curve,
-        surface,
-        [
-            t0,
-            3.0f64.mul_add(t0, t1) * 0.25,
-            f64::midpoint(t0, t1),
-            3.0f64.mul_add(t1, t0) * 0.25,
-            t1,
-        ],
-    )
-}
-
-fn exact_line_boundary_by_surface_search<C, S>(
-    curve: &C,
-    surface: &S,
-) -> Option<ParameterCurve<Line<Point2>, S>>
-where
-    C: ParametricCurve3D + BoundedCurve<Point = Point3>,
-    S: Clone + ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
-{
-    let (t0, t1) = curve.range_tuple();
-    exact_linear_boundary_by_surface_search_with_parameters(
-        curve,
-        surface,
-        [t0, f64::midpoint(t0, t1), t1],
-    )
-}
-
-fn project_sample_to_parameter_line<S>(
-    point: Point3,
-    uv: Point2,
-    line: Line<Point2>,
-    surface: &S,
-) -> Option<Point2>
-where
-    S: ParametricSurface3D,
-{
-    let direction = line.1 - line.0;
-    let len2 = direction.magnitude2();
-    (len2 > TOLERANCE * TOLERANCE)
-        .then(|| {
-            let parameter = (uv - line.0).dot(direction) / len2;
-            let projected = line.0 + direction * parameter;
-            surface
-                .evaluate(projected.x, projected.y)
-                .near(&point)
-                .then_some(projected)
-        })
-        .flatten()
-}
-
-fn exact_parameter_line_from_samples<S>(
-    samples: &[(Point3, Point2)],
-    surface: &S,
-    candidate: Line<Point2>,
+fn exact_revolution_isoparametric_boundary_from_homogeneous<C>(
+    curve: &BsplineCurve<Vector4>,
+    front: Point3,
+    back: Point3,
+    surface: &RevolutionSurface<C>,
 ) -> Option<Line<Point2>>
 where
-    S: ParametricSurface3D,
+    C: Clone + ParametricCurve3D + BoundedCurve + TryIntoHomogeneousBsplineCurve,
 {
-    let projected = samples
-        .iter()
-        .copied()
-        .map(|(point, uv)| project_sample_to_parameter_line(point, uv, candidate, surface))
-        .collect::<Option<SmallVec<[Point2; 5]>>>()?;
-    let line = Line(*projected.first()?, *projected.last()?);
-    (!line.0.near(&line.1)).then_some(line)
+    // Search only proposes the candidate branch and endpoint profile
+    // parameters.  Acceptance below is structural: the complete input curve
+    // must equal the corresponding rotated profile segment after both exact
+    // homogeneous representations are put on the same spline basis.
+    let (u0, raw_v0) = surface.search_parameter(front, SearchParameterHint2D::None, 30)?;
+    let (u1, raw_v1) =
+        surface.search_parameter(back, SearchParameterHint2D::Parameter(u0, raw_v0), 30)?;
+    let (profile_start, profile_end) = surface.entity_curve().range_tuple();
+    let front_singular = (surface.is_front_fixed() && u0.near(&profile_start))
+        || (surface.is_back_fixed() && u0.near(&profile_end));
+    let back_singular = (surface.is_front_fixed() && u1.near(&profile_start))
+        || (surface.is_back_fixed() && u1.near(&profile_end));
+
+    // The angular coordinate at a point on the revolution axis is undefined.
+    // Do not compare an arbitrary spelling returned by search against a real
+    // angle from the other endpoint. Singular endpoints contribute only u;
+    // a non-singular endpoint chooses the angular branch. If both endpoints
+    // are singular, an interior point proposes v and the complete control-net
+    // equality below still supplies the proof.
+    let angle = match (front_singular, back_singular) {
+        (false, false) => {
+            let v1 = nearest_periodic_angle(raw_v1, raw_v0);
+            if (v1 - raw_v0).abs() > TOLERANCE {
+                return None;
+            }
+            raw_v0
+        }
+        (true, false) => raw_v1,
+        (false, true) => raw_v0,
+        (true, true) => {
+            let nurbs = NurbsCurve::new(curve.clone());
+            let (t0, t1) = nurbs.range_tuple();
+            let midpoint = nurbs.evaluate((t0 + t1) * 0.5);
+            surface
+                .search_parameter(midpoint, SearchParameterHint2D::None, 30)?
+                .1
+        }
+    };
+
+    let mut segment = if let Some(mut continued) = surface
+        .entity_curve()
+        .try_into_homogeneous_bspline_curve_over((u0, u1))
+    {
+        if u0 > u1 {
+            continued.invert();
+        }
+        continued
+    } else {
+        let profile = surface
+            .entity_curve()
+            .try_into_homogeneous_bspline_curve()?;
+        restricted_bspline_segment(&profile, u0, u1)?
+    };
+    let origin = surface.origin().to_vec();
+    let rotation = Matrix3::from_axis_angle(surface.axis(), Rad(angle));
+    segment.control_points_mut().for_each(|point| {
+        let xyz = Vector3::new(point.x, point.y, point.z);
+        let rotated = rotation * (xyz - origin * point.w) + origin * point.w;
+        point.x = rotated.x;
+        point.y = rotated.y;
+        point.z = rotated.z;
+    });
+    compatible_homogeneous_control_nets(curve, &segment)
+        .then_some(Line(Point2::new(u0, angle), Point2::new(u1, angle)))
 }
 
-fn exact_linear_boundary_by_surface_search_with_parameters<C, S, I>(
-    curve: &C,
-    surface: &S,
-    parameters: I,
-) -> Option<ParameterCurve<Line<Point2>, S>>
+fn exact_revolution_isoparametric_boundary<C, D>(
+    curve: &D,
+    surface: &RevolutionSurface<C>,
+) -> Option<ParameterCurve<Line<Point2>, RevolutionSurface<C>>>
 where
-    C: ParametricCurve3D + BoundedCurve<Point = Point3>,
-    S: Clone + ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
-    I: IntoIterator<Item = f64>,
+    C: Clone + ParametricCurve3D + BoundedCurve + TryIntoHomogeneousBsplineCurve,
+    D: ParametricCurve3D<Point = Point3> + BoundedCurve + TryIntoHomogeneousBsplineCurve,
 {
-    let mut parameters = parameters.into_iter();
-    let periods = (surface.period_u(), surface.period_v());
-    let samples: SmallVec<[(Point3, Point2); 5]> =
-        parameters.try_fold(SmallVec::new(), |mut samples, parameter| {
-            let point = curve.evaluate(parameter);
-            let hint = samples
-                .last()
-                .map(|(_, uv): &(Point3, Point2)| (*uv).into());
-            let uv = surface
-                .search_parameter(point, hint, 30)
-                .or_else(|| surface.search_parameter(point, None, 30))?;
-            let uv = Point2::from(uv);
-            let uv = samples
-                .last()
-                .map_or(uv, |(_, reference): &(Point3, Point2)| {
-                    nearest_periodic_surface_parameter(uv, *reference, periods)
-                });
-            samples.push((point, uv));
-            Some(samples)
-        })?;
-    let sample_count = samples.len();
-    let mut pairs = (0..sample_count)
-        .flat_map(|start| ((start + 1)..sample_count).map(move |end| (start, end)));
-    pairs
-        .find_map(|(start, end)| {
-            let candidate = Line(samples[start].1, samples[end].1);
-            exact_parameter_line_from_samples(&samples, surface, candidate)
-        })
-        .map(|line| ParameterCurve::new(line, surface.clone()))
-}
-
-fn exact_boundary_on_homogeneous_surface_only<C, S>(
-    curve: &C,
-    surface: &S,
-) -> Option<ParameterCurve<Line<Point2>, S>>
-where
-    C: ParametricCurve3D
-        + BoundedCurve<Point = Point3>
-        + SearchParameter<CurveParameter, Point = Point3>
-        + TryIntoHomogeneousBsplineCurve,
-    S: Clone
-        + ParametricSurface3D
-        + SearchParameter<SurfaceParameter, Point = Point3>
-        + TryIntoHomogeneousBsplineSurface,
-{
-    let hom_surface = surface.try_into_homogeneous_bspline_surface()?;
-    let (u_range, v_range) = surface.try_range_tuple();
-    let ranges = (u_range?, v_range?);
-    let last_u = hom_surface.control_points().len().checked_sub(1)?;
-    let last_v = hom_surface.control_points().first()?.len().checked_sub(1)?;
-    let boundary = exact_boundary_line_on_surface(
-        curve,
-        last_u,
-        last_v,
-        |index| NurbsCurve::new(hom_surface.curve_v(index)),
-        |index| NurbsCurve::new(hom_surface.curve_u(index)),
-        ranges,
+    let homogeneous = curve.try_into_homogeneous_bspline_curve()?;
+    let boundary = exact_revolution_isoparametric_boundary_from_homogeneous(
+        &homogeneous,
+        curve.front(),
+        curve.back(),
+        surface,
     )?;
-    // The row/column curves parameterize the border in the homogeneous
-    // B-spline's knot space, which need not agree with the original
-    // surface's parameterization along that border (a revolution surface
-    // measures its angle in radians while the homogeneous form inherits the
-    // normalized full-circle knots, so a quarter turn reads 0.25 instead of
-    // pi/2). Accept the matched border line only when its image on the
-    // original surface reproduces the curve; otherwise report no exact
-    // boundary so the surface-search fallback derives true parameters.
-    let mid = boundary.evaluate(0.5);
-    (surface
-        .evaluate(boundary.0.x, boundary.0.y)
-        .near(&curve.front())
-        && surface
-            .evaluate(boundary.1.x, boundary.1.y)
-            .near(&curve.back())
-        && curve
-            .search_parameter(surface.evaluate(mid.x, mid.y), None, 100)
-            .is_some())
-    .then(|| ParameterCurve::new(boundary, surface.clone()))
+    Some(ParameterCurve::new(boundary, surface.clone()))
 }
 
-fn exact_boundary_on_homogeneous_surface<C, S>(
-    curve: &C,
-    surface: &S,
-) -> Option<ParameterCurve<Line<Point2>, S>>
-where
-    C: ParametricCurve3D
-        + BoundedCurve<Point = Point3>
-        + SearchParameter<CurveParameter, Point = Point3>
-        + TryIntoHomogeneousBsplineCurve,
-    S: Clone
-        + ParametricSurface3D
-        + SearchParameter<SurfaceParameter, Point = Point3>
-        + TryIntoHomogeneousBsplineSurface,
-{
-    exact_boundary_on_homogeneous_surface_only(curve, surface)
-        .or_else(|| exact_linear_boundary_by_surface_search(curve, surface))
-}
+type ProcessorRevolutionBoundary<C> =
+    ParameterCurve<Line<Point2>, Processor<RevolutionSurface<C>, Matrix4>>;
 
-fn exact_line_boundary_on_homogeneous_surface<C, S>(
-    curve: &C,
-    surface: &S,
-) -> Option<ParameterCurve<Line<Point2>, S>>
+fn exact_processor_revolution_isoparametric_boundary<C, D>(
+    curve: &D,
+    surface: &Processor<RevolutionSurface<C>, Matrix4>,
+) -> Option<ProcessorRevolutionBoundary<C>>
 where
-    C: ParametricCurve3D
-        + BoundedCurve<Point = Point3>
-        + SearchParameter<CurveParameter, Point = Point3>
-        + TryIntoHomogeneousBsplineCurve,
-    S: Clone
-        + ParametricSurface3D
-        + SearchParameter<SurfaceParameter, Point = Point3>
-        + TryIntoHomogeneousBsplineSurface,
+    C: Clone + ParametricCurve3D + BoundedCurve + TryIntoHomogeneousBsplineCurve,
+    D: ParametricCurve3D<Point = Point3> + BoundedCurve + TryIntoHomogeneousBsplineCurve,
 {
-    exact_line_boundary_by_surface_search(curve, surface)
-        .or_else(|| exact_boundary_on_homogeneous_surface_only(curve, surface))
+    let inverse = surface.transform().invert()?;
+    let mut homogeneous = curve.try_into_homogeneous_bspline_curve()?;
+    homogeneous
+        .control_points_mut()
+        .for_each(|point| *point = inverse * *point);
+    let mut boundary = exact_revolution_isoparametric_boundary_from_homogeneous(
+        &homogeneous,
+        inverse.transform_point(curve.front()),
+        inverse.transform_point(curve.back()),
+        surface.entity(),
+    )?;
+    if !surface.orientation() {
+        boundary = Line(
+            Point2::new(boundary.0.y, boundary.0.x),
+            Point2::new(boundary.1.y, boundary.1.x),
+        );
+    }
+    Some(ParameterCurve::new(boundary, surface.clone()))
 }
 
 impl ExactParameterBoundary2D<Plane> for Line<Point3> {
@@ -635,7 +646,7 @@ where C: Clone + ParametricCurve3D + BoundedCurve + TryIntoHomogeneousBsplineCur
         &self,
         surface: &RevolutionSurface<C>,
     ) -> Option<Self::BoundaryCurve> {
-        exact_line_boundary_on_homogeneous_surface(self, surface)
+        exact_revolution_isoparametric_boundary(self, surface)
     }
 }
 
@@ -648,7 +659,7 @@ where C: Clone + ParametricCurve3D + BoundedCurve + TryIntoHomogeneousBsplineCur
         &self,
         surface: &RevolutionSurface<C>,
     ) -> Option<Self::BoundaryCurve> {
-        exact_boundary_on_homogeneous_surface(self, surface)
+        exact_revolution_isoparametric_boundary(self, surface)
     }
 }
 
@@ -661,7 +672,7 @@ where C: Clone + ParametricCurve3D + BoundedCurve + TryIntoHomogeneousBsplineCur
         &self,
         surface: &RevolutionSurface<C>,
     ) -> Option<Self::BoundaryCurve> {
-        exact_boundary_on_homogeneous_surface(self, surface)
+        exact_revolution_isoparametric_boundary(self, surface)
     }
 }
 
@@ -674,7 +685,7 @@ where C: Clone + ParametricCurve3D + BoundedCurve + TryIntoHomogeneousBsplineCur
         &self,
         surface: &Processor<RevolutionSurface<C>, Matrix4>,
     ) -> Option<Self::BoundaryCurve> {
-        exact_line_boundary_on_homogeneous_surface(self, surface)
+        exact_processor_revolution_isoparametric_boundary(self, surface)
     }
 }
 
@@ -687,7 +698,7 @@ where C: Clone + ParametricCurve3D + BoundedCurve + TryIntoHomogeneousBsplineCur
         &self,
         surface: &Processor<RevolutionSurface<C>, Matrix4>,
     ) -> Option<Self::BoundaryCurve> {
-        exact_boundary_on_homogeneous_surface(self, surface)
+        exact_processor_revolution_isoparametric_boundary(self, surface)
     }
 }
 
@@ -700,7 +711,7 @@ where C: Clone + ParametricCurve3D + BoundedCurve + TryIntoHomogeneousBsplineCur
         &self,
         surface: &Processor<RevolutionSurface<C>, Matrix4>,
     ) -> Option<Self::BoundaryCurve> {
-        exact_boundary_on_homogeneous_surface(self, surface)
+        exact_processor_revolution_isoparametric_boundary(self, surface)
     }
 }
 

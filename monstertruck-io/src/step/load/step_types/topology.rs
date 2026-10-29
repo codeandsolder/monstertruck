@@ -39,7 +39,7 @@ pub struct EdgeCurve {
     #[holder(use_place_holder)]
     pub edge_end: VertexPoint,
     #[holder(use_place_holder)]
-    pub edge_geometry: CurveAny,
+    pub edge_geometry: Option<CurveAny>,
     pub same_sense: bool,
 }
 
@@ -51,7 +51,11 @@ impl EdgeCurve {
             true => (p, q),
             false => (q, p),
         };
-        Self::sub_parse_2d(&self.edge_geometry, p, q, self.same_sense)
+        let geometry = self
+            .edge_geometry
+            .as_ref()
+            .ok_or_else(|| "EDGE_CURVE has no edge_geometry.".to_string())?;
+        Self::sub_parse_2d(geometry, p, q, self.same_sense)
     }
     fn sub_parse_2d(
         curve: &CurveAny,
@@ -175,7 +179,11 @@ impl EdgeCurve {
             true => (p, q),
             false => (q, p),
         };
-        Self::sub_parse_curve3d(&self.edge_geometry, p, q, self.same_sense)
+        let geometry = self
+            .edge_geometry
+            .as_ref()
+            .ok_or_else(|| "EDGE_CURVE has no edge_geometry.".to_string())?;
+        Self::sub_parse_curve3d(geometry, p, q, self.same_sense)
     }
     fn sub_parse_curve3d(
         curve: &CurveAny,

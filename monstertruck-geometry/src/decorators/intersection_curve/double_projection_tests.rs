@@ -84,3 +84,65 @@ proptest! {
         exec_sphere_case(t, r)?;
     }
 }
+
+#[test]
+fn transformed_inverted_supports_continue_local_intersection_branch() {
+    let transform = Matrix4::from_cols(
+        Vector4::unit_x(),
+        Vector4::unit_y(),
+        Vector4::unit_z(),
+        Vector4::new(3.0, -2.0, 5.0, 1.0),
+    );
+    let sphere: Processor<Sphere, Matrix4> =
+        Processor::with_transform(Sphere::new(Point3::origin(), f64::sqrt(2.0)), transform);
+
+    let cylinder_profile = Line(Point3::new(1.0, 0.0, -2.0), Point3::new(1.0, 0.0, 2.0));
+    let mut cylinder: Processor<RevolutionSurface<Line<Point3>>, Matrix4> =
+        Processor::with_transform(
+            RevolutionSurface::by_revolution(cylinder_profile, Point3::origin(), Vector3::unit_z()),
+            transform,
+        );
+    cylinder.invert();
+
+    // The untransformed surfaces intersect in two circles z=+-1. Continue on
+    // the z=+1 branch from angle 0.2 to a transverse slice at angle 0.3.
+    let source_angle = 0.2_f64;
+    let target_angle = 0.3_f64;
+    let transform_point = |point: Point3| transform.transform_point(point);
+    let expected = transform_point(Point3::new(target_angle.cos(), target_angle.sin(), 1.0));
+    let tangent = Vector3::new(-target_angle.sin(), target_angle.cos(), 0.0);
+    let leader = Line(
+        transform_point(Point3::new(source_angle.cos(), source_angle.sin(), 1.0)),
+        expected,
+    );
+    let intersection = IntersectionCurve::new(sphere, cylinder, leader);
+
+    let (point, uv0, uv1) = intersection
+        .search_intersection_in_plane(
+            expected,
+            tangent,
+            Some((std::f64::consts::FRAC_PI_4, source_angle)),
+            Some((source_angle, 0.75)),
+            100,
+        )
+        .expect("regular transverse continuation must converge");
+
+    assert!(
+        point.distance(expected) < 1.0e-8,
+        "{point:?} != {expected:?}"
+    );
+    assert!(
+        intersection
+            .surface0()
+            .evaluate(uv0.x, uv0.y)
+            .distance(point)
+            < 1.0e-8
+    );
+    assert!(
+        intersection
+            .surface1()
+            .evaluate(uv1.x, uv1.y)
+            .distance(point)
+            < 1.0e-8
+    );
+}
