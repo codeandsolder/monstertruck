@@ -271,7 +271,7 @@ fn nurbs(surface: &IrNurbsSurface, context: &Context<'_>) -> Result<Surface> {
                 .map(|row| rows_of(row).iter().map(frame::point).collect())
                 .collect();
             Ok(Surface::BsplineSurface(built(
-                BsplineSurface::try_new(knots, net),
+                BsplineSurface::new(knots, net),
                 context,
             )?))
         }
@@ -292,7 +292,7 @@ fn nurbs(surface: &IrNurbsSurface, context: &Context<'_>) -> Result<Surface> {
                 })
                 .collect();
             Ok(Surface::NurbsSurface(NurbsSurface::new(built(
-                BsplineSurface::try_new(knots, net),
+                BsplineSurface::new(knots, net),
                 context,
             )?)))
         }

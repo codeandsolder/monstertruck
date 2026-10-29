@@ -1,4 +1,4 @@
-use super::*;
+use super::{InnerSpace, Matrix3, Origin, Point3, PolygonMesh, SquareMatrix, Vector3, hash};
 use derive_more::{Deref, DerefMut};
 
 #[derive(Clone, Copy, Debug)]
@@ -11,7 +11,7 @@ struct Ray {
 struct Triangle([Point3; 3]);
 
 impl Triangle {
-    #[inline(always)]
+    #[inline]
     fn normal(self) -> Vector3 { (self[1] - self[0]).cross(self[2] - self[0]).normalize() }
 
     fn is_crossing(self, ray: Ray) -> bool {
@@ -104,7 +104,14 @@ impl IncludingPointInDomain for PolygonMesh {
                     self.positions()[face[i].pos],
                 ]);
                 if tri.is_crossing(ray) {
-                    counter += f64::signum(tri.normal().dot(ray.direction)) as isize;
+                    let direction = tri.normal().dot(ray.direction);
+                    counter += if direction > 0.0 {
+                        1
+                    } else if direction < 0.0 {
+                        -1
+                    } else {
+                        0
+                    };
                 }
             }
             counter

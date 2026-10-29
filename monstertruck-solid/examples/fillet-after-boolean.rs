@@ -6,7 +6,7 @@
 
 use monstertruck_modeling::*;
 
-fn main() {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Unit cube at origin.
     let v = builder::vertex(Point3::origin());
     let e = builder::extrude(&v, Vector3::unit_x());
@@ -21,13 +21,14 @@ fn main() {
         Vector3::unit_z(),
         builder::SweepAngle::Closed,
         4,
-    );
-    let f = builder::try_attach_plane(&[w]).unwrap();
+    )?;
+    let f = builder::try_attach_plane([w])?;
     let mut cylinder = builder::extrude(&f, Vector3::unit_z() * 2.0);
     cylinder.not();
 
-    let and = monstertruck_solid::and(&cube, &cylinder, 0.05).unwrap();
-    let json = serde_json::to_vec_pretty(&and).unwrap();
-    std::fs::write("fillet-after-boolean.json", json).unwrap();
+    let and = monstertruck_solid::and(&cube, &cylinder, 0.05)?;
+    let json = serde_json::to_vec_pretty(&and)?;
+    std::fs::write("fillet-after-boolean.json", json)?;
     eprintln!("Wrote fillet-after-boolean.json");
+    Ok(())
 }

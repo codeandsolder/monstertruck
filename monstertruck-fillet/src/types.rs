@@ -4,7 +4,10 @@ use monstertruck_geometry::prelude::*;
 /// A parametric curve defined by a line in parameter space on a NURBS surface.
 pub type ParameterCurveLinear = ParameterCurve<Line<Point2>, NurbsSurface<Vector4>>;
 
-#[allow(clippy::enum_variant_names)]
+#[allow(
+    clippy::enum_variant_names,
+    reason = "domain variant names intentionally preserve the explicit fillet entity terminology"
+)]
 #[derive(
     Clone,
     Debug,

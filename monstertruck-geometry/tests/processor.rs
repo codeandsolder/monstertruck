@@ -49,17 +49,18 @@ proptest! {
 }
 
 fn exec_compatible_with_bspsurface(
-    ycoords: [[f64; 7]; 7],
+    ycoords: &[[f64; 7]; 7],
     mat: [f64; 9],
     (u, v): (f64, f64),
 ) -> PResult {
     let knot_vec = KnotVector::uniform_knot(3, 4);
     let knot_vecs = (knot_vec.clone(), knot_vec);
     let control_points: Vec<Vec<Point3>> = ycoords
-        .into_iter()
+        .iter()
         .enumerate()
         .map(|(i, arr)| {
-            arr.into_iter()
+            arr.iter()
+                .copied()
                 .enumerate()
                 .map(|(j, y)| Point3::new(i as f64, j as f64, y))
                 .collect()
@@ -131,6 +132,6 @@ proptest! {
         mat in prop::array::uniform9(-2f64..2f64),
         (u, v) in (0f64..=1f64, 0f64..=1f64),
     ) {
-        exec_compatible_with_bspsurface(ycoords, mat, (u, v))?;
+        exec_compatible_with_bspsurface(&ycoords, mat, (u, v))?;
     }
 }

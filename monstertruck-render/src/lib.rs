@@ -9,11 +9,12 @@
 //! # Examples
 //!
 //! ```
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use monstertruck_gpu::*;
 //! use monstertruck_render::*;
 //! # let mesh = PolygonMesh::default();
 //!
-//! let handler = pollster::block_on(DeviceHandler::default_device()).expect("GPU device is available");
+//! let handler = pollster::block_on(DeviceHandler::default_device())?;
 //! let mut scene = Scene::new(handler, &Default::default());
 //!
 //! // Create render instances from a mesh
@@ -28,56 +29,35 @@
 //!         },
 //!         ..Default::default()
 //!     },
-//! );
+//! )?;
 //! scene.add_object(&instance);
+//! # Ok(())
+//! # }
 //! ```
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
 use bytemuck::{Pod, Zeroable};
 use image::DynamicImage;
-use monstertruck_gpu::{wgpu::*, *};
+use monstertruck_gpu::{
+    BufferHandler, DeviceHandler, PreBindGroupLayoutEntry, RenderId, Rendered, Scene,
+    SceneDescriptor, bind_group_util, impl_render_id, matrix4_to_raw_f32,
+    wgpu::{
+        BindGroup, BindGroupLayout, BindingResource, BindingType, BlendState, BufferAddress,
+        BufferBindingType, BufferUsages, ColorTargetState, ColorWrites, CompareFunction,
+        DepthBiasState, DepthStencilState, Device, Extent3d, Face, FilterMode, FragmentState,
+        FrontFace, MipmapFilterMode, MultisampleState, Origin3d, PipelineCompilationOptions,
+        PipelineLayout, PolygonMode, PrimitiveState, PrimitiveTopology, RenderPipeline,
+        RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, ShaderModule,
+        ShaderModuleDescriptor, ShaderSource, ShaderStages, StencilState, TexelCopyBufferLayout,
+        TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor, TextureDimension,
+        TextureFormat, TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor,
+        TextureViewDimension, VertexAttribute, VertexBufferLayout, VertexFormat, VertexState,
+        VertexStepMode,
+    },
+};
 use std::sync::Arc;
-
-fn matrix4_to_f32(matrix: Matrix4) -> [[f32; 4]; 4] {
-    [
-        [
-            matrix.x.x as f32,
-            matrix.x.y as f32,
-            matrix.x.z as f32,
-            matrix.x.w as f32,
-        ],
-        [
-            matrix.y.x as f32,
-            matrix.y.y as f32,
-            matrix.y.z as f32,
-            matrix.y.w as f32,
-        ],
-        [
-            matrix.z.x as f32,
-            matrix.z.y as f32,
-            matrix.z.z as f32,
-            matrix.z.w as f32,
-        ],
-        [
-            matrix.w.x as f32,
-            matrix.w.y as f32,
-            matrix.w.z as f32,
-            matrix.w.w as f32,
-        ],
-    ]
-}
 
 /// Re-exports `monstertruck_mesh`.
 pub mod polymesh {
@@ -85,12 +65,58 @@ pub mod polymesh {
 }
 pub use polymesh::*;
 
+/// Errors while converting CPU-side render data into GPU instances.
+#[derive(Debug, thiserror::Error)]
+pub enum RenderError {
+    /// The source polygon mesh is internally inconsistent.
+    #[error(transparent)]
+    Mesh(#[from] monstertruck_mesh::errors::Error),
+    /// A CPU-side index cannot be represented by wgpu's `u32` index format.
+    #[error("{what} index {value} exceeds the u32 GPU index range")]
+    IndexTooLarge {
+        /// Description of the index being converted.
+        what: &'static str,
+        /// CPU-side index value.
+        value: usize,
+    },
+    /// Image dimensions cannot be represented by the selected GPU device.
+    #[error(
+        "unsupported texture dimensions {width}×{height}; both axes must be non-zero and at most {max_dimension}"
+    )]
+    InvalidTextureDimensions {
+        /// Texture width in pixels.
+        width: u32,
+        /// Texture height in pixels.
+        height: u32,
+        /// Device limit for a 2D texture axis.
+        max_dimension: u32,
+    },
+    /// A texture row cannot be represented by wgpu's `u32` byte-stride field.
+    #[error("texture row is too large: width {width} × {pixel_size} bytes per pixel")]
+    TextureRowTooLarge {
+        /// Texture width in pixels.
+        width: u32,
+        /// Size of one pixel in bytes.
+        pixel_size: usize,
+    },
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "wgpu vertex/material/shader interfaces intentionally use f32 while mesh/modeling data uses f64"
+)]
+const fn narrow_f64_to_f32(value: f64) -> f32 { value as f32 }
+
+fn gpu_index(value: usize, what: &'static str) -> std::result::Result<u32, RenderError> {
+    u32::try_from(value).map_err(|_| RenderError::IndexTooLarge { what, value })
+}
+
 /// Material information.
 ///
 /// Each instance is rendered based on the microfacet theory.
 #[derive(Debug, Clone, Copy)]
 pub struct Material {
-    /// albedo, base color, [0, 1]-normalized rgba. Default is `Vector4::new(1.0, 1.0, 1.0, 1.0)`.  
+    /// albedo, base color, [0, 1]-normalized rgba. Default is `Vector4::new(1.0, 1.0, 1.0, 1.0)`.
     /// Transparent by alpha is not yet supported in the current standard shader.
     pub albedo: Vector4,
     /// roughness of the surface: [0, 1]. Default is 0.5.
@@ -190,12 +216,15 @@ pub trait CreatorCreator {
 /// The trait for Buffer Objects.
 pub trait CreateBuffers {
     /// Creates buffer handlers of attributes and indices.
+    ///
+    /// # Errors
+    /// Returns [`RenderError`] when source mesh data is invalid or an index cannot fit the GPU index format.
     fn buffers(
         &self,
         vertex_usage: BufferUsages,
         index_usage: BufferUsages,
         device: &Device,
-    ) -> (BufferHandler, BufferHandler);
+    ) -> std::result::Result<(BufferHandler, BufferHandler), RenderError>;
 }
 
 /// The trait for generating `Instance` from `Self`.
@@ -203,7 +232,15 @@ pub trait ToInstance<I: Instance> {
     /// Configuration descriptor for instance.
     type State;
     /// Creates `Instance` from `self`.
-    fn to_instance(&self, handler: &DeviceHandler, shaders: &I::Shaders, desc: &Self::State) -> I;
+    ///
+    /// # Errors
+    /// Returns [`RenderError`] when the source cannot be represented safely as GPU render data.
+    fn to_instance(
+        &self,
+        handler: &DeviceHandler,
+        shaders: &I::Shaders,
+        desc: &Self::State,
+    ) -> std::result::Result<I, RenderError>;
 }
 
 /// Instance for rendering

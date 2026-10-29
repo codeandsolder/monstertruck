@@ -33,6 +33,9 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     /// # Ok(())
     /// # }
     /// ```
+    /// # Errors
+    /// Returns [`InvalidContinuityCapability`] if the requested capability cannot be represented consistently.
+    ///
     pub fn continuity_capability(
         &self,
         side: BoundarySide,
@@ -92,6 +95,9 @@ where V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    /// Returns [`InvalidContinuityCapability`] if the requested capability cannot be represented consistently.
     pub fn continuity_capability(
         &self,
         side: BoundarySide,
@@ -136,7 +142,7 @@ where V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>
 /// nothing about the achievable order -- or a maximum that the surrounding
 /// insufficiency check has already proven strictly lower. Doing the unwrap here
 /// keeps that argument in one place instead of repeating it at eight call sites.
-fn unsupported(
+const fn unsupported(
     side: BoundarySide,
     requested: ContinuityOrder,
     reason: UnsupportedContinuityCapability,

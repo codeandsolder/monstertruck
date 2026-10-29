@@ -56,7 +56,7 @@ fn arc_vertices<C, T>(
 /// final `assort_boundary`/`divide_face` step rejects faces whose param-space
 /// loops are all clockwise (inward-normal / hole cylinders, whose divided loops
 /// have no positive outer loop) or whose seam-crossing half wraps the u-period,
-/// leaving the doubled-seam wire intact. `Face::try_new` then refuses it as
+/// leaving the doubled-seam wire intact. `Face::new` then refuses it as
 /// `NotSimpleWire` (the seam endpoints are revisited), so the whole STEP solid
 /// fails to extract at solidify -- BEFORE any boolean.
 ///

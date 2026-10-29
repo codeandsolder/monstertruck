@@ -29,8 +29,8 @@ fn nurbs_sphere() {
     const N: usize = 10;
     for i in 0..=10 {
         for j in 0..=10 {
-            let u = i as f64 / N as f64;
-            let v = j as f64 / N as f64;
+            let u = f64::from(i) / N as f64;
+            let v = f64::from(j) / N as f64;
             let p = surface.subs(u, v).to_vec();
             assert_near!(p.magnitude(), 1.0);
             let uder = surface.uder(u, v);
@@ -90,9 +90,14 @@ fn endpoint_test_surface() -> NurbsSurface<Vector4> {
         .map(|i| {
             (0..4)
                 .map(|j| {
-                    let i = i as f64;
-                    let j = j as f64;
-                    Vector4::new(i, j, 0.1 * (i * i + j * j) + 0.05 * i * j, 1.0)
+                    let i = f64::from(i);
+                    let j = f64::from(j);
+                    Vector4::new(
+                        i,
+                        j,
+                        f64::mul_add(0.05 * i, j, 0.1 * f64::mul_add(j, j, i * i)),
+                        1.0,
+                    )
                 })
                 .collect::<Vec<_>>()
         })
@@ -103,7 +108,7 @@ fn endpoint_test_surface() -> NurbsSurface<Vector4> {
     ))
 }
 
-fn seam_samples() -> impl Iterator<Item = f64> { (0..=20).map(|i| i as f64 / 20.0) }
+fn seam_samples() -> impl Iterator<Item = f64> { (0..=20).map(|i| f64::from(i) / 20.0) }
 
 fn assert_u_seam_matches(surface: &NurbsSurface<Vector4>, cut: f64, check_higher_order: bool) {
     let mut left = surface.clone();
@@ -203,13 +208,13 @@ fn ucut_at_domain_start_regression() {
 
     assert_eq!(left.control_points().len(), 1);
     for i in 0..=20 {
-        let v = i as f64 / 20.0;
+        let v = f64::from(i) / 20.0;
         assert_near!(left.subs(0.0, v), surface.subs(0.0, v));
     }
     for i in 0..=20 {
-        let u = i as f64 / 20.0;
+        let u = f64::from(i) / 20.0;
         for j in 0..=20 {
-            let v = j as f64 / 20.0;
+            let v = f64::from(j) / 20.0;
             assert_near!(right.subs(u, v), surface.subs(u, v));
         }
     }
@@ -223,13 +228,13 @@ fn vcut_at_domain_start_regression() {
 
     assert_eq!(lower.control_points()[0].len(), 1);
     for i in 0..=20 {
-        let u = i as f64 / 20.0;
+        let u = f64::from(i) / 20.0;
         assert_near!(lower.subs(u, 0.0), surface.subs(u, 0.0));
     }
     for i in 0..=20 {
-        let u = i as f64 / 20.0;
+        let u = f64::from(i) / 20.0;
         for j in 0..=20 {
-            let v = j as f64 / 20.0;
+            let v = f64::from(j) / 20.0;
             assert_near!(upper.subs(u, v), surface.subs(u, v));
         }
     }

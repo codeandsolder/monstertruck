@@ -143,7 +143,7 @@ where
         self.connected_components()
             .into_iter()
             .map(move |shell| {
-                Solid::try_new(
+                Solid::new(
                     shell
                         .extract_boundaries()
                         .iter()

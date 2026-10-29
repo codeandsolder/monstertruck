@@ -1,4 +1,12 @@
-use super::*;
+#![allow(
+    clippy::many_single_char_names,
+    reason = "a through h are the documented Karnaugh-map boolean variables for edge connectivity"
+)]
+
+use super::{
+    Arc, Error, Result, RwLock, TnurccConnection, TnurccControlPoint, TnurccEdge, TnurccFace,
+    TnurccFaceSide, TnurccVertexEnd,
+};
 use std::fmt;
 
 impl<P> TnurccEdge<P> {
@@ -10,21 +18,25 @@ impl<P> TnurccEdge<P> {
         origin: Arc<RwLock<TnurccControlPoint<P>>>,
         dest: Arc<RwLock<TnurccControlPoint<P>>>,
     ) -> Arc<RwLock<Self>> {
-        let edge = TnurccEdge {
+        origin.write().valence += 1;
+        dest.write().valence += 1;
+
+        let edge = Self {
             index,
             connections: [const { None }; 4],
             face_left: None,
             face_right: None,
-            origin: Arc::clone(&origin),
-            dest: Arc::clone(&dest),
+            origin,
+            dest,
             knot_interval,
         };
-        let edge: Arc<RwLock<TnurccEdge<P>>> = Arc::new(RwLock::new(edge));
+        let edge: Arc<RwLock<Self>> = Arc::new(RwLock::new(edge));
 
-        origin.write().valence += 1;
-        origin.write().incoming_edge = Some(Arc::clone(&edge));
-        dest.write().valence += 1;
-        dest.write().incoming_edge = Some(Arc::clone(&edge));
+        {
+            let edge_ref = edge.read();
+            edge_ref.origin.write().incoming_edge = Some(Arc::clone(&edge));
+            edge_ref.dest.write().incoming_edge = Some(Arc::clone(&edge));
+        }
 
         edge.write()
             .connections
@@ -34,16 +46,16 @@ impl<P> TnurccEdge<P> {
     }
 
     /// Returns the connected edge, or `None` while the edge is incomplete.
-    pub fn connection(&self, con: TnurccConnection) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+    pub fn connection(&self, con: TnurccConnection) -> Option<Arc<RwLock<Self>>> {
         self.connections[con as usize].as_ref().map(Arc::clone)
     }
 
     /// Replaces the connection `con` with the new edge `other`, returning the old connection.
-    pub fn set_connection(
+    pub const fn set_connection(
         &mut self,
-        other: Arc<RwLock<TnurccEdge<P>>>,
+        other: Arc<RwLock<Self>>,
         con: TnurccConnection,
-    ) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+    ) -> Option<Arc<RwLock<Self>>> {
         self.connections[con as usize].replace(other)
     }
 
@@ -55,8 +67,8 @@ impl<P> TnurccEdge<P> {
     /// - `Some(edge)` otherwise.
     pub fn acw_edge_from_point(
         &self,
-        p: Arc<RwLock<TnurccControlPoint<P>>>,
-    ) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+        p: &Arc<RwLock<TnurccControlPoint<P>>>,
+    ) -> Option<Arc<RwLock<Self>>> {
         // Determine which end the point is connected to on incoming_edge.
         let dir = match self.point_end(p)? {
             TnurccVertexEnd::Origin => TnurccConnection::LeftCw,
@@ -74,8 +86,8 @@ impl<P> TnurccEdge<P> {
     /// - `Some(edge)` otherwise.
     pub fn cw_edge_from_point(
         &self,
-        p: Arc<RwLock<TnurccControlPoint<P>>>,
-    ) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+        p: &Arc<RwLock<TnurccControlPoint<P>>>,
+    ) -> Option<Arc<RwLock<Self>>> {
         // Determine which end the point is connected to on incoming_edge.
         let dir = match self.point_end(p)? {
             TnurccVertexEnd::Origin => TnurccConnection::RightAcw,
@@ -96,15 +108,15 @@ impl<P> TnurccEdge<P> {
     /// # Borrows
     /// Immutably borrows every edge connected to `p` between and including `e` and the destination edge.
     pub fn nth_acw_edge_from_point(
-        e: Arc<RwLock<TnurccEdge<P>>>,
-        p: Arc<RwLock<TnurccControlPoint<P>>>,
+        e: Arc<RwLock<Self>>,
+        p: &Arc<RwLock<TnurccControlPoint<P>>>,
         n: usize,
-    ) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+    ) -> Option<Arc<RwLock<Self>>> {
         let mut e = e;
         for _ in 0..n {
             e = {
                 let borrow = e.read();
-                borrow.acw_edge_from_point(Arc::clone(&p))?
+                borrow.acw_edge_from_point(p)?
             };
         }
         Some(e)
@@ -121,22 +133,22 @@ impl<P> TnurccEdge<P> {
     /// # Borrows
     /// Immutably borrows every edge connected to `p` between and including `e` and the destination edge.
     pub fn nth_cw_edge_from_point(
-        e: Arc<RwLock<TnurccEdge<P>>>,
-        p: Arc<RwLock<TnurccControlPoint<P>>>,
+        e: Arc<RwLock<Self>>,
+        p: &Arc<RwLock<TnurccControlPoint<P>>>,
         n: usize,
-    ) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+    ) -> Option<Arc<RwLock<Self>>> {
         let mut e = e;
         for _ in 0..n {
             e = {
                 let borrow = e.read();
-                borrow.cw_edge_from_point(Arc::clone(&p))?
+                borrow.cw_edge_from_point(p)?
             };
         }
         Some(e)
     }
 
     /// Returns the next anti-clockwise edge around `self`'s vertex `end`.
-    pub fn acw_edge_from_end(&self, end: TnurccVertexEnd) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+    pub fn acw_edge_from_end(&self, end: TnurccVertexEnd) -> Option<Arc<RwLock<Self>>> {
         // Determine which end the point is connected to on incoming_edge.
         let dir = match end {
             TnurccVertexEnd::Origin => TnurccConnection::LeftCw,
@@ -147,8 +159,11 @@ impl<P> TnurccEdge<P> {
     }
 
     /// Returns the next clockwise edge around `self`'s vertex `end`.
-    #[allow(dead_code)]
-    pub fn cw_edge_from_end(&self, end: TnurccVertexEnd) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+    #[allow(
+        dead_code,
+        reason = "retained as part of the complete T-NURCC adjacency traversal API"
+    )]
+    pub fn cw_edge_from_end(&self, end: TnurccVertexEnd) -> Option<Arc<RwLock<Self>>> {
         // Determine which end the point is connected to on incoming_edge.
         let dir = match end {
             TnurccVertexEnd::Origin => TnurccConnection::RightAcw,
@@ -164,11 +179,11 @@ impl<P> TnurccEdge<P> {
     /// - `None` if `f` is not on either side of `self`.
     ///
     /// - `Some(edge)` otherwise.
-    #[allow(dead_code)]
-    pub fn acw_edge_from_face(
-        &self,
-        f: Arc<RwLock<TnurccFace<P>>>,
-    ) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+    #[allow(
+        dead_code,
+        reason = "retained as part of the complete T-NURCC adjacency traversal API"
+    )]
+    pub fn acw_edge_from_face(&self, f: &Arc<RwLock<TnurccFace<P>>>) -> Option<Arc<RwLock<Self>>> {
         // Determine which side the face is connected to.
         let dir = match self.face_side(f)? {
             TnurccFaceSide::Left => TnurccConnection::LeftAcw,
@@ -184,11 +199,11 @@ impl<P> TnurccEdge<P> {
     /// - `None` if `f` is not on either side of `self`.
     ///
     /// - `Some(edge)` otherwise.
-    #[allow(dead_code)]
-    pub fn cw_edge_from_face(
-        &self,
-        f: Arc<RwLock<TnurccFace<P>>>,
-    ) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+    #[allow(
+        dead_code,
+        reason = "retained as part of the complete T-NURCC adjacency traversal API"
+    )]
+    pub fn cw_edge_from_face(&self, f: &Arc<RwLock<TnurccFace<P>>>) -> Option<Arc<RwLock<Self>>> {
         // Determine which side the face is connected to.
         let dir = match self.face_side(f)? {
             TnurccFaceSide::Left => TnurccConnection::LeftCw,
@@ -199,7 +214,7 @@ impl<P> TnurccEdge<P> {
     }
 
     /// Returns the next anti-clockwise edge around `self`'s face `side`.
-    pub fn acw_edge_from_side(&self, side: TnurccFaceSide) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+    pub fn acw_edge_from_side(&self, side: TnurccFaceSide) -> Option<Arc<RwLock<Self>>> {
         // Determine which end the point is connected to on incoming_edge.
         let dir = match side {
             TnurccFaceSide::Left => TnurccConnection::LeftAcw,
@@ -210,8 +225,11 @@ impl<P> TnurccEdge<P> {
     }
 
     /// Returns the next clockwise edge around `self`'s face `side`.
-    #[allow(dead_code)]
-    pub fn cw_edge_from_side(&self, side: TnurccFaceSide) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
+    #[allow(
+        dead_code,
+        reason = "retained as part of the complete T-NURCC adjacency traversal API"
+    )]
+    pub fn cw_edge_from_side(&self, side: TnurccFaceSide) -> Option<Arc<RwLock<Self>>> {
         // Determine which end the point is connected to on incoming_edge.
         let dir = match side {
             TnurccFaceSide::Left => TnurccConnection::LeftCw,
@@ -227,7 +245,7 @@ impl<P> TnurccEdge<P> {
     /// - `Some(end)` if `point` is connected to `self`.
     ///
     /// - `None` otherwise.
-    pub fn point_end(&self, point: Arc<RwLock<TnurccControlPoint<P>>>) -> Option<TnurccVertexEnd> {
+    pub fn point_end(&self, point: &Arc<RwLock<TnurccControlPoint<P>>>) -> Option<TnurccVertexEnd> {
         if std::ptr::eq(self.origin.as_ref(), point.as_ref()) {
             Some(TnurccVertexEnd::Origin)
         } else if std::ptr::eq(self.dest.as_ref(), point.as_ref()) {
@@ -239,7 +257,7 @@ impl<P> TnurccEdge<P> {
 
     /// Returns the point on the end `end`.
     pub fn point_at_end(&self, end: TnurccVertexEnd) -> Arc<RwLock<TnurccControlPoint<P>>> {
-        use TnurccVertexEnd::*;
+        use TnurccVertexEnd::{Dest, Origin};
         match end {
             Origin => Arc::clone(&self.origin),
             Dest => Arc::clone(&self.dest),
@@ -255,7 +273,7 @@ impl<P> TnurccEdge<P> {
     /// - `Some(side)` if `face` is connected to `self`.
     ///
     /// - `None` if `self` is not connected to `face`.
-    pub fn face_side(&self, face: Arc<RwLock<TnurccFace<P>>>) -> Option<TnurccFaceSide> {
+    pub fn face_side(&self, face: &Arc<RwLock<TnurccFace<P>>>) -> Option<TnurccFaceSide> {
         if self
             .face_left
             .as_ref()
@@ -280,7 +298,7 @@ impl<P> TnurccEdge<P> {
     ///
     /// - `None` if the face on `side` does not exist.
     pub fn face_from_side(&self, side: TnurccFaceSide) -> Option<Arc<RwLock<TnurccFace<P>>>> {
-        use TnurccFaceSide::*;
+        use TnurccFaceSide::{Left, Right};
         match side {
             Left => self.face_left.as_ref().map(Arc::clone),
             Right => self.face_right.as_ref().map(Arc::clone),
@@ -291,18 +309,18 @@ impl<P> TnurccEdge<P> {
     ///
     /// # Panics
     /// Panics if `self` has been incorrectly configured with `None` connections.
-    #[allow(dead_code)]
-    pub fn connection_orientation(
-        &self,
-        other: Arc<RwLock<TnurccEdge<P>>>,
-    ) -> Vec<TnurccConnection> {
+    #[allow(
+        dead_code,
+        reason = "retained as part of the complete T-NURCC adjacency traversal API"
+    )]
+    pub fn connection_orientation(&self, other: &Arc<RwLock<Self>>) -> Vec<TnurccConnection> {
         self.connections
             .iter()
             .enumerate()
             .filter(|(_, connection)| {
                 connection
                     .as_ref()
-                    .is_some_and(|edge| Arc::ptr_eq(edge, &other))
+                    .is_some_and(|edge| Arc::ptr_eq(edge, other))
             })
             .map(|(i, _)| TnurccConnection::from_usize(i))
             .collect()
@@ -329,14 +347,14 @@ impl<P> TnurccEdge<P> {
     /// # Borrows
     /// Mutably borrows `e`.
     pub fn split_edge(
-        e: Arc<RwLock<TnurccEdge<P>>>,
+        e: &Arc<RwLock<Self>>,
         edge_index: usize,
         p: P,
         point_index: usize,
         ratio: f64,
     ) -> Result<Arc<RwLock<TnurccControlPoint<P>>>> {
         let point = Arc::new(RwLock::new(TnurccControlPoint::new(point_index, p)));
-        let conjugate = TnurccEdge::new(
+        let conjugate = Self::new(
             edge_index,
             (1.0 - ratio) * e.read().knot_interval,
             Arc::clone(&point),
@@ -355,18 +373,16 @@ impl<P> TnurccEdge<P> {
         e.write().knot_interval *= ratio;
 
         point.write().valence = 2;
-        point.write().incoming_edge = Some(Arc::clone(&e));
+        point.write().incoming_edge = Some(Arc::clone(e));
 
         conjugate.read().dest.write().incoming_edge = Some(Arc::clone(&conjugate));
 
         for con in [TnurccConnection::LeftAcw, TnurccConnection::RightCw] {
             let other = e.read().connection(con).ok_or(Error::TnurccMalformedFace)?;
-            TnurccEdge::connect(other, Arc::clone(&conjugate))
-                .map_err(|_| Error::TnurccMalformedFace)?;
+            Self::connect(&other, &conjugate).map_err(|_| Error::TnurccMalformedFace)?;
         }
 
-        TnurccEdge::connect(Arc::clone(&e), Arc::clone(&conjugate))
-            .map_err(|_| Error::TnurccMalformedFace)?;
+        Self::connect(e, &conjugate).map_err(|_| Error::TnurccMalformedFace)?;
 
         Ok(point)
     }
@@ -383,7 +399,7 @@ impl<P> TnurccEdge<P> {
     ///
     /// # Panics
     /// Panics if any borrow fails.
-    pub fn common_face(&self, other: Arc<RwLock<Self>>) -> Option<Arc<RwLock<TnurccFace<P>>>> {
+    pub fn common_face(&self, other: &Arc<RwLock<Self>>) -> Option<Arc<RwLock<TnurccFace<P>>>> {
         let other = other.read();
 
         if let Some(ref first_left_face) = self.face_left {
@@ -393,7 +409,7 @@ impl<P> TnurccEdge<P> {
                 .is_some_and(|r| std::ptr::eq(r.as_ref(), first_left_face.as_ref()))
             {
                 return Some(Arc::clone(first_left_face));
-            };
+            }
 
             if other
                 .face_right
@@ -437,10 +453,13 @@ impl<P> TnurccEdge<P> {
     ///
     /// # Panics
     /// Panics if any borrow fails.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "retained as part of the complete T-NURCC adjacency traversal API"
+    )]
     pub fn common_point(
         &self,
-        other: Arc<RwLock<Self>>,
+        other: &Arc<RwLock<Self>>,
     ) -> Option<Arc<RwLock<TnurccControlPoint<P>>>> {
         let other = other.read();
 
@@ -474,11 +493,8 @@ impl<P> TnurccEdge<P> {
     ///
     /// # Undefined Behavior
     /// Undefined if `first` and `other` are the same edge instance, or if all the relevant members are identical between the two.
-    pub fn connect(
-        first: Arc<RwLock<TnurccEdge<P>>>,
-        other: Arc<RwLock<TnurccEdge<P>>>,
-    ) -> Result<()> {
-        use TnurccConnection::*;
+    pub fn connect(first: &Arc<RwLock<Self>>, other: &Arc<RwLock<Self>>) -> Result<()> {
+        use TnurccConnection::{LeftAcw, LeftCw, RightAcw, RightCw};
 
         let mut face_config = Vec::with_capacity(4);
         let mut vert_config = Vec::with_capacity(4);
@@ -504,7 +520,7 @@ impl<P> TnurccEdge<P> {
                 .is_some_and(|r| std::ptr::eq(r.as_ref(), first_left_face.as_ref()))
             {
                 face_config.push(0);
-            };
+            }
 
             if other_right
                 .as_ref()
@@ -557,7 +573,7 @@ impl<P> TnurccEdge<P> {
         let mut valid_state_reached = false;
         let directions = [LeftCw, LeftAcw, RightCw, RightAcw];
         for face_state in face_config {
-            for vert_state in vert_config.iter().cloned() {
+            for vert_state in vert_config.iter().copied() {
                 // Vertex and face state to self and other direction indicies
                 // (f, v) | (s, o) | ab cd | ef gh |
                 // -------+--------+-------+-------|
@@ -597,17 +613,17 @@ impl<P> TnurccEdge<P> {
                 // h(a, b, c, d) = b ^ 'd
                 let h = b ^ d_prime;
 
-                let self_index = if e { 2 } else { 0 } + if f { 1 } else { 0 };
-                let other_index = if g { 2 } else { 0 } + if h { 1 } else { 0 };
+                let self_index = if e { 2 } else { 0 } + usize::from(f);
+                let other_index = if g { 2 } else { 0 } + usize::from(h);
 
                 let sub_directions = [directions[self_index], directions[other_index]];
 
                 first
                     .write()
-                    .set_connection(Arc::clone(&other), sub_directions[0]);
+                    .set_connection(Arc::clone(other), sub_directions[0]);
                 other
                     .write()
-                    .set_connection(Arc::clone(&first), sub_directions[1]);
+                    .set_connection(Arc::clone(first), sub_directions[1]);
             }
         }
 
@@ -635,30 +651,26 @@ impl<P> Drop for TnurccEdge<P> {
 
 impl<P> fmt::Display for TnurccEdge<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let face_index = |face: &Option<Arc<RwLock<TnurccFace<P>>>>| {
+            face.as_ref()
+                .map_or_else(|| "-".to_owned(), |face| face.read().index.to_string())
+        };
+        let edge_index = |edge: &Option<Arc<RwLock<Self>>>| {
+            edge.as_ref()
+                .map_or_else(|| "-".to_owned(), |edge| edge.read().index.to_string())
+        };
         write!(
             f,
             "Index: {}\n\tOrigin: {}\n\tDest: {}\n\tFace Left: {}\n\tFace Right: {}\n{}-----{}\n   |\n{}-----{}",
             self.index,
             self.origin.read().index,
             self.dest.read().index,
-            self.face_left
-                .as_ref()
-                .map_or(-1, |f| f.read().index as i32),
-            self.face_right
-                .as_ref()
-                .map_or(-1, |f| f.read().index as i32),
-            self.connections[TnurccConnection::LeftAcw as usize]
-                .as_ref()
-                .map_or(-1, |e| e.read().index as i32),
-            self.connections[TnurccConnection::RightCw as usize]
-                .as_ref()
-                .map_or(-1, |e| e.read().index as i32),
-            self.connections[TnurccConnection::LeftCw as usize]
-                .as_ref()
-                .map_or(-1, |e| e.read().index as i32),
-            self.connections[TnurccConnection::RightAcw as usize]
-                .as_ref()
-                .map_or(-1, |e| e.read().index as i32),
+            face_index(&self.face_left),
+            face_index(&self.face_right),
+            edge_index(&self.connections[TnurccConnection::LeftAcw as usize]),
+            edge_index(&self.connections[TnurccConnection::RightCw as usize]),
+            edge_index(&self.connections[TnurccConnection::LeftCw as usize]),
+            edge_index(&self.connections[TnurccConnection::RightAcw as usize]),
         )
     }
 }

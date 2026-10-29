@@ -5,7 +5,10 @@
 //! Intermediate regions remain `FaceFragment`s until compressed-topology repair and
 //! extraction establish valid [`Face`] invariants.
 
-#![allow(clippy::many_single_char_names)]
+#![allow(
+    clippy::many_single_char_names,
+    reason = "face-division formulas follow compact geometric notation"
+)]
 
 use super::faces_classification::FacesClassification;
 use super::loops_store::*;
@@ -730,7 +733,7 @@ mod tests {
             test_line(&l1, &l0),
         ]
         .into();
-        let face = Face::debug_new(vec![outer], Plane::xy()).expect("valid source face");
+        let face = Face::new(vec![outer], Plane::xy()).expect("valid source face");
 
         let left: Wire<_, _> = vec![
             test_line(&l0, &a),
@@ -786,7 +789,7 @@ mod tests {
             test_line(&o3, &o0),
         ]
         .into();
-        let face = Face::debug_new(vec![outer.clone()], Plane::xy()).expect("valid source face");
+        let face = Face::new(vec![outer.clone()], Plane::xy()).expect("valid source face");
         let inner: Wire<_, _> = vec![
             test_line(&h0, &h1),
             test_line(&h1, &h2),
@@ -827,7 +830,7 @@ mod tests {
             test_line(&o3, &o0),
         ]
         .into();
-        let face = Face::debug_new(vec![outer.clone()], Plane::xy()).expect("valid source face");
+        let face = Face::new(vec![outer.clone()], Plane::xy()).expect("valid source face");
         let hole_positive: Wire<_, _> = vec![
             test_line(&h0, &h1),
             test_line(&h1, &h2),

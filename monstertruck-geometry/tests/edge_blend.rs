@@ -147,7 +147,7 @@ fn test_edge_blend_g1_continuity_along_rails() {
     let blend = EdgeBlendSurface::new(pcurve0.clone(), 0.5, pcurve1.clone(), 0.5);
 
     for i in 0..=8 {
-        let u = i as f64 / 8.0;
+        let u = f64::from(i) / 8.0;
 
         // Rail positions coincide with the supporting surfaces.
         assert_near!(blend.subs(u, 0.0), pcurve0.subs(u));

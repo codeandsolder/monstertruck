@@ -1,10 +1,25 @@
-use crate::*;
-use monstertruck_topology::{compress::*, *};
+use crate::{
+    BoundedCurve, CurveParameter, EuclideanSpace, ExactParameterBoundary2D, Faces, HashGen,
+    InnerSpace, Invertible, MetricSpace, Origin, ParameterBoundary2D, ParameterDivision1D,
+    ParameterDivision2D, ParametricCurve2D, ParametricCurve3D, ParametricSurface3D, Point3,
+    PolygonMesh, SearchNearestParameter, SearchParameter, StandardAttributes, StandardVertex,
+    SurfaceParameter, TOLERANCE, Tolerance, Vector2, Vector3, Zero, algo, nonpositive_tolerance,
+};
+use monstertruck_topology::{
+    Edge, Face, Shell, Solid, Wire,
+    compress::{
+        CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace, CompressedShell,
+        CompressedSolid, CompressedTrimmedFace, CompressedTrimmedShell, CompressedTrimmedSolid,
+    },
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
-use spade::{iterators::*, *};
+use spade::{
+    CdtEdge, ConstrainedDelaunayTriangulation, MIN_ALLOWED_VALUE, Triangulation, handles,
+    iterators::{InnerFaceIterator, VertexIterator},
+};
 
 /// Tessellation output primitive preference.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -45,7 +60,7 @@ impl Default for TessellationPrimitiveOptions {
             score_tolerance: 1.0,
             normal_blend_angle: std::f64::consts::PI / 4.0,
             minimum_area: TOLERANCE * TOLERANCE,
-            maximum_corner_angle: 175.0 * std::f64::consts::PI / 180.0,
+            maximum_corner_angle: 175.0_f64.to_radians(),
         }
     }
 }
@@ -179,8 +194,8 @@ pub enum TessellationError {
     /// index within its shell, the surface class ([`std::any::type_name`] of the
     /// face's surface type), and the [`FaceDropReason`].
     FaceDropped {
-        /// Index of the dropped face within its shell (`-1` if unknown).
-        face: i64,
+        /// Index of the dropped face within its shell.
+        face: usize,
         /// The dropped face's surface class (its surface type's `type_name`).
         surface: &'static str,
         /// Why the face produced no usable mesh.
@@ -245,12 +260,13 @@ pub fn shell_to_polygon_strict<C: PolylineableCurve, S: MeshableSurface>(
                     .absolute_boundaries()
                     .iter()
                     .all(|wire| wire.is_empty());
-                let reason = match is_untrimmed {
-                    true => FaceDropReason::UnboundedDomain,
-                    false => FaceDropReason::BoundaryProjectionFailed,
+                let reason = if is_untrimmed {
+                    FaceDropReason::UnboundedDomain
+                } else {
+                    FaceDropReason::BoundaryProjectionFailed
                 };
                 return Err(TessellationError::FaceDropped {
-                    face: index as i64,
+                    face: index,
                     surface,
                     reason,
                 });
@@ -298,9 +314,9 @@ where Shell<P, C, S>: MeshedShape
 {
     fn to_polygon(&self) -> PolygonMesh {
         let mut polygon = PolygonMesh::default();
-        self.boundaries().iter().for_each(|shell| {
+        for shell in self.boundaries() {
             polygon.merge(shell.to_polygon());
-        });
+        }
         polygon
     }
 }
@@ -308,10 +324,13 @@ where Shell<P, C, S>: MeshedShape
 impl MeshedShape for CompressedShell<Point3, PolylineCurve, PolygonMesh> {
     fn to_polygon(&self) -> PolygonMesh {
         let mut polygon = PolygonMesh::default();
-        self.faces.iter().for_each(|face| match face.orientation {
-            true => polygon.merge(face.surface.clone()),
-            false => polygon.merge(face.surface.inverse()),
-        });
+        for face in &self.faces {
+            if face.orientation {
+                polygon.merge(face.surface.clone());
+            } else {
+                polygon.merge(face.surface.inverse());
+            }
+        }
         polygon
     }
 }
@@ -319,14 +338,15 @@ impl MeshedShape for CompressedShell<Point3, PolylineCurve, PolygonMesh> {
 impl MeshedShape for CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>> {
     fn to_polygon(&self) -> PolygonMesh {
         let mut polygon = PolygonMesh::default();
-        self.faces.iter().for_each(|face| {
+        for face in &self.faces {
             if let Some(surface) = &face.surface {
-                match face.orientation {
-                    true => polygon.merge(surface.clone()),
-                    false => polygon.merge(surface.inverse()),
+                if face.orientation {
+                    polygon.merge(surface.clone());
+                } else {
+                    polygon.merge(surface.inverse());
                 }
             }
-        });
+        }
         polygon
     }
 }
@@ -472,6 +492,7 @@ pub trait RobustMeshableShape {
 }
 
 /// Tessellates a [`Shell`] with a [`TessellationOptions`].
+#[must_use]
 pub fn triangulation_with<C: PolylineableCurve, S: MeshableSurface>(
     shell: &Shell<Point3, C, S>,
     options: TessellationOptions,
@@ -491,6 +512,7 @@ pub fn triangulation_with<C: PolylineableCurve, S: MeshableSurface>(
 }
 
 /// Tessellates a [`Shell`] with robust parameter search and a [`TessellationOptions`].
+#[must_use]
 pub fn robust_triangulation_with<C: PolylineableCurve, S: RobustMeshableSurface>(
     shell: &Shell<Point3, C, S>,
     options: TessellationOptions,
@@ -510,6 +532,7 @@ pub fn robust_triangulation_with<C: PolylineableCurve, S: RobustMeshableSurface>
 }
 
 /// Tessellates a [`CompressedShell`] with a [`TessellationOptions`].
+#[must_use]
 pub fn cshell_triangulation_with<
     C: PolylineableCurve + ParameterBoundary2D<S>,
     S: MeshableSurface,
@@ -523,6 +546,7 @@ pub fn cshell_triangulation_with<
 }
 
 /// Tessellates a [`CompressedShell`] with robust parameter search and a [`TessellationOptions`].
+#[must_use]
 pub fn robust_cshell_triangulation_with<
     C: PolylineableCurve + ParameterBoundary2D<S>,
     S: RobustMeshableSurface,
@@ -536,6 +560,7 @@ pub fn robust_cshell_triangulation_with<
 }
 
 /// Tessellates a [`CompressedTrimmedShell`] with a [`TessellationOptions`].
+#[must_use]
 pub fn trimmed_cshell_triangulation_with<
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
     S: MeshableSurface,
@@ -553,6 +578,7 @@ where
 }
 
 /// Tessellates a [`CompressedTrimmedShell`] and emits trim-aware isoparametric curves.
+#[must_use]
 pub fn compressed_trimmed_shell_triangulation_with_isoparams<
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
     S: MeshableSurface,
@@ -577,6 +603,7 @@ where
 }
 
 /// Tessellates a [`CompressedTrimmedShell`] with robust parameter search and a [`TessellationOptions`].
+#[must_use]
 pub fn robust_trimmed_cshell_triangulation_with<
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
     S: RobustMeshableSurface,
@@ -594,6 +621,7 @@ where
 }
 
 /// Robustly tessellates a [`CompressedTrimmedShell`] and emits trim-aware isoparametric curves.
+#[must_use]
 pub fn robust_compressed_trimmed_shell_triangulation_with_isoparams<
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
     S: RobustMeshableSurface,

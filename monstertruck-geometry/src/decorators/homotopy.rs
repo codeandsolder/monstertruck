@@ -1,24 +1,35 @@
-use super::*;
+#![allow(
+    clippy::similar_names,
+    reason = "paired U/V parameter-range names are standard surface notation"
+)]
+
+use super::{
+    Bound, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, EuclideanSpace,
+    HomotopySurface, KnotVector, MetricSpace, PRESEARCH_DIVISION, ParameterDivision1D,
+    ParameterDivision2D, ParameterRange, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
+    SurfaceParameterRange, Tolerance, VectorSpace, Zero, algo, control_point, range_common_part,
+};
 use algo::surface::{SearchNearestParameterVector, SearchParameterVector};
 use control_point::ControlPoint;
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 
 impl<C0, C1> HomotopySurface<C0, C1> {
     /// constructor
-    #[inline(always)]
-    pub fn new(curve0: C0, curve1: C1) -> Self { Self { curve0, curve1 } }
+    #[inline]
+    pub const fn new(curve0: C0, curve1: C1) -> Self { Self { curve0, curve1 } }
     /// Returns the first curve.
-    #[inline(always)]
-    pub fn first_curve(&self) -> &C0 { &self.curve0 }
+    #[inline]
+    pub const fn first_curve(&self) -> &C0 { &self.curve0 }
     /// Returns the second curve.
-    #[inline(always)]
-    pub fn second_curve(&self) -> &C1 { &self.curve1 }
+    #[inline]
+    pub const fn second_curve(&self) -> &C1 { &self.curve1 }
     /// Returns the first curve.
-    #[inline(always)]
-    pub fn first_curve_mut(&mut self) -> &mut C0 { &mut self.curve0 }
+    #[inline]
+    pub const fn first_curve_mut(&mut self) -> &mut C0 { &mut self.curve0 }
     /// Returns the second curve.
-    #[inline(always)]
-    pub fn second_curve_mut(&mut self) -> &mut C1 { &mut self.curve1 }
+    #[inline]
+    pub const fn second_curve_mut(&mut self) -> &mut C1 { &mut self.curve1 }
 }
 
 impl<C0, C1> ParametricSurface for HomotopySurface<C0, C1>
@@ -30,7 +41,7 @@ where
 {
     type Point = C0::Point;
     type Vector = C0::Vector;
-    #[inline(always)]
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         match (m, n) {
             (_, 0) => {
@@ -46,35 +57,35 @@ where
             _ => Self::Vector::zero(),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Self::Point {
         let p0 = self.curve0.evaluate(u);
         let p1 = self.curve1.evaluate(u);
         p0 + (p1 - p0) * v
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> Self::Vector {
         let v0 = self.curve0.derivative(u);
         let v1 = self.curve1.derivative(u);
         v0 + (v1 - v0) * v
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, u: f64, _: f64) -> Self::Vector {
         self.curve1.evaluate(u) - self.curve0.evaluate(u)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> Self::Vector {
         let v0 = self.curve0.derivative_2(u);
         let v1 = self.curve1.derivative_2(u);
         v0 + (v1 - v0) * v
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, u: f64, _: f64) -> Self::Vector {
         self.curve1.derivative(u) - self.curve0.derivative(u)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, _: f64, _: f64) -> Self::Vector { Self::Vector::zero() }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
         let range0 = self.curve0.parameter_range();
         let range1 = self.curve1.parameter_range();
@@ -96,6 +107,11 @@ where
     C1: BoundedCurve,
     Self: ParametricSurface,
 {
+    fn range_tuple(&self) -> SurfaceParameterRange {
+        let range0 = self.curve0.range_tuple();
+        let range1 = self.curve1.range_tuple();
+        ((range0.0.max(range1.0), range0.1.min(range1.1)), (0.0, 1.0))
+    }
 }
 
 impl<C0, C1> ParameterDivision2D for HomotopySurface<C0, C1>
@@ -188,6 +204,6 @@ where P: ControlPoint<f64> + Tolerance
         let control_points: Vec<Vec<_>> = (0..bspcurve0.control_points().len())
             .map(|i| vec![*bspcurve0.control_point(i), *bspcurve1.control_point(i)])
             .collect();
-        BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points)
+        Self::new_unchecked((knot_vector_u, knot_vector_v), control_points)
     }
 }

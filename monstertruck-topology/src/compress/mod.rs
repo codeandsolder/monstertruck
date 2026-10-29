@@ -8,6 +8,8 @@
 //! They directly reflect the results of parsing data from json or STEP, and all member variables are public.
 //! Boundary connectivity and closure are checked when converting to proprietary data structures, `Vertex`, `Edge`, and so on.
 
+#[cfg(test)]
+use crate::*;
 use monstertruck_core::{
     ContentHasher, DeterministicContentHash,
     bounding_box::{Bounded, BoundingBox},
@@ -16,10 +18,14 @@ use monstertruck_core::{
 use rustc_hash::FxHashMap as HashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::*;
+use crate::{
+    Debug, Edge, EdgeId, ExactParameterBoundary2D, Face, Hash, Hasher, ParametricCurve,
+    ParametricSurface, Result, Shell, Solid, SolidAttributes, StableId, StableIdAllocator,
+    TOLERANCE, Vertex, VertexId, Wire,
+};
 
 /// Serialized compressed edge
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressedEdge<C> {
     /// vertices of the edge
     pub vertices: (usize, usize),
@@ -28,11 +34,11 @@ pub struct CompressedEdge<C> {
 }
 
 impl<C> CompressedEdge<C> {
-    #[inline(always)]
+    #[inline]
     fn create_edge<P>(self, v: &[Vertex<P>]) -> Result<Edge<P, C>> {
         let front = &v[self.vertices.0];
         let back = &v[self.vertices.1];
-        Edge::try_new(front, back, self.curve)
+        Edge::new(front, back, self.curve)
     }
 }
 
@@ -54,7 +60,7 @@ impl From<(usize, bool)> for CompressedEdgeIndex {
 /// This is the serialized equivalent of a coedge or edge-use: it refers to a shared
 /// edge by `index`, stores the local `orientation`, and may also carry an exact trim
 /// curve for this face-use.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressedEdgeUse<T> {
     /// The index of the shared edge in the parent `CompressedShell`.
     pub index: usize,
@@ -85,7 +91,7 @@ impl<T> From<(usize, bool, Option<T>)> for CompressedEdgeUse<T> {
 }
 
 /// Serialized compressed face
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressedFace<S> {
     /// Boundaries of the face
     pub boundaries: Vec<Vec<CompressedEdgeIndex>>,
@@ -96,7 +102,7 @@ pub struct CompressedFace<S> {
 }
 
 /// Serialized compressed face with exact face-local trim storage.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressedTrimmedFace<S, T> {
     /// Boundaries of the face as oriented edge-uses.
     pub boundaries: Vec<Vec<CompressedEdgeUse<T>>>,
@@ -113,16 +119,17 @@ impl<S> CompressedFace<S> {
             .into_iter()
             .map(|wire| {
                 wire.into_iter()
-                    .map(
-                        |CompressedEdgeIndex { index, orientation }| match orientation {
-                            true => edges[index].clone(),
-                            false => edges[index].inverse(),
-                        },
-                    )
+                    .map(|CompressedEdgeIndex { index, orientation }| {
+                        if orientation {
+                            edges[index].clone()
+                        } else {
+                            edges[index].inverse()
+                        }
+                    })
                     .collect()
             })
             .collect();
-        let mut face = Face::try_new(wires, self.surface)?;
+        let mut face = Face::new(wires, self.surface)?;
         if !self.orientation {
             face.invert();
         }
@@ -131,7 +138,7 @@ impl<S> CompressedFace<S> {
 }
 
 /// Serialized compressed shell
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressedShell<P, C, S> {
     /// all geometries of vertices
     pub vertices: Vec<P>,
@@ -151,7 +158,7 @@ pub struct CompressedShell<P, C, S> {
 }
 
 /// Serialized compressed shell with exact face-local trim storage.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressedTrimmedShell<P, C, S, T> {
     /// all geometries of vertices
     pub vertices: Vec<P>,
@@ -175,7 +182,7 @@ pub struct CompressedSolid<P, C, S> {
 }
 
 /// Serialized compressed solid with exact face-local trim storage.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressedTrimmedSolid<P, C, S, T> {
     /// all boundaries of solid
     pub boundaries: Vec<CompressedTrimmedShell<P, C, S, T>>,
@@ -189,7 +196,7 @@ struct CompressDirector<P, C> {
 }
 
 impl<P: Clone, C: Clone> CompressDirector<P, C> {
-    #[inline(always)]
+    #[inline]
     fn new() -> Self {
         Self {
             vmap: HashMap::default(),
@@ -198,7 +205,7 @@ impl<P: Clone, C: Clone> CompressDirector<P, C> {
             edge_stable_ids: HashMap::default(),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn get_vid(&mut self, vertex: &Vertex<P>) -> usize {
         let id = self.vmap.len();
         let vid = vertex.id();
@@ -211,33 +218,32 @@ impl<P: Clone, C: Clone> CompressDirector<P, C> {
             .0
     }
 
-    #[inline(always)]
+    #[inline]
     fn get_eid(&mut self, edge: &Edge<P, C>) -> CompressedEdgeIndex {
-        match self.emap.get(&edge.id()) {
-            Some(got) => (got.0, edge.orientation()).into(),
-            None => {
-                let id = self.emap.len();
-                let front_id = self.get_vid(edge.absolute_front());
-                let back_id = self.get_vid(edge.absolute_back());
-                let curve = edge.curve();
-                let cedge = CompressedEdge {
-                    vertices: (front_id, back_id),
-                    curve,
-                };
-                self.edge_stable_ids
-                    .insert(edge.id(), (id, edge.stable_id()));
-                self.emap.insert(edge.id(), (id, cedge));
-                (id, edge.orientation()).into()
-            }
+        if let Some(got) = self.emap.get(&edge.id()) {
+            (got.0, edge.orientation()).into()
+        } else {
+            let id = self.emap.len();
+            let front_id = self.get_vid(edge.absolute_front());
+            let back_id = self.get_vid(edge.absolute_back());
+            let curve = edge.curve();
+            let cedge = CompressedEdge {
+                vertices: (front_id, back_id),
+                curve,
+            };
+            self.edge_stable_ids
+                .insert(edge.id(), (id, edge.stable_id()));
+            self.emap.insert(edge.id(), (id, cedge));
+            (id, edge.orientation()).into()
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn create_boundary(&mut self, boundary: &Wire<P, C>) -> Vec<CompressedEdgeIndex> {
         boundary.iter().map(|edge| self.get_eid(edge)).collect()
     }
 
-    #[inline(always)]
+    #[inline]
     fn create_trimmed_boundary<S, T, F>(
         &mut self,
         boundary: &Wire<P, C>,
@@ -260,7 +266,7 @@ impl<P: Clone, C: Clone> CompressDirector<P, C> {
             .collect()
     }
 
-    #[inline(always)]
+    #[inline]
     fn create_cface<S: Clone>(&mut self, face: &Face<P, C, S>) -> CompressedFace<S> {
         CompressedFace {
             boundaries: face
@@ -273,7 +279,7 @@ impl<P: Clone, C: Clone> CompressDirector<P, C> {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn create_trimmed_cface<S: Clone, T, F>(
         &mut self,
         face: &Face<P, C, S>,
@@ -294,19 +300,19 @@ impl<P: Clone, C: Clone> CompressDirector<P, C> {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn map2vec<K, T>(map: HashMap<K, (usize, T)>) -> Vec<T> {
         let mut vec: Vec<_> = map.into_iter().map(|entry| entry.1).collect();
         vec.sort_by_key(|x| x.0);
         vec.into_iter().map(|x| x.1).collect()
     }
 
-    #[inline(always)]
+    #[inline]
     fn vertices_edges(self) -> (Vec<P>, Vec<CompressedEdge<C>>) {
         (Self::map2vec(self.vmap), Self::map2vec(self.emap))
     }
 
-    #[inline(always)]
+    #[inline]
     fn stable_ids(self) -> (Vec<P>, Vec<CompressedEdge<C>>, Vec<StableId>, Vec<StableId>) {
         let vertices = Self::map2vec(self.vmap);
         let edges = Self::map2vec(self.emap);
@@ -315,7 +321,7 @@ impl<P: Clone, C: Clone> CompressDirector<P, C> {
         (vertices, edges, vsids, esids)
     }
 
-    #[inline(always)]
+    #[inline]
     fn map2vec_simple<K, T>(map: HashMap<K, (usize, T)>) -> Vec<T> {
         let mut vec: Vec<_> = map.into_iter().map(|entry| entry.1).collect();
         vec.sort_by_key(|x| x.0);
@@ -325,9 +331,10 @@ impl<P: Clone, C: Clone> CompressDirector<P, C> {
 
 impl<P: Clone, C: Clone, S: Clone> Shell<P, C, S> {
     /// Compresses the shell into the serialized compressed shell.
+    #[must_use]
     pub fn compress(&self) -> CompressedShell<P, C, S> {
         let mut director = CompressDirector::new();
-        let face_stable_ids: Vec<StableId> = self.iter().map(|f| f.stable_id()).collect();
+        let face_stable_ids: Vec<StableId> = self.iter().map(super::Face::stable_id).collect();
         let mut face_closure = |face: &Face<P, C, S>| director.create_cface(face);
         let faces: Vec<_> = self.iter().map(&mut face_closure).collect();
         let (vertices, edges, vsids, esids) = director.stable_ids();
@@ -369,6 +376,7 @@ impl<P: Clone, C: Clone, S: Clone> Shell<P, C, S> {
     }
 
     /// Compresses the shell while preserving exact face-local trims carried by the edge curves.
+    #[must_use]
     pub fn compress_with_exact_face_trims(
         &self,
     ) -> CompressedTrimmedShell<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
@@ -412,7 +420,7 @@ impl<P, C, S> Shell<P, C, S> {
                 e.set_stable_id(sid);
             }
         }
-        let shell: Shell<P, C, S> = faces
+        let shell: Self = faces
             .into_iter()
             .map(move |face| face.create_face(&edges))
             .collect::<Result<Self>>()?;
@@ -421,7 +429,7 @@ impl<P, C, S> Shell<P, C, S> {
             for (f, sid) in face_list.iter_mut().zip(fsids) {
                 f.set_stable_id(sid);
             }
-            Ok(Shell::from(face_list))
+            Ok(Self::from(face_list))
         } else {
             Ok(shell)
         }
@@ -480,12 +488,12 @@ impl<S, T> CompressedTrimmedFace<S, T> {
 
 /// Samples per parameter direction taken from each edge curve when computing
 /// a shell's bounding box.
-const CURVE_BOUNDS_SAMPLES: usize = 16;
+const CURVE_BOUNDS_SAMPLES: u32 = 16;
 
 /// Samples per parameter direction taken from each face surface when a shell
 /// carries no vertices or edges at all. Only a fallback, so a coarse grid is
 /// plenty.
-const SURFACE_BOUNDS_SAMPLES: usize = 8;
+const SURFACE_BOUNDS_SAMPLES: u32 = 8;
 
 impl<P, C, S, T> CompressedTrimmedShell<P, C, S, T>
 where
@@ -497,6 +505,7 @@ where
     ///
     /// Vertices and sampled edge curves define the box. Unbounded curves are
     /// skipped rather than panicking.
+    #[must_use]
     pub fn bounding_box(&self) -> BoundingBox<P> { self.bounding_box_with(|point| point) }
 
     /// Bounding box of the shell's geometry, with every sampled point passed
@@ -520,7 +529,7 @@ where
                 continue;
             };
             for i in 0..=CURVE_BOUNDS_SAMPLES {
-                let t = t0 + (t1 - t0) * i as f64 / CURVE_BOUNDS_SAMPLES as f64;
+                let t = t0 + (t1 - t0) * f64::from(i) / f64::from(CURVE_BOUNDS_SAMPLES);
                 bdd_box.push(map(edge.curve.evaluate(t)));
             }
         }
@@ -536,15 +545,15 @@ where
         // the face, so sampling it is correct. Reached only when the topology
         // pass came up empty, so trimmed shells are never inflated to their
         // surfaces' parameter rectangles.
-        let samples = SURFACE_BOUNDS_SAMPLES as f64;
+        let samples = f64::from(SURFACE_BOUNDS_SAMPLES);
         for face in &self.faces {
             let (Some((u0, u1)), Some((v0, v1))) = face.surface.try_range_tuple() else {
                 continue;
             };
             for i in 0..=SURFACE_BOUNDS_SAMPLES {
-                let u = u0 + (u1 - u0) * i as f64 / samples;
+                let u = u0 + (u1 - u0) * f64::from(i) / samples;
                 for j in 0..=SURFACE_BOUNDS_SAMPLES {
-                    let v = v0 + (v1 - v0) * j as f64 / samples;
+                    let v = v0 + (v1 - v0) * f64::from(j) / samples;
                     bdd_box.push(map(face.surface.evaluate(u, v)));
                 }
             }
@@ -577,11 +586,13 @@ where
     /// # let _ = tolerance;
     /// # }
     /// ```
+    #[must_use]
     pub fn relative_tolerance(&self, factor: f64) -> f64 {
         let tolerance = self.bounding_box().diameter() * factor;
-        match tolerance.is_finite() {
-            true => f64::max(tolerance, TOLERANCE),
-            false => TOLERANCE,
+        if tolerance.is_finite() {
+            f64::max(tolerance, TOLERANCE)
+        } else {
+            TOLERANCE
         }
     }
 }
@@ -713,11 +724,14 @@ impl<P: Clone, C: Clone, S: Clone> CompressedShell<P, C, S> {
     }
 
     /// Attaches exact face-local trims to each edge-use in this compressed shell.
+    #[must_use]
     pub fn with_exact_face_trims(
         &self,
     ) -> CompressedTrimmedShell<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
     where C: ExactParameterBoundary2D<S> {
-        self.with_face_trims(|curve, surface| curve.exact_parameter_boundary_2d(surface))
+        self.with_face_trims(
+            monstertruck_traits::ExactParameterBoundary2D::exact_parameter_boundary_2d,
+        )
     }
 }
 
@@ -749,22 +763,26 @@ impl<P: Clone, C: Clone, S: Clone> CompressedSolid<P, C, S> {
     }
 
     /// Attaches exact face-local trims to each edge-use in this compressed solid.
+    #[must_use]
     pub fn with_exact_face_trims(
         &self,
     ) -> CompressedTrimmedSolid<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
     where C: ExactParameterBoundary2D<S> {
-        self.with_face_trims(|curve, surface| curve.exact_parameter_boundary_2d(surface))
+        self.with_face_trims(
+            monstertruck_traits::ExactParameterBoundary2D::exact_parameter_boundary_2d,
+        )
     }
 }
 
 impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     /// Compresses the solid into the serialized compressed solid.
+    #[must_use]
     pub fn compress(&self) -> CompressedSolid<P, C, S> {
         CompressedSolid {
             boundaries: self
                 .boundaries()
                 .iter()
-                .map(|shell| shell.compress())
+                .map(super::Shell::compress)
                 .collect(),
             id_allocator: Some(self.id_allocator.clone()),
             attributes: if self.attributes.is_empty() {
@@ -793,6 +811,7 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     }
 
     /// Compresses the solid while preserving exact face-local trims carried by the edge curves.
+    #[must_use]
     pub fn compress_with_exact_face_trims(
         &self,
     ) -> CompressedTrimmedSolid<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
@@ -803,12 +822,16 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     }
 
     /// Extracts the serialized compressed solid into the solid.
+    ///
+    /// # Errors
+    /// Returns an error when a compressed shell is invalid or the extracted
+    /// shells do not form valid solid boundaries.
     pub fn extract(csolid: CompressedSolid<P, C, S>) -> Result<Self> {
         let id_allocator = csolid.id_allocator.unwrap_or_default();
         let attributes = csolid.attributes.unwrap_or_default();
         let shells: Result<Vec<Shell<P, C, S>>> =
             csolid.boundaries.into_iter().map(Shell::extract).collect();
-        let mut solid = Solid::try_new(shells?)?;
+        let mut solid = Self::new(shells?)?;
         solid.id_allocator = id_allocator;
         solid.attributes = attributes;
         Ok(solid)
@@ -855,13 +878,13 @@ fn hash_shell_topology<P, C, S>(shell: &CompressedShell<P, C, S>, hasher: &mut C
     shell.faces.iter().for_each(|f| {
         f.orientation.content_hash(hasher);
         hasher.write_usize(f.boundaries.len());
-        f.boundaries.iter().for_each(|wire| {
+        for wire in &f.boundaries {
             hasher.write_usize(wire.len());
-            wire.iter().for_each(|ei| {
-                ei.index.content_hash(hasher);
-                ei.orientation.content_hash(hasher);
-            });
-        });
+            for edge_use in wire {
+                edge_use.index.content_hash(hasher);
+                edge_use.orientation.content_hash(hasher);
+            }
+        }
     });
 }
 
@@ -895,6 +918,7 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     /// This hash is independent of pointer identity, attribute edits, and
     /// geometry content. Two solids with the same connectivity and stable IDs
     /// produce the same hash.
+    #[must_use]
     pub fn topology_hash(&self) -> u64 {
         let compressed = self.compress();
         let mut hasher = ContentHasher::new();
@@ -917,6 +941,7 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     ///
     /// Unlike [`topology_hash`](Self::topology_hash), this changes when per-element
     /// attributes (e.g. selection stamps) are modified.
+    #[must_use]
     pub fn topology_attribute_hash(&self) -> u64 {
         let compressed = self.compress();
         let mut hasher = ContentHasher::new();
@@ -948,6 +973,7 @@ where
     /// Includes canonical topology, stable IDs, sparse attributes, and
     /// analytic geometry. Remains deterministic across runs and independent
     /// of pointer identity.
+    #[must_use]
     pub fn content_hash(&self) -> u64 {
         let compressed = self.compress();
         let mut hasher = ContentHasher::new();
@@ -978,39 +1004,50 @@ fn compress_extract() {
     assert!(same_topology(shell0, &shell1));
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "topology-equivalence helper is retained for compressed-topology validation utilities"
+)]
 fn vmap_subroutin<P, Q>(
     v0: &Vertex<P>,
     v1: &Vertex<Q>,
     vmap: &mut HashMap<VertexId<P>, VertexId<Q>>,
 ) -> bool {
-    match vmap.get(&v0.id()) {
-        Some(got) => *got == v1.id(),
-        None => {
+    let existing = vmap.get(&v0.id()).copied();
+    existing.map_or_else(
+        || {
             vmap.insert(v0.id(), v1.id());
             true
-        }
-    }
+        },
+        |got| got == v1.id(),
+    )
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "topology-equivalence helper is retained for compressed-topology validation utilities"
+)]
 fn emap_subroutin<P, Q, C, D>(
     edge0: &Edge<P, C>,
     edge1: &Edge<Q, D>,
     vmap: &mut HashMap<VertexId<P>, VertexId<Q>>,
     emap: &mut HashMap<EdgeId<C>, EdgeId<D>>,
 ) -> bool {
-    match emap.get(&edge0.id()) {
-        Some(got) => *got == edge1.id(),
-        None => {
+    let existing = emap.get(&edge0.id()).copied();
+    existing.map_or_else(
+        || {
             emap.insert(edge0.id(), edge1.id());
             vmap_subroutin(edge0.front(), edge1.front(), vmap)
                 && vmap_subroutin(edge0.back(), edge1.back(), vmap)
-        }
-    }
+        },
+        |got| got == edge1.id(),
+    )
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "topology-equivalence helper is retained for compressed-topology validation utilities"
+)]
 fn same_topology<P, C, S, Q, D, T>(one: &Shell<P, C, S>, other: &Shell<Q, D, T>) -> bool {
     let mut vmap = HashMap::<VertexId<P>, VertexId<Q>>::default();
     let mut emap = HashMap::<EdgeId<C>, EdgeId<D>>::default();
@@ -1038,14 +1075,14 @@ fn same_topology<P, C, S, Q, D, T>(one: &Shell<P, C, S>, other: &Shell<Q, D, T>)
 }
 
 #[test]
-fn stable_ids_survive_compress_extract() {
+fn stable_ids_survive_compress_extract() -> std::result::Result<(), StableIdExhausted> {
     // Build a cube, take it apart, assign stable IDs to faces, rebuild.
     let cube = solid::cube();
     let mut shells = cube.into_boundaries();
     let shell = &mut shells[0];
     let mut alloc = StableIdAllocator::new();
     for face in shell.face_iter_mut() {
-        face.set_stable_id(alloc.allocate());
+        face.set_stable_id(alloc.allocate()?);
     }
 
     let orig_sids: Vec<_> = shell.face_iter().map(|f| f.stable_id()).collect();
@@ -1059,14 +1096,15 @@ fn stable_ids_survive_compress_extract() {
     let extracted_shell = Shell::extract(compressed).unwrap();
     let ext_sids: Vec<_> = extracted_shell.face_iter().map(|f| f.stable_id()).collect();
     assert_eq!(orig_sids, ext_sids);
+    Ok(())
 }
 
 #[test]
-fn attributes_survive_compress_extract() {
+fn attributes_survive_compress_extract() -> std::result::Result<(), StableIdExhausted> {
     use crate::attributes::AttributeValue;
     let cube = solid::cube();
     let mut alloc = StableIdAllocator::new();
-    let face_id = alloc.allocate();
+    let face_id = alloc.allocate()?;
 
     // Build compressed solid manually to set attributes.
     let mut compressed = cube.compress();
@@ -1084,6 +1122,7 @@ fn attributes_survive_compress_extract() {
         extracted.face_attributes().get("color", face_id),
         Some(&AttributeValue::Color([1.0, 0.0, 0.0, 1.0]))
     );
+    Ok(())
 }
 
 #[test]
@@ -1126,7 +1165,7 @@ where
     where D: serde::Deserializer<'de> {
         use serde::de::Error;
         let compressed = CompressedShell::<P, C, S>::deserialize(deserializer)?;
-        Shell::extract(compressed).map_err(D::Error::custom)
+        Self::extract(compressed).map_err(D::Error::custom)
     }
 }
 
@@ -1157,7 +1196,7 @@ where
     where D: serde::Deserializer<'de> {
         use serde::de::Error;
         let compressed = CompressedSolid::<P, C, S>::deserialize(deserializer)?;
-        Solid::extract(compressed).map_err(D::Error::custom)
+        Self::extract(compressed).map_err(D::Error::custom)
     }
 }
 

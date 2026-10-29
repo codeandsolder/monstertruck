@@ -28,19 +28,42 @@
 //! ```
 //!
 //! Also, see the sample `newton-cuberoot.wgsl`, default shader, in `examples`.
-#![allow(deprecated)]
+#![allow(
+    deprecated,
+    reason = "example intentionally demonstrates the legacy event-loop integration while winit compatibility is maintained"
+)]
 
-use monstertruck_gpu::*;
+use monstertruck_gpu::{
+    BufferHandler, DeviceHandler, RenderId, Rendered, SceneDescriptor, WindowScene,
+    WindowSceneDescriptor, bind_group_util, impl_render_id, wgpu,
+};
 use std::sync::Arc;
-use wgpu::*;
-use winit::event::*;
-use winit::event_loop::*;
+use wgpu::{
+    BindGroup, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
+    BlendState, BufferBindingType, BufferUsages, ColorTargetState, ColorWrites, DepthBiasState,
+    DepthStencilState, Device, Face, FragmentState, FrontFace, MultisampleState,
+    PipelineCompilationOptions, PipelineLayout, PolygonMode, PrimitiveState, PrimitiveTopology,
+    RenderPipeline, RenderPipelineDescriptor, ShaderModule, ShaderModuleDescriptor, ShaderSource,
+    ShaderStages, StencilState, TextureFormat, VertexAttribute, VertexBufferLayout, VertexFormat,
+    VertexState, VertexStepMode,
+};
+use winit::event::{ElementState, Event, StartCause, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 
 const DEFAULT_SHADER: &str = include_str!("newton-cuberoot.wgsl");
 
 /// minimum example for implementing `Rendered`.
 mod plane {
-    use super::*;
+    use super::{
+        Arc, BindGroup, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
+        BindingType, BlendState, BufferBindingType, BufferHandler, BufferUsages, ColorTargetState,
+        ColorWrites, DepthBiasState, DepthStencilState, Device, DeviceHandler, Face, FragmentState,
+        FrontFace, MultisampleState, PipelineCompilationOptions, PipelineLayout, PolygonMode,
+        PrimitiveState, PrimitiveTopology, RenderId, RenderPipeline, RenderPipelineDescriptor,
+        Rendered, SceneDescriptor, ShaderModule, ShaderModuleDescriptor, ShaderSource,
+        ShaderStages, StencilState, TextureFormat, VertexAttribute, VertexBufferLayout,
+        VertexFormat, VertexState, VertexStepMode, bind_group_util, impl_render_id, wgpu,
+    };
 
     /// Canvas to draw by fragment shader.
     pub struct Plane {
@@ -172,7 +195,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                             module: &self.module,
                             entry_point: Some("vs_main"),
                             buffers: &[VertexBufferLayout {
-                                array_stride: std::mem::size_of::<u32>() as BufferAddress,
+                                array_stride: 4,
                                 step_mode: VertexStepMode::Vertex,
                                 attributes: &[VertexAttribute {
                                     format: VertexFormat::Uint32,
@@ -180,7 +203,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                                     shader_location: 0,
                                 }],
                             }],
-                            compilation_options: Default::default(),
+                            compilation_options: PipelineCompilationOptions::default(),
                         },
                         fragment: Some(FragmentState {
                             module: &self.module,
@@ -190,21 +213,21 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                                 blend: Some(BlendState::REPLACE),
                                 write_mask: ColorWrites::ALL,
                             })],
-                            compilation_options: Default::default(),
+                            compilation_options: PipelineCompilationOptions::default(),
                         }),
                         primitive: PrimitiveState {
                             topology: PrimitiveTopology::TriangleList,
                             front_face: FrontFace::Ccw,
                             cull_mode: Some(Face::Back),
                             polygon_mode: PolygonMode::Fill,
-                            ..Default::default()
+                            ..PrimitiveState::default()
                         },
                         depth_stencil: Some(DepthStencilState {
                             format: TextureFormat::Depth32Float,
                             depth_write_enabled: Some(true),
                             depth_compare: Some(wgpu::CompareFunction::Less),
-                            stencil: Default::default(),
-                            bias: Default::default(),
+                            stencil: StencilState::default(),
+                            bias: DepthBiasState::default(),
                         }),
                         multisample: MultisampleState {
                             count: backend_buffer.sample_count,
@@ -224,13 +247,12 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         /// # Arguments
         /// - device: Device, provided by wgpu.
         /// - shader: the inputted fragment shader
-        pub fn new(device: &Device, shader: &str) -> Plane {
-            let module = create_module(device, shader).expect("Default shader is invalid");
-            Plane {
-                module,
+        pub fn new(device: &Device, shader: &str) -> Option<Self> {
+            Some(Self {
+                module: create_module(device, shader)?,
                 mouse: [0.0; 4],
                 id: RenderId::generate(),
-            }
+            })
         }
 
         pub fn set_shader(&mut self, device: &Device, shader: &str) {
@@ -241,7 +263,10 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     }
 
     fn create_module(device: &Device, shader: &str) -> Option<ShaderModule> {
-        use ::naga::{front::wgsl, valid::*};
+        use ::naga::{
+            front::wgsl,
+            valid::{Capabilities, ValidationFlags, Validator},
+        };
         let mut source = BASE_PREFIX.to_string();
         source += shader;
         source += BASE_SHADER;
@@ -263,14 +288,16 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 }
 use plane::Plane;
 
-async fn run(event_loop: EventLoop<()>, window: winit::window::Window) {
-    let mut scene = match WindowScene::from_window(Arc::new(window), &Default::default()).await {
-        Ok(scene) => scene,
-        Err(error) => {
-            eprintln!("failed to initialize GPU scene: {error}");
-            return;
-        }
-    };
+#[allow(
+    clippy::future_not_send,
+    reason = "winit event loops and windows are deliberately thread-affine"
+)]
+async fn run(
+    event_loop: EventLoop<()>,
+    window: winit::window::Window,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut scene =
+        WindowScene::from_window(Arc::new(window), &WindowSceneDescriptor::default()).await?;
     let args: Vec<_> = std::env::args().collect();
     let source = if args.len() > 1 {
         match std::fs::read_to_string(&args[1]) {
@@ -283,7 +310,12 @@ async fn run(event_loop: EventLoop<()>, window: winit::window::Window) {
     } else {
         DEFAULT_SHADER.to_string()
     };
-    let mut plane = Plane::new(scene.device(), &source);
+    let Some(mut plane) = Plane::new(scene.device(), &source).or_else(|| {
+        eprintln!("input shader is invalid; falling back to the built-in shader");
+        Plane::new(scene.device(), DEFAULT_SHADER)
+    }) else {
+        return Err(std::io::Error::other("built-in WGSL shader is invalid").into());
+    };
     // Adds a plane to the scene!
     scene.add_object(&plane);
 
@@ -303,7 +335,9 @@ async fn run(event_loop: EventLoop<()>, window: winit::window::Window) {
                         plane.mouse[3] = -plane.mouse[3];
                         clicked = false;
                     }
-                    scene.render_frame();
+                    if let Err(error) = scene.render_frame() {
+                        eprintln!("render failed: {error}");
+                    }
                     ControlFlow::Poll
                 }
                 WindowEvent::CloseRequested => {
@@ -334,8 +368,11 @@ async fn run(event_loop: EventLoop<()>, window: winit::window::Window) {
                     ControlFlow::Poll
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    let height = scene.descriptor().render_texture.canvas_size.1 as f32;
-                    cursor = [position.x as f32, height - position.y as f32];
+                    let height = f64::from(scene.descriptor().render_texture.canvas_size.1);
+                    cursor = [
+                        shader_coordinate(position.x),
+                        shader_coordinate(height - position.y),
+                    ];
                     if dragging {
                         plane.mouse[0] = cursor[0];
                         plane.mouse[1] = cursor[1];
@@ -349,30 +386,35 @@ async fn run(event_loop: EventLoop<()>, window: winit::window::Window) {
         target.set_control_flow(control_flow);
     };
     #[cfg(not(target_arch = "wasm32"))]
-    event_loop.run(routine).unwrap();
+    event_loop.run(routine)?;
     #[cfg(target_arch = "wasm32")]
     {
         use winit::platform::web::EventLoopExtWebSys;
         event_loop.spawn(routine);
     }
+    Ok(())
 }
 
-fn main() {
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "winit f64 cursor coordinates are intentionally narrowed to f32 shader uniforms"
+)]
+const fn shader_coordinate(value: f64) -> f32 { value as f32 }
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let event_loop = winit::event_loop::EventLoop::new()?;
     let mut wa = winit::window::Window::default_attributes();
     wa.title = "WGSL Sandbox".to_string();
-    let window = event_loop
-        .create_window(wa)
-        .expect("failed to build window");
+    let window = event_loop.create_window(wa)?;
     #[cfg(not(target_arch = "wasm32"))]
-    pollster::block_on(run(event_loop, window));
+    pollster::block_on(run(event_loop, window))?;
     #[cfg(target_arch = "wasm32")]
     {
         std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-        console_log::init().expect("could not initialize logger");
+        console_log::init()?;
         use winit::platform::web::WindowExtWebSys;
         // On wasm, append the canvas to the document body
-        web_sys::window()
+        let appended = web_sys::window()
             .and_then(|win| win.document())
             .and_then(|doc| doc.body())
             .and_then(|body| {
@@ -380,8 +422,15 @@ fn main() {
                 canvas.set_width(500);
                 canvas.set_height(500);
                 body.append_child(&web_sys::Element::from(canvas)).ok()
-            })
-            .expect("couldn't append canvas to document body");
-        wasm_bindgen_futures::spawn_local(run(event_loop, window));
+            });
+        if appended.is_none() {
+            return Err(std::io::Error::other("could not append canvas to document body").into());
+        }
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(error) = run(event_loop, window).await {
+                eprintln!("WGSL sandbox failed: {error}");
+            }
+        });
     }
+    Ok(())
 }

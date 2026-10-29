@@ -1,9 +1,19 @@
-use super::*;
+#![allow(
+    clippy::many_single_char_names,
+    reason = "a through d are polynomial coefficients in the analytic hyperbola solve"
+)]
+
+use super::{
+    CurveParameter, D1, EuclideanSpace, HashGen, MetricSpace, Origin, ParameterDivision1D,
+    ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
+    SearchParameterHint1D, TOLERANCE, UnitHyperbola, Vector2, Vector3, algo, solver,
+};
 
 impl<P> UnitHyperbola<P> {
     /// constructor
     #[inline]
-    pub const fn new() -> UnitHyperbola<P> { UnitHyperbola(std::marker::PhantomData) }
+    #[must_use]
+    pub const fn new() -> Self { Self(std::marker::PhantomData) }
 }
 
 impl ParametricCurve for UnitHyperbola<Point2> {
@@ -111,7 +121,7 @@ impl_v2_hyperbola_search!(Point3);
 
 impl<P> ParameterDivision1D for UnitHyperbola<P>
 where
-    UnitHyperbola<P>: ParametricCurve<Point = P>,
+    Self: ParametricCurve<Point = P>,
     P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     type Point = P;
@@ -129,15 +139,12 @@ impl SearchNearestParameter<CurveParameter> for UnitHyperbola<Point2> {
         _: usize,
     ) -> Option<f64> {
         let a = -p.y;
-        let b = (p.y * p.y - p.x * p.x) / 4.0 + 1.0;
+        let b = p.x.mul_add(-p.x, p.y * p.y) / 4.0 + 1.0;
         let c = -p.y;
         let d = p.y * p.y / 4.0;
         let y = solver::solve_quartic(a, b, c, d)
             .into_iter()
-            .filter_map(|z| match z.im.so_small() {
-                true => Some(z.re),
-                false => None,
-            })
+            .filter_map(|z| if z.im.so_small() { Some(z.re) } else { None })
             .min_by(|s, t| {
                 p.distance2(self.subs(*s))
                     .total_cmp(&p.distance2(self.subs(*t)))
@@ -152,13 +159,9 @@ impl SearchNearestParameter<CurveParameter> for UnitHyperbola<Point3> {
         &self,
         p: Point3,
         _: H,
-        _trials: usize,
+        trials: usize,
     ) -> Option<f64> {
-        UnitHyperbola::<Point2>::new().search_nearest_parameter(
-            Point2::new(p.x, p.y),
-            None,
-            _trials,
-        )
+        UnitHyperbola::<Point2>::new().search_nearest_parameter(Point2::new(p.x, p.y), None, trials)
     }
 }
 

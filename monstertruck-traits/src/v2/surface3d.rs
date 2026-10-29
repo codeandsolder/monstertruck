@@ -27,7 +27,8 @@ pub trait ParametricSurface3D: super::ParametricSurface<Point = Point3, Vector =
         let cross_uder = uuder.cross(vder) + uder.cross(uvder);
         let abs = cross.magnitude();
         let abs_uder = cross.dot(cross_uder) / abs;
-        (cross_uder * abs - cross * abs_uder) / (abs * abs)
+        let abs_squared = abs * abs;
+        (cross_uder * abs - cross * abs_uder) / abs_squared
     }
     /// Returns the derivative of the normal vector w.r.t. `v` at `(u, v)`.
     fn normal_vder(&self, u: Self::Scalar, v: Self::Scalar) -> Vector3 {
@@ -39,6 +40,7 @@ pub trait ParametricSurface3D: super::ParametricSurface<Point = Point3, Vector =
         let cross_vder = uvder.cross(vder) + uder.cross(vvder);
         let abs = cross.magnitude();
         let abs_vder = cross.dot(cross_vder) / abs;
-        (cross_vder * abs - cross * abs_vder) / (abs * abs)
+        let abs_squared = abs * abs;
+        (cross_vder * abs - cross * abs_vder) / abs_squared
     }
 }

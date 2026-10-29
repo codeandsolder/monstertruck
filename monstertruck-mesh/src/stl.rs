@@ -1,5 +1,9 @@
-use crate::*;
+use crate::{
+    Deserialize, Faces, InnerSpace, Point3, PolygonMesh, Serialize, StandardAttributes,
+    StandardVertex, TOLERANCE, Vector3, array, errors, faces,
+};
 use bytemuck::{Pod, Zeroable};
+use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap as HashMap;
 use std::io::{BufRead, BufReader, Lines, Read, Write};
 
@@ -8,6 +12,46 @@ const CHUNKSIZE: usize = FACESIZE + 2;
 
 type Vertex = StandardVertex;
 type Result<T> = std::result::Result<T, errors::Error>;
+
+fn invalid_data(message: impl Into<String>) -> errors::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()).into()
+}
+
+fn stl_f32(value: f64) -> f32 {
+    value.to_f32().unwrap_or_else(|| {
+        if value.is_nan() {
+            f32::NAN
+        } else if value.is_sign_negative() {
+            f32::NEG_INFINITY
+        } else {
+            f32::INFINITY
+        }
+    })
+}
+
+fn quantize_coordinate(value: f32) -> i64 {
+    let scaled = TOLERANCE.mul_add(0.25, f64::from(value)) / (TOLERANCE * 0.5);
+    scaled.to_i64().unwrap_or_else(|| {
+        if scaled.is_nan() {
+            0
+        } else if scaled.is_sign_negative() {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    })
+}
+
+fn dequantize_coordinate(value: i64) -> f64 {
+    value.to_f64().unwrap_or_else(|| {
+        if value.is_negative() {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        }
+    }) * TOLERANCE
+        * 0.5
+}
 
 fn syntax_error() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, "syntax error")
@@ -24,8 +68,8 @@ pub struct StlFace {
 }
 
 impl StlFace {
-    #[inline(always)]
-    fn is_empty(&self) -> bool { self == &StlFace::default() }
+    #[inline]
+    fn is_empty(&self) -> bool { self == &Self::default() }
 }
 
 /// STL reading iterator.
@@ -58,9 +102,9 @@ pub enum StlType {
 }
 
 impl<R: Read> StlReader<R> {
-    #[inline(always)]
-    fn text_reader(reader: R) -> StlReader<R> { StlReader::Ascii(BufReader::new(reader).lines()) }
-    fn binary_reader(mut reader: R, header_judge: bool) -> Result<StlReader<R>> {
+    #[inline]
+    fn text_reader(reader: R) -> Self { Self::Ascii(BufReader::new(reader).lines()) }
+    fn binary_reader(mut reader: R, header_judge: bool) -> Result<Self> {
         let mut header = [0; 5];
         reader.read_exact(&mut header)?;
         if header_judge && &header == b"solid" {
@@ -70,11 +114,14 @@ impl<R: Read> StlReader<R> {
         reader.read_exact(&mut header)?;
         let mut length_bytes = [0; 4];
         reader.read_exact(&mut length_bytes)?;
-        let length = u32::from_le_bytes(length_bytes) as usize;
-        Ok(StlReader::Binary(reader, length))
+        let length = usize::try_from(u32::from_le_bytes(length_bytes))
+            .map_err(|_| invalid_data("binary STL face count does not fit usize"))?;
+        Ok(Self::Binary(reader, length))
     }
     /// Creates new STL reader.
-    #[inline(always)]
+    #[inline]
+    /// # Errors
+    /// Returns an error if the STL header or count cannot be read or represented on this target.
     pub fn new(reader: R, stl_type: StlType) -> Result<Self> {
         match stl_type {
             StlType::Automatic => Self::binary_reader(reader, true),
@@ -83,11 +130,11 @@ impl<R: Read> StlReader<R> {
         }
     }
     /// Returns the STL type.
-    #[inline(always)]
-    pub fn stl_type(&self) -> StlType {
+    #[inline]
+    pub const fn stl_type(&self) -> StlType {
         match self {
-            StlReader::Ascii(_) => StlType::Ascii,
-            StlReader::Binary(_, _) => StlType::Binary,
+            Self::Ascii(_) => StlType::Ascii,
+            Self::Binary(_, _) => StlType::Binary,
         }
     }
 }
@@ -96,7 +143,7 @@ impl<R: Read> Iterator for StlReader<R> {
     type Item = Result<StlFace>;
     fn next(&mut self) -> Option<Self::Item> {
         let res = match self {
-            StlReader::Binary(reader, length) => {
+            Self::Binary(reader, length) => {
                 if *length == 0 {
                     Ok(None)
                 } else {
@@ -104,7 +151,7 @@ impl<R: Read> Iterator for StlReader<R> {
                     binary_one_read(reader)
                 }
             }
-            StlReader::Ascii(lines) => ascii_one_read(lines),
+            Self::Ascii(lines) => ascii_one_read(lines),
         };
         match res {
             Ok(Some(got)) => Some(Ok(got)),
@@ -118,27 +165,29 @@ fn ascii_one_read<R: BufRead>(lines: &mut Lines<R>) -> Result<Option<StlFace>> {
     let mut face = StlFace::default();
     let mut num_ver = 0;
     loop {
-        let line = match lines.next() {
-            Some(got) => got?,
-            None => match face.is_empty() {
-                true => return Ok(None),
-                false => return Err(syntax_error().into()),
-            },
+        let line = if let Some(got) = lines.next() {
+            got?
+        } else {
+            if face.is_empty() {
+                return Ok(None);
+            }
+            return Err(syntax_error().into());
         };
         let line = line.trim();
         if line.len() < 8 {
             continue;
-        } else if &line[0..5] == "facet" {
+        }
+        if line.starts_with("facet") {
             let args: Vec<_> = line.split_whitespace().collect();
             face.normal = array![i => args[i + 2].parse::<f32>()?; 3];
-        } else if &line[0..6] == "vertex" {
+        } else if line.starts_with("vertex") {
             let args: Vec<_> = line.split_whitespace().collect();
             if num_ver > 2 {
                 return Err(syntax_error().into());
             }
             face.vertices[num_ver] = array![i => args[i + 1].parse::<f32>()?; 3];
             num_ver += 1;
-        } else if &line[0..8] == "endfacet" {
+        } else if line.starts_with("endfacet") {
             if num_ver != 3 {
                 return Err(syntax_error().into());
             }
@@ -158,7 +207,9 @@ fn binary_one_read<R: Read>(reader: &mut R) -> Result<Option<StlFace>> {
 /// Write STL file in `stl_type` format.
 ///
 /// If `stl_type == StlType::Automatic`, write the binary format.
-#[inline(always)]
+#[inline]
+/// # Errors
+/// Returns an error on output I/O failure, or when binary STL is asked to encode more than the format count limit.
 pub fn write<I: IntoStlIterator, W: Write>(
     iter: I,
     writer: &mut W,
@@ -197,10 +248,11 @@ fn write_ascii<I: IntoStlIterator, W: Write>(iter: I, writer: &mut W) -> Result<
 }
 
 /// Writes binary STL data.
-#[inline(always)]
+#[inline]
 fn write_binary<I: IntoStlIterator, W: Write>(iter: I, writer: &mut W) -> Result<()> {
     let mut iter = iter.into_iter();
-    let len = iter.len() as u32;
+    let len = u32::try_from(iter.len())
+        .map_err(|_| invalid_data("binary STL supports at most u32::MAX faces"))?;
     writer.write_all(&[0u8; 80])?;
     writer.write_all(&len.to_le_bytes())?;
     iter.try_for_each(|face| {
@@ -235,12 +287,12 @@ impl Iterator for PolygonMeshStlFaceIterator<'_> {
         self.faces.next().map(|face| {
             let p = array![i => self.positions[face[i].pos]; 3];
             let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize();
-            let normal = [n.x as f32, n.y as f32, n.z as f32];
-            let vertices = array![i => [p[i].x as f32, p[i].y as f32, p[i].z as f32]; 3];
+            let normal = [stl_f32(n.x), stl_f32(n.y), stl_f32(n.z)];
+            let vertices = array![i => [stl_f32(p[i].x), stl_f32(p[i].y), stl_f32(p[i].z)]; 3];
             StlFace { normal, vertices }
         })
     }
-    #[inline(always)]
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) { (self.len, Some(self.len)) }
 }
 
@@ -268,18 +320,17 @@ where
 }
 
 fn signup_vector(vector: [f32; 3], map: &mut HashMap<[i64; 3], usize>) -> usize {
-    let vector = array![i =>
-        ((vector[i] as f64 + TOLERANCE * 0.25) / (TOLERANCE * 0.5)) as i64; 3];
+    let vector = array![i => quantize_coordinate(vector[i]); 3];
     let len = map.len();
     *map.entry(vector).or_insert_with(|| len)
 }
 
 fn decode_vector<T: From<[f64; 3]>>((code, _): ([i64; 3], usize)) -> T {
-    array![i => code[i] as f64 * TOLERANCE * 0.5; 3].into()
+    array![i => dequantize_coordinate(code[i]); 3].into()
 }
 
 impl FromIterator<StlFace> for PolygonMesh {
-    fn from_iter<I: IntoIterator<Item = StlFace>>(iter: I) -> PolygonMesh {
+    fn from_iter<I: IntoIterator<Item = StlFace>>(iter: I) -> Self {
         let mut positions = HashMap::<[i64; 3], usize>::default();
         let mut normals = HashMap::<[i64; 3], usize>::default();
         let closure = |face: StlFace| {
@@ -295,7 +346,7 @@ impl FromIterator<StlFace> for PolygonMesh {
         let mut normals: Vec<([i64; 3], usize)> = normals.into_iter().collect();
         normals.sort_by_key(|a| a.1);
         let normals: Vec<Vector3> = normals.into_iter().map(decode_vector).collect();
-        PolygonMesh::new_unchecked(
+        Self::new_unchecked(
             StandardAttributes {
                 positions,
                 uv_coords: Vec::new(),
@@ -307,7 +358,45 @@ impl FromIterator<StlFace> for PolygonMesh {
 }
 
 /// Read STL file and parse to [`PolygonMesh`].
-#[inline(always)]
+#[inline]
+/// # Errors
+/// Returns an error if the STL stream is malformed, truncated, or cannot be read.
 pub fn read<R: Read>(reader: R, stl_type: StlType) -> Result<PolygonMesh> {
     StlReader::new(reader, stl_type)?.collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stl_float_narrowing_preserves_nonfinite_values() {
+        assert!(stl_f32(f64::NAN).is_nan());
+        assert_eq!(stl_f32(f64::INFINITY), f32::INFINITY);
+        assert_eq!(stl_f32(f64::NEG_INFINITY), f32::NEG_INFINITY);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn binary_writer_rejects_face_counts_above_format_limit_before_writing() {
+        #[derive(Clone, Copy)]
+        struct TooManyFaces;
+
+        impl Iterator for TooManyFaces {
+            type Item = StlFace;
+
+            fn next(&mut self) -> Option<Self::Item> { None }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                let len = usize::try_from(u64::from(u32::MAX) + 1).unwrap();
+                (len, Some(len))
+            }
+        }
+
+        impl ExactSizeIterator for TooManyFaces {}
+
+        let mut output = Vec::new();
+        let error = write(TooManyFaces, &mut output, StlType::Binary).unwrap_err();
+        assert!(error.to_string().contains("at most"));
+        assert!(output.is_empty());
+    }
 }

@@ -1,4 +1,4 @@
-use crate::*;
+use crate::{Attributes, Faces, PolygonMesh, errors};
 use rustc_hash::FxHashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -48,6 +48,8 @@ impl<V: Copy + Hash + Debug + Eq, A: Attributes<V>> PolygonMesh<V, A> {
     /// # Ok(())
     /// # }
     /// ```
+    /// # Errors
+    /// Returns an out-of-range error if a face references an attribute that is not present.
     pub fn expands<T: Copy>(
         &self,
         contraction: impl Fn(A::Output) -> T,
@@ -58,18 +60,17 @@ impl<V: Copy + Hash + Debug + Eq, A: Attributes<V>> PolygonMesh<V, A> {
         for face in self.face_iter() {
             let mut expanded = Vec::with_capacity(face.len());
             for &vertex in face {
-                let idx = match vertex_map.get(&vertex).copied() {
-                    Some(idx) => idx,
-                    None => {
-                        let attribute = self
-                            .attributes
-                            .get(vertex)
-                            .ok_or(errors::Error::OutOfRange(vertex))?;
-                        let idx = attributes.len();
-                        attributes.push(contraction(attribute));
-                        vertex_map.insert(vertex, idx);
-                        idx
-                    }
+                let idx = if let Some(idx) = vertex_map.get(&vertex).copied() {
+                    idx
+                } else {
+                    let attribute = self
+                        .attributes
+                        .get(vertex)
+                        .ok_or(errors::Error::OutOfRange(vertex))?;
+                    let idx = attributes.len();
+                    attributes.push(contraction(attribute));
+                    vertex_map.insert(vertex, idx);
+                    idx
                 };
                 expanded.push(idx);
             }
@@ -82,12 +83,13 @@ impl<V: Copy + Hash + Debug + Eq, A: Attributes<V>> PolygonMesh<V, A> {
 #[cfg(test)]
 mod totality_tests {
     use super::*;
+    use crate::{Point3, StandardAttributes, StandardVertex};
 
     #[test]
     fn expansion_reports_invalid_source_indices() {
         let mesh = PolygonMesh::new_unchecked(
             StandardAttributes {
-                positions: vec![Point3::origin()],
+                positions: vec![Point3::new(0.0, 0.0, 0.0)],
                 ..Default::default()
             },
             Faces::from_iter([[

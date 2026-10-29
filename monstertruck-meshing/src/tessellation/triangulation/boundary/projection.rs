@@ -1,3 +1,8 @@
+#![allow(
+    clippy::similar_names,
+    reason = "surface parameter algorithms intentionally use canonical paired parameter names"
+)]
+
 //! `PolyBoundaryPiece`: projecting a face's 3D wire into the surface's
 //! parameter space, including the restart ladder and the verified-footpoint
 //! solver rung.
@@ -5,7 +10,14 @@
 //! Split out of the module file so the source stays readable; the module path
 //! is unchanged.
 
-use super::*;
+use super::{
+    BoundedCurve, EuclideanSpace, ExactParameterBoundary2D, ExactTrimBoundary2D, HashMap,
+    InnerSpace, MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D,
+    Point2, Point3, PolylineCurve, PreMeshableSurface, SP, SurfacePoint, TOLERANCE, Tolerance,
+    algo, env, mesh, periodic_min_difference, projection_debug_enabled, projection_debug_face,
+    report_projection_failure, report_projection_outcome, resample_boundary,
+    simplify_parameter_boundary,
+};
 use mesh::spade_round;
 use std::sync::OnceLock;
 
@@ -125,9 +137,10 @@ fn orient_boundary_to_edge<C, S>(
     C: BoundedCurve<Point = Point3> + ParametricCurve3D,
     S: ParametricSurface3D,
 {
-    let (edge_front, edge_back) = match orientation {
-        true => (edge_curve.front(), edge_curve.back()),
-        false => (edge_curve.back(), edge_curve.front()),
+    let (edge_front, edge_back) = if orientation {
+        (edge_curve.front(), edge_curve.back())
+    } else {
+        (edge_curve.back(), edge_curve.front())
     };
     if edge_front.near(&edge_back) {
         return;
@@ -161,11 +174,8 @@ impl PolyBoundaryPiece {
         let mut seen = HashMap::<(u64, u64), usize>::default();
         self.0.iter().copied().enumerate().all(|(index, point)| {
             let key = Self::rounded_uv_key(point);
-            if let Some(previous) = seen.insert(key, index) {
-                index == previous + 1 || (previous == 0 && index + 1 == len)
-            } else {
-                true
-            }
+            seen.insert(key, index)
+                .is_none_or(|previous| index == previous + 1 || (previous == 0 && index + 1 == len))
         })
     }
 
@@ -508,6 +518,10 @@ impl PolyBoundaryPiece {
         }
     }
 
+    #[allow(
+        clippy::option_if_let_else,
+        reason = "explicit period and range case analysis is clearer than nested map_or_else closures"
+    )]
     pub(super) fn normalize_axis(
         value: f64,
         previous: Option<f64>,
@@ -564,6 +578,10 @@ impl PolyBoundaryPiece {
         uder.dot(uder) + vder.dot(vder)
     }
 
+    #[allow(
+        clippy::tuple_array_conversions,
+        reason = "the two parameter-range endpoints are intentionally materialized as a fixed array for iteration"
+    )]
     fn project_loop<S: PreMeshableSurface>(
         surface: &S,
         boundary: &[Point3],
@@ -743,14 +761,19 @@ impl PolyBoundaryPiece {
             });
         report_projection_outcome("ladder", projected.is_some());
         let mut vec = projected?;
-        let grav = vec.iter().fold(Point2::origin(), |g, p| g + p.uv.to_vec()) / vec.len() as f64;
+        let grav = vec.iter().fold(Point2::origin(), |g, p| g + p.uv.to_vec())
+            / crate::count_as_f64(vec.len());
         if let (Some(up), Some((u0, _))) = (surface.period_u(), urange) {
             let quot = f64::floor((grav.x - u0) / up);
-            vec.iter_mut().for_each(|p| p.x -= quot * up);
+            for point in &mut vec {
+                point.x -= quot * up;
+            }
         }
         if let (Some(vp), Some((v0, _))) = (surface.period_v(), vrange) {
             let quot = f64::floor((grav.y - v0) / vp);
-            vec.iter_mut().for_each(|p| p.y -= quot * vp);
+            for point in &mut vec {
+                point.y -= quot * vp;
+            }
         }
         let last = *vec.last()?;
         if !vec[0].near(&last) {

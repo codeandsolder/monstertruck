@@ -5,7 +5,7 @@
 
 use monstertruck_core::{bounding_box::*, cgmath64::*, prop_assert_near, tolerance::*};
 use monstertruck_gpu::*;
-use proptest::prelude::*;
+use proptest::{prelude::*, test_runner::TestCaseError};
 use std::f64::consts::PI;
 
 proptest! {
@@ -18,10 +18,10 @@ proptest! {
         points in prop::array::uniform32(prop::array::uniform3(-100.0f64..=100.0f64)),
     ) {
         let z = rot_axis.0;
-        let r = (1.0 - z * z).sqrt();
+        let r = f64::mul_add(z, -z, 1.0).sqrt();
         let rot_axis = Vector3::new(r * f64::cos(rot_axis.1), r * f64::sin(rot_axis.1), z);
         let rot = Matrix3::from_axis_angle(rot_axis, Rad(rot_angle));
-        let points: [Point3; 32] = points.map(|p| p.into());
+        let points: [Point3; 32] = points.map(std::convert::Into::into);
 
         let same_plane = points.windows(4).all(|p| {
             Matrix3::from_cols(p[1] - p[0], p[2] - p[0], p[3] - p[0])
@@ -30,10 +30,15 @@ proptest! {
         });
         prop_assume!(!same_plane);
 
-        let camera = Camera::parallel_view_fitting(rot, aspect, near_clip, &points).expect("rotation is invertible");
+        let Some(camera) = Camera::parallel_view_fitting(rot, aspect, near_clip, &points) else {
+            return Err(TestCaseError::fail("rotation unexpectedly produced a singular view basis"));
+        };
+        let Some(projection) = camera.projection(aspect) else {
+            return Err(TestCaseError::fail("fitted camera must have an invertible transform"));
+        };
         let nvolume = points
             .iter()
-            .map(|p| camera.projection(aspect).transform_point(*p))
+            .map(|p| projection.transform_point(*p))
             .collect::<BoundingBox<Point3>>();
 
         let (min, max) = (nvolume.min(), nvolume.max());
@@ -52,10 +57,10 @@ proptest! {
         points in prop::array::uniform32(prop::array::uniform3(-100.0f64..=100.0f64)),
     ) {
         let z = rot_axis.0;
-        let r = (1.0 - z * z).sqrt();
+        let r = f64::mul_add(z, -z, 1.0).sqrt();
         let rot_axis = Vector3::new(r * f64::cos(rot_axis.1), r * f64::sin(rot_axis.1), z);
         let rot = Matrix3::from_axis_angle(rot_axis, Rad(rot_angle));
-        let points: [Point3; 32] = points.map(|p| p.into());
+        let points: [Point3; 32] = points.map(std::convert::Into::into);
 
         let same_plane = points.windows(4).all(|p| {
             Matrix3::from_cols(p[1] - p[0], p[2] - p[0], p[3] - p[0])
@@ -64,12 +69,17 @@ proptest! {
         });
         prop_assume!(!same_plane);
 
-        let camera = Camera::perspective_view_fitting(rot, aspect, Rad(fov), &points).expect("rotation is invertible");
+        let Some(camera) = Camera::perspective_view_fitting(rot, aspect, Rad(fov), &points) else {
+            return Err(TestCaseError::fail("rotation unexpectedly produced a singular view basis"));
+        };
         prop_assume!(camera.near_clip > TOLERANCE);
 
+        let Some(projection) = camera.projection(aspect) else {
+            return Err(TestCaseError::fail("fitted camera must have an invertible transform"));
+        };
         let nvolume = points
             .iter()
-            .map(|p| camera.projection(aspect).transform_point(*p))
+            .map(|p| projection.transform_point(*p))
             .collect::<BoundingBox<Point3>>();
 
         let (min, max) = (nvolume.min(), nvolume.max());
@@ -86,10 +96,8 @@ fn singular_camera_is_undefined_instead_of_aborting() {
         matrix: Matrix4::from_value(0.0),
         ..Camera::default()
     };
-    assert!(camera.try_projection(1.0).is_none());
-    assert!(camera.projection(1.0).x.x.is_nan());
-    let ray = camera.ray(Point2::origin());
-    assert!(ray.direction().x.is_nan());
+    assert!(camera.projection(1.0).is_none());
+    assert!(camera.ray(Point2::origin()).is_none());
 }
 
 #[test]

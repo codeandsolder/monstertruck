@@ -1,8 +1,13 @@
+#![allow(
+    clippy::similar_names,
+    reason = "surface parameter diagnostics intentionally use canonical paired parameter names"
+)]
+
 //! The boundary-projection failure lens. Split out of the module file so the
 //! source stays readable; the module path is unchanged. What it measures and
 //! why is the banner below.
 
-use super::*;
+use super::{EuclideanSpace, InnerSpace, MetricSpace, Point3, PreMeshableSurface, algo, env};
 
 // ---------------------------------------------------------------------------
 // Boundary-projection failure lens (`MT_DEBUG_BOUNDARY_PROJECTION=1`)
@@ -86,23 +91,23 @@ fn sampled_nearest<S: PreMeshableSurface>(
     let (v0, v1) = vrange;
     let mut best = ((u0, v0), f64::INFINITY);
     for i in 0..=GRID {
-        let u = u0 + (u1 - u0) * i as f64 / GRID as f64;
+        let u = u0 + (u1 - u0) * crate::count_as_f64(i) / crate::count_as_f64(GRID);
         for j in 0..=GRID {
-            let v = v0 + (v1 - v0) * j as f64 / GRID as f64;
+            let v = v0 + (v1 - v0) * crate::count_as_f64(j) / crate::count_as_f64(GRID);
             let d = surface.subs(u, v).distance2(point);
             if d < best.1 {
                 best = ((u, v), d);
             }
         }
     }
-    let mut du = (u1 - u0) / GRID as f64;
-    let mut dv = (v1 - v0) / GRID as f64;
+    let mut du = (u1 - u0) / crate::count_as_f64(GRID);
+    let mut dv = (v1 - v0) / crate::count_as_f64(GRID);
     for _ in 0..60 {
         let ((bu, bv), _) = best;
         for i in -2i32..=2 {
             for j in -2i32..=2 {
-                let u = (bu + du * i as f64).clamp(u0, u1);
-                let v = (bv + dv * j as f64).clamp(v0, v1);
+                let u = (bu + du * f64::from(i)).clamp(u0, u1);
+                let v = (bv + dv * f64::from(j)).clamp(v0, v1);
                 let d = surface.subs(u, v).distance2(point);
                 if d < best.1 {
                     best = ((u, v), d);
@@ -116,7 +121,10 @@ fn sampled_nearest<S: PreMeshableSurface>(
 }
 
 /// One line per unprojectable boundary vertex. Print-only.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "diagnostic reporter names each independent projection datum explicitly"
+)]
 pub(super) fn report_projection_failure<S: PreMeshableSurface>(
     surface: &S,
     attempt: &str,
@@ -191,8 +199,8 @@ pub(super) fn report_projection_failure<S: PreMeshableSurface>(
     // bound on `search_nearest_parameter_sp`, not the algorithm.
     let snp = |hint: Option<(f64, f64)>| -> String {
         let seed = hint.unwrap_or_else(|| {
-            let u = urange.map_or(0.0, |(lo, hi)| 0.5 * (lo + hi));
-            let v = vrange.map_or(0.0, |(lo, hi)| 0.5 * (lo + hi));
+            let u = urange.map_or(0.0, |(lo, hi)| f64::midpoint(lo, hi));
+            let v = vrange.map_or(0.0, |(lo, hi)| f64::midpoint(lo, hi));
             (u, v)
         });
         match algo::surface::search_nearest_parameter(surface, point, seed, 100) {

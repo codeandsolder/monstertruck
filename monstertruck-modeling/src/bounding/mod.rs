@@ -96,6 +96,7 @@ pub const ANALYTIC_SPHERE_LOOSENESS: f64 = 6.0 / std::f64::consts::PI;
 /// The ratio of the certified box's volume to the enclosed ball's volume, for a
 /// ball of any radius: exactly [`ANALYTIC_SPHERE_LOOSENESS`].
 #[inline]
+#[must_use]
 pub const fn analytic_sphere_looseness() -> f64 { ANALYTIC_SPHERE_LOOSENESS }
 
 /// Relative tolerance for judging a `Matrix4` a similarity.
@@ -108,6 +109,7 @@ const SIMILARITY_TOL: f64 = 1.0e-9;
 /// The box contains the solid's SURFACE and therefore -- the surface being a
 /// closed boundary -- the solid. See the module note for the per-class
 /// arguments and for how loose the result is.
+#[must_use]
 pub fn certified_solid_bounding_box(solid: &Solid) -> Option<BoundingBox<Point3>> {
     let mut result = BoundingBox::<Point3>::new();
     let mut any = false;
@@ -121,6 +123,7 @@ pub fn certified_solid_bounding_box(solid: &Solid) -> Option<BoundingBox<Point3>
 }
 
 /// A certified axis-aligned box containing every point of `face`, or [`None`].
+#[must_use]
 pub fn certified_face_bounding_box(face: &Face) -> Option<BoundingBox<Point3>> {
     let surface = face.surface();
     let hull = face_boundary_hull(face);
@@ -203,6 +206,7 @@ pub fn certified_surface_bounding_box(
 /// Diagnosis, not certification: an empty result means every face was bounded.
 /// A caller staring at a `None` needs to know WHICH class it tripped over, and
 /// guessing is how instruments start lying.
+#[must_use]
 pub fn uncertifiable_face_classes(solid: &Solid) -> Vec<String> {
     let mut classes: Vec<String> = Vec::new();
     for shell in solid.boundaries() {
@@ -237,7 +241,7 @@ pub fn uncertifiable_face_classes(solid: &Solid) -> Vec<String> {
 }
 
 /// The [`Surface`] variant's name, for diagnosis.
-fn surface_class_name(surface: &Surface) -> &'static str {
+const fn surface_class_name(surface: &Surface) -> &'static str {
     match surface {
         Surface::Plane(_) => "Plane",
         Surface::BsplineSurface(_) => "BsplineSurface",
@@ -250,7 +254,7 @@ fn surface_class_name(surface: &Surface) -> &'static str {
 }
 
 /// The [`Curve`] variant's name, for diagnosis.
-fn curve_class_name(curve: &Curve) -> &'static str {
+const fn curve_class_name(curve: &Curve) -> &'static str {
     match curve {
         Curve::Line(_) => "Line",
         Curve::BsplineCurve(_) => "BsplineCurve",
@@ -262,6 +266,7 @@ fn curve_class_name(curve: &Curve) -> &'static str {
 
 /// Points whose convex hull encloses every boundary wire of `face`, or [`None`]
 /// when some edge carries a curve with no cheap enclosure.
+#[must_use]
 pub fn face_boundary_hull(face: &Face) -> Option<Vec<Point3>> {
     let mut points = Vec::new();
     for edge in face.edge_iter() {

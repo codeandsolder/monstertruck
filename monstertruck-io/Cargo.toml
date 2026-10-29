@@ -7,7 +7,6 @@ authors = [
 ]
 edition = "2024"
 description = "Read and write CAD exchange formats as monstertruck B-rep"
-homepage = "https://github.com/virtualritz/monstertruck"
 repository = "https://github.com/virtualritz/monstertruck"
 readme = "README.md"
 keywords = ["cad", "step", "iges", "brep", "truck"]

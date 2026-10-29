@@ -553,8 +553,7 @@ fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             },
         )));
     }
-    Solid::try_new(boundaries)
-        .map_err(|source| ShapeOpsError::InvalidOutputShell { operation, source })
+    Solid::new(boundaries).map_err(|source| ShapeOpsError::InvalidOutputShell { operation, source })
 }
 
 /// AND operation between two solids (classic backend).

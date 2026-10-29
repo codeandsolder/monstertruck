@@ -1,7 +1,9 @@
 //! Demonstrates `BsplineSurface::sweep_rail` -- sweeping a profile along a
 //! curved rail with tangent-aligned framing.
 
-use monstertruck_geometry::prelude::*;
+use monstertruck_geometry::prelude::{
+    BsplineCurve, BsplineSurface, KnotVector, ParametricSurface, Point3,
+};
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // A curved rail (quadratic arc rising in z).
@@ -20,7 +22,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         vec![Point3::new(-0.5, 0.0, -0.5), Point3::new(0.5, 0.0, -0.5)],
     );
 
-    let surface = BsplineSurface::sweep_rail(profile, &rail, 15)?;
+    let surface = BsplineSurface::sweep_rail(&profile, &rail, 15)?;
 
     println!("Sweep rail surface:");
     println!("  u-degree = {}", surface.udegree());
@@ -29,9 +31,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Trace the leading edge (u=0) along the rail.
     println!("\nLeading edge (u=0) along rail:");
     for i in 0..=5 {
-        let v = i as f64 / 5.0;
+        let v = f64::from(i) / 5.0;
         let pt = surface.subs(0.0, v);
-        println!("  v={:.1}: ({:.2}, {:.2}, {:.2})", v, pt.x, pt.y, pt.z);
+        println!("  v={v:.1}: ({:.2}, {:.2}, {:.2})", pt.x, pt.y, pt.z);
     }
     Ok(())
 }

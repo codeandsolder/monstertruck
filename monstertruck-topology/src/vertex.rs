@@ -1,4 +1,9 @@
+#[cfg(test)]
 use crate::*;
+use crate::{
+    Arc, Debug, DebugDisplay, Formatter, Hash, Hasher, Id, Mutex, MutexFmt, StableId, Vertex,
+    VertexDisplayFormat, VertexId,
+};
 
 impl<P> Vertex<P> {
     /// constructor
@@ -11,30 +16,31 @@ impl<P> Vertex<P> {
     /// assert_ne!(v0, v1);
     /// assert_eq!(v0, v2);
     /// ```
-    #[inline(always)]
-    pub fn new(point: P) -> Vertex<P> {
-        Vertex {
+    #[inline]
+    pub fn new(point: P) -> Self {
+        Self {
             point: Arc::new(Mutex::new(point)),
             stable_id: StableId::UNASSIGNED,
         }
     }
 
     /// Creates a vertex with an explicit [`StableId`].
-    #[inline(always)]
-    pub fn new_with_id(point: P, stable_id: StableId) -> Vertex<P> {
-        Vertex {
+    #[inline]
+    pub fn new_with_id(point: P, stable_id: StableId) -> Self {
+        Self {
             point: Arc::new(Mutex::new(point)),
             stable_id,
         }
     }
 
     /// Returns the stable persistent identifier of this vertex.
-    #[inline(always)]
-    pub fn stable_id(&self) -> StableId { self.stable_id }
+    #[inline]
+    #[must_use]
+    pub const fn stable_id(&self) -> StableId { self.stable_id }
 
     /// Sets the stable persistent identifier of this vertex.
-    #[inline(always)]
-    pub fn set_stable_id(&mut self, id: StableId) { self.stable_id = id; }
+    #[inline]
+    pub const fn set_stable_id(&mut self, id: StableId) { self.stable_id = id; }
 
     /// Creates distinct vertices from points.
     /// # Examples
@@ -44,14 +50,15 @@ impl<P> Vertex<P> {
     /// assert_eq!(v.len(), 3);
     /// assert_ne!(v[0], v[2]);
     /// ```
-    #[inline(always)]
-    pub fn from_points(points: impl AsRef<[P]>) -> Vec<Vertex<P>>
+    #[inline]
+    pub fn from_points(points: impl AsRef<[P]>) -> Vec<Self>
     where P: Copy {
-        points.as_ref().iter().map(|p| Vertex::new(*p)).collect()
+        points.as_ref().iter().map(|p| Self::new(*p)).collect()
     }
 
     /// Returns the point of vertex.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn point(&self) -> P
     where P: Clone {
         self.point.lock().clone()
@@ -75,7 +82,7 @@ impl<P> Vertex<P> {
     /// assert_eq!(v0.point(), 1);
     /// assert_eq!(v1.point(), 1);
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn set_point(&self, point: P) { *self.point.lock() = point; }
 
     /// Returns vertex whose point is converted by `point_mapping`.
@@ -83,7 +90,7 @@ impl<P> Vertex<P> {
     /// Accessing geometry elements directly in the closure will result in a deadlock.
     /// So, this method does not appear to the document.
     #[doc(hidden)]
-    #[inline(always)]
+    #[inline]
     pub fn try_mapped<Q>(
         &self,
         mut point_mapping: impl FnMut(&P) -> Option<Q>,
@@ -106,13 +113,14 @@ impl<P> Vertex<P> {
     /// Accessing geometry elements directly in the closure will result in a deadlock.
     /// So, this method does not appear to the document.
     #[doc(hidden)]
-    #[inline(always)]
+    #[inline]
     pub fn mapped<Q>(&self, mut point_mapping: impl FnMut(&P) -> Q) -> Vertex<Q> {
         Vertex::new_with_id(point_mapping(&*self.point.lock()), self.stable_id)
     }
 
     /// Returns the id of the vertex.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn id(&self) -> VertexId<P> { Id::new(Arc::as_ptr(&self.point)) }
 
     /// Returns how many same vertices.
@@ -134,7 +142,8 @@ impl<P> Vertex<P> {
     /// drop(v2);
     /// assert_eq!(v0.count(), 1);
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn count(&self) -> usize { Arc::strong_count(&self.point) }
 
     /// Create display struct for debugging the vertex.
@@ -160,8 +169,9 @@ impl<P> Vertex<P> {
     ///     "[0, 2]",
     /// );
     /// ```
-    #[inline(always)]
-    pub fn display(
+    #[inline]
+    #[must_use]
+    pub const fn display(
         &self,
         format: VertexDisplayFormat,
     ) -> DebugDisplay<'_, Self, VertexDisplayFormat> {
@@ -173,9 +183,9 @@ impl<P> Vertex<P> {
 }
 
 impl<P> Clone for Vertex<P> {
-    #[inline(always)]
-    fn clone(&self) -> Vertex<P> {
-        Vertex {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
             point: Arc::clone(&self.point),
             stable_id: self.stable_id,
         }
@@ -183,14 +193,14 @@ impl<P> Clone for Vertex<P> {
 }
 
 impl<P> PartialEq for Vertex<P> {
-    #[inline(always)]
+    #[inline]
     fn eq(&self, other: &Self) -> bool { self.id() == other.id() }
 }
 
 impl<P> Eq for Vertex<P> {}
 
 impl<P> Hash for Vertex<P> {
-    #[inline(always)]
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) { std::ptr::hash(Arc::as_ptr(&self.point), state); }
 }
 
@@ -217,12 +227,13 @@ impl<P: Debug> Debug for DebugDisplay<'_, Vertex<P>, VertexDisplayFormat> {
 }
 
 #[test]
-fn vertex_stable_id_survives_clone() {
+fn vertex_stable_id_survives_clone() -> std::result::Result<(), StableIdExhausted> {
     let mut alloc = StableIdAllocator::new();
-    let v = Vertex::new_with_id((), alloc.allocate());
+    let v = Vertex::new_with_id((), alloc.allocate()?);
     let v2 = v.clone();
     assert_eq!(v.stable_id(), v2.stable_id());
     assert!(v.stable_id().is_assigned());
+    Ok(())
 }
 
 #[test]
@@ -257,7 +268,7 @@ fn face_stable_id_survives_clone() {
 }
 
 #[test]
-fn solid_alloc_id() {
+fn solid_alloc_id() -> std::result::Result<(), StableIdExhausted> {
     let v = Vertex::from_points([(); 8]);
     let edge = [
         Edge::new_unchecked(&v[0], &v[1], ()),
@@ -292,9 +303,10 @@ fn solid_alloc_id() {
     let face5 = Face::new_unchecked(vec![wire5], ());
     let shell: Shell<(), (), ()> = vec![face0, face1, face2, face3, face4, face5].into();
     let mut solid = Solid::new_unchecked(vec![shell]);
-    let a = solid.alloc_id();
-    let b = solid.alloc_id();
+    let a = solid.alloc_id()?;
+    let b = solid.alloc_id()?;
     assert_ne!(a, b);
     assert_eq!(a.raw(), 1);
     assert_eq!(b.raw(), 2);
+    Ok(())
 }

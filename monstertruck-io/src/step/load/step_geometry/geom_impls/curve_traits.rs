@@ -20,7 +20,9 @@ impl ParametricCurve for SurfaceCurve3D {
     fn period(&self) -> Option<f64> { self.leader().period() }
 }
 
-impl BoundedCurve for SurfaceCurve3D {}
+impl BoundedCurve for SurfaceCurve3D {
+    fn range_tuple(&self) -> (f64, f64) { self.leader().range_tuple() }
+}
 
 impl ParameterDivision1D for SurfaceCurve3D {
     type Point = Point3;

@@ -1,6 +1,8 @@
-/// This macro is a replacement for the prelude module. It loads the main public structures in monstertruck-topology,
-/// and redefines the topological elements in a way that relates them to geometric elements.
-/// For information on the actual structures that are loaded (or aliased), please refer to [`imported`].
+/// This macro replaces the prelude module and loads the main public structures
+/// in `monstertruck-topology`.
+///
+/// It redefines topological elements so they are related to geometric elements.
+/// See [`imported`] for the exact structures and aliases loaded.
 ///
 /// # Examples
 /// ```
@@ -47,7 +49,7 @@
 #[macro_export]
 macro_rules! prelude {
     ($point: ty, $curve: ty, $surface: ty $(, $pub: tt $($super: tt)?)?) => {
-        #[allow(unused)]
+        #[allow(unused_imports, reason = "prelude consumers intentionally choose only a subset of convenience imports")]
         $($pub$($super)?)? use $crate::{
             compress::CompressedEdgeIndex,
             shell::ShellCondition,
@@ -62,52 +64,55 @@ macro_rules! prelude {
         };
 
         /// Vertex, the minimum topological unit.
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type Vertex = $crate::Vertex<$point>;
         /// Edge, which consists two vertices.
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type Edge = $crate::Edge<$point, $curve>;
         /// Wire, a path or cycle which consists some edges.
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type Wire = $crate::Wire<$point, $curve>;
         /// Face, attached to a simple and closed wire.
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type Face = $crate::Face<$point, $curve, $surface>;
         /// Shell, a connected compounded faces.
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type Shell = $crate::Shell<$point, $curve, $surface>;
         /// Solid, attached to a closed shells.
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type Solid = $crate::Solid<$point, $curve, $surface>;
 
         /// The id of vertex. `Copy` trait is implemented.
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type VertexId = $crate::VertexId<$point>;
         /// The id that does not depend on the direction of the edge.
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type EdgeId = $crate::EdgeId<$curve>;
         /// The id that does not depend on the direction of the face.
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type FaceId = $crate::FaceId<$surface>;
 
         /// Serialized compressed edge
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type CompressedEdge = $crate::compress::CompressedEdge<$curve>;
         /// Serialized compressed face
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type CompressedFace = $crate::compress::CompressedFace<$surface>;
         /// Serialized compressed shell
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type CompressedShell = $crate::compress::CompressedShell<$point, $curve, $surface>;
         /// Serialized compressed solid
-        #[allow(unused)]
+        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
         $($pub$($super)?)? type CompressedSolid = $crate::compress::CompressedSolid<$point, $curve, $surface>;
     };
 }
 
 #[doc(hidden)]
 pub mod empty_geometries {
-    #![allow(missing_debug_implementations)]
+    #![allow(
+        missing_debug_implementations,
+        reason = "empty marker geometries intentionally carry no state worth formatting"
+    )]
     pub struct Point;
     pub struct Curve;
     pub struct Surface;

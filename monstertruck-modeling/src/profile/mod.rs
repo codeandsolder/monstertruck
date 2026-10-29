@@ -20,7 +20,7 @@ where C: ParametricCurve3D + BoundedCurve + Clone {
             let p0 = edge.front().point();
             let curve = edge.curve();
             let (t0, t1) = curve.range_tuple();
-            let p1 = curve.subs((t0 + t1) / 2.0);
+            let p1 = curve.subs(f64::midpoint(t0, t1));
             [p0, p1]
         })
         .map(|p| Point2::new(p.to_vec().dot(u_axis), p.to_vec().dot(v_axis)))
@@ -39,7 +39,7 @@ fn signed_area_2d(pts: &[Point2]) -> f64 {
 
 /// Centroid of 2D sample points.
 fn centroid_2d(pts: &[Point2]) -> Point2 {
-    let n = pts.len() as f64;
+    let n = crate::usize_to_f64(pts.len());
     let sum = pts.iter().fold(Vector2::zero(), |acc, p| acc + p.to_vec());
     Point2::from_vec(sum / n)
 }
@@ -70,8 +70,7 @@ fn point_in_polygon(pts: &[Point2], c: Point2) -> bool {
                 Some(counter)
             }
         })
-        .map(|counter| counter > 0)
-        .unwrap_or(true)
+        .is_none_or(|counter| counter > 0)
 }
 
 /// Computes the average normal of a set of wires by accumulating cross products
@@ -85,7 +84,7 @@ where C: ParametricCurve3D + BoundedCurve + Clone {
                 let p0 = edge.front().point();
                 let curve = edge.curve();
                 let (t0, t1) = curve.range_tuple();
-                let p1 = curve.subs((t0 + t1) / 2.0);
+                let p1 = curve.subs(f64::midpoint(t0, t1));
                 [p0, p1]
             })
         })
@@ -95,8 +94,8 @@ where C: ParametricCurve3D + BoundedCurve + Clone {
         return None;
     }
 
-    let center =
-        all_pts.iter().fold(Point3::origin(), |s, p| s + p.to_vec()) / all_pts.len() as f64;
+    let center = all_pts.iter().fold(Point3::origin(), |s, p| s + p.to_vec())
+        / crate::usize_to_f64(all_pts.len());
 
     let normal = all_pts
         .iter()
@@ -138,8 +137,17 @@ where C: ParametricCurve3D + BoundedCurve + Clone + Invertible {
         ));
     }
 
-    // Validate all wires are closed.
-    if wires.iter().any(|w| !w.is_closed()) {
+    // `Wire::is_closed()` deliberately considers an empty wire closed, but an
+    // empty profile loop has no plane, area, or containment point. Reject it
+    // before projection/centroid arithmetic can manufacture NaNs.
+    if wires.iter().any(|wire| wire.is_empty()) {
+        return Err(Error::FromTopology(
+            monstertruck_topology::errors::Error::EmptyWire,
+        ));
+    }
+
+    // Validate all non-empty wires are closed.
+    if wires.iter().any(|wire| !wire.is_closed()) {
         return Err(Error::OpenWire);
     }
 
@@ -252,9 +260,9 @@ where
     let normal =
         compute_plane_normal(std::slice::from_ref(outer)).ok_or(Error::WireNotInOnePlane)?;
     if normal.dot(dir) < 0.0 {
-        normalized
-            .iter_mut()
-            .for_each(|wire| *wire = wire.inverse());
+        for wire in &mut normalized {
+            *wire = wire.inverse();
+        }
     }
     let face = crate::builder::try_attach_plane(normalized)?;
     let solid: monstertruck_topology::Solid<Point3, C, S> = crate::builder::extrude(&face, dir);

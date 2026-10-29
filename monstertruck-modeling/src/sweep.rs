@@ -241,10 +241,10 @@ where
             connect_curves,
         ));
         shell.push(seiling);
-        // Spec 012 U4: `Solid::debug_new` is fallible now, and this trait
+        // Spec 012 U4: the former profile-dependent `Solid` constructor is fallible now, and this trait
         // method's return type is a bare `Solid`, so there is nowhere to put a
         // refusal. The construction is stated as `new_unchecked` rather than
-        // left behind `debug_new`'s profile switch, which chose between an
+        // left behind the former profile-dependent constructor, which chose between an
         // abort (debug) and exactly this call (release). The check it drops is
         // MEASURED DEAD in-gate -- it validates the sweep's own output, and a
         // firing would have aborted a debug test run. Giving it a channel means
@@ -285,9 +285,9 @@ where
         self.connected_components()
             .into_iter()
             .map(move |shell| {
-                let mut bdry = Shell::new();
+                let mut bdry = Self::new();
                 let mut seiling = shell.mapped(&point_mapping, &curve_mapping, &surface_mapping);
-                bdry.extend(shell.face_iter().map(|face| face.inverse()));
+                bdry.extend(shell.face_iter().map(monstertruck_topology::Face::inverse));
                 let bdries0 = shell.extract_boundaries();
                 let bdries1 = seiling.extract_boundaries();
                 let biter0 = bdries0.iter().flat_map(Wire::edge_iter);
@@ -299,7 +299,7 @@ where
                     &connect_curves,
                 ));
                 bdry.append(&mut seiling);
-                Solid::try_new(vec![bdry])
+                Solid::new(vec![bdry])
             })
             .collect()
     }

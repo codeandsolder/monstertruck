@@ -51,7 +51,7 @@ impl<P, C, S> BooleanRegion<P, C, S> {
         P: Clone,
         C: Clone,
         S: Clone, {
-        let mut face = Face::try_new(self.boundaries.clone(), self.surface.clone()).ok()?;
+        let mut face = Face::new(self.boundaries.clone(), self.surface.clone()).ok()?;
         if !self.orientation {
             face.invert();
         }
@@ -214,7 +214,7 @@ fn materialize_region_set<P: Clone, C: Clone, S: Clone>(
                         .map(Wire::from)
                 })
                 .collect::<Option<Vec<_>>>()?;
-            let mut face = Face::try_new(boundaries, compressed_face.surface).ok()?;
+            let mut face = Face::new(boundaries, compressed_face.surface).ok()?;
             if !compressed_face.orientation {
                 face.invert();
             }

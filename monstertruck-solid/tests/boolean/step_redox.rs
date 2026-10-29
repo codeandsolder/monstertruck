@@ -154,7 +154,6 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
 
 #[test]
 #[allow(
-    clippy::approx_constant,
     clippy::excessive_precision,
     reason = "regression fixture preserves recovered STEP coordinates verbatim"
 )]
@@ -183,7 +182,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         point_on_arc(
             [0.5, -0.19999999999999996],
             0.2000000000000001,
-            1.5707963267948966,
+            std::f64::consts::FRAC_PI_2,
         ),
         Point3::new(0.7, -0.19999999999999996, 0.0),
         Point3::new(0.7, -1.7, 0.0),
@@ -191,7 +190,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         point_on_arc(
             [2.9, -0.19999999999999996],
             0.2000000000000001,
-            3.141592653589793,
+            std::f64::consts::PI,
         ),
         Point3::new(2.8999999999999995, 0.0, 0.0),
         Point3::new(3.4, 0.0, 0.0),
@@ -207,7 +206,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
             arc_mid(
                 [0.5, -0.19999999999999996],
                 0.2000000000000001,
-                1.5707963267948966,
+                std::f64::consts::FRAC_PI_2,
                 0.0,
             ),
         )?,
@@ -220,8 +219,8 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
             arc_mid(
                 [2.9, -0.19999999999999996],
                 0.2000000000000001,
-                3.141592653589793,
-                1.5707963267948988,
+                std::f64::consts::PI,
+                f64::from_bits(0x3ff9_21fb_5444_2d22),
             ),
         )?,
         builder::line(&plate_vertices[6], &plate_vertices[7]),
@@ -248,7 +247,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         point_on_arc(
             [0.30000000000000004, 0.0],
             0.3000000000000329,
-            -3.141592653589793,
+            -std::f64::consts::PI,
         ),
         Point3::new(0.30000000000000004, -0.30000000000000027, 0.0),
         Point3::new(1.8, -0.30000000000000027, 0.0),
@@ -270,8 +269,8 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
             arc_mid(
                 [0.30000000000000004, 0.0],
                 0.3000000000000329,
-                -3.141592653589793,
-                -1.5707963267948966,
+                -std::f64::consts::PI,
+                -std::f64::consts::FRAC_PI_2,
             ),
         )?,
         builder::line(&hook_vertices[1], &hook_vertices[2]),
@@ -284,7 +283,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
                 [0.30000000000000004, 0.0],
                 0.10000000000003278,
                 4.712388980384706,
-                3.141592653589793,
+                std::f64::consts::PI,
             ),
         )?,
         builder::line(&hook_vertices[5], &hook_vertices[6]),
@@ -344,7 +343,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
             arc_mid(
                 [0.39999999999999813, 0.2],
                 0.2000000000000001,
-                -1.5707963267948988,
+                f64::from_bits(0xbff9_21fb_5444_2d22),
                 0.0,
             ),
         )?,
@@ -356,7 +355,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
                 [0.39999999999999813, 1.7999999999999998],
                 0.2000000000000001,
                 0.0,
-                1.5707963267948988,
+                f64::from_bits(0x3ff9_21fb_5444_2d22),
             ),
         )?,
         builder::line(&rounded_vertices[4], &rounded_vertices[5]),
@@ -413,7 +412,6 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
 
 #[test]
 #[allow(
-    clippy::approx_constant,
     clippy::excessive_precision,
     reason = "regression fixture preserves recovered STEP coordinates verbatim"
 )]
@@ -532,7 +530,6 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
 
 #[test]
 #[allow(
-    clippy::approx_constant,
     clippy::excessive_precision,
     reason = "regression fixture preserves recovered STEP coordinates verbatim"
 )]

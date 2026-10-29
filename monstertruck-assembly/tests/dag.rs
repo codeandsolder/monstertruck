@@ -49,7 +49,7 @@ fn random_graph(
     #[strategy = prop::array::uniform32(NODE_RANGE)] to: [usize; NUM_EDGE],
     #[strategy = prop::array::uniform32(NODE_RANGE)] entity: [usize; NUM_EDGE],
     #[strategy = prop::array::uniform10(NODE_RANGE)] node4remove: [usize; NUM_REMOVE],
-    #[strategy = prop::array::uniform10(0f64..1f64)] edge4remove: [f64; NUM_REMOVE],
+    #[strategy = prop::array::uniform10(0usize..NUM_EDGE)] edge4remove: [usize; NUM_REMOVE],
 ) {
     let mut dag = Dag::<usize, usize>::new();
     let node = dag.create_nodes(NODE_RANGE);
@@ -64,11 +64,11 @@ fn random_graph(
 
     for i in 0..NUM_REMOVE {
         let node_index = node[node4remove[i]];
-        let len = dag
-            .node(node_index)
-            .map_or(0.0, |node| node.edges().len() as f64);
-        let edge_index = (len * edge4remove[i]) as usize;
-        dag.remove_edge(node_index, edge_index);
+        let len = dag.node(node_index).map_or(0, |node| node.edges().len());
+        if len != 0 {
+            let edge_index = edge4remove[i] % len;
+            dag.remove_edge(node_index, edge_index);
+        }
     }
 
     // Consistency of parents
@@ -110,7 +110,8 @@ fn sub_has_cycle<NE, EE>(
         let (_, child) = edge.nodes();
         if finished.contains(&child) {
             continue;
-        } else if seen.contains(&child) || sub_has_cycle(child, dag, seen, finished) {
+        }
+        if seen.contains(&child) || sub_has_cycle(child, dag, seen, finished) {
             return true;
         }
     }

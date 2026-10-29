@@ -24,7 +24,7 @@
 //! unchanged. Escalating a drop to a hard/typed error is deliberately **out of
 //! scope** here (it changes outcomes and needs a user decision -- see D1b).
 
-use super::*;
+use super::{PolygonMesh, PreMeshableSurface, env, mesh_trace_enabled};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Why a face produced no usable mesh (was silently dropped).
@@ -45,6 +45,7 @@ pub enum FaceDropReason {
 
 impl FaceDropReason {
     /// Stable machine-readable tag for census parsing and structured log fields.
+    #[must_use]
     pub const fn tag(self) -> &'static str {
         match self {
             Self::UnboundedDomain => "unbounded-domain",
@@ -81,7 +82,7 @@ fn census_enabled() -> bool { env::var_os("MT_FACE_DROP").is_some() || mesh_trac
 /// `pub(crate)` so the opt-in strict meshing path
 /// ([`crate::tessellation::shell_to_polygon_strict`]) classifies a just-meshed
 /// shell's faces with the *same* logic the always-on warn floor uses.
-pub(crate) fn classify_face_drop(
+pub fn classify_face_drop(
     polygon: Option<&PolygonMesh>,
     is_untrimmed: bool,
 ) -> Option<FaceDropReason> {
@@ -110,7 +111,7 @@ pub(super) fn observe_face_drop<S: PreMeshableSurface>(
         return;
     };
     FACE_DROP_COUNT.fetch_add(1, Ordering::Relaxed);
-    let face = face_idx.map_or(-1i64, |index| index as i64);
+    let face = face_idx.map_or_else(|| String::from("unknown"), |index| index.to_string());
     let surface_type = std::any::type_name::<S>();
     let periodic_u = surface.period_u().is_some();
     let periodic_v = surface.period_v().is_some();

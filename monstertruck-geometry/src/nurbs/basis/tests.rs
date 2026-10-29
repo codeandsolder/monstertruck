@@ -4,6 +4,8 @@
 //! path is unchanged.
 
 use super::*;
+use crate::prelude::{Point3, Vector3, assert_near2};
+use monstertruck_traits::ParametricCurve;
 
 #[test]
 fn hermite_endpoints_and_tangents() {
@@ -54,6 +56,15 @@ fn power_basis_quadratic() {
     assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
     assert_near2!(curve.subs(1.0), Point3::new(1.0, 0.0, 0.0));
     assert_near2!(curve.subs(0.5), Point3::new(0.25, 0.0, 0.0));
+}
+
+#[test]
+fn power_basis_degree_68_does_not_overflow_binomial_weights() {
+    let mut coefficients = vec![Point3::new(0.0, 0.0, 0.0); 69];
+    coefficients[68] = Point3::new(1.0, 0.0, 0.0);
+    let curve = BsplineCurve::from(PowerBasisCurve(coefficients));
+    let t = 0.9_f64;
+    assert_near2!(curve.subs(t), Point3::new(t.powi(68), 0.0, 0.0));
 }
 
 #[test]

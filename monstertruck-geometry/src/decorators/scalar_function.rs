@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BsplineCurve, BsplineSurface, CurveScalarFunction, NurbsCurve, NurbsSurface, ParametricCurve,
+    ParametricSurface, SurfaceScalarFunction, Vector1, Vector2,
+};
 
 impl CurveScalarFunction for f64 {
     #[inline]
@@ -25,7 +28,7 @@ impl_curve_scalar_function!(BsplineCurve<Vector1>);
 impl_curve_scalar_function!(NurbsCurve<Vector2>);
 
 impl<T: CurveScalarFunction> CurveScalarFunction for &T {
-    #[inline(always)]
+    #[inline]
     fn derivative_n(&self, n: usize, t: f64) -> f64 { (**self).derivative_n(n, t) }
 }
 
@@ -54,7 +57,7 @@ impl_surface_scalar_function!(BsplineSurface<Vector1>);
 impl_surface_scalar_function!(NurbsSurface<Vector2>);
 
 impl<T: SurfaceScalarFunction> SurfaceScalarFunction for &T {
-    #[inline(always)]
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> f64 {
         (**self).derivative_mn(m, n, u, v)
     }

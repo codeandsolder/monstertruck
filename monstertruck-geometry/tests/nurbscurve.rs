@@ -136,7 +136,7 @@ fn test_parameter_division() {
         let pt1 = curve.subs(div[i]);
         assert_eq!(pt1, pts[i]);
         let value_middle = pt0.midpoint(pt1);
-        let param_middle = curve.subs((div[i - 1] + div[i]) / 2.0);
+        let param_middle = curve.subs(f64::midpoint(div[i - 1], div[i]));
         let dist = value_middle.distance(param_middle);
         assert!(dist < tol, "large distance: {dist}");
     }

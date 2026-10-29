@@ -1,4 +1,4 @@
-use super::*;
+use super::{Point3, PolygonMesh, PolylineCurve, Vector4};
 use array_macro::array;
 
 /// Calculate the volume and the center of gravity of mesh.
@@ -131,6 +131,10 @@ impl CalcVolume for PolygonMesh {
             sum + (p.x + q.x + r.x) * ((q.y - p.y) * (r.z - p.z) - (r.y - p.y) * (q.z - p.z))
         }) / 6.0
     }
+    #[allow(
+        clippy::suspicious_operation_groupings,
+        reason = "this is the canonical symmetric second-moment polynomial; Clippy's suggested p*s replacement is mathematically different"
+    )]
     fn center_of_gravity(&self) -> Vector4 {
         let arr = point_triangles(self).fold([0.0; 4], |sum, [p, q, r]| {
             let det = array![i => {
@@ -158,17 +162,23 @@ fn point_triangles(poly: &PolygonMesh) -> impl Iterator<Item = [Point3; 3]> + '_
 impl CalcVolume for monstertruck_topology::Solid<Point3, PolylineCurve<Point3>, PolygonMesh> {
     fn volume(&self) -> f64 {
         self.face_iter()
-            .map(|face| match face.orientation() {
-                true => face.surface().volume(),
-                false => -face.surface().volume(),
+            .map(|face| {
+                if face.orientation() {
+                    face.surface().volume()
+                } else {
+                    -face.surface().volume()
+                }
             })
             .sum::<f64>()
     }
     fn center_of_gravity(&self) -> Vector4 {
         self.face_iter()
-            .map(|face| match face.orientation() {
-                true => face.surface().center_of_gravity(),
-                false => -face.surface().center_of_gravity(),
+            .map(|face| {
+                if face.orientation() {
+                    face.surface().center_of_gravity()
+                } else {
+                    -face.surface().center_of_gravity()
+                }
             })
             .sum::<Vector4>()
     }

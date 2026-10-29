@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Adjacency, FaceNormal, Faces, InnerSpace, MetricSpace, Point3, PolygonMesh, StandardAttributes,
+    Vector3, Vertex, nonpositive_tolerance,
+};
 use std::f64::consts::PI;
 
 /// Splitting the faces into several clusters.
@@ -136,7 +139,7 @@ impl Splitting for PolygonMesh {
         let uv_coords = self.uv_coords().clone();
         let normals = self.normals().clone();
         let faces: Faces = indices.iter().map(|i| &self.faces()[*i]).collect();
-        PolygonMesh::new_unchecked(
+        Self::new_unchecked(
             StandardAttributes {
                 positions,
                 uv_coords,
@@ -185,9 +188,10 @@ impl ExperimentalSplitters for PolygonMesh {
         let mut true_faces = Vec::new();
         let mut false_faces = Vec::new();
         for (i, face) in self.face_iter().enumerate() {
-            match func(face) {
-                true => true_faces.push(i),
-                false => false_faces.push(i),
+            if func(face) {
+                true_faces.push(i);
+            } else {
+                false_faces.push(i);
             }
         }
         (true_faces, false_faces)
@@ -248,9 +252,8 @@ fn get_components(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let mut unchecked = vec![true; adjacency.len()];
     let mut components = Vec::new();
     loop {
-        let first = match unchecked.iter().position(|x| *x) {
-            Some(idx) => idx,
-            None => return components,
+        let Some(first) = unchecked.iter().position(|x| *x) else {
+            return components;
         };
         let mut stack = vec![first];
         let mut component = vec![first];
@@ -304,7 +307,7 @@ fn add_weights(weights: &mut [f64], positions: &[Point3], face: &[Vertex]) {
         let vec0 = positions[face[i - 1].pos] - positions[face[0].pos];
         let vec1 = positions[face[i].pos] - positions[face[0].pos];
         sum + (vec0.cross(vec1)).magnitude() / 2.0
-    }) / (face.len() as f64);
+    }) / (crate::count_as_f64(face.len()));
     for v in face {
         weights[v.pos] += area;
     }

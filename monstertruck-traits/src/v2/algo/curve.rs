@@ -1,22 +1,7 @@
+use super::scalar_from_usize;
 use crate::v2;
 use monstertruck_core::MetricSpace;
 use num_traits::Float;
-
-fn scalar_from_usize<S: Float>(mut value: usize) -> S {
-    let mut result = S::zero();
-    let mut bit = S::one();
-    while value != 0 {
-        if value & 1 == 1 {
-            result = result + bit;
-        }
-        value >>= 1;
-        if value != 0 {
-            bit = bit + bit;
-        }
-    }
-    result
-}
-
 /// Divides the domain into equal parts and returns `t` such that
 /// `curve.evaluate(t)` is closest to `point`.
 ///

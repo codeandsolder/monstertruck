@@ -38,7 +38,10 @@ pub enum Curve {
     /// 3-dimensional NURBS curve
     NurbsCurve(NurbsCurve<Vector4>),
     /// 3-dimensional curve carried by a 2-dimensional parameter curve on a surface
-    #[allow(clippy::enum_variant_names)]
+    #[allow(
+        clippy::enum_variant_names,
+        reason = "curve variants intentionally mirror the explicit geometry type names"
+    )]
     ParameterCurve(ParameterCurve<Curve2D, Box<Surface>>),
     /// intersection curve
     IntersectionCurve(ModelSurfaceCurve),
@@ -123,31 +126,31 @@ macro_rules! derive_curve_self_method {
 impl BoundedCurve for Curve {
     fn range_tuple(&self) -> (f64, f64) {
         match self {
-            Curve::Line(curve) => curve.range_tuple(),
-            Curve::BsplineCurve(curve) => curve.range_tuple(),
-            Curve::NurbsCurve(curve) => curve.range_tuple(),
-            Curve::ParameterCurve(curve) => curve.range_tuple(),
-            Curve::IntersectionCurve(curve) => curve.range_tuple(),
+            Self::Line(curve) => curve.range_tuple(),
+            Self::BsplineCurve(curve) => curve.range_tuple(),
+            Self::NurbsCurve(curve) => curve.range_tuple(),
+            Self::ParameterCurve(curve) => curve.range_tuple(),
+            Self::IntersectionCurve(curve) => curve.range_tuple(),
         }
     }
 
     fn front(&self) -> Point3 {
         match self {
-            Curve::Line(curve) => curve.front(),
-            Curve::BsplineCurve(curve) => curve.front(),
-            Curve::NurbsCurve(curve) => curve.front(),
-            Curve::ParameterCurve(curve) => curve.front(),
-            Curve::IntersectionCurve(curve) => curve.front(),
+            Self::Line(curve) => curve.front(),
+            Self::BsplineCurve(curve) => curve.front(),
+            Self::NurbsCurve(curve) => curve.front(),
+            Self::ParameterCurve(curve) => curve.front(),
+            Self::IntersectionCurve(curve) => curve.front(),
         }
     }
 
     fn back(&self) -> Point3 {
         match self {
-            Curve::Line(curve) => curve.back(),
-            Curve::BsplineCurve(curve) => curve.back(),
-            Curve::NurbsCurve(curve) => curve.back(),
-            Curve::ParameterCurve(curve) => curve.back(),
-            Curve::IntersectionCurve(curve) => curve.back(),
+            Self::Line(curve) => curve.back(),
+            Self::BsplineCurve(curve) => curve.back(),
+            Self::NurbsCurve(curve) => curve.back(),
+            Self::ParameterCurve(curve) => curve.back(),
+            Self::IntersectionCurve(curve) => curve.back(),
         }
     }
 
@@ -160,10 +163,12 @@ fn sample_curve_to_nurbs(curve: &(impl ParametricCurve3D + BoundedCurve)) -> Nur
     let (t0, t1) = curve.range_tuple();
     let samples = 16usize;
     let points: Vec<Point3> = (0..=samples)
-        .map(|i| t0 + (t1 - t0) * (i as f64) / (samples as f64))
+        .map(|i| t0 + (t1 - t0) * crate::usize_to_f64(i) / crate::usize_to_f64(samples))
         .map(|t| curve.evaluate(t))
         .collect();
-    let knots: Vec<f64> = (0..=samples).map(|i| i as f64 / samples as f64).collect();
+    let knots: Vec<f64> = (0..=samples)
+        .map(|i| crate::usize_to_f64(i) / crate::usize_to_f64(samples))
+        .collect();
     let knot_vec = KnotVector::from(
         iter::once(0.0)
             .chain(knots.iter().copied())
@@ -205,25 +210,25 @@ impl ParameterDivision1D for Curve {
         let debug_profile = env::var("MT_PROFILE_CURVE_DIVISION").is_ok();
         let started = Instant::now();
         let result = match self {
-            Curve::Line(curve) => curve.parameter_division(range, tol),
-            Curve::BsplineCurve(curve) => linear_bspline_division(curve, range)
+            Self::Line(curve) => curve.parameter_division(range, tol),
+            Self::BsplineCurve(curve) => linear_bspline_division(curve, range)
                 .unwrap_or_else(|| curve.parameter_division(range, tol)),
-            Curve::NurbsCurve(curve) => curve.parameter_division(range, tol),
-            Curve::ParameterCurve(curve) => curve.parameter_division(range, tol),
-            Curve::IntersectionCurve(curve) => curve.leader().parameter_division(range, tol),
+            Self::NurbsCurve(curve) => curve.parameter_division(range, tol),
+            Self::ParameterCurve(curve) => curve.parameter_division(range, tol),
+            Self::IntersectionCurve(curve) => curve.leader().parameter_division(range, tol),
         };
         if debug_profile {
             let kind = match self {
-                Curve::Line(_) => "Line",
-                Curve::BsplineCurve(_) => "BsplineCurve",
-                Curve::NurbsCurve(_) => "NurbsCurve",
-                Curve::ParameterCurve(_) => "ParameterCurve",
-                Curve::IntersectionCurve(curve) => match curve.leader().as_ref() {
-                    Curve::Line(_) => "IntersectionCurve(Line)",
-                    Curve::BsplineCurve(_) => "IntersectionCurve(BsplineCurve)",
-                    Curve::NurbsCurve(_) => "IntersectionCurve(NurbsCurve)",
-                    Curve::ParameterCurve(_) => "IntersectionCurve(ParameterCurve)",
-                    Curve::IntersectionCurve(_) => "IntersectionCurve(IntersectionCurve)",
+                Self::Line(_) => "Line",
+                Self::BsplineCurve(_) => "BsplineCurve",
+                Self::NurbsCurve(_) => "NurbsCurve",
+                Self::ParameterCurve(_) => "ParameterCurve",
+                Self::IntersectionCurve(curve) => match curve.leader().as_ref() {
+                    Self::Line(_) => "IntersectionCurve(Line)",
+                    Self::BsplineCurve(_) => "IntersectionCurve(BsplineCurve)",
+                    Self::NurbsCurve(_) => "IntersectionCurve(NurbsCurve)",
+                    Self::ParameterCurve(_) => "IntersectionCurve(ParameterCurve)",
+                    Self::IntersectionCurve(_) => "IntersectionCurve(IntersectionCurve)",
                 },
             };
             eprintln!(
@@ -239,9 +244,9 @@ impl ParameterDivision1D for Curve {
 }
 
 impl From<IntersectionCurve<BsplineCurve<Point3>, Surface, Surface>> for Curve {
-    fn from(c: IntersectionCurve<BsplineCurve<Point3>, Surface, Surface>) -> Curve {
+    fn from(c: IntersectionCurve<BsplineCurve<Point3>, Surface, Surface>) -> Self {
         let (surface0, surface1, leader) = c.destruct();
-        Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+        Self::IntersectionCurve(SurfaceCurve::with_boundaries(
             Box::new(surface0),
             Box::new(surface1),
             Box::new(leader.into()),
@@ -285,9 +290,9 @@ impl
             ParameterCurve<BoundaryCurve2D, Surface>,
             ParameterCurve<BoundaryCurve2D, Surface>,
         >,
-    ) -> Curve {
+    ) -> Self {
         let (surface0, surface1, leader, boundary0, boundary1) = c.destruct_with_boundaries();
-        Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+        Self::IntersectionCurve(SurfaceCurve::with_boundaries(
             Box::new(surface0),
             Box::new(surface1),
             Box::new(leader.into()),
@@ -316,9 +321,9 @@ impl
             ParameterCurve<BoundaryCurve2D, Surface>,
             ParameterCurve<BoundaryCurve2D, Surface>,
         >,
-    ) -> Curve {
+    ) -> Self {
         let (surface0, surface1, leader, boundary0, boundary1) = c.destruct_with_boundaries();
-        Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+        Self::IntersectionCurve(SurfaceCurve::with_boundaries(
             Box::new(surface0),
             Box::new(surface1),
             Box::new(leader.into()),
@@ -345,10 +350,11 @@ impl ToSameGeometry<Curve> for BsplineCurve<Point3> {
 
 impl Curve {
     /// Into non-ratinalized 4-dimensional B-spline curve
+    #[must_use]
     pub fn lift_up(&self) -> BsplineCurve<Vector4> {
         match self {
-            Curve::Line(curve) => Curve::BsplineCurve((*curve).into()).lift_up(),
-            Curve::BsplineCurve(curve) => BsplineCurve::new_unchecked(
+            Self::Line(curve) => Self::BsplineCurve((*curve).into()).lift_up(),
+            Self::BsplineCurve(curve) => BsplineCurve::new_unchecked(
                 curve.knot_vector().clone(),
                 curve
                     .control_points()
@@ -356,9 +362,9 @@ impl Curve {
                     .map(|pt| pt.to_vec().extend(1.0))
                     .collect(),
             ),
-            Curve::NurbsCurve(curve) => curve.non_rationalized().clone(),
-            Curve::ParameterCurve(curve) => sample_curve_to_nurbs(curve).non_rationalized().clone(),
-            Curve::IntersectionCurve(curve) => curve.leader().lift_up(),
+            Self::NurbsCurve(curve) => curve.non_rationalized().clone(),
+            Self::ParameterCurve(curve) => sample_curve_to_nurbs(curve).non_rationalized().clone(),
+            Self::IntersectionCurve(curve) => curve.leader().lift_up(),
         }
     }
 }
@@ -451,7 +457,7 @@ fn snap_parameter_curve_endpoints(
 impl SnapCurveEndpoints for Curve {
     fn snap_endpoints(&mut self, front: Point3, back: Point3) {
         match self {
-            Curve::IntersectionCurve(curve) => {
+            Self::IntersectionCurve(curve) => {
                 curve.leader_mut().snap_endpoints(front, back);
                 if let Some(boundary) = curve.boundary0_mut() {
                     snap_parameter_curve_endpoints(boundary, front, back);
@@ -460,7 +466,7 @@ impl SnapCurveEndpoints for Curve {
                     snap_parameter_curve_endpoints(boundary, front, back);
                 }
             }
-            Curve::ParameterCurve(curve) => snap_parameter_curve_endpoints(curve, front, back),
+            Self::ParameterCurve(curve) => snap_parameter_curve_endpoints(curve, front, back),
             _ => {}
         }
     }
@@ -469,11 +475,11 @@ impl SnapCurveEndpoints for Curve {
 impl TryIntoHomogeneousBsplineCurve for Curve {
     fn try_into_homogeneous_bspline_curve(&self) -> Option<BsplineCurve<Vector4>> {
         match self {
-            Curve::Line(curve) => curve.try_into_homogeneous_bspline_curve(),
-            Curve::BsplineCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
-            Curve::NurbsCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
-            Curve::ParameterCurve(_) => None,
-            Curve::IntersectionCurve(curve) => curve.leader().try_into_homogeneous_bspline_curve(),
+            Self::Line(curve) => curve.try_into_homogeneous_bspline_curve(),
+            Self::BsplineCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
+            Self::NurbsCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
+            Self::ParameterCurve(_) => None,
+            Self::IntersectionCurve(curve) => curve.leader().try_into_homogeneous_bspline_curve(),
         }
     }
 
@@ -486,7 +492,7 @@ impl TryIntoHomogeneousBsplineCurve for Curve {
             // every other variant keeps the trait's refusing default. This is
             // what lets a cylinder's profile be re-spanned onto the face's trim
             // once it has been re-homed into the modeling `Curve` enum.
-            Curve::Line(curve) => curve.try_into_homogeneous_bspline_curve_over(range),
+            Self::Line(curve) => curve.try_into_homogeneous_bspline_curve_over(range),
             _ => None,
         }
     }
@@ -496,7 +502,7 @@ impl TryFrom<ParameterCurve<Line<Point2>, Surface>> for Curve {
     type Error = ();
     fn try_from(curve: ParameterCurve<Line<Point2>, Surface>) -> std::result::Result<Self, ()> {
         let (line, surface) = curve.decompose();
-        Ok(Curve::ParameterCurve(ParameterCurve::new(
+        Ok(Self::ParameterCurve(ParameterCurve::new(
             Curve2D::Line(line),
             Box::new(surface),
         )))
@@ -506,10 +512,10 @@ impl TryFrom<ParameterCurve<Line<Point2>, Surface>> for Curve {
 impl ParameterBoundary2D<Surface> for Curve {
     fn parameter_boundary_2d(&self, surface: &Surface, tolerance: f64) -> Option<Vec<Point2>> {
         match self {
-            Curve::Line(curve) => exact_line_boundary(curve, surface)
+            Self::Line(curve) => exact_line_boundary(curve, surface)
                 .map(|boundary| parameter_curve_points(&boundary, tolerance))
                 .or_else(|| sampled_parameter_boundary(curve, surface, tolerance)),
-            Curve::BsplineCurve(curve) => exact_bspline_boundary(curve, surface)
+            Self::BsplineCurve(curve) => exact_bspline_boundary(curve, surface)
                 .map(|boundary| parameter_curve_points(&boundary, tolerance))
                 .or_else(|| {
                     if let Surface::BsplineSurface(bspline_surface) = surface {
@@ -520,7 +526,7 @@ impl ParameterBoundary2D<Surface> for Curve {
                     }
                 })
                 .or_else(|| sampled_parameter_boundary(curve, surface, tolerance)),
-            Curve::NurbsCurve(curve) => exact_nurbs_boundary(curve, surface)
+            Self::NurbsCurve(curve) => exact_nurbs_boundary(curve, surface)
                 .map(|boundary| parameter_curve_points(&boundary, tolerance))
                 .or_else(|| {
                     if let Surface::NurbsSurface(nurbs_surface) = surface {
@@ -536,14 +542,14 @@ impl ParameterBoundary2D<Surface> for Curve {
                 // Without this the cap arcs yield no parameter curve and drop from
                 // downstream NURBS export. Mirrors the `Line`/`BsplineCurve` arms.
                 .or_else(|| sampled_parameter_boundary(curve, surface, tolerance)),
-            Curve::ParameterCurve(curve) => {
+            Self::ParameterCurve(curve) => {
                 if same_surface_parameterization(curve.surface().as_ref(), surface) {
                     Some(parameter_curve_points(curve, tolerance))
                 } else {
                     sampled_parameter_boundary(curve, surface, tolerance)
                 }
             }
-            Curve::IntersectionCurve(curve) => {
+            Self::IntersectionCurve(curve) => {
                 if let Some(boundary) = curve.boundary0().filter(|boundary| {
                     boundary_matches_surface_curve(curve.leader().as_ref(), boundary, surface)
                 }) {
@@ -575,15 +581,15 @@ impl ExactParameterBoundary2D<Surface> for Curve {
 
     fn exact_parameter_boundary_2d(&self, surface: &Surface) -> Option<Self::BoundaryCurve> {
         match self {
-            Curve::Line(curve) => exact_line_boundary(curve, surface),
-            Curve::BsplineCurve(curve) => exact_bspline_boundary(curve, surface),
-            Curve::NurbsCurve(curve) => exact_nurbs_boundary(curve, surface),
-            Curve::ParameterCurve(curve)
+            Self::Line(curve) => exact_line_boundary(curve, surface),
+            Self::BsplineCurve(curve) => exact_bspline_boundary(curve, surface),
+            Self::NurbsCurve(curve) => exact_nurbs_boundary(curve, surface),
+            Self::ParameterCurve(curve)
                 if same_surface_parameterization(curve.surface().as_ref(), surface) =>
             {
                 Some(curve.clone())
             }
-            Curve::IntersectionCurve(curve)
+            Self::IntersectionCurve(curve)
                 if same_surface_parameterization(curve.surface0().as_ref(), surface) =>
             {
                 curve
@@ -591,7 +597,7 @@ impl ExactParameterBoundary2D<Surface> for Curve {
                     .cloned()
                     .or_else(|| curve.leader().exact_parameter_boundary_2d(surface))
             }
-            Curve::IntersectionCurve(curve)
+            Self::IntersectionCurve(curve)
                 if same_surface_parameterization(curve.surface1().as_ref(), surface) =>
             {
                 curve
@@ -607,7 +613,7 @@ impl ExactParameterBoundary2D<Surface> for Curve {
 impl BoundaryCurveFromSamples<Surface> for ParameterCurve<Curve2D, Box<Surface>> {
     fn boundary_curve_from_samples(surface: &Surface, points: Vec<Point2>) -> Option<Self> {
         curve2d_from_sampled_boundary(points)
-            .map(|curve| ParameterCurve::new(curve, Box::new(surface.clone())))
+            .map(|curve| Self::new(curve, Box::new(surface.clone())))
     }
 }
 
@@ -633,16 +639,16 @@ impl Curve {
         });
         if debug_profile {
             let kind = match self {
-                Curve::Line(_) => "Line",
-                Curve::BsplineCurve(_) => "BsplineCurve",
-                Curve::NurbsCurve(_) => "NurbsCurve",
-                Curve::ParameterCurve(_) => "ParameterCurve",
-                Curve::IntersectionCurve(curve) => match curve.leader().as_ref() {
-                    Curve::Line(_) => "IntersectionCurve(Line)",
-                    Curve::BsplineCurve(_) => "IntersectionCurve(BsplineCurve)",
-                    Curve::NurbsCurve(_) => "IntersectionCurve(NurbsCurve)",
-                    Curve::ParameterCurve(_) => "IntersectionCurve(ParameterCurve)",
-                    Curve::IntersectionCurve(_) => "IntersectionCurve(IntersectionCurve)",
+                Self::Line(_) => "Line",
+                Self::BsplineCurve(_) => "BsplineCurve",
+                Self::NurbsCurve(_) => "NurbsCurve",
+                Self::ParameterCurve(_) => "ParameterCurve",
+                Self::IntersectionCurve(curve) => match curve.leader().as_ref() {
+                    Self::Line(_) => "IntersectionCurve(Line)",
+                    Self::BsplineCurve(_) => "IntersectionCurve(BsplineCurve)",
+                    Self::NurbsCurve(_) => "IntersectionCurve(NurbsCurve)",
+                    Self::ParameterCurve(_) => "IntersectionCurve(ParameterCurve)",
+                    Self::IntersectionCurve(_) => "IntersectionCurve(IntersectionCurve)",
                 },
             };
             eprintln!(

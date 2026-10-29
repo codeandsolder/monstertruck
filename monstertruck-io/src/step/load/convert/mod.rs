@@ -268,7 +268,7 @@ impl Table {
     /// convention: `CompressDirector::create_cface` stores `Face::boundaries`
     /// -- the ABSOLUTE boundaries, in the surface's own sense -- alongside the
     /// orientation flag, and `CompressedFace::create_face` rebuilds with
-    /// `Face::try_new(stored, surface)` followed by `invert()`, which flips the
+    /// `Face::new(stored, surface)` followed by `invert()`, which flips the
     /// EFFECTIVE traversal a second time.
     ///
     /// Passing STEP's loops through verbatim therefore traverses every

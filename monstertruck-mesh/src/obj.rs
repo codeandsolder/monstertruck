@@ -1,4 +1,6 @@
-use crate::*;
+use crate::{
+    Faces, Point3, PolygonMesh, StandardAttributes, StandardVertex, Vector2, Vector3, errors,
+};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 type Vertex = StandardVertex;
 type Result<T> = std::result::Result<T, errors::Error>;
@@ -52,11 +54,15 @@ type Result<T> = std::result::Result<T, errors::Error>;
 /// # Ok(())
 /// # }
 /// ```
+/// # Errors
+/// Returns an error if writing the OBJ stream fails.
 pub fn write<W: Write>(mesh: &PolygonMesh, writer: W) -> Result<()> {
     sub_write(mesh, &mut BufWriter::new(writer))
 }
 
 /// Writes obj data to output stream
+/// # Errors
+/// Returns an error if writing any OBJ group or mesh data fails.
 pub fn write_vec<W: Write>(mesh: &[PolygonMesh], writer: W) -> Result<()> {
     let mut writer = BufWriter::new(writer);
     for (i, mesh) in mesh.iter().enumerate() {
@@ -72,7 +78,7 @@ fn write2vec<V: std::ops::Index<usize, Output = f64>, W: Write>(
     prefix: &str,
 ) -> Result<()> {
     for vec in vecs {
-        writer.write_fmt(format_args!("{} {:.10e} {:.10e}\n", prefix, vec[0], vec[1]))?;
+        writer.write_fmt(format_args!("{prefix} {:.10e} {:.10e}\n", vec[0], vec[1]))?;
     }
     Ok(())
 }
@@ -84,8 +90,8 @@ fn write3vec<V: std::ops::Index<usize, Output = f64>, W: Write>(
 ) -> Result<()> {
     for vec in vecs {
         writer.write_fmt(format_args!(
-            "{} {:.10e} {:.10e} {:.10e}\n",
-            prefix, vec[0], vec[1], vec[2]
+            "{prefix} {:.10e} {:.10e} {:.10e}\n",
+            vec[0], vec[1], vec[2]
         ))?;
     }
     Ok(())
@@ -125,6 +131,37 @@ fn next_float(args: &mut std::str::SplitWhitespace<'_>) -> Result<f64> {
     Ok(token.parse::<f64>()?)
 }
 
+fn invalid_data(message: impl Into<String>) -> errors::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()).into()
+}
+
+fn resolve_obj_index(token: Option<&str>, current_len: usize) -> Result<Option<usize>> {
+    let Some(token) = token else {
+        return Ok(None);
+    };
+    if token.is_empty() {
+        return Ok(None);
+    }
+
+    let index = token.parse::<i64>()?;
+    if index == 0 {
+        return Err(invalid_data("OBJ indices are 1-based; zero is invalid"));
+    }
+    if index > 0 {
+        let zero_based = usize::try_from(index - 1)
+            .map_err(|_| invalid_data(format!("OBJ index {index} does not fit usize")))?;
+        return Ok(Some(zero_based));
+    }
+
+    let distance = usize::try_from(index.unsigned_abs())
+        .map_err(|_| invalid_data(format!("OBJ relative index {index} does not fit usize")))?;
+    current_len.checked_sub(distance).map(Some).ok_or_else(|| {
+        invalid_data(format!(
+            "OBJ relative index {index} exceeds the {current_len} values defined so far"
+        ))
+    })
+}
+
 fn sub_write<W: Write>(mesh: &PolygonMesh, writer: &mut BufWriter<W>) -> Result<()> {
     write3vec(writer, mesh.positions(), "v")?;
     write2vec(writer, mesh.uv_coords(), "vt")?;
@@ -133,6 +170,8 @@ fn sub_write<W: Write>(mesh: &PolygonMesh, writer: &mut BufWriter<W>) -> Result<
 }
 
 /// Reads mesh data from wavefront obj file.
+/// # Errors
+/// Returns an error for I/O failures, malformed numeric or index fields, invalid relative indices, or out-of-range mesh indices.
 pub fn read<R: Read>(reader: R) -> Result<PolygonMesh> {
     let mut positions = Vec::new();
     let mut uv_coords = Vec::new();
@@ -160,27 +199,22 @@ pub fn read<R: Read>(reader: R) -> Result<PolygonMesh> {
             } else if first_str == "f" {
                 let mut face = Vec::new();
                 for vert_str in args {
-                    if &vert_str[0..1] == "#" {
+                    if vert_str.starts_with('#') {
                         break;
                     }
                     let mut iter = vert_str.split('/');
-                    let pos = iter
-                        .next()
-                        .map(|val| val.parse::<usize>().map(|i| i - 1).ok())
-                        .unwrap_or(None);
-                    let uv = iter
-                        .next()
-                        .map(|val| val.parse::<usize>().map(|i| i - 1).ok())
-                        .unwrap_or(None);
-                    let nor = iter
-                        .next()
-                        .map(|val| val.parse::<usize>().map(|i| i - 1).ok())
-                        .unwrap_or(None);
-                    let vert = match (pos, uv, nor) {
-                        (None, _, _) => continue,
-                        (Some(pos), uv, nor) => Vertex { pos, uv, nor },
-                    };
-                    face.push(vert);
+                    let pos =
+                        resolve_obj_index(iter.next(), positions.len())?.ok_or_else(|| {
+                            invalid_data("OBJ face vertex is missing its position index")
+                        })?;
+                    let uv = resolve_obj_index(iter.next(), uv_coords.len())?;
+                    let nor = resolve_obj_index(iter.next(), normals.len())?;
+                    if iter.next().is_some() {
+                        return Err(invalid_data(format!(
+                            "OBJ face vertex {vert_str:?} has more than three index components"
+                        )));
+                    }
+                    face.push(Vertex { pos, uv, nor });
                 }
                 faces.push(face);
             }

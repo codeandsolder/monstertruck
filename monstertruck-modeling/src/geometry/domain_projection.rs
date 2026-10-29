@@ -70,7 +70,7 @@ struct SurfaceParameterDomain {
 /// domain test live and the behaviour unchanged. Only a range that is provably
 /// a placeholder may be dropped, because dropping a real one would cost a
 /// genuine C3 rescue.
-fn reported_range_bounds_the_curve(curve: &Curve) -> bool {
+const fn reported_range_bounds_the_curve(curve: &Curve) -> bool {
     match curve {
         Curve::Line(_) => false,
         // Knot vectors, and the delegating decorators, all report the extent
@@ -489,7 +489,7 @@ pub(super) fn sampled_parameter_boundary(
 }
 
 /// Which [`Surface`] variant this is, for the `[proj-chain]` lens only.
-fn surface_kind(surface: &Surface) -> &'static str {
+const fn surface_kind(surface: &Surface) -> &'static str {
     match surface {
         Surface::Plane(_) => "plane",
         Surface::BsplineSurface(_) => "bspline",

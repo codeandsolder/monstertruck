@@ -1,4 +1,11 @@
-#![allow(missing_docs, unused_qualifications)]
+#![allow(
+    missing_docs,
+    reason = "STEP schema re-exports preserve upstream entity names without duplicating generated documentation"
+)]
+#![allow(
+    unused_qualifications,
+    reason = "STEP schema paths intentionally retain explicit qualification to mirror source entities"
+)]
 
 /// re-export [`step_p21`](https://docs.rs/step-p21/latest/step_p21/)
 pub use step_p21;

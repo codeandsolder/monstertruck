@@ -1,9 +1,19 @@
-use crate::*;
+use crate::{
+    Arc, BindGroup, BindGroupLayout, BindingType, BlendState, BufferAddress, BufferBindingType,
+    BufferHandler, BufferUsages, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState,
+    DepthStencilState, DeviceHandler, FragmentState, Instance, InstanceCreator, Matrix4,
+    MultisampleState, PipelineCompilationOptions, PipelineLayout, Point3, PreBindGroupLayoutEntry,
+    PrimitiveState, PrimitiveTopology, RenderError, RenderId, RenderPipeline,
+    RenderPipelineDescriptor, Rendered, SceneDescriptor, ShaderStages, SquareMatrix, StencilState,
+    TextureFormat, ToInstance, Vector4, VertexAttribute, VertexBufferLayout, VertexFormat,
+    VertexState, VertexStepMode, WireFrameInstance, WireFrameState, WireShaders, bind_group_util,
+    gpu_index, impl_render_id, matrix4_to_raw_f32, narrow_f64_to_f32,
+};
 
 impl Default for WireFrameState {
-    #[inline(always)]
-    fn default() -> WireFrameState {
-        WireFrameState {
+    #[inline]
+    fn default() -> Self {
+        Self {
             matrix: Matrix4::identity(),
             color: Vector4::new(1.0, 1.0, 1.0, 1.0),
         }
@@ -12,7 +22,8 @@ impl Default for WireFrameState {
 
 impl WireFrameInstance {
     /// Clone the instance as another drawn element.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn clone_instance(&self) -> Self {
         Self {
             vertices: Arc::clone(&self.vertices),
@@ -23,14 +34,15 @@ impl WireFrameInstance {
         }
     }
     /// Returns the wireframe state
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn instance_state(&self) -> &WireFrameState { &self.state }
     /// Returns the mutable reference to wireframe state
-    #[inline(always)]
-    pub fn instance_state_mut(&mut self) -> &mut WireFrameState { &mut self.state }
+    #[inline]
+    pub const fn instance_state_mut(&mut self) -> &mut WireFrameState { &mut self.state }
     /// swap vertex buffers and index buffers
-    #[inline(always)]
-    pub fn swap_vertex(&mut self, other: &mut WireFrameInstance) {
+    #[inline]
+    pub const fn swap_vertex(&mut self, other: &mut Self) {
         std::mem::swap(&mut self.vertices, &mut other.vertices);
         std::mem::swap(&mut self.strips, &mut other.strips);
     }
@@ -75,14 +87,14 @@ impl Rendered for WireFrameInstance {
     }
     fn bind_group(&self, handler: &DeviceHandler, layout: &BindGroupLayout) -> Arc<BindGroup> {
         let device = handler.device();
-        let matrix_data = matrix4_to_f32(self.state.matrix);
+        let matrix_data = matrix4_to_raw_f32(self.state.matrix);
         let matrix_buffer = BufferHandler::from_slice(&matrix_data, device, BufferUsages::UNIFORM);
         let color = self.state.color;
         let color_data = [
-            color.x as f32,
-            color.y as f32,
-            color.z as f32,
-            color.w as f32,
+            narrow_f64_to_f32(color.x),
+            narrow_f64_to_f32(color.y),
+            narrow_f64_to_f32(color.z),
+            narrow_f64_to_f32(color.w),
         ];
         let color_buffer = BufferHandler::from_slice(&color_data, device, BufferUsages::UNIFORM);
         Arc::new(bind_group_util::create_bind_group(
@@ -116,7 +128,7 @@ impl Rendered for WireFrameInstance {
                         shader_location: 0,
                     }],
                 }],
-                compilation_options: Default::default(),
+                compilation_options: PipelineCompilationOptions::default(),
             },
             fragment: Some(FragmentState {
                 module: &self.shaders.fragment_module,
@@ -126,19 +138,22 @@ impl Rendered for WireFrameInstance {
                     blend: Some(BlendState::REPLACE),
                     write_mask: ColorWrites::ALL,
                 })],
-                compilation_options: Default::default(),
+                compilation_options: PipelineCompilationOptions::default(),
             }),
             primitive: PrimitiveState {
                 topology: PrimitiveTopology::LineList,
                 ..Default::default()
             },
-            depth_stencil: Some(DepthStencilState {
-                format: TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            depth_stencil: scene_desc
+                .backend_buffer
+                .depth_test
+                .then(|| DepthStencilState {
+                    format: TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(CompareFunction::Less),
+                    stencil: StencilState::default(),
+                    bias: DepthBiasState::default(),
+                }),
             multisample: MultisampleState {
                 count: sample_count,
                 mask: !0,
@@ -159,22 +174,31 @@ impl ToInstance<WireFrameInstance> for Vec<(Point3, Point3)> {
         handler: &DeviceHandler,
         shaders: &WireShaders,
         state: &WireFrameState,
-    ) -> WireFrameInstance {
+    ) -> std::result::Result<WireFrameInstance, RenderError> {
         let device = handler.device();
         let positions: Vec<[f32; 3]> = self
             .iter()
-            .flat_map(|p| vec![p.0, p.1])
-            .map(|p| [p.x as f32, p.y as f32, p.z as f32])
+            .copied()
+            .flat_map(<[Point3; 2]>::from)
+            .map(|p| {
+                [
+                    narrow_f64_to_f32(p.x),
+                    narrow_f64_to_f32(p.y),
+                    narrow_f64_to_f32(p.z),
+                ]
+            })
             .collect();
-        let strips: Vec<u32> = (0..2 * self.len()).map(|i| i as u32).collect();
+        let strips = (0..positions.len())
+            .map(|index| gpu_index(index, "line segment"))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         let vb = BufferHandler::from_slice(&positions, device, BufferUsages::VERTEX);
         let ib = BufferHandler::from_slice(&strips, device, BufferUsages::INDEX);
-        WireFrameInstance {
+        Ok(WireFrameInstance {
             vertices: Arc::new(vb),
             strips: Arc::new(ib),
             state: state.clone(),
             shaders: shaders.clone(),
             id: RenderId::generate(),
-        }
+        })
     }
 }

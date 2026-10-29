@@ -19,7 +19,7 @@ pub enum Error {
     /// assert_eq!(knot_vec.try_bspline_basis_functions(1, 0, 0.0), Err(Error::ZeroRange));
     ///
     /// let control_points = vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 1.0)];
-    /// assert!(matches!(BsplineCurve::try_new(knot_vec, control_points), Err(Error::ZeroRange)));
+    /// assert!(matches!(BsplineCurve::new(knot_vec, control_points), Err(Error::ZeroRange)));
     /// ```
     #[error("This knot vector consists single value.")]
     ZeroRange,
@@ -112,7 +112,7 @@ the degree: {1}"
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points: Vec<Vector4> = Vec::new();
     /// assert!(matches!(
-    ///     BsplineCurve::try_new(knot_vec, control_points),
+    ///     BsplineCurve::new(knot_vec, control_points),
     ///     Err(Error::EmptyControlPoints),
     /// ));
     /// ```
@@ -121,6 +121,18 @@ the degree: {1}"
     /// A surface-construction algorithm received structurally invalid input.
     #[error("invalid surface builder input: {0}")]
     InvalidSurfaceBuilderInput(&'static str),
+    /// An operation received too few elements for one of its discrete inputs.
+    #[error("{operation} requires at least {minimum} {input}, got {provided}")]
+    InsufficientInputCount {
+        /// Operation validating the input.
+        operation: &'static str,
+        /// Name of the count being validated.
+        input: &'static str,
+        /// Count supplied by the caller.
+        provided: usize,
+        /// Smallest accepted count.
+        minimum: usize,
+    },
     /// A torus requires finite positive major and minor radii.
     #[error("invalid torus radii: major={0}, minor={1}; both must be finite and positive")]
     InvalidTorusRadii(f64, f64),
@@ -133,7 +145,7 @@ the degree: {1}"
     /// let knot_vec = KnotVector::from(vec![0.0, 1.0, 2.0]);
     /// let control_points = vec![Vector2::new(0.0, 0.0), Vector2::new(0.0, 0.0), Vector2::new(0.0, 0.0), Vector2::new(0.0, 0.0)];
     /// assert!(matches!(
-    ///     BsplineCurve::try_new(knot_vec, control_points),
+    ///     BsplineCurve::new(knot_vec, control_points),
     ///     Err(Error::TooShortKnotVector(3, 4)),
     /// ));
     /// ```
@@ -154,7 +166,7 @@ the number of control points: {1}"
     ///     vec![Vector2::new(1.0, 2.0)] // length = 1
     /// ];
     /// assert!(matches!(
-    ///     BsplineSurface::try_new(knot_vecs, control_points),
+    ///     BsplineSurface::new(knot_vecs, control_points),
     ///     Err(Error::IrregularControlPoints),
     /// ));
     /// ```
@@ -215,9 +227,6 @@ the number of control points: {1}"
     /// T-mesh knot intervals on a connection do not match in both directions.
     #[error("T-mesh knot intervals on a connection do not match in both directions.")]
     TmeshConnectionInvalidKnotInterval,
-    /// An unknown T-mesh error occurred.
-    #[error("An unknown T-mesh error occurred.")]
-    TmeshUnknownError,
     /// The T-mesh is malformed and should no longer be used.
     #[error("The T-mesh is malformed and should no longer be used.")]
     TmeshMalformedMesh,
@@ -268,15 +277,15 @@ the number of control points: {1}"
 fn print_messages() {
     use std::io::Write;
     let stderr = &mut std::io::stderr();
-    writeln!(stderr, "****** test of the expressions of error messages ******\n").unwrap();
-    writeln!(stderr, "{}\n", Error::ZeroRange).unwrap();
-    writeln!(stderr, "{}\n", Error::DifferentBackFront(0.0, 1.0)).unwrap();
-    writeln!(stderr, "{}\n", Error::NotClampedKnotVector).unwrap();
-    writeln!(stderr, "{}\n", Error::NotSortedVector).unwrap();
-    writeln!(stderr, "{}\n", Error::TooLargeDegree(1, 2)).unwrap();
-    writeln!(stderr, "{}\n", Error::CannotRemoveKnot(7)).unwrap();
-    writeln!(stderr, "{}\n", Error::EmptyControlPoints).unwrap();
-    writeln!(stderr, "{}\n", Error::TooShortKnotVector(1, 2)).unwrap();
-    writeln!(stderr, "{}\n", Error::IrregularControlPoints).unwrap();
-    writeln!(stderr, "*******************************************************").unwrap();
+    (writeln!(stderr, "****** test of the expressions of error messages ******\n")).unwrap();
+    (writeln!(stderr, "{}\n", Error::ZeroRange)).unwrap();
+    (writeln!(stderr, "{}\n", Error::DifferentBackFront(0.0, 1.0))).unwrap();
+    (writeln!(stderr, "{}\n", Error::NotClampedKnotVector)).unwrap();
+    (writeln!(stderr, "{}\n", Error::NotSortedVector)).unwrap();
+    (writeln!(stderr, "{}\n", Error::TooLargeDegree(1, 2))).unwrap();
+    (writeln!(stderr, "{}\n", Error::CannotRemoveKnot(7))).unwrap();
+    (writeln!(stderr, "{}\n", Error::EmptyControlPoints)).unwrap();
+    (writeln!(stderr, "{}\n", Error::TooShortKnotVector(1, 2))).unwrap();
+    (writeln!(stderr, "{}\n", Error::IrregularControlPoints)).unwrap();
+    (writeln!(stderr, "*******************************************************")).unwrap();
 }

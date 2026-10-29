@@ -48,7 +48,7 @@ fn test_shell(shell: &Shell, sign: f64) {
 }
 
 #[test]
-fn partial_torus() {
+fn partial_torus() -> Result<()> {
     let v = builder::vertex(Point3::new(0.5, 0.0, 0.0));
     let w = builder::revolve(
         &v,
@@ -56,8 +56,8 @@ fn partial_torus() {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         2,
-    );
-    let face = builder::try_attach_plane(&[w]).unwrap();
+    )?;
+    let face = builder::try_attach_plane([w])?;
     test_shell(&shell![face.clone()], 1.0);
     let torus = builder::revolve(
         &face,
@@ -65,7 +65,7 @@ fn partial_torus() {
         Vector3::unit_z(),
         builder::SweepAngle::Partial(Rad(2.0)),
         1,
-    );
+    )?;
     test_shell(&torus.boundaries()[0], 1.0);
     assert!(torus.is_geometric_consistent());
     let torus = builder::revolve(
@@ -74,7 +74,7 @@ fn partial_torus() {
         Vector3::unit_z(),
         builder::SweepAngle::Partial(Rad(5.0)),
         2,
-    );
+    )?;
     test_shell(&torus.boundaries()[0], 1.0);
     assert!(torus.is_geometric_consistent());
     let torus = builder::revolve(
@@ -83,7 +83,7 @@ fn partial_torus() {
         Vector3::unit_z(),
         builder::SweepAngle::Partial(Rad(-2.0)),
         1,
-    );
+    )?;
     test_shell(&torus.boundaries()[0], -1.0);
     assert!(torus.is_geometric_consistent());
     let torus = builder::revolve(
@@ -92,7 +92,8 @@ fn partial_torus() {
         Vector3::unit_z(),
         builder::SweepAngle::Partial(Rad(-5.0)),
         2,
-    );
+    )?;
     test_shell(&torus.boundaries()[0], -1.0);
     assert!(torus.is_geometric_consistent());
+    Ok(())
 }

@@ -5,11 +5,20 @@
 //! Split out of the module file so the source stays readable; the module path
 //! is unchanged.
 
-use super::*;
+use super::{
+    Cdt, FixedVertexHandle, HashGen, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools,
+    MetricSpace, Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SPoint2,
+    SurfacePoint, TOLERANCE, Tolerance, Triangulation, UvKey, Vector2, align_full_period_open_pair,
+    align_periodic_open_pair, close_open_periodic_curve_to_singular, compact_periodic_closed_loop,
+    connect_edges, mesh, normalize_range, open_periodic_closed_loop, periodic_axis_full_span,
+    periodic_open_axis_full_span, polyline_on_surface, surface_point_with_cache,
+};
 use mesh::spade_round;
 use std::{f64::consts::TAU, iter, mem};
 
 const ISOPARAM_BOUNDARY_SEARCH_ITERATIONS: usize = 32;
+
+const fn end_points<T: Copy>(slice: &[T]) -> (T, T) { (slice[0], slice[slice.len() - 1]) }
 
 #[derive(Debug, Clone)]
 pub(in crate::tessellation::triangulation) struct PolyBoundary {
@@ -130,20 +139,17 @@ impl PolyBoundary {
         tolerance: f64,
     ) -> Self {
         let (mut closed, mut open) = (Vec::new(), Vec::new());
-        pieces.into_iter().for_each(|PolyBoundaryPiece(mut vec)| {
+        for PolyBoundaryPiece(mut vec) in pieces {
             compact_periodic_closed_loop(&mut vec, surface);
             if let Some((axis, period)) = periodic_axis_full_span(&vec, surface) {
                 open.push(open_periodic_closed_loop(vec, surface, axis, period));
+            } else if vec[0].uv.distance(vec[vec.len() - 1].uv) < 1.0e-3 {
+                vec.pop();
+                closed.push(vec);
             } else {
-                match vec[0].uv.distance(vec[vec.len() - 1].uv) < 1.0e-3 {
-                    true => {
-                        vec.pop();
-                        closed.push(vec)
-                    }
-                    false => open.push(vec),
-                }
+                open.push(vec);
             }
-        });
+        }
         open.retain(|curve| curve.len() >= 2);
         closed.retain(|curve| curve.len() >= 2);
         let mut point_cache = HashMap::<UvKey, Point3>::default();
@@ -241,10 +247,9 @@ impl PolyBoundary {
             2 => {
                 let mut curve1 = open.remove(1);
                 let mut curve0 = open.remove(0);
-                fn end_pts<T: Copy>(vec: &[T]) -> (T, T) { (vec[0], vec[vec.len() - 1]) }
                 let full_period_pair_aligned =
                     align_full_period_open_pair(&mut curve0, &mut curve1, surface);
-                let ((p0, p1), (q0, q1)) = (end_pts(&curve0), end_pts(&curve1));
+                let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
                 if !full_period_pair_aligned && !p0.x.near(&p1.x) && !q0.x.near(&q1.x) {
                     if let Some(period) = surface.period_u() {
                         align_periodic_open_pair(&curve0, &mut curve1, 0, period);
@@ -260,13 +265,13 @@ impl PolyBoundary {
                         normalize_range(&mut curve1, 1, vrange);
                     }
                 }
-                let ((p0, p1), (q0, q1)) = (end_pts(&curve0), end_pts(&curve1));
+                let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
                 let current_score = open_pair_connector_score(p0, p1, q0, q1);
                 let reversed_score = open_pair_connector_score(p0, p1, q1, q0);
                 if reversed_score + TOLERANCE < current_score {
                     curve1.reverse();
                 }
-                let ((p0, p1), (q0, q1)) = (end_pts(&curve0), end_pts(&curve1));
+                let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
                 let vec0 = polyline_on_surface(surface, p1, q0, tolerance, &mut point_cache);
                 let vec1 = polyline_on_surface(surface, q1, p0, tolerance, &mut point_cache);
                 closed.push(connect_edges([curve0, vec0, curve1, vec1]));
@@ -338,8 +343,7 @@ impl PolyBoundary {
                     Some(counter)
                 }
             })
-            .map(|counter| counter > 0)
-            .unwrap_or(false)
+            .is_some_and(|counter| counter > 0)
     }
 
     pub(in crate::tessellation::triangulation) fn isoparametric_curves<S: PreMeshableSurface>(
@@ -385,7 +389,8 @@ impl PolyBoundary {
         };
         (0..count)
             .map(|index| {
-                let parameter = (index + 1) as f64 / (count + 1) as f64;
+                let parameter =
+                    (crate::count_as_f64(index) + 1.0) / (crate::count_as_f64(count) + 1.0);
                 min + (max - min) * parameter
             })
             .collect()
@@ -404,7 +409,7 @@ impl PolyBoundary {
         };
         let samples = (0..=segments)
             .map(|index| {
-                let parameter = index as f64 / segments as f64;
+                let parameter = crate::count_as_f64(index) / crate::count_as_f64(segments);
                 let variable_value = min + (max - min) * parameter;
                 match constant_axis {
                     0 => Point2::new(constant_value, variable_value),
@@ -453,14 +458,15 @@ impl PolyBoundary {
         back: Point2,
         front_included: bool,
     ) -> Point2 {
-        let (mut included, mut excluded) = match front_included {
-            true => (front, back),
-            false => (back, front),
+        let (mut included, mut excluded) = if front_included {
+            (front, back)
+        } else {
+            (back, front)
         };
         (0..ISOPARAM_BOUNDARY_SEARCH_ITERATIONS).for_each(|_| {
             let middle = Point2::new(
-                (included.x + excluded.x) * 0.5,
-                (included.y + excluded.y) * 0.5,
+                f64::midpoint(included.x, excluded.x),
+                f64::midpoint(included.y, excluded.y),
             );
             if self.include(middle) {
                 included = middle;
@@ -469,8 +475,8 @@ impl PolyBoundary {
             }
         });
         Point2::new(
-            (included.x + excluded.x) * 0.5,
-            (included.y + excluded.y) * 0.5,
+            f64::midpoint(included.x, excluded.x),
+            f64::midpoint(included.y, excluded.y),
         )
     }
 
@@ -486,13 +492,10 @@ impl PolyBoundary {
             .flatten()
             .map(|pt| {
                 let p = [spade_round(pt.x), spade_round(pt.y)];
-                match triangulation.insert(SPoint2::from(p)) {
-                    Err(_) => None,
-                    Ok(idx) => {
-                        boundary_map.insert(idx, pt.point);
-                        Some(idx)
-                    }
-                }
+                triangulation.insert(SPoint2::from(p)).ok().map(|idx| {
+                    boundary_map.insert(idx, pt.point);
+                    idx
+                })
             })
             .collect();
         let split_vertices = triangulation
@@ -529,10 +532,10 @@ impl PolyBoundary {
                     .chain(chain.into_iter().map(|(_, handle)| handle))
                     .chain(iter::once(back))
                     .collect::<Vec<_>>();
-                let mut handled = false;
+                let mut did_handle = false;
                 handles.windows(2).for_each(|window| {
                     if window[0] != window[1] {
-                        handled = true;
+                        did_handle = true;
                         add_direct_cdt_constraint(
                             triangulation,
                             &mut added_constraints,
@@ -542,7 +545,7 @@ impl PolyBoundary {
                         );
                     }
                 });
-                handled
+                did_handle
             }
         };
         self.loops.iter().map(Vec::len).for_each(|len| {

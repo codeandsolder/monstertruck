@@ -1,4 +1,18 @@
-use super::*;
+#![allow(
+    clippy::many_single_char_names,
+    reason = "compact U/V derivative symbols mirror the contact-circle equations"
+)]
+#![allow(
+    clippy::similar_names,
+    reason = "paired U/V derivative names mirror the contact-circle equations"
+)]
+
+use super::{
+    Angle, BsplineCurve, ContactCircle, ContactPoint, EuclideanSpace, InnerSpace, KnotVector,
+    Matrix, Matrix2, Matrix3, Matrix4, NurbsCurve, PI, ParameterRange, ParametricSurface3D, Point3,
+    Rad, SearchParameter, SquareMatrix, SurfaceParameter, ToSameGeometry, Tolerance, Vector2,
+    Vector3, Vector4,
+};
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 
 /// trait for attach rolling fillet
@@ -13,21 +27,27 @@ impl<S: ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>>
 impl ContactCircle {
     /// center of the fillet circle
     #[inline]
+    #[must_use]
     pub const fn center(self) -> Point3 { self.center }
     /// axis of the fillet circle
     #[inline]
+    #[must_use]
     pub const fn axis(self) -> Vector3 { self.axis }
     /// angle of the fillet circle-arc
     #[inline]
+    #[must_use]
     pub const fn angle(self) -> Rad<f64> { self.angle }
     /// parameter of the edge curve
     #[inline]
+    #[must_use]
     pub const fn curve_parameter(self) -> f64 { self.t }
     /// contact point of the rolling ball and `surface0`.
     #[inline]
+    #[must_use]
     pub const fn contact_point0(self) -> ContactPoint { self.contact_point0 }
     /// contact point of the fillet circle and `surface1`.
     #[inline]
+    #[must_use]
     pub const fn contact_point1(self) -> ContactPoint { self.contact_point1 }
 
     pub(super) fn try_new(
@@ -70,10 +90,16 @@ impl ParametricCurveTrait for ContactCircle {
     type Vector = Vector3;
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
         let radius = self.contact_point0.point - self.center;
-        let angle = Rad(PI / 2.0) * n as f64 + self.angle * t;
+        let phase = match n % 4 {
+            0 => 0.0,
+            1 => PI / 2.0,
+            2 => PI,
+            _ => 3.0 * PI / 2.0,
+        };
+        let angle = Rad(phase) + self.angle * t;
         let rot = Matrix3::from_axis_angle(self.axis, angle);
         let c = self.center.to_vec() * if n == 0 { 1.0 } else { 0.0 };
-        c + rot * radius * self.angle.0.powi(n as i32)
+        c + rot * radius * crate::pow_usize(self.angle.0, n)
     }
     fn evaluate(&self, t: f64) -> Self::Point { Point3::from_vec(self.derivative_n(0, t)) }
     fn derivative(&self, t: f64) -> Self::Vector { self.derivative_n(1, t) }
@@ -123,8 +149,8 @@ fn contact_points(
     let mat = Matrix3::from_cols(der, n0, n1).transpose();
     let vec = Vector3::new(
         der.dot(p.to_vec()),
-        n0.dot(p0.to_vec()) - sign * radius,
-        n1.dot(p1.to_vec()) - sign * radius,
+        f64::mul_add(sign, -radius, n0.dot(p0.to_vec())),
+        f64::mul_add(sign, -radius, n1.dot(p1.to_vec())),
     );
     let center = Point3::from_vec(mat.invert()? * vec);
     let q0 = center + sign * radius * n0;

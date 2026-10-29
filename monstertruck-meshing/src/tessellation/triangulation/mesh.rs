@@ -1,6 +1,17 @@
+#![allow(
+    clippy::similar_names,
+    reason = "parameter grid and indexed mesh names encode paired geometric axes and topology"
+)]
+
 use std::iter;
 
-use super::*;
+use super::{
+    Cdt, CdtEdge, EuclideanSpace, Faces, FixedVertexHandle, HashMap, InnerFaceIterator, InnerSpace,
+    Instant, Invertible, MIN_ALLOWED_VALUE, MetricSpace, Origin, ParametricSurface3D, Point2,
+    Point3, PolygonMesh, PreMeshableSurface, SPoint2, StandardAttributes, StandardVertex,
+    StructuringFilter, TOLERANCE, TessellationPrimitiveMode, TessellationPrimitiveOptions,
+    Triangulation, Vector2, Vector3, VertexIterator, Zero, array, boundary, log_mesh_trace,
+};
 use boundary::{PolyBoundary, UvKey, boundary_segment_parameter, uv_key};
 
 const MAX_SURFACE_SPAN_INTERVALS: usize = 32;
@@ -36,7 +47,7 @@ fn ensure_winding_matches_normals(mesh: &mut PolygonMesh) {
         let center = face
             .iter()
             .fold(Vector3::zero(), |sum, v| sum + positions[v.pos].to_vec())
-            / face.len() as f64;
+            / crate::count_as_f64(face.len());
         // Twice the area-weighted normal of the (possibly non-planar) polygon.
         // Deliberately NOT normalized: see the note above.
         let geo = face
@@ -48,7 +59,7 @@ fn ensure_winding_matches_normals(mesh: &mut PolygonMesh) {
                 sum + vec0.cross(vec1)
             });
         let vtx: Vector3 = face.iter().fold(Vector3::zero(), |sum, v| {
-            sum + v.nor.map(|i| normals[i]).unwrap_or(Vector3::zero())
+            sum + v.nor.map_or(Vector3::zero(), |i| normals[i])
         });
         let term = geo.dot(vtx);
         if term.is_finite() {
@@ -61,9 +72,10 @@ fn ensure_winding_matches_normals(mesh: &mut PolygonMesh) {
 }
 
 pub(super) fn spade_round(x: f64) -> f64 {
-    match f64::abs(x) < MIN_ALLOWED_VALUE {
-        true => 0.0,
-        false => x,
+    if f64::abs(x) < MIN_ALLOWED_VALUE {
+        0.0
+    } else {
+        x
     }
 }
 
@@ -104,14 +116,14 @@ fn surface_is_nearly_planar(surface: &impl PreMeshableSurface, boundary: &PolyBo
     let u1 = boundary.uv_max.x;
     let v0 = boundary.uv_min.y;
     let v1 = boundary.uv_max.y;
-    if ![u0, u1, v0, v1].into_iter().all(f64::is_finite) {
-        false
-    } else {
-        let center = ((u0 + u1) * 0.5, (v0 + v1) * 0.5);
+    if [u0, u1, v0, v1].into_iter().all(f64::is_finite) {
+        let center = (f64::midpoint(u0, u1), f64::midpoint(v0, v1));
         let normal = surface.normal(center.0, center.1);
         [(u0, v0), (u1, v0), (u0, v1), (u1, v1), center]
             .into_iter()
             .all(|(u, v)| normal.dot(surface.normal(u, v)) > 1.0 - 1.0e-6)
+    } else {
+        false
     }
 }
 
@@ -319,22 +331,22 @@ where
             (0..nv - 1).map(move |j| {
                 let corner_indices = [idx(i, j), idx(i, j + 1), idx(i + 1, j + 1), idx(i + 1, j)];
                 let corners_inside = corner_indices.into_iter().all(|k| inside_ref[k]);
-                if !corners_inside {
-                    false
-                } else {
+                if corners_inside {
                     let (u0, u1) = (udiv_ref[i], udiv_ref[i + 1]);
                     let (v0, v1) = (vdiv_ref[j], vdiv_ref[j + 1]);
-                    let center = Point2::new((u0 + u1) * 0.5, (v0 + v1) * 0.5);
+                    let center = Point2::new(f64::midpoint(u0, u1), f64::midpoint(v0, v1));
                     let edge_midpoints = [
-                        Point2::new((u0 + u1) * 0.5, v0),
-                        Point2::new(u1, (v0 + v1) * 0.5),
-                        Point2::new((u0 + u1) * 0.5, v1),
-                        Point2::new(u0, (v0 + v1) * 0.5),
+                        Point2::new(f64::midpoint(u0, u1), v0),
+                        Point2::new(u1, f64::midpoint(v0, v1)),
+                        Point2::new(f64::midpoint(u0, u1), v1),
+                        Point2::new(u0, f64::midpoint(v0, v1)),
                     ];
                     polyboundary.include(center)
                         && edge_midpoints
                             .into_iter()
                             .all(|midpoint| polyboundary.include(midpoint))
+                } else {
+                    false
                 }
             })
         })
@@ -392,7 +404,7 @@ where
             })
             .collect::<Vec<_>>();
         {
-            let editor = boundary_mesh.debug_editor();
+            let editor = boundary_mesh.editor();
             *editor.faces = Faces::from_tri_and_quad_faces(boundary_triangles, boundary_quads);
         }
         interior_mesh.merge(boundary_mesh);
@@ -541,7 +553,7 @@ fn force_all_triangles_to_quads(
         }
     });
     {
-        let editor = mesh.debug_editor();
+        let editor = mesh.editor();
         *editor.faces = Faces::from_tri_and_quad_faces(Vec::new(), quadrangles);
     }
     ensure_winding_matches_normals(mesh);
@@ -798,9 +810,12 @@ fn division_axis_length<S: ParametricSurface3D>(
 fn desired_span_intervals(length: f64, tolerance: f64) -> usize {
     let max_segment_length = f64::max(tolerance * SURFACE_SPAN_TOLERANCE_FACTOR, TOLERANCE);
     if length.is_finite() && max_segment_length.is_finite() && max_segment_length > 0.0 {
-        f64::ceil(length / max_segment_length)
-            .max(1.0)
-            .min(MAX_SURFACE_SPAN_INTERVALS as f64) as usize
+        let required = f64::ceil(length / max_segment_length).max(1.0);
+        let mut intervals = 1usize;
+        while intervals < MAX_SURFACE_SPAN_INTERVALS && crate::count_as_f64(intervals) < required {
+            intervals += 1;
+        }
+        intervals
     } else {
         1
     }
@@ -821,7 +836,11 @@ fn densify_divisions(
         && !(end - start).so_small()
     {
         divisions = (0..=desired_intervals)
-            .map(|index| start + (end - start) * index as f64 / desired_intervals as f64)
+            .map(|index| {
+                start
+                    + (end - start) * crate::count_as_f64(index)
+                        / crate::count_as_f64(desired_intervals)
+            })
             .collect();
     }
     divisions
@@ -834,8 +853,8 @@ fn densify_surface_divisions<S: ParametricSurface3D>(
     tolerance: f64,
 ) -> (Vec<f64>, Vec<f64>) {
     let (udiv, vdiv) = divisions;
-    let vmid = (range.1.0 + range.1.1) * 0.5;
-    let umid = (range.0.0 + range.0.1) * 0.5;
+    let vmid = f64::midpoint(range.1.0, range.1.1);
+    let umid = f64::midpoint(range.0.0, range.0.1);
     let u_length = division_axis_length(surface, &udiv, 0, vmid);
     let v_length = division_axis_length(surface, &vdiv, 1, umid);
     (
@@ -909,12 +928,13 @@ fn insert_surface(
             vdiv.iter()
                 .map(|v| {
                     let uv = Point2::new(u, *v);
-                    match polyline.include(uv) {
-                        true => triangulation
+                    if polyline.include(uv) {
+                        triangulation
                             .insert(SPoint2::new(u, *v))
                             .ok()
-                            .map(|handle| (handle, uv)),
-                        false => None,
+                            .map(|handle| (handle, uv))
+                    } else {
+                        None
                     }
                 })
                 .collect()
@@ -987,7 +1007,7 @@ fn triangulation_into_polymesh<'a>(
     let tri_faces: Vec<[StandardVertex; 3]> = triangles
         .map(|tri| tri.vertices())
         .filter(|tri| {
-            fn sp2cg(p: SPoint2) -> Point2 { Point2::new(p.x, p.y) }
+            const fn sp2cg(p: SPoint2) -> Point2 { Point2::new(p.x, p.y) }
             let tri = array![i => sp2cg(*tri[i].as_ref()); 3];
             let (a, b) = (tri[1] - tri[0], tri[2] - tri[0]);
             let c = tri[0] + (a + b) / 3.0;

@@ -1,9 +1,23 @@
-use super::*;
+#![allow(
+    clippy::similar_names,
+    reason = "paired U/V ranges, tolerances, and divisions are standard torus parameterization notation"
+)]
+
+use super::{
+    Bound, BoundedSurface, D2, ElementWise, Error, EuclideanSpace, InnerSpace, Origin,
+    ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
+    ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
+    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance, Torus, UnitCircle,
+    Vector2, Vector3, Zero,
+};
 use std::f64::consts::PI;
 
 impl Torus {
     /// constructor
-    #[inline(always)]
+    /// # Errors
+    /// Returns [`Error::InvalidTorusRadii`] unless both radii are finite and strictly positive.
+    ///
+    #[inline]
     pub fn new(center: Point3, large_radius: f64, small_radius: f64) -> Result<Self> {
         if !large_radius.is_finite()
             || !small_radius.is_finite()
@@ -23,7 +37,8 @@ impl Torus {
     ///
     /// Use this only when the caller has already established that both radii
     /// are finite and strictly positive (for example, fixed test geometry).
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn new_unchecked(center: Point3, large_radius: f64, small_radius: f64) -> Self {
         Self {
             center,
@@ -33,22 +48,25 @@ impl Torus {
     }
 
     /// get center
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn center(&self) -> Point3 { self.center }
 
     /// get large radius
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn large_radius(&self) -> f64 { self.large_radius }
 
     /// get small radius
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn small_radius(&self) -> f64 { self.small_radius }
 }
 
 impl ParametricSurface for Torus {
     type Point = Point3;
     type Vector = Vector3;
-    #[inline(always)]
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         let ((su, cu), (sv, cv)) = (u.sin_cos(), v.sin_cos());
         let center = match (m, n) {
@@ -65,7 +83,7 @@ impl ParametricSurface for Torus {
         let r0 = if n == 0 { self.large_radius } else { 0.0 };
         let r1 = self.small_radius;
         let v_part_d2 = match n % 4 {
-            0 => Vector2::new(r0 + r1 * cv, r1 * sv),
+            0 => Vector2::new(r1.mul_add(cv, r0), r1 * sv),
             1 => Vector2::new(-r1 * sv, r1 * cv),
             2 => Vector2::new(-r1 * cv, -r1 * sv),
             _ => Vector2::new(r1 * sv, -r1 * cv),
@@ -73,70 +91,75 @@ impl ParametricSurface for Torus {
         let v_part = Vector3::new(v_part_d2.x, v_part_d2.x, v_part_d2.y);
         center + u_part.mul_element_wise(v_part)
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 {
         let sr = self.small_radius() * Vector2::new(f64::cos(v), f64::sin(v));
         let lr = (self.large_radius() + sr.x) * Vector2::new(f64::cos(u), f64::sin(u));
         self.center() + Vector3::new(lr.x, lr.y, sr.y)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> Vector3 {
         let sr = self.small_radius() * f64::cos(v);
         let lr = (self.large_radius() + sr) * Vector2::new(f64::cos(u), f64::sin(u));
         Vector3::new(-lr.y, lr.x, 0.0)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> Vector3 {
         let sv = self.small_radius() * Vector2::new(-f64::sin(v), f64::cos(v));
         Vector3::new(sv.x * f64::cos(u), sv.x * f64::sin(u), sv.y)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> Vector3 {
         let sr = self.small_radius() * f64::cos(v);
         let lr = (self.large_radius() + sr) * Vector2::new(f64::cos(u), f64::sin(u));
         Vector3::new(-lr.x, -lr.y, 0.0)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> Vector3 {
         let sr = -self.small_radius() * f64::sin(v);
         let lr = sr * Vector2::new(f64::cos(u), f64::sin(u));
         Vector3::new(-lr.y, lr.x, 0.0)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Vector3 {
         let sv = -self.small_radius() * Vector2::new(f64::cos(v), f64::sin(v));
         Vector3::new(sv.x * f64::cos(u), sv.x * f64::sin(u), sv.y)
     }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
         const RANGE: (Bound<f64>, Bound<f64>) = (Bound::Included(0.0), Bound::Excluded(2.0 * PI));
         (RANGE, RANGE)
     }
-    #[inline(always)]
+    #[inline]
     fn period_u(&self) -> Option<f64> { Some(2.0 * PI) }
-    #[inline(always)]
+    #[inline]
     fn period_v(&self) -> Option<f64> { Some(2.0 * PI) }
 }
 
 impl ParametricSurface3D for Torus {
-    #[inline(always)]
+    #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         let sv = Vector2::new(f64::cos(v), f64::sin(v));
         Vector3::new(sv.x * f64::cos(u), sv.x * f64::sin(u), sv.y)
     }
-    #[inline(always)]
+    #[inline]
     fn normal_uder(&self, u: f64, v: f64) -> Vector3 {
         let sv = Vector2::new(f64::cos(v), f64::sin(v));
         Vector3::new(-sv.x * f64::sin(u), sv.x * f64::cos(u), sv.y)
     }
-    #[inline(always)]
+    #[inline]
     fn normal_vder(&self, u: f64, v: f64) -> Vector3 {
         let sv = Vector2::new(-f64::sin(v), f64::cos(v));
         Vector3::new(sv.x * f64::cos(u), sv.x * f64::sin(u), sv.y)
     }
 }
 
-impl BoundedSurface for Torus {}
+impl BoundedSurface for Torus {
+    fn range_tuple(&self) -> SurfaceParameterRange {
+        let range = (0.0, 2.0 * PI);
+        (range, range)
+    }
+}
 
 // -- v2 scalar-generic impls ------------------------------------------------
 
@@ -147,36 +170,36 @@ impl v2::ParametricSurface for Torus {
     type Point = Point3;
     type Vector = Vector3;
 
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 { ParametricSurface::evaluate(self, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_u(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_v(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_uu(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_uv(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_vv(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn period_u(&self) -> Option<f64> { ParametricSurface::period_u(self) }
-    #[inline(always)]
+    #[inline]
     fn period_v(&self) -> Option<f64> { ParametricSurface::period_v(self) }
 }
 
 impl v2::BoundedSurface for Torus {
-    #[inline(always)]
+    #[inline]
     fn range_tuple(&self) -> ((f64, f64), (f64, f64)) { BoundedSurface::range_tuple(self) }
 }
 
@@ -184,7 +207,7 @@ impl v2::ParametricSurface3D for Torus {}
 
 impl v2::SearchNearestParameter<v2::D2<f64>> for Torus {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
         &self,
         pt: Point3,
@@ -197,7 +220,7 @@ impl v2::SearchNearestParameter<v2::D2<f64>> for Torus {
 
 impl v2::SearchParameter<v2::D2<f64>> for Torus {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
         &self,
         pt: Point3,
@@ -215,7 +238,7 @@ impl v2::SearchParameter<v2::D2<f64>> for Torus {
 /// disambiguation (the boundary projection chain, the SSI's parameter refiner)
 /// passes `Parameter`.
 #[inline]
-fn hint_parameter(hint: SearchParameterHint2D) -> Option<(f64, f64)> {
+const fn hint_parameter(hint: SearchParameterHint2D) -> Option<(f64, f64)> {
     match hint {
         SearchParameterHint2D::Parameter(u, v) => Some((u, v)),
         SearchParameterHint2D::Range(..) | SearchParameterHint2D::None => None,
@@ -270,10 +293,9 @@ fn hint_parameter(hint: SearchParameterHint2D) -> Option<(f64, f64)> {
 /// the arithmetic it saw before.
 #[inline]
 fn nearest_periodic_angle(angle: f64, hint: Option<f64>) -> f64 {
-    match hint {
-        None => angle,
-        Some(hint) => angle + 2.0 * PI * ((hint - angle) / (2.0 * PI)).round(),
-    }
+    hint.map_or(angle, |hint| {
+        (2.0 * PI).mul_add(((hint - angle) / (2.0 * PI)).round(), angle)
+    })
 }
 
 impl SearchParameter<SurfaceParameter> for Torus {
@@ -292,22 +314,24 @@ impl SearchParameter<SurfaceParameter> for Torus {
         let v = match (minus, v < 0.0) {
             (true, _) => PI - v,
             (false, false) => v,
-            (false, true) => 2.0 * PI + v,
+            (false, true) => 2.0f64.mul_add(PI, v),
         };
         let v = nearest_periodic_angle(v, hint.map(|hint| hint.1));
         let rxy_n = rxy.normalize();
         let u = f64::acos(f64::clamp(rxy_n.x, -1.0, 1.0));
-        let u = match rxy_n.y < 0.0 {
-            true => 2.0 * PI - u,
-            false => u,
+        let u = if rxy_n.y < 0.0 {
+            2.0f64.mul_add(PI, -u)
+        } else {
+            u
         };
         let u = nearest_periodic_angle(u, hint.map(|hint| hint.0));
         // Still the SAME acceptance test on the SAME surface: `subs` is
         // `2 * PI`-periodic, so a re-spelled parameter evaluates to the very
         // same point and this check is unweakened by the re-spelling.
-        match self.subs(u, v).near(&point) {
-            true => Some((u, v)),
-            false => None,
+        if self.subs(u, v).near(&point) {
+            Some((u, v))
+        } else {
+            None
         }
     }
 }
@@ -335,9 +359,10 @@ impl SearchNearestParameter<SurfaceParameter> for Torus {
         let small_r = diff.normalize();
 
         let u = f64::acos(f64::clamp(rxy_n.x, -1.0, 1.0));
-        let u = match rxy_n.y < 0.0 {
-            true => 2.0 * PI - u,
-            false => u,
+        let u = if rxy_n.y < 0.0 {
+            2.0f64.mul_add(PI, -u)
+        } else {
+            u
         };
         // The same seam disambiguation as the exact solver above -- see
         // [`nearest_periodic_angle`]. The two are twins over the same branch
@@ -349,7 +374,7 @@ impl SearchNearestParameter<SurfaceParameter> for Torus {
         let v = match (small_r.dot(large_r) < 0.0, v < 0.0) {
             (true, _) => PI - v,
             (false, false) => v,
-            (false, true) => 2.0 * PI + v,
+            (false, true) => 2.0f64.mul_add(PI, v),
         };
         let v = nearest_periodic_angle(v, hint.map(|hint| hint.1));
         Some((u, v))

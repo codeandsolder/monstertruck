@@ -20,7 +20,11 @@ fn grid_params() -> impl Iterator<Item = f64> { (0..GRID).map(|i| i as f64 / (GR
 fn full_circle_angle(t: f64) -> f64 {
     let p = full_unit_circle_curve().subs(t);
     let angle = p.y.atan2(p.x);
-    if angle < 0.0 { angle + 2.0 * PI } else { angle }
+    if angle < 0.0 {
+        2.0f64.mul_add(PI, angle)
+    } else {
+        angle
+    }
 }
 
 /// Exact `param -> colatitude` map of the sphere meridian semicircle.
@@ -43,14 +47,12 @@ fn meridian_colatitude(s: f64) -> f64 {
 
 fn torus_off_surface(torus: &Torus, point: Point3) -> f64 {
     let c = torus.center();
-    let radial = ((point.x - c.x).powi(2) + (point.y - c.y).powi(2)).sqrt();
-    ((radial - torus.large_radius()).powi(2) + (point.z - c.z).powi(2)).sqrt()
-        - torus.small_radius()
+    let radial = (point.x - c.x).hypot(point.y - c.y);
+    (radial - torus.large_radius()).hypot(point.z - c.z) - torus.small_radius()
 }
 
 fn assert_torus_grid(torus: Torus) {
-    let hom = torus
-        .try_into_homogeneous_bspline_surface()
+    let hom = (torus.try_into_homogeneous_bspline_surface())
         .expect("torus converts to homogeneous NURBS");
     let conv = as_nurbs(hom);
     let tol = 1.0e-9 * (torus.large_radius() + torus.small_radius());
@@ -73,8 +75,7 @@ fn assert_torus_grid(torus: Torus) {
 }
 
 fn assert_sphere_grid(sphere: Sphere) {
-    let hom = sphere
-        .try_into_homogeneous_bspline_surface()
+    let hom = (sphere.try_into_homogeneous_bspline_surface())
         .expect("sphere converts to homogeneous NURBS");
     let conv = as_nurbs(hom);
     let tol = 1.0e-9 * sphere.radius();
@@ -132,7 +133,7 @@ fn torus_fp_near_horn_is_representable() {
 #[test]
 fn torus_horn_inner_equator_collapses_to_center() {
     let torus = Torus::new_unchecked(Point3::new(0.5, 0.5, 0.5), 1.5, 1.5);
-    let conv = as_nurbs(torus.try_into_homogeneous_bspline_surface().unwrap());
+    let conv = as_nurbs((torus.try_into_homogeneous_bspline_surface()).unwrap());
     // Tube angle pi (v-knot 0.5) is the inner equator -> a single point at
     // the center for a horn torus.
     for s in grid_params() {
@@ -147,7 +148,7 @@ fn torus_horn_inner_equator_collapses_to_center() {
 #[test]
 fn torus_seams_are_periodic() {
     let torus = Torus::new_unchecked(Point3::origin(), 4.0, 1.0);
-    let conv = as_nurbs(torus.try_into_homogeneous_bspline_surface().unwrap());
+    let conv = as_nurbs((torus.try_into_homogeneous_bspline_surface()).unwrap());
     let tol = 1.0e-9 * (torus.large_radius() + torus.small_radius());
     for g in grid_params() {
         assert!(
@@ -194,7 +195,7 @@ fn sphere_tiny_matches_analytic_on_grid() {
 #[test]
 fn sphere_poles_collapse() {
     let sphere = Sphere::new(Point3::new(1.0, -1.0, 2.0), 2.5);
-    let conv = as_nurbs(sphere.try_into_homogeneous_bspline_surface().unwrap());
+    let conv = as_nurbs((sphere.try_into_homogeneous_bspline_surface()).unwrap());
     let north = sphere.center() + Vector3::new(0.0, 0.0, sphere.radius());
     let south = sphere.center() + Vector3::new(0.0, 0.0, -sphere.radius());
     let tol = 1.0e-9 * sphere.radius();
@@ -213,7 +214,7 @@ fn sphere_poles_collapse() {
 #[test]
 fn sphere_longitude_seam_is_periodic() {
     let sphere = Sphere::new(Point3::origin(), 3.0);
-    let conv = as_nurbs(sphere.try_into_homogeneous_bspline_surface().unwrap());
+    let conv = as_nurbs((sphere.try_into_homogeneous_bspline_surface()).unwrap());
     let tol = 1.0e-9 * sphere.radius();
     for s in grid_params() {
         assert!(
@@ -290,9 +291,7 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
     let cylinder = step_cylinder(Point3::origin(), Vector3::unit_z(), 8.0);
 
     // Untrimmed: the one-unit stub, unchanged.
-    let stub = cylinder
-        .try_into_homogeneous_bspline_surface()
-        .expect("cylinder converts");
+    let stub = (cylinder.try_into_homogeneous_bspline_surface()).expect("cylinder converts");
     let (stub_min, stub_max) = control_net_bbox(&stub);
     assert!(
         (stub_max.z - stub_min.z - 1.0).abs() < 1.0e-12,
@@ -301,9 +300,9 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
 
     // `v` is the profile axis (the processor is inverted), so the face's
     // trim rectangle is (angle, height).
-    let converted = cylinder
-        .try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (0.0, 80.0))))
-        .expect("trimmed cylinder converts");
+    let converted = (cylinder
+        .try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (0.0, 80.0)))))
+    .expect("trimmed cylinder converts");
     assert_eq!(
         converted.surface_frame_axes,
         (false, true),
@@ -337,7 +336,7 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
             let v = 80.0 * t;
             let got = conv.subs(s, v);
             let want = ParametricSurface::evaluate(&cylinder, s * 2.0 * PI, v);
-            let radius = (got.x * got.x + got.y * got.y).sqrt();
+            let radius = got.x.hypot(got.y);
             assert!(
                 (radius - 8.0).abs() <= 1.0e-9 * 80.0,
                 "off-cylinder at ({s},{v}): r={radius}"
@@ -374,8 +373,7 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
         // Strictly inside.
         ((0.0, 1.0), (0.25, 0.75)),
     ] {
-        let converted = cylinder
-            .try_into_homogeneous_bspline_surface_over(Some(trim))
+        let converted = (cylinder.try_into_homogeneous_bspline_surface_over(Some(trim)))
             .expect("cylinder converts");
         let surface = as_nurbs(converted.surface);
         let v0 = trim.1.0.max(0.0);
@@ -383,7 +381,7 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
         for s in grid_params() {
             let angle = full_circle_angle(s);
             for fraction in grid_params() {
-                let v = v0 + (v1 - v0) * fraction;
+                let v = f64::mul_add(v1 - v0, fraction, v0);
                 let got = surface.subs(s, v);
                 let want = ParametricSurface::evaluate(&cylinder, angle, v);
                 assert!(
@@ -396,14 +394,14 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
 
     // A trim that genuinely reaches below the profile start must cover that
     // geometry too; how the converter chooses its control net is irrelevant.
-    let below = cylinder
-        .try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (-0.6, 1.0))))
-        .expect("cylinder converts");
+    let below = (cylinder
+        .try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (-0.6, 1.0)))))
+    .expect("cylinder converts");
     let below = as_nurbs(below.surface);
     for s in grid_params() {
         let angle = full_circle_angle(s);
         for fraction in grid_params() {
-            let v = -0.6 + 1.6 * fraction;
+            let v = 1.6f64.mul_add(fraction, -0.6);
             let got = below.subs(s, v);
             let want = ParametricSurface::evaluate(&cylinder, angle, v);
             assert!(
@@ -421,8 +419,7 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
 fn optional_trim_preserves_analytic_geometry() {
     let cylinder = step_cylinder(Point3::origin(), Vector3::unit_z(), 3.0);
     let cylinder_surface = as_nurbs(
-        cylinder
-            .try_into_homogeneous_bspline_surface_over(None)
+        (cylinder.try_into_homogeneous_bspline_surface_over(None))
             .expect("cylinder converts")
             .surface,
     );
@@ -439,8 +436,7 @@ fn optional_trim_preserves_analytic_geometry() {
 
     let sphere = Sphere::new(Point3::new(1.0, 2.0, 3.0), 4.0);
     let sphere_surface = as_nurbs(
-        sphere
-            .try_into_homogeneous_bspline_surface_over(trim)
+        (sphere.try_into_homogeneous_bspline_surface_over(trim))
             .expect("sphere converts")
             .surface,
     );
@@ -456,8 +452,7 @@ fn optional_trim_preserves_analytic_geometry() {
 
     let torus = Torus::new_unchecked(Point3::origin(), 3.0, 1.0);
     let torus_surface = as_nurbs(
-        torus
-            .try_into_homogeneous_bspline_surface_over(trim)
+        (torus.try_into_homogeneous_bspline_surface_over(trim))
             .expect("torus converts")
             .surface,
     );
@@ -477,8 +472,7 @@ fn optional_trim_preserves_analytic_geometry() {
         Point3::new(0.0, 1.0, 0.0),
     );
     let plane_surface = as_nurbs(
-        plane
-            .try_into_homogeneous_bspline_surface_over(trim)
+        (plane.try_into_homogeneous_bspline_surface_over(trim))
             .expect("plane converts")
             .surface,
     );
@@ -505,15 +499,15 @@ fn trimmed_cone_stays_an_exact_cone() {
     ));
     cone.invert();
     let conv = as_nurbs(
-        cone.try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (10.0, 40.0))))
+        (cone.try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (10.0, 40.0)))))
             .expect("cone converts")
             .surface,
     );
     for s in grid_params() {
         for t in grid_params() {
-            let v = 10.0 + 30.0 * t;
+            let v = 30.0f64.mul_add(t, 10.0);
             let point = conv.subs(s, v);
-            let radius = (point.x * point.x + point.y * point.y).sqrt();
+            let radius = point.x.hypot(point.y);
             // On this cone radius == 1 + height and height == v.
             assert!((point.z - v).abs() <= 1.0e-9 * 40.0, "height at ({s},{v})");
             assert!(
@@ -540,12 +534,9 @@ fn transformed_torus_via_processor_lies_on_surface() {
     );
     let transform = Matrix4::from_translation(Vector3::new(5.0, -3.0, 2.0)) * rot_x;
     let placed = Processor::with_transform(torus, transform);
-    let conv = as_nurbs(
-        placed
-            .try_into_homogeneous_bspline_surface()
-            .expect("placed torus converts"),
-    );
-    let inv = transform.invert().expect("rigid transform is invertible");
+    let conv =
+        as_nurbs((placed.try_into_homogeneous_bspline_surface()).expect("placed torus converts"));
+    let inv = (transform.invert()).expect("rigid transform is invertible");
     let tol = 1.0e-9 * (torus.large_radius() + torus.small_radius());
     for s in grid_params() {
         for t in grid_params() {

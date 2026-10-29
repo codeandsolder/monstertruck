@@ -55,7 +55,7 @@ impl<S: Clone> BoundaryCurveFromSamples<S> for ParameterCurve<Line<Point2>, S> {
     fn boundary_curve_from_samples(surface: &S, points: Vec<Point2>) -> Option<Self> {
         let (front, rest) = points.split_first()?;
         let back = rest.last()?;
-        Some(ParameterCurve::new(Line(*front, *back), surface.clone()))
+        Some(Self::new(Line(*front, *back), surface.clone()))
     }
 }
 
@@ -69,14 +69,16 @@ impl<S: Clone> BoundaryCurveFromSamples<S> for ParameterCurve<BoundaryCurve2D, S
                 line.search_nearest_parameter(point, None, 1)
                     .is_some_and(|t| line.subs(t).near(&point))
             });
-            Some(ParameterCurve::new(
+            Some(Self::new(
                 if is_linear {
                     BoundaryCurve2D::Line(line)
                 } else {
-                    let denom = (points.len() - 1) as f64;
+                    let denom = crate::usize_to_f64(points.len() - 1);
                     let knot_vec = KnotVector::from(
                         std::iter::once(0.0)
-                            .chain((0..points.len()).map(|index| index as f64 / denom))
+                            .chain(
+                                (0..points.len()).map(|index| crate::usize_to_f64(index) / denom),
+                            )
                             .chain(std::iter::once(1.0))
                             .collect::<Vec<_>>(),
                     );
@@ -95,7 +97,7 @@ impl TryFrom<ParameterCurve<Line<Point2>, Plane>> for BsplineCurve<Point3> {
         value: ParameterCurve<Line<Point2>, Plane>,
     ) -> std::result::Result<Self, Self::Error> {
         let (line, plane) = value.decompose();
-        Ok(BsplineCurve::from(Line(
+        Ok(Self::from(Line(
             plane.subs(line.0.x, line.0.y),
             plane.subs(line.1.x, line.1.y),
         )))
@@ -126,7 +128,7 @@ where C: ParameterBoundary2D<S>
     }
 }
 
-impl<C, T, S> ParameterBoundary2D<S> for Processor<C, T> where Processor<C, T>: ParametricCurve3D {}
+impl<C, T, S> ParameterBoundary2D<S> for Processor<C, T> where Self: ParametricCurve3D {}
 
 fn exact_line_boundary_on_plane(
     line: &Line<Point3>,
@@ -151,7 +153,7 @@ where
     let p10 = surface.subs(u1, v0);
     let p01 = surface.subs(u0, v1);
     let p11 = surface.subs(u1, v1);
-    let midpoint = surface.subs((u0 + u1) * 0.5, (v0 + v1) * 0.5);
+    let midpoint = surface.subs(f64::midpoint(u0, u1), f64::midpoint(v0, v1));
     (p11.near(&(p10 + (p01 - p00))) && midpoint.near(&(p00 + ((p10 - p00) + (p01 - p00)) * 0.5)))
         .then_some(())?;
     let u_axis = p10 - p00;
@@ -159,15 +161,16 @@ where
     let uu = u_axis.dot(u_axis);
     let uv = u_axis.dot(v_axis);
     let vv = v_axis.dot(v_axis);
-    let denominator = uu * vv - uv * uv;
+    let uv_squared = uv * uv;
+    let denominator = f64::mul_add(uu, vv, -uv_squared);
     (!denominator.so_small()).then_some(())?;
     let project = |point: Point3| {
         let delta = point - p00;
         let du = delta.dot(u_axis);
         let dv = delta.dot(v_axis);
-        let su = (du * vv - dv * uv) / denominator;
-        let sv = (dv * uu - du * uv) / denominator;
-        let parameter = Point2::new(u0 + (u1 - u0) * su, v0 + (v1 - v0) * sv);
+        let su = f64::mul_add(dv, -uv, du * vv) / denominator;
+        let sv = f64::mul_add(du, -uv, dv * uu) / denominator;
+        let parameter = Point2::new(f64::mul_add(u1 - u0, su, u0), f64::mul_add(v1 - v0, sv, v0));
         surface
             .subs(parameter.x, parameter.y)
             .near(&point)
@@ -211,8 +214,11 @@ fn exact_line_boundary_on_homogeneous_extrusion_surface(
     let base_point = base_curve.subs(curve_parameter);
     let extrusion_parameter = |point: Point3| {
         let factor = (point - base_point).dot(vector) / vector2;
-        let parameter = extrusion.extrusion_range.0
-            + (extrusion.extrusion_range.1 - extrusion.extrusion_range.0) * factor;
+        let parameter = f64::mul_add(
+            extrusion.extrusion_range.1 - extrusion.extrusion_range.0,
+            factor,
+            extrusion.extrusion_range.0,
+        );
         let uv = match (extrusion.curve_axis, extrusion.extrusion_axis) {
             (SurfaceParameterAxis::U, SurfaceParameterAxis::V) => {
                 Point2::new(curve_parameter, parameter)
@@ -244,9 +250,9 @@ where
     let (t0, t1) = curve.range_tuple();
     let samples = [
         t0,
-        (3.0 * t0 + t1) * 0.25,
-        (t0 + t1) * 0.5,
-        (t0 + 3.0 * t1) * 0.25,
+        3.0f64.mul_add(t0, t1) * 0.25,
+        f64::midpoint(t0, t1),
+        3.0f64.mul_add(t1, t0) * 0.25,
         t1,
     ];
     samples
@@ -339,7 +345,9 @@ fn exact_nurbs_boundary_on_surface(
 
 fn nearest_periodic_component(value: f64, reference: f64, period: Option<f64>) -> f64 {
     period.map_or(value, |period| {
-        value + ((reference - value) / period).round() * period
+        ((reference - value) / period)
+            .round()
+            .mul_add(period, value)
     })
 }
 
@@ -368,9 +376,9 @@ where
         surface,
         [
             t0,
-            (3.0 * t0 + t1) * 0.25,
-            (t0 + t1) * 0.5,
-            (t0 + 3.0 * t1) * 0.25,
+            3.0f64.mul_add(t0, t1) * 0.25,
+            f64::midpoint(t0, t1),
+            3.0f64.mul_add(t1, t0) * 0.25,
             t1,
         ],
     )
@@ -388,7 +396,7 @@ where
     exact_linear_boundary_by_surface_search_with_parameters(
         curve,
         surface,
-        [t0, (t0 + t1) * 0.5, t1],
+        [t0, f64::midpoint(t0, t1), t1],
     )
 }
 
@@ -456,22 +464,20 @@ where
             let uv = Point2::from(uv);
             let uv = samples
                 .last()
-                .map(|(_, reference): &(Point3, Point2)| {
+                .map_or(uv, |(_, reference): &(Point3, Point2)| {
                     nearest_periodic_surface_parameter(uv, *reference, periods)
-                })
-                .unwrap_or(uv);
+                });
             samples.push((point, uv));
             Some(samples)
         })?;
     let sample_count = samples.len();
-    let pairs = (0..sample_count)
+    let mut pairs = (0..sample_count)
         .flat_map(|start| ((start + 1)..sample_count).map(move |end| (start, end)));
     pairs
-        .filter_map(|(start, end)| {
+        .find_map(|(start, end)| {
             let candidate = Line(samples[start].1, samples[end].1);
             exact_parameter_line_from_samples(&samples, surface, candidate)
         })
-        .next()
         .map(|line| ParameterCurve::new(line, surface.clone()))
 }
 
@@ -726,10 +732,8 @@ where
     S1: ParametricSurface3D
         + SearchNearestParameter<SurfaceParameter, Point = Point3>
         + PartialEq<S>,
-    T0: ParameterBoundary2D<S>,
-    T1: ParameterBoundary2D<S>,
-    T0: Clone,
-    T1: Clone,
+    T0: ParameterBoundary2D<S> + Clone,
+    T1: ParameterBoundary2D<S> + Clone,
 {
     fn parameter_boundary_2d(&self, surface: &S, tolerance: f64) -> Option<Vec<Point2>> {
         if self.surface0() == surface {

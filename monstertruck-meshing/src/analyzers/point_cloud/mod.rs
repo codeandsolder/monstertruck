@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BoundingBox, EuclideanSpace, InnerSpace, MetricSpace, Origin, Point3, PolygonMesh, TOLERANCE,
+    Vector3, hash, nonpositive_tolerance,
+};
 mod hashed_point_cloud;
 use hashed_point_cloud::HashedPointCloud;
 mod sort_end_points;
@@ -45,16 +48,26 @@ pub trait WithPointCloud {
 }
 
 impl WithPointCloud for PolygonMesh {
-    #[inline(always)]
+    #[inline]
     fn is_clung_to_by(&self, point_cloud: &[Point3], tol: f64) -> bool {
         nonpositive_tolerance!(tol);
-        HashedPointCloud::from_points(point_cloud, tol * 2.0).distance2(self) < tol * tol
+        let Some(point_cloud) = HashedPointCloud::from_points(point_cloud, tol * 2.0) else {
+            return false;
+        };
+        point_cloud.distance2(&self) < tol * tol
     }
-    #[inline(always)]
+    #[inline]
     fn collide_with_neighborhood_of(&self, point_cloud: &[Point3], tol: f64) -> bool {
-        HashedPointCloud::from_points(point_cloud, tol * 2.0).is_colliding(self, tol)
+        nonpositive_tolerance!(tol, 0.0);
+        if tol == 0.0 {
+            return false;
+        }
+        let Some(point_cloud) = HashedPointCloud::from_points(point_cloud, tol * 2.0) else {
+            return false;
+        };
+        point_cloud.is_colliding(&self, tol)
     }
-    #[inline(always)]
+    #[inline]
     fn neighborhood_include(&self, point_cloud: &[Point3], tol: f64) -> bool {
         sort_end_points::pointcloud_in_polygon_neighborhood(self, point_cloud, tol)
     }

@@ -56,7 +56,7 @@ type Shell<C, S> = monstertruck_topology::Shell<Point3, C, S>;
 /// let vertex = builder::vertex((1.0, 2.0, 3.0));
 /// # assert_eq!(vertex.point(), Point3::new(1.0, 2.0, 3.0));
 /// ```
-#[inline(always)]
+#[inline]
 pub fn vertex<P: Into<Point3>>(p: P) -> Vertex { Vertex::new(p.into()) }
 
 /// Creates and returns vertices by three dimensional points.
@@ -77,7 +77,7 @@ pub fn vertex<P: Into<Point3>>(p: P) -> Vertex { Vertex::new(p.into()) }
 /// ]);
 /// # assert_eq!(vertices[3].point(), Point3::new(0.0, 0.0, 1.0));
 /// ```
-#[inline(always)]
+#[inline]
 pub fn vertices<P: Into<Point3>>(points: impl IntoIterator<Item = P>) -> Vec<Vertex> {
     points.into_iter().map(|p| Vertex::new(p.into())).collect()
 }
@@ -100,6 +100,7 @@ pub fn vertices<P: Into<Point3>>(points: impl IntoIterator<Item = P>) -> Vec<Ver
 /// #     assert!(curve.subs(t).near2(&(pt0 + t * (pt1 - pt0))));
 /// # }
 /// ```
+#[must_use]
 pub fn line<C>(vertex0: &Vertex, vertex1: &Vertex) -> Edge<C>
 where Line<Point3>: ToSameGeometry<C> {
     let pt0 = vertex0.point();
@@ -243,6 +244,7 @@ where
 /// #       assert!(curve.subs(t).near(&pt));
 /// # }
 /// ```
+#[must_use]
 pub fn bezier<C>(vertex0: &Vertex, vertex1: &Vertex, mut inter_points: Vec<Point3>) -> Edge<C>
 where BsplineCurve<Point3>: ToSameGeometry<C> {
     let pt0 = vertex0.point();
@@ -279,6 +281,7 @@ where BsplineCurve<Point3>: ToSameGeometry<C> {
 /// #       }
 /// # }
 /// ```
+#[must_use]
 pub fn homotopy<C, S>(edge0: &Edge<C>, edge1: &Edge<C>) -> Face<C, S>
 where
     C: Invertible,
@@ -538,7 +541,7 @@ where
     C: ParametricCurve3D + BoundedCurve,
     Plane: IncludeCurve<C> + ToSameGeometry<S>, {
     let wires = wires.into();
-    let _ = Face::try_new(wires.clone(), ())?;
+    let _ = Face::new(wires.clone(), ())?;
     let pts = wires
         .iter()
         .map(|wire| {
@@ -547,7 +550,7 @@ where
                     let p0 = edge.front().point();
                     let curve = edge.curve();
                     let (t0, t1) = curve.range_tuple();
-                    let p1 = curve.subs((t0 + t1) / 2.0);
+                    let p1 = curve.subs(f64::midpoint(t0, t1));
                     [p0, p1]
                 })
                 .collect()
@@ -570,15 +573,15 @@ where
 /// assert_eq!(v0.point(), Point3::origin());
 /// assert_ne!(v0.id(), v.id());
 /// ```
-#[inline(always)]
+#[inline]
 pub fn clone<T: Mapped<()>>(elem: &T) -> T { elem.mapped(()) }
 
 /// Returns a transformed vertex, edge, wire, face, shell or solid.
-#[inline(always)]
+#[inline]
 pub fn transformed<T: Mapped<Matrix4>>(elem: &T, mat: Matrix4) -> T { elem.mapped(mat) }
 
 /// Returns a translated vertex, edge, wire, face, shell or solid.
-#[inline(always)]
+#[inline]
 pub fn translated<T: Mapped<Matrix4>>(elem: &T, vector: Vector3) -> T {
     transformed(elem, Matrix4::from_translation(vector))
 }
@@ -709,7 +712,7 @@ fn normalize_composite_segments(
                     return Err(Error::InvalidCompositeSweepSegment);
                 }
                 let axis = axis / axis_magnitude;
-                let part_angle = angle / division as f64;
+                let part_angle = angle / crate::usize_to_f64(division);
                 normalized.extend((0..division).map(|_| ValidatedCompositeSegment::Rotation {
                     origin,
                     axis,
@@ -776,7 +779,7 @@ fn sweep_composite_segment(
             origin,
             axis,
             angle,
-        } => revolve(face, origin, axis, SweepAngle::Partial(angle), 1),
+        } => revolve(face, origin, axis, SweepAngle::Partial(angle), 1)?,
     };
     let mut shells = solid.into_boundaries();
     if shells.len() != 1 {
@@ -879,7 +882,7 @@ fn append_closing_composite_segment(
 /// zero/non-finite rotations, zero-length rotation axes, or zero subdivisions,
 /// and [`Error::UnexpectedCompositeSweepTopology`] if an internally generated
 /// segment does not have the single-shell capped topology produced by the
-/// primitive sweep builders. The final solid is validated with [`Solid::try_new`].
+/// primitive sweep builders. The final solid is validated with [`Solid::new`].
 pub fn composite_sweep(
     face: &crate::Face,
     segments: impl IntoIterator<Item = CompositeSweepSegment>,
@@ -893,7 +896,7 @@ pub fn composite_sweep(
     }
 
     output.push(cursor);
-    Ok(crate::Solid::try_new(vec![output])?)
+    Ok(crate::Solid::new(vec![output])?)
 }
 
 /// Sweep a face around an exactly closed composite path.
@@ -928,7 +931,7 @@ pub fn composite_closed_sweep(
     }
     append_closing_composite_segment(&mut output, &cursor, &first, final_segment)?;
 
-    Ok(crate::Solid::try_new(vec![output])?)
+    Ok(crate::Solid::new(vec![output])?)
 }
 
 /// Sweeps a vertex, an edge, a wire, a face, or a shell by the rotation.
@@ -939,7 +942,7 @@ pub fn composite_closed_sweep(
 /// # Remarks
 /// `axis` must be normalized. If not, panics occurs in debug mode.
 /// # Panics
-/// ALways `division > 0` must hold. Moreover, `division >= 2` must hold if `angle` is no less than 2π.
+/// `ALways` `division > 0` must hold. Moreover, `division >= 2` must hold if `angle` is no less than 2π.
 /// # Examples
 /// ```
 /// // Torus
@@ -1038,31 +1041,50 @@ pub fn composite_closed_sweep(
 /// Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C>,
 /// RevolutionSurface<C>: ToSameGeometry<S>,
 /// ```
+fn validate_revolve_parameters(
+    origin: Point3,
+    axis: Vector3,
+    sweep: SweepAngle,
+    division: usize,
+) -> Result<()> {
+    let finite_point =
+        |point: Point3| point.x.is_finite() && point.y.is_finite() && point.z.is_finite();
+    let finite_vector =
+        |vector: Vector3| vector.x.is_finite() && vector.y.is_finite() && vector.z.is_finite();
+    let valid_sweep = match sweep {
+        SweepAngle::Closed => division >= 2,
+        SweepAngle::Partial(angle) => division >= 1 && angle.0.is_finite() && !angle.0.so_small(),
+    };
+    if finite_point(origin) && finite_vector(axis) && axis.magnitude().near(&1.0) && valid_sweep {
+        Ok(())
+    } else {
+        Err(Error::InvalidRevolveParameters)
+    }
+}
+
+/// Revolves a topological element around a finite unit axis.
+///
+/// # Errors
+/// Returns [`Error::InvalidRevolveParameters`] for a non-finite origin/axis,
+/// a non-unit axis, a non-finite or zero partial angle, or too few divisions.
 pub fn revolve<T, Swept>(
     elem: &T,
     origin: Point3,
     axis: Vector3,
     sweep: SweepAngle,
     division: usize,
-) -> Swept
+) -> Result<Swept>
 where
     T: ClosedSweep<Matrix4, ArcConnector, RevoluteConnector, Swept>,
 {
-    debug_assert!(axis.magnitude().near(&1.0));
-    match sweep {
-        SweepAngle::Closed => {
-            assert!(
-                division >= 2,
-                "division must be 2 or greater for closed revolve"
-            );
-            whole_revolve(elem, origin, axis, division)
-        }
+    validate_revolve_parameters(origin, axis, sweep, division)?;
+    Ok(match sweep {
+        SweepAngle::Closed => whole_revolve(elem, origin, axis, division),
         SweepAngle::Partial(angle) => {
-            assert!(division >= 1, "division must be 1 or greater");
             let sign = f64::signum(angle.0);
             partial_revolve(elem, origin, sign * axis, angle * sign, division)
         }
-    }
+    })
 }
 
 fn partial_revolve<T: MultiSweep<Matrix4, ArcConnector, RevoluteConnector, Swept>, Swept>(
@@ -1073,7 +1095,7 @@ fn partial_revolve<T: MultiSweep<Matrix4, ArcConnector, RevoluteConnector, Swept
     division: usize,
 ) -> Swept {
     let mat0 = Matrix4::from_translation(-origin.to_vec());
-    let mat1 = Matrix4::from_axis_angle(axis, angle / division as f64);
+    let mat1 = Matrix4::from_axis_angle(axis, angle / crate::usize_to_f64(division));
     let mat2 = Matrix4::from_translation(origin.to_vec());
     let trsl = mat2 * mat1 * mat0;
     elem.multi_sweep(
@@ -1081,7 +1103,7 @@ fn partial_revolve<T: MultiSweep<Matrix4, ArcConnector, RevoluteConnector, Swept
         ArcConnector {
             origin,
             axis,
-            angle: angle / division as f64,
+            angle: angle / crate::usize_to_f64(division),
         },
         RevoluteConnector { origin, axis },
         division,
@@ -1095,7 +1117,7 @@ fn whole_revolve<T: ClosedSweep<Matrix4, ArcConnector, RevoluteConnector, Swept>
     division: usize,
 ) -> Swept {
     let mat0 = Matrix4::from_translation(-origin.to_vec());
-    let mat1 = Matrix4::from_axis_angle(axis, PI * 2.0 / division as f64);
+    let mat1 = Matrix4::from_axis_angle(axis, PI * 2.0 / crate::usize_to_f64(division));
     let mat2 = Matrix4::from_translation(origin.to_vec());
     let trsl = mat2 * mat1 * mat0;
     elem.closed_sweep(
@@ -1103,7 +1125,7 @@ fn whole_revolve<T: ClosedSweep<Matrix4, ArcConnector, RevoluteConnector, Swept>
         ArcConnector {
             origin,
             axis,
-            angle: PI * 2.0 / division as f64,
+            angle: PI * 2.0 / crate::usize_to_f64(division),
         },
         RevoluteConnector { origin, axis },
         division,
@@ -1162,18 +1184,7 @@ where
         return Ok(Shell::new());
     }
 
-    let finite_point =
-        |point: Point3| point.x.is_finite() && point.y.is_finite() && point.z.is_finite();
-    let finite_vector =
-        |vector: Vector3| vector.x.is_finite() && vector.y.is_finite() && vector.z.is_finite();
-    let valid_sweep = match sweep {
-        SweepAngle::Closed => division >= 2,
-        SweepAngle::Partial(angle) => division >= 1 && angle.0.is_finite() && !angle.0.so_small(),
-    };
-    if !finite_point(origin) || !finite_vector(axis) || !axis.magnitude().near(&1.0) || !valid_sweep
-    {
-        return Err(Error::InvalidRevolveParameters);
-    }
+    validate_revolve_parameters(origin, axis, sweep, division)?;
 
     let closed = matches!(sweep, SweepAngle::Closed);
     let mut wire = wire.clone();
@@ -1192,14 +1203,14 @@ where
         let v2 = edge.back().clone();
         let mut curve = edge.curve();
         let (t0, t1) = curve.range_tuple();
-        let t = (t0 + t1) * 0.5;
+        let t = f64::midpoint(t0, t1);
         let v1 = Vertex::new(curve.subs(t));
         let curve1 = curve.cut(t);
         wire.push_back(Edge::new_unchecked(&v0, &v1, curve));
         wire.push_back(Edge::new_unchecked(&v1, &v2, curve1));
     }
 
-    let mut shell = revolve(&wire, origin, axis, sweep, division);
+    let mut shell = revolve(&wire, origin, axis, sweep, division)?;
     if shell.is_empty() || shell.len() % wire.len() != 0 {
         return Err(Error::UnexpectedRevolveTopology);
     }
@@ -1292,25 +1303,6 @@ where
         }
     }
     Ok(shell)
-}
-
-/// Use [`revolve_wire`] instead, which takes an explicit `origin` parameter
-/// and handles on-axis degenerate edges automatically.
-#[deprecated(note = "Use revolve_wire instead, which takes an explicit origin parameter.")]
-pub fn cone<C, S>(
-    wire: &Wire<C>,
-    axis: Vector3,
-    sweep: SweepAngle,
-    division: usize,
-) -> Result<Shell<C, S>>
-where
-    C: ParametricCurve3D + BoundedCurve + Cut + Invertible + Transformed<Matrix4>,
-    S: Invertible,
-    Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C>,
-    RevolutionSurface<C>: ToSameGeometry<S>,
-{
-    let origin = wire.front_vertex().map_or(Point3::origin(), |v| v.point());
-    revolve_wire(wire, origin, axis, sweep, division)
 }
 
 #[cfg(test)]

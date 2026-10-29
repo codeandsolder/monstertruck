@@ -4,7 +4,7 @@
 
 use monstertruck_modeling::*;
 
-fn main() {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let v0 = builder::vertex(Point3::new(1.0, 1.0, 0.0));
     let v1 = builder::vertex(Point3::new(0.0, -1.0, 1.0));
     let line = builder::line(&v0, &v1);
@@ -14,19 +14,12 @@ fn main() {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         2,
-    );
+    )?;
     let wires = shell.extract_boundaries();
-    shell.push(
-        builder::try_attach_plane(&[wires[0].clone()])
-            .unwrap()
-            .inverse(),
-    );
-    shell.push(
-        builder::try_attach_plane(&[wires[1].clone()])
-            .unwrap()
-            .inverse(),
-    );
+    shell.push(builder::try_attach_plane([wires[0].clone()])?.inverse());
+    shell.push(builder::try_attach_plane([wires[1].clone()])?.inverse());
     let solid = Solid::new_unchecked(vec![shell]);
-    let json = serde_json::to_vec_pretty(&solid).unwrap();
-    std::fs::write("tsudumi.json", json).unwrap();
+    let json = serde_json::to_vec_pretty(&solid)?;
+    std::fs::write("tsudumi.json", json)?;
+    Ok(())
 }

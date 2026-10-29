@@ -1,15 +1,21 @@
-use super::*;
+#![allow(
+    clippy::many_single_char_names,
+    reason = "compact symbols in basis-function recurrences follow the standard B-spline notation"
+)]
+
+use super::{BasisWindow, Deserialize, KnotVector, Origin, Result, Tolerance, Zero};
 use crate::errors::Error;
 use smallvec::SmallVec;
 use std::slice::SliceIndex;
 use std::vec::Vec;
 
-#[inline(always)]
-fn inv_or_zero_strict(delta: f64) -> f64 { if delta == 0.0 { 0.0 } else { 1.0 / delta } }
+#[inline]
+fn inv_or_zero_strict(delta: f64) -> f64 { if delta.is_zero() { 0.0 } else { 1.0 / delta } }
 
 impl KnotVector {
     /// empty constructor
-    pub const fn new() -> KnotVector { KnotVector(Vec::new()) }
+    #[must_use]
+    pub const fn new() -> Self { Self(Vec::new()) }
 
     /// Returns the length of range.
     /// # Examples
@@ -18,11 +24,13 @@ impl KnotVector {
     /// let knot_vec = KnotVector::from(vec![0.0, 6.0]);
     /// assert_eq!(knot_vec.range_length(), 6.0);
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn range_length(&self) -> f64 {
-        match self.is_empty() {
-            true => 0.0,
-            false => self[self.len() - 1] - self[0],
+        if self.is_empty() {
+            0.0
+        } else {
+            self[self.len() - 1] - self[0]
         }
     }
 
@@ -39,8 +47,9 @@ impl KnotVector {
     /// assert!(knot_vec1.same_range(&knot_vec2)); // the range of both knot vector is [0, 1].
     /// assert!(!knot_vec1.same_range(&knot_vec3));
     /// ```
-    #[inline(always)]
-    pub fn same_range(&self, other: &KnotVector) -> bool {
+    #[inline]
+    #[must_use]
+    pub fn same_range(&self, other: &Self) -> bool {
         match (self.is_empty(), other.is_empty()) {
             (false, false) => {
                 self[0].near(&other[0]) && self.range_length().near(&other.range_length())
@@ -51,7 +60,7 @@ impl KnotVector {
     }
 
     /// Removes one item.
-    #[inline(always)]
+    #[inline]
     pub fn remove(&mut self, idx: usize) -> f64 { self.0.remove(idx) }
 
     /// Returns the maximum index `i` of `self[i] <= x`
@@ -63,7 +72,8 @@ impl KnotVector {
     /// let idx = knot_vec.floor(1.5).unwrap();
     /// assert_eq!(idx, 2);
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn floor(&self, x: f64) -> Option<usize> { self.iter().rposition(|t| *t <= x) }
 
     /// Returns the multiplicity of the `i`th knot
@@ -73,15 +83,23 @@ impl KnotVector {
     /// let knot_vec = KnotVector::from(vec![0.0, 0.0, 1.0, 2.0, 2.0, 2.0, 3.0, 3.0]);
     /// assert_eq!(knot_vec.multiplicity(5), 3);
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn multiplicity(&self, i: usize) -> usize {
         self.iter().filter(|u| self[i].near(u)).count()
     }
 
-    #[inline(always)]
+    #[inline]
     fn strict_multiplicity(&self, i: usize) -> usize {
         let knot = self[i];
-        self.iter().filter(|value| **value == knot).count()
+        self.iter()
+            .filter(|value| {
+                matches!(
+                    (**value).partial_cmp(&knot),
+                    Some(std::cmp::Ordering::Equal)
+                )
+            })
+            .count()
     }
 
     /// Adds a knot and return the index of the added knot.
@@ -96,17 +114,14 @@ impl KnotVector {
     /// let ansvec = KnotVector::from(vec![-1.0, 0.0, 0.0, 1.0, 1.5, 2.0, 3.0, 3.0]);
     /// assert_eq!(knot_vec, ansvec);
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn add_knot(&mut self, knot: f64) -> usize {
-        match self.floor(knot) {
-            Some(idx) => {
-                self.0.insert(idx + 1, knot);
-                idx + 1
-            }
-            None => {
-                self.0.insert(0, knot);
-                0
-            }
+        if let Some(idx) = self.floor(knot) {
+            self.0.insert(idx + 1, knot);
+            idx + 1
+        } else {
+            self.0.insert(0, knot);
+            0
         }
     }
 
@@ -115,7 +130,7 @@ impl KnotVector {
     /// Returns an error for a zero-range knot vector or a degree too large for the vector.
     /// # Remarks
     /// In this package, the B-spline basis function is based on the characteristic function of
-    /// the right-open intervals [s, t). So, the value corresponding to the end point t = t_n is always 0.0.
+    /// the right-open intervals [s, t). So, the value corresponding to the end point t = `t_n` is always 0.0.
     /// # Examples
     /// ```
     /// # fn main() -> monstertruck_geometry::errors::Result<()> {
@@ -181,12 +196,12 @@ impl KnotVector {
     }
 
     /// Calculates B-spline basis functions at `t` with degree `degree` and `der_rank`th-order derivation.
-    /// # Failures
+    /// # Errors
     /// - If the range of the knot vector is zero, returns [`Error::ZeroRange`].
     /// - If the length of `self` is not more than `degree`, returns [`Error::TooLargeDegree`].
     /// # Remarks
     /// In this package, the B-spline basis function is based on the characteristic function of
-    /// the right-open intervals [s, t). So, the value corresponding to the end point t = t_n is always 0.0.
+    /// the right-open intervals [s, t). So, the value corresponding to the end point t = `t_n` is always 0.0.
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
@@ -252,7 +267,7 @@ impl KnotVector {
             return Err(Error::ZeroRange);
         }
         let n = self.len() - 1;
-        if self[0] == self[n] {
+        if self.range_length().is_zero() {
             return Err(Error::ZeroRange);
         } else if n < degree {
             return Err(Error::TooLargeDegree(n + 1, degree));
@@ -300,7 +315,7 @@ impl KnotVector {
                 let delta = self[i + k + 1] - self[i + 1];
                 let b = inv_or_zero_strict(delta) * (self[i + k + 1] - t);
                 let j = i - start;
-                eval[j] = a * eval[j] + b * eval[j + 1];
+                eval[j] = b.mul_add(eval[j + 1], a * eval[j]);
                 a = 1.0 - b;
             }
         }
@@ -313,7 +328,7 @@ impl KnotVector {
                 let delta = self[i + k + 1] - self[i + 1];
                 let b = inv_or_zero_strict(delta);
                 let j = i - start;
-                eval[j] = (a * eval[j] - b * eval[j + 1]) * k as f64;
+                eval[j] = b.mul_add(-eval[j + 1], a * eval[j]) * crate::usize_to_f64(k);
                 a = b;
             }
         }
@@ -327,6 +342,8 @@ impl KnotVector {
 
     #[doc(hidden)]
     pub fn maximum_points(&self, degree: usize) -> Result<Vec<f64>> {
+        const N: i32 = 100;
+
         if self.is_empty() {
             return Err(Error::ZeroRange);
         }
@@ -335,12 +352,11 @@ impl KnotVector {
             return Err(Error::TooLargeDegree(n, degree));
         };
         let range = self.range_length();
-        const N: i32 = 100;
 
         let mut res = vec![0.0; m];
         let mut max = vec![0.0; m];
         for i in 1..N {
-            let t = self[0] + range * (i as f64) / (N as f64);
+            let t = self[0] + range * f64::from(i) / f64::from(N);
             let basis = self.try_bspline_basis_functions(degree, 0, t)?;
             let start = basis.start_index();
             for (offset, &value) in basis.values().iter().enumerate() {
@@ -371,12 +387,12 @@ impl KnotVector {
         assert!(scalar > 0.0, "The scalar {scalar} is not positive.");
         self.0
             .iter_mut()
-            .for_each(move |vec| *vec = *vec * scalar + r#move);
+            .for_each(move |vec| *vec = f64::mul_add(*vec, scalar, r#move));
         self
     }
 
     /// Normalizes the knot vector i.e. makes the first value 0 and the last value 1.
-    /// # Failures
+    /// # Errors
     /// Returns [`Error::ZeroRange`] if the range of the knot vector is so small.
     /// # Examples
     /// ```
@@ -408,7 +424,7 @@ impl KnotVector {
     /// let res : Vec<f64> = knot_vec.into();
     /// assert_eq!(res, vec![0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0]);
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn normalize(&mut self) -> Result<&mut Self> { self.try_normalize() }
 
     pub(crate) fn normalize_unchecked(&mut self) -> &mut Self {
@@ -460,7 +476,8 @@ impl KnotVector {
     /// assert!(knot_vec.is_clamped(2));
     /// assert!(!knot_vec.is_clamped(3));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn is_clamped(&self, degree: usize) -> bool {
         if self.is_empty() || self.len() <= degree {
             return false;
@@ -480,10 +497,10 @@ impl KnotVector {
     /// # Ok(())
     /// # }
     /// ```
-    /// # Failures
+    /// # Errors
     /// - If at least one of `self` or `other` is not clamped, returns [`Error::NotClampedKnotVector`]
     /// - If the last knot of `self` and the first knot of `other` are different, returns [`Error::DifferentBackFront`].
-    pub fn try_concat(&mut self, other: &KnotVector, degree: usize) -> Result<&mut Self> {
+    pub fn try_concat(&mut self, other: &Self, degree: usize) -> Result<&mut Self> {
         if !self.is_clamped(degree) || !other.is_clamped(degree) {
             return Err(Error::NotClampedKnotVector);
         }
@@ -511,8 +528,8 @@ impl KnotVector {
     /// ```
     /// # Errors
     /// Returns the same validation errors as [`KnotVector::try_concat`].
-    #[inline(always)]
-    pub fn concat(&mut self, other: &KnotVector, degree: usize) -> Result<&mut Self> {
+    #[inline]
+    pub fn concat(&mut self, other: &Self, degree: usize) -> Result<&mut Self> {
         self.try_concat(other, degree)
     }
 
@@ -524,9 +541,10 @@ impl KnotVector {
     /// let sub_vec = knot_vec.sub_vec(1..3);
     /// assert_eq!(sub_vec, KnotVector::from(vec![1.0, 2.0]));
     /// ```
-    #[inline(always)]
-    pub fn sub_vec<I: SliceIndex<[f64], Output = [f64]>>(&self, range: I) -> KnotVector {
-        KnotVector(Vec::from(&self.0[range]))
+    #[inline]
+    #[must_use]
+    pub fn sub_vec<I: SliceIndex<[f64], Output = [f64]>>(&self, range: I) -> Self {
+        Self(Vec::from(&self.0[range]))
     }
 
     /// To single-multi description. i.e. decompose the unique vector of knots and the vector of
@@ -539,6 +557,7 @@ impl KnotVector {
     /// assert_eq!(knots, vec![0.0, 1.0, 2.0, 3.0]);
     /// assert_eq!(mults, vec![3, 1, 4, 2]);
     /// ```
+    #[must_use]
     pub fn to_single_multi(&self) -> (Vec<f64>, Vec<usize>) {
         let mut knots = Vec::new();
         let mut mults = Vec::new();
@@ -574,7 +593,10 @@ impl KnotVector {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_single_multi(knots: Vec<f64>, mults: Vec<usize>) -> Result<KnotVector> {
+    ///
+    /// # Errors
+    /// Returns [`Error::NotSortedVector`] when `knots` is not nondecreasing.
+    pub fn from_single_multi(knots: Vec<f64>, mults: Vec<usize>) -> Result<Self> {
         for i in 1..knots.len() {
             if knots[i - 1] > knots[i] {
                 return Err(Error::NotSortedVector);
@@ -582,20 +604,23 @@ impl KnotVector {
         }
 
         let vec: Vec<f64> = knots
-            .iter()
-            .zip(mults.iter())
-            .flat_map(|(&k, &m)| std::iter::repeat_n(k, m))
+            .into_iter()
+            .zip(mults)
+            .flat_map(|(k, m)| std::iter::repeat_n(k, m))
             .collect();
-        Ok(KnotVector(vec))
+        Ok(Self(vec))
     }
     /// Constructs from `Vec<f64>`. do not sort, only check sorted.
-    pub fn try_from(vec: Vec<f64>) -> Result<KnotVector> {
+    /// # Errors
+    /// Returns [`Error::NotSortedVector`] when `vec` is not nondecreasing.
+    ///
+    pub fn try_from(vec: Vec<f64>) -> Result<Self> {
         for i in 1..vec.len() {
             if vec[i - 1] > vec[i] {
                 return Err(Error::NotSortedVector);
             }
         }
-        Ok(KnotVector(vec))
+        Ok(Self(vec))
     }
 
     /// Constructs the knot vector for the bezier spline.
@@ -607,10 +632,11 @@ impl KnotVector {
     ///     vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
     /// );
     /// ```
-    pub fn bezier_knot(degree: usize) -> KnotVector {
+    #[must_use]
+    pub fn bezier_knot(degree: usize) -> Self {
         let mut vec = vec![0.0; degree + 1];
         vec.extend(std::iter::repeat_n(1.0, degree + 1));
-        KnotVector(vec)
+        Self(vec)
     }
 
     /// Constructs the uniform knot vector
@@ -622,11 +648,12 @@ impl KnotVector {
     ///     vec![0.0, 0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0],
     /// );
     /// ```
-    pub fn uniform_knot(degree: usize, division: usize) -> KnotVector {
+    #[must_use]
+    pub fn uniform_knot(degree: usize, division: usize) -> Self {
         let mut vec = vec![0.0; degree + 1];
-        vec.extend((1..division).map(|i| i as f64 / division as f64));
+        vec.extend((1..division).map(|i| crate::usize_to_f64(i) / crate::usize_to_f64(division)));
         vec.extend(std::iter::repeat_n(1.0, degree + 1));
-        KnotVector(vec)
+        Self(vec)
     }
 }
 
@@ -638,9 +665,9 @@ impl From<Vec<f64>> for KnotVector {
     /// let arr : Vec<f64> = knot_vec.into();
     /// assert_eq!(arr, vec![0.0, 1.0, 2.0, 3.0]);
     /// ```
-    fn from(mut vec: Vec<f64>) -> KnotVector {
+    fn from(mut vec: Vec<f64>) -> Self {
         vec.sort_by(f64::total_cmp);
-        KnotVector(vec)
+        Self(vec)
     }
 }
 
@@ -652,11 +679,11 @@ impl From<&[f64]> for KnotVector {
     /// let arr : Vec<f64> = knot_vec.into();
     /// assert_eq!(arr, vec![0.0, 1.0, 2.0, 3.0]);
     /// ```
-    #[inline(always)]
-    fn from(vec: &[f64]) -> KnotVector {
+    #[inline]
+    fn from(vec: &[f64]) -> Self {
         let mut copy_vec = vec.to_vec();
         copy_vec.sort_by(f64::total_cmp);
-        KnotVector(copy_vec)
+        Self(copy_vec)
     }
 }
 
@@ -668,11 +695,11 @@ impl From<&Vec<f64>> for KnotVector {
     /// let arr : Vec<f64> = knot_vec.into();
     /// assert_eq!(arr, vec![0.0, 1.0, 2.0, 3.0]);
     /// ```
-    #[inline(always)]
-    fn from(vec: &Vec<f64>) -> KnotVector {
+    #[inline]
+    fn from(vec: &Vec<f64>) -> Self {
         let mut copy_vec = vec.clone();
         copy_vec.sort_by(f64::total_cmp);
-        KnotVector(copy_vec)
+        Self(copy_vec)
     }
 }
 
@@ -685,32 +712,32 @@ impl From<KnotVector> for Vec<f64> {
     /// let vec0 : Vec<f64> = knot_vec.into();
     /// assert_eq!(vec, vec0);
     /// ```
-    #[inline(always)]
-    fn from(knotvec: KnotVector) -> Vec<f64> { knotvec.0 }
+    #[inline]
+    fn from(knotvec: KnotVector) -> Self { knotvec.0 }
 }
 
 impl FromIterator<f64> for KnotVector {
-    #[inline(always)]
-    fn from_iter<I: IntoIterator<Item = f64>>(iter: I) -> KnotVector {
-        KnotVector::from(iter.into_iter().collect::<Vec<_>>())
+    #[inline]
+    fn from_iter<I: IntoIterator<Item = f64>>(iter: I) -> Self {
+        Self::from(iter.into_iter().collect::<Vec<_>>())
     }
 }
 
 impl<'a> IntoIterator for &'a KnotVector {
     type Item = &'a f64;
     type IntoIter = std::slice::Iter<'a, f64>;
-    #[inline(always)]
+    #[inline]
     fn into_iter(self) -> Self::IntoIter { self.0.iter() }
 }
 
 impl std::ops::Deref for KnotVector {
     type Target = Vec<f64>;
-    #[inline(always)]
+    #[inline]
     fn deref(&self) -> &Vec<f64> { &self.0 }
 }
 
 impl AsRef<[f64]> for KnotVector {
-    #[inline(always)]
+    #[inline]
     fn as_ref(&self) -> &[f64] { &self.0 }
 }
 

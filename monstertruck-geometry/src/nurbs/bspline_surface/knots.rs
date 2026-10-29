@@ -1,4 +1,12 @@
-use super::*;
+#![allow(
+    clippy::similar_names,
+    reason = "paired U/V knot-vector names are standard tensor-product surface notation"
+)]
+
+use super::{
+    BsplineCurve, BsplineSurface, ControlPoint, KnotVector, Origin, Result, TOLERANCE, Tolerance,
+    inv_or_zero,
+};
 use crate::errors::Error;
 
 impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
@@ -111,7 +119,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         self
     }
 
-    /// Removes the knot_u corresponding to the indice `idx`, and do not change `self` as a curve.
+    /// Removes the `knot_u` corresponding to the indice `idx`, and do not change `self` as a curve.
     /// If the knot cannot be removed, returns
     /// [`Error::CannotRemoveKnot`](./errors/enum.Error.html#variant.CannotRemoveKnot).
     /// # Examples
@@ -135,6 +143,9 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// assert_eq!(bspsurface.knot_vector_u().len(), org_surface.knot_vector_u().len() + 1);
     /// assert!(bspsurface.near2_as_surface(&org_surface));
     /// ```
+    /// # Errors
+    /// Returns [`Error::CannotRemoveKnot`] when the requested U knot is not removable without changing the surface.
+    ///
     pub fn try_remove_knot_u(&mut self, idx: usize) -> Result<&mut Self> {
         let k = self.udegree();
         let knot_vec = self.knot_vector_u();
@@ -147,7 +158,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let mut new_points = Vec::with_capacity(k + 1);
         let first_vec = self
             .control_points_column_iter(idx - k - 1)
-            .cloned()
+            .copied()
             .collect::<Vec<_>>();
         new_points.push(first_vec);
         for i in (idx - k)..idx {
@@ -155,17 +166,16 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
             let a = inv_or_zero(delta) * (knot_vec[idx] - knot_vec[i]);
             if a.so_small() {
                 break;
-            } else {
-                let Some(previous) = new_points.last() else {
-                    return Err(Error::CannotRemoveKnot(idx));
-                };
-                let vec = self
-                    .control_points_column_iter(i)
-                    .zip(previous)
-                    .map(|(pt0, pt1)| *pt1 + (*pt0 - *pt1) / a)
-                    .collect();
-                new_points.push(vec);
             }
+            let Some(previous) = new_points.last() else {
+                return Err(Error::CannotRemoveKnot(idx));
+            };
+            let vec = self
+                .control_points_column_iter(i)
+                .zip(previous)
+                .map(|(pt0, pt1)| *pt1 + (*pt0 - *pt1) / a)
+                .collect();
+            new_points.push(vec);
         }
 
         let Some(previous) = new_points.last() else {
@@ -186,7 +196,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         Ok(self)
     }
 
-    /// Removes the knot_u corresponding to the indices `idx`, and do not change `self` as a curve.
+    /// Removes the `knot_u` corresponding to the indices `idx`, and do not change `self` as a curve.
     /// If cannot remove the knot, do not change `self` and return `self`.
     /// # Examples
     /// ```
@@ -207,13 +217,13 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// assert!(bspsurface.near2_as_surface(&org_surface));
     /// assert_eq!(bspsurface.knot_vector_u().len(), org_surface.knot_vector_u().len())
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn remove_knot_u(&mut self, idx: usize) -> &mut Self {
         let _ = self.try_remove_knot_u(idx);
         self
     }
 
-    /// Removes a knot_v corresponding to the indice `idx`, and do not change `self` as a curve.
+    /// Removes a `knot_v` corresponding to the indice `idx`, and do not change `self` as a curve.
     /// If the knot cannot be removed, returns
     /// [`Error::CannotRemoveKnot`](./errors/enum.Error.html#variant.CannotRemoveKnot).
     /// # Examples
@@ -236,6 +246,9 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// assert!(bspsurface.near2_as_surface(&org_surface));
     /// assert_eq!(bspsurface.knot_vector_v().len(), org_surface.knot_vector_v().len() + 1);
     /// ```
+    /// # Errors
+    /// Returns [`Error::CannotRemoveKnot`] when the requested V knot is not removable without changing the surface.
+    ///
     pub fn try_remove_knot_v(&mut self, idx: usize) -> Result<&mut Self> {
         let (_, k) = self.degrees();
         let knot_vec = self.knot_vector_v();
@@ -248,7 +261,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let mut new_points = Vec::with_capacity(k + 1);
         let first_vec = self
             .control_points_row_iter(idx - k - 1)
-            .cloned()
+            .copied()
             .collect::<Vec<_>>();
         new_points.push(first_vec);
         for i in (idx - k)..idx {
@@ -256,17 +269,16 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
             let a = inv_or_zero(delta) * (knot_vec[idx] - knot_vec[i]);
             if a.so_small() {
                 break;
-            } else {
-                let Some(previous) = new_points.last() else {
-                    return Err(Error::CannotRemoveKnot(idx));
-                };
-                let vec = self
-                    .control_points_row_iter(i)
-                    .zip(previous)
-                    .map(|(pt0, pt1)| *pt1 + (*pt0 - *pt1) / a)
-                    .collect();
-                new_points.push(vec);
             }
+            let Some(previous) = new_points.last() else {
+                return Err(Error::CannotRemoveKnot(idx));
+            };
+            let vec = self
+                .control_points_row_iter(i)
+                .zip(previous)
+                .map(|(pt0, pt1)| *pt1 + (*pt0 - *pt1) / a)
+                .collect();
+            new_points.push(vec);
         }
 
         let Some(previous) = new_points.last() else {
@@ -291,7 +303,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         Ok(self)
     }
 
-    /// Removes a knot_u corresponding to the indices `idx`, and do not change `self` as a curve.
+    /// Removes a `knot_u` corresponding to the indices `idx`, and do not change `self` as a curve.
     /// If cannot remove the knot, do not change `self` and return `self`.
     /// # Examples
     /// ```
@@ -312,7 +324,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// assert!(bspsurface.near2_as_surface(&org_surface));
     /// assert_eq!(bspsurface.knot_vector_v().len(), org_surface.knot_vector_v().len())
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn remove_knot_v(&mut self, idx: usize) -> &mut Self {
         let _ = self.try_remove_knot_v(idx);
         self
@@ -412,7 +424,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         self
     }
 
-    /// Makes the knot_u vector and the knot_v vector the same knot vector.
+    /// Makes the `knot_u` vector and the `knot_v` vector the same knot vector.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
@@ -449,25 +461,24 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
 
         let ulen = self.knot_vector_u().len();
         let vlen = self.knot_vector_v().len();
-        use std::cmp::Ordering;
         match usize::cmp(&ulen, &vlen) {
-            Ordering::Less => {
+            std::cmp::Ordering::Less => {
                 for _ in 0..vlen - ulen {
                     self.add_knot_u(1.0);
                 }
             }
-            Ordering::Greater => {
+            std::cmp::Ordering::Greater => {
                 for _ in 0..ulen - vlen {
                     self.add_knot_v(1.0);
                 }
             }
-            _ => {}
+            std::cmp::Ordering::Equal => {}
         }
         self
     }
 
     /// Normalizes the knot vectors
-    #[inline(always)]
+    #[inline]
     pub fn knot_normalize(&mut self) -> &mut Self {
         self.knot_vecs.0.normalize_unchecked();
         self.knot_vecs.1.normalize_unchecked();
@@ -475,7 +486,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     }
 
     /// Translates the knot vectors.
-    #[inline(always)]
+    #[inline]
     pub fn knot_translate(&mut self, x: f64, y: f64) -> &mut Self {
         self.knot_vecs.0.translate(x);
         self.knot_vecs.1.translate(y);

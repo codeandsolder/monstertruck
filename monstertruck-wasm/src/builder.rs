@@ -27,6 +27,9 @@ pub fn vertex(x: f64, y: f64, z: f64) -> Vertex { builder::vertex(Point3::new(x,
 pub fn line(vertex0: &Vertex, vertex1: &Vertex) -> Edge { builder::line(vertex0, vertex1).into() }
 
 /// Returns a circle arc from `vertex0` to `vertex1` via `transit`.
+///
+/// # Errors
+/// Returns a JavaScript error for malformed coordinates or degenerate arc geometry.
 #[wasm_bindgen]
 pub fn circle_arc(
     vertex0: &Vertex,
@@ -40,6 +43,9 @@ pub fn circle_arc(
 }
 
 /// Returns a Bezier curve from `vertex0` to `vertex1` with inter control points `inter_points`.
+///
+/// # Errors
+/// Returns a JavaScript error unless `inter_points` contains complete XYZ triples.
 #[wasm_bindgen]
 pub fn bezier(
     vertex0: &Vertex,
@@ -91,6 +97,27 @@ macro_rules! transform_if_chain {
     };
 }
 
+macro_rules! try_transform_if_chain {
+    ($shape: expr, $function: expr, ($($arg: expr),*), $exception: expr, $member: ident) => {
+        if let Some(entity) = AbstractShape::$member($shape) {
+            $function(entity.as_ref(), $($arg),*)
+                .map(|value| value.into_wasm().upcast())
+                .map_err(|error| js_error(error.to_string()))
+        } else {
+            $exception
+        }
+    };
+    ($shape: expr, $function: expr, ($($arg: expr),*), $exception: expr, $member: ident, $($a: ident),*) => {
+        if let Some(entity) = AbstractShape::$member($shape) {
+            $function(entity.as_ref(), $($arg),*)
+                .map(|value| value.into_wasm().upcast())
+                .map_err(|error| js_error(error.to_string()))
+        } else {
+            try_transform_if_chain!($shape, $function, ($($arg),*), $exception, $($a),*)
+        }
+    };
+}
+
 macro_rules! derive_all_shape {
     ($shape: expr, $function: expr, ($($arg: expr),*)) => {
         transform_if_chain!(
@@ -123,7 +150,25 @@ macro_rules! derive_all_sweepable {
     };
 }
 
+macro_rules! derive_all_fallible_sweepable {
+    ($shape: expr, $function: expr, ($($arg: expr),*)) => {
+        try_transform_if_chain!(
+            $shape,
+            $function,
+            ($($arg),*),
+            Err(js_error("sweep is only supported for Vertex, Edge, Wire, and Face")),
+            as_vertex,
+            as_edge,
+            as_wire,
+            as_face
+        )
+    };
+}
+
 /// Returns a translated vertex, edge, wire, face, shell or solid.
+///
+/// # Errors
+/// Returns a JavaScript error for malformed vectors or unsupported shape variants.
 #[wasm_bindgen]
 pub fn translated(
     shape: &AbstractShape,
@@ -134,6 +179,9 @@ pub fn translated(
 }
 
 /// Returns a rotated vertex, edge, wire, face, shell or solid.
+///
+/// # Errors
+/// Returns a JavaScript error for malformed transform inputs or unsupported shape variants.
 #[wasm_bindgen]
 pub fn rotated(
     shape: &AbstractShape,
@@ -147,6 +195,9 @@ pub fn rotated(
 }
 
 /// Returns a scaled vertex, edge, wire, face, shell or solid.
+///
+/// # Errors
+/// Returns a JavaScript error for malformed scale/origin inputs or unsupported shape variants.
 #[wasm_bindgen]
 pub fn scaled(
     shape: &AbstractShape,
@@ -163,6 +214,9 @@ pub fn scaled(
 }
 
 /// Sweeps a vertex, an edge, a wire, or a face by a vector.
+///
+/// # Errors
+/// Returns a JavaScript error for malformed vectors or unsupported shape variants.
 #[wasm_bindgen]
 pub fn extrude(
     shape: &AbstractShape,
@@ -173,6 +227,9 @@ pub fn extrude(
 }
 
 /// Sweeps a vertex, an edge, a wire, or a face by a rotation.
+///
+/// # Errors
+/// Returns a JavaScript error for malformed/degenerate revolution parameters or unsupported shapes.
 #[wasm_bindgen]
 pub fn revolve(
     shape: &AbstractShape,
@@ -183,20 +240,7 @@ pub fn revolve(
 ) -> std::result::Result<AbstractShape, JsValue> {
     let origin = point3(origin, "origin")?;
     let axis = vector3(axis, "axis")?;
-    if !origin.x.is_finite()
-        || !origin.y.is_finite()
-        || !origin.z.is_finite()
-        || !axis.x.is_finite()
-        || !axis.y.is_finite()
-        || !axis.z.is_finite()
-        || !axis.magnitude().near(&1.0)
-        || !angle.is_finite()
-        || angle.so_small()
-        || division == 0
-    {
-        return Err(js_error("invalid revolve origin, axis, angle, or division"));
-    }
-    derive_all_sweepable!(
+    derive_all_fallible_sweepable!(
         shape,
         builder::revolve,
         (

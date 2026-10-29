@@ -28,20 +28,24 @@ struct MyApp {
 }
 
 impl MyApp {
-    fn init_surface(degree: usize, division: usize) -> BsplineSurface<Point3> {
+    fn init_surface(degree: usize, division: usize) -> AppResult<BsplineSurface<Point3>> {
         let range = degree + division - 1;
+        let range_u32 = u32::try_from(range)?;
         let knot_vec = KnotVector::uniform_knot(degree, division);
         let mut control_points = Vec::new();
-        for i in 0..=range {
-            let u = (i as f64) / (range as f64);
+        for i in 0..=range_u32 {
+            let u = f64::from(i) / f64::from(range_u32);
             let mut vec = Vec::new();
-            for j in 0..=range {
-                let v = (j as f64) / (range as f64);
+            for j in 0..=range_u32 {
+                let v = f64::from(j) / f64::from(range_u32);
                 vec.push(Point3::new(v, 0.0, u));
             }
             control_points.push(vec);
         }
-        BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points)
+        Ok(BsplineSurface::new_unchecked(
+            (knot_vec.clone(), knot_vec),
+            control_points,
+        ))
     }
     fn init_camera() -> Camera {
         let mut vec0 = Vector4::new(1.5, 0.0, -1.5, 0.0);
@@ -81,7 +85,9 @@ impl MyApp {
                     drop(surface);
                     let mesh =
                         StructuredMesh::from_surface(&surface0, surface0.range_tuple(), 0.01);
-                    *object.lock().unwrap() = mesh;
+                    *object
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = mesh;
                 }
                 updated.store(true, Ordering::SeqCst);
                 count += 1;
@@ -99,14 +105,14 @@ impl MyApp {
 
 #[async_trait(?Send)]
 impl App for MyApp {
-    async fn init(window: Arc<Window>) -> Self {
+    async fn init(window: Arc<Window>) -> AppResult<Self> {
         let desc = WindowSceneDescriptor {
             studio: StudioConfig {
                 camera: MyApp::init_camera(),
                 lights: vec![Light {
                     position: Point3::new(0.5, 2.0, 0.5),
                     color: Vector3::new(1.0, 1.0, 1.0),
-                    light_type: LightType::Point,
+                    kind: LightType::Point,
                 }],
                 ..Default::default()
             },
@@ -115,13 +121,11 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &desc)
-            .await
-            .expect("GPU window scene is available");
+        let mut scene = WindowScene::from_window(window, &desc).await?;
         let creator = scene.instance_creator();
-        let surface = Self::init_surface(3, 4);
+        let surface = Self::init_surface(3, 4)?;
         let object = StructuredMesh::from_surface(&surface, surface.range_tuple(), 0.01);
-        let instance = creator.create_instance(&object, &Default::default());
+        let instance = creator.create_instance(&object, &Default::default())?;
         scene.add_object(&instance);
         let object = Arc::new(Mutex::new(object));
         let closed = Arc::new(AtomicBool::new(false));
@@ -132,7 +136,7 @@ impl App for MyApp {
             Arc::clone(&updated),
             Arc::new(Mutex::new(surface)),
         ));
-        MyApp {
+        Ok(MyApp {
             scene,
             creator,
             instance,
@@ -140,25 +144,37 @@ impl App for MyApp {
             closed,
             updated,
             thread,
-        }
+        })
     }
     fn app_title<'a>() -> Option<&'a str> { Some("Bspline Benchmark Animation") }
 
     fn render(&mut self) {
         if self.updated.load(Ordering::SeqCst) {
-            let object = self.object.lock().unwrap();
-            let mut object: PolygonInstance =
-                self.creator.create_instance(&*object, &Default::default());
-            self.instance.swap_vertex(&mut object);
-            self.scene.update_vertex_buffer(&self.instance);
+            let object = self
+                .object
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match self.creator.create_instance(&*object, &Default::default()) {
+                Ok(mut object) => {
+                    self.instance.swap_vertex(&mut object);
+                    self.scene.update_vertex_buffer(&self.instance);
+                }
+                Err(error) => eprintln!("instance rebuild failed: {error}"),
+            }
             self.updated.store(false, Ordering::SeqCst);
         }
-        self.scene.render_frame();
+        if let Err(error) = self.scene.render_frame() {
+            eprintln!("render failed: {error}");
+        }
     }
 
     fn closed_requested(&mut self) -> ControlFlow {
         self.closed.store(true, Ordering::SeqCst);
-        self.thread.take().unwrap().join().unwrap();
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            eprintln!("animation worker terminated unexpectedly");
+        }
         ControlFlow::Exit
     }
 }

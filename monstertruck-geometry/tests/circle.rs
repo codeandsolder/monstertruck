@@ -29,7 +29,7 @@ proptest! {
     ) {
         let circle = UnitCircle::<Point2>::new();
         let p = circle.evaluate(t);
-        let hint = t + winding as f64 * TAU;
+        let hint = f64::mul_add(f64::from(winding), TAU, t);
         let s = circle.search_parameter(p, hint, 1).unwrap();
         prop_assert_near2!(s, hint);
     }
@@ -43,7 +43,7 @@ proptest! {
     ) {
         let circle = UnitCircle::<Point2>::new();
         let p = circle.evaluate(t);
-        let hint = t + winding as f64 * TAU;
+        let hint = f64::mul_add(f64::from(winding), TAU, t);
         let s = circle.search_nearest_parameter(p, hint, 1).unwrap();
         prop_assert_near2!(s, hint);
         prop_assert_near!(circle.evaluate(s), p);
@@ -57,7 +57,7 @@ proptest! {
         prop_assert_near!(bsp.front(), arc.front());
         prop_assert_near!(bsp.back(), arc.back());
         for i in 0..=10 {
-            let t = i as f64 / 10.0;
+            let t = f64::from(i) / 10.0;
             let p = bsp.subs(t).to_vec();
             let der = bsp.der(t);
             prop_assert_near!(p.magnitude2(), 1.0);
@@ -69,7 +69,7 @@ proptest! {
 #[test]
 fn search_parameter_near_zero_preserves_precision() {
     let circle = UnitCircle::<Point2>::new();
-    let t = 9.621083226117856e-6;
+    let t = 9.621_083_226_117_856e-6;
     let point = circle.evaluate(t);
 
     let parameter = circle.search_parameter(point, t, 1).unwrap();
@@ -77,6 +77,23 @@ fn search_parameter_near_zero_preserves_precision() {
 
     let nearest = circle.search_nearest_parameter(point, t, 1).unwrap();
     assert_near2!(nearest, t);
+}
+
+#[test]
+fn unrepresentable_parameter_division_is_refused_without_overflow() {
+    let circle = UnitCircle::<Point2>::new();
+    let range = (0.0, f64::MAX);
+
+    assert!(circle.try_parameter_division(range, 0.05).is_none());
+
+    let (parameters, points) = circle.parameter_division(range, 0.05);
+    assert_eq!(parameters, vec![range.0, range.1]);
+    assert_eq!(points.len(), 2);
+    assert!(
+        points
+            .iter()
+            .all(|point| point.x.is_finite() && point.y.is_finite())
+    );
 }
 
 #[test]

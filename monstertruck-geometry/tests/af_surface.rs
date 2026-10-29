@@ -21,16 +21,19 @@ fn approx_fillet_between_two_spheres() {
                 2 => -f64::cos(t),
                 _ => f64::sin(t),
             };
-            o + 5.0 * x
+            5.0f64.mul_add(x, o)
         }
     }
 
-    let fillet = RbfSurface::new(edge_circle, sphere0, sphere1, Radius);
+    let fillet = RollingBallFilletSurface::new(edge_circle, sphere0, sphere1, Radius);
 
     let instance = std::time::Instant::now();
-    let approx =
-        ApproxFilletSurface::approx_rolling_ball_fillet(&fillet, (PI * 0.1, PI * 1.9), 0.001)
-            .unwrap();
+    let approx = (ApproximateFilletSurface::approx_rolling_ball_fillet(
+        &fillet,
+        (PI * 0.1, PI * 1.9),
+        0.001,
+    ))
+    .unwrap();
     println!("fillet approximation: {}ms", instance.elapsed().as_millis());
 
     let instance = std::time::Instant::now();

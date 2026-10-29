@@ -1,4 +1,8 @@
-use crate::*;
+use crate::{
+    Angle, BoundingBox, BufferHandler, BufferUsages, Camera, CameraInfo, Device, EuclideanSpace,
+    InnerSpace, Matrix3, Matrix4, Point2, Point3, ProjectionMethod, Rad, Ray, SquareMatrix,
+    Transform, Vector3, matrix4_to_raw_f32, ortho, perspective,
+};
 
 // Since cgmath assumes a normalized view volume in OpenGL,
 // this conversion is necessary to handle it with wgpu.
@@ -11,50 +15,25 @@ pub const OPENGL_TO_WGPU_MATRIX: Matrix4 = Matrix4::new(
     0.0, 0.0, 0.5, 1.0,
 );
 
-fn matrix4_to_f32(matrix: Matrix4) -> [[f32; 4]; 4] {
-    [
-        [
-            matrix.x.x as f32,
-            matrix.x.y as f32,
-            matrix.x.z as f32,
-            matrix.x.w as f32,
-        ],
-        [
-            matrix.y.x as f32,
-            matrix.y.y as f32,
-            matrix.y.z as f32,
-            matrix.y.w as f32,
-        ],
-        [
-            matrix.z.x as f32,
-            matrix.z.y as f32,
-            matrix.z.z as f32,
-            matrix.z.w as f32,
-        ],
-        [
-            matrix.w.x as f32,
-            matrix.w.y as f32,
-            matrix.w.z as f32,
-            matrix.w.w as f32,
-        ],
-    ]
-}
-
 impl Ray {
     /// Returns the origin of the ray
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn origin(&self) -> Point3 { self.origin }
     /// Returns the (normalized) direction of the ray
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn direction(&self) -> Vector3 { self.direction }
 }
 
 impl ProjectionMethod {
     /// Returns `ProjectionMethod::Perspective { fov }`.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn perspective(fov: Rad<f64>) -> Self { Self::Perspective { fov } }
     /// Returns `ProjectionMethod::Parallel { screen_size }`.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn parallel(screen_size: f64) -> Self { Self::Parallel { screen_size } }
 }
 
@@ -70,7 +49,8 @@ impl Camera {
     /// camera.matrix = Matrix4::from_translation(Vector3::new(1.0, 2.0, 3.0));
     /// assert_eq!(camera.position(), Point3::new(1.0, 2.0, 3.0));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn position(&self) -> Point3 { Point3::from_vec(self.matrix[3].truncate()) }
 
     /// Returns the eye direction of camera.
@@ -88,7 +68,8 @@ impl Camera {
     /// );
     /// assert!(camera.eye_direction().near(&-Vector3::unit_x()));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn eye_direction(&self) -> Vector3 { -self.matrix[2].truncate() }
 
     /// Returns the direction of the head vector, the y-axis of the camera matrix.
@@ -104,7 +85,8 @@ impl Camera {
     /// );
     /// assert!(camera.head_direction().near(&Vector3::unit_z()));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn head_direction(&self) -> Vector3 { self.matrix[1].truncate() }
 
     /// Returns the projection matrix into the normalized view volume.
@@ -144,7 +126,8 @@ impl Camera {
     /// let v = h.dot(y_axis);
     ///
     /// // check the answer
-    /// let uv = camera.projection(aspect).transform_point(pt);
+    /// let Some(projection) = camera.projection(aspect) else { return };
+    /// let uv = projection.transform_point(pt);
     /// assert_near!(u, uv[0]);
     /// assert_near!(v, uv[1]);
     /// ```
@@ -178,19 +161,15 @@ impl Camera {
     /// let v = h.dot(y_axis) / (size / 2.0);
     ///
     /// // check the answer
-    /// let uv = camera.projection(aspect).transform_point(pt);
+    /// let Some(projection) = camera.projection(aspect) else { return };
+    /// let uv = projection.transform_point(pt);
     /// assert_near!(u, uv[0]);
     /// assert_near!(v, uv[1]);
     /// ```
-    #[inline(always)]
-    pub fn projection(&self, aspect: f64) -> Matrix4 {
-        self.try_projection(aspect)
-            .unwrap_or_else(|| Matrix4::from_value(f64::NAN))
-    }
-
     /// Returns the projection matrix, or `None` when the public camera matrix is singular.
-    #[inline(always)]
-    pub fn try_projection(&self, aspect: f64) -> Option<Matrix4> {
+    #[inline]
+    #[must_use]
+    pub fn projection(&self, aspect: f64) -> Option<Matrix4> {
         let (near, far) = (self.near_clip, self.far_clip);
         let normal_projection = match self.method {
             ProjectionMethod::Perspective { fov } => perspective(fov, aspect, near, far),
@@ -205,12 +184,12 @@ impl Camera {
             .map(|inverse| OPENGL_TO_WGPU_MATRIX * normal_projection * inverse)
     }
 
-    #[inline(always)]
-    fn camera_info(&self, aspect: f64) -> CameraInfo {
-        CameraInfo {
-            camera_matrix: matrix4_to_f32(self.matrix),
-            camera_projection: matrix4_to_f32(self.projection(aspect)),
-        }
+    #[inline]
+    fn camera_info(&self, aspect: f64) -> Option<CameraInfo> {
+        Some(CameraInfo {
+            camera_matrix: matrix4_to_raw_f32(self.matrix),
+            camera_projection: matrix4_to_raw_f32(self.projection(aspect)?),
+        })
     }
 
     /// Creates a `UNIFORM` buffer of camera.
@@ -224,9 +203,15 @@ impl Camera {
     ///     mat4 camera_projection; // the projection into the normalized view volume
     /// };
     /// ```
-    #[inline(always)]
-    pub fn buffer(&self, aspect: f64, device: &Device) -> BufferHandler {
-        BufferHandler::from_slice(&[self.camera_info(aspect)], device, BufferUsages::UNIFORM)
+    /// Returns `None` when the camera transform is singular and no projection can be formed.
+    #[inline]
+    #[must_use]
+    pub fn buffer(&self, aspect: f64, device: &Device) -> Option<BufferHandler> {
+        Some(BufferHandler::from_slice(
+            &[self.camera_info(aspect)?],
+            device,
+            BufferUsages::UNIFORM,
+        ))
     }
 
     /// Returns the ray from camera with aspect-ratio = 1.0.
@@ -256,11 +241,12 @@ impl Camera {
     /// // take a point in the 3D space
     /// let point = Point3::new(0.1, 0.15, 0.0);
     /// // project to the normalized view volume
-    /// let uvz = camera.projection(1.0).transform_point(point);
+    /// let Some(projection) = camera.projection(1.0) else { return };
+    /// let uvz = projection.transform_point(point);
     /// // coordinate on the screen
     /// let uv = Point2::new(uvz.x, uvz.y);
     ///
-    /// let ray = camera.ray(uv);
+    /// let Some(ray) = camera.ray(uv) else { return };
     /// // the origin of the ray is camera position
     /// assert_near!(ray.origin(), camera.position());
     /// // the direction of the ray is the normalized vector of point - camera.position().
@@ -289,43 +275,37 @@ impl Camera {
     /// let projed = point
     ///     - camera.eye_direction() * camera.eye_direction().dot(point - camera.position());
     /// // project to the normalized view volume
-    /// let uvz = camera.projection(1.0).transform_point(point);
+    /// let Some(projection) = camera.projection(1.0) else { return };
+    /// let uvz = projection.transform_point(point);
     /// // coordinate on the screen
     /// let uv = Point2::new(uvz.x, uvz.y);
     ///
-    /// let ray = camera.ray(uv);
+    /// let Some(ray) = camera.ray(uv) else { return };
     /// // the origin of the ray is the projection of the point.
     /// assert_near!(ray.origin(), projed);
     /// // the direction of the ray is eye direction.
     /// assert_near!(ray.direction(), camera.eye_direction());
     /// ```
-    pub fn ray(&self, coord: Point2) -> Ray {
+    #[must_use]
+    pub fn ray(&self, coord: Point2) -> Option<Ray> {
         match self.method {
             ProjectionMethod::Perspective { .. } => {
-                let Some(mat) = self
-                    .try_projection(1.0)
-                    .and_then(|projection| projection.invert())
-                else {
-                    return Ray {
-                        origin: self.position(),
-                        direction: Vector3::new(f64::NAN, f64::NAN, f64::NAN),
-                    };
-                };
+                let mat = self.projection(1.0)?.invert()?;
                 let x = mat.transform_point(Point3::new(coord.x, coord.y, 0.5));
                 let y = mat.transform_point(Point3::new(coord.x, coord.y, 1.0));
-                Ray {
+                Some(Ray {
                     origin: self.position(),
                     direction: (y - x).normalize(),
-                }
+                })
             }
             ProjectionMethod::Parallel { screen_size } => {
                 let a = screen_size / 2.0;
                 let axis_x = self.matrix[0].truncate() * a;
                 let axis_y = self.matrix[1].truncate() * a;
-                Ray {
+                Some(Ray {
                     origin: self.position() + coord.x * axis_x + coord.y * axis_y,
                     direction: self.eye_direction(),
-                }
+                })
             }
         }
     }
@@ -375,6 +355,7 @@ impl Camera {
     ///     assert!(0.0 <= n.z && n.z <= 1.0);
     /// });
     /// ```
+    #[must_use]
     pub fn parallel_view_fitting(
         direction: Matrix3,
         aspect: f64,
@@ -446,13 +427,14 @@ impl Camera {
     /// });
     /// ```
     /// # Remarks
-    /// Depending on the arrangement of the point cloud, near_clip may take a negative value.
+    /// Depending on the arrangement of the point cloud, `near_clip` may take a negative value.
+    #[must_use]
     pub fn perspective_view_fitting(
         direction: Matrix3,
         aspect: f64,
         fov: Rad<f64>,
         points: &[Point3],
-    ) -> Option<Camera> {
+    ) -> Option<Self> {
         let inv_dir = direction.invert()?;
         let tan = (fov / 2.0).tan();
 
@@ -465,18 +447,22 @@ impl Camera {
 
         for p in points {
             let p = inv_dir.transform_point(*p);
-            x_min = f64::min(x_min, p.x - tan * p.z * aspect);
-            x_max = f64::max(x_max, p.x + tan * p.z * aspect);
-            y_min = f64::min(y_min, p.y - tan * p.z);
-            y_max = f64::max(y_max, p.y + tan * p.z);
+            x_min = f64::min(x_min, (tan * p.z).mul_add(-aspect, p.x));
+            x_max = f64::max(x_max, (tan * p.z).mul_add(aspect, p.x));
+            y_min = f64::min(y_min, tan.mul_add(-p.z, p.y));
+            y_max = f64::max(y_max, tan.mul_add(p.z, p.y));
             z_min = f64::min(z_min, p.z);
             z_max = f64::max(z_max, p.z);
         }
 
         let z_x = (x_max - x_min) / (2.0 * tan) / aspect;
         let z_y = (y_max - y_min) / (2.0 * tan);
-        let position = Vector3::new((x_min + x_max) / 2.0, (y_min + y_max) / 2.0, z_x.max(z_y));
-        Some(Camera {
+        let position = Vector3::new(
+            f64::midpoint(x_min, x_max),
+            f64::midpoint(y_min, y_max),
+            z_x.max(z_y),
+        );
+        Some(Self {
             matrix: Matrix4::from(direction) * Matrix4::from_translation(position),
             method: ProjectionMethod::Perspective { fov },
             near_clip: position.z - z_max,
@@ -486,7 +472,7 @@ impl Camera {
 }
 
 impl Default for Camera {
-    #[inline(always)]
+    #[inline]
     fn default() -> Self {
         Self {
             matrix: Matrix4::identity(),

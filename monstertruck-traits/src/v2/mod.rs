@@ -41,7 +41,10 @@ pub use search_parameter::{
     CurveParameter, ParameterRange, SearchNearestParameter, SearchParameter,
     SearchParameterDimension, SearchParameterHint1D, SearchParameterHint2D, SurfaceParameter,
 };
-#[allow(deprecated)]
+#[allow(
+    deprecated,
+    reason = "the v2 facade intentionally re-exports deprecated aliases for migration compatibility"
+)]
 pub use search_parameter::{D1, D2};
 pub use surface::ParametricSurface;
 pub use surface3d::ParametricSurface3D;

@@ -11,7 +11,10 @@
 //! type, so an alias pointing at something else would not compile.
 
 #![cfg(feature = "load")]
-#![allow(deprecated)]
+#![allow(
+    deprecated,
+    reason = "this regression test intentionally verifies the deprecated ruststep compatibility alias"
+)]
 
 use monstertruck_io::step::load::{ruststep, step_p21};
 

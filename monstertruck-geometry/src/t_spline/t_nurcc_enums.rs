@@ -1,4 +1,4 @@
-use super::*;
+use super::TnurccConnection;
 use std::fmt;
 
 impl TnurccConnection {
@@ -7,16 +7,16 @@ impl TnurccConnection {
     ///
     /// # Panics
     /// Panics if `i % 4 >= 4` (impossible?).
-    pub fn from_usize(i: usize) -> TnurccConnection {
+    pub const fn from_usize(i: usize) -> Self {
         let remainder = i % 4;
         if remainder == 0 {
-            TnurccConnection::LeftCw
+            Self::LeftCw
         } else if remainder == 1 {
-            TnurccConnection::LeftAcw
+            Self::LeftAcw
         } else if remainder == 2 {
-            TnurccConnection::RightCw
+            Self::RightCw
         } else {
-            TnurccConnection::RightAcw
+            Self::RightAcw
         }
     }
 }
@@ -24,10 +24,10 @@ impl TnurccConnection {
 impl fmt::Display for TnurccConnection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TnurccConnection::LeftAcw => write!(f, "Anti-clockwise Left"),
-            TnurccConnection::RightAcw => write!(f, "Anti-clockwise Right"),
-            TnurccConnection::LeftCw => write!(f, "Clockwise Left"),
-            TnurccConnection::RightCw => write!(f, "Clockwise Right"),
+            Self::LeftAcw => write!(f, "Anti-clockwise Left"),
+            Self::RightAcw => write!(f, "Anti-clockwise Right"),
+            Self::LeftCw => write!(f, "Clockwise Left"),
+            Self::RightCw => write!(f, "Clockwise Right"),
         }
     }
 }

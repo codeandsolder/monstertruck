@@ -6,7 +6,10 @@
 //! sample, and fit a new [`BsplineCurve`] or [`BsplineSurface`] through the
 //! offset points.
 
-use super::*;
+use super::{
+    BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, InnerSpace, KnotVector, Origin,
+    ParametricCurve, ParametricSurface, Point2, Point3, Vector2, Vector3, errors,
+};
 use errors::Error;
 use std::result::Result as StdResult;
 
@@ -20,8 +23,8 @@ type Result<T> = StdResult<T, Error>;
 ///
 /// # Errors
 ///
-/// Returns an error if the interpolation system is singular (e.g., degenerate
-/// curve with coincident sample points).
+/// Returns an error if fewer than four samples are requested or if the interpolation system
+/// is singular (e.g., degenerate curve with coincident sample points).
 ///
 /// # Examples
 ///
@@ -45,18 +48,22 @@ pub fn curve_offset_2d(
     distance: f64,
     n_samples: usize,
 ) -> Result<BsplineCurve<Point2>> {
-    assert!(
-        n_samples >= 4,
-        "curve_offset_2d requires at least 4 samples",
-    );
+    if n_samples < 4 {
+        return Err(Error::InsufficientInputCount {
+            operation: "curve_offset_2d",
+            input: "samples",
+            provided: n_samples,
+            minimum: 4,
+        });
+    }
 
     let (t_start, t_end) = curve.range_tuple();
 
     // Sample offset points.
     let param_points: Vec<(f64, Point2)> = (0..n_samples)
         .map(|i| {
-            let u = i as f64 / (n_samples - 1) as f64;
-            let t = t_start + (t_end - t_start) * u;
+            let u = crate::usize_to_f64(i) / crate::usize_to_f64(n_samples - 1);
+            let t = f64::mul_add(t_end - t_start, u, t_start);
             let pt = curve.subs(t);
             let tangent = curve.der(t);
 
@@ -89,7 +96,7 @@ pub fn curve_offset_2d(
 ///
 /// # Errors
 ///
-/// Returns an error if the interpolation system is singular.
+/// Returns an error if fewer than four samples are requested or if the interpolation system is singular.
 ///
 /// # Examples
 ///
@@ -114,17 +121,21 @@ pub fn curve_offset_3d(
     normal: Vector3,
     n_samples: usize,
 ) -> Result<BsplineCurve<Point3>> {
-    assert!(
-        n_samples >= 4,
-        "curve_offset_3d requires at least 4 samples",
-    );
+    if n_samples < 4 {
+        return Err(Error::InsufficientInputCount {
+            operation: "curve_offset_3d",
+            input: "samples",
+            provided: n_samples,
+            minimum: 4,
+        });
+    }
 
     let (t_start, t_end) = curve.range_tuple();
 
     let param_points: Vec<(f64, Point3)> = (0..n_samples)
         .map(|i| {
-            let u = i as f64 / (n_samples - 1) as f64;
-            let t = t_start + (t_end - t_start) * u;
+            let u = crate::usize_to_f64(i) / crate::usize_to_f64(n_samples - 1);
+            let t = f64::mul_add(t_end - t_start, u, t_start);
             let pt = curve.subs(t);
             let tangent = curve.der(t);
             let tangent_len = tangent.magnitude();
@@ -172,7 +183,8 @@ pub fn curve_offset_3d(
 ///
 /// # Errors
 ///
-/// Returns an error if the interpolation fails for any row of the surface.
+/// Returns an error if either grid axis has fewer than four samples or if interpolation fails
+/// for any row of the surface.
 ///
 /// # Examples
 ///
@@ -198,8 +210,22 @@ pub fn surface_offset(
     distance: f64,
     (n_u, n_v): (usize, usize),
 ) -> Result<BsplineSurface<Point3>> {
-    assert!(n_u >= 4, "surface_offset requires at least 4 u-samples");
-    assert!(n_v >= 4, "surface_offset requires at least 4 v-samples");
+    if n_u < 4 {
+        return Err(Error::InsufficientInputCount {
+            operation: "surface_offset",
+            input: "u-samples",
+            provided: n_u,
+            minimum: 4,
+        });
+    }
+    if n_v < 4 {
+        return Err(Error::InsufficientInputCount {
+            operation: "surface_offset",
+            input: "v-samples",
+            provided: n_v,
+            minimum: 4,
+        });
+    }
 
     let ((u_start, u_end), (v_start, v_end)) = surface.range_tuple();
 
@@ -210,13 +236,13 @@ pub fn surface_offset(
 
     let rows: Vec<BsplineCurve<Point3>> = (0..n_u)
         .map(|i| {
-            let u_frac = i as f64 / (n_u - 1) as f64;
-            let u = u_start + (u_end - u_start) * u_frac;
+            let u_frac = crate::usize_to_f64(i) / crate::usize_to_f64(n_u - 1);
+            let u = f64::mul_add(u_end - u_start, u_frac, u_start);
 
             let param_points: Vec<(f64, Point3)> = (0..n_v)
                 .map(|j| {
-                    let v_frac = j as f64 / (n_v - 1) as f64;
-                    let v = v_start + (v_end - v_start) * v_frac;
+                    let v_frac = crate::usize_to_f64(j) / crate::usize_to_f64(n_v - 1);
+                    let v = f64::mul_add(v_end - v_start, v_frac, v_start);
                     let pt = surface.subs(u, v);
                     let du = surface.uder(u, v);
                     let dv = surface.vder(u, v);

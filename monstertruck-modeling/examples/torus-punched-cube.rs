@@ -13,7 +13,7 @@ fn cube_shell() -> Shell {
     s.into_boundaries().pop().unwrap()
 }
 
-fn torus_shell() -> Shell {
+fn torus_shell() -> Result<Shell> {
     let v = builder::vertex(Point3::new(0.5, 0.0, 0.25));
     let w = builder::revolve(
         &v,
@@ -21,7 +21,7 @@ fn torus_shell() -> Shell {
         -Vector3::unit_y(),
         builder::SweepAngle::Closed,
         2,
-    );
+    )?;
     builder::revolve(
         &w,
         Point3::origin(),
@@ -43,9 +43,9 @@ fn find_torus_boundary(bdds: &[Wire], idx: usize) -> Option<&Wire> {
         .find(|wire| wire[0].front().point()[idx].near(&0.0))
 }
 
-fn main() {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut shell = cube_shell();
-    let torus = torus_shell();
+    let torus = torus_shell()?;
     let bdds = torus.extract_boundaries();
     let face = find_cube_face(&mut shell, -Vector3::unit_y()).unwrap();
     let bdd = find_torus_boundary(&bdds, 1).unwrap();
@@ -57,6 +57,7 @@ fn main() {
         .expect("torus x-boundary should attach to cube face");
     shell.extend(torus);
     let solid = Solid::new_unchecked(vec![shell]);
-    let json = serde_json::to_vec_pretty(&solid).unwrap();
-    std::fs::write("torus-punched-cube.json", json).unwrap();
+    let json = serde_json::to_vec_pretty(&solid)?;
+    std::fs::write("torus-punched-cube.json", json)?;
+    Ok(())
 }

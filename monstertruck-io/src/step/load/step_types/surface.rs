@@ -460,7 +460,7 @@ impl TryFrom<&BsplineSurfaceWithKnots> for BsplineSurface<Point3> {
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Ok(Self::try_new((uknots, vknots), ctrls)?)
+        Ok(Self::new((uknots, vknots), ctrls)?)
     }
 }
 
@@ -496,7 +496,7 @@ impl TryFrom<&UniformSurface> for BsplineSurface<Point3> {
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Ok(Self::try_new((uknots, vknots), ctrls)?)
+        Ok(Self::new((uknots, vknots), ctrls)?)
     }
 }
 
@@ -533,7 +533,7 @@ impl TryFrom<&QuasiUniformSurface> for BsplineSurface<Point3> {
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Ok(Self::try_new((uknots, vknots), ctrls)?)
+        Ok(Self::new((uknots, vknots), ctrls)?)
     }
 }
 

@@ -40,7 +40,7 @@ impl<'a> Iterator for TriangleIter<'a> {
         self.len -= 1;
         Some(res)
     }
-    #[inline(always)]
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) { (self.len, Some(self.len)) }
 }
 
@@ -53,7 +53,7 @@ pub struct Triangulate<'a> {
 }
 
 impl<'a> Triangulate<'a> {
-    #[inline(always)]
+    #[inline]
     pub fn new(entity: &'a PolygonMesh) -> Self {
         fn divide_mesh<T: Copy>(face: &Vec<T>) -> impl Iterator<Item = [T; 3]> + '_ {
             face.windows(2).skip(1).map(move |a| [face[0], a[0], a[1]])
@@ -63,7 +63,7 @@ impl<'a> Triangulate<'a> {
             entity,
         }
     }
-    #[inline(always)]
+    #[inline]
     pub fn get(&self, idx: usize) -> [Vertex; 3] {
         let tri_and_quad = self.entity.tri_faces().len() + 2 * self.entity.quad_faces().len();
         if idx < self.entity.tri_faces().len() {
@@ -80,14 +80,14 @@ impl<'a> Triangulate<'a> {
             self.other_faces[idx - tri_and_quad]
         }
     }
-    #[inline(always)]
+    #[inline]
     pub fn entity(&self) -> &PolygonMesh { self.entity }
 }
 
 impl<'a> IntoIterator for &'a Triangulate<'a> {
     type Item = [Vertex; 3];
     type IntoIter = TriangleIter<'a>;
-    #[inline(always)]
+    #[inline]
     fn into_iter(self) -> TriangleIter<'a> {
         let len = self
             .entity

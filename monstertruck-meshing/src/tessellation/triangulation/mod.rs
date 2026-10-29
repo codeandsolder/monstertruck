@@ -1,6 +1,22 @@
-#![allow(clippy::many_single_char_names)]
+#![allow(
+    clippy::many_single_char_names,
+    reason = "triangulation formulas conventionally use compact geometric variable names"
+)]
 
-use super::*;
+use super::{
+    BoundedCurve, CdtEdge, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace,
+    CompressedShell, CompressedShellTessellation, CompressedTrimmedFace, CompressedTrimmedShell,
+    ConstrainedDelaunayTriangulation, CurveParameter, Edge, EuclideanSpace,
+    ExactParameterBoundary2D, Face, Faces, HashGen, IndexedParallelIterator, InnerFaceIterator,
+    InnerSpace, IntoParallelIterator, IntoParallelRefIterator, Invertible,
+    IsoparametricCurveOptions, MIN_ALLOWED_VALUE, MeshableSurface, MetricSpace, Origin,
+    ParallelIterator, Parallelizable, ParameterBoundary2D, ParameterDivision1D, ParametricCurve2D,
+    ParametricCurve3D, ParametricSurface3D, Point3, PolygonMesh, PolylineCurve, PolylineableCurve,
+    PreMeshableSurface, RobustMeshableSurface, SearchNearestParameter, SearchParameter, Shell,
+    StandardAttributes, StandardVertex, TOLERANCE, TessellationPrimitiveMode,
+    TessellationPrimitiveOptions, Tolerance, Triangulation, Vector2, Vector3, VertexIterator, Wire,
+    Zero, algo, handles,
+};
 use crate::Point2;
 use crate::filters::StructuringFilter;
 use array_macro::array;
@@ -46,7 +62,7 @@ impl<C, S> ExactTrimBoundary2D for ParameterCurve<C, S>
 where
     C: ParametricCurve2D + BoundedCurve + ParameterDivision1D<Point = Point2>,
     S: ParametricSurface3D,
-    ParameterCurve<C, S>: SearchParameter<CurveParameter, Point = Point3>
+    Self: SearchParameter<CurveParameter, Point = Point3>
         + SearchNearestParameter<CurveParameter, Point = Point3>,
 {
     fn exact_trim_boundary_2d(&self, tolerance: f64) -> Vec<Point2> {
@@ -112,7 +128,7 @@ fn append_lifted_trim_segment<C, S>(
     if depth >= MAX_LIFTED_TRIM_SUBDIVISION_DEPTH || (back_parameter - front_parameter).so_small() {
         refined.push(back_uv);
     } else {
-        let middle_parameter = (front_parameter + back_parameter) * 0.5;
+        let middle_parameter = f64::midpoint(front_parameter, back_parameter);
         let middle_uv = trim_curve.curve().subs(middle_parameter);
         let front_point = trim_curve.surface().subs(front_uv.x, front_uv.y);
         let middle_point = trim_curve.surface().subs(middle_uv.x, middle_uv.y);
@@ -174,7 +190,7 @@ fn densify_curve_parameters(mut parameters: Vec<f64>, min_points: usize) -> Vec<
                 let extra_after = (interval + 1) * extra / intervals;
                 let splits = 1 + extra_after - extra_before;
                 (0..splits).map(move |index| {
-                    let weight = index as f64 / splits as f64;
+                    let weight = crate::count_as_f64(index) / crate::count_as_f64(splits);
                     window[0] + (window[1] - window[0]) * weight
                 })
             })
@@ -215,7 +231,8 @@ fn untrimmed_isoparametric_curves<S: PreMeshableSurface>(
         let axis_values = |min: f64, max: f64| {
             (0..options.samples_per_direction)
                 .map(move |index| {
-                    let parameter = (index + 1) as f64 / (options.samples_per_direction + 1) as f64;
+                    let parameter = (crate::count_as_f64(index) + 1.0)
+                        / (crate::count_as_f64(options.samples_per_direction) + 1.0);
                     min + (max - min) * parameter
                 })
                 .collect::<Vec<_>>()
@@ -223,7 +240,8 @@ fn untrimmed_isoparametric_curves<S: PreMeshableSurface>(
         let sample_axis = |constant_axis: usize, constant_value: f64| {
             (0..=options.segments_per_curve)
                 .map(|index| {
-                    let parameter = index as f64 / options.segments_per_curve as f64;
+                    let parameter = crate::count_as_f64(index)
+                        / crate::count_as_f64(options.segments_per_curve);
                     let variable_value = match constant_axis {
                         0 => v_min + (v_max - v_min) * parameter,
                         _ => u_min + (u_max - u_min) * parameter,
@@ -247,42 +265,44 @@ fn untrimmed_isoparametric_curves<S: PreMeshableSurface>(
     }
 }
 
-fn oriented_edge_indices<'a>(
-    wire: &'a [CompressedEdgeIndex],
+fn oriented_edge_indices(
+    wire: &[CompressedEdgeIndex],
     face_orientation: bool,
-) -> impl Iterator<Item = (usize, bool)> + 'a {
-    match face_orientation {
-        true => Either::Left(
+) -> impl Iterator<Item = (usize, bool)> + '_ {
+    if face_orientation {
+        Either::Left(
             wire.iter()
                 .map(|edge_idx| (edge_idx.index, edge_idx.orientation)),
-        ),
-        false => Either::Right(
+        )
+    } else {
+        Either::Right(
             wire.iter()
                 .rev()
                 .map(|edge_idx| (edge_idx.index, !edge_idx.orientation)),
-        ),
+        )
     }
 }
 
-fn oriented_trimmed_edge_uses<'a, T>(
-    wire: &'a [CompressedEdgeUse<T>],
+fn oriented_trimmed_edge_uses<T>(
+    wire: &[CompressedEdgeUse<T>],
     face_orientation: bool,
-) -> impl Iterator<Item = (usize, bool, Option<&'a T>)> + 'a {
-    match face_orientation {
-        true => Either::Left(wire.iter().map(|edge_use| {
+) -> impl Iterator<Item = (usize, bool, Option<&T>)> + '_ {
+    if face_orientation {
+        Either::Left(wire.iter().map(|edge_use| {
             (
                 edge_use.index,
                 edge_use.orientation,
                 edge_use.trim_curve.as_ref(),
             )
-        })),
-        false => Either::Right(wire.iter().rev().map(|edge_use| {
+        }))
+    } else {
+        Either::Right(wire.iter().rev().map(|edge_use| {
             (
                 edge_use.index,
                 !edge_use.orientation,
                 edge_use.trim_curve.as_ref(),
             )
-        })),
+        }))
     }
 }
 
@@ -317,7 +337,7 @@ where
     if reversed < direct {
         points.reverse();
     }
-    Some(PolylineCurve(points))
+    Some(monstertruck_mesh::PolylineCurve(points))
 }
 
 fn point_segment_distance2(point: Point3, front: Point3, back: Point3) -> f64 {
@@ -415,7 +435,8 @@ fn resample_boundary(boundary: &[Point2], target_len: usize) -> Option<Vec<Point
                         if index + 1 == target_len {
                             last
                         } else {
-                            let distance = total * index as f64 / (target_len - 1) as f64;
+                            let distance = total * crate::count_as_f64(index)
+                                / crate::count_as_f64(target_len - 1);
                             let upper = cumulative.partition_point(|value| *value < distance);
                             let segment = upper.saturating_sub(1).min(boundary.len() - 2);
                             let front = boundary[segment];
@@ -514,9 +535,10 @@ where
     };
     let create_edge = |edge: &Edge<Point3, C>| -> Option<Edge<_, _>> {
         let new_edge = edge_map.get(&edge.id())?;
-        Some(match edge.orientation() {
-            true => new_edge.clone(),
-            false => new_edge.inverse(),
+        Some(if edge.orientation() {
+            new_edge.clone()
+        } else {
+            new_edge.inverse()
         })
     };
     let create_boundary = |wire: &Wire<Point3, C>| -> Option<Wire<_, _>> {
@@ -581,9 +603,10 @@ where
     );
     let mut create_edge = move |edge: &'a Edge<Point3, C>| -> Edge<_, _> {
         let new_edge = edge_map.entry_or_insert(edge);
-        match edge.orientation() {
-            true => new_edge.clone(),
-            false => new_edge.inverse(),
+        if edge.orientation() {
+            new_edge.clone()
+        } else {
+            new_edge.inverse()
         }
     };
     let mut create_boundary = move |wire: &'a Wire<Point3, C>| -> Wire<_, _> {
@@ -638,7 +661,7 @@ where
         let face_orientation = face.orientation;
 
         // Fast path: untrimmed face with bounded surface domain.
-        let is_untrimmed = boundaries.iter().all(|wire| wire.is_empty());
+        let is_untrimmed = boundaries.iter().all(std::vec::Vec::is_empty);
         if is_untrimmed && let (Some(urange), Some(vrange)) = surface.try_range_tuple() {
             let polygon =
                 untrimmed_tessellation(surface, (urange, vrange), tolerance, primitive_config.mode);
@@ -658,9 +681,12 @@ where
             };
         }
 
-        let create_edge = |(edge_index, edge_orientation): (usize, bool)| match edge_orientation {
-            true => Some(edges.get(edge_index)?.curve.clone()),
-            false => Some(edges.get(edge_index)?.curve.inverse()),
+        let create_edge = |(edge_index, edge_orientation): (usize, bool)| {
+            if edge_orientation {
+                Some(edges.get(edge_index)?.curve.clone())
+            } else {
+                Some(edges.get(edge_index)?.curve.inverse())
+            }
         };
         let create_boundary = |wire: &Vec<CompressedEdgeIndex>| {
             let exact_edges = |boundary_tolerance| {
@@ -677,9 +703,10 @@ where
                             });
                         }
                         let polyline = if boundary_tolerance.near(&tolerance) {
-                            match edge_orientation {
-                                true => edges.get(edge_index)?.curve.clone(),
-                                false => edges.get(edge_index)?.curve.inverse(),
+                            if edge_orientation {
+                                edges.get(edge_index)?.curve.clone()
+                            } else {
+                                edges.get(edge_index)?.curve.inverse()
                             }
                         } else {
                             fallback_polyline_curve(edge, edge_orientation, boundary_tolerance)
@@ -794,7 +821,7 @@ where
             polygon.as_ref(),
             is_untrimmed,
             boundaries.len(),
-            boundaries.iter().map(|wire| wire.len()).sum(),
+            boundaries.iter().map(std::vec::Vec::len).sum(),
         );
         CompressedFace {
             boundaries,
@@ -886,10 +913,12 @@ where
                     &vertices,
                     tolerance,
                 )
-                .map(|curve| {
-                    fallback_polyline_curve_with_min_points(edge, true, tolerance, curve.len())
-                })
-                .unwrap_or_else(|| fallback_polyline_curve(edge, true, tolerance));
+                .map_or_else(
+                    || fallback_polyline_curve(edge, true, tolerance),
+                    |curve| {
+                        fallback_polyline_curve_with_min_points(edge, true, tolerance, curve.len())
+                    },
+                );
                 match acc.entry(edge_idx) {
                     Entry::Occupied(mut entry) => {
                         if candidate.len() > entry.get().len() {
@@ -947,13 +976,13 @@ where
         let surface = &face.surface;
         let face_orientation = face.orientation;
 
-        let is_untrimmed = boundaries.iter().all(|wire| wire.is_empty());
+        let is_untrimmed = boundaries.iter().all(std::vec::Vec::is_empty);
         if is_untrimmed && let (Some(urange), Some(vrange)) = surface.try_range_tuple() {
             let polygon =
                 untrimmed_tessellation(surface, (urange, vrange), tolerance, primitive_config.mode);
-            let isoparams = isoparametric_options
-                .map(|options| untrimmed_isoparametric_curves(surface, (urange, vrange), options))
-                .unwrap_or_default();
+            let isoparams = isoparametric_options.map_or_default(|options| {
+                untrimmed_isoparametric_curves(surface, (urange, vrange), options)
+            });
             log_mesh_trace(face_idx, "untrimmed", "ok", face_start);
             observe_face_drop(
                 surface,
@@ -1100,47 +1129,39 @@ where
         } else {
             log_mesh_trace(face_idx, "preboundary", "failed", boundary_start);
         }
-        let (polygon, isoparams) = preboundary
-            .map(|preboundary| {
-                let close_start = Instant::now();
-                let boundary = PolyBoundary::new(preboundary, surface, tolerance);
-                log_mesh_trace(
-                    face_idx,
-                    "polyboundary",
-                    format!(
-                        "closed_loops={} uv_min=({:.6},{:.6}) uv_max=({:.6},{:.6})",
-                        boundary.loops.len(),
-                        boundary.uv_min.x,
-                        boundary.uv_min.y,
-                        boundary.uv_max.x,
-                        boundary.uv_max.y,
-                    ),
-                    close_start,
-                );
-                let isoparams = isoparametric_options
-                    .map(|options| boundary.isoparametric_curves(surface, options))
-                    .unwrap_or_default();
-                let mesh_start = Instant::now();
-                let polygon = trimming_tessellation(
-                    surface,
-                    &boundary,
-                    tolerance,
-                    primitive_config,
-                    face_idx,
-                );
-                log_mesh_trace(
-                    face_idx,
-                    "trimmed",
-                    format!(
-                        "tris={} quads={}",
-                        polygon.tri_faces().len(),
-                        polygon.quad_faces().len()
-                    ),
-                    mesh_start,
-                );
-                (Some(polygon), isoparams)
-            })
-            .unwrap_or_default();
+        let (polygon, isoparams) = preboundary.map_or_default(|preboundary| {
+            let close_start = Instant::now();
+            let boundary = PolyBoundary::new(preboundary, surface, tolerance);
+            log_mesh_trace(
+                face_idx,
+                "polyboundary",
+                format!(
+                    "closed_loops={} uv_min=({:.6},{:.6}) uv_max=({:.6},{:.6})",
+                    boundary.loops.len(),
+                    boundary.uv_min.x,
+                    boundary.uv_min.y,
+                    boundary.uv_max.x,
+                    boundary.uv_max.y,
+                ),
+                close_start,
+            );
+            let isoparams = isoparametric_options
+                .map_or_default(|options| boundary.isoparametric_curves(surface, options));
+            let mesh_start = Instant::now();
+            let polygon =
+                trimming_tessellation(surface, &boundary, tolerance, primitive_config, face_idx);
+            log_mesh_trace(
+                face_idx,
+                "trimmed",
+                format!(
+                    "tris={} quads={}",
+                    polygon.tri_faces().len(),
+                    polygon.quad_faces().len()
+                ),
+                mesh_start,
+            );
+            (Some(polygon), isoparams)
+        });
         log_mesh_trace(
             face_idx,
             "face",
@@ -1153,7 +1174,7 @@ where
             polygon.as_ref(),
             is_untrimmed,
             boundaries.len(),
-            boundaries.iter().map(|wire| wire.len()).sum(),
+            boundaries.iter().map(std::vec::Vec::len).sum(),
         );
         (
             CompressedFace {

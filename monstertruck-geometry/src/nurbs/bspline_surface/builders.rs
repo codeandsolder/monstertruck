@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    BoundedCurve, BsplineCurve, BsplineSurface, ControlPoint, Error, InnerSpace, Invertible,
+    KnotVector, Matrix3, Origin, ParametricCurve, Point3, Rad, Result, SquareMatrix, TOLERANCE,
+    Tolerance, Vector3, compat,
+};
 
 impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// Creates a surface with normailized knot vectors connecting two curves.
@@ -23,10 +27,8 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     ],
     /// );
     /// ```
-    pub fn homotopy(
-        mut bspcurve0: BsplineCurve<P>,
-        mut bspcurve1: BsplineCurve<P>,
-    ) -> BsplineSurface<P> {
+    #[must_use]
+    pub fn homotopy(mut bspcurve0: BsplineCurve<P>, mut bspcurve1: BsplineCurve<P>) -> Self {
         bspcurve0.syncro_degree(&mut bspcurve1);
 
         //bspcurve0.optimize();
@@ -39,7 +41,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let control_points: Vec<Vec<_>> = (0..bspcurve0.control_points().len())
             .map(|i| vec![*bspcurve0.control_point(i), *bspcurve1.control_point(i)])
             .collect();
-        BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points)
+        Self::new_unchecked((knot_vector_u, knot_vector_v), control_points)
     }
 
     /// Creates a skinned (lofted) surface through N section curves.
@@ -85,7 +87,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn skin(mut curves: Vec<BsplineCurve<P>>) -> Result<BsplineSurface<P>> {
+    pub fn skin(mut curves: Vec<BsplineCurve<P>>) -> Result<Self> {
         if curves.is_empty() {
             return Err(Error::EmptyControlPoints);
         }
@@ -97,7 +99,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
             let knot_vector_v = KnotVector::from(vec![0.0, 0.0, 1.0, 1.0]);
             let control_points: Vec<Vec<_>> =
                 c.control_points().iter().map(|p| vec![*p, *p]).collect();
-            return Ok(BsplineSurface::new_unchecked(
+            return Ok(Self::new_unchecked(
                 (knot_vector_u, knot_vector_v),
                 control_points,
             ));
@@ -115,7 +117,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         // Build the v-direction knot vector (degree 1, clamped, uniform).
         let mut v_knots = Vec::with_capacity(n + 2);
         v_knots.push(0.0);
-        (0..n).for_each(|i| v_knots.push(i as f64 / (n - 1) as f64));
+        (0..n).for_each(|i| v_knots.push(crate::usize_to_f64(i) / crate::usize_to_f64(n - 1)));
         v_knots.push(1.0);
         let knot_vector_v = KnotVector::from(v_knots);
 
@@ -123,7 +125,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let control_points: Vec<Vec<P>> = (0..m)
             .map(|j| curves.iter().map(|c| *c.control_point(j)).collect())
             .collect();
-        Ok(BsplineSurface::new_unchecked(
+        Ok(Self::new_unchecked(
             (knot_vector_u, knot_vector_v),
             control_points,
         ))
@@ -157,7 +159,7 @@ impl BsplineSurface<Point3> {
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
     /// );
-    /// let surface = BsplineSurface::sweep_rail(profile, &rail, 3)?;
+    /// let surface = BsplineSurface::sweep_rail(&profile, &rail, 3)?;
     /// // At v=0 (rail start), the surface reproduces the profile.
     /// assert_near2!(surface.subs(0.0, 0.0), Point3::new(-1.0, 0.0, 0.0));
     /// assert_near2!(surface.subs(1.0, 0.0), Point3::new(1.0, 0.0, 0.0));
@@ -168,10 +170,10 @@ impl BsplineSurface<Point3> {
     /// # }
     /// ```
     pub fn sweep_rail(
-        profile: BsplineCurve<Point3>,
+        profile: &BsplineCurve<Point3>,
         rail: &BsplineCurve<Point3>,
         n_sections: usize,
-    ) -> Result<BsplineSurface<Point3>> {
+    ) -> Result<Self> {
         if n_sections < 2 {
             return Err(Error::InvalidSurfaceBuilderInput(
                 "sweep_rail requires at least 2 sections",
@@ -185,7 +187,9 @@ impl BsplineSurface<Point3> {
 
         let sections: Vec<BsplineCurve<Point3>> = (0..n_sections)
             .map(|i| {
-                let t = t_start + (t_end - t_start) * i as f64 / (n_sections - 1) as f64;
+                let t = t_start
+                    + (t_end - t_start) * crate::usize_to_f64(i)
+                        / crate::usize_to_f64(n_sections - 1);
                 let rail_pt = rail.subs(t);
                 let tangent_i = rail.derivative(t);
                 let translation = rail_pt - rail_origin;
@@ -207,7 +211,7 @@ impl BsplineSurface<Point3> {
             })
             .collect();
 
-        BsplineSurface::skin(sections)
+        Self::skin(sections)
     }
 
     /// Creates a surface by sweeping a single profile along two rail curves (birail1).
@@ -244,7 +248,7 @@ impl BsplineSurface<Point3> {
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
     /// );
-    /// let surface = BsplineSurface::birail1(profile, &rail1, &rail2, 3)?;
+    /// let surface = BsplineSurface::birail1(&profile, &rail1, &rail2, 3)?;
     /// // At v=0 (rail start), corners match.
     /// assert_near2!(surface.subs(0.0, 0.0), Point3::new(-1.0, 0.0, 0.0));
     /// assert_near2!(surface.subs(1.0, 0.0), Point3::new(1.0, 0.0, 0.0));
@@ -255,11 +259,11 @@ impl BsplineSurface<Point3> {
     /// # }
     /// ```
     pub fn birail1(
-        profile: BsplineCurve<Point3>,
+        profile: &BsplineCurve<Point3>,
         rail1: &BsplineCurve<Point3>,
         rail2: &BsplineCurve<Point3>,
         n_sections: usize,
-    ) -> Result<BsplineSurface<Point3>> {
+    ) -> Result<Self> {
         if n_sections < 2 {
             return Err(Error::InvalidSurfaceBuilderInput(
                 "birail1 requires at least 2 sections",
@@ -275,7 +279,9 @@ impl BsplineSurface<Point3> {
 
         let sections: Vec<BsplineCurve<Point3>> = (0..n_sections)
             .map(|i| {
-                let t = r_start + (r_end - r_start) * i as f64 / (n_sections - 1) as f64;
+                let t = r_start
+                    + (r_end - r_start) * crate::usize_to_f64(i)
+                        / crate::usize_to_f64(n_sections - 1);
                 let r1_pt = rail1.subs(t);
                 let r2_pt = rail2.subs(t);
                 let target_chord = r2_pt - r1_pt;
@@ -305,7 +311,7 @@ impl BsplineSurface<Point3> {
             })
             .collect();
 
-        BsplineSurface::skin(sections)
+        Self::skin(sections)
     }
 
     /// Creates a surface by blending two profiles along two rail curves (birail2).
@@ -361,7 +367,7 @@ impl BsplineSurface<Point3> {
         rail1: &BsplineCurve<Point3>,
         rail2: &BsplineCurve<Point3>,
         n_sections: usize,
-    ) -> Result<BsplineSurface<Point3>> {
+    ) -> Result<Self> {
         if n_sections < 2 {
             return Err(Error::InvalidSurfaceBuilderInput(
                 "birail2 requires at least 2 sections",
@@ -388,8 +394,8 @@ impl BsplineSurface<Point3> {
 
         let sections: Vec<BsplineCurve<Point3>> = (0..n_sections)
             .map(|i| {
-                let v = i as f64 / (n_sections - 1) as f64;
-                let t = r_start + (r_end - r_start) * v;
+                let v = crate::usize_to_f64(i) / crate::usize_to_f64(n_sections - 1);
+                let t = f64::mul_add(r_end - r_start, v, r_start);
                 let r1_pt = rail1.subs(t);
                 let r2_pt = rail2.subs(t);
                 let target_chord = r2_pt - r1_pt;
@@ -433,7 +439,7 @@ impl BsplineSurface<Point3> {
             })
             .collect();
 
-        BsplineSurface::skin(sections)
+        Self::skin(sections)
     }
 }
 
@@ -527,7 +533,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         u_curves: Vec<BsplineCurve<P>>,
         v_curves: Vec<BsplineCurve<P>>,
         points: &[Vec<P>],
-    ) -> Result<BsplineSurface<P>> {
+    ) -> Result<Self> {
         let n = u_curves.len();
         let m = v_curves.len();
         if u_curves.is_empty() {
@@ -552,11 +558,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         }
 
         // S_u: skin the u-curves (v parameterizes across sections).
-        let s_u = BsplineSurface::skin(u_curves)?;
+        let s_u = Self::skin(u_curves)?;
 
         // S_v: skin the v-curves (u parameterizes across sections),
         // then swap axes so u/v orientation matches S_u.
-        let mut s_v = BsplineSurface::skin(v_curves)?;
+        let mut s_v = Self::skin(v_curves)?;
         s_v.swap_axes();
 
         // T: tensor product surface interpolating the grid points.
@@ -565,12 +571,16 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let n_v = m;
         let mut u_knots = Vec::with_capacity(n_u + 2);
         u_knots.push(0.0);
-        (0..n_u).for_each(|i| u_knots.push(i as f64 / (n_u - 1).max(1) as f64));
+        (0..n_u).for_each(|i| {
+            u_knots.push(crate::usize_to_f64(i) / crate::usize_to_f64((n_u - 1).max(1)));
+        });
         u_knots.push(1.0);
 
         let mut v_knots = Vec::with_capacity(n_v + 2);
         v_knots.push(0.0);
-        (0..n_v).for_each(|j| v_knots.push(j as f64 / (n_v - 1).max(1) as f64));
+        (0..n_v).for_each(|j| {
+            v_knots.push(crate::usize_to_f64(j) / crate::usize_to_f64((n_v - 1).max(1)));
+        });
         v_knots.push(1.0);
 
         let knot_u = KnotVector::from(u_knots);
@@ -579,7 +589,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let t_cp: Vec<Vec<P>> = (0..n_v)
             .map(|j| (0..n_u).map(|i| points[i][j]).collect())
             .collect();
-        let tensor = BsplineSurface::new_unchecked((knot_u, knot_v), t_cp);
+        let tensor = Self::new_unchecked((knot_u, knot_v), t_cp);
 
         // Make all three surfaces compatible.
         let mut surfaces = vec![s_u, s_v, tensor];
@@ -599,7 +609,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
             })
             .collect();
 
-        Ok(BsplineSurface::new_unchecked(
+        Ok(Self::new_unchecked(
             surfaces[0].knot_vectors().clone(),
             result_cp,
         ))
@@ -665,12 +675,13 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// assert_ne!(surface.subs(0.0, 0.0), curve0.subs(0.0));
     /// assert_eq!(surface.subs(0.0, 0.0), curve3.subs(1.0));
     /// ```
+    #[must_use]
     pub fn by_boundary(
         mut curve0: BsplineCurve<P>,
         mut curve1: BsplineCurve<P>,
         mut curve2: BsplineCurve<P>,
         mut curve3: BsplineCurve<P>,
-    ) -> BsplineSurface<P> {
+    ) -> Self {
         curve2.invert();
         curve3.invert();
         curve0.syncro_degree(&mut curve2);
@@ -687,12 +698,12 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let n = curve0.control_points().len();
         let m = curve3.control_points().len();
         for i in 1..(n - 1) {
-            let u = (i as f64) / (n as f64);
+            let u = crate::usize_to_f64(i) / crate::usize_to_f64(n);
             let pt0 = curve2.control_points[i]
                 + (curve0.control_points[i] - curve2.control_points[i]) * u;
             let mut new_row = vec![*curve0.control_point(i)];
             for j in 1..(m - 1) {
-                let v = (j as f64) / (m as f64);
+                let v = crate::usize_to_f64(j) / crate::usize_to_f64(m);
                 let pt1 = curve1.control_points[j]
                     + (curve3.control_points[j] - curve1.control_points[j]) * v;
                 new_row.push(pt0 + (pt1 - pt0) / 2.0);
@@ -701,6 +712,6 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
             control_points.push(new_row);
         }
         control_points.push(curve1.control_points().clone());
-        BsplineSurface::new_unchecked(knot_vecs, control_points)
+        Self::new_unchecked(knot_vecs, control_points)
     }
 }

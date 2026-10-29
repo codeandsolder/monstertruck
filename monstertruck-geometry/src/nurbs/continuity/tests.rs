@@ -25,15 +25,13 @@ fn boundary_side_selects_the_cross_boundary_axis() {
     let surface = polynomial_surface(1, 3);
 
     assert_eq!(
-        surface
-            .continuity_capability(BoundarySide::MinV, ContinuityOrder::G3)
+        (surface.continuity_capability(BoundarySide::MinV, ContinuityOrder::G3))
             .expect("coherent capability")
             .unsupported_reason(),
         None
     );
     assert_eq!(
-        surface
-            .continuity_capability(BoundarySide::MinU, ContinuityOrder::G2)
+        (surface.continuity_capability(BoundarySide::MinU, ContinuityOrder::G2))
             .expect("coherent capability")
             .unsupported_reason(),
         Some(
@@ -61,15 +59,13 @@ fn unclamped_cross_boundary_axis_is_unsupported() {
     );
 
     assert_eq!(
-        surface
-            .continuity_capability(BoundarySide::MaxU, ContinuityOrder::G1)
+        (surface.continuity_capability(BoundarySide::MaxU, ContinuityOrder::G1))
             .expect("coherent capability")
             .unsupported_reason(),
         Some(UnsupportedContinuityCapability::UnclampedBoundary)
     );
     assert_eq!(
-        surface
-            .continuity_capability(BoundarySide::MaxV, ContinuityOrder::G1)
+        (surface.continuity_capability(BoundarySide::MaxV, ContinuityOrder::G1))
             .expect("coherent capability")
             .unsupported_reason(),
         None
@@ -88,15 +84,13 @@ fn nurbs_capability_requires_positive_finite_weights() {
     ));
 
     assert_eq!(
-        positive
-            .continuity_capability(BoundarySide::MinU, ContinuityOrder::G1)
+        (positive.continuity_capability(BoundarySide::MinU, ContinuityOrder::G1))
             .expect("coherent capability")
             .unsupported_reason(),
         None
     );
     assert_eq!(
-        zero_weight
-            .continuity_capability(BoundarySide::MinU, ContinuityOrder::G0)
+        (zero_weight.continuity_capability(BoundarySide::MinU, ContinuityOrder::G0))
             .expect("coherent capability")
             .unsupported_reason(),
         Some(UnsupportedContinuityCapability::NonPositiveWeight)
@@ -117,8 +111,7 @@ fn insufficient_degree_alone_reports_the_achievable_order() {
         vec![vec![Point3::new(0.0, 0.0, 0.0); 3]; 4],
     );
 
-    let capability = surface
-        .continuity_capability(BoundarySide::MinU, ContinuityOrder::G2)
+    let capability = (surface.continuity_capability(BoundarySide::MinU, ContinuityOrder::G2))
         .expect("coherent capability");
 
     assert_eq!(

@@ -180,7 +180,7 @@ fn homogeneous_point(point: Vector4) -> Option<Point3> {
 }
 
 fn spherical_revolution_from_profile(
-    profile: BsplineCurve<Vector4>,
+    profile: &BsplineCurve<Vector4>,
     origin: Point3,
     axis: Vector3,
     revolution_range: (f64, f64),
@@ -189,28 +189,24 @@ fn spherical_revolution_from_profile(
     let profile_range = profile.range_tuple();
     let samples = [0.0, 0.25, 0.5, 0.75, 1.0].map(|parameter| {
         homogeneous_point(
-            profile.subs(profile_range.0 + (profile_range.1 - profile_range.0) * parameter),
+            profile.subs((profile_range.1 - profile_range.0).mul_add(parameter, profile_range.0)),
         )
     });
     let samples = samples.into_iter().collect::<Option<Vec<_>>>()?;
     let reference = *samples.first()?;
     let reference_offset = reference - origin;
-    let center_parameter = samples
-        .iter()
-        .skip(1)
-        .filter_map(|point| {
-            let offset = *point - origin;
-            let denominator = 2.0 * axis.dot(offset - reference_offset);
-            (denominator.abs() > SPHERICAL_REVOLUTION_TOLERANCE)
-                .then(|| (offset.magnitude2() - reference_offset.magnitude2()) / denominator)
-        })
-        .next()?;
+    let center_parameter = samples.iter().skip(1).find_map(|point| {
+        let offset = *point - origin;
+        let denominator = 2.0 * axis.dot(offset - reference_offset);
+        (denominator.abs() > SPHERICAL_REVOLUTION_TOLERANCE)
+            .then(|| (offset.magnitude2() - reference_offset.magnitude2()) / denominator)
+    })?;
     let center = origin + axis * center_parameter;
     let radius = samples
         .iter()
         .map(|point| point.distance(center))
         .sum::<f64>()
-        / samples.len() as f64;
+        / crate::usize_to_f64(samples.len());
     let radius_tolerance = SPHERICAL_REVOLUTION_TOLERANCE * radius.max(1.0);
     let meridian_vector = samples
         .iter()
@@ -315,7 +311,7 @@ where C: ParametricCurve3D + TryIntoHomogeneousBsplineCurve
     fn try_into_analytic_surface_kind(&self) -> Option<AnalyticSurfaceKind> {
         let profile = self.entity_curve().try_into_homogeneous_bspline_curve()?;
         spherical_revolution_from_profile(
-            profile,
+            &profile,
             self.origin(),
             self.axis(),
             finite_range(self.try_range_tuple().1)?,
@@ -351,7 +347,7 @@ fn transform_homogeneous_extrusion(
 }
 
 fn transform_spherical_revolution(
-    sphere: SphericalRevolutionSurface,
+    sphere: &SphericalRevolutionSurface,
     transform: Matrix4,
 ) -> Option<SphericalRevolutionSurface> {
     let transverse = sphere.axis.cross(sphere.meridian_direction).normalize();
@@ -393,7 +389,7 @@ fn transform_analytic_surface_kind(
             ))
         }),
         AnalyticSurfaceKind::SphericalRevolution(sphere) => orientation
-            .then(|| transform_spherical_revolution(sphere, transform))
+            .then(|| transform_spherical_revolution(&sphere, transform))
             .flatten()
             .map(AnalyticSurfaceKind::SphericalRevolution),
     }

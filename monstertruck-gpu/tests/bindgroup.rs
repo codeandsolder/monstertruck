@@ -3,13 +3,15 @@
 #![recursion_limit = "256"]
 mod common;
 use common::Plane;
-use monstertruck_core::cgmath64::*;
-use monstertruck_gpu::*;
-use wgpu::*;
+use monstertruck_core::cgmath64::{Matrix4, Point3, Rad, Vector3, Vector4};
+use monstertruck_gpu::{
+    Camera, Light, LightType, ProjectionMethod, RenderTextureConfig, Scene, SceneDescriptor,
+    StudioConfig,
+};
+use wgpu::{Backends, Color, TextureFormat};
 
 const PICTURE_WIDTH: u32 = 256;
 const PICTURE_HEIGHT: u32 = 256;
-const PICTURE_ASP: f64 = PICTURE_WIDTH as f64 / PICTURE_HEIGHT as f64;
 
 const CAMERA_MATRIX: Matrix4 = Matrix4::from_cols(
     Vector4::new(1.0, 2.1, 3.2, 4.3),
@@ -24,40 +26,30 @@ const CAMERA_FARCLIP: f64 = 10.0;
 const POINT_LIGHT: Light = Light {
     position: Point3::new(0.1, 0.2, 0.3),
     color: Vector3::new(0.4, 0.5, 0.6),
-    light_type: LightType::Point,
+    kind: LightType::Point,
 };
 const UNIFORM_LIGHT: Light = Light {
     position: Point3::new(1.1, 1.2, 1.3),
     color: Vector3::new(1.4, 1.5, 1.6),
-    light_type: LightType::Uniform,
+    kind: LightType::Uniform,
 };
 
-fn save_buffer<P: AsRef<std::path::Path>>(path: P, vec: &[u8]) {
-    image::save_buffer(
-        path,
-        vec,
-        PICTURE_WIDTH,
-        PICTURE_HEIGHT,
-        image::ColorType::Rgba8,
-    )
-    .unwrap();
-}
-
-fn exec_bind_group_test(backend: Backends, out_dir: &str) {
-    let out_dir = String::from(out_dir);
-    std::fs::create_dir_all(&out_dir).unwrap();
+fn exec_bind_group_test(backend: Backends, out_dir: &str) -> common::TestResult {
+    std::fs::create_dir_all(out_dir)?;
     let camera = Camera {
         matrix: CAMERA_MATRIX,
         method: ProjectionMethod::perspective(CAMERA_FOV),
         near_clip: CAMERA_NEARCLIP,
         far_clip: CAMERA_FARCLIP,
     };
-    println!("camera projection:\n{:?}", camera.projection(PICTURE_ASP));
-    let lights = vec![POINT_LIGHT, UNIFORM_LIGHT];
+    println!(
+        "camera projection:\n{:?}",
+        camera.projection(f64::from(PICTURE_WIDTH) / f64::from(PICTURE_HEIGHT))
+    );
     let desc = SceneDescriptor {
         studio: StudioConfig {
             camera,
-            lights,
+            lights: vec![POINT_LIGHT, UNIFORM_LIGHT],
             background: Color {
                 r: 0.1,
                 g: 0.2,
@@ -69,22 +61,38 @@ fn exec_bind_group_test(backend: Backends, out_dir: &str) {
             canvas_size: (PICTURE_WIDTH, PICTURE_HEIGHT),
             format: TextureFormat::Rgba8Unorm,
         },
-        ..Default::default()
+        ..SceneDescriptor::default()
     };
-    let handler = common::init_device(backend);
+    let handler = common::init_device(backend)?;
     let mut scene = Scene::new(handler, &desc);
     let plane = new_plane!("shaders/unicolor.wgsl", "vs_main", "fs_main");
-    let buffer0 = common::render_one(&mut scene, &plane);
+    let buffer0 = common::render_one(&mut scene, &plane)?;
     let plane = new_plane!("shaders/bindgroup.wgsl", "vs_main", "fs_main");
-    let buffer1 = common::render_one(&mut scene, &plane);
+    let buffer1 = common::render_one(&mut scene, &plane)?;
     let plane = new_plane!("shaders/bindgroup.wgsl", "vs_main", "fs_main_anti");
-    let buffer2 = common::render_one(&mut scene, &plane);
-    save_buffer(out_dir.clone() + "unicolor.png", &buffer0);
-    save_buffer(out_dir.clone() + "bindgroup.png", &buffer1);
-    save_buffer(out_dir + "anti-bindgroup.png", &buffer2);
+    let buffer2 = common::render_one(&mut scene, &plane)?;
+    common::save_rgba8(
+        format!("{out_dir}unicolor.png"),
+        &buffer0,
+        PICTURE_WIDTH,
+        PICTURE_HEIGHT,
+    )?;
+    common::save_rgba8(
+        format!("{out_dir}bindgroup.png"),
+        &buffer1,
+        PICTURE_WIDTH,
+        PICTURE_HEIGHT,
+    )?;
+    common::save_rgba8(
+        format!("{out_dir}anti-bindgroup.png"),
+        &buffer2,
+        PICTURE_WIDTH,
+        PICTURE_HEIGHT,
+    )?;
     assert!(common::same_buffer(&buffer0, &buffer1));
     assert!(!common::same_buffer(&buffer0, &buffer2));
+    Ok(())
 }
 
 #[test]
-fn bind_group_test() { common::os_alt_exec_test(exec_bind_group_test); }
+fn bind_group_test() -> common::TestResult { common::os_alt_exec_test(exec_bind_group_test) }

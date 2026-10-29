@@ -70,7 +70,7 @@ fn boolean_matrix_and_crossing_cubes() {
 }
 
 #[test]
-fn punched_cube() {
+fn punched_cube() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let v = builder::vertex(Point3::origin());
     let e = builder::extrude(&v, Vector3::unit_x());
     let f = builder::extrude(&e, Vector3::unit_y());
@@ -83,11 +83,11 @@ fn punched_cube() {
         Vector3::unit_z(),
         builder::SweepAngle::Closed,
         4,
-    );
-    let f = builder::try_attach_plane(&[w]).unwrap();
+    )?;
+    let f = builder::try_attach_plane([w])?;
     let mut cylinder = builder::extrude(&f, Vector3::unit_z() * 2.0);
     cylinder.not();
-    let and = crate::and(&cube, &cylinder, 0.05).unwrap();
+    let and = crate::and(&cube, &cylinder, 0.05)?;
     assert_eq!(and.face_iter().count(), 10);
     assert_eq!(
         and.face_iter()
@@ -98,6 +98,7 @@ fn punched_cube() {
 
     let poly = and.triangulation(0.01).to_polygon();
     assert!(poly.volume() < 0.9);
+    Ok(())
 }
 
 #[test]

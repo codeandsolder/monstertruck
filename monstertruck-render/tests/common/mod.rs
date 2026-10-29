@@ -1,10 +1,15 @@
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "shared render-test helpers are consumed only by selected test targets"
+)]
 
 use monstertruck_gpu::*;
 use rayon::prelude::*;
-use std::io::Write;
+use std::error::Error;
 use std::sync::Arc;
 use wgpu::*;
+
+pub type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 #[derive(Clone, Debug)]
 pub struct Plane<'a> {
@@ -32,7 +37,7 @@ impl Rendered for Plane<'_> {
         &self,
         handler: &DeviceHandler,
     ) -> (Arc<BufferHandler>, Option<Arc<BufferHandler>>) {
-        writeln!(&mut std::io::stderr(), "create vertex buffer").unwrap();
+        eprintln!("create vertex buffer");
         let vertex_buffer =
             BufferHandler::from_slice(&[0, 1, 2, 3], handler.device(), BufferUsages::VERTEX);
         let index_buffer =
@@ -40,14 +45,14 @@ impl Rendered for Plane<'_> {
         (Arc::new(vertex_buffer), Some(Arc::new(index_buffer)))
     }
     fn bind_group_layout(&self, handler: &DeviceHandler) -> Arc<BindGroupLayout> {
-        writeln!(&mut std::io::stderr(), "create bind group layout").unwrap();
+        eprintln!("create bind group layout");
         Arc::new(bind_group_util::create_bind_group_layout(
             handler.device(),
             &[],
         ))
     }
     fn bind_group(&self, handler: &DeviceHandler, layout: &BindGroupLayout) -> Arc<BindGroup> {
-        writeln!(&mut std::io::stderr(), "create bind group").unwrap();
+        eprintln!("create bind group");
         Arc::new(handler.device().create_bind_group(&BindGroupDescriptor {
             label: None,
             layout,
@@ -60,7 +65,7 @@ impl Rendered for Plane<'_> {
         layout: &PipelineLayout,
         scene_desc: &SceneDescriptor,
     ) -> Arc<RenderPipeline> {
-        writeln!(&mut std::io::stderr(), "create pipeline").unwrap();
+        eprintln!("create pipeline");
         let device = handler.device();
         let source = ShaderSource::Wgsl(self.shader.into());
         let module = device.create_shader_module(ShaderModuleDescriptor {
@@ -123,40 +128,29 @@ impl Rendered for Plane<'_> {
     }
 }
 
-pub fn render_one<R: Rendered>(scene: &mut Scene, object: &R) -> Vec<u8> {
+pub fn render_one<R: Rendered>(scene: &mut Scene, object: &R) -> TestResult<Vec<u8>> {
     scene.add_object(object);
-    let res = pollster::block_on(scene.render_to_buffer())
-        .expect("GPU readback should succeed during render test");
+    let result = pollster::block_on(scene.render_to_buffer());
     scene.remove_object(object);
-    res
+    Ok(result?)
 }
 
-pub fn render_ones<'a, R: 'a + Rendered, I: IntoIterator<Item = &'a R>>(
-    scene: &mut Scene,
-    texture: &Texture,
-    object: I,
-) {
-    scene.add_objects(object);
-    scene.render(&texture.create_view(&Default::default()));
-    scene.clear_objects();
-}
-
-pub fn nontex_answer_texture(scene: &mut Scene) -> Vec<u8> {
+pub fn nontex_answer_texture(scene: &mut Scene) -> TestResult<Vec<u8>> {
     let plane = new_plane!("../shaders/plane.wgsl", "vs_main", "unicolor");
     render_one(scene, &plane)
 }
 
-pub fn random_texture(scene: &mut Scene) -> Vec<u8> {
+pub fn random_texture(scene: &mut Scene) -> TestResult<Vec<u8>> {
     let plane = new_plane!("../shaders/plane.wgsl", "vs_main", "random_texture");
     render_one(scene, &plane)
 }
 
-pub fn gradation_texture(scene: &mut Scene) -> Vec<u8> {
+pub fn gradation_texture(scene: &mut Scene) -> TestResult<Vec<u8>> {
     let plane = new_plane!("../shaders/plane.wgsl", "vs_main", "gradation_texture");
     render_one(scene, &plane)
 }
 
-pub fn init_device(instance: &Instance) -> DeviceHandler {
+pub fn init_device(instance: &Instance) -> TestResult<DeviceHandler> {
     pollster::block_on(async {
         let adapter = instance
             .request_adapter(&RequestAdapterOptions {
@@ -164,9 +158,8 @@ pub fn init_device(instance: &Instance) -> DeviceHandler {
                 compatible_surface: None,
                 force_fallback_adapter: false,
             })
-            .await
-            .unwrap();
-        writeln!(&mut std::io::stderr(), "{:?}", adapter.get_info()).unwrap();
+            .await?;
+        eprintln!("{:?}", adapter.get_info());
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 required_features: Default::default(),
@@ -176,9 +169,8 @@ pub fn init_device(instance: &Instance) -> DeviceHandler {
                 experimental_features: ExperimentalFeatures::disabled(),
                 label: None,
             })
-            .await
-            .unwrap();
-        DeviceHandler::new(adapter, device, queue)
+            .await?;
+        Ok(DeviceHandler::new(adapter, device, queue))
     })
 }
 
@@ -212,8 +204,9 @@ pub fn texture_descriptor(config: &RenderTextureConfig) -> TextureDescriptor<'st
     }
 }
 
-pub fn save_buffer<P: AsRef<std::path::Path>>(path: P, vec: &[u8], size: (u32, u32)) {
-    image::save_buffer(path, vec, size.0, size.1, image::ColorType::Rgba8).unwrap();
+pub fn save_buffer<P: AsRef<std::path::Path>>(path: P, vec: &[u8], size: (u32, u32)) -> TestResult {
+    image::save_buffer(path, vec, size.0, size.1, image::ColorType::Rgba8)?;
+    Ok(())
 }
 
 pub fn same_buffer(vec0: &[u8], vec1: &[u8]) -> bool {
@@ -229,14 +222,16 @@ pub fn count_difference(vec0: &[u8], vec1: &[u8]) -> usize {
         .count()
 }
 
-pub fn os_alt_exec_test<F: Fn(Backends, &str)>(test: F) {
+pub fn os_alt_exec_test<F>(test: F) -> TestResult
+where F: Fn(Backends, &str) -> TestResult {
     let _ = env_logger::try_init();
     if cfg!(target_os = "windows") {
-        test(Backends::VULKAN, "output/vulkan/");
-        test(Backends::DX12, "output/dx12/");
+        test(Backends::VULKAN, "output/vulkan/")?;
+        test(Backends::DX12, "output/dx12/")?;
     } else if cfg!(target_os = "macos") {
-        test(Backends::METAL, "output/");
+        test(Backends::METAL, "output/")?;
     } else {
-        test(Backends::VULKAN, "output/");
+        test(Backends::VULKAN, "output/")?;
     }
+    Ok(())
 }

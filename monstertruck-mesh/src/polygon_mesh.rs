@@ -1,5 +1,8 @@
 use crate::errors::Error;
-use crate::*;
+use crate::{
+    Attributes, BoundingBox, Deserialize, Faces, Invertible, Matrix4, Point3, PolygonMesh,
+    StandardAttributes, Transformed, TransformedAttributes, Vector2, Vector3,
+};
 use std::fmt::Debug;
 
 impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
@@ -14,43 +17,33 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
     pub fn new(attributes: A, faces: Faces<V>) -> Result<Self, Error<V>> {
         faces
             .is_compatible(&attributes)
-            .map(|_| Self::new_unchecked(attributes, faces))
+            .map(|()| Self::new_unchecked(attributes, faces))
     }
 
     /// constructor without boundary check
-    #[inline(always)]
+    #[inline]
     pub const fn new_unchecked(attributes: A, faces: Faces<V>) -> Self {
         Self { attributes, faces }
     }
 
-    /// Constructor that validates in debug builds and preserves the same fallible API in release builds.
-    #[inline(always)]
-    pub fn debug_new(attributes: A, faces: Faces<V>) -> Result<Self, Error<V>> {
-        if cfg!(debug_assertions) {
-            Self::new(attributes, faces)
-        } else {
-            Ok(Self::new_unchecked(attributes, faces))
-        }
-    }
-
     /// Returns attributes
-    #[inline(always)]
+    #[inline]
     pub const fn attributes(&self) -> &A { &self.attributes }
 
     /// Returns the faces of the polygon.
-    #[inline(always)]
+    #[inline]
     pub const fn faces(&self) -> &Faces<V> { &self.faces }
 
     /// Returns the vector of all triangles of the polygon.
-    #[inline(always)]
+    #[inline]
     pub const fn tri_faces(&self) -> &Vec<[V; 3]> { &self.faces.tri_faces }
 
     /// Returns the vector of all quadrangles.
-    #[inline(always)]
+    #[inline]
     pub const fn quad_faces(&self) -> &Vec<[V; 4]> { &self.faces.quad_faces }
 
     /// Returns the vector of n-gons (n > 4).
-    #[inline(always)]
+    #[inline]
     pub const fn other_faces(&self) -> &Vec<Vec<V>> { &self.faces.other_faces }
 
     /// Returns the iterator of the slice.
@@ -58,7 +51,7 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
     /// By the internal optimization, this iterator does not runs in the simple order
     /// in which they are registered, but runs order: triangle, square, and the others.
     /// cf: [`Faces::face_iter`](./struct.Faces.html#method.face_iter)
-    #[inline(always)]
+    #[inline]
     pub fn face_iter(&self) -> impl Iterator<Item = &[V]> { self.faces.face_iter() }
 
     /// Returns the iterator of the slice.
@@ -66,10 +59,10 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
     /// By the internal optimization, this iterator does not runs in the simple order
     /// in which they are registered, but runs order: triangle, square, and the others.
     /// cf: [`Faces::face_iter`](./struct.Faces.html#method.face_iter)
-    #[inline(always)]
+    #[inline]
     pub fn face_iter_mut(&mut self) -> impl Iterator<Item = &mut [V]> { self.faces.face_iter_mut() }
     /// Creates an editor that performs boundary checking on dropped.
-    #[inline(always)]
+    #[inline]
     pub fn editor(&mut self) -> PolygonMeshEditor<'_, V, A>
     where A: Clone {
         let backup = Some((self.attributes.clone(), self.faces.clone()));
@@ -81,8 +74,8 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
         }
     }
     /// Creates an editor that does NOT perform boundary checking on dropped.
-    #[inline(always)]
-    pub fn uncheck_editor(&mut self) -> PolygonMeshEditor<'_, V, A> {
+    #[inline]
+    pub const fn uncheck_editor(&mut self) -> PolygonMeshEditor<'_, V, A> {
         PolygonMeshEditor {
             attributes: &mut self.attributes,
             faces: &mut self.faces,
@@ -90,41 +83,33 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
             bound_check: false,
         }
     }
-    /// Creates an editor that performs boundary checking on dropped ONLY in debug build.
-    #[inline(always)]
-    pub fn debug_editor(&mut self) -> PolygonMeshEditor<'_, V, A>
-    where A: Clone {
-        if cfg!(debug_assertions) {
-            self.editor()
-        } else {
-            self.uncheck_editor()
-        }
-    }
 }
 
 impl PolygonMesh {
     /// Returns a polygon mesh merged `self` and `mesh`.
-    pub fn merge(&mut self, mut mesh: PolygonMesh) {
+    pub fn merge(&mut self, mut mesh: Self) {
         let n_pos = self.positions().len();
         let n_uv = self.uv_coords().len();
         let n_nor = self.normals().len();
-        mesh.faces.face_iter_mut().for_each(move |face| {
-            face.iter_mut().for_each(|v| {
-                v.pos += n_pos;
-                v.uv = v.uv.map(|uv| uv + n_uv);
-                v.nor = v.nor.map(|nor| nor + n_nor);
-            })
-        });
+        for face in mesh.faces.face_iter_mut() {
+            for vertex in face {
+                vertex.pos += n_pos;
+                vertex.uv = vertex.uv.map(|uv| uv + n_uv);
+                vertex.nor = vertex.nor.map(|nor| nor + n_nor);
+            }
+        }
         self.attributes.positions.extend(mesh.attributes.positions);
         self.attributes.uv_coords.extend(mesh.attributes.uv_coords);
         self.attributes.normals.extend(mesh.attributes.normals);
         self.faces.naive_concat(mesh.faces);
     }
     /// Creates the bounding box of the polygon mesh.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn bounding_box(&self) -> BoundingBox<Point3> { self.positions().iter().collect() }
     /// Returns a polygon mesh with only positions information.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn to_positions_mesh(&self) -> PolygonMesh<usize, Vec<Point3>> {
         let faces = self.faces();
         let tri_faces = faces
@@ -154,12 +139,12 @@ impl PolygonMesh {
 }
 
 impl Invertible for PolygonMesh {
-    #[inline(always)]
+    #[inline]
     fn invert(&mut self) {
         self.attributes.normals.iter_mut().for_each(|n| *n = -*n);
         self.faces.invert();
     }
-    #[inline(always)]
+    #[inline]
     fn inverse(&self) -> Self {
         Self {
             attributes: StandardAttributes {
@@ -174,53 +159,56 @@ impl Invertible for PolygonMesh {
 
 impl PolygonMesh {
     /// Returns the vector of all positions.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn positions(&self) -> &Vec<Point3> { &self.attributes.positions }
 
     /// Returns the mutable slice of all positions.
-    #[inline(always)]
+    #[inline]
     pub fn positions_mut(&mut self) -> &mut [Point3] { &mut self.attributes.positions }
 
     /// Adds a position.
-    #[inline(always)]
+    #[inline]
     pub fn push_position(&mut self, position: Point3) { self.attributes.positions.push(position) }
 
     /// Extend positions by iterator.
-    #[inline(always)]
+    #[inline]
     pub fn extend_positions<I: IntoIterator<Item = Point3>>(&mut self, iter: I) {
-        self.attributes.positions.extend(iter)
+        self.attributes.positions.extend(iter);
     }
 
     /// Returns the vector of all uv (texture) coordinates.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn uv_coords(&self) -> &Vec<Vector2> { &self.attributes.uv_coords }
 
     /// Returns the mutable slice of all uv (texture) coordinates.
-    #[inline(always)]
+    #[inline]
     pub fn uv_coords_mut(&mut self) -> &mut [Vector2] { &mut self.attributes.uv_coords }
 
     /// Adds a uv (texture) coordinate.
-    #[inline(always)]
+    #[inline]
     pub fn push_uv_coord(&mut self, uv_coord: Vector2) { self.attributes.uv_coords.push(uv_coord) }
 
     /// Extend uv (texture) coordinates by iterator.
-    #[inline(always)]
+    #[inline]
     pub fn extend_uv_coords<I: IntoIterator<Item = Vector2>>(&mut self, iter: I) {
-        self.attributes.uv_coords.extend(iter)
+        self.attributes.uv_coords.extend(iter);
     }
 
     /// Returns the vector of all normals.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn normals(&self) -> &Vec<Vector3> { &self.attributes.normals }
 
     /// Returns the mutable slice of all normals.
-    #[inline(always)]
+    #[inline]
     pub fn normals_mut(&mut self) -> &mut [Vector3] { &mut self.attributes.normals }
 
     /// Extend normals by iterator
-    #[inline(always)]
+    #[inline]
     pub fn extend_normals<I: IntoIterator<Item = Vector3>>(&mut self, iter: I) {
-        self.attributes.normals.extend(iter)
+        self.attributes.normals.extend(iter);
     }
 }
 
@@ -251,9 +239,9 @@ where
 }
 
 impl<V: Clone, A: TransformedAttributes> Transformed<Matrix4> for PolygonMesh<V, A> {
-    #[inline(always)]
+    #[inline]
     fn transform_by(&mut self, trans: Matrix4) { self.attributes.transform_by(trans); }
-    #[inline(always)]
+    #[inline]
     fn transformed(&self, trans: Matrix4) -> Self {
         Self {
             attributes: self.attributes.transformed(trans),
@@ -337,7 +325,7 @@ pub struct PolygonMeshEditor<'a, V: Copy + Debug, A: Attributes<V>> {
 }
 
 impl<V: Copy + Debug, A: Attributes<V>> PolygonMeshEditor<'_, V, A> {
-    #[inline(always)]
+    #[inline]
     fn is_compatible(&self) -> Result<(), Error<V>> { self.faces.is_compatible(&*self.attributes) }
 
     fn rollback(&mut self) {
@@ -350,7 +338,9 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMeshEditor<'_, V, A> {
     /// Finishes editing with boundary validation.
     ///
     /// Invalid edits are rolled back before the validation error is returned.
-    #[inline(always)]
+    #[inline]
+    /// # Errors
+    /// Returns an out-of-range error when edited faces reference missing attributes; the edit is rolled back first.
     pub fn try_drop(mut self) -> Result<(), Error<V>> {
         self.bound_check = false;
         match self.is_compatible() {
@@ -367,7 +357,7 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMeshEditor<'_, V, A> {
 }
 
 impl<V: Copy + Debug, A: Attributes<V>> Drop for PolygonMeshEditor<'_, V, A> {
-    #[inline(always)]
+    #[inline]
     fn drop(&mut self) {
         if self.bound_check && self.is_compatible().is_err() {
             self.rollback();
@@ -398,7 +388,7 @@ mod totality_tests {
     fn checked_constructor_rejects_out_of_range_vertex() {
         let result = PolygonMesh::new(
             StandardAttributes {
-                positions: vec![Point3::origin()],
+                positions: vec![Point3::new(0.0, 0.0, 0.0)],
                 ..Default::default()
             },
             Faces::from_iter([[0usize, 1, 2]]),

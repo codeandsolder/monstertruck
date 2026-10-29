@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BoundingBox, ElementWise, Faces, MetricSpace, Point3, PolygonMesh, PolygonMeshEditor,
+    StandardAttributes, Vector2, Vector3, Vertex,
+};
 use rustc_hash::FxHashMap as HashMap;
 use std::iter::Iterator;
 use std::ops::{Div, Mul};
@@ -116,7 +119,7 @@ fn all_nor_mut(faces: &mut Faces) -> impl Iterator<Item = &mut usize> {
 
 impl OptimizingFilter for PolygonMesh {
     fn remove_unused_attrs(&mut self) -> &mut Self {
-        let mut mesh = self.debug_editor();
+        let mut mesh = self.editor();
         let PolygonMeshEditor {
             attributes:
                 StandardAttributes {
@@ -141,7 +144,7 @@ impl OptimizingFilter for PolygonMesh {
     }
 
     fn remove_degenerate_faces(&mut self) -> &mut Self {
-        let mesh = self.debug_editor();
+        let mesh = self.editor();
         let mut faces = Faces::default();
         for tri in mesh.faces.tri_faces() {
             if !degenerate_triangle(*tri) {
@@ -164,7 +167,7 @@ impl OptimizingFilter for PolygonMesh {
     }
 
     fn put_together_same_attrs(&mut self, tol: f64) -> &mut Self {
-        let mut mesh = self.debug_editor();
+        let mut mesh = self.editor();
         let PolygonMeshEditor {
             attributes:
                 StandardAttributes {
@@ -200,15 +203,13 @@ fn sub_remove_unused_attrs<'a, I: Iterator<Item = &'a mut usize>>(
     let mut new2old = Vec::new();
     let mut old2new = vec![None; old_len];
     for idx in iter {
-        *idx = match old2new[*idx] {
-            Some(k) => k,
-            None => {
-                let k = new2old.len();
-                new2old.push(*idx);
-                old2new[*idx] = Some(k);
-                k
-            }
-        };
+        let old_idx = *idx;
+        *idx = old2new[old_idx].unwrap_or_else(|| {
+            let new_idx = new2old.len();
+            new2old.push(old_idx);
+            old2new[old_idx] = Some(new_idx);
+            new_idx
+        });
     }
     new2old
 }
@@ -309,7 +310,7 @@ fn centralize<T: SameAttr>(
         let center = component
             .iter()
             .fold(T::zero(), |sum, j| sum.add_element_wise(attrs[*j]))
-            / component.len() as f64;
+            / crate::count_as_f64(component.len());
         let (mut mindist, mut mindx) = (f64::INFINITY, 0);
         component.iter().copied().for_each(|i| {
             let dist = attrs[i].distance2(center);
@@ -318,14 +319,14 @@ fn centralize<T: SameAttr>(
                 mindx = i;
             }
         });
-        component.into_iter().for_each(|i| {
+        for i in component {
             res[i] = mindx;
-        });
+        }
     });
     res
 }
 
-fn degenerate_triangle(tri: [Vertex; 3]) -> bool {
+const fn degenerate_triangle(tri: [Vertex; 3]) -> bool {
     tri[0].pos == tri[1].pos || tri[1].pos == tri[2].pos || tri[2].pos == tri[0].pos
 }
 
@@ -335,7 +336,7 @@ enum QuadrangleType {
     TotallyDegenerate,
 }
 
-fn degenerate_quadrangle(quad: [Vertex; 4]) -> QuadrangleType {
+const fn degenerate_quadrangle(quad: [Vertex; 4]) -> QuadrangleType {
     if (quad[0].pos == quad[2].pos || quad[1].pos == quad[3].pos)
         || (quad[0].pos == quad[1].pos && quad[2].pos == quad[3].pos)
         || quad[1].pos == quad[2].pos && quad[3].pos == quad[0].pos

@@ -3,7 +3,7 @@ use crate::*;
 use itertools::Itertools;
 use std::f64::consts::PI;
 
-pub(super) fn circle_arc_by_three_points(
+pub fn circle_arc_by_three_points(
     point0: Point3,
     point1: Point3,
     transit: Point3,
@@ -40,7 +40,7 @@ pub(super) fn circle_arc_by_three_points(
 /// - [`Error::CircularArcTangentParallelToChord`] if `tangent` is
 ///   parallel (or anti-parallel) to `point1 - point0` -- the plane of
 ///   the arc would be under-determined and the radius infinite.
-pub(super) fn try_circle_arc_by_start_tangent(
+pub fn try_circle_arc_by_start_tangent(
     point0: Point3,
     point1: Point3,
     tangent: Vector3,
@@ -69,11 +69,16 @@ pub(super) fn try_circle_arc_by_start_tangent(
 fn circum_center(pt0: Point3, pt1: Point3, pt2: Point3) -> Point3 {
     let (vec0, vec1) = (pt1 - pt0, pt2 - pt0);
     let (a2, ab, b2) = (vec0.dot(vec0), vec0.dot(vec1), vec1.dot(vec1));
-    let (det, u, v) = (a2 * b2 - ab * ab, a2 * b2 - ab * b2, a2 * b2 - ab * a2);
+    let det = ab.mul_add(-ab, a2 * b2);
+    // Solving the 2×2 Gram system for the circumcenter coefficients gives
+    // b²(a² - a·b) and a²(b² - a·b). Factoring the shared terms makes
+    // the symmetry explicit and avoids the easy-to-misread product grouping.
+    let u = (a2 - ab) * b2;
+    let v = (b2 - ab) * a2;
     pt0 + u / (2.0 * det) * vec0 + v / (2.0 * det) * vec1
 }
 
-pub(super) fn circle_arc(
+pub fn circle_arc(
     point: Point3,
     origin: Point3,
     axis: Vector3,
@@ -108,21 +113,26 @@ fn take_one_axis_by_normal(n: Vector3) -> Vector3 {
     }
 }
 
-pub(super) fn attach_plane(mut pts: Vec<Vec<Point3>>) -> Option<Plane> {
+pub fn attach_plane(mut pts: Vec<Vec<Point3>>) -> Option<Plane> {
+    let point_count = pts.iter().map(Vec::len).sum::<usize>();
+    if point_count == 0 {
+        return None;
+    }
     let center = pts
         .iter()
         .flatten()
         .fold(Point3::origin(), |sum, pt| sum + pt.to_vec())
-        / pts.len() as f64;
+        / crate::usize_to_f64(point_count);
     let normal = pts
         .iter()
         .flat_map(|vec| vec.iter().circular_tuple_windows())
         .fold(Vector3::zero(), |sum, (p0, p1)| {
             sum + (p0 - center).cross(p1 - center)
         });
-    let n = match normal.so_small() {
-        true => return None,
-        false => normal.normalize(),
+    let n = if normal.so_small() {
+        return None;
+    } else {
+        normal.normalize()
     };
     let a = take_one_axis_by_normal(n);
     let mat: Matrix4 = Matrix3::from_cols(a, n.cross(a), n).into();
@@ -135,9 +145,10 @@ pub(super) fn attach_plane(mut pts: Vec<Vec<Point3>>) -> Option<Plane> {
     if !diag[2].so_small() {
         return None;
     }
-    let (max, min) = match closed_polyline_orientation(&pts) {
-        true => (bnd_box.max(), bnd_box.min()),
-        false => (bnd_box.min(), bnd_box.max()),
+    let (max, min) = if closed_polyline_orientation(&pts) {
+        (bnd_box.max(), bnd_box.min())
+    } else {
+        (bnd_box.min(), bnd_box.max())
     };
     let plane = Plane::new(
         Point3::new(min[0], min[1], min[2]),
@@ -155,7 +166,7 @@ impl<T: Clone> GeometricMapping<T> for () {
     #[inline]
     fn mapping(self) -> impl Fn(&T) -> T { Clone::clone }
 }
-impl<T: Transformed<Matrix4>> GeometricMapping<T> for Matrix4 {
+impl<T: Transformed<Self>> GeometricMapping<T> for Matrix4 {
     #[inline]
     fn mapping(self) -> impl Fn(&T) -> T { move |t| t.transformed(self) }
 }

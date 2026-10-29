@@ -4,7 +4,7 @@
 #[macro_export]
 macro_rules! impl_render_id {
     ($($id_member: tt).*) => {
-        #[inline(always)]
+        #[inline]
         fn render_id(&self) -> RenderId { self.$($id_member).* }
     };
 }
@@ -15,7 +15,7 @@ macro_rules! impl_render_id {
 #[macro_export]
 macro_rules! derive_render_id {
     ($($id_member: tt).*) => {
-        #[inline(always)]
+        #[inline]
         fn render_id(&self) -> RenderId { self.$($id_member).*.render_id() }
     };
 }
@@ -26,7 +26,7 @@ macro_rules! derive_render_id {
 #[macro_export]
 macro_rules! derive_vertex_buffer {
     ($($id_member: tt).*) => {
-        #[inline(always)]
+        #[inline]
         fn vertex_buffer(
             &self,
             device_handler: &DeviceHandler,
@@ -43,7 +43,7 @@ macro_rules! derive_vertex_buffer {
 #[macro_export]
 macro_rules! derive_bind_group_layout {
     ($($id_member: tt).*) => {
-        #[inline(always)]
+        #[inline]
         fn bind_group_layout(&self, device_handler: &DeviceHandler) -> Arc<BindGroupLayout> {
             self.$($id_member)*.bind_group_layout(device_handler)
         }
@@ -56,7 +56,7 @@ macro_rules! derive_bind_group_layout {
 #[macro_export]
 macro_rules! derive_bind_group {
     ($($id_member: tt).*) => {
-        #[inline(always)]
+        #[inline]
         fn bind_group(
             &self,
             device_handler: &DeviceHandler,

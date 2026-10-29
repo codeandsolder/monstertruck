@@ -1,13 +1,15 @@
 //! Demonstrates `BsplineSurface::skin` -- creating a lofted surface through
 //! multiple section curves.
 
-use monstertruck_geometry::prelude::*;
+use monstertruck_geometry::prelude::{
+    BsplineCurve, BsplineSurface, KnotVector, ParametricSurface, Point3,
+};
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Three quadratic arcs at different y-positions.
     let sections: Vec<BsplineCurve<Point3>> = (0..3)
         .map(|i| {
-            let y = i as f64 * 2.0;
+            let y = f64::from(i) * 2.0;
             BsplineCurve::new_unchecked(
                 KnotVector::bezier_knot(2),
                 vec![
@@ -35,9 +37,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Evaluate along the apex of the arcs (u=0.5).
     println!("\nApex line (u=0.5):");
     for i in 0..=4 {
-        let v = i as f64 / 4.0;
+        let v = f64::from(i) / 4.0;
         let pt = surface.subs(0.5, v);
-        println!("  v={:.2}: ({:.2}, {:.2}, {:.2})", v, pt.x, pt.y, pt.z);
+        println!("  v={v:.2}: ({:.2}, {:.2}, {:.2})", pt.x, pt.y, pt.z);
     }
     Ok(())
 }

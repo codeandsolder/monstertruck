@@ -130,11 +130,11 @@ fn special_cylinder_model() -> Result<Shell> {
     );
     let surface: Surface = Processor::new(surface_row).into();
 
-    let face2 = Face::try_new(
+    let face2 = Face::new(
         vec![vec![edge2, edge1.clone(), edge4.inverse(), edge0.inverse()].into()],
         surface.clone(),
     )?;
-    let face3 = Face::try_new(
+    let face3 = Face::new(
         vec![vec![edge3, edge0, edge5.inverse(), edge1.inverse()].into()],
         surface,
     )?;

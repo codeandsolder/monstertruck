@@ -18,11 +18,11 @@ pub struct Edge<'a, EE> {
     nodes: (NodeIndex, NodeIndex),
     entity: &'a EE,
 }
-impl<'a, EE> Clone for Edge<'a, EE> {
+impl<EE> Clone for Edge<'_, EE> {
     fn clone(&self) -> Self { *self }
 }
 
-impl<'a, EE> Copy for Edge<'a, EE> {}
+impl<EE> Copy for Edge<'_, EE> {}
 
 fn edge_closure<EE>(index: NodeIndex) -> impl Fn(&EdgeData<EE>) -> Edge<'_, EE> {
     move |edge| Edge {
@@ -57,9 +57,9 @@ pub struct NodeData<NE, EE> {
 impl<NE, EE> NodeData<NE, EE> {
     #[inline]
     fn new(entity: NE) -> Self {
-        NodeData {
-            edges: Default::default(),
-            parents: Default::default(),
+        Self {
+            edges: Vec::default(),
+            parents: BTreeSet::default(),
             entity,
         }
     }
@@ -100,13 +100,13 @@ pub struct Node<'a, NE, EE> {
     data: &'a NodeData<NE, EE>,
 }
 
-impl<'a, NE, EE> Clone for Node<'a, NE, EE> {
+impl<NE, EE> Clone for Node<'_, NE, EE> {
     fn clone(&self) -> Self { *self }
 }
 
-impl<'a, NE, EE> Copy for Node<'a, NE, EE> {}
+impl<NE, EE> Copy for Node<'_, NE, EE> {}
 
-fn node<NE, EE>((index, data): (usize, &NodeData<NE, EE>)) -> Node<'_, NE, EE> {
+const fn node<NE, EE>((index, data): (usize, &NodeData<NE, EE>)) -> Node<'_, NE, EE> {
     Node {
         index: NodeIndex(index),
         data,
@@ -154,7 +154,7 @@ pub struct NodeMut<'a, NE, EE> {
     data: &'a mut NodeData<NE, EE>,
 }
 
-fn node_mut<NE, EE>((index, data): (usize, &mut NodeData<NE, EE>)) -> NodeMut<'_, NE, EE> {
+const fn node_mut<NE, EE>((index, data): (usize, &mut NodeData<NE, EE>)) -> NodeMut<'_, NE, EE> {
     NodeMut {
         index: NodeIndex(index),
         data,
@@ -204,10 +204,12 @@ impl<NE, EE> Default for Dag<NE, EE> {
 impl<NE, EE> Dag<NE, EE> {
     /// Constructor
     #[inline]
+    #[must_use]
     pub const fn new() -> Self { Self { nodes: Vec::new() } }
 
     /// Constructs a new dag with capacity for `n` values pre-allocated.
     #[inline]
+    #[must_use]
     pub fn with_capacity(n: usize) -> Self {
         Self {
             nodes: Vec::with_capacity(n),
@@ -216,6 +218,7 @@ impl<NE, EE> Dag<NE, EE> {
 
     /// Returns `true` if the graph contains no nodes.
     #[inline]
+    #[must_use]
     pub const fn is_empty(&self) -> bool { self.nodes.is_empty() }
 
     /// Returns the number of the nodes.
@@ -227,6 +230,7 @@ impl<NE, EE> Dag<NE, EE> {
     /// assert_eq!(dag.len(), 5);
     /// ```
     #[inline]
+    #[must_use]
     pub const fn len(&self) -> usize { self.nodes.len() }
 
     /// Returns an iterator over all node indices.
@@ -361,9 +365,12 @@ impl<NE, EE> Dag<NE, EE> {
         self.nodes
             .iter()
             .enumerate()
-            .filter_map(move |(index, data)| match data.parents.is_empty() {
-                true => Some(node((index, data))),
-                false => None,
+            .filter_map(move |(index, data)| {
+                if data.parents.is_empty() {
+                    Some(node((index, data)))
+                } else {
+                    None
+                }
             })
     }
 
@@ -390,9 +397,12 @@ impl<NE, EE> Dag<NE, EE> {
         self.nodes
             .par_iter()
             .enumerate()
-            .filter_map(move |(index, data)| match data.parents.is_empty() {
-                true => Some(node((index, data))),
-                false => None,
+            .filter_map(move |(index, data)| {
+                if data.parents.is_empty() {
+                    Some(node((index, data)))
+                } else {
+                    None
+                }
             })
     }
 
@@ -415,9 +425,12 @@ impl<NE, EE> Dag<NE, EE> {
         self.nodes
             .iter_mut()
             .enumerate()
-            .filter_map(move |(index, data)| match data.parents.is_empty() {
-                true => Some(node_mut((index, data))),
-                false => None,
+            .filter_map(move |(index, data)| {
+                if data.parents.is_empty() {
+                    Some(node_mut((index, data)))
+                } else {
+                    None
+                }
             })
     }
 
@@ -444,9 +457,12 @@ impl<NE, EE> Dag<NE, EE> {
         self.nodes
             .par_iter_mut()
             .enumerate()
-            .filter_map(move |(index, data)| match data.parents.is_empty() {
-                true => Some(node_mut((index, data))),
-                false => None,
+            .filter_map(move |(index, data)| {
+                if data.parents.is_empty() {
+                    Some(node_mut((index, data)))
+                } else {
+                    None
+                }
             })
     }
 
@@ -482,6 +498,7 @@ impl<NE, EE> Dag<NE, EE> {
     /// Returns the node corresponding to `index`, or `None` if the index is
     /// out of range (for example, an index obtained from a larger graph).
     #[inline]
+    #[must_use]
     pub fn node(&self, index: NodeIndex) -> Option<Node<'_, NE, EE>> {
         self.nodes.get(index.0).map(|data| Node { index, data })
     }
@@ -576,7 +593,7 @@ impl<NE, EE> Dag<NE, EE> {
     pub fn all_edges<'a>(
         &'a self,
     ) -> AllEdges<'a, NE, EE, impl FnMut(&'a EdgeData<EE>) -> Edge<'a, EE>> {
-        self.all_nodes().flat_map(move |node| node.edges())
+        self.all_nodes().flat_map(Node::edges)
     }
 
     /// Returns a parallel iterator on the all edges.
@@ -600,7 +617,7 @@ impl<NE, EE> Dag<NE, EE> {
     where
         NE: Sync,
         EE: Sync, {
-        self.par_all_nodes().flat_map(move |node| node.par_edges())
+        self.par_all_nodes().flat_map(Node::par_edges)
     }
 
     /// Returns an iterator for all paths with the top = `self`.
@@ -691,6 +708,7 @@ impl<NE, EE> Dag<NE, EE> {
     /// assert!(dag.has_path(a[0], a[4]));
     /// ```
     #[inline]
+    #[must_use]
     pub fn has_path(&self, from: NodeIndex, to: NodeIndex) -> bool {
         if self.node(from).is_none() || self.node(to).is_none() {
             return false;
@@ -709,7 +727,8 @@ impl<NE, EE> Dag<NE, EE> {
         for &parent in to_node.parents() {
             if seen.contains(&parent) {
                 continue;
-            } else if self.sub_has_path(from, parent, seen) {
+            }
+            if self.sub_has_path(from, parent, seen) {
                 return true;
             }
         }
@@ -974,7 +993,7 @@ impl<NE, EE> Dag<NE, EE> {
                 .into_iter()
                 .map(&mut edge_data_map)
                 .collect(),
-            parents: node_data.parents.clone(),
+            parents: node_data.parents,
         };
 
         Dag {
@@ -1031,7 +1050,7 @@ impl<NE, EE> Dag<NE, EE> {
         let node_data_map = move |node_data: NodeData<NE, EE>| NodeData {
             entity: node_map(node_data.entity),
             edges: node_data.edges.into_iter().map(&edge_data_map).collect(),
-            parents: node_data.parents.clone(),
+            parents: node_data.parents,
         };
 
         Dag {
@@ -1062,7 +1081,8 @@ fn sub_has_cycle(
     for &NodeIndex(child) in &adjacency[cursor] {
         if finished[child] {
             continue;
-        } else if seen[child] || sub_has_cycle(child, adjacency, seen, finished) {
+        }
+        if seen[child] || sub_has_cycle(child, adjacency, seen, finished) {
             return true;
         }
     }
@@ -1073,15 +1093,18 @@ fn sub_has_cycle(
 impl<'a, NE, EE> Node<'a, NE, EE> {
     /// Returns node index
     #[inline]
-    pub fn index(self) -> NodeIndex { self.index }
+    #[must_use]
+    pub const fn index(self) -> NodeIndex { self.index }
     /// Returns entity of node.
     #[inline]
-    pub fn entity(self) -> &'a NE { &self.data.entity }
+    #[must_use]
+    pub const fn entity(self) -> &'a NE { &self.data.entity }
     /// Returns the `index`th edge.
     ///
-    /// # Panics
-    /// `index` must be smaller than the number of edges from `self`.
+    ///
+    /// Returns `None` when `index` is outside the node's edge list.
     #[inline]
+    #[must_use]
     pub fn edge(self, index: usize) -> Option<Edge<'a, EE>> {
         Some(edge_closure(self.index)(self.data.edges.get(index)?))
     }
@@ -1098,7 +1121,8 @@ impl<'a, NE, EE> Node<'a, NE, EE> {
     }
     /// Returns parents from `self`.
     #[inline]
-    pub fn parents(self) -> &'a BTreeSet<NodeIndex> { &self.data.parents }
+    #[must_use]
+    pub const fn parents(self) -> &'a BTreeSet<NodeIndex> { &self.data.parents }
 
     /// Returns `true` if `self` has no parents.
     /// # Examples
@@ -1111,6 +1135,11 @@ impl<'a, NE, EE> Node<'a, NE, EE> {
     /// assert!(dag.node(a[1]).is_some_and(|node| !node.is_top()));
     /// ```
     #[inline]
+    #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "BTreeSet::is_empty is not a stable const fn on the Rust 1.99.1 toolchain"
+    )]
     pub fn is_top(self) -> bool { self.data.parents.is_empty() }
 
     /// Returns `true` if `self` has no child.
@@ -1124,16 +1153,18 @@ impl<'a, NE, EE> Node<'a, NE, EE> {
     /// assert!(dag.node(a[0]).is_some_and(|node| !node.is_terminal()));
     /// ```
     #[inline]
-    pub fn is_terminal(self) -> bool { self.data.edges.is_empty() }
+    #[must_use]
+    pub const fn is_terminal(self) -> bool { self.data.edges.is_empty() }
 }
 
 impl<'a, NE, EE> NodeMut<'a, NE, EE> {
     /// Returns node index
     #[inline]
-    pub fn index(&self) -> NodeIndex { self.index }
+    #[must_use]
+    pub const fn index(&self) -> NodeIndex { self.index }
     /// Returns entity of node.
     #[inline]
-    pub fn entity(&mut self) -> &mut NE { &mut self.data.entity }
+    pub const fn entity(&mut self) -> &mut NE { &mut self.data.entity }
     /// Returns the `index`th edge.
     pub fn edge(&'a mut self, index: usize) -> Option<EdgeMut<'a, EE>> {
         Some(edge_mut_closure(self.index)(
@@ -1171,15 +1202,22 @@ impl<'a, NE, EE> NodeMut<'a, NE, EE> {
     }
     /// Returns parents from `self`.
     #[inline]
-    pub fn parents(&'a self) -> &'a BTreeSet<NodeIndex> { &self.data.parents }
+    #[must_use]
+    pub const fn parents(&'a self) -> &'a BTreeSet<NodeIndex> { &self.data.parents }
 
     /// Returns `true` if `self` has no parents.
     #[inline]
+    #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "BTreeSet::is_empty is not a stable const fn on the Rust 1.99.1 toolchain"
+    )]
     pub fn is_top(&self) -> bool { self.data.parents.is_empty() }
 
     /// Returns `true` if `self` has no child.
     #[inline]
-    pub fn is_terminal(&self) -> bool { self.data.edges.is_empty() }
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool { self.data.edges.is_empty() }
 }
 
 impl<'a, EE> Edge<'a, EE> {
@@ -1194,7 +1232,8 @@ impl<'a, EE> Edge<'a, EE> {
     /// assert_eq!(edge.nodes(), (a[0], a[1]));
     /// ```
     #[inline]
-    pub fn nodes(self) -> (NodeIndex, NodeIndex) { self.nodes }
+    #[must_use]
+    pub const fn nodes(self) -> (NodeIndex, NodeIndex) { self.nodes }
     /// Returns entity
     /// # Examples
     /// ```
@@ -1206,7 +1245,8 @@ impl<'a, EE> Edge<'a, EE> {
     /// assert_eq!(edge.entity(), &3);
     /// ```
     #[inline]
-    pub fn entity(self) -> &'a EE { self.entity }
+    #[must_use]
+    pub const fn entity(self) -> &'a EE { self.entity }
 }
 
 impl<'a, EE> EdgeMut<'a, EE> {
@@ -1222,7 +1262,8 @@ impl<'a, EE> EdgeMut<'a, EE> {
     /// assert_eq!(edge.nodes(), (a[0], a[1]));
     /// ```
     #[inline]
-    pub fn nodes(&self) -> (NodeIndex, NodeIndex) { self.nodes }
+    #[must_use]
+    pub const fn nodes(&self) -> (NodeIndex, NodeIndex) { self.nodes }
     /// Returns entity
     /// # Examples
     /// ```
@@ -1243,12 +1284,13 @@ impl<'a, EE> EdgeMut<'a, EE> {
     ///     .is_some_and(|edge| edge.entity() == &5));
     /// ```
     #[inline]
-    pub fn entity(&'a mut self) -> &'a mut EE { self.entity }
+    pub const fn entity(&'a mut self) -> &'a mut EE { self.entity }
 }
 
 impl<'a, NE, EE> Path<'a, NE, EE> {
     /// Returns nodes of path.
     #[inline]
+    #[must_use]
     pub fn nodes(&self) -> &[Node<'a, NE, EE>] { &self.nodes }
     /// Returns an iterator of node indices.
     #[inline]
@@ -1257,9 +1299,11 @@ impl<'a, NE, EE> Path<'a, NE, EE> {
     }
     /// Returns nodes of path.
     #[inline]
+    #[must_use]
     pub fn edges(&self) -> &[Edge<'a, EE>] { &self.edges }
     /// Returns the terminal node
     #[inline]
+    #[must_use]
     pub fn terminal_node(&'a self) -> Option<Node<'a, NE, EE>> { self.nodes.last().copied() }
 }
 
@@ -1269,7 +1313,7 @@ struct PathIndices<'a, NE, EE> {
     edges: Vec<usize>,
 }
 
-impl<'a, NE, EE> Clone for PathIndices<'a, NE, EE> {
+impl<NE, EE> Clone for PathIndices<'_, NE, EE> {
     fn clone(&self) -> Self {
         Self {
             nodes: self.nodes.clone(),

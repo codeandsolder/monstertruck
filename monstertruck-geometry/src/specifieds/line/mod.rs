@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    Bound, BoundedCurve, BsplineCurve, CurveParameter, Cut, EuclideanSpace, InnerSpace, Invertible,
+    KnotVector, Line, Matrix2, One, ParameterDivision1D, ParameterRange, ParametricCurve, Point2,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SquareMatrix, ToSameGeometry,
+    Tolerance, Transform, Transformed, Zero,
+};
 use monstertruck_core::cgmath64::control_point::ControlPoint;
 
 impl<P: Copy> Line<P> {
@@ -78,7 +83,7 @@ impl Line<Point2> {
     /// assert_near!(line1.subs(t), Point2::new(6.0, 2.0));
     /// assert_near!(p, Point2::new(6.0, 2.0));
     /// ```
-    /// # Failures
+    /// # Errors
     /// Returns `None` if two lines are parallel.
     /// ```
     /// use monstertruck_geometry::prelude::*;
@@ -86,7 +91,8 @@ impl Line<Point2> {
     /// let line1 = Line(Point2::new(-1.0, 0.0), Point2::new(8.0, 3.0));
     /// assert!(line0.intersection(line1).is_none());
     /// ```
-    pub fn intersection(self, other: Line<Point2>) -> Option<(f64, f64, Point2)> {
+    #[must_use]
+    pub fn intersection(self, other: Self) -> Option<(f64, f64, Point2)> {
         let mat = Matrix2::from_cols(self.1 - self.0, other.0 - other.1);
         let v = other.0 - self.0;
         let params = mat.invert().map(|inv| inv * v)?;
@@ -116,7 +122,9 @@ impl<P: ControlPoint<f64>> ParametricCurve for Line<P> {
     fn parameter_range(&self) -> ParameterRange { (Bound::Included(0.0), Bound::Included(1.0)) }
 }
 
-impl<P: ControlPoint<f64>> BoundedCurve for Line<P> {}
+impl<P: ControlPoint<f64>> BoundedCurve for Line<P> {
+    fn range_tuple(&self) -> (f64, f64) { (0.0, 1.0) }
+}
 
 impl<P: ControlPoint<f64>> Cut for Line<P> {
     #[inline]
@@ -179,9 +187,10 @@ where
     ) -> Option<f64> {
         let b = self.1 - self.0;
         let t = (pt - self.0).dot(b) / b.dot(b);
-        match self.subs(t).near(&pt) {
-            true => Some(t),
-            false => None,
+        if self.subs(t).near(&pt) {
+            Some(t)
+        } else {
+            None
         }
     }
 }
@@ -194,13 +203,13 @@ impl<P: EuclideanSpace, M: Transform<P>> Transformed<M> for Line<P> {
     }
     #[inline]
     fn transformed(&self, trans: M) -> Self {
-        Line(trans.transform_point(self.0), trans.transform_point(self.1))
+        Self(trans.transform_point(self.0), trans.transform_point(self.1))
     }
 }
 
 impl<P> From<Line<P>> for BsplineCurve<P> {
     fn from(Line(p, q): Line<P>) -> Self {
-        BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p, q])
+        Self::new_unchecked(KnotVector::bezier_knot(1), vec![p, q])
     }
 }
 
@@ -329,8 +338,7 @@ fn line() {
 
     // SNP
     assert_near!(
-        line.search_nearest_parameter(Point2::new(1.0, 1.0), None, 0)
-            .unwrap(),
+        (line.search_nearest_parameter(Point2::new(1.0, 1.0), None, 0)).unwrap(),
         0.5
     );
     assert!(
@@ -340,6 +348,9 @@ fn line() {
 }
 
 // -- Phase 4.0: scalar-generic validation (f32) ----------------------------
+
+#[cfg(test)]
+use crate::prelude::assert_near;
 
 #[cfg(test)]
 mod scalar_generic_tests;

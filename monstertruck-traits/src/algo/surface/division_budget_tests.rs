@@ -4,6 +4,7 @@
 //! name is unchanged, so every test keeps its path and its identity.
 
 use super::*;
+use monstertruck_core::cgmath64::Zero;
 
 /// A surface whose evaluation carries a high-frequency term that a bilinear
 /// interpolant can never match, so the deviation test fails at EVERY level:
@@ -86,13 +87,16 @@ fn a_non_converging_surface_terminates_instead_of_grinding() {
 }
 
 #[test]
-fn the_infallible_entry_returns_a_coarse_division_and_the_fallible_one_refuses() {
+fn the_infallible_entry_returns_a_coarse_division_and_the_fallible_one_refuses()
+-> Result<(), &'static str> {
     // The contract for a caller with no refusal channel (a viewer, a volume
     // estimate) versus one whose SOUNDNESS rests on the chord bound.
     let coarse = parameter_division(&NonConvergingSurface, ((0.0, 1.0), (0.0, 1.0)), 0.01);
     assert!(coarse.0.len() >= 2 && coarse.1.len() >= 2);
     let refused = try_parameter_division(&NonConvergingSurface, ((0.0, 1.0), (0.0, 1.0)), 0.01);
-    let error = refused.expect_err("a truncated division must not be reported as Ok");
+    let Err(error) = refused else {
+        return Err("a truncated division must not be reported as Ok");
+    };
     assert_eq!(error.budget, MAX_PARAMETER_DIVISION_CELLS);
     assert!(error.cells <= MAX_PARAMETER_DIVISION_CELLS);
     assert!(
@@ -102,6 +106,7 @@ fn the_infallible_entry_returns_a_coarse_division_and_the_fallible_one_refuses()
     // Same grid either way -- the fallible entry adds a verdict, not a
     // different division.
     assert_eq!(error.division, coarse);
+    Ok(())
 }
 
 #[test]

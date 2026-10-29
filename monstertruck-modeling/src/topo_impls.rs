@@ -1,7 +1,7 @@
 use monstertruck_topology::*;
 use rustc_hash::FxHashMap as HashMap;
 
-pub(super) fn create_edge<P: Clone, C: Clone, CP: Fn(&P, &P) -> C>(
+pub fn create_edge<P: Clone, C: Clone, CP: Fn(&P, &P) -> C>(
     v0: &Vertex<P>,
     v1: &Vertex<P>,
     connect_points: CP,
@@ -9,7 +9,7 @@ pub(super) fn create_edge<P: Clone, C: Clone, CP: Fn(&P, &P) -> C>(
     connect_points(&v0.point(), &v1.point())
 }
 
-pub(super) fn connect_vertices<P: Clone, C: Clone, CP: Fn(&P, &P) -> C>(
+pub fn connect_vertices<P: Clone, C: Clone, CP: Fn(&P, &P) -> C>(
     v0: &Vertex<P>,
     v1: &Vertex<P>,
     connect_points: CP,
@@ -18,11 +18,11 @@ pub(super) fn connect_vertices<P: Clone, C: Clone, CP: Fn(&P, &P) -> C>(
     // `v1` are the two ends of a sweep's connecting edge -- one from the source
     // wire, one from its `mapped` image, and `Vertex::mapped` allocates a fresh
     // `Arc` whose pointer identity IS `Vertex` equality -- so `v0 == v1` cannot
-    // hold and the check `debug_new` would run is vacuous here.
+    // hold and the checked-constructor condition is vacuous here.
     Edge::new_unchecked(v0, v1, create_edge(v0, v1, connect_points))
 }
 
-pub(super) fn create_surface<P: Clone, C: Clone, S: Clone, CC: Fn(&C, &C) -> S>(
+pub fn create_surface<P: Clone, C: Clone, S: Clone, CC: Fn(&C, &C) -> S>(
     edge0: &Edge<P, C>,
     edge1: &Edge<P, C>,
     connect_curves: CC,
@@ -30,13 +30,7 @@ pub(super) fn create_surface<P: Clone, C: Clone, S: Clone, CC: Fn(&C, &C) -> S>(
     connect_curves(&edge0.curve(), &edge1.curve())
 }
 
-pub(super) fn connect_edges<
-    P: Clone,
-    C: Clone,
-    S: Clone,
-    CP: Fn(&P, &P) -> C,
-    CC: Fn(&C, &C) -> S,
->(
+pub fn connect_edges<P: Clone, C: Clone, S: Clone, CP: Fn(&P, &P) -> C, CC: Fn(&C, &C) -> S>(
     edge0: &Edge<P, C>,
     edge1: &Edge<P, C>,
     connect_points: CP,
@@ -45,9 +39,10 @@ pub(super) fn connect_edges<
     let edge2 = connect_vertices(edge0.front(), edge1.front(), &connect_points);
     let edge3 = connect_vertices(edge0.back(), edge1.back(), connect_points);
     let surface = create_surface(edge0, edge1, connect_curves);
-    let wire: Wire<P, C> = match edge0.orientation() {
-        true => vec![edge0.clone(), edge3, edge1.inverse(), edge2.inverse()].into(),
-        false => vec![edge0.inverse(), edge2, edge1.clone(), edge3.inverse()].into(),
+    let wire: Wire<P, C> = if edge0.orientation() {
+        vec![edge0.clone(), edge3, edge1.inverse(), edge2.inverse()].into()
+    } else {
+        vec![edge0.inverse(), edge2, edge1.clone(), edge3.inverse()].into()
     };
     let mut face = Face::new_unchecked(vec![wire], surface);
     if !edge0.orientation() {
@@ -72,9 +67,10 @@ fn sub_connect_wires<P: Clone, C: Clone, S: Clone, CP: Fn(&P, &P) -> C, CC: Fn(&
         .or_insert_with(|| connect_vertices(edge0.back(), edge1.back(), connect_points))
         .clone();
     let ori = edge0.orientation();
-    let wire = match ori {
-        true => Wire::from(vec![edge0.clone(), edge3, edge1.inverse(), edge2.inverse()]),
-        false => Wire::from(vec![edge2, edge1.clone(), edge3.inverse(), edge0.inverse()]),
+    let wire = if ori {
+        Wire::from(vec![edge0.clone(), edge3, edge1.inverse(), edge2.inverse()])
+    } else {
+        Wire::from(vec![edge2, edge1.clone(), edge3.inverse(), edge0.inverse()])
     };
     let surface = create_surface(edge0, edge1, connect_curves);
     let mut face = Face::new_unchecked(vec![wire], surface);
@@ -84,7 +80,7 @@ fn sub_connect_wires<P: Clone, C: Clone, S: Clone, CP: Fn(&P, &P) -> C, CC: Fn(&
     face
 }
 
-pub(super) fn connect_wires<
+pub fn connect_wires<
     'a,
     P: 'a + Clone,
     C: 'a + Clone,
@@ -104,7 +100,7 @@ pub(super) fn connect_wires<
     })
 }
 
-pub(super) fn connect_raw_wires<
+pub fn connect_raw_wires<
     'a,
     P: 'a + Clone,
     C: 'a + Clone,

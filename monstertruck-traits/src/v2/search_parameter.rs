@@ -39,7 +39,7 @@ pub use self::SurfaceParameter as D2;
 pub type ParameterRange<T> = (Bound<T>, Bound<T>);
 
 /// Hint for searching a 1D parameter.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchParameterHint1D<T> {
     /// A parameter near the answer.
     Parameter(T),
@@ -50,7 +50,7 @@ pub enum SearchParameterHint1D<T> {
 }
 
 /// Hint for searching a 2D parameter.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchParameterHint2D<T> {
     /// A parameter near the answer.
     Parameter(T, T),

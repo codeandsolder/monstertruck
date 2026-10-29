@@ -857,7 +857,7 @@ fn emitted_extrusion_net_matches_the_analytic_surface() {
 
 /// The transposition regression guard. Before this track, the emitted extrusion
 /// net indexed its control points `[sweep][profile]` while its knot vectors were
-/// `(profile, sweep)`, so `BsplineSurface::try_new`'s knot-vs-control-point rule
+/// `(profile, sweep)`, so `BsplineSurface::new`'s knot-vs-control-point rule
 /// PANICKED on every profile with 4 or more control points -- essentially every
 /// real B-spline profile -- and silently produced a transposed surface for the
 /// rest. This pins both halves, one fixture each.

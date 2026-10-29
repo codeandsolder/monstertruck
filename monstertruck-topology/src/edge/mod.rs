@@ -1,40 +1,31 @@
-use crate::{errors::Error, *};
+use crate::{
+    Arc, BoundedCurve, Concat, CurveParameter, Cut, Debug, DebugDisplay, Edge, EdgeDisplayFormat,
+    EdgeId, Formatter, Hash, Hasher, Id, Invertible, Mutex, MutexFmt, ParameterTransform, Result,
+    SEARCH_PARAMETER_TRIALS, SearchParameter, StableId, TOLERANCE, Tolerance, Vertex,
+    errors::Error,
+};
 use thiserror::Error;
 
 impl<P, C> Edge<P, C> {
-    /// Generates the edge from `front` to `back`.  
-    /// # Failures
-    /// If `front == back`, then returns `Error::SameVertex`.
-    /// ```
-    /// use monstertruck_topology::*;
-    /// use monstertruck_topology::errors::Error;
-    /// let v = Vertex::from_points(&[(), ()]);
-    /// assert!(Edge::try_new(&v[0], &v[1], ()).is_ok());
-    /// assert_eq!(Edge::try_new(&v[0], &v[0], ()), Err(Error::SameVertex));
-    /// ```
-    #[inline(always)]
-    pub fn try_new(front: &Vertex<P>, back: &Vertex<P>, curve: C) -> Result<Edge<P, C>> {
+    /// Generates the edge from `front` to `back`, validating that the vertices differ.
+    ///
+    /// # Errors
+    /// Returns [`Error::SameVertex`] if `front == back`.
+    #[inline]
+    pub fn new(front: &Vertex<P>, back: &Vertex<P>, curve: C) -> Result<Self> {
         if front == back {
             Err(Error::SameVertex)
         } else {
-            Ok(Edge::new_unchecked(front, back, curve))
+            Ok(Self::new_unchecked(front, back, curve))
         }
     }
-    /// Generates the edge from `front` to `back`, validating that the vertices differ.
-    /// # Failures
-    /// Returns [`Error::SameVertex`] if `front == back`.
-    #[inline(always)]
-    pub fn new(front: &Vertex<P>, back: &Vertex<P>, curve: C) -> Result<Edge<P, C>> {
-        Self::try_new(front, back, curve)
-    }
-    /// Generates the edge from `front` to `back`.
-    /// # Remarks
-    /// This method is prepared only for performance-critical development and is not recommended.  
-    /// This method does NOT check the condition `front == back`.  
-    /// The programmer must guarantee this condition before using this method.
-    #[inline(always)]
-    pub fn new_unchecked(front: &Vertex<P>, back: &Vertex<P>, curve: C) -> Edge<P, C> {
-        Edge {
+
+    /// Generates the edge from `front` to `back` without checking that the vertices differ.
+    ///
+    /// Callers must establish `front != back` before using this constructor.
+    #[inline]
+    pub fn new_unchecked(front: &Vertex<P>, back: &Vertex<P>, curve: C) -> Self {
+        Self {
             vertices: (front.clone(), back.clone()),
             orientation: true,
             curve: Arc::new(Mutex::new(curve)),
@@ -43,38 +34,13 @@ impl<P, C> Edge<P, C> {
     }
 
     /// Returns the stable persistent identifier of this edge.
-    #[inline(always)]
-    pub fn stable_id(&self) -> StableId { self.stable_id }
+    #[inline]
+    #[must_use]
+    pub const fn stable_id(&self) -> StableId { self.stable_id }
 
     /// Sets the stable persistent identifier of this edge.
-    #[inline(always)]
-    pub fn set_stable_id(&mut self, id: StableId) { self.stable_id = id; }
-
-    /// Generates the edge from `front` to `back`, checking the condition
-    /// `front == back` in debug mode and REPORTING a violation rather than
-    /// aborting on it.
-    ///
-    /// # Why this returns `Result` (spec 012 U4, ledger C11)
-    ///
-    /// This used to be `cfg!(debug_assertions)` selecting between [`Edge::new`]
-    /// (PANICS when `front == back`) and [`Edge::new_unchecked`] (accepts a
-    /// degenerate edge) -- the two worst available outcomes, chosen by build
-    /// profile, so the failure class had a C11 face in debug and a C9 face in
-    /// release. See [`Solid::debug_new`](crate::Solid::debug_new) for the
-    /// measurement that forced this; [`Face::debug_new`](crate::Face::debug_new)
-    /// already had this shape.
-    ///
-    /// Release still skips the check, so a release `Ok` is not a validity
-    /// certificate -- but a caller with a channel now propagates the debug
-    /// refusal instead of aborting the process.
-    #[inline(always)]
-    pub fn debug_new(front: &Vertex<P>, back: &Vertex<P>, curve: C) -> Result<Edge<P, C>> {
-        match cfg!(debug_assertions) {
-            true => Edge::try_new(front, back, curve),
-            false => Ok(Edge::new_unchecked(front, back, curve)),
-        }
-    }
-
+    #[inline]
+    pub const fn set_stable_id(&mut self, id: StableId) { self.stable_id = id; }
     /// Returns the orientation of the curve.
     /// # Examples
     /// ```
@@ -85,7 +51,8 @@ impl<P, C> Edge<P, C> {
     /// assert!(edge0.orientation());
     /// assert!(!edge1.orientation());
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn orientation(&self) -> bool { self.orientation }
 
     /// Inverts the direction of edge.
@@ -103,8 +70,8 @@ impl<P, C> Edge<P, C> {
     /// assert_eq!(edge.front(), inv_edge.back());
     /// assert_eq!(edge.back(), inv_edge.front());
     /// ```
-    #[inline(always)]
-    pub fn invert(&mut self) -> &mut Self {
+    #[inline]
+    pub const fn invert(&mut self) -> &mut Self {
         self.orientation = !self.orientation;
         self
     }
@@ -126,9 +93,10 @@ impl<P, C> Edge<P, C> {
     /// assert_eq!(edge.front(), inv_edge.back());
     /// assert_eq!(edge.back(), inv_edge.front());
     /// ```
-    #[inline(always)]
-    pub fn inverse(&self) -> Edge<P, C> {
-        Edge {
+    #[inline]
+    #[must_use]
+    pub fn inverse(&self) -> Self {
+        Self {
             vertices: self.vertices.clone(),
             orientation: !self.orientation,
             curve: Arc::clone(&self.curve),
@@ -143,11 +111,13 @@ impl<P, C> Edge<P, C> {
     /// let edge = Edge::new_unchecked(&v[0], &v[1], ());
     /// assert_eq!(edge.front(), &v[0]);
     /// ```
-    #[inline(always)]
-    pub fn front(&self) -> &Vertex<P> {
-        match self.orientation {
-            true => &self.vertices.0,
-            false => &self.vertices.1,
+    #[inline]
+    #[must_use]
+    pub const fn front(&self) -> &Vertex<P> {
+        if self.orientation {
+            &self.vertices.0
+        } else {
+            &self.vertices.1
         }
     }
 
@@ -158,11 +128,13 @@ impl<P, C> Edge<P, C> {
     /// let edge = Edge::new_unchecked(&v[0], &v[1], ());
     /// assert_eq!(edge.back(), &v[1]);
     /// ```
-    #[inline(always)]
-    pub fn back(&self) -> &Vertex<P> {
-        match self.orientation {
-            true => &self.vertices.1,
-            false => &self.vertices.0,
+    #[inline]
+    #[must_use]
+    pub const fn back(&self) -> &Vertex<P> {
+        if self.orientation {
+            &self.vertices.1
+        } else {
+            &self.vertices.0
         }
     }
 
@@ -173,11 +145,13 @@ impl<P, C> Edge<P, C> {
     /// let edge = Edge::new_unchecked(&v[0], &v[1], ());
     /// assert_eq!(edge.ends(), (&v[0], &v[1]));
     /// ```
-    #[inline(always)]
-    pub fn ends(&self) -> (&Vertex<P>, &Vertex<P>) {
-        match self.orientation {
-            true => (&self.vertices.0, &self.vertices.1),
-            false => (&self.vertices.1, &self.vertices.0),
+    #[inline]
+    #[must_use]
+    pub const fn ends(&self) -> (&Vertex<P>, &Vertex<P>) {
+        if self.orientation {
+            (&self.vertices.0, &self.vertices.1)
+        } else {
+            (&self.vertices.1, &self.vertices.0)
         }
     }
 
@@ -189,7 +163,8 @@ impl<P, C> Edge<P, C> {
     /// assert_eq!(edge.front(), &v[1]);
     /// assert_eq!(edge.absolute_front(), &v[0]);
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn absolute_front(&self) -> &Vertex<P> { &self.vertices.0 }
     /// Returns the back vertex which is generated by constructor
     /// ```
@@ -199,7 +174,8 @@ impl<P, C> Edge<P, C> {
     /// assert_eq!(edge.back(), &v[0]);
     /// assert_eq!(edge.absolute_back(), &v[1]);
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn absolute_back(&self) -> &Vertex<P> { &self.vertices.1 }
 
     /// Returns the vertices at both absolute ends.
@@ -211,7 +187,8 @@ impl<P, C> Edge<P, C> {
     /// assert_eq!(edge.ends(), (&v[1], &v[0]));
     /// assert_eq!(edge.absolute_ends(), (&v[0], &v[1]));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn absolute_ends(&self) -> (&Vertex<P>, &Vertex<P>) {
         (&self.vertices.0, &self.vertices.1)
     }
@@ -228,7 +205,8 @@ impl<P, C> Edge<P, C> {
     /// assert_ne!(edge1, edge2);
     /// assert!(edge1.is_same(&edge2));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn absolute_clone(&self) -> Self {
         Self {
             vertices: self.vertices.clone(),
@@ -250,8 +228,9 @@ impl<P, C> Edge<P, C> {
     /// assert!(edge0.is_same(&edge2)); // The cloned edge is the same edge.
     /// assert!(edge0.is_same(&edge3)); // The inversed edge is the "same" edge
     /// ```
-    #[inline(always)]
-    pub fn is_same(&self, other: &Edge<P, C>) -> bool { self.id() == other.id() }
+    #[inline]
+    #[must_use]
+    pub fn is_same(&self, other: &Self) -> bool { self.id() == other.id() }
 
     /// Returns the clone of the curve.
     /// # Remarks
@@ -268,14 +247,15 @@ impl<P, C> Edge<P, C> {
     /// // oriented curve
     /// assert_eq!(edge.oriented_curve(), (1, 0));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn curve(&self) -> C
     where C: Clone {
         self.curve.lock().clone()
     }
 
     /// Calls `f` with a borrowed reference to the edge curve.
-    #[inline(always)]
+    #[inline]
     pub fn with_curve<R>(&self, f: impl FnOnce(&C) -> R) -> R { f(&self.curve.lock()) }
 
     /// Set the curve.
@@ -297,7 +277,7 @@ impl<P, C> Edge<P, C> {
     /// assert_eq!(edge0.curve(), 1);
     /// assert_eq!(edge1.curve(), 1);
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn set_curve(&self, curve: C) { *self.curve.lock() = curve; }
 
     /// Returns the id that does not depend on the direction of the edge.
@@ -310,7 +290,8 @@ impl<P, C> Edge<P, C> {
     /// assert_ne!(edge0, edge1);
     /// assert_eq!(edge0.id(), edge1.id());
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn id(&self) -> EdgeId<C> { Id::new(Arc::as_ptr(&self.curve)) }
 
     /// Returns how many same edges.
@@ -337,17 +318,20 @@ impl<P, C> Edge<P, C> {
     /// drop(e2);
     /// assert_eq!(e0.count(), 1);
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn count(&self) -> usize { Arc::strong_count(&self.curve) }
 
     /// Returns the cloned curve in edge.
     /// If edge is inverted, then the returned curve is also inverted.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn oriented_curve(&self) -> C
     where C: Clone + Invertible {
-        match self.orientation {
-            true => self.curve.lock().clone(),
-            false => self.curve.lock().inverse(),
+        if self.orientation {
+            self.curve.lock().clone()
+        } else {
+            self.curve.lock().inverse()
         }
     }
 
@@ -357,7 +341,7 @@ impl<P, C> Edge<P, C> {
     /// Accessing geometry elements directly in the closure will result in a deadlock.
     /// So, this method does not appear to the document.
     #[doc(hidden)]
-    #[inline(always)]
+    #[inline]
     pub fn try_mapped<Q, D>(
         &self,
         mut point_mapping: impl FnMut(&P) -> Option<Q>,
@@ -371,7 +355,7 @@ impl<P, C> Edge<P, C> {
         // builds a FRESH `Arc` per call and `Vertex` identity is
         // `Arc::as_ptr`, so `v0 == v1` is unreachable here whatever the
         // receiver looks like. Recorded rather than asserted (C5).
-        let mut edge = Edge::debug_new(&v0, &v1, curve).ok()?;
+        let mut edge = Edge::new(&v0, &v1, curve).ok()?;
         if !self.orientation() {
             edge.invert();
         }
@@ -399,7 +383,7 @@ impl<P, C> Edge<P, C> {
     /// Accessing geometry elements directly in the closure will result in a deadlock.
     /// So, this method does not appear to the document.
     #[doc(hidden)]
-    #[inline(always)]
+    #[inline]
     pub fn mapped<Q, D>(
         &self,
         mut point_mapping: impl FnMut(&P) -> Q,
@@ -412,7 +396,7 @@ impl<P, C> Edge<P, C> {
         // one is PROVABLY total, so nothing is being swallowed: `Vertex::mapped`
         // is `Vertex::new_with_id`, a fresh `Arc` per call, and `Vertex`
         // equality is `Arc::as_ptr` equality, so `v0 == v1` cannot hold. Stated
-        // as `new_unchecked` rather than hidden behind `debug_new`'s profile
+        // as `new_unchecked` rather than hiding the invariant behind a build-profile switch
         // switch (spec 012 U4).
         let mut edge = Edge::new_unchecked(&v0, &v1, curve);
         if edge.orientation() != self.orientation() {
@@ -423,38 +407,41 @@ impl<P, C> Edge<P, C> {
 
     /// Returns the consistence of the geometry of end vertices
     /// and the geometry of edge.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn is_geometric_consistent(&self) -> bool
     where
         P: Tolerance,
         C: BoundedCurve<Point = P>, {
-        let curve = self.curve.lock();
-        let geom_front = curve.front();
-        let geom_back = curve.back();
+        let (geom_front, geom_back) = {
+            let curve = self.curve.lock();
+            (curve.front(), curve.back())
+        };
         let top_front = self.absolute_front().point.lock();
         let top_back = self.absolute_back().point.lock();
         geom_front.near(&*top_front) && geom_back.near(&*top_back)
     }
 
-    #[inline(always)]
+    #[inline]
     fn pre_cut(&self, vertex: &Vertex<P>, mut curve0: C, t: f64) -> (Self, Self)
     where C: Cut<Point = P> {
         let curve1 = curve0.cut(t);
-        let edge0 = Edge {
+        let edge0 = Self {
             vertices: (self.absolute_front().clone(), vertex.clone()),
             orientation: self.orientation,
             curve: Arc::new(Mutex::new(curve0)),
             stable_id: StableId::UNASSIGNED,
         };
-        let edge1 = Edge {
+        let edge1 = Self {
             vertices: (vertex.clone(), self.absolute_back().clone()),
             orientation: self.orientation,
             curve: Arc::new(Mutex::new(curve1)),
             stable_id: StableId::UNASSIGNED,
         };
-        match self.orientation {
-            true => (edge0, edge1),
-            false => (edge1, edge0),
+        if self.orientation {
+            (edge0, edge1)
+        } else {
+            (edge1, edge0)
         }
     }
 
@@ -463,6 +450,7 @@ impl<P, C> Edge<P, C> {
     /// Returns `None` if:
     /// - cannot find the parameter `t` such that `edge.curve().subs(t) == vertex.point()`, or
     /// - the found parameter is not in the parameter range without end points.
+    #[must_use]
     pub fn cut(&self, vertex: &Vertex<P>) -> Option<(Self, Self)>
     where
         P: Clone,
@@ -479,6 +467,7 @@ impl<P, C> Edge<P, C> {
     /// Cuts the edge at `vertex` with parameter `t`.
     /// # Failure
     /// Returns `None` if `!edge.curve().subs(t).near(&vertex.point())`.
+    #[must_use]
     pub fn cut_with_parameter(&self, vertex: &Vertex<P>, t: f64) -> Option<(Self, Self)>
     where
         P: Clone + Tolerance,
@@ -495,6 +484,10 @@ impl<P, C> Edge<P, C> {
     }
 
     /// Concats two edges.
+    ///
+    /// # Errors
+    /// Returns an error when the edges are disconnected, would close onto the
+    /// same vertex, or their oriented curves cannot be concatenated.
     pub fn concat(&self, rhs: &Self) -> std::result::Result<Self, ConcatError<P>>
     where
         P: Debug,
@@ -514,12 +507,12 @@ impl<P, C> Edge<P, C> {
         let t1 = curve1.range_tuple().0;
         curve1.parameter_transform(1.0, t0 - t1);
         let curve = curve0.try_concat(&curve1)?;
-        // The `front == back` violation `debug_new` checks for is the same one
+        // The `front == back` violation checked construction rejects is the same one
         // `ConcatError::SameVertex` names, and it was already rejected above --
         // so this maps a redundant check onto the error this function already
         // has, rather than unwrapping it (spec 012 U4: a panic that moves looks
         // exactly like a panic that was fixed).
-        Edge::debug_new(self.front(), rhs.back(), curve)
+        Self::new(self.front(), rhs.back(), curve)
             .map_err(|_| ConcatError::SameVertex(self.front().clone()))
     }
 
@@ -559,8 +552,12 @@ impl<P, C> Edge<P, C> {
     ///     "2",
     /// );
     /// ```
-    #[inline(always)]
-    pub fn display(&self, format: EdgeDisplayFormat) -> DebugDisplay<'_, Self, EdgeDisplayFormat> {
+    #[inline]
+    #[must_use]
+    pub const fn display(
+        &self,
+        format: EdgeDisplayFormat,
+    ) -> DebugDisplay<'_, Self, EdgeDisplayFormat> {
         DebugDisplay {
             entity: self,
             format,
@@ -584,15 +581,13 @@ pub enum ConcatError<P: Debug> {
 }
 
 impl<P: Debug> From<monstertruck_traits::ConcatError<P>> for ConcatError<P> {
-    fn from(err: monstertruck_traits::ConcatError<P>) -> ConcatError<P> {
-        ConcatError::FromGeometry(err)
-    }
+    fn from(err: monstertruck_traits::ConcatError<P>) -> Self { Self::FromGeometry(err) }
 }
 
 impl<P, C> Clone for Edge<P, C> {
-    #[inline(always)]
-    fn clone(&self) -> Edge<P, C> {
-        Edge {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
             vertices: self.vertices.clone(),
             orientation: self.orientation,
             curve: Arc::clone(&self.curve),
@@ -602,7 +597,7 @@ impl<P, C> Clone for Edge<P, C> {
 }
 
 impl<P, C> PartialEq for Edge<P, C> {
-    #[inline(always)]
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(Arc::as_ptr(&self.curve), Arc::as_ptr(&other.curve))
             && self.orientation == other.orientation
@@ -612,7 +607,7 @@ impl<P, C> PartialEq for Edge<P, C> {
 impl<P, C> Eq for Edge<P, C> {}
 
 impl<P, C> Hash for Edge<P, C> {
-    #[inline(always)]
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::ptr::hash(Arc::as_ptr(&self.curve), state);
         self.orientation.hash(state);
@@ -672,9 +667,3 @@ impl<P: Debug, C: Debug> Debug for DebugDisplay<'_, Edge<P, C>, EdgeDisplayForma
         }
     }
 }
-
-/// Spec 012 U4 / ledger class C11: [`Edge::debug_new`] used to choose between a
-/// PANIC and an UNCHECKED construction on `debug_assertions` -- the two worst
-/// available outcomes, selected by build profile.
-#[cfg(test)]
-mod debug_new_tests;

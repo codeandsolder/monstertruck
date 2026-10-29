@@ -32,7 +32,7 @@ enum RenderMode {
 
 #[async_trait(?Send)]
 impl App for MyApp {
-    async fn init(window: Arc<winit::window::Window>) -> MyApp {
+    async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;
         let matrix = Matrix4::look_at_rh(
             Point3::new(2.0, 2.0, 2.0),
@@ -40,7 +40,9 @@ impl App for MyApp {
             Vector3::unit_y(),
         );
         let camera = Camera {
-            matrix: matrix.invert().unwrap(),
+            matrix: matrix
+                .invert()
+                .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
             method: ProjectionMethod::perspective(Rad(std::f64::consts::PI / 4.0)),
             near_clip: 0.1,
             far_clip: 40.0,
@@ -51,7 +53,7 @@ impl App for MyApp {
                 lights: vec![Light {
                     position: Point3::new(2.0, 2.0, 2.0),
                     color: Vector3::new(1.0, 1.0, 1.0),
-                    light_type: LightType::Point,
+                    kind: LightType::Point,
                 }],
                 ..Default::default()
             },
@@ -60,11 +62,9 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &scene_desc)
-            .await
-            .expect("GPU window scene is available");
-        let sphere0 = sphere(Point3::new(0.0, 0.0, 0.7), 1.0, 50, 50);
-        let sphere1 = sphere(Point3::new(0.0, 0.0, -0.7), 1.0, 50, 50);
+        let mut scene = WindowScene::from_window(window, &scene_desc).await?;
+        let sphere0 = sphere(Point3::new(0.0, 0.0, 0.7), 1.0, 50, 50)?;
+        let sphere1 = sphere(Point3::new(0.0, 0.0, -0.7), 1.0, 50, 50)?;
         let intersect = sphere0.extract_interference(&sphere1);
         let creator = scene.instance_creator();
         let instance0 = creator.create_instance(
@@ -77,7 +77,7 @@ impl App for MyApp {
                 },
                 ..Default::default()
             },
-        );
+        )?;
         let instance1 = creator.create_instance(
             &sphere1,
             &PolygonState {
@@ -88,22 +88,22 @@ impl App for MyApp {
                 },
                 ..Default::default()
             },
-        );
-        let instance2 = creator.create_instance(&sphere0, &Default::default());
-        let instance3 = creator.create_instance(&sphere1, &Default::default());
+        )?;
+        let instance2 = creator.create_instance(&sphere0, &Default::default())?;
+        let instance3 = creator.create_instance(&sphere1, &Default::default())?;
         let wireinstance = creator.create_instance(
             &intersect,
             &WireFrameState {
                 color: Vector4::new(1.0, 0.0, 0.0, 1.0),
                 ..Default::default()
             },
-        );
+        )?;
         scene.add_object(&instance0);
         scene.add_object(&instance1);
         scene.add_object(&instance2);
         scene.add_object(&instance3);
         scene.add_object(&wireinstance);
-        MyApp {
+        Ok(MyApp {
             scene,
             rotate_flag: false,
             prev_cursor: Vector2::zero(),
@@ -113,7 +113,7 @@ impl App for MyApp {
             instance3,
             wireinstance,
             render_mode: RenderMode::All,
-        }
+        })
     }
     fn mouse_input(&mut self, state: ElementState, button: MouseButton) -> ControlFlow {
         match button {
@@ -125,7 +125,7 @@ impl App for MyApp {
                     let desc = self.scene.studio_config_mut();
                     (&mut desc.lights[0], &desc.camera)
                 };
-                match light.light_type {
+                match light.kind {
                     LightType::Point => {
                         light.position = camera.position();
                     }
@@ -146,10 +146,10 @@ impl App for MyApp {
                 let camera = &mut self.scene.studio_config_mut().camera;
                 match &mut camera.method {
                     ProjectionMethod::Parallel { screen_size } => {
-                        *screen_size *= 0.9f64.powf(y as f64);
+                        *screen_size *= 0.9f64.powf(f64::from(y));
                     }
                     ProjectionMethod::Perspective { .. } => {
-                        let trans_vec = camera.eye_direction() * y as f64 * 0.2;
+                        let trans_vec = camera.eye_direction() * f64::from(y) * 0.2;
                         camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
                     }
                 }
@@ -172,8 +172,8 @@ impl App for MyApp {
             axis += dir2d[0] * matrix[1].truncate();
             axis /= axis.magnitude();
             let angle = dir2d.magnitude() * 0.01;
-            let mat = Matrix4::from_axis_angle(axis, Rad(angle));
-            *matrix = mat.invert().unwrap() * *matrix;
+            let inverse_rotation = Matrix4::from_axis_angle(axis, Rad(-angle));
+            *matrix = inverse_rotation * *matrix;
         }
         self.prev_cursor = position;
         Self::default_control_flow()
@@ -220,24 +220,37 @@ impl App for MyApp {
         }
         Self::default_control_flow()
     }
-    fn render(&mut self) { self.scene.render_frame(); }
+    fn render(&mut self) {
+        if let Err(error) = self.scene.render_frame() {
+            eprintln!("render failed: {error}");
+        }
+    }
 }
 
-fn sphere(center: Point3, radius: f64, udiv: usize, vdiv: usize) -> PolygonMesh {
-    let positions = (0..udiv)
+fn sphere(center: Point3, radius: f64, udiv: usize, vdiv: usize) -> AppResult<PolygonMesh> {
+    if udiv == 0 || vdiv < 2 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "sphere divisions require udiv > 0 and vdiv >= 2",
+        )
+        .into());
+    }
+    let udiv_u32 = u32::try_from(udiv)?;
+    let vdiv_u32 = u32::try_from(vdiv)?;
+    let positions = (0..udiv_u32)
         .flat_map(move |i| {
-            (0..vdiv).map(move |j| {
-                let u = 2.0 * PI * i as f64 / udiv as f64;
-                let v = PI * j as f64 / (vdiv - 1) as f64;
+            (0..vdiv_u32).map(move |j| {
+                let u = 2.0 * PI * f64::from(i) / f64::from(udiv_u32);
+                let v = PI * f64::from(j) / f64::from(vdiv_u32 - 1);
                 center + radius * Vector3::new(u.cos() * v.sin(), u.sin() * v.sin(), v.cos())
             })
         })
         .collect::<Vec<_>>();
-    let normals = (0..udiv)
+    let normals = (0..udiv_u32)
         .flat_map(move |i| {
-            (0..vdiv).map(move |j| {
-                let u = 2.0 * PI * i as f64 / udiv as f64;
-                let v = PI * j as f64 / (vdiv - 1) as f64;
+            (0..vdiv_u32).map(move |j| {
+                let u = 2.0 * PI * f64::from(i) / f64::from(udiv_u32);
+                let v = PI * f64::from(j) / f64::from(vdiv_u32 - 1);
                 Vector3::new(u.cos() * v.sin(), u.sin() * v.sin(), v.cos())
             })
         })
@@ -260,15 +273,14 @@ fn sphere(center: Point3, radius: f64, udiv: usize, vdiv: usize) -> PolygonMesh 
             })
         })
         .collect();
-    PolygonMesh::new(
+    Ok(PolygonMesh::new(
         StandardAttributes {
             positions,
             normals,
             ..Default::default()
         },
         faces,
-    )
-    .expect("fixture mesh is valid")
+    )?)
 }
 
 fn main() { MyApp::run() }

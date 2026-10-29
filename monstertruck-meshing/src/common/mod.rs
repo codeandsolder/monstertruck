@@ -1,6 +1,6 @@
-use crate::*;
+use crate::{EuclideanSpace, Faces, InnerSpace, Point3, Vector3, Vertex, Zero};
 
 mod adjacency;
 mod face_normal;
-pub(super) use adjacency::Adjacency;
-pub(super) use face_normal::FaceNormal;
+pub use adjacency::Adjacency;
+pub use face_normal::FaceNormal;

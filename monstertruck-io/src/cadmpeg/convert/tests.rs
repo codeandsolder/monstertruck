@@ -304,7 +304,7 @@ fn a_planar_sheet_face_becomes_a_compressed_shell() {
     assert!(plane.origin().to_vec().magnitude() < 1.0e-12);
 }
 
-/// The invariant `Edge::try_new` will check later: an edge's curve runs from its
+/// The invariant `Edge::new` will check later: an edge's curve runs from its
 /// start vertex to its end vertex, at the curve's own parameter bounds.
 ///
 /// This is the one that silently breaks if the trim is applied in the wrong frame
@@ -337,7 +337,7 @@ fn every_converted_edge_curve_runs_from_its_start_vertex_to_its_end_vertex() {
 /// The strongest oracle available here: monstertruck's OWN extraction accepts the
 /// converted shell.
 ///
-/// `Shell::extract` runs `Edge::try_new` on every edge and `Face::try_new` on
+/// `Shell::extract` runs `Edge::new` on every edge and `Face::new` on
 /// every face, so it checks the endpoint agreement and the boundary-wire rules
 /// that the hand-written assertions above only sample. A converter that produced
 /// a plausible-looking shell with a curve running the wrong way, or a ring that
@@ -438,7 +438,7 @@ fn a_reversed_face_sense_becomes_the_faces_orientation_flag() {
     );
 }
 
-/// The stated outer loop reaches position zero, where `Face::try_new` reads the
+/// The stated outer loop reaches position zero, where `Face::new` reads the
 /// outer boundary -- even when the source lists it second.
 #[test]
 fn a_stated_outer_loop_is_moved_to_the_front() {

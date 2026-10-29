@@ -47,7 +47,7 @@ fn an_empty_document_reports_no_geometry_rather_than_an_empty_list() {
 ///
 /// Every number here is checked, not just the body count. A cube is 8 vertices,
 /// 12 edges and 6 faces -- Euler characteristic 2 -- and `Shell::extract` running
-/// `Edge::try_new` and `Face::try_new` over the result reports it CLOSED. A
+/// `Edge::new` and `Face::new` over the result reports it CLOSED. A
 /// converter that dropped an edge, or oriented one backwards, gets a body count of
 /// 1 and fails every line below it.
 #[test]

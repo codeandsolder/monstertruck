@@ -7,7 +7,7 @@ use monstertruck_topology::repair::{
 /// RED reproducer for the cell-8 extraction blocker: a face whose boundary
 /// wires are each SIMPLE but share one vertex (a PINCHED face, e.g. the
 /// pass-through imprint landing a T-junction vertex in two wires) is
-/// rejected by `Face::try_new` via `Wire::disjoint_wires` -- the same
+/// rejected by `Face::new` via `Wire::disjoint_wires` -- the same
 /// `NotSimpleWire` error an intra-wire revisit produces, which misled the
 /// cell-8 diagnosis until probed.
 #[test]

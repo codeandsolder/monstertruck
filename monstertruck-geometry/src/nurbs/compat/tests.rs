@@ -4,6 +4,7 @@
 //! path is unchanged.
 
 use super::*;
+use crate::prelude::Vector2;
 
 #[test]
 fn empty_curves_error() {
@@ -20,7 +21,7 @@ fn single_curve_normalizes_knots() {
         KnotVector::from(vec![0.0, 0.0, 2.0, 2.0]),
         vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 1.0)],
     )];
-    make_curves_compatible(&mut curves).unwrap();
+    (make_curves_compatible(&mut curves)).unwrap();
     assert_eq!(curves[0].knot_vector().as_slice(), &[0.0, 0.0, 1.0, 1.0]);
 }
 
@@ -48,7 +49,7 @@ fn two_curves_same_degree_different_knots() {
     let org1 = c1.clone();
 
     let mut curves = vec![c0, c1];
-    make_curves_compatible(&mut curves).unwrap();
+    (make_curves_compatible(&mut curves)).unwrap();
 
     assert_eq!(curves[0].knot_vector(), curves[1].knot_vector());
     assert_eq!(curves[0].degree(), curves[1].degree());
@@ -76,7 +77,7 @@ fn two_curves_different_degrees() {
     let org1 = c1.clone();
 
     let mut curves = vec![c0, c1];
-    make_curves_compatible(&mut curves).unwrap();
+    (make_curves_compatible(&mut curves)).unwrap();
 
     assert_eq!(curves[0].degree(), curves[1].degree());
     assert_eq!(curves[0].degree(), 3);
@@ -113,7 +114,7 @@ fn three_curves_mixed() {
     let org2 = c2.clone();
 
     let mut curves = vec![c0, c1, c2];
-    make_curves_compatible(&mut curves).unwrap();
+    (make_curves_compatible(&mut curves)).unwrap();
 
     // All must share the same degree and knot vector.
     assert_eq!(curves[0].degree(), curves[1].degree());
@@ -168,7 +169,7 @@ fn two_surfaces_different_degrees() {
     let org1 = s1.clone();
 
     let mut surfaces = vec![s0, s1];
-    make_surfaces_compatible(&mut surfaces).unwrap();
+    (make_surfaces_compatible(&mut surfaces)).unwrap();
 
     assert_eq!(surfaces[0].udegree(), surfaces[1].udegree());
     assert_eq!(surfaces[0].vdegree(), surfaces[1].vdegree());

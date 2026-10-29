@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    EuclideanSpace, InnerSpace, Origin, Point3, PolygonMesh, Vector3, distance2_point_triangle,
+    hash, nonpositive_tolerance,
+};
 use array_macro::array;
 
 #[repr(u8)]
@@ -17,19 +20,19 @@ struct EndPoint {
 }
 
 impl EndPoint {
-    #[inline(always)]
-    fn new(entity: f64, r#type: EndPointType, index: usize) -> EndPoint {
-        EndPoint {
+    #[inline]
+    const fn new(entity: f64, r#type: EndPointType, index: usize) -> Self {
+        Self {
             entity,
             r#type,
             index,
         }
     }
-    #[inline(always)]
-    fn from_seg(seg: (f64, f64), index: usize) -> Vec<EndPoint> {
+    #[inline]
+    fn from_seg(seg: (f64, f64), index: usize) -> Vec<Self> {
         vec![
-            EndPoint::new(seg.0, EndPointType::Front, index),
-            EndPoint::new(seg.1, EndPointType::Back, index),
+            Self::new(seg.0, EndPointType::Front, index),
+            Self::new(seg.1, EndPointType::Back, index),
         ]
     }
 }

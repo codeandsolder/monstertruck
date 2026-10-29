@@ -160,6 +160,9 @@ macro_rules! impl_shape {
                 .map(|res| res.into_wasm())
             }
             /// write shape to json
+            ///
+            /// # Errors
+            /// Returns a JavaScript error if serialization fails.
             pub fn to_json(&self) -> std::result::Result<Vec<u8>, JsValue> {
                 serde_json::to_vec_pretty(&self.0)
                     .map_err(|error| JsValue::from_str(&error.to_string()))
@@ -184,7 +187,7 @@ impl_shape!(Shell, Solid);
 impl Shell {
     /// Creates Solid if `self` is a closed shell.
     pub fn into_solid(self) -> Option<Solid> {
-        monstertruck_modeling::Solid::try_new(vec![self.0])
+        monstertruck_modeling::Solid::new(vec![self.0])
             .map_err(|e| {
                 gloo::console::error!(format!("{e}"));
             })

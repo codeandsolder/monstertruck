@@ -28,7 +28,7 @@ fn body_shell(bottom: f64, height: f64, width: f64, thickness: f64) -> Shell {
     solid.into_boundaries().pop().unwrap()
 }
 
-fn cylinder(bottom: f64, height: f64, radius: f64) -> Shell {
+fn cylinder(bottom: f64, height: f64, radius: f64) -> Result<Shell> {
     let vertex = builder::vertex(Point3::new(0.0, bottom, radius));
     let circle = builder::revolve(
         &vertex,
@@ -36,10 +36,10 @@ fn cylinder(bottom: f64, height: f64, radius: f64) -> Shell {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         2,
-    );
-    let disk = builder::try_attach_plane(&[circle]).unwrap();
+    )?;
+    let disk = builder::try_attach_plane([circle])?;
     let solid = builder::extrude(&disk, Vector3::new(0.0, height, 0.0));
-    solid.into_boundaries().pop().unwrap()
+    Ok(solid.into_boundaries().pop().unwrap())
 }
 
 fn grue_body_neck(body: &mut Shell, neck: Shell) {
@@ -78,7 +78,7 @@ fn vertical_line_edges(shell: &Shell, height: f64) -> Vec<Edge> {
         .collect()
 }
 
-fn bottle(height: f64, width: f64, thickness: f64) -> Solid {
+fn bottle(height: f64, width: f64, thickness: f64) -> Result<Solid> {
     let mut body = body_shell(0.0, height, width, thickness);
 
     // Fillet the body's vertical edges (Line edges spanning the full height)
@@ -93,7 +93,7 @@ fn bottle(height: f64, width: f64, thickness: f64) -> Solid {
         fillet_edges(&mut body, &edges, Some(&opts)).expect("body fillet");
     }
 
-    let neck = cylinder(height, height / 10.0, thickness / 4.0);
+    let neck = cylinder(height, height / 10.0, thickness / 4.0)?;
     grue_body_neck(&mut body, neck);
 
     let eps = height / 50.0;
@@ -114,7 +114,7 @@ fn bottle(height: f64, width: f64, thickness: f64) -> Solid {
         fillet_edges(&mut inner_body, &edges, Some(&opts)).expect("inner body fillet");
     }
 
-    let inner_neck = cylinder(height - eps, height / 10.0 + eps, thickness / 4.0 - eps);
+    let inner_neck = cylinder(height - eps, height / 10.0 + eps, thickness / 4.0 - eps)?;
     grue_body_neck(&mut inner_body, inner_neck);
 
     let inner_hat = inner_body.pop().unwrap();
@@ -124,11 +124,12 @@ fn bottle(height: f64, width: f64, thickness: f64) -> Solid {
         .add_boundary(wire)
         .expect("inner hat boundary should attach to bottle body");
     body.extend(inner_body.into_iter().map(|face| face.inverse()));
-    Solid::new_unchecked(vec![body])
+    Ok(Solid::new_unchecked(vec![body]))
 }
 
-fn main() {
-    let bottle = bottle(1.4, 1.0, 0.6);
-    let json = serde_json::to_vec_pretty(&bottle).unwrap();
-    std::fs::write("bottle.json", json).unwrap();
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let bottle = bottle(1.4, 1.0, 0.6)?;
+    let json = serde_json::to_vec_pretty(&bottle)?;
+    std::fs::write("bottle.json", json)?;
+    Ok(())
 }

@@ -11,10 +11,10 @@ fn offset_2d_straight_line() {
         KnotVector::bezier_knot(1),
         vec![Point2::new(0.0, 0.0), Point2::new(4.0, 0.0)],
     );
-    let offset = curve_offset_2d(&line, 1.0, 20).unwrap();
+    let offset = (curve_offset_2d(&line, 1.0, 20)).unwrap();
     // Check several points along the offset.
     for i in 0..=10 {
-        let u = i as f64 / 10.0;
+        let u = f64::from(i) / 10.0;
         let pt = offset.subs(u);
         assert!(
             (pt.y - 1.0).abs() < 0.05,
@@ -36,9 +36,9 @@ fn offset_3d_straight_line_z_normal() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 0.0, 0.0)],
     );
-    let offset = curve_offset_3d(&line, 2.0, Vector3::unit_z(), 20).unwrap();
+    let offset = (curve_offset_3d(&line, 2.0, Vector3::unit_z(), 20)).unwrap();
     for i in 0..=10 {
-        let u = i as f64 / 10.0;
+        let u = f64::from(i) / 10.0;
         let pt = offset.subs(u);
         assert!(
             (pt.z - 2.0).abs() < 0.05,
@@ -57,12 +57,12 @@ fn surface_offset_flat_plane() {
             vec![Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 3.0, 0.0)],
         ],
     );
-    let offset_surf = surface_offset(&surface, 1.5, (10, 10)).unwrap();
+    let offset_surf = (surface_offset(&surface, 1.5, (10, 10))).unwrap();
     // Check grid of points.
     for i in 0..=5 {
         for j in 0..=5 {
-            let u = i as f64 / 5.0;
-            let v = j as f64 / 5.0;
+            let u = f64::from(i) / 5.0;
+            let v = f64::from(j) / 5.0;
             let pt = offset_surf.subs(u, v);
             assert!(
                 (pt.z - 1.5).abs() < 0.15,
@@ -71,4 +71,61 @@ fn surface_offset_flat_plane() {
             );
         }
     }
+}
+
+#[test]
+fn too_few_samples_are_reported_as_errors() {
+    let line2 = BsplineCurve::new_unchecked(
+        KnotVector::bezier_knot(1),
+        vec![Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)],
+    );
+    assert!(matches!(
+        curve_offset_2d(&line2, 1.0, 3),
+        Err(Error::InsufficientInputCount {
+            operation: "curve_offset_2d",
+            provided: 3,
+            minimum: 4,
+            ..
+        })
+    ));
+
+    let line3 = BsplineCurve::new_unchecked(
+        KnotVector::bezier_knot(1),
+        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+    );
+    assert!(matches!(
+        curve_offset_3d(&line3, 1.0, Vector3::unit_z(), 3),
+        Err(Error::InsufficientInputCount {
+            operation: "curve_offset_3d",
+            provided: 3,
+            minimum: 4,
+            ..
+        })
+    ));
+
+    let surface = BsplineSurface::new_unchecked(
+        (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
+        vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+            vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+        ],
+    );
+    assert!(matches!(
+        surface_offset(&surface, 1.0, (3, 4)),
+        Err(Error::InsufficientInputCount {
+            operation: "surface_offset",
+            input: "u-samples",
+            provided: 3,
+            minimum: 4
+        })
+    ));
+    assert!(matches!(
+        surface_offset(&surface, 1.0, (4, 3)),
+        Err(Error::InsufficientInputCount {
+            operation: "surface_offset",
+            input: "v-samples",
+            provided: 3,
+            minimum: 4
+        })
+    ));
 }

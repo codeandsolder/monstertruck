@@ -41,7 +41,12 @@ pub(super) fn circle_arc_by_three_points(
 fn circum_center(pt0: Point3, pt1: Point3, pt2: Point3) -> Point3 {
     let (vec0, vec1) = (pt1 - pt0, pt2 - pt0);
     let (a2, ab, b2) = (vec0.dot(vec0), vec0.dot(vec1), vec1.dot(vec1));
-    let (det, u, v) = (a2 * b2 - ab * ab, a2 * b2 - ab * b2, a2 * b2 - ab * a2);
+    let det = ab.mul_add(-ab, a2 * b2);
+    // Solving the 2×2 Gram system for the circumcenter coefficients gives
+    // b²(a² - a·b) and a²(b² - a·b). Factoring the shared terms makes
+    // the symmetry explicit and avoids the easy-to-misread product grouping.
+    let u = (a2 - ab) * b2;
+    let v = (b2 - ab) * a2;
     pt0 + u / (2.0 * det) * vec0 + v / (2.0 * det) * vec1
 }
 
@@ -138,7 +143,10 @@ pub(super) fn composite_line_bezier(
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RelaySphere {
     /// Center of fillet circle.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "retained with the relay-sphere state for fillet diagnostics and inspection"
+    )]
     pub(super) center: Point3,
     /// Contact point of sphere and surface0, 3d coordinate and parameter.
     pub(super) contact0: (Point3, Point2),
@@ -291,7 +299,10 @@ pub(super) fn relay_spheres(
     range.map(generator).collect()
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "reference construction retained for comparison with the active custom fillet implementation"
+)]
 fn almost_fillet_patch(rs0: RelaySphere, rs1: RelaySphere) -> BsplineSurface<Vector4> {
     let nurbs0 = rs0.fillet_wire();
     let nurbs1 = rs1.fillet_wire();
@@ -656,7 +667,10 @@ pub(super) fn expand_custom(
 // bundling and the sibling builders (`chamfer_fillet_surface`,
 // `rolling_ball_fillet_surface`) share this argument shape, so a params struct
 // here would either desync those signatures or ripple through `relay_spheres`.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "arguments mirror the two surfaces, relay spheres, and boundary derivatives without an artificial parameter bag"
+)]
 pub(super) fn custom_fillet_surface(
     surface0: &NurbsSurface<Vector4>,
     surface1: &NurbsSurface<Vector4>,

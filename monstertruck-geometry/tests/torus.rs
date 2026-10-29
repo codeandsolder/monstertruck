@@ -12,7 +12,7 @@ proptest! {
         deform in -0.4f64..=0.4
     ) {
         const EPS: f64 = 1.0e-2;
-        let large_radius = 2.0 * small_radius + radius_diff;
+        let large_radius = 2.0f64.mul_add(small_radius, radius_diff);
         let torus = Torus::new_unchecked(Point3::origin(), large_radius, small_radius);
 
         let p = torus.subs(u, v);
@@ -221,10 +221,10 @@ fn a_seam_point_takes_the_periodic_spelling_its_hint_asks_for() {
             "a hint just above the seam must keep the low spelling, got {below:?}",
         );
         let above = torus
-            .search_parameter(seam, Some((2.0 * PI - 0.05, v)), 100)
+            .search_parameter(seam, Some((2.0f64.mul_add(PI, -0.05), v)), 100)
             .expect("a point on the surface must be recovered");
         assert!(
-            (above.0 - 2.0 * PI).abs() < 0.1,
+            2.0f64.mul_add(-PI, above.0).abs() < 0.1,
             "a hint just below 2 pi must keep the high spelling, got {above:?}",
         );
         // Whichever spelling comes back, it is the SAME 3D point. That is what
@@ -241,10 +241,10 @@ fn a_seam_point_takes_the_periodic_spelling_its_hint_asks_for() {
             .search_nearest_parameter(seam, Some((0.05, v)), 100)
             .expect("nearest must answer for an on-surface point");
         let nearest_above = torus
-            .search_nearest_parameter(seam, Some((2.0 * PI - 0.05, v)), 100)
+            .search_nearest_parameter(seam, Some((2.0f64.mul_add(PI, -0.05), v)), 100)
             .expect("nearest must answer for an on-surface point");
         assert!(
-            nearest_below.0.abs() < 0.1 && (nearest_above.0 - 2.0 * PI).abs() < 0.1,
+            nearest_below.0.abs() < 0.1 && 2.0f64.mul_add(-PI, nearest_above.0).abs() < 0.1,
             "the nearest solver must disambiguate the same way: {nearest_below:?} / \
              {nearest_above:?}",
         );
@@ -259,7 +259,7 @@ fn a_seam_point_takes_the_periodic_spelling_its_hint_asks_for() {
 #[test]
 fn unhinted_search_recovers_point_in_declared_period() {
     let torus = Torus::new_unchecked(Point3::origin(), 7.0, 2.0);
-    for u in [0.0, 0.3, 1.9, PI, 4.4, 2.0 * PI - 0.3] {
+    for u in [0.0, 0.3, 1.9, PI, 4.4, 2.0f64.mul_add(PI, -0.3)] {
         for v in [0.0, 0.4, 2.2, PI, 5.9] {
             let point = torus.subs(u, v);
             let (recovered_u, recovered_v) = torus

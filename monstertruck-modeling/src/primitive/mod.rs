@@ -42,6 +42,7 @@ use std::f64::consts::PI;
 /// assert_eq!(rect[2].front().point(), Point3::new(3.0, 1.0, 0.0));
 /// assert_eq!(rect[3].front().point(), Point3::new(0.0, 1.0, 0.0));
 /// ```
+#[must_use]
 pub fn rect<C>(r#box: BoundingBox<Point2>, plane: Plane) -> Wire<Point3, C>
 where Line<Point3>: ToSameGeometry<C> {
     let (min, max) = (r#box.min(), r#box.max());
@@ -85,6 +86,7 @@ where Line<Point3>: ToSameGeometry<C> {
 ///     }
 /// }
 /// ```
+#[must_use]
 pub fn circle<C>(start: Point3, origin: Point3, axis: Vector3, division: usize) -> Wire<Point3, C>
 where Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C> {
     let origin = origin + (start - origin).dot(axis) * axis;
@@ -98,15 +100,15 @@ where Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C> {
     );
 
     let make_vertices = move |i: usize| {
-        let t = 2.0 * PI * i as f64 / division as f64;
+        let t = 2.0 * PI * crate::usize_to_f64(i) / crate::usize_to_f64(division);
         let p = Point3::new(f64::cos(t), f64::sin(t), 0.0);
         Vertex::new(mat.transform_point(p))
     };
     let v = (0..division).map(make_vertices).collect::<Vec<_>>();
 
     let make_edges = move |i: usize| {
-        let t0 = 2.0 * PI * i as f64 / division as f64;
-        let t1 = 2.0 * PI * (i + 1) as f64 / division as f64;
+        let t0 = 2.0 * PI * crate::usize_to_f64(i) / crate::usize_to_f64(division);
+        let t1 = 2.0 * PI * crate::usize_to_f64(i + 1) / crate::usize_to_f64(division);
         let unit_circle = UnitCircle::new();
         let trimmed = TrimmedCurve::new(unit_circle, (t0, t1));
         let mut arc = Processor::new(trimmed);
@@ -133,6 +135,7 @@ where Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C> {
 ///     assert!(x.z.near(&p.z) || x.z.near(&q.z));
 /// }
 /// ```
+#[must_use]
 pub fn cuboid<C, S>(r#box: BoundingBox<Point3>) -> Solid<Point3, C, S>
 where
     Line<Point3>: ToSameGeometry<C>,

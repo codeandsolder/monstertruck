@@ -10,7 +10,7 @@ use std::f64::consts::FRAC_PI_4;
 fn plane_line_pcurve_converts_to_bspline_curve() {
     let plane = Plane::xy();
     let line = Line(Point2::new(0.25, 0.5), Point2::new(1.25, -0.5));
-    let curve = BsplineCurve::<Point3>::try_from(ParameterCurve::new(line, plane))
+    let curve = (BsplineCurve::<Point3>::try_from(ParameterCurve::new(line, plane)))
         .expect("plane line parameter curve should convert to a `BsplineCurve`.");
 
     assert!(curve.subs(0.0).near(&plane.subs(line.0.x, line.0.y)));
@@ -31,8 +31,7 @@ fn revolution_surface_exact_boundary_recovers_internal_iso_angle_line() {
         Point3::new(angle.cos(), angle.sin(), 0.75),
     );
 
-    let boundary = curve
-        .exact_parameter_boundary_2d(&surface)
+    let boundary = (curve.exact_parameter_boundary_2d(&surface))
         .expect("iso-angle line must have an exact surface parameter boundary");
     let line = boundary.curve();
 
@@ -55,8 +54,7 @@ fn revolution_surface_exact_boundary_recovers_iso_angle_nurbs_with_fixed_endpoin
         vec![surface.subs(0.0, angle), surface.subs(1.0, angle)],
     ));
 
-    let boundary = curve
-        .exact_parameter_boundary_2d(&surface)
+    let boundary = (curve.exact_parameter_boundary_2d(&surface))
         .expect("iso-angle NURBS with a fixed endpoint must have an exact boundary");
     let line = boundary.curve();
 
@@ -94,8 +92,7 @@ fn nurbs_extrusion_exact_boundary_recovers_generator_line() {
 
     assert!((curve.1 - curve.0).near(&Vector3::new(0.0, 0.0, vector.z * (v1 - v0))));
 
-    let boundary = curve
-        .exact_parameter_boundary_2d(&surface)
+    let boundary = (curve.exact_parameter_boundary_2d(&surface))
         .expect("extrusion generator line must have an exact surface parameter boundary");
     let line = boundary.curve();
 

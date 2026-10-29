@@ -1,11 +1,14 @@
-use super::*;
+use super::{
+    Arc, Debug, Result, RwLock, TmeshConnection, TmeshConnectionType, TmeshControlPoint,
+    TmeshDirection,
+};
 use crate::errors::Error;
 use std::fmt;
 
 impl<P> TmeshControlPoint<P> {
     /// Creates a new T-mesh control point located at the real space coordinate `p`, with edge conditions in all directions with knot interval `interval`.
-    pub fn new(p: P, interval: f64) -> TmeshControlPoint<P> {
-        TmeshControlPoint {
+    pub const fn new(p: P, interval: f64) -> Self {
+        Self {
             point: p,
             connections: [
                 Some((None, interval)),
@@ -18,7 +21,7 @@ impl<P> TmeshControlPoint<P> {
     }
 
     /// Returns an immutable reference to the location of the control point in real space.
-    pub fn point(&self) -> &P { &self.point }
+    pub const fn point(&self) -> &P { &self.point }
 
     /// Sets the cartesian point of the control point.
     pub fn set_point(&mut self, p: P) { self.point = p; }
@@ -29,23 +32,23 @@ impl<P> TmeshControlPoint<P> {
     // }
 
     /// Get an immutable reference to the connection on the side `dir`.
-    pub fn get(&self, dir: TmeshDirection) -> &Option<TmeshConnection<P>> {
-        &self.connections[dir as usize]
+    pub const fn get(&self, dir: TmeshDirection) -> Option<&TmeshConnection<P>> {
+        self.connections[dir as usize].as_ref()
     }
 
     /// Get a mutable reference to the connection on the side `dir`.
-    fn connection_mut(&mut self, dir: TmeshDirection) -> &mut Option<TmeshConnection<P>> {
+    const fn connection_mut(&mut self, dir: TmeshDirection) -> &mut Option<TmeshConnection<P>> {
         &mut self.connections[dir as usize]
     }
 
     /// Returns the knot coordinates for `self`.
-    pub fn knot_coordinates(&self) -> (f64, f64) { self.knot_coordinates }
+    pub const fn knot_coordinates(&self) -> (f64, f64) { self.knot_coordinates }
 
     /// Sets the knot coordinates for `self`. Only changes the coordinates if `self`
     /// is not connected to any other points or T-junctions. `t` is the horizontal
     /// knot coordinate, and `s` is the vertical.
     ///
-    /// # Returns
+    /// # Errors
     /// - `TmeshExistingConnection` if `self` is connected to anything that is not an edge condition
     ///
     /// - `Ok` if the knot coordinates were changed.
@@ -64,13 +67,13 @@ impl<P> TmeshControlPoint<P> {
 
     /// Sets the weight of the edge condition in the direction `dir` to weight `weight`.
     ///
-    /// # Returns
+    /// # Errors
     /// - `TmeshConnectionNotFound` if the connection is T-junction.
     ///
     /// - `TmeshExistingConnection` if the connection is connected to another point.
     ///
     /// - `Ok` if the connection was modified.
-    pub fn set_edge_con_weight(&mut self, dir: TmeshDirection, weight: f64) -> Result<()> {
+    pub const fn set_edge_con_weight(&mut self, dir: TmeshDirection, weight: f64) -> Result<()> {
         if let Some(connection) = self.connection_mut(dir) {
             // If the connection is not an edge condition, return an error.
             if connection.0.is_some() {
@@ -88,7 +91,7 @@ impl<P> TmeshControlPoint<P> {
     /// `dir` can be either a point connection or an edge condition. Modifies the connected point to also
     /// remove the connection, if it exists. In the case of an error, nothing is modified.
     ///
-    /// # Returns
+    /// # Errors
     /// - `TmeshConnectionNotFound` if the connection does not exist.
     ///
     /// - `TmeshControlPointNotFound` if the connected control point exists and cannot be
@@ -123,7 +126,7 @@ impl<P> TmeshControlPoint<P> {
     /// are extremely difficult to squash, since many T-mesh functions rely on a properly
     /// formatted T-mesh and DO NOT CHECK to make sure they are given one.
     ///
-    /// # Returns
+    /// # Errors
     /// - `TmeshExistingConnection` if `dir` is not an edge condition.
     ///
     /// - `Ok` if the edge condition was successfully removed.
@@ -145,7 +148,7 @@ impl<P> TmeshControlPoint<P> {
     /// by taking the knot coordinates of `point` and applying the delta `ki` to the relevant coordinate.
     /// Only `other`'s knot coordinates will change
     ///
-    /// # Returns
+    /// # Errors
     /// - `TmeshControlPointNotFound` if either `point` or `other` could not be borrowed mutably.
     ///
     /// - `TmeshExistingConnection` if either point has an existing connection in the
@@ -158,8 +161,8 @@ impl<P> TmeshControlPoint<P> {
     /// # Borrows
     /// `connect` borrows both `point` and `other` mutably.
     pub fn connect(
-        point: Arc<RwLock<TmeshControlPoint<P>>>,
-        other: Arc<RwLock<TmeshControlPoint<P>>>,
+        point: &Arc<RwLock<Self>>,
+        other: &Arc<RwLock<Self>>,
         dir: TmeshDirection,
         ki: f64,
     ) -> Result<()> {
@@ -187,7 +190,7 @@ impl<P> TmeshControlPoint<P> {
             {
                 let mut borrow = point.try_write().ok_or(Error::TmeshControlPointNotFound)?;
 
-                borrow.connections[dir as usize] = Some((Some(Arc::clone(&other)), ki));
+                borrow.connections[dir as usize] = Some((Some(Arc::clone(other)), ki));
             }
 
             // point <-> other
@@ -195,7 +198,7 @@ impl<P> TmeshControlPoint<P> {
                 let mut borrow = other.try_write().ok_or(Error::TmeshControlPointNotFound)?;
 
                 // The connected point is connected to self on the opposite side
-                borrow.connections[dir.flip() as usize] = Some((Some(Arc::clone(&point)), ki));
+                borrow.connections[dir.flip() as usize] = Some((Some(Arc::clone(point)), ki));
             }
 
             // Knot coordinates
@@ -225,33 +228,30 @@ impl<P> TmeshControlPoint<P> {
     pub fn con_type(&self, dir: TmeshDirection) -> TmeshConnectionType {
         // The first option differentiates between a T-junction and a knotted (weighted)
         // connection (edge condition or connection to another point).
-        if let Some(con) = self.get(dir).as_ref() {
-            // This option differentiates between a point connection and an edge condition.
+        self.get(dir).map_or(TmeshConnectionType::Tjunction, |con| {
             if con.0.is_some() {
                 TmeshConnectionType::Point
             } else {
                 TmeshConnectionType::Edge
             }
-        } else {
-            TmeshConnectionType::Tjunction
-        }
+        })
     }
 
     /// Returns the knot interval for a connection in the direction `dir`.
     ///
-    /// # Returns
+    /// # Errors
     /// - `None` if a T-junction is found in the direction `dir`.
     ///
     /// - `Some(f64)` otherwise.
     pub fn connection_knot(&self, dir: TmeshDirection) -> Option<f64> {
-        self.get(dir).as_ref().map(|connection| connection.1)
+        self.get(dir).map(|connection| connection.1)
     }
 
     /// Navigates from `self` in the direction `traverse` until a connection is found in the direction `monitor`,
     /// returning a tuple of the point at which that connection was found and the knot interval traversed.
     /// Assumes that `self` has no connection in direction `monitor`.
     ///
-    /// # Returns
+    /// # Errors
     /// - `TmeshConnectionNotFound` if a T junction is found in the direction `traverse` while traversing.
     ///
     /// - `TmeshControlPointNotFound` if an edge condition is found in the direction `traverse` while traversing.
@@ -291,7 +291,7 @@ impl<P> TmeshControlPoint<P> {
                 let borrow = cur_point.read();
 
                 // Found the desired connection
-                if borrow.get(monitor).as_ref().is_some_and(|c| c.0.is_some()) {
+                if borrow.get(monitor).is_some_and(|c| c.0.is_some()) {
                     break 'traverse;
                 }
 
@@ -315,19 +315,15 @@ impl<P> TmeshControlPoint<P> {
 
     /// Returns the connected control point in the direction `dir` if it exists.
     ///
-    /// # Returns
+    /// # Errors
     /// - `TmeshConnectionNotFound` if the connection in direction `dir` is a T-junction.
     ///
     /// - `TmeshControlPointNotFound` if the connection in direction `dir` is an edge condition.
     ///
     /// - `Ok(point)` if the connection in direction `dir` is a point, where `point` is the corresponding control point.
-    pub fn try_connected_point(
-        &self,
-        dir: TmeshDirection,
-    ) -> Result<Arc<RwLock<TmeshControlPoint<P>>>> {
-        let connected_point = &self
+    pub fn try_connected_point(&self, dir: TmeshDirection) -> Result<Arc<RwLock<Self>>> {
+        let connected_point = self
             .get(dir)
-            .as_ref()
             .ok_or(Error::TmeshConnectionNotFound)?
             .0
             .as_ref()
@@ -337,10 +333,10 @@ impl<P> TmeshControlPoint<P> {
     }
 
     /// Returns the connected control point in the direction `dir`.
-    pub fn connected_point(
-        &self,
-        dir: TmeshDirection,
-    ) -> Result<Arc<RwLock<TmeshControlPoint<P>>>> {
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::try_connected_point`].
+    pub fn connected_point(&self, dir: TmeshDirection) -> Result<Arc<RwLock<Self>>> {
         self.try_connected_point(dir)
     }
 }
@@ -355,14 +351,12 @@ where P: Debug
         // Go through all directions for self
         for dir in TmeshDirection::iter() {
             // Write direction
-            write!(f, "\t{}: ", dir)?;
+            write!(f, "\t{dir}: ")?;
 
-            if let Some(con) = self.get(dir).as_ref() {
+            if let Some(con) = self.get(dir) {
                 if let Some(ref point_rc) = con.0 {
                     // Connection to another point.
-                    let point_borrow = point_rc.read();
-                    let point = point_borrow.point();
-                    write!(f, "{:?} => {}", point, con.1)?;
+                    write!(f, "{:?} => {}", point_rc.read().point(), con.1)?;
                 } else {
                     // Edge condition.
                     write!(f, "{}; Edge", con.1)?;

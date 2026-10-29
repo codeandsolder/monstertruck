@@ -88,6 +88,19 @@ fn mixed_winding_multiple_holes() {
 }
 
 #[test]
+fn empty_profile_loop_is_rejected_before_containment_math() {
+    let outer = rect_wire(-2.0, -2.0, 2.0, 2.0);
+    let empty = Wire::new();
+    let result = attach_plane_normalized::<Curve, Surface>(vec![outer, empty]);
+    assert!(matches!(
+        result,
+        Err(Error::FromTopology(
+            monstertruck_topology::errors::Error::EmptyWire
+        ))
+    ));
+}
+
+#[test]
 fn open_wire_rejected() {
     let v0 = builder::vertex(Point3::new(0.0, 0.0, 0.0));
     let v1 = builder::vertex(Point3::new(1.0, 0.0, 0.0));

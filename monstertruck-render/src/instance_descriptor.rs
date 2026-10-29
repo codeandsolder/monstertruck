@@ -1,10 +1,15 @@
 use crate::SamplerBindingType::Filtering;
-use crate::*;
+use crate::{
+    BindingType, BufferBindingType, BufferHandler, BufferUsages, Device, FilterMode, Material,
+    Matrix4, MipmapFilterMode, PolygonState, PreBindGroupLayoutEntry, Sampler, SamplerDescriptor,
+    ShaderStages, SquareMatrix, TextureSampleType, TextureView, TextureViewDescriptor,
+    TextureViewDimension, Vector4, matrix4_to_raw_f32, narrow_f64_to_f32,
+};
 
 impl Default for Material {
-    #[inline(always)]
-    fn default() -> Material {
-        Material {
+    #[inline]
+    fn default() -> Self {
+        Self {
             albedo: Vector4::new(1.0, 1.0, 1.0, 1.0),
             roughness: 0.5,
             reflectance: 0.25,
@@ -28,24 +33,26 @@ impl Material {
     ///     float ambient_ratio;
     /// };
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn buffer(&self, device: &Device) -> BufferHandler {
         let material_data: [f32; 8] = [
-            self.albedo[0] as f32,
-            self.albedo[1] as f32,
-            self.albedo[2] as f32,
-            self.albedo[3] as f32,
-            self.roughness as f32,
-            self.reflectance as f32,
-            self.ambient_ratio as f32,
-            self.background_ratio as f32,
+            narrow_f64_to_f32(self.albedo[0]),
+            narrow_f64_to_f32(self.albedo[1]),
+            narrow_f64_to_f32(self.albedo[2]),
+            narrow_f64_to_f32(self.albedo[3]),
+            narrow_f64_to_f32(self.roughness),
+            narrow_f64_to_f32(self.reflectance),
+            narrow_f64_to_f32(self.ambient_ratio),
+            narrow_f64_to_f32(self.background_ratio),
         ];
         BufferHandler::from_slice(&material_data, device, BufferUsages::UNIFORM)
     }
 
     #[doc(hidden)]
-    #[inline(always)]
-    pub fn bgl_entry() -> PreBindGroupLayoutEntry {
+    #[inline]
+    #[must_use]
+    pub const fn bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::FRAGMENT,
             ty: BindingType::Buffer {
@@ -59,11 +66,11 @@ impl Material {
 }
 
 impl Default for PolygonState {
-    #[inline(always)]
-    fn default() -> PolygonState {
-        PolygonState {
+    #[inline]
+    fn default() -> Self {
+        Self {
             matrix: Matrix4::identity(),
-            material: Default::default(),
+            material: Material::default(),
             texture: None,
             backface_culling: true,
         }
@@ -80,14 +87,16 @@ impl PolygonState {
     ///     mat4 uniform_matrix;
     /// };
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn matrix_buffer(&self, device: &Device) -> BufferHandler {
-        let matrix_data = matrix4_to_f32(self.matrix);
+        let matrix_data = matrix4_to_raw_f32(self.matrix);
         BufferHandler::from_slice(&matrix_data, device, BufferUsages::UNIFORM)
     }
 
     #[doc(hidden)]
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn matrix_bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
@@ -112,12 +121,14 @@ impl PolygonState {
     ///     float ambient_ratio;
     /// };
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn material_buffer(&self, device: &Device) -> BufferHandler { self.material.buffer(device) }
 
     #[doc(hidden)]
-    #[inline(always)]
-    pub fn material_bgl_entry() -> PreBindGroupLayoutEntry { Material::bgl_entry() }
+    #[inline]
+    #[must_use]
+    pub const fn material_bgl_entry() -> PreBindGroupLayoutEntry { Material::bgl_entry() }
 
     /// Creates texture view and sampler of the instance's texture image.
     ///
@@ -127,9 +138,10 @@ impl PolygonState {
     /// layout(set = 1, binding = 2) uniform texture2D texture_view;
     /// layout(set = 1, binding = 3) uniform sampler texture_sampler;
     /// ```
+    #[must_use]
     pub fn textureview_and_sampler(&self, device: &Device) -> Option<(TextureView, Sampler)> {
         let texture = self.texture.as_ref()?;
-        let view = texture.create_view(&Default::default());
+        let view = texture.create_view(&TextureViewDescriptor::default());
         let sampler = device.create_sampler(&SamplerDescriptor {
             mag_filter: FilterMode::Linear,
             min_filter: FilterMode::Nearest,
@@ -142,8 +154,9 @@ impl PolygonState {
     }
 
     #[doc(hidden)]
-    #[inline(always)]
-    pub fn textureview_bgl_entry() -> PreBindGroupLayoutEntry {
+    #[inline]
+    #[must_use]
+    pub const fn textureview_bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::FRAGMENT,
             ty: BindingType::Texture {
@@ -156,8 +169,9 @@ impl PolygonState {
     }
 
     #[doc(hidden)]
-    #[inline(always)]
-    pub fn sampler_bgl_entry() -> PreBindGroupLayoutEntry {
+    #[inline]
+    #[must_use]
+    pub const fn sampler_bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::FRAGMENT,
             ty: BindingType::Sampler(Filtering),

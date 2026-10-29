@@ -1,7 +1,9 @@
 //! Demonstrates `BsplineSurface::birail1` and `birail2` -- creating surfaces
 //! by sweeping profiles along two rail curves.
 
-use monstertruck_geometry::prelude::*;
+use monstertruck_geometry::prelude::{
+    BsplineCurve, BsplineSurface, KnotVector, ParametricSurface, Point3,
+};
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Two diverging rails.
@@ -32,7 +34,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         ],
     );
 
-    let surf1 = BsplineSurface::birail1(profile, &rail1, &rail2, 10)?;
+    let surf1 = BsplineSurface::birail1(&profile, &rail1, &rail2, 10)?;
     println!("Birail1 surface (single profile, diverging rails):");
     println!(
         "  u-degree = {}, v-degree = {}",

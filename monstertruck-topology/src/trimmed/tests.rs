@@ -29,20 +29,20 @@ fn tetrahedron() -> Shell<(), (), ()> {
 
 fn trimmed(shell: Shell<(), (), ()>) -> TrimmedShell<(), (), (), ()> { TrimmedShell::from(shell) }
 
-/// `TrimmedSolid::try_new` must accept exactly what `Solid::try_new`
+/// `TrimmedSolid::new` must accept exactly what `Solid::new`
 /// accepts. Both are checked on the same shell so the two cannot drift
 /// apart silently -- they share one definition
 /// (`Shell::check_solid_boundary`) precisely so that this assertion holds.
 #[test]
 fn try_new_accepts_a_closed_manifold_boundary_just_as_solid_try_new_does() {
     let shell = tetrahedron();
-    assert!(Solid::try_new(vec![shell.clone()]).is_ok());
-    assert!(TrimmedSolid::try_new(vec![trimmed(shell)]).is_ok());
+    assert!(Solid::new(vec![shell.clone()]).is_ok());
+    assert!(TrimmedSolid::new(vec![trimmed(shell)]).is_ok());
 }
 
 /// The C11 shape: a boundary shell one face short -- what a typed surface
-/// refusal upstream leaves behind. `TrimmedSolid::try_new` must refuse it
-/// with the SAME typed error `Solid::try_new` gives, and the unchecked
+/// refusal upstream leaves behind. `TrimmedSolid::new` must refuse it
+/// with the SAME typed error `Solid::new` gives, and the unchecked
 /// `TrimmedSolid::new` must still build it, because that is what `new`
 /// has always done and callers depend on it.
 #[test]
@@ -52,18 +52,20 @@ fn try_new_refuses_a_boundary_shell_that_lost_a_face() {
     assert_eq!(shell.len(), 3);
 
     assert_eq!(
-        Solid::try_new(vec![shell.clone()]).err(),
+        Solid::new(vec![shell.clone()]).err(),
         Some(Error::NotClosedShell),
     );
     assert_eq!(
-        TrimmedSolid::try_new(vec![trimmed(shell.clone())]).err(),
+        TrimmedSolid::new(vec![trimmed(shell.clone())]).err(),
         Some(Error::NotClosedShell),
         "the trimmed path must refuse what the plain path refuses",
     );
     assert_eq!(
-        TrimmedSolid::new(vec![trimmed(shell)]).boundaries().len(),
+        TrimmedSolid::new_unchecked(vec![trimmed(shell)])
+            .boundaries()
+            .len(),
         1,
-        "`new` is the unchecked constructor and must stay unchecked",
+        "the explicit unchecked constructor preserves the trusted-input path",
     );
 }
 
@@ -77,11 +79,11 @@ fn try_new_distinguishes_a_disconnected_boundary_from_an_open_one() {
         shell.push(face);
     }
     assert_eq!(
-        TrimmedSolid::try_new(vec![trimmed(shell)]).err(),
+        TrimmedSolid::new(vec![trimmed(shell)]).err(),
         Some(Error::NotConnected),
     );
     assert_eq!(
-        TrimmedSolid::try_new(vec![TrimmedShell::<(), (), (), ()>::from(Shell::new())]).err(),
+        TrimmedSolid::new(vec![TrimmedShell::<(), (), (), ()>::from(Shell::new())]).err(),
         Some(Error::EmptyShell),
     );
 }

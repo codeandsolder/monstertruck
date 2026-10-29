@@ -460,7 +460,7 @@ where
             shell.push(face);
             shell
         });
-    Solid::try_new(vec![shell]).map_err(|source| ShapeOpsError::InvalidOutputShell {
+    Solid::new(vec![shell]).map_err(|source| ShapeOpsError::InvalidOutputShell {
         operation: HALF_SPACE_CLIP_OPERATION,
         source,
     })

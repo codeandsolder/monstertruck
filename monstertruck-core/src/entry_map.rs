@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
-use std::hash::*;
+use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 
-/// A utility structure for chaining entry and or_insert_with by a fixed closure.
+/// A utility structure for chaining entry and `or_insert_with` by a fixed closure.
 ///
 /// # Example
 /// ```
@@ -30,7 +30,7 @@ pub struct EntryMap<K, V, KF, VF, P, S = RandomState> {
     _phantom: PhantomData<P>,
 }
 
-/// type alias for EntryMap with `FxHasher`.
+/// type alias for `EntryMap` with `FxHasher`.
 pub type FxEntryMap<K, V, KF, VF, P> = EntryMap<K, V, KF, VF, P, rustc_hash::FxBuildHasher>;
 
 impl<K, V, KF, VF, P, S> EntryMap<K, V, KF, VF, P, S>

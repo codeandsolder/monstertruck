@@ -28,27 +28,29 @@ impl ParametricCurve for Segment {
             _ => Vector3::zero(),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, t: f64) -> Point3 {
         self.ends.0
             + (self.ends.1 - self.ends.0) * (t - self.range.0) / (self.range.1 - self.range.0)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative(&self, _: f64) -> Vector3 {
         (self.ends.1 - self.ends.0) / (self.range.1 - self.range.0)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_2(&self, _: f64) -> Vector3 { Vector3::zero() }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> ParameterRange {
         (Bound::Included(self.range.0), Bound::Included(self.range.1))
     }
 }
 
-impl BoundedCurve for Segment {}
+impl BoundedCurve for Segment {
+    fn range_tuple(&self) -> (f64, f64) { self.range }
+}
 
 impl ParameterTransform for Segment {
-    #[inline(always)]
+    #[inline]
     fn parameter_transform(&mut self, scalar: f64, r#move: f64) -> &mut Self {
         self.range.0 = self.range.0 * scalar + r#move;
         self.range.1 = self.range.1 * scalar + r#move;
@@ -57,7 +59,7 @@ impl ParameterTransform for Segment {
 }
 
 impl Cut for Segment {
-    #[inline(always)]
+    #[inline]
     fn cut(&mut self, t: f64) -> Self {
         let p = self.subs(t);
         let res = Segment {
@@ -74,7 +76,7 @@ impl Cut for Segment {
 
 impl Concat<Segment> for Segment {
     type Output = Segment;
-    #[inline(always)]
+    #[inline]
     fn try_concat(&self, rhs: &Self) -> std::result::Result<Self, ConcatError<Point3>> {
         if !self.range.1.near(&rhs.range.0) {
             Err(ConcatError::DisconnectedParameters(
@@ -115,7 +117,7 @@ impl SearchParameter<CurveParameter> for Segment {
 }
 
 impl Invertible for Segment {
-    #[inline(always)]
+    #[inline]
     fn invert(&mut self) {
         *self = Segment {
             ends: (self.ends.1, self.ends.0),
@@ -211,7 +213,7 @@ fn solid_cut_edge() -> anyhow::Result<()> {
             Ok(faces.into())
         })
         .collect::<Result<Vec<_>>>()?;
-    Solid::new_unchecked(new_shells);
+    let _ = Solid::new_unchecked(new_shells);
 
     assert!(tri.remove_vertex_by_concat_edges(v[4].id()).is_some());
     let count = tri.edge_iter().count();

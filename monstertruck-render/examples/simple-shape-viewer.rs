@@ -46,18 +46,20 @@ struct MyApp {
 }
 
 impl MyApp {
-    fn create_camera() -> Camera {
+    fn create_camera() -> AppResult<Camera> {
         let matrix = Matrix4::look_at_rh(
             Point3::new(1.5, 1.5, 1.5),
             Point3::origin(),
             Vector3::unit_y(),
         );
-        Camera {
-            matrix: matrix.invert().unwrap(),
+        Ok(Camera {
+            matrix: matrix
+                .invert()
+                .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
             method: ProjectionMethod::perspective(Rad(PI / 4.0)),
             near_clip: 0.1,
             far_clip: 40.0,
-        }
+        })
     }
     fn update_render_mode(&mut self) {
         match self.render_mode {
@@ -116,8 +118,8 @@ impl MyApp {
     fn load_shape<R: Read>(
         creator: &InstanceCreator,
         reader: R,
-    ) -> (PolygonInstance, WireFrameInstance) {
-        let solid: Solid = serde_json::from_reader(reader).unwrap();
+    ) -> AppResult<(PolygonInstance, WireFrameInstance)> {
+        let solid: Solid = serde_json::from_reader(reader)?;
         let mut bdd_box = BoundingBox::new();
         solid
             .boundaries()
@@ -145,33 +147,36 @@ impl MyApp {
             .edge_iter()
             .map(|edge| edge.curve())
             .collect::<Vec<_>>();
+        let inverse = mat
+            .invert()
+            .ok_or_else(|| std::io::Error::other("shape normalization matrix is singular"))?;
         let polygon_state = PolygonState {
-            matrix: mat.invert().unwrap(),
+            matrix: inverse,
             ..Default::default()
         };
         let wire_state = WireFrameState {
-            matrix: mat.invert().unwrap(),
+            matrix: inverse,
             ..Default::default()
         };
-        (
-            creator.create_instance(&mesh_solid.to_polygon(), &polygon_state),
-            creator.create_instance(&curves, &wire_state),
-        )
+        Ok((
+            creator.create_instance(&mesh_solid.to_polygon(), &polygon_state)?,
+            creator.create_instance(&curves, &wire_state)?,
+        ))
     }
 }
 
 #[async_trait(?Send)]
 impl App for MyApp {
-    async fn init(window: Arc<winit::window::Window>) -> MyApp {
+    async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;
         let scene_desc = WindowSceneDescriptor {
             studio: StudioConfig {
                 background: Color::BLACK,
-                camera: MyApp::create_camera(),
+                camera: MyApp::create_camera()?,
                 lights: vec![Light {
                     position: Point3::new(1.0, 1.0, 1.0),
                     color: Vector3::new(1.0, 1.0, 1.0),
-                    light_type: LightType::Point,
+                    kind: LightType::Point,
                 }],
             },
             backend_buffer: BackendBufferConfig {
@@ -179,11 +184,9 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &scene_desc)
-            .await
-            .expect("GPU window scene is available");
+        let mut scene = WindowScene::from_window(window, &scene_desc).await?;
         let creator = scene.instance_creator();
-        let (instance, wireframe) = Self::load_shape(&creator, PUNCHED_CUBE_BYTES);
+        let (instance, wireframe) = Self::load_shape(&creator, PUNCHED_CUBE_BYTES)?;
         scene.add_object(&instance);
         scene.add_object(&wireframe);
         let mut app = MyApp {
@@ -196,20 +199,26 @@ impl App for MyApp {
             render_mode: RenderMode::NaiveSurface,
         };
         app.update_render_mode();
-        app
+        Ok(app)
     }
 
     fn app_title<'a>() -> Option<&'a str> { Some("simple shape viewer") }
 
     fn dropped_file(&mut self, path: std::path::PathBuf) -> ControlFlow {
-        let file = std::fs::File::open(path).unwrap();
-        self.scene.clear_objects();
-        let (instance, wireframe) = Self::load_shape(&self.creator, file);
-        self.scene.add_object(&instance);
-        self.scene.add_object(&wireframe);
-        self.instance = instance;
-        self.wireframe = wireframe;
-        self.update_render_mode();
+        let result = std::fs::File::open(path)
+            .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })
+            .and_then(|file| Self::load_shape(&self.creator, file));
+        match result {
+            Ok((instance, wireframe)) => {
+                self.scene.clear_objects();
+                self.scene.add_object(&instance);
+                self.scene.add_object(&wireframe);
+                self.instance = instance;
+                self.wireframe = wireframe;
+                self.update_render_mode();
+            }
+            Err(error) => eprintln!("shape reload failed: {error}"),
+        }
         Self::default_control_flow()
     }
 
@@ -223,7 +232,7 @@ impl App for MyApp {
                     let desc = self.scene.studio_config_mut();
                     (&mut desc.lights[0], &desc.camera)
                 };
-                match light.light_type {
+                match light.kind {
                     LightType::Point => {
                         light.position = camera.position();
                     }
@@ -244,10 +253,10 @@ impl App for MyApp {
                 let camera = &mut self.scene.studio_config_mut().camera;
                 match &mut camera.method {
                     ProjectionMethod::Parallel { screen_size } => {
-                        *screen_size *= 0.9f64.powf(y as f64);
+                        *screen_size *= 0.9f64.powf(f64::from(y));
                     }
                     ProjectionMethod::Perspective { .. } => {
-                        let trans_vec = camera.eye_direction() * y as f64 * 0.2;
+                        let trans_vec = camera.eye_direction() * f64::from(y) * 0.2;
                         camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
                     }
                 }
@@ -269,8 +278,8 @@ impl App for MyApp {
             axis += dir2d[0] * matrix[1].truncate();
             axis /= axis.magnitude();
             let angle = dir2d.magnitude() * 0.01;
-            let mat = Matrix4::from_axis_angle(axis, Rad(angle));
-            *matrix = mat.invert().unwrap() * *matrix;
+            let inverse_rotation = Matrix4::from_axis_angle(axis, Rad(-angle));
+            *matrix = inverse_rotation * *matrix;
         }
         self.prev_cursor = position;
         Self::default_control_flow()
@@ -298,14 +307,14 @@ impl App for MyApp {
                     let desc = self.scene.studio_config_mut();
                     (&mut desc.lights[0], &desc.camera)
                 };
-                *light = match light.light_type {
+                *light = match light.kind {
                     LightType::Point => {
                         let mut vec = camera.position();
                         vec /= vec.to_vec().magnitude();
                         Light {
                             position: vec,
                             color: Vector3::new(1.0, 1.0, 1.0),
-                            light_type: LightType::Uniform,
+                            kind: LightType::Uniform,
                         }
                     }
                     LightType::Uniform => {
@@ -313,7 +322,7 @@ impl App for MyApp {
                         Light {
                             position,
                             color: Vector3::new(1.0, 1.0, 1.0),
-                            light_type: LightType::Point,
+                            kind: LightType::Point,
                         }
                     }
                 };
@@ -332,7 +341,11 @@ impl App for MyApp {
         Self::default_control_flow()
     }
 
-    fn render(&mut self) { self.scene.render_frame(); }
+    fn render(&mut self) {
+        if let Err(error) = self.scene.render_frame() {
+            eprintln!("render failed: {error}");
+        }
+    }
 }
 
 fn main() { MyApp::run(); }

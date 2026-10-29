@@ -41,7 +41,7 @@ fn test_substitution() {
             let v = (j as f64) / (N as f64);
             assert_near2!(
                 bspsurface.subs(u, v),
-                Vector2::new(v, 2.0 * v * (1.0 - v) * (2.0 * u - 1.0) + u),
+                Vector2::new(v, (2.0 * v * (1.0 - v)).mul_add(2.0f64.mul_add(u, -1.0), u)),
             );
         }
     }
@@ -72,7 +72,7 @@ fn test_uderivation() {
             let v = (j as f64) / (N as f64);
             assert_near2!(
                 bspsurface.uder(u, v),
-                Vector2::new(0.0, 4.0 * v * (1.0 - v) + 1.0),
+                Vector2::new(0.0, (4.0 * v).mul_add(1.0 - v, 1.0)),
             );
         }
     }
@@ -103,7 +103,10 @@ fn test_vderivation() {
             let v = (j as f64) / (N as f64);
             assert_near2!(
                 bspsurface.vder(u, v),
-                Vector2::new(1.0, -2.0 * (2.0 * u - 1.0) * (2.0 * v - 1.0)),
+                Vector2::new(
+                    1.0,
+                    -2.0 * 2.0f64.mul_add(u, -1.0) * 2.0f64.mul_add(v, -1.0)
+                ),
             );
         }
     }
@@ -177,7 +180,10 @@ fn test_uvderivation() {
             let v = (j as f64) / (N as f64);
             assert_near2!(
                 bspsurface.uvder(u, v),
-                Vector2::new(0.0, 8.0 * u * v - 4.0 * u - 12.0 * v + 6.0),
+                Vector2::new(
+                    0.0,
+                    12.0f64.mul_add(-v, 4.0f64.mul_add(-u, 8.0 * u * v)) + 6.0
+                ),
             );
         }
     }
@@ -214,7 +220,7 @@ fn test_vvderivation() {
             let v = (j as f64) / (N as f64);
             assert_near2!(
                 bspsurface.vvder(u, v),
-                Vector2::new(0.0, 4.0 * (u * u - 3.0 * u + 1.0)),
+                Vector2::new(0.0, 4.0 * (3.0f64.mul_add(-u, u * u) + 1.0)),
             );
         }
     }
@@ -266,9 +272,13 @@ fn endpoint_test_surface() -> BsplineSurface<Point3> {
         .map(|i| {
             (0..4)
                 .map(|j| {
-                    let i = i as f64;
-                    let j = j as f64;
-                    Point3::new(i, j, 0.1 * (i * i + j * j) + 0.05 * i * j)
+                    let i = f64::from(i);
+                    let j = f64::from(j);
+                    Point3::new(
+                        i,
+                        j,
+                        f64::mul_add(0.05 * i, j, 0.1 * f64::mul_add(j, j, i * i)),
+                    )
                 })
                 .collect::<Vec<_>>()
         })
@@ -276,7 +286,7 @@ fn endpoint_test_surface() -> BsplineSurface<Point3> {
     BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points)
 }
 
-fn seam_samples() -> impl Iterator<Item = f64> { (0..=20).map(|i| i as f64 / 20.0) }
+fn seam_samples() -> impl Iterator<Item = f64> { (0..=20).map(|i| f64::from(i) / 20.0) }
 
 fn assert_u_seam_matches(surface: &BsplineSurface<Point3>, cut: f64, check_higher_order: bool) {
     let mut left = surface.clone();
@@ -369,6 +379,48 @@ fn assert_v_seam_matches(surface: &BsplineSurface<Point3>, cut: f64, check_highe
 }
 
 #[test]
+fn sectional_curve_respects_v_bounds_when_u_spans_full_domain() {
+    let surface = BsplineSurface::new_unchecked(
+        (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
+        vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+            vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+        ],
+    );
+    let bounds = BoundingBox::from_iter(&[Vector2::new(0.0, 0.25), Vector2::new(1.0, 0.75)]);
+    let curve = surface.sectional_curve(bounds).expect("section is valid");
+
+    assert_near!(curve.subs(0.0), surface.subs(0.0, 0.25));
+    assert_near!(curve.subs(1.0), surface.subs(1.0, 0.75));
+}
+
+#[test]
+fn high_degree_sectional_curve_does_not_overflow_combinatorics() {
+    let degree = 68;
+    let knot_vectors = (
+        KnotVector::bezier_knot(degree),
+        KnotVector::bezier_knot(degree),
+    );
+    let control_points = vec![vec![Point3::origin(); degree + 1]; degree + 1];
+    let surface = BsplineSurface::new_unchecked(knot_vectors, control_points);
+    let bounds = BoundingBox::from_iter(&[Vector2::new(0.0, 0.0), Vector2::new(1.0, 1.0)]);
+    let curve = surface.sectional_curve(bounds);
+    assert!(curve.is_some());
+}
+
+#[test]
+fn ucut_near_domain_start_continuity_regression() {
+    let surface = endpoint_test_surface();
+    assert_u_seam_matches(&surface, 7.0e-7, true);
+}
+
+#[test]
+fn vcut_near_domain_start_continuity_regression() {
+    let surface = endpoint_test_surface();
+    assert_v_seam_matches(&surface, 7.0e-7, true);
+}
+
+#[test]
 fn ucut_at_domain_start_regression() {
     let surface = endpoint_test_surface();
     let mut left = surface.clone();
@@ -376,13 +428,13 @@ fn ucut_at_domain_start_regression() {
 
     assert_eq!(left.control_points().len(), 1);
     for i in 0..=20 {
-        let v = i as f64 / 20.0;
+        let v = f64::from(i) / 20.0;
         assert_near!(left.subs(0.0, v), surface.subs(0.0, v));
     }
     for i in 0..=20 {
-        let u = i as f64 / 20.0;
+        let u = f64::from(i) / 20.0;
         for j in 0..=20 {
-            let v = j as f64 / 20.0;
+            let v = f64::from(j) / 20.0;
             assert_near!(right.subs(u, v), surface.subs(u, v));
         }
     }
@@ -396,13 +448,13 @@ fn vcut_at_domain_start_regression() {
 
     assert_eq!(lower.control_points()[0].len(), 1);
     for i in 0..=20 {
-        let u = i as f64 / 20.0;
+        let u = f64::from(i) / 20.0;
         assert_near!(lower.subs(u, 0.0), surface.subs(u, 0.0));
     }
     for i in 0..=20 {
-        let u = i as f64 / 20.0;
+        let u = f64::from(i) / 20.0;
         for j in 0..=20 {
-            let v = j as f64 / 20.0;
+            let v = f64::from(j) / 20.0;
             assert_near!(upper.subs(u, v), surface.subs(u, v));
         }
     }

@@ -79,14 +79,15 @@ pub(super) fn parameter_curve_points(
     boundary: &ParameterCurve<Curve2D, Box<Surface>>,
     tolerance: f64,
 ) -> Vec<Point2> {
-    linear_curve2d_boundary(boundary.curve(), tolerance)
-        .map(|line| line_points(line, tolerance))
-        .unwrap_or_else(|| {
+    linear_curve2d_boundary(boundary.curve(), tolerance).map_or_else(
+        || {
             boundary
                 .curve()
                 .parameter_division(boundary.curve().range_tuple(), tolerance)
                 .1
-        })
+        },
+        |line| line_points(line, tolerance),
+    )
 }
 
 pub(super) fn boundary_matches_surface_curve(
@@ -131,7 +132,7 @@ where C: ParametricCurve<Point = Point3> + BoundedCurve<Point = Point3> {
     }
 }
 
-fn orient_boundary_line(line: Line<Point2>, reversed: bool) -> Line<Point2> {
+const fn orient_boundary_line(line: Line<Point2>, reversed: bool) -> Line<Point2> {
     if reversed { Line(line.1, line.0) } else { line }
 }
 
@@ -215,10 +216,10 @@ pub(super) fn curve2d_from_sampled_boundary(points: Vec<Point2>) -> Option<Curve
         if is_linear {
             Some(Curve2D::Line(line))
         } else {
-            let denom = (points.len() - 1) as f64;
+            let denom = crate::usize_to_f64(points.len() - 1);
             let knot_vec = KnotVector::from(
                 iter::once(0.0)
-                    .chain((0..points.len()).map(|index| index as f64 / denom))
+                    .chain((0..points.len()).map(|index| crate::usize_to_f64(index) / denom))
                     .chain(iter::once(1.0))
                     .collect::<Vec<_>>(),
             );
@@ -251,7 +252,7 @@ where C: ParametricCurve3D<Point = Point3> + BoundedCurve<Point = Point3> {
     let (t0, t1) = curve.range_tuple();
     const SAMPLES: usize = 16;
     (0..=SAMPLES).all(|index| {
-        let ratio = index as f64 / SAMPLES as f64;
+        let ratio = crate::usize_to_f64(index) / crate::usize_to_f64(SAMPLES);
         let point = curve.evaluate(t0 * (1.0 - ratio) + t1 * ratio);
         surface
             .search_parameter(point, None, 32)
@@ -418,7 +419,7 @@ impl ToTrimmedParameterCurves for Solid {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn to_trimmed_with_parameter_curves(&self, tolerance: f64) -> Self::Output {
-        TrimmedSolid::new(
+        TrimmedSolid::new_unchecked(
             self.boundaries()
                 .par_iter()
                 .map(|shell| shell.to_trimmed_with_parameter_curves(tolerance))

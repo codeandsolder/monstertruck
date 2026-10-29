@@ -1,3 +1,7 @@
+#![allow(
+    clippy::suboptimal_flops,
+    reason = "reference polynomial formulas stay expanded so the oracle is readable and does not change rounding via FMA"
+)]
 #![cfg(feature = "polynomial")]
 
 use monstertruck_core::{cgmath64::*, tolerance::*};
@@ -28,7 +32,7 @@ fn polycurve_test() {
     ];
     let poly = PolynomialCurve::<Point1>(coef);
     for i in 0..10 {
-        let t = i as f64;
+        let t = f64::from(i);
         let res = poly.subs(t);
         let ans = Point1::new(t * t * t + 2.0 * t * t + 3.0 * t + 4.0);
         assert_eq!(res, ans);
@@ -67,21 +71,22 @@ fn exec_polycurve_snp_on_curve(rng: &mut StdRng) -> bool {
     let t = 20.0 * rng.random::<f64>() - 10.0;
     let pt = poly.subs(t);
     let hint = t + 1.0 * rng.random::<f64>() - 0.5;
-    match algo::curve::search_nearest_parameter(&poly, pt, hint, 100) {
-        Some(res) => match poly.subs(res).near(&pt) {
-            true => true,
-            false => {
+    algo::curve::search_nearest_parameter(&poly, pt, hint, 100).map_or_else(
+        || {
+            eprintln!("not converge\npolynomial: {poly:?}\nt: {t:?}\nhint: {hint:?}");
+            false
+        },
+        |res| {
+            if poly.subs(res).near(&pt) {
+                true
+            } else {
                 eprintln!(
                     "wrong answer\npolynomial: {poly:?}\nt: {t:?}\nhint: {hint:?}\nresult: {res:?}",
                 );
                 false
             }
         },
-        None => {
-            eprintln!("not converge\npolynomial: {poly:?}\nt: {t:?}\nhint: {hint:?}");
-            false
-        }
-    }
+    )
 }
 
 #[test]
@@ -114,7 +119,7 @@ fn exec_polycurve_division(rng: &mut StdRng) -> bool {
         assert_eq!(pt0, pt);
         let pt1 = poly.subs(a[1]);
         (1..3).all(|i| {
-            let t = i as f64 / 3.0;
+            let t = f64::from(i) / 3.0;
             let res = pt0 + (pt1 - pt0) * t;
             let t = a[0] * (1.0 - t) + a[1] * t;
             let ans = poly.subs(t);
@@ -158,9 +163,8 @@ fn exec_polycurve_closest_point(rng: &mut StdRng) -> bool {
     let poly0 = PolynomialCurve::<Point3>(coef0);
     let poly1 = PolynomialCurve::<Point3>(coef1);
     let res = algo::curve::search_closest_parameter(&poly0, &poly1, (0.5, 0.5), 100);
-    let (t0, t1) = match res {
-        Some(res) => res,
-        None => return false,
+    let Some((t0, t1)) = res else {
+        return false;
     };
 
     let (p0, der0) = (poly0.subs(t0), poly0.der(t0));
@@ -206,9 +210,8 @@ fn exec_polycurve_intersection_point(rng: &mut StdRng) -> bool {
     let poly0 = PolynomialCurve::<Point2>(coef0);
     let poly1 = PolynomialCurve::<Point2>(coef1);
     let res = algo::curve::search_intersection_parameter(&poly0, &poly1, (0.5, 0.5), 100);
-    let (t0, t1) = match res {
-        Some(res) => res,
-        None => return false,
+    let Some((t0, t1)) = res else {
+        return false;
     };
 
     let (p0, p1) = (poly0.subs(t0), poly1.subs(t1));

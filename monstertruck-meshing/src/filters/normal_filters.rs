@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    FaceNormal, Faces, InnerSpace, Point3, PolygonMesh, PolygonMeshEditor, StandardAttributes,
+    Tolerance, Vector3, Vertex, Zero,
+};
 use rustc_hash::FxHashMap as HashMap;
 
 /// Filters for adding normals
@@ -186,15 +189,15 @@ pub trait NormalFilters {
 
 impl NormalFilters for PolygonMesh {
     fn normalize_normals(&mut self) -> &mut Self {
-        let mut mesh = self.debug_editor();
+        let mut mesh = self.editor();
         let PolygonMeshEditor {
             attributes: StandardAttributes { normals, .. },
             faces,
             ..
         } = &mut mesh;
-        normals
-            .iter_mut()
-            .for_each(move |normal| *normal = normal.normalize());
+        for normal in normals.iter_mut() {
+            *normal = normal.normalize();
+        }
         faces.face_iter_mut().flatten().for_each(|v| {
             if let Some(idx) = v.nor
                 && !normals[idx].magnitude2().near(&1.0)
@@ -206,7 +209,7 @@ impl NormalFilters for PolygonMesh {
         self
     }
     fn make_face_compatible_to_normal(&mut self) -> &mut Self {
-        let mut mesh = self.debug_editor();
+        let mut mesh = self.editor();
         let PolygonMeshEditor {
             attributes: StandardAttributes {
                 positions, normals, ..
@@ -216,7 +219,7 @@ impl NormalFilters for PolygonMesh {
         } = &mut mesh;
         for face in faces.face_iter_mut() {
             let normal = face.iter().fold(Vector3::zero(), |normal, v| {
-                normal + v.nor.map(|i| normals[i]).unwrap_or_else(Vector3::zero)
+                normal + v.nor.map_or_else(Vector3::zero, |i| normals[i])
             });
             let face_normal = FaceNormal::new(positions, face, 0).normal;
             if normal.dot(face_normal) < 0.0 {
@@ -227,7 +230,7 @@ impl NormalFilters for PolygonMesh {
         self
     }
     fn make_normal_compatible_to_face(&mut self) -> &mut Self {
-        let mut mesh = self.debug_editor();
+        let mut mesh = self.editor();
         let PolygonMeshEditor {
             attributes: StandardAttributes {
                 positions, normals, ..
@@ -237,7 +240,7 @@ impl NormalFilters for PolygonMesh {
         } = &mut mesh;
         for face in faces.face_iter_mut() {
             let face_normal = FaceNormal::new(positions, face, 0).normal;
-            face.iter_mut().for_each(|v| {
+            for v in face.iter_mut() {
                 v.nor = v.nor.map(|idx| {
                     if normals[idx].dot(face_normal) < 0.0 {
                         normals.push(-normals[idx]);
@@ -246,13 +249,13 @@ impl NormalFilters for PolygonMesh {
                         idx
                     }
                 });
-            })
+            }
         }
         drop(mesh);
         self
     }
     fn add_naive_normals(&mut self, overwrite: bool) -> &mut Self {
-        let mut mesh = self.debug_editor();
+        let mut mesh = self.editor();
         let PolygonMeshEditor {
             attributes: StandardAttributes {
                 positions, normals, ..
@@ -261,12 +264,12 @@ impl NormalFilters for PolygonMesh {
             ..
         } = &mut mesh;
         if overwrite {
-            normals.clear()
+            normals.clear();
         }
-        faces.face_iter_mut().for_each(move |face| {
+        for face in faces.face_iter_mut() {
             let normal = FaceNormal::new(positions, face, 0).normal;
             let mut added = false;
-            face.iter_mut().for_each(|v| {
+            for v in face.iter_mut() {
                 if v.nor.is_none() || overwrite {
                     if !added {
                         normals.push(normal);
@@ -274,8 +277,8 @@ impl NormalFilters for PolygonMesh {
                     }
                     v.nor = Some(normals.len() - 1);
                 }
-            });
-        });
+            }
+        }
         drop(mesh);
         self
     }
@@ -310,7 +313,7 @@ impl SubNormalFilter for PolygonMesh {
         vnmap: HashMap<usize, Vec<Vec<FaceNormal>>>,
         overwrite: bool,
     ) {
-        let mut mesh = self.debug_editor();
+        let mut mesh = self.editor();
         let PolygonMeshEditor {
             attributes: StandardAttributes { normals, .. },
             faces,
@@ -319,7 +322,7 @@ impl SubNormalFilter for PolygonMesh {
         if overwrite {
             normals.clear();
         }
-        for (pos_id, vecs) in vnmap.into_iter() {
+        for (pos_id, vecs) in vnmap {
             for vec in vecs {
                 let normal = vec
                     .iter()
@@ -341,9 +344,9 @@ fn add_face_normal(
     inf: f64,
 ) {
     let face_normal = FaceNormal::new(positions, face, face_id);
-    face.iter().for_each(|v| {
+    for v in face {
         add_to_vnmap(v.pos, face_normal, vnmap, inf);
-    })
+    }
 }
 
 fn add_to_vnmap(
@@ -352,24 +355,21 @@ fn add_to_vnmap(
     vnmap: &mut HashMap<usize, Vec<Vec<FaceNormal>>>,
     inf: f64,
 ) {
-    match vnmap.get_mut(&pos_id) {
-        Some(vecs) => {
-            for vec in vecs.iter_mut() {
-                let normal = vec
-                    .iter()
-                    .fold(Vector3::zero(), |sum, x| sum + x.normal)
-                    .normalize();
-                if face_normal.normal.dot(normal) > inf {
-                    vec.push(face_normal);
-                    return;
-                }
+    if let Some(vecs) = vnmap.get_mut(&pos_id) {
+        for vec in vecs.iter_mut() {
+            let normal = vec
+                .iter()
+                .fold(Vector3::zero(), |sum, x| sum + x.normal)
+                .normalize();
+            if face_normal.normal.dot(normal) > inf {
+                vec.push(face_normal);
+                return;
             }
-            vecs.push(vec![face_normal]);
         }
-        None => {
-            let vecs = vec![vec![face_normal]];
-            vnmap.insert(pos_id, vecs);
-        }
+        vecs.push(vec![face_normal]);
+    } else {
+        let vecs = vec![vec![face_normal]];
+        vnmap.insert(pos_id, vecs);
     }
 }
 

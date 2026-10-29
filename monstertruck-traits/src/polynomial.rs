@@ -1,8 +1,43 @@
-use crate::*;
-use monstertruck_core::{cgmath64::*, hash::HashGen, tolerance::*};
+#![allow(
+    clippy::similar_names,
+    reason = "polynomial surface composition uses canonical paired u/v component names"
+)]
+
+use crate::{
+    BoundedCurve, BoundedSurface, CurveParameter, ParameterDivision1D, ParameterDivision2D,
+    ParameterRange, ParametricCurve, ParametricSurface, ParametricSurface3D,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SurfaceParameterRange, algo,
+};
+use monstertruck_core::{
+    cgmath64::{
+        ElementWise, EuclideanSpace, InnerSpace, MetricSpace, Point1, Point2, Point3, Vector1,
+        Vector3, Zero,
+    },
+    hash::HashGen,
+    tolerance::Tolerance,
+};
 use std::ops::Bound;
 
 const PRESEARCH_DIVISION: usize = 50;
+
+fn scalar_from_usize(mut value: usize) -> f64 {
+    let mut result = 0.0;
+    let mut bit = 1.0;
+    while value != 0 {
+        if value & 1 == 1 {
+            result += bit;
+        }
+        value >>= 1;
+        bit += bit;
+    }
+    result
+}
+
+fn falling_factorial(value: usize, order: usize) -> f64 {
+    (0..order).fold(1.0, |factor, offset| {
+        factor * scalar_from_usize(value - offset)
+    })
+}
 
 /// polynomial curve
 #[derive(Clone, Debug)]
@@ -14,24 +49,26 @@ impl<P: EuclideanSpace<Scalar = f64>> ParametricCurve for PolynomialCurve<P> {
     fn derivative_n(&self, n: usize, t: f64) -> P::Diff {
         let iter = self.0.iter().enumerate().skip(n);
         let (_, res) = iter.fold((1.0, P::Diff::zero()), |(s, res), (deg, a)| {
-            let p = (0..n).fold(1, |p, i| p * (deg - i));
-            (s * t, res + *a * s * p as f64)
+            let factor = falling_factorial(deg, n);
+            (s * t, res + *a * s * factor)
         });
         res
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, t: f64) -> P { P::from_vec(self.derivative_n(0, t)) }
-    #[inline(always)]
+    #[inline]
     fn derivative(&self, t: f64) -> P::Diff { self.derivative_n(1, t) }
-    #[inline(always)]
+    #[inline]
     fn derivative_2(&self, t: f64) -> P::Diff { self.derivative_n(2, t) }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> ParameterRange {
         (Bound::Included(-100.0), Bound::Included(100.0))
     }
 }
 
-impl<P: EuclideanSpace<Scalar = f64>> BoundedCurve for PolynomialCurve<P> {}
+impl<P: EuclideanSpace<Scalar = f64>> BoundedCurve for PolynomialCurve<P> {
+    fn range_tuple(&self) -> (f64, f64) { (-100.0, 100.0) }
+}
 
 impl<P> ParameterDivision1D for PolynomialCurve<P>
 where P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>
@@ -139,33 +176,33 @@ pub struct PolynomialSurface<P: EuclideanSpace<Scalar = f64>>(pub Vec<Vec<P::Dif
 impl<P: EuclideanSpace<Scalar = f64>> ParametricSurface for PolynomialSurface<P> {
     type Point = P;
     type Vector = P::Diff;
-    #[inline(always)]
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         let iter = self.0.iter().enumerate().skip(m);
         let (_, res) = iter.fold((1.0, P::Diff::zero()), |(us, res), (udeg, vec)| {
-            let up = (0..m).fold(1, |p, i| p * (udeg - i));
+            let up = falling_factorial(udeg, m);
             let iter = vec.iter().enumerate().skip(n);
             let (_, sum) = iter.fold((1.0, P::Diff::zero()), |(vs, res), (vdeg, &a)| {
-                let vp = (0..n).fold(1, |p, i| p * (vdeg - i));
-                (vs * v, res + a * (vs * vp as f64))
+                let vp = falling_factorial(vdeg, n);
+                (vs * v, res + a * (vs * vp))
             });
-            (us * u, res + sum * (us * up as f64))
+            (us * u, res + sum * (us * up))
         });
         res
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> P { P::from_vec(self.derivative_mn(0, 0, u, v)) }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(1, 0, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(0, 1, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(2, 0, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(1, 1, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(0, 2, u, v) }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
         (
             (Bound::Included(-100.0), Bound::Included(100.0)),
@@ -175,7 +212,7 @@ impl<P: EuclideanSpace<Scalar = f64>> ParametricSurface for PolynomialSurface<P>
 }
 
 impl ParametricSurface3D for PolynomialSurface<Point3> {
-    #[inline(always)]
+    #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         self.derivative_u(u, v)
             .cross(self.derivative_v(u, v))
@@ -183,7 +220,9 @@ impl ParametricSurface3D for PolynomialSurface<Point3> {
     }
 }
 
-impl<P: EuclideanSpace<Scalar = f64>> BoundedSurface for PolynomialSurface<P> {}
+impl<P: EuclideanSpace<Scalar = f64>> BoundedSurface for PolynomialSurface<P> {
+    fn range_tuple(&self) -> SurfaceParameterRange { ((-100.0, 100.0), (-50.0, 50.0)) }
+}
 
 impl<P> ParameterDivision2D for PolynomialSurface<P>
 where P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>
@@ -199,16 +238,19 @@ where
     P::Diff: ElementWise,
 {
     /// create polysurface by tensor product e.g. (u^2 + 2u + 2) * (v^2 + 3v - 2)
+    #[must_use]
     pub fn by_tensor(curve0: PolynomialCurve<P>, curve1: PolynomialCurve<P>) -> Self {
+        let PolynomialCurve(curve0) = curve0;
+        let PolynomialCurve(curve1) = curve1;
         let vec = curve0
-            .0
-            .iter()
-            .map(|&p| curve1.0.iter().map(|&q| p.mul_element_wise(q)).collect())
+            .into_iter()
+            .map(|p| curve1.iter().map(|&q| p.mul_element_wise(q)).collect())
             .collect();
         Self(vec)
     }
 
     /// composite `curve` and `self`.
+    #[must_use]
     pub fn composite(&self, curve: &PolynomialCurve<Point2>) -> PolynomialCurve<P> {
         let ucurve = PolynomialCurve::<Point1>(curve.0.iter().map(|p| Vector1::new(p.x)).collect());
         let vcurve = PolynomialCurve::<Point1>(curve.0.iter().map(|p| Vector1::new(p.y)).collect());
@@ -222,7 +264,7 @@ where
             })
             .collect::<Vec<_>>();
         let mut t = PolynomialCurve::<Point1>(vec![Vector1::new(1.0)]);
-        let v_max = self.0.iter().map(|vec| vec.len()).max().unwrap_or(1);
+        let v_max = self.0.iter().map(Vec::len).max().unwrap_or(1);
         let vcurve_pow = (0..v_max)
             .map(|_| {
                 let reserve = t.clone();

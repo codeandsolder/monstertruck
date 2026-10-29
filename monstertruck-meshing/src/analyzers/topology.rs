@@ -1,4 +1,4 @@
-use super::*;
+use super::{Faces, PolygonMesh, Vertex};
 use itertools::Itertools;
 use monstertruck_topology::shell::ShellCondition;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -7,7 +7,7 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 pub trait Topology {
     /// Returns a vector of all boundaries as line strip.
     fn extract_boundaries(&self) -> Vec<Vec<usize>>;
-    /// Determines the shell conditions: non-regular, regular, oriented, or closed.  
+    /// Determines the shell conditions: non-regular, regular, oriented, or closed.\
     /// The complexity increases in proportion to the number of edges.
     ///
     /// Examples for each condition can be found on the page of
@@ -23,37 +23,38 @@ struct Boundaries {
 }
 
 impl Boundaries {
-    #[inline(always)]
+    #[inline]
     fn new() -> Self {
-        Boundaries {
-            checked: Default::default(),
-            boundary: Default::default(),
+        Self {
+            checked: HashSet::default(),
+            boundary: HashMap::default(),
             condition: ShellCondition::Oriented,
         }
     }
-    #[inline(always)]
+    #[inline]
     fn insert(&mut self, edge: [Vertex; 2]) {
         let ori = edge[0].pos < edge[1].pos;
-        let edge = match ori {
-            true => [edge[0].pos, edge[1].pos],
-            false => [edge[1].pos, edge[0].pos],
+        let edge = if ori {
+            [edge[0].pos, edge[1].pos]
+        } else {
+            [edge[1].pos, edge[0].pos]
         };
         self.condition = self.condition
             & match (self.checked.insert(edge), self.boundary.insert(edge, ori)) {
                 (true, None) => ShellCondition::Oriented,
-                (false, None) => ShellCondition::Irregular,
-                (true, Some(_)) => ShellCondition::Irregular,
+                (false, None) | (true, Some(_)) => ShellCondition::Irregular,
                 (false, Some(ori0)) => {
                     self.boundary.remove(&edge);
-                    match ori == ori0 {
-                        true => ShellCondition::Regular,
-                        false => ShellCondition::Oriented,
+                    if ori == ori0 {
+                        ShellCondition::Regular
+                    } else {
+                        ShellCondition::Oriented
                     }
                 }
             };
     }
 
-    #[inline(always)]
+    #[inline]
     fn condition(&self) -> ShellCondition {
         if self.condition == ShellCondition::Oriented && self.boundary.is_empty() {
             ShellCondition::Closed
@@ -64,9 +65,11 @@ impl Boundaries {
 }
 
 impl FromIterator<[Vertex; 2]> for Boundaries {
-    fn from_iter<I: IntoIterator<Item = [Vertex; 2]>>(iter: I) -> Boundaries {
-        let mut boundaries = Boundaries::new();
-        iter.into_iter().for_each(|edge| boundaries.insert(edge));
+    fn from_iter<I: IntoIterator<Item = [Vertex; 2]>>(iter: I) -> Self {
+        let mut boundaries = Self::new();
+        for edge in iter {
+            boundaries.insert(edge);
+        }
         boundaries
     }
 }
@@ -81,9 +84,9 @@ impl Topology for Faces {
         let mut vemap: HashMap<usize, usize> = boundaries
             .boundary
             .into_iter()
-            .map(|(edge, ori)| match ori {
-                true => (edge[0], edge[1]),
-                false => (edge[1], edge[0]),
+            .map(|(edge, ori)| {
+                let [front, back] = edge;
+                if ori { (front, back) } else { (back, front) }
             })
             .collect();
 

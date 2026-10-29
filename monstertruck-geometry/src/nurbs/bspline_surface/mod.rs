@@ -1,4 +1,18 @@
-use super::*;
+#![allow(
+    clippy::similar_names,
+    reason = "paired U/V knot, degree, basis, and control-count names mirror the tensor-product equations"
+)]
+
+use super::{
+    BasisWindow, Bound, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve,
+    BsplineSurface, Concat, ControlPoint, CurveCollector, D2, Deserialize, Error, EuclideanSpace,
+    HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace, Invertible, KnotVector,
+    Matrix2, Matrix3, Matrix4, MetricSpace, NurbsCurve, Origin, PRESEARCH_DIVISION,
+    ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface, ParametricSurface3D,
+    Point2, Point3, Rad, Result, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
+    SquareMatrix, SurfaceParameter, SurfaceParameterRange, TOLERANCE, Tolerance, Transform,
+    Transformed, Vector2, Vector3, Vector4, Zero, algo, compat, gaussian_elimination, inv_or_zero,
+};
 
 mod accessors;
 mod builders;
@@ -8,7 +22,7 @@ mod split;
 mod traits;
 
 impl<P: ControlPoint<f64>> BsplineSurface<P> {
-    #[inline(always)]
+    #[inline]
     fn udelta_control_points(&self, i: usize, j: usize) -> P::Diff {
         if i == 0 {
             self.control_point(i, j).to_vec()
@@ -19,7 +33,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn vdelta_control_points(&self, i: usize, j: usize) -> P::Diff {
         if j == 0 {
             self.control_point(i, j).to_vec()
@@ -32,7 +46,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
 
     pub(super) fn sub_near_as_surface<F: Fn(&P, &P) -> bool>(
         &self,
-        other: &BsplineSurface<P>,
+        other: &Self,
         div_coef: usize,
         ord: F,
     ) -> bool {
@@ -54,15 +68,16 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
                 continue;
             }
             for j0 in 0..division0 {
-                let u = self.knot_vecs.0[i0 - 1] + delta0 * (j0 as f64) / (division0 as f64);
+                let u = self.knot_vecs.0[i0 - 1]
+                    + delta0 * crate::usize_to_f64(j0) / crate::usize_to_f64(division0);
                 for i1 in 1..self.knot_vecs.1.len() {
                     let delta1 = self.knot_vecs.1[i1] - self.knot_vecs.1[i1 - 1];
                     if delta1.so_small() {
                         continue;
                     }
                     for j1 in 0..division1 {
-                        let v =
-                            self.knot_vecs.1[i1 - 1] + delta1 * (j1 as f64) / (division1 as f64);
+                        let v = self.knot_vecs.1[i1 - 1]
+                            + delta1 * crate::usize_to_f64(j1) / crate::usize_to_f64(division1);
                         if !ord(&self.subs(u, v), &other.subs(u, v)) {
                             return false;
                         }
@@ -86,7 +101,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     /// [`BasisWindow`](crate::prelude::BasisWindow) values. Only the upper band is
     /// walked, because the matrix is symmetric.
     ///
-    /// # Failures
+    /// # Errors
     ///
     /// Returns [`Error::GaussianEliminationFailure`] when the normal matrix is
     /// singular, which happens when a patch of the control grid carries no
@@ -151,7 +166,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
                         }
                     }
                     for d in 0..P::DIM {
-                        rhs[i][d] += basis_i * point[d];
+                        rhs[i][d] = f64::mul_add(basis_i, point[d], rhs[i][d]);
                     }
                 }
             }
@@ -196,9 +211,10 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// *bspsurface1.control_point_mut(1, 1) = Vector2::new(0.4, 1.0);
     /// assert!(!bspsurface0.near_as_surface(&bspsurface1));
     /// ```
-    #[inline(always)]
-    pub fn near_as_surface(&self, other: &BsplineSurface<P>) -> bool {
-        self.sub_near_as_surface(other, 1, |x, y| x.near(y))
+    #[inline]
+    #[must_use]
+    pub fn near_as_surface(&self, other: &Self) -> bool {
+        self.sub_near_as_surface(other, 1, monstertruck_core::tolerance::Tolerance::near)
     }
     /// Determines whether `self` and `other` is near in square order as the B-spline surfaces or not.
     ///
@@ -223,9 +239,10 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// assert!(bspsurface0.near_as_surface(&bspsurface1));
     /// assert!(!bspsurface0.near2_as_surface(&bspsurface1));
     /// ```
-    #[inline(always)]
-    pub fn near2_as_surface(&self, other: &BsplineSurface<P>) -> bool {
-        self.sub_near_as_surface(other, 1, |x, y| x.near2(y))
+    #[inline]
+    #[must_use]
+    pub fn near2_as_surface(&self, other: &Self) -> bool {
+        self.sub_near_as_surface(other, 1, monstertruck_core::tolerance::Tolerance::near2)
     }
 }
 
@@ -321,7 +338,7 @@ fn test_include_bspcurve3() {
     ];
     let surface = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
     let bnd_box = BoundingBox::from_iter(&[Vector2::new(0.2, 0.3), Vector2::new(0.8, 0.6)]);
-    let mut curve = surface.sectional_curve(bnd_box).expect("section is valid");
+    let mut curve = (surface.sectional_curve(bnd_box)).expect("section is valid");
     assert!(surface.include(&curve));
     *curve.control_point_mut(2) += Vector3::new(0.0, 0.0, 0.001);
     assert!(!surface.include(&curve));
@@ -357,7 +374,7 @@ fn swap_axes_on_empty_control_net_swaps_knots_without_panicking() {
         Vec::new(),
     );
     surface.swap_axes();
-    assert!(surface.control_points().is_empty());
+    assert_eq!(surface.control_points().as_slice(), &[] as &[Vec<Point3>]);
     assert_eq!(surface.knot_vector_u().to_vec(), vec![0.0, 0.0, 1.0, 1.0]);
     assert_eq!(surface.knot_vector_v().to_vec(), vec![0.0, 0.0]);
 }

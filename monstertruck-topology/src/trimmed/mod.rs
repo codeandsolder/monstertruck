@@ -2,7 +2,10 @@ use crate::compress::{
     CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedTrimmedFace,
     CompressedTrimmedShell, CompressedTrimmedSolid,
 };
-use crate::{errors::Error, *};
+use crate::{
+    Debug, Edge, EdgeId, ExactParameterBoundary2D, Face, Result, Shell, Solid, Vertex, VertexId,
+    Wire, errors::Error,
+};
 use rustc_hash::FxHashMap as HashMap;
 
 /// Destructured parts of a [`TrimmedFace`].
@@ -30,8 +33,9 @@ pub struct TrimmedSolid<P, C, S, T> {
 impl<P, C, S, T> TrimmedFace<P, C, S, T> {
     /// Creates a trimmed face from a face and per-edge-use trims.
     ///
-    /// The `trims` layout must match [`Face::absolute_boundaries`].
-    pub fn try_new(face: Face<P, C, S>, trims: Vec<Vec<Option<T>>>) -> Result<Self> {
+    /// # Errors
+    /// Returns an error if the trim layout does not match [`Face::absolute_boundaries`].
+    pub fn new(face: Face<P, C, S>, trims: Vec<Vec<Option<T>>>) -> Result<Self> {
         let same_wire_count = face.absolute_boundaries().len() == trims.len();
         let same_edge_counts = same_wire_count
             && face
@@ -46,35 +50,33 @@ impl<P, C, S, T> TrimmedFace<P, C, S, T> {
         }
     }
 
-    /// Creates a trimmed face from a face and per-edge-use trims.
-    /// # Failures
-    /// Returns an error if the trim layout does not match [`Face::absolute_boundaries`].
-    pub fn new(face: Face<P, C, S>, trims: Vec<Vec<Option<T>>>) -> Result<Self> {
-        Self::try_new(face, trims)
-    }
-
     /// Creates a trimmed face without validating the trim layout.
     ///
     /// The caller must guarantee that `trims` matches [`Face::absolute_boundaries`].
-    #[inline(always)]
-    pub fn new_unchecked(face: Face<P, C, S>, trims: Vec<Vec<Option<T>>>) -> Self {
+    #[inline]
+    #[must_use]
+    pub const fn new_unchecked(face: Face<P, C, S>, trims: Vec<Vec<Option<T>>>) -> Self {
         Self { face, trims }
     }
 
     /// Returns the wrapped face.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn face(&self) -> &Face<P, C, S> { &self.face }
 
     /// Returns the face-local trims matching [`Face::absolute_boundaries`].
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn trims(&self) -> &Vec<Vec<Option<T>>> { &self.trims }
 
     /// Consumes `self` and drops trim storage.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn erase_trims(self) -> Face<P, C, S> { self.face }
 
     /// Destructures into the face and trim storage.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn into_parts(self) -> TrimmedFaceParts<P, C, S, T> { (self.face, self.trims) }
 }
 
@@ -103,7 +105,8 @@ impl<P, C, S, T> FromIterator<TrimmedFace<P, C, S, T>> for TrimmedShell<P, C, S,
 
 impl<P, C, S, T> TrimmedShell<P, C, S, T> {
     /// Returns the faces.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn faces(&self) -> &Vec<TrimmedFace<P, C, S, T>> { &self.face_list }
 
     /// Consumes `self` and drops trim storage.
@@ -125,6 +128,9 @@ impl<P, C, S, T> TrimmedShell<P, C, S, T> {
 
     /// The precondition this shell must satisfy to be a boundary of a
     /// [`TrimmedSolid`]; see [`Shell::check_solid_boundary`].
+    ///
+    /// # Errors
+    /// Returns an error when the erased plain shell is not a valid solid boundary.
     pub fn check_solid_boundary(&self) -> Result<()> {
         self.to_plain_shell().check_solid_boundary()
     }
@@ -139,50 +145,38 @@ impl<P, C, S, T> From<TrimmedShell<P, C, S, T>> for Shell<P, C, S> {
 }
 
 impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
-    /// Creates a trimmed solid from its boundary shells, WITHOUT validating
-    /// them.
+    /// Creates a trimmed solid whose boundaries are non-empty, connected,
+    /// closed manifolds, matching [`Solid::new`].
     ///
-    /// # This is `Solid::new_unchecked`, not `Solid::new`
-    ///
-    /// Despite the shared name, this constructor is the trimmed counterpart of
-    /// [`Solid::new_unchecked`] and not of [`Solid::new`]: it checks nothing.
-    /// Spec 011's ledger entry for class C11, and the corpus row that pinned
-    /// it, both recorded this call as "the infallible `Solid::new`" -- it is
-    /// not, it never validated at all, and the abort they were chasing came
-    /// from a `Solid::debug_new` two hops downstream in
-    /// [`Solid::try_mapped`]. That confusion is the reason this doc comment is
-    /// this long.
-    ///
-    /// Use [`Self::try_new`] whenever the boundaries come from data rather
-    /// than from a construction that already established the invariant.
-    #[inline(always)]
-    pub const fn new(boundaries: Vec<TrimmedShell<P, C, S, T>>) -> Self { Self { boundaries } }
-
-    /// Creates a trimmed solid whose boundaries must be non-empty, connected,
-    /// and closed manifold -- the SAME precondition as [`Solid::try_new`],
-    /// via the single definition in [`Shell::check_solid_boundary`].
-    ///
-    /// The plain path has enforced this since forever
-    /// (`Solid::extract` ends in `Solid::try_new(shells?)?`); the trimmed path
-    /// did not, so a `CompressedTrimmedSolid` that was short a face -- the
-    /// shape a typed surface refusal upstream produces -- extracted to `Ok`
-    /// and only failed later, in a `debug_assertions`-only construction that
-    /// panicked in debug and silently returned an invalid solid in release.
-    /// Ledger class C11.
-    #[inline(always)]
-    pub fn try_new(boundaries: Vec<TrimmedShell<P, C, S, T>>) -> Result<Self> {
+    /// # Errors
+    /// Returns the topology validation error reported by [`Shell::check_solid_boundary`]
+    /// for the first invalid boundary shell.
+    #[inline]
+    pub fn new(boundaries: Vec<TrimmedShell<P, C, S, T>>) -> Result<Self> {
         for shell in &boundaries {
             shell.check_solid_boundary()?;
         }
         Ok(Self { boundaries })
     }
 
+    /// Creates a trimmed solid without validating its boundary shells.
+    ///
+    /// Use this only when the caller has already established the same boundary
+    /// invariants enforced by [`Self::new`].
+    #[inline]
+    #[must_use]
+    pub const fn new_unchecked(boundaries: Vec<TrimmedShell<P, C, S, T>>) -> Self {
+        Self { boundaries }
+    }
+
     /// Returns the boundary shells.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn boundaries(&self) -> &Vec<TrimmedShell<P, C, S, T>> { &self.boundaries }
 
     /// Consumes `self` and returns the boundary shells.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn into_boundaries(self) -> Vec<TrimmedShell<P, C, S, T>> { self.boundaries }
 
     /// Consumes `self` and drops trim storage.
@@ -238,6 +232,7 @@ impl<P: Clone, C: Clone, S: Clone> Shell<P, C, S> {
     }
 
     /// Creates a runtime trimmed shell from exact trims carried by the edge curves.
+    #[must_use]
     pub fn to_trimmed_with_exact_face_trims(
         &self,
     ) -> TrimmedShell<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
@@ -262,6 +257,7 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     }
 
     /// Creates a runtime trimmed solid from exact trims carried by the edge curves.
+    #[must_use]
     pub fn to_trimmed_with_exact_face_trims(
         &self,
     ) -> TrimmedSolid<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
@@ -392,7 +388,7 @@ impl<P, C, S, T> TryFrom<CompressedTrimmedShell<P, C, S, T>> for TrimmedShell<P,
             .map(|edge| {
                 let front = &vertices[edge.vertices.0];
                 let back = &vertices[edge.vertices.1];
-                Edge::try_new(front, back, edge.curve)
+                Edge::new(front, back, edge.curve)
             })
             .collect::<Result<Vec<_>>>()?;
         faces
@@ -422,11 +418,11 @@ impl<P, C, S, T> TryFrom<CompressedTrimmedShell<P, C, S, T>> for TrimmedShell<P,
                             .collect()
                     })
                     .collect();
-                let mut runtime_face = Face::try_new(boundaries, face.surface)?;
+                let mut runtime_face = Face::new(boundaries, face.surface)?;
                 if !face.orientation {
                     runtime_face.invert();
                 }
-                TrimmedFace::try_new(runtime_face, trims)
+                TrimmedFace::new(runtime_face, trims)
             })
             .collect()
     }

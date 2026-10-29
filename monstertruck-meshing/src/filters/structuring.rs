@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Adjacency, Faces, InnerSpace, Matrix3, PolygonMesh, SquareMatrix, Vector3, Vertex,
+    nonpositive_tolerance,
+};
 
 /// triangulation, quadrangulation, give a structure
 pub trait StructuringFilter {
@@ -89,7 +92,7 @@ pub trait StructuringFilter {
 impl StructuringFilter for PolygonMesh {
     fn triangulate(&mut self) -> &mut Self {
         let tri_faces = self.faces().triangle_iter().collect::<Vec<_>>();
-        *self.debug_editor().faces = Faces::from_tri_and_quad_faces(tri_faces, Vec::new());
+        *self.editor().faces = Faces::from_tri_and_quad_faces(tri_faces, Vec::new());
         self
     }
     fn quadrangulate(&mut self, plane_tol: f64, score_tol: f64) -> &mut Self {
@@ -122,7 +125,8 @@ impl SubStructureFilter for PolygonMesh {
             for j in face {
                 if i > *j {
                     continue;
-                } else if let Some(face_edge) = self.get_face_edge(i, *j, plane_tol, score_tol) {
+                }
+                if let Some(face_edge) = self.get_face_edge(i, *j, plane_tol, score_tol) {
                     passed.push(face_edge);
                 }
             }
@@ -152,12 +156,9 @@ impl SubStructureFilter for PolygonMesh {
         let tri_faces = used
             .into_iter()
             .enumerate()
-            .filter_map(move |(i, flag)| match flag {
-                true => None,
-                false => Some(tri_faces[i]),
-            })
+            .filter_map(move |(i, flag)| if flag { None } else { Some(tri_faces[i]) })
             .collect::<Vec<_>>();
-        *self.debug_editor().faces = Faces::from_tri_and_quad_faces(tri_faces, quad_faces);
+        *self.editor().faces = Faces::from_tri_and_quad_faces(tri_faces, quad_faces);
     }
     fn get_face_edge(
         &self,
@@ -225,7 +226,7 @@ struct FaceEdge {
     score: f64,
 }
 
-#[inline(always)]
+#[inline]
 fn calc_score(edge0: Vector3, edge1: Vector3, edge2: Vector3, edge3: Vector3) -> f64 {
     edge0.cos_angle(edge1).abs()
         + edge1.cos_angle(edge2).abs()

@@ -6,7 +6,10 @@
 //! signatures: sampled or summary evidence may select candidates, never prove
 //! trimmed-region identity by itself.
 
-#![allow(clippy::many_single_char_names)]
+#![allow(
+    clippy::many_single_char_names,
+    reason = "loop-intersection formulas follow compact geometric notation"
+)]
 
 use super::{
     curve_equivalence::{

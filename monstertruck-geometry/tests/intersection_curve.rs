@@ -22,12 +22,9 @@ proptest! {
         prop_assert_near!(p.to_vec().magnitude(), 1.0);
         prop_assert!(p.to_vec().dot(v).so_small());
 
-        let t0 = match curve.search_parameter(p, None, 100) {
-            Some(t0) => t0,
-            None => {
-                let reason = "search_parameter failed".into();
-                return Err(TestCaseError::Fail(reason))
-            }
+        let Some(t0) = curve.search_parameter(p, None, 100) else {
+            let reason = "search_parameter failed".into();
+            return Err(TestCaseError::Fail(reason));
         };
         prop_assert_near!(t, t0);
     }
@@ -38,7 +35,7 @@ proptest! {
         let cylinder0 = RevolutionSurface::by_revolution(line0, Point3::origin(), Vector3::unit_x());
         let line1 = Line(Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 0.0, -1.0));
         let cylinder1 = RevolutionSurface::by_revolution(line1, Point3::origin(), Vector3::unit_z());
-        let z = (1.0 + f64::sqrt(3.0)) / 2.0;
+        let z = f64::midpoint(1.0, f64::sqrt(3.0));
         let lead_circle = Processor::with_transform(
             UnitCircle::<Point3>::new(),
             Matrix4::from_translation(z * Vector3::unit_z()),
@@ -46,15 +43,12 @@ proptest! {
         let curve = IntersectionCurve::new(cylinder0, cylinder1, lead_circle);
 
         let p = curve.subs(t);
-        prop_assert_near!(p.x * p.x + p.y * p.y, 1.0);
-        prop_assert_near!(p.z * p.z + p.y * p.y, 4.0);
+        prop_assert_near!(f64::mul_add(p.y, p.y, p.x * p.x), 1.0);
+        prop_assert_near!(f64::mul_add(p.y, p.y, p.z * p.z), 4.0);
 
-        let t0 = match curve.search_parameter(p, None, 100) {
-            Some(t0) => t0,
-            None => {
-                let reason = "search_parameter failed".into();
-                return Err(TestCaseError::Fail(reason));
-            }
+        let Some(t0) = curve.search_parameter(p, None, 100) else {
+            let reason = "search_parameter failed".into();
+            return Err(TestCaseError::Fail(reason));
         };
         let diff = (t - t0).abs();
         prop_assert!(diff.near(&0.0) || diff.near(&(2.0 * PI)));

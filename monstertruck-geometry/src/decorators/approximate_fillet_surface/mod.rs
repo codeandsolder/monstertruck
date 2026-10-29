@@ -1,5 +1,16 @@
-use super::{rolling_ball_fillet::*, *};
-use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
+#![allow(
+    clippy::similar_names,
+    reason = "paired U/V and derivative-order names mirror the fillet equations"
+)]
+
+use super::{
+    ApproximateFilletSurface, BsplineCurve, CurveDerivatives, EuclideanSpace, InnerSpace,
+    KnotVector, Matrix3, MetricSpace, Mul, NurbsCurve, ParameterCurve, ParameterDivision2D,
+    ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
+    Point1, Point2, Point3, RollingBallFilletSurface, SearchParameter, SquareMatrix,
+    SurfaceDerivatives, SurfaceParameter, ToSameGeometry, Vector2, Vector3, Vector4, algo,
+    rolling_ball_fillet::{ContactCircle, RadiusFunction},
+};
 
 impl<S0, S1> ApproximateFilletSurface<S0, S1> {
     /// Returns the first surface.
@@ -47,24 +58,24 @@ fn control_points_u<S: ParametricSurface3D>(
 }
 
 const fn bezier_3rd_basis(n: usize, u: f64) -> [f64; 4] {
-    let _1subu = 1.0 - u;
+    let one_minus_u = 1.0 - u;
     match n {
         0 => [
-            _1subu * _1subu * _1subu,
-            3.0 * _1subu * _1subu * u,
-            3.0 * _1subu * u * u,
+            one_minus_u * one_minus_u * one_minus_u,
+            3.0 * one_minus_u * one_minus_u * u,
+            3.0 * one_minus_u * u * u,
             u * u * u,
         ],
         1 => [
-            -3.0 * _1subu * _1subu,
-            3.0 * _1subu * (1.0 - 3.0 * u),
-            3.0 * u * (2.0 - 3.0 * u),
+            -3.0 * one_minus_u * one_minus_u,
+            3.0 * one_minus_u * 3.0f64.mul_add(-u, 1.0),
+            3.0 * u * 3.0f64.mul_add(-u, 2.0),
             3.0 * u * u,
         ],
         2 => [
-            6.0 * _1subu,
-            -6.0 * (2.0 - 3.0 * u),
-            6.0 * (1.0 - 3.0 * u),
+            6.0 * one_minus_u,
+            -6.0 * 3.0f64.mul_add(-u, 2.0),
+            6.0 * 3.0f64.mul_add(-u, 1.0),
             6.0 * u,
         ],
         3 => [-6.0, 18.0, -18.0, 6.0],
@@ -73,7 +84,7 @@ const fn bezier_3rd_basis(n: usize, u: f64) -> [f64; 4] {
 }
 
 mod subders {
-    use super::*;
+    use super::{CurveDerivatives, SurfaceDerivatives, Vector2, Vector3, Vector4};
     fn axis_v_ders(p_ders: &CurveDerivatives<Vector3>) -> CurveDerivatives<Vector3> {
         let p_derders = p_ders.derivative();
         let homog_ders =
@@ -121,7 +132,8 @@ mod subders {
         let p_ders = s_ders.composite_derivatives(uv_ders);
         let lift_p_ders = lift_p_ders(&p_ders);
         let wq_ders = wq_ders(w_ders, &p_ders, b_ders, &n_ders(s_ders, uv_ders));
-        let lift_q_ders = wq_ders.element_wise_derivatives(w_ders, |x, y| x.extend(y));
+        let lift_q_ders =
+            wq_ders.element_wise_derivatives(w_ders, monstertruck_core::cgmath::Vector3::extend);
         (lift_p_ders, lift_q_ders)
     }
 }
@@ -206,7 +218,7 @@ where
     fn derivative_uv(&self, u: f64, v: f64) -> Self::Vector { self.derivative_mn(1, 1, u, v) }
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector { self.derivative_mn(0, 2, u, v) }
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
-        use std::ops::Bound::*;
+        use std::ops::Bound::Included;
         let (a, b) = (self.knot_vec[0], self.knot_vec[self.knot_vec.len() - 1]);
         ((Included(0.0), Included(1.0)), (Included(a), Included(b)))
     }
@@ -266,7 +278,7 @@ where
         R: RadiusFunction,
     {
         let (v0, v1) = edge_parameter_range;
-        let v_5 = (v0 + v1) / 2.0;
+        let v_5 = f64::midpoint(v0, v1);
         let cc0 = fillet_surface.contact_circle(v0)?;
         let cc_5 = fillet_surface.contact_circle(v_5)?;
         let cc1 = fillet_surface.contact_circle(v1)?;
@@ -277,7 +289,9 @@ where
             vec.extend([v0, v0, v0]);
             vec.extend({
                 let n = ccs.len() - 1;
-                ccs[1..n].windows(2).map(move |v| (v[0].0 + v[1].0) / 2.0)
+                ccs[1..n]
+                    .windows(2)
+                    .map(move |v| f64::midpoint(v[0].0, v[1].0))
             });
             vec.extend([v1, v1, v1]);
             let knot_vec = KnotVector::try_from(vec).ok()?;
@@ -340,7 +354,7 @@ where
             };
             let mut added_ccs = Vec::new();
             for pair in ccs.windows(2) {
-                let v = (pair[0].0 + pair[1].0) / 2.0;
+                let v = f64::midpoint(pair[0].0, pair[1].0);
                 let cc = fillet_surface.contact_circle(v)?;
                 let is_near = |t: f64| approx.evaluate(t, v).distance2(cc.evaluate(t)) < tol * tol;
                 if ![0.0, 0.5, 1.0].into_iter().all(is_near) {

@@ -1,4 +1,7 @@
-#![allow(clippy::too_many_arguments)]
+#![allow(
+    clippy::too_many_arguments,
+    reason = "STEP fixture constructors mirror schema entities with many independent fields"
+)]
 
 use monstertruck_geometry::prelude as truck;
 use monstertruck_io::step::{

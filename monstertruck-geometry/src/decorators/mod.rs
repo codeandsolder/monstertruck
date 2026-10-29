@@ -1,4 +1,6 @@
-use crate::{prelude::*, *};
+use crate::{
+    Bound, Debug, Deserialize, INCLUDE_CURVE_TRIALS, PRESEARCH_DIVISION, Serialize, prelude::*,
+};
 use std::ops::{Deref, DerefMut, Mul};
 
 /// revolution
@@ -88,7 +90,7 @@ pub struct RevolutionSurface<C> {
 ///     }
 /// }
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct ExtrusionSurface<C, V> {
     curve: C,
     vector: V,
@@ -153,7 +155,7 @@ pub struct ExtrusionSurface<C, V> {
 ///     }
 /// }
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Processor<E, T> {
     entity: E,
     transform: T,
@@ -218,7 +220,7 @@ pub struct Processor<E, T> {
 /// let t = pcurve.search_nearest_parameter(pt, None, 100).unwrap();
 /// assert!(pcurve.derivative(t).dot(pcurve.evaluate(t) - pt).so_small());
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct ParameterCurve<C, S> {
     curve: C,
     surface: S,
@@ -233,7 +235,7 @@ pub struct ParameterCurve<C, S> {
 /// corresponding `magnitude` scalar function. This makes the blend positionally
 /// and tangentially continuous with both supporting surfaces along their shared
 /// boundaries -- a fillet-like additive decorator.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct EdgeBlendSurface<C0, S0, F0, C1, S1, F1> {
     pcurve0: ParameterCurve<C0, S0>,
     magnitude0: F0,
@@ -281,7 +283,7 @@ pub struct EdgeBlendSurface<C0, S0, F0, C1, S1, F1> {
 /// let length = sum / 100.0 / 2.0;
 /// assert!(f64::abs(length - PI) < 1.0e-4 * PI);
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct IntersectionCurve<C, S0, S1> {
     surface0: S0,
     surface1: S1,
@@ -289,7 +291,7 @@ pub struct IntersectionCurve<C, S0, S1> {
 }
 
 /// Surface curve with exact face-local boundaries on both supporting surfaces.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct SurfaceCurve<C, S0, S1, T0, T1> {
     surface0: S0,
     surface1: S1,
@@ -337,14 +339,14 @@ pub struct TrimmedCurve<C> {
 ///     }
 /// }
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct HomotopySurface<C0, C1> {
     curve0: C0,
     curve1: C1,
 }
 
 /// Rolling ball fillet surface along one edge between two surfaces.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct RollingBallFilletSurface<C, S0, S1, R> {
     edge_curve: C,
     surface0: S0,
@@ -353,7 +355,7 @@ pub struct RollingBallFilletSurface<C, S0, S1, R> {
 }
 
 /// Orbit curve of a rolling ball fillet contact point.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct RollingBallFilletContactCurve<C, S0, S1, R> {
     surface: RollingBallFilletSurface<C, S0, S1, R>,
     index: usize,
@@ -381,7 +383,7 @@ pub struct ApproximateFilletSurface<S0, S1> {
 /// Pair with [`NormalOffsetField`] when you want a normal-direction offset
 /// (i.e. an offset of magnitude `scalar(t)` along the curve normal): build
 /// `OffsetCurve::new(entity, NormalOffsetField::new(entity.clone(), scalar))`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct OffsetCurve<C, N> {
     entity: C,
     offset: N,
@@ -392,7 +394,7 @@ pub struct OffsetCurve<C, N> {
 /// Analogous to [`OffsetCurve`] but for two-parameter surfaces.
 /// `OffsetSurface<S, N>::subs(u, v)` returns
 /// `entity.subs(u, v) + offset.subs(u, v)`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct OffsetSurface<S, N> {
     entity: S,
     offset: N,
@@ -410,7 +412,7 @@ pub struct OffsetSurface<S, N> {
 ///
 /// Typically used as the `N` parameter of [`OffsetCurve`] / [`OffsetSurface`]
 /// to express the classical offset-curve / offset-surface constructions.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct NormalOffsetField<T, F> {
     entity: T,
     scalar: F,
@@ -478,7 +480,7 @@ pub trait SurfaceScalarFunction: Clone {
     fn derivatives(&self, max_order: usize, u: f64, v: f64) -> SurfaceDerivatives<f64> {
         let mut derivatives = SurfaceDerivatives::new(max_order);
         (0..=max_order).for_each(|m| {
-            (0..=max_order - m).for_each(|n| derivatives[m][n] = self.derivative_mn(m, n, u, v))
+            (0..=max_order - m).for_each(|n| derivatives[m][n] = self.derivative_mn(m, n, u, v));
         });
         derivatives
     }
@@ -487,25 +489,6 @@ pub trait SurfaceScalarFunction: Clone {
 // The canonical names are `CurveScalarFunction` and `SurfaceScalarFunction`:
 // they say what the function is parameterised *over* and use only the
 // concrete words "curve" and "surface" that appear all over the kernel.
-// The upstream `truck-geometry` spellings `ScalarFunctionD1` /
-// `ScalarFunctionD2` -- whose trailing `D1`/`D2` reads like a generic
-// argument over our existing parameter-space markers, which it is not --
-// are kept as `#[deprecated]` re-exports so code ported from upstream
-// keeps compiling with a warning.
-#[deprecated(since = "0.3.1", note = "renamed to `CurveScalarFunction`.")]
-pub use self::CurveScalarFunction as ScalarFunctionD1;
-#[deprecated(since = "0.3.1", note = "renamed to `SurfaceScalarFunction`.")]
-pub use self::SurfaceScalarFunction as ScalarFunctionD2;
-
-// `NormalField` in upstream conflates "normal field" with "offset along
-// the normal." `NormalOffsetField` makes the intent explicit. The alias
-// keeps porting from `truck-geometry` compiling.
-#[deprecated(since = "0.3.1", note = "renamed to `NormalOffsetField`.")]
-pub use self::NormalOffsetField as NormalField;
-
-pub use self::ApproximateFilletSurface as ApproxFilletSurface;
-pub use self::RollingBallFilletSurface as RbfSurface;
-
 mod approximate_fillet_surface;
 mod edge_blend;
 mod extruded_curve;
@@ -526,8 +509,7 @@ mod trimmed_curve;
 
 fn bound2opt<T>(x: Bound<T>) -> Option<T> {
     match x {
-        Bound::Included(x) => Some(x),
-        Bound::Excluded(x) => Some(x),
+        Bound::Included(x) | Bound::Excluded(x) => Some(x),
         Bound::Unbounded => None,
     }
 }
@@ -546,10 +528,13 @@ where
         (Some(x), Some(y)) => match x.total_cmp(y) {
             Ordering::Greater => t00,
             Ordering::Less => t10,
-            Ordering::Equal => match matches!(t00, Bound::Excluded(_)) {
-                true => t00,
-                false => t10,
-            },
+            Ordering::Equal => {
+                if matches!(t00, Bound::Excluded(_)) {
+                    t00
+                } else {
+                    t10
+                }
+            }
         },
         (_, None) => t00,
         (None, _) => t10,
@@ -558,10 +543,13 @@ where
         (Some(x), Some(y)) => match x.total_cmp(y) {
             Ordering::Less => t01,
             Ordering::Greater => t11,
-            Ordering::Equal => match matches!(t01, Bound::Excluded(_)) {
-                true => t01,
-                false => t11,
-            },
+            Ordering::Equal => {
+                if matches!(t01, Bound::Excluded(_)) {
+                    t01
+                } else {
+                    t11
+                }
+            }
         },
         (_, None) => t01,
         (None, _) => t11,
@@ -597,5 +585,5 @@ fn test_range_common_part() {
         0.0..1.0,
         (Bound::Excluded(0.0), Bound::Excluded(1.0)),
     );
-    compare(0.0..1.0, 2.0..3.0, 2.0..1.0)
+    compare(0.0..1.0, 2.0..3.0, 2.0..1.0);
 }

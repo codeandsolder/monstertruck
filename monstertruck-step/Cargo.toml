@@ -7,7 +7,6 @@ authors = [
 ]
 edition = "2024"
 description = "Deprecated: STEP support moved into monstertruck-io behind the `step` feature"
-homepage = "https://github.com/virtualritz/monstertruck"
 repository = "https://github.com/virtualritz/monstertruck"
 readme = "README.md"
 keywords = ["truck", "graphics"]

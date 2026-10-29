@@ -1,23 +1,42 @@
 #[cfg(test)]
 use crate::shell::ShellCondition;
-use crate::*;
+use crate::{
+    BoundedCurve, Concat, CurveParameter, Cut, Debug, DebugDisplay, Edge, EdgeId,
+    ElementAttributes, Face, FaceId, Formatter, IncludeCurve, Invertible, ParameterTransform,
+    Result, SearchParameter, Shell, Solid, SolidAttributes, SolidDisplayFormat, StableId,
+    StableIdAllocator, StableIdExhausted, Tolerance, Vertex, VertexId,
+};
 use rustc_hash::FxHashMap as HashMap;
-use std::vec::Vec;
+use std::{hash::Hash, vec::Vec};
+
+fn unassigned_shared_count<K>(uses: impl IntoIterator<Item = (K, StableId)>) -> usize
+where K: Eq + Hash {
+    let mut assignments = HashMap::<K, bool>::default();
+    for (key, stable_id) in uses {
+        let assigned = stable_id.is_assigned();
+        assignments
+            .entry(key)
+            .and_modify(|any_assigned| *any_assigned |= assigned)
+            .or_insert(assigned);
+    }
+    assignments.values().filter(|&&assigned| !assigned).count()
+}
 
 fn assign_vertex_stable_id<P>(
     vertex: &mut Vertex<P>,
     ids: &mut HashMap<VertexId<P>, StableId>,
     id_allocator: &mut StableIdAllocator,
-) {
+) -> std::result::Result<(), StableIdExhausted> {
     let vertex_id = vertex.id();
     let stable_id = if let Some(stable_id) = ids.get(&vertex_id).copied() {
         stable_id
     } else {
-        let stable_id = id_allocator.allocate();
+        let stable_id = id_allocator.allocate()?;
         ids.insert(vertex_id, stable_id);
         stable_id
     };
     vertex.set_stable_id(stable_id);
+    Ok(())
 }
 
 fn collect_assigned_vertex_stable_id<P>(
@@ -39,163 +58,173 @@ fn collect_assigned_edge_stable_id<P, C>(
 }
 
 impl<P, C, S> Solid<P, C, S> {
-    /// Create a solid whose boundaries must be non-empty, connected,
-    /// and closed manifold.
-    #[inline(always)]
-    pub fn try_new(boundaries: Vec<Shell<P, C, S>>) -> Result<Solid<P, C, S>> {
+    /// Creates a solid whose boundaries are non-empty, connected, closed manifolds.
+    ///
+    /// # Errors
+    /// Returns the topology validation error reported by [`Shell::check_solid_boundary`]
+    /// for the first invalid boundary shell.
+    #[inline]
+    pub fn new(boundaries: Vec<Shell<P, C, S>>) -> Result<Self> {
         for shell in &boundaries {
             shell.check_solid_boundary()?;
         }
-        Ok(Solid::new_unchecked(boundaries))
-    }
-
-    /// Create a solid whose boundaries must be non-empty, connected,
-    /// and closed manifold.
-    /// # Failures
-    /// Returns the same validation errors as [`Solid::try_new`].
-    #[inline(always)]
-    pub fn new(boundaries: Vec<Shell<P, C, S>>) -> Result<Solid<P, C, S>> {
-        Self::try_new(boundaries)
+        Ok(Self::new_unchecked(boundaries))
     }
 
     /// Create without validation (for performance-critical code).
-    #[inline(always)]
-    pub fn new_unchecked(boundaries: Vec<Shell<P, C, S>>) -> Solid<P, C, S> {
-        Solid {
+    #[inline]
+    #[must_use]
+    pub fn new_unchecked(boundaries: Vec<Shell<P, C, S>>) -> Self {
+        Self {
             boundaries,
             id_allocator: StableIdAllocator::new(),
             attributes: SolidAttributes::new(),
         }
     }
 
-    /// Allocate a fresh [`StableId`] from this solid's allocator.
-    #[inline(always)]
-    pub fn alloc_id(&mut self) -> StableId { self.id_allocator.allocate() }
+    /// Allocates a fresh [`StableId`] from this solid's allocator.
+    ///
+    /// # Errors
+    /// Returns [`StableIdExhausted`] if the identifier space is exhausted.
+    #[inline]
+    pub fn alloc_id(&mut self) -> std::result::Result<StableId, StableIdExhausted> {
+        self.id_allocator.allocate()
+    }
 
     /// Returns a reference to this solid's [`StableIdAllocator`].
-    #[inline(always)]
-    pub fn id_allocator(&self) -> &StableIdAllocator { &self.id_allocator }
+    #[inline]
+    #[must_use]
+    pub const fn id_allocator(&self) -> &StableIdAllocator { &self.id_allocator }
 
     /// Returns a mutable reference to this solid's [`StableIdAllocator`].
-    #[inline(always)]
-    pub fn id_allocator_mut(&mut self) -> &mut StableIdAllocator { &mut self.id_allocator }
+    #[inline]
+    pub const fn id_allocator_mut(&mut self) -> &mut StableIdAllocator { &mut self.id_allocator }
 
     /// Returns a reference to this solid's [`SolidAttributes`].
-    #[inline(always)]
-    pub fn attributes(&self) -> &SolidAttributes { &self.attributes }
+    #[inline]
+    #[must_use]
+    pub const fn attributes(&self) -> &SolidAttributes { &self.attributes }
 
     /// Returns a mutable reference to this solid's [`SolidAttributes`].
-    #[inline(always)]
-    pub fn attributes_mut(&mut self) -> &mut SolidAttributes { &mut self.attributes }
+    #[inline]
+    pub const fn attributes_mut(&mut self) -> &mut SolidAttributes { &mut self.attributes }
 
     /// Returns a reference to the face [`ElementAttributes`].
-    #[inline(always)]
-    pub fn face_attributes(&self) -> &ElementAttributes { &self.attributes.faces }
+    #[inline]
+    #[must_use]
+    pub const fn face_attributes(&self) -> &ElementAttributes { &self.attributes.faces }
 
     /// Returns a mutable reference to the face [`ElementAttributes`].
-    #[inline(always)]
-    pub fn face_attributes_mut(&mut self) -> &mut ElementAttributes { &mut self.attributes.faces }
+    #[inline]
+    pub const fn face_attributes_mut(&mut self) -> &mut ElementAttributes {
+        &mut self.attributes.faces
+    }
 
     /// Returns a reference to the edge [`ElementAttributes`].
-    #[inline(always)]
-    pub fn edge_attributes(&self) -> &ElementAttributes { &self.attributes.edges }
+    #[inline]
+    #[must_use]
+    pub const fn edge_attributes(&self) -> &ElementAttributes { &self.attributes.edges }
 
     /// Returns a mutable reference to the edge [`ElementAttributes`].
-    #[inline(always)]
-    pub fn edge_attributes_mut(&mut self) -> &mut ElementAttributes { &mut self.attributes.edges }
+    #[inline]
+    pub const fn edge_attributes_mut(&mut self) -> &mut ElementAttributes {
+        &mut self.attributes.edges
+    }
 
     /// Returns a reference to the vertex [`ElementAttributes`].
-    #[inline(always)]
-    pub fn vertex_attributes(&self) -> &ElementAttributes { &self.attributes.vertices }
+    #[inline]
+    #[must_use]
+    pub const fn vertex_attributes(&self) -> &ElementAttributes { &self.attributes.vertices }
 
     /// Returns a mutable reference to the vertex [`ElementAttributes`].
-    #[inline(always)]
-    pub fn vertex_attributes_mut(&mut self) -> &mut ElementAttributes {
+    #[inline]
+    pub const fn vertex_attributes_mut(&mut self) -> &mut ElementAttributes {
         &mut self.attributes.vertices
     }
 
-    /// Create with validation only in debug mode, REPORTING the violation
-    /// instead of aborting on it.
-    ///
-    /// # Why this returns `Result` (spec 012 U4, ledger C11)
-    ///
-    /// This used to be `cfg!(debug_assertions)` selecting between
-    /// [`Solid::new`] (PANICS on violation) and [`Solid::new_unchecked`]
-    /// (accepts anything) -- the two worst available outcomes, chosen by build
-    /// profile. Measured during spec 011's C11 work: **the same input that
-    /// panicked in a debug build returned `Some(invalid solid)` in RELEASE and
-    /// let a boolean run on a shell with a hole.** So the class had two faces --
-    /// C11 in debug, C9 in release -- and a panic-shaped census could only ever
-    /// see one of them.
-    ///
-    /// The `Result` gives the caller the one thing neither arm offered: a way to
-    /// say so. [`Face::debug_new`](crate::Face::debug_new) already had this
-    /// shape; this is the other two brought to it.
-    ///
-    /// Release still skips the check (that is what `debug_new` is FOR), so a
-    /// release `Ok` is not a validity certificate -- but a caller with an
-    /// `Option`/`Result` channel now propagates the debug refusal instead of
-    /// aborting the process, and the release path is no longer silently
-    /// *different in kind*.
-    #[inline(always)]
-    pub fn debug_new(boundaries: Vec<Shell<P, C, S>>) -> Result<Solid<P, C, S>> {
-        match cfg!(debug_assertions) {
-            true => Solid::try_new(boundaries),
-            false => Ok(Solid::new_unchecked(boundaries)),
-        }
-    }
-
     /// Returns the reference of boundary shells
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn boundaries(&self) -> &Vec<Shell<P, C, S>> { &self.boundaries }
     /// Returns the boundary shells
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn into_boundaries(self) -> Vec<Shell<P, C, S>> { self.boundaries }
 
     /// The valid EMPTY solid: zero boundary shells, hence zero faces and zero
     /// volume -- the geometric empty set as a first-class B-rep value.
     ///
-    /// This is a well-formed [`Solid`]: [`Solid::try_new`] accepts an empty
+    /// This is a well-formed [`Solid`]: [`Solid::new`] accepts an empty
     /// boundary list (the per-shell validity loop is vacuously satisfied), so
     /// the empty set is representable without any `unchecked` escape. Boolean
     /// operations return it for results that are geometrically, provably empty
     /// (e.g. the intersection of disjoint solids), so a consumer receives a
     /// closed zero-volume value rather than an error signal.
-    #[inline(always)]
-    pub fn empty() -> Solid<P, C, S> { Solid::new_unchecked(Vec::new()) }
+    #[inline]
+    #[must_use]
+    pub fn empty() -> Self { Self::new_unchecked(Vec::new()) }
 
     /// True when this solid is the EMPTY set: it has no boundary shells (hence
     /// no faces and zero volume). See [`Solid::empty`].
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool { self.boundaries.is_empty() }
+    #[inline]
+    #[must_use]
+    pub const fn is_empty(&self) -> bool { self.boundaries.is_empty() }
 
     /// Returns an iterator over the faces.
-    #[inline(always)]
+    #[inline]
     pub fn face_iter(&self) -> impl Iterator<Item = &Face<P, C, S>> {
         self.boundaries.iter().flatten()
     }
 
     /// Returns an iterator over the edges.
-    #[inline(always)]
+    #[inline]
     pub fn edge_iter(&self) -> impl Iterator<Item = Edge<P, C>> + '_ {
         self.face_iter().flat_map(Face::boundaries).flatten()
     }
 
     /// Returns an iterator over the vertices.
-    #[inline(always)]
+    #[inline]
     pub fn vertex_iter(&self) -> impl Iterator<Item = Vertex<P>> + '_ {
         self.edge_iter().map(|edge| edge.front().clone())
     }
 
+    /// Returns every stored vertex use, including both endpoints of every edge use.
+    ///
+    /// Unlike [`Solid::vertex_iter`], this deliberately retains duplicate uses so `StableId`
+    /// reconciliation can observe metadata attached to any clone of a shared vertex.
+    fn vertex_use_iter(&self) -> impl Iterator<Item = Vertex<P>> + '_ {
+        self.edge_iter().flat_map(|edge| {
+            let (front, back) = edge.absolute_ends();
+            [front.clone(), back.clone()]
+        })
+    }
+
     /// invert all faces
-    #[inline(always)]
+    #[inline]
     pub fn not(&mut self) {
         self.boundaries
             .iter_mut()
             .flat_map(|shell| shell.face_iter_mut())
             .for_each(|face| {
                 face.invert();
-            })
+            });
+    }
+
+    fn unassigned_face_count(&self) -> usize {
+        self.face_iter()
+            .filter(|face| !face.stable_id().is_assigned())
+            .count()
+    }
+
+    fn unassigned_vertex_count(&self) -> usize {
+        unassigned_shared_count(
+            self.vertex_use_iter()
+                .map(|vertex| (vertex.id(), vertex.stable_id())),
+        )
+    }
+
+    fn unassigned_edge_count(&self) -> usize {
+        unassigned_shared_count(self.edge_iter().map(|edge| (edge.id(), edge.stable_id())))
     }
 
     /// Assigns a fresh [`StableId`] to every face that does not have one yet,
@@ -205,65 +234,69 @@ impl<P, C, S> Solid<P, C, S> {
     /// are explicitly assigned, so per-face attributes (e.g. a colour) cannot
     /// be keyed on them. Calling this first gives every face a stable id to key
     /// attributes on.
-    pub fn ensure_face_stable_ids(&mut self) {
-        self.ensure_allocator_above_existing_topology_ids();
+    ///
+    /// # Errors
+    /// Returns [`StableIdExhausted`] before mutation if there are not enough identifiers left.
+    pub fn ensure_face_stable_ids(&mut self) -> std::result::Result<(), StableIdExhausted> {
+        self.ensure_allocator_above_existing_topology_ids()?;
+        self.id_allocator
+            .ensure_capacity(self.unassigned_face_count())?;
         let id_allocator = &mut self.id_allocator;
         for shell in &mut self.boundaries {
             for face in shell.face_iter_mut() {
                 if !face.stable_id().is_assigned() {
-                    face.set_stable_id(id_allocator.allocate());
+                    face.set_stable_id(id_allocator.allocate()?);
                 }
             }
         }
+        Ok(())
     }
 
     /// Assigns a [`StableId`] to every vertex use that does not have one yet.
     ///
     /// Shared vertex uses receive the same id, preferring an existing assigned
     /// id for that topology key before allocating a fresh one.
-    pub fn ensure_vertex_stable_ids(&mut self) {
-        self.ensure_allocator_above_existing_topology_ids();
-        let id_allocator = &mut self.id_allocator;
+    ///
+    /// # Errors
+    /// Returns [`StableIdExhausted`] before mutation if there are not enough identifiers left.
+    pub fn ensure_vertex_stable_ids(&mut self) -> std::result::Result<(), StableIdExhausted> {
+        self.ensure_allocator_above_existing_topology_ids()?;
+        self.id_allocator
+            .ensure_capacity(self.unassigned_vertex_count())?;
         let mut ids = HashMap::<VertexId<P>, StableId>::default();
-        for shell in &self.boundaries {
-            for face in shell.face_iter() {
-                for wire in &face.boundaries {
-                    for edge in wire.iter() {
-                        collect_assigned_vertex_stable_id(&edge.vertices.0, &mut ids);
-                        collect_assigned_vertex_stable_id(&edge.vertices.1, &mut ids);
-                    }
-                }
-            }
+        for vertex in self.vertex_use_iter() {
+            collect_assigned_vertex_stable_id(&vertex, &mut ids);
         }
+        let id_allocator = &mut self.id_allocator;
         for shell in &mut self.boundaries {
             for face in shell.face_iter_mut() {
                 for wire in &mut face.boundaries {
                     for edge in wire.edge_iter_mut() {
-                        assign_vertex_stable_id(&mut edge.vertices.0, &mut ids, id_allocator);
-                        assign_vertex_stable_id(&mut edge.vertices.1, &mut ids, id_allocator);
+                        assign_vertex_stable_id(&mut edge.vertices.0, &mut ids, id_allocator)?;
+                        assign_vertex_stable_id(&mut edge.vertices.1, &mut ids, id_allocator)?;
                     }
                 }
             }
         }
+        Ok(())
     }
 
     /// Assigns a [`StableId`] to every edge use that does not have one yet.
     ///
     /// Shared edge uses receive the same id, preferring an existing assigned id
     /// for that topology key before allocating a fresh one.
-    pub fn ensure_edge_stable_ids(&mut self) {
-        self.ensure_allocator_above_existing_topology_ids();
-        let id_allocator = &mut self.id_allocator;
+    ///
+    /// # Errors
+    /// Returns [`StableIdExhausted`] before mutation if there are not enough identifiers left.
+    pub fn ensure_edge_stable_ids(&mut self) -> std::result::Result<(), StableIdExhausted> {
+        self.ensure_allocator_above_existing_topology_ids()?;
+        self.id_allocator
+            .ensure_capacity(self.unassigned_edge_count())?;
         let mut ids = HashMap::<EdgeId<C>, StableId>::default();
-        for shell in &self.boundaries {
-            for face in shell.face_iter() {
-                for wire in &face.boundaries {
-                    for edge in wire.iter() {
-                        collect_assigned_edge_stable_id(edge, &mut ids);
-                    }
-                }
-            }
+        for edge in self.edge_iter() {
+            collect_assigned_edge_stable_id(&edge, &mut ids);
         }
+        let id_allocator = &mut self.id_allocator;
         for shell in &mut self.boundaries {
             for face in shell.face_iter_mut() {
                 for wire in &mut face.boundaries {
@@ -272,7 +305,7 @@ impl<P, C, S> Solid<P, C, S> {
                         let stable_id = if let Some(stable_id) = ids.get(&edge_id).copied() {
                             stable_id
                         } else {
-                            let stable_id = id_allocator.allocate();
+                            let stable_id = id_allocator.allocate()?;
                             ids.insert(edge_id, stable_id);
                             stable_id
                         };
@@ -281,13 +314,24 @@ impl<P, C, S> Solid<P, C, S> {
                 }
             }
         }
+        Ok(())
     }
 
     /// Assigns stable ids to every topology element that does not have one yet.
-    pub fn ensure_topology_stable_ids(&mut self) {
-        self.ensure_vertex_stable_ids();
-        self.ensure_edge_stable_ids();
-        self.ensure_face_stable_ids();
+    ///
+    /// # Errors
+    /// Returns [`StableIdExhausted`] if the identifier space is exhausted.
+    pub fn ensure_topology_stable_ids(&mut self) -> std::result::Result<(), StableIdExhausted> {
+        self.ensure_allocator_above_existing_topology_ids()?;
+        let required = self
+            .unassigned_vertex_count()
+            .checked_add(self.unassigned_edge_count())
+            .and_then(|count| count.checked_add(self.unassigned_face_count()))
+            .ok_or(StableIdExhausted)?;
+        self.id_allocator.ensure_capacity(required)?;
+        self.ensure_vertex_stable_ids()?;
+        self.ensure_edge_stable_ids()?;
+        self.ensure_face_stable_ids()
     }
 
     /// Replaces every topology element's [`StableId`] with a caller-supplied
@@ -307,13 +351,19 @@ impl<P, C, S> Solid<P, C, S> {
     /// which allocates in traversal order and skips already-assigned elements,
     /// this reassigns every mapped element unconditionally. The caller owns the
     /// canonical order; this method only applies it.
+    ///
+    /// # Errors
+    /// Returns [`StableIdExhausted`] if advancing the allocator past the
+    /// supplied stable-ID range would exhaust the ID space.
     pub fn apply_stable_ids(
         &mut self,
         vertex_ids: &HashMap<VertexId<P>, StableId>,
         edge_ids: &HashMap<EdgeId<C>, StableId>,
         face_ids_in_order: &[StableId],
         next_free_id: u64,
-    ) {
+    ) -> std::result::Result<(), StableIdExhausted> {
+        let mut next_allocator = StableIdAllocator::new();
+        next_allocator.ensure_above(next_free_id.saturating_sub(1))?;
         let mut face_ids = face_ids_in_order.iter().copied();
         for shell in &mut self.boundaries {
             for face in shell.face_iter_mut() {
@@ -335,12 +385,13 @@ impl<P, C, S> Solid<P, C, S> {
                 }
             }
         }
-        self.id_allocator = StableIdAllocator::new();
-        self.id_allocator
-            .ensure_above(next_free_id.saturating_sub(1));
+        self.id_allocator = next_allocator;
+        Ok(())
     }
 
-    fn ensure_allocator_above_existing_topology_ids(&mut self) {
+    fn ensure_allocator_above_existing_topology_ids(
+        &mut self,
+    ) -> std::result::Result<(), StableIdExhausted> {
         let max_id = self
             .boundaries
             .iter()
@@ -357,7 +408,7 @@ impl<P, C, S> Solid<P, C, S> {
                             .max(edge.vertices.1.stable_id().raw())
                     })
             });
-        self.id_allocator.ensure_above(max_id);
+        self.id_allocator.ensure_above(max_id)
     }
 
     /// Returns a new solid whose surfaces are mapped by `surface_mapping`,
@@ -366,7 +417,7 @@ impl<P, C, S> Solid<P, C, S> {
     /// Accessing geometry elements directly in the closure will result in a deadlock.
     /// So, this method does not appear to the document.
     #[doc(hidden)]
-    #[inline(always)]
+    #[inline]
     pub fn try_mapped<Q, D, T>(
         &self,
         mut point_mapping: impl FnMut(&P) -> Option<Q>,
@@ -379,7 +430,7 @@ impl<P, C, S> Solid<P, C, S> {
         // process in debug and hand back `Some(invalid solid)` in release.
         // `.ok()` makes both profiles answer the same shape of thing -- a
         // `None` this function's signature already promised.
-        Solid::debug_new(
+        Solid::new(
             self.boundaries()
                 .iter()
                 .map(move |shell| {
@@ -396,7 +447,7 @@ impl<P, C, S> Solid<P, C, S> {
     /// Accessing geometry elements directly in the closure will result in a deadlock.
     /// So, this method does not appear to the document.
     #[doc(hidden)]
-    #[inline(always)]
+    #[inline]
     pub fn mapped<Q, D, T>(
         &self,
         mut point_mapping: impl FnMut(&P) -> Q,
@@ -405,11 +456,11 @@ impl<P, C, S> Solid<P, C, S> {
     ) -> Solid<Q, D, T> {
         // Infallible signature, so there is no channel to report a violation
         // on -- and `new_unchecked` is stated here rather than hidden behind
-        // `debug_new`'s profile switch, because the alternative was a panic in
+        // the former profile-dependent constructor, because the alternative was a panic in
         // debug and this exact call in release (spec 012 U4).
         //
         // It costs nothing, and that is provable rather than hoped for.
-        // `Solid::try_new`'s condition is `Shell::check_solid_boundary`, which
+        // `Solid::new`'s condition is `Shell::check_solid_boundary`, which
         // is PURELY COMBINATORIAL -- non-empty, connected, closed, no singular
         // vertex -- and `mapped` rebuilds the identical face/edge/vertex
         // incidence structure with only the geometry replaced. So the result
@@ -430,7 +481,8 @@ impl<P, C, S> Solid<P, C, S> {
 
     /// Returns the consistence of the geometry of end vertices
     /// and the geometry of edge.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn is_geometric_consistent(&self) -> bool
     where
         P: Tolerance,
@@ -438,11 +490,11 @@ impl<P, C, S> Solid<P, C, S> {
         S: IncludeCurve<C>, {
         self.boundaries()
             .iter()
-            .all(|shell| shell.is_geometric_consistent())
+            .all(super::Shell::is_geometric_consistent)
     }
 
     /// Cuts one edge into two edges at vertex.
-    #[inline(always)]
+    #[inline]
     pub fn cut_edge(
         &mut self,
         edge_id: EdgeId<C>,
@@ -457,11 +509,11 @@ impl<P, C, S> Solid<P, C, S> {
             .iter_mut()
             .find_map(|shell| shell.cut_edge(edge_id, vertex));
         #[cfg(debug_assertions)]
-        let _ = Solid::new_unchecked(self.boundaries.clone());
+        let _ = Self::new_unchecked(self.boundaries.clone());
         res
     }
     /// Removes `vertex` from `self` by concat two edges on both sides.
-    #[inline(always)]
+    #[inline]
     pub fn remove_vertex_by_concat_edges(&mut self, vertex_id: VertexId<P>) -> Option<Edge<P, C>>
     where
         P: Debug,
@@ -471,12 +523,12 @@ impl<P, C, S> Solid<P, C, S> {
             .iter_mut()
             .find_map(|shell| shell.remove_vertex_by_concat_edges(vertex_id));
         #[cfg(debug_assertions)]
-        let _ = Solid::new_unchecked(self.boundaries.clone());
+        let _ = Self::new_unchecked(self.boundaries.clone());
         res
     }
 
     /// Cut a face with `face_id` by edge.
-    #[inline(always)]
+    #[inline]
     pub fn cut_face_by_edge(&mut self, face_id: FaceId<S>, edge: Edge<P, C>) -> bool
     where S: Clone {
         let tuple = self.boundaries.iter_mut().find_map(|shell| {
@@ -498,8 +550,9 @@ impl<P, C, S> Solid<P, C, S> {
     }
 
     /// Creates display struct for debugging the solid.
-    #[inline(always)]
-    pub fn display(
+    #[inline]
+    #[must_use]
+    pub const fn display(
         &self,
         format: SolidDisplayFormat,
     ) -> DebugDisplay<'_, Self, SolidDisplayFormat> {
@@ -512,7 +565,7 @@ impl<P, C, S> Solid<P, C, S> {
 
 impl<P: Clone, C: Clone, S: Clone> Solid<P, C, Option<S>> {
     /// Returns the value with the Option removed if there is no `None` in the surfaces of the faces.
-    #[inline(always)]
+    #[inline]
     pub fn collect_option(&self) -> Option<Solid<P, C, S>> {
         self.try_mapped(|x| Some(x.clone()), |x| Some(x.clone()), Clone::clone)
     }
@@ -615,13 +668,13 @@ pub(super) fn cube() -> Solid<(), (), ()> {
 fn cube_test() { cube(); }
 
 #[test]
-fn ensure_face_stable_ids_assigns_unassigned_faces() {
+fn ensure_face_stable_ids_assigns_unassigned_faces() -> std::result::Result<(), StableIdExhausted> {
     use monstertruck_core::StableId;
     let mut solid = cube();
     // A freshly built cube has unassigned face ids.
     assert!(solid.face_iter().all(|f| !f.stable_id().is_assigned()));
 
-    solid.ensure_face_stable_ids();
+    solid.ensure_face_stable_ids()?;
     let ids: Vec<StableId> = solid.face_iter().map(|f| f.stable_id()).collect();
     assert_eq!(ids.len(), 6);
     assert!(ids.iter().all(|id| id.is_assigned()), "all faces assigned");
@@ -631,18 +684,103 @@ fn ensure_face_stable_ids_assigns_unassigned_faces() {
     assert_eq!(unique.len(), 6, "face ids are unique");
 
     // Idempotent: a second call leaves already-assigned faces untouched.
-    solid.ensure_face_stable_ids();
+    solid.ensure_face_stable_ids()?;
     let ids_again: Vec<StableId> = solid.face_iter().map(|f| f.stable_id()).collect();
     assert_eq!(ids, ids_again, "second call is a no-op for assigned faces");
+    Ok(())
 }
 
 #[test]
-fn ensure_edge_stable_ids_assigns_each_topological_edge_once() {
+fn ensure_vertex_stable_ids_assigns_each_topological_vertex_once()
+-> std::result::Result<(), StableIdExhausted> {
+    use monstertruck_core::StableId;
+    let mut solid = cube();
+    assert!(
+        solid
+            .vertex_use_iter()
+            .all(|vertex| !vertex.stable_id().is_assigned())
+    );
+
+    solid.ensure_vertex_stable_ids()?;
+    let ids: Vec<StableId> = solid
+        .vertex_use_iter()
+        .map(|vertex| vertex.stable_id())
+        .collect();
+    assert!(
+        ids.iter().all(|id| id.is_assigned()),
+        "all vertex uses assigned"
+    );
+    let mut unique = ids.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), 8, "shared vertex uses receive one id");
+
+    solid.ensure_vertex_stable_ids()?;
+    let ids_again: Vec<StableId> = solid
+        .vertex_use_iter()
+        .map(|vertex| vertex.stable_id())
+        .collect();
+    assert_eq!(
+        ids, ids_again,
+        "second call is a no-op for assigned vertices"
+    );
+    Ok(())
+}
+
+#[test]
+fn ensure_vertex_stable_ids_preserves_id_found_only_on_back_endpoint()
+-> std::result::Result<(), StableIdExhausted> {
+    use monstertruck_core::StableId;
+    let mut solid = cube();
+    let target_id = solid
+        .edge_iter()
+        .next()
+        .expect("cube has edges")
+        .absolute_back()
+        .id();
+    let existing_id = StableId::new(100);
+    let mut assigned_one_back_use = false;
+
+    'outer: for shell in &mut solid.boundaries {
+        for face in shell.face_iter_mut() {
+            for wire in &mut face.boundaries {
+                for edge in wire.edge_iter_mut() {
+                    if edge.vertices.1.id() == target_id {
+                        edge.vertices.1.set_stable_id(existing_id);
+                        assigned_one_back_use = true;
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+    assert!(assigned_one_back_use);
+
+    solid.ensure_vertex_stable_ids()?;
+    let target_ids: Vec<StableId> = solid
+        .vertex_use_iter()
+        .filter(|vertex| vertex.id() == target_id)
+        .map(|vertex| vertex.stable_id())
+        .collect();
+    assert!(!target_ids.is_empty());
+    assert!(target_ids.iter().all(|&id| id == existing_id));
+    assert!(
+        solid
+            .vertex_use_iter()
+            .all(|vertex| vertex.stable_id().is_assigned())
+    );
+    assert!(solid.id_allocator().peek() > existing_id.raw());
+    Ok(())
+}
+
+#[test]
+fn ensure_edge_stable_ids_assigns_each_topological_edge_once()
+-> std::result::Result<(), StableIdExhausted> {
     use monstertruck_core::StableId;
     let mut solid = cube();
     assert!(solid.edge_iter().all(|e| !e.stable_id().is_assigned()));
 
-    solid.ensure_edge_stable_ids();
+    solid.ensure_edge_stable_ids()?;
     let ids: Vec<StableId> = solid.edge_iter().map(|e| e.stable_id()).collect();
     assert_eq!(ids.len(), 24);
     assert!(
@@ -654,13 +792,15 @@ fn ensure_edge_stable_ids_assigns_each_topological_edge_once() {
     unique.dedup();
     assert_eq!(unique.len(), 12, "shared edge uses receive one id");
 
-    solid.ensure_edge_stable_ids();
+    solid.ensure_edge_stable_ids()?;
     let ids_again: Vec<StableId> = solid.edge_iter().map(|e| e.stable_id()).collect();
     assert_eq!(ids, ids_again, "second call is a no-op for assigned edges");
+    Ok(())
 }
 
 #[test]
-fn ensure_edge_stable_ids_preserves_existing_shared_edge_id() {
+fn ensure_edge_stable_ids_preserves_existing_shared_edge_id()
+-> std::result::Result<(), StableIdExhausted> {
     use monstertruck_core::StableId;
     let mut solid = cube();
     let target_id = solid.edge_iter().next().expect("cube has edges").id();
@@ -683,7 +823,7 @@ fn ensure_edge_stable_ids_preserves_existing_shared_edge_id() {
     }
     assert_eq!(seen, 2, "cube edge should have two edge uses");
 
-    solid.ensure_edge_stable_ids();
+    solid.ensure_edge_stable_ids()?;
     let target_ids: Vec<StableId> = solid
         .edge_iter()
         .filter(|edge| edge.id() == target_id)
@@ -692,10 +832,5 @@ fn ensure_edge_stable_ids_preserves_existing_shared_edge_id() {
     assert_eq!(target_ids, vec![existing_id, existing_id]);
     assert!(solid.edge_iter().all(|edge| edge.stable_id().is_assigned()));
     assert!(solid.id_allocator().peek() > existing_id.raw());
+    Ok(())
 }
-
-/// Spec 012 U4 / ledger class C11: [`Solid::debug_new`] used to choose between
-/// a PANIC and an UNCHECKED construction on `debug_assertions`, so the same
-/// input aborted a debug build and returned `Some(invalid solid)` in release.
-#[cfg(test)]
-mod debug_new_tests;

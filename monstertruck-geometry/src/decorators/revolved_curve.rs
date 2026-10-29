@@ -1,4 +1,21 @@
-use super::*;
+#![allow(
+    clippy::many_single_char_names,
+    reason = "compact point/vector symbols mirror the local revolution projection equations"
+)]
+#![allow(
+    clippy::similar_names,
+    reason = "paired U/V derivative and parameter names mirror the revolution equations"
+)]
+
+use super::{
+    Angle, Bound, BoundedCurve, BoundedSurface, BsplineCurve, CurveParameter, D2, Debug,
+    EuclideanSpace, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace, Invertible, Matrix3,
+    NurbsCurve, Origin, PRESEARCH_DIVISION, ParameterDivision1D, ParameterDivision2D,
+    ParameterRange, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point2, Point3, Rad,
+    Revolution, RevolutionSurface, SearchNearestParameter, SearchParameter, SearchParameterHint1D,
+    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance, Vector2, Vector3,
+    Vector4, Zero, algo,
+};
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 use std::f64::consts::PI;
 
@@ -9,25 +26,25 @@ impl Revolution {
             axis: axis.normalize(),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn rotation_matrix(self, v: f64) -> Matrix3 { Matrix3::from_axis_angle(self.axis, Rad(v)) }
-    #[inline(always)]
+    #[inline]
     fn invert(&mut self) { self.axis *= -1.0; }
-    #[inline(always)]
+    #[inline]
     fn inverse(mut self) -> Self {
         self.axis *= -1.0;
         self
     }
-    #[inline(always)]
+    #[inline]
     fn contains(self, p: Point3) -> bool { (p - self.origin).cross(self.axis).so_small() }
-    #[inline(always)]
+    #[inline]
     fn proj_point(&self, p: Point3) -> Point2 {
         let r = p - self.origin;
         let z = r.dot(self.axis);
         let h = r - z * self.axis;
         Point2::new(z, h.magnitude())
     }
-    #[inline(always)]
+    #[inline]
     fn proj_vector(&self, p: Point3, v: Vector3) -> Vector2 {
         let r = self.proj_point(p).y;
         let vz = v.dot(self.axis);
@@ -35,7 +52,7 @@ impl Revolution {
         let vq = (p - self.origin).dot(vxy) / r;
         Vector2::new(vz, vq)
     }
-    #[inline(always)]
+    #[inline]
     fn proj_vector2(&self, p: Point3, v: Vector3, v2: Vector3) -> Vector2 {
         let r = self.proj_point(p).y;
         let v2z = v2.dot(self.axis);
@@ -46,15 +63,16 @@ impl Revolution {
         let b = f64::powi((p - self.origin).dot(vxy), 2) / (r * r * r);
         Vector2::new(v2z, a - b)
     }
-    #[inline(always)]
+    #[inline]
     fn proj_angle(&self, p: Point3, q: Point3) -> f64 {
         let (p, q) = (p - self.origin, q - self.origin);
         let hp = (p - p.dot(self.axis) * self.axis).normalize();
         let hq = (q - q.dot(self.axis) * self.axis).normalize();
         let t = f64::acos(f64::clamp(hp.dot(hq), -1.0, 1.0));
-        match hp.cross(hq).dot(self.axis) < 0.0 {
-            false => t,
-            true => 2.0 * PI - t,
+        if hp.cross(hq).dot(self.axis) >= 0.0 {
+            t
+        } else {
+            2.0f64.mul_add(PI, -t)
         }
     }
 }
@@ -62,7 +80,7 @@ impl Revolution {
 impl<C: ParametricCurve3D> ParametricSurface for RevolutionSurface<C> {
     type Point = Point3;
     type Vector = Vector3;
-    #[inline(always)]
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
         let center = match (m, n) {
             (0, 0) => self.origin().to_vec(),
@@ -75,53 +93,53 @@ impl<C: ParametricCurve3D> ParametricSurface for RevolutionSurface<C> {
         let v_part = from_axis_angle_derivation(n, self.axis(), Rad(v));
         v_part * u_part + center
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 {
         let mat = self.revolution.rotation_matrix(v);
         let (p, o) = (self.curve.evaluate(u), self.origin());
         o + mat * (p - o)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> Vector3 {
         self.revolution.rotation_matrix(v) * self.curve.derivative(u)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> Vector3 {
         let u_part = self.curve.evaluate(u) - self.origin();
         let v_part = from_axis_angle_derivation(1, self.axis(), Rad(v));
         v_part * u_part
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> Vector3 {
         self.revolution.rotation_matrix(v) * self.curve.derivative_2(u)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Vector3 {
         let u_part = self.curve.evaluate(u) - self.origin();
         let v_part = from_axis_angle_derivation(2, self.axis(), Rad(v));
         v_part * u_part
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> Vector3 {
         let u_part = self.curve.derivative(u);
         let v_part = from_axis_angle_derivation(1, self.axis(), Rad(v));
         v_part * u_part
     }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
         (
             self.curve.parameter_range(),
             (Bound::Included(0.0), Bound::Excluded(2.0 * PI)),
         )
     }
-    #[inline(always)]
+    #[inline]
     fn period_u(&self) -> Option<f64> { self.curve.period() }
-    #[inline(always)]
+    #[inline]
     fn period_v(&self) -> Option<f64> { Some(2.0 * PI) }
 }
 
 impl<C: ParametricCurve3D + BoundedCurve> ParametricSurface3D for RevolutionSurface<C> {
-    #[inline(always)]
+    #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         let (u0, u1) = self.curve.range_tuple();
         let (uder, vder) = if u.near(&u0) {
@@ -149,7 +167,9 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricSurface3D for RevolutionSurf
     }
 }
 
-impl<C: ParametricCurve3D + BoundedCurve> BoundedSurface for RevolutionSurface<C> {}
+impl<C: ParametricCurve3D + BoundedCurve> BoundedSurface for RevolutionSurface<C> {
+    fn range_tuple(&self) -> SurfaceParameterRange { (self.curve.range_tuple(), (0.0, 2.0 * PI)) }
+}
 
 // -- v2 scalar-generic impls ------------------------------------------------
 
@@ -160,41 +180,41 @@ impl<C: ParametricCurve3D> v2::ParametricSurface for RevolutionSurface<C> {
     type Point = Point3;
     type Vector = Vector3;
 
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 { ParametricSurface::evaluate(self, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_u(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_v(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_uu(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_uv(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_vv(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn period_u(&self) -> Option<f64> { ParametricSurface::period_u(self) }
-    #[inline(always)]
+    #[inline]
     fn period_v(&self) -> Option<f64> { ParametricSurface::period_v(self) }
 }
 
 impl<C: ParametricCurve3D + BoundedCurve> v2::BoundedSurface for RevolutionSurface<C> {
-    #[inline(always)]
+    #[inline]
     fn range_tuple(&self) -> ((f64, f64), (f64, f64)) { BoundedSurface::range_tuple(self) }
 }
 
 impl<C: ParametricCurve3D + BoundedCurve> v2::ParametricSurface3D for RevolutionSurface<C> {
-    #[inline(always)]
+    #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 { ParametricSurface3D::normal(self, u, v) }
 }
 
@@ -202,7 +222,7 @@ impl<C: ParametricCurve3D + BoundedCurve> v2::SearchParameter<v2::D2<f64>>
     for RevolutionSurface<C>
 {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
         &self,
         pt: Point3,
@@ -217,7 +237,7 @@ impl<C: ParametricCurve3D + BoundedCurve> v2::SearchNearestParameter<v2::D2<f64>
     for RevolutionSurface<C>
 {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
         &self,
         pt: Point3,
@@ -229,11 +249,11 @@ impl<C: ParametricCurve3D + BoundedCurve> v2::SearchNearestParameter<v2::D2<f64>
 }
 
 impl<C: Clone> Invertible for RevolutionSurface<C> {
-    #[inline(always)]
-    fn invert(&mut self) { self.revolution.invert() }
-    #[inline(always)]
+    #[inline]
+    fn invert(&mut self) { self.revolution.invert(); }
+    #[inline]
     fn inverse(&self) -> Self {
-        RevolutionSurface {
+        Self {
             curve: self.curve.clone(),
             revolution: self.revolution.inverse(),
         }
@@ -247,7 +267,7 @@ struct ProjectedCurve<C> {
 }
 
 impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
-    #[inline(always)]
+    #[inline]
     fn fixed_endpoint_sign(&self, t: f64, point: Point3) -> Option<f64> {
         if !self.revolution.proj_point(point).y.so_small() {
             return None;
@@ -275,7 +295,7 @@ impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
         factorials.push(1.0);
         let mut factorial = 1.0;
         for order in 1..=n {
-            factorial *= order as f64;
+            factorial *= crate::usize_to_f64(order);
             factorials.push(factorial);
         }
 
@@ -322,7 +342,11 @@ impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
                 // the interior. The ordinary derivative does not exist there.
                 return Vector2::new(axial, f64::NAN);
             };
-            sign.powi(leading_order as i32)
+            if leading_order.is_multiple_of(2) {
+                1.0
+            } else {
+                sign
+            }
         };
         Vector2::new(axial, side * radial[radial_order] * factorials[n])
     }
@@ -331,7 +355,7 @@ impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
 impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurve<C> {
     type Point = Point2;
     type Vector = Vector2;
-    #[inline(always)]
+    #[inline]
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
         match n {
             0 => self.evaluate(t).to_vec(),
@@ -340,9 +364,9 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
             _ => self.derivative_n_from_jet(n, t),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, t: f64) -> Self::Point { self.revolution.proj_point(self.curve.evaluate(t)) }
-    #[inline(always)]
+    #[inline]
     fn derivative(&self, t: f64) -> Self::Vector {
         let point = self.curve.evaluate(t);
         let derivative = self.curve.derivative(t);
@@ -358,7 +382,7 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
         }
         self.revolution.proj_vector(point, derivative)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_2(&self, t: f64) -> Self::Vector {
         let point = self.curve.evaluate(t);
         let derivative = self.curve.derivative(t);
@@ -376,13 +400,15 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
         self.revolution
             .proj_vector2(point, derivative, derivative_2)
     }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> ParameterRange { self.curve.parameter_range() }
-    #[inline(always)]
+    #[inline]
     fn period(&self) -> Option<f64> { self.curve.period() }
 }
 
-impl<C: ParametricCurve3D + BoundedCurve> BoundedCurve for ProjectedCurve<C> {}
+impl<C: ParametricCurve3D + BoundedCurve> BoundedCurve for ProjectedCurve<C> {
+    fn range_tuple(&self) -> (f64, f64) { self.curve.range_tuple() }
+}
 
 impl<C: ParametricCurve3D + BoundedCurve> SearchParameter<CurveParameter> for ProjectedCurve<C> {
     type Point = Point2;
@@ -430,14 +456,13 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<CurveParameter>
 
 #[inline]
 fn nearest_periodic_angle(angle: f64, hint: Option<f64>) -> f64 {
-    match hint {
-        Some(hint) => angle + 2.0 * PI * ((hint - angle) / (2.0 * PI)).round(),
-        None => angle,
-    }
+    hint.map_or(angle, |hint| {
+        (2.0 * PI).mul_add(((hint - angle) / (2.0 * PI)).round(), angle)
+    })
 }
 
 #[inline]
-fn angular_hint(hint: SearchParameterHint2D) -> Option<f64> {
+const fn angular_hint(hint: SearchParameterHint2D) -> Option<f64> {
     match hint {
         SearchParameterHint2D::Parameter(_, angle) => Some(angle),
         SearchParameterHint2D::Range(..) | SearchParameterHint2D::None => None,
@@ -446,24 +471,24 @@ fn angular_hint(hint: SearchParameterHint2D) -> Option<f64> {
 
 impl<C> RevolutionSurface<C> {
     /// Creates a surface by revoluting a curve.
-    #[inline(always)]
+    #[inline]
     pub fn by_revolution(curve: C, origin: Point3, axis: Vector3) -> Self {
-        RevolutionSurface {
+        Self {
             curve,
             revolution: Revolution::new(origin, axis),
         }
     }
     /// Returns the curve before revoluted.
-    #[inline(always)]
+    #[inline]
     pub const fn entity_curve(&self) -> &C { &self.curve }
     /// Into the curve before revoluted.
-    #[inline(always)]
+    #[inline]
     pub fn into_entity_curve(self) -> C { self.curve }
     /// Returns origin of revolution
-    #[inline(always)]
+    #[inline]
     pub const fn origin(&self) -> Point3 { self.revolution.origin }
     /// Returns axis of revolution
-    #[inline(always)]
+    #[inline]
     pub const fn axis(&self) -> Vector3 { self.revolution.axis }
 }
 
@@ -481,7 +506,7 @@ impl<C: ParametricCurve3D + BoundedCurve> RevolutionSurface<C> {
     /// let surface1 = RevolutionSurface::by_revolution(line, Point3::new(1.0, 0.0, 0.0), Vector3::unit_y());
     /// assert!(!surface1.is_front_fixed());
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn is_front_fixed(&self) -> bool { self.revolution.contains(self.curve.front()) }
     /// Returns true if the back point of the curve is on the axis of rotation.
     /// # Examples
@@ -496,7 +521,7 @@ impl<C: ParametricCurve3D + BoundedCurve> RevolutionSurface<C> {
     /// let surface1 = RevolutionSurface::by_revolution(line, Point3::new(1.0, 0.0, 0.0), Vector3::unit_y());
     /// assert!(!surface1.is_back_fixed());
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn is_back_fixed(&self) -> bool { self.revolution.contains(self.curve.back()) }
 }
 
@@ -514,14 +539,14 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchParameter<SurfaceParameter>
         let (t0, t1) = self.curve.range_tuple();
         if self.is_front_fixed() && self.curve.front().near(&point) {
             match hint {
-                SearchParameterHint2D::Parameter(_, y) => Some((t0, y)),
-                SearchParameterHint2D::Range((_, y), _) => Some((t0, y)),
+                SearchParameterHint2D::Parameter(_, y)
+                | SearchParameterHint2D::Range((_, y), _) => Some((t0, y)),
                 SearchParameterHint2D::None => Some((t0, 0.0)),
             }
         } else if self.is_back_fixed() && self.curve.back().near(&point) {
             match hint {
-                SearchParameterHint2D::Parameter(_, y) => Some((t1, y)),
-                SearchParameterHint2D::Range(_, (_, y)) => Some((t1, y)),
+                SearchParameterHint2D::Parameter(_, y)
+                | SearchParameterHint2D::Range(_, (_, y)) => Some((t1, y)),
                 SearchParameterHint2D::None => Some((t1, 2.0 * PI)),
             }
         } else {
@@ -541,9 +566,10 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchParameter<SurfaceParameter>
             let p = self.curve.evaluate(t);
             let ang =
                 nearest_periodic_angle(self.revolution.proj_angle(p, point), angular_hint(hint));
-            match self.evaluate(t, ang).near(&point) {
-                true => Some((t, ang)),
-                false => None,
+            if self.evaluate(t, ang).near(&point) {
+                Some((t, ang))
+            } else {
+                None
             }
         }
     }
@@ -567,14 +593,14 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<SurfaceParamete
         };
         if self.is_front_fixed() && on_axis(self.curve.front(), self.normal(t0, 0.0)) {
             match hint {
-                SearchParameterHint2D::Parameter(_, y) => Some((t0, y)),
-                SearchParameterHint2D::Range((_, y), _) => Some((t0, y)),
+                SearchParameterHint2D::Parameter(_, y)
+                | SearchParameterHint2D::Range((_, y), _) => Some((t0, y)),
                 SearchParameterHint2D::None => Some((t0, 0.0)),
             }
         } else if self.is_back_fixed() && on_axis(self.curve.back(), self.normal(t1, 0.0)) {
             match hint {
-                SearchParameterHint2D::Parameter(_, y) => Some((t1, y)),
-                SearchParameterHint2D::Range(_, (_, y)) => Some((t1, y)),
+                SearchParameterHint2D::Parameter(_, y)
+                | SearchParameterHint2D::Range(_, (_, y)) => Some((t1, y)),
                 SearchParameterHint2D::None => Some((t1, 2.0 * PI)),
             }
         } else {
@@ -611,16 +637,15 @@ where
     C1: ParametricCurve3D + BoundedCurve,
 {
     let first = curve.evaluate(knots[0]);
-    let mut hint = match surface.search_parameter(first, None, INCLUDE_CURVE_TRIALS) {
-        Some(hint) => hint,
-        None => return false,
+    let Some(mut hint) = surface.search_parameter(first, None, INCLUDE_CURVE_TRIALS) else {
+        return false;
     };
     knots
         .windows(2)
         .flat_map(move |knot| {
             (1..=degree).map(move |i| {
-                let s = i as f64 / degree as f64;
-                knot[0] * (1.0 - s) + knot[1] * s
+                let s = crate::usize_to_f64(i) / crate::usize_to_f64(degree);
+                f64::mul_add(knot[1], s, knot[0] * (1.0 - s))
             })
         })
         .all(move |t| {
@@ -715,9 +740,18 @@ where C: ParametricCurve3D + ParameterDivision1D<Point = Point3>
             })
             .sqrt();
         let acos = f64::acos(1.0 - tol / max);
-        let div: usize = 1 + ((vrange.1 - vrange.0) / acos).floor() as usize;
+        let Some(div) = crate::strict_segment_count(vrange.1 - vrange.0, acos) else {
+            return algo::surface::parameter_division(self, (urange, vrange), tol);
+        };
+        let max_cells =
+            usize::try_from(algo::surface::MAX_PARAMETER_DIVISION_CELLS).unwrap_or(usize::MAX);
+        if curve_division.0.len().saturating_sub(1).saturating_mul(div) > max_cells {
+            return algo::surface::parameter_division(self, (urange, vrange), tol);
+        }
         let circle_division = (0..=div)
-            .map(|j| vrange.0 + (vrange.1 - vrange.0) * j as f64 / div as f64)
+            .map(|j| {
+                vrange.0 + (vrange.1 - vrange.0) * crate::usize_to_f64(j) / crate::usize_to_f64(div)
+            })
             .collect();
         (curve_division.0, circle_division)
     }
@@ -731,27 +765,30 @@ fn from_axis_angle_derivation(n: usize, axis: Vector3, angle: Rad<f64>) -> Matri
         2 => (-s, -c),
         _ => (-c, s),
     };
-    let _1subc = match n {
+    let one_minus_cosine_derivative = match n {
         0 => 1.0 - c,
         _ => -c,
     };
 
-    #[allow(clippy::deprecated_cfg_attr)]
+    #[allow(clippy::deprecated_cfg_attr, reason = "rustfmt_skip is formatter-only and intentionally scoped through cfg_attr")]
     #[cfg_attr(rustfmt, rustfmt_skip)]
     Matrix3::new(
-        _1subc * axis.x * axis.x + c,
-        _1subc * axis.x * axis.y + s * axis.z,
-        _1subc * axis.x * axis.z - s * axis.y,
+        (one_minus_cosine_derivative * axis.x).mul_add(axis.x, c),
+        f64::mul_add(s, axis.z, one_minus_cosine_derivative * axis.x * axis.y),
+        f64::mul_add(s, -axis.y, one_minus_cosine_derivative * axis.x * axis.z),
 
-        _1subc * axis.x * axis.y - s * axis.z,
-        _1subc * axis.y * axis.y + c,
-        _1subc * axis.y * axis.z + s * axis.x,
+        f64::mul_add(s, -axis.z, one_minus_cosine_derivative * axis.x * axis.y),
+        (one_minus_cosine_derivative * axis.y).mul_add(axis.y, c),
+        f64::mul_add(s, axis.x, one_minus_cosine_derivative * axis.y * axis.z),
 
-        _1subc * axis.x * axis.z + s * axis.y,
-        _1subc * axis.y * axis.z - s * axis.x,
-        _1subc * axis.z * axis.z + c,
+        f64::mul_add(s, axis.y, one_minus_cosine_derivative * axis.x * axis.z),
+        f64::mul_add(s, -axis.x, one_minus_cosine_derivative * axis.y * axis.z),
+        (one_minus_cosine_derivative * axis.z).mul_add(axis.z, c),
     )
 }
+
+#[cfg(test)]
+use crate::prelude::{KnotVector, assert_near};
 
 #[cfg(test)]
 mod tests {

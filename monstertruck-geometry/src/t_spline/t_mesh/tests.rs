@@ -13,25 +13,22 @@ use super::*;
 ///
 /// - `Ok(())` if the connection is correctly configured.
 fn test_points_are_connected<P: PartialEq>(
-    point: Arc<RwLock<TmeshControlPoint<P>>>,
-    other: Arc<RwLock<TmeshControlPoint<P>>>,
+    point: &Arc<RwLock<TmeshControlPoint<P>>>,
+    other: &Arc<RwLock<TmeshControlPoint<P>>>,
     dir: TmeshDirection,
 ) -> std::result::Result<(), (i32, Error)> {
-    // Check that point is connected to other
-    let point_borrow = point.read();
-    let point_con = &point_borrow.try_connected_point(dir).map_err(|e| (0, e))?;
-    let point_equal = Arc::ptr_eq(point_con, &other);
-    point_equal
+    // Check that point is connected to other.
+    let point_con = point.read().try_connected_point(dir).map_err(|e| (0, e))?;
+    Arc::ptr_eq(&point_con, other)
         .then_some(0)
         .ok_or((0, Error::TmeshExistingConnection))?;
 
-    // Check that other is connected to point
-    let other_borrow = other.read();
-    let other_con = &other_borrow
+    // Check that other is connected to point.
+    let other_con = other
+        .read()
         .try_connected_point(dir.flip())
         .map_err(|e| (1, e))?;
-    let other_equal = Arc::ptr_eq(other_con, &point);
-    other_equal
+    Arc::ptr_eq(&other_con, point)
         .then_some(0)
         .ok_or((1, Error::TmeshExistingConnection))?;
     Ok(())
@@ -58,8 +55,8 @@ fn test_t_mesh_new() {
 
     // Test that the origin and the right are correctly connected
     let con_test = test_points_are_connected(
-        mesh.find(Point3::from((0.0, 0.0, 0.0))).unwrap(),
-        mesh.find(Point3::from((1.0, 0.0, 0.0))).unwrap(),
+        &(mesh.find(&Point3::from((0.0, 0.0, 0.0)))).unwrap(),
+        &(mesh.find(&Point3::from((1.0, 0.0, 0.0)))).unwrap(),
         TmeshDirection::Right,
     );
     assert!(
@@ -69,8 +66,8 @@ fn test_t_mesh_new() {
 
     // Test that the origin and the up are correctly connected
     let con_test: std::result::Result<(), (i32, Error)> = test_points_are_connected(
-        mesh.find(Point3::from((0.0, 0.0, 0.0))).unwrap(),
-        mesh.find(Point3::from((0.0, 1.0, 0.0))).unwrap(),
+        &(mesh.find(&Point3::from((0.0, 0.0, 0.0)))).unwrap(),
+        &(mesh.find(&Point3::from((0.0, 1.0, 0.0)))).unwrap(),
         TmeshDirection::Up,
     );
     assert!(
@@ -80,8 +77,8 @@ fn test_t_mesh_new() {
 
     // Test that (1,1,0) and the up are correctly connected
     let con_test: std::result::Result<(), (i32, Error)> = test_points_are_connected(
-        mesh.find(Point3::from((1.0, 1.0, 0.0))).unwrap(),
-        mesh.find(Point3::from((0.0, 1.0, 0.0))).unwrap(),
+        &(mesh.find(&Point3::from((1.0, 1.0, 0.0)))).unwrap(),
+        &(mesh.find(&Point3::from((0.0, 1.0, 0.0)))).unwrap(),
         TmeshDirection::Left,
     );
     assert!(
@@ -91,8 +88,8 @@ fn test_t_mesh_new() {
 
     // Test that (1,1,0) and the right are correctly connected
     let con_test: std::result::Result<(), (i32, Error)> = test_points_are_connected(
-        mesh.find(Point3::from((1.0, 1.0, 0.0))).unwrap(),
-        mesh.find(Point3::from((1.0, 0.0, 0.0))).unwrap(),
+        &(mesh.find(&Point3::from((1.0, 1.0, 0.0)))).unwrap(),
+        &(mesh.find(&Point3::from((1.0, 0.0, 0.0)))).unwrap(),
         TmeshDirection::Down,
     );
     assert!(
@@ -124,18 +121,18 @@ fn test_t_mesh_insert_control_point() {
 
     let mut mesh = Tmesh::new(points, 1.0);
 
-    mesh.add_control_point(
+    (mesh.add_control_point(
         Point3::from((0.5, 1.0, 0.0)),
-        mesh.find(Point3::from((0.0, 1.0, 0.0)))
+        &(mesh.find(&Point3::from((0.0, 1.0, 0.0))))
             .expect("Point (0, 1, 0) is a valid point in the T-mesh"),
         TmeshDirection::Right,
         0.5,
-    )
+    ))
     .expect("Arguments provided to add_control_point are valid and insertion is allowed");
 
-    let top_left = mesh.find(Point3::from((0.0, 1.0, 0.0))).unwrap();
-    let top_mid = mesh.find(Point3::from((0.5, 1.0, 0.0))).unwrap();
-    let top_right = mesh.find(Point3::from((1.0, 1.0, 0.0))).unwrap();
+    let top_left = (mesh.find(&Point3::from((0.0, 1.0, 0.0)))).unwrap();
+    let top_mid = (mesh.find(&Point3::from((0.5, 1.0, 0.0)))).unwrap();
+    let top_right = (mesh.find(&Point3::from((1.0, 1.0, 0.0)))).unwrap();
 
     // Test that there are five control points in the mesh after insertion.
     assert!(
@@ -144,22 +141,14 @@ fn test_t_mesh_insert_control_point() {
     );
 
     // Test that the left and the middle are correctly connected
-    let left_mid_con = test_points_are_connected(
-        Arc::clone(&top_left),
-        Arc::clone(&top_mid),
-        TmeshDirection::Right,
-    );
+    let left_mid_con = test_points_are_connected(&top_left, &top_mid, TmeshDirection::Right);
     assert!(
         left_mid_con.is_ok(),
         "Top left and top middle points are not correctly connected"
     );
 
     // Test that the right and the middle are correctly connected
-    let right_mid_con = test_points_are_connected(
-        Arc::clone(&top_right),
-        Arc::clone(&top_mid),
-        TmeshDirection::Left,
-    );
+    let right_mid_con = test_points_are_connected(&top_right, &top_mid, TmeshDirection::Left);
     assert!(
         right_mid_con.is_ok(),
         "Top left and top middle points are not correctly connected"
@@ -170,7 +159,6 @@ fn test_t_mesh_insert_control_point() {
         top_mid
             .read()
             .get(TmeshDirection::Up)
-            .as_ref()
             .is_some_and(|c| c.0.is_none() && (c.1 - 1.0).so_small()),
         "Top middle edge condition (direction UP) is incorrectly configured"
     );
@@ -207,34 +195,30 @@ fn test_t_mesh_insert_control_point_one_inferred_connection() {
     let mut mesh = Tmesh::new(points, 1.0);
 
     // Add the first control points
-    mesh.add_control_point(
+    (mesh.add_control_point(
         Point3::from((0.5, 1.0, 0.0)),
-        mesh.find(Point3::from((0.0, 1.0, 0.0)))
+        &(mesh.find(&Point3::from((0.0, 1.0, 0.0))))
             .expect("Point (0, 1, 0) is a valid point in the T-mesh"),
         TmeshDirection::Right,
         0.5,
-    )
+    ))
     .expect("Arguments provided to add_control_point are valid and insertion is allowed");
 
     // Add second control point with inferred connection
-    mesh.add_control_point(
+    (mesh.add_control_point(
         Point3::from((0.5, 0.0, 0.0)),
-        mesh.find(Point3::from((0.0, 0.0, 0.0)))
+        &(mesh.find(&Point3::from((0.0, 0.0, 0.0))))
             .expect("Point (0, 0, 0) is a valid point in the T-mesh"),
         TmeshDirection::Right,
         0.5,
-    )
+    ))
     .expect("Arguments provided to add_control_point are valid and insertion is allowed");
 
-    let top_mid = mesh.find(Point3::from((0.5, 1.0, 0.0))).unwrap();
-    let bottom_mid = mesh.find(Point3::from((0.5, 0.0, 0.0))).unwrap();
+    let top_mid = (mesh.find(&Point3::from((0.5, 1.0, 0.0)))).unwrap();
+    let bottom_mid = (mesh.find(&Point3::from((0.5, 0.0, 0.0)))).unwrap();
 
     // Test that the inferrect connection exists
-    let inferred_con_exist = test_points_are_connected(
-        Arc::clone(&bottom_mid),
-        Arc::clone(&top_mid),
-        TmeshDirection::Up,
-    );
+    let inferred_con_exist = test_points_are_connected(&bottom_mid, &top_mid, TmeshDirection::Up);
     assert!(
         inferred_con_exist.is_ok(),
         "Inferred connection is not correctly configured"
@@ -244,10 +228,7 @@ fn test_t_mesh_insert_control_point_one_inferred_connection() {
     let inferred_con_interval = {
         let borrow = top_mid.read();
 
-        (borrow
-            .connection_knot(TmeshDirection::Down)
-            .expect("Connection should exist")
-            - 1.0)
+        ((borrow.connection_knot(TmeshDirection::Down)).expect("Connection should exist") - 1.0)
             .so_small()
     };
     assert!(
@@ -269,19 +250,19 @@ fn test_t_mesh_insert_control_point_one_inferred_connection() {
 ///    |  |  |
 /// ```
 fn test_t_mesh_plus_mesh(mesh: &Tmesh<Point3>) {
-    let middle = mesh.find(Point3::from((0.5, 0.5, 0.0))).unwrap();
+    let middle = (mesh.find(&Point3::from((0.5, 0.5, 0.0)))).unwrap();
 
     // Test connections in the four directions
     let up_con = test_points_are_connected(
-        Arc::clone(&middle),
-        Arc::clone(&mesh.find(Point3::from((0.5, 1.0, 0.0))).unwrap()),
+        &middle,
+        &(mesh.find(&Point3::from((0.5, 1.0, 0.0)))).unwrap(),
         TmeshDirection::Up,
     );
     assert!(up_con.is_ok(), "Middle is not correctly connected to UP");
 
     let right_con = test_points_are_connected(
-        Arc::clone(&middle),
-        Arc::clone(&mesh.find(Point3::from((1.0, 0.5, 0.0))).unwrap()),
+        &middle,
+        &(mesh.find(&Point3::from((1.0, 0.5, 0.0)))).unwrap(),
         TmeshDirection::Right,
     );
     assert!(
@@ -290,8 +271,8 @@ fn test_t_mesh_plus_mesh(mesh: &Tmesh<Point3>) {
     );
 
     let down_con = test_points_are_connected(
-        Arc::clone(&middle),
-        Arc::clone(&mesh.find(Point3::from((0.5, 0.0, 0.0))).unwrap()),
+        &middle,
+        &(mesh.find(&Point3::from((0.5, 0.0, 0.0)))).unwrap(),
         TmeshDirection::Down,
     );
     assert!(
@@ -300,8 +281,8 @@ fn test_t_mesh_plus_mesh(mesh: &Tmesh<Point3>) {
     );
 
     let left_con = test_points_are_connected(
-        Arc::clone(&middle),
-        Arc::clone(&mesh.find(Point3::from((0.0, 0.5, 0.0))).unwrap()),
+        &middle,
+        &(mesh.find(&Point3::from((0.0, 0.5, 0.0)))).unwrap(),
         TmeshDirection::Left,
     );
     assert!(
@@ -345,26 +326,26 @@ fn test_t_mesh_insert_control_point_two_inferred_connections() {
     let mut dir = TmeshDirection::Right;
 
     for point_pair in points {
-        mesh.add_control_point(
+        (mesh.add_control_point(
             Point3::from(point_pair.0),
-            mesh.find(Point3::from(point_pair.1)).unwrap_or_else(|_| {
+            &mesh.find(&Point3::from(point_pair.1)).unwrap_or_else(|_| {
                 panic!("Point {:?} is a valid point in the T-mesh", point_pair.1)
             }),
             dir,
             0.5,
-        )
+        ))
         .expect("Arguments provided to add_control_point are valid and insertion is allowed");
         dir = dir.anti_clockwise();
     }
 
     // Add center control point with inferred connections
-    mesh.add_control_point(
+    (mesh.add_control_point(
         Point3::from((0.5, 0.5, 0.0)),
-        mesh.find(Point3::from((0.5, 0.0, 0.0)))
+        &(mesh.find(&Point3::from((0.5, 0.0, 0.0))))
             .expect("Point (0.5, 0, 0) is a valid point in the T-mesh"),
         TmeshDirection::Up,
         0.5,
-    )
+    ))
     .expect("Arguments provided to add_control_point are valid and insertion is allowed");
 
     test_t_mesh_plus_mesh(&mesh);
@@ -396,19 +377,19 @@ fn test_t_mesh_try_add_absolute_point_mesh_construction() {
     let mut mesh = Tmesh::new(points, 1.0);
 
     // Insert vertical aspect of the plus
-    mesh.try_add_absolute_point(Point3::from((0.0, 0.5, 0.0)), (0.0, 0.5))
+    (mesh.try_add_absolute_point(Point3::from((0.0, 0.5, 0.0)), (0.0, 0.5)))
         .expect("Legal point insertion");
-    mesh.try_add_absolute_point(Point3::from((1.0, 0.5, 0.0)), (1.0, 0.5))
+    (mesh.try_add_absolute_point(Point3::from((1.0, 0.5, 0.0)), (1.0, 0.5)))
         .expect("Legal point insertion");
 
     // Insert horizontal aspect of the plus
-    mesh.try_add_absolute_point(Point3::from((0.5, 0.0, 0.0)), (0.5, 0.0))
+    (mesh.try_add_absolute_point(Point3::from((0.5, 0.0, 0.0)), (0.5, 0.0)))
         .expect("Legal point insertion");
-    mesh.try_add_absolute_point(Point3::from((0.5, 1.0, 0.0)), (0.5, 1.0))
+    (mesh.try_add_absolute_point(Point3::from((0.5, 1.0, 0.0)), (0.5, 1.0)))
         .expect("Legal point insertion");
 
     // Insert center point of the plus
-    mesh.try_add_absolute_point(Point3::from((0.5, 0.5, 0.0)), (0.5, 0.5))
+    (mesh.try_add_absolute_point(Point3::from((0.5, 0.5, 0.0)), (0.5, 0.5)))
         .expect("Legal point insertion");
 
     test_t_mesh_plus_mesh(&mesh);
@@ -434,30 +415,29 @@ fn test_t_mesh_try_add_absolute_point_knot_intervals() {
     ];
 
     let mut mesh = Tmesh::new(points, 1.0);
-    mesh.try_add_absolute_point(Point3::from((0.2, 0.0, 0.0)), (0.2, 0.0))
+    (mesh.try_add_absolute_point(Point3::from((0.2, 0.0, 0.0)), (0.2, 0.0)))
         .expect("Legal point insertion");
 
     // Insert a point asymetrically into a mesh to test if knot interval calculations work
-    let knot_interval_check = mesh
-        .find(Point3::from((0.2, 0.0, 0.0)))
+    let knot_interval_check = (mesh.find(&Point3::from((0.2, 0.0, 0.0))))
         .expect("Control point previously inserted into mesh");
 
     // Left connection should be connected to (0, 0, 0), with interval 0.2
     assert_eq!(
-        knot_interval_check
+        (knot_interval_check
             .read()
-            .connection_knot(TmeshDirection::Left)
-            .expect("Known existing connection"),
+            .connection_knot(TmeshDirection::Left))
+        .expect("Known existing connection"),
         0.2,
         "Knot interval on LEFT does not match expectation"
     );
 
     // Right connection should be connected to (1, 0, 0), with interval 0.8
     assert_eq!(
-        knot_interval_check
+        (knot_interval_check
             .read()
-            .connection_knot(TmeshDirection::Right)
-            .expect("Known existing connection"),
+            .connection_knot(TmeshDirection::Right))
+        .expect("Known existing connection"),
         0.8,
         "Knot interval on RIGHT does not match expectation"
     );
@@ -536,17 +516,15 @@ fn test_t_mesh_navigate_until_con_existing_con() {
     ];
 
     let mut mesh = Tmesh::new(points, 1.0);
-    let origin = mesh
-        .find(Point3::from((0.0, 0.0, 0.0)))
-        .expect("Point exists in T-mesh");
+    let origin = (mesh.find(&Point3::from((0.0, 0.0, 0.0)))).expect("Point exists in T-mesh");
 
     // Add control point for navigation
-    mesh.add_control_point(
+    (mesh.add_control_point(
         Point3::from((0.0, 0.5, 0.0)),
-        Arc::clone(&origin),
+        &origin,
         TmeshDirection::Up,
         0.5,
-    )
+    ))
     .expect("Valid addition of control point.");
 
     // Navigates to the top left point
@@ -559,12 +537,12 @@ fn test_t_mesh_navigate_until_con_existing_con() {
         "Error navigating until existing connecton"
     );
     assert_eq!(
-        navigation_result.as_ref().unwrap().0.read().point,
+        (navigation_result.as_ref()).unwrap().0.read().point,
         Point3::from((0.0, 1.0, 0.0)),
         "Navigation returned incorrect point"
     );
     assert_eq!(
-        navigation_result.as_ref().unwrap().1,
+        (navigation_result.as_ref()).unwrap().1,
         1.0,
         "Navigation knot interval incorrect"
     );
@@ -595,17 +573,15 @@ fn test_t_mesh_navigate_until_con_no_existing_con() {
     ];
 
     let mut mesh = Tmesh::new(points, 1.0);
-    let origin = mesh
-        .find(Point3::from((0.0, 0.0, 0.0)))
-        .expect("Point exists in T-mesh");
+    let origin = (mesh.find(&Point3::from((0.0, 0.0, 0.0)))).expect("Point exists in T-mesh");
 
     // Add control point for navigation
-    mesh.add_control_point(
+    (mesh.add_control_point(
         Point3::from((0.0, 0.5, 0.0)),
-        Arc::clone(&origin),
+        &origin,
         TmeshDirection::Up,
         0.5,
-    )
+    ))
     .expect("Valid addition of control point.");
 
     // Navigate until error
@@ -707,9 +683,9 @@ fn construct_ray_casting_example_mesh() -> Tmesh<Point3> {
     mesh
 }
 
-/// Tests if the face intersection algorithm in cast_ray functions as expected, including testing if the
+/// Tests if the face intersection algorithm in `cast_ray` functions as expected, including testing if the
 /// point-edge detection, but not connection traversal, aspect of the algorithm function as expected. Uses the mesh
-/// constructed by construct_ray_casting_example_mesh to test cast_ray, by casting a ray from the point
+/// constructed by `construct_ray_casting_example_mesh` to test `cast_ray`, by casting a ray from the point
 /// located at (0.0, 0.4) in parametric space in the direction RIGHT.
 #[test]
 fn test_t_mesh_ray_casting_face_intersection() {
@@ -717,18 +693,16 @@ fn test_t_mesh_ray_casting_face_intersection() {
     let mesh = construct_ray_casting_example_mesh();
 
     // Select the initial point
-    let start = mesh
-        .find(Point3::from((0.0, 0.4, 0.0)))
-        .expect("Known existing point in mesh");
+    let start = (mesh.find(&Point3::from((0.0, 0.4, 0.0)))).expect("Known existing point in mesh");
 
     // Cast ray
-    let intersections = Tmesh::cast_ray(Arc::clone(&start), TmeshDirection::Right, 9);
+    let intersections = Tmesh::cast_ray(&start, TmeshDirection::Right, 9);
 
     assert!(
         intersections.is_ok(),
         "Ray casting produces unexpectd error"
     );
-    let intersections = intersections.unwrap();
+    let intersections = (intersections).unwrap();
 
     // Because 9 intersections are requested in the cast_ray function call, the returned vector must be of length 9
     assert_eq!(
@@ -747,10 +721,10 @@ fn test_t_mesh_ray_casting_face_intersection() {
     );
 }
 
-/// Tests if the face intersection algorithm in cast_ray functions as expected. Does not test if the
+/// Tests if the face intersection algorithm in `cast_ray` functions as expected. Does not test if the
 /// edge detection or connection traversal aspects of the algorithm function as expected, however,
 /// it does test if the T-junction traversal algorithm terminates when expected. Uses the mesh
-/// constructed by construct_ray_casting_example_mesh to test cast_ray, by casting a ray from the point
+/// constructed by `construct_ray_casting_example_mesh` to test `cast_ray`, by casting a ray from the point
 /// located at (0.0, 0.4) in parametric space in the direction RIGHT.
 #[test]
 fn test_t_mesh_ray_casting_face_intersection_incomplete_cast() {
@@ -758,18 +732,16 @@ fn test_t_mesh_ray_casting_face_intersection_incomplete_cast() {
     let mesh = construct_ray_casting_example_mesh();
 
     // Select the initial point
-    let start = mesh
-        .find(Point3::from((0.0, 0.4, 0.0)))
-        .expect("Known existing point in mesh");
+    let start = (mesh.find(&Point3::from((0.0, 0.4, 0.0)))).expect("Known existing point in mesh");
 
     // Cast ray
-    let intersections = Tmesh::cast_ray(Arc::clone(&start), TmeshDirection::Right, 5);
+    let intersections = Tmesh::cast_ray(&start, TmeshDirection::Right, 5);
 
     assert!(
         intersections.is_ok(),
         "Ray casting produces unexpectd error"
     );
-    let intersections = intersections.unwrap();
+    let intersections = (intersections).unwrap();
 
     // Because 9 intersections are requested in the cast_ray function call, the returned vector must be of length 9
     assert_eq!(
@@ -788,9 +760,9 @@ fn test_t_mesh_ray_casting_face_intersection_incomplete_cast() {
     );
 }
 
-/// Tests if the face intersection algorithm in cast_ray functions as expected, including testing if the
+/// Tests if the face intersection algorithm in `cast_ray` functions as expected, including testing if the
 /// T-junction edge detection and connection traversal aspects of the algorithm function as expected. Uses the mesh
-/// constructed by construct_ray_casting_example_mesh to test cast_ray, by casting a ray from the point
+/// constructed by `construct_ray_casting_example_mesh` to test `cast_ray`, by casting a ray from the point
 /// located at (0.0, 0.4) in parametric space in the direction RIGHT.
 #[test]
 fn test_t_mesh_ray_casting_non_point_edge_condition() {
@@ -798,19 +770,17 @@ fn test_t_mesh_ray_casting_non_point_edge_condition() {
     let mesh = construct_ray_casting_example_mesh();
 
     // Select the initial point
-    let start = mesh
-        .find(Point3::from((0.3, 0.7, 0.0)))
-        .expect("Known existing point in mesh");
+    let start = (mesh.find(&Point3::from((0.3, 0.7, 0.0)))).expect("Known existing point in mesh");
 
     // Cast ray
-    let intersections = Tmesh::cast_ray(Arc::clone(&start), TmeshDirection::Right, 8);
+    let intersections = Tmesh::cast_ray(&start, TmeshDirection::Right, 8);
 
     assert!(
         intersections.is_ok(),
         "Ray casting produces unexpectd error"
     );
-    let intersections = intersections.unwrap();
-    println!("{:?}", intersections);
+    let intersections = (intersections).unwrap();
+    println!("{intersections:?}");
     // Because 9 intersections are requested in the cast_ray function call, the returned vector must be of length 9
     assert_eq!(
         intersections.len(),
@@ -832,7 +802,7 @@ fn test_t_mesh_ray_casting_non_point_edge_condition() {
 /// uncloned mesh from `construct_ray_casting_example_mesh`.
 #[test]
 fn test_t_mesh_clone() {
-    let tmesh_test = construct_ray_casting_example_mesh().clone();
+    let tmesh_test = construct_ray_casting_example_mesh();
     let tmesh_comp = construct_ray_casting_example_mesh();
 
     // Test number of control points
@@ -870,51 +840,40 @@ fn test_t_mesh_clone() {
             .all(|p| {
                 // Test all directions of every point in the meshes
                 for dir in TmeshDirection::iter() {
-                    // Compare connection types
-                    if p.0.read().con_type(dir) != p.1.read().con_type(dir) {
+                    let test_type = p.0.read().con_type(dir);
+                    let comp_type = p.1.read().con_type(dir);
+                    if test_type != comp_type {
                         return false;
                     }
 
-                    // Based on the conenction type, compare connected objects
-                    match p.0.read().con_type(dir) {
+                    // Based on the connection type, compare connected objects.
+                    match test_type {
                         TmeshConnectionType::Edge => {
-                            // Compare knot intervals
                             if p.0.read().connection_knot(dir) != p.1.read().connection_knot(dir) {
                                 return false;
                             }
                         }
                         TmeshConnectionType::Point => {
-                            // Compare knot intervals
                             if p.0.read().connection_knot(dir) != p.1.read().connection_knot(dir) {
                                 return false;
                             }
 
-                            // Get connection object from both meshes
-                            let test_borrow = p.0.read();
-                            let test_con = test_borrow
-                                .get(dir)
-                                .as_ref()
-                                .expect("Point con type must have a connection");
-                            let comp_borrow = p.1.read();
-                            let comp_con = comp_borrow
-                                .get(dir)
-                                .as_ref()
-                                .expect("Point con type must have a connection");
+                            let test_point = {
+                                let borrow = p.0.read();
+                                let Some((Some(point), _)) = borrow.get(dir) else {
+                                    return false;
+                                };
+                                Arc::clone(point)
+                            };
+                            let comp_point = {
+                                let borrow = p.1.read();
+                                let Some((Some(point), _)) = borrow.get(dir) else {
+                                    return false;
+                                };
+                                Arc::clone(point)
+                            };
 
-                            // Compare connected points
-                            if test_con
-                                .0
-                                .as_ref()
-                                .expect("Point con type must have a point connected")
-                                .read()
-                                .point()
-                                != comp_con
-                                    .0
-                                    .as_ref()
-                                    .expect("Point con type must have a point connected")
-                                    .read()
-                                    .point()
-                            {
+                            if test_point.read().point() != comp_point.read().point() {
                                 return false;
                             }
                         }
@@ -924,7 +883,7 @@ fn test_t_mesh_clone() {
 
                 true
             })
-    )
+    );
 }
 
 /// Creates a plane of the form `x + y = z` and solves it using `subs`.
@@ -945,9 +904,7 @@ fn test_t_mesh_subs() {
         let s = s as f64 / C as f64;
         for t in 0..C {
             let t = t as f64 / C as f64;
-            let p = mesh
-                .subs(s, t)
-                .expect("Solvable T-mesh with s and t within bounds");
+            let p = (mesh.subs(s, t)).expect("Solvable T-mesh with s and t within bounds");
 
             assert!(
                 ((p.x + p.y) - p.z).so_small(),
@@ -981,7 +938,7 @@ fn test_t_mesh_subdivide() {
     assert!(
         sub_res.is_ok(),
         "Error while subdividing mesh {}.",
-        sub_res.err().unwrap()
+        (sub_res.err()).unwrap()
     );
 
     // Mesh becomes a 3x3 grid, 9 control points
@@ -992,24 +949,22 @@ fn test_t_mesh_subdivide() {
     );
 
     // Test middle point for inifered connection shenanegins
-    let middle_point = mesh
-        .find(Point3::from((0.5, 0.5, 1.0)))
+    let middle_point = (mesh.find(&Point3::from((0.5, 0.5, 1.0))))
         .expect("Control point should be located in subdivided mesh");
     for dir in TmeshDirection::iter() {
         assert_eq!(
             middle_point.read().con_type(dir),
             TmeshConnectionType::Point,
-            "Expected a point connection in the direction {}.",
-            dir
+            "Expected a point connection in the direction {dir}."
         );
         assert!(
-            (middle_point.read().connection_knot(dir).unwrap() - 0.5).so_small(),
+            ((middle_point.read().connection_knot(dir)).unwrap() - 0.5).so_small(),
             "Expected knot interval of 0.5."
         );
     }
 
     // Make sure each point still follows the x + y = z scheme (averaging will have no effect on this)
-    for point in mesh.control_points.iter() {
+    for point in &mesh.control_points {
         let p = *point.read().point();
         assert!(
             (p.x + p.y - p.z).so_small(),
@@ -1050,22 +1005,22 @@ fn test_t_mesh_local_knot_insertion_no_edge_conditions() -> Result<()> {
     // will be the same. If the points are more scattered, then deviation in elements which get canceled out by the "averging"
     // nature of the LKI algorithm will become more evident in the elements which are not "averaged out".
     mesh.map_point(
-        Point3::from((0.25, 0.25, 0.375)),
+        &Point3::from((0.25, 0.25, 0.375)),
         Point3::from((0.25, 0.10, 0.375)),
     )
     .expect("Control point is in mesh");
     mesh.map_point(
-        Point3::from((0.50, 0.25, 0.500)),
+        &Point3::from((0.50, 0.25, 0.500)),
         Point3::from((0.50, 0.30, 0.300)),
     )
     .expect("Control point is in mesh");
     mesh.map_point(
-        Point3::from((0.75, 0.25, 0.625)),
+        &Point3::from((0.75, 0.25, 0.625)),
         Point3::from((0.75, 0.15, 0.625)),
     )
     .expect("Control point is in mesh");
     mesh.map_point(
-        Point3::from((1.00, 0.25, 0.750)),
+        &Point3::from((1.00, 0.25, 0.750)),
         Point3::from((1.00, 0.25, 0.200)),
     )
     .expect("Control point is in mesh");
@@ -1074,7 +1029,8 @@ fn test_t_mesh_local_knot_insertion_no_edge_conditions() -> Result<()> {
 
     let ins_point = test
         .try_local_knot_insertion(
-            test.find(Point3::from((0.50, 0.30, 0.300)))
+            &test
+                .find(&Point3::from((0.50, 0.30, 0.300)))
                 .expect("Point is a valid point in mesh"),
             TmeshDirection::Right,
             0.1,
@@ -1097,11 +1053,14 @@ fn test_t_mesh_local_knot_insertion_no_edge_conditions() -> Result<()> {
 
     // Values verified via https://www.desmos.com/3d/pitkyckhfn
     assert!(
-        points_eq(p3_prime, Point3::from((0.5916666, 0.245, 0.41916666))),
+        points_eq(p3_prime, Point3::from((0.591_666_6, 0.245, 0.419_166_66))),
         "Inserted point does not match expected cartesian coordinates"
     );
     assert!(
-        points_eq(p4_prime, Point3::from((0.75416666, 0.1516666, 0.617916666))),
+        points_eq(
+            p4_prime,
+            Point3::from((0.754_166_66, 0.151_666_6, 0.617_916_666))
+        ),
         "Point right of inserted point does not match expected cartesian coordinates"
     );
     assert!(
@@ -1117,9 +1076,7 @@ fn test_t_mesh_local_knot_insertion_no_edge_conditions() -> Result<()> {
             let test_sub = test.subs(s, t).expect("Parametric point is within bounds");
             assert!(
                 (mesh_sub - test_sub).so_small(),
-                "Surfaces do not match at ({}, {}).",
-                s,
-                t
+                "Surfaces do not match at ({s}, {t})."
             );
         }
     }
@@ -1146,12 +1103,11 @@ fn test_t_mesh_local_knot_insertion_edge_conditions() {
     let _ = mesh.subdivide(average_points);
     let _ = mesh.subdivide(average_points);
 
-    println!("{}", mesh);
+    println!("{mesh}");
 
     let mut test = mesh.clone();
     let ins_point = test.try_local_knot_insertion(
-        test.find(Point3::from((1.0, 1.0, 0.0)))
-            .expect("Point is a valid point in mesh"),
+        &(test.find(&Point3::from((1.0, 1.0, 0.0)))).expect("Point is a valid point in mesh"),
         TmeshDirection::Down,
         0.1,
     );
@@ -1173,33 +1129,23 @@ fn test_t_mesh_absolute_local_knot_insertion_mesh_construction() {
 
     // 5x5
     let mut mesh = Tmesh::new(points, 1.0);
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
+    (mesh.subdivide(average_points)).expect("Mesh is not malformed.");
+    (mesh.subdivide(average_points)).expect("Mesh is not malformed.");
 
     // Insert vertical aspect of the plus
-    mesh.try_absolute_local_knot_insertion((0.52, 0.00))
-        .expect("Legal point insertion");
-    mesh.try_absolute_local_knot_insertion((0.52, 0.25))
-        .expect("Legal point insertion");
-    mesh.try_absolute_local_knot_insertion((0.52, 0.50))
-        .expect("Legal point insertion");
-    mesh.try_absolute_local_knot_insertion((0.52, 0.75))
-        .expect("Legal point insertion");
-    mesh.try_absolute_local_knot_insertion((0.52, 1.00))
-        .expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.52, 0.00))).expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.52, 0.25))).expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.52, 0.50))).expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.52, 0.75))).expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.52, 1.00))).expect("Legal point insertion");
 
     // Insert horizontal aspect of the plus
-    mesh.try_absolute_local_knot_insertion((0.50, 0.52))
-        .expect("Legal point insertion");
-    mesh.try_absolute_local_knot_insertion((0.75, 0.52))
-        .expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.50, 0.52))).expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.75, 0.52))).expect("Legal point insertion");
 
     // Insert center point of the plus
-    let center_point = mesh
-        .try_absolute_local_knot_insertion((0.52, 0.52))
-        .expect("Legal point insertion");
+    let center_point =
+        (mesh.try_absolute_local_knot_insertion((0.52, 0.52))).expect("Legal point insertion");
 
     // Test absolute knot coordinates of the center point.
     let knot_coords = center_point.read().knot_coordinates();
@@ -1216,8 +1162,7 @@ fn test_t_mesh_absolute_local_knot_insertion_mesh_construction() {
         assert_eq!(
             center_point.read().con_type(dir),
             TmeshConnectionType::Point,
-            "Center point is not connected to a point in the direction {}.",
-            dir
+            "Center point is not connected to a point in the direction {dir}."
         );
     }
 }
@@ -1264,64 +1209,53 @@ fn test_t_mesh_local_knot_insertion_force_ray_casting() {
 
     // 5x5
     let mut mesh = Tmesh::new(points, 1.0);
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
+    (mesh.subdivide(average_points)).expect("Mesh is not malformed.");
+    (mesh.subdivide(average_points)).expect("Mesh is not malformed.");
 
     // Mangle linearity of control points in cartesian space
-    mesh.map_point(
-        Point3::from((0.25, 0.25, 0.375)),
+    (mesh.map_point(
+        &Point3::from((0.25, 0.25, 0.375)),
         Point3::from((0.10, 0.25, 0.375)),
-    )
+    ))
     .expect("Control point is in mesh");
-    mesh.map_point(
-        Point3::from((0.25, 0.50, 0.500)),
+    (mesh.map_point(
+        &Point3::from((0.25, 0.50, 0.500)),
         Point3::from((0.30, 0.50, 0.300)),
-    )
+    ))
     .expect("Control point is in mesh");
-    mesh.map_point(
-        Point3::from((0.25, 0.75, 0.625)),
+    (mesh.map_point(
+        &Point3::from((0.25, 0.75, 0.625)),
         Point3::from((0.15, 0.75, 0.625)),
-    )
+    ))
     .expect("Control point is in mesh");
-    mesh.map_point(
-        Point3::from((0.25, 1.00, 0.750)),
+    (mesh.map_point(
+        &Point3::from((0.25, 1.00, 0.750)),
         Point3::from((0.25, 1.00, 0.200)),
-    )
+    ))
     .expect("Control point is in mesh");
 
     // Insert vertical aspect of the plus
-    mesh.try_absolute_local_knot_insertion((0.27, 0.25))
-        .expect("Legal point insertion");
-    mesh.try_absolute_local_knot_insertion((0.27, 0.50))
-        .expect("Legal point insertion");
-    mesh.try_absolute_local_knot_insertion((0.27, 0.75))
-        .expect("Legal point insertion");
-    mesh.try_absolute_local_knot_insertion((0.27, 1.00))
-        .expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.27, 0.25))).expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.27, 0.50))).expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.27, 0.75))).expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.27, 1.00))).expect("Legal point insertion");
 
     // Insert horizontal aspect of the plus
-    mesh.try_absolute_local_knot_insertion((0.25, 0.52))
-        .expect("Legal point insertion");
-    mesh.try_absolute_local_knot_insertion((0.50, 0.52))
-        .expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.25, 0.52))).expect("Legal point insertion");
+    (mesh.try_absolute_local_knot_insertion((0.50, 0.52))).expect("Legal point insertion");
 
     let mut test = mesh.clone();
-    test.try_absolute_local_knot_insertion((0.27, 0.52))
-        .expect("Legal point insertion");
+    (test.try_absolute_local_knot_insertion((0.27, 0.52))).expect("Legal point insertion");
 
     for s in 0..N {
         let s = s as f64 / N as f64;
         for t in 0..N {
             let t = t as f64 / N as f64;
-            let mesh_sub = mesh.subs(s, t).expect("Parametric point is within bounds");
-            let test_sub = test.subs(s, t).expect("Parametric point is within bounds");
+            let mesh_sub = (mesh.subs(s, t)).expect("Parametric point is within bounds");
+            let test_sub = (test.subs(s, t)).expect("Parametric point is within bounds");
             assert!(
                 (mesh_sub - test_sub).so_small(),
-                "Surfaces do not match at ({}, {}).",
-                s,
-                t
+                "Surfaces do not match at ({s}, {t})."
             );
         }
     }
@@ -1350,9 +1284,9 @@ fn test_to_bspline_surface_accuracy() -> Result<()> {
     let n = 20;
     let mut max_err = 0.0f64;
     for i in 1..n {
-        let u = i as f64 / n as f64;
+        let u = f64::from(i) / f64::from(n);
         for j in 1..n {
-            let v = j as f64 / n as f64;
+            let v = f64::from(j) / f64::from(n);
             let p_tmesh = ParametricSurface::subs(&mesh, u, v);
             let p_bsp = ParametricSurface::subs(&bsp, u, v);
             let err = (p_tmesh - p_bsp).magnitude();
@@ -1384,17 +1318,17 @@ fn make_derivative_test_mesh() -> Tmesh<Point3> {
 
     // Mangle linearity so derivatives are nontrivial.
     mesh.map_point(
-        Point3::from((0.25, 0.25, 0.375)),
+        &Point3::from((0.25, 0.25, 0.375)),
         Point3::from((0.25, 0.10, 0.375)),
     )
     .expect("Control point is in mesh");
     mesh.map_point(
-        Point3::from((0.50, 0.25, 0.500)),
+        &Point3::from((0.50, 0.25, 0.500)),
         Point3::from((0.50, 0.30, 0.300)),
     )
     .expect("Control point is in mesh");
     mesh.map_point(
-        Point3::from((0.75, 0.25, 0.625)),
+        &Point3::from((0.75, 0.25, 0.625)),
         Point3::from((0.75, 0.15, 0.625)),
     )
     .expect("Control point is in mesh");
@@ -1426,9 +1360,9 @@ fn test_analytical_derivatives_vs_finite_diff() {
     let n = 10;
 
     for i in 1..n {
-        let u = i as f64 / n as f64;
+        let u = f64::from(i) / f64::from(n);
         for j in 1..n {
-            let v = j as f64 / n as f64;
+            let v = f64::from(j) / f64::from(n);
             // Test all 1st and 2nd order derivatives.
             // 2nd-order finite differences are inherently less accurate (O(h^2) error
             // compounds), so use a looser tolerance for them.
@@ -1444,14 +1378,7 @@ fn test_analytical_derivatives_vs_finite_diff() {
                 let diff = (analytical - numerical).magnitude();
                 assert!(
                     diff < tol,
-                    "Derivative d^({},{}) at ({}, {}) differs: analytical={:?}, numerical={:?}, diff={:.2e}",
-                    m,
-                    ord_n,
-                    u,
-                    v,
-                    analytical,
-                    numerical,
-                    diff
+                    "Derivative d^({m},{ord_n}) at ({u}, {v}) differs: analytical={analytical:?}, numerical={numerical:?}, diff={diff:.2e}"
                 );
             }
         }
@@ -1475,13 +1402,7 @@ fn test_analytical_derivatives_knot_continuity() {
             let diff = (left - right).magnitude();
             assert!(
                 diff < tol,
-                "Derivative d^({},{}) discontinuous at u-knot {}: left={:?}, right={:?}, diff={:.2e}",
-                m,
-                n,
-                k,
-                left,
-                right,
-                diff
+                "Derivative d^({m},{n}) discontinuous at u-knot {k}: left={left:?}, right={right:?}, diff={diff:.2e}"
             );
 
             // Test continuity across v-knot boundary.
@@ -1490,13 +1411,7 @@ fn test_analytical_derivatives_knot_continuity() {
             let diff = (below - above).magnitude();
             assert!(
                 diff < tol,
-                "Derivative d^({},{}) discontinuous at v-knot {}: below={:?}, above={:?}, diff={:.2e}",
-                m,
-                n,
-                k,
-                below,
-                above,
-                diff
+                "Derivative d^({m},{n}) discontinuous at v-knot {k}: below={below:?}, above={above:?}, diff={diff:.2e}"
             );
         }
     }
@@ -1517,12 +1432,7 @@ fn test_analytical_derivatives_at_boundaries() {
             let diff = (analytical - numerical).magnitude();
             assert!(
                 diff < tol,
-                "Boundary derivative d^({},{}) at ({}, {}) differs: diff={:.2e}",
-                m,
-                n,
-                u,
-                v,
-                diff
+                "Boundary derivative d^({m},{n}) at ({u}, {v}) differs: diff={diff:.2e}"
             );
         }
     }
@@ -1539,36 +1449,28 @@ fn test_refine_at_existing_edge() {
         Point3::from((0.0, 1.0, 1.0)),
     ];
     let mut mesh = Tmesh::new(points, 1.0);
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
+    (mesh.subdivide(average_points)).expect("Mesh is not malformed.");
+    (mesh.subdivide(average_points)).expect("Mesh is not malformed.");
 
     let mut reference = mesh.clone();
 
     // Direct LKI should succeed at this location (on an existing edge).
-    reference
-        .try_absolute_local_knot_insertion((0.3, 0.25))
-        .expect("Direct LKI should succeed");
+    (reference.try_absolute_local_knot_insertion((0.3, 0.25))).expect("Direct LKI should succeed");
 
     // refine_at should produce the same result.
-    mesh.refine_at(0.3, 0.25).expect("refine_at should succeed");
+    (mesh.refine_at(0.3, 0.25)).expect("refine_at should succeed");
 
     // Verify surfaces match.
     let n = 20;
     for i in 0..n {
-        let u = i as f64 / n as f64;
+        let u = f64::from(i) / f64::from(n);
         for j in 0..n {
-            let v = j as f64 / n as f64;
-            let a = mesh.subs(u, v).expect("subs should succeed");
-            let b = reference.subs(u, v).expect("subs should succeed");
+            let v = f64::from(j) / f64::from(n);
+            let a = (mesh.subs(u, v)).expect("subs should succeed");
+            let b = (reference.subs(u, v)).expect("subs should succeed");
             assert!(
                 (a - b).so_small(),
-                "Surfaces differ at ({}, {}): refine_at={:?}, direct={:?}",
-                u,
-                v,
-                a,
-                b
+                "Surfaces differ at ({u}, {v}): refine_at={a:?}, direct={b:?}"
             );
         }
     }
@@ -1584,10 +1486,8 @@ fn test_refine_at_with_intermediate_edge() {
         Point3::from((0.0, 1.0, 1.0)),
     ];
     let mut mesh = Tmesh::new(points, 1.0);
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
+    (mesh.subdivide(average_points)).expect("Mesh is not malformed.");
+    (mesh.subdivide(average_points)).expect("Mesh is not malformed.");
 
     let original = mesh.clone();
 
@@ -1601,24 +1501,19 @@ fn test_refine_at_with_intermediate_edge() {
     );
 
     // refine_at should succeed by inserting intermediate edges.
-    mesh.refine_at(0.3, 0.3)
-        .expect("refine_at should succeed with intermediate edges");
+    (mesh.refine_at(0.3, 0.3)).expect("refine_at should succeed with intermediate edges");
 
     // Verify surface is unchanged (shape-preserving).
     let n = 20;
     for i in 0..n {
-        let u = i as f64 / n as f64;
+        let u = f64::from(i) / f64::from(n);
         for j in 0..n {
-            let v = j as f64 / n as f64;
-            let a = mesh.subs(u, v).expect("subs should succeed");
-            let b = original.subs(u, v).expect("subs should succeed");
+            let v = f64::from(j) / f64::from(n);
+            let a = (mesh.subs(u, v)).expect("subs should succeed");
+            let b = (original.subs(u, v)).expect("subs should succeed");
             assert!(
                 (a - b).so_small(),
-                "Surface changed after refine_at at ({}, {}): refined={:?}, original={:?}",
-                u,
-                v,
-                a,
-                b
+                "Surface changed after refine_at at ({u}, {v}): refined={a:?}, original={b:?}"
             );
         }
     }
@@ -1634,30 +1529,26 @@ fn test_refine_at_shape_preserving() {
         Point3::from((0.0, 1.0, 1.0)),
     ];
     let mut mesh = Tmesh::new(points, 1.0);
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
+    (mesh.subdivide(average_points)).expect("Mesh is not malformed.");
+    (mesh.subdivide(average_points)).expect("Mesh is not malformed.");
 
     let original = mesh.clone();
 
     // Insert on an existing horizontal edge at t=0.
-    mesh.refine_at(0.6, 0.0)
-        .expect("refine_at on edge should succeed");
+    (mesh.refine_at(0.6, 0.0)).expect("refine_at on edge should succeed");
 
     // Insert requiring intermediate edges.
-    mesh.refine_at(0.6, 0.5)
-        .expect("refine_at with intermediate should succeed");
+    (mesh.refine_at(0.6, 0.5)).expect("refine_at with intermediate should succeed");
 
     // Verify surface is unchanged.
     let n = 20;
     let mut max_err = 0.0f64;
     for i in 0..n {
-        let u = i as f64 / n as f64;
+        let u = f64::from(i) / f64::from(n);
         for j in 0..n {
-            let v = j as f64 / n as f64;
-            let a = mesh.subs(u, v).expect("subs should succeed");
-            let b = original.subs(u, v).expect("subs should succeed");
+            let v = f64::from(j) / f64::from(n);
+            let a = (mesh.subs(u, v)).expect("subs should succeed");
+            let b = (original.subs(u, v)).expect("subs should succeed");
             let err = (a - b).magnitude();
             max_err = max_err.max(err);
         }
@@ -1668,7 +1559,7 @@ fn test_refine_at_shape_preserving() {
     );
 }
 
-/// Round-trip test: BsplineSurface → Tmesh → evaluate, compare with original.
+/// Round-trip test: `BsplineSurface` → Tmesh → evaluate, compare with original.
 #[test]
 fn test_from_bspline_surface_round_trip() {
     use monstertruck_core::cgmath64::*;
@@ -1684,8 +1575,8 @@ fn test_from_bspline_surface_round_trip() {
         .map(|i| {
             (0..nv)
                 .map(|j| {
-                    let x = i as f64 / (nu - 1) as f64;
-                    let y = j as f64 / (nv - 1) as f64;
+                    let x = f64::from(i) / f64::from(nu - 1);
+                    let y = f64::from(j) / f64::from(nv - 1);
                     let z = (x * std::f64::consts::PI).sin() * (y * std::f64::consts::PI).sin();
                     Point3::new(x, y, z)
                 })
@@ -1694,17 +1585,17 @@ fn test_from_bspline_surface_round_trip() {
         .collect();
     let bsp = BsplineSurface::new_unchecked((u_knots, v_knots), cps);
 
-    let tmesh = Tmesh::from_bspline_surface(&bsp).expect("Conversion should succeed");
+    let tmesh = (Tmesh::from_bspline_surface(&bsp)).expect("Conversion should succeed");
 
     // Sample both surfaces and compare.
     let n = 15;
     let mut max_err = 0.0f64;
     for i in 1..n {
-        let u = i as f64 / n as f64;
+        let u = f64::from(i) / f64::from(n);
         for j in 1..n {
-            let v = j as f64 / n as f64;
+            let v = f64::from(j) / f64::from(n);
             let p_bsp = ParametricSurface::subs(&bsp, u, v);
-            let p_tmesh = tmesh.subs(u, v).expect("T-mesh eval should succeed");
+            let p_tmesh = (tmesh.subs(u, v)).expect("T-mesh eval should succeed");
             let err = (p_bsp - p_tmesh).magnitude();
             max_err = max_err.max(err);
         }
@@ -1732,7 +1623,7 @@ fn test_from_bspline_surface_structure() {
         .collect();
     let bsp = BsplineSurface::new_unchecked((u_knots, v_knots), cps);
 
-    let tmesh = Tmesh::from_bspline_surface(&bsp).expect("Conversion should succeed");
+    let tmesh = (Tmesh::from_bspline_surface(&bsp)).expect("Conversion should succeed");
 
     // Correct number of control points.
     assert_eq!(tmesh.control_points().len(), nu * nv);
@@ -1769,7 +1660,7 @@ fn test_from_bspline_surface_non_cubic() {
     let cps: Vec<Vec<Point3>> = (0..nu)
         .map(|i| {
             (0..nv)
-                .map(|j| Point3::new(i as f64, j as f64, 0.0))
+                .map(|j| Point3::new(f64::from(i), f64::from(j), 0.0))
                 .collect()
         })
         .collect();
@@ -1789,12 +1680,10 @@ fn test_adaptive_refine_flat_surface() {
         Point3::new(0.0, 1.0, 0.0),
     ];
     let mut mesh = Tmesh::new(points, 1.0);
-    mesh.subdivide(average_points).expect("Subdivision ok");
-    mesh.subdivide(average_points).expect("Subdivision ok");
+    (mesh.subdivide(average_points)).expect("Subdivision ok");
+    (mesh.subdivide(average_points)).expect("Subdivision ok");
 
-    let insertions = mesh
-        .adaptive_refine(0.01, 3, 5)
-        .expect("Adaptive refine should succeed");
+    let insertions = (mesh.adaptive_refine(0.01, 3, 5)).expect("Adaptive refine should succeed");
     assert_eq!(
         insertions, 0,
         "Flat surface should have 0 insertions, got {insertions}"
@@ -1812,13 +1701,11 @@ fn test_adaptive_refine_curved_surface() {
         Point3::new(0.0, 1.0, 1.0),
     ];
     let mut mesh = Tmesh::new(points, 1.0);
-    mesh.subdivide(average_points).expect("ok");
-    mesh.subdivide(average_points).expect("ok");
+    (mesh.subdivide(average_points)).expect("ok");
+    (mesh.subdivide(average_points)).expect("ok");
     let original = mesh.clone();
 
-    let insertions = mesh
-        .adaptive_refine(0.1, 2, 5)
-        .expect("Adaptive refine should succeed");
+    let insertions = (mesh.adaptive_refine(0.1, 2, 5)).expect("Adaptive refine should succeed");
     assert!(
         insertions > 0,
         "Curved surface should have insertions, got 0"
@@ -1828,11 +1715,11 @@ fn test_adaptive_refine_curved_surface() {
     let n = 15;
     let mut max_err = 0.0f64;
     for i in 0..n {
-        let u = i as f64 / n as f64;
+        let u = f64::from(i) / f64::from(n);
         for j in 0..n {
-            let v = j as f64 / n as f64;
-            let a = mesh.subs(u, v).expect("subs ok");
-            let b = original.subs(u, v).expect("subs ok");
+            let v = f64::from(j) / f64::from(n);
+            let a = (mesh.subs(u, v)).expect("subs ok");
+            let b = (original.subs(u, v)).expect("subs ok");
             let err = (a - b).magnitude();
             max_err = max_err.max(err);
         }
@@ -1854,8 +1741,8 @@ fn test_gaussian_curvature_sanity() {
         Point3::new(0.0, 1.0, 0.0),
     ];
     let mut flat = Tmesh::new(flat_points, 1.0);
-    flat.subdivide(average_points).expect("ok");
-    flat.subdivide(average_points).expect("ok");
+    (flat.subdivide(average_points)).expect("ok");
+    (flat.subdivide(average_points)).expect("ok");
 
     let k_flat = flat.gaussian_curvature(0.5, 0.5);
     assert!(

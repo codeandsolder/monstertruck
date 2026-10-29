@@ -42,7 +42,7 @@ pub fn split_non_simple_compressed_wires<P, C, S>(shell: &mut CompressedShell<P,
                     .collect::<Vec<_>>();
                 if sub_loop.len() >= 2 && !outer.is_empty() {
                     let mut traversal_balance: HashMap<(usize, usize), isize> = HashMap::default();
-                    sub_loop.iter().for_each(|edge_use| {
+                    for edge_use in &sub_loop {
                         let (v0, v1) = edges[edge_use.index].vertices;
                         let (start, end) = if edge_use.orientation {
                             (v0, v1)
@@ -52,7 +52,7 @@ pub fn split_non_simple_compressed_wires<P, C, S>(shell: &mut CompressedShell<P,
                         let key = (start.min(end), start.max(end));
                         *traversal_balance.entry(key).or_insert(0) +=
                             if start <= end { 1 } else { -1 };
-                    });
+                    }
                     let is_spike = traversal_balance.values().all(|balance| *balance == 0);
                     face.boundaries[wire_index] = outer;
                     if !is_spike {
@@ -82,7 +82,7 @@ pub fn split_non_simple_compressed_wires<P, C, S>(shell: &mut CompressedShell<P,
 /// each is emitted as a separate face on the same surface. Mutually disjoint
 /// boundaries, including ordinary outer-loop-plus-hole faces, stay together.
 pub fn split_pinched_compressed_faces<P, C, S: Clone>(shell: &mut CompressedShell<P, C, S>) {
-    fn component_root(components: &mut [usize], index: usize) -> usize {
+    const fn component_root(components: &mut [usize], index: usize) -> usize {
         let mut root = index;
         while components[root] != root {
             root = components[root];
@@ -109,8 +109,8 @@ pub fn split_pinched_compressed_faces<P, C, S: Clone>(shell: &mut CompressedShel
             .map(|wire| {
                 wire.iter()
                     .flat_map(|edge_use| {
-                        let (v0, v1) = shell.edges[edge_use.index].vertices;
-                        [v0, v1]
+                        let vertices: [usize; 2] = shell.edges[edge_use.index].vertices.into();
+                        vertices
                     })
                     .collect::<std::collections::BTreeSet<_>>()
             })

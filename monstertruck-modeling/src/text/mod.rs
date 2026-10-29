@@ -76,22 +76,31 @@ impl ttf_parser::OutlineBuilder for ContourCollector {
             let segs = std::mem::take(&mut self.current_segments);
             self.contours.push((sx, sy, segs));
         }
-        self.current_start = Some((x as f64, y as f64));
+        self.current_start = Some((f64::from(x), f64::from(y)));
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
         self.current_segments
-            .push(Segment::Line(x as f64, y as f64));
+            .push(Segment::Line(f64::from(x), f64::from(y)));
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        self.current_segments
-            .push(Segment::Quad(x1 as f64, y1 as f64, x as f64, y as f64));
+        self.current_segments.push(Segment::Quad(
+            f64::from(x1),
+            f64::from(y1),
+            f64::from(x),
+            f64::from(y),
+        ));
     }
 
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
         self.current_segments.push(Segment::Cubic(
-            x1 as f64, y1 as f64, x2 as f64, y2 as f64, x as f64, y as f64,
+            f64::from(x1),
+            f64::from(y1),
+            f64::from(x2),
+            f64::from(y2),
+            f64::from(x),
+            f64::from(y),
         ));
     }
 
@@ -217,7 +226,7 @@ pub fn glyph_profile(
 ) -> Result<Vec<Wire>> {
     let scale = opts
         .scale
-        .unwrap_or_else(|| 1.0 / face.units_per_em() as f64);
+        .unwrap_or_else(|| 1.0 / f64::from(face.units_per_em()));
 
     let mut collector = ContourCollector::new();
     face.outline_glyph(glyph_id, &mut collector)
@@ -274,7 +283,7 @@ pub fn text_profile(
 ) -> Result<Vec<Wire>> {
     let scale = opts
         .scale
-        .unwrap_or_else(|| 1.0 / face.units_per_em() as f64);
+        .unwrap_or_else(|| 1.0 / f64::from(face.units_per_em()));
 
     // Pass 1: collect all contours with their cursor offsets (sequential).
     let mut contours = Vec::new();
@@ -288,7 +297,7 @@ pub fn text_profile(
         let mut collector = ContourCollector::new();
         if face.outline_glyph(glyph_id, &mut collector).is_none() {
             if let Some(advance) = face.glyph_hor_advance(glyph_id) {
-                cursor_x += advance as f64 * scale;
+                cursor_x += f64::from(advance) * scale;
             }
             continue;
         }
@@ -305,7 +314,7 @@ pub fn text_profile(
         }
 
         if let Some(advance) = face.glyph_hor_advance(glyph_id) {
-            cursor_x += advance as f64 * scale;
+            cursor_x += f64::from(advance) * scale;
         }
     }
 

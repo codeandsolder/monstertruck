@@ -11,16 +11,6 @@
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
 pub(crate) use ahash::AHashSet as HashSet;
 
@@ -981,7 +971,7 @@ where
 /// simply has a hole.
 ///
 /// This function therefore ends in
-/// [`TrimmedSolid::try_new`](monstertruck_topology::trimmed::TrimmedSolid::try_new)
+/// [`TrimmedSolid::new`](monstertruck_topology::trimmed::TrimmedSolid::new)
 /// and refuses such an input with the same typed error the plain path has
 /// always used -- `NotClosedShell`, `NotConnected`, `NotManifold`,
 /// `EmptyShell`. Measured over every in-repo fixture (15 files, 185 solids,
@@ -1034,7 +1024,7 @@ where
     // function has, so whatever is still wrong after it is not repairable
     // here and must leave as a typed refusal rather than as an `Ok` that
     // violates `Solid`'s precondition. See the C11 note on the item docs.
-    TrimmedSolid::try_new(
+    TrimmedSolid::new(
         solid
             .into_boundaries()
             .into_iter()

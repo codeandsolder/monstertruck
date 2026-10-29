@@ -1,6 +1,10 @@
 use newton::Jacobian;
 
-use super::*;
+use super::{
+    CalcOutput, EuclideanSpace, HashGen, InnerSpace, Matrix2, Matrix3, MetricSpace,
+    ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point2, Point3,
+    SurfaceParameterRange, TOLERANCE, Tolerance, Vector2, Vector3, newton, scalar_from_usize,
+};
 
 /// Maximum recursion depth used by [`parameter_division`].
 ///
@@ -107,6 +111,7 @@ pub fn division_work() -> DivisionWork { DIVISION_WORK.with(std::cell::Cell::get
 ///
 /// Call it immediately BEFORE a division to zero the meter and immediately
 /// AFTER to read that division's cost, including any nested ones.
+#[must_use]
 pub fn take_division_work() -> DivisionWork { DIVISION_WORK.replace(DivisionWork::default()) }
 
 /// Process-wide cells examined, across every thread.
@@ -163,10 +168,10 @@ pub fn take_division_totals() -> (u64, u64) {
 /// never inside the grid loop, which is the loop being measured.
 static PRESEARCH_NODES_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Charges `nodes` presearch grid nodes. Public because the hand-rolled
-/// separable presearches (`NurbsSurface::presearch_separable`, the revolution
-/// processor's) bypass [`presearch`] and must charge the same unit, or the
-/// counter would read differently depending on which fast path a surface takes.
+/// Charges `nodes` to the presearch work counter.
+///
+/// Public because hand-rolled separable presearches bypass [`presearch`] and must charge the
+/// same unit, otherwise the counter would depend on which fast path a surface takes.
 #[inline]
 pub fn charge_presearch_nodes(nodes: u64) {
     PRESEARCH_NODES_TOTAL.fetch_add(nodes, std::sync::atomic::Ordering::Relaxed);
@@ -175,7 +180,7 @@ pub fn charge_presearch_nodes(nodes: u64) {
 /// Grid nodes for a `(division + 1) x (division + 1)` presearch scan.
 #[inline]
 #[must_use]
-pub fn presearch_nodes(division: usize) -> u64 {
+pub const fn presearch_nodes(division: usize) -> u64 {
     let side = division as u64 + 1;
     side.saturating_mul(side)
 }
@@ -227,9 +232,10 @@ impl std::fmt::Display for DivisionTruncated {
 
 impl std::error::Error for DivisionTruncated {}
 
-/// Divides the domain into equal parts, examines all the values, and returns `(u, v)` such that
-/// `surface.evaluate(u, v)` is closest to `point`.
-/// This method is useful to get an efficient hint of `search_nearest_parameter`.
+/// Finds a coarse nearest surface parameter by uniform domain sampling.
+///
+/// Returns `(u, v)` whose sampled `surface.evaluate(u, v)` is closest to `point`; this is useful
+/// as a hint for `search_nearest_parameter`.
 pub fn presearch<S>(
     surface: &S,
     point: S::Point,
@@ -248,10 +254,10 @@ where
     let ((u0, u1), (v0, v1)) = (urange, vrange);
     for i in 0..=division {
         for j in 0..=division {
-            let p = i as f64 / division as f64;
-            let q = j as f64 / division as f64;
-            let u = u0 * (1.0 - p) + u1 * p;
-            let v = v0 * (1.0 - q) + v1 * q;
+            let p = scalar_from_usize(i) / scalar_from_usize(division);
+            let q = scalar_from_usize(j) / scalar_from_usize(division);
+            let u = f64::mul_add(u1, p, u0 * (1.0 - p));
+            let v = f64::mul_add(v1, q, v0 * (1.0 - q));
             let dist = surface.evaluate(u, v).distance2(point);
             if dist < min {
                 min = dist;
@@ -283,10 +289,10 @@ impl SearchNearestParameterVector for Vector2 {
     fn subs<S>(
         surface: &S,
         point: Point2,
-        Vector2 { x: u, y: v }: Vector2,
+        Vector2 { x: u, y: v }: Self,
     ) -> CalcOutput<Self, Matrix2>
     where
-        S: ParametricSurface<Point = Point2, Vector = Vector2>,
+        S: ParametricSurface<Point = Point2, Vector = Self>,
     {
         CalcOutput {
             value: surface.evaluate(u, v) - point,
@@ -303,7 +309,7 @@ impl SearchNearestParameterVector for Vector3 {
     fn subs<S>(
         surface: &S,
         point: Self::Point,
-        Vector3 { x: u, y: v, z: w }: Vector3,
+        Vector3 { x: u, y: v, z: w }: Self,
     ) -> CalcOutput<Self, Self::Matrix>
     where
         S: ParametricSurface<Point = Self::Point, Vector = Self>,
@@ -329,7 +335,7 @@ impl SearchNearestParameterVector for Vector3 {
 }
 
 /// Searches the parameter by Newton's method.
-#[inline(always)]
+#[inline]
 pub fn search_nearest_parameter<P, S>(
     surface: &S,
     point: P,
@@ -363,7 +369,7 @@ impl SearchParameterVector for Vector2 {
         Vector2 { x: u, y: v }: Vector2,
     ) -> CalcOutput<Vector2, Matrix2>
     where
-        S: ParametricSurface<Point = Point2, Vector = Vector2>,
+        S: ParametricSurface<Point = Point2, Vector = Self>,
     {
         CalcOutput {
             value: surface.evaluate(u, v) - point,
@@ -398,7 +404,7 @@ impl SearchParameterVector for Vector3 {
 }
 
 /// Searches the parameter by Newton's method.
-#[inline(always)]
+#[inline]
 pub fn search_parameter<P, S>(
     surface: &S,
     point: P,
@@ -412,12 +418,13 @@ where
 {
     let function = move |param: Vector2| SearchParameterVector::subs(surface, point, param);
     let res = newton::solve(function, hint.into(), trials);
-    res.ok().and_then(
-        |Vector2 { x: u, y: v }| match surface.evaluate(u, v).near(&point) {
-            true => Some((u, v)),
-            false => None,
-        },
-    )
+    res.ok().and_then(|Vector2 { x: u, y: v }| {
+        if surface.evaluate(u, v).near(&point) {
+            Some((u, v))
+        } else {
+            None
+        }
+    })
 }
 
 /// Searches the parameters of the intersection point of `surface` and `curve`.
@@ -442,9 +449,10 @@ where
     };
     let hint = Vector3::new(hint0.0, hint0.1, hint1);
     let Vector3 { x, y, z } = newton::solve(function, hint, trials).ok()?;
-    match surface.evaluate(x, y).near(&curve.evaluate(z)) {
-        true => Some(((x, y), z)),
-        false => None,
+    if surface.evaluate(x, y).near(&curve.evaluate(z)) {
+        Some(((x, y), z))
+    } else {
+        None
     }
 }
 
@@ -453,7 +461,7 @@ where
 /// # Panics
 ///
 /// `tol` must be more than `TOLERANCE`.
-#[inline(always)]
+#[inline]
 pub fn parameter_division<S>(
     surface: &S,
     (urange, vrange): SurfaceParameterRange,
@@ -542,6 +550,10 @@ where
 /// # Panics
 ///
 /// `tol` must be more than `TOLERANCE`.
+///
+/// # Errors
+///
+/// Returns [`DivisionTruncated`] when the refinement cannot reach `tol` within the cell budget.
 pub fn try_parameter_division<S>(
     surface: &S,
     (urange, vrange): SurfaceParameterRange,
@@ -557,13 +569,14 @@ where
         tol,
         MAX_PARAMETER_DIVISION_CELLS,
     );
-    match budgeted.truncated {
-        false => Ok(budgeted.division),
-        true => Err(DivisionTruncated {
+    if budgeted.truncated {
+        Err(DivisionTruncated {
             division: budgeted.division,
             cells: budgeted.cells,
             budget: MAX_PARAMETER_DIVISION_CELLS,
-        }),
+        })
+    } else {
+        Ok(budgeted.division)
     }
 }
 
@@ -623,15 +636,15 @@ fn sub_parameter_division<S>(
             if *ub && *vb {
                 continue;
             }
-            let (u_gen, v_gen) = ((u[0] + u[1]) / 2.0, (v[0] + v[1]) / 2.0);
+            let (u_gen, v_gen) = (f64::midpoint(u[0], u[1]), f64::midpoint(v[0], v[1]));
             // Independent hash channels for `p` and `q`: `hash1` twice would
             // return the same value, biasing the in-cell sample along the
             // diagonal `p == q`.
             let [p_jitter, q_jitter] = HashGen::hash2(surface.evaluate(u_gen, v_gen));
-            let p = 0.5 + (0.2 * p_jitter - 0.1);
-            let q = 0.5 + (0.2 * q_jitter - 0.1);
-            let u0 = u[0] * (1.0 - p) + u[1] * p;
-            let v0 = v[0] * (1.0 - q) + v[1] * q;
+            let p = 0.5 + 0.2f64.mul_add(p_jitter, -0.1);
+            let q = 0.5 + 0.2f64.mul_add(q_jitter, -0.1);
+            let u0 = f64::mul_add(u[1], p, u[0] * (1.0 - p));
+            let v0 = f64::mul_add(v[1], q, v[0] * (1.0 - q));
             let p0 = surface.evaluate(u0, v0);
             let pt00 = surface.evaluate(u[0], v[0]);
             let pt01 = surface.evaluate(u[0], v[1]);
@@ -660,7 +673,7 @@ fn sub_parameter_division<S>(
     let mut new_udiv = vec![udiv[0]];
     for (u, ub) in udiv.windows(2).zip(divide_flag0) {
         if ub {
-            new_udiv.push((u[0] + u[1]) / 2.0);
+            new_udiv.push(f64::midpoint(u[0], u[1]));
         }
         new_udiv.push(u[1]);
     }
@@ -668,7 +681,7 @@ fn sub_parameter_division<S>(
     let mut new_vdiv = vec![vdiv[0]];
     for (v, vb) in vdiv.windows(2).zip(divide_flag1) {
         if vb {
-            new_vdiv.push((v[0] + v[1]) / 2.0);
+            new_vdiv.push(f64::midpoint(v[0], v[1]));
         }
         new_vdiv.push(v[1]);
     }
@@ -693,7 +706,7 @@ where S: ParametricSurface<Point = Point3> {
         0 => surface.evaluate(band, periodic),
         _ => surface.evaluate(periodic, band),
     };
-    point(lap.0).distance(point((lap.0 + lap.1) * 0.5)) * 0.5
+    point(lap.0).distance(point(f64::midpoint(lap.0, lap.1))) * 0.5
 }
 
 /// Parameter along `band_axis` at which a ruled surface collapses to a point --
@@ -755,7 +768,7 @@ where
         let (low, high) = span(axis)?;
         let (cross_low, cross_high) = span(1 - axis)?;
         ((high - low - period).abs() <= tolerance && cross_high - cross_low <= tolerance)
-            .then_some((axis, (cross_low + cross_high) * 0.5))
+            .then_some((axis, f64::midpoint(cross_low, cross_high)))
     })
 }
 

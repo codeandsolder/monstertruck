@@ -1,4 +1,18 @@
-use super::*;
+#![allow(
+    clippy::similar_names,
+    reason = "paired U/V parameter-division names are standard surface notation"
+)]
+
+use super::{
+    Angle, BoundedCurve, BoundedSurface, BsplineCurve, CurveDerivatives, CurveParameter, Debug,
+    EuclideanSpace, HashGen, InnerSpace, KnotVector, MAX_DER_ORDER, Matrix, Matrix2, Matrix3,
+    Matrix4, MetricSpace, Mul, NurbsCurve, ParameterDivision1D, ParameterDivision2D,
+    ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
+    Point1, Point2, Point3, Rad, RollingBallFilletContactCurve, RollingBallFilletSurface,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SearchParameterHint2D,
+    SquareMatrix, SurfaceDerivatives, SurfaceParameter, SurfaceParameterRange, TOLERANCE,
+    ToSameGeometry, Tolerance, Vector2, Vector3, Vector4, Zero, nonpositive_tolerance,
+};
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 use std::f64::consts::PI;
 
@@ -134,14 +148,18 @@ mod algo;
 mod contact_circle;
 
 #[inline]
-fn undefined_vector() -> Vector3 { Vector3::new(f64::NAN, f64::NAN, f64::NAN) }
+const fn undefined_vector() -> Vector3 { Vector3::new(f64::NAN, f64::NAN, f64::NAN) }
 
 #[inline]
-fn undefined_point() -> Point3 { Point3::new(f64::NAN, f64::NAN, f64::NAN) }
+const fn undefined_point() -> Point3 { Point3::new(f64::NAN, f64::NAN, f64::NAN) }
 
+// `ParametricCurve`/`ParametricSurface` are legacy infallible traits. The
+// rolling-ball solve is genuinely fallible at singular contact configurations,
+// so only those trait adapters translate `None` into NaN geometry. New direct
+// callers should use the `try_*` methods below.
 fn undefined_curve_derivatives(max_order: usize) -> CurveDerivatives<Vector3> {
     let mut derivatives = CurveDerivatives::new(max_order);
-    for order in 0..=max_order {
+    for order in 0..=derivatives.max_order() {
         derivatives[order] = undefined_vector();
     }
     derivatives
@@ -149,9 +167,9 @@ fn undefined_curve_derivatives(max_order: usize) -> CurveDerivatives<Vector3> {
 
 fn undefined_surface_derivatives(max_order: usize) -> SurfaceDerivatives<Vector3> {
     let mut derivatives = SurfaceDerivatives::new(max_order);
-    for m in 0..=max_order {
-        for n in 0..=max_order - m {
-            derivatives[m][n] = undefined_vector();
+    for row in derivatives.slice_iter_mut() {
+        for derivative in row {
+            *derivative = undefined_vector();
         }
     }
     derivatives
@@ -170,6 +188,41 @@ where
         }
         Some(self.vder_info(cc, n)?.derivative_mn(m, n, u))
     }
+
+    /// Evaluates the fillet surface when a valid rolling contact circle exists.
+    /// Returns `None` at singular or otherwise unsolved contact configurations.
+    #[inline]
+    pub fn try_evaluate(&self, u: f64, v: f64) -> Option<Point3> {
+        self.contact_circle(v).map(|cc| cc.evaluate(u))
+    }
+
+    /// Evaluates one mixed derivative when the rolling-contact solve is regular.
+    /// Returns `None` if the contact or derivative solve is singular.
+    #[inline]
+    pub fn try_derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Option<Vector3> {
+        self.contact_circle(v)
+            .and_then(|cc| self.sub_der_mn(m, n, u, cc))
+    }
+
+    /// Evaluates all representable derivatives up to `max_order`.
+    ///
+    /// The fixed derivative container caps the order at [`MAX_DER_ORDER`].
+    /// Returns `None` if any requested derivative crosses a singular rolling-contact state.
+    pub fn try_derivatives(
+        &self,
+        max_order: usize,
+        u: f64,
+        v: f64,
+    ) -> Option<SurfaceDerivatives<Vector3>> {
+        let cc = self.contact_circle(v)?;
+        let mut out = SurfaceDerivatives::new(max_order);
+        for (i, row) in out.slice_iter_mut().enumerate() {
+            for (j, derivative) in row.iter_mut().enumerate() {
+                *derivative = self.sub_der_mn(i, j, u, cc)?;
+            }
+        }
+        Some(out)
+    }
 }
 
 impl<C, S0, S1, R> ParametricSurface for RollingBallFilletSurface<C, S0, S1, R>
@@ -182,59 +235,41 @@ where
     type Point = Point3;
     type Vector = Vector3;
     fn derivatives(&self, max_order: usize, u: f64, v: f64) -> SurfaceDerivatives<Vector3> {
-        let Some(cc) = self.contact_circle(v) else {
-            return undefined_surface_derivatives(max_order);
-        };
-        let mut out = SurfaceDerivatives::new(max_order);
-        for i in 0..=max_order {
-            for j in 0..=max_order - i {
-                out[i][j] = self
-                    .sub_der_mn(i, j, u, cc)
-                    .unwrap_or_else(undefined_vector);
-            }
-        }
-        out
+        self.try_derivatives(max_order, u, v)
+            .unwrap_or_else(|| undefined_surface_derivatives(max_order))
     }
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
-        self.contact_circle(v)
-            .and_then(|cc| self.sub_der_mn(m, n, u, cc))
+        self.try_derivative_mn(m, n, u, v)
             .unwrap_or_else(undefined_vector)
     }
     fn evaluate(&self, u: f64, v: f64) -> Point3 {
-        self.contact_circle(v)
-            .map(|cc| cc.evaluate(u))
-            .unwrap_or_else(undefined_point)
+        self.try_evaluate(u, v).unwrap_or_else(undefined_point)
     }
     fn derivative_u(&self, u: f64, v: f64) -> Vector3 {
         self.contact_circle(v)
-            .map(|cc| cc.derivative(u))
-            .unwrap_or_else(undefined_vector)
+            .map_or_else(undefined_vector, |cc| cc.derivative(u))
     }
     fn derivative_v(&self, u: f64, v: f64) -> Vector3 {
         self.contact_circle(v)
             .and_then(|cc| self.vder_info(cc, 1))
-            .map(|info| info.derivative_v(u))
-            .unwrap_or_else(undefined_vector)
+            .map_or_else(undefined_vector, |info| info.derivative_v(u))
     }
     fn derivative_uu(&self, u: f64, v: f64) -> Self::Vector {
         self.contact_circle(v)
-            .map(|cc| cc.derivative_2(u))
-            .unwrap_or_else(undefined_vector)
+            .map_or_else(undefined_vector, |cc| cc.derivative_2(u))
     }
     fn derivative_uv(&self, u: f64, v: f64) -> Self::Vector {
         self.contact_circle(v)
             .and_then(|cc| self.vder_info(cc, 1))
-            .map(|info| info.derivative_uv(u))
-            .unwrap_or_else(undefined_vector)
+            .map_or_else(undefined_vector, |info| info.derivative_uv(u))
     }
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector {
         self.contact_circle(v)
             .and_then(|cc| self.vder_info(cc, 2))
-            .map(|info| info.derivative_vv(u))
-            .unwrap_or_else(undefined_vector)
+            .map_or_else(undefined_vector, |info| info.derivative_vv(u))
     }
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
-        use std::ops::Bound::*;
+        use std::ops::Bound::Included;
         (
             (Included(0.0), Included(1.0)),
             self.edge_curve.parameter_range(),
@@ -259,6 +294,7 @@ where
     S1: ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
     R: RadiusFunction,
 {
+    fn range_tuple(&self) -> SurfaceParameterRange { ((0.0, 1.0), self.edge_curve.range_tuple()) }
 }
 
 impl<C, S0, S1, R> ParameterDivision2D for RollingBallFilletSurface<C, S0, S1, R>
@@ -309,9 +345,10 @@ where
         let cp0 = cc.contact_point0.point - cc.center;
         let cp = point - cc.center;
         let u = cp.angle(cp0).0 / cc.angle.0;
-        match cp.magnitude2().near(&cp0.magnitude2()) {
-            true => Some((u, v)),
-            false => None,
+        if cp.magnitude2().near(&cp0.magnitude2()) {
+            Some((u, v))
+        } else {
+            None
         }
     }
 }
@@ -325,6 +362,55 @@ impl<C, S0, S1, R> RollingBallFilletContactCurve<C, S0, S1, R> {
     pub const fn index(&self) -> usize { self.index }
 }
 
+impl<C, S0, S1, R> RollingBallFilletContactCurve<C, S0, S1, R>
+where
+    C: ParametricCurve3D,
+    S0: ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
+    S1: ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
+    R: RadiusFunction,
+{
+    /// Evaluates the contact point when the rolling-contact solve is regular.
+    /// Returns `None` at singular or otherwise unsolved contact configurations.
+    pub fn try_evaluate(&self, t: f64) -> Option<Point3> {
+        let cc = self.surface.contact_circle(t)?;
+        Some(match self.index {
+            0 => cc.contact_point0.point,
+            _ => cc.contact_point1.point,
+        })
+    }
+
+    /// Evaluates all representable derivatives up to `max_order`.
+    ///
+    /// The fixed derivative container caps the order at [`MAX_DER_ORDER`].
+    /// Returns `None` if the rolling-contact derivative solve is singular.
+    pub fn try_derivatives(&self, max_order: usize, t: f64) -> Option<CurveDerivatives<Vector3>> {
+        let max_order = max_order.min(MAX_DER_ORDER);
+        if max_order == 0 {
+            let mut derivatives = CurveDerivatives::new(0);
+            derivatives[0] = self.try_evaluate(t)?.to_vec();
+            return Some(derivatives);
+        }
+        let cc = self.surface.contact_circle(t)?;
+        let rders = self.surface.radius.derivatives(max_order, t);
+        let cc_ders = self
+            .surface
+            .sub_center_contacts_ders(cc, &rders, max_order)?;
+        Some(match self.index {
+            0 => cc_ders.contact0,
+            _ => cc_ders.contact1,
+        })
+    }
+
+    /// Evaluates one derivative when its order is representable and the solve is regular.
+    /// Returns `None` for orders above [`MAX_DER_ORDER`] or a singular contact solve.
+    pub fn try_derivative_n(&self, n: usize, t: f64) -> Option<Vector3> {
+        if n > MAX_DER_ORDER {
+            return None;
+        }
+        Some(self.try_derivatives(n, t)?[n])
+    }
+}
+
 impl<C, S0, S1, R> ParametricCurveTrait for RollingBallFilletContactCurve<C, S0, S1, R>
 where
     C: ParametricCurve3D,
@@ -335,32 +421,14 @@ where
     type Point = Point3;
     type Vector = Vector3;
     fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Vector3> {
-        if n == 0 {
-            let mut derivatives = CurveDerivatives::new(0);
-            derivatives[0] = self.evaluate(t).to_vec();
-            return derivatives;
-        }
-        let Some(cc) = self.surface.contact_circle(t) else {
-            return undefined_curve_derivatives(n);
-        };
-        let rders = self.surface.radius.derivatives(n, t);
-        let Some(cc_ders) = self.surface.sub_center_contacts_ders(cc, &rders, n) else {
-            return undefined_curve_derivatives(n);
-        };
-        match self.index {
-            0 => cc_ders.contact0_ders,
-            _ => cc_ders.contact1_ders,
-        }
+        self.try_derivatives(n, t)
+            .unwrap_or_else(|| undefined_curve_derivatives(n))
     }
-    fn derivative_n(&self, n: usize, t: f64) -> Self::Vector { self.derivatives(n, t)[n] }
+    fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
+        self.try_derivative_n(n, t).unwrap_or_else(undefined_vector)
+    }
     fn evaluate(&self, t: f64) -> Self::Point {
-        self.surface
-            .contact_circle(t)
-            .map(|cc| match self.index {
-                0 => cc.contact_point0.point,
-                _ => cc.contact_point1.point,
-            })
-            .unwrap_or_else(undefined_point)
+        self.try_evaluate(t).unwrap_or_else(undefined_point)
     }
     fn derivative(&self, t: f64) -> Self::Vector { self.derivative_n(1, t) }
     fn derivative_2(&self, t: f64) -> Self::Vector { self.derivative_n(2, t) }
@@ -377,6 +445,7 @@ where
     S1: ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
     R: RadiusFunction,
 {
+    fn range_tuple(&self) -> (f64, f64) { self.surface.edge_curve.range_tuple() }
 }
 
 impl<C, S0, S1, R> ParameterDivision1D for RollingBallFilletContactCurve<C, S0, S1, R>
@@ -413,9 +482,6 @@ where
             0 => cc.contact_point0.point,
             _ => cc.contact_point1.point,
         };
-        match point.near(&q) {
-            true => Some(t),
-            false => None,
-        }
+        if point.near(&q) { Some(t) } else { None }
     }
 }

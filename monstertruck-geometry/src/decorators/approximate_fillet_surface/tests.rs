@@ -4,6 +4,7 @@
 //! path is unchanged.
 
 use super::*;
+use crate::prelude::{BsplineSurface, NurbsSurface, Plane, assert_near, prop_assert_near};
 use proptest::{prelude::*, property_test};
 
 #[property_test]
@@ -100,10 +101,18 @@ fn test_ders(#[strategy = 0.0..=1.0] u: f64, #[strategy = 0.0..=1.0] v: f64) {
     }
 
     let pt0 = surface.evaluate(0.0, v);
-    let (u0, v0) = surface0.search_parameter(pt0, (0.5, 0.5), 100).unwrap();
+    let Some((u0, v0)) = surface0.search_parameter(pt0, (0.5, 0.5), 100) else {
+        return Err(TestCaseError::Fail(
+            "surface0 search_parameter failed".into(),
+        ));
+    };
     assert_near!(surface.normal(0.0, v), surface0.normal(u0, v0));
 
     let pt1 = surface.evaluate(1.0, v);
-    let (u1, v1) = surface1.search_parameter(pt1, (0.5, 0.5), 100).unwrap();
+    let Some((u1, v1)) = surface1.search_parameter(pt1, (0.5, 0.5), 100) else {
+        return Err(TestCaseError::Fail(
+            "surface1 search_parameter failed".into(),
+        ));
+    };
     assert_near!(surface.normal(1.0, v), surface1.normal(u1, v1));
 }

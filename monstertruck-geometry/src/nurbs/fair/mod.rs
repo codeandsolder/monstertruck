@@ -3,7 +3,10 @@
 //! These operations precondition curves before use in surface constructors,
 //! improving the quality of skins, sweeps, and Gordon surfaces.
 
-use super::*;
+use super::{
+    BoundedCurve, BsplineCurve, ControlPoint, KnotVector, Origin, ParametricCurve, Tolerance,
+    errors,
+};
 use errors::Error;
 use std::result::Result as StdResult;
 
@@ -17,7 +20,7 @@ type Result<T> = StdResult<T, Error>;
 ///
 /// # Errors
 ///
-/// Returns an error if the interpolation system is singular.
+/// Returns an error if fewer than four samples are requested or if the interpolation system is singular.
 ///
 /// # Examples
 ///
@@ -48,16 +51,23 @@ pub fn reparameterize_arc_length<P>(
 where
     P: ControlPoint<f64> + Tolerance,
 {
-    assert!(
-        n_samples >= 4,
-        "reparameterize_arc_length requires at least 4 samples",
-    );
+    if n_samples < 4 {
+        return Err(Error::InsufficientInputCount {
+            operation: "reparameterize_arc_length",
+            input: "samples",
+            provided: n_samples,
+            minimum: 4,
+        });
+    }
 
     let (t_start, t_end) = curve.range_tuple();
 
     // Sample points and compute cumulative arc lengths.
     let sample_params: Vec<f64> = (0..n_samples)
-        .map(|i| t_start + (t_end - t_start) * i as f64 / (n_samples - 1) as f64)
+        .map(|i| {
+            t_start
+                + (t_end - t_start) * crate::usize_to_f64(i) / crate::usize_to_f64(n_samples - 1)
+        })
         .collect();
 
     let points: Vec<P> = sample_params.iter().map(|&t| curve.subs(t)).collect();
@@ -100,11 +110,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error if the interpolation system is singular.
-///
-/// # Panics
-///
-/// Panics if `n_control_points < target_degree + 1` or `n_samples < n_control_points`.
+/// Returns an error if there are too few control points for `target_degree`, if fewer samples
+/// than control points are requested, or if the interpolation system is singular.
 ///
 /// # Examples
 ///
@@ -141,22 +148,31 @@ pub fn fair_curve<P>(
 where
     P: ControlPoint<f64> + Tolerance,
 {
-    assert!(
-        n_control_points > target_degree,
-        "need at least degree+1 control points",
-    );
-    assert!(
-        n_samples >= n_control_points,
-        "need at least as many samples as control points",
-    );
+    let minimum_control_points = target_degree.saturating_add(1);
+    if n_control_points < minimum_control_points {
+        return Err(Error::InsufficientInputCount {
+            operation: "fair_curve",
+            input: "control points",
+            provided: n_control_points,
+            minimum: minimum_control_points,
+        });
+    }
+    if n_samples < n_control_points {
+        return Err(Error::InsufficientInputCount {
+            operation: "fair_curve",
+            input: "samples",
+            provided: n_samples,
+            minimum: n_control_points,
+        });
+    }
 
     let (t_start, t_end) = curve.range_tuple();
     let knot = KnotVector::uniform_knot(target_degree, n_control_points - target_degree);
 
     let param_points: Vec<(f64, P)> = (0..n_control_points)
         .map(|i| {
-            let u = i as f64 / (n_control_points - 1) as f64;
-            let t = t_start + (t_end - t_start) * u;
+            let u = crate::usize_to_f64(i) / crate::usize_to_f64(n_control_points - 1);
+            let t = f64::mul_add(t_end - t_start, u, t_start);
             (u, curve.subs(t))
         })
         .collect();

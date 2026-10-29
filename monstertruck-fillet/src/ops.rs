@@ -144,7 +144,10 @@ fn fillet_on_side(
 /// Fillets a shared edge between two faces, optionally updating adjacent side faces.
 ///
 /// Returns `(new_face0, new_face1, fillet_face, new_side0, new_side1)`.
-#[allow(clippy::type_complexity)]
+#[allow(
+    clippy::type_complexity,
+    reason = "the five-element tuple is the direct correlated topology result of a fillet operation"
+)]
 pub fn fillet_with_side(
     face0: &Face,
     face1: &Face,

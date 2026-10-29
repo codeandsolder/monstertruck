@@ -5,7 +5,15 @@
 //! provides multi-input wrappers around the pairwise [`BsplineCurve::syncro_degree`]
 //! and [`BsplineCurve::syncro_knots`] primitives.
 
-use super::*;
+#![allow(
+    clippy::similar_names,
+    reason = "paired U/V degree names are standard tensor-product spline notation"
+)]
+
+use super::{
+    BsplineCurve, BsplineSurface, ControlPoint, Homogeneous, KnotVector, NurbsCurve, TOLERANCE,
+    Tolerance,
+};
 use crate::errors::{Error, Result};
 
 /// Makes all curves in the slice share the same degree and normalized knot vector.
@@ -55,19 +63,19 @@ where P: ControlPoint<f64> + Tolerance {
     // Phase 1: elevate all curves to the maximum degree.
     let max_degree = curves
         .iter()
-        .map(|c| c.degree())
+        .map(super::BsplineCurve::degree)
         .max()
         .ok_or(Error::EmptyControlPoints)?;
-    curves.iter_mut().for_each(|c| {
+    for c in curves.iter_mut() {
         for _ in c.degree()..max_degree {
             c.elevate_degree();
         }
-    });
+    }
 
     // Phase 2: normalize all knot vectors to [0, 1].
-    curves.iter_mut().for_each(|c| {
+    for c in curves.iter_mut() {
         c.knot_normalize();
-    });
+    }
 
     // Phase 3: merge knot vectors by synchronizing each curve against the first.
     // After each syncro_knots call the first curve accumulates all knots seen so far,
@@ -144,27 +152,27 @@ where P: ControlPoint<f64> + Tolerance {
     // Phase 1: elevate all surfaces to max u-degree and max v-degree.
     let max_udeg = surfaces
         .iter()
-        .map(|s| s.udegree())
+        .map(super::BsplineSurface::udegree)
         .max()
         .ok_or(Error::EmptyControlPoints)?;
     let max_vdeg = surfaces
         .iter()
-        .map(|s| s.vdegree())
+        .map(super::BsplineSurface::vdegree)
         .max()
         .ok_or(Error::EmptyControlPoints)?;
-    surfaces.iter_mut().for_each(|s| {
+    for s in surfaces.iter_mut() {
         for _ in s.udegree()..max_udeg {
             s.elevate_udegree();
         }
         for _ in s.vdegree()..max_vdeg {
             s.elevate_vdegree();
         }
-    });
+    }
 
     // Phase 2: normalize all knot vectors to [0, 1].
-    surfaces.iter_mut().for_each(|s| {
+    for s in surfaces.iter_mut() {
         s.knot_normalize();
-    });
+    }
 
     // Phase 3: synchronize u-knots and v-knots across all surfaces.
     // Extract columns of curves from the control point grids to synchronize
@@ -273,19 +281,19 @@ where V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Tolerance {
     // Elevate all to max degree.
     let max_degree = curves
         .iter()
-        .map(|c| c.degree())
+        .map(super::NurbsCurve::degree)
         .max()
         .ok_or(Error::EmptyControlPoints)?;
-    curves.iter_mut().for_each(|c| {
+    for c in curves.iter_mut() {
         for _ in c.degree()..max_degree {
             c.elevate_degree();
         }
-    });
+    }
 
     // Normalize knot vectors.
-    curves.iter_mut().for_each(|c| {
+    for c in curves.iter_mut() {
         c.knot_normalize();
-    });
+    }
 
     // Synchronize knots pairwise against the first (two passes).
     for _ in 0..2 {
