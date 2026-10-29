@@ -103,7 +103,9 @@ where C: ParametricCurve3D<Point = Point3>
         let midpoint = curve.subs((t0 + t1) * 0.5);
         tracing::debug!(
             "debug pass-through edge front={:?} back={:?} midpoint={midpoint:?} candidates={:?}",
-            vertices[edge.vertices.0], vertices[edge.vertices.1], candidates,
+            vertices[edge.vertices.0],
+            vertices[edge.vertices.1],
+            candidates,
         );
     }
     let mut splits: Vec<_> = candidates
@@ -448,7 +450,9 @@ where
                     let m = midpoint(edge);
                     tracing::debug!(
                         "debug pass-through-dedup unify dup={index} -> canon={canonical_index} reversed={reversed} pair={key:?} mid=({:.4},{:.4},{:.4})",
-                        m.x, m.y, m.z,
+                        m.x,
+                        m.y,
+                        m.z,
                     );
                 }
                 remap.insert(index, (canonical_index, reversed));

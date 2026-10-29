@@ -327,7 +327,10 @@ where
     if debug_trace {
         tracing::debug!(
             "trace bool reattach_trims preserved={} derived={} regenerated={} missing={}",
-            preserved_count, derived_count, regenerated_count, missing_count,
+            preserved_count,
+            derived_count,
+            regenerated_count,
+            missing_count,
         );
     }
     CompressedTrimmedShell {
