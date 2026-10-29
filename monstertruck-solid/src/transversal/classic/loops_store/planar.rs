@@ -441,7 +441,7 @@ fn shell_polygon_bounds(
     let mut points = shell
         .iter()
         .filter_map(|face| face.surface())
-        .flat_map(|polygon| polygon.positions().clone());
+        .flat_map(|polygon| polygon.positions().to_vec());
     let first = points.next()?;
     Some(points.fold((first, first), |(mut min, mut max), point| {
         min.x = min.x.min(point.x);

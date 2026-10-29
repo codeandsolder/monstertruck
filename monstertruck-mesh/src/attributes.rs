@@ -127,7 +127,7 @@ impl TransformedAttributes for StandardAttributes {
                 .iter()
                 .map(|&p| trans.transform_point(p))
                 .collect(),
-            uv_coords: self.uv_coords().clone(),
+            uv_coords: self.uv_coords().to_vec(),
             normals: self
                 .normals()
                 .iter()

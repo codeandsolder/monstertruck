@@ -137,7 +137,7 @@ impl SubStructureFilter for PolygonMesh {
 
     fn reflect_face_edge_list(&mut self, list: Vec<FaceEdge>) {
         let mut used = vec![false; self.faces().tri_faces().len()];
-        let mut quad_faces = self.faces().quad_faces().clone();
+        let mut quad_faces = self.faces().quad_faces().to_vec();
         quad_faces.extend(list.into_iter().filter_map(|face_edge| {
             let (i, j) = face_edge.faces;
             if used[i] || used[j] {
