@@ -297,7 +297,7 @@ where
                                 missing_count += 1;
                                 if debug_reattach && missing_logged < 32 {
                                     let edge = &edges[index];
-                                    eprintln!(
+                                    tracing::debug!(
                                         "debug reattach missing surface_face edge={} orientation={} front={:?} back={:?}",
                                         index,
                                         orientation,
@@ -325,7 +325,7 @@ where
         })
         .collect();
     if debug_trace {
-        eprintln!(
+        tracing::debug!(
             "trace bool reattach_trims preserved={} derived={} regenerated={} missing={}",
             preserved_count, derived_count, regenerated_count, missing_count,
         );
@@ -550,7 +550,7 @@ where
     };
     let Some(uv0) = point_to_uv(edge.curve.front(), None) else {
         if debug_reattach {
-            eprintln!(
+            tracing::debug!(
                 "debug reattach linear no_uv front={:?} back={:?}",
                 edge.curve.front(),
                 edge.curve.back(),
@@ -560,7 +560,7 @@ where
     };
     let Some(uv1) = point_to_uv(edge.curve.back(), Some((uv0.x, uv0.y))) else {
         if debug_reattach {
-            eprintln!(
+            tracing::debug!(
                 "debug reattach linear no_uv back front={:?} back={:?} uv0={:?}",
                 edge.curve.front(),
                 edge.curve.back(),
@@ -579,7 +579,7 @@ where
     });
     if !quarters_ok {
         if debug_reattach {
-            eprintln!(
+            tracing::debug!(
                 "debug reattach linear mismatch front={:?} back={:?} uv0={:?} uv1={:?}",
                 edge.curve.front(),
                 edge.curve.back(),
@@ -591,7 +591,7 @@ where
     }
     let Some(curve) = C::try_from(linear_trim.clone()).ok() else {
         if debug_reattach {
-            eprintln!(
+            tracing::debug!(
                 "debug reattach linear try_from failed front={:?} back={:?} uv0={:?} uv1={:?}",
                 edge.curve.front(),
                 edge.curve.back(),
@@ -603,7 +603,7 @@ where
     };
     let exact = curve.exact_parameter_boundary_2d(surface);
     if debug_reattach && exact.is_none() {
-        eprintln!(
+        tracing::debug!(
             "debug reattach linear exact_none front={:?} back={:?} uv0={:?} uv1={:?}",
             edge.curve.front(),
             edge.curve.back(),
@@ -673,7 +673,7 @@ where
                 .or_else(|| surface.search_nearest_parameter(point, None, 100))
         }
         if debug_trace {
-            eprintln!(
+            tracing::debug!(
                 "trace bool robust_split start vertices={} edges={} faces={}",
                 self.vertices.len(),
                 self.edges.len(),
@@ -682,7 +682,7 @@ where
         }
         split_closed_edges(self);
         if debug_trace {
-            eprintln!(
+            tracing::debug!(
                 "trace bool robust_split after_edges elapsed_ms={:.3}",
                 started.elapsed().as_secs_f64() * 1000.0,
             );
@@ -691,7 +691,7 @@ where
             split_pass_through_edges(self, tol);
         }
         if debug_trace {
-            eprintln!(
+            tracing::debug!(
                 "trace bool robust_split after_pass_through elapsed_ms={:.3} skipped={}",
                 started.elapsed().as_secs_f64() * 1000.0,
                 skip_single_face_pass_through || !enable_pass_through,
@@ -699,7 +699,7 @@ where
         }
         let faces_changed = split_closed_faces(self, tol, sp);
         if debug_trace {
-            eprintln!(
+            tracing::debug!(
                 "trace bool robust_split after_faces elapsed_ms={:.3} changed={faces_changed}",
                 started.elapsed().as_secs_f64() * 1000.0,
             );
@@ -772,7 +772,7 @@ where
         }
         split_closed_edges_trimmed(self);
         if debug_trace {
-            eprintln!(
+            tracing::debug!(
                 "trace bool robust_split_trimmed after_edges elapsed_ms={:.3}",
                 started.elapsed().as_secs_f64() * 1000.0,
             );
@@ -830,7 +830,7 @@ where
             }
         }
         if debug_trace {
-            eprintln!(
+            tracing::debug!(
                 "trace bool robust_split_trimmed after_pass_through elapsed_ms={:.3} skipped={}",
                 started.elapsed().as_secs_f64() * 1000.0,
                 skip_single_face_pass_through || !enable_pass_through,
@@ -839,7 +839,7 @@ where
         let mut plain = self.cloned_without_trims();
         let first_faces_changed = split_closed_faces(&mut plain, tol, sp);
         if debug_trace || debug_heal_split {
-            eprintln!(
+            tracing::debug!(
                 "trace bool robust_split_trimmed after_faces elapsed_ms={:.3} changed={first_faces_changed}",
                 started.elapsed().as_secs_f64() * 1000.0,
             );
@@ -851,7 +851,7 @@ where
                 split_pass_through_edges(&mut plain, tol);
                 let second_faces_changed = split_closed_faces(&mut plain, tol, sp);
                 if debug_trace || debug_heal_split {
-                    eprintln!(
+                    tracing::debug!(
                         "trace bool robust_split_trimmed after_faces_propagate elapsed_ms={:.3} changed={second_faces_changed}",
                         started.elapsed().as_secs_f64() * 1000.0,
                     );
@@ -866,7 +866,7 @@ where
         // trimmed solid extracts instead of refusing `NotSimpleWire` at solidify.
         let seam_splits = split_seam_faces_trimmed(self);
         if debug_trace || debug_heal_split {
-            eprintln!(
+            tracing::debug!(
                 "trace bool robust_split_trimmed after_seam elapsed_ms={:.3} seam_splits={seam_splits}",
                 started.elapsed().as_secs_f64() * 1000.0,
             );

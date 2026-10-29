@@ -101,7 +101,7 @@ where C: ParametricCurve3D<Point = Point3>
     if debug_focus {
         let curve = &edge.curve;
         let midpoint = curve.subs((t0 + t1) * 0.5);
-        eprintln!(
+        tracing::debug!(
             "debug pass-through edge front={:?} back={:?} midpoint={midpoint:?} candidates={:?}",
             vertices[edge.vertices.0], vertices[edge.vertices.1], candidates,
         );
@@ -111,7 +111,7 @@ where C: ParametricCurve3D<Point = Point3>
         .filter_map(|(index, point, t, distance2)| {
             let on_curve = distance2 <= tol2;
             if debug_focus {
-                eprintln!(
+                tracing::debug!(
                     "debug pass-through candidate index={index} point={point:?} t={t} distance2={distance2} on_curve={on_curve}",
                 );
             }
@@ -125,7 +125,7 @@ where C: ParametricCurve3D<Point = Point3>
         same_param || same_vertex
     });
     if debug_focus {
-        eprintln!("debug pass-through splits={splits:?}");
+        tracing::debug!("debug pass-through splits={splits:?}");
     }
     splits
 }
@@ -446,7 +446,7 @@ where
                 let reversed = edges[canonical_index].vertices != edge.vertices;
                 if std::env::var("MT_BOOL_DEBUG_PASS_THROUGH_DEDUP").is_ok() {
                     let m = midpoint(edge);
-                    eprintln!(
+                    tracing::debug!(
                         "debug pass-through-dedup unify dup={index} -> canon={canonical_index} reversed={reversed} pair={key:?} mid=({:.4},{:.4},{:.4})",
                         m.x, m.y, m.z,
                     );

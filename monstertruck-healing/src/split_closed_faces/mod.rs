@@ -73,7 +73,7 @@ where
             let started = Instant::now();
             let poly = to_poly(edge);
             if debug_trace && started.elapsed().as_secs_f64() * 1000.0 >= 10.0 {
-                eprintln!(
+                tracing::debug!(
                     "trace bool split_closed_faces poly_edge edge={index} elapsed_ms={:.3}",
                     started.elapsed().as_secs_f64() * 1000.0,
                 );
@@ -93,7 +93,7 @@ where
             tol,
         );
         if debug_trace && started.elapsed().as_secs_f64() * 1000.0 >= 10.0 {
-            eprintln!(
+            tracing::debug!(
                 "trace bool split_closed_faces non_closed face={i} elapsed_ms={:.3}",
                 started.elapsed().as_secs_f64() * 1000.0,
             );
@@ -111,7 +111,7 @@ where
             tol,
         );
         if debug_trace && started.elapsed().as_secs_f64() * 1000.0 >= 10.0 {
-            eprintln!(
+            tracing::debug!(
                 "trace bool split_closed_faces non_simple face={i} elapsed_ms={:.3}",
                 started.elapsed().as_secs_f64() * 1000.0,
             );
@@ -133,7 +133,7 @@ where
             tol,
         );
         if debug_trace && started.elapsed().as_secs_f64() * 1000.0 >= 10.0 {
-            eprintln!(
+            tracing::debug!(
                 "trace bool split_closed_faces concave face={i} elapsed_ms={:.3}",
                 started.elapsed().as_secs_f64() * 1000.0,
             );
