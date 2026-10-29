@@ -7,7 +7,7 @@ static MAXID: AtomicUsize = AtomicUsize::new(0);
 impl RenderId {
     /// Generate the unique `RenderId`.
     #[inline(always)]
-    pub fn generate() -> Self { RenderId(MAXID.fetch_add(1, Ordering::SeqCst)) }
+    pub fn generate() -> Self { RenderId(MAXID.fetch_add(1, Ordering::Relaxed)) }
 }
 
 async fn init_default_device(
