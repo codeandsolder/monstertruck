@@ -78,7 +78,7 @@ fn add_naive_normals_test() {
 
     // test of overwrite flag
     mesh.add_smooth_normals(1.0, true);
-    let normals = mesh.normals().clone();
+    let normals = mesh.normals().to_vec();
     mesh.add_naive_normals(false);
     assert_eq!(&normals, mesh.normals());
 
@@ -113,7 +113,7 @@ fn add_smooth_normals() {
 
     let mut naive_sphere = sphere.clone();
     naive_sphere.add_naive_normals(true);
-    let naive_normals = naive_sphere.normals().clone();
+    let naive_normals = naive_sphere.normals().to_vec();
 
     // variable overwrite
     naive_sphere.add_smooth_normals(1.0, false);

@@ -132,9 +132,9 @@ pub trait Splitting {
 
 impl Splitting for PolygonMesh {
     fn create_mesh_by_face_indices(&self, indices: &[usize]) -> PolygonMesh {
-        let positions = self.positions().clone();
-        let uv_coords = self.uv_coords().clone();
-        let normals = self.normals().clone();
+        let positions = self.positions().to_vec();
+        let uv_coords = self.uv_coords().to_vec();
+        let normals = self.normals().to_vec();
         let faces: Faces = indices.iter().map(|i| &self.faces()[*i]).collect();
         PolygonMesh::new(
             StandardAttributes {

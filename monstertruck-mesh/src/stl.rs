@@ -224,7 +224,7 @@ pub trait IntoStlIterator {
 /// Generate an STL faces from from a [`PolygonMesh`].
 #[derive(Debug)]
 pub struct PolygonMeshStlFaceIterator<'a> {
-    positions: &'a Vec<Point3>,
+    positions: &'a [Point3],
     faces: faces::TriangleIterator<'a, Vertex>,
     len: usize,
 }

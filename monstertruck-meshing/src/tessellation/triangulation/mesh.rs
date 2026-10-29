@@ -487,8 +487,8 @@ fn force_all_triangles_to_quads(
         return;
     }
     let normal_blend_angle = primitive_config.normal_blend_angle;
-    let triangles = mesh.tri_faces().clone();
-    let mut quadrangles = mesh.quad_faces().clone();
+    let triangles = mesh.tri_faces().to_vec();
+    let mut quadrangles = mesh.quad_faces().to_vec();
     let mut midpoint_cache = HashMap::<(VertexKey, VertexKey), StandardVertex>::default();
     triangles.into_iter().for_each(|triangle| {
         let [vertex0, vertex1, vertex2] = triangle;
