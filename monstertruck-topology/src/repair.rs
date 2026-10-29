@@ -208,17 +208,17 @@ pub fn split_singular_compressed_trimmed_vertices<P: Clone, C, S, T>(
 /// Diagnostics from a transactional same-domain face-unification pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SameDomainUnification {
-    /// Candidate face states whose supports were reported equivalent and were
-    /// actually attempted. An unchanged locally-invalid pair is not counted
-    /// again merely because an unrelated merge committed elsewhere in the shell.
+    /// Distinct candidate face states whose supports were reported equivalent.
+    /// An unchanged pair may be retried after another merge, preserving callback
+    /// semantics, but is counted only once.
     pub proposals: usize,
     /// Face-pair merges that passed trim reconstruction and complete shell validation.
     pub accepted: usize,
     /// Candidates whose surviving directed boundary could not be traced unambiguously.
     pub rejected_ambiguous_boundary: usize,
     /// Distinct candidate face states for which at least one surviving 3D edge
-    /// could not be represented on the chosen reference surface. Unchanged
-    /// local failures are cached across unrelated successful merges.
+    /// could not be represented on the chosen reference surface. Retries of an
+    /// unchanged local failure are not counted again.
     pub rejected_missing_trim: usize,
     /// Candidates whose rebuilt shell failed face, closure, connectivity, or
     /// manifold validation.
@@ -431,15 +431,15 @@ where
     original.check_solid_boundary()?;
 
     let mut report = SameDomainUnification::default();
-    // Face indices are compacted after every committed merge, so an index pair is
-    // not a stable identity for memoizing a failed candidate. Keep a tiny sidecar
-    // identity + generation for each current face instead. A face generation only
-    // changes when that face is replaced by a merged face; therefore a local
-    // AmbiguousBoundary/MissingTrim result is still valid after an unrelated merge,
-    // while any candidate touching the changed face is retried.
+    // Face indices are compacted after every committed merge, so diagnostic
+    // identity must survive index shifts. Keep a tiny sidecar identity + generation
+    // for each current face. We deliberately still execute retries of unchanged
+    // states: the generic callbacks are Fn but are not contractually pure, so
+    // suppressing calls would be a semantic change. Only the counters are deduplicated.
     let mut face_states = (0..shell.faces.len())
         .map(|identity| (identity, 0usize))
         .collect::<Vec<_>>();
+    let mut seen_proposals = BTreeSet::<((usize, usize), (usize, usize))>::new();
     let mut locally_rejected = BTreeSet::<((usize, usize), (usize, usize))>::new();
     loop {
         let mut edge_face_uses = HashMap::<usize, Vec<(usize, bool)>>::default();
@@ -476,10 +476,9 @@ where
                 continue;
             }
             let state_key = (face_states[face_index0], face_states[face_index1]);
-            if locally_rejected.contains(&state_key) {
-                continue;
+            if seen_proposals.insert(state_key) {
+                report.proposals += 1;
             }
-            report.proposals += 1;
             let merged = match merged_same_domain_face(
                 &shell.edges,
                 &edge_face_uses,
@@ -490,13 +489,15 @@ where
             ) {
                 Ok(merged) => merged,
                 Err(SameDomainMergeFailure::AmbiguousBoundary) => {
-                    locally_rejected.insert(state_key);
-                    report.rejected_ambiguous_boundary += 1;
+                    if locally_rejected.insert(state_key) {
+                        report.rejected_ambiguous_boundary += 1;
+                    }
                     continue;
                 }
                 Err(SameDomainMergeFailure::MissingTrim) => {
-                    locally_rejected.insert(state_key);
-                    report.rejected_missing_trim += 1;
+                    if locally_rejected.insert(state_key) {
+                        report.rejected_missing_trim += 1;
+                    }
                     continue;
                 }
             };
@@ -786,7 +787,7 @@ mod trimmed_tests {
     }
 
     #[test]
-    fn same_domain_unification_does_not_retry_unchanged_local_failure() {
+    fn same_domain_unification_does_not_recount_unchanged_local_failure() {
         use std::cell::Cell;
 
         fn use_(index: usize, orientation: bool) -> CompressedEdgeUse<u32> {
@@ -865,7 +866,9 @@ mod trimmed_tests {
         assert_eq!(report.accepted, 1);
         assert_eq!(report.rejected_missing_trim, 1);
         assert_eq!(report.proposals, 2);
-        assert_eq!(failed_curve_calls.get(), 1);
+        // The callback is deliberately retried to preserve the public API's
+        // semantics; only the diagnostic state is counted once.
+        assert_eq!(failed_curve_calls.get(), 2);
         assert_eq!(shell.faces.len(), 6);
     }
 }
