@@ -82,7 +82,7 @@ fn census_enabled() -> bool { env::var_os("MT_FACE_DROP").is_some() || mesh_trac
 /// `pub(crate)` so the opt-in strict meshing path
 /// ([`crate::tessellation::shell_to_polygon_strict`]) classifies a just-meshed
 /// shell's faces with the *same* logic the always-on warn floor uses.
-pub fn classify_face_drop(
+pub const fn classify_face_drop(
     polygon: Option<&PolygonMesh>,
     is_untrimmed: bool,
 ) -> Option<FaceDropReason> {

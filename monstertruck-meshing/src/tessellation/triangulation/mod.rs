@@ -74,7 +74,7 @@ where
         // but open in parameter space matches its start with both ends, and
         // an unseeded search can land on the far one, sending every later
         // projection off the curve. So an absent hint means the start.
-        let hint = hint.or(Some(self.curve().range_tuple().0));
+        let hint = Some(hint.unwrap_or_else(|| self.curve().range_tuple().0));
         self.search_parameter(point, hint, 100)
             .or_else(|| self.search_nearest_parameter(point, hint, 100))
             .or_else(|| self.search_parameter(point, None, 100))
@@ -178,26 +178,25 @@ fn fallback_polyline_curve<C: PolylineableCurve>(
 
 fn densify_curve_parameters(mut parameters: Vec<f64>, min_points: usize) -> Vec<f64> {
     if parameters.len() >= min_points || parameters.len() < 2 || min_points < 2 {
-        parameters
-    } else {
-        let intervals = parameters.len() - 1;
-        let extra = min_points - parameters.len();
-        parameters = parameters
-            .windows(2)
-            .enumerate()
-            .flat_map(|(interval, window)| {
-                let extra_before = interval * extra / intervals;
-                let extra_after = (interval + 1) * extra / intervals;
-                let splits = 1 + extra_after - extra_before;
-                (0..splits).map(move |index| {
-                    let weight = crate::count_as_f64(index) / crate::count_as_f64(splits);
-                    window[0] + (window[1] - window[0]) * weight
-                })
-            })
-            .chain(parameters.last().copied())
-            .collect();
-        parameters
+        return parameters;
     }
+    let intervals = parameters.len() - 1;
+    let extra = min_points - parameters.len();
+    parameters = parameters
+        .windows(2)
+        .enumerate()
+        .flat_map(|(interval, window)| {
+            let extra_before = interval * extra / intervals;
+            let extra_after = (interval + 1) * extra / intervals;
+            let splits = 1 + extra_after - extra_before;
+            (0..splits).map(move |index| {
+                let weight = crate::count_as_f64(index) / crate::count_as_f64(splits);
+                window[0] + (window[1] - window[0]) * weight
+            })
+        })
+        .chain(parameters.last().copied())
+        .collect();
+    parameters
 }
 
 fn fallback_polyline_curve_with_min_points<C: PolylineableCurve>(
@@ -565,10 +564,10 @@ where
         ))
     };
     let faces: Vec<_> = shell.face_par_iter().enumerate().map(create_face).collect();
-    match faces.into_iter().collect::<Option<Vec<_>>>() {
-        Some(faces) => faces.into_iter().collect(),
-        None => shell_tessellation_single_thread(shell, tolerance, sp, primitive_config),
-    }
+    faces.into_iter().collect::<Option<Vec<_>>>().map_or_else(
+        || shell_tessellation_single_thread(shell, tolerance, sp, primitive_config),
+        |faces| faces.into_iter().collect(),
+    )
 }
 
 /// Tessellates faces.
@@ -746,8 +745,7 @@ where
                     })
                     .count();
                 eprintln!(
-                    "mesh_trace face={face_idx} stage=exact-boundary edges={}/{} success={}",
-                    exact_count,
+                    "mesh_trace face={face_idx} stage=exact-boundary edges={exact_count}/{} success={}",
                     wire.len(),
                     exact_piece.is_some(),
                 );
@@ -1102,8 +1100,7 @@ where
                     })
                     .count();
                 eprintln!(
-                    "mesh_trace face={face_idx} stage=exact-boundary edges={}/{} success={}",
-                    exact_count,
+                    "mesh_trace face={face_idx} stage=exact-boundary edges={exact_count}/{} success={}",
                     wire.len(),
                     exact_piece.is_some(),
                 );

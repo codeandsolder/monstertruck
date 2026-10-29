@@ -492,9 +492,8 @@ impl PolyBoundary {
             .flatten()
             .map(|pt| {
                 let p = [spade_round(pt.x), spade_round(pt.y)];
-                triangulation.insert(SPoint2::from(p)).ok().map(|idx| {
+                triangulation.insert(SPoint2::from(p)).ok().inspect(|&idx| {
                     boundary_map.insert(idx, pt.point);
-                    idx
                 })
             })
             .collect();

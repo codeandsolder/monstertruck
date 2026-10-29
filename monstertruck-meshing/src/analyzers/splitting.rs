@@ -4,6 +4,9 @@ use super::{
 };
 use std::f64::consts::PI;
 
+#[cfg(test)]
+use crate::EuclideanSpace;
+
 /// Splitting the faces into several clusters.
 pub trait Splitting {
     /// Creates a sub mesh by the face indices.
@@ -272,15 +275,15 @@ fn get_components(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
 }
 
 fn is_in_the_plane(positions: &[Point3], normals: &[Vector3], face: &[Vertex], tol2: f64) -> bool {
-    let n = FaceNormal::new(positions, face, 0).normal;
-    for v in face {
-        if let Some(nor) = v.nor
-            && n.distance2(normals[nor]) < tol2
-        {
-            return true;
-        }
-    }
-    false
+    let Some(normal) = FaceNormal::new(positions, face, 0).map(|face| face.normal) else {
+        return false;
+    };
+    face.iter().any(|vertex| {
+        vertex
+            .nor
+            .and_then(|idx| normals.get(idx))
+            .is_some_and(|candidate| normal.distance2(*candidate) < tol2)
+    })
 }
 
 fn is_signed_up_upper(

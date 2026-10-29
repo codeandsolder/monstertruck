@@ -10,7 +10,9 @@ use super::{
     mesh::trimming_tessellation,
     *,
 };
-use monstertruck_geometry::prelude::{Line, Matrix4, Plane, Processor, RevolutionSurface};
+use monstertruck_geometry::prelude::{
+    Line, Matrix4, ParametricSurface, Plane, Processor, RevolutionSurface,
+};
 
 #[derive(Clone, Debug)]
 struct SampledTrim {

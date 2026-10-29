@@ -59,7 +59,7 @@ fn ensure_winding_matches_normals(mesh: &mut PolygonMesh) {
                 sum + vec0.cross(vec1)
             });
         let vtx: Vector3 = face.iter().fold(Vector3::zero(), |sum, v| {
-            sum + v.nor.map_or(Vector3::zero(), |i| normals[i])
+            sum + v.nor.map_or_else(Vector3::zero, |i| normals[i])
         });
         let term = geo.dot(vtx);
         if term.is_finite() {
@@ -205,23 +205,17 @@ pub(super) fn trimming_tessellation<S>(
 where
     S: PreMeshableSurface,
 {
-    if primitive_config.mode == TessellationPrimitiveMode::IsoQuads {
-        if let Some(mut mesh) =
-            iso_quad_trimmed_tessellation(surface, polyboundary, tolerance, face_idx)
-        {
-            ensure_winding_matches_normals(&mut mesh);
-            mesh
-        } else {
-            let mut mesh = cdt_trimming_tessellation(surface, polyboundary, tolerance, face_idx);
-            ensure_winding_matches_normals(&mut mesh);
-            mesh
-        }
+    let mut mesh = if primitive_config.mode == TessellationPrimitiveMode::IsoQuads {
+        iso_quad_trimmed_tessellation(surface, polyboundary, tolerance, face_idx).unwrap_or_else(
+            || cdt_trimming_tessellation(surface, polyboundary, tolerance, face_idx),
+        )
     } else {
         let mut mesh = cdt_trimming_tessellation(surface, polyboundary, tolerance, face_idx);
-        ensure_winding_matches_normals(&mut mesh);
         apply_primitive_mode(&mut mesh, primitive_config);
         mesh
-    }
+    };
+    ensure_winding_matches_normals(&mut mesh);
+    mesh
 }
 
 fn cdt_trimming_tessellation<S>(
@@ -242,11 +236,8 @@ where
         face_idx,
         "cdt_boundary",
         format!(
-            "loops={} boundary_vertices={} constraints={} skipped_constraints={}",
+            "loops={} boundary_vertices={boundary_vertices} constraints={added_constraints} skipped_constraints={skipped_constraints}",
             polyboundary.loops.len(),
-            boundary_vertices,
-            added_constraints,
-            skipped_constraints,
         ),
         insert_boundary_start,
     );
@@ -502,7 +493,7 @@ fn force_all_triangles_to_quads(
     let triangles = mesh.tri_faces().clone();
     let mut quadrangles = mesh.quad_faces().clone();
     let mut midpoint_cache = HashMap::<(VertexKey, VertexKey), StandardVertex>::default();
-    triangles.into_iter().for_each(|triangle| {
+    for triangle in triangles {
         let [vertex0, vertex1, vertex2] = triangle;
         let point0 = mesh.positions()[vertex0.pos];
         let point1 = mesh.positions()[vertex1.pos];
@@ -551,7 +542,7 @@ fn force_all_triangles_to_quads(
         } else {
             quadrangles.push([vertex0, vertex1, vertex2, vertex2]);
         }
-    });
+    }
     {
         let editor = mesh.editor();
         *editor.faces = Faces::from_tri_and_quad_faces(Vec::new(), quadrangles);
@@ -569,13 +560,11 @@ fn midpoint_for_edge(
     normal_blend_angle: f64,
 ) -> StandardVertex {
     let key = edge_key(vertex0, vertex1);
-    if let Some(vertex) = midpoint_cache.get(&key) {
-        *vertex
-    } else {
+    midpoint_cache.get(&key).copied().unwrap_or_else(|| {
         let midpoint = create_midpoint_vertex(mesh, vertex0, vertex1, normal_blend_angle);
         midpoint_cache.insert(key, midpoint);
         midpoint
-    }
+    })
 }
 
 fn edge_key(vertex0: StandardVertex, vertex1: StandardVertex) -> (VertexKey, VertexKey) {
@@ -989,12 +978,11 @@ fn triangulation_into_polymesh<'a>(
             let uv = Point2::new(p.x, p.y);
             let key = uv_key(uv);
             let idx = v.fix();
-            let point = match boundary_map.get(&idx) {
-                Some(point) => *point,
-                None => *surface_point_cache
+            let point = boundary_map.get(&idx).copied().unwrap_or_else(|| {
+                *surface_point_cache
                     .entry(key)
-                    .or_insert_with(|| surface.subs(p.x, p.y)),
-            };
+                    .or_insert_with(|| surface.subs(p.x, p.y))
+            });
             let normal = *normal_cache
                 .entry(key)
                 .or_insert_with(|| surface.normal(p.x, p.y));

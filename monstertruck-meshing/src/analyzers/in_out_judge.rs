@@ -1,6 +1,9 @@
 use super::{InnerSpace, Matrix3, Origin, Point3, PolygonMesh, SquareMatrix, Vector3, hash};
 use derive_more::{Deref, DerefMut};
 
+#[cfg(test)]
+use crate::{Faces, StandardAttributes};
+
 #[derive(Clone, Copy, Debug)]
 struct Ray {
     origin: Point3,

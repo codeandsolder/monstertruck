@@ -41,7 +41,9 @@ impl EdgeInfo {
         }
     }
     #[inline]
-    fn add_second_wing(&mut self, second_wing: usize) { self.second_wing = Some(second_wing); }
+    const fn add_second_wing(&mut self, second_wing: usize) {
+        self.second_wing = Some(second_wing);
+    }
 }
 
 impl Subdivision for PolygonMesh {

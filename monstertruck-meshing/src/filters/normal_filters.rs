@@ -198,12 +198,12 @@ impl NormalFilters for PolygonMesh {
         for normal in normals.iter_mut() {
             *normal = normal.normalize();
         }
-        faces.face_iter_mut().flatten().for_each(|v| {
-            if let Some(idx) = v.nor
-                && !normals[idx].magnitude2().near(&1.0)
-            {
-                v.nor = None;
-            }
+        faces.face_iter_mut().flatten().for_each(|vertex| {
+            vertex.nor = vertex.nor.filter(|&idx| {
+                normals
+                    .get(idx)
+                    .is_some_and(|normal| normal.magnitude2().near(&1.0))
+            });
         });
         drop(mesh);
         self
@@ -218,10 +218,17 @@ impl NormalFilters for PolygonMesh {
             ..
         } = &mut mesh;
         for face in faces.face_iter_mut() {
-            let normal = face.iter().fold(Vector3::zero(), |normal, v| {
-                normal + v.nor.map_or_else(Vector3::zero, |i| normals[i])
+            let normal = face.iter().fold(Vector3::zero(), |normal, vertex| {
+                normal
+                    + vertex
+                        .nor
+                        .and_then(|idx| normals.get(idx).copied())
+                        .unwrap_or_else(Vector3::zero)
             });
-            let face_normal = FaceNormal::new(positions, face, 0).normal;
+            let Some(face_normal) = FaceNormal::new(positions, face, 0).map(|face| face.normal)
+            else {
+                continue;
+            };
             if normal.dot(face_normal) < 0.0 {
                 face.reverse();
             }
@@ -239,14 +246,18 @@ impl NormalFilters for PolygonMesh {
             ..
         } = &mut mesh;
         for face in faces.face_iter_mut() {
-            let face_normal = FaceNormal::new(positions, face, 0).normal;
-            for v in face.iter_mut() {
-                v.nor = v.nor.map(|idx| {
-                    if normals[idx].dot(face_normal) < 0.0 {
-                        normals.push(-normals[idx]);
-                        normals.len() - 1
+            let Some(face_normal) = FaceNormal::new(positions, face, 0).map(|face| face.normal)
+            else {
+                continue;
+            };
+            for vertex in face.iter_mut() {
+                vertex.nor = vertex.nor.and_then(|idx| {
+                    let normal = normals.get(idx).copied()?;
+                    if normal.dot(face_normal) < 0.0 {
+                        normals.push(-normal);
+                        Some(normals.len() - 1)
                     } else {
-                        idx
+                        Some(idx)
                     }
                 });
             }
@@ -267,7 +278,9 @@ impl NormalFilters for PolygonMesh {
             normals.clear();
         }
         for face in faces.face_iter_mut() {
-            let normal = FaceNormal::new(positions, face, 0).normal;
+            let Some(normal) = FaceNormal::new(positions, face, 0).map(|face| face.normal) else {
+                continue;
+            };
             let mut added = false;
             for v in face.iter_mut() {
                 if v.nor.is_none() || overwrite {
@@ -343,9 +356,11 @@ fn add_face_normal(
     vnmap: &mut HashMap<usize, Vec<Vec<FaceNormal>>>,
     inf: f64,
 ) {
-    let face_normal = FaceNormal::new(positions, face, face_id);
-    for v in face {
-        add_to_vnmap(v.pos, face_normal, vnmap, inf);
+    let Some(face_normal) = FaceNormal::new(positions, face, face_id) else {
+        return;
+    };
+    for vertex in face {
+        add_to_vnmap(vertex.pos, face_normal, vnmap, inf);
     }
 }
 
@@ -394,5 +409,51 @@ fn signup_vertex_normal(
             normals.push(normal);
         }
         face[j].nor = Some(normals.len() - 1);
+    }
+}
+
+#[cfg(test)]
+mod totality_tests {
+    use super::*;
+    use crate::{Faces, StandardVertex};
+
+    #[test]
+    fn unchecked_invalid_mesh_normal_filters_are_total() {
+        let faces = Faces::from_tri_and_quad_faces(
+            vec![[
+                StandardVertex {
+                    pos: 0,
+                    uv: None,
+                    nor: Some(5),
+                },
+                StandardVertex {
+                    pos: 1,
+                    uv: None,
+                    nor: None,
+                },
+                StandardVertex {
+                    pos: 9,
+                    uv: None,
+                    nor: None,
+                },
+            ]],
+            Vec::new(),
+        );
+        let mut mesh = PolygonMesh::new_unchecked(
+            StandardAttributes {
+                positions: vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+                normals: vec![Vector3::unit_z()],
+                ..Default::default()
+            },
+            faces,
+        );
+
+        let before = mesh.clone();
+        mesh.normalize_normals();
+        mesh.make_face_compatible_to_normal();
+        mesh.make_normal_compatible_to_face();
+        mesh.add_naive_normals(false);
+        mesh.add_smooth_normals(0.5, false);
+        assert_eq!(mesh, before);
     }
 }

@@ -3,6 +3,9 @@ use super::{
 };
 use array_macro::array;
 
+#[cfg(test)]
+use crate::Vector3;
+
 #[derive(Clone, Debug)]
 pub(super) struct HashedPointCloud {
     space: Vec<Vec<Point3>>,

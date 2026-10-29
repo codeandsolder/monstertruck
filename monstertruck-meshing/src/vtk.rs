@@ -1,5 +1,6 @@
 use crate::*;
 use monstertruck_core::tolerance::TOLERANCE;
+use monstertruck_mesh::StandardAttribute;
 use monstertruck_topology::{Vertex, compress::*, *};
 use rustc_hash::FxHashMap as HashMap;
 use std::convert::identity;
