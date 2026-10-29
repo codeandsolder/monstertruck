@@ -55,7 +55,7 @@ pub struct Triangulate<'a> {
 impl<'a> Triangulate<'a> {
     #[inline]
     pub fn new(entity: &'a PolygonMesh) -> Self {
-        fn divide_mesh<T: Copy>(face: &Vec<T>) -> impl Iterator<Item = [T; 3]> + '_ {
+        fn divide_mesh<T: Copy>(face: &[T]) -> impl Iterator<Item = [T; 3]> + '_ {
             face.windows(2).skip(1).map(move |a| [face[0], a[0], a[1]])
         }
         Triangulate {

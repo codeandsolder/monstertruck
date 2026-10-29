@@ -221,9 +221,10 @@ impl std::fmt::Display for TessellationError {
 
 impl std::error::Error for TessellationError {}
 
-/// Meshes `shell` at `tolerance` and merges every face into one [`PolygonMesh`],
-/// but REFUSES with a typed [`TessellationError::FaceDropped`] on the first face
-/// that would silently drop -- the opt-in, correctness-critical counterpart to
+/// Meshes `shell` at `tolerance` and merges every face into one [`PolygonMesh`].
+///
+/// Refuses with a typed [`TessellationError::FaceDropped`] on the first face that
+/// would silently drop -- the opt-in, correctness-critical counterpart to
 /// `shell.triangulation(tolerance).to_polygon()`.
 ///
 /// It is deliberately equivalent to `triangulation(tolerance).to_polygon()` on
@@ -242,6 +243,11 @@ impl std::error::Error for TessellationError {}
 /// divergence-theorem volume, so omitting it cannot understate a trusted volume,
 /// and escalating it would risk false refusals on degenerate result faces. The
 /// always-on D1 warn floor still flags every drop of every class.
+///
+/// # Errors
+///
+/// Returns [`TessellationError::FaceDropped`] when a real face has no tessellation
+/// because its surface is unbounded or its boundary projection failed.
 pub fn shell_to_polygon_strict<C: PolylineableCurve, S: MeshableSurface>(
     shell: &Shell<Point3, C, S>,
     tolerance: f64,

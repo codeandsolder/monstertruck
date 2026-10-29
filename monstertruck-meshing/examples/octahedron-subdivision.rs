@@ -3,9 +3,10 @@
 //! - Input: hardcoded octahedron
 //! - Output: octahedron.obj, subdivision-octahedron.obj
 
-use monstertruck_meshing::prelude::*;
+use monstertruck_mesh::{Faces, Point3, PolygonMesh, StandardAttributes, obj};
+use monstertruck_meshing::filters::{NormalFilters, Subdivision};
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let mut polymesh = PolygonMesh::new(
         StandardAttributes {
             positions: vec![
@@ -31,11 +32,10 @@ fn main() {
             ],
             Vec::new(),
         ),
-    )
-    .expect("fixture mesh is valid");
+    )?;
     let mut buf = Vec::<u8>::new();
-    obj::write(&polymesh, &mut buf).unwrap();
-    std::fs::write("octahedron.obj", &buf).unwrap();
+    obj::write(&polymesh, &mut buf)?;
+    std::fs::write("octahedron.obj", &buf)?;
     polymesh
         .loop_subdivision()
         .loop_subdivision()
@@ -45,6 +45,7 @@ fn main() {
         .loop_subdivision()
         .add_smooth_normals(std::f64::consts::PI / 3.0, true);
     buf.clear();
-    obj::write(&polymesh, &mut buf).unwrap();
-    std::fs::write("subdivision-octahedron.obj", &buf).unwrap();
+    obj::write(&polymesh, &mut buf)?;
+    std::fs::write("subdivision-octahedron.obj", &buf)?;
+    Ok(())
 }

@@ -630,6 +630,218 @@ where
     shell.face_iter().enumerate().map(create_face).collect()
 }
 
+fn log_exact_boundary(face_idx: usize, piece: &Option<PolyBoundaryPiece>) {
+    if mesh_trace_enabled() {
+        let exact_count = piece.as_ref().map_or(0, |piece| piece.0.len());
+        eprintln!(
+            "mesh_trace face={face_idx} stage=exact_boundary points={exact_count} success={}",
+            piece.is_some(),
+        );
+    }
+}
+
+fn tessellate_preboundary<S: PreMeshableSurface>(
+    face_idx: usize,
+    preboundary: Vec<PolyBoundaryPiece>,
+    surface: &S,
+    tolerance: f64,
+    primitive_config: TessellationPrimitiveOptions,
+) -> PolygonMesh {
+    let close_start = Instant::now();
+    let boundary = PolyBoundary::new(preboundary, surface, tolerance);
+    log_mesh_trace(
+        face_idx,
+        "polyboundary",
+        format!(
+            "closed_loops={} uv_min=({:.6},{:.6}) uv_max=({:.6},{:.6})",
+            boundary.loops.len(),
+            boundary.uv_min.x,
+            boundary.uv_min.y,
+            boundary.uv_max.x,
+            boundary.uv_max.y,
+        ),
+        close_start,
+    );
+    let mesh_start = Instant::now();
+    let polygon = trimming_tessellation(surface, &boundary, tolerance, primitive_config, face_idx);
+    log_mesh_trace(
+        face_idx,
+        "trimmed",
+        format!(
+            "tris={} quads={}",
+            polygon.tri_faces().len(),
+            polygon.quad_faces().len()
+        ),
+        mesh_start,
+    );
+    polygon
+}
+
+struct CShellTessellationContext<'a, C, S, P> {
+    shell: &'a CompressedShell<Point3, C, S>,
+    edges: &'a [CompressedEdge<PolylineCurve>],
+    tolerance: f64,
+    sp: &'a P,
+    primitive_config: TessellationPrimitiveOptions,
+}
+
+fn cshell_boundary_piece<C, S, P>(
+    face_idx: usize,
+    wire: &[CompressedEdgeIndex],
+    face_orientation: bool,
+    surface: &S,
+    context: &CShellTessellationContext<'_, C, S, P>,
+) -> Option<PolyBoundaryPiece>
+where
+    C: PolylineableCurve + ParameterBoundary2D<S>,
+    S: PreMeshableSurface,
+    P: SP<S>,
+{
+    let shell = context.shell;
+    let edges = context.edges;
+    let tolerance = context.tolerance;
+    let sp = context.sp;
+    let exact_edges = |boundary_tolerance| {
+        oriented_edge_indices(wire, face_orientation)
+            .filter_map(|(edge_index, edge_orientation)| {
+                let edge = shell.edges.get(edge_index)?;
+                let mut boundary = edge
+                    .curve
+                    .parameter_boundary_2d(surface, boundary_tolerance);
+                if !edge_orientation {
+                    boundary = boundary.map(|mut boundary| {
+                        boundary.reverse();
+                        boundary
+                    });
+                }
+                let polyline = if boundary_tolerance.near(&tolerance) {
+                    if edge_orientation {
+                        edges.get(edge_index)?.curve.clone()
+                    } else {
+                        edges.get(edge_index)?.curve.inverse()
+                    }
+                } else {
+                    fallback_polyline_curve(edge, edge_orientation, boundary_tolerance)
+                };
+                Some((edge_orientation, &edge.curve, boundary, polyline))
+            })
+            .collect::<Vec<_>>()
+    };
+    let create_exact_piece = |boundary_tolerance| {
+        let exact_edges = exact_edges(boundary_tolerance);
+        let direct_piece = PolyBoundaryPiece::try_new_from_exact(
+            surface,
+            exact_edges
+                .iter()
+                .map(|(orientation, curve, _, _)| (*orientation, *curve)),
+            boundary_tolerance,
+        );
+        let aligned_piece = PolyBoundaryPiece::try_new_from_aligned_exact(
+            surface,
+            exact_edges
+                .into_iter()
+                .map(|(_, _, boundary, polyline)| (boundary, polyline)),
+            sp,
+        );
+        aligned_piece.or(direct_piece)
+    };
+    let exact_piece = create_exact_piece(tolerance);
+    log_exact_boundary(face_idx, &exact_piece);
+    exact_piece
+        .or_else(|| {
+            boundary_tolerance_candidates(tolerance)
+                .into_iter()
+                .skip(1)
+                .find_map(create_exact_piece)
+        })
+        .or_else(|| {
+            let wire_iter = oriented_edge_indices(wire, face_orientation).filter_map(
+                |(edge_index, edge_orientation)| {
+                    if edge_orientation {
+                        Some(edges.get(edge_index)?.curve.clone())
+                    } else {
+                        Some(edges.get(edge_index)?.curve.inverse())
+                    }
+                },
+            );
+            PolyBoundaryPiece::try_new(surface, wire_iter, sp, tolerance)
+        })
+}
+
+fn tessellate_cshell_face<C, S, P>(
+    face_idx: usize,
+    face: &CompressedFace<S>,
+    context: &CShellTessellationContext<'_, C, S, P>,
+) -> CompressedFace<Option<PolygonMesh>>
+where
+    C: PolylineableCurve + ParameterBoundary2D<S>,
+    S: PreMeshableSurface,
+    P: SP<S>,
+{
+    let tolerance = context.tolerance;
+    let primitive_config = context.primitive_config;
+    let face_start = Instant::now();
+    let boundaries = face.boundaries.clone();
+    let surface = &face.surface;
+    let is_untrimmed = boundaries.iter().all(std::vec::Vec::is_empty);
+    if is_untrimmed && let (Some(urange), Some(vrange)) = surface.try_range_tuple() {
+        let polygon =
+            untrimmed_tessellation(surface, (urange, vrange), tolerance, primitive_config.mode);
+        log_mesh_trace(face_idx, "untrimmed", "ok", face_start);
+        observe_face_drop(
+            surface,
+            Some(face_idx),
+            Some(&polygon),
+            true,
+            boundaries.len(),
+            0,
+        );
+        return CompressedFace {
+            boundaries,
+            orientation: face.orientation,
+            surface: Some(polygon),
+        };
+    }
+    let boundary_start = Instant::now();
+    let preboundary: Option<Vec<_>> = boundaries
+        .iter()
+        .map(|wire| cshell_boundary_piece(face_idx, wire, face.orientation, surface, context))
+        .collect();
+    if let Some(preboundary) = &preboundary {
+        let point_count = preboundary.iter().map(|piece| piece.0.len()).sum::<usize>();
+        log_mesh_trace(
+            face_idx,
+            "preboundary",
+            format!("loops={} points={point_count}", preboundary.len()),
+            boundary_start,
+        );
+    } else {
+        log_mesh_trace(face_idx, "preboundary", "failed", boundary_start);
+    }
+    let polygon = preboundary.map(|preboundary| {
+        tessellate_preboundary(face_idx, preboundary, surface, tolerance, primitive_config)
+    });
+    log_mesh_trace(
+        face_idx,
+        "face",
+        format!("surface={}", polygon.is_some()),
+        face_start,
+    );
+    observe_face_drop(
+        surface,
+        Some(face_idx),
+        polygon.as_ref(),
+        is_untrimmed,
+        boundaries.len(),
+        boundaries.iter().map(std::vec::Vec::len).sum(),
+    );
+    CompressedFace {
+        boundaries,
+        orientation: face.orientation,
+        surface: polygon,
+    }
+}
+
 /// Tessellates faces.
 pub(super) fn cshell_tessellation<'a, C, S>(
     shell: &CompressedShell<Point3, C, S>,
@@ -642,190 +854,23 @@ where
     S: PreMeshableSurface + 'a,
 {
     let vertices = shell.vertices.clone();
-    let tessellate_edge = |edge: &CompressedEdge<C>| {
-        let curve = &edge.curve;
-        CompressedEdge {
-            vertices: edge.vertices,
-            curve: PolylineCurve::from_curve(curve, curve.range_tuple(), tolerance),
-        }
+    let tessellate_edge = |edge: &CompressedEdge<C>| CompressedEdge {
+        vertices: edge.vertices,
+        curve: PolylineCurve::from_curve(&edge.curve, edge.curve.range_tuple(), tolerance),
     };
     #[cfg(not(target_arch = "wasm32"))]
     let edges: Vec<_> = shell.edges.par_iter().map(tessellate_edge).collect();
     #[cfg(target_arch = "wasm32")]
     let edges: Vec<_> = shell.edges.iter().map(tessellate_edge).collect();
+    let context = CShellTessellationContext {
+        shell,
+        edges: &edges,
+        tolerance,
+        sp: &sp,
+        primitive_config,
+    };
     let tessellate_face = |(face_idx, face): (usize, &CompressedFace<S>)| {
-        let face_start = Instant::now();
-        let boundaries = face.boundaries.clone();
-        let surface = &face.surface;
-        let face_orientation = face.orientation;
-
-        // Fast path: untrimmed face with bounded surface domain.
-        let is_untrimmed = boundaries.iter().all(std::vec::Vec::is_empty);
-        if is_untrimmed && let (Some(urange), Some(vrange)) = surface.try_range_tuple() {
-            let polygon =
-                untrimmed_tessellation(surface, (urange, vrange), tolerance, primitive_config.mode);
-            log_mesh_trace(face_idx, "untrimmed", "ok", face_start);
-            observe_face_drop(
-                surface,
-                Some(face_idx),
-                Some(&polygon),
-                true,
-                boundaries.len(),
-                0,
-            );
-            return CompressedFace {
-                boundaries,
-                orientation: face.orientation,
-                surface: Some(polygon),
-            };
-        }
-
-        let create_edge = |(edge_index, edge_orientation): (usize, bool)| {
-            if edge_orientation {
-                Some(edges.get(edge_index)?.curve.clone())
-            } else {
-                Some(edges.get(edge_index)?.curve.inverse())
-            }
-        };
-        let create_boundary = |wire: &Vec<CompressedEdgeIndex>| {
-            let exact_edges = |boundary_tolerance| {
-                oriented_edge_indices(wire, face_orientation)
-                    .filter_map(|(edge_index, edge_orientation)| {
-                        let edge = shell.edges.get(edge_index)?;
-                        let mut boundary = edge
-                            .curve
-                            .parameter_boundary_2d(surface, boundary_tolerance);
-                        if !edge_orientation {
-                            boundary = boundary.map(|mut boundary| {
-                                boundary.reverse();
-                                boundary
-                            });
-                        }
-                        let polyline = if boundary_tolerance.near(&tolerance) {
-                            if edge_orientation {
-                                edges.get(edge_index)?.curve.clone()
-                            } else {
-                                edges.get(edge_index)?.curve.inverse()
-                            }
-                        } else {
-                            fallback_polyline_curve(edge, edge_orientation, boundary_tolerance)
-                        };
-                        Some((edge_orientation, &edge.curve, boundary, polyline))
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let create_exact_piece = |boundary_tolerance| {
-                let exact_edges = exact_edges(boundary_tolerance);
-                let direct_piece = PolyBoundaryPiece::try_new_from_exact(
-                    surface,
-                    exact_edges
-                        .iter()
-                        .map(|(orientation, curve, _, _)| (*orientation, *curve)),
-                    boundary_tolerance,
-                );
-                let aligned_piece = PolyBoundaryPiece::try_new_from_aligned_exact(
-                    surface,
-                    exact_edges
-                        .into_iter()
-                        .map(|(_, _, boundary, polyline)| (boundary, polyline)),
-                    &sp,
-                );
-                aligned_piece.or(direct_piece)
-            };
-            let exact_piece = create_exact_piece(tolerance);
-            if mesh_trace_enabled() {
-                let exact_count = wire
-                    .iter()
-                    .filter(|edge_idx| {
-                        shell
-                            .edges
-                            .get(edge_idx.index)
-                            .and_then(|edge| edge.curve.parameter_boundary_2d(surface, tolerance))
-                            .is_some()
-                    })
-                    .count();
-                eprintln!(
-                    "mesh_trace face={face_idx} stage=exact-boundary edges={exact_count}/{} success={}",
-                    wire.len(),
-                    exact_piece.is_some(),
-                );
-            }
-            exact_piece
-                .or_else(|| {
-                    boundary_tolerance_candidates(tolerance)
-                        .into_iter()
-                        .skip(1)
-                        .find_map(create_exact_piece)
-                })
-                .or_else(|| {
-                    let wire_iter =
-                        oriented_edge_indices(wire, face_orientation).filter_map(create_edge);
-                    PolyBoundaryPiece::try_new(surface, wire_iter, &sp, tolerance)
-                })
-        };
-        let boundary_start = Instant::now();
-        let preboundary: Option<Vec<_>> = boundaries.iter().map(create_boundary).collect();
-        if let Some(preboundary) = &preboundary {
-            let point_count = preboundary.iter().map(|piece| piece.0.len()).sum::<usize>();
-            log_mesh_trace(
-                face_idx,
-                "preboundary",
-                format!("loops={} points={point_count}", preboundary.len()),
-                boundary_start,
-            );
-        } else {
-            log_mesh_trace(face_idx, "preboundary", "failed", boundary_start);
-        }
-        let polygon: Option<PolygonMesh> = preboundary.map(|preboundary| {
-            let close_start = Instant::now();
-            let boundary = PolyBoundary::new(preboundary, &surface, tolerance);
-            log_mesh_trace(
-                face_idx,
-                "polyboundary",
-                format!(
-                    "closed_loops={} uv_min=({:.6},{:.6}) uv_max=({:.6},{:.6})",
-                    boundary.loops.len(),
-                    boundary.uv_min.x,
-                    boundary.uv_min.y,
-                    boundary.uv_max.x,
-                    boundary.uv_max.y,
-                ),
-                close_start,
-            );
-            let mesh_start = Instant::now();
-            let polygon =
-                trimming_tessellation(&surface, &boundary, tolerance, primitive_config, face_idx);
-            log_mesh_trace(
-                face_idx,
-                "trimmed",
-                format!(
-                    "tris={} quads={}",
-                    polygon.tri_faces().len(),
-                    polygon.quad_faces().len()
-                ),
-                mesh_start,
-            );
-            polygon
-        });
-        log_mesh_trace(
-            face_idx,
-            "face",
-            format!("surface={}", polygon.is_some()),
-            face_start,
-        );
-        observe_face_drop(
-            surface,
-            Some(face_idx),
-            polygon.as_ref(),
-            is_untrimmed,
-            boundaries.len(),
-            boundaries.iter().map(std::vec::Vec::len).sum(),
-        );
-        CompressedFace {
-            boundaries,
-            orientation: face.orientation,
-            surface: polygon,
-        }
+        tessellate_cshell_face(face_idx, face, &context)
     };
     #[cfg(not(target_arch = "wasm32"))]
     let faces = shell
@@ -873,21 +918,16 @@ where
     .shell
 }
 
-pub(super) fn compressed_trimmed_shell_tessellation_with_isoparams<'a, C, S, T>(
+fn trimmed_exact_edge_polylines<C, S, T>(
     shell: &TrimmedShell<C, S, T>,
     tolerance: f64,
-    sp: impl SP<S>,
-    primitive_config: TessellationPrimitiveOptions,
-    isoparametric_options: Option<IsoparametricCurveOptions>,
-) -> CompressedShellTessellation
+) -> HashMap<usize, PolylineCurve>
 where
-    C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S> + 'a,
-    S: PreMeshableSurface + 'a,
-    T: ExactTrimBoundary2D + Parallelizable + 'a,
-    <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
+    C: PolylineableCurve,
+    S: PreMeshableSurface,
+    T: ExactTrimBoundary2D,
 {
-    let vertices = shell.vertices.clone();
-    let exact_edge_polylines = shell
+    shell
         .faces
         .iter()
         .flat_map(|face| {
@@ -908,7 +948,7 @@ where
                     surface,
                     trim_curve,
                     edge.vertices,
-                    &vertices,
+                    &shell.vertices,
                     tolerance,
                 )
                 .map_or_else(
@@ -929,7 +969,14 @@ where
                 }
                 acc
             },
-        );
+        )
+}
+
+fn tessellate_trimmed_edges<C: PolylineableCurve>(
+    shell_edges: &[CompressedEdge<C>],
+    exact_edge_polylines: &HashMap<usize, PolylineCurve>,
+    tolerance: f64,
+) -> Vec<CompressedEdge<PolylineCurve>> {
     let tessellate_edge = |(edge_idx, edge): (usize, &CompressedEdge<C>)| {
         let curve = &edge.curve;
         CompressedEdge {
@@ -943,244 +990,380 @@ where
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let edges: Vec<_> = shell
-        .edges
-        .par_iter()
-        .enumerate()
-        .map(tessellate_edge)
-        .collect();
+    {
+        shell_edges
+            .par_iter()
+            .enumerate()
+            .map(tessellate_edge)
+            .collect()
+    }
     #[cfg(target_arch = "wasm32")]
-    let edges: Vec<_> = shell
-        .edges
-        .iter()
-        .enumerate()
-        .map(tessellate_edge)
-        .collect();
-    let tessellate_face = |(face_idx, face): (usize, &CompressedTrimmedFace<S, T>)| {
-        let face_start = Instant::now();
-        log_mesh_trace(face_idx, "face-start", "", face_start);
-        let boundaries = face
-            .boundaries
+    {
+        shell_edges
             .iter()
-            .map(|wire| {
-                wire.iter()
-                    .map(|edge_use| CompressedEdgeIndex {
-                        index: edge_use.index,
-                        orientation: edge_use.orientation,
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let surface = &face.surface;
-        let face_orientation = face.orientation;
+            .enumerate()
+            .map(tessellate_edge)
+            .collect()
+    }
+}
 
-        let is_untrimmed = boundaries.iter().all(std::vec::Vec::is_empty);
-        if is_untrimmed && let (Some(urange), Some(vrange)) = surface.try_range_tuple() {
-            let polygon =
-                untrimmed_tessellation(surface, (urange, vrange), tolerance, primitive_config.mode);
-            let isoparams = isoparametric_options.map_or_default(|options| {
-                untrimmed_isoparametric_curves(surface, (urange, vrange), options)
-            });
-            log_mesh_trace(face_idx, "untrimmed", "ok", face_start);
-            observe_face_drop(
+struct TrimmedTessellationContext<'a, C, S, T, P> {
+    shell: &'a TrimmedShell<C, S, T>,
+    exact_edge_polylines: &'a HashMap<usize, PolylineCurve>,
+    tolerance: f64,
+    sp: &'a P,
+    primitive_config: TessellationPrimitiveOptions,
+    isoparametric_options: Option<IsoparametricCurveOptions>,
+}
+
+fn fallback_trimmed_boundary_piece<C, S, T, P>(
+    wire: &[CompressedEdgeUse<T>],
+    face_orientation: bool,
+    surface: &S,
+    context: &TrimmedTessellationContext<'_, C, S, T, P>,
+) -> Option<PolyBoundaryPiece>
+where
+    C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
+    S: PreMeshableSurface,
+    T: ExactTrimBoundary2D,
+    <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
+    P: SP<S>,
+{
+    let shell = context.shell;
+    let tolerance = context.tolerance;
+    let sp = context.sp;
+    boundary_tolerance_candidates(tolerance)
+        .into_iter()
+        .skip(1)
+        .find_map(|boundary_tolerance| {
+            PolyBoundaryPiece::try_new_from_trimmed(
                 surface,
-                Some(face_idx),
-                Some(&polygon),
-                true,
-                boundaries.len(),
-                0,
-            );
-            return (
-                CompressedFace {
-                    boundaries,
-                    orientation: face.orientation,
-                    surface: Some(polygon),
-                },
-                isoparams,
-            );
-        }
-
-        let create_boundary = |wire: &Vec<CompressedEdgeUse<T>>| {
-            let wire_start = Instant::now();
-            let all_exact = wire.iter().all(|edge_use| edge_use.trim_curve.is_some());
-            let has_shared_edge_polyline = wire
-                .iter()
-                .any(|edge_use| exact_edge_polylines.contains_key(&edge_use.index));
-            let direct_trim_piece = || {
-                PolyBoundaryPiece::try_new_from_trimmed(
-                    surface,
-                    oriented_trimmed_edge_uses(wire, face_orientation).filter_map(
-                        |(edge_index, edge_orientation, trim_curve)| {
-                            shell
-                                .edges
-                                .get(edge_index)
-                                .map(|edge| (edge_orientation, trim_curve, &edge.curve))
-                        },
-                    ),
-                    tolerance,
-                )
-            };
-            let aligned_trim_piece = || {
-                PolyBoundaryPiece::try_new_from_aligned_trimmed(
-                    surface,
-                    oriented_trimmed_edge_uses(wire, face_orientation).filter_map(
-                        |(edge_index, edge_orientation, trim_curve)| {
-                            shell.edges.get(edge_index).map(|edge| {
-                                let mut polyline = exact_edge_polylines
-                                    .get(&edge_index)
-                                    .cloned()
-                                    .unwrap_or_else(|| {
-                                        fallback_polyline_curve(edge, true, tolerance)
-                                    });
-                                if !edge_orientation {
-                                    polyline.invert();
-                                }
-                                (trim_curve, &edge.curve, polyline)
-                            })
-                        },
-                    ),
-                    &sp,
-                    tolerance,
-                )
-            };
-            let exact_piece = if has_shared_edge_polyline {
-                aligned_trim_piece()
-                    .filter(PolyBoundaryPiece::is_cdt_compatible)
-                    .or_else(direct_trim_piece)
-            } else {
-                direct_trim_piece().or_else(aligned_trim_piece)
-            }
+                oriented_trimmed_edge_uses(wire, face_orientation).filter_map(
+                    |(edge_index, edge_orientation, trim_curve)| {
+                        shell
+                            .edges
+                            .get(edge_index)
+                            .map(|edge| (edge_orientation, trim_curve, &edge.curve))
+                    },
+                ),
+                boundary_tolerance,
+            )
             .or_else(|| {
-                if all_exact {
-                    None
-                } else {
-                    boundary_tolerance_candidates(tolerance)
-                        .into_iter()
-                        .skip(1)
-                        .find_map(|boundary_tolerance| {
-                            PolyBoundaryPiece::try_new_from_trimmed(
-                                surface,
-                                oriented_trimmed_edge_uses(wire, face_orientation).filter_map(
-                                    |(edge_index, edge_orientation, trim_curve)| {
-                                        shell
-                                            .edges
-                                            .get(edge_index)
-                                            .map(|edge| (edge_orientation, trim_curve, &edge.curve))
-                                    },
-                                ),
-                                boundary_tolerance,
-                            )
-                            .or_else(|| {
-                                let wire_iter = oriented_trimmed_edge_uses(wire, face_orientation)
-                                    .filter_map(|(edge_index, edge_orientation, _)| {
-                                        shell.edges.get(edge_index).map(|edge| {
-                                            fallback_polyline_curve(
-                                                edge,
-                                                edge_orientation,
-                                                boundary_tolerance,
-                                            )
-                                        })
-                                    });
-                                PolyBoundaryPiece::try_new(surface, wire_iter, &sp, tolerance)
-                            })
+                let wire_iter = oriented_trimmed_edge_uses(wire, face_orientation).filter_map(
+                    |(edge_index, edge_orientation, _)| {
+                        shell.edges.get(edge_index).map(|edge| {
+                            fallback_polyline_curve(edge, edge_orientation, boundary_tolerance)
                         })
-                }
-            });
-            if mesh_trace_enabled() {
-                let exact_count = wire
-                    .iter()
-                    .filter(|edge_use| {
-                        edge_use.trim_curve.as_ref().is_some_and(|trim_curve| {
-                            !trim_curve.exact_trim_boundary_2d(tolerance).is_empty()
-                        }) || shell.edges.get(edge_use.index).is_some_and(|edge| {
-                            edge.curve
-                                .parameter_boundary_2d(surface, tolerance)
-                                .is_some()
-                        })
-                    })
-                    .count();
-                eprintln!(
-                    "mesh_trace face={face_idx} stage=exact-boundary edges={exact_count}/{} success={}",
-                    wire.len(),
-                    exact_piece.is_some(),
+                    },
                 );
-            }
-            log_mesh_trace(
-                face_idx,
-                "wire",
-                format!("edges={} success={}", wire.len(), exact_piece.is_some()),
-                wire_start,
-            );
-            exact_piece
-        };
-        let boundary_start = Instant::now();
-        let preboundary: Option<Vec<_>> = face.boundaries.iter().map(create_boundary).collect();
-        if let Some(preboundary) = &preboundary {
-            let point_count = preboundary.iter().map(|piece| piece.0.len()).sum::<usize>();
-            log_mesh_trace(
-                face_idx,
-                "preboundary",
-                format!("loops={} points={point_count}", preboundary.len()),
-                boundary_start,
-            );
-        } else {
-            log_mesh_trace(face_idx, "preboundary", "failed", boundary_start);
-        }
-        let (polygon, isoparams) = preboundary.map_or_default(|preboundary| {
-            let close_start = Instant::now();
-            let boundary = PolyBoundary::new(preboundary, surface, tolerance);
-            log_mesh_trace(
-                face_idx,
-                "polyboundary",
-                format!(
-                    "closed_loops={} uv_min=({:.6},{:.6}) uv_max=({:.6},{:.6})",
-                    boundary.loops.len(),
-                    boundary.uv_min.x,
-                    boundary.uv_min.y,
-                    boundary.uv_max.x,
-                    boundary.uv_max.y,
-                ),
-                close_start,
-            );
-            let isoparams = isoparametric_options
-                .map_or_default(|options| boundary.isoparametric_curves(surface, options));
-            let mesh_start = Instant::now();
-            let polygon =
-                trimming_tessellation(surface, &boundary, tolerance, primitive_config, face_idx);
-            log_mesh_trace(
-                face_idx,
-                "trimmed",
-                format!(
-                    "tris={} quads={}",
-                    polygon.tri_faces().len(),
-                    polygon.quad_faces().len()
-                ),
-                mesh_start,
-            );
-            (Some(polygon), isoparams)
-        });
+                PolyBoundaryPiece::try_new(surface, wire_iter, sp, tolerance)
+            })
+        })
+}
+
+fn trace_trimmed_boundary_piece<C, S, T>(
+    face_idx: usize,
+    wire: &[CompressedEdgeUse<T>],
+    surface: &S,
+    shell: &TrimmedShell<C, S, T>,
+    tolerance: f64,
+    piece: &Option<PolyBoundaryPiece>,
+    wire_start: Instant,
+) where
+    C: ParameterBoundary2D<S>,
+    T: ExactTrimBoundary2D,
+{
+    if mesh_trace_enabled() {
+        let exact_count = wire
+            .iter()
+            .filter(|edge_use| {
+                edge_use.trim_curve.as_ref().is_some_and(|trim_curve| {
+                    !trim_curve.exact_trim_boundary_2d(tolerance).is_empty()
+                }) || shell.edges.get(edge_use.index).is_some_and(|edge| {
+                    edge.curve
+                        .parameter_boundary_2d(surface, tolerance)
+                        .is_some()
+                })
+            })
+            .count();
+        eprintln!(
+            "mesh_trace face={face_idx} stage=exact-boundary edges={exact_count}/{} success={}",
+            wire.len(),
+            piece.is_some(),
+        );
+    }
+    log_mesh_trace(
+        face_idx,
+        "wire",
+        format!("edges={} success={}", wire.len(), piece.is_some()),
+        wire_start,
+    );
+}
+
+fn trimmed_boundary_piece<C, S, T, P>(
+    face_idx: usize,
+    wire: &[CompressedEdgeUse<T>],
+    face_orientation: bool,
+    surface: &S,
+    context: &TrimmedTessellationContext<'_, C, S, T, P>,
+) -> Option<PolyBoundaryPiece>
+where
+    C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
+    S: PreMeshableSurface,
+    T: ExactTrimBoundary2D,
+    <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
+    P: SP<S>,
+{
+    let shell = context.shell;
+    let exact_edge_polylines = context.exact_edge_polylines;
+    let tolerance = context.tolerance;
+    let sp = context.sp;
+    let wire_start = Instant::now();
+    let all_exact = wire.iter().all(|edge_use| edge_use.trim_curve.is_some());
+    let has_shared_edge_polyline = wire
+        .iter()
+        .any(|edge_use| exact_edge_polylines.contains_key(&edge_use.index));
+    let direct_trim_piece = || {
+        PolyBoundaryPiece::try_new_from_trimmed(
+            surface,
+            oriented_trimmed_edge_uses(wire, face_orientation).filter_map(
+                |(edge_index, edge_orientation, trim_curve)| {
+                    shell
+                        .edges
+                        .get(edge_index)
+                        .map(|edge| (edge_orientation, trim_curve, &edge.curve))
+                },
+            ),
+            tolerance,
+        )
+    };
+    let aligned_trim_piece = || {
+        PolyBoundaryPiece::try_new_from_aligned_trimmed(
+            surface,
+            oriented_trimmed_edge_uses(wire, face_orientation).filter_map(
+                |(edge_index, edge_orientation, trim_curve)| {
+                    shell.edges.get(edge_index).map(|edge| {
+                        let mut polyline = exact_edge_polylines
+                            .get(&edge_index)
+                            .cloned()
+                            .unwrap_or_else(|| fallback_polyline_curve(edge, true, tolerance));
+                        if !edge_orientation {
+                            polyline.invert();
+                        }
+                        (trim_curve, &edge.curve, polyline)
+                    })
+                },
+            ),
+            sp,
+            tolerance,
+        )
+    };
+    let mut piece = if has_shared_edge_polyline {
+        aligned_trim_piece()
+            .filter(PolyBoundaryPiece::is_cdt_compatible)
+            .or_else(direct_trim_piece)
+    } else {
+        direct_trim_piece().or_else(aligned_trim_piece)
+    };
+    if piece.is_none() && !all_exact {
+        piece = fallback_trimmed_boundary_piece(wire, face_orientation, surface, context);
+    }
+    trace_trimmed_boundary_piece(
+        face_idx, wire, surface, shell, tolerance, &piece, wire_start,
+    );
+    piece
+}
+
+fn tessellate_trimmed_preboundary<S: PreMeshableSurface>(
+    face_idx: usize,
+    preboundary: Vec<PolyBoundaryPiece>,
+    surface: &S,
+    tolerance: f64,
+    primitive_config: TessellationPrimitiveOptions,
+    isoparametric_options: Option<IsoparametricCurveOptions>,
+) -> (Option<PolygonMesh>, Vec<Vec<Point3>>) {
+    let close_start = Instant::now();
+    let boundary = PolyBoundary::new(preboundary, surface, tolerance);
+    log_mesh_trace(
+        face_idx,
+        "polyboundary",
+        format!(
+            "closed_loops={} uv_min=({:.6},{:.6}) uv_max=({:.6},{:.6})",
+            boundary.loops.len(),
+            boundary.uv_min.x,
+            boundary.uv_min.y,
+            boundary.uv_max.x,
+            boundary.uv_max.y,
+        ),
+        close_start,
+    );
+    let isoparams = isoparametric_options
+        .map_or_default(|options| boundary.isoparametric_curves(surface, options));
+    let mesh_start = Instant::now();
+    let polygon = trimming_tessellation(surface, &boundary, tolerance, primitive_config, face_idx);
+    log_mesh_trace(
+        face_idx,
+        "trimmed",
+        format!(
+            "tris={} quads={}",
+            polygon.tri_faces().len(),
+            polygon.quad_faces().len()
+        ),
+        mesh_start,
+    );
+    (Some(polygon), isoparams)
+}
+
+fn collect_trimmed_preboundary<C, S, T, P>(
+    face_idx: usize,
+    face: &CompressedTrimmedFace<S, T>,
+    context: &TrimmedTessellationContext<'_, C, S, T, P>,
+) -> Option<Vec<PolyBoundaryPiece>>
+where
+    C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
+    S: PreMeshableSurface,
+    T: ExactTrimBoundary2D,
+    <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
+    P: SP<S>,
+{
+    let boundary_start = Instant::now();
+    let preboundary = face
+        .boundaries
+        .iter()
+        .map(|wire| {
+            trimmed_boundary_piece(face_idx, wire, face.orientation, &face.surface, context)
+        })
+        .collect::<Option<Vec<_>>>();
+    if let Some(preboundary) = &preboundary {
+        let point_count = preboundary.iter().map(|piece| piece.0.len()).sum::<usize>();
         log_mesh_trace(
             face_idx,
-            "face",
-            format!("surface={}", polygon.is_some()),
-            face_start,
+            "preboundary",
+            format!("loops={} points={point_count}", preboundary.len()),
+            boundary_start,
         );
+    } else {
+        log_mesh_trace(face_idx, "preboundary", "failed", boundary_start);
+    }
+    preboundary
+}
+
+fn tessellate_trimmed_face<C, S, T, P>(
+    face_idx: usize,
+    face: &CompressedTrimmedFace<S, T>,
+    context: &TrimmedTessellationContext<'_, C, S, T, P>,
+) -> (CompressedFace<Option<PolygonMesh>>, Vec<Vec<Point3>>)
+where
+    C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
+    S: PreMeshableSurface,
+    T: ExactTrimBoundary2D,
+    <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
+    P: SP<S>,
+{
+    let tolerance = context.tolerance;
+    let primitive_config = context.primitive_config;
+    let isoparametric_options = context.isoparametric_options;
+    let face_start = Instant::now();
+    log_mesh_trace(face_idx, "face-start", "", face_start);
+    let boundaries = face
+        .boundaries
+        .iter()
+        .map(|wire| {
+            wire.iter()
+                .map(|edge_use| CompressedEdgeIndex {
+                    index: edge_use.index,
+                    orientation: edge_use.orientation,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let surface = &face.surface;
+    let is_untrimmed = boundaries.iter().all(std::vec::Vec::is_empty);
+    if is_untrimmed && let (Some(urange), Some(vrange)) = surface.try_range_tuple() {
+        let polygon =
+            untrimmed_tessellation(surface, (urange, vrange), tolerance, primitive_config.mode);
+        let isoparams = isoparametric_options.map_or_default(|options| {
+            untrimmed_isoparametric_curves(surface, (urange, vrange), options)
+        });
+        log_mesh_trace(face_idx, "untrimmed", "ok", face_start);
         observe_face_drop(
             surface,
             Some(face_idx),
-            polygon.as_ref(),
-            is_untrimmed,
+            Some(&polygon),
+            true,
             boundaries.len(),
-            boundaries.iter().map(std::vec::Vec::len).sum(),
+            0,
         );
-        (
+        return (
             CompressedFace {
                 boundaries,
                 orientation: face.orientation,
-                surface: polygon,
+                surface: Some(polygon),
             },
             isoparams,
+        );
+    }
+    let preboundary = collect_trimmed_preboundary(face_idx, face, context);
+    let (polygon, isoparams) = preboundary.map_or_default(|preboundary| {
+        tessellate_trimmed_preboundary(
+            face_idx,
+            preboundary,
+            surface,
+            tolerance,
+            primitive_config,
+            isoparametric_options,
         )
+    });
+    log_mesh_trace(
+        face_idx,
+        "face",
+        format!("surface={}", polygon.is_some()),
+        face_start,
+    );
+    observe_face_drop(
+        surface,
+        Some(face_idx),
+        polygon.as_ref(),
+        is_untrimmed,
+        boundaries.len(),
+        boundaries.iter().map(std::vec::Vec::len).sum(),
+    );
+    (
+        CompressedFace {
+            boundaries,
+            orientation: face.orientation,
+            surface: polygon,
+        },
+        isoparams,
+    )
+}
+
+pub(super) fn compressed_trimmed_shell_tessellation_with_isoparams<'a, C, S, T>(
+    shell: &TrimmedShell<C, S, T>,
+    tolerance: f64,
+    sp: impl SP<S>,
+    primitive_config: TessellationPrimitiveOptions,
+    isoparametric_options: Option<IsoparametricCurveOptions>,
+) -> CompressedShellTessellation
+where
+    C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S> + 'a,
+    S: PreMeshableSurface + 'a,
+    T: ExactTrimBoundary2D + Parallelizable + 'a,
+    <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
+{
+    let vertices = shell.vertices.clone();
+    let exact_edge_polylines = trimmed_exact_edge_polylines(shell, tolerance);
+    let edges = tessellate_trimmed_edges(&shell.edges, &exact_edge_polylines, tolerance);
+    let context = TrimmedTessellationContext {
+        shell,
+        exact_edge_polylines: &exact_edge_polylines,
+        tolerance,
+        sp: &sp,
+        primitive_config,
+        isoparametric_options,
+    };
+    let tessellate_face = |(face_idx, face): (usize, &CompressedTrimmedFace<S, T>)| {
+        tessellate_trimmed_face(face_idx, face, &context)
     };
     #[cfg(not(target_arch = "wasm32"))]
     let face_outputs = shell

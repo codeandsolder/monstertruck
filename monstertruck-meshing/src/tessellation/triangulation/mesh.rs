@@ -264,6 +264,124 @@ where
     )
 }
 
+fn iso_quad_full_cells(udiv: &[f64], vdiv: &[f64], polyboundary: &PolyBoundary) -> Vec<bool> {
+    let (nu, nv) = (udiv.len(), vdiv.len());
+    let idx = |i: usize, j: usize| i * nv + j;
+    let inside = udiv
+        .iter()
+        .flat_map(|u| {
+            vdiv.iter()
+                .map(move |v| polyboundary.include(Point2::new(*u, *v)))
+        })
+        .collect::<Vec<_>>();
+    (0..nu - 1)
+        .flat_map(|i| {
+            let inside = &inside;
+            (0..nv - 1).map(move |j| {
+                let corner_indices = [idx(i, j), idx(i, j + 1), idx(i + 1, j + 1), idx(i + 1, j)];
+                if !corner_indices.into_iter().all(|index| inside[index]) {
+                    return false;
+                }
+                let (u0, u1) = (udiv[i], udiv[i + 1]);
+                let (v0, v1) = (vdiv[j], vdiv[j + 1]);
+                let center = Point2::new(f64::midpoint(u0, u1), f64::midpoint(v0, v1));
+                let edge_midpoints = [
+                    Point2::new(f64::midpoint(u0, u1), v0),
+                    Point2::new(u1, f64::midpoint(v0, v1)),
+                    Point2::new(f64::midpoint(u0, u1), v1),
+                    Point2::new(u0, f64::midpoint(v0, v1)),
+                ];
+                polyboundary.include(center)
+                    && edge_midpoints
+                        .into_iter()
+                        .all(|midpoint| polyboundary.include(midpoint))
+            })
+        })
+        .collect()
+}
+
+fn iso_quad_interior_mesh<S>(
+    surface: &S,
+    udiv: &[f64],
+    vdiv: &[f64],
+    polyboundary: &PolyBoundary,
+) -> Option<(PolygonMesh, Vec<bool>)>
+where
+    S: PreMeshableSurface,
+{
+    let nv = vdiv.len();
+    let idx = |i: usize, j: usize| i * nv + j;
+    let vertex = |index: usize| StandardVertex::from([index, index, index]);
+    let full_cells = iso_quad_full_cells(udiv, vdiv, polyboundary);
+    let nv_cells = nv - 1;
+    let interior_quads = full_cells
+        .iter()
+        .enumerate()
+        .filter_map(|(cell_index, &is_full)| {
+            is_full.then(|| {
+                let i = cell_index / nv_cells;
+                let j = cell_index % nv_cells;
+                [
+                    vertex(idx(i, j)),
+                    vertex(idx(i, j + 1)),
+                    vertex(idx(i + 1, j + 1)),
+                    vertex(idx(i + 1, j)),
+                ]
+            })
+        })
+        .collect::<Vec<_>>();
+    if interior_quads.is_empty() {
+        return None;
+    }
+    let positions = udiv
+        .iter()
+        .flat_map(|u| vdiv.iter().map(move |v| surface.subs(*u, *v)))
+        .collect();
+    let uv_coords = udiv
+        .iter()
+        .flat_map(|u| vdiv.iter().map(move |v| Vector2::new(*u, *v)))
+        .collect();
+    let normals = udiv
+        .iter()
+        .flat_map(|u| vdiv.iter().map(move |v| surface.normal(*u, *v)))
+        .collect();
+    let mesh = PolygonMesh::new_unchecked(
+        StandardAttributes {
+            positions,
+            uv_coords,
+            normals,
+        },
+        Faces::from_tri_and_quad_faces(Vec::new(), interior_quads),
+    );
+    Some((mesh, full_cells))
+}
+
+fn remove_full_cells_from_boundary_mesh(
+    boundary_mesh: &mut PolygonMesh,
+    udiv: &[f64],
+    vdiv: &[f64],
+    full_cells: &[bool],
+) {
+    let boundary_triangles = boundary_mesh
+        .tri_faces()
+        .iter()
+        .copied()
+        .filter(|triangle| {
+            !triangle_is_in_full_cell(*triangle, boundary_mesh.uv_coords(), udiv, vdiv, full_cells)
+        })
+        .collect();
+    let boundary_quads = boundary_mesh
+        .quad_faces()
+        .iter()
+        .copied()
+        .filter(|quad| {
+            !quad_is_in_full_cell(*quad, boundary_mesh.uv_coords(), udiv, vdiv, full_cells)
+        })
+        .collect();
+    let editor = boundary_mesh.editor();
+    *editor.faces = Faces::from_tri_and_quad_faces(boundary_triangles, boundary_quads);
+}
+
 fn iso_quad_trimmed_tessellation<S>(
     surface: &S,
     polyboundary: &PolyBoundary,
@@ -290,117 +408,15 @@ where
         format!("udiv={} vdiv={}", udiv.len(), vdiv.len()),
         division_start,
     );
-    let (nu, nv) = (udiv.len(), vdiv.len());
-    if nu < 2 || nv < 2 {
+    if udiv.len() < 2 || vdiv.len() < 2 {
         return None;
     }
-    let idx = |i: usize, j: usize| -> usize { i * nv + j };
-    let sv = |k: usize| -> StandardVertex { [k, k, k].into() };
-    let positions = udiv
-        .iter()
-        .flat_map(|u| vdiv.iter().map(move |v| surface.subs(*u, *v)))
-        .collect::<Vec<_>>();
-    let uv_coords = udiv
-        .iter()
-        .flat_map(|u| vdiv.iter().map(move |v| Vector2::new(*u, *v)))
-        .collect::<Vec<_>>();
-    let normals = udiv
-        .iter()
-        .flat_map(|u| vdiv.iter().map(move |v| surface.normal(*u, *v)))
-        .collect::<Vec<_>>();
-    let inside = udiv
-        .iter()
-        .flat_map(|u| {
-            vdiv.iter()
-                .map(move |v| polyboundary.include(Point2::new(*u, *v)))
-        })
-        .collect::<Vec<_>>();
-    let nv_cells = nv - 1;
-    let (udiv_ref, vdiv_ref, inside_ref) = (&udiv, &vdiv, &inside);
-    let full_cells = (0..nu - 1)
-        .flat_map(|i| {
-            (0..nv - 1).map(move |j| {
-                let corner_indices = [idx(i, j), idx(i, j + 1), idx(i + 1, j + 1), idx(i + 1, j)];
-                let corners_inside = corner_indices.into_iter().all(|k| inside_ref[k]);
-                if corners_inside {
-                    let (u0, u1) = (udiv_ref[i], udiv_ref[i + 1]);
-                    let (v0, v1) = (vdiv_ref[j], vdiv_ref[j + 1]);
-                    let center = Point2::new(f64::midpoint(u0, u1), f64::midpoint(v0, v1));
-                    let edge_midpoints = [
-                        Point2::new(f64::midpoint(u0, u1), v0),
-                        Point2::new(u1, f64::midpoint(v0, v1)),
-                        Point2::new(f64::midpoint(u0, u1), v1),
-                        Point2::new(u0, f64::midpoint(v0, v1)),
-                    ];
-                    polyboundary.include(center)
-                        && edge_midpoints
-                            .into_iter()
-                            .all(|midpoint| polyboundary.include(midpoint))
-                } else {
-                    false
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    let interior_quads = full_cells
-        .iter()
-        .enumerate()
-        .filter_map(|(cell_index, is_full)| {
-            if *is_full {
-                let i = cell_index / nv_cells;
-                let j = cell_index % nv_cells;
-                let a = idx(i, j);
-                let b = idx(i, j + 1);
-                let c = idx(i + 1, j + 1);
-                let d = idx(i + 1, j);
-                Some([sv(a), sv(b), sv(c), sv(d)])
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    if interior_quads.is_empty() {
-        None
-    } else {
-        let mut interior_mesh = PolygonMesh::new_unchecked(
-            StandardAttributes {
-                positions,
-                uv_coords,
-                normals,
-            },
-            Faces::from_tri_and_quad_faces(Vec::new(), interior_quads),
-        );
-        let mut boundary_mesh =
-            cdt_trimming_tessellation(surface, polyboundary, tolerance, face_idx);
-        let boundary_triangles = boundary_mesh
-            .tri_faces()
-            .iter()
-            .copied()
-            .filter(|triangle| {
-                !triangle_is_in_full_cell(
-                    *triangle,
-                    boundary_mesh.uv_coords(),
-                    &udiv,
-                    &vdiv,
-                    &full_cells,
-                )
-            })
-            .collect::<Vec<_>>();
-        let boundary_quads = boundary_mesh
-            .quad_faces()
-            .iter()
-            .copied()
-            .filter(|quad| {
-                !quad_is_in_full_cell(*quad, boundary_mesh.uv_coords(), &udiv, &vdiv, &full_cells)
-            })
-            .collect::<Vec<_>>();
-        {
-            let editor = boundary_mesh.editor();
-            *editor.faces = Faces::from_tri_and_quad_faces(boundary_triangles, boundary_quads);
-        }
-        interior_mesh.merge(boundary_mesh);
-        Some(interior_mesh)
-    }
+    let (mut interior_mesh, full_cells) =
+        iso_quad_interior_mesh(surface, &udiv, &vdiv, polyboundary)?;
+    let mut boundary_mesh = cdt_trimming_tessellation(surface, polyboundary, tolerance, face_idx);
+    remove_full_cells_from_boundary_mesh(&mut boundary_mesh, &udiv, &vdiv, &full_cells);
+    interior_mesh.merge(boundary_mesh);
+    Some(interior_mesh)
 }
 
 fn triangle_is_in_full_cell(
@@ -852,6 +868,70 @@ fn densify_surface_divisions<S: ParametricSurface3D>(
     )
 }
 
+fn insert_surface_grid(
+    triangulation: &mut Cdt,
+    polyline: &PolyBoundary,
+    udiv: Vec<f64>,
+    vdiv: &[f64],
+) -> usize {
+    let split_vertices = triangulation
+        .vertices()
+        .map(|vertex| {
+            let point = *vertex.as_ref();
+            (vertex.fix(), Point2::new(point.x, point.y))
+        })
+        .collect::<Vec<_>>();
+    let insert_res: Vec<Vec<Option<_>>> = udiv
+        .into_iter()
+        .map(|u| {
+            vdiv.iter()
+                .map(|v| {
+                    let uv = Point2::new(u, *v);
+                    if polyline.include(uv) {
+                        triangulation
+                            .insert(SPoint2::new(u, *v))
+                            .ok()
+                            .map(|handle| (handle, uv))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    insert_res.windows(2).for_each(|rows| {
+        rows[0].windows(2).zip(&rows[1]).for_each(|(pair, next)| {
+            if let Some(front) = pair[0] {
+                if let Some(back) = pair[1] {
+                    add_constraint_through_existing_vertices(
+                        triangulation,
+                        &split_vertices,
+                        front,
+                        back,
+                    );
+                }
+                if let Some(next) = next {
+                    add_constraint_through_existing_vertices(
+                        triangulation,
+                        &split_vertices,
+                        front,
+                        *next,
+                    );
+                }
+            }
+        });
+        let last = rows[0].len() - 1;
+        if let (Some(front), Some(back)) = (rows[0][last], rows[1][last]) {
+            add_constraint_through_existing_vertices(triangulation, &split_vertices, front, back);
+        }
+    });
+    insert_res
+        .iter()
+        .flatten()
+        .filter(|vertex| vertex.is_some())
+        .count()
+}
+
 /// Inserts parameter divisions into triangulation.
 fn insert_surface(
     triangulation: &mut Cdt,
@@ -904,52 +984,7 @@ fn insert_surface(
         division_start,
     );
     let insert_start = Instant::now();
-    let split_vertices = triangulation
-        .vertices()
-        .map(|vertex| {
-            let point = *vertex.as_ref();
-            (vertex.fix(), Point2::new(point.x, point.y))
-        })
-        .collect::<Vec<_>>();
-    let insert_res: Vec<Vec<Option<_>>> = udiv
-        .into_iter()
-        .map(|u| {
-            vdiv.iter()
-                .map(|v| {
-                    let uv = Point2::new(u, *v);
-                    if polyline.include(uv) {
-                        triangulation
-                            .insert(SPoint2::new(u, *v))
-                            .ok()
-                            .map(|handle| (handle, uv))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    insert_res.windows(2).for_each(|vec| {
-        vec[0].windows(2).zip(&vec[1]).for_each(|(a, z)| {
-            if let Some(x) = a[0] {
-                if let Some(y) = a[1] {
-                    add_constraint_through_existing_vertices(triangulation, &split_vertices, x, y);
-                }
-                if let Some(z) = z {
-                    add_constraint_through_existing_vertices(triangulation, &split_vertices, x, *z);
-                }
-            }
-        });
-        let idx = vec[0].len() - 1;
-        if let (Some(x), Some(y)) = (vec[0][idx], vec[1][idx]) {
-            add_constraint_through_existing_vertices(triangulation, &split_vertices, x, y);
-        }
-    });
-    let inserted_points = insert_res
-        .iter()
-        .flatten()
-        .filter(|vertex| vertex.is_some())
-        .count();
+    let inserted_points = insert_surface_grid(triangulation, polyline, udiv, &vdiv);
     log_mesh_trace(
         face_idx,
         "insert_surface",

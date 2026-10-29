@@ -61,9 +61,11 @@ impl std::fmt::Display for FaceDropReason {
 
 static FACE_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Number of faces the tessellator has silently dropped in this process since
-/// start (or since the last [`reset_face_drop_count`]). A nonzero value means
-/// at least one emitted shell is missing a face and its volume is understated.
+/// Number of faces the tessellator has silently dropped in this process.
+///
+/// Counts since process start (or since the last [`reset_face_drop_count`]). A
+/// nonzero value means at least one emitted shell is missing a face and its
+/// volume is understated.
 pub fn face_drop_count() -> u64 { FACE_DROP_COUNT.load(Ordering::Relaxed) }
 
 /// Resets the global face-drop counter to zero and returns its previous value.

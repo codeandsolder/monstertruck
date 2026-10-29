@@ -132,181 +132,216 @@ fn add_direct_cdt_constraint(
     }
 }
 
+fn classify_boundary_pieces(
+    pieces: Vec<PolyBoundaryPiece>,
+    surface: &impl PreMeshableSurface,
+) -> (Vec<Vec<SurfacePoint>>, Vec<Vec<SurfacePoint>>) {
+    let (mut closed, mut open) = (Vec::new(), Vec::new());
+    for PolyBoundaryPiece(mut curve) in pieces {
+        compact_periodic_closed_loop(&mut curve, surface);
+        if let Some((axis, period)) = periodic_axis_full_span(&curve, surface) {
+            open.push(open_periodic_closed_loop(curve, surface, axis, period));
+        } else if curve[0].uv.distance(curve[curve.len() - 1].uv) < 1.0e-3 {
+            curve.pop();
+            closed.push(curve);
+        } else {
+            open.push(curve);
+        }
+    }
+    open.retain(|curve| curve.len() >= 2);
+    closed.retain(|curve| curve.len() >= 2);
+    (closed, open)
+}
+
+fn close_curve_via_corners(
+    surface: &impl PreMeshableSurface,
+    curve: Vec<SurfacePoint>,
+    corner0: Point2,
+    corner1: Point2,
+    tolerance: f64,
+    point_cache: &mut HashMap<UvKey, Point3>,
+) -> Vec<SurfacePoint> {
+    let (front, back) = end_points(&curve);
+    let first_corner = surface_point_with_cache(surface, corner0, point_cache);
+    let second_corner = surface_point_with_cache(surface, corner1, point_cache);
+    let edge0 = polyline_on_surface(surface, back, first_corner, tolerance, point_cache);
+    let edge1 = polyline_on_surface(surface, first_corner, second_corner, tolerance, point_cache);
+    let edge2 = polyline_on_surface(surface, second_corner, front, tolerance, point_cache);
+    connect_edges([edge0, edge1, edge2, curve])
+}
+
+fn close_single_open_boundary(
+    mut curve: Vec<SurfacePoint>,
+    surface: &impl PreMeshableSurface,
+    tolerance: f64,
+    point_cache: &mut HashMap<UvKey, Point3>,
+) -> Option<Vec<SurfacePoint>> {
+    if let Some((axis, _)) = periodic_open_axis_full_span(&curve, surface)
+        && let Some(singular_curve) = close_open_periodic_curve_to_singular(
+            curve.clone(),
+            surface,
+            axis,
+            tolerance,
+            point_cache,
+        )
+    {
+        return Some(singular_curve);
+    }
+    let (Some((u0, u1)), Some((v0, v1))) = surface.try_range_tuple() else {
+        return None;
+    };
+    let (front, back) = end_points(&curve);
+    if front.x < back.x - TOLERANCE {
+        normalize_range(&mut curve, 0, (u0, u1));
+        Some(close_curve_via_corners(
+            surface,
+            curve,
+            Point2::new(u1, v1),
+            Point2::new(u0, v1),
+            tolerance,
+            point_cache,
+        ))
+    } else if back.x < front.x - TOLERANCE {
+        normalize_range(&mut curve, 0, (u0, u1));
+        Some(close_curve_via_corners(
+            surface,
+            curve,
+            Point2::new(u0, v0),
+            Point2::new(u1, v0),
+            tolerance,
+            point_cache,
+        ))
+    } else if front.y < back.y - TOLERANCE {
+        normalize_range(&mut curve, 1, (v0, v1));
+        Some(close_curve_via_corners(
+            surface,
+            curve,
+            Point2::new(u0, v1),
+            Point2::new(u0, v0),
+            tolerance,
+            point_cache,
+        ))
+    } else if back.y < front.y - TOLERANCE {
+        normalize_range(&mut curve, 1, (v0, v1));
+        Some(close_curve_via_corners(
+            surface,
+            curve,
+            Point2::new(u1, v0),
+            Point2::new(u1, v1),
+            tolerance,
+            point_cache,
+        ))
+    } else {
+        None
+    }
+}
+
+fn close_open_boundary_pair(
+    mut curve0: Vec<SurfacePoint>,
+    mut curve1: Vec<SurfacePoint>,
+    surface: &impl PreMeshableSurface,
+    tolerance: f64,
+    point_cache: &mut HashMap<UvKey, Point3>,
+) -> Vec<SurfacePoint> {
+    let full_period_pair_aligned = align_full_period_open_pair(&mut curve0, &mut curve1, surface);
+    let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
+    if !full_period_pair_aligned && !p0.x.near(&p1.x) && !q0.x.near(&q1.x) {
+        if let Some(period) = surface.period_u() {
+            align_periodic_open_pair(&curve0, &mut curve1, 0, period);
+        } else if let (Some(urange), _) = surface.try_range_tuple() {
+            normalize_range(&mut curve0, 0, urange);
+            normalize_range(&mut curve1, 0, urange);
+        }
+    } else if !full_period_pair_aligned && !p0.y.near(&p1.y) && !q0.y.near(&q1.y) {
+        if let Some(period) = surface.period_v() {
+            align_periodic_open_pair(&curve0, &mut curve1, 1, period);
+        } else if let (_, Some(vrange)) = surface.try_range_tuple() {
+            normalize_range(&mut curve0, 1, vrange);
+            normalize_range(&mut curve1, 1, vrange);
+        }
+    }
+    let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
+    if open_pair_connector_score(p0, p1, q1, q0) + TOLERANCE
+        < open_pair_connector_score(p0, p1, q0, q1)
+    {
+        curve1.reverse();
+    }
+    let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
+    let edge0 = polyline_on_surface(surface, p1, q0, tolerance, point_cache);
+    let edge1 = polyline_on_surface(surface, q1, p0, tolerance, point_cache);
+    connect_edges([curve0, edge0, curve1, edge1])
+}
+
+fn add_surface_domain_boundary_if_needed(
+    closed: &mut Vec<Vec<SurfacePoint>>,
+    surface: &impl PreMeshableSurface,
+    tolerance: f64,
+    point_cache: &mut HashMap<UvKey, Point3>,
+) {
+    if closed.iter().any(|curve| loop_orientation(curve)) {
+        return;
+    }
+    let (Some((u0, u1)), Some((v0, v1))) = surface.try_range_tuple() else {
+        return;
+    };
+    let corners = [
+        surface_point_with_cache(surface, Point2::new(u0, v0), point_cache),
+        surface_point_with_cache(surface, Point2::new(u1, v0), point_cache),
+        surface_point_with_cache(surface, Point2::new(u1, v1), point_cache),
+        surface_point_with_cache(surface, Point2::new(u0, v1), point_cache),
+    ];
+    let edge0 = polyline_on_surface(surface, corners[0], corners[1], tolerance, point_cache);
+    let edge1 = polyline_on_surface(surface, corners[1], corners[2], tolerance, point_cache);
+    let edge2 = polyline_on_surface(surface, corners[2], corners[3], tolerance, point_cache);
+    let edge3 = polyline_on_surface(surface, corners[3], corners[0], tolerance, point_cache);
+    closed.push(connect_edges([edge0, edge1, edge2, edge3]));
+}
+
+fn boundary_uv_bounds(closed: &[Vec<SurfacePoint>]) -> (Point2, Point2) {
+    let (mut uv_min, mut uv_max) = (
+        Point2::new(f64::INFINITY, f64::INFINITY),
+        Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+    );
+    for point in closed.iter().flatten() {
+        uv_min.x = f64::min(uv_min.x, point.x);
+        uv_min.y = f64::min(uv_min.y, point.y);
+        uv_max.x = f64::max(uv_max.x, point.x);
+        uv_max.y = f64::max(uv_max.y, point.y);
+    }
+    (uv_min, uv_max)
+}
+
 impl PolyBoundary {
     pub(in crate::tessellation::triangulation) fn new(
         pieces: Vec<PolyBoundaryPiece>,
         surface: &impl PreMeshableSurface,
         tolerance: f64,
     ) -> Self {
-        let (mut closed, mut open) = (Vec::new(), Vec::new());
-        for PolyBoundaryPiece(mut vec) in pieces {
-            compact_periodic_closed_loop(&mut vec, surface);
-            if let Some((axis, period)) = periodic_axis_full_span(&vec, surface) {
-                open.push(open_periodic_closed_loop(vec, surface, axis, period));
-            } else if vec[0].uv.distance(vec[vec.len() - 1].uv) < 1.0e-3 {
-                vec.pop();
-                closed.push(vec);
-            } else {
-                open.push(vec);
-            }
-        }
-        open.retain(|curve| curve.len() >= 2);
-        closed.retain(|curve| curve.len() >= 2);
+        let (mut closed, mut open) = classify_boundary_pieces(pieces, surface);
         let mut point_cache = HashMap::<UvKey, Point3>::default();
         match open.len() {
             1 => {
-                let mut curve = open.remove(0);
-                if let Some((axis, _)) = periodic_open_axis_full_span(&curve, surface)
-                    && let Some(singular_curve) = close_open_periodic_curve_to_singular(
-                        curve.clone(),
-                        surface,
-                        axis,
-                        tolerance,
-                        &mut point_cache,
-                    )
+                if let Some(curve) =
+                    close_single_open_boundary(open.remove(0), surface, tolerance, &mut point_cache)
                 {
-                    closed.push(singular_curve);
-                } else if let (Some((u0, u1)), Some((v0, v1))) = surface.try_range_tuple() {
-                    let p = curve[0];
-                    let q = curve[curve.len() - 1];
-                    if p.x < q.x - TOLERANCE {
-                        normalize_range(&mut curve, 0, (u0, u1));
-                        let p = curve[0];
-                        let q = curve[curve.len() - 1];
-                        let x = surface_point_with_cache(
-                            surface,
-                            Point2::new(u0, v1),
-                            &mut point_cache,
-                        );
-                        let y = surface_point_with_cache(
-                            surface,
-                            Point2::new(u1, v1),
-                            &mut point_cache,
-                        );
-                        let vec0 = polyline_on_surface(surface, q, y, tolerance, &mut point_cache);
-                        let vec1 = polyline_on_surface(surface, y, x, tolerance, &mut point_cache);
-                        let vec2 = polyline_on_surface(surface, x, p, tolerance, &mut point_cache);
-                        closed.push(connect_edges([vec0, vec1, vec2, curve]));
-                    } else if q.x < p.x - TOLERANCE {
-                        normalize_range(&mut curve, 0, (u0, u1));
-                        let p = curve[0];
-                        let q = curve[curve.len() - 1];
-                        let x = surface_point_with_cache(
-                            surface,
-                            Point2::new(u1, v0),
-                            &mut point_cache,
-                        );
-                        let y = surface_point_with_cache(
-                            surface,
-                            Point2::new(u0, v0),
-                            &mut point_cache,
-                        );
-                        let vec0 = polyline_on_surface(surface, q, y, tolerance, &mut point_cache);
-                        let vec1 = polyline_on_surface(surface, y, x, tolerance, &mut point_cache);
-                        let vec2 = polyline_on_surface(surface, x, p, tolerance, &mut point_cache);
-                        closed.push(connect_edges([vec0, vec1, vec2, curve]));
-                    } else if p.y < q.y - TOLERANCE {
-                        normalize_range(&mut curve, 1, (v0, v1));
-                        let p = curve[0];
-                        let q = curve[curve.len() - 1];
-                        let x = surface_point_with_cache(
-                            surface,
-                            Point2::new(u0, v0),
-                            &mut point_cache,
-                        );
-                        let y = surface_point_with_cache(
-                            surface,
-                            Point2::new(u0, v1),
-                            &mut point_cache,
-                        );
-                        let vec0 = polyline_on_surface(surface, q, y, tolerance, &mut point_cache);
-                        let vec1 = polyline_on_surface(surface, y, x, tolerance, &mut point_cache);
-                        let vec2 = polyline_on_surface(surface, x, p, tolerance, &mut point_cache);
-                        closed.push(connect_edges([vec0, vec1, vec2, curve]));
-                    } else if q.y < p.y - TOLERANCE {
-                        normalize_range(&mut curve, 1, (v0, v1));
-                        let p = curve[0];
-                        let q = curve[curve.len() - 1];
-                        let x = surface_point_with_cache(
-                            surface,
-                            Point2::new(u1, v1),
-                            &mut point_cache,
-                        );
-                        let y = surface_point_with_cache(
-                            surface,
-                            Point2::new(u1, v0),
-                            &mut point_cache,
-                        );
-                        let vec0 = polyline_on_surface(surface, q, y, tolerance, &mut point_cache);
-                        let vec1 = polyline_on_surface(surface, y, x, tolerance, &mut point_cache);
-                        let vec2 = polyline_on_surface(surface, x, p, tolerance, &mut point_cache);
-                        closed.push(connect_edges([vec0, vec1, vec2, curve]));
-                    }
+                    closed.push(curve);
                 }
             }
-            2 => {
-                let mut curve1 = open.remove(1);
-                let mut curve0 = open.remove(0);
-                let full_period_pair_aligned =
-                    align_full_period_open_pair(&mut curve0, &mut curve1, surface);
-                let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
-                if !full_period_pair_aligned && !p0.x.near(&p1.x) && !q0.x.near(&q1.x) {
-                    if let Some(period) = surface.period_u() {
-                        align_periodic_open_pair(&curve0, &mut curve1, 0, period);
-                    } else if let (Some(urange), _) = surface.try_range_tuple() {
-                        normalize_range(&mut curve0, 0, urange);
-                        normalize_range(&mut curve1, 0, urange);
-                    }
-                } else if !full_period_pair_aligned && !p0.y.near(&p1.y) && !q0.y.near(&q1.y) {
-                    if let Some(period) = surface.period_v() {
-                        align_periodic_open_pair(&curve0, &mut curve1, 1, period);
-                    } else if let (_, Some(vrange)) = surface.try_range_tuple() {
-                        normalize_range(&mut curve0, 1, vrange);
-                        normalize_range(&mut curve1, 1, vrange);
-                    }
-                }
-                let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
-                let current_score = open_pair_connector_score(p0, p1, q0, q1);
-                let reversed_score = open_pair_connector_score(p0, p1, q1, q0);
-                if reversed_score + TOLERANCE < current_score {
-                    curve1.reverse();
-                }
-                let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
-                let vec0 = polyline_on_surface(surface, p1, q0, tolerance, &mut point_cache);
-                let vec1 = polyline_on_surface(surface, q1, p0, tolerance, &mut point_cache);
-                closed.push(connect_edges([curve0, vec0, curve1, vec1]));
-            }
+            2 => closed.push(close_open_boundary_pair(
+                open.remove(0),
+                open.remove(0),
+                surface,
+                tolerance,
+                &mut point_cache,
+            )),
             _ => {}
         }
         if closed.len() == 1 && !loop_orientation(&closed[0]) {
             closed[0].reverse();
         }
-        if !closed.iter().any(|curve| loop_orientation(curve))
-            && let (Some((u0, u1)), Some((v0, v1))) = surface.try_range_tuple()
-        {
-            let p = [
-                surface_point_with_cache(surface, Point2::new(u0, v0), &mut point_cache),
-                surface_point_with_cache(surface, Point2::new(u1, v0), &mut point_cache),
-                surface_point_with_cache(surface, Point2::new(u1, v1), &mut point_cache),
-                surface_point_with_cache(surface, Point2::new(u0, v1), &mut point_cache),
-            ];
-            let vec0 = polyline_on_surface(surface, p[0], p[1], tolerance, &mut point_cache);
-            let vec1 = polyline_on_surface(surface, p[1], p[2], tolerance, &mut point_cache);
-            let vec2 = polyline_on_surface(surface, p[2], p[3], tolerance, &mut point_cache);
-            let vec3 = polyline_on_surface(surface, p[3], p[0], tolerance, &mut point_cache);
-            closed.push(connect_edges([vec0, vec1, vec2, vec3]));
-        }
+        add_surface_domain_boundary_if_needed(&mut closed, surface, tolerance, &mut point_cache);
         normalize_closed_loop_winding(&mut closed);
-        let (mut uv_min, mut uv_max) = (
-            Point2::new(f64::INFINITY, f64::INFINITY),
-            Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
-        );
-        for pt in closed.iter().flatten() {
-            uv_min.x = f64::min(uv_min.x, pt.x);
-            uv_min.y = f64::min(uv_min.y, pt.y);
-            uv_max.x = f64::max(uv_max.x, pt.x);
-            uv_max.y = f64::max(uv_max.y, pt.y);
-        }
+        let (uv_min, uv_max) = boundary_uv_bounds(&closed);
         Self {
             loops: closed,
             uv_min,

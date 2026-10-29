@@ -24,19 +24,19 @@ impl Adjacency for Faces {
             };
             rest.iter()
                 .scan(first_vertex, |previous, &current| {
-                    let edge = [previous.pos, current.pos];
+                    let edge = (previous.pos, current.pos);
                     *previous = current;
                     Some(edge)
                 })
-                .chain(std::iter::once([last_vertex.pos, first_vertex.pos]))
+                .chain(std::iter::once((last_vertex.pos, first_vertex.pos)))
                 .for_each(|edge| {
-                    if edge[0] >= num_of_vertices || edge[1] >= num_of_vertices {
+                    if edge.0 >= num_of_vertices || edge.1 >= num_of_vertices {
                         return;
                     }
-                    let edge = if edge[0] < edge[1] {
-                        (edge[0], edge[1])
+                    let edge = if edge.0 < edge.1 {
+                        edge
                     } else {
-                        (edge[1], edge[0])
+                        (edge.1, edge.0)
                     };
                     if already.insert(edge) {
                         res[edge.0].push(edge.1);
