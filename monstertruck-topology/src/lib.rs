@@ -467,7 +467,7 @@ pub mod imported;
 /// ];
 /// ```
 #[macro_export]
-macro_rules! wire { ($($t:tt)*) => { $crate::Wire::from_iter([$($t)*]) }; }
+macro_rules! wire { ($($t:expr),* $(,)?) => { $crate::Wire::from_iter([$($t),*]) }; }
 
 /// Creates a Vec containing the arguments.
 ///
@@ -491,4 +491,4 @@ macro_rules! wire { ($($t:tt)*) => { $crate::Wire::from_iter([$($t)*]) }; }
 /// ];
 /// ```
 #[macro_export]
-macro_rules! shell { ($($t:tt)*) => { $crate::Shell::from_iter([$($t)*]) }; }
+macro_rules! shell { ($($t:expr),* $(,)?) => { $crate::Shell::from_iter([$($t),*]) }; }

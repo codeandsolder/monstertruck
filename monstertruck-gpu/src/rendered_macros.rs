@@ -5,7 +5,7 @@
 macro_rules! impl_render_id {
     ($($id_member: tt).*) => {
         #[inline(always)]
-        fn render_id(&self) -> RenderId { self.$($id_member).* }
+        fn render_id(&self) -> $crate::RenderId { self.$($id_member).* }
     };
 }
 
@@ -16,7 +16,7 @@ macro_rules! impl_render_id {
 macro_rules! derive_render_id {
     ($($id_member: tt).*) => {
         #[inline(always)]
-        fn render_id(&self) -> RenderId { self.$($id_member).*.render_id() }
+        fn render_id(&self) -> $crate::RenderId { self.$($id_member).*.render_id() }
     };
 }
 
@@ -29,8 +29,8 @@ macro_rules! derive_vertex_buffer {
         #[inline(always)]
         fn vertex_buffer(
             &self,
-            device_handler: &DeviceHandler,
-        ) -> (Arc<BufferHandler>, Option<Arc<BufferHandler>>)
+            device_handler: &$crate::DeviceHandler,
+        ) -> (::std::sync::Arc<$crate::BufferHandler>, Option<::std::sync::Arc<$crate::BufferHandler>>)
         {
             self.$($id_member)*.vertex_buffer(device_handler)
         }
@@ -44,7 +44,7 @@ macro_rules! derive_vertex_buffer {
 macro_rules! derive_bind_group_layout {
     ($($id_member: tt).*) => {
         #[inline(always)]
-        fn bind_group_layout(&self, device_handler: &DeviceHandler) -> Arc<BindGroupLayout> {
+        fn bind_group_layout(&self, device_handler: &$crate::DeviceHandler) -> ::std::sync::Arc<$crate::wgpu::BindGroupLayout> {
             self.$($id_member)*.bind_group_layout(device_handler)
         }
     };
@@ -59,9 +59,9 @@ macro_rules! derive_bind_group {
         #[inline(always)]
         fn bind_group(
             &self,
-            device_handler: &DeviceHandler,
-            layout: &BindGroupLayout,
-        ) -> Arc<BindGroup>
+            device_handler: &$crate::DeviceHandler,
+            layout: &$crate::wgpu::BindGroupLayout,
+        ) -> ::std::sync::Arc<$crate::wgpu::BindGroup>
         {
             self.$($id_member)*.bind_group(device_handler, layout)
         }
@@ -76,10 +76,10 @@ macro_rules! derive_pipeline {
     ($($id_member: tt).*) => {
         fn pipeline(
             &self,
-            device_handler: &DeviceHandler,
-            layout: &PipelineLayout,
+            device_handler: &$crate::DeviceHandler,
+            layout: &$crate::wgpu::PipelineLayout,
             sample_count: u32,
-        ) -> Arc<RenderPipeline> {
+        ) -> ::std::sync::Arc<$crate::wgpu::RenderPipeline> {
             self.$($id_member)*.pipeline(device_handler, layout, sample_count)
         }
     };
