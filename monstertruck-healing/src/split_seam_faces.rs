@@ -23,7 +23,9 @@ fn is_closed_loop<C, T>(arc: &[CompressedEdgeUse<T>], edges: &[CompressedEdge<C>
         && arc
             .windows(2)
             .all(|pair| use_endpoints(&pair[0], edges).1 == use_endpoints(&pair[1], edges).0)
-        && use_endpoints(arc.last().unwrap(), edges).1 == use_endpoints(&arc[0], edges).0
+        && arc
+            .last()
+            .is_some_and(|last| use_endpoints(last, edges).1 == use_endpoints(&arc[0], edges).0)
 }
 
 /// All endpoint vertices touched by a run of edge-uses.
