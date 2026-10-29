@@ -317,17 +317,16 @@ where
     let interior_quads = full_cells
         .iter()
         .enumerate()
-        .filter_map(|(cell_index, &is_full)| {
-            is_full.then(|| {
-                let i = cell_index / nv_cells;
-                let j = cell_index % nv_cells;
-                [
-                    vertex(idx(i, j)),
-                    vertex(idx(i, j + 1)),
-                    vertex(idx(i + 1, j + 1)),
-                    vertex(idx(i + 1, j)),
-                ]
-            })
+        .filter(|(_, is_full)| **is_full)
+        .map(|(cell_index, _)| {
+            let i = cell_index / nv_cells;
+            let j = cell_index % nv_cells;
+            [
+                vertex(idx(i, j)),
+                vertex(idx(i, j + 1)),
+                vertex(idx(i + 1, j + 1)),
+                vertex(idx(i + 1, j)),
+            ]
         })
         .collect::<Vec<_>>();
     if interior_quads.is_empty() {
