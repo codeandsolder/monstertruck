@@ -51,15 +51,15 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
 
     /// Returns the vector of all triangles of the polygon.
     #[inline(always)]
-    pub const fn tri_faces(&self) -> &Vec<[V; 3]> { &self.faces.tri_faces }
+    pub fn tri_faces(&self) -> &[[V; 3]] { &self.faces.tri_faces }
 
     /// Returns the vector of all quadrangles.
     #[inline(always)]
-    pub const fn quad_faces(&self) -> &Vec<[V; 4]> { &self.faces.quad_faces }
+    pub fn quad_faces(&self) -> &[[V; 4]] { &self.faces.quad_faces }
 
     /// Returns the vector of n-gons (n > 4).
     #[inline(always)]
-    pub const fn other_faces(&self) -> &Vec<Vec<V>> { &self.faces.other_faces }
+    pub fn other_faces(&self) -> &[Vec<V>] { &self.faces.other_faces }
 
     /// Returns the iterator of the slice.
     ///
@@ -146,7 +146,7 @@ impl PolygonMesh {
             .map(|face| face.iter().map(|x| x.pos).collect::<Vec<_>>())
             .collect::<Vec<_>>();
         PolygonMesh {
-            attributes: self.positions().clone(),
+            attributes: self.positions().to_vec(),
             faces: Faces {
                 tri_faces,
                 quad_faces,
@@ -178,7 +178,7 @@ impl Invertible for PolygonMesh {
 impl PolygonMesh {
     /// Returns the vector of all positions.
     #[inline(always)]
-    pub const fn positions(&self) -> &Vec<Point3> { &self.attributes.positions }
+    pub fn positions(&self) -> &[Point3] { &self.attributes.positions }
 
     /// Returns the mutable slice of all positions.
     #[inline(always)]
@@ -196,7 +196,7 @@ impl PolygonMesh {
 
     /// Returns the vector of all uv (texture) coordinates.
     #[inline(always)]
-    pub const fn uv_coords(&self) -> &Vec<Vector2> { &self.attributes.uv_coords }
+    pub fn uv_coords(&self) -> &[Vector2] { &self.attributes.uv_coords }
 
     /// Returns the mutable slice of all uv (texture) coordinates.
     #[inline(always)]
@@ -214,7 +214,7 @@ impl PolygonMesh {
 
     /// Returns the vector of all normals.
     #[inline(always)]
-    pub const fn normals(&self) -> &Vec<Vector3> { &self.attributes.normals }
+    pub fn normals(&self) -> &[Vector3] { &self.attributes.normals }
 
     /// Returns the mutable slice of all normals.
     #[inline(always)]
