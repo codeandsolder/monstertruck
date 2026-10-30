@@ -439,11 +439,13 @@ fn split_seam_faces_resolves_doubled_seam_cylinder() {
 fn geometric_slit_cleanup_preserves_noncoincident_digon() {
     let p0 = Point3::new(0.0, 0.0, 0.0);
     let p1 = Point3::new(1.0, 0.0, 0.0);
-    let straight = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p0, p1]);
+    let straight = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p0, p1])
+        .expect("valid straight test curve");
     let bowed = BsplineCurve::new(
         KnotVector::bezier_knot(2),
         vec![p1, Point3::new(0.5, 0.25, 0.0), p0],
-    );
+    )
+    .expect("valid bowed test curve");
     let shell = CompressedShell {
         vertices: vec![p0, p1],
         edges: vec![
