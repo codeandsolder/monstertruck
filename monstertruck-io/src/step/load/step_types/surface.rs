@@ -1,7 +1,16 @@
 //! Surface entities: elementary surfaces, B-spline/NURBS surfaces and
 //! swept surfaces.
 
-use super::*;
+use super::{
+    Angle, Array, Axis1Placement, Axis1PlacementHolder, Axis2Placement3d, Axis2Placement3dHolder,
+    BsplineSurface, CartesianPoint, CartesianPointHolder, Curve3D, CurveAny, CurveAnyHolder,
+    Deserialize, ElementarySurface, EuclideanSpace, Holder, Homogeneous, InnerSpace, Invertible,
+    KnotType, KnotVector, Line, Logical, Matrix4, NurbsSurface, PI, Point3, Result,
+    RevolutionSurface, Rotation, Serialize, Sphere, SquareMatrix, StepConvertingError,
+    StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface, TOLERANCE, Table, Torus,
+    Transformed, TransformedAttributes, Vector, Vector3, Vector4, VectorHolder, geom,
+    quasi_uniform_knots, step_geometry, uniform_knots,
+};
 
 /// `surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
@@ -18,9 +27,8 @@ pub enum SurfaceAny {
 
 impl TryFrom<&SurfaceAny> for Surface {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(x: &SurfaceAny) -> Result<Self, Self::Error> {
-        use SurfaceAny::*;
+        use SurfaceAny::{BsplineSurface, ElementarySurface, SweptSurface};
         Ok(match x {
             ElementarySurface(x) => Self::ElementarySurface(x.as_ref().try_into()?),
             BsplineSurface(x) => x.as_ref().try_into()?,
@@ -58,9 +66,11 @@ pub enum ElementarySurfaceAny {
 /// constructors.
 impl TryFrom<&ElementarySurfaceAny> for ElementarySurface {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &ElementarySurfaceAny) -> Result<Self, Self::Error> {
-        use ElementarySurfaceAny::*;
+        use ElementarySurfaceAny::{
+            ConicalSurface, CylindricalSurface, DegenerateToroidalSurface, Plane, SphericalSurface,
+            ToroidalSurface,
+        };
         Ok(match value {
             Plane(x) => Self::Plane(x.as_ref().into()),
             SphericalSurface(x) => Self::Sphere(x.as_ref().into()),
@@ -84,7 +94,6 @@ pub struct Plane {
 }
 
 impl From<&Plane> for geom::Plane {
-    #[inline(always)]
     fn from(plane: &Plane) -> Self {
         let mat = Matrix4::from(&plane.position);
         let o = Point3::from_homogeneous(mat[3]);
@@ -107,11 +116,10 @@ pub struct SphericalSurface {
 }
 
 impl From<&SphericalSurface> for step_geometry::SphericalSurface {
-    #[inline(always)]
     fn from(ss: &SphericalSurface) -> Self {
         let mat = Matrix4::from(&ss.position);
         let sphere = Sphere(geom::Sphere::new(Point3::origin(), ss.radius));
-        Processor::new(sphere).transformed(mat)
+        Self::new(sphere).transformed(mat)
     }
 }
 
@@ -128,7 +136,6 @@ pub struct CylindricalSurface {
 }
 
 impl From<&CylindricalSurface> for step_geometry::CylindricalSurface {
-    #[inline(always)]
     fn from(cs: &CylindricalSurface) -> Self {
         let mat = Matrix4::from(&cs.position);
         let x = mat[0].truncate();
@@ -136,7 +143,7 @@ impl From<&CylindricalSurface> for step_geometry::CylindricalSurface {
         let center = Point3::from_homogeneous(mat[3]);
         let radius = cs.radius;
         let p = center + x * radius;
-        let mut res = Processor::new(RevolutionSurface::by_revolution(Line(p, p + z), center, z));
+        let mut res = Self::new(RevolutionSurface::by_revolution(Line(p, p + z), center, z));
         res.invert();
         res
     }
@@ -191,7 +198,6 @@ fn validate_torus_radii(
 
 impl TryFrom<&ToroidalSurface> for step_geometry::ToroidalSurface {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(
         ToroidalSurface {
             position,
@@ -203,7 +209,7 @@ impl TryFrom<&ToroidalSurface> for step_geometry::ToroidalSurface {
         validate_torus_radii("TOROIDAL_SURFACE", *major_radius, *minor_radius)?;
         let mat = Matrix4::from(position);
         let torus = Torus::new(Point3::origin(), *major_radius, *minor_radius)?;
-        Ok(Processor::new(torus).transformed(mat))
+        Ok(Self::new(torus).transformed(mat))
     }
 }
 
@@ -270,7 +276,7 @@ impl TryFrom<&DegenerateToroidalSurface> for step_geometry::ToroidalSurface {
         }
         let mat = Matrix4::from(position);
         let torus = Torus::new(Point3::origin(), *major_radius, *minor_radius)?;
-        Ok(Processor::new(torus).transformed(mat))
+        Ok(Self::new(torus).transformed(mat))
     }
 }
 
@@ -310,7 +316,7 @@ impl From<&ConicalSurface> for step_geometry::ConicalSurface {
         let v = Vector3::new(f64::tan(semi_angle), 0.0, 1.0);
         let rev =
             RevolutionSurface::by_revolution(Line(p, p + v), Point3::origin(), Vector3::unit_z());
-        let mut processor = Processor::new(rev);
+        let mut processor = Self::new(rev);
         processor.transform_by(mat);
         processor.invert();
         processor
@@ -330,12 +336,11 @@ pub enum BsplineSurfaceAny {
 
 impl TryFrom<&BsplineSurfaceAny> for Surface {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &BsplineSurfaceAny) -> Result<Self, Self::Error> {
-        use BsplineSurfaceAny::*;
+        use BsplineSurfaceAny::{NonRationalBsplineSurface, RationalBsplineSurface};
         Ok(match value {
-            NonRationalBsplineSurface(bsp) => Surface::BsplineSurface(bsp.try_into()?),
-            RationalBsplineSurface(bsp) => Surface::NurbsSurface(bsp.try_into()?),
+            NonRationalBsplineSurface(bsp) => Self::BsplineSurface(bsp.try_into()?),
+            RationalBsplineSurface(bsp) => Self::NurbsSurface(bsp.try_into()?),
         })
     }
 }
@@ -380,21 +385,20 @@ pub struct BsplineSurfaceWithKnots {
 
 impl TryFrom<&BsplineSurfaceWithKnots> for BsplineSurface<Point3> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(surface: &BsplineSurfaceWithKnots) -> Result<Self, StepConvertingError> {
-        let uknots = surface.u_knots.to_vec();
+        let uknots = surface.u_knots.clone();
         let umulti = surface
             .u_multiplicities
             .iter()
-            .map(|n| *n as usize)
-            .collect();
+            .map(|n| usize::try_from(*n))
+            .collect::<Result<Vec<_>, _>>()?;
         let uknots = KnotVector::from_single_multi(uknots, umulti)?;
-        let vknots = surface.v_knots.to_vec();
+        let vknots = surface.v_knots.clone();
         let vmulti = surface
             .v_multiplicities
             .iter()
-            .map(|n| *n as usize)
-            .collect();
+            .map(|n| usize::try_from(*n))
+            .collect::<Result<Vec<_>, _>>()?;
         let vknots = KnotVector::from_single_multi(vknots, vmulti)?;
         let ctrls = surface
             .control_points_list
@@ -424,14 +428,16 @@ pub struct UniformSurface {
 
 impl TryFrom<&UniformSurface> for BsplineSurface<Point3> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(surface: &UniformSurface) -> Result<Self, StepConvertingError> {
-        let uknots = uniform_knots(surface.control_points_list.len(), surface.u_degree as usize)?;
+        let uknots = uniform_knots(
+            surface.control_points_list.len(),
+            usize::try_from(surface.u_degree)?,
+        )?;
         let first = surface
             .control_points_list
             .first()
             .ok_or("control points list is empty.")?;
-        let vknots = uniform_knots(first.len(), surface.v_degree as usize)?;
+        let vknots = uniform_knots(first.len(), usize::try_from(surface.v_degree)?)?;
         let ctrls = surface
             .control_points_list
             .iter()
@@ -460,15 +466,16 @@ pub struct QuasiUniformSurface {
 
 impl TryFrom<&QuasiUniformSurface> for BsplineSurface<Point3> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(surface: &QuasiUniformSurface) -> Result<Self, StepConvertingError> {
-        let uknots =
-            quasi_uniform_knots(surface.control_points_list.len(), surface.u_degree as usize);
+        let uknots = quasi_uniform_knots(
+            surface.control_points_list.len(),
+            usize::try_from(surface.u_degree)?,
+        )?;
         let first = surface
             .control_points_list
             .first()
             .ok_or("control points list is empty.")?;
-        let vknots = quasi_uniform_knots(first.len(), surface.v_degree as usize);
+        let vknots = quasi_uniform_knots(first.len(), usize::try_from(surface.v_degree)?)?;
         let ctrls = surface
             .control_points_list
             .iter()
@@ -498,10 +505,9 @@ pub struct BezierSurface {
 impl TryFrom<&BezierSurface> for BsplineSurface<Point3> {
     type Error = StepConvertingError;
 
-    #[inline(always)]
     fn try_from(value: &BezierSurface) -> Result<Self, Self::Error> {
-        let uknots = KnotVector::bezier_knot(value.u_degree as usize);
-        let vknots = KnotVector::bezier_knot(value.v_degree as usize);
+        let uknots = KnotVector::bezier_knot(usize::try_from(value.u_degree)?);
+        let vknots = KnotVector::bezier_knot(usize::try_from(value.v_degree)?);
         let ctrls = value
             .control_points_list
             .iter()
@@ -529,9 +535,10 @@ pub enum NonRationalBsplineSurface {
 
 impl TryFrom<&NonRationalBsplineSurface> for BsplineSurface<Point3> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &NonRationalBsplineSurface) -> Result<Self, Self::Error> {
-        use NonRationalBsplineSurface::*;
+        use NonRationalBsplineSurface::{
+            BezierSurface, BsplineSurfaceWithKnots, QuasiUniformSurface, UniformSurface,
+        };
         match value {
             BsplineSurfaceWithKnots(x) => x.as_ref().try_into(),
             UniformSurface(x) => x.as_ref().try_into(),
@@ -558,7 +565,6 @@ pub struct RationalBsplineSurface {
 
 impl TryFrom<&RationalBsplineSurface> for NurbsSurface<Vector4> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(
         RationalBsplineSurface {
             non_rational_b_spline_surface,
@@ -586,12 +592,11 @@ pub enum SweptSurfaceAny {
 
 impl TryFrom<&SweptSurfaceAny> for SweepSurface {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &SweptSurfaceAny) -> Result<Self, Self::Error> {
-        use SweptSurfaceAny::*;
+        use SweptSurfaceAny::{SurfaceOfLinearExtrusion, SurfaceOfRevolution};
         Ok(match value {
-            SurfaceOfLinearExtrusion(x) => SweepSurface::ExtrusionSurface(x.as_ref().try_into()?),
-            SurfaceOfRevolution(x) => SweepSurface::RevolutionSurface(x.as_ref().try_into()?),
+            SurfaceOfLinearExtrusion(x) => Self::ExtrusionSurface(x.as_ref().try_into()?),
+            SurfaceOfRevolution(x) => Self::RevolutionSurface(x.as_ref().try_into()?),
         })
     }
 }
@@ -611,11 +616,10 @@ pub struct SurfaceOfLinearExtrusion {
 
 impl TryFrom<&SurfaceOfLinearExtrusion> for StepExtrusionSurface {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(sr: &SurfaceOfLinearExtrusion) -> Result<Self, Self::Error> {
         let curve = Curve3D::try_from(&sr.swept_curve)?;
         let vector = Vector3::from(&sr.extrusion_axis);
-        Ok(ExtrusionSurface::by_extrusion(curve, vector))
+        Ok(Self::by_extrusion(curve, vector))
     }
 }
 
@@ -634,12 +638,11 @@ pub struct SurfaceOfRevolution {
 
 impl TryFrom<&SurfaceOfRevolution> for StepRevolutionSurface {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(sr: &SurfaceOfRevolution) -> Result<Self, Self::Error> {
         let curve = Curve3D::try_from(&sr.swept_curve)?;
         let origin = Point3::from(&sr.axis_position.location);
         let axis = sr.axis_position.direction().normalize();
-        let mut rev = Processor::new(RevolutionSurface::by_revolution(curve, origin, axis));
+        let mut rev = Self::new(RevolutionSurface::by_revolution(curve, origin, axis));
         rev.invert();
         Ok(rev)
     }

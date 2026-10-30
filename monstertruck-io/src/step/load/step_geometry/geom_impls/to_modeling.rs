@@ -2,7 +2,23 @@
 //! carriers reach an analytic modeling variant, and which fall through to
 //! the rational net.
 
-use super::*;
+use super::{
+    Angle, Array, Attributes, BoundaryCurveFromSamples, Bounded, BoundedCurve, BoundedSurface,
+    Concat, Conic2D, Curve2D, Curve3D, CurveScalarFunction, Cut, Decomposition, Deserialize,
+    EigenValues, ElementWise, ElementarySurface, EuclideanSpace, ExactParameterBoundary2D,
+    Exponential, HashGen, Homogeneous, IncludeCurve, InnerSpace, Invertible, Matrix, MetricSpace,
+    ModelingConic2D, ModelingCurve, ModelingCurve2D, ModelingSurface, NurbsCurve, NurbsSurface,
+    One, OperatorNorm, Origin, ParameterBoundary2D, ParameterCurve, ParameterDivision1D,
+    ParameterDivision2D, ParameterTransform, ParametricCurve, ParametricCurve2D, ParametricCurve3D,
+    ParametricSurface, ParametricSurface2D, ParametricSurface3D, RevolutionSurface, Rotation,
+    Rotation2, Rotation3, SearchNearestParameter, SearchParameter, SearchParameterDimension,
+    Serialize, SnapCurveEndpoints, SquareMatrix, StepConvertingError, StepParameterCurve,
+    SupportsExactPatchDomains, Surface, SurfaceCurve, SurfaceCurveAssociatedGeometry,
+    SurfaceScalarFunction, TOLERANCE, ToSameGeometry, Tolerance, Torus, Transform, Transform2,
+    Transform3, Transformed, TransformedAttributes, TryIntoAnalyticSurfaceKind,
+    TryIntoBsplineSurface, TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface,
+    VectorSpace, Zero,
+};
 
 fn to_modeling_trim(
     curve: &StepParameterCurve,
@@ -21,12 +37,10 @@ impl TryFrom<&Curve3D> for ModelingCurve {
             Curve3D::Line(line) => Ok((*line).into()),
             Curve3D::BsplineCurve(curve) => Ok(curve.clone().into()),
             Curve3D::NurbsCurve(curve) => Ok(curve.clone().into()),
-            Curve3D::ParameterCurve(curve) => {
-                Ok(ModelingCurve::ParameterCurve(ParameterCurve::new(
-                    curve.curve().as_ref().try_into()?,
-                    Box::new(curve.surface().as_ref().try_into()?),
-                )))
-            }
+            Curve3D::ParameterCurve(curve) => Ok(Self::ParameterCurve(ParameterCurve::new(
+                curve.curve().as_ref().try_into()?,
+                Box::new(curve.surface().as_ref().try_into()?),
+            ))),
             Curve3D::SurfaceCurve(curve) => {
                 let surfaces = curve
                     .associated_geometry()
@@ -46,7 +60,7 @@ impl TryFrom<&Curve3D> for ModelingCurve {
                         .cloned()
                         .map(|trim| to_modeling_trim(&trim))
                         .transpose()?;
-                    Ok(ModelingCurve::Intersection(SurfaceCurve::with_boundaries(
+                    Ok(Self::Intersection(SurfaceCurve::with_boundaries(
                         Box::new(surface0),
                         Box::new(surface1),
                         Box::new(curve.leader().try_into()?),
@@ -58,7 +72,7 @@ impl TryFrom<&Curve3D> for ModelingCurve {
                 }
             }
             Curve3D::IntersectionCurve(curve) => {
-                Ok(ModelingCurve::Intersection(SurfaceCurve::with_boundaries(
+                Ok(Self::Intersection(SurfaceCurve::with_boundaries(
                     Box::new(curve.surface0().as_ref().try_into()?),
                     Box::new(curve.surface1().as_ref().try_into()?),
                     Box::new(curve.leader().as_ref().try_into()?),
@@ -68,7 +82,7 @@ impl TryFrom<&Curve3D> for ModelingCurve {
             }
             _ => value
                 .try_into_homogeneous_bspline_curve()
-                .map(|curve| ModelingCurve::NurbsCurve(NurbsCurve::new(curve)))
+                .map(|curve| Self::NurbsCurve(NurbsCurve::new(curve)))
                 .ok_or_else(|| "STEP curve cannot be represented in modeling geometry.".into()),
         }
     }
@@ -91,7 +105,7 @@ impl TryFrom<&Curve2D> for ModelingCurve2D {
         match value {
             Curve2D::Line(curve) => Ok((*curve).into()),
             Curve2D::Polyline(curve) => Ok(curve.clone().into()),
-            Curve2D::Conic(curve) => Ok(ModelingCurve2D::Conic(curve.try_into()?)),
+            Curve2D::Conic(curve) => Ok(Self::Conic(curve.try_into()?)),
             Curve2D::BsplineCurve(curve) => Ok(curve.clone().into()),
             Curve2D::NurbsCurve(curve) => Ok(curve.clone().into()),
         }
@@ -317,7 +331,7 @@ impl TryFrom<&Surface> for ModelingSurface {
             Surface::ElementarySurface(
                 ElementarySurface::CylindricalSurface(surface)
                 | ElementarySurface::ConicalSurface(surface),
-            ) => Ok(ModelingSurface::Revolution(surface.map_ref(|revolution| {
+            ) => Ok(Self::Revolution(surface.map_ref(|revolution| {
                 RevolutionSurface::by_revolution(
                     ModelingCurve::Line(*revolution.entity_curve()),
                     revolution.origin(),
@@ -336,7 +350,7 @@ impl TryFrom<&Surface> for ModelingSurface {
                 if ROUTE_ANALYTIC_SPHERE
                     && analytic_sphere_is_representable(&surface.entity().0) =>
             {
-                Ok(ModelingSurface::Sphere(surface.map_ref(|sphere| sphere.0)))
+                Ok(Self::Sphere(surface.map_ref(|sphere| sphere.0)))
             }
             // TORUS ROUTING, spec 012 W1: the sibling of the sphere arm above,
             // and it was HELD BACK behind an `if false &&` for one round.
@@ -381,11 +395,11 @@ impl TryFrom<&Surface> for ModelingSurface {
                 // The dead arm carried the clone unnoticed -- clippy does not
                 // lint through an `if false` guard, which is one more reason a
                 // held-back arm is not a free thing to leave lying around.
-                Ok(ModelingSurface::Torus(*surface))
+                Ok(Self::Torus(*surface))
             }
             _ => value
                 .try_into_homogeneous_bspline_surface()
-                .map(|surface| ModelingSurface::NurbsSurface(NurbsSurface::new(surface)))
+                .map(|surface| Self::NurbsSurface(NurbsSurface::new(surface)))
                 .or_else(|| {
                     value
                         .try_into_bspline_surface()

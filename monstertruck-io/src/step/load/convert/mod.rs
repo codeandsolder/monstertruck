@@ -4,8 +4,31 @@ use super::step_geometry::{
     SurfaceCurveAssociatedGeometry as StepSurfaceCurveAssociatedGeometry,
     SurfaceCurveKind as StepSurfaceCurveKind,
 };
-use super::*;
-use monstertruck_topology::compress::*;
+use super::{
+    Angle, Array, Assembly, Attributes, BoundResolution, BoundaryCurveFromSamples, Bounded,
+    BoundedCurve, BoundedSurface, Concat, Curve3D, CurveScalarFunction, Cut, Decomposition,
+    Deserialize, EdgeAnyHolder, EdgeCurve, EdgeCurveHolder, EdgeEntity, EdgeLoopHolder,
+    EigenValues, ElementWise, EntityTable, EuclideanSpace, ExactParameterBoundary2D, Exponential,
+    FaceAnyHolder, FaceBoundHolder, FaceSurfaceHolder, GeometricCurveSetHolder, GeometricSetSelect,
+    HashGen, HashMap, Homogeneous, IncludeCurve, InnerSpace, IntersectionCurve, IntoOwned,
+    Invertible, ItemDefinedTransformation, LoadError, ManifoldSolidBrepHolder, Matrix, Matrix3,
+    Matrix4, MetricSpace, Name, NextAssemblyUsageOccurrenceHolder, NodeEntity, One, OperatorNorm,
+    OrientedShellHolder, Origin, ParameterBoundary2D, ParameterDivision1D, ParameterDivision2D,
+    ParameterTransform, ParametricCurve, ParametricCurve2D, ParametricCurve3D, ParametricSurface,
+    ParametricSurface2D, ParametricSurface3D, PlaceHolder, Point2, Point3, PolylineCurve,
+    ProductDefinitionHolder, Result, Rotation, Rotation2, Rotation3, SearchNearestParameter,
+    SearchParameter, SearchParameterDimension, ShellAnyHolder, ShellBasedSurfaceModelHolder,
+    ShellHolder, ShellLoadReport, SnapCurveEndpoints, SquareMatrix, StepConvertingError,
+    SupportsExactPatchDomains, Surface, SurfaceAny, SurfaceScalarFunction, TOLERANCE, Table,
+    Takeable, ToSameGeometry, Tolerance, Transform, Transform2, Transform3, Transformed,
+    TransformedAttributes, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
+    TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface, VectorSpace,
+    VertexPointHolder, Zero, step_geometry, step_p21,
+};
+use monstertruck_topology::compress::{
+    CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace, CompressedShell,
+    CompressedSolid, CompressedTrimmedFace, CompressedTrimmedShell, CompressedTrimmedSolid,
+};
 use std::collections::HashSet;
 
 mod missing_edge;
@@ -65,7 +88,7 @@ impl Table {
     }
 
     /// The entity id behind a reference place-holder, when it has one.
-    fn ref_id<T>(place_holder: &PlaceHolder<T>) -> Option<u64> {
+    const fn ref_id<T>(place_holder: &PlaceHolder<T>) -> Option<u64> {
         if let PlaceHolder::Ref(Name::Entity(idx)) = place_holder {
             Some(*idx)
         } else {
@@ -247,7 +270,7 @@ impl Table {
                     Cat::Edge,
                     Why::EdgeEndpointUnresolved,
                     Some(idx),
-                    Some(format!("no kept vertex for #{front_idx} or #{back_idx}",)),
+                    Some(format!("no kept vertex for #{front_idx} or #{back_idx}")),
                 );
                 return None;
             };
@@ -309,7 +332,7 @@ impl Table {
     /// exact trim, and pick the other seam curve. Composing is all that was
     /// missing.
     #[inline]
-    fn absolute_bound_orientation(bound: &FaceBoundHolder, face_sense: bool) -> bool {
+    const fn absolute_bound_orientation(bound: &FaceBoundHolder, face_sense: bool) -> bool {
         bound.orientation == face_sense
     }
 
@@ -467,8 +490,7 @@ impl Table {
                 let orientation = self
                     .oriented_edge
                     .get(&idx)
-                    .map(|oriented_edge| oriented_edge.orientation == ori)
-                    .unwrap_or(ori);
+                    .map_or(ori, |oriented_edge| oriented_edge.orientation == ori);
                 let Some(index) = eidx_map.get(&edge_entity_idx).copied() else {
                     sink.lost(Cat::EdgeUse, Why::EdgeUseUnresolved, Some(idx), None);
                     return None;
@@ -869,6 +891,7 @@ impl Table {
     ///
     /// Returns `None` if the holder cannot be resolved or yields no curves.
     /// Silently skips points and curves that fail conversion.
+    #[must_use]
     pub fn to_curve3d_set(&self, gcs: &GeometricCurveSetHolder) -> Option<Vec<Curve3D>> {
         let owned = gcs.clone().into_owned(self).ok()?;
         let curves: Vec<Curve3D> = owned
@@ -1102,6 +1125,7 @@ impl Table {
     /// the two routes agree node for node, and the id route reaches the same
     /// 832 of 832 and 254 of 254 solids.** A disagreement would be a finding,
     /// not a rounding error, and that pin is where it would surface.
+    #[must_use]
     pub fn shape_representation_of_node(&self, node: &ProductEntity) -> Option<u64> {
         node.attrs
             .shape_representation
@@ -1135,6 +1159,7 @@ impl Table {
     ///
     /// `items` that are not all entity references cannot match anything, because
     /// `ProductEntity::shape` only exists when every item was one.
+    #[must_use]
     pub fn shape_representation_of_items(&self, items: &[u64]) -> Option<u64> {
         let mut best: Option<u64> = None;
         for (&id, representation) in &self.shape_representation {
@@ -1238,6 +1263,7 @@ impl Table {
     /// # Ok(())
     /// # }
     /// ```
+    #[must_use]
     pub fn solids_via_shape_relationship(
         &self,
         shape_representation: u64,
@@ -1474,8 +1500,8 @@ impl StepShell for ShellAnyHolder {
     ) -> Result<(CompressedShell<Point3, Curve3D, Surface>, ShellLoadReport), StepConvertingError>
     {
         match self {
-            ShellAnyHolder::OrientedShell(shell) => shell.to_compressed_shell_reported(table),
-            ShellAnyHolder::Shell(shell) => shell.to_compressed_shell_reported(table),
+            Self::OrientedShell(shell) => shell.to_compressed_shell_reported(table),
+            Self::Shell(shell) => shell.to_compressed_shell_reported(table),
         }
     }
 
@@ -1490,10 +1516,8 @@ impl StepShell for ShellAnyHolder {
         StepConvertingError,
     > {
         match self {
-            ShellAnyHolder::OrientedShell(shell) => {
-                shell.to_compressed_trimmed_shell_reported(table)
-            }
-            ShellAnyHolder::Shell(shell) => shell.to_compressed_trimmed_shell_reported(table),
+            Self::OrientedShell(shell) => shell.to_compressed_trimmed_shell_reported(table),
+            Self::Shell(shell) => shell.to_compressed_trimmed_shell_reported(table),
         }
     }
 }

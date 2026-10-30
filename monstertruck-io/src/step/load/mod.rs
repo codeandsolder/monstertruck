@@ -10,12 +10,12 @@
 /// re-export [`step_p21`](https://docs.rs/step-p21/latest/step_p21/)
 pub use step_p21;
 
-use monstertruck_assembly::assy::*;
+use monstertruck_assembly::assy::{Assembly, EdgeEntity, NodeEntity, Takeable};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::result::Result;
 use step_p21::{
-    ast::{DataSection, EntityInstance, Name, Parameter, SubSuperRecord},
+    ast::{DataSection, EntityInstance, Name, Parameter, Record, SubSuperRecord},
     tables::{EntityTable, IntoOwned, PlaceHolder},
 };
 
@@ -71,7 +71,20 @@ impl From<String> for LoadError {
     fn from(value: String) -> Self { Self::Conversion(value) }
 }
 
-use step_geometry::*;
+use step_geometry::{
+    Angle, Array, Attributes, BoundaryCurveFromSamples, Bounded, BoundedCurve, BoundedSurface,
+    Concat, Curve3D, CurveScalarFunction, Cut, Decomposition, EigenValues, ElementWise,
+    EuclideanSpace, ExactParameterBoundary2D, Exponential, HashGen, Homogeneous, IncludeCurve,
+    InnerSpace, IntersectionCurve, Invertible, Matrix, Matrix3, Matrix4, MetricSpace, One,
+    OperatorNorm, Origin, ParameterBoundary2D, ParameterDivision1D, ParameterDivision2D,
+    ParameterTransform, ParametricCurve, ParametricCurve2D, ParametricCurve3D, ParametricSurface,
+    ParametricSurface2D, ParametricSurface3D, Point2, Point3, PolylineCurve, Rotation, Rotation2,
+    Rotation3, SearchNearestParameter, SearchParameter, SearchParameterDimension,
+    SnapCurveEndpoints, SquareMatrix, SupportsExactPatchDomains, Surface, SurfaceScalarFunction,
+    TOLERANCE, ToSameGeometry, Tolerance, Transform, Transform2, Transform3, Transformed,
+    TransformedAttributes, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
+    TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface, VectorSpace, Zero,
+};
 pub use step_types::*;
 
 /// the exchange structure corresponds to a graph in STEP file
@@ -229,420 +242,789 @@ impl Table {
         );
     }
 
+    fn push_simple_primitives(
+        &mut self,
+        id: u64,
+        record: &Record,
+    ) -> step_p21::error::Result<bool> {
+        match record.name.as_str() {
+            "CARTESIAN_POINT" => {
+                self.cartesian_point
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "DIRECTION" => {
+                self.direction.insert(id, Deserialize::deserialize(record)?);
+            }
+            "VECTOR" => {
+                self.vector.insert(id, Deserialize::deserialize(record)?);
+            }
+            "PLACEMENT" => {
+                self.placement.insert(id, Deserialize::deserialize(record)?);
+            }
+            "AXIS1_PLACEMENT" => {
+                self.axis1_placement
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "AXIS2_PLACEMENT_2D" => {
+                self.axis2_placement_2d
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "AXIS2_PLACEMENT_3D" => {
+                self.axis2_placement_3d
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn push_simple_curves(&mut self, id: u64, record: &Record) -> step_p21::error::Result<bool> {
+        match record.name.as_str() {
+            "LINE" => {
+                self.line
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "POLYLINE" => {
+                self.polyline.insert(id, Deserialize::deserialize(record)?);
+            }
+            "B_SPLINE_CURVE_WITH_KNOTS" => {
+                self.b_spline_curve_with_knots
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "BEZIER_CURVE" => {
+                self.bezier_curve
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "QUASI_UNIFORM_CURVE" => {
+                self.quasi_uniform_curve
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "UNIFORM_CURVE" => {
+                self.uniform_curve
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "CIRCLE" => {
+                self.circle.insert(id, Deserialize::deserialize(record)?);
+            }
+            "ELLIPSE" => {
+                self.ellipse.insert(id, Deserialize::deserialize(record)?);
+            }
+            "HYPERBOLA" => {
+                self.hyperbola.insert(id, Deserialize::deserialize(record)?);
+            }
+            "PARABOLA" => {
+                self.parabola.insert(id, Deserialize::deserialize(record)?);
+            }
+            "PCURVE" => {
+                self.pcurve.insert(id, Deserialize::deserialize(record)?);
+            }
+            "SURFACE_CURVE" => {
+                let curve: SurfaceCurveParams = Deserialize::deserialize(&record.parameter)?;
+                self.surface_curve.insert(
+                    id,
+                    curve.into_holder(step_types::SurfaceCurveEntityKind::Surface),
+                );
+            }
+            "SEAM_CURVE" => {
+                let curve: SurfaceCurveParams = Deserialize::deserialize(&record.parameter)?;
+                self.surface_curve.insert(
+                    id,
+                    curve.into_holder(step_types::SurfaceCurveEntityKind::Seam),
+                );
+            }
+            "INTERSECTION_CURVE" => {
+                let curve: SurfaceCurveParams = Deserialize::deserialize(&record.parameter)?;
+                self.surface_curve.insert(
+                    id,
+                    curve.into_holder(step_types::SurfaceCurveEntityKind::Intersection),
+                );
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn push_simple_surfaces(&mut self, id: u64, record: &Record) -> step_p21::error::Result<bool> {
+        match record.name.as_str() {
+            "PLANE" => {
+                self.plane.insert(id, Deserialize::deserialize(record)?);
+            }
+            "SPHERICAL_SURFACE" => {
+                self.spherical_surface
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "CYLINDRICAL_SURFACE" => {
+                self.cylindrical_surface
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "TOROIDAL_SURFACE" => {
+                self.toroidal_surface
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            // A distinct entity, not a spelling of the above: it carries a
+            // fifth attribute (`select_outer`) and its own WHERE rule
+            // (`major_radius < minor_radius`). Without this arm the record
+            // fell into `dummy` and every face on it could only be refused as
+            // `Lookup failed for #<id>`, naming neither class nor reason --
+            // 253 corpus faces (spec 011 T1).
+            "DEGENERATE_TOROIDAL_SURFACE" => {
+                self.degenerate_toroidal_surface
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "CONICAL_SURFACE" => {
+                self.conical_surface
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "B_SPLINE_SURFACE_WITH_KNOTS" => {
+                self.b_spline_surface_with_knots
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "UNIFORM_SURFACE" => {
+                self.uniform_surface
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "QUASI_UNIFORM_SURFACE" => {
+                self.quasi_uniform_surface
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "BEZIER_SURFACE" => {
+                self.bezier_surface
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "SURFACE_OF_LINEAR_EXTRUSION" => {
+                self.surface_of_linear_extrusion
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "SURFACE_OF_REVOLUTION" => {
+                self.surface_of_revolution
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn push_simple_topology(&mut self, id: u64, record: &Record) -> step_p21::error::Result<bool> {
+        match record.name.as_str() {
+            "VERTEX_POINT" => {
+                self.vertex_point
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "EDGE_CURVE" => {
+                self.edge_curve
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "ORIENTED_EDGE" => {
+                if let Parameter::List(params) = &record.parameter
+                    && params.len() == 5
+                {
+                    self.oriented_edge.insert(
+                        id,
+                        OrientedEdgeHolder {
+                            label: Deserialize::deserialize(&params[0])?,
+                            edge_element: Deserialize::deserialize(&params[3])?,
+                            orientation: Deserialize::deserialize(&params[4])?,
+                        },
+                    );
+                } else {
+                    self.note_unexpected_shape(
+                        "ORIENTED_EDGE",
+                        id,
+                        "a list of 5",
+                        &record.parameter,
+                    );
+                }
+            }
+            "EDGE_LOOP" => {
+                self.edge_loop.insert(id, Deserialize::deserialize(record)?);
+            }
+            // A `loop` subtype with no edges at all -- the point boundary at a
+            // cone apex, a sphere pole, or a stand-in for the closed torus.
+            // Without this arm the record fell into `dummy` and the WIRE that
+            // referenced it was discarded by a `filter_map` with no error and
+            // no message: the only truly silent drop the spec 011 Phase 0
+            // census found, and it bit four in-repo fixtures
+            // (`boxy-with-surfacetex.step` lost 10 of 160 wires). The arm does
+            // not make the loop representable; it makes the loss reportable.
+            "VERTEX_LOOP" => {
+                self.vertex_loop
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "FACE_BOUND" => {
+                self.face_bound
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "FACE_OUTER_BOUND" => {
+                self.face_bound
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "FACE_SURFACE" => {
+                self.face_surface
+                    .insert(id, Deserialize::deserialize(record)?);
+            }
+            "ADVANCED_FACE" => {
+                self.face_surface
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "ORIENTED_FACE" => {
+                if let Parameter::List(params) = &record.parameter
+                    && params.len() == 4
+                {
+                    self.oriented_face.insert(
+                        id,
+                        OrientedFaceHolder {
+                            label: Deserialize::deserialize(&params[0])?,
+                            face_element: Deserialize::deserialize(&params[2])?,
+                            orientation: Deserialize::deserialize(&params[3])?,
+                        },
+                    );
+                } else {
+                    self.note_unexpected_shape(
+                        "ORIENTED_FACE",
+                        id,
+                        "a list of 4",
+                        &record.parameter,
+                    );
+                }
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn push_simple_shells(&mut self, id: u64, record: &Record) -> step_p21::error::Result<bool> {
+        match record.name.as_str() {
+            "OPEN_SHELL" | "CLOSED_SHELL" => {
+                self.shell
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "ORIENTED_OPEN_SHELL" => {
+                if let Parameter::List(params) = &record.parameter
+                    && params.len() == 4
+                {
+                    self.oriented_shell.insert(
+                        id,
+                        OrientedShellHolder {
+                            label: Deserialize::deserialize(&params[0])?,
+                            shell_element: Deserialize::deserialize(&params[2])?,
+                            orientation: Deserialize::deserialize(&params[3])?,
+                        },
+                    );
+                } else {
+                    self.note_unexpected_shape(
+                        "ORIENTED_OPEN_SHELL",
+                        id,
+                        "a list of 4",
+                        &record.parameter,
+                    );
+                }
+            }
+            "ORIENTED_CLOSED_SHELL" => {
+                if let Parameter::List(params) = &record.parameter
+                    && params.len() == 4
+                {
+                    self.oriented_shell.insert(
+                        id,
+                        OrientedShellHolder {
+                            label: Deserialize::deserialize(&params[0])?,
+                            shell_element: Deserialize::deserialize(&params[2])?,
+                            orientation: Deserialize::deserialize(&params[3])?,
+                        },
+                    );
+                } else {
+                    self.note_unexpected_shape(
+                        "ORIENTED_CLOSED_SHELL",
+                        id,
+                        "a list of 4",
+                        &record.parameter,
+                    );
+                }
+            }
+            "SHELL_BASED_SURFACE_MODEL" => {
+                self.shell_based_surface_model
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "MANIFOLD_SOLID_BREP" => {
+                if let Parameter::List(params) = &record.parameter
+                    && params.len() == 2
+                {
+                    self.manifold_solid_brep.insert(
+                        id,
+                        ManifoldSolidBrepHolder {
+                            label: Deserialize::deserialize(&params[0])?,
+                            outer: Deserialize::deserialize(&params[1])?,
+                            voids: Vec::new(),
+                        },
+                    );
+                } else {
+                    self.note_unexpected_shape(
+                        "MANIFOLD_SOLID_BREP",
+                        id,
+                        "a list of 2",
+                        &record.parameter,
+                    );
+                }
+            }
+            "BREP_WITH_VOIDS" => {
+                self.manifold_solid_brep
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn push_simple_representations(
+        &mut self,
+        id: u64,
+        record: &Record,
+    ) -> step_p21::error::Result<bool> {
+        match record.name.as_str() {
+            "GEOMETRIC_CURVE_SET" => {
+                self.geometric_curve_set
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "DEFINITIONAL_REPRESENTATION" => {
+                if let Parameter::List(params) = &record.parameter
+                    && params.len() == 3
+                {
+                    self.definitional_representation.insert(
+                        id,
+                        DefinitionalRepresentationHolder {
+                            label: Deserialize::deserialize(&params[0])?,
+                            representation_item: Deserialize::deserialize(&params[1])?,
+                            context_of_items: match &params[2] {
+                                Parameter::Ref(x) => PlaceHolder::Ref(x.clone()),
+                                _ => PlaceHolder::Owned(DummyHolder {
+                                    record: format!("{:?}", params[2]),
+                                    is_simple: true,
+                                }),
+                            },
+                        },
+                    );
+                } else {
+                    self.note_unexpected_shape(
+                        "DEFINITIONAL_REPRESENTATION",
+                        id,
+                        "a list of 3",
+                        &record.parameter,
+                    );
+                }
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn push_simple_products(&mut self, id: u64, record: &Record) -> step_p21::error::Result<bool> {
+        match record.name.as_str() {
+            "APPLICATION_CONTEXT" => {
+                self.application_context
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "PRODUCT_CONTEXT" => {
+                self.product_context
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "PRODUCT" => {
+                self.product
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "PRODUCT_DEFINITION_FORMATION" => {
+                self.product_definition_formation
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE" => {
+                if let Parameter::List(params) = &record.parameter
+                    && params.len() >= 3
+                {
+                    self.product_definition_formation.insert(
+                        id,
+                        ProductDefinitionFormationHolder {
+                            id: Deserialize::deserialize(&params[0])?,
+                            description: Deserialize::deserialize(&params[1])?,
+                            of_product: Deserialize::deserialize(&params[2])?,
+                        },
+                    );
+                } else {
+                    self.note_unexpected_shape(
+                        "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE",
+                        id,
+                        "a list of 3 or more",
+                        &record.parameter,
+                    );
+                }
+            }
+            "PRODUCT_DEFINITION_CONTEXT" => {
+                self.product_definition_context
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "PRODUCT_DEFINITION" => {
+                self.product_definition
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "PRODUCT_DEFINITION_SHAPE" => {
+                self.product_definition_shape
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "SHAPE_DEFINITION_REPRESENTATION" => {
+                self.shape_definition_representation
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "SHAPE_REPRESENTATION" | "ADVANCED_BREP_SHAPE_REPRESENTATION" => {
+                self.shape_representation
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION" => {
+                self.context_dependent_shape_representation
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "SHAPE_REPRESENTATION_RELATIONSHIP" => {
+                self.shape_representation_relationship
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "NEXT_ASSEMBLY_USAGE_OCCURRENCE" => {
+                self.next_assembly_usage_occurrence
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            "ITEM_DEFINED_TRANSFORMATION" => {
+                self.item_defined_transformation
+                    .insert(id, Deserialize::deserialize(&record.parameter)?);
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn records_named(records: &[Record], expected: &[&str]) -> bool {
+        records.len() == expected.len()
+            && records
+                .iter()
+                .zip(expected)
+                .all(|(record, expected)| record.name == *expected)
+    }
+
+    fn push_rational_curve_knots_or_bezier(
+        &mut self,
+        id: u64,
+        records: &[Record],
+    ) -> step_p21::error::Result<bool> {
+        use NonRationalBsplineCurveHolder as NRBC;
+        let (bsp_idx, knots_idx) = if Self::records_named(
+            records,
+            &[
+                "BOUNDED_CURVE",
+                "B_SPLINE_CURVE",
+                "B_SPLINE_CURVE_WITH_KNOTS",
+                "CURVE",
+                "GEOMETRIC_REPRESENTATION_ITEM",
+                "RATIONAL_B_SPLINE_CURVE",
+                "REPRESENTATION_ITEM",
+            ],
+        ) {
+            (1, Some(2))
+        } else if Self::records_named(
+            records,
+            &[
+                "BEZIER_CURVE",
+                "BOUNDED_CURVE",
+                "B_SPLINE_CURVE",
+                "CURVE",
+                "GEOMETRIC_REPRESENTATION_ITEM",
+                "RATIONAL_B_SPLINE_CURVE",
+                "REPRESENTATION_ITEM",
+            ],
+        ) {
+            (2, None)
+        } else {
+            return Ok(false);
+        };
+        let (Parameter::List(bsp_params), Parameter::List(weights), Parameter::List(label)) = (
+            &records[bsp_idx].parameter,
+            &records[5].parameter,
+            &records[6].parameter,
+        ) else {
+            return Ok(false);
+        };
+        let mut params = label.clone();
+        params.extend(bsp_params.clone());
+        let non_rational = if let Some(knots_idx) = knots_idx {
+            let Parameter::List(knots_params) = &records[knots_idx].parameter else {
+                return Ok(false);
+            };
+            params.extend(knots_params.clone());
+            NRBC::BsplineCurveWithKnots(Deserialize::deserialize(&Parameter::List(params))?)
+        } else {
+            NRBC::BezierCurve(Deserialize::deserialize(&Parameter::List(params))?)
+        };
+        self.rational_b_spline_curve.insert(
+            id,
+            RationalBsplineCurveHolder {
+                non_rational_b_spline_curve: PlaceHolder::Owned(non_rational),
+                weights_data: Deserialize::deserialize(&weights[0])?,
+            },
+        );
+        Ok(true)
+    }
+
+    fn push_rational_curve_quasi_or_uniform(
+        &mut self,
+        id: u64,
+        records: &[Record],
+    ) -> step_p21::error::Result<bool> {
+        use NonRationalBsplineCurveHolder as NRBC;
+        let (quasi, weights_idx, label_idx) = if Self::records_named(
+            records,
+            &[
+                "BOUNDED_CURVE",
+                "B_SPLINE_CURVE",
+                "CURVE",
+                "GEOMETRIC_REPRESENTATION_ITEM",
+                "QUASI_UNIFORM_CURVE",
+                "RATIONAL_B_SPLINE_CURVE",
+                "REPRESENTATION_ITEM",
+            ],
+        ) {
+            (true, 5, 6)
+        } else if Self::records_named(
+            records,
+            &[
+                "BOUNDED_CURVE",
+                "B_SPLINE_CURVE",
+                "CURVE",
+                "GEOMETRIC_REPRESENTATION_ITEM",
+                "RATIONAL_B_SPLINE_CURVE",
+                "REPRESENTATION_ITEM",
+                "UNIFORM_CURVE",
+            ],
+        ) {
+            (false, 4, 5)
+        } else {
+            return Ok(false);
+        };
+        let (Parameter::List(bsp_params), Parameter::List(weights), Parameter::List(label)) = (
+            &records[1].parameter,
+            &records[weights_idx].parameter,
+            &records[label_idx].parameter,
+        ) else {
+            return Ok(false);
+        };
+        let mut params = vec![label[0].clone()];
+        params.extend(bsp_params.iter().cloned());
+        let non_rational = if quasi {
+            NRBC::QuasiUniformCurve(Deserialize::deserialize(&Parameter::List(params))?)
+        } else {
+            NRBC::UniformCurve(Deserialize::deserialize(&Parameter::List(params))?)
+        };
+        self.rational_b_spline_curve.insert(
+            id,
+            RationalBsplineCurveHolder {
+                non_rational_b_spline_curve: PlaceHolder::Owned(non_rational),
+                weights_data: Deserialize::deserialize(&weights[0])?,
+            },
+        );
+        Ok(true)
+    }
+
+    fn push_rational_surface_knots_or_bezier(
+        &mut self,
+        id: u64,
+        records: &[Record],
+    ) -> step_p21::error::Result<bool> {
+        use NonRationalBsplineSurfaceHolder as NRBS;
+        let (bsp_idx, knots_idx) = if Self::records_named(
+            records,
+            &[
+                "BOUNDED_SURFACE",
+                "B_SPLINE_SURFACE",
+                "B_SPLINE_SURFACE_WITH_KNOTS",
+                "GEOMETRIC_REPRESENTATION_ITEM",
+                "RATIONAL_B_SPLINE_SURFACE",
+                "REPRESENTATION_ITEM",
+                "SURFACE",
+            ],
+        ) {
+            (1, Some(2))
+        } else if Self::records_named(
+            records,
+            &[
+                "BEZIER_SURFACE",
+                "BOUNDED_SURFACE",
+                "B_SPLINE_SURFACE",
+                "GEOMETRIC_REPRESENTATION_ITEM",
+                "RATIONAL_B_SPLINE_SURFACE",
+                "REPRESENTATION_ITEM",
+                "SURFACE",
+            ],
+        ) {
+            (2, None)
+        } else {
+            return Ok(false);
+        };
+        let (Parameter::List(bsp_params), Parameter::List(weights), Parameter::List(label)) = (
+            &records[bsp_idx].parameter,
+            &records[4].parameter,
+            &records[5].parameter,
+        ) else {
+            return Ok(false);
+        };
+        let mut params = label.clone();
+        params.extend(bsp_params.clone());
+        let non_rational = if let Some(knots_idx) = knots_idx {
+            let Parameter::List(knots_params) = &records[knots_idx].parameter else {
+                return Ok(false);
+            };
+            params.extend(knots_params.clone());
+            NRBS::BsplineSurfaceWithKnots(Deserialize::deserialize(&Parameter::List(params))?)
+        } else {
+            NRBS::BezierSurface(Deserialize::deserialize(&Parameter::List(params))?)
+        };
+        self.rational_b_spline_surface.insert(
+            id,
+            RationalBsplineSurfaceHolder {
+                non_rational_b_spline_surface: PlaceHolder::Owned(non_rational),
+                weights_data: Deserialize::deserialize(&weights[0])?,
+            },
+        );
+        Ok(true)
+    }
+
+    fn push_rational_surface_quasi_or_uniform(
+        &mut self,
+        id: u64,
+        records: &[Record],
+    ) -> step_p21::error::Result<bool> {
+        use NonRationalBsplineSurfaceHolder as NRBS;
+        let (quasi, weights_idx, label_idx) = if Self::records_named(
+            records,
+            &[
+                "BOUNDED_SURFACE",
+                "B_SPLINE_SURFACE",
+                "GEOMETRIC_REPRESENTATION_ITEM",
+                "QUASI_UNIFORM_SURFACE",
+                "RATIONAL_B_SPLINE_SURFACE",
+                "REPRESENTATION_ITEM",
+                "SURFACE",
+            ],
+        ) {
+            (true, 4, 5)
+        } else if Self::records_named(
+            records,
+            &[
+                "BOUNDED_SURFACE",
+                "B_SPLINE_SURFACE",
+                "GEOMETRIC_REPRESENTATION_ITEM",
+                "RATIONAL_B_SPLINE_SURFACE",
+                "REPRESENTATION_ITEM",
+                "SURFACE",
+                "UNIFORM_SURFACE",
+            ],
+        ) {
+            (false, 3, 4)
+        } else {
+            return Ok(false);
+        };
+        let (Parameter::List(bsp_params), Parameter::List(weights), Parameter::List(label)) = (
+            &records[1].parameter,
+            &records[weights_idx].parameter,
+            &records[label_idx].parameter,
+        ) else {
+            return Ok(false);
+        };
+        let mut params = label.clone();
+        params.extend(bsp_params.clone());
+        let non_rational = if quasi {
+            NRBS::QuasiUniformSurface(Deserialize::deserialize(&Parameter::List(params))?)
+        } else {
+            NRBS::UniformSurface(Deserialize::deserialize(&Parameter::List(params))?)
+        };
+        self.rational_b_spline_surface.insert(
+            id,
+            RationalBsplineSurfaceHolder {
+                non_rational_b_spline_surface: PlaceHolder::Owned(non_rational),
+                weights_data: Deserialize::deserialize(&weights[0])?,
+            },
+        );
+        Ok(true)
+    }
+
+    fn push_complex_relationship(
+        &mut self,
+        id: u64,
+        records: &[Record],
+    ) -> step_p21::error::Result<bool> {
+        if !Self::records_named(
+            records,
+            &[
+                "REPRESENTATION_RELATIONSHIP",
+                "REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION",
+                "SHAPE_REPRESENTATION_RELATIONSHIP",
+            ],
+        ) {
+            return Ok(false);
+        }
+        let (Parameter::List(rr_parameter), Parameter::List(transformation)) =
+            (&records[0].parameter, &records[1].parameter)
+        else {
+            return Ok(false);
+        };
+        let entity = ShapeRepresentationRelationshipWithTransformationHolder {
+            name: Deserialize::deserialize(&rr_parameter[0])?,
+            description: Deserialize::deserialize(&rr_parameter[1])?,
+            rep_1: Deserialize::deserialize(&rr_parameter[2])?,
+            rep_2: Deserialize::deserialize(&rr_parameter[3])?,
+            transformation_operator: Deserialize::deserialize(&transformation[0])?,
+        };
+        self.shape_representation_relationship_with_transformation
+            .insert(id, entity);
+        Ok(true)
+    }
+
+    fn push_complex_instance(
+        &mut self,
+        id: u64,
+        records: &[Record],
+    ) -> step_p21::error::Result<()> {
+        let handled = match records.len() {
+            7 => {
+                self.push_rational_curve_knots_or_bezier(id, records)?
+                    || self.push_rational_curve_quasi_or_uniform(id, records)?
+                    || self.push_rational_surface_knots_or_bezier(id, records)?
+                    || self.push_rational_surface_quasi_or_uniform(id, records)?
+            }
+            3 => self.push_complex_relationship(id, records)?,
+            _ => false,
+        };
+        if !handled {
+            self.dummy.insert(
+                id,
+                DummyHolder {
+                    record: format!("{records:?}"),
+                    is_simple: false,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Adds one parsed STEP entity to this table.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying STEP deserialization error when a recognized
+    /// entity cannot be decoded into its typed holder.
     pub fn push_instance(&mut self, instance: &EntityInstance) -> step_p21::error::Result<()> {
         match instance {
-            EntityInstance::Simple { id, record } => match record.name.as_str() {
-                "CARTESIAN_POINT" => {
-                    self.cartesian_point
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "DIRECTION" => {
-                    self.direction
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "VECTOR" => {
-                    self.vector.insert(*id, Deserialize::deserialize(record)?);
-                }
-                "PLACEMENT" => {
-                    self.placement
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "AXIS1_PLACEMENT" => {
-                    self.axis1_placement
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "AXIS2_PLACEMENT_2D" => {
-                    self.axis2_placement_2d
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "AXIS2_PLACEMENT_3D" => {
-                    self.axis2_placement_3d
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "LINE" => {
-                    self.line
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "POLYLINE" => {
-                    self.polyline.insert(*id, Deserialize::deserialize(record)?);
-                }
-                "B_SPLINE_CURVE_WITH_KNOTS" => {
-                    self.b_spline_curve_with_knots
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "BEZIER_CURVE" => {
-                    self.bezier_curve
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "QUASI_UNIFORM_CURVE" => {
-                    self.quasi_uniform_curve
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "UNIFORM_CURVE" => {
-                    self.uniform_curve
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "CIRCLE" => {
-                    self.circle.insert(*id, Deserialize::deserialize(record)?);
-                }
-                "ELLIPSE" => {
-                    self.ellipse.insert(*id, Deserialize::deserialize(record)?);
-                }
-                "HYPERBOLA" => {
-                    self.hyperbola
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "PARABOLA" => {
-                    self.parabola.insert(*id, Deserialize::deserialize(record)?);
-                }
-                "PCURVE" => {
-                    self.pcurve.insert(*id, Deserialize::deserialize(record)?);
-                }
-                "SURFACE_CURVE" => {
-                    let curve: SurfaceCurveParams = Deserialize::deserialize(&record.parameter)?;
-                    self.surface_curve.insert(
-                        *id,
-                        curve.into_holder(step_types::SurfaceCurveEntityKind::Surface),
-                    );
-                }
-                "SEAM_CURVE" => {
-                    let curve: SurfaceCurveParams = Deserialize::deserialize(&record.parameter)?;
-                    self.surface_curve.insert(
-                        *id,
-                        curve.into_holder(step_types::SurfaceCurveEntityKind::Seam),
-                    );
-                }
-                "INTERSECTION_CURVE" => {
-                    let curve: SurfaceCurveParams = Deserialize::deserialize(&record.parameter)?;
-                    self.surface_curve.insert(
-                        *id,
-                        curve.into_holder(step_types::SurfaceCurveEntityKind::Intersection),
-                    );
-                }
-                "PLANE" => {
-                    self.plane.insert(*id, Deserialize::deserialize(record)?);
-                }
-                "SPHERICAL_SURFACE" => {
-                    self.spherical_surface
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "CYLINDRICAL_SURFACE" => {
-                    self.cylindrical_surface
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "TOROIDAL_SURFACE" => {
-                    self.toroidal_surface
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                // A distinct entity, not a spelling of the above: it carries a
-                // fifth attribute (`select_outer`) and its own WHERE rule
-                // (`major_radius < minor_radius`). Without this arm the record
-                // fell into `dummy` and every face on it could only be refused as
-                // `Lookup failed for #<id>`, naming neither class nor reason --
-                // 253 corpus faces (spec 011 T1).
-                "DEGENERATE_TOROIDAL_SURFACE" => {
-                    self.degenerate_toroidal_surface
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "CONICAL_SURFACE" => {
-                    self.conical_surface
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "B_SPLINE_SURFACE_WITH_KNOTS" => {
-                    self.b_spline_surface_with_knots
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "UNIFORM_SURFACE" => {
-                    self.uniform_surface
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "QUASI_UNIFORM_SURFACE" => {
-                    self.quasi_uniform_surface
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "BEZIER_SURFACE" => {
-                    self.bezier_surface
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "SURFACE_OF_LINEAR_EXTRUSION" => {
-                    self.surface_of_linear_extrusion
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "SURFACE_OF_REVOLUTION" => {
-                    self.surface_of_revolution
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-
-                "VERTEX_POINT" => {
-                    self.vertex_point
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "EDGE_CURVE" => {
-                    self.edge_curve
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "ORIENTED_EDGE" => {
-                    if let Parameter::List(params) = &record.parameter
-                        && params.len() == 5
-                    {
-                        self.oriented_edge.insert(
-                            *id,
-                            OrientedEdgeHolder {
-                                label: Deserialize::deserialize(&params[0])?,
-                                edge_element: Deserialize::deserialize(&params[3])?,
-                                orientation: Deserialize::deserialize(&params[4])?,
-                            },
-                        );
-                    } else {
-                        self.note_unexpected_shape(
-                            "ORIENTED_EDGE",
-                            *id,
-                            "a list of 5",
-                            &record.parameter,
-                        );
-                    }
-                }
-                "EDGE_LOOP" => {
-                    self.edge_loop
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                // A `loop` subtype with no edges at all -- the point boundary at a
-                // cone apex, a sphere pole, or a stand-in for the closed torus.
-                // Without this arm the record fell into `dummy` and the WIRE that
-                // referenced it was discarded by a `filter_map` with no error and
-                // no message: the only truly silent drop the spec 011 Phase 0
-                // census found, and it bit four in-repo fixtures
-                // (`boxy-with-surfacetex.step` lost 10 of 160 wires). The arm does
-                // not make the loop representable; it makes the loss reportable.
-                "VERTEX_LOOP" => {
-                    self.vertex_loop
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "FACE_BOUND" => {
-                    self.face_bound
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "FACE_OUTER_BOUND" => {
-                    self.face_bound
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "FACE_SURFACE" => {
-                    self.face_surface
-                        .insert(*id, Deserialize::deserialize(record)?);
-                }
-                "ADVANCED_FACE" => {
-                    self.face_surface
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "ORIENTED_FACE" => {
-                    if let Parameter::List(params) = &record.parameter
-                        && params.len() == 4
-                    {
-                        self.oriented_face.insert(
-                            *id,
-                            OrientedFaceHolder {
-                                label: Deserialize::deserialize(&params[0])?,
-                                face_element: Deserialize::deserialize(&params[2])?,
-                                orientation: Deserialize::deserialize(&params[3])?,
-                            },
-                        );
-                    } else {
-                        self.note_unexpected_shape(
-                            "ORIENTED_FACE",
-                            *id,
-                            "a list of 4",
-                            &record.parameter,
-                        );
-                    }
-                }
-                "OPEN_SHELL" => {
-                    self.shell
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "CLOSED_SHELL" => {
-                    self.shell
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "ORIENTED_OPEN_SHELL" => {
-                    if let Parameter::List(params) = &record.parameter
-                        && params.len() == 4
-                    {
-                        self.oriented_shell.insert(
-                            *id,
-                            OrientedShellHolder {
-                                label: Deserialize::deserialize(&params[0])?,
-                                shell_element: Deserialize::deserialize(&params[2])?,
-                                orientation: Deserialize::deserialize(&params[3])?,
-                            },
-                        );
-                    } else {
-                        self.note_unexpected_shape(
-                            "ORIENTED_OPEN_SHELL",
-                            *id,
-                            "a list of 4",
-                            &record.parameter,
-                        );
-                    }
-                }
-                "ORIENTED_CLOSED_SHELL" => {
-                    if let Parameter::List(params) = &record.parameter
-                        && params.len() == 4
-                    {
-                        self.oriented_shell.insert(
-                            *id,
-                            OrientedShellHolder {
-                                label: Deserialize::deserialize(&params[0])?,
-                                shell_element: Deserialize::deserialize(&params[2])?,
-                                orientation: Deserialize::deserialize(&params[3])?,
-                            },
-                        );
-                    } else {
-                        self.note_unexpected_shape(
-                            "ORIENTED_CLOSED_SHELL",
-                            *id,
-                            "a list of 4",
-                            &record.parameter,
-                        );
-                    }
-                }
-                "SHELL_BASED_SURFACE_MODEL" => {
-                    self.shell_based_surface_model
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "MANIFOLD_SOLID_BREP" => {
-                    if let Parameter::List(params) = &record.parameter
-                        && params.len() == 2
-                    {
-                        self.manifold_solid_brep.insert(
-                            *id,
-                            ManifoldSolidBrepHolder {
-                                label: Deserialize::deserialize(&params[0])?,
-                                outer: Deserialize::deserialize(&params[1])?,
-                                voids: Vec::new(),
-                            },
-                        );
-                    } else {
-                        self.note_unexpected_shape(
-                            "MANIFOLD_SOLID_BREP",
-                            *id,
-                            "a list of 2",
-                            &record.parameter,
-                        );
-                    }
-                }
-                "BREP_WITH_VOIDS" => {
-                    self.manifold_solid_brep
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "GEOMETRIC_CURVE_SET" => {
-                    self.geometric_curve_set
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "DEFINITIONAL_REPRESENTATION" => {
-                    if let Parameter::List(params) = &record.parameter
-                        && params.len() == 3
-                    {
-                        self.definitional_representation.insert(
-                            *id,
-                            DefinitionalRepresentationHolder {
-                                label: Deserialize::deserialize(&params[0])?,
-                                representation_item: Deserialize::deserialize(&params[1])?,
-                                context_of_items: match &params[2] {
-                                    Parameter::Ref(x) => PlaceHolder::Ref(x.clone()),
-                                    _ => PlaceHolder::Owned(DummyHolder {
-                                        record: format!("{:?}", params[2]),
-                                        is_simple: true,
-                                    }),
-                                },
-                            },
-                        );
-                    } else {
-                        self.note_unexpected_shape(
-                            "DEFINITIONAL_REPRESENTATION",
-                            *id,
-                            "a list of 3",
-                            &record.parameter,
-                        );
-                    }
-                }
-                "APPLICATION_CONTEXT" => {
-                    self.application_context
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "PRODUCT_CONTEXT" => {
-                    self.product_context
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "PRODUCT" => {
-                    self.product
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "PRODUCT_DEFINITION_FORMATION" => {
-                    self.product_definition_formation
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE" => {
-                    if let Parameter::List(params) = &record.parameter
-                        && params.len() >= 3
-                    {
-                        self.product_definition_formation.insert(
-                            *id,
-                            ProductDefinitionFormationHolder {
-                                id: Deserialize::deserialize(&params[0])?,
-                                description: Deserialize::deserialize(&params[1])?,
-                                of_product: Deserialize::deserialize(&params[2])?,
-                            },
-                        );
-                    } else {
-                        self.note_unexpected_shape(
-                            "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE",
-                            *id,
-                            "a list of 3 or more",
-                            &record.parameter,
-                        );
-                    }
-                }
-                "PRODUCT_DEFINITION_CONTEXT" => {
-                    self.product_definition_context
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "PRODUCT_DEFINITION" => {
-                    self.product_definition
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "PRODUCT_DEFINITION_SHAPE" => {
-                    self.product_definition_shape
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "SHAPE_DEFINITION_REPRESENTATION" => {
-                    self.shape_definition_representation
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "SHAPE_REPRESENTATION" => {
-                    self.shape_representation
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "ADVANCED_BREP_SHAPE_REPRESENTATION" => {
-                    self.shape_representation
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION" => {
-                    self.context_dependent_shape_representation
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "SHAPE_REPRESENTATION_RELATIONSHIP" => {
-                    self.shape_representation_relationship
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "NEXT_ASSEMBLY_USAGE_OCCURRENCE" => {
-                    self.next_assembly_usage_occurrence
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                "ITEM_DEFINED_TRANSFORMATION" => {
-                    self.item_defined_transformation
-                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
-                }
-                _ => {
+            EntityInstance::Simple { id, record } => {
+                let handled = self.push_simple_primitives(*id, record)?
+                    || self.push_simple_curves(*id, record)?
+                    || self.push_simple_surfaces(*id, record)?
+                    || self.push_simple_topology(*id, record)?
+                    || self.push_simple_shells(*id, record)?
+                    || self.push_simple_representations(*id, record)?
+                    || self.push_simple_products(*id, record)?;
+                if !handled {
                     self.dummy.insert(
                         *id,
                         DummyHolder {
@@ -651,346 +1033,26 @@ impl Table {
                         },
                     );
                 }
-            },
+                Ok(())
+            }
             EntityInstance::Complex {
                 id,
                 subsuper: SubSuperRecord(records),
-            } => {
-                use NonRationalBsplineCurveHolder as NRBC;
-                use NonRationalBsplineSurfaceHolder as NRBS;
-                if records.len() == 7 {
-                    match (
-                        records[0].name.as_str(),
-                        &records[0].parameter,
-                        records[1].name.as_str(),
-                        &records[1].parameter,
-                        records[2].name.as_str(),
-                        &records[2].parameter,
-                        records[3].name.as_str(),
-                        &records[3].parameter,
-                        records[4].name.as_str(),
-                        &records[4].parameter,
-                        records[5].name.as_str(),
-                        &records[5].parameter,
-                        records[6].name.as_str(),
-                        &records[6].parameter,
-                    ) {
-                        (
-                            "BOUNDED_CURVE",
-                            _,
-                            "B_SPLINE_CURVE",
-                            Parameter::List(bsp_params),
-                            "B_SPLINE_CURVE_WITH_KNOTS",
-                            Parameter::List(knots_params),
-                            "CURVE",
-                            _,
-                            "GEOMETRIC_REPRESENTATION_ITEM",
-                            _,
-                            "RATIONAL_B_SPLINE_CURVE",
-                            Parameter::List(weights),
-                            "REPRESENTATION_ITEM",
-                            Parameter::List(label),
-                        ) => {
-                            let mut params = label.clone();
-                            params.extend(bsp_params.clone());
-                            params.extend(knots_params.clone());
-                            self.rational_b_spline_curve.insert(
-                                *id,
-                                RationalBsplineCurveHolder {
-                                    non_rational_b_spline_curve: PlaceHolder::Owned(
-                                        NRBC::BsplineCurveWithKnots(Deserialize::deserialize(
-                                            &Parameter::List(params),
-                                        )?),
-                                    ),
-                                    weights_data: Deserialize::deserialize(&weights[0])?,
-                                },
-                            );
-                        }
-                        (
-                            "BEZIER_CURVE",
-                            _,
-                            "BOUNDED_CURVE",
-                            _,
-                            "B_SPLINE_CURVE",
-                            Parameter::List(bsp_params),
-                            "CURVE",
-                            _,
-                            "GEOMETRIC_REPRESENTATION_ITEM",
-                            _,
-                            "RATIONAL_B_SPLINE_CURVE",
-                            Parameter::List(weights),
-                            "REPRESENTATION_ITEM",
-                            Parameter::List(label),
-                        ) => {
-                            let mut params = label.clone();
-                            params.extend(bsp_params.clone());
-                            self.rational_b_spline_curve.insert(
-                                *id,
-                                RationalBsplineCurveHolder {
-                                    non_rational_b_spline_curve: PlaceHolder::Owned(
-                                        NRBC::BezierCurve(Deserialize::deserialize(
-                                            &Parameter::List(params),
-                                        )?),
-                                    ),
-                                    weights_data: Deserialize::deserialize(&weights[0])?,
-                                },
-                            );
-                        }
-                        (
-                            "BOUNDED_CURVE",
-                            _,
-                            "B_SPLINE_CURVE",
-                            Parameter::List(bsp_params),
-                            "CURVE",
-                            _,
-                            "GEOMETRIC_REPRESENTATION_ITEM",
-                            _,
-                            "QUASI_UNIFORM_CURVE",
-                            _,
-                            "RATIONAL_B_SPLINE_CURVE",
-                            Parameter::List(weights),
-                            "REPRESENTATION_ITEM",
-                            Parameter::List(label),
-                        ) => {
-                            let mut params = vec![label[0].clone()];
-                            params.extend(bsp_params.iter().cloned());
-                            self.rational_b_spline_curve.insert(
-                                *id,
-                                RationalBsplineCurveHolder {
-                                    non_rational_b_spline_curve: PlaceHolder::Owned(
-                                        NRBC::QuasiUniformCurve(Deserialize::deserialize(
-                                            &Parameter::List(params),
-                                        )?),
-                                    ),
-                                    weights_data: Deserialize::deserialize(&weights[0])?,
-                                },
-                            );
-                        }
-                        (
-                            "BOUNDED_CURVE",
-                            _,
-                            "B_SPLINE_CURVE",
-                            Parameter::List(bsp_params),
-                            "CURVE",
-                            _,
-                            "GEOMETRIC_REPRESENTATION_ITEM",
-                            _,
-                            "RATIONAL_B_SPLINE_CURVE",
-                            Parameter::List(weights),
-                            "REPRESENTATION_ITEM",
-                            Parameter::List(label),
-                            "UNIFORM_CURVE",
-                            _,
-                        ) => {
-                            let mut params = vec![label[0].clone()];
-                            params.extend(bsp_params.iter().cloned());
-                            self.rational_b_spline_curve.insert(
-                                *id,
-                                RationalBsplineCurveHolder {
-                                    non_rational_b_spline_curve: PlaceHolder::Owned(
-                                        NRBC::UniformCurve(Deserialize::deserialize(
-                                            &Parameter::List(params),
-                                        )?),
-                                    ),
-                                    weights_data: Deserialize::deserialize(&weights[0])?,
-                                },
-                            );
-                        }
-                        (
-                            "BOUNDED_SURFACE",
-                            _,
-                            "B_SPLINE_SURFACE",
-                            Parameter::List(bsp_params),
-                            "B_SPLINE_SURFACE_WITH_KNOTS",
-                            Parameter::List(knots_params),
-                            "GEOMETRIC_REPRESENTATION_ITEM",
-                            _,
-                            "RATIONAL_B_SPLINE_SURFACE",
-                            Parameter::List(weights),
-                            "REPRESENTATION_ITEM",
-                            Parameter::List(label),
-                            "SURFACE",
-                            _,
-                        ) => {
-                            let mut params = label.clone();
-                            params.extend(bsp_params.clone());
-                            params.extend(knots_params.clone());
-                            self.rational_b_spline_surface.insert(
-                                *id,
-                                RationalBsplineSurfaceHolder {
-                                    non_rational_b_spline_surface: PlaceHolder::Owned(
-                                        NRBS::BsplineSurfaceWithKnots(Deserialize::deserialize(
-                                            &Parameter::List(params),
-                                        )?),
-                                    ),
-                                    weights_data: Deserialize::deserialize(&weights[0])?,
-                                },
-                            );
-                        }
-                        (
-                            "BEZIER_SURFACE",
-                            _,
-                            "BOUNDED_SURFACE",
-                            _,
-                            "B_SPLINE_SURFACE",
-                            Parameter::List(bsp_params),
-                            "GEOMETRIC_REPRESENTATION_ITEM",
-                            _,
-                            "RATIONAL_B_SPLINE_SURFACE",
-                            Parameter::List(weights),
-                            "REPRESENTATION_ITEM",
-                            Parameter::List(label),
-                            "SURFACE",
-                            _,
-                        ) => {
-                            let mut params = label.clone();
-                            params.extend(bsp_params.clone());
-                            self.rational_b_spline_surface.insert(
-                                *id,
-                                RationalBsplineSurfaceHolder {
-                                    non_rational_b_spline_surface: PlaceHolder::Owned(
-                                        NRBS::BezierSurface(Deserialize::deserialize(
-                                            &Parameter::List(params),
-                                        )?),
-                                    ),
-                                    weights_data: Deserialize::deserialize(&weights[0])?,
-                                },
-                            );
-                        }
-                        (
-                            "BOUNDED_SURFACE",
-                            _,
-                            "B_SPLINE_SURFACE",
-                            Parameter::List(bsp_params),
-                            "GEOMETRIC_REPRESENTATION_ITEM",
-                            _,
-                            "QUASI_UNIFORM_SURFACE",
-                            _,
-                            "RATIONAL_B_SPLINE_SURFACE",
-                            Parameter::List(weights),
-                            "REPRESENTATION_ITEM",
-                            Parameter::List(label),
-                            "SURFACE",
-                            _,
-                        ) => {
-                            let mut params = label.clone();
-                            params.extend(bsp_params.clone());
-                            self.rational_b_spline_surface.insert(
-                                *id,
-                                RationalBsplineSurfaceHolder {
-                                    non_rational_b_spline_surface: PlaceHolder::Owned(
-                                        NRBS::QuasiUniformSurface(Deserialize::deserialize(
-                                            &Parameter::List(params),
-                                        )?),
-                                    ),
-                                    weights_data: Deserialize::deserialize(&weights[0])?,
-                                },
-                            );
-                        }
-                        (
-                            "BOUNDED_SURFACE",
-                            _,
-                            "B_SPLINE_SURFACE",
-                            Parameter::List(bsp_params),
-                            "GEOMETRIC_REPRESENTATION_ITEM",
-                            _,
-                            "RATIONAL_B_SPLINE_SURFACE",
-                            Parameter::List(weights),
-                            "REPRESENTATION_ITEM",
-                            Parameter::List(label),
-                            "SURFACE",
-                            _,
-                            "UNIFORM_SURFACE",
-                            _,
-                        ) => {
-                            let mut params = label.clone();
-                            params.extend(bsp_params.clone());
-                            self.rational_b_spline_surface.insert(
-                                *id,
-                                RationalBsplineSurfaceHolder {
-                                    non_rational_b_spline_surface: PlaceHolder::Owned(
-                                        NRBS::UniformSurface(Deserialize::deserialize(
-                                            &Parameter::List(params),
-                                        )?),
-                                    ),
-                                    weights_data: Deserialize::deserialize(&weights[0])?,
-                                },
-                            );
-                        }
-                        _ => {
-                            self.dummy.insert(
-                                *id,
-                                DummyHolder {
-                                    record: format!("{records:?}"),
-                                    is_simple: false,
-                                },
-                            );
-                        }
-                    }
-                } else if records.len() == 3 {
-                    match (
-                        records[0].name.as_str(),
-                        &records[0].parameter,
-                        records[1].name.as_str(),
-                        &records[1].parameter,
-                        records[2].name.as_str(),
-                        &records[2].parameter,
-                    ) {
-                        (
-                            "REPRESENTATION_RELATIONSHIP",
-                            Parameter::List(rr_parameter),
-                            "REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION",
-                            Parameter::List(transformation),
-                            "SHAPE_REPRESENTATION_RELATIONSHIP",
-                            _,
-                        ) => {
-                            let entity = ShapeRepresentationRelationshipWithTransformationHolder {
-                                name: Deserialize::deserialize(&rr_parameter[0])?,
-                                description: Deserialize::deserialize(&rr_parameter[1])?,
-                                rep_1: Deserialize::deserialize(&rr_parameter[2])?,
-                                rep_2: Deserialize::deserialize(&rr_parameter[3])?,
-                                transformation_operator: Deserialize::deserialize(
-                                    &transformation[0],
-                                )?,
-                            };
-                            self.shape_representation_relationship_with_transformation
-                                .insert(*id, entity);
-                        }
-                        _ => {
-                            self.dummy.insert(
-                                *id,
-                                DummyHolder {
-                                    record: format!("{records:?}"),
-                                    is_simple: false,
-                                },
-                            );
-                        }
-                    }
-                } else {
-                    self.dummy.insert(
-                        *id,
-                        DummyHolder {
-                            record: format!("{records:?}"),
-                            is_simple: false,
-                        },
-                    );
-                }
-            }
+            } => self.push_complex_instance(*id, records),
         }
-        Ok(())
     }
-    #[inline(always)]
-    pub fn from_data_section(data_section: &DataSection) -> Table {
-        Table::from_iter(&data_section.entities)
+
+    #[must_use]
+    pub fn from_data_section(data_section: &DataSection) -> Self {
+        Self::from_iter(&data_section.entities)
     }
     /// Parses a STEP file source and assembles a [`Table`] of entities.
     ///
     /// Returns the parser's error verbatim when the input is not a valid
     /// STEP exchange structure.
-    #[inline(always)]
-    pub fn from_step(step_str: &str) -> Result<Table, LoadError> {
+    pub fn from_step(step_str: &str) -> Result<Self, LoadError> {
         let exchange = step_p21::parser::parse(step_str)?;
-        Ok(Table::from_data_section(&exchange.data[0]))
+        Ok(Self::from_data_section(&exchange.data[0]))
     }
 
     /// Parses STEP file BYTES, decoding UTF-8 where possible and falling back to
@@ -1027,7 +1089,7 @@ impl Table {
     ///
     /// UTF-8 input is unaffected -- it takes the first branch and is
     /// byte-identical to calling [`Table::from_step`] directly.
-    pub fn from_step_bytes(bytes: &[u8]) -> Result<Table, LoadError> {
+    pub fn from_step_bytes(bytes: &[u8]) -> Result<Self, LoadError> {
         match std::str::from_utf8(bytes) {
             Ok(text) => Self::from_step(text),
             // Infallible by construction: `u8 as char` is the ISO-8859-1 code
@@ -1047,8 +1109,8 @@ impl<'a> FromIterator<&'a EntityInstance> for Table {
     /// changes; what is new is that the swallow also lands in
     /// [`Table::entity_report`], where a caller can find it after the fact
     /// instead of having to have been watching stderr.
-    fn from_iter<I: IntoIterator<Item = &'a EntityInstance>>(iter: I) -> Table {
-        let mut res = Table::default();
+    fn from_iter<I: IntoIterator<Item = &'a EntityInstance>>(iter: I) -> Self {
+        let mut res = Self::default();
         iter.into_iter().for_each(|instance| {
             if let Err(e) = res.push_instance(instance) {
                 eprintln!("{e}");

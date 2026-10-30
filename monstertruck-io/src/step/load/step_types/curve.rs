@@ -4,7 +4,14 @@
 //! The `pcurve`/`surface_curve` cluster is the exception: it lives in the
 //! parent module because [`topology`](super::topology) reads its fields.
 
-use super::*;
+use super::{
+    Array, Axis2Placement, Axis2PlacementHolder, BsplineCurve, CartesianPoint,
+    CartesianPointHolder, Conic2D, Conic3D, Curve2D, Curve3D, Deserialize, EuclideanSpace, Holder,
+    Homogeneous, KnotVector, Logical, Matrix3, Matrix4, NurbsCurve, PI, Pcurve, PcurveHolder,
+    Point2, Point3, PolylineCurve, Result, Serialize, StepConvertingError, SurfaceCurve,
+    SurfaceCurveHolder, Table, Transformed, TransformedAttributes, UnitCircle, UnitHyperbola,
+    UnitParabola, Vector, VectorHolder, geom, quasi_uniform_knots, step_geometry, uniform_knots,
+};
 
 /// `curve`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
@@ -25,9 +32,8 @@ pub enum CurveAny {
 
 impl TryFrom<&CurveAny> for Curve2D {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(curve: &CurveAny) -> Result<Self, Self::Error> {
-        use CurveAny::*;
+        use CurveAny::{BoundedCurve, Conic, Line, Pcurve, SurfaceCurve};
         Ok(match curve {
             Line(line) => Self::Line(line.as_ref().into()),
             BoundedCurve(b) => b.as_ref().try_into()?,
@@ -40,9 +46,8 @@ impl TryFrom<&CurveAny> for Curve2D {
 
 impl TryFrom<&CurveAny> for Curve3D {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(curve: &CurveAny) -> Result<Self, Self::Error> {
-        use CurveAny::*;
+        use CurveAny::{BoundedCurve, Conic, Line, Pcurve, SurfaceCurve};
         Ok(match curve {
             Line(line) => Self::Line(line.as_ref().into()),
             BoundedCurve(b) => b.as_ref().try_into()?,
@@ -70,7 +75,6 @@ where
     P: EuclideanSpace + From<&'a CartesianPoint>,
     P::Diff: From<&'a Vector>,
 {
-    #[inline(always)]
     fn from(line: &'a Line) -> Self {
         let p = P::from(&line.pnt);
         let q = p + P::Diff::from(&line.dir);
@@ -91,9 +95,8 @@ pub enum BoundedCurveAny {
 
 impl TryFrom<&BoundedCurveAny> for Curve2D {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &BoundedCurveAny) -> Result<Self, Self::Error> {
-        use BoundedCurveAny::*;
+        use BoundedCurveAny::{BsplineCurve, Polyline};
         Ok(match value {
             Polyline(x) => Self::Polyline(x.as_ref().into()),
             BsplineCurve(x) => x.as_ref().try_into()?,
@@ -103,9 +106,8 @@ impl TryFrom<&BoundedCurveAny> for Curve2D {
 
 impl TryFrom<&BoundedCurveAny> for Curve3D {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &BoundedCurveAny) -> Result<Self, Self::Error> {
-        use BoundedCurveAny::*;
+        use BoundedCurveAny::{BsplineCurve, Polyline};
         Ok(match value {
             Polyline(x) => Self::Polyline(x.as_ref().into()),
             BsplineCurve(x) => x.as_ref().try_into()?,
@@ -124,7 +126,6 @@ pub struct Polyline {
     pub points: Vec<CartesianPoint>,
 }
 impl<'a, P: From<&'a CartesianPoint>> From<&'a Polyline> for PolylineCurve<P> {
-    #[inline(always)]
     fn from(poly: &'a Polyline) -> Self { Self(poly.points.iter().map(|pt| P::from(pt)).collect()) }
 }
 
@@ -167,14 +168,13 @@ pub struct BsplineCurveWithKnots {
 }
 impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&BsplineCurveWithKnots> for BsplineCurve<P> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(curve: &BsplineCurveWithKnots) -> Result<Self, StepConvertingError> {
         let knots = curve.knots.clone();
         let multi = curve
             .knot_multiplicities
             .iter()
-            .map(|n| *n as usize)
-            .collect();
+            .map(|n| usize::try_from(*n))
+            .collect::<Result<Vec<_>, _>>()?;
         let knots = KnotVector::from_single_multi(knots, multi)?;
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
         Ok(Self::new(knots, ctrpts)?)
@@ -197,9 +197,8 @@ pub struct BezierCurve {
 }
 impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&BezierCurve> for BsplineCurve<P> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(curve: &BezierCurve) -> Result<Self, StepConvertingError> {
-        let degree = curve.degree as usize;
+        let degree = usize::try_from(curve.degree)?;
         let knots = KnotVector::bezier_knot(degree);
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
         Ok(Self::new(knots, ctrpts)?)
@@ -222,9 +221,11 @@ pub struct QuasiUniformCurve {
 }
 impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&QuasiUniformCurve> for BsplineCurve<P> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(curve: &QuasiUniformCurve) -> Result<Self, StepConvertingError> {
-        let knots = quasi_uniform_knots(curve.control_points_list.len(), curve.degree as usize);
+        let knots = quasi_uniform_knots(
+            curve.control_points_list.len(),
+            usize::try_from(curve.degree)?,
+        )?;
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
         Ok(Self::new(knots, ctrpts)?)
     }
@@ -246,9 +247,11 @@ pub struct UniformCurve {
 }
 impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&UniformCurve> for BsplineCurve<P> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(curve: &UniformCurve) -> Result<Self, StepConvertingError> {
-        let knots = uniform_knots(curve.control_points_list.len(), curve.degree as usize)?;
+        let knots = uniform_knots(
+            curve.control_points_list.len(),
+            usize::try_from(curve.degree)?,
+        )?;
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
         Ok(Self::new(knots, ctrpts)?)
     }
@@ -272,9 +275,10 @@ pub enum NonRationalBsplineCurve {
 
 impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&NonRationalBsplineCurve> for BsplineCurve<P> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(curve: &NonRationalBsplineCurve) -> Result<Self, StepConvertingError> {
-        use NonRationalBsplineCurve::*;
+        use NonRationalBsplineCurve::{
+            BezierCurve, BsplineCurveWithKnots, QuasiUniformCurve, UniformCurve,
+        };
         match curve {
             BsplineCurveWithKnots(x) => x.try_into(),
             BezierCurve(x) => x.try_into(),
@@ -304,7 +308,6 @@ where
     V::Point: for<'a> From<&'a CartesianPoint>,
 {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(curve: &RationalBsplineCurve) -> Result<Self, StepConvertingError> {
         Ok(Self::try_from_bspline_and_weights(
             BsplineCurve::try_from(&curve.non_rational_b_spline_curve)?,
@@ -313,7 +316,7 @@ where
     }
 }
 
-/// b_spline_curve
+/// `b_spline_curve`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -326,9 +329,8 @@ pub enum BsplineCurveAny {
 
 impl TryFrom<&BsplineCurveAny> for Curve2D {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &BsplineCurveAny) -> Result<Self, Self::Error> {
-        use BsplineCurveAny::*;
+        use BsplineCurveAny::{NonRationalBsplineCurve, RationalBsplineCurve};
         Ok(match value {
             NonRationalBsplineCurve(bsp) => Self::BsplineCurve(bsp.as_ref().try_into()?),
             RationalBsplineCurve(bsp) => Self::NurbsCurve(bsp.as_ref().try_into()?),
@@ -338,9 +340,8 @@ impl TryFrom<&BsplineCurveAny> for Curve2D {
 
 impl TryFrom<&BsplineCurveAny> for Curve3D {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &BsplineCurveAny) -> Result<Self, Self::Error> {
-        use BsplineCurveAny::*;
+        use BsplineCurveAny::{NonRationalBsplineCurve, RationalBsplineCurve};
         Ok(match value {
             NonRationalBsplineCurve(bsp) => Self::BsplineCurve(bsp.as_ref().try_into()?),
             RationalBsplineCurve(bsp) => Self::NurbsCurve(bsp.as_ref().try_into()?),
@@ -365,26 +366,24 @@ pub enum Conic {
 
 impl TryFrom<&Conic> for Conic2D {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &Conic) -> Result<Self, Self::Error> {
         Ok(match value {
-            Conic::Circle(value) => Conic2D::Ellipse(value.try_into()?),
-            Conic::Ellipse(value) => Conic2D::Ellipse(value.try_into()?),
-            Conic::Hyperbola(value) => Conic2D::Hyperbola(value.try_into()?),
-            Conic::Parabola(value) => Conic2D::Parabola(value.try_into()?),
+            Conic::Circle(value) => Self::Ellipse(value.try_into()?),
+            Conic::Ellipse(value) => Self::Ellipse(value.try_into()?),
+            Conic::Hyperbola(value) => Self::Hyperbola(value.try_into()?),
+            Conic::Parabola(value) => Self::Parabola(value.try_into()?),
         })
     }
 }
 
 impl TryFrom<&Conic> for Conic3D {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &Conic) -> Result<Self, Self::Error> {
         Ok(match value {
-            Conic::Circle(value) => Conic3D::Ellipse(value.try_into()?),
-            Conic::Ellipse(value) => Conic3D::Ellipse(value.try_into()?),
-            Conic::Hyperbola(value) => Conic3D::Hyperbola(value.try_into()?),
-            Conic::Parabola(value) => Conic3D::Parabola(value.try_into()?),
+            Conic::Circle(value) => Self::Ellipse(value.try_into()?),
+            Conic::Ellipse(value) => Self::Ellipse(value.try_into()?),
+            Conic::Hyperbola(value) => Self::Hyperbola(value.try_into()?),
+            Conic::Parabola(value) => Self::Parabola(value.try_into()?),
         })
     }
 }
@@ -403,11 +402,10 @@ pub struct Circle {
 
 impl TryFrom<&Circle> for step_geometry::Ellipse<Point2, Matrix3> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(circle: &Circle) -> Result<Self, Self::Error> {
         let transform = Matrix3::try_from(&circle.position)? * Matrix3::from_scale(circle.radius);
         Ok(
-            Processor::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
+            Self::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
                 .transformed(transform),
         )
     }
@@ -415,11 +413,10 @@ impl TryFrom<&Circle> for step_geometry::Ellipse<Point2, Matrix3> {
 
 impl TryFrom<&Circle> for step_geometry::Ellipse<Point3, Matrix4> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(circle: &Circle) -> Result<Self, Self::Error> {
         let transform = Matrix4::try_from(&circle.position)? * Matrix4::from_scale(circle.radius);
         Ok(
-            Processor::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
+            Self::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
                 .transformed(transform),
         )
     }
@@ -440,13 +437,12 @@ pub struct Ellipse {
 
 impl TryFrom<&Ellipse> for step_geometry::Ellipse<Point2, Matrix3> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(ellipse: &Ellipse) -> Result<Self, Self::Error> {
         let (r0, r1) = (ellipse.semi_axis_1, ellipse.semi_axis_2);
         let transform =
             Matrix3::try_from(&ellipse.position)? * Matrix3::from_nonuniform_scale(r0, r1);
         Ok(
-            Processor::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
+            Self::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
                 .transformed(transform),
         )
     }
@@ -454,13 +450,12 @@ impl TryFrom<&Ellipse> for step_geometry::Ellipse<Point2, Matrix3> {
 
 impl TryFrom<&Ellipse> for step_geometry::Ellipse<Point3, Matrix4> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(ellipse: &Ellipse) -> Result<Self, Self::Error> {
         let (r0, r1) = (ellipse.semi_axis_1, ellipse.semi_axis_2);
         let transform = Matrix4::try_from(&ellipse.position)?
             * Matrix4::from_nonuniform_scale(r0, r1, f64::min(r0, r1));
         Ok(
-            Processor::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
+            Self::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
                 .transformed(transform),
         )
     }
@@ -481,13 +476,12 @@ pub struct Hyperbola {
 
 impl TryFrom<&Hyperbola> for step_geometry::Hyperbola<Point2, Matrix3> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(hyperbola: &Hyperbola) -> Result<Self, Self::Error> {
         let (r0, r1) = (hyperbola.semi_axis, hyperbola.semi_imag_axis);
         let transform =
             Matrix3::try_from(&hyperbola.position)? * Matrix3::from_nonuniform_scale(r0, r1);
         Ok(
-            Processor::new(geom::TrimmedCurve::new(UnitHyperbola::new(), (-1.0, 1.0)))
+            Self::new(geom::TrimmedCurve::new(UnitHyperbola::new(), (-1.0, 1.0)))
                 .transformed(transform),
         )
     }
@@ -495,13 +489,12 @@ impl TryFrom<&Hyperbola> for step_geometry::Hyperbola<Point2, Matrix3> {
 
 impl TryFrom<&Hyperbola> for step_geometry::Hyperbola<Point3, Matrix4> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(hyperbola: &Hyperbola) -> Result<Self, Self::Error> {
         let (r0, r1) = (hyperbola.semi_axis, hyperbola.semi_imag_axis);
         let transform = Matrix4::try_from(&hyperbola.position)?
             * Matrix4::from_nonuniform_scale(r0, r1, f64::min(r0, r1));
         Ok(
-            Processor::new(geom::TrimmedCurve::new(UnitHyperbola::new(), (-1.0, 1.0)))
+            Self::new(geom::TrimmedCurve::new(UnitHyperbola::new(), (-1.0, 1.0)))
                 .transformed(transform),
         )
     }
@@ -521,12 +514,11 @@ pub struct Parabola {
 
 impl TryFrom<&Parabola> for step_geometry::Parabola<Point2, Matrix3> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(parabola: &Parabola) -> Result<Self, Self::Error> {
         let transform =
             Matrix3::try_from(&parabola.position)? * Matrix3::from_scale(parabola.focal_dist);
         Ok(
-            Processor::new(geom::TrimmedCurve::new(UnitParabola::new(), (-1.0, 1.0)))
+            Self::new(geom::TrimmedCurve::new(UnitParabola::new(), (-1.0, 1.0)))
                 .transformed(transform),
         )
     }
@@ -534,12 +526,11 @@ impl TryFrom<&Parabola> for step_geometry::Parabola<Point2, Matrix3> {
 
 impl TryFrom<&Parabola> for step_geometry::Parabola<Point3, Matrix4> {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(parabola: &Parabola) -> Result<Self, Self::Error> {
         let transform =
             Matrix4::try_from(&parabola.position)? * Matrix4::from_scale(parabola.focal_dist);
         Ok(
-            Processor::new(geom::TrimmedCurve::new(UnitParabola::new(), (-1.0, 1.0)))
+            Self::new(geom::TrimmedCurve::new(UnitParabola::new(), (-1.0, 1.0)))
                 .transformed(transform),
         )
     }

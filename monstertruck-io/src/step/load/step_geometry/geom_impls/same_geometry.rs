@@ -1,7 +1,12 @@
 //! Lifting a concrete `monstertruck-geometry` carrier back INTO the STEP
 //! enums, and the enum-level predicates that ride along with it.
 
-use super::*;
+use super::{
+    BsplineCurve, Conic2D, Conic3D, Curve2D, Curve3D, ElementarySurface, EuclideanSpace,
+    ExtrusionSurface, Homogeneous, IncludeCurve, InnerSpace, Invertible, Line, Matrix3, Matrix4,
+    Origin, ParametricSurface3D, Plane, Point2, Point3, Processor, RevolutionSurface,
+    SearchParameter, Surface, SweepSurface, ToSameGeometry, TrimmedCurve, UnitCircle, Vector3,
+};
 
 impl ToSameGeometry<Curve2D> for Line<Point2> {
     #[inline]
@@ -34,11 +39,12 @@ impl ToSameGeometry<Curve3D> for BsplineCurve<Point3> {
 }
 
 impl Conic3D {
-    pub fn posture(&self) -> Matrix4 {
+    #[must_use]
+    pub const fn posture(&self) -> Matrix4 {
         match self {
-            Conic3D::Ellipse(processor) => *processor.transform(),
-            Conic3D::Hyperbola(processor) => *processor.transform(),
-            Conic3D::Parabola(processor) => *processor.transform(),
+            Self::Ellipse(processor) => *processor.transform(),
+            Self::Hyperbola(processor) => *processor.transform(),
+            Self::Parabola(processor) => *processor.transform(),
         }
     }
 }
@@ -86,7 +92,7 @@ impl ToSameGeometry<Surface> for RevolutionSurface<Curve3D> {
     fn to_same_geometry(&self) -> Surface {
         let default = || {
             let (curve, origin, axis) = (self.entity_curve().inverse(), self.origin(), self.axis());
-            let processor = Processor::new(RevolutionSurface::by_revolution(curve, origin, axis));
+            let processor = Processor::new(Self::by_revolution(curve, origin, axis));
             Surface::SweepSurface(SweepSurface::RevolutionSurface(processor))
         };
         match self.entity_curve() {

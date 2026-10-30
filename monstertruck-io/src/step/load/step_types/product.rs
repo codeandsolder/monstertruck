@@ -4,9 +4,23 @@
 //! transformations that relate them -- the non-geometric scaffolding that
 //! says which shape belongs to which part, and where.
 
-use super::*;
+use super::{
+    Angle, Array, Attributes, Axis2Placement, Axis2PlacementHolder, BoundaryCurveFromSamples,
+    Bounded, BoundedCurve, BoundedSurface, Concat, CurveScalarFunction, Cut, Decomposition,
+    Deserialize, EigenValues, ElementWise, EuclideanSpace, ExactParameterBoundary2D, Exponential,
+    HashGen, Holder, Homogeneous, IncludeCurve, InnerSpace, Invertible, Matrix, Matrix3, Matrix4,
+    MetricSpace, One, OperatorNorm, Origin, ParameterBoundary2D, ParameterDivision1D,
+    ParameterDivision2D, ParameterTransform, ParametricCurve, ParametricCurve2D, ParametricCurve3D,
+    ParametricSurface, ParametricSurface2D, ParametricSurface3D, RepresentationContext,
+    RepresentationContextHolder, RepresentationItem, RepresentationItemHolder, Result, Rotation,
+    Rotation2, Rotation3, SearchNearestParameter, SearchParameter, SearchParameterDimension,
+    Serialize, SnapCurveEndpoints, SquareMatrix, StepConvertingError, SupportsExactPatchDomains,
+    SurfaceScalarFunction, Table, ToSameGeometry, Tolerance, Transform, Transform2, Transform3,
+    Transformed, TransformedAttributes, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
+    TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface, VectorSpace, Zero,
+};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = application_context)]
 #[holder(generate_deserialize)]
@@ -14,7 +28,7 @@ pub struct ApplicationContext {
     pub application: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product_context)]
 #[holder(generate_deserialize)]
@@ -25,7 +39,7 @@ pub struct ProductContext {
     pub discipline_type: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product)]
 #[holder(generate_deserialize)]
@@ -42,7 +56,7 @@ pub struct Product {
     pub frame_of_reference: Vec<ProductContext>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product_definition_formation)]
 #[holder(generate_deserialize)]
@@ -57,7 +71,7 @@ pub struct ProductDefinitionFormation {
     pub of_product: Product,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product_definition_context)]
 #[holder(generate_deserialize)]
@@ -68,7 +82,7 @@ pub struct ProductDefinitionContext {
     pub life_cycle_stage: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product_definition)]
 #[holder(generate_deserialize)]
@@ -114,7 +128,7 @@ pub struct ProductDefinitionShape {
     pub definition: CharacterizedDefinition,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = shape_representation)]
 #[holder(generate_deserialize)]
@@ -148,7 +162,7 @@ pub struct ShapeDefinitionRepresentation {
     pub used_representation: ShapeRepresentation,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = shape_representation_relationship)]
 #[holder(generate_deserialize)]

@@ -2,7 +2,19 @@
 //! surface, found exactly where the pair admits a closed form and by
 //! projected sampling otherwise.
 
-use super::*;
+use super::{
+    Angle, Array, BoundaryCurveFromSamples, BoundedCurve, BoundedSurface, BsplineCurve, Conic2D,
+    Conic3D, Curve2D, Curve3D, CurveScalarFunction, CurveTrimRef, ElementarySurface, Ellipse,
+    EuclideanSpace, ExactParameterBoundary2D, Hyperbola, InnerSpace, Invertible, KnotVector, Line,
+    Matrix3, Matrix4, MetricSpace, NurbsCurve, Ordering, Origin, Parabola, ParameterBoundary2D,
+    ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface,
+    ParametricSurface3D, Plane, Point2, Point3, Processor, RevolutionSurface, Rotation,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SphericalSurface, SquareMatrix,
+    StepConvertingError, StepParameterCurve, StepRevolutionSurface, Surface, SurfaceCurve3D,
+    SurfaceCurveTrimRef, SurfaceScalarFunction, SweepSurface, TOLERANCE, Tolerance,
+    ToroidalSurface, Transform, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector3,
+    Vector4, uv_clamp,
+};
 
 fn sampled_parameter_boundary<C>(
     curve: &C,
@@ -35,7 +47,7 @@ where
         } else if let Some(previous) = previous {
             if let Some(period) = period {
                 (-2..=2)
-                    .map(|index| value + index as f64 * period)
+                    .map(|index| f64::mul_add(f64::from(index), period, value))
                     .min_by(abs_diff(previous))
             } else if let Some(range) = range {
                 let clamped = clamp_near_range(value, range);
@@ -69,7 +81,7 @@ where
                     );
                     Some(min)
                 } else {
-                    let mut normalized = value - f64::floor((value - min) / period) * period;
+                    let mut normalized = f64::floor((value - min) / period).mul_add(-period, value);
                     if normalized < min {
                         normalized += period;
                     }
@@ -389,9 +401,9 @@ where C: ParametricCurve3D<Point = Point3> + BoundedCurve {
     let (t0, t1) = curve.range_tuple();
     [
         t0,
-        (3.0 * t0 + t1) * 0.25,
-        (t0 + t1) * 0.5,
-        (t0 + 3.0 * t1) * 0.25,
+        3.0f64.mul_add(t0, t1) * 0.25,
+        f64::midpoint(t0, t1),
+        3.0f64.mul_add(t1, t0) * 0.25,
         t1,
     ]
     .into_iter()
@@ -542,7 +554,7 @@ fn ellipse_circle_frame_in_processor<S>(
     let (t0, t1) = curve.range_tuple();
     Some(AnalyticCircleFrame {
         center,
-        radius: (radius0 + radius1) * 0.5,
+        radius: f64::midpoint(radius0, radius1),
         normal: cross / cross_magnitude,
         front: inverse.transform_point(curve.front()),
         tangent: inverse.transform_vector(curve.derivative(t0)),
@@ -588,7 +600,7 @@ fn unit_angular_rate(curve_tangent: Vector3, surface_tangent: Vector3) -> Option
 }
 
 #[inline]
-fn processor_parameter(orientation: bool, u: f64, v: f64) -> Point2 {
+const fn processor_parameter(orientation: bool, u: f64, v: f64) -> Point2 {
     if orientation {
         Point2::new(u, v)
     } else {
@@ -619,7 +631,7 @@ where
         return None;
     }
     let rate = unit_angular_rate(frame.tangent, entity.derivative_v(profile_parameter, angle))?;
-    let angle1 = angle + rate * (frame.range.1 - frame.range.0);
+    let angle1 = f64::mul_add(rate, frame.range.1 - frame.range.0, angle);
     let front = processor_parameter(revolution.orientation(), profile_parameter, angle);
     let back = processor_parameter(revolution.orientation(), profile_parameter, angle1);
     let parameter_curve = affine_uv_parameter_curve(frame.range, front, back, surface)?;
@@ -642,7 +654,7 @@ fn exact_ellipse_parameter_curve_on_sphere(
         && circle_support_matches(frame, parallel_center, parallel_radius, z)
     {
         let rate = unit_angular_rate(frame.tangent, sphere.derivative_v(u, v))?;
-        let v1 = v + rate * (frame.range.1 - frame.range.0);
+        let v1 = f64::mul_add(rate, frame.range.1 - frame.range.0, v);
         let front = processor_parameter(processor.orientation(), u, v);
         let back = processor_parameter(processor.orientation(), u, v1);
         let parameter_curve = affine_uv_parameter_curve(frame.range, front, back, surface)?;
@@ -660,7 +672,7 @@ fn exact_ellipse_parameter_curve_on_sphere(
         return None;
     }
     let rate = unit_angular_rate(frame.tangent, sphere.derivative_u(u, v))?;
-    let u1 = u + rate * (frame.range.1 - frame.range.0);
+    let u1 = f64::mul_add(rate, frame.range.1 - frame.range.0, u);
     if u1 < -TOLERANCE || u1 > std::f64::consts::PI + TOLERANCE {
         return None;
     }
@@ -682,13 +694,13 @@ fn exact_ellipse_parameter_curve_on_torus(
     let (u, v) = torus.search_parameter(frame.front, SearchParameterHint2D::None, 30)?;
     let z = Vector3::unit_z();
 
-    let major_radius = torus.large_radius() + torus.small_radius() * v.cos();
+    let major_radius = torus.small_radius().mul_add(v.cos(), torus.large_radius());
     let major_center = torus.center() + z * (torus.small_radius() * v.sin());
     if major_radius.abs() > TOLERANCE
         && circle_support_matches(frame, major_center, major_radius.abs(), z)
     {
         let rate = unit_angular_rate(frame.tangent, torus.derivative_u(u, v))?;
-        let u1 = u + rate * (frame.range.1 - frame.range.0);
+        let u1 = f64::mul_add(rate, frame.range.1 - frame.range.0, u);
         let front = processor_parameter(processor.orientation(), u, v);
         let back = processor_parameter(processor.orientation(), u1, v);
         let parameter_curve = affine_uv_parameter_curve(frame.range, front, back, surface)?;
@@ -707,7 +719,7 @@ fn exact_ellipse_parameter_curve_on_torus(
         return None;
     }
     let rate = unit_angular_rate(frame.tangent, torus.derivative_v(u, v))?;
-    let v1 = v + rate * (frame.range.1 - frame.range.0);
+    let v1 = f64::mul_add(rate, frame.range.1 - frame.range.0, v);
     let front = processor_parameter(processor.orientation(), u, v);
     let back = processor_parameter(processor.orientation(), u, v1);
     let parameter_curve = affine_uv_parameter_curve(frame.range, front, back, surface)?;
@@ -791,8 +803,9 @@ fn exact_line_parameter_curve_on(
         Surface::SweepSurface(SweepSurface::RevolutionSurface(revolution)) => {
             exact_line_parameter_curve_on_step_revolution(curve, revolution, surface)
         }
-        Surface::ElementarySurface(ElementarySurface::Sphere(_))
-        | Surface::ElementarySurface(ElementarySurface::ToroidalSurface(_))
+        Surface::ElementarySurface(
+            ElementarySurface::Sphere(_) | ElementarySurface::ToroidalSurface(_),
+        )
         | Surface::SweepSurface(SweepSurface::ExtrusionSurface(_)) => None,
     }
 }
@@ -895,7 +908,7 @@ fn exact_conic_parameter_curve_on(
 impl ParameterBoundary2D<Surface> for Curve3D {
     fn parameter_boundary_2d(&self, surface: &Surface, tolerance: f64) -> Option<Vec<Point2>> {
         match self {
-            Curve3D::ParameterCurve(curve) => {
+            Self::ParameterCurve(curve) => {
                 if curve.surface().as_ref() == surface {
                     curve
                         .curve()
@@ -905,7 +918,7 @@ impl ParameterBoundary2D<Surface> for Curve3D {
                     sampled_parameter_boundary(curve, surface, tolerance)
                 }
             }
-            Curve3D::SurfaceCurve(curve) => curve
+            Self::SurfaceCurve(curve) => curve
                 .parameter_curve_reparameterized_on(surface)
                 .and_then(|parameter_curve| {
                     parameter_curve
@@ -914,7 +927,7 @@ impl ParameterBoundary2D<Surface> for Curve3D {
                         .map(|(_, points)| points)
                 })
                 .or_else(|| sampled_parameter_boundary(curve.leader(), surface, tolerance)),
-            Curve3D::IntersectionCurve(curve) => {
+            Self::IntersectionCurve(curve) => {
                 exact_parameter_curve_on(curve.leader().as_ref(), surface)
                     .and_then(|parameter_curve| {
                         parameter_curve
@@ -947,11 +960,11 @@ impl ParameterBoundary2D<Surface> for Curve3D {
                             .collect::<Option<Vec<_>>>()
                     })
             }
-            Curve3D::Line(_)
-            | Curve3D::Polyline(_)
-            | Curve3D::Conic(_)
-            | Curve3D::BsplineCurve(_)
-            | Curve3D::NurbsCurve(_) => sampled_parameter_boundary(self, surface, tolerance),
+            Self::Line(_)
+            | Self::Polyline(_)
+            | Self::Conic(_)
+            | Self::BsplineCurve(_)
+            | Self::NurbsCurve(_) => sampled_parameter_boundary(self, surface, tolerance),
         }
     }
 }
@@ -995,7 +1008,7 @@ fn curve2d_from_sampled_boundary(points: Vec<Point2>) -> Option<Curve2D> {
 impl BoundaryCurveFromSamples<Surface> for StepParameterCurve {
     fn boundary_curve_from_samples(surface: &Surface, points: Vec<Point2>) -> Option<Self> {
         curve2d_from_sampled_boundary(points)
-            .map(|curve| ParameterCurve::new(Box::new(curve), Box::new(surface.clone())))
+            .map(|curve| Self::new(Box::new(curve), Box::new(surface.clone())))
     }
 }
 

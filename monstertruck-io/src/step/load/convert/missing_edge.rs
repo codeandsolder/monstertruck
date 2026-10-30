@@ -24,7 +24,13 @@
 //! tessellated replacement for the edge: the leader is only the numerical guide
 //! used by Monstertruck's existing intersection-curve implementation.
 
-use super::*;
+use super::{
+    Array, Attributes, BoundResolution, BoundedSurface, Curve3D, CurveScalarFunction, EdgeCurve,
+    EuclideanSpace, FaceBoundHolder, HashMap, InnerSpace, IntersectionCurve, MetricSpace, Name,
+    ParametricSurface3D, PlaceHolder, Point2, Point3, PolylineCurve, Rotation,
+    SearchNearestParameter, SearchParameter, ShellHolder, SquareMatrix, Surface,
+    SurfaceScalarFunction, TOLERANCE, Table, step_geometry, step_p21,
+};
 use monstertruck_geometry::prelude::{
     BoundedCurve, Invertible, ParameterDivision1D, ParametricCurve, ParametricSurface,
 };
@@ -72,7 +78,9 @@ fn unwrap_near(value: f64, reference: f64, period: Option<f64>) -> f64 {
     let Some(period) = period.filter(|period| period.is_finite() && *period > TOLERANCE) else {
         return value;
     };
-    value + ((reference - value) / period).round() * period
+    ((reference - value) / period)
+        .round()
+        .mul_add(period, value)
 }
 
 #[inline]
@@ -168,8 +176,9 @@ impl Table {
                 let orientation = self
                     .oriented_edge
                     .get(&reference_id)
-                    .map(|oriented_edge| oriented_edge.orientation == absolute_orientation)
-                    .unwrap_or(absolute_orientation);
+                    .map_or(absolute_orientation, |oriented_edge| {
+                        oriented_edge.orientation == absolute_orientation
+                    });
                 Some(RecoveryUse {
                     edge_id,
                     orientation,
@@ -573,8 +582,7 @@ impl Table {
             ] {
                 let value = unwrap_near(value, target, period);
                 let tolerance = period
-                    .map(|period| period.abs() * 1.0e-6)
-                    .unwrap_or(GEOMETRY_TOLERANCE)
+                    .map_or(GEOMETRY_TOLERANCE, |period| period.abs() * 1.0e-6)
                     .max(GEOMETRY_TOLERANCE);
                 if (value - target).abs() > tolerance {
                     trace_recovery(edge_id, "pair_fail=endpoint_uv");
@@ -621,7 +629,7 @@ impl Table {
         let (t0, t1) = intersection.range_tuple();
         for index in 0..RECOVERY_SAMPLES - 1 {
             let fraction = (index as f64 + 0.5) / (RECOVERY_SAMPLES - 1) as f64;
-            let t = t0 + (t1 - t0) * fraction;
+            let t = f64::mul_add(t1 - t0, fraction, t0);
             let Some((point, uv0, uv1)) = intersection.search_triple(t, PROJECTION_TRIALS) else {
                 trace_recovery(edge_id, "pair_fail=final_search_triple");
                 return None;
@@ -703,8 +711,8 @@ impl Table {
                             let (c0, c1) = candidate.range_tuple();
                             let agrees = [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().all(|fraction| {
                                 point_close(
-                                    existing.evaluate(e0 + (e1 - e0) * fraction),
-                                    candidate.evaluate(c0 + (c1 - c0) * fraction),
+                                    existing.evaluate(f64::mul_add(e1 - e0, fraction, e0)),
+                                    candidate.evaluate(f64::mul_add(c1 - c0, fraction, c0)),
                                 )
                             });
                             if !agrees {

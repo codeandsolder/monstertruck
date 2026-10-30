@@ -99,7 +99,8 @@ impl LossCategory {
     ];
 
     /// Lower-case singular noun, for messages.
-    pub fn noun(self) -> &'static str {
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
         match self {
             Self::Face => "face",
             Self::Wire => "wire",
@@ -113,7 +114,8 @@ impl LossCategory {
 
     /// Lower-case plural noun. Spelled out rather than `noun() + "s"` because
     /// "vertexs" in a diagnostic reads as a bug in the diagnostic.
-    pub fn plural(self) -> &'static str {
+    #[must_use]
+    pub const fn plural(self) -> &'static str {
         match self {
             Self::Face => "faces",
             Self::Wire => "wires",
@@ -207,7 +209,8 @@ pub enum LossReason {
 
 impl LossReason {
     /// One-line explanation, for messages.
-    pub fn description(self) -> &'static str {
+    #[must_use]
+    pub const fn description(self) -> &'static str {
         match self {
             Self::FaceUnresolved => "the shell's face reference resolves to no face record",
             Self::SurfaceUnresolved => "the face's surface record could not be resolved",
@@ -272,7 +275,8 @@ pub struct CategoryCount {
 
 impl CategoryCount {
     /// `listed - kept`, saturating (they cannot legitimately invert).
-    pub fn lost(&self) -> usize { self.listed.saturating_sub(self.kept) }
+    #[must_use]
+    pub const fn lost(&self) -> usize { self.listed.saturating_sub(self.kept) }
 }
 
 /// What one conversion kept and lost, per category, with reasons.
@@ -295,20 +299,24 @@ pub struct ShellLoadReport {
 
 impl ShellLoadReport {
     /// Listed/kept for one category.
+    #[must_use]
     pub fn count(&self, category: LossCategory) -> CategoryCount {
         self.counts.get(&category).copied().unwrap_or_default()
     }
 
     /// How many items of `category` were lost.
+    #[must_use]
     pub fn lost(&self, category: LossCategory) -> usize { self.count(category).lost() }
 
     /// How many items were lost across every category.
+    #[must_use]
     pub fn total_lost(&self) -> usize { LossCategory::ALL.iter().map(|c| self.lost(*c)).sum() }
 
     /// Did this conversion keep every single thing the STEP data listed?
     ///
     /// Note what this does NOT claim: a lossless conversion can still be
     /// geometrically wrong. It claims only that nothing silently vanished.
+    #[must_use]
     pub fn is_lossless(&self) -> bool { self.total_lost() == 0 }
 
     /// Every (category, reason) that fired, in [`LossCategory::ALL`] order then
@@ -320,6 +328,7 @@ impl ShellLoadReport {
     }
 
     /// The tally for one (category, reason) pair; zeroed when it never fired.
+    #[must_use]
     pub fn tally(&self, category: LossCategory, reason: LossReason) -> LossTally {
         self.reasons
             .get(&(category, reason))
@@ -328,6 +337,7 @@ impl ShellLoadReport {
     }
 
     /// How many items were lost for `reason`, across all categories.
+    #[must_use]
     pub fn lost_for(&self, reason: LossReason) -> usize {
         self.reasons
             .iter()
@@ -457,15 +467,19 @@ pub struct EntityLoadReport {
 
 impl EntityLoadReport {
     /// Did the table-building pass swallow nothing at all?
+    #[must_use]
     pub fn is_empty(&self) -> bool { self.total() == 0 }
 
     /// How many records were swallowed, both kinds together.
+    #[must_use]
     pub fn total(&self) -> usize { self.total_refused() + self.total_shape_unexpected() }
 
     /// How many records had a typed `Deserialize` refusal.
+    #[must_use]
     pub fn total_refused(&self) -> usize { self.refused.values().map(|t| t.count).sum() }
 
     /// How many records vanished in an arity-guarded arm with no `else`.
+    #[must_use]
     pub fn total_shape_unexpected(&self) -> usize {
         self.shape_unexpected.values().map(|t| t.count).sum()
     }
@@ -488,6 +502,7 @@ impl EntityLoadReport {
     }
 
     /// How many records of exactly this entity type were swallowed, either way.
+    #[must_use]
     pub fn swallowed_of(&self, entity_type: &str) -> usize {
         self.refused.get(entity_type).map_or(0, |t| t.count)
             + self

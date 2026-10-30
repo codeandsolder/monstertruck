@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    Angle, Array, Curve3D, ElementarySurface, EuclideanSpace, Homogeneous, InnerSpace, Matrix4,
+    Point3, Processor, Sphere, SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceCurveKind,
+    SurfaceCurveRepresentation, Transform, Transformed, TransformedAttributes, save,
+};
 use crate::step::load::{GeometricCurveSet, GeometricSetSelect};
 use crate::step::save::{
     FloatDisplay, IndexSliceDisplay, StepDisplay, StepLength, VectorAsDirection,
@@ -7,8 +11,8 @@ use crate::step::save::{
 impl save::StepFormat for SurfaceCurveAssociatedGeometry {
     fn fmt(&self, idx: usize, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SurfaceCurveAssociatedGeometry::ParameterCurve(curve) => curve.fmt(idx, f),
-            SurfaceCurveAssociatedGeometry::Surface(surface) => surface.fmt(idx, f),
+            Self::ParameterCurve(curve) => curve.fmt(idx, f),
+            Self::Surface(surface) => surface.fmt(idx, f),
         }
     }
 }
@@ -16,8 +20,8 @@ impl save::StepFormat for SurfaceCurveAssociatedGeometry {
 impl save::StepLength for SurfaceCurveAssociatedGeometry {
     fn step_length(&self) -> usize {
         match self {
-            SurfaceCurveAssociatedGeometry::ParameterCurve(curve) => curve.step_length(),
-            SurfaceCurveAssociatedGeometry::Surface(surface) => surface.step_length(),
+            Self::ParameterCurve(curve) => curve.step_length(),
+            Self::Surface(surface) => surface.step_length(),
         }
     }
 }
@@ -151,9 +155,9 @@ impl save::StepFormat for ElementarySurface {
 /// Step length of a single [`GeometricSetSelect`] element.
 fn set_select_step_length(elem: &GeometricSetSelect) -> usize {
     match elem {
-        GeometricSetSelect::Curve(c) => Curve3D::try_from(c.as_ref())
-            .map(|c3d| c3d.step_length())
-            .unwrap_or(0),
+        GeometricSetSelect::Curve(c) => {
+            Curve3D::try_from(c.as_ref()).map_or(0, |c3d| c3d.step_length())
+        }
         // Point3 has ConstStepLength = 1.
         GeometricSetSelect::Point(_) => 1,
     }

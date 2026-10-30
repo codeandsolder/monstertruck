@@ -362,7 +362,9 @@ fn unwrap_parameter_component(value: f64, reference: f64, period: Option<f64>) -
     period
         .filter(|period| period.is_finite() && *period > TOLERANCE)
         .map_or(value, |period| {
-            value + ((reference - value) / period).round() * period
+            ((reference - value) / period)
+                .round()
+                .mul_add(period, value)
         })
 }
 
@@ -375,7 +377,7 @@ fn unwrap_parameter_near(surface: &Surface, value: Point2, reference: Point2) ->
 }
 
 #[inline]
-fn processor_parameter(orientation: bool, internal: Point2) -> Point2 {
+const fn processor_parameter(orientation: bool, internal: Point2) -> Point2 {
     if orientation {
         internal
     } else {
@@ -470,7 +472,7 @@ fn exact_torus_parameter(surface: &Processor<Torus, Matrix4>, point: Point3) -> 
     ]
     .into_iter()
     .find_map(|v| {
-        let signed_radial = torus.large_radius() + radius * v.cos();
+        let signed_radial = radius.mul_add(v.cos(), torus.large_radius());
         if (signed_radial.abs() - rho).abs() > TOLERANCE * scale {
             return None;
         }
@@ -560,10 +562,7 @@ fn affine_map_from_correspondences(source: [Point2; 3], target: [Point2; 3]) -> 
 /// have affine relationships by construction. Spheres are deliberately
 /// excluded: rotating a sphere's polar axis generally induces a nonlinear
 /// spherical-coordinate map.
-pub(crate) fn affine_same_domain_parameter_map(
-    source: &Surface,
-    target: &Surface,
-) -> Option<Matrix3> {
+pub fn affine_same_domain_parameter_map(source: &Surface, target: &Surface) -> Option<Matrix3> {
     same_surface_domain(source, target, TOLERANCE, 1.0e-10)?;
 
     let source_parameters = match (source, target) {
@@ -642,6 +641,7 @@ pub(crate) fn affine_same_domain_parameter_map(
 /// The returned relation includes the orientation induced by each carrier's
 /// parameterization, allowing topology to distinguish a harmless reversed
 /// parameterization from an oppositely oriented physical face.
+#[must_use]
 pub fn same_surface_domain(
     left: &Surface,
     right: &Surface,

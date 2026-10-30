@@ -58,14 +58,14 @@ use std::cell::RefCell;
 
 /// Which axis a recording belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Axis {
+pub enum Axis {
     U,
     V,
 }
 
 /// The surface classes the census splits on, named as the STEP entity is named.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub(crate) enum SurfaceClass {
+pub enum SurfaceClass {
     Plane,
     Sphere,
     Cylinder,
@@ -122,7 +122,7 @@ impl SurfaceClass {
         }
     }
 
-    pub(crate) fn of(surface: &Surface) -> Self {
+    pub(crate) const fn of(surface: &Surface) -> Self {
         match surface {
             Surface::ElementarySurface(ElementarySurface::Plane(_)) => Self::Plane,
             Surface::ElementarySurface(ElementarySurface::Sphere(_)) => Self::Sphere,
@@ -189,7 +189,7 @@ fn reported_range_bounds_the_curve(curve: &Curve3D) -> bool {
 /// A sphere's `[0, PI] x [0, 2pi)` and a torus's `[0, 2pi)^2` ARE measurements:
 /// they close the surface. Knot vectors are measurements: the net carries no
 /// data outside them.
-pub(crate) fn reported_range_bounds_the_surface(surface: &Surface) -> (bool, bool) {
+pub fn reported_range_bounds_the_surface(surface: &Surface) -> (bool, bool) {
     match surface {
         Surface::ElementarySurface(ElementarySurface::Plane(_)) => (false, false),
         Surface::ElementarySurface(
@@ -233,7 +233,7 @@ const fn axes_by_orientation(orientation: bool, profile: bool) -> (bool, bool) {
 
 /// One `(class, axis, provenance)` row of the census.
 #[derive(Clone, Copy, Default, Debug)]
-pub(crate) struct ClampRow {
+pub struct ClampRow {
     /// `clamp_near_range` invocations on this row.
     pub(crate) calls: usize,
     /// Invocations that returned a DIFFERENT value than they were given.
@@ -294,7 +294,7 @@ impl ClampRow {
 /// The whole census: `[class][axis][provenance]`, provenance index 0 = the
 /// reported range is a PLACEHOLDER, 1 = it is a real bound.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ClampCensus {
+pub struct ClampCensus {
     pub(crate) rows: [[[ClampRow; 2]; 2]; 9],
     /// Chains (`sampled_parameter_boundary` calls) whose points were normalized.
     pub(crate) chains: usize,
@@ -414,7 +414,7 @@ thread_local! {
 }
 
 /// Read once: the lens must not cost an environment lookup per sample.
-pub(crate) fn enabled() -> bool {
+pub fn enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("MT_STEP_DEBUG_UV_CLAMP").is_some())
 }
@@ -427,7 +427,7 @@ fn record(update: impl FnOnce(&mut ClampCensus)) {
 }
 
 /// What one `normalize_axis` call did with its range, as reported by the caller.
-pub(crate) enum Event {
+pub enum Event {
     /// `clamp_near_range` ran. `moved` is `clamped - value`; `to_max` says
     /// which end it snapped to when it moved.
     Clamp { moved: f64, to_max: bool },
@@ -447,7 +447,7 @@ pub(crate) enum Event {
 /// "the clamp fires" from "the domain is violated": `clamp_near_range` only ever
 /// touches an excess below `TOLERANCE`, so everything in `reported_out_far` is a
 /// domain excursion the STEP twin does NOT repair.
-pub(crate) fn record_reported_excess(
+pub fn record_reported_excess(
     surface: &Surface,
     axis: Axis,
     real_range: bool,
@@ -469,7 +469,7 @@ pub(crate) fn record_reported_excess(
     });
 }
 
-pub(crate) fn record_axis(surface: &Surface, axis: Axis, real_range: bool, event: Event) {
+pub fn record_axis(surface: &Surface, axis: Axis, real_range: bool, event: Event) {
     record(|census| {
         let row = census.row_mut(SurfaceClass::of(surface), axis, real_range);
         let mut moved = false;
@@ -516,16 +516,16 @@ pub(crate) fn record_axis(surface: &Surface, axis: Axis, real_range: bool, event
     });
 }
 
-pub(crate) fn record_point() { record(|census| census.points += 1); }
+pub fn record_point() { record(|census| census.points += 1); }
 
-pub(crate) fn begin_chain() {
+pub fn begin_chain() {
     record(|census| {
         census.chains += 1;
         CHAIN_MOVED.with(|flag| flag.set(false));
     });
 }
 
-pub(crate) fn end_chain() {
+pub fn end_chain() {
     record(|census| {
         if CHAIN_MOVED.with(std::cell::Cell::get) {
             census.chains_moved += 1;

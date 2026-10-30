@@ -68,8 +68,7 @@ fn install_census_panic_hook() {
                 .unwrap_or_else(|| "<non-string panic payload>".to_owned());
             let at = info
                 .location()
-                .map(|l| format!(" at {}:{}", l.file(), l.line()))
-                .unwrap_or_default();
+                .map_or_default(|l| format!(" at {}:{}", l.file(), l.line()));
             LAST_PANIC.with(|slot| *slot.borrow_mut() = Some(format!("{payload}{at}")));
         } else {
             eprintln!("{info}");
@@ -220,13 +219,14 @@ fn typed_class(table: &Table, id: u64) -> Option<&'static str> {
 fn unrecognised_name(record: &str) -> String { record.split('"').nth(1).unwrap_or("?").to_owned() }
 
 fn class_of(table: &Table, id: u64) -> Class {
-    typed_class(table, id).map(Class::Typed).unwrap_or_else(|| {
-        table
-            .dummy
-            .get(&id)
-            .map(|d| Class::Unrecognised(unrecognised_name(&d.record)))
-            .unwrap_or(Class::Absent)
-    })
+    typed_class(table, id).map_or_else(
+        || {
+            table.dummy.get(&id).map_or(Class::Absent, |d| {
+                Class::Unrecognised(unrecognised_name(&d.record))
+            })
+        },
+        Class::Typed,
+    )
 }
 
 // -------------------------------------------------------------- face fates
@@ -249,7 +249,7 @@ enum Fate {
 }
 
 /// Replace `#<digits>` with `#<id>` so N refusals that differ only in entity id
-/// group into one reported row. Without this, Rocky_House alone emits 156 lines
+/// group into one reported row. Without this, `Rocky_House` alone emits 156 lines
 /// that say the same thing, which buries every other finding.
 fn without_ids(message: &str) -> String {
     let mut out = String::with_capacity(message.len());
@@ -283,7 +283,7 @@ fn surface_any_fate(surface_any: &SurfaceAny) -> Fate {
     }
 }
 
-fn face_geometry_id(holder: &monstertruck_io::step::load::FaceSurfaceHolder) -> Option<u64> {
+const fn face_geometry_id(holder: &monstertruck_io::step::load::FaceSurfaceHolder) -> Option<u64> {
     match &holder.face_geometry {
         PlaceHolder::Ref(Name::Entity(id)) => Some(*id),
         _ => None,
@@ -335,10 +335,10 @@ fn census_faces(table: &Table) -> FileCensus {
         match fate {
             Fate::Converted => tally.converted += 1,
             Fate::RefusedConversion(e) => {
-                *tally.refused_conversion.entry(without_ids(&e)).or_default() += 1
+                *tally.refused_conversion.entry(without_ids(&e)).or_default() += 1;
             }
             Fate::RefusedResolution(e) => {
-                *tally.refused_resolution.entry(without_ids(&e)).or_default() += 1
+                *tally.refused_resolution.entry(without_ids(&e)).or_default() += 1;
             }
             Fate::Panicked(e) => *tally.panicked.entry(without_ids(&e)).or_default() += 1,
         }
@@ -385,7 +385,7 @@ fn entity_name(instance: &EntityInstance) -> String {
     }
 }
 
-fn entity_id(instance: &EntityInstance) -> u64 {
+const fn entity_id(instance: &EntityInstance) -> u64 {
     match instance {
         EntityInstance::Simple { id, .. } | EntityInstance::Complex { id, .. } => *id,
     }

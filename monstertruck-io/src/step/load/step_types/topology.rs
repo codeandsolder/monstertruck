@@ -3,7 +3,24 @@
 //! Also carries the `*Holder` inherent impls that resolve a topological
 //! entity's references against the entity table while loading.
 
-use super::*;
+use super::{
+    Angle, Array, Attributes, BoundaryCurveFromSamples, Bounded, BoundedCurve, BoundedSurface,
+    CartesianPoint, CartesianPointHolder, Concat, Conic, Conic2D, Conic3D, Curve2D, Curve3D,
+    CurveAny, CurveAnyHolder, CurveScalarFunction, Cut, Decomposition, Deserialize, EigenValues,
+    ElementWise, EuclideanSpace, ExactParameterBoundary2D, Exponential, HashGen, Holder,
+    Homogeneous, IncludeCurve, InnerSpace, Invertible, Line, Matrix, Matrix3, Matrix4, MetricSpace,
+    Name, One, OperatorNorm, Origin, PI, ParameterBoundary2D, ParameterDivision1D,
+    ParameterDivision2D, ParameterTransform, ParametricCurve, ParametricCurve2D, ParametricCurve3D,
+    ParametricSurface, ParametricSurface2D, ParametricSurface3D, PcurveOrSurface, PlaceHolder,
+    Point2, Point3, PreferredSurfaceCurveRepresentation, Processor, Result, Rotation, Rotation2,
+    Rotation3, SearchNearestParameter, SearchParameter, SearchParameterDimension, Serialize,
+    SnapCurveEndpoints, SquareMatrix, StepConvertingError, SupportsExactPatchDomains, Surface,
+    SurfaceAny, SurfaceAnyHolder, SurfaceCurve, SurfaceCurveEntityKind, SurfaceScalarFunction,
+    TOLERANCE, Table, ToSameGeometry, Tolerance, Transform, Transform2, Transform3, Transformed,
+    TransformedAttributes, TrimmedCurve, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
+    TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface, UnitCircle, UnitHyperbola,
+    VectorSpace, Zero, geom, step_geometry,
+};
 
 /// `vertex_point`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
@@ -44,13 +61,16 @@ pub struct EdgeCurve {
 }
 
 impl EdgeCurve {
+    /// Converts this STEP edge geometry into a bounded 2D curve.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the referenced geometry is missing, unsupported,
+    /// singular, or cannot be parameterized at the edge endpoints.
     pub fn parse_curve2d(&self) -> Result<Curve2D, StepConvertingError> {
         let p = Point2::from(&self.edge_start.vertex_geometry);
         let q = Point2::from(&self.edge_end.vertex_geometry);
-        let (p, q) = match self.same_sense {
-            true => (p, q),
-            false => (q, p),
-        };
+        let (p, q) = if self.same_sense { (p, q) } else { (q, p) };
         let geometry = self
             .edge_geometry
             .as_ref()
@@ -71,97 +91,7 @@ impl EdgeCurve {
                 Curve2D::Line(Line(p, q))
             }
             CurveAny::BoundedCurve(b) => b.as_ref().try_into()?,
-            CurveAny::Conic(curve) => match curve.as_ref() {
-                Conic::Circle(circle) => {
-                    let mat =
-                        Matrix3::try_from(&circle.position)? * Matrix3::from_scale(circle.radius);
-                    let inv_mat = mat
-                        .invert()
-                        .ok_or_else(|| "Failed to convert Circle".to_string())?;
-                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                    let (u, mut v) = (
-                        UnitCircle::<Point2>::new()
-                            .search_nearest_parameter(p, None, 0)
-                            .ok_or_else(|| "the point is not on circle".to_string())?,
-                        UnitCircle::<Point2>::new()
-                            .search_nearest_parameter(q, None, 0)
-                            .ok_or_else(|| "the point is not on circle".to_string())?,
-                    );
-                    if v <= u + TOLERANCE {
-                        v += 2.0 * PI;
-                    }
-                    let circle = TrimmedCurve::new(UnitCircle::<Point2>::new(), (u, v));
-                    let mut ellipse = Processor::new(circle);
-                    ellipse.transform_by(mat);
-                    Curve2D::Conic(Conic2D::Ellipse(ellipse))
-                }
-                Conic::Ellipse(ellipse) => {
-                    let mat = Matrix3::try_from(&ellipse.position)?
-                        * Matrix3::from_nonuniform_scale(ellipse.semi_axis_1, ellipse.semi_axis_2);
-                    let inv_mat = mat
-                        .invert()
-                        .ok_or_else(|| "Failed to convert Circle".to_string())?;
-                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                    let (u, mut v) = (
-                        UnitCircle::<Point2>::new()
-                            .search_nearest_parameter(p, None, 0)
-                            .ok_or_else(|| "the point is not on circle".to_string())?,
-                        UnitCircle::<Point2>::new()
-                            .search_nearest_parameter(q, None, 0)
-                            .ok_or_else(|| "the point is not on circle".to_string())?,
-                    );
-                    if v <= u + TOLERANCE {
-                        v += 2.0 * PI;
-                    }
-                    let circle = TrimmedCurve::new(UnitCircle::<Point2>::new(), (u, v));
-                    let mut ellipse = Processor::new(circle);
-                    ellipse.transform_by(mat);
-                    Curve2D::Conic(Conic2D::Ellipse(ellipse))
-                }
-                Conic::Hyperbola(hyperbola) => {
-                    let mat = Matrix3::try_from(&hyperbola.position)?
-                        * Matrix3::from_nonuniform_scale(
-                            hyperbola.semi_axis,
-                            hyperbola.semi_imag_axis,
-                        );
-                    let inv_mat = mat
-                        .invert()
-                        .ok_or_else(|| "Failed to convert Hyperbola".to_string())?;
-                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                    let (u, v) = (
-                        UnitHyperbola::<Point2>::new()
-                            .search_nearest_parameter(p, None, 0)
-                            .ok_or_else(|| "the point is not on hyperbola".to_string())?,
-                        UnitHyperbola::<Point2>::new()
-                            .search_nearest_parameter(q, None, 0)
-                            .ok_or_else(|| "the point is not on hyparbola".to_string())?,
-                    );
-                    let unit = TrimmedCurve::new(UnitHyperbola::<Point2>::new(), (u, v));
-                    let mut hyperbola = Processor::new(unit);
-                    hyperbola.transform_by(mat);
-                    Curve2D::Conic(Conic2D::Hyperbola(hyperbola))
-                }
-                Conic::Parabola(parabola) => {
-                    let mat = Matrix3::try_from(&parabola.position)?
-                        * Matrix3::from_scale(parabola.focal_dist);
-                    let inv_mat = mat
-                        .invert()
-                        .ok_or_else(|| "Failed to convert Parabola".to_string())?;
-                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                    let (u, v) = (
-                        UnitHyperbola::<Point2>::new()
-                            .search_nearest_parameter(p, None, 0)
-                            .ok_or_else(|| "the point is not on parabola".to_string())?,
-                        UnitHyperbola::<Point2>::new()
-                            .search_nearest_parameter(q, None, 0)
-                            .ok_or_else(|| "the point is not on parabola".to_string())?,
-                    );
-                    let unit = TrimmedCurve::new(UnitHyperbola::<Point2>::new(), (u, v));
-                    let mut parabola = Processor::new(unit);
-                    parabola.transform_by(mat);
-                    Curve2D::Conic(Conic2D::Hyperbola(parabola))
-                }
-            },
+            CurveAny::Conic(curve) => Self::parse_conic_2d(curve.as_ref(), p, q)?,
             CurveAny::Pcurve(_) => return Err("Pcurves cannot be parsed to 2D curves.".into()),
             CurveAny::SurfaceCurve(_) => {
                 return Err("Surface curves cannot be parsed to 2D curves.".into());
@@ -172,19 +102,297 @@ impl EdgeCurve {
         }
         Ok(curve)
     }
+    /// Converts this STEP edge geometry into a bounded 3D curve.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the referenced geometry is missing, unsupported,
+    /// singular, or cannot be parameterized at the edge endpoints.
+    fn parse_conic_2d(curve: &Conic, p: Point2, q: Point2) -> Result<Curve2D, StepConvertingError> {
+        Ok(match curve {
+            Conic::Circle(circle) => {
+                let mat = Matrix3::try_from(&circle.position)? * Matrix3::from_scale(circle.radius);
+                let inv_mat = mat
+                    .invert()
+                    .ok_or_else(|| "Failed to convert Circle".to_string())?;
+                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                let (u, mut v) = (
+                    UnitCircle::<Point2>::new()
+                        .search_nearest_parameter(p, None, 0)
+                        .ok_or_else(|| "the point is not on circle".to_string())?,
+                    UnitCircle::<Point2>::new()
+                        .search_nearest_parameter(q, None, 0)
+                        .ok_or_else(|| "the point is not on circle".to_string())?,
+                );
+                if v <= u + TOLERANCE {
+                    v = 2.0f64.mul_add(PI, v);
+                }
+                let circle = TrimmedCurve::new(UnitCircle::<Point2>::new(), (u, v));
+                let mut ellipse = Processor::new(circle);
+                ellipse.transform_by(mat);
+                Curve2D::Conic(Conic2D::Ellipse(ellipse))
+            }
+            Conic::Ellipse(ellipse) => {
+                let mat = Matrix3::try_from(&ellipse.position)?
+                    * Matrix3::from_nonuniform_scale(ellipse.semi_axis_1, ellipse.semi_axis_2);
+                let inv_mat = mat
+                    .invert()
+                    .ok_or_else(|| "Failed to convert Circle".to_string())?;
+                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                let (u, mut v) = (
+                    UnitCircle::<Point2>::new()
+                        .search_nearest_parameter(p, None, 0)
+                        .ok_or_else(|| "the point is not on circle".to_string())?,
+                    UnitCircle::<Point2>::new()
+                        .search_nearest_parameter(q, None, 0)
+                        .ok_or_else(|| "the point is not on circle".to_string())?,
+                );
+                if v <= u + TOLERANCE {
+                    v = 2.0f64.mul_add(PI, v);
+                }
+                let circle = TrimmedCurve::new(UnitCircle::<Point2>::new(), (u, v));
+                let mut ellipse = Processor::new(circle);
+                ellipse.transform_by(mat);
+                Curve2D::Conic(Conic2D::Ellipse(ellipse))
+            }
+            Conic::Hyperbola(hyperbola) => {
+                let mat = Matrix3::try_from(&hyperbola.position)?
+                    * Matrix3::from_nonuniform_scale(hyperbola.semi_axis, hyperbola.semi_imag_axis);
+                let inv_mat = mat
+                    .invert()
+                    .ok_or_else(|| "Failed to convert Hyperbola".to_string())?;
+                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                let (u, v) = (
+                    UnitHyperbola::<Point2>::new()
+                        .search_nearest_parameter(p, None, 0)
+                        .ok_or_else(|| "the point is not on hyperbola".to_string())?,
+                    UnitHyperbola::<Point2>::new()
+                        .search_nearest_parameter(q, None, 0)
+                        .ok_or_else(|| "the point is not on hyparbola".to_string())?,
+                );
+                let unit = TrimmedCurve::new(UnitHyperbola::<Point2>::new(), (u, v));
+                let mut hyperbola = Processor::new(unit);
+                hyperbola.transform_by(mat);
+                Curve2D::Conic(Conic2D::Hyperbola(hyperbola))
+            }
+            Conic::Parabola(parabola) => {
+                let mat = Matrix3::try_from(&parabola.position)?
+                    * Matrix3::from_scale(parabola.focal_dist);
+                let inv_mat = mat
+                    .invert()
+                    .ok_or_else(|| "Failed to convert Parabola".to_string())?;
+                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                let (u, v) = (
+                    UnitHyperbola::<Point2>::new()
+                        .search_nearest_parameter(p, None, 0)
+                        .ok_or_else(|| "the point is not on parabola".to_string())?,
+                    UnitHyperbola::<Point2>::new()
+                        .search_nearest_parameter(q, None, 0)
+                        .ok_or_else(|| "the point is not on parabola".to_string())?,
+                );
+                let unit = TrimmedCurve::new(UnitHyperbola::<Point2>::new(), (u, v));
+                let mut parabola = Processor::new(unit);
+                parabola.transform_by(mat);
+                Curve2D::Conic(Conic2D::Hyperbola(parabola))
+            }
+        })
+    }
+
     pub fn parse_curve3d(&self) -> Result<Curve3D, StepConvertingError> {
         let p = Point3::from(&self.edge_start.vertex_geometry);
         let q = Point3::from(&self.edge_end.vertex_geometry);
-        let (p, q) = match self.same_sense {
-            true => (p, q),
-            false => (q, p),
-        };
+        let (p, q) = if self.same_sense { (p, q) } else { (q, p) };
         let geometry = self
             .edge_geometry
             .as_ref()
             .ok_or_else(|| "EDGE_CURVE has no edge_geometry.".to_string())?;
         Self::sub_parse_curve3d(geometry, p, q, self.same_sense)
     }
+    fn parse_conic_3d(curve: &Conic, p: Point3, q: Point3) -> Result<Curve3D, StepConvertingError> {
+        Ok(match curve {
+            Conic::Circle(circle) => {
+                let mat = Matrix4::try_from(&circle.position)? * Matrix4::from_scale(circle.radius);
+                let inv_mat = mat
+                    .invert()
+                    .ok_or_else(|| "Failed to convert Circle".to_string())?;
+                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                let (u, mut v) = (
+                    UnitCircle::<Point3>::new()
+                        .search_nearest_parameter(p, None, 0)
+                        .ok_or_else(|| format!("the point is not on circle: {p:?}"))?,
+                    UnitCircle::<Point3>::new()
+                        .search_nearest_parameter(q, None, 0)
+                        .ok_or_else(|| format!("the point is not on circle: {q:?}"))?,
+                );
+                if v <= u + TOLERANCE {
+                    v = 2.0f64.mul_add(PI, v);
+                }
+                let circle = TrimmedCurve::new(UnitCircle::<Point3>::new(), (u, v));
+                let mut ellipse = Processor::new(circle);
+                ellipse.transform_by(mat);
+                Curve3D::Conic(Conic3D::Ellipse(ellipse))
+            }
+            Conic::Ellipse(ellipse) => {
+                let mat = Matrix4::try_from(&ellipse.position)?
+                    * Matrix4::from_nonuniform_scale(
+                        ellipse.semi_axis_1,
+                        ellipse.semi_axis_2,
+                        f64::min(ellipse.semi_axis_1, ellipse.semi_axis_2),
+                    );
+                let inv_mat = mat
+                    .invert()
+                    .ok_or_else(|| "Failed to convert Circle".to_string())?;
+                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                let (u, mut v) = (
+                    UnitCircle::<Point3>::new()
+                        .search_nearest_parameter(p, None, 0)
+                        .ok_or_else(|| format!("the point is not on circle: {p:?}"))?,
+                    UnitCircle::<Point3>::new()
+                        .search_nearest_parameter(q, None, 0)
+                        .ok_or_else(|| format!("the point is not on circle: {q:?}"))?,
+                );
+                if v <= u + TOLERANCE {
+                    v = 2.0f64.mul_add(PI, v);
+                }
+                let circle = TrimmedCurve::new(UnitCircle::<Point3>::new(), (u, v));
+                let mut ellipse = Processor::new(circle);
+                ellipse.transform_by(mat);
+                Curve3D::Conic(Conic3D::Ellipse(ellipse))
+            }
+            Conic::Hyperbola(hyperbola) => {
+                let mat = Matrix4::try_from(&hyperbola.position)?
+                    * Matrix4::from_nonuniform_scale(
+                        hyperbola.semi_axis,
+                        hyperbola.semi_imag_axis,
+                        f64::min(hyperbola.semi_axis, hyperbola.semi_imag_axis),
+                    );
+                let inv_mat = mat
+                    .invert()
+                    .ok_or_else(|| "Failed to convert Circle".to_string())?;
+                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                let (u, mut v) = (
+                    UnitHyperbola::<Point3>::new()
+                        .search_nearest_parameter(p, None, 0)
+                        .ok_or_else(|| "the point is not on circle".to_string())?,
+                    UnitHyperbola::<Point3>::new()
+                        .search_nearest_parameter(q, None, 0)
+                        .ok_or_else(|| "the point is not on circle".to_string())?,
+                );
+                if v <= u + TOLERANCE {
+                    v = 2.0f64.mul_add(PI, v);
+                }
+                let unit = TrimmedCurve::new(UnitHyperbola::<Point3>::new(), (u, v));
+                let mut hyperbola = Processor::new(unit);
+                hyperbola.transform_by(mat);
+                Curve3D::Conic(Conic3D::Hyperbola(hyperbola))
+            }
+            Conic::Parabola(parabola) => {
+                let mat = Matrix4::try_from(&parabola.position)?
+                    * Matrix4::from_scale(parabola.focal_dist);
+                let inv_mat = mat
+                    .invert()
+                    .ok_or_else(|| "Failed to convert Parabola".to_string())?;
+                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                let (u, v) = (
+                    UnitHyperbola::<Point3>::new()
+                        .search_nearest_parameter(p, None, 0)
+                        .ok_or_else(|| "the point is not on parabola".to_string())?,
+                    UnitHyperbola::<Point3>::new()
+                        .search_nearest_parameter(q, None, 0)
+                        .ok_or_else(|| "the point is not on parabola".to_string())?,
+                );
+                let unit = TrimmedCurve::new(UnitHyperbola::<Point3>::new(), (u, v));
+                let mut parabola = Processor::new(unit);
+                parabola.transform_by(mat);
+                Curve3D::Conic(Conic3D::Hyperbola(parabola))
+            }
+        })
+    }
+
+    fn parse_surface_curve3d(
+        c: &SurfaceCurve,
+        p: Point3,
+        q: Point3,
+        same_sense: bool,
+    ) -> Result<Curve3D, StepConvertingError> {
+        let curve = {
+            if p.near(&q) {
+                return Self::sub_parse_curve3d(&c.curve_3d, p, q, same_sense);
+            }
+            let associated_surface =
+                |entry: &PcurveOrSurface| -> Result<step_geometry::Surface, StepConvertingError> {
+                    match entry {
+                        PcurveOrSurface::Pcurve(x) => (&x.basis_surface).try_into(),
+                        PcurveOrSurface::Surface(x) => x.as_ref().try_into(),
+                    }
+                };
+            let associated_geometry = c
+                .associated_geometry
+                .iter()
+                .map(|entry| match entry {
+                    PcurveOrSurface::Pcurve(curve) => curve
+                        .as_ref()
+                        .try_into()
+                        .map(step_geometry::SurfaceCurveAssociatedGeometry::ParameterCurve),
+                    PcurveOrSurface::Surface(surface) => surface
+                        .as_ref()
+                        .try_into()
+                        .map(Box::new)
+                        .map(step_geometry::SurfaceCurveAssociatedGeometry::Surface),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let kind = match c.kind {
+                SurfaceCurveEntityKind::Surface => step_geometry::SurfaceCurveKind::SurfaceCurve,
+                SurfaceCurveEntityKind::Seam => step_geometry::SurfaceCurveKind::SeamCurve,
+                SurfaceCurveEntityKind::Intersection => {
+                    step_geometry::SurfaceCurveKind::IntersectionCurve
+                }
+            };
+            let master_representation = match c.master_representation {
+                PreferredSurfaceCurveRepresentation::Curve3D => {
+                    step_geometry::SurfaceCurveRepresentation::Curve3D
+                }
+                PreferredSurfaceCurveRepresentation::PcurveS1 => {
+                    step_geometry::SurfaceCurveRepresentation::ParameterCurve0
+                }
+                PreferredSurfaceCurveRepresentation::PcurveS2 => {
+                    step_geometry::SurfaceCurveRepresentation::ParameterCurve1
+                }
+            };
+            let leader = Self::sub_parse_curve3d(&c.curve_3d, p, q, true)?;
+            if associated_geometry.len() >= 2
+                && associated_geometry.iter().all(|entry| {
+                    matches!(
+                        entry,
+                        step_geometry::SurfaceCurveAssociatedGeometry::Surface(_)
+                    )
+                })
+            {
+                let surface0 = c
+                    .associated_geometry
+                    .first()
+                    .ok_or("The 0-indexed associated geometry is missing.")?;
+                let surface1 = c
+                    .associated_geometry
+                    .get(1)
+                    .ok_or("The 1-indexed associated geometry is missing.")?;
+                Curve3D::IntersectionCurve(geom::IntersectionCurve::new(
+                    Box::new(associated_surface(surface0)?),
+                    Box::new(associated_surface(surface1)?),
+                    Box::new(leader),
+                ))
+            } else {
+                Curve3D::SurfaceCurve(step_geometry::SurfaceCurve3D::new(
+                    kind,
+                    Box::new(leader),
+                    associated_geometry,
+                    master_representation,
+                ))
+            }
+        };
+        Ok(curve)
+    }
+
     fn sub_parse_curve3d(
         curve: &CurveAny,
         p: Point3,
@@ -194,105 +402,7 @@ impl EdgeCurve {
         let mut curve = match curve {
             CurveAny::Line(_) => Curve3D::Line(Line(p, q)),
             CurveAny::BoundedCurve(b) => b.as_ref().try_into()?,
-            CurveAny::Conic(curve) => match curve.as_ref() {
-                Conic::Circle(circle) => {
-                    let mat =
-                        Matrix4::try_from(&circle.position)? * Matrix4::from_scale(circle.radius);
-                    let inv_mat = mat
-                        .invert()
-                        .ok_or_else(|| "Failed to convert Circle".to_string())?;
-                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                    let (u, mut v) = (
-                        UnitCircle::<Point3>::new()
-                            .search_nearest_parameter(p, None, 0)
-                            .ok_or_else(|| format!("the point is not on circle: {p:?}"))?,
-                        UnitCircle::<Point3>::new()
-                            .search_nearest_parameter(q, None, 0)
-                            .ok_or_else(|| format!("the point is not on circle: {q:?}"))?,
-                    );
-                    if v <= u + TOLERANCE {
-                        v += 2.0 * PI;
-                    }
-                    let circle = TrimmedCurve::new(UnitCircle::<Point3>::new(), (u, v));
-                    let mut ellipse = Processor::new(circle);
-                    ellipse.transform_by(mat);
-                    Curve3D::Conic(Conic3D::Ellipse(ellipse))
-                }
-                Conic::Ellipse(ellipse) => {
-                    let mat = Matrix4::try_from(&ellipse.position)?
-                        * Matrix4::from_nonuniform_scale(
-                            ellipse.semi_axis_1,
-                            ellipse.semi_axis_2,
-                            f64::min(ellipse.semi_axis_1, ellipse.semi_axis_2),
-                        );
-                    let inv_mat = mat
-                        .invert()
-                        .ok_or_else(|| "Failed to convert Circle".to_string())?;
-                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                    let (u, mut v) = (
-                        UnitCircle::<Point3>::new()
-                            .search_nearest_parameter(p, None, 0)
-                            .ok_or_else(|| format!("the point is not on circle: {p:?}"))?,
-                        UnitCircle::<Point3>::new()
-                            .search_nearest_parameter(q, None, 0)
-                            .ok_or_else(|| format!("the point is not on circle: {q:?}"))?,
-                    );
-                    if v <= u + TOLERANCE {
-                        v += 2.0 * PI;
-                    }
-                    let circle = TrimmedCurve::new(UnitCircle::<Point3>::new(), (u, v));
-                    let mut ellipse = Processor::new(circle);
-                    ellipse.transform_by(mat);
-                    Curve3D::Conic(Conic3D::Ellipse(ellipse))
-                }
-                Conic::Hyperbola(hyperbola) => {
-                    let mat = Matrix4::try_from(&hyperbola.position)?
-                        * Matrix4::from_nonuniform_scale(
-                            hyperbola.semi_axis,
-                            hyperbola.semi_imag_axis,
-                            f64::min(hyperbola.semi_axis, hyperbola.semi_imag_axis),
-                        );
-                    let inv_mat = mat
-                        .invert()
-                        .ok_or_else(|| "Failed to convert Circle".to_string())?;
-                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                    let (u, mut v) = (
-                        UnitHyperbola::<Point3>::new()
-                            .search_nearest_parameter(p, None, 0)
-                            .ok_or_else(|| "the point is not on circle".to_string())?,
-                        UnitHyperbola::<Point3>::new()
-                            .search_nearest_parameter(q, None, 0)
-                            .ok_or_else(|| "the point is not on circle".to_string())?,
-                    );
-                    if v <= u + TOLERANCE {
-                        v += 2.0 * PI;
-                    }
-                    let unit = TrimmedCurve::new(UnitHyperbola::<Point3>::new(), (u, v));
-                    let mut hyperbola = Processor::new(unit);
-                    hyperbola.transform_by(mat);
-                    Curve3D::Conic(Conic3D::Hyperbola(hyperbola))
-                }
-                Conic::Parabola(parabola) => {
-                    let mat = Matrix4::try_from(&parabola.position)?
-                        * Matrix4::from_scale(parabola.focal_dist);
-                    let inv_mat = mat
-                        .invert()
-                        .ok_or_else(|| "Failed to convert Parabola".to_string())?;
-                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                    let (u, v) = (
-                        UnitHyperbola::<Point3>::new()
-                            .search_nearest_parameter(p, None, 0)
-                            .ok_or_else(|| "the point is not on parabola".to_string())?,
-                        UnitHyperbola::<Point3>::new()
-                            .search_nearest_parameter(q, None, 0)
-                            .ok_or_else(|| "the point is not on parabola".to_string())?,
-                    );
-                    let unit = TrimmedCurve::new(UnitHyperbola::<Point3>::new(), (u, v));
-                    let mut parabola = Processor::new(unit);
-                    parabola.transform_by(mat);
-                    Curve3D::Conic(Conic3D::Hyperbola(parabola))
-                }
-            },
+            CurveAny::Conic(curve) => Self::parse_conic_3d(curve.as_ref(), p, q)?,
             CurveAny::Pcurve(c) => {
                 let surface: Surface = (&c.basis_surface).try_into()?;
                 let u = surface
@@ -317,85 +427,7 @@ impl EdgeCurve {
                     Box::new(surface),
                 ))
             }
-            CurveAny::SurfaceCurve(c) => {
-                if p.near(&q) {
-                    return Self::sub_parse_curve3d(&c.curve_3d, p, q, same_sense);
-                }
-                let associated_surface = |entry: &PcurveOrSurface| -> Result<
-                    step_geometry::Surface,
-                    StepConvertingError,
-                > {
-                    match entry {
-                        PcurveOrSurface::Pcurve(x) => (&x.basis_surface).try_into(),
-                        PcurveOrSurface::Surface(x) => x.as_ref().try_into(),
-                    }
-                };
-                let associated_geometry = c
-                    .associated_geometry
-                    .iter()
-                    .map(|entry| match entry {
-                        PcurveOrSurface::Pcurve(curve) => curve
-                            .as_ref()
-                            .try_into()
-                            .map(step_geometry::SurfaceCurveAssociatedGeometry::ParameterCurve),
-                        PcurveOrSurface::Surface(surface) => surface
-                            .as_ref()
-                            .try_into()
-                            .map(Box::new)
-                            .map(step_geometry::SurfaceCurveAssociatedGeometry::Surface),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let kind = match c.kind {
-                    SurfaceCurveEntityKind::Surface => {
-                        step_geometry::SurfaceCurveKind::SurfaceCurve
-                    }
-                    SurfaceCurveEntityKind::Seam => step_geometry::SurfaceCurveKind::SeamCurve,
-                    SurfaceCurveEntityKind::Intersection => {
-                        step_geometry::SurfaceCurveKind::IntersectionCurve
-                    }
-                };
-                let master_representation = match c.master_representation {
-                    PreferredSurfaceCurveRepresentation::Curve3D => {
-                        step_geometry::SurfaceCurveRepresentation::Curve3D
-                    }
-                    PreferredSurfaceCurveRepresentation::PcurveS1 => {
-                        step_geometry::SurfaceCurveRepresentation::ParameterCurve0
-                    }
-                    PreferredSurfaceCurveRepresentation::PcurveS2 => {
-                        step_geometry::SurfaceCurveRepresentation::ParameterCurve1
-                    }
-                };
-                let leader = Self::sub_parse_curve3d(&c.curve_3d, p, q, true)?;
-                if associated_geometry.len() >= 2
-                    && associated_geometry.iter().all(|entry| {
-                        matches!(
-                            entry,
-                            step_geometry::SurfaceCurveAssociatedGeometry::Surface(_)
-                        )
-                    })
-                {
-                    let surface0 = c
-                        .associated_geometry
-                        .first()
-                        .ok_or("The 0-indexed associated geometry is missing.")?;
-                    let surface1 = c
-                        .associated_geometry
-                        .get(1)
-                        .ok_or("The 1-indexed associated geometry is missing.")?;
-                    Curve3D::IntersectionCurve(geom::IntersectionCurve::new(
-                        Box::new(associated_surface(surface0)?),
-                        Box::new(associated_surface(surface1)?),
-                        Box::new(leader),
-                    ))
-                } else {
-                    Curve3D::SurfaceCurve(step_geometry::SurfaceCurve3D::new(
-                        kind,
-                        Box::new(leader),
-                        associated_geometry,
-                        master_representation,
-                    ))
-                }
-            }
+            CurveAny::SurfaceCurve(c) => Self::parse_surface_curve3d(c, p, q, same_sense)?,
         };
         if !same_sense {
             curve.invert();
@@ -427,7 +459,7 @@ impl OrientedEdgeHolder {
             _ => None,
         }
     }
-    pub(crate) fn edge_element_idx(&self) -> Option<u64> {
+    pub(crate) const fn edge_element_idx(&self) -> Option<u64> {
         if let PlaceHolder::Ref(Name::Entity(idx)) = self.edge_element {
             Some(idx)
         } else {
@@ -496,7 +528,7 @@ pub struct FaceBound {
 /// three outcomes is what lets the loader distinguish a LEGITIMATE degeneracy
 /// (a vertex loop) from a genuine loss (a bound that is simply not there).
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum BoundResolution {
+pub enum BoundResolution {
     /// An `EDGE_LOOP`, inline or resolved from the table.
     EdgeLoop(EdgeLoopHolder),
     /// A `VERTEX_LOOP`, with its entity id.
@@ -510,18 +542,16 @@ impl FaceBoundHolder {
     pub(crate) fn resolve_bound(&self, table: &Table) -> BoundResolution {
         match &self.bound {
             PlaceHolder::Owned(holder) => BoundResolution::EdgeLoop(holder.clone()),
-            PlaceHolder::Ref(Name::Entity(idx)) => table
-                .edge_loop
-                .get(idx)
-                .cloned()
-                .map(BoundResolution::EdgeLoop)
-                .unwrap_or_else(|| {
+            PlaceHolder::Ref(Name::Entity(idx)) => table.edge_loop.get(idx).cloned().map_or_else(
+                || {
                     if table.vertex_loop.contains_key(idx) {
                         BoundResolution::VertexLoop(*idx)
                     } else {
                         BoundResolution::Unresolved(Some(*idx))
                     }
-                }),
+                },
+                BoundResolution::EdgeLoop,
+            ),
             _ => BoundResolution::Unresolved(None),
         }
     }

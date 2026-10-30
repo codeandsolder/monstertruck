@@ -44,14 +44,17 @@ pub struct SurfaceCurveTrimRef<'a> {
 
 impl<'a> SurfaceCurveTrimRef<'a> {
     /// Creates a new trim lookup reference.
+    #[must_use]
     pub const fn new(curve: &'a SurfaceCurve3D, surface: &'a Surface) -> Self {
         Self { curve, surface }
     }
 
     /// Returns the referenced STEP `surface_curve`.
+    #[must_use]
     pub const fn curve(self) -> &'a SurfaceCurve3D { self.curve }
 
     /// Returns the target surface.
+    #[must_use]
     pub const fn surface(self) -> &'a Surface { self.surface }
 }
 
@@ -64,12 +67,15 @@ pub struct CurveTrimRef<'a> {
 
 impl<'a> CurveTrimRef<'a> {
     /// Creates a new trim lookup reference.
+    #[must_use]
     pub const fn new(curve: &'a Curve3D, surface: &'a Surface) -> Self { Self { curve, surface } }
 
     /// Returns the referenced curve.
+    #[must_use]
     pub const fn curve(self) -> &'a Curve3D { self.curve }
 
     /// Returns the target surface.
+    #[must_use]
     pub const fn surface(self) -> &'a Surface { self.surface }
 }
 
@@ -118,8 +124,8 @@ impl SurfaceCurve3D {
         let (leader_min, leader_max) = self.leader().range_tuple();
         let tolerance2 = (100.0 * TOLERANCE).powi(2).max(1.0e-12);
         [0.0, 0.5, 1.0].into_iter().all(|fraction| {
-            let curve_t = curve_min + (curve_max - curve_min) * fraction;
-            let leader_t = leader_min + (leader_max - leader_min) * fraction;
+            let curve_t = f64::mul_add(curve_max - curve_min, fraction, curve_min);
+            let leader_t = f64::mul_add(leader_max - leader_min, fraction, leader_min);
             let uv = curve.curve().evaluate(curve_t);
             let surface_point = surface.evaluate(uv.x, uv.y);
             let leader_point = self.leader().evaluate(leader_t);
@@ -139,8 +145,14 @@ impl SurfaceCurve3D {
             [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)]
                 .into_iter()
                 .all(|(s, t)| {
-                    let lp = lhs.evaluate(lu0 + (lu1 - lu0) * s, lv0 + (lv1 - lv0) * t);
-                    let rp = rhs.evaluate(ru0 + (ru1 - ru0) * s, rv0 + (rv1 - rv0) * t);
+                    let lp = lhs.evaluate(
+                        f64::mul_add(lu1 - lu0, s, lu0),
+                        f64::mul_add(lv1 - lv0, t, lv0),
+                    );
+                    let rp = rhs.evaluate(
+                        f64::mul_add(ru1 - ru0, s, ru0),
+                        f64::mul_add(rv1 - rv0, t, rv0),
+                    );
                     lp.near(&rp)
                 })
         } else {
@@ -149,7 +161,8 @@ impl SurfaceCurve3D {
     }
 
     /// Creates a new STEP `surface_curve`.
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         kind: SurfaceCurveKind,
         leader: Box<Curve3D>,
         associated_geometry: Vec<SurfaceCurveAssociatedGeometry>,
@@ -164,23 +177,30 @@ impl SurfaceCurve3D {
     }
 
     /// Returns the STEP `surface_curve` flavor.
-    pub fn kind(&self) -> SurfaceCurveKind { self.kind }
+    #[must_use]
+    pub const fn kind(&self) -> SurfaceCurveKind { self.kind }
 
     /// Returns the master representation.
-    pub fn master_representation(&self) -> SurfaceCurveRepresentation { self.master_representation }
+    #[must_use]
+    pub const fn master_representation(&self) -> SurfaceCurveRepresentation {
+        self.master_representation
+    }
 
     /// Returns the 3D leader curve.
+    #[must_use]
     pub fn leader(&self) -> &Curve3D { self.leader.as_ref() }
 
     /// Returns the mutable 3D leader curve.
     pub fn leader_mut(&mut self) -> &mut Curve3D { self.leader.as_mut() }
 
     /// Returns the associated geometries.
+    #[must_use]
     pub fn associated_geometry(&self) -> &[SurfaceCurveAssociatedGeometry] {
         &self.associated_geometry
     }
 
     /// Returns the first associated `ParameterCurve` whose basis surface matches `surface`.
+    #[must_use]
     pub fn parameter_curve_on(&self, surface: &Surface) -> Option<&StepParameterCurve> {
         self.associated_geometry
             .iter()
@@ -339,7 +359,7 @@ pub enum Curve3D {
     BsplineCurve(BsplineCurve<Point3>),
     ParameterCurve(StepParameterCurve),
     SurfaceCurve(SurfaceCurve3D),
-    IntersectionCurve(IntersectionCurve<Box<Curve3D>, Box<Surface>, Box<Surface>>),
+    IntersectionCurve(IntersectionCurve<Box<Self>, Box<Surface>, Box<Surface>>),
     NurbsCurve(NurbsCurve<Vector4>),
 }
 
@@ -420,7 +440,7 @@ pub enum Surface {
 
 impl save::StepFormat for Surface {
     fn fmt(&self, idx: usize, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use Surface::*;
+        use Surface::{BsplineSurface, ElementarySurface, NurbsSurface, SweepSurface};
         match self {
             ElementarySurface(x) => x.fmt(idx, f),
             SweepSurface(x) => x.fmt(idx, f),
@@ -435,7 +455,6 @@ impl save::StepFormat for Surface {
 pub struct Sphere(pub monstertruck_geometry::prelude::Sphere);
 
 impl save::StepSurface for Processor<Sphere, Matrix4> {
-    #[inline(always)]
     fn same_sense(&self) -> bool { self.orientation() }
 }
 
@@ -452,7 +471,7 @@ mod from_pcurve {
     impl From<ParameterCurve<Line<Point2>, Surface>> for Curve3D {
         fn from(value: ParameterCurve<Line<Point2>, Surface>) -> Self {
             let (line, surface) = value.decompose();
-            Curve3D::ParameterCurve(ParameterCurve::new(
+            Self::ParameterCurve(ParameterCurve::new(
                 Curve2D::Line(line).into(),
                 surface.into(),
             ))

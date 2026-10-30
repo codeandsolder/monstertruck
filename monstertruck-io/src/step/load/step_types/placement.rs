@@ -5,7 +5,11 @@
 //! `axis*_placement` entities the local frames that curves, surfaces and
 //! transformations are expressed in.
 
-use super::*;
+use super::{
+    Angle, Array, Deserialize, EuclideanSpace, Holder, InnerSpace, Matrix, Matrix3, Matrix4,
+    Origin, Point2, Point3, Result, Serialize, StepConvertingError, Table, Tolerance, Vector2,
+    Vector3, Zero,
+};
 
 /// `cartesian_point`
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Holder)]
@@ -17,25 +21,23 @@ pub struct CartesianPoint {
     pub coordinates: Vec<f64>,
 }
 impl From<&CartesianPoint> for Point2 {
-    #[inline(always)]
     fn from(pt: &CartesianPoint) -> Self {
         let pt = &pt.coordinates;
         match pt.len() {
-            0 => Point2::origin(),
-            1 => Point2::new(pt[0], 0.0),
-            _ => Point2::new(pt[0], pt[1]),
+            0 => Self::origin(),
+            1 => Self::new(pt[0], 0.0),
+            _ => Self::new(pt[0], pt[1]),
         }
     }
 }
 impl From<&CartesianPoint> for Point3 {
-    #[inline(always)]
     fn from(pt: &CartesianPoint) -> Self {
         let pt = &pt.coordinates;
         match pt.len() {
-            0 => Point3::origin(),
-            1 => Point3::new(pt[0], 0.0, 0.0),
-            2 => Point3::new(pt[0], pt[1], 0.0),
-            _ => Point3::new(pt[0], pt[1], pt[2]),
+            0 => Self::origin(),
+            1 => Self::new(pt[0], 0.0, 0.0),
+            2 => Self::new(pt[0], pt[1], 0.0),
+            _ => Self::new(pt[0], pt[1], pt[2]),
         }
     }
 }
@@ -50,25 +52,23 @@ pub struct Direction {
     pub direction_ratios: Vec<f64>,
 }
 impl From<&Direction> for Vector2 {
-    #[inline(always)]
     fn from(dir: &Direction) -> Self {
         let dir = &dir.direction_ratios;
         match dir.len() {
-            0 => Vector2::zero(),
-            1 => Vector2::new(dir[0], 0.0),
-            _ => Vector2::new(dir[0], dir[1]),
+            0 => Self::zero(),
+            1 => Self::new(dir[0], 0.0),
+            _ => Self::new(dir[0], dir[1]),
         }
     }
 }
 impl From<&Direction> for Vector3 {
-    #[inline(always)]
     fn from(dir: &Direction) -> Self {
         let dir = &dir.direction_ratios;
         match dir.len() {
-            0 => Vector3::zero(),
-            1 => Vector3::new(dir[0], 0.0, 0.0),
-            2 => Vector3::new(dir[0], dir[1], 0.0),
-            _ => Vector3::new(dir[0], dir[1], dir[2]),
+            0 => Self::zero(),
+            1 => Self::new(dir[0], 0.0, 0.0),
+            2 => Self::new(dir[0], dir[1], 0.0),
+            _ => Self::new(dir[0], dir[1], dir[2]),
         }
     }
 }
@@ -85,11 +85,9 @@ pub struct Vector {
     pub magnitude: f64,
 }
 impl From<&Vector> for Vector2 {
-    #[inline(always)]
     fn from(vec: &Vector) -> Self { Self::from(&vec.orientation) * vec.magnitude }
 }
 impl From<&Vector> for Vector3 {
-    #[inline(always)]
     fn from(vec: &Vector) -> Self { Self::from(&vec.orientation) * vec.magnitude }
 }
 
@@ -104,11 +102,9 @@ pub struct Placement {
     pub location: CartesianPoint,
 }
 impl From<&Placement> for Point2 {
-    #[inline(always)]
     fn from(p: &Placement) -> Self { Self::from(&p.location) }
 }
 impl From<&Placement> for Point3 {
-    #[inline(always)]
     fn from(p: &Placement) -> Self { Self::from(&p.location) }
 }
 
@@ -129,8 +125,7 @@ impl Axis1Placement {
     pub fn direction(&self) -> Vector3 {
         self.direction
             .as_ref()
-            .map(Vector3::from)
-            .unwrap_or_else(Vector3::unit_z)
+            .map_or_else(Vector3::unit_z, Vector3::from)
     }
 }
 
@@ -147,23 +142,21 @@ pub enum Axis2Placement {
 
 impl TryFrom<&Axis2Placement> for Matrix3 {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(axis: &Axis2Placement) -> Result<Self, StepConvertingError> {
-        use Axis2Placement::*;
+        use Axis2Placement::{Axis2Placement2d, Axis2Placement3d};
         match axis {
-            Axis2Placement2d(axis) => Ok(Matrix3::from(axis)),
+            Axis2Placement2d(axis) => Ok(Self::from(axis)),
             Axis2Placement3d(_) => Err("This is not a 2D axis placement.".into()),
         }
     }
 }
 impl TryFrom<&Axis2Placement> for Matrix4 {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(axis: &Axis2Placement) -> Result<Self, StepConvertingError> {
-        use Axis2Placement::*;
+        use Axis2Placement::{Axis2Placement2d, Axis2Placement3d};
         match axis {
             Axis2Placement2d(_) => Err("This is not a 3D axis placement.".into()),
-            Axis2Placement3d(axis) => Ok(Matrix4::from(axis)),
+            Axis2Placement3d(axis) => Ok(Self::from(axis)),
         }
     }
 }
@@ -182,7 +175,6 @@ pub struct Axis2Placement2d {
 }
 
 impl From<&Axis2Placement2d> for Matrix3 {
-    #[inline(always)]
     fn from(axis: &Axis2Placement2d) -> Self {
         let z = Point2::from(&axis.location);
         let x = match &axis.ref_direction {
@@ -190,7 +182,7 @@ impl From<&Axis2Placement2d> for Matrix3 {
             None => Vector2::unit_x(),
         };
         let y = Vector2::new(-x.y, x.x);
-        Matrix3::from_cols(x.extend(0.0), y.extend(0.0), z.to_vec().extend(1.0))
+        Self::from_cols(x.extend(0.0), y.extend(0.0), z.to_vec().extend(1.0))
     }
 }
 
@@ -210,17 +202,17 @@ pub struct Axis2Placement3d {
 }
 
 impl From<&Axis2Placement3d> for Matrix4 {
-    #[inline(always)]
-    fn from(axis: &Axis2Placement3d) -> Matrix4 {
+    fn from(axis: &Axis2Placement3d) -> Self {
         let w = Point3::from(&axis.location);
         let z = match &axis.axis {
             Some(axis) => Vector3::from(axis),
             None => Vector3::unit_z(),
         };
         // Pick a fallback reference direction that is not parallel to `z`.
-        let fallback = match z.near(&Vector3::unit_x()) {
-            true => Vector3::unit_y(),
-            false => Vector3::unit_x(),
+        let fallback = if z.near(&Vector3::unit_x()) {
+            Vector3::unit_y()
+        } else {
+            Vector3::unit_x()
         };
         let x = match &axis.ref_direction {
             Some(axis) => Vector3::from(axis),
@@ -232,12 +224,13 @@ impl From<&Axis2Placement3d> for Matrix4 {
         // panics in `nonpositive_tolerance!` during meshing. Fall back to an
         // arbitrary direction orthogonal to `z` when the projection degenerates.
         let projected = x - x.dot(z) * z;
-        let x = match projected.magnitude2().so_small() {
-            true => (fallback - fallback.dot(z) * z).normalize(),
-            false => projected.normalize(),
+        let x = if projected.magnitude2().so_small() {
+            (fallback - fallback.dot(z) * z).normalize()
+        } else {
+            projected.normalize()
         };
         let y = z.cross(x);
-        Matrix4::from_cols(
+        Self::from_cols(
             x.extend(0.0),
             y.extend(0.0),
             z.extend(0.0),

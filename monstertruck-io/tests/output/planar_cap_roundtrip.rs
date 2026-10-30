@@ -26,7 +26,7 @@ fn cylinder(height: f64, radius: f64) -> monstertruck_modeling::Result<Solid> {
     Ok(builder::extrude(&disk, Vector3::new(0.0, height, 0.0)))
 }
 
-fn is_planar(surface: &step_geometry::Surface) -> bool {
+const fn is_planar(surface: &step_geometry::Surface) -> bool {
     matches!(
         surface,
         step_geometry::Surface::ElementarySurface(step_geometry::ElementarySurface::Plane(_))

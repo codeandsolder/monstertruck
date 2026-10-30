@@ -104,8 +104,7 @@ fn install_oracle_panic_hook() {
                 .unwrap_or_else(|| "<non-string panic payload>".to_owned());
             let at = info
                 .location()
-                .map(|l| format!(" at {}:{}", l.file(), l.line()))
-                .unwrap_or_default();
+                .map_or_default(|l| format!(" at {}:{}", l.file(), l.line()));
             LAST_PANIC.with(|slot| *slot.borrow_mut() = Some(format!("{payload}{at}")));
         } else {
             eprintln!("{info}");
@@ -232,7 +231,7 @@ fn sample_curve(curve: &Curve3D, out: &mut Vec<Point3>) {
     }
 }
 
-fn finite(v: Vector3) -> bool { v.x.is_finite() && v.y.is_finite() && v.z.is_finite() }
+const fn finite(v: Vector3) -> bool { v.x.is_finite() && v.y.is_finite() && v.z.is_finite() }
 
 // --------------------------------------------------------- the measurement
 
@@ -262,7 +261,7 @@ impl Extent {
         let above_u = (self.required_profile.1 - self.emitted_profile.1).max(0.0);
         let below_v = (self.emitted_sweep.0 - self.required_sweep.0).max(0.0);
         let above_v = (self.required_sweep.1 - self.emitted_sweep.1).max(0.0);
-        (below_u + above_u) * self.profile_scale + (below_v + above_v) * self.sweep_scale
+        (below_v + above_v).mul_add(self.sweep_scale, (below_u + above_u) * self.profile_scale)
     }
 
     /// The multiple of the emitted sweep span the boundary actually needs. 1.0
@@ -355,7 +354,7 @@ fn revolution_extent(surface: &StepRevolutionSurface, samples: &[Point3]) -> Opt
     };
     let residual_at = |u: f64, target: (f64, f64)| {
         let (z, r) = cylindrical_of_profile(profile, u, origin, axis);
-        ((z - target.0).powi(2) + (r - target.1).powi(2)).sqrt()
+        (z - target.0).hypot(r - target.1)
     };
 
     let full_turn = std::f64::consts::TAU;
@@ -392,7 +391,7 @@ fn profile_profile_scale(profile: &Curve3D, u0: f64, u1: f64) -> f64 {
     let mut length = 0.0;
     let mut previous = profile.evaluate(u0);
     for index in 1..=n {
-        let u = u0 + (u1 - u0) * index as f64 / n as f64;
+        let u = u0 + (u1 - u0) * f64::from(index) / f64::from(n);
         let p = profile.evaluate(u);
         length += (p - previous).magnitude();
         previous = p;
@@ -426,7 +425,7 @@ fn argmin_on_span(a: f64, b: f64, f: impl Fn(f64) -> f64) -> f64 {
             lo = m0;
         }
     }
-    let mid = 0.5 * (lo + hi);
+    let mid = f64::midpoint(lo, hi);
     if f(mid) < best_value { mid } else { best }
 }
 
@@ -506,7 +505,7 @@ fn fidelity_pairs(surface: &Surface, profile_span: (f64, f64)) -> Vec<FramePair>
     match surface {
         Surface::SweepSurface(SweepSurface::RevolutionSurface(_)) => (0..=4)
             .flat_map(|q| {
-                let t = q as f64 / 4.0;
+                let t = f64::from(q) / 4.0;
                 (0..=6).map(move |i| {
                     let p = profile(i, 6);
                     ((t * std::f64::consts::TAU, p), (t, p))
@@ -517,7 +516,7 @@ fn fidelity_pairs(surface: &Surface, profile_span: (f64, f64)) -> Vec<FramePair>
             .flat_map(|i| {
                 let u = profile(i, 6);
                 (0..=6).map(move |j| {
-                    let v = j as f64 / 6.0;
+                    let v = f64::from(j) / 6.0;
                     ((u, v), (u, v))
                 })
             })
@@ -575,7 +574,7 @@ impl ClassReport {
                 *self
                     .modeling_panicked
                     .entry(without_ids(panic))
-                    .or_default() += 1
+                    .or_default() += 1;
             }
             Ok(Err(e)) => *self.modeling_refused.entry(without_ids(e)).or_default() += 1,
             Ok(Ok(_)) => self.modeling_converted += 1,
@@ -953,7 +952,7 @@ fn oracle_separates_a_truncating_boundary_from_a_covered_one() {
     let on_surface = |u: f64, v: f64| ParametricSurface::evaluate(extrusion, u, v);
 
     let inside: Vec<Point3> = (0..=8)
-        .map(|i| on_surface(u0 + (u1 - u0) * i as f64 / 8.0, i as f64 / 8.0))
+        .map(|i| on_surface(u0 + (u1 - u0) * f64::from(i) / 8.0, f64::from(i) / 8.0))
         .collect();
     let inside = extrusion_extent(extrusion, &inside).expect("measurable");
     assert!(inside.residual < 1.0e-10, "residual {}", inside.residual);
@@ -963,7 +962,12 @@ fn oracle_separates_a_truncating_boundary_from_a_covered_one() {
     );
 
     let outside: Vec<Point3> = (0..=8)
-        .map(|i| on_surface(u0 + (u1 - u0) * i as f64 / 8.0, 3.0 * i as f64 / 8.0))
+        .map(|i| {
+            on_surface(
+                u0 + (u1 - u0) * f64::from(i) / 8.0,
+                3.0 * f64::from(i) / 8.0,
+            )
+        })
         .collect();
     let outside = extrusion_extent(extrusion, &outside).expect("measurable");
     assert!(outside.residual < 1.0e-8, "residual {}", outside.residual);

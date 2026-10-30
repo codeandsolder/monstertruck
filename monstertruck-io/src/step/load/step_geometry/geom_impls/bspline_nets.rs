@@ -2,7 +2,12 @@
 //! B-spline nets, and the predicate for which surfaces carry an exact
 //! patch domain.
 
-use super::*;
+use super::{
+    BsplineCurve, BsplineSurface, Conic3D, Curve3D, ElementarySurface,
+    HomogeneousSurfaceConversion, Point3, Sphere, SupportsExactPatchDomains, Surface,
+    SurfaceParameterRectangle, SweepSurface, TryIntoBsplineSurface, TryIntoHomogeneousBsplineCurve,
+    TryIntoHomogeneousBsplineSurface, Vector4,
+};
 
 impl TryIntoHomogeneousBsplineSurface for Sphere {
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
@@ -27,17 +32,15 @@ impl TryIntoBsplineSurface for Sphere {
 impl TryIntoHomogeneousBsplineCurve for Curve3D {
     fn try_into_homogeneous_bspline_curve(&self) -> Option<BsplineCurve<Vector4>> {
         match self {
-            Curve3D::Line(line) => line.try_into_homogeneous_bspline_curve(),
-            Curve3D::Conic(Conic3D::Ellipse(curve)) => curve.try_into_homogeneous_bspline_curve(),
-            Curve3D::Conic(_) => None,
-            Curve3D::BsplineCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
-            Curve3D::ParameterCurve(_) => None,
-            Curve3D::Polyline(_) => None,
-            Curve3D::SurfaceCurve(curve) => curve.leader().try_into_homogeneous_bspline_curve(),
-            Curve3D::IntersectionCurve(curve) => {
-                curve.leader().try_into_homogeneous_bspline_curve()
-            }
-            Curve3D::NurbsCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
+            Self::Line(line) => line.try_into_homogeneous_bspline_curve(),
+            Self::Conic(Conic3D::Ellipse(curve)) => curve.try_into_homogeneous_bspline_curve(),
+            Self::Conic(_) => None,
+            Self::BsplineCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
+            Self::ParameterCurve(_) => None,
+            Self::Polyline(_) => None,
+            Self::SurfaceCurve(curve) => curve.leader().try_into_homogeneous_bspline_curve(),
+            Self::IntersectionCurve(curve) => curve.leader().try_into_homogeneous_bspline_curve(),
+            Self::NurbsCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
         }
     }
 
@@ -48,7 +51,7 @@ impl TryIntoHomogeneousBsplineCurve for Curve3D {
         match self {
             // Only a line has an exact analytic continuation past its own range;
             // every other variant keeps the trait's refusing default.
-            Curve3D::Line(line) => line.try_into_homogeneous_bspline_curve_over(range),
+            Self::Line(line) => line.try_into_homogeneous_bspline_curve_over(range),
             _ => None,
         }
     }
@@ -57,29 +60,29 @@ impl TryIntoHomogeneousBsplineCurve for Curve3D {
 impl TryIntoBsplineSurface for Surface {
     fn try_into_bspline_surface(&self) -> Option<BsplineSurface<Point3>> {
         match self {
-            Surface::ElementarySurface(ElementarySurface::Plane(surface)) => {
+            Self::ElementarySurface(ElementarySurface::Plane(surface)) => {
                 surface.try_into_bspline_surface()
             }
-            Surface::ElementarySurface(ElementarySurface::Sphere(surface)) => {
+            Self::ElementarySurface(ElementarySurface::Sphere(surface)) => {
                 surface.try_into_bspline_surface()
             }
-            Surface::ElementarySurface(ElementarySurface::CylindricalSurface(surface)) => {
+            Self::ElementarySurface(ElementarySurface::CylindricalSurface(surface)) => {
                 surface.try_into_bspline_surface()
             }
-            Surface::ElementarySurface(ElementarySurface::ToroidalSurface(surface)) => {
+            Self::ElementarySurface(ElementarySurface::ToroidalSurface(surface)) => {
                 surface.try_into_bspline_surface()
             }
-            Surface::ElementarySurface(ElementarySurface::ConicalSurface(surface)) => {
+            Self::ElementarySurface(ElementarySurface::ConicalSurface(surface)) => {
                 surface.try_into_bspline_surface()
             }
-            Surface::SweepSurface(SweepSurface::ExtrusionSurface(surface)) => {
+            Self::SweepSurface(SweepSurface::ExtrusionSurface(surface)) => {
                 surface.try_into_bspline_surface()
             }
-            Surface::SweepSurface(SweepSurface::RevolutionSurface(surface)) => {
+            Self::SweepSurface(SweepSurface::RevolutionSurface(surface)) => {
                 surface.try_into_bspline_surface()
             }
-            Surface::BsplineSurface(surface) => surface.try_into_bspline_surface(),
-            Surface::NurbsSurface(surface) => surface.try_into_bspline_surface(),
+            Self::BsplineSurface(surface) => surface.try_into_bspline_surface(),
+            Self::NurbsSurface(surface) => surface.try_into_bspline_surface(),
         }
     }
 }
@@ -87,29 +90,29 @@ impl TryIntoBsplineSurface for Surface {
 impl TryIntoHomogeneousBsplineSurface for Surface {
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
         match self {
-            Surface::ElementarySurface(ElementarySurface::Plane(surface)) => {
+            Self::ElementarySurface(ElementarySurface::Plane(surface)) => {
                 surface.try_into_homogeneous_bspline_surface()
             }
-            Surface::ElementarySurface(ElementarySurface::Sphere(surface)) => {
+            Self::ElementarySurface(ElementarySurface::Sphere(surface)) => {
                 surface.try_into_homogeneous_bspline_surface()
             }
-            Surface::ElementarySurface(ElementarySurface::CylindricalSurface(surface)) => {
+            Self::ElementarySurface(ElementarySurface::CylindricalSurface(surface)) => {
                 surface.try_into_homogeneous_bspline_surface()
             }
-            Surface::ElementarySurface(ElementarySurface::ToroidalSurface(surface)) => {
+            Self::ElementarySurface(ElementarySurface::ToroidalSurface(surface)) => {
                 surface.try_into_homogeneous_bspline_surface()
             }
-            Surface::ElementarySurface(ElementarySurface::ConicalSurface(surface)) => {
+            Self::ElementarySurface(ElementarySurface::ConicalSurface(surface)) => {
                 surface.try_into_homogeneous_bspline_surface()
             }
-            Surface::SweepSurface(SweepSurface::ExtrusionSurface(surface)) => {
+            Self::SweepSurface(SweepSurface::ExtrusionSurface(surface)) => {
                 surface.try_into_homogeneous_bspline_surface()
             }
-            Surface::SweepSurface(SweepSurface::RevolutionSurface(surface)) => {
+            Self::SweepSurface(SweepSurface::RevolutionSurface(surface)) => {
                 surface.try_into_homogeneous_bspline_surface()
             }
-            Surface::BsplineSurface(surface) => surface.try_into_homogeneous_bspline_surface(),
-            Surface::NurbsSurface(surface) => surface.try_into_homogeneous_bspline_surface(),
+            Self::BsplineSurface(surface) => surface.try_into_homogeneous_bspline_surface(),
+            Self::NurbsSurface(surface) => surface.try_into_homogeneous_bspline_surface(),
         }
     }
 
@@ -118,31 +121,31 @@ impl TryIntoHomogeneousBsplineSurface for Surface {
         parameter_range: Option<SurfaceParameterRectangle>,
     ) -> Option<HomogeneousSurfaceConversion> {
         match self {
-            Surface::ElementarySurface(ElementarySurface::Plane(surface)) => {
+            Self::ElementarySurface(ElementarySurface::Plane(surface)) => {
                 surface.try_into_homogeneous_bspline_surface_over(parameter_range)
             }
-            Surface::ElementarySurface(ElementarySurface::Sphere(surface)) => {
+            Self::ElementarySurface(ElementarySurface::Sphere(surface)) => {
                 surface.try_into_homogeneous_bspline_surface_over(parameter_range)
             }
-            Surface::ElementarySurface(ElementarySurface::CylindricalSurface(surface)) => {
+            Self::ElementarySurface(ElementarySurface::CylindricalSurface(surface)) => {
                 surface.try_into_homogeneous_bspline_surface_over(parameter_range)
             }
-            Surface::ElementarySurface(ElementarySurface::ToroidalSurface(surface)) => {
+            Self::ElementarySurface(ElementarySurface::ToroidalSurface(surface)) => {
                 surface.try_into_homogeneous_bspline_surface_over(parameter_range)
             }
-            Surface::ElementarySurface(ElementarySurface::ConicalSurface(surface)) => {
+            Self::ElementarySurface(ElementarySurface::ConicalSurface(surface)) => {
                 surface.try_into_homogeneous_bspline_surface_over(parameter_range)
             }
-            Surface::SweepSurface(SweepSurface::ExtrusionSurface(surface)) => {
+            Self::SweepSurface(SweepSurface::ExtrusionSurface(surface)) => {
                 surface.try_into_homogeneous_bspline_surface_over(parameter_range)
             }
-            Surface::SweepSurface(SweepSurface::RevolutionSurface(surface)) => {
+            Self::SweepSurface(SweepSurface::RevolutionSurface(surface)) => {
                 surface.try_into_homogeneous_bspline_surface_over(parameter_range)
             }
-            Surface::BsplineSurface(surface) => {
+            Self::BsplineSurface(surface) => {
                 surface.try_into_homogeneous_bspline_surface_over(parameter_range)
             }
-            Surface::NurbsSurface(surface) => {
+            Self::NurbsSurface(surface) => {
                 surface.try_into_homogeneous_bspline_surface_over(parameter_range)
             }
         }
@@ -151,6 +154,6 @@ impl TryIntoHomogeneousBsplineSurface for Surface {
 
 impl SupportsExactPatchDomains for Surface {
     fn supports_exact_patch_domains(&self) -> bool {
-        matches!(self, Surface::BsplineSurface(_) | Surface::NurbsSurface(_))
+        matches!(self, Self::BsplineSurface(_) | Self::NurbsSurface(_))
     }
 }

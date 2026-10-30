@@ -24,9 +24,9 @@ fn float_to_str(x: f64) -> String {
 
 /// create uniform unit vector from [0.0f64..1.0f64; 2]
 fn dir_from_array(arr: [f64; 2]) -> Vector3 {
-    let z = 2.0 * arr[1] - 1.0;
+    let z = 2.0f64.mul_add(arr[1], -1.0);
     let theta = 2.0 * PI * arr[0];
-    let r = f64::sqrt(f64::max(1.0 - z * z, 0.0));
+    let r = f64::sqrt(f64::max(z.mul_add(-z, 1.0), 0.0));
     Vector3::new(r * f64::cos(theta), r * f64::sin(theta), z)
 }
 
@@ -71,7 +71,7 @@ fn exec_cartesian_point(coord: [f64; 3]) {
 proptest! {
     #[test]
     fn cartesian_point(coord in array::uniform3(-100.0f64..100.0f64)) {
-        exec_cartesian_point(coord)
+        exec_cartesian_point(coord);
     }
 }
 
@@ -101,7 +101,7 @@ fn exec_direction(dir_array: [f64; 2]) {
 proptest! {
     #[test]
     fn direction(dir_array in array::uniform2(0.0f64..1.0)) {
-        exec_direction(dir_array)
+        exec_direction(dir_array);
     }
 }
 
@@ -121,7 +121,7 @@ fn exec_vector(elem: [f64; 3]) {
 proptest! {
     #[test]
     fn vector(elem in array::uniform3(-100.0f64..100.0f64)) {
-        exec_vector(elem)
+        exec_vector(elem);
     }
 }
 
@@ -147,7 +147,7 @@ fn exec_placement(org_coord: [f64; 3]) {
 proptest! {
     #[test]
     fn placement(org_coord in array::uniform3(-100.0f64..100.0f64)) {
-        exec_placement(org_coord)
+        exec_placement(org_coord);
     }
 }
 
@@ -182,7 +182,7 @@ proptest! {
         org_coord in array::uniform3(-100.0f64..100.0f64),
         dir_array in array::uniform2(0.0f64..1.0),
     ) {
-        exec_axis1_placement(org_coord, dir_array)
+        exec_axis1_placement(org_coord, dir_array);
     }
 }
 
@@ -207,7 +207,7 @@ proptest! {
         org_coord in array::uniform2(-100.0f64..100.0f64),
         theta in 0.0f64..2.0 * PI,
     ) {
-        exec_axis2_placement2d(org_coord, theta)
+        exec_axis2_placement2d(org_coord, theta);
     }
 }
 
@@ -216,10 +216,7 @@ fn exec_axis2_placement3d(org_coord: [f64; 3], dir_array: [f64; 2], ref_dir_arra
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
     let v = z.cross(ref_dir);
-    let y = match v.so_small() {
-        true => return,
-        false => v.normalize(),
-    };
+    let y = if v.so_small() { return } else { v.normalize() };
     let x = y.cross(z).normalize();
     let step_str = format!(
         "DATA;#1 = AXIS2_PLACEMENT_3D('', #2, #3, #4);{}{}{}ENDSEC;",
@@ -245,7 +242,7 @@ proptest! {
         dir_array in array::uniform2(0.0f64..1.0f64),
         ref_dir_array in array::uniform2(0.0f64..1.0f64),
     ) {
-        exec_axis2_placement3d(org_coord, dir_array, ref_dir_array)
+        exec_axis2_placement3d(org_coord, dir_array, ref_dir_array);
     }
 }
 
@@ -271,7 +268,7 @@ proptest! {
         org_coord in array::uniform3(-100.0f64..100.0f64),
         vec_elem in array::uniform3(-100.0f64..100.0f64),
     ) {
-        exec_line(org_coord, vec_elem)
+        exec_line(org_coord, vec_elem);
     }
 }
 
@@ -309,7 +306,7 @@ proptest! {
         length in 2usize..100,
         coords in collection::vec(array::uniform3(-100.0f64..100.0f64), 100)
     ) {
-        exec_polyline(length, coords)
+        exec_polyline(length, coords);
     }
 }
 
@@ -361,7 +358,7 @@ proptest! {
         degree in 2usize..6,
         ctrlpt_coords in collection::vec(array::uniform3(-100.0f64..100.0f64), 80),
     ) {
-        exec_b_spline_curve_with_knots(knot_len, knot_incrs, knot_mults, degree, ctrlpt_coords)
+        exec_b_spline_curve_with_knots(knot_len, knot_incrs, knot_mults, degree, ctrlpt_coords);
     }
 }
 
@@ -410,7 +407,7 @@ proptest! {
         degree in 1usize..6,
         ctrlpt_coords in collection::vec(array::uniform3(-100.0f64..100.0f64), 6),
     ) {
-        exec_bezier_curve(degree, ctrlpt_coords)
+        exec_bezier_curve(degree, ctrlpt_coords);
     }
 }
 
@@ -450,7 +447,7 @@ proptest! {
         division in 3usize..5,
         ctrlpt_coords in collection::vec(array::uniform3(-100.0f64..100.0f64), 20),
     ) {
-        exec_quasi_uniform_curve(degree, division, ctrlpt_coords)
+        exec_quasi_uniform_curve(degree, division, ctrlpt_coords);
     }
 }
 
@@ -489,7 +486,7 @@ proptest! {
         knot_len in 6usize..10,
         ctrlpt_coords in collection::vec(array::uniform3(-100.0f64..100.0f64), 40),
     ) {
-        exec_uniform_curve(degree, knot_len, ctrlpt_coords)
+        exec_uniform_curve(degree, knot_len, ctrlpt_coords);
     }
 }
 
@@ -545,7 +542,7 @@ proptest! {
         degree in 2usize..6,
         ctrlpt_coords in collection::vec(array::uniform3(-100.0f64..100.0f64), 80),
     ) {
-        exec_nurbs_curve_b_spline_with_knots(knot_len, knot_incrs, knot_mults, weights, degree, ctrlpt_coords)
+        exec_nurbs_curve_b_spline_with_knots(knot_len, knot_incrs, knot_mults, weights, degree, ctrlpt_coords);
     }
 }
 
@@ -598,7 +595,7 @@ proptest! {
         ctrlpt_coords in collection::vec(array::uniform3(-100.0f64..100.0f64), 6),
         weights in collection::vec(0.01f64..100.0, 6),
     ) {
-        exec_nurbs_curve_bezier_curve(degree, ctrlpt_coords, weights)
+        exec_nurbs_curve_bezier_curve(degree, ctrlpt_coords, weights);
     }
 }
 
@@ -655,7 +652,7 @@ proptest! {
         ctrlpt_coords in collection::vec(array::uniform3(-100.0f64..100.0f64), 20),
         weights in collection::vec(0.01f64..100.0, 20),
     ) {
-        exec_nurbs_curve_quasi_uniform_curve(degree, division, ctrlpt_coords, weights)
+        exec_nurbs_curve_quasi_uniform_curve(degree, division, ctrlpt_coords, weights);
     }
 }
 
@@ -711,7 +708,7 @@ proptest! {
         ctrlpt_coords in collection::vec(array::uniform3(-100.0f64..100.0f64), 40),
         weights in collection::vec(0.01f64..100.0, 40),
     ) {
-        exec_nurbs_curve_uniform_curve(degree, knot_len, ctrlpt_coords, weights)
+        exec_nurbs_curve_uniform_curve(degree, knot_len, ctrlpt_coords, weights);
     }
 }
 
@@ -720,10 +717,7 @@ fn exec_circle(org_coord: [f64; 3], dir_array: [f64; 2], ref_dir_array: [f64; 2]
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
     let v = z.cross(ref_dir);
-    let y = match v.so_small() {
-        true => return,
-        false => v.normalize(),
-    };
+    let y = if v.so_small() { return } else { v.normalize() };
     let x = y.cross(z).normalize();
     let step_str = format!(
         "DATA; #1 = CIRCLE('', #2, {radius}); #2 = AXIS2_PLACEMENT_3D('', #3, #4, #5); {}{}{}ENDSEC;",
@@ -740,7 +734,7 @@ fn exec_circle(org_coord: [f64; 3], dir_array: [f64; 2], ref_dir_array: [f64; 2]
         origin.to_vec().extend(1.0),
     );
     (0..10).for_each(|i| {
-        let t = 2.0 * PI * i as f64 / 10.0;
+        let t = 2.0 * PI * f64::from(i) / 10.0;
         let p = Point3::new(radius * f64::cos(t), radius * f64::sin(t), 0.0);
         assert_near!(ellipse.evaluate(t), mat.transform_point(p));
     });
@@ -754,7 +748,7 @@ proptest! {
         ref_dir_array in array::uniform2(0.0f64..1.0),
         radius in 1.0e-2f64..100.0,
     ) {
-        exec_circle(org_coord, dir_array, ref_dir_array, radius)
+        exec_circle(org_coord, dir_array, ref_dir_array, radius);
     }
 }
 
@@ -768,10 +762,7 @@ fn exec_ellipse(
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
     let v = z.cross(ref_dir);
-    let y = match v.so_small() {
-        true => return,
-        false => v.normalize(),
-    };
+    let y = if v.so_small() { return } else { v.normalize() };
     let x = y.cross(z).normalize();
     let step_str = format!(
         "DATA; #1 = ELLIPSE('', #2, {}, {}); #2 = AXIS2_PLACEMENT_3D('', #3, #4, #5); {}{}{}ENDSEC;",
@@ -790,7 +781,7 @@ fn exec_ellipse(
         origin.to_vec().extend(1.0),
     );
     (0..10).for_each(|i| {
-        let t = 2.0 * PI * i as f64 / 10.0;
+        let t = 2.0 * PI * f64::from(i) / 10.0;
         let p = Point3::new(radius[0] * f64::cos(t), radius[1] * f64::sin(t), 0.0);
         assert_near!(ellipse.evaluate(t), mat.transform_point(p));
     });
@@ -804,7 +795,7 @@ proptest! {
         ref_dir_array in array::uniform2(0.0f64..1.0),
         radius in array::uniform2(1.0e-2f64..100.0),
     ) {
-        exec_ellipse(org_coord, dir_array, ref_dir_array, radius)
+        exec_ellipse(org_coord, dir_array, ref_dir_array, radius);
     }
 }
 
@@ -818,10 +809,7 @@ fn exec_hyperbola(
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
     let v = z.cross(ref_dir);
-    let y = match v.so_small() {
-        true => return,
-        false => v.normalize(),
-    };
+    let y = if v.so_small() { return } else { v.normalize() };
     let x = y.cross(z).normalize();
     let step_str = format!(
         "DATA; #1 = HYPERBOLA('', #2, {}, {}); #2 = AXIS2_PLACEMENT_3D('', #3, #4, #5); {}{}{}ENDSEC;",
@@ -841,7 +829,7 @@ fn exec_hyperbola(
         origin.to_vec().extend(1.0),
     );
     (0..10).for_each(|i| {
-        let t = 2.0 * i as f64 / 10.0 - 1.0;
+        let t = 2.0 * f64::from(i) / 10.0 - 1.0;
         let p = Point3::new(radius[0] * f64::cosh(t), radius[1] * f64::sinh(t), 0.0);
         assert_near!(hyperbola.evaluate(t), mat.transform_point(p));
     });
@@ -855,7 +843,7 @@ proptest! {
         ref_dir_array in array::uniform2(0.0f64..1.0),
         radius in array::uniform2(1.0e-2f64..100.0),
     ) {
-        exec_hyperbola(org_coord, dir_array, ref_dir_array, radius)
+        exec_hyperbola(org_coord, dir_array, ref_dir_array, radius);
     }
 }
 
@@ -869,10 +857,7 @@ fn exec_parabola(
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
     let v = z.cross(ref_dir);
-    let y = match v.so_small() {
-        true => return,
-        false => v.normalize(),
-    };
+    let y = if v.so_small() { return } else { v.normalize() };
     let x = y.cross(z).normalize();
     let step_str = format!(
         "DATA; #1 = PARABOLA('', #2, {}); #2 = AXIS2_PLACEMENT_3D('', #3, #4, #5); {}{}{}ENDSEC;",
@@ -890,7 +875,7 @@ fn exec_parabola(
         origin.to_vec().extend(1.0),
     );
     (0..10).for_each(|i| {
-        let t = 2.0 * i as f64 / 10.0 - 1.0;
+        let t = 2.0 * f64::from(i) / 10.0 - 1.0;
         let p = Point3::new(focal_dist * t * t, focal_dist * 2.0 * t, 0.0);
         assert_near!(parabola.evaluate(t), mat.transform_point(p));
     });
@@ -904,7 +889,7 @@ proptest! {
         ref_dir_array in array::uniform2(0.0f64..1.0),
         focal_dist in 0.01f64..100.0,
     ) {
-        exec_parabola(org_coord, dir_array, ref_dir_array, focal_dist)
+        exec_parabola(org_coord, dir_array, ref_dir_array, focal_dist);
     }
 }
 
@@ -913,10 +898,7 @@ fn exec_plane(org_coord: [f64; 3], dir_array: [f64; 2], ref_dir_array: [f64; 2])
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
     let v = z.cross(ref_dir);
-    let y = match v.so_small() {
-        true => return,
-        false => v.normalize(),
-    };
+    let y = if v.so_small() { return } else { v.normalize() };
     let x = y.cross(z).normalize();
     let step_str = format!(
         "DATA;
@@ -941,7 +923,7 @@ proptest! {
         dir_array in array::uniform2(0.0f64..1.0f64),
         ref_dir_array in array::uniform2(0.0f64..1.0f64),
     ) {
-        exec_plane(org_coord, dir_array, ref_dir_array)
+        exec_plane(org_coord, dir_array, ref_dir_array);
     }
 }
 
@@ -955,10 +937,7 @@ fn exec_spherical_surface(
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
     let v = z.cross(ref_dir);
-    let y = match v.so_small() {
-        true => return,
-        false => v.normalize(),
-    };
+    let y = if v.so_small() { return } else { v.normalize() };
     let x = y.cross(z).normalize();
     let step_str = format!(
         "DATA;
@@ -982,8 +961,8 @@ fn exec_spherical_surface(
     (0..=10)
         .flat_map(move |i| (0..=10).map(move |j| (i, j)))
         .for_each(|(i, j)| {
-            let u = 2.0 * PI * i as f64 / 10.0;
-            let v = PI * j as f64 / 10.0 - PI / 2.0;
+            let u = 2.0 * PI * f64::from(i) / 10.0;
+            let v = PI * f64::from(j) / 10.0 - PI / 2.0;
             let res = sphere.evaluate(u, v);
             let ans = mat.transform_point(Point3::new(
                 radius * f64::cos(u) * f64::cos(v),
@@ -991,7 +970,7 @@ fn exec_spherical_surface(
                 radius * f64::sin(v),
             ));
             assert_near!(res, ans);
-        })
+        });
 }
 
 proptest! {
@@ -1002,7 +981,7 @@ proptest! {
         ref_dir_array in array::uniform2(0.0f64..1.0f64),
         radius in 1.0e-2f64..100.0f64
     ) {
-        exec_spherical_surface(org_coord, dir_array, ref_dir_array, radius)
+        exec_spherical_surface(org_coord, dir_array, ref_dir_array, radius);
     }
 }
 
@@ -1016,10 +995,7 @@ fn exec_cylindrical_surface(
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
     let v = z.cross(ref_dir);
-    let y = match v.so_small() {
-        true => return,
-        false => v.normalize(),
-    };
+    let y = if v.so_small() { return } else { v.normalize() };
     let x = y.cross(z).normalize();
     let step_str0 = format!(
         "DATA;
@@ -1051,15 +1027,15 @@ fn exec_cylindrical_surface(
     (0..=10)
         .flat_map(move |i| (0..=10).map(move |j| (i, j)))
         .for_each(|(i, j)| {
-            let u = 2.0 * PI * i as f64 / 10.0;
-            let v = j as f64;
+            let u = 2.0 * PI * f64::from(i) / 10.0;
+            let v = f64::from(j);
             let res0 = cylinder0.evaluate(u, v);
             let res1 = cylinder1.evaluate(u, v);
             let ans =
                 mat.transform_point(Point3::new(radius * f64::cos(u), radius * f64::sin(u), v));
             assert_near!(res0, ans, "u:{u} v:{v} res:{res0:?} ans:{ans:?}");
             assert_near!(res1, ans, "u:{u} v:{v} res:{res1:?} ans:{ans:?}");
-        })
+        });
 }
 
 proptest! {
@@ -1070,7 +1046,7 @@ proptest! {
         ref_dir_array in array::uniform2(0.0f64..1.0f64),
         radius in 1.0e-2f64..100.0f64
     ) {
-        exec_cylindrical_surface(org_coord, dir_array, ref_dir_array, radius)
+        exec_cylindrical_surface(org_coord, dir_array, ref_dir_array, radius);
     }
 }
 
@@ -1084,10 +1060,7 @@ fn exec_toroidal_surface(
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
     let v = z.cross(ref_dir);
-    let y = match v.so_small() {
-        true => return,
-        false => v.normalize(),
-    };
+    let y = if v.so_small() { return } else { v.normalize() };
     let x = y.cross(z).normalize();
     let major_radius = f64::max(radii[0], radii[1]);
     let minor_radius = (f64::min(radii[0], radii[1])) / 2.0;
@@ -1113,16 +1086,16 @@ fn exec_toroidal_surface(
     (0..=10)
         .flat_map(move |i| (0..=10).map(move |j| (i, j)))
         .for_each(|(i, j)| {
-            let u = 2.0 * PI * i as f64 / 10.0;
-            let v = 2.0 * PI * j as f64 / 10.0;
+            let u = 2.0 * PI * f64::from(i) / 10.0;
+            let v = 2.0 * PI * f64::from(j) / 10.0;
             let res = toroidal.evaluate(u, v);
             let ans = mat.transform_point(Point3::new(
-                (major_radius + minor_radius * f64::cos(v)) * f64::cos(u),
-                (major_radius + minor_radius * f64::cos(v)) * f64::sin(u),
+                minor_radius.mul_add(f64::cos(v), major_radius) * f64::cos(u),
+                minor_radius.mul_add(f64::cos(v), major_radius) * f64::sin(u),
                 minor_radius * f64::sin(v),
             ));
             assert_near!(res, ans, "u:{u} v:{v} res:{res:?} ans:{ans:?}");
-        })
+        });
 }
 
 proptest! {
@@ -1133,7 +1106,7 @@ proptest! {
         ref_dir_array in array::uniform2(0.0f64..1.0f64),
         radii in array::uniform2(1.0e-2f64..100.0f64),
     ) {
-        exec_toroidal_surface(org_coord, dir_array, ref_dir_array, radii)
+        exec_toroidal_surface(org_coord, dir_array, ref_dir_array, radii);
     }
 }
 
@@ -1148,10 +1121,7 @@ fn exec_conical_surface(
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
     let v = z.cross(ref_dir);
-    let y = match v.so_small() {
-        true => return,
-        false => v.normalize(),
-    };
+    let y = if v.so_small() { return } else { v.normalize() };
     let x = y.cross(z).normalize();
     let step_str = format!(
         "DATA;
@@ -1183,19 +1153,19 @@ fn exec_conical_surface(
     (0..=10)
         .flat_map(move |i| (0..=10).map(move |j| (i, j)))
         .for_each(|(i, j)| {
-            let u = 2.0 * PI * i as f64 / 10.0;
-            let v = j as f64 / 10.0;
+            let u = 2.0 * PI * f64::from(i) / 10.0;
+            let v = f64::from(j) / 10.0;
             let tan = f64::tan(semi_angle);
             let res = conical.evaluate(u, v);
             let res1 = conical1.evaluate(u, v);
             let ans = mat.transform_point(Point3::new(
-                (radius + v * tan) * f64::cos(u),
-                (radius + v * tan) * f64::sin(u),
+                v.mul_add(tan, radius) * f64::cos(u),
+                v.mul_add(tan, radius) * f64::sin(u),
                 v,
             ));
             assert_near!(res, ans, "u:{u} v:{v} res:{res:?} ans:{ans:?}");
             assert_near!(res1, ans, "u:{u} v:{v} res:{res1:?} ans:{ans:?}");
-        })
+        });
 }
 
 proptest! {
@@ -1207,7 +1177,7 @@ proptest! {
         radius in 0.01f64..100.0f64,
         semi_angle in 0.0f64..PI / 2.0,
     ) {
-        exec_conical_surface(org_coord, dir_array, ref_dir_array, radius, semi_angle)
+        exec_conical_surface(org_coord, dir_array, ref_dir_array, radius, semi_angle);
     }
 }
 
@@ -1334,7 +1304,7 @@ proptest! {
             vknot_incrs,
             vdegree,
             ctrlpt_coords,
-        )
+        );
     }
 }
 
@@ -1386,7 +1356,7 @@ proptest! {
         degrees in array::uniform2(1usize..6),
         ctrlpt_coords in collection::vec(collection::vec(array::uniform3(-100.0f64..100.0f64), 6), 6),
     ) {
-        exec_bezier_surface(degrees, ctrlpt_coords)
+        exec_bezier_surface(degrees, ctrlpt_coords);
     }
 }
 
@@ -1423,7 +1393,7 @@ proptest! {
         divisions in array::uniform2(2usize..5),
         ctrlpt_coords in collection::vec(collection::vec(array::uniform3(-100.0f64..100.0f64), 30), 30),
     ) {
-        exec_quasi_uniform_surface(degrees, divisions, ctrlpt_coords)
+        exec_quasi_uniform_surface(degrees, divisions, ctrlpt_coords);
     }
 }
 
@@ -1458,7 +1428,7 @@ proptest! {
         knot_lens in array::uniform2(7usize..30),
         ctrlpt_coords in collection::vec(collection::vec(array::uniform3(-100.0f64..100.0f64), 30), 30),
     ) {
-        exec_uniform_surface(degrees, knot_lens, ctrlpt_coords)
+        exec_uniform_surface(degrees, knot_lens, ctrlpt_coords);
     }
 }
 
@@ -1539,7 +1509,7 @@ proptest! {
             vdegree,
             ctrlpt_coords,
             weights,
-        )
+        );
     }
 }
 
@@ -1593,7 +1563,7 @@ proptest! {
         ctrlpt_coords in collection::vec(collection::vec(array::uniform3(-100.0f64..100.0f64), 6), 6),
         weights in collection::vec(collection::vec(0.01f64..100.0f64, 6), 6),
     ) {
-        exec_nurbs_surface_bezier_surface(degrees, ctrlpt_coords, weights)
+        exec_nurbs_surface_bezier_surface(degrees, ctrlpt_coords, weights);
     }
 }
 
@@ -1651,7 +1621,7 @@ proptest! {
         ctrlpt_coords in collection::vec(collection::vec(array::uniform3(-100.0f64..100.0f64), 30), 30),
         weights in collection::vec(collection::vec(0.01f64..100.0f64, 30), 30),
     ) {
-        exec_nurbs_surface_quasi_uniform_surface(degrees, divisions, ctrlpt_coords, weights)
+        exec_nurbs_surface_quasi_uniform_surface(degrees, divisions, ctrlpt_coords, weights);
     }
 }
 
@@ -1708,7 +1678,7 @@ proptest! {
         ctrlpt_coords in collection::vec(collection::vec(array::uniform3(-100.0f64..100.0f64), 30), 30),
         weights in collection::vec(collection::vec(0.01f64..100.0f64, 30), 30),
     ) {
-        exec_nurbs_surface_uniform_surface(degrees, knot_lens, ctrlpt_coords, weights)
+        exec_nurbs_surface_uniform_surface(degrees, knot_lens, ctrlpt_coords, weights);
     }
 }
 
@@ -1732,7 +1702,7 @@ fn exec_surface_of_linear_extrusion(
     (0..=100)
         .flat_map(move |i| (0..=100).map(move |j| (i, j)))
         .for_each(|(i, j)| {
-            let (u, v) = (i as f64 / 10.0, j as f64 / 10.0);
+            let (u, v) = (f64::from(i) / 10.0, f64::from(j) / 10.0);
             assert_near!(surface.evaluate(u, v), line.evaluate(u) + axis * v);
         });
 }
@@ -1744,7 +1714,7 @@ proptest! {
         point1_coord in array::uniform3(-100.0f64..100.0f64),
         axis_elem in array::uniform3(-100.0f64..100.0f64),
     ) {
-        exec_surface_of_linear_extrusion(point0_coord, point1_coord, axis_elem)
+        exec_surface_of_linear_extrusion(point0_coord, point1_coord, axis_elem);
     }
 }
 
@@ -1774,7 +1744,7 @@ fn exec_surface_of_revolution(
     (0..=100)
         .flat_map(move |i| (0..=100).map(move |j| (i, j)))
         .for_each(|(i, j)| {
-            let (u, v) = (i as f64 / 10.0, j as f64 / 10.0);
+            let (u, v) = (f64::from(i) / 10.0, f64::from(j) / 10.0);
             let lc = line.evaluate(v) - origin;
             let ans = origin
                 + lc * f64::cos(u)
@@ -1792,6 +1762,6 @@ proptest! {
         org_coord in array::uniform3(-100f64..100.0),
         axis_array in array::uniform2(0.0f64..1.0),
     ) {
-        exec_surface_of_revolution(point0_coord, point1_coord, org_coord, axis_array)
+        exec_surface_of_revolution(point0_coord, point1_coord, org_coord, axis_array);
     }
 }

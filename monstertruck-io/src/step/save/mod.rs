@@ -1,6 +1,9 @@
 use std::fmt::{Debug, Display, Formatter, Result};
 
-use monstertruck_topology::compress::*;
+use monstertruck_topology::compress::{
+    CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell, CompressedSolid,
+    CompressedTrimmedShell, CompressedTrimmedSolid,
+};
 
 use self::topology::PreStepModel;
 
@@ -14,9 +17,10 @@ pub struct BooleanDisplay(pub bool);
 
 impl Display for BooleanDisplay {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        match self.0 {
-            true => f.write_str(".T."),
-            false => f.write_str(".F."),
+        if self.0 {
+            f.write_str(".T.")
+        } else {
+            f.write_str(".F.")
         }
     }
 }
@@ -27,7 +31,7 @@ pub struct FloatDisplay(pub f64);
 
 impl Display for FloatDisplay {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        let FloatDisplay(x) = *self;
+        let Self(x) = *self;
         if f64::abs(x) < 1.0e-2 && x != 0.0 {
             f.write_fmt(format_args!("{x:.10E}"))
         } else {
@@ -201,12 +205,10 @@ pub trait StepLength {
 }
 
 impl<T: StepLength> StepLength for &T {
-    #[inline(always)]
     fn step_length(&self) -> usize { StepLength::step_length(*self) }
 }
 
 impl<T: StepLength> StepLength for Box<T> {
-    #[inline(always)]
     fn step_length(&self) -> usize { self.as_ref().step_length() }
 }
 
@@ -231,8 +233,7 @@ macro_rules! impl_const_step_length {
             const LENGTH: usize = $len;
         }
         impl$(<$($gen),*>)? StepLength for $type {
-            #[inline(always)]
-            fn step_length(&self) -> usize { <Self as ConstStepLength>::LENGTH }
+                    fn step_length(&self) -> usize { <Self as ConstStepLength>::LENGTH }
         }
     };
 }
@@ -240,34 +241,28 @@ macro_rules! impl_const_step_length {
 /// Additional information for output to `edge_curve`.
 pub trait StepCurve {
     /// the parameter `same_sense`.
-    #[inline(always)]
     fn same_sense(&self) -> bool { true }
 }
 
 impl<T: StepCurve> StepCurve for &T {
-    #[inline(always)]
     fn same_sense(&self) -> bool { (*self).same_sense() }
 }
 
 impl<T: StepCurve> StepCurve for Box<T> {
-    #[inline(always)]
     fn same_sense(&self) -> bool { self.as_ref().same_sense() }
 }
 
 /// Additional information for output to `face_surface`.
 pub trait StepSurface {
     /// the parameter `same_sense`.
-    #[inline(always)]
     fn same_sense(&self) -> bool { true }
 }
 
 impl<T: StepSurface> StepSurface for &T {
-    #[inline(always)]
     fn same_sense(&self) -> bool { (*self).same_sense() }
 }
 
 impl<T: StepSurface> StepSurface for Box<T> {
-    #[inline(always)]
     fn same_sense(&self) -> bool { self.as_ref().same_sense() }
 }
 
@@ -386,23 +381,23 @@ pub enum SiPrefix {
 impl Display for SiPrefix {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.write_str(match self {
-            SiPrefix::Exa => ".EXA.",
-            SiPrefix::Peta => ".PETA.",
-            SiPrefix::Tera => ".TERA.",
-            SiPrefix::Giga => ".GIGA.",
-            SiPrefix::Mega => ".MEGA.",
-            SiPrefix::Kilo => ".KILO.",
-            SiPrefix::Hecto => ".HECTO.",
-            SiPrefix::Deca => ".DECA.",
-            SiPrefix::None => "$",
-            SiPrefix::Deci => ".DECI.",
-            SiPrefix::Centi => ".CENTI.",
-            SiPrefix::Milli => ".MILLI.",
-            SiPrefix::Micro => ".MICRO.",
-            SiPrefix::Nano => ".NANO.",
-            SiPrefix::Pico => ".PICO.",
-            SiPrefix::Femto => ".FEMTO.",
-            SiPrefix::Atto => ".ATTO.",
+            Self::Exa => ".EXA.",
+            Self::Peta => ".PETA.",
+            Self::Tera => ".TERA.",
+            Self::Giga => ".GIGA.",
+            Self::Mega => ".MEGA.",
+            Self::Kilo => ".KILO.",
+            Self::Hecto => ".HECTO.",
+            Self::Deca => ".DECA.",
+            Self::None => "$",
+            Self::Deci => ".DECI.",
+            Self::Centi => ".CENTI.",
+            Self::Milli => ".MILLI.",
+            Self::Micro => ".MICRO.",
+            Self::Nano => ".NANO.",
+            Self::Pico => ".PICO.",
+            Self::Femto => ".FEMTO.",
+            Self::Atto => ".ATTO.",
         })
     }
 }
@@ -431,7 +426,7 @@ impl Default for StepMeasurementContext {
 
 impl StepMeasurementContext {
     /// STEP `REAL` literal for the distance accuracy value.
-    pub(super) fn accuracy(&self) -> StepReal { StepReal(self.distance_accuracy_value) }
+    pub(super) const fn accuracy(&self) -> StepReal { StepReal(self.distance_accuracy_value) }
 }
 
 /// Formats an `f64` as a STEP `REAL` literal: shortest round-tripping form with
@@ -503,7 +498,7 @@ impl<T> CompleteStepDisplay<T> {
     /// constructor
     #[inline]
     pub fn new(display: T, header: StepHeaderDescriptor) -> Self {
-        CompleteStepDisplay {
+        Self {
             display,
             header: StepHeader {
                 file_name: header.file_name,

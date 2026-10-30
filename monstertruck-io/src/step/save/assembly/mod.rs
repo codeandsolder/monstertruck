@@ -11,9 +11,12 @@
 //! [`Assembly`] or from a single shape via [`StepDesign::from_model`] and
 //! implements [`std::fmt::Display`] to produce the STEP data section.
 
-use super::{Result, *};
+use super::{
+    ConstStepLength, Debug, Display, Formatter, IndexSliceDisplay, MatrixAsAxis, Result, StepCurve,
+    StepDisplay, StepFormat, StepLength, StepMeasurementContext, StepSurface,
+};
 use crate::step::common::PartAttributes;
-use monstertruck_assembly::assy::*;
+use monstertruck_assembly::assy::{Assembly, EdgeEntity, Node, NodeEntity, Takeable};
 use monstertruck_modeling::Matrix4;
 
 /// Index of the `APPLICATION_CONTEXT` entity, always written first.
@@ -81,8 +84,8 @@ where
     }
 }
 
-impl<'a, Model, Models, Matrix> StepFormat
-    for Node<'a, NodeEntity<Models, PartAttributes>, EdgeEntity<Matrix, PartAttributes>>
+impl<Model, Models, Matrix> StepFormat
+    for Node<'_, NodeEntity<Models, PartAttributes>, EdgeEntity<Matrix, PartAttributes>>
 where
     Model: StepFormat + StepLength,
     for<'b> &'b Models: IntoIterator<Item = &'b Model>,
@@ -150,8 +153,8 @@ where
     }
 }
 
-impl<'a, Model, Models, Matrix> StepLength
-    for Node<'a, NodeEntity<Models, PartAttributes>, EdgeEntity<Matrix, PartAttributes>>
+impl<Model, Models, Matrix> StepLength
+    for Node<'_, NodeEntity<Models, PartAttributes>, EdgeEntity<Matrix, PartAttributes>>
 where
     Model: StepLength,
     for<'b> &'b Models: IntoIterator<Item = &'b Model>,
@@ -162,7 +165,7 @@ where
         8 + MatrixAsAxis::<Matrix>::LENGTH * self.edges().len()
             + (&self.entity().shape)
                 .into_iter()
-                .map(|shape| shape.step_length())
+                .map(super::StepLength::step_length)
                 .sum::<usize>()
     }
 }
@@ -176,8 +179,8 @@ struct NodeInEdge {
 }
 
 impl NodeInEdge {
-    fn new(node_idx: usize) -> Self {
-        NodeInEdge {
+    const fn new(node_idx: usize) -> Self {
+        Self {
             product_definition_idx: node_idx + 2,
             shape_representation_idx: node_idx + 7,
         }
@@ -269,6 +272,7 @@ pub struct StepDesign<Model, Models, Matrix = Matrix4> {
 impl<Model, Models, Matrix> StepDesign<Model, Models, Matrix> {
     /// Builds a `StepDesign` from an explicit assembly.
     #[inline]
+    #[must_use]
     pub fn new(assembly: Assembly<Models, PartAttributes, Matrix, PartAttributes>) -> Self {
         Self {
             assembly,
@@ -280,6 +284,7 @@ impl<Model, Models, Matrix> StepDesign<Model, Models, Matrix> {
 
     /// Builds a `StepDesign` with a caller-provided application-context string.
     #[inline]
+    #[must_use]
     pub fn with_application_context(
         assembly: Assembly<Models, PartAttributes, Matrix, PartAttributes>,
         application_context: String,
@@ -296,14 +301,16 @@ impl<Model, Models, Matrix> StepDesign<Model, Models, Matrix> {
     /// representation-context preamble. The default preserves millimetre
     /// lengths and a `1.0E-6` `distance_accuracy_value`.
     #[inline]
-    pub fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
+    #[must_use]
+    pub const fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
         self.measurement_context = context;
         self
     }
 
     /// Returns the length unit and distance accuracy written into the preamble.
     #[inline]
-    pub fn measurement_context(&self) -> StepMeasurementContext { self.measurement_context }
+    #[must_use]
+    pub const fn measurement_context(&self) -> StepMeasurementContext { self.measurement_context }
 }
 
 impl<Model> StepDesign<Model, Option<Model>, Matrix4> {
