@@ -17,6 +17,9 @@ pub(crate) use ahash::AHashSet as HashSet;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::rexport_polymesh::*;
 use monstertruck_topology::compress::*;
+use monstertruck_topology::repair::{
+    split_non_simple_compressed_wires, split_pinched_compressed_faces,
+};
 use monstertruck_topology::trimmed::{TrimmedShell, TrimmedSolid};
 use monstertruck_traits::SnapCurveEndpoints;
 use rustc_hash::FxHashMap as HashMap;
@@ -643,7 +646,8 @@ where
         + Clone,
     S: ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>
+        + Clone,
 {
     fn split_closed_edges_and_faces(&mut self, tol: f64) {
         let debug_trace = env::var("MT_BOOL_TRACE").is_ok();
@@ -694,6 +698,12 @@ where
                 started.elapsed().as_secs_f64() * 1000.0,
             );
         }
+        // The geometric split passes can leave residual topology that is
+        // individually closed but still invalid for `Face::new`: first split
+        // boundary walks that revisit a vertex, then separate simple boundary
+        // wires that still share vertices with each other.
+        split_non_simple_compressed_wires(self);
+        split_pinched_compressed_faces(self);
     }
 }
 
@@ -710,7 +720,8 @@ where
         + Clone,
     S: ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>
+        + Clone,
 {
     fn split_closed_edges_and_faces(&mut self, tol: f64) {
         let fs = SplitClosedEdgesAndFaces::split_closed_edges_and_faces;
