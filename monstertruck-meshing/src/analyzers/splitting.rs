@@ -241,7 +241,7 @@ impl ExperimentalSplitters for PolygonMesh {
         angles
             .into_iter()
             .zip(weights)
-            .map(|(ang, weight)| (PI * 2.0 - ang) / weight)
+            .map(|(ang, weight)| PI.mul_add(2.0, -ang) / weight)
             .collect()
     }
 }

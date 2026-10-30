@@ -1033,7 +1033,7 @@ fn triangulation_into_polymesh<'a>(
             let tri = array![i => sp2cg(*tri[i].as_ref()); 3];
             let (a, b) = (tri[1] - tri[0], tri[2] - tri[0]);
             let c = tri[0] + (a + b) / 3.0;
-            let area = a.x * b.y - a.y * b.x;
+            let area = f64::mul_add(a.y, -b.x, a.x * b.y);
             polyline.include(c) && !area.so_small2()
         })
         .map(|tri| {

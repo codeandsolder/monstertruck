@@ -203,7 +203,7 @@ fn calc_new_position(
             Inner => {
                 let alpha =
                     3.0 / 8.0 + f64::cos(2.0 * PI / crate::count_as_f64(adjacency.len())) / 4.0;
-                let alpha = (5.0 / 8.0 - alpha * alpha) / crate::count_as_f64(adjacency.len());
+                let alpha = alpha.mul_add(-alpha, 5.0 / 8.0) / crate::count_as_f64(adjacency.len());
                 let mut delta = Vector3::zero();
                 for &w in adjacency {
                     delta += *positions.get(w)? - point;

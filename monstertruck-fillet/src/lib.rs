@@ -16,14 +16,18 @@
 pub(crate) use ahash::AHashSet as HashSet;
 
 #[expect(
-    private_interfaces,
-    reason = "legacy fillet module API intentionally keeps implementation helper types private"
+    clippy::cast_precision_loss,
+    reason = "fillet sampling and subdivision counts are bounded by iterable geometry and converted only for normalized f64 parameters"
 )]
-mod edge_select;
+pub(crate) const fn count_as_f64(value: usize) -> f64 { value as f64 }
+
 #[expect(
-    private_interfaces,
-    reason = "legacy fillet module API intentionally keeps implementation helper types private"
+    clippy::cast_precision_loss,
+    reason = "extended fillet sampling indices range only from -1 through a bounded subdivision count plus one"
 )]
+pub(crate) const fn signed_index_as_f64(value: isize) -> f64 { value as f64 }
+
+mod edge_select;
 mod ops;
 
 mod convert;

@@ -544,7 +544,7 @@ impl PolyBoundaryPiece {
                 if span.so_small() {
                     Some(min)
                 } else {
-                    let mut normalized = value - f64::floor((value - min) / period) * period;
+                    let mut normalized = f64::floor((value - min) / period).mul_add(-period, value);
                     if normalized < min {
                         normalized += period;
                     }
@@ -766,13 +766,13 @@ impl PolyBoundaryPiece {
         if let (Some(up), Some((u0, _))) = (surface.period_u(), urange) {
             let quot = f64::floor((grav.x - u0) / up);
             for point in &mut vec {
-                point.x -= quot * up;
+                point.x = quot.mul_add(-up, point.x);
             }
         }
         if let (Some(vp), Some((v0, _))) = (surface.period_v(), vrange) {
             let quot = f64::floor((grav.y - v0) / vp);
             for point in &mut vec {
-                point.y -= quot * vp;
+                point.y = quot.mul_add(-vp, point.y);
             }
         }
         let last = *vec.last()?;

@@ -193,7 +193,7 @@ fn densify_curve_parameters(mut parameters: Vec<f64>, min_points: usize) -> Vec<
             let splits = 1 + extra_after - extra_before;
             (0..splits).map(move |index| {
                 let weight = crate::count_as_f64(index) / crate::count_as_f64(splits);
-                window[0] + (window[1] - window[0]) * weight
+                f64::mul_add(window[1] - window[0], weight, window[0])
             })
         })
         .chain(parameters.last().copied())
@@ -234,7 +234,7 @@ fn untrimmed_isoparametric_curves<S: PreMeshableSurface>(
                 .map(move |index| {
                     let parameter = (crate::count_as_f64(index) + 1.0)
                         / (crate::count_as_f64(options.samples_per_direction) + 1.0);
-                    min + (max - min) * parameter
+                    (max - min).mul_add(parameter, min)
                 })
                 .collect::<Vec<_>>()
         };
@@ -244,8 +244,8 @@ fn untrimmed_isoparametric_curves<S: PreMeshableSurface>(
                     let parameter = crate::count_as_f64(index)
                         / crate::count_as_f64(options.segments_per_curve);
                     let variable_value = match constant_axis {
-                        0 => v_min + (v_max - v_min) * parameter,
-                        _ => u_min + (u_max - u_min) * parameter,
+                        0 => f64::mul_add(v_max - v_min, parameter, v_min),
+                        _ => f64::mul_add(u_max - u_min, parameter, u_min),
                     };
                     match constant_axis {
                         0 => surface.evaluate(constant_value, variable_value),
@@ -450,8 +450,8 @@ fn resample_boundary(boundary: &[Point2], target_len: usize) -> Option<Vec<Point
                                 (distance - front_distance) / (back_distance - front_distance)
                             };
                             Point2::new(
-                                front.x + (back.x - front.x) * weight,
-                                front.y + (back.y - front.y) * weight,
+                                (back.x - front.x).mul_add(weight, front.x),
+                                (back.y - front.y).mul_add(weight, front.y),
                             )
                         }
                     })
@@ -632,9 +632,9 @@ where
     shell.face_iter().enumerate().map(create_face).collect()
 }
 
-fn log_exact_boundary(face_idx: usize, piece: &Option<PolyBoundaryPiece>) {
+fn log_exact_boundary(face_idx: usize, piece: Option<&PolyBoundaryPiece>) {
     if mesh_trace_enabled() {
-        let exact_count = piece.as_ref().map_or(0, |piece| piece.0.len());
+        let exact_count = piece.map_or(0, |piece| piece.0.len());
         eprintln!(
             "mesh_trace face={face_idx} stage=exact_boundary points={exact_count} success={}",
             piece.is_some(),
@@ -748,7 +748,7 @@ where
         aligned_piece.or(direct_piece)
     };
     let exact_piece = create_exact_piece(tolerance);
-    log_exact_boundary(face_idx, &exact_piece);
+    log_exact_boundary(face_idx, exact_piece.as_ref());
     exact_piece
         .or_else(|| {
             boundary_tolerance_candidates(tolerance)
@@ -1069,7 +1069,7 @@ fn trace_trimmed_boundary_piece<C, S, T>(
     surface: &S,
     shell: &TrimmedShell<C, S, T>,
     tolerance: f64,
-    piece: &Option<PolyBoundaryPiece>,
+    piece: Option<&PolyBoundaryPiece>,
     wire_start: Instant,
 ) where
     C: ParameterBoundary2D<S>,
@@ -1171,7 +1171,13 @@ where
         piece = fallback_trimmed_boundary_piece(wire, face_orientation, surface, context);
     }
     trace_trimmed_boundary_piece(
-        face_idx, wire, surface, shell, tolerance, &piece, wire_start,
+        face_idx,
+        wire,
+        surface,
+        shell,
+        tolerance,
+        piece.as_ref(),
+        wire_start,
     );
     piece
 }

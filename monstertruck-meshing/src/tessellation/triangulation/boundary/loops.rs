@@ -42,7 +42,7 @@ fn loop_signed_area(curve: &[SurfacePoint]) -> f64 {
     curve
         .iter()
         .circular_tuple_windows()
-        .fold(0.0, |sum, (p, q)| sum + (q.x + p.x) * (q.y - p.y))
+        .fold(0.0, |sum, (p, q)| f64::mul_add(q.x + p.x, q.y - p.y, sum))
 }
 
 fn loop_orientation(curve: &[SurfacePoint]) -> bool { loop_signed_area(curve) > 0.0 }
@@ -75,7 +75,11 @@ fn open_pair_connector_score(
 ) -> f64 {
     let p1q0 = p1.uv - q0.uv;
     let q1p0 = q1.uv - p0.uv;
-    p1q0.x * p1q0.x + p1q0.y * p1q0.y + q1p0.x * q1p0.x + q1p0.y * q1p0.y
+    q1p0.y.mul_add(
+        q1p0.y,
+        q1p0.x
+            .mul_add(q1p0.x, p1q0.y.mul_add(p1q0.y, p1q0.x * p1q0.x)),
+    )
 }
 
 pub(in crate::tessellation::triangulation) fn boundary_segment_parameter(
@@ -364,9 +368,9 @@ impl PolyBoundary {
             .try_fold(0_i32, move |counter, (p0, p1)| {
                 let a = **p0 - c;
                 let b = **p1 - c;
-                let s0 = r.x * a.y - r.y * a.x; // v times a.
-                let s1 = r.x * b.y - r.y * b.x; // v times b.
-                let s2 = a.x * b.y - a.y * b.x; // a times b.
+                let s0 = r.y.mul_add(-a.x, r.x * a.y); // v times a.
+                let s1 = r.y.mul_add(-b.x, r.x * b.y); // v times b.
+                let s2 = a.y.mul_add(-b.x, a.x * b.y); // a times b.
                 let x = s2 / (s1 - s0);
                 if x.so_small() && s0 * s1 < 0.0 {
                     None
@@ -426,7 +430,7 @@ impl PolyBoundary {
             .map(|index| {
                 let parameter =
                     (crate::count_as_f64(index) + 1.0) / (crate::count_as_f64(count) + 1.0);
-                min + (max - min) * parameter
+                f64::mul_add(max - min, parameter, min)
             })
             .collect()
     }
@@ -445,7 +449,7 @@ impl PolyBoundary {
         let samples = (0..=segments)
             .map(|index| {
                 let parameter = crate::count_as_f64(index) / crate::count_as_f64(segments);
-                let variable_value = min + (max - min) * parameter;
+                let variable_value = f64::mul_add(max - min, parameter, min);
                 match constant_axis {
                     0 => Point2::new(constant_value, variable_value),
                     _ => Point2::new(variable_value, constant_value),

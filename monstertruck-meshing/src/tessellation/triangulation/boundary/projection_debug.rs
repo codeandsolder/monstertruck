@@ -106,8 +106,8 @@ fn sampled_nearest<S: PreMeshableSurface>(
         let ((bu, bv), _) = best;
         for i in -2i32..=2 {
             for j in -2i32..=2 {
-                let u = (bu + du * f64::from(i)).clamp(u0, u1);
-                let v = (bv + dv * f64::from(j)).clamp(v0, v1);
+                let u = du.mul_add(f64::from(i), bu).clamp(u0, u1);
+                let v = dv.mul_add(f64::from(j), bv).clamp(v0, v1);
                 let d = surface.evaluate(u, v).distance2(point);
                 if d < best.1 {
                     best = ((u, v), d);

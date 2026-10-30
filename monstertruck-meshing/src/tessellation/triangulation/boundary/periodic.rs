@@ -24,7 +24,7 @@ fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> std::cmp::Ordering {
     move |x: &f64, y: &f64| f(x).total_cmp(&f(y))
 }
 pub(super) fn periodic_min_difference(u: f64, u0: f64, up: f64) -> f64 {
-    let closure = |i| u + f64::from(i) * up;
+    let closure = |i| f64::mul_add(f64::from(i), up, u);
     let mut best = closure(-2);
     for i in -1..=2 {
         let candidate = closure(i);
@@ -253,10 +253,10 @@ fn periodic_seam_bounds(
         return (lower, upper);
     }
     let origin = range.map_or(0.0, |(min, _)| min);
-    let mut seam_lower = origin + ((lower - origin) / period).floor() * period;
+    let mut seam_lower = ((lower - origin) / period).floor().mul_add(period, origin);
     let excess = upper - (seam_lower + period + TOLERANCE);
     if excess > 0.0 {
-        seam_lower += (excess / period).ceil() * period;
+        seam_lower = (excess / period).ceil().mul_add(period, seam_lower);
     }
     (seam_lower, seam_lower + period)
 }
@@ -399,7 +399,7 @@ fn align_full_period_curve_to_axis(
         let Some(template) = curve.first().copied() else {
             return false;
         };
-        let target_end = target_start + direction * period;
+        let target_end = direction.mul_add(period, target_start);
         let open_len = curve.len().saturating_sub(1);
         let mut aligned = curve
             .iter()

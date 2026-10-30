@@ -205,7 +205,7 @@ fn collide_triangles(
     }
 }
 
-fn make_pos_tri(poly: &PolygonMesh, face: [StandardVertex; 3]) -> [Point3; 3] {
+const fn make_pos_tri(poly: &PolygonMesh, face: [StandardVertex; 3]) -> [Point3; 3] {
     array![i => poly.positions()[face[i].pos]; 3]
 }
 

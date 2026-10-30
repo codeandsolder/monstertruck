@@ -85,6 +85,7 @@ impl Default for FilletOptions {
 
 impl FilletOptions {
     /// Creates options with a constant radius.
+    #[must_use]
     pub fn constant(radius: f64) -> Self {
         Self {
             radius: RadiusSpec::Constant(radius),
@@ -101,18 +102,21 @@ impl FilletOptions {
     }
 
     /// Sets the fillet radius specification.
+    #[must_use]
     pub fn with_radius(mut self, radius: RadiusSpec) -> Self {
         self.radius = radius;
         self
     }
 
     /// Sets the division count used by the fillet algorithm.
-    pub fn with_division(mut self, division: NonZeroUsize) -> Self {
+    #[must_use]
+    pub const fn with_division(mut self, division: NonZeroUsize) -> Self {
         self.divisions = division;
         self
     }
 
     /// Sets the fillet profile.
+    #[must_use]
     pub fn with_profile(mut self, profile: FilletProfile) -> Self {
         self.profile = profile;
         self
