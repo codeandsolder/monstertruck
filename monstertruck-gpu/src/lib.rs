@@ -161,6 +161,18 @@ pub enum GpuError {
         /// Destination buffer size in bytes.
         destination_size: u64,
     },
+    /// A CPU-visible render readback cannot fit in this platform's address space.
+    #[error("render readback requires {bytes} bytes, which cannot fit in memory on this platform")]
+    ReadbackTooLarge {
+        /// Number of unpadded image bytes requested by the readback.
+        bytes: u64,
+    },
+    /// The configured render texture does not have a simple copyable texel footprint.
+    #[error("render texture format {format:?} is not supported for CPU readback")]
+    UnsupportedReadbackFormat {
+        /// Texture format that cannot be represented by the readback path.
+        format: TextureFormat,
+    },
 }
 
 /// safe handler of GPU buffer

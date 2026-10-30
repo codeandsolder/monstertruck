@@ -813,8 +813,8 @@ impl Scene {
     /// Render image to buffer.
     ///
     /// # Errors
-    /// Returns a [`GpuError`] for singular camera transforms, device polling failures,
-    /// buffer-map failures, or a closed map-completion channel.
+    /// Returns a [`GpuError`] for singular camera transforms, invalid readback sizing, device
+    /// polling failures, buffer-map failures, or a closed map-completion channel.
     pub async fn render_to_buffer(&self) -> Result<Vec<u8>, GpuError> {
         let texture = self.compatible_texture();
         let view = texture.create_view(&TextureViewDescriptor::default());
@@ -822,12 +822,38 @@ impl Scene {
         let (device, queue) = (self.device(), self.queue());
 
         let (width, height) = self.descriptor.render_texture.canvas_size;
-        let size = u64::from(width) * u64::from(height) * 4;
+        let format = self.descriptor.render_texture.format;
+        if format.block_dimensions() != (1, 1) {
+            return Err(GpuError::UnsupportedReadbackFormat { format });
+        }
+        let bytes_per_texel = format
+            .block_copy_size(Some(TextureAspect::All))
+            .ok_or(GpuError::UnsupportedReadbackFormat { format })?;
+        let unpadded_bytes_per_row =
+            width
+                .checked_mul(bytes_per_texel)
+                .ok_or(GpuError::CountTooLarge {
+                    what: "render readback row pitch",
+                })?;
+        let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padding = (alignment - unpadded_bytes_per_row % alignment) % alignment;
+        let padded_bytes_per_row =
+            unpadded_bytes_per_row
+                .checked_add(padding)
+                .ok_or(GpuError::CountTooLarge {
+                    what: "aligned render readback row pitch",
+                })?;
+        let buffer_size = u64::from(padded_bytes_per_row) * u64::from(height);
+        let output_size_u64 = u64::from(unpadded_bytes_per_row) * u64::from(height);
+        let output_size =
+            usize::try_from(output_size_u64).map_err(|_| GpuError::ReadbackTooLarge {
+                bytes: output_size_u64,
+            })?;
         let buffer = device.create_buffer(&BufferDescriptor {
             label: None,
             mapped_at_creation: false,
             usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-            size,
+            size: buffer_size,
         });
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
         encoder.copy_texture_to_buffer(
@@ -841,7 +867,7 @@ impl Scene {
                 buffer: &buffer,
                 layout: TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(width * 4),
+                    bytes_per_row: Some(padded_bytes_per_row),
                     rows_per_image: Some(height),
                 },
             },
@@ -864,7 +890,30 @@ impl Scene {
         };
         device.poll(poll_type)?;
         match receiver.receive().await {
-            Some(Ok(())) => Ok(buffer_slice.get_mapped_range().iter().copied().collect()),
+            Some(Ok(())) => {
+                let mapped = buffer_slice.get_mapped_range();
+                if padded_bytes_per_row == unpadded_bytes_per_row {
+                    return Ok(mapped.iter().copied().collect());
+                }
+                let row_bytes = usize::try_from(unpadded_bytes_per_row).map_err(|_| {
+                    GpuError::ReadbackTooLarge {
+                        bytes: output_size_u64,
+                    }
+                })?;
+                let padded_row_bytes = usize::try_from(padded_bytes_per_row).map_err(|_| {
+                    GpuError::ReadbackTooLarge {
+                        bytes: output_size_u64,
+                    }
+                })?;
+                let rows = usize::try_from(height).map_err(|_| GpuError::ReadbackTooLarge {
+                    bytes: output_size_u64,
+                })?;
+                let mut output = Vec::with_capacity(output_size);
+                for row in mapped.chunks_exact(padded_row_bytes).take(rows) {
+                    output.extend_from_slice(&row[..row_bytes]);
+                }
+                Ok(output)
+            }
             Some(Err(error)) => Err(error.into()),
             None => Err(GpuError::BufferMapChannelClosed),
         }
