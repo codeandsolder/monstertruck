@@ -5,13 +5,14 @@
 use super::content_hash::content_hash64;
 use super::{
     BoundedCurve, BsplineCurve, BsplineSurface, CompressedTrimmedShell, CompressedTrimmedSolid,
-    Curve, Curve2D, ExactParameterBoundary2D, HashMap, InnerSpace, IntoParallelIterator,
-    IntoParallelRefIterator, KnotVector, Line, Matrix4, MetricSpace, NurbsCurve, NurbsSurface,
-    ParallelIterator, ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D,
-    ParametricSurface, Point2, Point3, Processor, RefCell, RevolutionSurface,
+    Curve, Curve2D, ExactParameterBoundary2D, HashMap, InnerSpace, KnotVector, Line, Matrix4,
+    MetricSpace, NurbsCurve, NurbsSurface, ParameterCurve, ParameterDivision1D, ParametricCurve,
+    ParametricCurve3D, ParametricSurface, Point2, Point3, Processor, RefCell, RevolutionSurface,
     SearchNearestParameter, SearchParameter, Shell, Solid, Surface, TOLERANCE, Tolerance,
-    TrimmedFace, TrimmedShell, TrimmedSolid, Vector3, Vector4, iter,
+    TrimmedShell, TrimmedSolid, Vector3, Vector4, iter,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use super::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator, TrimmedFace};
 
 type ModelTrimCurve = ParameterCurve<Curve2D, Box<Surface>>;
 type ExactTrimCacheKey = (u64, u64);
