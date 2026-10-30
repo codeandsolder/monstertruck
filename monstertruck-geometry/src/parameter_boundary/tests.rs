@@ -54,7 +54,7 @@ fn revolution_line_profile_exact_boundary_extends_beyond_placeholder_range() {
     let profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
     let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
     let angle = FRAC_PI_4;
-    let curve = Line(surface.subs(-3.0, angle), surface.subs(4.0, angle));
+    let curve = Line(surface.evaluate(-3.0, angle), surface.evaluate(4.0, angle));
 
     let boundary = curve
         .exact_parameter_boundary_2d(&surface)
@@ -97,7 +97,8 @@ fn exact_bspline_boundary_rejects_five_checkpoint_false_positive() {
             vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
             vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
         ],
-    );
+    )
+    .expect("valid bilinear test surface");
     // z(t) = t(t-1/4)(t-1/2)(t-3/4)(t-1).  Its degree-5 Bernstein
     // coefficients below make the curve coincide with the y=0 surface edge at
     // exactly the five checkpoints used by the removed sampled "exact" test,
@@ -116,12 +117,13 @@ fn exact_bspline_boundary_rejects_five_checkpoint_false_positive() {
             .enumerate()
             .map(|(index, z)| Point3::new(index as f64 / 5.0, 0.0, z))
             .collect(),
-    );
+    )
+    .expect("valid degree-5 regression curve");
 
     for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
-        assert!(curve.subs(t).z.abs() <= TOLERANCE);
+        assert!(curve.evaluate(t).z.abs() <= TOLERANCE);
     }
-    assert!(curve.subs(0.125).z.abs() > TOLERANCE);
+    assert!(curve.evaluate(0.125).z.abs() > TOLERANCE);
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());
 }
 

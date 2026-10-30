@@ -4,8 +4,8 @@
 //! name is unchanged, so every test keeps its path and its identity.
 
 use super::*;
-use crate::prelude::{Sphere, prop_assert_near};
-use monstertruck_core::{MetricSpace, Zero};
+use crate::prelude::{RevolutionSurface, Sphere, prop_assert_near};
+use monstertruck_core::{MetricSpace, Transform, Zero};
 use monstertruck_traits::ParametricSurface;
 use proptest::prelude::*;
 use std::f64::consts::PI;
