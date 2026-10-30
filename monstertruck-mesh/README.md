@@ -18,7 +18,7 @@ let faces = Faces::from_iter(&[[0, 1, 2]]);
 let mesh = PolygonMesh::new(
     StandardAttributes { positions, ..Default::default() },
     faces,
-);
+).expect("mesh is valid");
 
 assert_eq!(mesh.positions().len(), 3);
 assert_eq!(mesh.tri_faces().len(), 1);
