@@ -504,7 +504,7 @@ where
 ///
 /// // make a disk by attaching a plane into circle
 /// let vertex: Vertex = builder::vertex(Point3::new(1.0, 0.0, 0.0));
-/// let circle: Wire = builder::revolve(&vertex, Point3::origin(), Vector3::unit_y(), SweepAngle::Closed, 2);
+/// let circle: Wire = builder::revolve(&vertex, Point3::origin(), Vector3::unit_y(), SweepAngle::Closed, 2)?;
 /// let disk: Face = builder::try_attach_plane(vec![circle])?;
 /// # let surface = disk.oriented_surface();
 /// # let normal = surface.normal(0.5, 0.5);
@@ -961,8 +961,10 @@ pub fn composite_closed_sweep(
 /// use monstertruck_modeling::builder::SweepAngle;
 ///
 /// let v = builder::vertex(Point3::new(3.0, 0.0, 0.0));
-/// let circle = builder::revolve(&v, Point3::new(2.0, 0.0, 0.0), Vector3::unit_z(), SweepAngle::Closed, 2);
-/// let torus = builder::revolve(&circle, Point3::origin(), Vector3::unit_y(), SweepAngle::Closed, 2);
+/// let circle = builder::revolve(&v, Point3::new(2.0, 0.0, 0.0), Vector3::unit_z(), SweepAngle::Closed, 2)
+///     .expect("valid torus profile sweep");
+/// let torus = builder::revolve(&circle, Point3::origin(), Vector3::unit_y(), SweepAngle::Closed, 2)
+///     .expect("valid torus sweep");
 /// let solid: Solid = Solid::new_unchecked(vec![torus]);
 /// #
 /// # assert!(solid.is_geometric_consistent());
@@ -992,7 +994,8 @@ pub fn composite_closed_sweep(
 ///
 /// // Creates the base circle
 /// let v: Vertex = builder::vertex(Point3::new(1.0, 0.0, 4.0));
-/// let circle: Wire = builder::revolve(&v, Point3::new(2.0, 0.0, 4.0), -Vector3::unit_z(), SweepAngle::Closed, 2);
+/// let circle: Wire = builder::revolve(&v, Point3::new(2.0, 0.0, 4.0), -Vector3::unit_z(), SweepAngle::Closed, 2)
+///     .expect("valid pipe profile sweep");
 ///
 /// // the result shell of the pipe.
 /// let mut pipe: Shell = Shell::new();
@@ -1012,7 +1015,8 @@ pub fn composite_closed_sweep(
 ///     Vector3::unit_y(),
 ///     SweepAngle::Partial(PI / 2.0),
 ///     2,
-/// );
+/// )
+/// .expect("valid pipe bend sweep");
 /// # let surface = bend_part[0].surface();
 /// pipe.append(&mut bend_part);
 ///

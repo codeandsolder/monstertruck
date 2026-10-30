@@ -12,34 +12,12 @@ impl IntoWasm for monstertruck_meshing::prelude::PolygonMesh {
     type WasmWrapper = PolygonMesh;
 }
 
-/// STL type.
-#[wasm_bindgen]
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-pub enum StlType {
-    /// Determine STL type automatically.
-    ///
-    /// # Reading
-    /// If the first 5 bytes are..
-    /// - "solid" => ascii format
-    /// - otherwise => binary format
-    ///
-    /// # Writing
-    /// Always binary format.
-    Automatic,
-    /// ASCII format.
-    Ascii,
-    /// Binary format.
-    Binary,
-}
-
-impl From<StlType> for stl::StlType {
-    fn from(stl_type: StlType) -> Self {
-        match stl_type {
-            StlType::Automatic => Self::Automatic,
-            StlType::Ascii => Self::Ascii,
-            StlType::Binary => Self::Binary,
-        }
+fn parse_stl_type(name: &str) -> Option<stl::StlType> {
+    match name {
+        "automatic" => Some(stl::StlType::Automatic),
+        "ascii" => Some(stl::StlType::Ascii),
+        "binary" => Some(stl::StlType::Binary),
+        _ => None,
     }
 }
 
@@ -69,10 +47,13 @@ impl PolygonMesh {
             .ok()
             .map(IntoWasm::into_wasm)
     }
-    /// input from STL format
+    /// input from STL format.
+    ///
+    /// `stl_type` is one of `"automatic"`, `"ascii"`, or `"binary"`.
     #[must_use]
-    pub fn from_stl(data: &[u8], stl_type: StlType) -> Option<Self> {
-        stl::read::<&[u8]>(data, stl_type.into())
+    pub fn from_stl(data: &[u8], stl_type: &str) -> Option<Self> {
+        let stl_type = parse_stl_type(stl_type)?;
+        stl::read::<&[u8]>(data, stl_type)
             .map_err(|e| {
                 gloo::console::error!(format!("{e}"));
             })
@@ -90,11 +71,14 @@ impl PolygonMesh {
             .ok()?;
         Some(res)
     }
-    /// output stl format
+    /// output STL format.
+    ///
+    /// `stl_type` is one of `"automatic"`, `"ascii"`, or `"binary"`.
     #[must_use]
-    pub fn to_stl(&self, stl_type: StlType) -> Option<Vec<u8>> {
+    pub fn to_stl(&self, stl_type: &str) -> Option<Vec<u8>> {
+        let stl_type = parse_stl_type(stl_type)?;
         let mut res = Vec::new();
-        stl::write(&self.0, &mut res, stl_type.into())
+        stl::write(&self.0, &mut res, stl_type)
             .map_err(|e| {
                 gloo::console::error!(format!("{e}"));
             })
