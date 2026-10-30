@@ -1055,9 +1055,23 @@ fn tilted_planar_conic_is_not_exact_even_when_old_five_samples_are_near_plane() 
     let surface = Surface::ElementarySurface(ElementarySurface::Plane(plane));
 
     for parameter in [0.0, 0.25 * TAU, 0.5 * TAU, 0.75 * TAU, TAU] {
-        assert!(plane.parameter(curve.evaluate(parameter)).z.abs() <= TOLERANCE);
+        assert!(
+            plane
+                .parameter(curve.evaluate(parameter))
+                .expect("test curve point must have plane coordinates")
+                .z
+                .abs()
+                <= TOLERANCE
+        );
     }
-    assert!(plane.parameter(curve.evaluate(0.125 * TAU)).z.abs() > TOLERANCE);
+    assert!(
+        plane
+            .parameter(curve.evaluate(0.125 * TAU))
+            .expect("test curve point must have plane coordinates")
+            .z
+            .abs()
+            > TOLERANCE
+    );
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());
 }
 
@@ -1111,10 +1125,10 @@ fn exact_nurbs_trim_on_plane_preserves_weights_and_curve() {
         Vector4::new(1.0, 2.0, 0.0, 2.0),
         Vector4::new(3.0, 0.0, 0.0, 3.0),
     ];
-    let curve = Curve3D::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
-        knots.clone(),
-        source_control_points.clone(),
-    )));
+    let curve = Curve3D::NurbsCurve(NurbsCurve::new(
+        BsplineCurve::new(knots.clone(), source_control_points.clone())
+            .expect("valid rational test curve"),
+    ));
 
     let trim = curve
         .exact_parameter_boundary_2d(&surface)
@@ -1146,14 +1160,17 @@ fn exact_nurbs_trim_on_plane_preserves_weights_and_curve() {
 #[test]
 fn off_plane_nurbs_is_not_claimed_as_exact_planar_trim() {
     let surface = Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy()));
-    let curve = Curve3D::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
-        KnotVector::bezier_knot(2),
-        vec![
-            Vector4::new(0.0, 0.0, 0.0, 1.0),
-            Vector4::new(1.0, 1.0, 2.0e-3, 2.0),
-            Vector4::new(3.0, 0.0, 0.0, 3.0),
-        ],
-    )));
+    let curve = Curve3D::NurbsCurve(NurbsCurve::new(
+        BsplineCurve::new(
+            KnotVector::bezier_knot(2),
+            vec![
+                Vector4::new(0.0, 0.0, 0.0, 1.0),
+                Vector4::new(1.0, 1.0, 2.0e-3, 2.0),
+                Vector4::new(3.0, 0.0, 0.0, 3.0),
+            ],
+        )
+        .expect("valid off-plane rational test curve"),
+    ));
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());
 }
 
@@ -1166,14 +1183,17 @@ fn exact_bspline_trim_on_plane_preserves_curve() {
     );
     let surface = Surface::ElementarySurface(ElementarySurface::Plane(plane));
     let knots = KnotVector::bezier_knot(2);
-    let curve = Curve3D::BsplineCurve(BsplineCurve::new(
-        knots.clone(),
-        vec![
-            Point3::new(3.5, -1.5, 5.0),
-            Point3::new(4.25, 0.5, 5.0),
-            Point3::new(4.75, -0.25, 5.0),
-        ],
-    ));
+    let curve = Curve3D::BsplineCurve(
+        BsplineCurve::new(
+            knots.clone(),
+            vec![
+                Point3::new(3.5, -1.5, 5.0),
+                Point3::new(4.25, 0.5, 5.0),
+                Point3::new(4.75, -0.25, 5.0),
+            ],
+        )
+        .expect("valid planar B-spline test curve"),
+    );
 
     let trim = curve
         .exact_parameter_boundary_2d(&surface)
@@ -1224,14 +1244,17 @@ fn zero_range_nurbs_refuses_exact_planar_retrim_without_panicking() {
 fn off_plane_bspline_is_not_claimed_as_exact_planar_trim() {
     let plane = Plane::xy();
     let surface = Surface::ElementarySurface(ElementarySurface::Plane(plane));
-    let curve = Curve3D::BsplineCurve(BsplineCurve::new(
-        KnotVector::bezier_knot(2),
-        vec![
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(0.5, 0.5, 1.0e-3),
-            Point3::new(1.0, 0.0, 0.0),
-        ],
-    ));
+    let curve = Curve3D::BsplineCurve(
+        BsplineCurve::new(
+            KnotVector::bezier_knot(2),
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.5, 0.5, 1.0e-3),
+                Point3::new(1.0, 0.0, 0.0),
+            ],
+        )
+        .expect("valid off-plane B-spline test curve"),
+    );
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());
 }
 

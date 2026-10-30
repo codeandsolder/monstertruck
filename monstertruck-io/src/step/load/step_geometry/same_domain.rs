@@ -848,7 +848,7 @@ mod tests {
     #[test]
     fn torus_support_compares_axis_and_both_radii() {
         let a = surface(ElementarySurface::ToroidalSurface(Processor::new(
-            Torus::new(Point3::new(1.0, 2.0, 3.0), 5.0, 1.0),
+            Torus::new(Point3::new(1.0, 2.0, 3.0), 5.0, 1.0).expect("valid test torus"),
         )));
         let b = a.clone();
         assert_eq!(
@@ -856,7 +856,7 @@ mod tests {
             Some(SurfaceDomainRelation::SameOrientation)
         );
         let wrong = surface(ElementarySurface::ToroidalSurface(Processor::new(
-            Torus::new(Point3::new(1.0, 2.0, 3.0), 5.0, 1.01),
+            Torus::new(Point3::new(1.0, 2.0, 3.0), 5.0, 1.01).expect("valid comparison torus"),
         )));
         assert_eq!(same_surface_domain(&a, &wrong, 1.0e-6, 1.0e-9), None);
     }
@@ -958,7 +958,7 @@ mod tests {
 
     #[test]
     fn affine_parameter_map_transports_rotated_torus_chart() {
-        let torus = Torus::new(Point3::origin(), 5.0, 1.0);
+        let torus = Torus::new(Point3::origin(), 5.0, 1.0).expect("valid ring torus");
         let source = surface(ElementarySurface::ToroidalSurface(Processor::new(torus)));
         let target = surface(ElementarySurface::ToroidalSurface(
             Processor::with_transform(
@@ -979,7 +979,7 @@ mod tests {
 
     #[test]
     fn spindle_torus_same_domain_orientation_is_refused() {
-        let torus = Torus::new(Point3::origin(), 1.0, 2.0);
+        let torus = Torus::new(Point3::origin(), 1.0, 2.0).expect("valid spindle torus");
         let source = surface(ElementarySurface::ToroidalSurface(Processor::new(torus)));
         let target = surface(ElementarySurface::ToroidalSurface(
             Processor::with_transform(
