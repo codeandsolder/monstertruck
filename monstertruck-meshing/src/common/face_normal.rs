@@ -3,6 +3,13 @@ use monstertruck_mesh::Origin;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FaceNormal {
+    #[cfg_attr(
+        not(feature = "filters"),
+        expect(
+            dead_code,
+            reason = "face identity is consumed by normal filters; analyzer-only builds need only the normal vector"
+        )
+    )]
     pub face_id: usize,
     pub normal: Vector3,
 }
