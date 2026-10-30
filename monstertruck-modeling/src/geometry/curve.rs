@@ -47,10 +47,6 @@ pub enum Curve {
     /// 3-dimensional NURBS curve
     NurbsCurve(NurbsCurve<Vector4>),
     /// 3-dimensional curve carried by a 2-dimensional parameter curve on a surface
-    #[expect(
-        clippy::enum_variant_names,
-        reason = "curve variants intentionally mirror the explicit geometry type names"
-    )]
     ParameterCurve(ParameterCurve<Curve2D, Box<Surface>>),
     /// intersection curve
     #[serde(rename = "IntersectionCurve")]

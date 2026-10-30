@@ -2,9 +2,12 @@ use super::{Faces, Vertex};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 pub trait Adjacency {
-    #[expect(
-        dead_code,
-        reason = "the trait keeps vertex adjacency alongside the currently used face adjacency operation"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the trait keeps vertex adjacency alongside the currently used face adjacency operation"
+        )
     )]
     fn vertex_adjacency(&self, num_of_vertices: usize) -> Vec<Vec<usize>>;
     /// create the adjacency list of the faces
