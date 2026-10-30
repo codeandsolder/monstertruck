@@ -1487,3 +1487,46 @@ type AllEdges<'a, NE, EE, F> = std::iter::FlatMap<
 
 type ParAllEdges<'a, NE, EE, F> =
     rayon::iter::FlatMap<ParAllNodes<'a, NE, EE>, fn(Node<'a, NE, EE>) -> ParEdges<'a, EE, F>>;
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_edge_indices_leave_the_dag_unchanged() {
+        let mut dag = Dag::<(), u8>::new();
+        let nodes = dag.create_nodes([(), ()]);
+        let invalid = NodeIndex(usize::MAX);
+
+        assert!(!dag.create_edge(nodes[0], invalid, 1));
+        assert!(!dag.create_edge(invalid, nodes[1], 2));
+        assert_eq!(dag.node(nodes[0]).map(|node| node.edges().len()), Some(0));
+        assert!(
+            dag.node(nodes[1])
+                .is_some_and(|node| node.parents().is_empty())
+        );
+    }
+
+    #[test]
+    fn removing_parallel_edges_keeps_parent_until_last_edge_is_gone() {
+        let mut dag = Dag::<(), u8>::new();
+        let nodes = dag.create_nodes([(), ()]);
+        assert!(dag.create_edge(nodes[0], nodes[1], 10));
+        assert!(dag.create_edge(nodes[0], nodes[1], 11));
+        assert!(
+            dag.node(nodes[1])
+                .is_some_and(|node| node.parents().contains(&nodes[0]))
+        );
+
+        assert_eq!(dag.remove_edge(nodes[0], 0), Some(10));
+        assert!(
+            dag.node(nodes[1])
+                .is_some_and(|node| node.parents().contains(&nodes[0]))
+        );
+        assert_eq!(dag.remove_edge(nodes[0], 0), Some(11));
+        assert!(
+            dag.node(nodes[1])
+                .is_some_and(|node| node.parents().is_empty())
+        );
+    }
+}

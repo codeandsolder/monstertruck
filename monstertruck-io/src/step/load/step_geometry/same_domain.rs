@@ -1001,4 +1001,34 @@ mod tests {
         )));
         assert_eq!(same_surface_domain(&a, &b, 1.0e-6, 1.0e-9), None);
     }
+
+    #[test]
+    fn reflected_sphere_reports_reversed_geometric_orientation() {
+        let raw = crate::step::load::step_geometry::Sphere(
+            monstertruck_geometry::prelude::Sphere::new(Point3::origin(), 4.0),
+        );
+        let source = surface(ElementarySurface::Sphere(Processor::new(raw)));
+        let reflection = Matrix4::from_cols(
+            Vector4::new(-1.0, 0.0, 0.0, 0.0),
+            Vector4::new(0.0, 1.0, 0.0, 0.0),
+            Vector4::new(0.0, 0.0, 1.0, 0.0),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+        );
+        let reflected = surface(ElementarySurface::Sphere(Processor::with_transform(
+            raw, reflection,
+        )));
+
+        assert_eq!(
+            same_surface_domain(&source, &reflected, 1.0e-9, 1.0e-9),
+            Some(SurfaceDomainRelation::ReversedOrientation)
+        );
+    }
+
+    #[test]
+    fn invalid_same_domain_tolerances_are_refused() {
+        let plane = surface(ElementarySurface::Plane(Plane::xy()));
+        assert_eq!(same_surface_domain(&plane, &plane, -1.0, 1.0e-9), None);
+        assert_eq!(same_surface_domain(&plane, &plane, f64::NAN, 1.0e-9), None);
+        assert_eq!(same_surface_domain(&plane, &plane, 1.0e-9, f64::NAN), None);
+    }
 }

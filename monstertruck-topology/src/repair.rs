@@ -890,4 +890,69 @@ mod trimmed_tests {
         assert_eq!(failed_curve_calls.get(), 2);
         assert_eq!(shell.faces.len(), 6);
     }
+
+    fn plain_use(index: usize, orientation: bool) -> CompressedEdgeIndex {
+        CompressedEdgeIndex { index, orientation }
+    }
+
+    #[test]
+    fn pinched_face_split_preserves_disjoint_hole_boundaries() {
+        let mut shell = CompressedShell {
+            vertices: vec![(); 6],
+            edges: vec![
+                edge((0, 1)),
+                edge((1, 2)),
+                edge((2, 0)),
+                edge((3, 4)),
+                edge((4, 5)),
+                edge((5, 3)),
+            ],
+            faces: vec![CompressedFace {
+                boundaries: vec![
+                    vec![plain_use(0, true), plain_use(1, true), plain_use(2, true)],
+                    vec![plain_use(3, true), plain_use(4, true), plain_use(5, true)],
+                ],
+                orientation: true,
+                surface: 7_u8,
+            }],
+            vertex_stable_ids: None,
+            edge_stable_ids: None,
+            face_stable_ids: None,
+        };
+
+        split_pinched_compressed_faces(&mut shell);
+        assert_eq!(shell.faces.len(), 1);
+        assert_eq!(shell.faces[0].boundaries.len(), 2);
+    }
+
+    #[test]
+    fn pinched_face_split_separates_boundaries_that_share_only_a_vertex() {
+        let mut shell = CompressedShell {
+            vertices: vec![(); 5],
+            edges: vec![
+                edge((0, 1)),
+                edge((1, 2)),
+                edge((2, 0)),
+                edge((0, 3)),
+                edge((3, 4)),
+                edge((4, 0)),
+            ],
+            faces: vec![CompressedFace {
+                boundaries: vec![
+                    vec![plain_use(0, true), plain_use(1, true), plain_use(2, true)],
+                    vec![plain_use(3, true), plain_use(4, true), plain_use(5, true)],
+                ],
+                orientation: true,
+                surface: 9_u8,
+            }],
+            vertex_stable_ids: None,
+            edge_stable_ids: None,
+            face_stable_ids: None,
+        };
+
+        split_pinched_compressed_faces(&mut shell);
+        assert_eq!(shell.faces.len(), 2);
+        assert!(shell.faces.iter().all(|face| face.surface == 9));
+        assert!(shell.faces.iter().all(|face| face.boundaries.len() == 1));
+    }
 }
