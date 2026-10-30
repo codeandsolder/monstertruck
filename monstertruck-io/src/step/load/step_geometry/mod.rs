@@ -117,9 +117,9 @@ impl SurfaceCurve3D {
         [0.0, 0.5, 1.0].into_iter().all(|fraction| {
             let curve_t = curve_min + (curve_max - curve_min) * fraction;
             let leader_t = leader_min + (leader_max - leader_min) * fraction;
-            let uv = curve.curve().subs(curve_t);
-            let surface_point = surface.subs(uv.x, uv.y);
-            let leader_point = self.leader().subs(leader_t);
+            let uv = curve.curve().evaluate(curve_t);
+            let surface_point = surface.evaluate(uv.x, uv.y);
+            let leader_point = self.leader().evaluate(leader_t);
             surface_point.distance2(leader_point) <= tolerance2
         })
     }
@@ -136,8 +136,8 @@ impl SurfaceCurve3D {
             [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)]
                 .into_iter()
                 .all(|(s, t)| {
-                    let lp = lhs.subs(lu0 + (lu1 - lu0) * s, lv0 + (lv1 - lv0) * t);
-                    let rp = rhs.subs(ru0 + (ru1 - ru0) * s, rv0 + (rv1 - rv0) * t);
+                    let lp = lhs.evaluate(lu0 + (lu1 - lu0) * s, lv0 + (lv1 - lv0) * t);
+                    let rp = rhs.evaluate(ru0 + (ru1 - ru0) * s, rv0 + (rv1 - rv0) * t);
                     lp.near(&rp)
                 })
         } else {
@@ -192,13 +192,6 @@ impl SurfaceCurve3D {
             })
     }
 }
-
-/// Renamed to [`StepExtrusionSurface`].
-#[deprecated(note = "renamed to StepExtrusionSurface")]
-pub type StepExtrudedCurve = StepExtrusionSurface;
-/// Renamed to [`StepRevolutionSurface`].
-#[deprecated(note = "renamed to StepRevolutionSurface")]
-pub type StepRevolutedCurve = StepRevolutionSurface;
 
 /// `conic` in 2D, realized in `monstertruck`
 #[derive(

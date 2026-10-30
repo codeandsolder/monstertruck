@@ -21,11 +21,13 @@ fn exec_pcurve_derivation(
     let pcurve0 = ParameterCurve::new(curve, surface);
     let pcurve1 = pcurve0.surface().composite(pcurve0.curve());
 
-    prop_assert_near!(pcurve0.der_n(n, t), pcurve1.der_n(n, t));
+    prop_assert_near!(pcurve0.derivative_n(n, t), pcurve1.derivative_n(n, t));
 
-    let ders0 = (0..=n).map(|i| pcurve0.der_n(i, t)).collect::<Vec<_>>();
+    let ders0 = (0..=n)
+        .map(|i| pcurve0.derivative_n(i, t))
+        .collect::<Vec<_>>();
 
-    let ders1 = pcurve0.ders(n, t);
+    let ders1 = pcurve0.derivatives(n, t);
 
     prop_assert_eq!(ders0.len(), ders1.len());
 

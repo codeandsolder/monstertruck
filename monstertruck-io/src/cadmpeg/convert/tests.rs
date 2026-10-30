@@ -304,7 +304,7 @@ fn a_planar_sheet_face_becomes_a_compressed_shell() {
     assert!(plane.origin().to_vec().magnitude() < 1.0e-12);
 }
 
-/// The invariant `Edge::try_new` will check later: an edge's curve runs from its
+/// The invariant `Edge::new` will check later: an edge's curve runs from its
 /// start vertex to its end vertex, at the curve's own parameter bounds.
 ///
 /// This is the one that silently breaks if the trim is applied in the wrong frame
@@ -322,14 +322,14 @@ fn every_converted_edge_curve_runs_from_its_start_vertex_to_its_end_vertex() {
         );
         let (start, end) = edge.curve.range_tuple();
         assert!(
-            edge.curve.subs(start).distance(front) < 1.0e-9,
+            edge.curve.evaluate(start).distance(front) < 1.0e-9,
             "edge {index} starts at {:?}, not at its start vertex {front:?}",
-            edge.curve.subs(start)
+            edge.curve.evaluate(start)
         );
         assert!(
-            edge.curve.subs(end).distance(back) < 1.0e-9,
+            edge.curve.evaluate(end).distance(back) < 1.0e-9,
             "edge {index} ends at {:?}, not at its end vertex {back:?}",
-            edge.curve.subs(end)
+            edge.curve.evaluate(end)
         );
     }
 }
@@ -337,7 +337,7 @@ fn every_converted_edge_curve_runs_from_its_start_vertex_to_its_end_vertex() {
 /// The strongest oracle available here: monstertruck's OWN extraction accepts the
 /// converted shell.
 ///
-/// `Shell::extract` runs `Edge::try_new` on every edge and `Face::try_new` on
+/// `Shell::extract` runs `Edge::new` on every edge and `Face::new` on
 /// every face, so it checks the endpoint agreement and the boundary-wire rules
 /// that the hand-written assertions above only sample. A converter that produced
 /// a plausible-looking shell with a curve running the wrong way, or a ring that
@@ -411,7 +411,7 @@ fn a_reversed_coedge_flips_the_edge_use_and_not_the_shared_curve() {
     assert!(
         sheet.edges[0]
             .curve
-            .subs(start_parameter)
+            .evaluate(start_parameter)
             .distance(Point3::origin())
             < 1.0e-12
     );
@@ -438,7 +438,7 @@ fn a_reversed_face_sense_becomes_the_faces_orientation_flag() {
     );
 }
 
-/// The stated outer loop reaches position zero, where `Face::try_new` reads the
+/// The stated outer loop reaches position zero, where `Face::new` reads the
 /// outer boundary -- even when the source lists it second.
 #[test]
 fn a_stated_outer_loop_is_moved_to_the_front() {
@@ -513,12 +513,12 @@ fn a_cylinder_stays_a_surface_of_revolution() {
     let carrier = builder.ir.model.surfaces[0].geometry.clone();
     let context = context_over(&builder.ir);
     let converted = surface::convert(&carrier, &context).expect("a cylinder converts");
-    let Surface::RevolutionSurface(revolution) = &converted else {
+    let Surface::Revolution(revolution) = &converted else {
         panic!("a cylinder must stay analytic, got {converted:?}");
     };
     // On the surface: every point at parameter (u, v) is `radius` from the axis.
     for (u, v) in [(0.0, 0.0), (1.0, 0.5), (2.5, 1.0)] {
-        let point = revolution.subs(u, v);
+        let point = revolution.evaluate(u, v);
         let radial = (point.x * point.x + point.y * point.y).sqrt();
         assert!(
             (radial - 5.0).abs() < 1.0e-9,
@@ -542,7 +542,7 @@ fn a_sphere_stays_analytic_and_carries_its_radius() {
     let carrier = builder.ir.model.surfaces[0].geometry.clone();
     let context = context_over(&builder.ir);
     let converted = surface::convert(&carrier, &context).expect("a sphere converts");
-    let Surface::SphericalSurface(sphere) = &converted else {
+    let Surface::Sphere(sphere) = &converted else {
         panic!("a sphere must stay analytic, got {converted:?}");
     };
     assert_eq!(sphere.entity().radius(), 7.0);
@@ -565,14 +565,14 @@ fn a_torus_keeps_the_axis_it_was_given() {
     let carrier = builder.ir.model.surfaces[0].geometry.clone();
     let context = context_over(&builder.ir);
     let converted = surface::convert(&carrier, &context).expect("a torus converts");
-    let Surface::ToroidalSurface(torus) = &converted else {
+    let Surface::Torus(torus) = &converted else {
         panic!("a torus must stay analytic, got {converted:?}");
     };
     // Every point is `minor` away from the ring of radius `major` in the plane
     // PERPENDICULAR to +x, which is the claim that the axis was honoured. Were the
     // axis dropped, the ring would lie in the x-y plane and this would fail.
     for (u, v) in [(0.0, 0.0), (1.0, 2.0), (3.0, 4.5)] {
-        let point = torus.subs(u, v);
+        let point = torus.evaluate(u, v);
         let ring_distance = (point.y * point.y + point.z * point.z).sqrt();
         let to_tube_centre = ((ring_distance - 10.0).powi(2) + point.x * point.x).sqrt();
         assert!(
@@ -604,14 +604,19 @@ fn a_circular_edge_becomes_an_exact_arc_between_its_vertices() {
     )
     .expect("a quarter arc converts");
     let (start, end) = converted.range_tuple();
-    assert!(converted.subs(start).distance(Point3::new(3.0, 0.0, 0.0)) < 1.0e-12);
-    assert!(converted.subs(end).distance(Point3::new(0.0, 3.0, 0.0)) < 1.0e-12);
+    assert!(
+        converted
+            .evaluate(start)
+            .distance(Point3::new(3.0, 0.0, 0.0))
+            < 1.0e-12
+    );
+    assert!(converted.evaluate(end).distance(Point3::new(0.0, 3.0, 0.0)) < 1.0e-12);
     // Exactness, not closeness: a rational quadratic IS a circular arc, so every
     // interior point is on the circle to floating-point noise and not to a
     // chordal tolerance.
     for step in 1..8 {
         let t = start + (end - start) * f64::from(step) / 8.0;
-        let point = converted.subs(t);
+        let point = converted.evaluate(t);
         let radial = (point.x * point.x + point.y * point.y).sqrt();
         assert!(
             (radial - 3.0).abs() < 1.0e-12,
@@ -657,8 +662,18 @@ fn a_nurbs_edge_is_restricted_to_its_stated_knot_interval() {
     let (start, end) = restricted.range_tuple();
     assert!((start - 0.5).abs() < 1.0e-12, "range started at {start}");
     assert!((end - 1.5).abs() < 1.0e-12, "range ended at {end}");
-    assert!(restricted.subs(start).distance(Point3::new(0.5, 0.0, 0.0)) < 1.0e-12);
-    assert!(restricted.subs(end).distance(Point3::new(1.5, 0.0, 0.0)) < 1.0e-12);
+    assert!(
+        restricted
+            .evaluate(start)
+            .distance(Point3::new(0.5, 0.0, 0.0))
+            < 1.0e-12
+    );
+    assert!(
+        restricted
+            .evaluate(end)
+            .distance(Point3::new(1.5, 0.0, 0.0))
+            < 1.0e-12
+    );
 }
 
 /// An interval that runs BACKWARDS along the carrier gives a curve that still
@@ -688,11 +703,14 @@ fn a_backwards_interval_gives_a_curve_that_still_starts_at_the_start_vertex() {
     .expect("the reversed span converts");
     let (start, end) = converted.range_tuple();
     assert!(
-        converted.subs(start).distance(Point3::new(1.5, 0.0, 0.0)) < 1.0e-12,
+        converted
+            .evaluate(start)
+            .distance(Point3::new(1.5, 0.0, 0.0))
+            < 1.0e-12,
         "started at {:?}",
-        converted.subs(start)
+        converted.evaluate(start)
     );
-    assert!(converted.subs(end).distance(Point3::new(0.5, 0.0, 0.0)) < 1.0e-12);
+    assert!(converted.evaluate(end).distance(Point3::new(0.5, 0.0, 0.0)) < 1.0e-12);
 }
 
 /// A rational free-form curve keeps its weights: the converted control points are
@@ -723,7 +741,7 @@ fn a_rational_nurbs_edge_keeps_its_weights() {
     .expect("the rational quarter circle converts");
     // If the weights were dropped, the midpoint would be the Bezier midpoint
     // (0.75, 0.75) at radius 1.06, not on the unit circle.
-    let point = converted.subs(0.5);
+    let point = converted.evaluate(0.5);
     let radial = (point.x * point.x + point.y * point.y).sqrt();
     assert!(
         (radial - 1.0).abs() < 1.0e-12,
@@ -1125,7 +1143,7 @@ fn a_body_transform_moves_the_whole_body() {
     assert!(
         sheet.edges[0]
             .curve
-            .subs(start)
+            .evaluate(start)
             .distance(Point3::new(10.0, 20.0, 30.0))
             < 1.0e-12
     );

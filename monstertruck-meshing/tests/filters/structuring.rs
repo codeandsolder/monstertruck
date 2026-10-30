@@ -42,14 +42,16 @@ fn triangulate_test() {
             ..Default::default()
         },
         tri_faces,
-    );
+    )
+    .expect("fixture mesh is valid");
     let mut quad_mesh = PolygonMesh::new(
         StandardAttributes {
             positions,
             ..Default::default()
         },
         quad_faces,
-    );
+    )
+    .expect("fixture mesh is valid");
     quad_mesh.triangulate();
     assert_eq!(tri_mesh.faces(), quad_mesh.faces());
 }
@@ -95,14 +97,16 @@ fn quadrangulate_test() {
             ..Default::default()
         },
         tri_faces,
-    );
+    )
+    .expect("fixture mesh is valid");
     let quad_mesh = PolygonMesh::new(
         StandardAttributes {
             positions,
             ..Default::default()
         },
         quad_faces,
-    );
+    )
+    .expect("fixture mesh is valid");
     tri_mesh.quadrangulate(TOLERANCE, TOLERANCE);
     assert_eq!(tri_mesh.faces(), quad_mesh.faces());
 }

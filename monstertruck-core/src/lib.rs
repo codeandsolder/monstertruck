@@ -18,16 +18,6 @@
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
 /// Defines bounding box
 pub mod bounding_box;
@@ -48,7 +38,7 @@ pub use content_hash::{ContentHasher, DeterministicContentHash};
 pub mod hash;
 /// Id structure with `Copy`, `Hash` and `Eq` using raw pointers
 pub mod id;
-pub use id::{StableId, StableIdAllocator};
+pub use id::{StableId, StableIdAllocator, StableIdExhausted};
 pub mod newton;
 /// Scalar trait hierarchy for scalar-generic kernel infrastructure.
 pub mod scalar;

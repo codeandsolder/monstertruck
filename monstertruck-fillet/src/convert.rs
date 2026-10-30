@@ -86,7 +86,7 @@ fn sample_surface_to_nurbs<S: ParametricSurface<Point = Point3>>(
         .collect();
     let u_knot = KnotVector::uniform_knot(1, sample_count);
     let v_knot = KnotVector::uniform_knot(1, sample_count);
-    Some(NurbsSurface::from(BsplineSurface::new(
+    Some(NurbsSurface::from(BsplineSurface::new_unchecked(
         (u_knot, v_knot),
         control_points,
     )))

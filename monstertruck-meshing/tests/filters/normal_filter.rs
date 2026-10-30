@@ -32,7 +32,8 @@ fn normalize_normals_test() {
                 (0, None, Some(3)),
             ],
         ]),
-    );
+    )
+    .expect("fixture mesh is valid");
     mesh.normalize_normals();
 
     assert!(mesh.normals()[0].magnitude().near(&1.0));
@@ -74,7 +75,8 @@ fn add_naive_normals_test() {
             ..Default::default()
         },
         Faces::from_iter(&[[0, 1, 3, 2].as_ref(), &[1, 4, 3], &[2, 3, 5], &[3, 4, 6, 5]]),
-    );
+    )
+    .expect("fixture mesh is valid");
 
     // test of overwrite flag
     mesh.add_smooth_normals(1.0, true);

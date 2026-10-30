@@ -27,13 +27,13 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
     }
 
     /// constructor without boundary check
-    #[inline(always)]
+    #[inline]
     pub const fn new_unchecked(attributes: A, faces: Faces<V>) -> Self {
         Self { attributes, faces }
     }
 
     /// constructor, boundary check is acrivated only in debug mode.
-    #[inline(always)]
+    #[inline]
     pub fn debug_new(attributes: A, faces: Faces<V>) -> Self {
         match cfg!(debug_assertions) {
             true => Self::new(attributes, faces),
@@ -42,23 +42,23 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
     }
 
     /// Returns attributes
-    #[inline(always)]
+    #[inline]
     pub const fn attributes(&self) -> &A { &self.attributes }
 
     /// Returns the faces of the polygon.
-    #[inline(always)]
+    #[inline]
     pub const fn faces(&self) -> &Faces<V> { &self.faces }
 
     /// Returns the vector of all triangles of the polygon.
-    #[inline(always)]
+    #[inline]
     pub const fn tri_faces(&self) -> &[[V; 3]] { self.faces.tri_faces.as_slice() }
 
     /// Returns the vector of all quadrangles.
-    #[inline(always)]
+    #[inline]
     pub const fn quad_faces(&self) -> &[[V; 4]] { self.faces.quad_faces.as_slice() }
 
     /// Returns the vector of n-gons (n > 4).
-    #[inline(always)]
+    #[inline]
     pub const fn other_faces(&self) -> &[Vec<V>] { self.faces.other_faces.as_slice() }
 
     /// Returns the iterator of the slice.
@@ -66,7 +66,7 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
     /// By the internal optimization, this iterator does not runs in the simple order
     /// in which they are registered, but runs order: triangle, square, and the others.
     /// cf: [`Faces::face_iter`](./struct.Faces.html#method.face_iter)
-    #[inline(always)]
+    #[inline]
     pub fn face_iter(&self) -> impl Iterator<Item = &[V]> { self.faces.face_iter() }
 
     /// Returns the iterator of the slice.
@@ -74,10 +74,10 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
     /// By the internal optimization, this iterator does not runs in the simple order
     /// in which they are registered, but runs order: triangle, square, and the others.
     /// cf: [`Faces::face_iter`](./struct.Faces.html#method.face_iter)
-    #[inline(always)]
+    #[inline]
     pub fn face_iter_mut(&mut self) -> impl Iterator<Item = &mut [V]> { self.faces.face_iter_mut() }
     /// Creates an editor that performs boundary checking on dropped.
-    #[inline(always)]
+    #[inline]
     pub fn editor(&mut self) -> PolygonMeshEditor<'_, V, A> {
         PolygonMeshEditor {
             attributes: &mut self.attributes,
@@ -86,7 +86,7 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
         }
     }
     /// Creates an editor that does NOT perform boundary checking on dropped.
-    #[inline(always)]
+    #[inline]
     pub fn uncheck_editor(&mut self) -> PolygonMeshEditor<'_, V, A> {
         PolygonMeshEditor {
             attributes: &mut self.attributes,
@@ -95,7 +95,7 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMesh<V, A> {
         }
     }
     /// Creates an editor that performs boundary checking on dropped ONLY in debug build.
-    #[inline(always)]
+    #[inline]
     pub fn debug_editor(&mut self) -> PolygonMeshEditor<'_, V, A> {
         PolygonMeshEditor {
             attributes: &mut self.attributes,
@@ -124,10 +124,10 @@ impl PolygonMesh {
         self.faces.naive_concat(mesh.faces);
     }
     /// Creates the bounding box of the polygon mesh.
-    #[inline(always)]
+    #[inline]
     pub fn bounding_box(&self) -> BoundingBox<Point3> { self.positions().iter().collect() }
     /// Returns a polygon mesh with only positions information.
-    #[inline(always)]
+    #[inline]
     pub fn to_positions_mesh(&self) -> PolygonMesh<usize, Vec<Point3>> {
         let faces = self.faces();
         let tri_faces = faces
@@ -157,12 +157,12 @@ impl PolygonMesh {
 }
 
 impl Invertible for PolygonMesh {
-    #[inline(always)]
+    #[inline]
     fn invert(&mut self) {
         self.attributes.normals.iter_mut().for_each(|n| *n = -*n);
         self.faces.invert();
     }
-    #[inline(always)]
+    #[inline]
     fn inverse(&self) -> Self {
         Self {
             attributes: StandardAttributes {
@@ -177,51 +177,51 @@ impl Invertible for PolygonMesh {
 
 impl PolygonMesh {
     /// Returns the vector of all positions.
-    #[inline(always)]
+    #[inline]
     pub const fn positions(&self) -> &[Point3] { self.attributes.positions.as_slice() }
 
     /// Returns the mutable slice of all positions.
-    #[inline(always)]
+    #[inline]
     pub fn positions_mut(&mut self) -> &mut [Point3] { &mut self.attributes.positions }
 
     /// Adds a position.
-    #[inline(always)]
+    #[inline]
     pub fn push_position(&mut self, position: Point3) { self.attributes.positions.push(position) }
 
     /// Extend positions by iterator.
-    #[inline(always)]
+    #[inline]
     pub fn extend_positions<I: IntoIterator<Item = Point3>>(&mut self, iter: I) {
         self.attributes.positions.extend(iter)
     }
 
     /// Returns the vector of all uv (texture) coordinates.
-    #[inline(always)]
+    #[inline]
     pub const fn uv_coords(&self) -> &[Vector2] { self.attributes.uv_coords.as_slice() }
 
     /// Returns the mutable slice of all uv (texture) coordinates.
-    #[inline(always)]
+    #[inline]
     pub fn uv_coords_mut(&mut self) -> &mut [Vector2] { &mut self.attributes.uv_coords }
 
     /// Adds a uv (texture) coordinate.
-    #[inline(always)]
+    #[inline]
     pub fn push_uv_coord(&mut self, uv_coord: Vector2) { self.attributes.uv_coords.push(uv_coord) }
 
     /// Extend uv (texture) coordinates by iterator.
-    #[inline(always)]
+    #[inline]
     pub fn extend_uv_coords<I: IntoIterator<Item = Vector2>>(&mut self, iter: I) {
         self.attributes.uv_coords.extend(iter)
     }
 
     /// Returns the vector of all normals.
-    #[inline(always)]
+    #[inline]
     pub const fn normals(&self) -> &[Vector3] { self.attributes.normals.as_slice() }
 
     /// Returns the mutable slice of all normals.
-    #[inline(always)]
+    #[inline]
     pub fn normals_mut(&mut self) -> &mut [Vector3] { &mut self.attributes.normals }
 
     /// Extend normals by iterator
-    #[inline(always)]
+    #[inline]
     pub fn extend_normals<I: IntoIterator<Item = Vector3>>(&mut self, iter: I) {
         self.attributes.normals.extend(iter)
     }
@@ -254,9 +254,9 @@ where
 }
 
 impl<V: Clone, A: TransformedAttributes> Transformed<Matrix4> for PolygonMesh<V, A> {
-    #[inline(always)]
+    #[inline]
     fn transform_by(&mut self, trans: Matrix4) { self.attributes.transform_by(trans); }
-    #[inline(always)]
+    #[inline]
     fn transformed(&self, trans: Matrix4) -> Self {
         Self {
             attributes: self.attributes.transformed(trans),
@@ -332,11 +332,11 @@ pub struct PolygonMeshEditor<'a, V: Copy + Debug, A: Attributes<V>> {
 }
 
 impl<V: Copy + Debug, A: Attributes<V>> PolygonMeshEditor<'_, V, A> {
-    #[inline(always)]
+    #[inline]
     fn is_compatible(&self) -> Result<(), Error<V>> { self.faces.is_compatible(&*self.attributes) }
 
     /// Drops with boundary check and returns `Result`.
-    #[inline(always)]
+    #[inline]
     pub fn try_drop(mut self) -> Result<(), Error<V>> {
         self.bound_check = false;
         self.is_compatible()
@@ -344,7 +344,7 @@ impl<V: Copy + Debug, A: Attributes<V>> PolygonMeshEditor<'_, V, A> {
 }
 
 impl<V: Copy + Debug, A: Attributes<V>> Drop for PolygonMeshEditor<'_, V, A> {
-    #[inline(always)]
+    #[inline]
     fn drop(&mut self) {
         if self.bound_check {
             self.is_compatible().unwrap_or_else(|e| panic!("{e:?}"));

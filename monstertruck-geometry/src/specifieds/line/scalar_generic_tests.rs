@@ -4,6 +4,8 @@
 //! name is unchanged, so every test keeps its path and its identity.
 
 use super::*;
+use crate::prelude::Point3;
+use monstertruck_core::cgmath64::cgmath;
 use monstertruck_traits::v2;
 
 type Point2F32 = cgmath::Point2<f32>;
@@ -12,24 +14,27 @@ type Vector3F32 = cgmath::Vector3<f32>;
 
 // -- Compile-time trait satisfaction ------------------------------------
 
-const fn _assert_v2_curve<C: v2::ParametricCurve>() {}
-const fn _assert_v2_bounded<C: v2::BoundedCurve>() {}
-const fn _assert_v2_cut<C: v2::Cut>() {}
-const fn _assert_v2_search<C: v2::SearchParameter<v2::D1<f32>>>() {}
-const fn _assert_v2_nearest<C: v2::SearchNearestParameter<v2::D1<f32>>>() {}
+const fn assert_v2_curve<C: v2::ParametricCurve>() {}
+const fn assert_v2_bounded<C: v2::BoundedCurve>() {}
+const fn assert_v2_cut<C: v2::Cut>() {}
+const fn assert_v2_search<C: v2::SearchParameter<v2::CurveParameter<f32>>>() {}
+const fn assert_v2_nearest<C: v2::SearchNearestParameter<v2::CurveParameter<f32>>>() {}
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "compile-time trait assertion intentionally has no runtime references"
+)]
 const _: () = {
-    _assert_v2_curve::<Line<Point2F32>>();
-    _assert_v2_curve::<Line<Point3F32>>();
-    _assert_v2_bounded::<Line<Point2F32>>();
-    _assert_v2_bounded::<Line<Point3F32>>();
-    _assert_v2_cut::<Line<Point2F32>>();
-    _assert_v2_cut::<Line<Point3F32>>();
-    _assert_v2_search::<Line<Point2F32>>();
-    _assert_v2_search::<Line<Point3F32>>();
-    _assert_v2_nearest::<Line<Point2F32>>();
-    _assert_v2_nearest::<Line<Point3F32>>();
+    assert_v2_curve::<Line<Point2F32>>();
+    assert_v2_curve::<Line<Point3F32>>();
+    assert_v2_bounded::<Line<Point2F32>>();
+    assert_v2_bounded::<Line<Point3F32>>();
+    assert_v2_cut::<Line<Point2F32>>();
+    assert_v2_cut::<Line<Point3F32>>();
+    assert_v2_search::<Line<Point2F32>>();
+    assert_v2_search::<Line<Point3F32>>();
+    assert_v2_nearest::<Line<Point2F32>>();
+    assert_v2_nearest::<Line<Point3F32>>();
 };
 
 // -- Runtime correctness (f32) -----------------------------------------
@@ -93,17 +98,17 @@ fn f32_search_parameter_and_nearest() {
     let on_curve = Point3F32::new(0.25, 0.0, 0.0);
     let off_curve = Point3F32::new(0.25, 1.0, 0.0);
 
-    let found = v2::SearchParameter::<v2::D1<f32>>::search_parameter(
+    let found = (v2::SearchParameter::<v2::CurveParameter<f32>>::search_parameter(
         &line,
         on_curve,
         v2::SearchParameterHint1D::None,
         0,
-    )
+    ))
     .unwrap();
     assert!((found - 0.25).abs() < 1e-6);
 
     assert!(
-        v2::SearchParameter::<v2::D1<f32>>::search_parameter(
+        v2::SearchParameter::<v2::CurveParameter<f32>>::search_parameter(
             &line,
             off_curve,
             v2::SearchParameterHint1D::None,
@@ -112,12 +117,12 @@ fn f32_search_parameter_and_nearest() {
         .is_none()
     );
 
-    let nearest = v2::SearchNearestParameter::<v2::D1<f32>>::search_nearest_parameter(
+    let nearest = (v2::SearchNearestParameter::<v2::CurveParameter<f32>>::search_nearest_parameter(
         &line,
         off_curve,
         v2::SearchParameterHint1D::None,
         0,
-    )
+    ))
     .unwrap();
     assert!((nearest - 0.25).abs() < 1e-6);
 }
@@ -133,8 +138,8 @@ fn f32_f64_equivalence() {
     for &t in &[0.0, 0.25, 0.5, 0.75, 1.0] {
         let p32 = v2::ParametricCurve::evaluate(&line_f32, t as f32);
         let p64 = v2::ParametricCurve::evaluate(&line_f64, t);
-        assert!((p32.x as f64 - p64.x).abs() < 1e-6);
-        assert!((p32.y as f64 - p64.y).abs() < 1e-6);
-        assert!((p32.z as f64 - p64.z).abs() < 1e-6);
+        assert!((f64::from(p32.x) - p64.x).abs() < 1e-6);
+        assert!((f64::from(p32.y) - p64.y).abs() < 1e-6);
+        assert!((f64::from(p32.z) - p64.z).abs() < 1e-6);
     }
 }

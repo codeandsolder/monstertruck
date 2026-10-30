@@ -5,7 +5,10 @@
 //! Intermediate regions remain `FaceFragment`s until compressed-topology repair and
 //! extraction establish valid [`Face`] invariants.
 
-#![allow(clippy::many_single_char_names)]
+#![expect(
+    clippy::many_single_char_names,
+    reason = "face-division formulas follow compact geometric notation"
+)]
 
 use super::faces_classification::FacesClassification;
 use super::loops_store::*;
@@ -620,10 +623,10 @@ mod tests {
         front: &Vertex<Point3>,
         back: &Vertex<Point3>,
     ) -> Edge<Point3, BsplineCurve<Point3>> {
-        Edge::new(
+        Edge::new_unchecked(
             front,
             back,
-            BsplineCurve::new(
+            BsplineCurve::new_unchecked(
                 KnotVector::bezier_knot(1),
                 vec![front.point(), back.point()],
             ),
@@ -634,8 +637,12 @@ mod tests {
     fn synchronized_mesh_samples_use_mesh_projection_budget() {
         let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
-        let exact: Wire<_, _> =
-            vec![Edge::new(&front, &back, Line(front.point(), back.point()))].into();
+        let exact: Wire<_, _> = vec![Edge::new_unchecked(
+            &front,
+            &back,
+            Line(front.point(), back.point()),
+        )]
+        .into();
         let sampled_front = Vertex::new(front.point());
         let sampled_back = Vertex::new(back.point());
         let sampled_curve = PolylineCurve(vec![
@@ -643,8 +650,12 @@ mod tests {
             Point3::new(0.5, 0.0, 5.0e-4),
             back.point(),
         ]);
-        let sampled: Wire<_, _> =
-            vec![Edge::new(&sampled_front, &sampled_back, sampled_curve)].into();
+        let sampled: Wire<_, _> = vec![Edge::new_unchecked(
+            &sampled_front,
+            &sampled_back,
+            sampled_curve,
+        )]
+        .into();
         let mut polys = HashMap::default();
 
         let boundary = create_parameter_boundary_on_surface(
@@ -722,7 +733,7 @@ mod tests {
             test_line(&l1, &l0),
         ]
         .into();
-        let face = Face::debug_new(vec![outer], Plane::xy()).expect("valid source face");
+        let face = Face::new(vec![outer], Plane::xy()).expect("valid source face");
 
         let left: Wire<_, _> = vec![
             test_line(&l0, &a),
@@ -778,7 +789,7 @@ mod tests {
             test_line(&o3, &o0),
         ]
         .into();
-        let face = Face::debug_new(vec![outer.clone()], Plane::xy()).expect("valid source face");
+        let face = Face::new(vec![outer.clone()], Plane::xy()).expect("valid source face");
         let inner: Wire<_, _> = vec![
             test_line(&h0, &h1),
             test_line(&h1, &h2),
@@ -819,7 +830,7 @@ mod tests {
             test_line(&o3, &o0),
         ]
         .into();
-        let face = Face::debug_new(vec![outer.clone()], Plane::xy()).expect("valid source face");
+        let face = Face::new(vec![outer.clone()], Plane::xy()).expect("valid source face");
         let hole_positive: Wire<_, _> = vec![
             test_line(&h0, &h1),
             test_line(&h1, &h2),

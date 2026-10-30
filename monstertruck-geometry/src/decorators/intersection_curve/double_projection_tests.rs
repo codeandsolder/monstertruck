@@ -4,18 +4,21 @@
 //! name is unchanged, so every test keeps its path and its identity.
 
 use super::*;
+use crate::prelude::{Sphere, prop_assert_near};
+use monstertruck_core::{MetricSpace, Zero};
+use monstertruck_traits::ParametricSurface;
 use proptest::prelude::*;
 use std::f64::consts::PI;
 type PResult = std::result::Result<(), TestCaseError>;
 
 fn unit_normal_candidate(u: [f64; 2]) -> Vector3 {
     let angle = 2.0 * PI * u[0];
-    let w = f64::sqrt(1.0 - u[1] * u[1]);
+    let w = f64::sqrt(u[1].mul_add(-u[1], 1.0));
     Vector3::new(w * f64::cos(angle), w * f64::sin(angle), u[1])
 }
 
 fn create_axis(n: Vector3) -> (Vector3, Vector3) {
-    let idx = if n[0].abs() < n[1].abs() { 0 } else { 1 };
+    let idx = usize::from(n[0].abs() >= n[1].abs());
     let idx = if n[idx].abs() < n[2].abs() { idx } else { 2 };
     let mut e = Vector3::zero();
     e[idx] = 1.0;
@@ -35,7 +38,7 @@ fn exec_plane_case(c0: [f64; 3], n0: [f64; 2], c1: [f64; 3], n1: [f64; 2]) -> PR
     let n = n0.cross(n1).normalize();
     let mut o = None;
     for i in 0..10 {
-        let t = i as f64;
+        let t = f64::from(i);
         let p = Point3::origin() + t * n;
         let (q, p0, p1) = double_projection(&plane0, None, &plane1, None, p, n, 100)
             .unwrap_or_else(|| panic!("plane0: {plane0:?}\nplane1: {plane1:?}\n p: {p:?}"));

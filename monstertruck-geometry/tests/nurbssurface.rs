@@ -21,7 +21,7 @@ fn nurbs_sphere() {
             Vector4::new(0.0, 4.0, 0.0, 4.0),
         ],
     ];
-    let surface = NurbsSurface::new(BsplineSurface::new(
+    let surface = NurbsSurface::new(BsplineSurface::new_unchecked(
         (knot_vec.clone(), knot_vec),
         control_points,
     ));
@@ -29,13 +29,13 @@ fn nurbs_sphere() {
     const N: usize = 10;
     for i in 0..=10 {
         for j in 0..=10 {
-            let u = i as f64 / N as f64;
-            let v = j as f64 / N as f64;
-            let p = surface.subs(u, v).to_vec();
+            let u = f64::from(i) / N as f64;
+            let v = f64::from(j) / N as f64;
+            let p = surface.evaluate(u, v).to_vec();
             assert_near!(p.magnitude(), 1.0);
-            let uder = surface.uder(u, v);
+            let uder = surface.derivative_u(u, v);
             assert!(p.dot(uder).so_small());
-            let vder = surface.vder(u, v);
+            let vder = surface.derivative_v(u, v);
             assert!(p.dot(vder).so_small());
         }
     }
@@ -67,16 +67,16 @@ proptest! {
                     .collect()
             })
             .collect::<Vec<Vec<_>>>();
-        let bsp = NurbsSurface::new(BsplineSurface::new((knot_vector_u, knot_vector_v), control_points));
+        let bsp = NurbsSurface::new(BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points));
 
         const EPS: f64 = 1.0e-4;
         let (der0, der1) = if u_derivate {
-            let der0 = bsp.der_mn(m + 1, n, u, v);
-            let der1 = (bsp.der_mn(m, n, u + EPS, v) - bsp.der_mn(m, n, u - EPS, v)) / (2.0 * EPS);
+            let der0 = bsp.derivative_mn(m + 1, n, u, v);
+            let der1 = (bsp.derivative_mn(m, n, u + EPS, v) - bsp.derivative_mn(m, n, u - EPS, v)) / (2.0 * EPS);
             (der0, der1)
         } else {
-            let der0 = bsp.der_mn(m, n + 1, u, v);
-            let der1 = (bsp.der_mn(m, n, u, v + EPS) - bsp.der_mn(m, n, u, v - EPS)) / (2.0 * EPS);
+            let der0 = bsp.derivative_mn(m, n + 1, u, v);
+            let der1 = (bsp.derivative_mn(m, n, u, v + EPS) - bsp.derivative_mn(m, n, u, v - EPS)) / (2.0 * EPS);
             (der0, der1)
         };
         prop_assert!((der0 - der1).magnitude() < 0.01 * der0.magnitude());
@@ -90,20 +90,25 @@ fn endpoint_test_surface() -> NurbsSurface<Vector4> {
         .map(|i| {
             (0..4)
                 .map(|j| {
-                    let i = i as f64;
-                    let j = j as f64;
-                    Vector4::new(i, j, 0.1 * (i * i + j * j) + 0.05 * i * j, 1.0)
+                    let i = f64::from(i);
+                    let j = f64::from(j);
+                    Vector4::new(
+                        i,
+                        j,
+                        f64::mul_add(0.05 * i, j, 0.1 * f64::mul_add(j, j, i * i)),
+                        1.0,
+                    )
                 })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    NurbsSurface::new(BsplineSurface::new(
+    NurbsSurface::new(BsplineSurface::new_unchecked(
         (knot_vector_u, knot_vector_v),
         control_points,
     ))
 }
 
-fn seam_samples() -> impl Iterator<Item = f64> { (0..=20).map(|i| i as f64 / 20.0) }
+fn seam_samples() -> impl Iterator<Item = f64> { (0..=20).map(|i| f64::from(i) / 20.0) }
 
 fn assert_u_seam_matches(surface: &NurbsSurface<Vector4>, cut: f64, check_higher_order: bool) {
     let mut left = surface.clone();
@@ -113,36 +118,36 @@ fn assert_u_seam_matches(surface: &NurbsSurface<Vector4>, cut: f64, check_higher
     let higher_order_tolerance = 1.0e-2;
 
     seam_samples().for_each(|v| {
-        assert_near!(left.subs(cut, v), right.subs(cut, v));
-        assert_near!(left.subs(cut, v), surface.subs(cut, v));
+        assert_near!(left.evaluate(cut, v), right.evaluate(cut, v));
+        assert_near!(left.evaluate(cut, v), surface.evaluate(cut, v));
         if can_compare_derivatives {
-            assert_near!(left.uder(cut, v), right.uder(cut, v));
-            assert_near!(left.uder(cut, v), surface.uder(cut, v));
-            assert_near!(left.vder(cut, v), right.vder(cut, v));
-            assert_near!(left.vder(cut, v), surface.vder(cut, v));
+            assert_near!(left.derivative_u(cut, v), right.derivative_u(cut, v));
+            assert_near!(left.derivative_u(cut, v), surface.derivative_u(cut, v));
+            assert_near!(left.derivative_v(cut, v), right.derivative_v(cut, v));
+            assert_near!(left.derivative_v(cut, v), surface.derivative_v(cut, v));
             if check_higher_order {
                 assert!(
-                    (left.uuder(cut, v) - right.uuder(cut, v)).magnitude()
+                    (left.derivative_uu(cut, v) - right.derivative_uu(cut, v)).magnitude()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (left.uuder(cut, v) - surface.uuder(cut, v)).magnitude()
+                    (left.derivative_uu(cut, v) - surface.derivative_uu(cut, v)).magnitude()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (left.uvder(cut, v) - right.uvder(cut, v)).magnitude()
+                    (left.derivative_uv(cut, v) - right.derivative_uv(cut, v)).magnitude()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (left.uvder(cut, v) - surface.uvder(cut, v)).magnitude()
+                    (left.derivative_uv(cut, v) - surface.derivative_uv(cut, v)).magnitude()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (left.vvder(cut, v) - right.vvder(cut, v)).magnitude()
+                    (left.derivative_vv(cut, v) - right.derivative_vv(cut, v)).magnitude()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (left.vvder(cut, v) - surface.vvder(cut, v)).magnitude()
+                    (left.derivative_vv(cut, v) - surface.derivative_vv(cut, v)).magnitude()
                         <= higher_order_tolerance
                 );
             }
@@ -158,36 +163,36 @@ fn assert_v_seam_matches(surface: &NurbsSurface<Vector4>, cut: f64, check_higher
     let higher_order_tolerance = 1.0e-2;
 
     seam_samples().for_each(|u| {
-        assert_near!(lower.subs(u, cut), upper.subs(u, cut));
-        assert_near!(lower.subs(u, cut), surface.subs(u, cut));
+        assert_near!(lower.evaluate(u, cut), upper.evaluate(u, cut));
+        assert_near!(lower.evaluate(u, cut), surface.evaluate(u, cut));
         if can_compare_derivatives {
-            assert_near!(lower.uder(u, cut), upper.uder(u, cut));
-            assert_near!(lower.uder(u, cut), surface.uder(u, cut));
-            assert_near!(lower.vder(u, cut), upper.vder(u, cut));
-            assert_near!(lower.vder(u, cut), surface.vder(u, cut));
+            assert_near!(lower.derivative_u(u, cut), upper.derivative_u(u, cut));
+            assert_near!(lower.derivative_u(u, cut), surface.derivative_u(u, cut));
+            assert_near!(lower.derivative_v(u, cut), upper.derivative_v(u, cut));
+            assert_near!(lower.derivative_v(u, cut), surface.derivative_v(u, cut));
             if check_higher_order {
                 assert!(
-                    (lower.uuder(u, cut) - upper.uuder(u, cut)).magnitude()
+                    (lower.derivative_uu(u, cut) - upper.derivative_uu(u, cut)).magnitude()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (lower.uuder(u, cut) - surface.uuder(u, cut)).magnitude()
+                    (lower.derivative_uu(u, cut) - surface.derivative_uu(u, cut)).magnitude()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (lower.uvder(u, cut) - upper.uvder(u, cut)).magnitude()
+                    (lower.derivative_uv(u, cut) - upper.derivative_uv(u, cut)).magnitude()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (lower.uvder(u, cut) - surface.uvder(u, cut)).magnitude()
+                    (lower.derivative_uv(u, cut) - surface.derivative_uv(u, cut)).magnitude()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (lower.vvder(u, cut) - upper.vvder(u, cut)).magnitude()
+                    (lower.derivative_vv(u, cut) - upper.derivative_vv(u, cut)).magnitude()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (lower.vvder(u, cut) - surface.vvder(u, cut)).magnitude()
+                    (lower.derivative_vv(u, cut) - surface.derivative_vv(u, cut)).magnitude()
                         <= higher_order_tolerance
                 );
             }
@@ -203,14 +208,14 @@ fn ucut_at_domain_start_regression() {
 
     assert_eq!(left.control_points().len(), 1);
     for i in 0..=20 {
-        let v = i as f64 / 20.0;
-        assert_near!(left.subs(0.0, v), surface.subs(0.0, v));
+        let v = f64::from(i) / 20.0;
+        assert_near!(left.evaluate(0.0, v), surface.evaluate(0.0, v));
     }
     for i in 0..=20 {
-        let u = i as f64 / 20.0;
+        let u = f64::from(i) / 20.0;
         for j in 0..=20 {
-            let v = j as f64 / 20.0;
-            assert_near!(right.subs(u, v), surface.subs(u, v));
+            let v = f64::from(j) / 20.0;
+            assert_near!(right.evaluate(u, v), surface.evaluate(u, v));
         }
     }
 }
@@ -223,14 +228,14 @@ fn vcut_at_domain_start_regression() {
 
     assert_eq!(lower.control_points()[0].len(), 1);
     for i in 0..=20 {
-        let u = i as f64 / 20.0;
-        assert_near!(lower.subs(u, 0.0), surface.subs(u, 0.0));
+        let u = f64::from(i) / 20.0;
+        assert_near!(lower.evaluate(u, 0.0), surface.evaluate(u, 0.0));
     }
     for i in 0..=20 {
-        let u = i as f64 / 20.0;
+        let u = f64::from(i) / 20.0;
         for j in 0..=20 {
-            let v = j as f64 / 20.0;
-            assert_near!(upper.subs(u, v), surface.subs(u, v));
+            let v = f64::from(j) / 20.0;
+            assert_near!(upper.evaluate(u, v), surface.evaluate(u, v));
         }
     }
 }
@@ -256,9 +261,9 @@ fn ucut_at_domain_end_regression() {
     let right = left.cut_u(1.0);
 
     assert_eq!(right.control_points().len(), 1);
-    seam_samples().for_each(|v| assert_near!(right.subs(1.0, v), surface.subs(1.0, v)));
+    seam_samples().for_each(|v| assert_near!(right.evaluate(1.0, v), surface.evaluate(1.0, v)));
     seam_samples().for_each(|u| {
-        seam_samples().for_each(|v| assert_near!(left.subs(u, v), surface.subs(u, v)));
+        seam_samples().for_each(|v| assert_near!(left.evaluate(u, v), surface.evaluate(u, v)));
     });
 }
 
@@ -269,9 +274,9 @@ fn vcut_at_domain_end_regression() {
     let upper = lower.cut_v(1.0);
 
     assert_eq!(upper.control_points()[0].len(), 1);
-    seam_samples().for_each(|u| assert_near!(upper.subs(u, 1.0), surface.subs(u, 1.0)));
+    seam_samples().for_each(|u| assert_near!(upper.evaluate(u, 1.0), surface.evaluate(u, 1.0)));
     seam_samples().for_each(|u| {
-        seam_samples().for_each(|v| assert_near!(lower.subs(u, v), surface.subs(u, v)));
+        seam_samples().for_each(|v| assert_near!(lower.evaluate(u, v), surface.evaluate(u, v)));
     });
 }
 

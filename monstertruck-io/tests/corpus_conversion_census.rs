@@ -25,7 +25,7 @@
 //! Corpus-gated and `#[ignore]`d -- ~1 GB of input. Run with:
 //!
 //! ```text
-//! cargo nextest run -p monstertruck-step --run-ignored all \
+//! cargo nextest run -p monstertruck-io --features step --run-ignored all \
 //!     -E 'test(corpus_conversion_census)' --no-capture
 //! ```
 

@@ -73,6 +73,12 @@ where
     C0: BoundedCurve,
     C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>,
 {
+    fn range_tuple(&self) -> (f64, f64) {
+        match self {
+            Alternative::FirstType(curve) => curve.range_tuple(),
+            Alternative::SecondType(curve) => curve.range_tuple(),
+        }
+    }
 }
 
 impl<S0, S1> ParametricSurface for Alternative<S0, S1>

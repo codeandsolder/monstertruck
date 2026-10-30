@@ -18,24 +18,28 @@
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
-use common::*;
+use common::{Adjacency, FaceNormal};
 
 /// re-export polymesh
 pub mod rexport_polymesh {
     pub use monstertruck_mesh::*;
 }
-use monstertruck_mesh::{StandardVertex as Vertex, *};
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "mesh collection/sampling counts are bounded by actually iterable/allocatable data and are converted only for normalized f64 geometry formulas"
+)]
+pub(crate) const fn count_as_f64(value: usize) -> f64 { value as f64 }
+use monstertruck_mesh::{
+    BoundedCurve, BoundingBox, CurveParameter, ElementWise, EuclideanSpace,
+    ExactParameterBoundary2D, Faces, HashGen, InnerSpace, Invertible, Matrix3, MetricSpace, Origin,
+    ParameterBoundary2D, ParameterDivision1D, ParameterDivision2D, ParametricCurve2D,
+    ParametricCurve3D, ParametricSurface3D, Point2, Point3, PolygonMesh, PolylineCurve,
+    SearchNearestParameter, SearchParameter, SquareMatrix, StandardAttributes, StandardVertex,
+    StandardVertex as Vertex, SurfaceParameter, TOLERANCE, TOLERANCE2, Tolerance, Vector2, Vector3,
+    Vector4, Zero, algo, hash, nonpositive_tolerance, polygon_mesh,
+};
 
 /// polygon mesh analyzers, including
 ///

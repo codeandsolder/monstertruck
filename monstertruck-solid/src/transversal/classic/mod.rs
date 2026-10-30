@@ -553,8 +553,7 @@ fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             },
         )));
     }
-    Solid::try_new(boundaries)
-        .map_err(|source| ShapeOpsError::InvalidOutputShell { operation, source })
+    Solid::new(boundaries).map_err(|source| ShapeOpsError::InvalidOutputShell { operation, source })
 }
 
 /// AND operation between two solids (classic backend).
@@ -749,6 +748,7 @@ mod structural_classification_tests {
             },
             Faces::from_iter(faces),
         )
+        .expect("fixture mesh is valid")
     }
 
     #[test]
@@ -793,7 +793,7 @@ mod structural_classification_tests {
         let edges = (0..vertices.len())
             .map(|index| {
                 let next = (index + 1) % vertices.len();
-                Edge::new(
+                Edge::new_unchecked(
                     &vertices[index],
                     &vertices[next],
                     Curve::from(Line(vertices[index].point(), vertices[next].point())),
@@ -828,7 +828,7 @@ mod structural_classification_tests {
         let edges = (0..vertices.len())
             .map(|index| {
                 let next = (index + 1) % vertices.len();
-                Edge::new(
+                Edge::new_unchecked(
                     &vertices[index],
                     &vertices[next],
                     Curve::from(Line(vertices[index].point(), vertices[next].point())),
@@ -864,6 +864,7 @@ mod structural_classification_tests {
             },
             Faces::from_iter(faces),
         )
+        .expect("fixture mesh is valid")
     }
 
     #[test]
@@ -895,7 +896,7 @@ mod structural_classification_tests {
             (0..vertices.len())
                 .map(|index| {
                     let next = (index + 1) % vertices.len();
-                    Edge::new(
+                    Edge::new_unchecked(
                         &vertices[index],
                         &vertices[next],
                         Curve::from(Line(vertices[index].point(), vertices[next].point())),

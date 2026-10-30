@@ -1,4 +1,8 @@
-use crate::*;
+use crate::{
+    Adjacency, BoundingBox, EuclideanSpace, FaceNormal, Faces, InnerSpace, Matrix3, MetricSpace,
+    Origin, Point3, PolygonMesh, PolylineCurve, SquareMatrix, StandardAttributes, StandardVertex,
+    TOLERANCE, TOLERANCE2, Vector3, Vector4, Vertex, hash, nonpositive_tolerance,
+};
 
 mod collision;
 mod in_out_judge;

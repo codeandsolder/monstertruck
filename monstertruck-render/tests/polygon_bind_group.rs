@@ -6,7 +6,7 @@ use image::{DynamicImage, ImageBuffer, Rgba};
 use monstertruck_gpu::*;
 use monstertruck_meshing::prelude::obj;
 use monstertruck_render::*;
-use std::sync::Arc;
+use std::{io, sync::Arc};
 use wgpu::*;
 
 const PICTURE_SIZE: (u32, u32) = (256, 256);
@@ -59,11 +59,11 @@ vn -1.0 0.2 -1.0\nvn 1.0 0.2 -1.0\nvn -1.0 0.2 1.0\nvn 1.0 0.2 1.0
 const TRIS_OBJ: &str = "f 1/1/1 2/2/3 3/4/2\nf 3/4/2 2/2/3 4/3/4\n";
 const QUADS_OBJ: &str = "f 1/1/1 2/2/3 4/3/4 3/4/2\n";
 
-fn test_polygons() -> [PolygonMesh; 2] {
-    [
-        obj::read((ATTRS_OBJ.to_string() + TRIS_OBJ).as_bytes()).unwrap(),
-        obj::read((ATTRS_OBJ.to_string() + QUADS_OBJ).as_bytes()).unwrap(),
-    ]
+fn test_polygons() -> common::TestResult<[PolygonMesh; 2]> {
+    Ok([
+        obj::read((ATTRS_OBJ.to_string() + TRIS_OBJ).as_bytes())?,
+        obj::read((ATTRS_OBJ.to_string() + QUADS_OBJ).as_bytes())?,
+    ])
 }
 
 fn nontex_inst_state() -> PolygonState {
@@ -93,21 +93,21 @@ fn exec_polygon_bgtest(
     answer: &[u8],
     id: usize,
     out_dir: String,
-) -> bool {
-    let buffer = common::render_one(scene, instance);
+) -> common::TestResult<bool> {
+    let buffer = common::render_one(scene, instance)?;
     let path = format!("{out_dir}polygon-bgtest-{id}.png");
-    common::save_buffer(path, &buffer, PICTURE_SIZE);
-    common::same_buffer(answer, &buffer)
+    common::save_buffer(path, &buffer, PICTURE_SIZE)?;
+    Ok(common::same_buffer(answer, &buffer))
 }
 
-fn exec_polymesh_nontex_bind_group_test(backend: Backends, out_dir: &str) {
+fn exec_polymesh_nontex_bind_group_test(backend: Backends, out_dir: &str) -> common::TestResult {
     let out_dir = out_dir.to_string();
-    std::fs::create_dir_all(&out_dir).unwrap();
+    std::fs::create_dir_all(&out_dir)?;
     let instance = wgpu::Instance::new(InstanceDescriptor {
         backends: backend,
         ..InstanceDescriptor::new_without_display_handle()
     });
-    let handler = common::init_device(&instance);
+    let handler = common::init_device(&instance)?;
     let mut scene = Scene::new(
         handler,
         &SceneDescriptor {
@@ -118,52 +118,50 @@ fn exec_polymesh_nontex_bind_group_test(backend: Backends, out_dir: &str) {
             ..Default::default()
         },
     );
-    let answer = common::nontex_answer_texture(&mut scene);
+    let answer = common::nontex_answer_texture(&mut scene)?;
     let inst_desc = nontex_inst_state();
-    test_polygons()
-        .iter()
-        .enumerate()
-        .for_each(move |(i, polygon)| {
-            let instance: PolygonInstance = polygon.to_instance(
-                scene.device_handler(),
-                &bgcheck_shaders(scene.device_handler()),
-                &inst_desc,
-            );
-            assert!(exec_polygon_bgtest(
-                &mut scene,
-                &instance,
-                &answer,
-                i,
-                out_dir.clone()
-            ));
-            let instance: PolygonInstance = polygon.to_instance(
-                scene.device_handler(),
-                &bgcheck_anti_shaders(scene.device_handler()),
-                &inst_desc,
-            );
-            assert!(!exec_polygon_bgtest(
-                &mut scene,
-                &instance,
-                &answer,
-                i,
-                out_dir.clone()
-            ));
-        })
+    for (i, polygon) in test_polygons()?.iter().enumerate() {
+        let instance: PolygonInstance = polygon.to_instance(
+            scene.device_handler(),
+            &bgcheck_shaders(scene.device_handler()),
+            &inst_desc,
+        )?;
+        assert!(exec_polygon_bgtest(
+            &mut scene,
+            &instance,
+            &answer,
+            i,
+            out_dir.clone(),
+        )?);
+        let instance: PolygonInstance = polygon.to_instance(
+            scene.device_handler(),
+            &bgcheck_anti_shaders(scene.device_handler()),
+            &inst_desc,
+        )?;
+        assert!(!exec_polygon_bgtest(
+            &mut scene,
+            &instance,
+            &answer,
+            i,
+            out_dir.clone(),
+        )?);
+    }
+    Ok(())
 }
 
 #[test]
-fn polymesh_nontex_bind_group_test() {
+fn polymesh_nontex_bind_group_test() -> common::TestResult {
     common::os_alt_exec_test(exec_polymesh_nontex_bind_group_test)
 }
 
-fn exec_polymesh_tex_bind_group_test(backend: Backends, out_dir: &str) {
+fn exec_polymesh_tex_bind_group_test(backend: Backends, out_dir: &str) -> common::TestResult {
     let out_dir = out_dir.to_string();
-    std::fs::create_dir_all(&out_dir).unwrap();
+    std::fs::create_dir_all(&out_dir)?;
     let instance = wgpu::Instance::new(InstanceDescriptor {
         backends: backend,
         ..InstanceDescriptor::new_without_display_handle()
     });
-    let handler = common::init_device(&instance);
+    let handler = common::init_device(&instance)?;
     let mut scene = Scene::new(
         handler,
         &SceneDescriptor {
@@ -174,48 +172,48 @@ fn exec_polymesh_tex_bind_group_test(backend: Backends, out_dir: &str) {
             ..Default::default()
         },
     );
-    let buffer = common::random_texture(&mut scene);
+    let buffer = common::random_texture(&mut scene)?;
     let pngpath = out_dir.clone() + "random-texture.png";
-    common::save_buffer(pngpath, &buffer, PICTURE_SIZE);
+    common::save_buffer(pngpath, &buffer, PICTURE_SIZE)?;
     let mut state = nontex_inst_state();
     let image_buffer =
         ImageBuffer::<Rgba<_>, _>::from_raw(PICTURE_SIZE.0, PICTURE_SIZE.1, buffer.clone())
-            .unwrap();
+            .ok_or_else(|| io::Error::other("rendered RGBA buffer has unexpected length"))?;
     let attach = image2texture::image2texture(
         scene.device_handler(),
         &DynamicImage::ImageRgba8(image_buffer),
-    );
+    )?;
     state.texture = Some(Arc::new(attach));
-    test_polygons()
-        .iter()
-        .enumerate()
-        .for_each(move |(i, polygon)| {
-            let instance: PolygonInstance = polygon.to_instance(
-                scene.device_handler(),
-                &bgcheck_shaders(scene.device_handler()),
-                &state,
-            );
-            assert!(exec_polygon_bgtest(
-                &mut scene,
-                &instance,
-                &buffer,
-                i + 3,
-                out_dir.clone(),
-            ));
-            let instance: PolygonInstance = polygon.to_instance(
-                scene.device_handler(),
-                &bgcheck_anti_shaders(scene.device_handler()),
-                &state,
-            );
-            assert!(!exec_polygon_bgtest(
-                &mut scene,
-                &instance,
-                &buffer,
-                i + 3,
-                out_dir.clone(),
-            ));
-        })
+    for (i, polygon) in test_polygons()?.iter().enumerate() {
+        let instance: PolygonInstance = polygon.to_instance(
+            scene.device_handler(),
+            &bgcheck_shaders(scene.device_handler()),
+            &state,
+        )?;
+        assert!(exec_polygon_bgtest(
+            &mut scene,
+            &instance,
+            &buffer,
+            i + 3,
+            out_dir.clone(),
+        )?);
+        let instance: PolygonInstance = polygon.to_instance(
+            scene.device_handler(),
+            &bgcheck_anti_shaders(scene.device_handler()),
+            &state,
+        )?;
+        assert!(!exec_polygon_bgtest(
+            &mut scene,
+            &instance,
+            &buffer,
+            i + 3,
+            out_dir.clone(),
+        )?);
+    }
+    Ok(())
 }
 
 #[test]
-fn polymesh_tex_bind_group_test() { common::os_alt_exec_test(exec_polymesh_tex_bind_group_test) }
+fn polymesh_tex_bind_group_test() -> common::TestResult {
+    common::os_alt_exec_test(exec_polymesh_tex_bind_group_test)
+}

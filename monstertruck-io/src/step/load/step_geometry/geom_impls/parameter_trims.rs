@@ -14,9 +14,7 @@ where
 {
     fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> Ordering {
         let distance = move |value: &f64| f64::abs(*value - previous);
-        // SAFETY: All compared values are finite after the finiteness check in
-        // `normalize_axis`.
-        move |lhs: &f64, rhs: &f64| distance(lhs).partial_cmp(&distance(rhs)).unwrap()
+        move |lhs: &f64, rhs: &f64| distance(lhs).total_cmp(&distance(rhs))
     }
 
     /// `surface` and `axis` are carried for the `MT_STEP_DEBUG_UV_CLAMP` lens
@@ -330,19 +328,20 @@ fn exact_parameter_curve_on(curve: &Curve3D, surface: &Surface) -> Option<StepPa
     }
 }
 
-fn projected_conic_transform_on_plane(transform: &Matrix4, plane: &Plane) -> Matrix3 {
+fn projected_conic_transform_on_plane(transform: &Matrix4, plane: &Plane) -> Option<Matrix3> {
     let project = |point| {
-        let parameter = plane.parameter(transform.transform_point(point));
-        Point2::new(parameter.x, parameter.y)
+        plane
+            .parameter(transform.transform_point(point))
+            .map(|parameter| Point2::new(parameter.x, parameter.y))
     };
-    let origin = project(Point3::origin());
-    let u_axis = project(Point3::new(1.0, 0.0, 0.0)) - origin;
-    let v_axis = project(Point3::new(0.0, 1.0, 0.0)) - origin;
-    Matrix3::from_cols(
+    let origin = project(Point3::origin())?;
+    let u_axis = project(Point3::new(1.0, 0.0, 0.0))? - origin;
+    let v_axis = project(Point3::new(0.0, 1.0, 0.0))? - origin;
+    Some(Matrix3::from_cols(
         Vector3::new(u_axis.x, u_axis.y, 0.0),
         Vector3::new(v_axis.x, v_axis.y, 0.0),
         Vector3::new(origin.x, origin.y, 1.0),
-    )
+    ))
 }
 
 fn pcurve_matches_surface_curve<C>(curve: &C, trim: &Curve2D, surface: &Surface) -> bool
@@ -372,7 +371,7 @@ fn exact_ellipse_parameter_curve_on_plane(
     let trimmed = TrimmedCurve::new(UnitCircle::new(), curve.entity().range());
     let mut projected = Processor::with_transform(
         trimmed,
-        projected_conic_transform_on_plane(curve.transform(), plane),
+        projected_conic_transform_on_plane(curve.transform(), plane)?,
     );
     if !curve.orientation() {
         projected.invert();
@@ -390,7 +389,7 @@ fn exact_hyperbola_parameter_curve_on_plane(
     let trimmed = TrimmedCurve::new(UnitHyperbola::new(), curve.entity().range());
     let mut projected = Processor::with_transform(
         trimmed,
-        projected_conic_transform_on_plane(curve.transform(), plane),
+        projected_conic_transform_on_plane(curve.transform(), plane)?,
     );
     if !curve.orientation() {
         projected.invert();
@@ -408,7 +407,7 @@ fn exact_parabola_parameter_curve_on_plane(
     let trimmed = TrimmedCurve::new(UnitParabola::new(), curve.entity().range());
     let mut projected = Processor::with_transform(
         trimmed,
-        projected_conic_transform_on_plane(curve.transform(), plane),
+        projected_conic_transform_on_plane(curve.transform(), plane)?,
     );
     if !curve.orientation() {
         projected.invert();
@@ -427,8 +426,8 @@ fn exact_line_parameter_curve_on_plane(
     plane: &Plane,
     surface: &Surface,
 ) -> Option<StepParameterCurve> {
-    let front = plane.parameter(curve.front());
-    let back = plane.parameter(curve.back());
+    let front = plane.parameter(curve.front())?;
+    let back = plane.parameter(curve.back())?;
     let trim = Curve2D::Line(Line(
         Point2::new(front.x, front.y),
         Point2::new(back.x, back.y),
@@ -606,7 +605,7 @@ fn curve2d_from_sampled_boundary(points: Vec<Point2>) -> Option<Curve2D> {
         let line = Line(front, back);
         let is_linear = points.iter().copied().all(|point| {
             line.search_nearest_parameter(point, None, 1)
-                .is_some_and(|t| line.subs(t).near(&point))
+                .is_some_and(|t| line.evaluate(t).near(&point))
         });
         if is_linear {
             Some(Curve2D::Line(line))
@@ -618,7 +617,9 @@ fn curve2d_from_sampled_boundary(points: Vec<Point2>) -> Option<Curve2D> {
                     .chain(std::iter::once(1.0))
                     .collect::<Vec<_>>(),
             );
-            Some(Curve2D::BsplineCurve(BsplineCurve::new(knot_vec, points)))
+            Some(Curve2D::BsplineCurve(BsplineCurve::new_unchecked(
+                knot_vec, points,
+            )))
         }
     }
 }
@@ -719,7 +720,7 @@ fn a_planar_trim_sample_past_the_fictional_unit_square_is_not_snapped_to_it() {
 #[test]
 fn a_knot_bounded_surface_still_snaps_a_sample_that_overshoots_its_knots() {
     let knots = KnotVector::bezier_knot(1);
-    let surface = Surface::BsplineSurface(BsplineSurface::new(
+    let surface = Surface::BsplineSurface(BsplineSurface::new_unchecked(
         (knots.clone(), knots),
         vec![
             vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
@@ -770,7 +771,7 @@ fn no_placeholder_axis_carries_a_period() {
             monstertruck_geometry::prelude::Sphere::new(center, 2.0),
         )))),
         Surface::ElementarySurface(ElementarySurface::ToroidalSurface(Processor::new(
-            Torus::new(center, 3.0, 1.0),
+            Torus::new_unchecked(center, 3.0, 1.0),
         ))),
     ];
 
@@ -866,7 +867,7 @@ fn surface_curve_line_without_pcurve_on_cylinder_stays_fallback_only() {
     let surface = Surface::ElementarySurface(ElementarySurface::CylindricalSurface(
         Processor::new(RevolutionSurface::by_revolution(profile, center, axis)),
     ));
-    let leader = Curve3D::Line(Line(surface.subs(0.0, 0.0), surface.subs(0.0, 1.0)));
+    let leader = Curve3D::Line(Line(surface.evaluate(0.0, 0.0), surface.evaluate(0.0, 1.0)));
     let curve = Curve3D::SurfaceCurve(SurfaceCurve3D::new(
         SurfaceCurveKind::SurfaceCurve,
         Box::new(leader),
@@ -887,7 +888,7 @@ fn raw_line_without_pcurve_on_cylinder_stays_fallback_only() {
     let surface = Surface::ElementarySurface(ElementarySurface::CylindricalSurface(
         Processor::new(RevolutionSurface::by_revolution(profile, center, axis)),
     ));
-    let curve = Curve3D::Line(Line(surface.subs(0.0, 0.0), surface.subs(0.0, 1.0)));
+    let curve = Curve3D::Line(Line(surface.evaluate(0.0, 0.0), surface.evaluate(0.0, 1.0)));
 
     assert!(StepParameterCurve::try_from(CurveTrimRef::new(&curve, &surface)).is_err());
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());

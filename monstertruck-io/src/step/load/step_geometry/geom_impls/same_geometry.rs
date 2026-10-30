@@ -177,7 +177,7 @@ fn to_same_geometry_2d_bspline_curve_round_trip() {
         Point2::new(2.0, 0.0),
         Point2::new(3.0, 1.0),
     ];
-    let spline = BsplineCurve::new(knots, control);
+    let spline = BsplineCurve::new_unchecked(knots, control);
     let curve: Curve2D = spline.to_same_geometry();
     match curve {
         Curve2D::BsplineCurve(rebuilt) => assert_eq!(rebuilt, spline),
@@ -186,7 +186,7 @@ fn to_same_geometry_2d_bspline_curve_round_trip() {
 }
 
 #[test]
-fn builder() {
+fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     use monstertruck_meshing::prelude::*;
     use monstertruck_modeling::builder;
     monstertruck_topology::prelude!(Point3, Curve3D, Surface);
@@ -209,12 +209,12 @@ fn builder() {
         Vector3::unit_z(),
         builder::SweepAngle::Closed,
         2,
-    );
+    )?;
     let boundaries = shell.extract_boundaries();
     assert_eq!(boundaries.len(), 2);
-    shell.push(builder::try_attach_plane([boundaries[0].inverse()]).unwrap());
-    shell.push(builder::try_attach_plane([boundaries[1].inverse()]).unwrap());
-    let cylinder = Solid::new(vec![shell]);
+    shell.push(builder::try_attach_plane([boundaries[0].inverse()])?);
+    shell.push(builder::try_attach_plane([boundaries[1].inverse()])?);
+    let cylinder = Solid::new_unchecked(vec![shell]);
     let mut poly = cylinder.triangulation(0.1).to_polygon();
     poly.put_together_same_attrs(1.0e-3).remove_unused_attrs();
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
@@ -227,15 +227,15 @@ fn builder() {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         2,
-    );
-    let f = builder::try_attach_plane([w]).unwrap();
+    )?;
+    let f = builder::try_attach_plane([w])?;
     let torus: Solid = builder::revolve(
         &f,
         Point3::origin(),
         Vector3::unit_z(),
         builder::SweepAngle::Closed,
         2,
-    );
+    )?;
     let mut poly = torus.triangulation(0.1).to_polygon();
     poly.put_together_same_attrs(1.0e-3).remove_unused_attrs();
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
@@ -256,7 +256,7 @@ fn builder() {
         -Vector3::unit_z(),
         builder::SweepAngle::Closed,
         2,
-    );
+    )?;
     let boundary = hole.extract_boundaries();
     assert_eq!(boundary.len(), 2);
     if boundary[0][0].front().point().z < 0.0 {
@@ -267,8 +267,9 @@ fn builder() {
         let _ = shell[5].add_boundary(boundary[0].inverse());
     }
     shell.extend(hole);
-    let solid = Solid::new(vec![shell]);
+    let solid = Solid::new_unchecked(vec![shell]);
     let mut poly = solid.triangulation(0.1).to_polygon();
     poly.put_together_same_attrs(1.0e-3).remove_unused_attrs();
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
+    Ok(())
 }

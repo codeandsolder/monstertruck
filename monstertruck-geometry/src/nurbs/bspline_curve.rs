@@ -1,34 +1,27 @@
-use super::*;
+#![expect(
+    clippy::many_single_char_names,
+    reason = "compact symbols in knot insertion and splitting follow the standard B-spline recurrence notation"
+)]
+
+use super::{
+    Bound, Bounded, BoundedCurve, BoundingBox, BsplineCurve, Concat, ConcatError, ControlPoint,
+    CurveCollector, CurveParameter, Cut, Deserialize, EuclideanSpace, HashGen, Homogeneous,
+    InnerSpace, Invertible, KnotVector, MetricSpace, Origin, PRESEARCH_DIVISION,
+    ParameterDivision1D, ParameterRange, ParameterTransform, ParametricCurve, Result,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, TOLERANCE, Tolerance,
+    Transform, Transformed, Zero, algo, gaussian_elimination, inv_or_zero,
+};
 use crate::errors::Error;
-use std::ops::*;
+#[cfg(test)]
+use crate::prelude::{Point2, Vector2, assert_near};
 
 impl<P> BsplineCurve<P> {
-    /// constructor.
-    /// # Arguments
-    /// * `knot_vec` - the knot vector
-    /// * `control_points` - the vector of the control points
-    /// # Panics
-    /// Panics occurs if:
-    /// * There are no control points.
-    /// * The number of knots is less than or equal to the one of control points.
-    /// * The range of the knot vector is zero.
-    pub fn new(knot_vec: KnotVector, control_points: Vec<P>) -> BsplineCurve<P> {
-        BsplineCurve::try_new(knot_vec, control_points).unwrap_or_else(|e| panic!("{}", e))
-    }
-
-    /// constructor.
-    /// # Arguments
-    /// * `knot_vec` - the knot vector
-    /// * `control_points` - the vector of the control points
-    /// # Failures
-    /// * If there are no control points, returns [`Error::EmptyControlPoint<f64>s`].
-    /// * If the number of knots is less than or equal to the one of control points, returns [`Error::TooShortKnotVector`].
-    /// * If the range of the knot vector is zero, returns [`Error::ZeroRange`].
+    /// Creates a B-spline curve after validating its knot/control-point layout.
     ///
-    /// [`Error::EmptyControlPoint<f64>s`]: errors/enum.Error.html#variant.EmptyControlPoint<f64>s
-    /// [`Error::TooShortKnotVector`]: errors/enum.Error.html#variant.TooShortKnotVector
-    /// [`Error::ZeroRange`]: errors/enum.Error.html#variant.ZeroRange
-    pub fn try_new(knot_vec: KnotVector, control_points: Vec<P>) -> Result<BsplineCurve<P>> {
+    /// # Errors
+    /// Returns [`Error::EmptyControlPoints`], [`Error::TooShortKnotVector`], or
+    /// [`Error::ZeroRange`] when the supplied representation is invalid.
+    pub fn new(knot_vec: KnotVector, control_points: Vec<P>) -> Result<Self> {
         if control_points.is_empty() {
             Err(Error::EmptyControlPoints)
         } else if knot_vec.len() <= control_points.len() {
@@ -39,7 +32,7 @@ impl<P> BsplineCurve<P> {
         } else if knot_vec.range_length().so_small() {
             Err(Error::ZeroRange)
         } else {
-            Ok(BsplineCurve::new_unchecked(knot_vec, control_points))
+            Ok(Self::new_unchecked(knot_vec, control_points))
         }
     }
 
@@ -48,70 +41,56 @@ impl<P> BsplineCurve<P> {
     /// * `knot_vec` - the knot vector
     /// * `control_points` - the vector of the control points
     /// # Remarks
-    /// This method is prepared only for performance-critical development and is not recommended.  
-    /// This method does NOT check the rules for constructing B-spline curve.  
+    /// This method is prepared only for performance-critical development and is not recommended.\
+    /// This method does NOT check the rules for constructing B-spline curve.\
     /// The programmer must guarantee these conditions before using this method.
-    #[inline(always)]
-    pub const fn new_unchecked(knot_vec: KnotVector, control_points: Vec<P>) -> BsplineCurve<P> {
+    #[inline]
+    #[must_use]
+    pub const fn new_unchecked(knot_vec: KnotVector, control_points: Vec<P>) -> Self {
         Self {
             knot_vec,
             control_points,
         }
     }
 
-    /// constructor.
-    /// # Arguments
-    /// * `knot_vec` - the knot vector
-    /// * `control_points` - the vector of the control points
-    /// # Remarks
-    /// This method checks the rules for constructing B-spline curve in the debug mode.  
-    /// The programmer must guarantee these conditions before using this method.
-    #[inline(always)]
-    pub fn debug_new(knot_vec: KnotVector, control_points: Vec<P>) -> BsplineCurve<P> {
-        match cfg!(debug_assertions) {
-            true => Self::new(knot_vec, control_points),
-            false => Self::new_unchecked(knot_vec, control_points),
-        }
-    }
-
     /// Returns the reference of the knot vector.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn knot_vector(&self) -> &KnotVector { &self.knot_vec }
 
-    /// Renamed to [`knot_vector`](Self::knot_vector).
-    #[deprecated(note = "renamed to knot_vector")]
-    #[inline(always)]
-    pub const fn knot_vec(&self) -> &KnotVector { &self.knot_vec }
-
     /// Returns the `idx`th knot
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn knot(&self, idx: usize) -> f64 { self.knot_vec[idx] }
 
     /// Returns the reference of the control points.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn control_points(&self) -> &Vec<P> { &self.control_points }
 
     /// Returns the reference of the control point corresponding to the index `idx`.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn control_point(&self, idx: usize) -> &P { &self.control_points[idx] }
 
     /// Returns the mutable reference of the control point corresponding to index `idx`.
-    #[inline(always)]
+    #[inline]
     pub fn control_point_mut(&mut self, idx: usize) -> &mut P { &mut self.control_points[idx] }
     /// Returns the iterator on all control points
-    #[inline(always)]
+    #[inline]
     pub fn control_points_mut(&mut self) -> impl Iterator<Item = &mut P> {
         self.control_points.iter_mut()
     }
 
     /// Into the tuple of knot vector and control points.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn destruct(self) -> (KnotVector, Vec<P>) { (self.knot_vec, self.control_points) }
 
     /// Apply the given transformation to all control points.
-    #[inline(always)]
+    #[inline]
     pub fn transform_control_points<F: FnMut(&mut P)>(&mut self, f: F) {
-        self.control_points.iter_mut().for_each(f)
+        self.control_points.iter_mut().for_each(f);
     }
 
     /// Returns the degree of B-spline curve
@@ -120,27 +99,27 @@ impl<P> BsplineCurve<P> {
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points = vec![Vector2::new(1.0, 2.0), Vector2::new(2.0, 3.0), Vector2::new(3.0, 4.0)];
-    /// let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// assert_eq!(bspcurve.degree(), 2);
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn degree(&self) -> usize { self.knot_vec.len() - self.control_points.len() - 1 }
 
     /// Returns whether the knot vector is clamped or not.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn is_clamped(&self) -> bool { self.knot_vec.is_clamped(self.degree()) }
 
     /// Normalizes the knot vector  
-    #[inline(always)]
+    #[inline]
     pub fn knot_normalize(&mut self) -> &mut Self {
-        // SAFETY: a valid `BsplineCurve` always has a non-zero-range knot vector,
-        // so normalization cannot fail.
-        self.knot_vec.try_normalize().unwrap();
+        self.knot_vec.normalize_unchecked();
         self
     }
 
     /// Translates the knot vector
-    #[inline(always)]
+    #[inline]
     pub fn knot_translate(&mut self, x: f64) -> &mut Self {
         self.knot_vec.translate(x);
         self
@@ -150,12 +129,12 @@ impl<P> BsplineCurve<P> {
 impl<P: ControlPoint<f64>> BsplineCurve<P> {
     /// Returns the closure of substitution.
     /// # Examples
-    /// The following test code is the same test with the one of `BsplineCurve::subs()`.
+    /// The following test code is the same test with the one of `BsplineCurve::evaluate()`.
     /// ```
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::from(vec![-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]);
     /// let control_points = vec![Vector2::new(-1.0, 1.0), Vector2::new(0.0, -1.0), Vector2::new(1.0, 1.0)];
-    /// let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     ///
     /// const N: usize = 100; // sample size
     /// let get_t = |i: usize| -1.0 + 2.0 * (i as f64) / (N as f64);
@@ -163,9 +142,9 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     /// let ans: Vec<_> = (0..=N).map(get_t).map(|t| Vector2::new(t, t * t)).collect();
     /// res.iter().zip(&ans).for_each(|(v0, v1)| assert_near2!(v0, v1));
     /// ```
-    #[inline(always)]
-    pub fn closure(&self) -> impl Fn(f64) -> P + '_ { move |t| self.subs(t) }
-    #[inline(always)]
+    #[inline]
+    pub fn closure(&self) -> impl Fn(f64) -> P + '_ { move |t| self.evaluate(t) }
+    #[inline]
     fn delta_control_points(&self, i: usize) -> P::Diff {
         if i == 0 {
             self.control_point(i).to_vec()
@@ -181,16 +160,17 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points = vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, 0.0), Vector2::new(1.0, 1.0)];
-    /// let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let derived = bspcurve.derivation();
     ///
     /// // `bpscurve = (t, t^2), derived = (1, 2t)`
     /// const N : usize = 100; // sample size
     /// for i in 0..=N {
     ///     let t = 1.0 / (N as f64) * (i as f64);
-    ///     assert_near2!(derived.subs(t), Vector2::new(1.0, 2.0 * t));
+    ///     assert_near2!(derived.evaluate(t), Vector2::new(1.0, 2.0 * t));
     /// }
     /// ```
+    #[must_use]
     pub fn derivation(&self) -> BsplineCurve<P::Diff> {
         let n = self.control_points.len();
         let k = self.degree();
@@ -200,7 +180,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
             let (knot_vec, new_points) = (&knot_vec, &mut new_points);
             (0..=n).for_each(move |i| {
                 let delta = knot_vec[i + k] - knot_vec[i];
-                let coef = (k as f64) * inv_or_zero(delta);
+                let coef = crate::usize_to_f64(k) * inv_or_zero(delta);
                 new_points.push(self.delta_control_points(i) * coef);
             });
         } else {
@@ -210,7 +190,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     }
     pub(super) fn sub_near_as_curve<F: Fn(&P, &P) -> bool>(
         &self,
-        other: &BsplineCurve<P>,
+        other: &Self,
         div_coef: usize,
         ord: F,
     ) -> bool {
@@ -226,8 +206,9 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
             }
 
             for j in 0..division {
-                let t = self.knot_vec[i] + delta * (j as f64) / (division as f64);
-                if !ord(&self.subs(t), &other.subs(t)) {
+                let t = self.knot_vec[i]
+                    + delta * crate::usize_to_f64(j) / crate::usize_to_f64(division);
+                if !ord(&self.evaluate(t), &other.evaluate(t)) {
                     return false;
                 }
             }
@@ -251,11 +232,16 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     /// let curve = BsplineCurve::try_interpolate(knot_vec, parameter_points.clone())?;
     ///
     /// parameter_points.into_iter().for_each(|(t, p)| {
-    ///     assert_near!(curve.subs(t), p);
+    ///     assert_near!(curve.evaluate(t), p);
     /// });
     /// # Ok(())
     /// # }
     /// ```
+    /// # Errors
+    /// Returns [`Error::TooShortKnotVector`] when the knot vector cannot support the supplied samples,
+    /// propagates knot-basis validation errors, returns [`Error::GaussianEliminationFailure`] when
+    /// the interpolation system is singular, and propagates checked B-spline construction errors.
+    ///
     pub fn try_interpolate(
         knot_vec: KnotVector,
         mut parameter_points: impl AsMut<[(f64, P)]>,
@@ -292,28 +278,18 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
         }
 
         let control_points = parameter_points.iter().map(|(_, p)| *p).collect::<Vec<_>>();
-        Self::try_new(knot_vec, control_points)
+        Self::new(knot_vec, control_points)
     }
 
     /// Interpolate by B-spline curve with the knot vector `knot_vec`. cf) [`BsplineCurve::try_interpolate`].
-    pub fn interpolate(knot_vec: KnotVector, parameter_points: impl AsMut<[(f64, P)]>) -> Self {
-        // SAFETY: panicking convenience wrapper; callers must ensure valid inputs.
-        Self::try_interpolate(knot_vec, parameter_points).unwrap()
-    }
-
-    /// Deprecated: use [`BsplineCurve::try_interpolate`] instead.
-    #[deprecated(since = "0.6.0", note = "renamed to `try_interpolate`")]
-    pub fn try_interpole(
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::try_interpolate`].
+    pub fn interpolate(
         knot_vec: KnotVector,
         parameter_points: impl AsMut<[(f64, P)]>,
     ) -> Result<Self> {
         Self::try_interpolate(knot_vec, parameter_points)
-    }
-
-    /// Deprecated: use [`BsplineCurve::interpolate`] instead.
-    #[deprecated(since = "0.6.0", note = "renamed to `interpolate`")]
-    pub fn interpole(knot_vec: KnotVector, parameter_points: impl AsMut<[(f64, P)]>) -> Self {
-        Self::interpolate(knot_vec, parameter_points)
     }
 
     /// Fits a B-spline curve to `parameter_points` in the least-squares sense.
@@ -329,7 +305,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     /// sample's [`BasisWindow`] rather than forming the full design matrix, and
     /// fills both triangles from one pass because the matrix is symmetric.
     ///
-    /// # Failures
+    /// # Errors
     ///
     /// Returns [`Error::GaussianEliminationFailure`] when the normal matrix is
     /// singular. That happens when a span carries no sample, so the control point
@@ -352,7 +328,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     ///
     /// // The fit stays near the samples without passing through each one.
     /// for (t, p) in &points {
-    ///     assert!(curve.subs(*t).distance(*p) < 0.2);
+    ///     assert!(curve.evaluate(*t).distance(*p) < 0.2);
     /// }
     /// ```
     pub fn least_square(
@@ -364,7 +340,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
         let mut matrix = vec![vec![0.0; n]; n];
         let mut rhs = vec![P::origin(); n];
         for &(t, point) in parameter_points {
-            let basis = knot_vec.bspline_basis_functions(degree, 0, t);
+            let basis = knot_vec.bspline_basis_functions_unchecked(degree, 0, t);
             let base = basis.start_index();
             for (local_i, &basis_i) in basis.values().iter().enumerate() {
                 let i = base + local_i;
@@ -379,7 +355,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
                     }
                 }
                 for d in 0..P::DIM {
-                    rhs[i][d] += basis_i * point[d];
+                    rhs[i][d] = f64::mul_add(basis_i, point[d], rhs[i][d]);
                 }
             }
         }
@@ -418,7 +394,7 @@ where P: ControlPoint<f64> + MetricSpace<Metric = f64> + HashGen<f64>
     /// const N: usize = 100;
     /// for i in 0..N {
     ///     let t = i as f64 / N as f64;
-    ///     assert!(circle.subs(t).distance(bspcurve.subs(t)) < 0.02);
+    ///     assert!(circle.evaluate(t).distance(bspcurve.evaluate(t)) < 0.02);
     /// }
     /// ```
     pub fn quadratic_approximation<C>(
@@ -436,17 +412,17 @@ where P: ControlPoint<f64> + MetricSpace<Metric = f64> + HashGen<f64>
             let len = n + 2;
             let parameter_points = (0..=len)
                 .map(|i| {
-                    let rat = i as f64 / len as f64;
-                    let t = range.0 + (range.1 - range.0) * rat;
-                    (t, curve.subs(t))
+                    let rat = crate::usize_to_f64(i) / crate::usize_to_f64(len);
+                    let t = (range.1 - range.0).mul_add(rat, range.0);
+                    (t, curve.evaluate(t))
                 })
                 .collect::<Vec<_>>();
             let bsp = Self::try_interpolate(knot_vec, parameter_points).ok()?;
             let is_approx = (0..len).all(|i| {
                 let seed = *bsp.control_point(i);
-                let rat = 0.5 + (0.2 * HashGen::hash1(seed) - 0.1);
-                let t = range.0 + (range.1 - range.0) * rat;
-                curve.subs(t).distance2(bsp.subs(t)) < tol * tol
+                let rat = 0.5 + 0.2f64.mul_add(HashGen::hash1(seed), -0.1);
+                let t = (range.1 - range.0).mul_add(rat, range.0);
+                curve.evaluate(t).distance2(bsp.evaluate(t)) < tol * tol
             });
             if is_approx {
                 return Some(bsp);
@@ -464,16 +440,16 @@ impl<V: Homogeneous> BsplineCurve<V> {
             .into_iter()
             .map(V::from_point)
             .collect();
-        BsplineCurve::new_unchecked(curve.knot_vec, control_points)
+        Self::new_unchecked(curve.knot_vec, control_points)
     }
 }
 
 impl<P: ControlPoint<f64>> ParametricCurve for BsplineCurve<P> {
     type Point = P;
     type Vector = P::Diff;
-    #[inline(always)]
+    #[inline]
     fn derivative_n(&self, n: usize, t: f64) -> P::Diff {
-        let range_is_zero = self.knot_vec[0] == self.knot_vec[self.knot_vec.len() - 1];
+        let range_is_zero = self.knot_vec.range_length().is_zero();
         if range_is_zero {
             if n == 0 {
                 self.control_points
@@ -483,20 +459,22 @@ impl<P: ControlPoint<f64>> ParametricCurve for BsplineCurve<P> {
                 P::Diff::zero()
             }
         } else {
-            let basis = self.knot_vec.bspline_basis_functions(self.degree(), n, t);
+            let basis = self
+                .knot_vec
+                .bspline_basis_functions_unchecked(self.degree(), n, t);
             self.control_points[basis.start_index()..]
                 .iter()
                 .zip(basis.values())
                 .fold(P::Diff::zero(), |sum, (&p, &b)| sum + p.to_vec() * b)
         }
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, t: f64) -> P { P::from_vec(self.derivative_n(0, t)) }
-    #[inline(always)]
+    #[inline]
     fn derivative(&self, t: f64) -> P::Diff { self.derivative_n(1, t) }
-    #[inline(always)]
+    #[inline]
     fn derivative_2(&self, t: f64) -> P::Diff { self.derivative_n(2, t) }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> ParameterRange {
         // For B-splines, this is [knot[degree], knot[n_cv]], the valid evaluation domain.
         let deg = self.degree();
@@ -507,7 +485,15 @@ impl<P: ControlPoint<f64>> ParametricCurve for BsplineCurve<P> {
     }
 }
 
-impl<P: ControlPoint<f64>> BoundedCurve for BsplineCurve<P> {}
+impl<P: ControlPoint<f64>> BoundedCurve for BsplineCurve<P> {
+    fn range_tuple(&self) -> (f64, f64) {
+        let degree = self.degree();
+        (
+            self.knot_vec[degree],
+            self.knot_vec[self.control_points.len()],
+        )
+    }
+}
 
 // -- v2 scalar-generic impls ------------------------------------------------
 
@@ -521,19 +507,19 @@ where P: HasScalar<Scalar = f64> + ControlPoint<f64>
     type Point = P;
     type Vector = P::Diff;
 
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, t: Self::Scalar) -> P { ParametricCurve::evaluate(self, t) }
-    #[inline(always)]
+    #[inline]
     fn derivative(&self, t: Self::Scalar) -> P::Diff { ParametricCurve::derivative(self, t) }
-    #[inline(always)]
+    #[inline]
     fn derivative_2(&self, t: Self::Scalar) -> P::Diff { ParametricCurve::derivative_2(self, t) }
-    #[inline(always)]
+    #[inline]
     fn derivative_n(&self, n: usize, t: Self::Scalar) -> P::Diff {
         ParametricCurve::derivative_n(self, n, t)
     }
-    #[inline(always)]
+    #[inline]
     fn period(&self) -> Option<Self::Scalar> { ParametricCurve::period(self) }
-    #[inline(always)]
+    #[inline]
     fn try_range_tuple(&self) -> Option<(Self::Scalar, Self::Scalar)> {
         ParametricCurve::try_range_tuple(self)
     }
@@ -542,18 +528,18 @@ where P: HasScalar<Scalar = f64> + ControlPoint<f64>
 impl<P> v2::BoundedCurve for BsplineCurve<P>
 where P: HasScalar<Scalar = f64> + ControlPoint<f64>
 {
-    #[inline(always)]
+    #[inline]
     fn range_tuple(&self) -> (f64, f64) { BoundedCurve::range_tuple(self) }
 }
 
 impl<P> v2::Cut for BsplineCurve<P>
 where P: HasScalar<Scalar = f64> + ControlPoint<f64> + Tolerance
 {
-    #[inline(always)]
+    #[inline]
     fn cut(&mut self, t: f64) -> Self { Cut::cut(self, t) }
 }
 
-impl<P> v2::SearchNearestParameter<v2::D1<f64>> for BsplineCurve<P>
+impl<P> v2::SearchNearestParameter<v2::CurveParameter<f64>> for BsplineCurve<P>
 where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>
@@ -563,18 +549,18 @@ where
     <P as ControlPoint<f64>>::Diff: InnerSpace<Scalar = f64> + Tolerance,
 {
     type Point = P;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<v2::SearchParameterHint1D<f64>>>(
         &self,
         pt: P,
         _: H,
         trials: usize,
     ) -> Option<f64> {
-        SearchNearestParameter::<D1>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<CurveParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
-impl<P> v2::SearchParameter<v2::D1<f64>> for BsplineCurve<P>
+impl<P> v2::SearchParameter<v2::CurveParameter<f64>> for BsplineCurve<P>
 where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>
@@ -584,14 +570,14 @@ where
     <P as ControlPoint<f64>>::Diff: InnerSpace<Scalar = f64> + Tolerance,
 {
     type Point = P;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<v2::SearchParameterHint1D<f64>>>(
         &self,
         pt: P,
         _: H,
         trials: usize,
     ) -> Option<f64> {
-        SearchParameter::<D1>::search_parameter(self, pt, None, trials)
+        SearchParameter::<CurveParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
@@ -605,11 +591,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let pt = Vector2::new(1.0, 2.0);
     /// let mut control_points = vec![pt.clone(), pt.clone(), pt.clone()];
-    /// let const_bspcurve = BsplineCurve::new(knot_vec.clone(), control_points.clone());
+    /// let const_bspcurve = BsplineCurve::new_unchecked(knot_vec.clone(), control_points.clone());
     /// assert!(const_bspcurve.is_const());
     ///
     /// control_points.push(Vector2::new(2.0, 3.0));
-    /// let bspcurve = BsplineCurve::new(knot_vec.clone(), control_points.clone());
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec.clone(), control_points.clone());
     /// assert!(!bspcurve.is_const());
     /// ```
     /// # Remarks
@@ -619,15 +605,16 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::uniform_knot(1, 5);
     /// let control_points = vec![Vector2::new(1.0, 2.0), Vector2::new(1.0, 2.0)];
-    /// let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     ///
     /// // bspcurve is not constant.
-    /// assert_eq!(bspcurve.subs(0.0), Vector2::new(0.0, 0.0));
-    /// assert_ne!(bspcurve.subs(0.5), Vector2::new(0.0, 0.0));
+    /// assert_eq!(bspcurve.evaluate(0.0), Vector2::new(0.0, 0.0));
+    /// assert_ne!(bspcurve.evaluate(0.5), Vector2::new(0.0, 0.0));
     ///
     /// // bspcurve.is_const() is true
     /// assert!(bspcurve.is_const());
     /// ```
+    #[must_use]
     pub fn is_const(&self) -> bool {
         self.control_points
             .iter()
@@ -640,7 +627,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points = vec![Vector2::new(-1.0, 1.0), Vector2::new(0.0, -1.0), Vector2::new(1.0, 1.0)];
-    /// let mut bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let mut bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let org_curve = bspcurve.clone();
     ///
     /// // add 4 knots
@@ -655,7 +642,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points = vec![Vector2::new(-1.0, 1.0), Vector2::new(0.0, -1.0), Vector2::new(1.0, 1.0)];
-    /// let mut bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let mut bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// assert_eq!(bspcurve.knot_vector().range_length(), 1.0);
     /// assert_eq!(bspcurve.front(), Vector2::new(-1.0, 1.0));
     /// assert_eq!(bspcurve.back(), Vector2::new(1.0, 1.0));
@@ -670,10 +657,15 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// assert_eq!(bspcurve.back(), Vector2::new(0.0, 0.0));
     /// ```
     pub fn add_knot(&mut self, x: f64) -> &mut Self {
+        self.add_knot_with_index(x);
+        self
+    }
+
+    fn add_knot_with_index(&mut self, x: f64) -> usize {
         if x < self.knot_vec[0] {
-            self.knot_vec.add_knot(x);
+            let idx = self.knot_vec.add_knot(x);
             self.control_points.insert(0, P::origin());
-            return self;
+            return idx;
         }
 
         let k = self.degree();
@@ -696,7 +688,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
             let p = self.delta_control_points(i0) * (1.0 - a);
             self.control_points[i0] -= p;
         }
-        self
+        idx
     }
 
     /// Removes a knot corresponding to the indices `idx`, and do not change `self` as a curve.
@@ -706,7 +698,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points = vec![Vector2::new(-1.0, 1.0), Vector2::new(0.0, -1.0), Vector2::new(1.0, 1.0)];
-    /// let mut bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let mut bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let org_curve = bspcurve.clone();
     ///
     /// // add knots and remove them.
@@ -720,7 +712,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
         self
     }
 
-    /// Removes a knot corresponding to the indice `idx`, and do not change `self` as a curve.  
+    /// Removes a knot corresponding to the indice `idx`, and do not change `self` as a curve.\
     /// If the knot cannot be removed, returns
     /// [`Error::CannotRemoveKnot`](./errors/enum.Error.html#variant.CannotRemoveKnot).
     /// # Examples
@@ -729,13 +721,16 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// use monstertruck_geometry::errors::Error;
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points = vec![Vector2::new(-1.0, 1.0), Vector2::new(0.0, -1.0), Vector2::new(1.0, 1.0)];
-    /// let mut bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let mut bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let org_curve = bspcurve.clone();
     /// bspcurve.add_knot(0.5).add_knot(0.5).add_knot(0.25).add_knot(0.75);
     /// assert!(bspcurve.try_remove_knot(3).is_ok());
     /// assert_eq!(bspcurve.try_remove_knot(2), Err(Error::CannotRemoveKnot(2)));
     /// ```
-    pub fn try_remove_knot(&mut self, idx: usize) -> Result<&mut BsplineCurve<P>> {
+    /// # Errors
+    /// Returns [`Error::CannotRemoveKnot`] when `idx` is not removable without changing the curve.
+    ///
+    pub fn try_remove_knot(&mut self, idx: usize) -> Result<&mut Self> {
         let k = self.degree();
         let n = self.control_points.len();
         let knot_vec = &self.knot_vec;
@@ -751,16 +746,18 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
             let a = inv_or_zero(delta) * (knot_vec[idx] - knot_vec[i]);
             if a.so_small() {
                 break;
-            } else {
-                // SAFETY: `new_points` was seeded with one element and only grows.
-                let p = *new_points.last().unwrap();
-                let p = p + (self.control_points[i] - p) / a;
-                new_points.push(p);
             }
+            let Some(&p) = new_points.last() else {
+                return Err(Error::CannotRemoveKnot(idx));
+            };
+            let p = p + (self.control_points[i] - p) / a;
+            new_points.push(p);
         }
 
-        // SAFETY: `new_points` was seeded with one element and only grows.
-        if !new_points.last().unwrap().near(self.control_point(idx)) {
+        let Some(last) = new_points.last() else {
+            return Err(Error::CannotRemoveKnot(idx));
+        };
+        if !last.near(self.control_point(idx)) {
             return Err(Error::CannotRemoveKnot(idx));
         }
 
@@ -782,7 +779,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
         self.control_points.push(P::origin());
         for i in 0..=(k + 1) {
             let i0 = k + 1 - i;
-            let a = (i0 as f64) / ((k + 1) as f64);
+            let a = crate::usize_to_f64(i0) / crate::usize_to_f64(k + 1);
             let p = self.delta_control_points(i0) * a;
             self.control_points[i0] -= p;
         }
@@ -795,7 +792,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::bezier_knot(1);
     /// let control_points = vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 1.0)];
-    /// let mut bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let mut bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// bspcurve.elevate_degree();
     /// assert_eq!(bspcurve.degree(), 2);
     /// assert_eq!(bspcurve.knot_vector(), &KnotVector::bezier_knot(2));
@@ -804,11 +801,13 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     pub fn elevate_degree(&mut self) -> &mut Self {
         let mut result = CurveCollector::Singleton;
         for mut bezier in self.bezier_decomposition() {
-            result.concat(bezier.elevate_degree_bezier());
+            if result.try_concat(bezier.elevate_degree_bezier()).is_err() {
+                return self;
+            }
         }
-        // SAFETY: `bezier_decomposition` of a valid B-spline always yields at least
-        // one segment, so the collector is never `Singleton`.
-        *self = result.unwrap();
+        if let Some(curve) = result.into_curve() {
+            *self = curve;
+        }
         self
     }
 
@@ -818,13 +817,13 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::from(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
     /// let control_points = vec![Vector2::new(0.0, 1.0), Vector2::new(1.0, 2.0), Vector2::new(2.0, 3.0)];
-    /// let mut bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let mut bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// assert!(!bspcurve.is_clamped());
     /// bspcurve.clamp();
     /// assert!(bspcurve.is_clamped());
     /// assert_eq!(bspcurve.knot_vector().len(), 10);
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn clamp(&mut self) -> &mut Self {
         let degree = self.degree();
 
@@ -848,7 +847,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     ///
     /// let knot_vec = KnotVector::bezier_knot(2);
     /// let control_points = vec![Vector2::new(1.0, 2.0), Vector2::new(2.0, 3.0), Vector2::new(3.0, 4.0)];
-    /// let mut bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let mut bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let org_curve = bspcurve.clone();
     ///
     /// // add 4 new knots
@@ -878,10 +877,10 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     ///
     /// let knot_vec0 = KnotVector::bezier_knot(1);
     /// let control_points0 = vec![Vector2::new(1.0, 2.0), Vector2::new(2.0, 3.0)];
-    /// let mut bspcurve0 = BsplineCurve::new(knot_vec0, control_points0);
+    /// let mut bspcurve0 = BsplineCurve::new_unchecked(knot_vec0, control_points0);
     /// let knot_vec1 = KnotVector::bezier_knot(2);
     /// let control_points1 = vec![Vector2::new(1.0, 2.0), Vector2::new(2.0, 3.0), Vector2::new(3.0, 4.0)];
-    /// let mut bspcurve1 = BsplineCurve::new(knot_vec1, control_points1);
+    /// let mut bspcurve1 = BsplineCurve::new_unchecked(knot_vec1, control_points1);
     /// assert_ne!(bspcurve0.degree(), bspcurve1.degree());
     ///
     /// let org_curve0 = bspcurve0.clone();
@@ -908,11 +907,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     ///
     /// let knot_vec0 = KnotVector::from(vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]);
     /// let control_points0 = vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 1.0), Vector2::new(2.0, 2.0), Vector2::new(3.0, 3.0)];
-    /// let mut bspcurve0 = BsplineCurve::new(knot_vec0, control_points0);
+    /// let mut bspcurve0 = BsplineCurve::new_unchecked(knot_vec0, control_points0);
     /// let mut org_curve0 = bspcurve0.clone();
     /// let knot_vec1 = KnotVector::from(vec![0.0, 0.0, 1.0, 3.0, 4.0, 4.0]);
     /// let control_points1 = vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 1.0), Vector2::new(2.0, 2.0), Vector2::new(3.0, 3.0)];
-    /// let mut bspcurve1 = BsplineCurve::new(knot_vec1, control_points1);
+    /// let mut bspcurve1 = BsplineCurve::new_unchecked(knot_vec1, control_points1);
     /// let mut org_curve1 = bspcurve1.clone();
     ///
     /// bspcurve0.syncro_knots(&mut bspcurve1);
@@ -930,7 +929,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// assert!(bspcurve0.near2_as_curve(org_curve0.knot_normalize()));
     /// assert!(bspcurve1.near2_as_curve(org_curve1.knot_normalize()));
     /// ```
-    pub fn syncro_knots(&mut self, other: &mut BsplineCurve<P>) {
+    pub fn syncro_knots(&mut self, other: &mut Self) {
         self.knot_normalize();
         other.knot_normalize();
 
@@ -946,17 +945,17 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
             j += 1;
         }
 
-        use std::cmp::Ordering;
         match usize::cmp(&self.knot_vec.len(), &other.knot_vec.len()) {
-            Ordering::Less => {
+            std::cmp::Ordering::Less => {
                 (0..(other.knot_vec.len() - self.knot_vec.len())).for_each(|_| {
                     self.add_knot(1.0);
                 });
             }
-            Ordering::Greater => (0..(self.knot_vec.len() - other.knot_vec.len())).for_each(|_| {
-                other.add_knot(1.0);
-            }),
-            _ => {}
+            std::cmp::Ordering::Greater => (0..(self.knot_vec.len() - other.knot_vec.len()))
+                .for_each(|_| {
+                    other.add_knot(1.0);
+                }),
+            std::cmp::Ordering::Equal => {}
         }
     }
 
@@ -967,20 +966,21 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     ///
     /// let knot_vec = KnotVector::uniform_knot(2, 2);
     /// let control_points = vec![Vector2::new(0.0, 1.0), Vector2::new(1.0, 2.0), Vector2::new(2.0, 3.0), Vector2::new(3.0, 4.0)];
-    /// let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let beziers = bspcurve.bezier_decomposition();
     ///
     /// const N: usize = 100;
     /// for i in 0..=N {
     ///     let t = 0.5 * (i as f64) / (N as f64);
-    ///     assert_near2!(bspcurve.subs(t), beziers[0].subs(t));
+    ///     assert_near2!(bspcurve.evaluate(t), beziers[0].evaluate(t));
     /// }
     /// for i in 0..=N {
     ///     let t = 0.5 + 0.5 * (i as f64) / (N as f64);
-    ///     assert_near2!(bspcurve.subs(t), beziers[1].subs(t));
+    ///     assert_near2!(bspcurve.evaluate(t), beziers[1].evaluate(t));
     /// }
     /// ```
-    pub fn bezier_decomposition(&self) -> Vec<BsplineCurve<P>> {
+    #[must_use]
+    pub fn bezier_decomposition(&self) -> Vec<Self> {
         let mut bspline = self.clone();
         bspline.clamp();
         let (knots, _) = self.knot_vec.to_single_multi();
@@ -1012,11 +1012,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     ///     Vector3::new(0.0, 0.0, 1.0),
     /// ];
     ///
-    /// let mut bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let mut bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let mut flag = false;
     /// for i in 0..=N {
     ///     let t = 4.0 * (i as f64) / (N as f64);
-    ///     flag = flag || bspcurve.subs(t).near(&bspcurve.subs(t + 1.0 / (N as f64)));
+    ///     flag = flag || bspcurve.evaluate(t).near(&bspcurve.evaluate(t + 1.0 / (N as f64)));
     /// }
     /// // There exists t such that bspcurve(t) == bspcurve(t + 0.01).
     /// assert!(flag);
@@ -1025,7 +1025,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// let mut flag = false;
     /// for i in 0..=N {
     ///     let t = 1.0 * (i as f64) / (N as f64);
-    ///     flag = flag || bspcurve.subs(t).near(&bspcurve.subs(t + 1.0 / (N as f64)));
+    ///     flag = flag || bspcurve.evaluate(t).near(&bspcurve.evaluate(t + 1.0 / (N as f64)));
     /// }
     /// // There does not exist t such that bspcurve(t) == bspcurve(t + 0.01).
     /// assert!(!flag);
@@ -1036,12 +1036,13 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::from(vec![0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0]);
     /// let control_points = vec![Vector2::new(1.0, 1.0); 4];
-    /// let mut bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let mut bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let org_curve = bspcurve.clone();
     /// bspcurve.make_locally_injective();
     /// assert_eq!(bspcurve, org_curve);
     /// ```
     pub fn make_locally_injective(&mut self) -> &mut Self {
+        let original = self.clone();
         let mut iter = self.bezier_decomposition().into_iter();
         for bezier in iter.by_ref() {
             if !bezier.is_const() {
@@ -1053,8 +1054,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
         for mut bezier in iter {
             if bezier.is_const() {
                 x += bezier.knot_vec.range_length();
+            } else if let Ok(concatted) = self.try_concat(bezier.knot_translate(-x)) {
+                *self = concatted;
             } else {
-                self.concat(bezier.knot_translate(-x));
+                *self = original;
+                return self;
             }
         }
         self
@@ -1077,15 +1081,16 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     ///     Vector2::new(5.0, 4.0),
     ///     Vector2::new(1.0, 1.0),
     /// ];
-    /// let bspcurve0 = BsplineCurve::new(knot_vec, control_points);
+    /// let bspcurve0 = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let mut bspcurve1 = bspcurve0.clone();
     /// assert!(bspcurve0.near_as_curve(&bspcurve1));
     /// *bspcurve1.control_point_mut(1) += Vector2::new(0.01, 0.0002);
     /// assert!(!bspcurve0.near_as_curve(&bspcurve1));
     /// ```
-    #[inline(always)]
-    pub fn near_as_curve(&self, other: &BsplineCurve<P>) -> bool {
-        self.sub_near_as_curve(other, 1, |x, y| x.near(y))
+    #[inline]
+    #[must_use]
+    pub fn near_as_curve(&self, other: &Self) -> bool {
+        self.sub_near_as_curve(other, 1, monstertruck_core::tolerance::Tolerance::near)
     }
 
     /// Determines `self` and `other` is near in square order as the B-spline curves or not.  
@@ -1107,20 +1112,21 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     ///     Vector2::new(5.0, 4.0),
     ///     Vector2::new(1.0, 1.0),
     /// ];
-    /// let bspcurve0 = BsplineCurve::new(knot_vec, control_points);
+    /// let bspcurve0 = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let mut bspcurve1 = bspcurve0.clone();
     /// assert!(bspcurve0.near_as_curve(&bspcurve1));
     /// *bspcurve1.control_point_mut(1) += Vector2::new(eps, 0.0);
     /// assert!(!bspcurve0.near2_as_curve(&bspcurve1));
     /// ```
-    #[inline(always)]
-    pub fn near2_as_curve(&self, other: &BsplineCurve<P>) -> bool {
-        self.sub_near_as_curve(other, 1, |x, y| x.near2(y))
+    #[inline]
+    #[must_use]
+    pub fn near2_as_curve(&self, other: &Self) -> bool {
+        self.sub_near_as_curve(other, 1, monstertruck_core::tolerance::Tolerance::near2)
     }
 }
 
 impl<P: ControlPoint<f64>> ParameterTransform for BsplineCurve<P> {
-    #[inline(always)]
+    #[inline]
     fn parameter_transform(&mut self, scalar: f64, r#move: f64) -> &mut Self {
         self.knot_vec.transform(scalar, r#move);
         self
@@ -1128,7 +1134,7 @@ impl<P: ControlPoint<f64>> ParameterTransform for BsplineCurve<P> {
 }
 
 impl<P: ControlPoint<f64> + Tolerance> Cut for BsplineCurve<P> {
-    fn cut(&mut self, mut t: f64) -> BsplineCurve<P> {
+    fn cut(&mut self, mut t: f64) -> Self {
         let degree = self.degree();
         let knot_start = self.knot_vec[0];
         let knot_end = self.knot_vec[self.knot_vec.len() - 1];
@@ -1136,58 +1142,53 @@ impl<P: ControlPoint<f64> + Tolerance> Cut for BsplineCurve<P> {
         // Snap cuts within `TOLERANCE` of the domain ends onto the ends themselves.
         // Otherwise the near-knot snapping below lands on the full-multiplicity end
         // knot blocks and produces invalid empty halves.
-        if t.near(&knot_start) {
-            let point = self.subs(knot_start);
+        if t <= knot_start && t.near(&knot_start) {
+            let point = self.evaluate(knot_start);
             let right = self.clone();
-            *self = BsplineCurve::new_unchecked(
-                KnotVector::from(vec![knot_start, knot_start]),
-                vec![point],
-            );
+            *self =
+                Self::new_unchecked(KnotVector::from(vec![knot_start, knot_start]), vec![point]);
             return right;
-        } else if t.near(&knot_end) {
-            let point = self.subs(knot_end);
-            return BsplineCurve::new_unchecked(
-                KnotVector::from(vec![knot_end, knot_end]),
-                vec![point],
-            );
+        } else if t >= knot_end && t.near(&knot_end) {
+            let point = self.evaluate(knot_end);
+            return Self::new_unchecked(KnotVector::from(vec![knot_end, knot_end]), vec![point]);
         }
 
-        let idx = match self.knot_vec.floor(t) {
-            Some(idx) => idx,
-            None => {
-                let bspline = self.clone();
-                let knot_vec = KnotVector::from(vec![t, self.knot_vec[0]]);
-                let control_points = vec![P::origin()];
-                *self = BsplineCurve::new(knot_vec, control_points);
-                return bspline;
-            }
+        let Some(idx) = self.knot_vec.floor(t) else {
+            let bspline = self.clone();
+            let knot_vec = KnotVector::from(vec![t, self.knot_vec[0]]);
+            let control_points = vec![P::origin()];
+            *self = Self::new_unchecked(knot_vec, control_points);
+            return bspline;
         };
-        let s = if t.near(&self.knot_vec[idx]) {
-            t = self.knot_vec[idx];
+        let candidate_knot = self.knot_vec[idx];
+        let candidate_is_start = candidate_knot.total_cmp(&knot_start).is_eq();
+        let candidate_is_end = candidate_knot.total_cmp(&knot_end).is_eq();
+        let interior_near_endpoint =
+            (candidate_is_start && t > knot_start) || (candidate_is_end && t < knot_end);
+        let s = if t.near(&candidate_knot) && !interior_near_endpoint {
+            t = candidate_knot;
             self.knot_vec.multiplicity(idx)
         } else {
             0
         };
 
+        let mut k = idx;
         for _ in s..=degree {
-            self.add_knot(t);
+            k = self.add_knot_with_index(t);
         }
-
-        // SAFETY: `t` was just added with full multiplicity, so it exists in the knot vector.
-        let k = self.knot_vec.floor(t).unwrap();
         let m = self.knot_vec.len();
         let n = self.control_points.len();
         let knot_vec0 = self.knot_vec.sub_vec(0..=k);
         let knot_vec1 = self.knot_vec.sub_vec((k - degree)..m);
         let control_points0 = Vec::from(&self.control_points[0..(k - degree)]);
         let control_points1 = Vec::from(&self.control_points[(k - degree)..n]);
-        *self = BsplineCurve::new_unchecked(knot_vec0, control_points0);
-        BsplineCurve::new_unchecked(knot_vec1, control_points1)
+        *self = Self::new_unchecked(knot_vec0, control_points0);
+        Self::new_unchecked(knot_vec1, control_points1)
     }
 }
 
-impl<P: ControlPoint<f64> + Tolerance> Concat<BsplineCurve<P>> for BsplineCurve<P> {
-    type Output = BsplineCurve<P>;
+impl<P: ControlPoint<f64> + Tolerance> Concat<Self> for BsplineCurve<P> {
+    type Output = Self;
     /// Concats two B-spline curves.
     /// # Examples
     /// ```
@@ -1201,14 +1202,14 @@ impl<P: ControlPoint<f64> + Tolerance> Concat<BsplineCurve<P>> for BsplineCurve<
     ///
     /// let knot_vec0 = KnotVector::from(vec![0.0, 0.0, 1.0, 1.0]);
     /// let control_points0 = vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 1.0)];
-    /// let mut bspcurve0 = BsplineCurve::new(knot_vec0, control_points0);
+    /// let mut bspcurve0 = BsplineCurve::new_unchecked(knot_vec0, control_points0);
     /// let knot_vec1 = KnotVector::from(vec![2.0, 2.0, 3.0, 3.0]);
     /// let control_points1 = vec![Vector2::new(1.0, 1.0), Vector2::new(2.0, 2.0)];
-    /// let mut bspcurve1 = BsplineCurve::new(knot_vec1, control_points1);
+    /// let mut bspcurve1 = BsplineCurve::new_unchecked(knot_vec1, control_points1);
     ///
     /// assert_eq!(bspcurve0.try_concat(&mut bspcurve1), Err(ConcatError::DisconnectedParameters(1.0, 2.0)));
     /// ```
-    fn try_concat(&self, other: &BsplineCurve<P>) -> std::result::Result<Self, ConcatError<P>> {
+    fn try_concat(&self, other: &Self) -> std::result::Result<Self, ConcatError<P>> {
         let mut curve0 = self.clone();
         let mut curve1 = other.clone();
         curve0.syncro_degree(&mut curve1);
@@ -1221,9 +1222,13 @@ impl<P: ControlPoint<f64> + Tolerance> Concat<BsplineCurve<P>> for BsplineCurve<
                 Error::DifferentBackFront(a, b) => ConcatError::DisconnectedParameters(a, b),
                 _ => unreachable!(),
             })?;
-        // SAFETY: both curves have non-empty control points by `BsplineCurve` invariant.
-        let front = curve0.control_points.last().unwrap();
-        let back = curve1.control_points.first().unwrap();
+        let Some((front, back)) = curve0
+            .control_points
+            .last()
+            .zip(curve1.control_points.first())
+        else {
+            return Err(ConcatError::EmptyControlPoints);
+        };
         if !front.near(back) {
             return Err(ConcatError::DisconnectedPoints(*front, *back));
         }
@@ -1254,9 +1259,9 @@ where
 {
     /// Determines whether `self` is an arc of `curve` by repeating applying Newton method.
     ///
-    /// The parameter `hint` is the init value, required that `curve.subs(hint)` is the front point of `self`.
+    /// The parameter `hint` is the init value, required that `curve.evaluate(hint)` is the front point of `self`.
     ///
-    /// If `self` is an arc of `curve`, then returns `Some(t)` such that `curve.subs(t)` coincides with
+    /// If `self` is an arc of `curve`, then returns `Some(t)` such that `curve.evaluate(t)` coincides with
     /// the back point of `self`. Otherwise, returns `None`.
     /// # Examples
     /// ```
@@ -1271,7 +1276,7 @@ where
     ///     Point3::new(0.0, 1.0, 0.0),
     ///     Point3::new(0.0, 1.0, 1.0),
     /// ];
-    /// let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     ///
     /// let mut part = bspcurve.clone().cut(0.6);
     /// part.cut(2.8);
@@ -1285,25 +1290,24 @@ where
     /// *part.control_point_mut(2) += Vector3::new(1.0, 2.0, 3.0);
     /// assert!(part.is_arc_of(&bspcurve, 0.6).is_none());
     /// ```
-    pub fn is_arc_of(&self, curve: &BsplineCurve<P>, mut hint: f64) -> Option<f64> {
+    #[must_use]
+    pub fn is_arc_of(&self, curve: &Self, mut hint: f64) -> Option<f64> {
         let degree = std::cmp::max(self.degree(), curve.degree()) * 3 + 1;
         let (knots, _) = self.knot_vec.to_single_multi();
-        if !self.subs(knots[0]).near(&curve.subs(hint)) {
+        if !self.evaluate(knots[0]).near(&curve.evaluate(hint)) {
             return None;
         }
 
         for i in 1..knots.len() {
             let range = knots[i] - knots[i - 1];
             for j in 1..=degree {
-                let t = knots[i - 1] + range * (j as f64) / (degree as f64);
-                let pt = ParametricCurve::subs(self, t);
-                let res = curve.search_nearest_parameter(pt, Some(hint), 100);
-                let flag = res.map(|res| hint <= res && curve.subs(res).near(&pt));
-                hint = match flag {
-                    // SAFETY: we just matched `Some(true)`, so `res` is `Some`.
-                    Some(true) => res.unwrap(),
-                    _ => return None,
-                };
+                let t = knots[i - 1] + range * crate::usize_to_f64(j) / crate::usize_to_f64(degree);
+                let pt = ParametricCurve::evaluate(self, t);
+                let res = curve.search_nearest_parameter(pt, Some(hint), 100)?;
+                if hint > res || !curve.evaluate(res).near(&pt) {
+                    return None;
+                }
+                hint = res;
             }
         }
         Some(hint)
@@ -1333,8 +1337,8 @@ where
     ///     Point3::new(0.0, 1.0, 0.0),
     ///     Point3::new(0.0, 1.0, 1.0),
     /// ];
-    /// let bspcurve = BsplineCurve::new(knot_vec, control_points);
-    /// let pt = ParametricCurve::subs(&bspcurve, 1.2);
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
+    /// let pt = ParametricCurve::evaluate(&bspcurve, 1.2);
     /// let t = bspcurve.search_nearest_parameter(pt, Some(0.8), 100).unwrap();
     /// assert_near!(t, 1.2);
     /// ```
@@ -1352,16 +1356,16 @@ where
     ///     Point3::new(0.0, 1.0, 0.0),
     ///     Point3::new(0.0, 1.0, 1.0),
     /// ];
-    /// let bspcurve = BsplineCurve::new(knot_vec, control_points);
+    /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let pt = Point3::new(0.0, 0.5, 1.0);
     /// let t = bspcurve.search_nearest_parameter(pt, Some(0.8), 100).unwrap();
-    /// let pt0 = ParametricCurve::subs(&bspcurve, t);
-    /// let pt1 = ParametricCurve::subs(&bspcurve, 3.0);
+    /// let pt0 = ParametricCurve::evaluate(&bspcurve, t);
+    /// let pt1 = ParametricCurve::evaluate(&bspcurve, 3.0);
     /// // the point corresponding the obtained parameter is not
     /// // the globally nearest point in the curve.
     /// assert!((pt0 - pt).magnitude() > (pt1 - pt).magnitude());
     /// ```
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<SearchParameterHint1D>>(
         &self,
         point: P,
@@ -1388,7 +1392,7 @@ where
     <P as ControlPoint<f64>>::Diff: InnerSpace<Scalar = f64> + Tolerance,
 {
     type Point = P;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<SearchParameterHint1D>>(
         &self,
         point: P,
@@ -1410,12 +1414,13 @@ where
 
 impl<P: Bounded> BsplineCurve<P> {
     /// Returns the bounding box including all control points.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn roughly_bounding_box(&self) -> BoundingBox<P> { self.control_points.iter().collect() }
 }
 
 impl<P: Clone> Invertible for BsplineCurve<P> {
-    #[inline(always)]
+    #[inline]
     fn invert(&mut self) {
         self.knot_vec.invert();
         self.control_points.reverse();
@@ -1427,11 +1432,11 @@ where
     P: EuclideanSpace,
     M: Transform<P>,
 {
-    #[inline(always)]
+    #[inline]
     fn transform_by(&mut self, trans: M) {
         self.control_points
             .iter_mut()
-            .for_each(|pt| *pt = trans.transform_point(*pt))
+            .for_each(|pt| *pt = trans.transform_point(*pt));
     }
 }
 
@@ -1449,7 +1454,7 @@ where P: Deserialize<'de>
             knot_vec,
             control_points,
         } = BsplineCurve_::<P>::deserialize(deserializer)?;
-        Self::try_new(knot_vec, control_points).map_err(serde::de::Error::custom)
+        Self::new(knot_vec, control_points).map_err(serde::de::Error::custom)
     }
 }
 
@@ -1472,7 +1477,7 @@ where
         let width = range.1 - range.0;
         let mut knot_vec = KnotVector::bezier_knot(3);
         knot_vec.transform(width, range.0);
-        Self::debug_new(
+        Self::new_unchecked(
             knot_vec,
             vec![pt0, pt0 + der0 * width / 3.0, pt1 - der1 * width / 3.0, pt1],
         )
@@ -1492,18 +1497,18 @@ where
     {
         let bezier = Self::cubic_bezier_interpolation(ends.0, ends.1, enders.0, enders.1, range);
         let seed = ends.0.midpoint(ends.1);
-        let p = 0.5 + (0.2 * HashGen::hash1(seed) - 0.1);
-        let t = range.0 * (1.0 - p) + range.1 * p;
-        let ders0 = bezier.ders(1, t);
-        let ders1 = curve.ders(1, t);
+        let p = 0.5 + 0.2f64.mul_add(HashGen::hash1(seed), -0.1);
+        let t = range.1.mul_add(p, range.0 * (1.0 - p));
+        let ders0 = bezier.derivatives(1, t);
+        let ders1 = curve.derivatives(1, t);
         let pt_dist2 = (ders0[0] - ders1[0]).magnitude2();
         let der_dist2 = (ders0[1] - ders1[1]).magnitude2();
         if pt_dist2 > p_tol * p_tol || der_dist2 > d_tol * d_tol {
             if trialis == 0 {
                 return None;
             }
-            let t = (range.0 + range.1) / 2.0;
-            let ders = curve.ders(1, t);
+            let t = f64::midpoint(range.0, range.1);
+            let ders = curve.derivatives(1, t);
             let pt = <P as EuclideanSpace>::from_vec(ders[0]);
             let bspcurve0 = Self::sub_cubic_approximation(
                 curve,
@@ -1544,8 +1549,8 @@ where
     /// const N: usize = 100;
     /// for i in 0..N {
     ///     let t = i as f64 / N as f64;
-    ///     assert!(circle.subs(t).distance(bspcurve.subs(t)) < 0.02);
-    ///     assert!((circle.der(t) - bspcurve.der(t)).magnitude() < 0.02);
+    ///     assert!(circle.evaluate(t).distance(bspcurve.evaluate(t)) < 0.02);
+    ///     assert!((circle.derivative(t) - bspcurve.derivative(t)).magnitude() < 0.02);
     /// }
     /// ```
     pub fn cubic_approximation<C>(
@@ -1558,8 +1563,8 @@ where
     where
         C: ParametricCurve<Point = P, Vector = <P as EuclideanSpace>::Diff>,
     {
-        let ends = (curve.subs(range.0), curve.subs(range.1));
-        let enders = (curve.der(range.0), curve.der(range.1));
+        let ends = (curve.evaluate(range.0), curve.evaluate(range.1));
+        let enders = (curve.derivative(range.0), curve.derivative(range.1));
         Self::sub_cubic_approximation(curve, range, ends, enders, p_tol, d_tol, trials).map(
             |mut x| {
                 x.optimize();

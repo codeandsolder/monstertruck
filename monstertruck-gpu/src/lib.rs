@@ -7,7 +7,7 @@
 //! use monstertruck_core::cgmath64::*;
 //! use monstertruck_gpu::*;
 //!
-//! let handler = pollster::block_on(DeviceHandler::default_device());
+//! let handler = pollster::block_on(DeviceHandler::default_device()).expect("GPU device is available");
 //! let scene = Scene::new(handler, &SceneDescriptor {
 //!     studio: StudioConfig {
 //!         camera: Camera {
@@ -36,24 +36,33 @@
 #![recursion_limit = "256"]
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
 use bytemuck::{Pod, Zeroable};
 use derive_more::{Deref, DerefMut};
-use monstertruck_core::{bounding_box::*, cgmath64::*};
+use monstertruck_core::{
+    bounding_box::BoundingBox,
+    cgmath64::{
+        Angle, EuclideanSpace, InnerSpace, Matrix3, Matrix4, Point2, Point3, Rad, SquareMatrix,
+        Transform, Vector3, ortho, perspective,
+    },
+};
 use std::sync::Arc;
 pub use wgpu;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
-use wgpu::*;
+use wgpu::{
+    Adapter, Backends, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
+    BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, Buffer,
+    BufferAsyncError, BufferBinding, BufferBindingType, BufferDescriptor, BufferUsages, Color,
+    CommandEncoder, CommandEncoderDescriptor, CompositeAlphaMode, CreateSurfaceError,
+    CurrentSurfaceTexture, Device, DeviceDescriptor, ExperimentalFeatures, Extent3d, IndexFormat,
+    Instance, InstanceDescriptor, Limits, LoadOp, MapMode, MemoryHints, Operations, Origin3d,
+    PipelineLayout, PipelineLayoutDescriptor, PollError, PollType, PowerPreference, PresentMode,
+    Queue, RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
+    RenderPipeline, RequestAdapterError, RequestAdapterOptions, RequestDeviceError, ShaderStages,
+    StoreOp, Surface, SurfaceConfiguration, TexelCopyBufferInfo, TexelCopyBufferLayout,
+    TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor, TextureDimension,
+    TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant as TimeInstant;
@@ -62,6 +71,28 @@ use web_time::Instant as TimeInstant;
 
 /// maximum number of light
 pub const LIGHT_MAX: usize = 255;
+
+#[inline]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "wgpu shader data is f32; this helper is the intentional IEEE-754 f64-to-f32 narrowing boundary"
+)]
+pub(crate) const fn narrow_f64_to_f32(value: f64) -> f32 { value as f32 }
+
+/// Narrows an f64 transform matrix to the raw f32 column layout consumed by wgpu.
+///
+/// The conversion intentionally uses Rust's floating-point narrowing semantics:
+/// finite out-of-range values become infinities and NaNs remain NaNs.
+#[inline]
+#[must_use]
+pub fn matrix4_to_raw_f32(matrix: Matrix4) -> [[f32; 4]; 4] {
+    [
+        matrix.x.map(narrow_f64_to_f32).into(),
+        matrix.y.map(narrow_f64_to_f32).into(),
+        matrix.z.map(narrow_f64_to_f32).into(),
+        matrix.w.map(narrow_f64_to_f32).into(),
+    ]
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Zeroable, Pod)]
@@ -73,9 +104,9 @@ struct CameraInfo {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Zeroable, Pod)]
 struct LightInfo {
-    light_position: [f32; 4],
-    light_color: [f32; 4],
-    light_type: [u32; 4],
+    position: [f32; 4],
+    color: [f32; 4],
+    kind: [u32; 4],
 }
 
 #[repr(C)]
@@ -85,6 +116,63 @@ struct SceneInfo {
     resolution: [u32; 2],
     time: f32,
     num_of_lights: u32,
+}
+
+/// Runtime failures from GPU initialization and readback.
+#[derive(Debug, thiserror::Error)]
+pub enum GpuError {
+    /// A window surface could not be created.
+    #[error("failed to create GPU surface: {0}")]
+    CreateSurface(#[from] CreateSurfaceError),
+    /// No compatible adapter could be requested.
+    #[error("failed to request GPU adapter: {0}")]
+    RequestAdapter(#[from] RequestAdapterError),
+    /// The selected adapter could not create a device.
+    #[error("failed to request GPU device: {0}")]
+    RequestDevice(#[from] RequestDeviceError),
+    /// Waiting for submitted GPU work failed.
+    #[error("GPU polling failed: {0}")]
+    Poll(#[from] PollError),
+    /// Mapping a GPU buffer for CPU readback failed.
+    #[error("GPU buffer mapping failed: {0}")]
+    BufferMap(#[from] BufferAsyncError),
+    /// The asynchronous map callback disappeared before delivering a result.
+    #[error("GPU buffer mapping callback was dropped")]
+    BufferMapChannelClosed,
+    /// Window initialization completed without the surface that was requested.
+    #[error("window GPU initialization did not produce a surface")]
+    MissingSurface,
+    /// The public camera transform is singular and cannot be projected.
+    #[error("camera transform is singular")]
+    SingularCameraMatrix,
+    /// A value required by the GPU API does not fit its 32-bit count field.
+    #[error("{what} exceeds the GPU API's u32 count range")]
+    CountTooLarge {
+        /// Name of the count that overflowed.
+        what: &'static str,
+    },
+    /// A requested GPU buffer copy would overrun the destination.
+    #[error(
+        "destination GPU buffer is too small: source={source_size} bytes, destination={destination_size} bytes"
+    )]
+    BufferTooSmall {
+        /// Source buffer size in bytes.
+        source_size: u64,
+        /// Destination buffer size in bytes.
+        destination_size: u64,
+    },
+    /// A CPU-visible render readback cannot fit in this platform's address space.
+    #[error("render readback requires {bytes} bytes, which cannot fit in memory on this platform")]
+    ReadbackTooLarge {
+        /// Number of unpadded image bytes requested by the readback.
+        bytes: u64,
+    },
+    /// The configured render texture does not have a simple copyable texel footprint.
+    #[error("render texture format {format:?} is not supported for CPU readback")]
+    UnsupportedReadbackFormat {
+        /// Texture format that cannot be represented by the readback path.
+        format: TextureFormat,
+    },
 }
 
 /// safe handler of GPU buffer
@@ -106,7 +194,7 @@ pub struct BufferHandler {
 /// use std::sync::{Arc, Mutex};
 /// use monstertruck_gpu::*;
 /// use wgpu::*;
-/// let handler = pollster::block_on(DeviceHandler::default_device());
+/// let handler = pollster::block_on(DeviceHandler::default_device()).expect("GPU device is available");
 /// let entries = [
 ///     PreBindGroupLayoutEntry {
 ///         visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
@@ -251,7 +339,7 @@ pub struct Light {
     /// [0, 1] range RGB color of light
     pub color: Vector3,
     /// type of light source: point or uniform
-    pub light_type: LightType,
+    pub kind: LightType,
 }
 
 /// Chain that holds [`Device`], [`Queue`] and [`SurfaceConfiguration`].
@@ -291,10 +379,6 @@ struct WindowHandler {
 /// ```
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
 pub struct RenderId(usize);
-
-/// Renamed to [`RenderId`] per RFC 430 (C-CASE).
-#[deprecated(note = "renamed to RenderId per RFC 430 (C-CASE)")]
-pub type RenderID = RenderId;
 
 /// Configuration for studio to shoot the scene.
 #[derive(Debug, Clone)]
@@ -358,7 +442,7 @@ pub struct Scene {
     bind_group_layout: BindGroupLayout,
     forward_depth: Option<Texture>,
     sampling_buffer: Option<Texture>,
-    scene_desc: SceneDescriptor,
+    descriptor: SceneDescriptor,
     clock: TimeInstant,
 }
 
@@ -376,7 +460,7 @@ pub trait Rendered {
     /// Returns the render id.
     ///
     /// [`RenderId`](./struct.RenderId.html) is a key that maps `self` to a drawing element.
-    /// Each object must have a RenderId to ensure that there are no duplicates.
+    /// Each object must have a `RenderId` to ensure that there are no duplicates.
     fn render_id(&self) -> RenderId;
     /// Creates the pair (vertex buffer, index buffer).
     fn vertex_buffer(
@@ -409,7 +493,7 @@ pub trait Rendered {
                 bind_group_layouts: &[Some(&scene.bind_group_layout), Some(&bind_group_layout)],
                 ..Default::default()
             });
-        let pipeline = self.pipeline(scene.device_handler(), &pipeline_layout, &scene.scene_desc);
+        let pipeline = self.pipeline(scene.device_handler(), &pipeline_layout, &scene.descriptor);
         RenderObject {
             vertex_buffer,
             index_buffer,
@@ -432,7 +516,24 @@ use slice_hashmap::SliceHashMap;
 
 #[doc(hidden)]
 pub mod bind_group_util {
-    use crate::*;
+    #[inline]
+    fn binding_index(index: usize) -> u32 {
+        assert!(
+            u32::try_from(index).is_ok(),
+            "bind-group binding index exceeds wgpu's u32 range"
+        );
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the preceding assertion proves the usize binding index fits u32"
+        )]
+        let index = index as u32;
+        index
+    }
+
+    use crate::{
+        BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
+        BindGroupLayoutEntry, BindingResource, Device, PreBindGroupLayoutEntry,
+    };
     #[doc(hidden)]
     pub fn create_bind_group<'a, T: IntoIterator<Item = BindingResource<'a>>>(
         device: &Device,
@@ -443,7 +544,7 @@ pub mod bind_group_util {
             .into_iter()
             .enumerate()
             .map(move |(i, resource)| BindGroupEntry {
-                binding: i as u32,
+                binding: binding_index(i),
                 resource,
             })
             .collect();
@@ -463,7 +564,7 @@ pub mod bind_group_util {
             .into_iter()
             .enumerate()
             .map(|(i, e)| BindGroupLayoutEntry {
-                binding: i as u32,
+                binding: binding_index(i),
                 visibility: e.visibility,
                 ty: e.ty,
                 count: e.count,

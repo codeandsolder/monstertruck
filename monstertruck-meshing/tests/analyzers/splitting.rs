@@ -37,7 +37,8 @@ fn extract_planes_test() {
                 (5, None, Some(1)),
             ],
         ]),
-    );
+    )
+    .expect("fixture mesh is valid");
     let (planes, others) = mesh.extract_planes(TOLERANCE);
     assert_eq!(planes, vec![1, 2]);
     assert_eq!(others, vec![0, 3]);
@@ -72,7 +73,8 @@ fn into_component_test() {
             &[4, 5, 7],
             &[6, 7, 5],
         ]),
-    );
+    )
+    .expect("fixture mesh is valid");
 
     // sign up normals
     mesh.add_naive_normals(true)

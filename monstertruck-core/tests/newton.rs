@@ -9,10 +9,10 @@ proptest! {
         x0 in -10.0f64..=10.0f64,
         delta in -0.5f64..=0.5f64,
     ) {
-        let poly = |x: f64| a[0] + a[1] * x + a[2] * x * x + a[3] * x * x * x;
+        let poly = |x: f64| (a[3] * x * x).mul_add(x, (a[2] * x).mul_add(x, f64::mul_add(a[1], x, a[0])));
         let function = |x: f64| CalcOutput {
             value: poly(x) - poly(x0),
-            derivation: a[1] + 2.0 * a[2] * x + 3.0 * a[3] * x * x,
+            derivation: (3.0 * a[3] * x).mul_add(x, f64::mul_add(2.0 * a[2], x, a[1])),
         };
         match solve(function, x0 + delta, 100) {
             Ok(res) => prop_assert_near!(function(res).value, 0.0),

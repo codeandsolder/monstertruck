@@ -5,7 +5,10 @@
 #[cfg(test)]
 mod project_domain_tests;
 
-use super::*;
+use super::{
+    BoundedCurve, Curve, ParameterDivision1D, ParametricCurve3D, ParametricSurface, Point2, Point3,
+    RefCell, SearchNearestParameter, SearchParameter, Surface, TOLERANCE, env,
+};
 
 /// The amount by which `value` lies OUTSIDE `range` on one surface parameter
 /// axis, or `0.0` when it lies inside (or the axis has no reported bound).
@@ -26,7 +29,7 @@ fn parameter_axis_excess(value: f64, range: Option<(f64, f64)>, period: Option<f
         return f64::INFINITY;
     }
     if let Some(period) = period.filter(|period| *period > 0.0) {
-        let shifted = value - f64::floor((value - min) / period) * period;
+        let shifted = f64::floor((value - min) / period).mul_add(-period, value);
         // `shifted` is in `[min, min + period)`; a range spanning a full period
         // therefore always contains it.
         return if shifted <= max {
@@ -70,7 +73,7 @@ struct SurfaceParameterDomain {
 /// domain test live and the behaviour unchanged. Only a range that is provably
 /// a placeholder may be dropped, because dropping a real one would cost a
 /// genuine C3 rescue.
-fn reported_range_bounds_the_curve(curve: &Curve) -> bool {
+const fn reported_range_bounds_the_curve(curve: &Curve) -> bool {
     match curve {
         Curve::Line(_) => false,
         // Knot vectors, and the delegating decorators, all report the extent
@@ -78,7 +81,7 @@ fn reported_range_bounds_the_curve(curve: &Curve) -> bool {
         Curve::BsplineCurve(_)
         | Curve::NurbsCurve(_)
         | Curve::ParameterCurve(_)
-        | Curve::IntersectionCurve(_) => true,
+        | Curve::Intersection(_) => true,
     }
 }
 
@@ -148,24 +151,17 @@ fn reported_range_bounds_the_curve(curve: &Curve) -> bool {
 /// on. Pinned by
 /// `project_domain_tests::a_placeholder_domain_costs_one_solve_per_point_not_four`
 /// and `::a_knot_bounded_surface_keeps_its_domain_and_its_rejection`.
-fn reported_range_bounds_the_surface(surface: &Surface) -> (bool, bool) {
+const fn reported_range_bounds_the_surface(surface: &Surface) -> (bool, bool) {
     match surface {
         Surface::Plane(_) => (false, false),
         // Knot vectors: the net genuinely carries no data outside them, which
         // is the whole premise of C3's extrapolation trap.
-        Surface::BsplineSurface(_) | Surface::NurbsSurface(_) => (true, true),
-        // Hardcoded `[0, 1]^2` like the plane's, but a T-mesh IS conventionally
-        // parameterised over a unit cell, and no fixture exercises it. Left
-        // authoritative on the safe default: this keeps today's behaviour.
-        Surface::TsplineSurface(_) => (true, true),
-        // Analytic and REAL on both axes: the sphere's `u` is the meridian
-        // `[0, pi]` and its `v` a full turn; both torus axes are full turns.
-        // Neither is the `[0, 1]` placeholder U2 found on the cone/cylinder
-        // axial axis, and both agree with what these faces reported while they
-        // were still rational nets (`(true, true)`), so this arm is
-        // behaviour-preserving.
-        Surface::SphericalSurface(_) | Surface::ToroidalSurface(_) => (true, true),
-        Surface::RevolutionSurface(processor) => {
+        Surface::BsplineSurface(_)
+        | Surface::NurbsSurface(_)
+        | Surface::Tspline(_)
+        | Surface::Sphere(_)
+        | Surface::Torus(_) => (true, true),
+        Surface::Revolution(processor) => {
             let profile = reported_range_bounds_the_curve(processor.entity().entity_curve());
             // A full turn is always a real bound, and it carries a period.
             let turn = true;
@@ -489,15 +485,15 @@ pub(super) fn sampled_parameter_boundary(
 }
 
 /// Which [`Surface`] variant this is, for the `[proj-chain]` lens only.
-fn surface_kind(surface: &Surface) -> &'static str {
+const fn surface_kind(surface: &Surface) -> &'static str {
     match surface {
         Surface::Plane(_) => "plane",
         Surface::BsplineSurface(_) => "bspline",
         Surface::NurbsSurface(_) => "nurbs",
-        Surface::RevolutionSurface(_) => "revolution",
-        Surface::TsplineSurface(_) => "tspline",
-        Surface::SphericalSurface(_) => "sphere",
-        Surface::ToroidalSurface(_) => "torus",
+        Surface::Revolution(_) => "revolution",
+        Surface::Tspline(_) => "tspline",
+        Surface::Sphere(_) => "sphere",
+        Surface::Torus(_) => "torus",
     }
 }
 

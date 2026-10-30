@@ -13,11 +13,11 @@ impl TryFrom<Surface> for NurbsSurface<Vector4> {
             // The exact rational net -- the SAME one these faces WERE before
             // spec 012 U1.2 moved them onto the analytic variants, so the
             // fillet path sees no change.
-            Surface::SphericalSurface(_) | Surface::ToroidalSurface(_) => surface
+            Surface::Sphere(_) | Surface::Torus(_) => surface
                 .try_into_homogeneous_bspline_surface()
                 .map(NurbsSurface::new)
                 .ok_or(()),
-            Surface::RevolutionSurface(_) | Surface::TsplineSurface(_) => Err(()),
+            Surface::Revolution(_) | Surface::Tspline(_) => Err(()),
         }
     }
 }
@@ -52,7 +52,7 @@ impl From<ParameterCurveLinear> for Curve {
 impl From<FilletIntersectionCurve> for Curve {
     fn from(curve: FilletIntersectionCurve) -> Self {
         let (surface0, surface1, leader) = curve.destruct();
-        Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+        Curve::Intersection(SurfaceCurve::with_boundaries(
             Box::new(Surface::NurbsSurface(*surface0)),
             Box::new(Surface::NurbsSurface(*surface1)),
             Box::new(leader.into()),

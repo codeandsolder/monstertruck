@@ -48,7 +48,10 @@ fn cylinder() -> NurbsSurface<Vector4> {
         TAU,
     ]);
     let v_knots = KnotVector::bezier_knot(1);
-    NurbsSurface::new(BsplineSurface::new((u_knots, v_knots), control_points))
+    NurbsSurface::new(BsplineSurface::new_unchecked(
+        (u_knots, v_knots),
+        control_points,
+    ))
 }
 
 /// Projects both evaluations of `trim`'s meeting point -- a neighbouring
@@ -57,12 +60,12 @@ fn cylinder() -> NurbsSurface<Vector4> {
 fn assert_projects_to_start(trim: &ParameterCurve<BsplineCurve<Point2>, NurbsSurface<Vector4>>) {
     let (start, end) = trim.range_tuple();
     assert!(
-        trim.subs(start).near(&trim.subs(end)),
+        trim.evaluate(start).near(&trim.evaluate(end)),
         "the fixture must be closed in space"
     );
     [start, end].into_iter().for_each(|at| {
         let (parameter, uv) = trim
-            .project_boundary_point(trim.subs(at), None)
+            .project_boundary_point(trim.evaluate(at), None)
             .expect("the start of the trim projects onto it");
         assert!(
             (parameter - start).abs() < (parameter - end).abs(),
@@ -78,7 +81,7 @@ fn circle_trim(
     to: f64,
     v: f64,
 ) -> ParameterCurve<BsplineCurve<Point2>, NurbsSurface<Vector4>> {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point2::new(from, v), Point2::new(to, v)],
     );

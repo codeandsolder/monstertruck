@@ -1,10 +1,10 @@
-use super::*;
+use super::{Arc, Error, Result, RwLock, TnurccAcwPointIter, TnurccControlPoint, TnurccEdge};
 
 impl<P> TnurccControlPoint<P> {
     /// Creates a new `TnurccControlPoint` instance with index `index`, cartesian point `point`,
     /// valence `0`, and no incoming edge (`None`).
-    pub fn new(index: usize, point: P) -> Self {
-        TnurccControlPoint {
+    pub const fn new(index: usize, point: P) -> Self {
+        Self {
             index,
             valence: 0,
             point,
@@ -18,17 +18,15 @@ impl<P> TnurccControlPoint<P> {
     ///
     /// # Panics
     /// Panics if `p`'s `incoming_edge` does not have `p` as an end.
-    pub fn radial_edges(p: Arc<RwLock<TnurccControlPoint<P>>>) -> Vec<Arc<RwLock<TnurccEdge<P>>>> {
-        if let Some(edge) = p.read().incoming_edge.as_ref().map(Arc::clone) {
-            let point_end = edge
-                .read()
-                .point_end(Arc::clone(&p))
-                .expect("Vertex should be on either end of reference edge.");
-
-            TnurccAcwPointIter::from_edge(Arc::clone(&edge), point_end).collect()
-        } else {
-            Vec::new()
-        }
+    pub fn radial_edges(p: &Arc<RwLock<Self>>) -> Result<Vec<Arc<RwLock<TnurccEdge<P>>>>> {
+        let edge = p
+            .read()
+            .incoming_edge
+            .as_ref()
+            .map(Arc::clone)
+            .ok_or(Error::TnurccMalformedFace)?;
+        let point_end = edge.read().point_end(p).ok_or(Error::TnurccMalformedFace)?;
+        Ok(TnurccAcwPointIter::from_edge(edge, point_end).collect())
     }
 
     /// Returns the edge connecting two points, if it exists.
@@ -45,18 +43,14 @@ impl<P> TnurccControlPoint<P> {
     /// # Panics
     /// Panics if any borrow fails
     pub fn edge_from_opposing_point(
-        center: Arc<RwLock<Self>>,
-        op: Arc<RwLock<Self>>,
+        center: &Arc<RwLock<Self>>,
+        op: &Arc<RwLock<Self>>,
     ) -> Option<Arc<RwLock<TnurccEdge<P>>>> {
-        if let Some(in_edge) = center.read().incoming_edge.as_ref().map(Arc::clone) {
-            TnurccAcwPointIter::from_edge(
-                Arc::clone(&in_edge),
-                in_edge.read().point_end(Arc::clone(&center))?,
-            )
-            .find(|e| e.read().point_end(Arc::clone(&op)).is_some())
-        } else {
-            None
-        }
+        let incoming_edge = center.read().incoming_edge.as_ref().map(Arc::clone);
+        let in_edge = incoming_edge?;
+        let endpoint = in_edge.read().point_end(center)?;
+        TnurccAcwPointIter::from_edge(Arc::clone(&in_edge), endpoint)
+            .find(|edge| edge.read().point_end(op).is_some())
     }
 }
 

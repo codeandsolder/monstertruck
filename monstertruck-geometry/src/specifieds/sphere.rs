@@ -1,25 +1,40 @@
-use super::*;
+#![expect(
+    clippy::similar_names,
+    reason = "paired U/V parameter-range names are standard surface notation"
+)]
+
+use super::{
+    Bound, BoundedCurve, BoundedSurface, BsplineCurve, ElementWise, EuclideanSpace, IncludeCurve,
+    InnerSpace, MetricSpace, NurbsCurve, Origin, ParameterDivision2D, ParameterRange,
+    ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, SearchNearestParameter,
+    SearchParameter, SearchParameterHint2D, Sphere, SurfaceParameter, SurfaceParameterRange,
+    TOLERANCE, Tolerance, Vector3, Vector4, Zero, nonpositive_tolerance,
+};
 use std::f64::consts::PI;
 
 impl Sphere {
     /// Creates a sphere
-    #[inline(always)]
-    pub const fn new(center: Point3, radius: f64) -> Sphere { Sphere { center, radius } }
+    #[inline]
+    #[must_use]
+    pub const fn new(center: Point3, radius: f64) -> Self { Self { center, radius } }
     /// Returns the center
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn center(&self) -> Point3 { self.center }
     /// Returns the radius
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn radius(&self) -> f64 { self.radius }
     /// Returns whether the point `pt` is on sphere
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn include(&self, pt: Point3) -> bool { self.center.distance(pt).near(&self.radius) }
 }
 
 impl ParametricSurface for Sphere {
     type Point = Point3;
     type Vector = Vector3;
-    #[inline(always)]
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         let ((su, cu), (sv, cv)) = (u.sin_cos(), v.sin_cos());
         let center = match (m, n) {
@@ -41,9 +56,9 @@ impl ParametricSurface for Sphere {
         };
         center + self.radius * u_part.mul_element_wise(v_part)
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 { self.center() + self.radius * self.normal(u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> Vector3 {
         self.radius
             * Vector3::new(
@@ -52,33 +67,33 @@ impl ParametricSurface for Sphere {
                 -f64::sin(u),
             )
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> Vector3 {
         self.radius * f64::sin(u) * Vector3::new(-f64::sin(v), f64::cos(v), 0.0)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> Vector3 { -self.radius * self.normal(u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> Vector3 {
         self.radius * f64::cos(u) * Vector3::new(-f64::sin(v), f64::cos(v), 0.0)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Vector3 {
         -self.radius * f64::sin(u) * Vector3::new(f64::cos(v), f64::sin(v), 0.0)
     }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
         (
             (Bound::Included(0.0), Bound::Included(PI)),
             (Bound::Included(0.0), Bound::Excluded(2.0 * PI)),
         )
     }
-    #[inline(always)]
+    #[inline]
     fn period_v(&self) -> Option<f64> { Some(2.0 * PI) }
 }
 
 impl ParametricSurface3D for Sphere {
-    #[inline(always)]
+    #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         Vector3::new(
             f64::sin(u) * f64::cos(v),
@@ -86,7 +101,7 @@ impl ParametricSurface3D for Sphere {
             f64::cos(u),
         )
     }
-    #[inline(always)]
+    #[inline]
     fn normal_uder(&self, u: f64, v: f64) -> Vector3 {
         Vector3::new(
             f64::cos(u) * f64::cos(v),
@@ -94,13 +109,15 @@ impl ParametricSurface3D for Sphere {
             -f64::sin(u),
         )
     }
-    #[inline(always)]
+    #[inline]
     fn normal_vder(&self, u: f64, v: f64) -> Vector3 {
         Vector3::new(-f64::sin(u) * f64::sin(v), f64::sin(u) * f64::cos(v), 0.0)
     }
 }
 
-impl BoundedSurface for Sphere {}
+impl BoundedSurface for Sphere {
+    fn range_tuple(&self) -> SurfaceParameterRange { ((0.0, PI), (0.0, 2.0 * PI)) }
+}
 
 // -- v2 scalar-generic impls ------------------------------------------------
 
@@ -111,69 +128,69 @@ impl v2::ParametricSurface for Sphere {
     type Point = Point3;
     type Vector = Vector3;
 
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 { ParametricSurface::evaluate(self, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_u(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_v(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_uu(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_uv(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Vector3 {
         ParametricSurface::derivative_vv(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn period_u(&self) -> Option<f64> { ParametricSurface::period_u(self) }
-    #[inline(always)]
+    #[inline]
     fn period_v(&self) -> Option<f64> { ParametricSurface::period_v(self) }
 }
 
 impl v2::BoundedSurface for Sphere {
-    #[inline(always)]
+    #[inline]
     fn range_tuple(&self) -> ((f64, f64), (f64, f64)) { BoundedSurface::range_tuple(self) }
 }
 
 impl v2::ParametricSurface3D for Sphere {}
 
-impl v2::SearchNearestParameter<v2::D2<f64>> for Sphere {
+impl v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for Sphere {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
         &self,
         pt: Point3,
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchNearestParameter::<D2>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<SurfaceParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
-impl v2::SearchParameter<v2::D2<f64>> for Sphere {
+impl v2::SearchParameter<v2::SurfaceParameter<f64>> for Sphere {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
         &self,
         pt: Point3,
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchParameter::<D2>::search_parameter(self, pt, None, trials)
+        SearchParameter::<SurfaceParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
 impl IncludeCurve<BsplineCurve<Point3>> for Sphere {
-    #[inline(always)]
+    #[inline]
     fn include(&self, curve: &BsplineCurve<Point3>) -> bool {
         curve.is_const() && self.include(curve.front())
     }
@@ -187,15 +204,15 @@ impl IncludeCurve<NurbsCurve<Vector4>> for Sphere {
             .windows(2)
             .flat_map(move |window| (1..degree).map(move |i| (window, i)))
             .all(move |(window, i)| {
-                let t = i as f64 / degree as f64;
-                let t = window[0] * (1.0 - t) + window[1] * t;
-                self.include(curve.subs(t))
+                let t = crate::usize_to_f64(i) / crate::usize_to_f64(degree);
+                let t = f64::mul_add(window[1], t, window[0] * (1.0 - t));
+                self.include(curve.evaluate(t))
             })
     }
 }
 
 impl ParameterDivision2D for Sphere {
-    #[inline(always)]
+    #[inline]
     fn parameter_division(
         &self,
         (urange, vrange): ((f64, f64), (f64, f64)),
@@ -218,14 +235,31 @@ impl ParameterDivision2D for Sphere {
         // answer when the chord budget exceeds the whole sphere.
         let chord_ratio = f64::min(tol / self.radius, 1.0);
         let delta = 2.0 * f64::acos(1.0 - chord_ratio);
-        let u_div = 1 + ((urange.1 - urange.0) / delta).floor() as usize;
-        let v_div = 1 + ((vrange.1 - vrange.0) / delta).floor() as usize;
+        let Some((u_div, v_div)) = crate::closed_form_surface_segment_counts(
+            urange.1 - urange.0,
+            vrange.1 - vrange.0,
+            delta,
+        ) else {
+            return monstertruck_traits::algo::surface::parameter_division(
+                self,
+                (urange, vrange),
+                tol,
+            );
+        };
         (
             (0..=u_div)
-                .map(|i| urange.0 + (urange.1 - urange.0) * i as f64 / u_div as f64)
+                .map(|i| {
+                    urange.0
+                        + (urange.1 - urange.0) * crate::usize_to_f64(i)
+                            / crate::usize_to_f64(u_div)
+                })
                 .collect(),
             (0..=v_div)
-                .map(|j| vrange.0 + (vrange.1 - vrange.0) * j as f64 / v_div as f64)
+                .map(|j| {
+                    vrange.0
+                        + (vrange.1 - vrange.0) * crate::usize_to_f64(j)
+                            / crate::usize_to_f64(v_div)
+                })
                 .collect(),
         )
     }
@@ -249,10 +283,9 @@ impl ParameterDivision2D for Sphere {
 /// no seam. Unhinted callers are BYTE-IDENTICAL.
 #[inline]
 fn nearest_periodic_v(v: f64, hint: Option<f64>) -> f64 {
-    match hint {
-        None => v,
-        Some(hint) => v + 2.0 * PI * ((hint - v) / (2.0 * PI)).round(),
-    }
+    hint.map_or(v, |hint| {
+        (2.0 * PI).mul_add(((hint - v) / (2.0 * PI)).round(), v)
+    })
 }
 
 /// The `v` a [`SearchParameterHint2D`] carries, or `None`.
@@ -261,7 +294,7 @@ fn nearest_periodic_v(v: f64, hint: Option<f64>) -> f64 {
 /// `Parameter` and nothing else, and folding a range to a midpoint there would
 /// change an answer this change has no business changing.
 #[inline]
-fn hint_v(hint: SearchParameterHint2D) -> Option<f64> {
+const fn hint_v(hint: SearchParameterHint2D) -> Option<f64> {
     match hint {
         SearchParameterHint2D::Parameter(_, v) => Some(v),
         SearchParameterHint2D::Range(..) | SearchParameterHint2D::None => None,
@@ -270,7 +303,7 @@ fn hint_v(hint: SearchParameterHint2D) -> Option<f64> {
 
 impl SearchParameter<SurfaceParameter> for Sphere {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<SearchParameterHint2D>>(
         &self,
         point: Point3,
@@ -282,7 +315,7 @@ impl SearchParameter<SurfaceParameter> for Sphere {
         if (self.radius * self.radius).near(&radius.magnitude2()) {
             let radius = radius.normalize();
             let u = f64::acos(radius[2]);
-            let sinu = f64::sqrt(1.0 - radius[2] * radius[2]);
+            let sinu = f64::sqrt(radius[2].mul_add(-radius[2], 1.0));
             let cosv = f64::clamp(radius[0] / sinu, -1.0, 1.0);
             // At a pole every `v` is the same 3D point, so the hint is not a
             // disambiguation there but the whole answer -- unchanged.
@@ -291,7 +324,7 @@ impl SearchParameter<SurfaceParameter> for Sphere {
             } else if radius[1] > 0.0 {
                 nearest_periodic_v(f64::acos(cosv), hint)
             } else {
-                nearest_periodic_v(2.0 * PI - f64::acos(cosv), hint)
+                nearest_periodic_v(2.0f64.mul_add(PI, -f64::acos(cosv)), hint)
             };
             Some((u, v))
         } else {
@@ -302,7 +335,7 @@ impl SearchParameter<SurfaceParameter> for Sphere {
 
 impl SearchNearestParameter<SurfaceParameter> for Sphere {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<SearchParameterHint2D>>(
         &self,
         point: Point3,
@@ -327,7 +360,7 @@ impl SearchNearestParameter<SurfaceParameter> for Sphere {
         // error in `normalize()` cannot push it slightly outside the
         // domain and produce `NaN`.
         let u = f64::acos(f64::clamp(radius[2], -1.0, 1.0));
-        let sinu = f64::sqrt(1.0 - radius[2] * radius[2]);
+        let sinu = f64::sqrt(radius[2].mul_add(-radius[2], 1.0));
         // The poles (`sinu == 0`, i.e. `point` on the sphere's
         // axis-of-symmetry through `center`) are a coordinate
         // singularity: every value of `v` maps to the same 3D point, so
@@ -341,7 +374,7 @@ impl SearchNearestParameter<SurfaceParameter> for Sphere {
             let v = if radius[1] > 0.0 {
                 f64::acos(cosv)
             } else {
-                2.0 * PI - f64::acos(cosv)
+                2.0f64.mul_add(PI, -f64::acos(cosv))
             };
             nearest_periodic_v(v, hint)
         };

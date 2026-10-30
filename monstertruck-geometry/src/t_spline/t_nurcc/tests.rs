@@ -4,6 +4,11 @@
 //! path is unchanged.
 
 use super::*;
+use crate::prelude::assert_near;
+use crate::{
+    prelude::Point3,
+    t_spline::{TnurccAcwFaceIter, TnurccAcwPointIter, TnurccVertexEnd},
+};
 
 /// Creates a T-NURCC cube with sides of lenth `1`, lower front left point at `(0, 0, 0)`,
 /// and all verticies in the first octant.
@@ -65,7 +70,7 @@ fn make_cube() -> Result<Tnurcc<Point3>> {
         ],
     ];
 
-    Tnurcc::try_new(points, faces)
+    Tnurcc::new(points, faces)
 }
 
 fn verify_tnurcc_control_points(t: &Tnurcc<Point3>) {
@@ -80,15 +85,12 @@ fn verify_tnurcc_control_points(t: &Tnurcc<Point3>) {
         // Incedentally verifies that the control point is referenced by the edge
         let iter = TnurccAcwPointIter::from_edge(
             Arc::clone(&point_edge),
-            point_edge
-                .read()
-                .point_end(Arc::clone(p))
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Point {} should be a side of its incoming edge",
-                        p.read().index,
-                    )
-                }),
+            point_edge.read().point_end(p).unwrap_or_else(|| {
+                panic!(
+                    "Point {} should be a side of its incoming edge",
+                    p.read().index
+                )
+            }),
         );
         let next = iter.last().unwrap_or_else(|| {
             panic!(
@@ -99,13 +101,14 @@ fn verify_tnurcc_control_points(t: &Tnurcc<Point3>) {
 
         // Assert the next acw edge (from the last one returned by the iter)
         // is the same edge as the one it started at
-        let next_point_end = next.read().point_end(Arc::clone(p)).unwrap_or_else(|| {
+        let next_point_end = next.read().point_end(p).unwrap_or_else(|| {
             panic!(
                 "Edges reached through point {} iter should be connected to that point",
                 p.read().index,
             )
         });
-        let final_edge = next.read().acw_edge_from_end(next_point_end);
+        let final_edge = (next.read().acw_edge_from_end(next_point_end))
+            .expect("closed point fan must have a next edge");
         assert!(
             std::ptr::eq(final_edge.as_ref(), point_edge.as_ref()),
             "Iter does not rotate around point {} correctly. Reached {}, expected {}",
@@ -118,15 +121,12 @@ fn verify_tnurcc_control_points(t: &Tnurcc<Point3>) {
         // recorded valence of the point.
         let iter = TnurccAcwPointIter::from_edge(
             Arc::clone(&point_edge),
-            point_edge
-                .read()
-                .point_end(Arc::clone(p))
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Point {} should be a side of its incoming edge",
-                        p.read().index,
-                    )
-                }),
+            point_edge.read().point_end(p).unwrap_or_else(|| {
+                panic!(
+                    "Point {} should be a side of its incoming edge",
+                    p.read().index
+                )
+            }),
         );
         let acw_calc_valence = iter.count();
         assert!(
@@ -179,25 +179,21 @@ fn verify_tnurcc_edges(t: &Tnurcc<Point3>) {
         .enumerate()
         {
             // Get edge in the direction under investigation
-            let con = e.read().connection(dir);
+            let con = (e.read().connection(dir))
+                .expect("closed T-NURCC edge must have all four connections");
 
             // Check the face between the two is the same and correct
-            let common_face = e
-                .read()
-                .common_face(Arc::clone(&con))
+            let common_face = (e.read().common_face(&con))
                 .expect("Connected edges must have a common face between them");
             assert!(std::ptr::eq(
                 common_face.as_ref(),
-                e.read()
-                    .face_from_side(common_faces[dir_index])
+                (e.read().face_from_side(common_faces[dir_index]))
                     .expect("Tnurcc must be closed on all edges")
                     .as_ref()
             ));
 
             // Check that the point between them is the same and correct
-            let common_point = e
-                .read()
-                .common_point(Arc::clone(&con))
+            let common_point = (e.read().common_point(&con))
                 .expect("Connected edges must have a common point between them");
 
             // In order to check to make sure that the common points is the correct one,
@@ -205,9 +201,7 @@ fn verify_tnurcc_edges(t: &Tnurcc<Point3>) {
             // common face needs to be computed in order to know what the relative
             // orientation of the two edges is to each other.
             let other_common_point = con.read().point_at_end(
-                common_points[dir as usize][con
-                    .read()
-                    .face_side(Arc::clone(&common_face))
+                common_points[dir as usize][(con.read().face_side(&common_face))
                     .expect("Common face must be a side on con")
                     as usize],
             );
@@ -223,32 +217,27 @@ fn verify_tnurcc_edges(t: &Tnurcc<Point3>) {
 }
 
 fn verify_tnurcc_faces(t: &Tnurcc<Point3>) {
-    for face in t.faces.iter() {
+    for face in &t.faces {
         // Get reference edge for face
-        let face_edge = Arc::clone(
-            face.read()
-                .edge
-                .as_ref()
-                .expect("All faces should have a reference edge in T-NURCC"),
-        );
+        let face_edge =
+            (face.read().edge.clone()).expect("All faces should have a reference edge in T-NURCC");
 
         // Assert the next acw edge (from the last one returned by the iter)
         // is the same edge as the one it started at
-        let last_edge = TnurccAcwFaceIter::try_from_edge(
+        let last_edge = ((TnurccAcwFaceIter::try_from_edge(
             Arc::clone(&face_edge),
-            face_edge.read().face_side(Arc::clone(face)).unwrap(),
-        )
+            face_edge.read().face_side(face).unwrap(),
+        ))
         .expect("Prevously tested assertion")
-        .last()
+        .last())
         .expect("Iter of size greater than 0 should have a last element");
 
         // Assert that the face is closed (The next edge around the face after exhausting the iterator
         // should be the original reference edge)
-        let next_face_side = last_edge
-            .read()
-            .face_side(Arc::clone(face))
+        let next_face_side = (last_edge.read().face_side(face))
             .expect("Edges reached through a face iter should be connected to that face");
-        let final_edge = last_edge.read().acw_edge_from_side(next_face_side);
+        let final_edge = (last_edge.read().acw_edge_from_side(next_face_side))
+            .expect("closed face boundary must have a next edge");
         assert!(
             std::ptr::eq(final_edge.as_ref(), face_edge.as_ref()),
             "Iter does not rotate around face correctly. Reached {}, expected {}",
@@ -266,9 +255,9 @@ fn t_nurcc_test_make_cube_euclidiean_geometry() {
     assert!(
         surface.is_ok(),
         "Surface was unsuccessfuly created with error: {}.",
-        surface.err().unwrap()
+        (surface.err()).unwrap()
     );
-    let surface = make_cube().unwrap();
+    let surface = (make_cube()).unwrap();
 
     assert_eq!(surface.faces.len(), 6, "Cube does not contain 6 faces.");
     assert_eq!(
@@ -281,11 +270,11 @@ fn t_nurcc_test_make_cube_euclidiean_geometry() {
 
 #[test]
 fn t_nurcc_test_cube_control_point_properties() {
-    let t = make_cube().expect("Cube should be successfuly created");
+    let t = (make_cube()).expect("Cube should be successfuly created");
 
     verify_tnurcc_control_points(&t);
 
-    for p in t.control_points.iter() {
+    for p in &t.control_points {
         // Check valencies
         assert_eq!(
             p.read().valence,
@@ -298,30 +287,26 @@ fn t_nurcc_test_cube_control_point_properties() {
 
 #[test]
 fn t_nurcc_test_cube_edge_properties() {
-    let t = make_cube().expect("Cube should be successfuly created");
+    let t = (make_cube()).expect("Cube should be successfuly created");
 
     verify_tnurcc_edges(&t);
 }
 
 #[test]
 fn t_nurcc_test_cube_face_properties() {
-    let surface = make_cube().unwrap();
+    let surface = (make_cube()).unwrap();
 
     verify_tnurcc_faces(&surface);
 
-    for face in surface.faces.iter() {
-        let face_edge = Arc::clone(
-            face.read()
-                .edge
-                .as_ref()
-                .expect("All faces should have a reference edge in T-NURCC"),
-        );
+    for face in &surface.faces {
+        let face_edge =
+            (face.read().edge.clone()).expect("All faces should have a reference edge in T-NURCC");
 
         // Assert that each face has four edges
-        let edge_count = TnurccAcwFaceIter::try_from_edge(
+        let edge_count = (TnurccAcwFaceIter::try_from_edge(
             Arc::clone(&face_edge),
-            face_edge.read().face_side(Arc::clone(face)).unwrap(),
-        )
+            (face_edge.read().face_side(face)).unwrap(),
+        ))
         .expect("face_edge should have Some(face) because it was cloned from face")
         .count();
 
@@ -377,12 +362,7 @@ fn t_nurcc_test_subdivide_faces() {
 
     // Make sure the faces are well formed (a little redundant but better be thorough)
     surface.faces.iter().for_each(|f| {
-        let start_edge = Arc::clone(
-            f.read()
-                .edge
-                .as_ref()
-                .expect("All faces should have an edge"),
-        );
+        let start_edge = (f.read().edge.clone()).expect("All faces should have an edge");
 
         // Anticlockwise traversal
         let mut acw_traverse_edge = Arc::clone(&start_edge);
@@ -391,15 +371,15 @@ fn t_nurcc_test_subdivide_faces() {
             acw_traverse_edge = {
                 let side = acw_traverse_edge
                     .read()
-                    .face_side(Arc::clone(f))
+                    .face_side(f)
                     .unwrap_or_else(|| panic!("Face should be connected to reference edge, error on ACW traversal {} face {}", i, f.read().index));
                 match side {
-                    TnurccFaceSide::Left => acw_traverse_edge
+                    TnurccFaceSide::Left => (acw_traverse_edge
                         .read()
-                        .connection(TnurccConnection::LeftAcw),
-                    TnurccFaceSide::Right => acw_traverse_edge
+                        .connection(TnurccConnection::LeftAcw)).expect("closed face must have a left ACW connection"),
+                    TnurccFaceSide::Right => (acw_traverse_edge
                         .read()
-                        .connection(TnurccConnection::RightAcw),
+                        .connection(TnurccConnection::RightAcw)).expect("closed face must have a right ACW connection"),
                 }
             };
         }
@@ -411,15 +391,15 @@ fn t_nurcc_test_subdivide_faces() {
             cw_traverse_edge = {
                 let side = cw_traverse_edge
                     .read()
-                    .face_side(Arc::clone(f))
+                    .face_side(f)
                     .unwrap_or_else(|| panic!("Face should be connected to reference edge, error on CW traversal {} face {}", i, f.read().index));
                 match side {
-                    TnurccFaceSide::Left => cw_traverse_edge
+                    TnurccFaceSide::Left => (cw_traverse_edge
                         .read()
-                        .connection(TnurccConnection::LeftCw),
-                    TnurccFaceSide::Right => cw_traverse_edge
+                        .connection(TnurccConnection::LeftCw)).expect("closed face must have a left CW connection"),
+                    TnurccFaceSide::Right => (cw_traverse_edge
                         .read()
-                        .connection(TnurccConnection::RightCw),
+                        .connection(TnurccConnection::RightCw)).expect("closed face must have a right CW connection"),
                 }
             };
         }
@@ -439,6 +419,14 @@ fn t_nurcc_test_subdivide_faces() {
 }
 
 #[test]
+fn uniform_cube_subdivision_matches_catmull_clark_vertex_rule() {
+    let surface = t_nurcc_subdivded_cube();
+    let corner = surface.control_points[0].read().point;
+    let expected = Point3::new(2.0 / 9.0, 2.0 / 9.0, 2.0 / 9.0);
+    assert_near!(corner, expected);
+}
+
+#[test]
 fn t_nurcc_test_subdivide_points() {
     let surface = t_nurcc_subdivded_cube();
 
@@ -448,9 +436,7 @@ fn t_nurcc_test_subdivide_points() {
 #[test]
 fn t_nurcc_test_double_subdivide() {
     let mut surface = t_nurcc_subdivded_cube();
-    surface
-        .global_subdivide()
-        .expect("Double subdivide should succeed");
+    (surface.global_subdivide()).expect("Double subdivide should succeed");
     verify_tnurcc_control_points(&surface);
     verify_tnurcc_edges(&surface);
     verify_tnurcc_faces(&surface);
@@ -461,18 +447,14 @@ fn t_nurcc_test_clone() {
     use std::mem::drop;
     let mut surface;
     {
-        let clone = make_cube().unwrap();
+        let clone = (make_cube()).unwrap();
         surface = clone.clone();
         drop(clone);
     }
 
-    surface
-        .global_subdivide()
-        .expect("Cloned subdivide should succeed");
+    (surface.global_subdivide()).expect("Cloned subdivide should succeed");
 
-    surface
-        .global_subdivide()
-        .expect("Cloned double subdivide should succeed");
+    (surface.global_subdivide()).expect("Cloned double subdivide should succeed");
 
     verify_tnurcc_control_points(&surface);
     verify_tnurcc_edges(&surface);
@@ -504,9 +486,9 @@ fn t_nurcc_test_from_quad_mesh_cube() {
     assert!(
         tnurcc.is_ok(),
         "from_quad_mesh should succeed for a cube: {}",
-        tnurcc.err().unwrap()
+        (tnurcc.err()).unwrap()
     );
-    let tnurcc = tnurcc.unwrap();
+    let tnurcc = (tnurcc).unwrap();
     assert_eq!(tnurcc.control_points.len(), 8);
     assert_eq!(tnurcc.faces.len(), 6);
     assert_eq!(tnurcc.edges.len(), 12);
@@ -536,11 +518,9 @@ fn t_nurcc_test_from_quad_mesh_open_mesh_rejected() {
 
 #[test]
 fn t_nurcc_test_subdivision_point_count() {
-    let mut tnurcc = make_cube().unwrap();
+    let mut tnurcc = (make_cube()).unwrap();
     // Before: V=8, E=12, F=6.
-    tnurcc
-        .global_subdivide()
-        .expect("Subdivision should succeed");
+    (tnurcc.global_subdivide()).expect("Subdivision should succeed");
     // After 1 CC level: V' = V + E + F = 8 + 12 + 6 = 26.
     assert_eq!(tnurcc.control_points.len(), 26);
     assert_eq!(tnurcc.edges.len(), 48);
@@ -549,14 +529,14 @@ fn t_nurcc_test_subdivision_point_count() {
 
 #[test]
 fn t_nurcc_test_to_tmesh_cube() {
-    let tnurcc = make_cube().unwrap();
+    let tnurcc = (make_cube()).unwrap();
     let tmesh = tnurcc.to_tmesh(2);
     assert!(
         tmesh.is_ok(),
         "to_tmesh should succeed: {}",
-        tmesh.err().unwrap()
+        (tmesh.err()).unwrap()
     );
-    let tmesh = tmesh.unwrap();
+    let tmesh = (tmesh).unwrap();
 
     // After 2 subdivisions: V = 98 total, all should be included.
     assert!(
@@ -565,17 +545,14 @@ fn t_nurcc_test_to_tmesh_cube() {
         tmesh.control_points().len()
     );
 
-    // Verify subs() produces valid (non-NaN) points at several locations.
+    // Verify evaluate() produces valid (non-NaN) points at several locations.
     for &(u, v) in &[(0.25, 0.25), (0.5, 0.5), (0.75, 0.75), (0.1, 0.9)] {
         let p: Point3 = tmesh
-            .subs(u, v)
-            .unwrap_or_else(|e| panic!("subs({}, {}) failed: {}", u, v, e));
+            .try_evaluate(u, v)
+            .unwrap_or_else(|e| panic!("try_evaluate({u}, {v}) failed: {e}"));
         assert!(
             !p.x.is_nan() && !p.y.is_nan() && !p.z.is_nan(),
-            "subs({}, {}) returned NaN: {:?}",
-            u,
-            v,
-            p
+            "evaluate({u}, {v}) returned NaN: {p:?}"
         );
     }
 }

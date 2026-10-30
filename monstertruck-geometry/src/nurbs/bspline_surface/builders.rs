@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    BoundedCurve, BsplineCurve, BsplineSurface, ControlPoint, Error, InnerSpace, Invertible,
+    KnotVector, Matrix3, Origin, ParametricCurve, Point3, Rad, Result, SquareMatrix, TOLERANCE,
+    Tolerance, Vector3, compat,
+};
 
 impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// Creates a surface with normailized knot vectors connecting two curves.
@@ -7,11 +11,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec0 = KnotVector::bezier_knot(2);
     /// let control_points0 = vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, -1.0), Vector2::new(1.0, 0.0)];
-    /// let bspcurve0 = BsplineCurve::new(knot_vec0, control_points0);
+    /// let bspcurve0 = BsplineCurve::new_unchecked(knot_vec0, control_points0);
     ///
     /// let knot_vec1 = KnotVector::bezier_knot(2);
     /// let control_points1 = vec![Vector2::new(0.0, 2.0), Vector2::new(0.5, 1.0), Vector2::new(1.0, 2.0)];
-    /// let bspcurve1 = BsplineCurve::new(knot_vec1, control_points1);
+    /// let bspcurve1 = BsplineCurve::new_unchecked(knot_vec1, control_points1);
     ///
     /// let homotopy_surface = BsplineSurface::homotopy(bspcurve0, bspcurve1);
     /// assert_eq!(
@@ -23,10 +27,8 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     ],
     /// );
     /// ```
-    pub fn homotopy(
-        mut bspcurve0: BsplineCurve<P>,
-        mut bspcurve1: BsplineCurve<P>,
-    ) -> BsplineSurface<P> {
+    #[must_use]
+    pub fn homotopy(mut bspcurve0: BsplineCurve<P>, mut bspcurve1: BsplineCurve<P>) -> Self {
         bspcurve0.syncro_degree(&mut bspcurve1);
 
         //bspcurve0.optimize();
@@ -39,7 +41,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let control_points: Vec<Vec<_>> = (0..bspcurve0.control_points().len())
             .map(|i| vec![*bspcurve0.control_point(i), *bspcurve1.control_point(i)])
             .collect();
-        BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points)
+        Self::new_unchecked((knot_vector_u, knot_vector_v), control_points)
     }
 
     /// Creates a skinned (lofted) surface through N section curves.
@@ -51,59 +53,63 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// All input curves are made compatible (same degree and knot vector) before
     /// surface construction. The curve shapes are preserved.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `curves` is empty.
+    /// Returns an error if `curves` is empty or compatibility normalization fails.
     ///
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> monstertruck_geometry::errors::Result<()> {
     /// use monstertruck_geometry::prelude::*;
     ///
-    /// let c0 = BsplineCurve::new(
+    /// let c0 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(2),
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, -1.0), Vector2::new(1.0, 0.0)],
     /// );
-    /// let c1 = BsplineCurve::new(
+    /// let c1 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(2),
     ///     vec![Vector2::new(0.0, 1.0), Vector2::new(0.5, 0.5), Vector2::new(1.0, 1.0)],
     /// );
-    /// let c2 = BsplineCurve::new(
+    /// let c2 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(2),
     ///     vec![Vector2::new(0.0, 2.0), Vector2::new(0.5, 1.0), Vector2::new(1.0, 2.0)],
     /// );
-    /// let surface = BsplineSurface::skin(vec![c0, c1, c2]);
+    /// let surface = BsplineSurface::skin(vec![c0, c1, c2])?;
     /// // At v=0, v=0.5, v=1 the surface reproduces the three section curves.
     /// // Endpoints are exact.
-    /// assert_near2!(surface.subs(0.0, 0.0), Vector2::new(0.0, 0.0));
-    /// assert_near2!(surface.subs(1.0, 0.0), Vector2::new(1.0, 0.0));
-    /// assert_near2!(surface.subs(0.0, 0.5), Vector2::new(0.0, 1.0));
-    /// assert_near2!(surface.subs(1.0, 0.5), Vector2::new(1.0, 1.0));
-    /// assert_near2!(surface.subs(0.0, 1.0), Vector2::new(0.0, 2.0));
-    /// assert_near2!(surface.subs(1.0, 1.0), Vector2::new(1.0, 2.0));
+    /// assert_near2!(surface.evaluate(0.0, 0.0), Vector2::new(0.0, 0.0));
+    /// assert_near2!(surface.evaluate(1.0, 0.0), Vector2::new(1.0, 0.0));
+    /// assert_near2!(surface.evaluate(0.0, 0.5), Vector2::new(0.0, 1.0));
+    /// assert_near2!(surface.evaluate(1.0, 0.5), Vector2::new(1.0, 1.0));
+    /// assert_near2!(surface.evaluate(0.0, 1.0), Vector2::new(0.0, 2.0));
+    /// assert_near2!(surface.evaluate(1.0, 1.0), Vector2::new(1.0, 2.0));
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn skin(mut curves: Vec<BsplineCurve<P>>) -> BsplineSurface<P> {
-        assert!(
-            !curves.is_empty(),
-            "skin requires at least one section curve"
-        );
+    pub fn skin(mut curves: Vec<BsplineCurve<P>>) -> Result<Self> {
+        if curves.is_empty() {
+            return Err(Error::EmptyControlPoints);
+        }
         if curves.len() == 1 {
             // Degenerate: single curve -> constant surface in v.
             let c = &mut curves[0];
-            c.knot_normalize();
+            c.knot_vec.try_normalize()?;
             let knot_vector_u = c.knot_vector().clone();
             let knot_vector_v = KnotVector::from(vec![0.0, 0.0, 1.0, 1.0]);
             let control_points: Vec<Vec<_>> =
                 c.control_points().iter().map(|p| vec![*p, *p]).collect();
-            return BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points);
+            return Ok(Self::new_unchecked(
+                (knot_vector_u, knot_vector_v),
+                control_points,
+            ));
         }
         if curves.len() == 2 {
-            return Self::homotopy(curves.swap_remove(0), curves.swap_remove(0));
+            return Ok(Self::homotopy(curves.swap_remove(0), curves.swap_remove(0)));
         }
 
         // Make all section curves compatible.
-        compat::make_curves_compatible(&mut curves)
-            .expect("skin: compatibility normalization failed on non-empty curve set");
+        compat::make_curves_compatible(&mut curves)?;
 
         let n = curves.len();
         let m = curves[0].control_points().len();
@@ -111,7 +117,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         // Build the v-direction knot vector (degree 1, clamped, uniform).
         let mut v_knots = Vec::with_capacity(n + 2);
         v_knots.push(0.0);
-        (0..n).for_each(|i| v_knots.push(i as f64 / (n - 1) as f64));
+        (0..n).for_each(|i| v_knots.push(crate::usize_to_f64(i) / crate::usize_to_f64(n - 1)));
         v_knots.push(1.0);
         let knot_vector_v = KnotVector::from(v_knots);
 
@@ -119,7 +125,10 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let control_points: Vec<Vec<P>> = (0..m)
             .map(|j| curves.iter().map(|c| *c.control_point(j)).collect())
             .collect();
-        BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points)
+        Ok(Self::new_unchecked(
+            (knot_vector_u, knot_vector_v),
+            control_points,
+        ))
     }
 }
 
@@ -131,48 +140,57 @@ impl BsplineSurface<Point3> {
     /// rail, the profile is rotated to align with the local tangent and
     /// translated to the rail point. The resulting sections are then skinned.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `n_sections < 2`.
+    /// Returns an error if `n_sections < 2` or section compatibility fails.
     ///
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> monstertruck_geometry::errors::Result<()> {
     /// use monstertruck_geometry::prelude::*;
     ///
     /// // Sweep a small circle profile along a straight rail (should approximate extrusion).
-    /// let rail = BsplineCurve::new(
+    /// let rail = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 5.0)],
     /// );
-    /// let profile = BsplineCurve::new(
+    /// let profile = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
     /// );
-    /// let surface = BsplineSurface::sweep_rail(profile, &rail, 3);
+    /// let surface = BsplineSurface::sweep_rail(&profile, &rail, 3)?;
     /// // At v=0 (rail start), the surface reproduces the profile.
-    /// assert_near2!(surface.subs(0.0, 0.0), Point3::new(-1.0, 0.0, 0.0));
-    /// assert_near2!(surface.subs(1.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+    /// assert_near2!(surface.evaluate(0.0, 0.0), Point3::new(-1.0, 0.0, 0.0));
+    /// assert_near2!(surface.evaluate(1.0, 0.0), Point3::new(1.0, 0.0, 0.0));
     /// // At v=1 (rail end), the profile is translated to the rail endpoint.
-    /// assert_near2!(surface.subs(0.0, 1.0), Point3::new(-1.0, 0.0, 5.0));
-    /// assert_near2!(surface.subs(1.0, 1.0), Point3::new(1.0, 0.0, 5.0));
+    /// assert_near2!(surface.evaluate(0.0, 1.0), Point3::new(-1.0, 0.0, 5.0));
+    /// assert_near2!(surface.evaluate(1.0, 1.0), Point3::new(1.0, 0.0, 5.0));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn sweep_rail(
-        profile: BsplineCurve<Point3>,
+        profile: &BsplineCurve<Point3>,
         rail: &BsplineCurve<Point3>,
         n_sections: usize,
-    ) -> BsplineSurface<Point3> {
-        assert!(n_sections >= 2, "sweep_rail requires at least 2 sections");
+    ) -> Result<Self> {
+        if n_sections < 2 {
+            return Err(Error::InvalidSurfaceBuilderInput(
+                "sweep_rail requires at least 2 sections",
+            ));
+        }
 
         let (t_start, t_end) = rail.range_tuple();
-        let rail_origin = rail.subs(t_start);
+        let rail_origin = rail.evaluate(t_start);
         let tangent0 = rail.derivative(t_start);
         let t0_len = tangent0.magnitude();
 
         let sections: Vec<BsplineCurve<Point3>> = (0..n_sections)
             .map(|i| {
-                let t = t_start + (t_end - t_start) * i as f64 / (n_sections - 1) as f64;
-                let rail_pt = rail.subs(t);
+                let t = t_start
+                    + (t_end - t_start) * crate::usize_to_f64(i)
+                        / crate::usize_to_f64(n_sections - 1);
+                let rail_pt = rail.evaluate(t);
                 let tangent_i = rail.derivative(t);
                 let translation = rail_pt - rail_origin;
 
@@ -193,7 +211,7 @@ impl BsplineSurface<Point3> {
             })
             .collect();
 
-        BsplineSurface::skin(sections)
+        Self::skin(sections)
     }
 
     /// Creates a surface by sweeping a single profile along two rail curves (birail1).
@@ -206,57 +224,66 @@ impl BsplineSurface<Point3> {
     /// its end point should correspond to `rail2`'s start. The two rails must
     /// share the same parameter domain.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `n_sections < 2`.
+    /// Returns an error if `n_sections < 2` or section compatibility fails.
     ///
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> monstertruck_geometry::errors::Result<()> {
     /// use monstertruck_geometry::prelude::*;
     ///
     /// // Two parallel straight rails separated along x.
-    /// let rail1 = BsplineCurve::new(
+    /// let rail1 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(-1.0, 0.0, 0.0), Point3::new(-1.0, 0.0, 5.0)],
     /// );
-    /// let rail2 = BsplineCurve::new(
+    /// let rail2 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 5.0)],
     /// );
     /// // Profile connects the rail starts.
-    /// let profile = BsplineCurve::new(
+    /// let profile = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
     /// );
-    /// let surface = BsplineSurface::birail1(profile, &rail1, &rail2, 3);
+    /// let surface = BsplineSurface::birail1(&profile, &rail1, &rail2, 3)?;
     /// // At v=0 (rail start), corners match.
-    /// assert_near2!(surface.subs(0.0, 0.0), Point3::new(-1.0, 0.0, 0.0));
-    /// assert_near2!(surface.subs(1.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+    /// assert_near2!(surface.evaluate(0.0, 0.0), Point3::new(-1.0, 0.0, 0.0));
+    /// assert_near2!(surface.evaluate(1.0, 0.0), Point3::new(1.0, 0.0, 0.0));
     /// // At v=1 (rail end), corners match.
-    /// assert_near2!(surface.subs(0.0, 1.0), Point3::new(-1.0, 0.0, 5.0));
-    /// assert_near2!(surface.subs(1.0, 1.0), Point3::new(1.0, 0.0, 5.0));
+    /// assert_near2!(surface.evaluate(0.0, 1.0), Point3::new(-1.0, 0.0, 5.0));
+    /// assert_near2!(surface.evaluate(1.0, 1.0), Point3::new(1.0, 0.0, 5.0));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn birail1(
-        profile: BsplineCurve<Point3>,
+        profile: &BsplineCurve<Point3>,
         rail1: &BsplineCurve<Point3>,
         rail2: &BsplineCurve<Point3>,
         n_sections: usize,
-    ) -> BsplineSurface<Point3> {
-        assert!(n_sections >= 2, "birail1 requires at least 2 sections");
+    ) -> Result<Self> {
+        if n_sections < 2 {
+            return Err(Error::InvalidSurfaceBuilderInput(
+                "birail1 requires at least 2 sections",
+            ));
+        }
 
         let (r_start, r_end) = rail1.range_tuple();
         let (u_start, u_end) = profile.range_tuple();
-        let p_start = profile.subs(u_start);
-        let p_end = profile.subs(u_end);
+        let p_start = profile.evaluate(u_start);
+        let p_end = profile.evaluate(u_end);
         let chord = p_end - p_start;
         let chord_len = chord.magnitude();
 
         let sections: Vec<BsplineCurve<Point3>> = (0..n_sections)
             .map(|i| {
-                let t = r_start + (r_end - r_start) * i as f64 / (n_sections - 1) as f64;
-                let r1_pt = rail1.subs(t);
-                let r2_pt = rail2.subs(t);
+                let t = r_start
+                    + (r_end - r_start) * crate::usize_to_f64(i)
+                        / crate::usize_to_f64(n_sections - 1);
+                let r1_pt = rail1.evaluate(t);
+                let r2_pt = rail2.evaluate(t);
                 let target_chord = r2_pt - r1_pt;
                 let target_len = target_chord.magnitude();
 
@@ -284,7 +311,7 @@ impl BsplineSurface<Point3> {
             })
             .collect();
 
-        BsplineSurface::skin(sections)
+        Self::skin(sections)
     }
 
     /// Creates a surface by blending two profiles along two rail curves (birail2).
@@ -297,39 +324,42 @@ impl BsplineSurface<Point3> {
     ///
     /// At v=0, the section matches `profile1`'s shape; at v=1, `profile2`'s shape.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `n_sections < 2`.
+    /// Returns an error if `n_sections < 2` or section compatibility fails.
     ///
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> monstertruck_geometry::errors::Result<()> {
     /// use monstertruck_geometry::prelude::*;
     ///
     /// // Two parallel straight rails.
-    /// let rail1 = BsplineCurve::new(
+    /// let rail1 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 4.0)],
     /// );
-    /// let rail2 = BsplineCurve::new(
+    /// let rail2 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 4.0)],
     /// );
     /// // Two identical straight profiles (result is a ruled surface).
-    /// let profile1 = BsplineCurve::new(
+    /// let profile1 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0)],
     /// );
-    /// let profile2 = BsplineCurve::new(
+    /// let profile2 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(0.0, 0.0, 4.0), Point3::new(2.0, 0.0, 4.0)],
     /// );
-    /// let surface = BsplineSurface::birail2(profile1, profile2, &rail1, &rail2, 3);
+    /// let surface = BsplineSurface::birail2(profile1, profile2, &rail1, &rail2, 3)?;
     /// // Corners.
-    /// assert_near2!(surface.subs(0.0, 0.0), Point3::new(0.0, 0.0, 0.0));
-    /// assert_near2!(surface.subs(1.0, 0.0), Point3::new(2.0, 0.0, 0.0));
-    /// assert_near2!(surface.subs(0.0, 1.0), Point3::new(0.0, 0.0, 4.0));
-    /// assert_near2!(surface.subs(1.0, 1.0), Point3::new(2.0, 0.0, 4.0));
+    /// assert_near2!(surface.evaluate(0.0, 0.0), Point3::new(0.0, 0.0, 0.0));
+    /// assert_near2!(surface.evaluate(1.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+    /// assert_near2!(surface.evaluate(0.0, 1.0), Point3::new(0.0, 0.0, 4.0));
+    /// assert_near2!(surface.evaluate(1.0, 1.0), Point3::new(2.0, 0.0, 4.0));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn birail2(
         profile1: BsplineCurve<Point3>,
@@ -337,34 +367,37 @@ impl BsplineSurface<Point3> {
         rail1: &BsplineCurve<Point3>,
         rail2: &BsplineCurve<Point3>,
         n_sections: usize,
-    ) -> BsplineSurface<Point3> {
-        assert!(n_sections >= 2, "birail2 requires at least 2 sections");
+    ) -> Result<Self> {
+        if n_sections < 2 {
+            return Err(Error::InvalidSurfaceBuilderInput(
+                "birail2 requires at least 2 sections",
+            ));
+        }
 
         let (r_start, r_end) = rail1.range_tuple();
 
         let (u1_start, u1_end) = profile1.range_tuple();
-        let p1_start = profile1.subs(u1_start);
-        let p1_end = profile1.subs(u1_end);
+        let p1_start = profile1.evaluate(u1_start);
+        let p1_end = profile1.evaluate(u1_end);
         let chord1 = p1_end - p1_start;
         let chord1_len = chord1.magnitude();
 
         let (u2_start, u2_end) = profile2.range_tuple();
-        let p2_start = profile2.subs(u2_start);
-        let p2_end = profile2.subs(u2_end);
+        let p2_start = profile2.evaluate(u2_start);
+        let p2_end = profile2.evaluate(u2_end);
         let chord2 = p2_end - p2_start;
         let chord2_len = chord2.magnitude();
 
         // Make profiles compatible so we can blend control points.
         let mut compat_profiles = vec![profile1, profile2];
-        compat::make_curves_compatible(&mut compat_profiles)
-            .expect("birail2: profile compatibility normalization failed");
+        compat::make_curves_compatible(&mut compat_profiles)?;
 
         let sections: Vec<BsplineCurve<Point3>> = (0..n_sections)
             .map(|i| {
-                let v = i as f64 / (n_sections - 1) as f64;
-                let t = r_start + (r_end - r_start) * v;
-                let r1_pt = rail1.subs(t);
-                let r2_pt = rail2.subs(t);
+                let v = crate::usize_to_f64(i) / crate::usize_to_f64(n_sections - 1);
+                let t = f64::mul_add(r_end - r_start, v, r_start);
+                let r1_pt = rail1.evaluate(t);
+                let r2_pt = rail2.evaluate(t);
                 let target_chord = r2_pt - r1_pt;
                 let target_len = target_chord.magnitude();
 
@@ -406,7 +439,7 @@ impl BsplineSurface<Point3> {
             })
             .collect();
 
-        BsplineSurface::skin(sections)
+        Self::skin(sections)
     }
 }
 
@@ -452,30 +485,31 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// The `points` grid must have dimensions `[n][m]` where `points[i][j]`
     /// is the intersection of `u_curves[i]` and `v_curves[j]`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `u_curves` or `v_curves` is empty, or if `points` dimensions
-    /// don't match `[u_curves.len()][v_curves.len()]`.
+    /// Returns an error if either curve family is empty, the point grid dimensions
+    /// do not match, or compatibility normalization fails.
     ///
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> monstertruck_geometry::errors::Result<()> {
     /// use monstertruck_geometry::prelude::*;
     ///
     /// // Two u-curves and two v-curves forming a bilinear patch.
-    /// let u0 = BsplineCurve::new(
+    /// let u0 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 0.0)],
     /// );
-    /// let u1 = BsplineCurve::new(
+    /// let u1 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Vector2::new(0.0, 1.0), Vector2::new(1.0, 1.0)],
     /// );
-    /// let v0 = BsplineCurve::new(
+    /// let v0 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(0.0, 1.0)],
     /// );
-    /// let v1 = BsplineCurve::new(
+    /// let v1 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Vector2::new(1.0, 0.0), Vector2::new(1.0, 1.0)],
     /// );
@@ -487,33 +521,48 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     vec![u0, u1],
     ///     vec![v0, v1],
     ///     &points,
-    /// );
-    /// assert_near2!(gordon.subs(0.0, 0.0), Vector2::new(0.0, 0.0));
-    /// assert_near2!(gordon.subs(1.0, 0.0), Vector2::new(1.0, 0.0));
-    /// assert_near2!(gordon.subs(0.0, 1.0), Vector2::new(0.0, 1.0));
-    /// assert_near2!(gordon.subs(1.0, 1.0), Vector2::new(1.0, 1.0));
+    /// )?;
+    /// assert_near2!(gordon.evaluate(0.0, 0.0), Vector2::new(0.0, 0.0));
+    /// assert_near2!(gordon.evaluate(1.0, 0.0), Vector2::new(1.0, 0.0));
+    /// assert_near2!(gordon.evaluate(0.0, 1.0), Vector2::new(0.0, 1.0));
+    /// assert_near2!(gordon.evaluate(1.0, 1.0), Vector2::new(1.0, 1.0));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn gordon(
         u_curves: Vec<BsplineCurve<P>>,
         v_curves: Vec<BsplineCurve<P>>,
         points: &[Vec<P>],
-    ) -> BsplineSurface<P> {
+    ) -> Result<Self> {
         let n = u_curves.len();
         let m = v_curves.len();
-        assert!(!u_curves.is_empty(), "gordon requires at least one u-curve");
-        assert!(!v_curves.is_empty(), "gordon requires at least one v-curve");
-        assert_eq!(points.len(), n, "points rows must match u_curves count");
-        assert!(
-            points.iter().all(|row| row.len() == m),
-            "each points row must have v_curves.len() columns",
-        );
+        if u_curves.is_empty() {
+            return Err(Error::InvalidSurfaceBuilderInput(
+                "gordon requires at least one u-curve",
+            ));
+        }
+        if v_curves.is_empty() {
+            return Err(Error::InvalidSurfaceBuilderInput(
+                "gordon requires at least one v-curve",
+            ));
+        }
+        if points.len() != n {
+            return Err(Error::InvalidSurfaceBuilderInput(
+                "points rows must match u_curves count",
+            ));
+        }
+        if !points.iter().all(|row| row.len() == m) {
+            return Err(Error::InvalidSurfaceBuilderInput(
+                "each points row must have v_curves.len() columns",
+            ));
+        }
 
         // S_u: skin the u-curves (v parameterizes across sections).
-        let s_u = BsplineSurface::skin(u_curves);
+        let s_u = Self::skin(u_curves)?;
 
         // S_v: skin the v-curves (u parameterizes across sections),
         // then swap axes so u/v orientation matches S_u.
-        let mut s_v = BsplineSurface::skin(v_curves);
+        let mut s_v = Self::skin(v_curves)?;
         s_v.swap_axes();
 
         // T: tensor product surface interpolating the grid points.
@@ -522,12 +571,16 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let n_v = m;
         let mut u_knots = Vec::with_capacity(n_u + 2);
         u_knots.push(0.0);
-        (0..n_u).for_each(|i| u_knots.push(i as f64 / (n_u - 1).max(1) as f64));
+        (0..n_u).for_each(|i| {
+            u_knots.push(crate::usize_to_f64(i) / crate::usize_to_f64((n_u - 1).max(1)));
+        });
         u_knots.push(1.0);
 
         let mut v_knots = Vec::with_capacity(n_v + 2);
         v_knots.push(0.0);
-        (0..n_v).for_each(|j| v_knots.push(j as f64 / (n_v - 1).max(1) as f64));
+        (0..n_v).for_each(|j| {
+            v_knots.push(crate::usize_to_f64(j) / crate::usize_to_f64((n_v - 1).max(1)));
+        });
         v_knots.push(1.0);
 
         let knot_u = KnotVector::from(u_knots);
@@ -536,12 +589,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let t_cp: Vec<Vec<P>> = (0..n_v)
             .map(|j| (0..n_u).map(|i| points[i][j]).collect())
             .collect();
-        let tensor = BsplineSurface::new_unchecked((knot_u, knot_v), t_cp);
+        let tensor = Self::new_unchecked((knot_u, knot_v), t_cp);
 
         // Make all three surfaces compatible.
         let mut surfaces = vec![s_u, s_v, tensor];
-        compat::make_surfaces_compatible(&mut surfaces)
-            .expect("gordon: surface compatibility normalization failed");
+        compat::make_surfaces_compatible(&mut surfaces)?;
 
         // G = S_u + S_v - T (boolean sum).
         let cp_u = surfaces[0].control_points();
@@ -557,26 +609,29 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
             })
             .collect();
 
-        BsplineSurface::new_unchecked(surfaces[0].knot_vectors().clone(), result_cp)
+        Ok(Self::new_unchecked(
+            surfaces[0].knot_vectors().clone(),
+            result_cp,
+        ))
     }
 
     /// Creates a surface by its boundary.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
-    /// let curve0 = BsplineCurve::new(
+    /// let curve0 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 0.0)],
     /// );
-    /// let curve1 = BsplineCurve::new(
+    /// let curve1 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(2),
     ///     vec![Vector2::new(1.0, 0.0), Vector2::new(2.0, 0.5), Vector2::new(1.0, 1.0)],
     /// );
-    /// let curve2 = BsplineCurve::new(
+    /// let curve2 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Vector2::new(1.0, 1.0), Vector2::new(0.0, 1.0)],
     /// );
-    /// let curve3 = BsplineCurve::new(
+    /// let curve3 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(2),
     ///     vec![Vector2::new(0.0, 1.0), Vector2::new(-1.0, 0.5), Vector2::new(0.0, 0.0)],
     /// );
@@ -595,19 +650,19 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// `curve2` are not contained.
     /// ```
     /// use monstertruck_geometry::prelude::*;
-    /// let curve0 = BsplineCurve::new(
+    /// let curve0 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 0.0)],
     /// );
-    /// let curve1 = BsplineCurve::new(
+    /// let curve1 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(2),
     ///     vec![Vector2::new(2.0, 0.0), Vector2::new(3.0, 0.5), Vector2::new(2.0, 1.0)],
     /// );
-    /// let curve2 = BsplineCurve::new(
+    /// let curve2 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(1),
     ///     vec![Vector2::new(1.0, 1.0), Vector2::new(0.0, 1.0)],
     /// );
-    /// let curve3 = BsplineCurve::new(
+    /// let curve3 = BsplineCurve::new_unchecked(
     ///     KnotVector::bezier_knot(2),
     ///     vec![Vector2::new(-1.0, 1.0), Vector2::new(-2.0, 0.5), Vector2::new(-1.0, 0.0)],
     /// );
@@ -617,15 +672,16 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     curve2.clone(),
     ///     curve3.clone()
     /// );
-    /// assert_ne!(surface.subs(0.0, 0.0), curve0.subs(0.0));
-    /// assert_eq!(surface.subs(0.0, 0.0), curve3.subs(1.0));
+    /// assert_ne!(surface.evaluate(0.0, 0.0), curve0.evaluate(0.0));
+    /// assert_eq!(surface.evaluate(0.0, 0.0), curve3.evaluate(1.0));
     /// ```
+    #[must_use]
     pub fn by_boundary(
         mut curve0: BsplineCurve<P>,
         mut curve1: BsplineCurve<P>,
         mut curve2: BsplineCurve<P>,
         mut curve3: BsplineCurve<P>,
-    ) -> BsplineSurface<P> {
+    ) -> Self {
         curve2.invert();
         curve3.invert();
         curve0.syncro_degree(&mut curve2);
@@ -642,12 +698,12 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let n = curve0.control_points().len();
         let m = curve3.control_points().len();
         for i in 1..(n - 1) {
-            let u = (i as f64) / (n as f64);
+            let u = crate::usize_to_f64(i) / crate::usize_to_f64(n);
             let pt0 = curve2.control_points[i]
                 + (curve0.control_points[i] - curve2.control_points[i]) * u;
             let mut new_row = vec![*curve0.control_point(i)];
             for j in 1..(m - 1) {
-                let v = (j as f64) / (m as f64);
+                let v = crate::usize_to_f64(j) / crate::usize_to_f64(m);
                 let pt1 = curve1.control_points[j]
                     + (curve3.control_points[j] - curve1.control_points[j]) * v;
                 new_row.push(pt0 + (pt1 - pt0) / 2.0);
@@ -656,6 +712,6 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
             control_points.push(new_row);
         }
         control_points.push(curve1.control_points().clone());
-        BsplineSurface::new(knot_vecs, control_points)
+        Self::new_unchecked(knot_vecs, control_points)
     }
 }

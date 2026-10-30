@@ -44,7 +44,7 @@ This fork exists to accomplish two main goals:
 Per-crate detail and porting verdicts live in [`TRUCK-PARITY.md`](TRUCK-PARITY.md); upstream commits we hand-ported include SHAs in their commit bodies for attribution.
 
 **Workspace Modernization**
-- All crates renamed `truck-*` -> `monstertruck-*`; `truck-platform` -> `monstertruck-gpu`, `truck-stepio/src/{in,out}` -> `monstertruck-io/src/step/{load,save}` (via `monstertruck-step`, since retired), `truck-shapeops` -> `monstertruck-solid`.
+- All crates renamed `truck-*` -> `monstertruck-*`; `truck-platform` -> `monstertruck-gpu`, `truck-stepio/src/{in,out}` -> `monstertruck-io/src/step/{load,save}`, `truck-shapeops` -> `monstertruck-solid`.
 - Rust edition 2024, `wgpu` 29, `rand` 0.10, `criterion` 0.8, `gloo` 0.12; `web_time::Instant` for `wasm`.
 - `vtk` dropped from default features over [RUSTSEC-2026-0041](https://rustsec.org/advisories/RUSTSEC-2026-0041.html); opt-in only.
 - Workspace `Cargo.toml` consolidates shared deps; `just` replaces `cargo-make`; GitHub Actions replaces GitLab CI; `fmt --check` runs on nightly so `rustfmt.toml`'s unstable options actually apply.
@@ -55,7 +55,7 @@ Per-crate detail and porting verdicts live in [`TRUCK-PARITY.md`](TRUCK-PARITY.m
 - Parameter-space markers `D1`/`D2` -> `CurveParameter`/`SurfaceParameter`; `Univariate*`/`Bivariate*ScalarFunction` -> `CurveScalarFunction`/`SurfaceScalarFunction`; `KnotVec` -> `KnotVector`; `BSpline*` -> `Bspline*`.
 - Public names de-abbreviated: `attrs()` -> `attributes()`, `PartAttrs` -> `PartAttributes`, `DisplayByStep` -> `StepFormat`, `assy` -> `assembly`, `rbf_surface` -> `rolling_ball_fillet`, `af_surface` -> `approximate_fillet_surface`, `interpole` -> `interpolate`.
 - Accessors follow `<property>_<direction>`, matching `derivative_u`: `u_period`/`v_period` -> `period_u`/`period_v`, `Plane::u_axis`/`v_axis` -> `axis_u`/`axis_v`, `row_curve`/`column_curve` -> `curve_u`/`curve_v` (the row/column pair was crossed -- the *row* curve varies `u`).
-- Every rename ships a deprecated alias so upstream-style code still compiles.
+- Deprecated rename aliases have been removed; callers use the canonical names directly.
 
 **Geometry Correctness**
 - `Sphere::search_nearest_parameter` guards: `acos` clamp, exact-pole `0/0` singularity, `point == center` singularity.
@@ -78,14 +78,14 @@ Per-crate detail and porting verdicts live in [`TRUCK-PARITY.md`](TRUCK-PARITY.m
 - Assembly STEP output: `StepDesign`, `MatrixAsAxis`, full `save::assembly` module (upstream `213-assy-step-output`).
 - Tangent-based circular arc construction in `monstertruck-modeling`: `CircularArcConstraint::{ThroughPoint, StartTangent}`, `try_circle_arc_by_start_tangent` (renamed from upstream `ArcConstraint`/`circle_arc_by_tangent0`; upstream [`993e156c`](https://github.com/ricosjp/truck/commit/993e156c)).
 - Fillet engine rewrite: per-edge radii, variable-radius open wires, multi-chain + chamfer, `Ridge` and `Custom` profile modes, robust topology surgery, degenerate-edge rejection, `IntersectionCurve` support.
-- T-spline / T-NURCC promoted to first-class surface type with `BsplineSurface` conversion, curvature-based adaptive refinement, and hot-path optimization (lock-free `Tmesh::subs()`, flat-array layout for `analytical_der_mn()`).
-- Scalar-generic `v2` trait family (`CurveParameter<T>`/`SurfaceParameter<T>`, `SearchParameter<v2::D2<T>>`, etc.) -- no upstream equivalent; default scalar still `f64`.
+- T-spline / T-NURCC promoted to first-class surface type with `BsplineSurface` conversion, curvature-based adaptive refinement, and hot-path optimization (lock-free `Tmesh::try_evaluate()`, flat-array layout for `analytical_der_mn()`).
+- Scalar-generic `v2` trait family (`CurveParameter<T>`/`SurfaceParameter<T>`, `SearchParameter<v2::SurfaceParameter<T>>`, etc.) -- no upstream equivalent; `f64` remains the established kernel scalar while selected geometry types support alternate scalars.
 - `SurfaceDerivatives::absolute_derivatives` + `combinatorial_derivative(s)` ported from upstream's `truck-base::ders`, backing the offset surface family.
 - `BasisWindow` active-window B-spline basis evaluation (upstream [`77e25635`](https://github.com/ricosjp/truck/commit/77e25635)), reimplemented with `SmallVec`; both `BsplineCurve` and `BsplineSurface` only touch active control points.
 - STEP face preview tool at [`monstertruck-io/examples/preview-step-face.rs`](monstertruck-io/examples/preview-step-face.rs) for diagnostic visualization -- canonical replacement for ad-hoc `eprintln!`-in-`loops_store` debugging; see [AGENTS.md](AGENTS.md#visual-debugging-for-meshingtrim-bugs).
 
 **I/O and Exchange Formats**
-- All exchange formats consolidated into [`monstertruck-io`](monstertruck-io/), one feature per format, so a caller reaches every format through a single dependency and compiles only what it asks for. `monstertruck-step` remains as a deprecated re-export, so an existing `monstertruck-step = "0.3"` requirement keeps resolving.
+- All exchange formats consolidated into [`monstertruck-io`](monstertruck-io/), one feature per format, so a caller reaches every format through a single dependency and compiles only what it asks for.
 - ISO 10303-21 now parses through [`step-p21`](https://crates.io/crates/step-p21), our published fork of [`ruststep`](https://github.com/ricosjp/ruststep). Two syntax fixes real CAD exports need had sat unreleased on ruststep master for four years: `''` as an escaped apostrophe (which imperial CAD emits as inch marks in thread callouts) and `()` as an empty aggregate. A `[patch.crates-io]` fixes your own build but never your dependents, so shipping them required publishing.
 - IGES 5.3 reading is scaffolded on the [`cadmpeg`](https://github.com/cadmpeg/cadmpeg) codecs behind an `iges` feature. The conversion to B-rep is unwritten and returns a typed `Unimplemented` rather than an empty model -- an importer that silently returns nothing is worse than one that refuses.
 - A second STEP reader sits behind a `cadmpeg` feature alongside ours. Ours stays the default and the measurement baseline; keeping both compiled lets the two be run over one corpus and diffed, so any future swap is a decision with evidence behind it.
@@ -173,7 +173,6 @@ The `monstertruck` kernel is split into independent crates so you only need to p
 ### I/O & Bindings
 
 - [`monstertruck-io`](monstertruck-io/) -- CAD exchange formats, one feature per format: STEP (read and write, on by default), IGES (placeholder).
-- [`monstertruck-step`](monstertruck-step/) -- **deprecated**, a re-export of `monstertruck-io`'s `step` module.
 - [`monstertruck-wasm`](monstertruck-wasm/) -- Wasm/JavaScript bindings.
 
 ## Dependency Graph

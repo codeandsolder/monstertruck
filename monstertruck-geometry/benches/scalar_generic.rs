@@ -25,13 +25,13 @@ fn bench_evaluate(c: &mut Criterion) {
                 sum.z += p.z + d.z;
             }
             sum
-        })
+        });
     });
     group.bench_function("f64", |b| {
         b.iter(|| {
             let mut sum = Point3::new(0.0, 0.0, 0.0);
             for i in 0..1000 {
-                let t = i as f64 / 999.0;
+                let t = f64::from(i) / 999.0;
                 let p = v2::ParametricCurve::evaluate(&line_f64, black_box(t));
                 let d = v2::ParametricCurve::derivative(&line_f64, black_box(t));
                 sum.x += p.x + d.x;
@@ -39,7 +39,7 @@ fn bench_evaluate(c: &mut Criterion) {
                 sum.z += p.z + d.z;
             }
             sum
-        })
+        });
     });
     group.finish();
 }
@@ -56,12 +56,12 @@ fn bench_presearch(c: &mut Criterion) {
     group.bench_function("f32_1000div", |b| {
         b.iter(|| {
             v2::algo::curve::presearch(&line_f32, black_box(query_f32), (0.0f32, 1.0f32), 1000)
-        })
+        });
     });
     group.bench_function("f64_1000div", |b| {
         b.iter(|| {
             v2::algo::curve::presearch(&line_f64, black_box(query_f64), (0.0f64, 1.0f64), 1000)
-        })
+        });
     });
     group.finish();
 }

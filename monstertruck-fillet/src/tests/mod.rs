@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use monstertruck_geometry::prelude::*;
-use monstertruck_io::step::save::{DisplayByStep, StepCurve, StepLength, StepModels};
+use monstertruck_io::step::save::{StepCurve, StepFormat, StepLength, StepModels};
 use monstertruck_meshing::prelude::*;
 
 use super::geometry::*;
@@ -40,14 +40,14 @@ fn step_polyline(curve: &Curve) -> PolylineCurve<Point3> {
     let (t0, t1) = curve.range_tuple();
     let points = (0..=32)
         .map(|i| t0 + (t1 - t0) * (i as f64) / 32.0)
-        .map(|t| curve.subs(t))
+        .map(|t| curve.evaluate(t))
         .collect();
     PolylineCurve(points)
 }
 
-impl DisplayByStep for Curve {
+impl StepFormat for Curve {
     fn fmt(&self, idx: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        DisplayByStep::fmt(&step_polyline(self), idx, f)
+        StepFormat::fmt(&step_polyline(self), idx, f)
     }
 }
 
@@ -57,12 +57,12 @@ impl StepLength for Curve {
 
 impl StepCurve for Curve {}
 
-fn format_entity(entity: &(impl DisplayByStep + StepLength), idx: usize) -> (String, usize) {
+fn format_entity(entity: &(impl StepFormat + StepLength), idx: usize) -> (String, usize) {
     struct EntityFmt<'a, T>(&'a T, usize);
 
-    impl<T: DisplayByStep> fmt::Display for EntityFmt<'_, T> {
+    impl<T: StepFormat> fmt::Display for EntityFmt<'_, T> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            DisplayByStep::fmt(self.0, self.1, f)
+            StepFormat::fmt(self.0, self.1, f)
         }
     }
 
@@ -101,7 +101,7 @@ fn dump_shell_step(name: &str, shell: &Shell) {
 }
 
 fn dump_surface_step<S>(name: &str, surface: &S)
-where S: DisplayByStep + StepLength {
+where S: StepFormat + StepLength {
     let (entity, _) = format_entity(surface, 1);
     write_step(
         test_artifact_dir().join(format!("{name}.step")),
@@ -111,7 +111,7 @@ where S: DisplayByStep + StepLength {
 }
 
 fn dump_surface_pair_step<S>(name: &str, surface0: &S, surface1: &S)
-where S: DisplayByStep + StepLength {
+where S: StepFormat + StepLength {
     let (entity0, next) = format_entity(surface0, 1);
     let (entity1, _) = format_entity(surface1, next);
     write_step(
@@ -137,8 +137,8 @@ fn build_box_shell() -> (Shell, [Edge; 12], Vec<Vertex>) {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1), // 0
@@ -159,7 +159,7 @@ fn build_box_shell() -> (Shell, [Edge; 12], Vec<Vertex>) {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
         let knot_vecs = (knot_vec.clone(), knot_vec);
-        let bsp = BsplineSurface::new(knot_vecs, control_points);
+        let bsp = BsplineSurface::new_unchecked(knot_vecs, control_points);
 
         let wire: Wire = [i, j, k, l]
             .into_iter()
@@ -178,7 +178,7 @@ fn build_box_shell() -> (Shell, [Edge; 12], Vec<Vertex>) {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     // Top, front, right, back (partial box -- 4 faces sharing edges).
@@ -208,8 +208,8 @@ fn build_5face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1), // 0: top front
@@ -229,7 +229,7 @@ fn build_5face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
     let plane = |i: usize, j: usize, k: usize, l: usize| {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()
@@ -247,7 +247,7 @@ fn build_5face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let shell: Shell = [
@@ -277,8 +277,8 @@ fn build_6face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1), // 0: top front
@@ -298,7 +298,7 @@ fn build_6face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
     let plane = |i: usize, j: usize, k: usize, l: usize| {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()
@@ -316,7 +316,7 @@ fn build_6face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let shell: Shell = [

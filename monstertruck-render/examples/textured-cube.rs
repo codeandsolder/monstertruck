@@ -6,15 +6,22 @@
 // The texture is referenced by:
 // https://cc0textures.com/view?id=WoodFloor024
 
-use monstertruck_gpu::*;
+use monstertruck_gpu::{
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
+    WindowSceneDescriptor,
+};
 use monstertruck_meshing::prelude::*;
-use monstertruck_modeling::*;
-use monstertruck_render::*;
+use monstertruck_modeling::{Solid, builder};
+use monstertruck_render::{CreatorCreator, Material, PolygonInstance, PolygonState, image2texture};
 use std::f64::consts::PI;
 use std::sync::Arc;
-use winit::{dpi::*, event::*, keyboard::*};
+use winit::{
+    dpi::PhysicalPosition,
+    event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase},
+    keyboard::{KeyCode, PhysicalKey},
+};
 mod app;
-use app::*;
+use app::{App, AppResult, ControlFlow, async_trait};
 
 const TEXTURE_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -30,18 +37,20 @@ struct MyApp {
 }
 
 impl MyApp {
-    fn create_camera() -> Camera {
+    fn create_camera() -> AppResult<Camera> {
         let matrix = Matrix4::look_at_rh(
             Point3::new(1.5, 1.5, 1.5),
             Point3::origin(),
             Vector3::unit_y(),
         );
-        Camera {
-            matrix: matrix.invert().unwrap(),
+        Ok(Camera {
+            matrix: matrix
+                .invert()
+                .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
             method: ProjectionMethod::perspective(Rad(PI / 4.0)),
             near_clip: 0.1,
             far_clip: 40.0,
-        }
+        })
     }
 
     fn create_cube() -> Solid {
@@ -54,15 +63,15 @@ impl MyApp {
 
 #[async_trait(?Send)]
 impl App for MyApp {
-    async fn init(window: Arc<winit::window::Window>) -> MyApp {
+    async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;
         let desc = WindowSceneDescriptor {
             studio: StudioConfig {
-                camera: MyApp::create_camera(),
+                camera: Self::create_camera()?,
                 lights: vec![Light {
                     position: Point3::new(1.0, 1.0, 1.0),
                     color: Vector3::new(1.0, 1.0, 1.0),
-                    light_type: LightType::Point,
+                    kind: LightType::Point,
                 }],
                 ..Default::default()
             },
@@ -71,9 +80,9 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &desc).await;
-        let texture = image::load_from_memory(TEXTURE_BYTES).unwrap();
-        let texture = image2texture::image2texture(scene.device_handler(), &texture);
+        let mut scene = WindowScene::from_window(window, &desc).await?;
+        let texture = image::load_from_memory(TEXTURE_BYTES)?;
+        let texture = image2texture::image2texture(scene.device_handler(), &texture)?;
         let state = PolygonState {
             matrix: Matrix4::from_translation(Vector3::new(-0.5, -0.5, -0.5)),
             material: Material {
@@ -88,15 +97,15 @@ impl App for MyApp {
             backface_culling: true,
         };
         let mesh = Self::create_cube().triangulation(0.05).to_polygon();
-        let shape: PolygonInstance = scene.instance_creator().create_instance(&mesh, &state);
+        let shape: PolygonInstance = scene.instance_creator().create_instance(&mesh, &state)?;
         scene.add_object(&shape);
-        MyApp {
+        Ok(Self {
             scene,
             rotate_flag: false,
             prev_cursor: None,
             camera_changed: None,
             light_changed: None,
-        }
+        })
     }
 
     fn app_title<'a>() -> Option<&'a str> { Some("textured cube") }
@@ -114,7 +123,7 @@ impl App for MyApp {
                     let desc = self.scene.studio_config_mut();
                     (&mut desc.lights[0], &desc.camera)
                 };
-                match light.light_type {
+                match light.kind {
                     LightType::Point => {
                         light.position = camera.position();
                     }
@@ -133,16 +142,16 @@ impl App for MyApp {
                 let camera = &mut self.scene.studio_config_mut().camera;
                 match &mut camera.method {
                     ProjectionMethod::Parallel { screen_size } => {
-                        *screen_size *= 0.9f64.powf(y as f64);
+                        *screen_size *= 0.9f64.powf(f64::from(y));
                     }
                     ProjectionMethod::Perspective { .. } => {
-                        let trans_vec = camera.eye_direction() * y as f64 * 0.2;
+                        let trans_vec = camera.eye_direction() * f64::from(y) * 0.2;
                         camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
                     }
                 }
             }
             MouseScrollDelta::PixelDelta(_) => {}
-        };
+        }
         Self::default_control_flow()
     }
 
@@ -159,17 +168,16 @@ impl App for MyApp {
                 axis += dir2d[0] * matrix[1].truncate();
                 axis /= axis.magnitude();
                 let angle = dir2d.magnitude() * 0.01;
-                let mat = Matrix4::from_axis_angle(axis, Rad(angle));
-                *matrix = mat.invert().unwrap() * *matrix;
+                let inverse_rotation = Matrix4::from_axis_angle(axis, Rad(-angle));
+                *matrix = inverse_rotation * *matrix;
             }
             self.prev_cursor = Some(position);
         }
         Self::default_control_flow()
     }
     fn keyboard_input(&mut self, input: KeyEvent, _: bool) -> ControlFlow {
-        let keycode = match input.physical_key {
-            PhysicalKey::Code(keycode) => keycode,
-            _ => return Self::default_control_flow(),
+        let PhysicalKey::Code(keycode) = input.physical_key else {
+            return Self::default_control_flow();
         };
         match keycode {
             KeyCode::KeyP => {
@@ -200,13 +208,13 @@ impl App for MyApp {
                     let desc = self.scene.studio_config_mut();
                     (&mut desc.lights[0], &desc.camera)
                 };
-                *light = match light.light_type {
+                *light = match light.kind {
                     LightType::Point => {
                         let position = Point3::from_vec(camera.position().to_vec().normalize());
                         Light {
                             position,
                             color: Vector3::new(1.0, 1.0, 1.0),
-                            light_type: LightType::Uniform,
+                            kind: LightType::Uniform,
                         }
                     }
                     LightType::Uniform => {
@@ -214,7 +222,7 @@ impl App for MyApp {
                         Light {
                             position,
                             color: Vector3::new(1.0, 1.0, 1.0),
-                            light_type: LightType::Point,
+                            kind: LightType::Point,
                         }
                     }
                 }
@@ -224,7 +232,11 @@ impl App for MyApp {
         Self::default_control_flow()
     }
 
-    fn render(&mut self) { self.scene.render_frame(); }
+    fn render(&mut self) {
+        if let Err(error) = self.scene.render_frame() {
+            eprintln!("render failed: {error}");
+        }
+    }
 }
 
 fn main() { MyApp::run(); }

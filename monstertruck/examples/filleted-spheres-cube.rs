@@ -10,9 +10,12 @@ use monstertruck_geometry::prelude::{
     BoundedCurve, ExactParameterBoundary2D, ParameterCurve, Point2, SearchNearestParameter,
     SearchParameter,
 };
-use monstertruck_io::step::save::{CompleteStepDisplay, StepModel};
+use monstertruck_io::step::save::{CompleteStepDisplay, StepHeaderDescriptor, StepModel};
 use monstertruck_mesh::PolylineCurve as PolylineCurve2;
-use monstertruck_modeling::*;
+use monstertruck_modeling::{
+    Curve, Curve2D, Edge, EuclideanSpace, NurbsCurve, ParameterDivision1D, Point3, Rad, Solid,
+    Surface, SurfaceCurve, Tolerance, Vector3, Wire, builder,
+};
 use monstertruck_solid::{difference, or};
 use monstertruck_topology::compress::{CompressedSolid, CompressedTrimmedSolid};
 use std::f64::consts::PI;
@@ -75,11 +78,14 @@ enum StepExportFlavor {
 /// Any other value falls back to the conservative shared-edge export.
 fn step_export_flavor() -> StepExportFlavor {
     match std::env::var("MT_STEP_EXPORT_FLAVOR").ok().as_deref() {
-        Some("curve-3d-only") => StepExportFlavor::Curve3DOnly,
         Some("shared") => StepExportFlavor::Shared,
         Some("exact-trims") => StepExportFlavor::ExactTrims,
         Some("face-trims") => StepExportFlavor::FaceTrims,
-        _ => StepExportFlavor::Curve3DOnly,
+        Some("curve-3d-only") | None => StepExportFlavor::Curve3DOnly,
+        Some(other) => {
+            eprintln!("unknown MT_STEP_EXPORT_FLAVOR={other:?}; using curve-3d-only");
+            StepExportFlavor::Curve3DOnly
+        }
     }
 }
 
@@ -89,15 +95,13 @@ fn curve3d_only_curve(curve: &Curve) -> Curve {
         Curve::ParameterCurve(parameter_curve) => Curve::NurbsCurve(NurbsCurve::new(
             Curve::ParameterCurve(parameter_curve.clone()).lift_up(),
         )),
-        Curve::IntersectionCurve(surface_curve) => {
-            Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
-                surface_curve.surface0().clone(),
-                surface_curve.surface1().clone(),
-                Box::new(curve3d_only_curve(surface_curve.leader())),
-                None,
-                None,
-            ))
-        }
+        Curve::Intersection(surface_curve) => Curve::Intersection(SurfaceCurve::with_boundaries(
+            surface_curve.surface0().clone(),
+            surface_curve.surface1().clone(),
+            Box::new(curve3d_only_curve(surface_curve.leader())),
+            None,
+            None,
+        )),
     }
 }
 
@@ -111,19 +115,24 @@ fn write_final_artifacts(result: &Solid, trim_tolerance: f64) -> Result<()> {
     let curve3d_only = shared.map_curves(curve3d_only_curve);
     let curve3d_only_step = CompleteStepDisplay::new(
         StepModel::from_curve3d_only_solid(&curve3d_only),
-        Default::default(),
+        StepHeaderDescriptor::default(),
     )
     .to_string();
     let shared_step =
-        CompleteStepDisplay::new(StepModel::from(&shared), Default::default()).to_string();
+        CompleteStepDisplay::new(StepModel::from(&shared), StepHeaderDescriptor::default())
+            .to_string();
     let exact: CompressedTrimmedSolid<_, _, _, _> =
         result.compress_with_face_trims(exact_face_trim);
     let exact_step =
-        CompleteStepDisplay::new(StepModel::from(&exact), Default::default()).to_string();
+        CompleteStepDisplay::new(StepModel::from(&exact), StepHeaderDescriptor::default())
+            .to_string();
     let face_trims: CompressedTrimmedSolid<_, _, _, _> = result
         .compress_with_face_trims(|edge, surface| sampled_face_trim(edge, surface, trim_tolerance));
-    let face_trims_step =
-        CompleteStepDisplay::new(StepModel::from(&face_trims), Default::default()).to_string();
+    let face_trims_step = CompleteStepDisplay::new(
+        StepModel::from(&face_trims),
+        StepHeaderDescriptor::default(),
+    )
+    .to_string();
     std::fs::write(
         example_output::artifact_path("filleted-spheres-cube-curve3d-only.step")?,
         &curve3d_only_step,
@@ -245,7 +254,7 @@ fn max_step_override() -> Option<usize> {
 }
 
 /// Create a sphere solid centered at `center` with the given `radius`.
-fn sphere(center: Point3, radius: f64) -> Solid {
+fn sphere(center: Point3, radius: f64) -> Result<Solid> {
     let top = builder::vertex(Point3::new(0.0, radius, 0.0));
     let wire: Wire = builder::revolve(
         &top,
@@ -253,16 +262,16 @@ fn sphere(center: Point3, radius: f64) -> Solid {
         Vector3::unit_x(),
         builder::SweepAngle::Partial(Rad(PI)),
         3,
-    );
+    )?;
     let shell = builder::revolve_wire(
         &wire,
         Point3::origin(),
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         4,
-    );
-    let s = Solid::new(vec![shell]);
-    builder::translated(&s, center.to_vec())
+    )?;
+    let s = Solid::new_unchecked(vec![shell]);
+    Ok(builder::translated(&s, center.to_vec()))
 }
 
 fn main() -> Result<()> {
@@ -314,11 +323,11 @@ fn main() -> Result<()> {
             }
             let (op_name, center, next) = match *operation {
                 Operation::Difference(center) => {
-                    let sphere = sphere(center, r);
+                    let sphere = sphere(center, r)?;
                     ("difference", center, difference(&body, &sphere, tol))
                 }
                 Operation::Union(center) => {
-                    let sphere = sphere(center, r);
+                    let sphere = sphere(center, r)?;
                     ("union", center, or(&body, &sphere, tol))
                 }
             };

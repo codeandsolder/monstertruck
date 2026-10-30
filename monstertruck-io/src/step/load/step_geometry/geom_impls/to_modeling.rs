@@ -46,28 +46,26 @@ impl TryFrom<&Curve3D> for ModelingCurve {
                         .cloned()
                         .map(|trim| to_modeling_trim(&trim))
                         .transpose()?;
-                    Ok(ModelingCurve::IntersectionCurve(
-                        SurfaceCurve::with_boundaries(
-                            Box::new(surface0),
-                            Box::new(surface1),
-                            Box::new(curve.leader().try_into()?),
-                            boundary0,
-                            boundary1,
-                        ),
-                    ))
+                    Ok(ModelingCurve::Intersection(SurfaceCurve::with_boundaries(
+                        Box::new(surface0),
+                        Box::new(surface1),
+                        Box::new(curve.leader().try_into()?),
+                        boundary0,
+                        boundary1,
+                    )))
                 } else {
                     curve.leader().try_into()
                 }
             }
-            Curve3D::IntersectionCurve(curve) => Ok(ModelingCurve::IntersectionCurve(
-                SurfaceCurve::with_boundaries(
+            Curve3D::IntersectionCurve(curve) => {
+                Ok(ModelingCurve::Intersection(SurfaceCurve::with_boundaries(
                     Box::new(curve.surface0().as_ref().try_into()?),
                     Box::new(curve.surface1().as_ref().try_into()?),
                     Box::new(curve.leader().as_ref().try_into()?),
                     None,
                     None,
-                ),
-            )),
+                )))
+            }
             _ => value
                 .try_into_homogeneous_bspline_curve()
                 .map(|curve| ModelingCurve::NurbsCurve(NurbsCurve::new(curve)))
@@ -106,7 +104,7 @@ impl TryFrom<&Curve2D> for ModelingCurve2D {
 /// The predicate has to be the BUILDER's and no wider: a sphere that fails it
 /// must reach the generic arm, where the builder returns `None` and the
 /// conversion refuses -- which is what it does today.
-/// Whether STEP spheres route onto the analytic [`ModelingSurface::SphericalSurface`].
+/// Whether STEP spheres route onto the analytic [`ModelingSurface::Sphere`].
 ///
 /// **`false` -- STILL HELD, but NOT for the reason the previous revision gave.**
 /// Ledger class C14.
@@ -252,7 +250,7 @@ fn analytic_torus_is_representable(torus: &Torus) -> bool {
 /// STEP surface -> modeling surface.
 ///
 /// Cylinders and cones map onto the ANALYTIC
-/// [`ModelingSurface::RevolutionSurface`] variant rather than being flattened.
+/// [`ModelingSurface::Revolution`] variant rather than being flattened.
 /// The flattening path is lossy in a way nothing downstream can undo: a STEP
 /// `CYLINDRICAL_SURFACE` is a revolution of a UNIT-LENGTH profile line, so the
 /// untrimmed homogeneous conversion emits a control net spanning ONE AXIAL UNIT
@@ -329,15 +327,13 @@ impl TryFrom<&Surface> for ModelingSurface {
             Surface::ElementarySurface(
                 ElementarySurface::CylindricalSurface(surface)
                 | ElementarySurface::ConicalSurface(surface),
-            ) => Ok(ModelingSurface::RevolutionSurface(surface.map_ref(
-                |revolution| {
-                    RevolutionSurface::by_revolution(
-                        ModelingCurve::Line(*revolution.entity_curve()),
-                        revolution.origin(),
-                        revolution.axis(),
-                    )
-                },
-            ))),
+            ) => Ok(ModelingSurface::Revolution(surface.map_ref(|revolution| {
+                RevolutionSurface::by_revolution(
+                    ModelingCurve::Line(*revolution.entity_curve()),
+                    revolution.origin(),
+                    revolution.axis(),
+                )
+            }))),
             // `map_ref` again: the `Matrix4` and the orientation flag ride
             // across untouched, only the STEP newtype's `(u, v)` relabeling is
             // dropped. That relabeling has Jacobian determinant +1, so the
@@ -350,9 +346,7 @@ impl TryFrom<&Surface> for ModelingSurface {
                 if ROUTE_ANALYTIC_SPHERE
                     && analytic_sphere_is_representable(&surface.entity().0) =>
             {
-                Ok(ModelingSurface::SphericalSurface(
-                    surface.map_ref(|sphere| sphere.0),
-                ))
+                Ok(ModelingSurface::Sphere(surface.map_ref(|sphere| sphere.0)))
             }
             // TORUS ROUTING, spec 012 W1: the sibling of the sphere arm above,
             // and it was HELD BACK behind an `if false &&` for one round.
@@ -397,7 +391,7 @@ impl TryFrom<&Surface> for ModelingSurface {
                 // The dead arm carried the clone unnoticed -- clippy does not
                 // lint through an `if false` guard, which is one more reason a
                 // held-back arm is not a free thing to leave lying around.
-                Ok(ModelingSurface::ToroidalSurface(*surface))
+                Ok(ModelingSurface::Torus(*surface))
             }
             _ => value
                 .try_into_homogeneous_bspline_surface()
@@ -426,7 +420,7 @@ fn u1_step_sphere(radius: f64) -> Surface {
 #[cfg(test)]
 fn u1_step_torus(large_radius: f64, small_radius: f64) -> Surface {
     Surface::ElementarySurface(ElementarySurface::ToroidalSurface(Processor::new(
-        Torus::new(Point3::new(1.0, -2.0, 3.0), large_radius, small_radius),
+        Torus::new_unchecked(Point3::new(1.0, -2.0, 3.0), large_radius, small_radius),
     )))
 }
 
@@ -447,7 +441,7 @@ fn the_analytic_route_emits_the_same_rational_net_the_flattened_route_did() {
         assert!(
             matches!(
                 modeling,
-                ModelingSurface::SphericalSurface(_) | ModelingSurface::ToroidalSurface(_)
+                ModelingSurface::Sphere(_) | ModelingSurface::Torus(_)
             ),
             "spheres and tori must reach the analytic variants, got {modeling:?}",
         );
@@ -534,7 +528,7 @@ fn a_spindle_torus_is_still_refused_by_the_analytic_route() {
         assert!(
             matches!(
                 ModelingSurface::try_from(&step),
-                Ok(ModelingSurface::ToroidalSurface(_))
+                Ok(ModelingSurface::Torus(_))
             ),
             "torus (R = {large_radius}, r = {small_radius}) must convert typed",
         );

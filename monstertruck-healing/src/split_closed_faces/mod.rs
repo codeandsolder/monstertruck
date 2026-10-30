@@ -793,15 +793,15 @@ where
     let mut previous0 = t0;
     let mut previous1 = None;
     for _ in 0..100 {
-        let p = pcurve.subs(t0);
+        let p = pcurve.evaluate(t0);
         let t1 = curve.search_nearest_parameter(p, previous1, 100)?;
-        let q = curve.subs(t1);
+        let q = curve.evaluate(t1);
         t0 = pcurve.search_nearest_parameter(q, t0, 100)?;
         if let Some(previous1) = previous1
             && previous0.near(&t0)
             && previous1.near(&t1)
         {
-            return Some((t0, t1, pcurve.subs(t0)));
+            return Some((t0, t1, pcurve.evaluate(t0)));
         }
         previous0 = t0;
         previous1 = Some(t1);
@@ -1141,7 +1141,7 @@ fn boundary_into_domain<S: ParametricSurface3D>(vec: &mut Vec<Point2>, surface: 
         && !vec[0].near(&last)
     {
         let Point2 { x: u0, y: v0 } = last;
-        if surface.uder(u0, v0).so_small() || surface.vder(u0, v0).so_small() {
+        if surface.derivative_u(u0, v0).so_small() || surface.derivative_v(u0, v0).so_small() {
             vec.push(vec[0]);
         }
     }

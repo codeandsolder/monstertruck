@@ -3,7 +3,16 @@
 //! traits that build trimmed topology out of them.
 
 use super::content_hash::content_hash64;
-use super::*;
+use super::{
+    BoundedCurve, BsplineCurve, BsplineSurface, CompressedTrimmedShell, CompressedTrimmedSolid,
+    Curve, Curve2D, ExactParameterBoundary2D, HashMap, InnerSpace, KnotVector, Line, Matrix4,
+    MetricSpace, NurbsCurve, NurbsSurface, ParameterCurve, ParameterDivision1D, ParametricCurve,
+    ParametricCurve3D, ParametricSurface, Point2, Point3, Processor, RefCell, RevolutionSurface,
+    SearchNearestParameter, SearchParameter, Shell, Solid, Surface, TOLERANCE, Tolerance,
+    TrimmedShell, TrimmedSolid, Vector3, Vector4, iter,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator, TrimmedFace};
 
 type ModelTrimCurve = ParameterCurve<Curve2D, Box<Surface>>;
 type ExactTrimCacheKey = (u64, u64);
@@ -48,8 +57,8 @@ fn homogeneous_point2(control: Vector3) -> Option<Point2> {
 
 fn linear_curve2d_boundary(curve: &Curve2D, tolerance: f64) -> Option<Line<Point2>> {
     let range = curve.range_tuple();
-    let start = curve.subs(range.0);
-    let end = curve.subs(range.1);
+    let start = curve.evaluate(range.0);
+    let end = curve.evaluate(range.1);
     match curve {
         Curve2D::Line(line) => Some(*line),
         Curve2D::Polyline(polyline) => {
@@ -79,14 +88,15 @@ pub(super) fn parameter_curve_points(
     boundary: &ParameterCurve<Curve2D, Box<Surface>>,
     tolerance: f64,
 ) -> Vec<Point2> {
-    linear_curve2d_boundary(boundary.curve(), tolerance)
-        .map(|line| line_points(line, tolerance))
-        .unwrap_or_else(|| {
+    linear_curve2d_boundary(boundary.curve(), tolerance).map_or_else(
+        || {
             boundary
                 .curve()
                 .parameter_division(boundary.curve().range_tuple(), tolerance)
                 .1
-        })
+        },
+        |line| line_points(line, tolerance),
+    )
 }
 
 pub(super) fn boundary_matches_surface_curve(
@@ -97,10 +107,12 @@ pub(super) fn boundary_matches_surface_curve(
     let leader_range = leader.range_tuple();
     let boundary_range = boundary.curve().range_tuple();
     [0.0, 0.5, 1.0].into_iter().all(|s| {
-        let leader_t = leader_range.0 + (leader_range.1 - leader_range.0) * s;
-        let boundary_t = boundary_range.0 + (boundary_range.1 - boundary_range.0) * s;
-        let uv = boundary.curve().subs(boundary_t);
-        surface.subs(uv.x, uv.y).near(&leader.subs(leader_t))
+        let leader_t = (leader_range.1 - leader_range.0).mul_add(s, leader_range.0);
+        let boundary_t = (boundary_range.1 - boundary_range.0).mul_add(s, boundary_range.0);
+        let uv = boundary.curve().evaluate(boundary_t);
+        surface
+            .evaluate(uv.x, uv.y)
+            .near(&leader.evaluate(leader_t))
     })
 }
 
@@ -109,8 +121,8 @@ where C: ParametricCurve<Point = Point3> + BoundedCurve<Point = Point3> {
     let curve_range = curve.range_tuple();
     let boundary_range = boundary.range_tuple();
     let samples = [0.0, 0.25, 0.5, 0.75, 1.0];
-    let curve_t = |s: f64| curve_range.0 + (curve_range.1 - curve_range.0) * s;
-    let boundary_t = |s: f64| boundary_range.0 + (boundary_range.1 - boundary_range.0) * s;
+    let curve_t = |s: f64| (curve_range.1 - curve_range.0).mul_add(s, curve_range.0);
+    let boundary_t = |s: f64| (boundary_range.1 - boundary_range.0).mul_add(s, boundary_range.0);
     let forward = samples.iter().copied().all(|s| {
         curve
             .evaluate(curve_t(s))
@@ -131,7 +143,7 @@ where C: ParametricCurve<Point = Point3> + BoundedCurve<Point = Point3> {
     }
 }
 
-fn orient_boundary_line(line: Line<Point2>, reversed: bool) -> Line<Point2> {
+const fn orient_boundary_line(line: Line<Point2>, reversed: bool) -> Line<Point2> {
     if reversed { Line(line.1, line.0) } else { line }
 }
 
@@ -215,14 +227,16 @@ pub(super) fn curve2d_from_sampled_boundary(points: Vec<Point2>) -> Option<Curve
         if is_linear {
             Some(Curve2D::Line(line))
         } else {
-            let denom = (points.len() - 1) as f64;
+            let denom = crate::usize_to_f64(points.len() - 1);
             let knot_vec = KnotVector::from(
                 iter::once(0.0)
-                    .chain((0..points.len()).map(|index| index as f64 / denom))
+                    .chain((0..points.len()).map(|index| crate::usize_to_f64(index) / denom))
                     .chain(iter::once(1.0))
                     .collect::<Vec<_>>(),
             );
-            Some(Curve2D::BsplineCurve(BsplineCurve::new(knot_vec, points)))
+            Some(Curve2D::BsplineCurve(BsplineCurve::new_unchecked(
+                knot_vec, points,
+            )))
         }
     }
 }
@@ -246,11 +260,11 @@ pub(super) fn same_surface_parameterization(lhs: &Surface, rhs: &Surface) -> boo
 /// reuse of UV coordinates from another surface parameterization.
 pub(super) fn sampled_curve_lies_on_surface<C>(curve: &C, surface: &Surface) -> bool
 where C: ParametricCurve3D<Point = Point3> + BoundedCurve<Point = Point3> {
-    let (t0, t1) = curve.range_tuple();
     const SAMPLES: usize = 16;
+    let (t0, t1) = curve.range_tuple();
     (0..=SAMPLES).all(|index| {
-        let ratio = index as f64 / SAMPLES as f64;
-        let point = curve.evaluate(t0 * (1.0 - ratio) + t1 * ratio);
+        let ratio = crate::usize_to_f64(index) / crate::usize_to_f64(SAMPLES);
+        let point = curve.evaluate(t1.mul_add(ratio, t0 * (1.0 - ratio)));
         surface
             .search_parameter(point, None, 32)
             .or_else(|| surface.search_nearest_parameter(point, None, 32))
@@ -285,15 +299,10 @@ pub(super) fn exact_line_boundary(
                 )
             })
         }
-        Surface::RevolutionSurface(surface) => {
-            line.exact_parameter_boundary_2d(surface).map(|boundary| {
-                let (curve, surface) = boundary.decompose();
-                ParameterCurve::new(
-                    Curve2D::Line(curve),
-                    Box::new(Surface::RevolutionSurface(surface)),
-                )
-            })
-        }
+        Surface::Revolution(surface) => line.exact_parameter_boundary_2d(surface).map(|boundary| {
+            let (curve, surface) = boundary.decompose();
+            ParameterCurve::new(Curve2D::Line(curve), Box::new(Surface::Revolution(surface)))
+        }),
         _ => None,
     }
 }
@@ -312,13 +321,10 @@ pub(super) fn exact_bspline_boundary(
                 )
             })
         }
-        Surface::RevolutionSurface(surface) => {
+        Surface::Revolution(surface) => {
             curve.exact_parameter_boundary_2d(surface).map(|boundary| {
                 let (curve, surface) = boundary.decompose();
-                ParameterCurve::new(
-                    Curve2D::Line(curve),
-                    Box::new(Surface::RevolutionSurface(surface)),
-                )
+                ParameterCurve::new(Curve2D::Line(curve), Box::new(Surface::Revolution(surface)))
             })
         }
         _ => None,
@@ -339,7 +345,7 @@ pub(super) fn exact_nurbs_boundary(
                 )
             })
         }
-        Surface::RevolutionSurface(surface) => {
+        Surface::Revolution(surface) => {
             cached_exact_nurbs_boundary_on_revolution_surface(curve, surface)
         }
         _ => None,
@@ -356,10 +362,7 @@ fn cached_exact_nurbs_boundary_on_revolution_surface(
         cached.unwrap_or_else(|| {
             let result = curve.exact_parameter_boundary_2d(surface).map(|boundary| {
                 let (curve, surface) = boundary.decompose();
-                ParameterCurve::new(
-                    Curve2D::Line(curve),
-                    Box::new(Surface::RevolutionSurface(surface)),
-                )
+                ParameterCurve::new(Curve2D::Line(curve), Box::new(Surface::Revolution(surface)))
             });
             cache.borrow_mut().insert(key, result.clone());
             result
@@ -396,7 +399,7 @@ impl ToTrimmedParameterCurves for Shell {
                             .collect()
                     })
                     .collect();
-                TrimmedFace::new(face, trims)
+                TrimmedFace::new_unchecked(face, trims)
             })
             .collect::<Vec<_>>()
             .into_iter()
@@ -416,7 +419,7 @@ impl ToTrimmedParameterCurves for Solid {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn to_trimmed_with_parameter_curves(&self, tolerance: f64) -> Self::Output {
-        TrimmedSolid::new(
+        TrimmedSolid::new_unchecked(
             self.boundaries()
                 .par_iter()
                 .map(|shell| shell.to_trimmed_with_parameter_curves(tolerance))
@@ -464,6 +467,7 @@ impl ToCompressedTrimmedParameterCurves for Solid {
 #[cfg(test)]
 mod surface_identity_tests {
     use super::*;
+    use crate::{IncludeCurve, ParameterBoundary2D, Plane, SurfaceCurve};
 
     #[test]
     fn coincident_support_does_not_reuse_foreign_uv_curve() {
@@ -513,7 +517,7 @@ mod surface_identity_tests {
             Curve2D::Line(Line(Point2::new(0.25, 0.25), Point2::new(0.75, 0.25))),
             Box::new(source_surface.clone()),
         ));
-        let curve = Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+        let curve = Curve::Intersection(SurfaceCurve::with_boundaries(
             Box::new(source_surface.clone()),
             Box::new(source_surface),
             Box::new(leader),

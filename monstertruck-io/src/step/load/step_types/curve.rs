@@ -177,7 +177,7 @@ impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&BsplineCurveWithKnots> for Bs
             .collect();
         let knots = KnotVector::from_single_multi(knots, multi)?;
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
-        Ok(Self::try_new(knots, ctrpts)?)
+        Ok(Self::new(knots, ctrpts)?)
     }
 }
 
@@ -202,7 +202,7 @@ impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&BezierCurve> for BsplineCurve
         let degree = curve.degree as usize;
         let knots = KnotVector::bezier_knot(degree);
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
-        Ok(Self::try_new(knots, ctrpts)?)
+        Ok(Self::new(knots, ctrpts)?)
     }
 }
 
@@ -226,7 +226,7 @@ impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&QuasiUniformCurve> for Bsplin
     fn try_from(curve: &QuasiUniformCurve) -> Result<Self, StepConvertingError> {
         let knots = quasi_uniform_knots(curve.control_points_list.len(), curve.degree as usize);
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
-        Ok(Self::try_new(knots, ctrpts)?)
+        Ok(Self::new(knots, ctrpts)?)
     }
 }
 
@@ -250,7 +250,7 @@ impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&UniformCurve> for BsplineCurv
     fn try_from(curve: &UniformCurve) -> Result<Self, StepConvertingError> {
         let knots = uniform_knots(curve.control_points_list.len(), curve.degree as usize)?;
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
-        Ok(Self::try_new(knots, ctrpts)?)
+        Ok(Self::new(knots, ctrpts)?)
     }
 }
 

@@ -1,38 +1,60 @@
-use crate::cgmath_extend_traits::*;
-use cgmath::*;
-use num_traits::NumCast;
+use crate::cgmath_extend_traits::{Homogeneous, scalar_from_u128};
+use cgmath::{AbsDiffEq, BaseFloat, EuclideanSpace, InnerSpace, Vector2, VectorSpace, Zero};
 use std::fmt::Debug;
 
 /// Maximum order that guarantees differential calculations
 pub const MAX_DER_ORDER: usize = 31;
 
+/// Error returned when a derivative container cannot represent another order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DerivativeOrderLimit;
+
+impl std::fmt::Display for DerivativeOrderLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "derivative order exceeds MAX_DER_ORDER ({MAX_DER_ORDER})"
+        )
+    }
+}
+
+impl std::error::Error for DerivativeOrderLimit {}
+
 /// Calculation results of curve differentiation
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct CurveDerivatives<V> {
     array: [V; MAX_DER_ORDER + 1],
     max_order: usize,
 }
 
 impl<V> CurveDerivatives<V> {
-    /// Construct zeroed `CurveDerivatives` with maximum order = `max_order`.
+    /// Constructs zeroed derivatives up to `max_order`, clamped to [`MAX_DER_ORDER`].
     #[inline]
+    #[must_use]
     pub fn new(max_order: usize) -> Self
     where V: Zero + Copy {
         Self {
             array: [V::zero(); MAX_DER_ORDER + 1],
-            max_order,
+            max_order: max_order.min(MAX_DER_ORDER),
         }
     }
     /// Returns the maximum order
     #[inline]
     pub const fn max_order(&self) -> usize { self.max_order }
-    /// Appends an element to the back of a collection.
+    /// Appends the next derivative order.
+    ///
+    /// # Errors
+    /// Returns [`DerivativeOrderLimit`] when the fixed-capacity container is full.
     #[inline]
-    pub fn push(&mut self, value: V) {
+    pub fn push(&mut self, value: V) -> Result<(), DerivativeOrderLimit> {
+        if self.max_order >= MAX_DER_ORDER {
+            return Err(DerivativeOrderLimit);
+        }
         self.max_order += 1;
         self.array[self.max_order] = value;
+        Ok(())
     }
-    /// Returns CurveDerivatives of derivative.
+    /// Returns `CurveDerivatives` of derivative.
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
@@ -44,13 +66,14 @@ impl<V> CurveDerivatives<V> {
     /// # }
     /// ```
     #[inline]
+    #[must_use]
     pub fn derivative(&self) -> Self
     where V: Zero + Copy {
         let mut array = [V::zero(); MAX_DER_ORDER + 1];
         array[..MAX_DER_ORDER].copy_from_slice(&self.array[1..]);
         Self {
             array,
-            max_order: self.max_order - 1,
+            max_order: self.max_order.saturating_sub(1),
         }
     }
 
@@ -86,14 +109,13 @@ impl<V> CurveDerivatives<V> {
     /// ```
     pub fn rational_derivatives(&self) -> CurveDerivatives<<V::Point as EuclideanSpace>::Diff>
     where V: Homogeneous {
-        let from = <V::Scalar as NumCast>::from;
         let mut evals = [<V::Point as EuclideanSpace>::Diff::zero(); MAX_DER_ORDER + 1];
         for i in 0..=self.max_order {
             let mut c = 1;
             let sum = (1..i).fold(evals[0] * self[i].weight(), |sum, j| {
                 c = c * (i - j + 1) / j;
                 // SAFETY: `c` is a small binomial coefficient that fits in any numeric type.
-                sum + evals[j] * (self[i - j].weight() * from(c).unwrap())
+                sum + evals[j] * (self[i - j].weight() * scalar_from_u128(c as u128))
             });
             evals[i] = (self[i].truncate() - sum) / self[0].weight();
         }
@@ -140,7 +162,7 @@ impl<V> CurveDerivatives<V> {
                 let x = self[i + 1].dot(self[m - 1 - i]);
                 let y = evals[i + 1] * evals[m - 1 - i];
                 // SAFETY: `c` is a small binomial coefficient that fits in any numeric type.
-                let c_float = <V::Scalar as NumCast>::from(c).unwrap();
+                let c_float = scalar_from_u128(c as u128);
                 sum += (x - y) * c_float;
                 c = c * (m - 1 - i) / (i + 1);
                 sum
@@ -199,7 +221,7 @@ impl<V> CurveDerivatives<V> {
     {
         let mut c = 1;
         (0..=order).fold(U::zero(), |sum, i| {
-            let c_mult = c as f64;
+            let c_mult = scalar_from_u128(c as u128);
             c = c * (order - i) / (i + 1);
             sum + binomial(self[i], other[order - i]) * c_mult
         })
@@ -250,9 +272,11 @@ impl<V> CurveDerivatives<V> {
         B: Fn(V, W) -> U,
     {
         let max_order = self.max_order.min(other.max_order);
-        (0..=max_order)
-            .map(|n| self.combinatorial_derivative(other, &binomial, n))
-            .collect()
+        let mut result = CurveDerivatives::new(max_order);
+        for n in 0..=max_order {
+            result[n] = self.combinatorial_derivative(other, &binomial, n);
+        }
+        result
     }
 
     /// Returns the result of element-wise operation.
@@ -281,10 +305,12 @@ impl<V> CurveDerivatives<V> {
         U: Copy + Zero,
         B: Fn(V, W) -> U,
     {
-        self.iter()
-            .zip(other.iter())
-            .map(|(&v, &w)| binomial(v, w))
-            .collect()
+        let max_order = self.max_order.min(other.max_order);
+        let mut result = CurveDerivatives::new(max_order);
+        for (out, (&v, &w)) in result.iter_mut().zip(self.iter().zip(other.iter())) {
+            *out = binomial(v, w);
+        }
+        result
     }
 
     /// Converts to an array
@@ -293,18 +319,18 @@ impl<V> CurveDerivatives<V> {
     /// # fn main() -> anyhow::Result<()> {
     /// use monstertruck_core::cgmath64::*;
     /// let derivs = CurveDerivatives::try_from([0.0, 1.0, 2.0]).map_err(anyhow::Error::msg)?;
-    /// let arr = derivs.to_array::<2>();
+    /// let arr = derivs.to_array::<2>().ok_or_else(|| anyhow::anyhow!("not enough derivatives"))?;
     /// assert_eq!(arr, [0.0, 1.0]);
     /// # Ok(())
     /// # }
     /// ```
-    pub fn to_array<const LEN: usize>(&self) -> [V; LEN]
+    #[must_use]
+    pub fn to_array<const LEN: usize>(self) -> Option<[V; LEN]>
     where V: Copy {
-        if self.max_order > LEN {
-            panic!("length of the returned array is longer than given CurveDerivatives");
+        if LEN > self.len() {
+            return None;
         }
-        // SAFETY: The slice `&self[..LEN]` has exactly `LEN` elements.
-        <[V; LEN]>::try_from(&self[..LEN]).unwrap()
+        self.array[..LEN].try_into().ok()
     }
 }
 
@@ -355,26 +381,13 @@ impl<V: Zero + Copy> TryFrom<&[V]> for CurveDerivatives<V> {
     }
 }
 
-impl<V: Zero + Copy> FromIterator<V> for CurveDerivatives<V> {
-    fn from_iter<T: IntoIterator<Item = V>>(iter: T) -> Self {
-        let mut array = [V::zero(); MAX_DER_ORDER + 1];
-        let mut iter = iter.into_iter();
-        let len = array.iter_mut().zip(&mut iter).map(|(o, v)| *o = v).count();
-        if iter.next().is_some() {
-            panic!("too long iterator");
-        }
-        Self {
-            array,
-            max_order: len - 1,
-        }
-    }
-}
-
 impl<V: VectorSpace> std::ops::Mul<V::Scalar> for CurveDerivatives<V> {
     type Output = Self;
     fn mul(self, rhs: V::Scalar) -> Self::Output {
         let mut array = self.array;
-        array.iter_mut().for_each(|a| *a = *a * rhs);
+        for value in &mut array {
+            *value = *value * rhs;
+        }
         Self {
             array,
             max_order: self.max_order,
@@ -386,7 +399,9 @@ impl<V: VectorSpace> std::ops::Div<V::Scalar> for CurveDerivatives<V> {
     type Output = Self;
     fn div(self, rhs: V::Scalar) -> Self::Output {
         let mut array = self.array;
-        array.iter_mut().for_each(|a| *a = *a / rhs);
+        for value in &mut array {
+            *value = *value / rhs;
+        }
         Self {
             array,
             max_order: self.max_order,
@@ -417,20 +432,21 @@ impl<V: Debug> Debug for CurveDerivatives<V> {
 }
 
 /// Calculation results of surface differentiation
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceDerivatives<V> {
     array: [[V; MAX_DER_ORDER + 1]; MAX_DER_ORDER + 1],
     max_order: usize,
 }
 
 impl<V> SurfaceDerivatives<V> {
-    /// Construct zeroed `SurfaceDerivatives` with maximum order = `max_order`.
+    /// Constructs zeroed derivatives up to `max_order`, clamped to [`MAX_DER_ORDER`].
     #[inline]
+    #[must_use]
     pub fn new(max_order: usize) -> Self
     where V: Zero + Copy {
         Self {
             array: [[V::zero(); MAX_DER_ORDER + 1]; MAX_DER_ORDER + 1],
-            max_order,
+            max_order: max_order.min(MAX_DER_ORDER),
         }
     }
     /// Returns maximum order
@@ -481,7 +497,7 @@ impl<V> SurfaceDerivatives<V> {
             .map(|(i, v)| &mut v[..=self.max_order - i])
     }
 
-    /// Returns SurfaceDerivatives of u-derivative.
+    /// Returns `SurfaceDerivatives` of u-derivative.
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
@@ -507,17 +523,18 @@ impl<V> SurfaceDerivatives<V> {
     /// # }
     /// ```
     #[inline]
+    #[must_use]
     pub fn derivative_u(&self) -> Self
     where V: Zero + Copy {
         let mut array = [[V::zero(); MAX_DER_ORDER + 1]; MAX_DER_ORDER + 1];
         array[..MAX_DER_ORDER].copy_from_slice(&self.array[1..]);
         Self {
             array,
-            max_order: self.max_order - 1,
+            max_order: self.max_order.saturating_sub(1),
         }
     }
 
-    /// Returns SurfaceDerivatives of v-derivative.
+    /// Returns `SurfaceDerivatives` of v-derivative.
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
@@ -543,15 +560,16 @@ impl<V> SurfaceDerivatives<V> {
     /// # }
     /// ```
     #[inline]
+    #[must_use]
     pub fn derivative_v(&self) -> Self
     where V: Zero + Copy {
         let mut array = [[V::zero(); MAX_DER_ORDER + 1]; MAX_DER_ORDER + 1];
-        array.iter_mut().zip(&self.array).for_each(|(arr, sarr)| {
-            arr[..MAX_DER_ORDER].copy_from_slice(&sarr[1..]);
-        });
+        for (output_row, source_row) in array.iter_mut().zip(&self.array) {
+            output_row[..MAX_DER_ORDER].copy_from_slice(&source_row[1..]);
+        }
         Self {
             array,
-            max_order: self.max_order - 1,
+            max_order: self.max_order.saturating_sub(1),
         }
     }
 
@@ -616,7 +634,6 @@ impl<V> SurfaceDerivatives<V> {
     pub fn rational_derivatives(&self) -> SurfaceDerivatives<<V::Point as EuclideanSpace>::Diff>
     where V: Homogeneous {
         let zero = <V::Point as EuclideanSpace>::Diff::zero();
-        let from = <V::Scalar as NumCast>::from;
         let mut evals = [[zero; MAX_DER_ORDER + 1]; MAX_DER_ORDER + 1];
         for m in 0..=self.max_order {
             for n in 0..=self.max_order - m {
@@ -627,7 +644,8 @@ impl<V> SurfaceDerivatives<V> {
                     let (evals, ders) = (evals[i].as_mut(), &self[m - i]);
                     for j in 0..=n {
                         // SAFETY: `c0` and `c1` are small binomial coefficients.
-                        let (c0_s, c1_s) = (from(c0).unwrap(), from(c1).unwrap());
+                        let (c0_s, c1_s) =
+                            (scalar_from_u128(c0 as u128), scalar_from_u128(c1 as u128));
                         sum = sum + evals[j] * (ders[n - j].weight() * c0_s * c1_s);
                         c1 = c1 * (n - j) / (j + 1);
                     }
@@ -643,7 +661,10 @@ impl<V> SurfaceDerivatives<V> {
         }
     }
 
-    /// Returns the derivation of composite curve.
+    /// Returns one derivative of the surface/curve composition.
+    ///
+    /// Returns `None` when `order` is not represented by either derivative container.
+    ///
     /// # Example
     /// ```
     /// # fn main() -> anyhow::Result<()> {
@@ -668,7 +689,8 @@ impl<V> SurfaceDerivatives<V> {
     /// ];
     /// let sderivs = SurfaceDerivatives::try_from(raw_derivs).map_err(anyhow::Error::msg)?;
     ///
-    /// let deriv = sderivs.composite_derivative(&cderivs, 1);
+    /// let deriv = sderivs.composite_derivative(&cderivs, 1)
+    ///     .ok_or_else(|| anyhow::anyhow!("missing derivative order"))?;
     /// let ans = Vector1::new(3.0 * t * t + 2.0 * t);
     /// assert_eq!(deriv, ans);
     /// # Ok(())
@@ -678,35 +700,37 @@ impl<V> SurfaceDerivatives<V> {
         &self,
         curve_ders: &CurveDerivatives<Vector2<V::Scalar>>,
         order: usize,
-    ) -> V
+    ) -> Option<V>
     where
         V: VectorSpace,
         V::Scalar: BaseFloat,
     {
         if order > self.max_order || order > curve_ders.max_order {
-            panic!(
-                "calculating derivative with order={order}, but the orders of given derivatives are less than {order}."
-            );
+            return None;
         }
-        (1..=order).fold(V::zero(), |sum, len| {
-            // SAFETY: `len` ranges 1..=order and order <= MAX (32), so `try_new` always succeeds.
-            let iter = CompositionIter::<32>::try_new(order, len).unwrap();
-            iter.fold(sum, |sum, idx| {
+        if order == 0 {
+            return Some(self[0][0]);
+        }
+        let mut sum = V::zero();
+        for len in 1..=order {
+            let iter = CompositionIter::<32>::try_new(order, len)?;
+            for idx in iter {
                 let idx = &idx[..len];
-                // SAFETY: Multiplicity is a multinomial coefficient that fits in any float type.
-                let mult = <V::Scalar as NumCast>::from(multiplicity(idx)).unwrap();
-                sum + tensor(self, curve_ders, idx) * mult
-            })
-        })
+                let mult = scalar_from_u128(multiplicity(idx));
+                sum = sum + tensor(self, curve_ders, idx) * mult;
+            }
+        }
+        Some(sum)
     }
 
     /// Returns one order of composite derivatives.
+    /// Returns `None` when the requested order is unavailable.
     #[inline]
     pub fn composite_der(
         &self,
         curve_ders: &CurveDerivatives<Vector2<V::Scalar>>,
         order: usize,
-    ) -> V
+    ) -> Option<V>
     where
         V: VectorSpace,
         V::Scalar: BaseFloat,
@@ -761,8 +785,12 @@ impl<V> SurfaceDerivatives<V> {
         let max_order = self.max_order.min(curve_ders.max_order);
         let mut res = CurveDerivatives::new(max_order);
         res[0] = self[0][0];
-        let iter = res[1..].iter_mut().enumerate();
-        iter.for_each(|(i, o)| *o = self.composite_derivative(curve_ders, i + 1));
+        for (i, out) in res[1..].iter_mut().enumerate() {
+            // `i + 1 <= max_order`, so both derivative containers represent this order.
+            if let Some(value) = self.composite_derivative(curve_ders, i + 1) {
+                *out = value;
+            }
+        }
         res
     }
 
@@ -797,7 +825,7 @@ impl<V> SurfaceDerivatives<V> {
                     for j in 0..=n {
                         // SAFETY: `c0` and `c1` are small binomial coefficients;
                         // their product fits in `f64`.
-                        let coefficient = <V::Scalar as NumCast>::from(c0 * c1).unwrap();
+                        let coefficient = scalar_from_u128((c0 * c1) as u128);
                         ders_sum += self[i][j].dot(self[m - i][n - j]) * coefficient;
                         if !((i == 0 && j == 0) || (i == m && j == n)) {
                             evals_sum += evals[i][j] * evals[m - i][n - j] * coefficient;
@@ -806,7 +834,8 @@ impl<V> SurfaceDerivatives<V> {
                     }
                     c0 = c0 * (m - i) / (i + 1);
                 }
-                evals[m][n] = (ders_sum - evals_sum) / (evals[0][0] + evals[0][0]);
+                let double_norm = evals[0][0] + evals[0][0];
+                evals[m][n] = (ders_sum - evals_sum) / double_norm;
             }
         }
         SurfaceDerivatives {
@@ -841,7 +870,7 @@ impl<V> SurfaceDerivatives<V> {
         (0..=u_order).fold(U::zero(), |sum, i| {
             let mut c1 = 1;
             let sum = (0..=v_order).fold(sum, |sum, j| {
-                let coefficient = (c0 * c1) as f64;
+                let coefficient = scalar_from_u128((c0 * c1) as u128);
                 c1 = c1 * (v_order - j) / (j + 1);
                 sum + binomial(self[i][j], other[u_order - i][v_order - j]) * coefficient
             });
@@ -871,7 +900,10 @@ impl<V> SurfaceDerivatives<V> {
             // `combinatorial_derivative` as a VALUE, not used only to index. The
             // iterator form would still have to recover it with `enumerate`, and
             // the bound depends on `m`, so it reads worse and says the same thing.
-            #[allow(clippy::needless_range_loop)]
+            #[expect(
+                clippy::needless_range_loop,
+                reason = "triangular derivative storage is naturally indexed by derivative order"
+            )]
             for n in 0..=max_order - m {
                 res[m][n] = self.combinatorial_derivative(other, &binomial, m, n);
             }
@@ -932,7 +964,7 @@ impl<V> SurfaceDerivatives<V> {
                 o.iter_mut()
                     .zip(a)
                     .zip(b)
-                    .for_each(|((o, &a), &b)| *o = binomial(a, b))
+                    .for_each(|((o, &a), &b)| *o = binomial(a, b));
             });
         res
     }
@@ -941,18 +973,22 @@ impl<V> SurfaceDerivatives<V> {
 impl<V> std::ops::Index<usize> for SurfaceDerivatives<V> {
     type Output = [V];
     fn index(&self, index: usize) -> &[V] {
-        if index > self.max_order {
-            panic!("the index must be no more than {}.", self.max_order);
-        }
+        assert!(
+            index <= self.max_order,
+            "surface derivative row {index} exceeds maximum order {}",
+            self.max_order
+        );
         &self.array[index][..=self.max_order - index]
     }
 }
 
 impl<V> std::ops::IndexMut<usize> for SurfaceDerivatives<V> {
     fn index_mut(&mut self, index: usize) -> &mut [V] {
-        if index > self.max_order {
-            panic!("the index must be no more than {}.", self.max_order);
-        }
+        assert!(
+            index <= self.max_order,
+            "surface derivative row {index} exceeds maximum order {}",
+            self.max_order
+        );
         &mut self.array[index][..=self.max_order - index]
     }
 }
@@ -963,16 +999,19 @@ impl<V: Zero + Copy> TryFrom<&[&[V]]> for SurfaceDerivatives<V> {
         if value.is_empty() {
             return Err("Empty array cannot convert to `SurfaceDerivatives`.");
         }
+        if value.len() > MAX_DER_ORDER + 1 {
+            return Err("The order of `SurfaceDerivatives` exceeds MAX_DER_ORDER.");
+        }
         let mut array = [[V::zero(); MAX_DER_ORDER + 1]; MAX_DER_ORDER + 1];
         let max_order = value.len() - 1;
 
         let mut iter = value.iter().zip(&mut array).enumerate();
         iter.try_for_each(|(i, (&slice, subarray))| {
-            if i + slice.len() != max_order + 1 {
-                Err("Inconsistent slice length and order.")
-            } else {
+            if i + slice.len() == max_order + 1 {
                 subarray[..=max_order - i].copy_from_slice(slice);
                 Ok(())
+            } else {
+                Err("Inconsistent slice length and order.")
             }
         })?;
 
@@ -1039,13 +1078,34 @@ impl<V: Debug> Debug for SurfaceDerivatives<V> {
 }
 
 #[test]
+fn derivative_storage_bounds_are_total() {
+    let mut curve = CurveDerivatives::<f64>::new(usize::MAX);
+    assert_eq!(curve.max_order(), MAX_DER_ORDER);
+    assert!(curve.to_array::<{ MAX_DER_ORDER + 1 }>().is_some());
+    assert!(curve.push(1.0).is_err());
+
+    let surface = SurfaceDerivatives::<f64>::new(usize::MAX);
+    assert_eq!(surface.max_order(), MAX_DER_ORDER);
+    assert_eq!(surface.slice_iter().count(), MAX_DER_ORDER + 1);
+}
+
+#[test]
+fn invalid_composite_order_is_explicit() {
+    use cgmath::Vector1;
+
+    let surface = SurfaceDerivatives::<Vector1<f64>>::new(0);
+    let curve = CurveDerivatives::<Vector2<f64>>::new(0);
+    assert!(surface.composite_derivative(&curve, 1).is_none());
+}
+
+#[test]
 fn surface_ders_debug() {
     let ders = SurfaceDerivatives::<f64>::new(2);
     let string = format!("{ders:?}");
     assert_eq!(string, "[[0.0, 0.0, 0.0], [0.0, 0.0], [0.0]]");
 }
 
-fn can_init(len: usize, n: usize, max: usize) -> bool { !(len > n || max * len < n) }
+const fn can_init(len: usize, n: usize, max: usize) -> bool { !(len > n || max * len < n) }
 
 fn init(array: &mut [usize], n: usize, max: usize) {
     if array.is_empty() {
@@ -1053,7 +1113,7 @@ fn init(array: &mut [usize], n: usize, max: usize) {
     }
     array[0] = (n - array.len() + 1).min(max);
     let (n, max) = (n - array[0], array[0]);
-    init(&mut array[1..], n, max)
+    init(&mut array[1..], n, max);
 }
 
 fn next(array: &mut [usize]) -> bool {
@@ -1111,7 +1171,9 @@ fn factorial(n: usize) -> u128 { (2..=n).fold(1, |f, i| f * i as u128) }
 fn multiplicity(array: &[usize]) -> u128 {
     let n = array.iter().sum::<usize>();
     let mut res = factorial(n);
-    array.iter().for_each(|&a| res /= factorial(a));
+    for &part in array {
+        res /= factorial(part);
+    }
     let mut mult = 1;
     array.windows(2).for_each(|x| {
         if x[0] == x[1] {
@@ -1129,7 +1191,7 @@ where
     S: BaseFloat,
     V: VectorSpace<Scalar = S>,
     A: std::ops::Index<usize, Output = [V]>, {
-    let n: u128 = 2u128.pow(idx.len() as u32);
+    let n = 1_u128 << idx.len();
     (0..n).fold(V::zero(), |sum, mut i| {
         let (t, mult) = idx.iter().fold((0, S::one()), |(t, mult), &j| {
             let k = (i % 2) as usize;
@@ -1141,8 +1203,8 @@ where
 }
 
 #[test]
-fn test_composition_iter() {
-    let iter = CompositionIter::<8>::try_new(10, 4).unwrap();
+fn test_composition_iter() -> Result<(), &'static str> {
+    let iter = CompositionIter::<8>::try_new(10, 4).ok_or("valid composition dimensions")?;
     let vec: Vec<_> = iter.collect();
     let iter = vec.iter().map(|idx| {
         idx[..4].iter().for_each(|&i| assert_ne!(i, 0));
@@ -1161,4 +1223,5 @@ fn test_composition_iter() {
     assert_eq!(vec[6], &[4, 2, 2, 2]);
     assert_eq!(vec[7], &[3, 3, 3, 1]);
     assert_eq!(vec[8], &[3, 3, 2, 2]);
+    Ok(())
 }

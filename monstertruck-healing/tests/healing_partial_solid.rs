@@ -11,17 +11,17 @@
 //!   because it ended in the UNCHECKED `TrimmedSolid::new`;
 //! * `TrimmedSolid::erase_trims` built the plain `Solid` through
 //!   `Solid::new_unchecked`, so nothing complained there either;
-//! * `Solid::try_mapped` then went through `Solid::debug_new`, which under
+//! * `Solid::try_mapped` then went through the former profile-dependent `Solid` constructor, which under
 //!   `debug_assertions` WAS `Solid::new` -- `try_new(..).unwrap_or_else(|e|
 //!   panic!(..))` -- and the process ABORTED. In a release build the same call
 //!   was `new_unchecked`, so it would instead have returned `Some(invalid
 //!   solid)` and let a boolean run on a shell with a hole. Spec 012 U4 removed
-//!   that profile switch: `Solid::debug_new` returns `Result` and
+//!   that profile switch: the former profile-dependent `Solid` constructor returns `Result` and
 //!   `try_mapped` answers `None`. The healing-stage refusal below is still the
 //!   fix -- U4 only removes the second, profile-dependent outcome behind it.
 //!
 //! Three of ROTOR's 33 solids were in that state. The fix is
-//! `TrimmedSolid::try_new` at the end of the healing path: the last stage that
+//! `TrimmedSolid::new` at the end of the healing path: the last stage that
 //! can still repair anything is also the last one that can honestly refuse.
 //!
 //! The rows below run on an in-repo fixture, so they are part of the default
@@ -76,7 +76,7 @@ fn a_complete_compressed_solid_still_heals_and_extracts() {
 /// The C11 row, inverted. A compressed solid one face short -- exactly the
 /// shape a typed surface refusal upstream leaves behind -- must produce a
 /// TYPED refusal from the healing path, and must reach neither the abort in
-/// `Solid::debug_new` nor an `Ok` that carries a solid with a hole in it.
+/// the former profile-dependent `Solid` constructor nor an `Ok` that carries a solid with a hole in it.
 #[test]
 fn a_compressed_solid_that_lost_a_face_refuses_typed_instead_of_aborting() {
     let mut csolid = cube();

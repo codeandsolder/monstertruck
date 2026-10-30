@@ -13,7 +13,7 @@ use monstertruck_io::step::save::*;
 use monstertruck_modeling::*;
 
 /// Era-standard modeling-layer right circular cylinder.
-fn cylinder(height: f64, radius: f64) -> Solid {
+fn cylinder(height: f64, radius: f64) -> monstertruck_modeling::Result<Solid> {
     let vertex = builder::vertex(Point3::new(0.0, -height / 2.0, radius));
     let circle = builder::revolve(
         &vertex,
@@ -21,9 +21,9 @@ fn cylinder(height: f64, radius: f64) -> Solid {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         2,
-    );
-    let disk = builder::try_attach_plane(&[circle]).unwrap();
-    builder::extrude(&disk, Vector3::new(0.0, height, 0.0))
+    )?;
+    let disk = builder::try_attach_plane([circle])?;
+    Ok(builder::extrude(&disk, Vector3::new(0.0, height, 0.0)))
 }
 
 fn is_planar(surface: &step_geometry::Surface) -> bool {
@@ -34,8 +34,9 @@ fn is_planar(surface: &step_geometry::Surface) -> bool {
 }
 
 #[test]
-fn cylinder_planar_caps_survive_step_roundtrip() {
-    let solid = cylinder(1.0, 0.5);
+fn cylinder_planar_caps_survive_step_roundtrip()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let solid = cylinder(1.0, 0.5)?;
     let tolerance = 0.01;
     let compressed = solid.compress_with_parameter_curves(tolerance);
 
@@ -94,4 +95,5 @@ fn cylinder_planar_caps_survive_step_roundtrip() {
              across the STEP round-trip, got {trims_present}/{total}",
         );
     }
+    Ok(())
 }

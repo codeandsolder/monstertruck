@@ -1,6 +1,6 @@
 use crate::builder;
 use monstertruck_geometry::prelude::*;
-use monstertruck_topology::*;
+use monstertruck_topology::{Edge, Face, Solid, Vertex, Wire, shell, wire};
 use std::f64::consts::PI;
 
 /// rectangle
@@ -42,14 +42,15 @@ use std::f64::consts::PI;
 /// assert_eq!(rect[2].front().point(), Point3::new(3.0, 1.0, 0.0));
 /// assert_eq!(rect[3].front().point(), Point3::new(0.0, 1.0, 0.0));
 /// ```
+#[must_use]
 pub fn rect<C>(r#box: BoundingBox<Point2>, plane: Plane) -> Wire<Point3, C>
 where Line<Point3>: ToSameGeometry<C> {
     let (min, max) = (r#box.min(), r#box.max());
     let v = builder::vertices([
-        plane.subs(min.x, min.y),
-        plane.subs(max.x, min.y),
-        plane.subs(max.x, max.y),
-        plane.subs(min.x, max.y),
+        plane.evaluate(min.x, min.y),
+        plane.evaluate(max.x, min.y),
+        plane.evaluate(max.x, max.y),
+        plane.evaluate(min.x, max.y),
     ]);
     wire![
         builder::line(&v[0], &v[1]),
@@ -77,14 +78,15 @@ where Line<Point3>: ToSameGeometry<C> {
 ///     for i in 0..=10 {
 ///         let u = i as f64 / 10.0;
 ///         let t = (1.0 - u) * t0 + u * t1;
-///         let p = arc.subs(t);
-///         let der = arc.der(t);
+///         let p = arc.evaluate(t);
+///         let der = arc.derivative(t);
 ///         assert_near!(p.distance(origin), 5.0);
 ///         assert!(der.dot(axis).so_small());
 ///         assert!((p - origin).cross(der).dot(axis) > 0.0);
 ///     }
 /// }
 /// ```
+#[must_use]
 pub fn circle<C>(start: Point3, origin: Point3, axis: Vector3, division: usize) -> Wire<Point3, C>
 where Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C> {
     let origin = origin + (start - origin).dot(axis) * axis;
@@ -98,20 +100,20 @@ where Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C> {
     );
 
     let make_vertices = move |i: usize| {
-        let t = 2.0 * PI * i as f64 / division as f64;
+        let t = 2.0 * PI * crate::usize_to_f64(i) / crate::usize_to_f64(division);
         let p = Point3::new(f64::cos(t), f64::sin(t), 0.0);
         Vertex::new(mat.transform_point(p))
     };
     let v = (0..division).map(make_vertices).collect::<Vec<_>>();
 
     let make_edges = move |i: usize| {
-        let t0 = 2.0 * PI * i as f64 / division as f64;
-        let t1 = 2.0 * PI * (i + 1) as f64 / division as f64;
+        let t0 = 2.0 * PI * crate::usize_to_f64(i) / crate::usize_to_f64(division);
+        let t1 = 2.0 * PI * crate::usize_to_f64(i + 1) / crate::usize_to_f64(division);
         let unit_circle = UnitCircle::new();
         let trimmed = TrimmedCurve::new(unit_circle, (t0, t1));
         let mut arc = Processor::new(trimmed);
         arc.transform_by(mat);
-        Edge::new(&v[i], &v[(i + 1) % division], arc.to_same_geometry())
+        Edge::new_unchecked(&v[i], &v[(i + 1) % division], arc.to_same_geometry())
     };
     (0..division).map(make_edges).collect()
 }
@@ -133,6 +135,7 @@ where Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C> {
 ///     assert!(x.z.near(&p.z) || x.z.near(&q.z));
 /// }
 /// ```
+#[must_use]
 pub fn cuboid<C, S>(r#box: BoundingBox<Point3>) -> Solid<Point3, C, S>
 where
     Line<Point3>: ToSameGeometry<C>,
@@ -173,21 +176,24 @@ where
     let mut shell = shell![Face::new_unchecked(vec![wire0], plane0.to_same_geometry())];
 
     (0..4).for_each(|i| {
-        let wirei = wire![
+        let side_wire = wire![
             e[i].clone(),
             e[(i + 1) % 4 + 4].clone(),
             e[i + 8].inverse(),
             e[i + 4].inverse(),
         ];
-        let planei = Plane::new(v[i].point(), v[i + 1].point(), v[i + 4].point());
-        shell.push(Face::new_unchecked(vec![wirei], planei.to_same_geometry()));
+        let side_plane = Plane::new(v[i].point(), v[i + 1].point(), v[i + 4].point());
+        shell.push(Face::new_unchecked(
+            vec![side_wire],
+            side_plane.to_same_geometry(),
+        ));
     });
 
     let wire5 = wire![e[8].clone(), e[9].clone(), e[10].clone(), e[11].clone(),];
     let plane5 = Plane::new(v[4].point(), v[5].point(), v[7].point());
     shell.push(Face::new_unchecked(vec![wire5], plane5.to_same_geometry()));
 
-    Solid::new(vec![shell])
+    Solid::new_unchecked(vec![shell])
 }
 
 #[cfg(test)]

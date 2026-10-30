@@ -136,7 +136,7 @@ pub trait SupportsExactPatchDomains {
 impl TryIntoHomogeneousBsplineCurve for Line<Point3> {
     #[inline]
     fn try_into_homogeneous_bspline_curve(&self) -> Option<BsplineCurve<Vector4>> {
-        Some(BsplineCurve::lift_up(BsplineCurve::new(
+        Some(BsplineCurve::lift_up(BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(1),
             vec![self.0, self.1],
         )))
@@ -144,8 +144,8 @@ impl TryIntoHomogeneousBsplineCurve for Line<Point3> {
 
     /// A line is defined for every real parameter, so its restriction to any
     /// interval is the SAME line, exactly. The emitted degree-1 Bezier carries
-    /// the requested interval as its knot vector, so `subs(t)` still equals
-    /// `Line::subs(t)` for every `t` in it -- the parameterization is preserved,
+    /// the requested interval as its knot vector, so `evaluate(t)` still equals
+    /// `Line::evaluate(t)` for every `t` in it -- the parameterization is preserved,
     /// not renormalized.
     #[inline]
     fn try_into_homogeneous_bspline_curve_over(
@@ -157,7 +157,7 @@ impl TryIntoHomogeneousBsplineCurve for Line<Point3> {
             return None;
         }
         let direction = self.1 - self.0;
-        Some(BsplineCurve::lift_up(BsplineCurve::new(
+        Some(BsplineCurve::lift_up(BsplineCurve::new_unchecked(
             KnotVector::from(vec![start, start, end, end]),
             vec![self.0 + direction * start, self.0 + direction * end],
         )))
@@ -270,7 +270,10 @@ impl TryIntoBsplineSurface for NurbsSurface<Vector4> {
             .iter()
             .map(|row| row.iter().map(|v| v.to_point()).collect())
             .collect();
-        Some(BsplineSurface::new(self.knot_vectors().clone(), pts))
+        Some(BsplineSurface::new_unchecked(
+            self.knot_vectors().clone(),
+            pts,
+        ))
     }
 }
 
@@ -354,10 +357,7 @@ where C: TryIntoHomogeneousBsplineCurve
                 self.entity_curve()
                     .try_into_homogeneous_bspline_curve_over(profile_range)
             });
-        Some(match widened {
-            Some(curve) => (curve, true),
-            None => (own, false),
-        })
+        Some(widened.map_or((own, false), |curve| (curve, true)))
     }
 
     fn revolve_profile(&self, profile: &BsplineCurve<Vector4>) -> Option<BsplineSurface<Vector4>> {
@@ -449,7 +449,7 @@ impl<C> SupportsExactPatchDomains for RevolutionSurface<C> {
 // STEP trims and re-derive boundary parameters by search, so this matches --
 // and is no worse than -- revolve-built equivalents. The tensor product
 // separates exactly, so evaluating the emitted surface reproduces the analytic
-// `subs` at the corresponding angles to machine precision (see this module's
+// `evaluate` at the corresponding angles to machine precision (see this module's
 // tests).
 // ---------------------------------------------------------------------------
 
@@ -487,7 +487,7 @@ impl TryIntoHomogeneousBsplineSurface for Sphere {
             (1.0, -1.0, w),
             (0.0, -1.0, 1.0),
         ];
-        // u = colatitude (meridian), v = longitude (matches `Sphere::subs`).
+        // u = colatitude (meridian), v = longitude (matches `Sphere::evaluate`).
         let control_points: Vec<Vec<Vector4>> = meridian
             .iter()
             .map(|&(radial_unit, axis_unit, meridian_weight)| {
@@ -497,8 +497,8 @@ impl TryIntoHomogeneousBsplineSurface for Sphere {
                     .iter()
                     .map(|&(direction, longitude_weight)| {
                         let position = Point3::new(
-                            center.x + radial * direction.x,
-                            center.y + radial * direction.y,
+                            radial.mul_add(direction.x, center.x),
+                            radial.mul_add(direction.y, center.y),
                             center.z + height,
                         );
                         weighted_control_point(position, meridian_weight * longitude_weight)
@@ -552,7 +552,7 @@ impl TryIntoHomogeneousBsplineSurface for Torus {
             .iter()
             .map(|point| (point.to_point(), point.weight()))
             .collect();
-        // u = ring/major angle, v = tube/minor angle (matches `Torus::subs`).
+        // u = ring/major angle, v = tube/minor angle (matches `Torus::evaluate`).
         let control_points: Vec<Vec<Vector4>> = polygon
             .iter()
             .map(|&(ring, ring_weight)| {
@@ -561,11 +561,11 @@ impl TryIntoHomogeneousBsplineSurface for Torus {
                     .map(|&(tube, tube_weight)| {
                         // Tube cross-section circle in (rho = radial, zeta =
                         // axis), centered at (R, 0) with radius r.
-                        let rho = large_radius + small_radius * tube.x;
+                        let rho = f64::mul_add(small_radius, tube.x, large_radius);
                         let zeta = small_radius * tube.y;
                         let position = Point3::new(
-                            center.x + rho * ring.x,
-                            center.y + rho * ring.y,
+                            f64::mul_add(rho, ring.x, center.x),
+                            f64::mul_add(rho, ring.y, center.y),
                             center.z + zeta,
                         );
                         weighted_control_point(position, ring_weight * tube_weight)
@@ -627,11 +627,16 @@ where C: TryIntoHomogeneousBsplineCurve
             .map(|p| {
                 vec![
                     *p,
-                    Vector4::new(p.x + dir.x * p.w, p.y + dir.y * p.w, p.z + dir.z * p.w, p.w),
+                    Vector4::new(
+                        dir.x.mul_add(p.w, p.x),
+                        dir.y.mul_add(p.w, p.y),
+                        dir.z.mul_add(p.w, p.z),
+                        p.w,
+                    ),
                 ]
             })
             .collect();
-        Some(BsplineSurface::new(knot_vecs, control_points))
+        Some(BsplineSurface::new_unchecked(knot_vecs, control_points))
     }
 }
 
@@ -659,12 +664,15 @@ where C: TryIntoHomogeneousBsplineCurve
             .iter()
             .map(|row| row.iter().map(|v| v.to_point()).collect())
             .collect();
-        Some(BsplineSurface::new(hom.knot_vectors().clone(), pts))
+        Some(BsplineSurface::new_unchecked(
+            hom.knot_vectors().clone(),
+            pts,
+        ))
     }
 }
 
-impl<T> TryIntoHomogeneousBsplineSurface for Processor<T, Matrix4>
-where T: TryIntoHomogeneousBsplineSurface
+impl<E> TryIntoHomogeneousBsplineSurface for Processor<E, Matrix4>
+where E: TryIntoHomogeneousBsplineSurface
 {
     #[inline]
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
@@ -687,9 +695,12 @@ where T: TryIntoHomogeneousBsplineSurface
         &self,
         parameter_range: Option<SurfaceParameterRectangle>,
     ) -> Option<HomogeneousSurfaceConversion> {
-        let entity_range = parameter_range.map(|(u_range, v_range)| match self.orientation() {
-            true => (u_range, v_range),
-            false => (v_range, u_range),
+        let entity_range = parameter_range.map(|(u_range, v_range)| {
+            if self.orientation() {
+                (u_range, v_range)
+            } else {
+                (v_range, u_range)
+            }
         });
         let HomogeneousSurfaceConversion {
             mut surface,
@@ -700,12 +711,11 @@ where T: TryIntoHomogeneousBsplineSurface
         surface
             .control_points_mut()
             .for_each(|point| *point = *self.transform() * *point);
-        let surface_frame_axes = match self.orientation() {
-            true => surface_frame_axes,
-            false => {
-                surface.invert();
-                (surface_frame_axes.1, surface_frame_axes.0)
-            }
+        let surface_frame_axes = if self.orientation() {
+            surface_frame_axes
+        } else {
+            surface.invert();
+            (surface_frame_axes.1, surface_frame_axes.0)
         };
         Some(HomogeneousSurfaceConversion {
             surface,
@@ -714,15 +724,15 @@ where T: TryIntoHomogeneousBsplineSurface
     }
 }
 
-impl<T> SupportsExactPatchDomains for Processor<T, Matrix4>
-where T: SupportsExactPatchDomains
+impl<E> SupportsExactPatchDomains for Processor<E, Matrix4>
+where E: SupportsExactPatchDomains
 {
     #[inline]
     fn supports_exact_patch_domains(&self) -> bool { self.entity().supports_exact_patch_domains() }
 }
 
-impl<T> TryIntoHomogeneousBsplineCurve for Processor<T, Matrix4>
-where T: TryIntoHomogeneousBsplineCurve
+impl<E> TryIntoHomogeneousBsplineCurve for Processor<E, Matrix4>
+where E: TryIntoHomogeneousBsplineCurve
 {
     #[inline]
     fn try_into_homogeneous_bspline_curve(&self) -> Option<BsplineCurve<Vector4>> {
@@ -737,10 +747,10 @@ where T: TryIntoHomogeneousBsplineCurve
     }
 }
 
-impl<T, M> TryIntoBsplineSurface for Processor<T, M>
+impl<E, T> TryIntoBsplineSurface for Processor<E, T>
 where
-    T: TryIntoBsplineSurface,
-    M: Transform<Point3> + Copy,
+    E: TryIntoBsplineSurface,
+    T: Transform<Point3> + Copy,
 {
     #[inline]
     fn try_into_bspline_surface(&self) -> Option<BsplineSurface<Point3>> {

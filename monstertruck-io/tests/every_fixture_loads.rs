@@ -1,12 +1,11 @@
 //! Every STEP fixture in the repository must load. No exceptions, no list to
 //! forget to update.
 //!
-//! This exists because of a real failure. Folding `monstertruck-step` into this
-//! crate moved `tests/fixtures/real-world/`, and seven hardcoded
-//! `../monstertruck-step/tests/fixtures/real-world` paths elsewhere in the
-//! workspace were left behind. Nothing here noticed: every fixture test names
-//! its files as string literals, so a fixture that has MOVED is
-//! indistinguishable from one that was never mentioned. The breakage surfaced
+//! This exists because of a real failure. Consolidating STEP into this crate
+//! moved `tests/fixtures/real-world/`, and seven hardcoded pre-consolidation
+//! fixture paths elsewhere in the workspace were left behind. Nothing here
+//! noticed: every fixture test names its files as string literals, so a fixture
+//! that has MOVED is indistinguishable from one that was never mentioned. The breakage surfaced
 //! far away, as eight unrelated-looking boolean rows dying at `read`, and cost
 //! another agent a debugging session to trace back.
 //!
@@ -24,7 +23,7 @@
 //! breaks input handling, seeing every affected file at once is worth far more
 //! than seeing whichever one sorted first.
 
-#![cfg(feature = "load")]
+#![cfg(feature = "step")]
 
 use monstertruck_io::step::load::Table;
 use std::path::{Path, PathBuf};

@@ -1,7 +1,35 @@
-use crate::*;
+use crate::{
+    BoundedCurve, CurveParameter, Cut, EuclideanSpace, HashGen, InnerSpace, Invertible, Origin,
+    ParameterDivision1D, ParameterRange, ParametricCurve, Point2, Point3, PolylineCurve,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SnapCurveEndpoints, Tolerance,
+    Transform, Transformed, Vector2, Zero,
+};
 use itertools::Itertools;
 use monstertruck_core::cgmath64::control_point::ControlPoint;
+use num_traits::ToPrimitive;
 use std::ops::{Bound, Deref, DerefMut};
+
+fn usize_to_f64(value: usize) -> f64 { value.to_f64().unwrap_or(f64::INFINITY) }
+
+fn interior_vertex_indices(
+    range: (f64, f64),
+    len: usize,
+) -> Option<std::ops::RangeInclusive<usize>> {
+    if len == 0 || !range.0.is_finite() || !range.1.is_finite() || range.0 >= range.1 {
+        return None;
+    }
+
+    let first = if range.0 < 0.0 {
+        0
+    } else {
+        range.0.floor().to_usize()?.saturating_add(1)
+    };
+    if range.1 <= 0.0 {
+        return None;
+    }
+    let last = range.1.ceil().to_usize()?.checked_sub(1)?.min(len - 1);
+    (first <= last).then_some(first..=last)
+}
 
 impl PolylineCurve<Point2> {
     /// Signed area of area enclosed when endpoints are connected
@@ -18,9 +46,10 @@ impl PolylineCurve<Point2> {
     /// hexagon.invert();
     /// assert_near!(hexagon.area(), -1.5 * f64::sqrt(3.0));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn area(&self) -> f64 {
-        let sum = |sum, (p, q): (&Point2, &Point2)| sum + (q.x + p.x) * (q.y - p.y);
+        let sum = |sum, (p, q): (&Point2, &Point2)| (q.x + p.x).mul_add(q.y - p.y, sum);
         self.iter().circular_tuple_windows().fold(0.0, sum) / 2.0
     }
 
@@ -39,6 +68,11 @@ impl PolylineCurve<Point2> {
     /// let p1 = Point2::new(0.0, 1.0);
     /// assert!(!hexagon.include(p1));
     /// ```
+    #[expect(
+        clippy::many_single_char_names,
+        reason = "2D winding calculation uses conventional point, vector, and cross-product notation"
+    )]
+    #[must_use]
     pub fn include(&self, c: Point2) -> bool {
         if self.iter().any(|p| (*p - c).so_small()) {
             return true;
@@ -53,9 +87,9 @@ impl PolylineCurve<Point2> {
                 }
                 let a = p0 - c;
                 let b = p1 - c;
-                let s0 = r.x * a.y - r.y * a.x; // v times a
-                let s1 = r.x * b.y - r.y * b.x; // v times b
-                let s2 = a.x * b.y - a.y * b.x; // a times b
+                let s0 = r.x.mul_add(a.y, -(r.y * a.x)); // v times a
+                let s1 = r.x.mul_add(b.y, -(r.y * b.x)); // v times b
+                let s2 = a.x.mul_add(b.y, -(a.y * b.x)); // a times b
                 let x = s2 / (s1 - s0);
                 if x.so_small() && s0 * s1 < 0.0 {
                     None
@@ -67,8 +101,7 @@ impl PolylineCurve<Point2> {
                     Some(counter)
                 }
             })
-            .map(|counter| counter > 0)
-            .unwrap_or(true)
+            .is_none_or(|counter| counter > 0)
     }
 }
 
@@ -93,7 +126,10 @@ impl PolylineCurve<Point2> {
 /// assert_near!(polyline_curve::area(&boundaries), 4.5 * f64::sqrt(3.0));
 /// ```
 pub fn area<'a>(boundaries: impl IntoIterator<Item = &'a PolylineCurve<Point2>>) -> f64 {
-    boundaries.into_iter().map(|poly| poly.area()).sum::<f64>()
+    boundaries
+        .into_iter()
+        .map(super::PolylineCurve::area)
+        .sum::<f64>()
 }
 
 /// whether `c` is included in enclosed multiple domains when endpoints of each polyline are connected
@@ -119,6 +155,10 @@ pub fn area<'a>(boundaries: impl IntoIterator<Item = &'a PolylineCurve<Point2>>)
 /// let p1 = Point2::new(0.0, 0.0);
 /// assert!(!polyline_curve::include(&boundaries, p1));
 /// ```
+#[expect(
+    clippy::many_single_char_names,
+    reason = "2D winding calculation uses conventional point, vector, and cross-product notation"
+)]
 pub fn include<'a>(
     boundaries: impl IntoIterator<Item = &'a PolylineCurve<Point2>>,
     c: Point2,
@@ -134,9 +174,9 @@ pub fn include<'a>(
             }
             let a = p0 - c;
             let b = p1 - c;
-            let s0 = r.x * a.y - r.y * a.x; // v times a
-            let s1 = r.x * b.y - r.y * b.x; // v times b
-            let s2 = a.x * b.y - a.y * b.x; // a times b
+            let s0 = r.x.mul_add(a.y, -(r.y * a.x)); // v times a
+            let s1 = r.x.mul_add(b.y, -(r.y * b.x)); // v times b
+            let s2 = a.x.mul_add(b.y, -(a.y * b.x)); // a times b
             let x = s2 / (s1 - s0);
             if x.so_small() && s0 * s1 < 0.0 {
                 None
@@ -148,75 +188,73 @@ pub fn include<'a>(
                 Some(counter)
             }
         })
-        .map(|counter| counter > 0)
-        // If the point is on the boundary, treat it as included (closed-set semantics).
-        .unwrap_or(true)
+        .is_none_or(|counter| counter > 0)
 }
 
 impl<P> AsRef<Vec<P>> for PolylineCurve<P> {
-    #[inline(always)]
+    #[inline]
     fn as_ref(&self) -> &Vec<P> { &self.0 }
 }
 
 impl<P> AsMut<Vec<P>> for PolylineCurve<P> {
-    #[inline(always)]
+    #[inline]
     fn as_mut(&mut self) -> &mut Vec<P> { &mut self.0 }
 }
 
 impl<P> AsRef<[P]> for PolylineCurve<P> {
-    #[inline(always)]
+    #[inline]
     fn as_ref(&self) -> &[P] { &self.0 }
 }
 
 impl<P> AsMut<[P]> for PolylineCurve<P> {
-    #[inline(always)]
+    #[inline]
     fn as_mut(&mut self) -> &mut [P] { &mut self.0 }
 }
 
 impl<P> Deref for PolylineCurve<P> {
     type Target = Vec<P>;
-    #[inline(always)]
+    #[inline]
     fn deref(&self) -> &Self::Target { &self.0 }
 }
 
 impl<P> DerefMut for PolylineCurve<P> {
-    #[inline(always)]
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
 }
 
 impl<P> From<Vec<P>> for PolylineCurve<P> {
-    #[inline(always)]
+    #[inline]
     fn from(v: Vec<P>) -> Self { Self(v) }
 }
 
 impl<P> From<PolylineCurve<P>> for Vec<P> {
-    #[inline(always)]
+    #[inline]
     fn from(v: PolylineCurve<P>) -> Self { v.0 }
 }
 
 impl<P> FromIterator<P> for PolylineCurve<P> {
-    #[inline(always)]
+    #[inline]
     fn from_iter<I: IntoIterator<Item = P>>(iter: I) -> Self { Self(Vec::from_iter(iter)) }
 }
 
 impl<P> IntoIterator for PolylineCurve<P> {
     type Item = P;
     type IntoIter = std::vec::IntoIter<P>;
-    #[inline(always)]
+    #[inline]
     fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
 }
 
 impl<'a, P> IntoIterator for &'a PolylineCurve<P> {
     type Item = &'a P;
     type IntoIter = std::slice::Iter<'a, P>;
-    #[inline(always)]
+    #[inline]
     fn into_iter(self) -> Self::IntoIter { self.0.iter() }
 }
 
 impl<P: ControlPoint<f64>> ParametricCurve for PolylineCurve<P> {
     type Point = P;
     type Vector = P::Diff;
-    #[inline(always)]
+    #[inline]
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
         match n {
             0 => self.evaluate(t).to_vec(),
@@ -224,26 +262,26 @@ impl<P: ControlPoint<f64>> ParametricCurve for PolylineCurve<P> {
             _ => Self::Vector::zero(),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, t: f64) -> P {
-        if self.is_empty() {
-            P::origin()
-        } else if t <= 0.0 {
-            self[0]
-        } else if t + 1.0 >= self.len() as f64 {
-            self[self.len() - 1]
-        } else {
-            let n = t as usize;
-            let t = t - n as f64;
-            self[n] + (self[n + 1] - self[n]) * t
+        match self.len() {
+            0 => P::origin(),
+            1 => self[0],
+            _ if t.is_nan() || t <= 0.0 => self[0],
+            _ if t + 1.0 >= usize_to_f64(self.len()) => self[self.len() - 1],
+            _ => {
+                let n = t.to_usize().unwrap_or(0).min(self.len() - 2);
+                let local_t = t - usize_to_f64(n);
+                self[n] + (self[n + 1] - self[n]) * local_t
+            }
         }
     }
-    #[inline(always)]
+    #[inline]
     fn derivative(&self, t: f64) -> P::Diff {
-        if self.len() <= 1 || t < 0.0 || (self.len() as f64) < t + 1.0 {
+        if self.len() <= 1 || t < 0.0 || usize_to_f64(self.len()) < t + 1.0 {
             P::Diff::zero()
         } else {
-            let n = t as usize;
+            let n = t.to_usize().unwrap_or(0).min(self.len() - 1);
             if n + 1 == self.len() {
                 self[n] - self[n - 1]
             } else {
@@ -251,23 +289,25 @@ impl<P: ControlPoint<f64>> ParametricCurve for PolylineCurve<P> {
             }
         }
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_2(&self, _: f64) -> P::Diff { P::Diff::zero() }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> ParameterRange {
         (
             Bound::Included(0.0),
-            Bound::Included(self.len() as f64 - 1.0),
+            Bound::Included(usize_to_f64(self.len()) - 1.0),
         )
     }
 }
 
-impl<P: ControlPoint<f64>> BoundedCurve for PolylineCurve<P> {}
+impl<P: ControlPoint<f64>> BoundedCurve for PolylineCurve<P> {
+    fn range_tuple(&self) -> (f64, f64) { (0.0, usize_to_f64(self.len()) - 1.0) }
+}
 
 impl<P: Clone> Invertible for PolylineCurve<P> {
-    #[inline(always)]
+    #[inline]
     fn invert(&mut self) { self.reverse(); }
-    #[inline(always)]
+    #[inline]
     fn inverse(&self) -> Self { Self(self.iter().rev().cloned().collect()) }
 }
 
@@ -285,25 +325,25 @@ impl SnapCurveEndpoints for PolylineCurve<Point3> {
 impl<P: ControlPoint<f64>> Cut for PolylineCurve<P> {
     fn cut(&mut self, t: f64) -> Self {
         if t < 0.0 {
-            PolylineCurve(Vec::new())
-        } else if t + 1.0 > self.len() as f64 {
+            Self(Vec::new())
+        } else if t + 1.0 > usize_to_f64(self.len()) {
             let mut v = Vec::new();
             v.append(&mut self.0);
-            PolylineCurve(v)
+            Self(v)
         } else {
-            let n = t as usize;
-            if t.near(&(n as f64)) {
+            let n = t.to_usize().unwrap_or(0).min(self.len().saturating_sub(1));
+            if t.near(&usize_to_f64(n)) {
                 let mut v = Vec::new();
                 v.extend(&self[n..]);
                 self.truncate(n + 1);
-                PolylineCurve(v)
+                Self(v)
             } else {
-                let p = self.subs(t);
+                let p = self.evaluate(t);
                 let mut v = vec![p];
                 v.extend(&self[(n + 1)..]);
                 self.truncate(n + 1);
                 self.push(p);
-                PolylineCurve(v)
+                Self(v)
             }
         }
     }
@@ -327,7 +367,7 @@ where
             let t = f64::clamp(a.dot(b) / b.dot(b), 0.0, 1.0);
             let h = a - b * t;
             if h.so_small() {
-                return Some(t + i as f64);
+                return Some(t + usize_to_f64(i));
             }
         }
         None
@@ -353,7 +393,7 @@ where
             let t = f64::clamp(a.dot(b) / b.dot(b), 0.0, 1.0);
             let h = a - b * t;
             if h.dot(h) < dist2 {
-                t0 = t + i as f64;
+                t0 = t + usize_to_f64(i);
                 dist2 = h.dot(h);
             }
         }
@@ -363,15 +403,17 @@ where
 
 impl<P: ControlPoint<f64>> ParameterDivision1D for PolylineCurve<P> {
     type Point = P;
-    #[inline(always)]
+    #[inline]
     fn parameter_division(&self, range: (f64, f64), _: f64) -> (Vec<f64>, Vec<P>) {
-        let r0 = range.0 as isize + 1;
-        let r1 = range.1 as isize;
-        let mut res = (vec![range.0], vec![self.subs(range.0)]);
-        res.0.extend((r0..=r1).map(|i| i as f64));
-        res.1.extend((r0..=r1).map(|i| self[i as usize]));
+        let mut res = (vec![range.0], vec![self.evaluate(range.0)]);
+        if let Some(indices) = interior_vertex_indices(range, self.len()) {
+            for index in indices {
+                res.0.push(usize_to_f64(index));
+                res.1.push(self[index]);
+            }
+        }
         res.0.push(range.1);
-        res.1.push(self.subs(range.1));
+        res.1.push(self.evaluate(range.1));
         res
     }
 }
@@ -384,7 +426,7 @@ where
     fn transform_by(&mut self, trans: T) {
         self.0
             .iter_mut()
-            .for_each(|p| *p = trans.transform_point(*p))
+            .for_each(|p| *p = trans.transform_point(*p));
     }
 }
 
@@ -401,22 +443,22 @@ fn polyline_test() {
         Point3::new(1.0, 1.0, 1.0),
     ];
     let polyline = PolylineCurve(vec);
-    monstertruck_core::assert_near!(polyline.subs(2.5), Point3::new(0.0, 0.5, 0.5));
+    monstertruck_core::assert_near!(polyline.evaluate(2.5), Point3::new(0.0, 0.5, 0.5));
 
     let mut part0 = polyline.clone();
     let part1 = part0.cut(2.5);
     assert_eq!(part0.len(), 4);
     assert_eq!(part1.len(), 6);
-    monstertruck_core::assert_near!(part0.subs(2.5), Point3::new(0.0, 0.75, 0.25));
-    monstertruck_core::assert_near!(part1.subs(0.5), Point3::new(0.0, 0.25, 0.75));
+    monstertruck_core::assert_near!(part0.evaluate(2.5), Point3::new(0.0, 0.75, 0.25));
+    monstertruck_core::assert_near!(part1.evaluate(0.5), Point3::new(0.0, 0.25, 0.75));
     let mut part0 = polyline.clone();
     let part1 = part0.cut(4.0);
     assert_eq!(part0.len(), 5);
     assert_eq!(part1.len(), 4);
-    monstertruck_core::assert_near!(part0.subs(2.5), Point3::new(0.0, 0.5, 0.5));
-    monstertruck_core::assert_near!(part1.subs(0.5), Point3::new(0.5, 0.5, 1.0));
+    monstertruck_core::assert_near!(part0.evaluate(2.5), Point3::new(0.0, 0.5, 0.5));
+    monstertruck_core::assert_near!(part1.evaluate(0.5), Point3::new(0.5, 0.5, 1.0));
 
-    let pt = polyline.subs(2.13);
+    let pt = polyline.evaluate(2.13);
     let t = polyline.search_parameter(pt, None, 1).unwrap();
     monstertruck_core::assert_near!(t, 2.13);
 
@@ -426,7 +468,12 @@ fn polyline_test() {
     let pt = Point3::new(0.5, 0.5, 0.51);
     assert!(polyline.search_parameter(pt, None, 1).is_none());
     let t = polyline.search_nearest_parameter(pt, None, 1).unwrap();
-    assert!(polyline.der(t).dot(pt - polyline.subs(t)).so_small());
+    assert!(
+        polyline
+            .derivative(t)
+            .dot(pt - polyline.evaluate(t))
+            .so_small()
+    );
 
     let div = polyline.parameter_division((1.5, 6.2), 0.0);
     assert_eq!(div.0, vec![1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 6.2]);
@@ -438,4 +485,57 @@ fn polyline_test() {
     monstertruck_core::assert_near!(div.1[4], Point3::new(1.0, 0.0, 1.0));
     monstertruck_core::assert_near!(div.1[5], Point3::new(1.0, 1.0, 0.0));
     monstertruck_core::assert_near!(div.1[6], Point3::new(1.0, 1.0, 0.2));
+}
+
+#[cfg(test)]
+mod parameter_totality_tests {
+    use super::*;
+
+    fn line() -> PolylineCurve<Point3> {
+        PolylineCurve(vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+        ])
+    }
+
+    #[test]
+    fn parameter_division_clamps_interior_vertices_to_curve_domain() {
+        let curve = line();
+        let (parameters, points) = curve.parameter_division((-2.5, 2.5), 0.0);
+        assert_eq!(parameters, vec![-2.5, 0.0, 1.0, 2.0, 2.5]);
+        assert_eq!(points.len(), parameters.len());
+        assert_eq!(points[0], curve[0]);
+        assert_eq!(points[1], curve[0]);
+        assert_eq!(points[4], curve.evaluate(2.5));
+    }
+
+    #[test]
+    fn parameter_division_does_not_duplicate_integer_endpoints() {
+        let curve = line();
+        let (parameters, points) = curve.parameter_division((1.0, 3.0), 0.0);
+        assert_eq!(parameters, vec![1.0, 2.0, 3.0]);
+        assert_eq!(points, vec![curve[1], curve[2], curve[3]]);
+    }
+
+    #[test]
+    fn evaluate_single_point_and_nan_are_total() {
+        let single = PolylineCurve(vec![Point3::new(1.0, 2.0, 3.0)]);
+        assert_eq!(single.evaluate(f64::NAN), single[0]);
+        assert_eq!(single.evaluate(f64::INFINITY), single[0]);
+        assert_eq!(single.evaluate(f64::NEG_INFINITY), single[0]);
+
+        let curve = line();
+        assert_eq!(curve.evaluate(f64::NAN), curve[0]);
+    }
+
+    #[test]
+    fn parameter_division_nonfinite_range_does_not_expand_integer_indices() {
+        let curve = line();
+        let (parameters, points) =
+            curve.parameter_division((f64::NEG_INFINITY, f64::INFINITY), 0.0);
+        assert_eq!(parameters, vec![f64::NEG_INFINITY, f64::INFINITY]);
+        assert_eq!(points, vec![curve[0], curve[3]]);
+    }
 }

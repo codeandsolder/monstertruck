@@ -29,16 +29,12 @@
 // marcher (`marching-ssi`, the published default) is off and the boolean entry
 // points return `ShapeOpsError::NoBackend`. Their generic helpers then go
 // unused, so allow dead code in exactly that no-backend configuration.
-#![cfg_attr(not(feature = "marching-ssi"), allow(dead_code))]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
+#![cfg_attr(
+    not(feature = "marching-ssi"),
+    expect(
+        dead_code,
+        reason = "classic SSI helpers are retained when the marching implementation is disabled"
+    )
 )]
 
 mod transversal;

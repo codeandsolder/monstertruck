@@ -19,7 +19,7 @@ pub trait SearchParameterDimension {
 /// [`SearchNearestParameter`] on [`ParametricCurve`](crate::ParametricCurve)
 /// implementors.
 #[derive(Clone, Copy, Debug)]
-pub enum CurveParameter {}
+pub struct CurveParameter(core::convert::Infallible);
 
 impl SearchParameterDimension for CurveParameter {
     const DIM: usize = 1;
@@ -33,26 +33,13 @@ impl SearchParameterDimension for CurveParameter {
 /// [`SearchNearestParameter`] on [`ParametricSurface`](crate::ParametricSurface)
 /// implementors.
 #[derive(Clone, Copy, Debug)]
-pub enum SurfaceParameter {}
+pub struct SurfaceParameter(core::convert::Infallible);
 
 impl SearchParameterDimension for SurfaceParameter {
     const DIM: usize = 2;
     type Parameter = (f64, f64);
     type Hint = SearchParameterHint2D;
 }
-
-// Upstream `truck-geotrait` names the parameter-space markers `D1` and `D2`
-// (for "Dimension 1" / "Dimension 2"). The names read as abbreviated
-// labels rather than self-describing markers, and at every call site
-// `SearchParameter<CurveParameter>` / `SearchParameter<SurfaceParameter>` is in fact picking the
-// curve vs surface flavour of the trait. The canonical names are now
-// `CurveParameter` and `SurfaceParameter`; the upstream spellings stay
-// as `#[deprecated]` re-exports so code ported from `truck-geotrait`
-// continues to compile.
-#[deprecated(since = "0.3.1", note = "renamed to `CurveParameter`.")]
-pub use self::CurveParameter as D1;
-#[deprecated(since = "0.3.1", note = "renamed to `SurfaceParameter`.")]
-pub use self::SurfaceParameter as D2;
 
 /// hint for searching parameter for curve
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -67,25 +54,18 @@ pub enum SearchParameterHint1D {
 }
 
 impl From<f64> for SearchParameterHint1D {
-    #[inline(always)]
-    fn from(x: f64) -> SearchParameterHint1D { SearchParameterHint1D::Parameter(x) }
+    #[inline]
+    fn from(x: f64) -> Self { Self::Parameter(x) }
 }
 
 impl From<(f64, f64)> for SearchParameterHint1D {
-    #[inline(always)]
-    fn from(range: (f64, f64)) -> SearchParameterHint1D {
-        SearchParameterHint1D::Range(range.0, range.1)
-    }
+    #[inline]
+    fn from(range: (f64, f64)) -> Self { Self::Range(range.0, range.1) }
 }
 
 impl From<Option<f64>> for SearchParameterHint1D {
-    #[inline(always)]
-    fn from(x: Option<f64>) -> SearchParameterHint1D {
-        match x {
-            Some(x) => x.into(),
-            None => SearchParameterHint1D::None,
-        }
-    }
+    #[inline]
+    fn from(x: Option<f64>) -> Self { x.map_or(Self::None, Into::into) }
 }
 
 /// hint for searching parameter for surface
@@ -100,23 +80,18 @@ pub enum SearchParameterHint2D {
 }
 
 impl From<(f64, f64)> for SearchParameterHint2D {
-    #[inline(always)]
+    #[inline]
     fn from(x: (f64, f64)) -> Self { Self::Parameter(x.0, x.1) }
 }
 
 impl From<((f64, f64), (f64, f64))> for SearchParameterHint2D {
-    #[inline(always)]
+    #[inline]
     fn from(ranges: ((f64, f64), (f64, f64))) -> Self { Self::Range(ranges.0, ranges.1) }
 }
 
 impl From<Option<(f64, f64)>> for SearchParameterHint2D {
-    #[inline(always)]
-    fn from(x: Option<(f64, f64)>) -> Self {
-        match x {
-            Some(x) => x.into(),
-            None => SearchParameterHint2D::None,
-        }
-    }
+    #[inline]
+    fn from(x: Option<(f64, f64)>) -> Self { x.map_or(Self::None, Into::into) }
 }
 
 /// Search parameter `t` such that `self.evaluate(t)` is near point.
@@ -135,7 +110,7 @@ pub trait SearchParameter<Dim: SearchParameterDimension> {
 
 impl<Dim: SearchParameterDimension, T: SearchParameter<Dim>> SearchParameter<Dim> for &T {
     type Point = T::Point;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<Dim::Hint>>(
         &self,
         point: Self::Point,
@@ -148,7 +123,7 @@ impl<Dim: SearchParameterDimension, T: SearchParameter<Dim>> SearchParameter<Dim
 
 impl<Dim: SearchParameterDimension, T: SearchParameter<Dim>> SearchParameter<Dim> for Box<T> {
     type Point = T::Point;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<Dim::Hint>>(
         &self,
         point: Self::Point,
@@ -177,7 +152,7 @@ impl<Dim: SearchParameterDimension, T: SearchNearestParameter<Dim>> SearchNeares
     for &T
 {
     type Point = T::Point;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<Dim::Hint>>(
         &self,
         point: Self::Point,
@@ -192,7 +167,7 @@ impl<Dim: SearchParameterDimension, T: SearchNearestParameter<Dim>> SearchNeares
     for Box<T>
 {
     type Point = T::Point;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<Dim::Hint>>(
         &self,
         point: Self::Point,

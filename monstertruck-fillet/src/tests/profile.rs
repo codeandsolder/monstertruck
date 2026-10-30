@@ -37,8 +37,8 @@ fn chamfer_semi_cube() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1),
@@ -58,7 +58,7 @@ fn chamfer_semi_cube() {
     let plane = |i: usize, j: usize, k: usize, l: usize| {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()
@@ -76,7 +76,7 @@ fn chamfer_semi_cube() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let mut shell: Shell = [
@@ -149,8 +149,8 @@ fn chamfer_closed_wire() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1),
@@ -170,7 +170,7 @@ fn chamfer_closed_wire() {
     let plane = |i: usize, j: usize, k: usize, l: usize| {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()
@@ -188,7 +188,7 @@ fn chamfer_closed_wire() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let mut shell: Shell = [
@@ -263,8 +263,8 @@ fn ridge_semi_cube() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1),
@@ -284,7 +284,7 @@ fn ridge_semi_cube() {
     let plane = |i: usize, j: usize, k: usize, l: usize| {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()
@@ -302,7 +302,7 @@ fn ridge_semi_cube() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let mut shell: Shell = [
@@ -375,8 +375,8 @@ fn ridge_closed_wire() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1),
@@ -396,7 +396,7 @@ fn ridge_closed_wire() {
     let plane = |i: usize, j: usize, k: usize, l: usize| {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()
@@ -414,7 +414,7 @@ fn ridge_closed_wire() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let mut shell: Shell = [
@@ -462,7 +462,7 @@ fn custom_profile_linear() {
     let (mut shell, edge, _) = build_box_shell();
     let initial_face_count = shell.len();
 
-    let profile = BsplineCurve::new(
+    let profile = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)],
     );
@@ -483,7 +483,7 @@ fn custom_profile_bump() {
     let (mut shell, edge, _) = build_box_shell();
     let initial_face_count = shell.len();
 
-    let profile = BsplineCurve::new(
+    let profile = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
             Point2::new(0.0, 0.0),

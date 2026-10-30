@@ -31,23 +31,18 @@
 //! ```
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro_error::proc_macro_error;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::*;
-use syn::*;
+use quote::quote;
+#[cfg(test)]
+use syn::parse_quote;
+use syn::{
+    Data, DataEnum, DataStruct, DeriveInput, Error, Fields, Ident, Result, Type, Variant,
+    parse_macro_input, punctuated, token,
+};
 
 macro_rules! derive_try {
     ($result:expr) => {
@@ -137,7 +132,7 @@ fn dependency_path(package: &str) -> Result<TokenStream2> {
 fn dependency_scope(
     package: &str,
     alias: &str,
-    implementation: TokenStream2,
+    implementation: &TokenStream2,
 ) -> Result<TokenStream2> {
     let path = dependency_path(package)?;
     let alias = Ident::new(alias, Span::call_site());
@@ -149,30 +144,30 @@ fn dependency_scope(
     })
 }
 
-fn traits_scope(implementation: TokenStream2) -> Result<TokenStream2> {
+fn traits_scope(implementation: &TokenStream2) -> Result<TokenStream2> {
     dependency_scope("monstertruck-traits", "monstertruck_traits", implementation)
 }
 
-fn io_scope(implementation: TokenStream2) -> Result<TokenStream2> {
+fn io_scope(implementation: &TokenStream2) -> Result<TokenStream2> {
     dependency_scope("monstertruck-io", "monstertruck_io", implementation)
 }
 
 fn enumerate_impl_return_something<'a>(
     variants: impl IntoIterator<Item = &'a Variant> + 'a,
-    method: TokenStream2,
-    method_variants: TokenStream2,
+    method: &TokenStream2,
+    method_variants: &TokenStream2,
 ) -> TokenStream2 {
     let impls = variants
         .into_iter()
         .map(|variant| {
             let field = single_variant_field(variant)?;
             let variant_name = &variant.ident;
-            Ok(match &field.ident {
-                Some(ident) => {
+            Ok(field.ident.as_ref().map_or_else(
+                || quote! { Self::#variant_name(got) => #method(got, #method_variants) },
+                |ident| {
                     quote! { Self::#variant_name { #ident } => #method(#ident, #method_variants) }
-                }
-                None => quote! { Self::#variant_name(got) => #method(got, #method_variants) },
-            })
+                },
+            ))
         })
         .collect::<Result<Vec<_>>>();
     match impls {
@@ -183,20 +178,20 @@ fn enumerate_impl_return_something<'a>(
 
 fn enumerate_impl_return_self<'a>(
     variants: impl IntoIterator<Item = &'a Variant> + 'a,
-    method: TokenStream2,
-    method_variants: TokenStream2,
+    method: &TokenStream2,
+    method_variants: &TokenStream2,
 ) -> TokenStream2 {
     let impls = variants
         .into_iter()
         .map(|variant| {
             let field = single_variant_field(variant)?;
             let variant_name = &variant.ident;
-            Ok(match &field.ident {
-                Some(ident) => quote! {
+            Ok(field.ident.as_ref().map_or_else(
+                || quote! { Self::#variant_name(got) => Self::#variant_name(#method(got, #method_variants)) },
+                |ident| quote! {
                     Self::#variant_name { #ident } => Self::#variant_name { #ident: #method(#ident, #method_variants) }
                 },
-                None => quote! { Self::#variant_name(got) => Self::#variant_name(#method(got, #method_variants)) },
-            })
+            ))
         })
         .collect::<Result<Vec<_>>>();
     match impls {
@@ -289,18 +284,12 @@ where I: IntoIterator<Item = &'a Variant> + 'a + Copy
             .collect::<Vec<_>>();
         let vals = self.fields.iter().map(|f| &f.var).collect::<Vec<_>>();
         let return_type = &self.return_type;
+        let delegated_method = quote! { #trait_name::#method_name };
+        let delegated_args = quote! { #(#vals),* };
         let implement = if return_type.to_string() == "Self" {
-            enumerate_impl_return_self::<'_>(
-                self.variants,
-                quote! { #trait_name::#method_name },
-                quote! { #(#vals),* },
-            )
+            enumerate_impl_return_self(self.variants, &delegated_method, &delegated_args)
         } else {
-            enumerate_impl_return_something::<'a>(
-                self.variants,
-                quote! { #trait_name::#method_name },
-                quote! { #(#vals),* },
-            )
+            enumerate_impl_return_something(self.variants, &delegated_method, &delegated_args)
         };
         quote! {
             fn #method_name #generics (#self_field #(#fields),*) -> #return_type { #implement }
@@ -357,9 +346,9 @@ pub fn derive_bounded_curve(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `BoundedSurface` for Enums or single field tuple structs.
@@ -406,9 +395,9 @@ pub fn derive_bounded_surface(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `Cut` for Enums or single field tuple structs.
@@ -453,9 +442,9 @@ pub fn derive_cut(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `Invertible` for Enums or single field tuple structs.
@@ -505,9 +494,9 @@ pub fn derive_invertible(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ParameterDivision1D` for Enums or single field tuple structs.
@@ -560,9 +549,9 @@ pub fn derive_parameter_division_1d(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ParameterDivision2D` for Enums or single field tuple structs.
@@ -609,9 +598,9 @@ pub fn derive_parameter_division_2d(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ParametricCurve` for Enums or single field tuple structs.
@@ -674,9 +663,9 @@ pub fn derive_parametric_curve(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ParametricSurface` for Enums or single field tuple structs.
@@ -761,9 +750,9 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ParametricSurface3D` for Enums or single field tuple structs.
@@ -860,9 +849,9 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `SearchNearestParameter<CurveParameter>` for Enums or single field tuple structs.
@@ -922,9 +911,9 @@ pub fn derive_snp_d1(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `SearchNearestParameter<SurfaceParameter>` for Enums or single field tuple structs.
@@ -984,9 +973,9 @@ pub fn derive_snp_d2(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `SearchParameter<CurveParameter>` for Enums or single field tuple structs.
@@ -1047,9 +1036,9 @@ pub fn derive_sp_d1(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `SearchParameter<SurfaceParameter>` for Enums or single field tuple structs.
@@ -1110,9 +1099,9 @@ pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `Transformed<Matrix3>` for enums or single field tuple structs.
@@ -1165,9 +1154,9 @@ pub fn derive_transform_m3(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `Transformed<Matrix4>` for enums or single field tuple structs.
@@ -1220,9 +1209,9 @@ pub fn derive_transform_m4(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 /// Derive macro generating an impl of the trait `StepLength` for enums or single field tuple structs.
 #[proc_macro_error]
@@ -1267,13 +1256,12 @@ pub fn derive_step_length(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(io_scope(implementation)).into()
+    derive_try!(io_scope(&implementation)).into()
 }
 
-// Internal generator shared by the `StepFormat` derive and its
-// upstream-compatible `DisplayByStep` alias.
+// Internal generator for the `StepFormat` derive.
 fn derive_step_format_impl(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let trait_name = quote! { monstertruck_io::step::save::StepFormat };
@@ -1316,26 +1304,15 @@ fn derive_step_format_impl(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(io_scope(implementation)).into()
+    derive_try!(io_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `StepFormat` for enums or single field tuple structs.
 #[proc_macro_error]
 #[proc_macro_derive(StepFormat)]
 pub fn derive_step_format(input: TokenStream) -> TokenStream { derive_step_format_impl(input) }
-
-// `DisplayByStep` is the upstream `truck-stepio` derive name. We renamed
-// the trait to `StepFormat` because "display by step" reads as
-// "display step-by-step" rather than "format as STEP". The alias is
-// kept registered so external code ported from `truck` still compiles
-// against `monstertruck`; new code should use `StepFormat`. Slated for
-// removal once downstream callers are off the old name.
-/// Deprecated alias for [`StepFormat`].
-#[proc_macro_error]
-#[proc_macro_derive(DisplayByStep)]
-pub fn derive_display_by_step(input: TokenStream) -> TokenStream { derive_step_format_impl(input) }
 
 /// Derive macro generating an impl of the trait `StepCurve` for enums or single field tuple structs.
 #[proc_macro_error]
@@ -1380,9 +1357,9 @@ pub fn derive_step_curve(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(io_scope(implementation)).into()
+    derive_try!(io_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `StepSurface` for enums or single field tuple structs.
@@ -1428,9 +1405,9 @@ pub fn derive_step_surface(input: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => unsupported_input(&ty),
+        Data::Union(_) => unsupported_input(&ty),
     };
-    derive_try!(io_scope(implementation)).into()
+    derive_try!(io_scope(&implementation)).into()
 }
 
 /// Derive macro generating an impl of the trait `ToSameGeometry<Self>` for structs.
@@ -1447,7 +1424,7 @@ pub fn derive_self_same_geometry(input: TokenStream) -> TokenStream {
             fn to_same_geometry(&self) -> Self { self.clone() }
         }
     };
-    derive_try!(traits_scope(implementation)).into()
+    derive_try!(traits_scope(&implementation)).into()
 }
 
 #[cfg(test)]

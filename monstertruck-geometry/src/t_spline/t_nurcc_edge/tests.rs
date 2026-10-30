@@ -4,6 +4,8 @@
 //! path is unchanged.
 
 use super::*;
+use crate::prelude::Point3;
+use monstertruck_core::tolerance::Origin;
 
 /// Tests if `connect` will properly connect two edges which share only one face.
 #[test]
@@ -123,9 +125,9 @@ fn test_tnurcc_edge_connect_single_shared_face() {
         match cmn_f_side {
             Left => secondary_edge.write().face_left = Some(common_face),
             Right => secondary_edge.write().face_right = Some(common_face),
-        };
+        }
 
-        let con_res = TnurccEdge::connect(Arc::clone(&primary_edge), Arc::clone(&secondary_edge));
+        let con_res = TnurccEdge::connect(&primary_edge, &secondary_edge);
         assert!(
             con_res.is_ok(),
             "Connection between {:?}->{:?} and {:?}->{:?} failed with error: {}.",
@@ -133,13 +135,11 @@ fn test_tnurcc_edge_connect_single_shared_face() {
             primary_edge.read().dest.read().point,
             secondary_edge.read().origin.read().point,
             secondary_edge.read().dest.read().point,
-            con_res.err().unwrap()
+            (con_res.err()).unwrap()
         );
 
         // Check if the primary edge is connected to the secondary
-        let primary_con_orientaion = primary_edge
-            .read()
-            .connection_orientation(Arc::clone(&secondary_edge));
+        let primary_con_orientaion = primary_edge.read().connection_orientation(&secondary_edge);
         assert_eq!(
             primary_con_orientaion.len(),
             1,
@@ -161,9 +161,7 @@ fn test_tnurcc_edge_connect_single_shared_face() {
         );
 
         // Check if the secondary edge is connected to the primary
-        let secondary_con_orientaion = secondary_edge
-            .read()
-            .connection_orientation(Arc::clone(&primary_edge));
+        let secondary_con_orientaion = secondary_edge.read().connection_orientation(&primary_edge);
         assert_eq!(
             secondary_con_orientaion.len(),
             1,
@@ -274,7 +272,7 @@ fn test_tnurcc_edge_connect_double_shared_face() {
         }
 
         // Attempt to connect
-        let con_res = TnurccEdge::connect(Arc::clone(&primary_edge), Arc::clone(&secondary_edge));
+        let con_res = TnurccEdge::connect(&primary_edge, &secondary_edge);
         assert!(
             con_res.is_ok(),
             "Connection between {:?}->{:?} and {:?}->{:?} failed with error: {}.",
@@ -282,13 +280,11 @@ fn test_tnurcc_edge_connect_double_shared_face() {
             primary_edge.read().dest.read().point,
             secondary_edge.read().origin.read().point,
             secondary_edge.read().dest.read().point,
-            con_res.err().unwrap()
+            (con_res.err()).unwrap()
         );
 
         // Check if the primary edge is connected to the secondary
-        let primary_con_orientaion = primary_edge
-            .read()
-            .connection_orientation(Arc::clone(&secondary_edge));
+        let primary_con_orientaion = primary_edge.read().connection_orientation(&secondary_edge);
         assert_eq!(
             primary_con_orientaion.len(),
             2,
@@ -299,7 +295,7 @@ fn test_tnurcc_edge_connect_double_shared_face() {
         );
 
         // Check if the connection orientation is correct
-        for expect in p_con_sides.iter() {
+        for expect in &p_con_sides {
             assert!(
                 primary_con_orientaion.contains(expect),
                 "Primary edge is not correctly connected to secondary edge for \
@@ -311,9 +307,7 @@ fn test_tnurcc_edge_connect_double_shared_face() {
         }
 
         // Check if the secondary edge is connected to the primary
-        let secondary_con_orientaion = secondary_edge
-            .read()
-            .connection_orientation(Arc::clone(&primary_edge));
+        let secondary_con_orientaion = secondary_edge.read().connection_orientation(&primary_edge);
         assert_eq!(
             secondary_con_orientaion.len(),
             2,
@@ -324,7 +318,7 @@ fn test_tnurcc_edge_connect_double_shared_face() {
         );
 
         // Check if the connection orientation is correct
-        for expect in s_con_sides.iter() {
+        for expect in &s_con_sides {
             assert!(
                 secondary_con_orientaion.contains(expect),
                 "Secondary edge is not correctly connected to primary edge for \
@@ -380,18 +374,14 @@ fn test_tnurcc_split_edge() {
     dest.write().incoming_edge = Some(Arc::clone(&edge));
 
     // Split the edge
-    let middle = TnurccEdge::split_edge(
-        Arc::clone(&edge),
-        24,
-        Point3::from((0.0, 1.0, 0.0)),
-        56,
-        0.25,
-    )
-    .expect("Splitting is designed to succeed");
+    let middle = (TnurccEdge::split_edge(&edge, 24, Point3::from((0.0, 1.0, 0.0)), 56, 0.25))
+        .expect("Splitting is designed to succeed");
 
     // Get the new edge, other_left and other_right should be the same
-    let other_left = edge.read().connection(TnurccConnection::LeftAcw);
-    let other_right = edge.read().connection(TnurccConnection::RightCw);
+    let other_left = (edge.read().connection(TnurccConnection::LeftAcw))
+        .expect("split edge must install its left ACW conjugate");
+    let other_right = (edge.read().connection(TnurccConnection::RightCw))
+        .expect("split edge must install its right CW conjugate");
 
     // Check that edge is correctly connected to an edge
     assert!(
@@ -430,13 +420,10 @@ fn test_tnurcc_split_edge() {
     // Check that the new point's incomming edge is an edge that is
     // connected to the new point
     assert!(
-        middle
-            .read()
-            .incoming_edge
-            .as_ref()
+        (middle.read().incoming_edge.clone())
             .unwrap()
             .read()
-            .point_end(Arc::clone(&middle))
+            .point_end(&middle)
             .is_some(),
         "Middle's incomming edge is incorrect."
     );
@@ -447,9 +434,7 @@ fn test_tnurcc_split_edge() {
     assert!(
         std::ptr::eq(
             other_left.as_ref(),
-            dest.read()
-                .incoming_edge
-                .as_ref()
+            (dest.read().incoming_edge.clone())
                 .expect("Incoming edge for dest should have been set")
                 .as_ref()
         ),
@@ -504,29 +489,23 @@ fn test_tnurcc_split_edge_connected_edges() {
     left_edge.write().face_right = Some(Arc::clone(&left_face));
     right_edge.write().face_left = Some(Arc::clone(&right_face));
 
-    TnurccEdge::connect(Arc::clone(&edge), Arc::clone(&right_edge))
+    (TnurccEdge::connect(&edge, &right_edge))
         .expect("Connection should be topologically consistent");
-    TnurccEdge::connect(Arc::clone(&edge), Arc::clone(&left_edge))
+    (TnurccEdge::connect(&edge, &left_edge))
         .expect("Connection should be topologically consistent");
 
     // Split the edge (parameters are the same from the previous test, but will not be checked)
-    let _middle = TnurccEdge::split_edge(
-        Arc::clone(&edge),
-        24,
-        Point3::from((0.0, 1.0, 0.0)),
-        56,
-        0.25,
-    );
+    let _middle = TnurccEdge::split_edge(&edge, 24, Point3::from((0.0, 1.0, 0.0)), 56, 0.25);
 
     // Get the new edge
-    let new_edge = edge.read().connection(TnurccConnection::LeftAcw);
+    let new_edge = (edge.read().connection(TnurccConnection::LeftAcw))
+        .expect("split edge must install its conjugate");
 
     // Test that left_edge was reconnected to the new edge
     assert!(
         std::ptr::eq(
-            left_edge
-                .read()
-                .connection(TnurccConnection::RightCw)
+            (left_edge.read().connection(TnurccConnection::RightCw))
+                .expect("left edge must be reconnected")
                 .as_ref(),
             new_edge.as_ref()
         ),
@@ -535,9 +514,8 @@ fn test_tnurcc_split_edge_connected_edges() {
     // Test that right_edge was reconnected to the new edge
     assert!(
         std::ptr::eq(
-            right_edge
-                .read()
-                .connection(TnurccConnection::LeftAcw)
+            (right_edge.read().connection(TnurccConnection::LeftAcw))
+                .expect("right edge must be reconnected")
                 .as_ref(),
             new_edge.as_ref()
         ),
@@ -547,9 +525,8 @@ fn test_tnurcc_split_edge_connected_edges() {
     assert!(
         std::ptr::eq(
             right_edge.as_ref(),
-            new_edge
-                .read()
-                .connection(TnurccConnection::RightCw)
+            (new_edge.read().connection(TnurccConnection::RightCw))
+                .expect("new edge must connect to the right edge")
                 .as_ref()
         ),
         "Edge's right clockwise connection was not correctly transfered."
@@ -558,9 +535,8 @@ fn test_tnurcc_split_edge_connected_edges() {
     assert!(
         std::ptr::eq(
             left_edge.as_ref(),
-            new_edge
-                .read()
-                .connection(TnurccConnection::LeftAcw)
+            (new_edge.read().connection(TnurccConnection::LeftAcw))
+                .expect("new edge must connect to the left edge")
                 .as_ref()
         ),
         "Edge's left anti-clockwise connection was not correctly transfered."

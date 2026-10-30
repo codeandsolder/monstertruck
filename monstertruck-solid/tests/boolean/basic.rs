@@ -177,8 +177,8 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
         Vector3::unit_z(),
         builder::SweepAngle::Closed,
         2,
-    );
-    let host = Solid::try_new(vec![shell])?;
+    )?;
+    let host = Solid::new(vec![shell])?;
     anyhow::ensure!(
         host.is_geometric_consistent(),
         "axis-aware revolved host is not geometrically consistent"
@@ -203,8 +203,8 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
 
 #[test]
 fn union_of_end_to_end_cylinders_with_full_circular_interface() -> Result<()> {
-    let a = unit_cylinder_y(0.0);
-    let b = unit_cylinder_y(1.0);
+    let a = unit_cylinder_y(0.0)?;
+    let b = unit_cylinder_y(1.0)?;
     let result = monstertruck_solid::or(&a, &b, STRICT_TOL)?;
     anyhow::ensure!(result.boundaries().len() == 1, "union must have one shell");
     anyhow::ensure!(

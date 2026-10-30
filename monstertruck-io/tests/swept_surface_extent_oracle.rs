@@ -58,7 +58,7 @@
 //! Corpus-gated and `#[ignore]`d. Run with:
 //!
 //! ```text
-//! flock -o /tmp/mt-cargo.lock cargo nextest run -p monstertruck-step \
+//! flock -o /tmp/mt-cargo.lock cargo nextest run -p monstertruck-io --features step \
 //!     --run-ignored all -E 'test(swept_surface_extent)' --no-capture
 //! ```
 
@@ -798,7 +798,7 @@ fn report_file(table: &Table) {
 fn extrusion_fixture(control_points: Vec<Point3>, degree: usize, axis: Vector3) -> Surface {
     use monstertruck_io::step::load::step_geometry::re_exports::{BsplineCurve, KnotVector};
     let divisions = control_points.len() - degree;
-    let profile = Curve3D::BsplineCurve(BsplineCurve::new(
+    let profile = Curve3D::BsplineCurve(BsplineCurve::new_unchecked(
         KnotVector::uniform_knot(degree, divisions),
         control_points,
     ));
@@ -857,7 +857,7 @@ fn emitted_extrusion_net_matches_the_analytic_surface() {
 
 /// The transposition regression guard. Before this track, the emitted extrusion
 /// net indexed its control points `[sweep][profile]` while its knot vectors were
-/// `(profile, sweep)`, so `BsplineSurface::try_new`'s knot-vs-control-point rule
+/// `(profile, sweep)`, so `BsplineSurface::new`'s knot-vs-control-point rule
 /// PANICKED on every profile with 4 or more control points -- essentially every
 /// real B-spline profile -- and silently produced a transposed surface for the
 /// rest. This pins both halves, one fixture each.

@@ -3,7 +3,7 @@ pub use dag::{Edge, EdgeMut, Node, NodeMut, Path};
 use monstertruck_core::cgmath64::One;
 
 /// Entity of the node
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct NodeEntity<Shape, NodeAttrs> {
     /// shape of node
     pub shape: Shape,
@@ -16,7 +16,7 @@ impl<Shape> From<Shape> for NodeEntity<Shape, ()> {
 }
 
 /// Entity of the edge
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EdgeEntity<Matrix, EdgeAttrs> {
     /// transform matrix of edge
     pub matrix: Matrix,
@@ -51,8 +51,8 @@ where
 pub type Assembly<Shape, NodeAttrs, Matrix, EdgeAttrs> =
     dag::Dag<NodeEntity<Shape, NodeAttrs>, EdgeEntity<Matrix, EdgeAttrs>>;
 
-impl<'a, Shape, NodeAttrs, Matrix, EdgeAttrs>
-    Path<'a, NodeEntity<Shape, NodeAttrs>, EdgeEntity<Matrix, EdgeAttrs>>
+impl<Shape, NodeAttrs, Matrix, EdgeAttrs>
+    Path<'_, NodeEntity<Shape, NodeAttrs>, EdgeEntity<Matrix, EdgeAttrs>>
 {
     /// Returns transform matrix of `self`.
     /// # Examples
@@ -67,6 +67,7 @@ impl<'a, Shape, NodeAttrs, Matrix, EdgeAttrs>
     /// assert_eq!(path.matrix(), 3628800.0);
     /// ```
     #[inline]
+    #[must_use]
     pub fn matrix(&self) -> Matrix
     where Matrix: One + Copy + std::ops::Mul<Output = Matrix> {
         self.edges()
@@ -80,14 +81,12 @@ impl<'a, Shape, NodeAttrs, Matrix, EdgeAttrs>
 {
     /// Returns the shape.
     #[inline]
-    pub fn shape(self) -> &'a Shape { &self.entity().shape }
+    #[must_use]
+    pub const fn shape(self) -> &'a Shape { &self.entity().shape }
     /// Returns the node attributes.
     #[inline]
-    pub fn attributes(self) -> &'a NodeAttrs { &self.entity().attrs }
-    /// Deprecated alias for [`attributes`](Self::attributes).
-    #[deprecated(since = "0.3.1", note = "renamed to `attributes`.")]
-    #[inline]
-    pub fn attrs(self) -> &'a NodeAttrs { self.attributes() }
+    #[must_use]
+    pub const fn attributes(self) -> &'a NodeAttrs { &self.entity().attrs }
 }
 
 impl<'a, Shape, NodeAttrs, Matrix, EdgeAttrs>
@@ -95,40 +94,30 @@ impl<'a, Shape, NodeAttrs, Matrix, EdgeAttrs>
 {
     /// Returns the shape.
     #[inline]
-    pub fn shape(&'a mut self) -> &'a mut Shape { &mut self.entity().shape }
+    pub const fn shape(&'a mut self) -> &'a mut Shape { &mut self.entity().shape }
     /// Returns the node attributes.
     #[inline]
-    pub fn attributes(&'a mut self) -> &'a mut NodeAttrs { &mut self.entity().attrs }
-    /// Deprecated alias for [`attributes`](Self::attributes).
-    #[deprecated(since = "0.3.1", note = "renamed to `attributes`.")]
-    #[inline]
-    pub fn attrs(&'a mut self) -> &'a mut NodeAttrs { self.attributes() }
+    pub const fn attributes(&'a mut self) -> &'a mut NodeAttrs { &mut self.entity().attrs }
 }
 
 impl<'a, Matrix, EdgeAttrs> Edge<'a, EdgeEntity<Matrix, EdgeAttrs>> {
     /// Returns the transform matrix of the edge.
     #[inline]
-    pub fn matrix(self) -> &'a Matrix { &self.entity().matrix }
+    #[must_use]
+    pub const fn matrix(self) -> &'a Matrix { &self.entity().matrix }
     /// Returns the edge attributes.
     #[inline]
-    pub fn attributes(self) -> &'a EdgeAttrs { &self.entity().attrs }
-    /// Deprecated alias for [`attributes`](Self::attributes).
-    #[deprecated(since = "0.3.1", note = "renamed to `attributes`.")]
-    #[inline]
-    pub fn attrs(self) -> &'a EdgeAttrs { self.attributes() }
+    #[must_use]
+    pub const fn attributes(self) -> &'a EdgeAttrs { &self.entity().attrs }
 }
 
 impl<'a, Matrix, EdgeAttrs> EdgeMut<'a, EdgeEntity<Matrix, EdgeAttrs>> {
     /// Returns the transform matrix of the edge.
     #[inline]
-    pub fn matrix(&'a mut self) -> &'a mut Matrix { &mut self.entity().matrix }
+    pub const fn matrix(&'a mut self) -> &'a mut Matrix { &mut self.entity().matrix }
     /// Returns the edge attributes.
     #[inline]
-    pub fn attributes(&'a mut self) -> &'a mut EdgeAttrs { &mut self.entity().attrs }
-    /// Deprecated alias for [`attributes`](Self::attributes).
-    #[deprecated(since = "0.3.1", note = "renamed to `attributes`.")]
-    #[inline]
-    pub fn attrs(&'a mut self) -> &'a mut EdgeAttrs { self.attributes() }
+    pub const fn attributes(&'a mut self) -> &'a mut EdgeAttrs { &mut self.entity().attrs }
 }
 
 /// have contents which can be removed
@@ -148,6 +137,7 @@ impl<'a, Matrix, EdgeAttrs> EdgeMut<'a, EdgeEntity<Matrix, EdgeAttrs>> {
 /// ```
 pub trait Takeable {
     /// take contents
+    #[must_use]
     fn take(&mut self) -> Self;
     /// Return `true` if the contents has been taken.
     /// # Examples
@@ -222,9 +212,14 @@ impl<Shape, NodeAttrs, Matrix, EdgeAttrs> Assembly<Shape, NodeAttrs, Matrix, Edg
         NodeAttrs: Default,
         EdgeAttrs: Default, {
         self.node_indices().for_each(|index| {
-            let node = self.node(index);
-            if !(node.is_terminal() || node.entity().shape.is_taken()) {
-                let shape = self.node_mut(index).entity().shape.take();
+            let should_split = self
+                .node(index)
+                .is_some_and(|node| !(node.is_terminal() || node.entity().shape.is_taken()));
+            if should_split {
+                let Some(mut node) = self.node_mut(index) else {
+                    return;
+                };
+                let shape = node.entity().shape.take();
                 let new_index = self.create_node(NodeEntity {
                     shape,
                     attrs: Default::default(),

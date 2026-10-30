@@ -10,16 +10,26 @@
 //! - Enter "L" on the keyboard to switch the point light source/uniform light source of the light.
 //! - Enter "Space" on the keyboard to switch the rendering mode for the wireframe and surface.
 
-use monstertruck_gpu::*;
+use monstertruck_gpu::{
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
+    WindowSceneDescriptor, wgpu,
+};
 use monstertruck_meshing::prelude::*;
-use monstertruck_render::*;
+use monstertruck_render::{
+    CreatorCreator, InstanceCreator, Material, PolygonInstance, PolygonState, WireFrameInstance,
+    WireFrameState,
+};
 use std::f64::consts::PI;
 use std::io::Read;
 use std::sync::Arc;
-use wgpu::*;
-use winit::{dpi::*, event::*, keyboard::*};
+use wgpu::Color;
+use winit::{
+    dpi::PhysicalPosition,
+    event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase},
+    keyboard::{KeyCode, PhysicalKey},
+};
 mod app;
-use app::*;
+use app::{App, AppResult, ControlFlow, async_trait};
 
 const TEAPOT_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -44,18 +54,20 @@ struct MyApp {
 }
 
 impl MyApp {
-    fn create_camera() -> Camera {
+    fn create_camera() -> AppResult<Camera> {
         let matrix = Matrix4::look_at_rh(
             Point3::new(1.0, 1.0, 1.0),
             Point3::origin(),
             Vector3::unit_y(),
         );
-        Camera {
-            matrix: matrix.invert().unwrap(),
+        Ok(Camera {
+            matrix: matrix
+                .invert()
+                .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
             method: ProjectionMethod::perspective(Rad(PI / 4.0)),
             near_clip: 0.1,
             far_clip: 40.0,
-        }
+        })
     }
 
     fn update_render_mode(&mut self) {
@@ -115,40 +127,43 @@ impl MyApp {
     fn load_obj<R: Read>(
         creator: &InstanceCreator,
         reader: R,
-    ) -> (PolygonInstance, WireFrameInstance) {
-        let mut mesh = obj::read(reader).unwrap();
+    ) -> AppResult<(PolygonInstance, WireFrameInstance)> {
+        let mut mesh = obj::read(reader)?;
         mesh.put_together_same_attrs(TOLERANCE * 2.0)
             .add_smooth_normals(0.5, false);
         let bdd_box = mesh.bounding_box();
         let (size, center) = (bdd_box.size(), bdd_box.center());
         let mat = Matrix4::from_translation(center.to_vec()) * Matrix4::from_scale(size);
+        let inverse = mat
+            .invert()
+            .ok_or_else(|| std::io::Error::other("object normalization matrix is singular"))?;
         let polygon_state = PolygonState {
-            matrix: mat.invert().unwrap(),
+            matrix: inverse,
             ..Default::default()
         };
         let wire_state = WireFrameState {
-            matrix: mat.invert().unwrap(),
+            matrix: inverse,
             ..Default::default()
         };
-        (
-            creator.create_instance(&mesh, &polygon_state),
-            creator.create_instance(&mesh, &wire_state),
-        )
+        Ok((
+            creator.create_instance(&mesh, &polygon_state)?,
+            creator.create_instance(&mesh, &wire_state)?,
+        ))
     }
 }
 
 #[async_trait(?Send)]
 impl App for MyApp {
-    async fn init(window: Arc<winit::window::Window>) -> MyApp {
+    async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;
         let scene_desc = WindowSceneDescriptor {
             studio: StudioConfig {
                 background: Color::BLACK,
-                camera: MyApp::create_camera(),
+                camera: Self::create_camera()?,
                 lights: vec![Light {
                     position: Point3::new(1.0, 1.0, 1.0),
                     color: Vector3::new(1.0, 1.0, 1.0),
-                    light_type: LightType::Point,
+                    kind: LightType::Point,
                 }],
             },
             backend_buffer: BackendBufferConfig {
@@ -156,12 +171,12 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &scene_desc).await;
+        let mut scene = WindowScene::from_window(window, &scene_desc).await?;
         let creator = scene.instance_creator();
-        let (instance, wireframe) = MyApp::load_obj(&creator, TEAPOT_BYTES);
+        let (instance, wireframe) = Self::load_obj(&creator, TEAPOT_BYTES)?;
         scene.add_object(&instance);
         scene.add_object(&wireframe);
-        let mut app = MyApp {
+        let mut app = Self {
             scene,
             creator,
             rotate_flag: false,
@@ -171,20 +186,26 @@ impl App for MyApp {
             render_mode: RenderMode::NaiveSurface,
         };
         app.update_render_mode();
-        app
+        Ok(app)
     }
 
     fn app_title<'a>() -> Option<&'a str> { Some("simple obj viewer") }
 
     fn dropped_file(&mut self, path: std::path::PathBuf) -> ControlFlow {
-        let file = std::fs::File::open(path).unwrap();
-        self.scene.clear_objects();
-        let (instance, wireframe) = MyApp::load_obj(&self.creator, file);
-        self.scene.add_object(&instance);
-        self.scene.add_object(&wireframe);
-        self.instance = instance;
-        self.wireframe = wireframe;
-        self.update_render_mode();
+        let result = std::fs::File::open(path)
+            .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })
+            .and_then(|file| Self::load_obj(&self.creator, file));
+        match result {
+            Ok((instance, wireframe)) => {
+                self.scene.clear_objects();
+                self.scene.add_object(&instance);
+                self.scene.add_object(&wireframe);
+                self.instance = instance;
+                self.wireframe = wireframe;
+                self.update_render_mode();
+            }
+            Err(error) => eprintln!("object reload failed: {error}"),
+        }
         Self::default_control_flow()
     }
 
@@ -198,7 +219,7 @@ impl App for MyApp {
                     let desc = self.scene.studio_config_mut();
                     (&mut desc.lights[0], &desc.camera)
                 };
-                match light.light_type {
+                match light.kind {
                     LightType::Point => {
                         light.position = camera.position();
                     }
@@ -219,16 +240,16 @@ impl App for MyApp {
                 let camera = &mut self.scene.studio_config_mut().camera;
                 match &mut camera.method {
                     ProjectionMethod::Parallel { screen_size } => {
-                        *screen_size *= 0.9f64.powf(y as f64);
+                        *screen_size *= 0.9f64.powf(f64::from(y));
                     }
                     ProjectionMethod::Perspective { .. } => {
-                        let trans_vec = camera.eye_direction() * y as f64 * 0.2;
+                        let trans_vec = camera.eye_direction() * f64::from(y) * 0.2;
                         camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
                     }
                 }
             }
             MouseScrollDelta::PixelDelta(_) => {}
-        };
+        }
         Self::default_control_flow()
     }
 
@@ -245,8 +266,8 @@ impl App for MyApp {
             axis += dir2d[0] * matrix[1].truncate();
             axis /= axis.magnitude();
             let angle = dir2d.magnitude() * 0.01;
-            let mat = Matrix4::from_axis_angle(axis, Rad(angle));
-            *matrix = mat.invert().unwrap() * *matrix;
+            let inverse_rotation = Matrix4::from_axis_angle(axis, Rad(-angle));
+            *matrix = inverse_rotation * *matrix;
         }
         self.prev_cursor = position;
         Self::default_control_flow()
@@ -255,9 +276,8 @@ impl App for MyApp {
         if input.state == ElementState::Released {
             return Self::default_control_flow();
         }
-        let keycode = match input.physical_key {
-            PhysicalKey::Code(keycode) => keycode,
-            _ => return Self::default_control_flow(),
+        let PhysicalKey::Code(keycode) = input.physical_key else {
+            return Self::default_control_flow();
         };
         match keycode {
             KeyCode::KeyP => {
@@ -274,14 +294,14 @@ impl App for MyApp {
                     let desc = self.scene.studio_config_mut();
                     (&mut desc.lights[0], &desc.camera)
                 };
-                *light = match light.light_type {
+                *light = match light.kind {
                     LightType::Point => {
                         let mut vec = camera.position();
                         vec /= vec.to_vec().magnitude();
                         Light {
                             position: vec,
                             color: Vector3::new(1.0, 1.0, 1.0),
-                            light_type: LightType::Uniform,
+                            kind: LightType::Uniform,
                         }
                     }
                     LightType::Uniform => {
@@ -289,7 +309,7 @@ impl App for MyApp {
                         Light {
                             position,
                             color: Vector3::new(1.0, 1.0, 1.0),
-                            light_type: LightType::Point,
+                            kind: LightType::Point,
                         }
                     }
                 };
@@ -308,7 +328,11 @@ impl App for MyApp {
         Self::default_control_flow()
     }
 
-    fn render(&mut self) { self.scene.render_frame(); }
+    fn render(&mut self) {
+        if let Err(error) = self.scene.render_frame() {
+            eprintln!("render failed: {error}");
+        }
+    }
 }
 
 fn main() { MyApp::run(); }

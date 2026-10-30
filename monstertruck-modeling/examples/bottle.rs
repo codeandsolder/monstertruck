@@ -14,21 +14,28 @@
 //!
 //! [OCCT tutorial]: https://dev.opencascade.org/doc/overview/html/occt__tutorial.html
 
-use monstertruck_modeling::*;
+#[cfg(feature = "fillet")]
+use monstertruck_modeling::{Curve, Edge, FilletOptions, RadiusSpec, fillet_edges};
+use monstertruck_modeling::{EuclideanSpace, Point3, Rad, Shell, Solid, Vector3, builder};
 use std::f64::consts::PI;
 
-fn body_shell(bottom: f64, height: f64, width: f64, thickness: f64) -> Shell {
+type ExampleResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+fn body_shell(bottom: f64, height: f64, width: f64, thickness: f64) -> ExampleResult<Shell> {
     let vertex0 = builder::vertex(Point3::new(-width / 2.0, bottom, thickness / 4.0));
     let vertex1 = builder::vertex(Point3::new(width / 2.0, bottom, thickness / 4.0));
     let transit = Point3::new(0.0, bottom, thickness / 2.0);
-    let arc0 = builder::circle_arc(&vertex0, &vertex1, transit);
+    let arc0 = builder::circle_arc(&vertex0, &vertex1, transit)?;
     let arc1 = builder::rotated(&arc0, Point3::origin(), Vector3::unit_y(), Rad(PI));
     let face = builder::homotopy(&arc0, &arc1.inverse());
     let solid = builder::extrude(&face, Vector3::new(0.0, height, 0.0));
-    solid.into_boundaries().pop().unwrap()
+    solid
+        .into_boundaries()
+        .pop()
+        .ok_or_else(|| std::io::Error::other("bottle body extrusion produced no shell").into())
 }
 
-fn cylinder(bottom: f64, height: f64, radius: f64) -> Shell {
+fn cylinder(bottom: f64, height: f64, radius: f64) -> ExampleResult<Shell> {
     let vertex = builder::vertex(Point3::new(0.0, bottom, radius));
     let circle = builder::revolve(
         &vertex,
@@ -36,22 +43,32 @@ fn cylinder(bottom: f64, height: f64, radius: f64) -> Shell {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         2,
-    );
-    let disk = builder::try_attach_plane(&[circle]).unwrap();
+    )?;
+    let disk = builder::try_attach_plane([circle])?;
     let solid = builder::extrude(&disk, Vector3::new(0.0, height, 0.0));
-    solid.into_boundaries().pop().unwrap()
+    solid
+        .into_boundaries()
+        .pop()
+        .ok_or_else(|| std::io::Error::other("neck extrusion produced no shell").into())
 }
 
-fn grue_body_neck(body: &mut Shell, neck: Shell) {
-    let body_seiling = body.last_mut().unwrap();
-    let wire = neck[0].boundaries()[0].clone();
-    body_seiling
-        .add_boundary(wire)
-        .expect("neck boundary should attach to body ceiling");
+fn glue_body_neck(body: &mut Shell, neck: Shell) -> ExampleResult<()> {
+    let neck_face = neck
+        .first()
+        .ok_or_else(|| std::io::Error::other("neck shell has no attachment face"))?;
+    let wire = neck_face
+        .boundaries()
+        .into_iter()
+        .next()
+        .ok_or_else(|| std::io::Error::other("neck shell has no attachment boundary"))?;
+    let body_ceiling = body
+        .last_mut()
+        .ok_or_else(|| std::io::Error::other("bottle body has no ceiling face"))?;
+    body_ceiling.add_boundary(wire)?;
     body.extend(neck.into_iter().skip(1));
+    Ok(())
 }
 
-/// Collect the vertical `Line` edges of a body shell (those spanning the full height).
 #[cfg(feature = "fillet")]
 fn vertical_line_edges(shell: &Shell, height: f64) -> Vec<Edge> {
     let mut edge_face_count = std::collections::HashMap::new();
@@ -65,12 +82,16 @@ fn vertical_line_edges(shell: &Shell, height: f64) -> Vec<Edge> {
     let mut seen = std::collections::HashSet::new();
     shell
         .edge_iter()
-        .filter(|e| seen.insert(e.id()))
-        .filter(|e| edge_face_count[&e.id()] == 2)
-        .filter(|e| {
-            matches!(e.oriented_curve(), Curve::Line(_)) && {
-                let p0 = e.front().point();
-                let p1 = e.back().point();
+        .filter(|edge| seen.insert(edge.id()))
+        .filter(|edge| {
+            edge_face_count
+                .get(&edge.id())
+                .is_some_and(|&count| count == 2)
+        })
+        .filter(|edge| {
+            matches!(edge.oriented_curve(), Curve::Line(_)) && {
+                let p0 = edge.front().point();
+                let p1 = edge.back().point();
                 (p0.y.abs() < 0.01 && (p1.y - height).abs() < 0.01)
                     || (p1.y.abs() < 0.01 && (p0.y - height).abs() < 0.01)
             }
@@ -78,11 +99,9 @@ fn vertical_line_edges(shell: &Shell, height: f64) -> Vec<Edge> {
         .collect()
 }
 
-fn bottle(height: f64, width: f64, thickness: f64) -> Solid {
-    let mut body = body_shell(0.0, height, width, thickness);
+fn bottle(height: f64, width: f64, thickness: f64) -> ExampleResult<Solid> {
+    let mut body = body_shell(0.0, height, width, thickness)?;
 
-    // Fillet the body's vertical edges (Line edges spanning the full height)
-    // matching the OCCT tutorial's BRepFilletAPI_MakeFillet at thickness / 12.
     #[cfg(feature = "fillet")]
     {
         let edges = vertical_line_edges(&body, height);
@@ -90,45 +109,50 @@ fn bottle(height: f64, width: f64, thickness: f64) -> Solid {
             radius: RadiusSpec::Constant(thickness / 12.0),
             ..Default::default()
         };
-        fillet_edges(&mut body, &edges, Some(&opts)).expect("body fillet");
+        fillet_edges(&mut body, &edges, Some(&opts))?;
     }
 
-    let neck = cylinder(height, height / 10.0, thickness / 4.0);
-    grue_body_neck(&mut body, neck);
+    let neck = cylinder(height, height / 10.0, thickness / 4.0)?;
+    glue_body_neck(&mut body, neck)?;
 
     let eps = height / 50.0;
-    let mut inner_body = body_shell(
-        eps,
-        height - 2.0 * eps,
-        width - 2.0 * eps,
-        thickness - 2.0 * eps,
-    );
+    let inner_height = 2.0f64.mul_add(-eps, height);
+    let inner_width = 2.0f64.mul_add(-eps, width);
+    let inner_thickness = 2.0f64.mul_add(-eps, thickness);
+    let mut inner_body = body_shell(eps, inner_height, inner_width, inner_thickness)?;
 
     #[cfg(feature = "fillet")]
     {
-        let edges = vertical_line_edges(&inner_body, height - 2.0 * eps);
+        let edges = vertical_line_edges(&inner_body, inner_height);
         let opts = FilletOptions {
-            radius: RadiusSpec::Constant((thickness - 2.0 * eps) / 12.0),
+            radius: RadiusSpec::Constant(inner_thickness / 12.0),
             ..Default::default()
         };
-        fillet_edges(&mut inner_body, &edges, Some(&opts)).expect("inner body fillet");
+        fillet_edges(&mut inner_body, &edges, Some(&opts))?;
     }
 
-    let inner_neck = cylinder(height - eps, height / 10.0 + eps, thickness / 4.0 - eps);
-    grue_body_neck(&mut inner_body, inner_neck);
+    let inner_neck = cylinder(height - eps, height / 10.0 + eps, thickness / 4.0 - eps)?;
+    glue_body_neck(&mut inner_body, inner_neck)?;
 
-    let inner_hat = inner_body.pop().unwrap();
-    let wire = inner_hat.into_boundaries()[0].inverse();
+    let inner_hat = inner_body
+        .pop()
+        .ok_or_else(|| std::io::Error::other("inner bottle body has no cap"))?;
+    let wire = inner_hat
+        .into_boundaries()
+        .into_iter()
+        .next()
+        .ok_or_else(|| std::io::Error::other("inner bottle cap has no boundary"))?
+        .inverse();
     body.last_mut()
-        .unwrap()
-        .add_boundary(wire)
-        .expect("inner hat boundary should attach to bottle body");
+        .ok_or_else(|| std::io::Error::other("bottle body has no final face"))?
+        .add_boundary(wire)?;
     body.extend(inner_body.into_iter().map(|face| face.inverse()));
-    Solid::new(vec![body])
+    Ok(Solid::new_unchecked(vec![body]))
 }
 
-fn main() {
-    let bottle = bottle(1.4, 1.0, 0.6);
-    let json = serde_json::to_vec_pretty(&bottle).unwrap();
-    std::fs::write("bottle.json", json).unwrap();
+fn main() -> ExampleResult<()> {
+    let bottle = bottle(1.4, 1.0, 0.6)?;
+    let json = serde_json::to_vec_pretty(&bottle)?;
+    std::fs::write("bottle.json", json)?;
+    Ok(())
 }

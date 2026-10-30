@@ -375,7 +375,7 @@ fn half_space_clip_margin(bounds: BoundingBox<Point3>, tol: f64) -> f64 {
 
 fn line_edge<C>(front: &Vertex<Point3>, back: &Vertex<Point3>) -> Edge<Point3, C>
 where Line<Point3>: ToSameGeometry<C> {
-    Edge::new(
+    Edge::new_unchecked(
         front,
         back,
         Line(front.point(), back.point()).to_same_geometry(),
@@ -460,7 +460,7 @@ where
             shell.push(face);
             shell
         });
-    Solid::try_new(vec![shell]).map_err(|source| ShapeOpsError::InvalidOutputShell {
+    Solid::new(vec![shell]).map_err(|source| ShapeOpsError::InvalidOutputShell {
         operation: HALF_SPACE_CLIP_OPERATION,
         source,
     })

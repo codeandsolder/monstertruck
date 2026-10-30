@@ -53,7 +53,7 @@ has diverged beyond upstream.
 ## `monstertruck-traits` (`truck-geotrait`)
 
 - ported -- surface-division recursion guard (`MAX_PARAMETER_DIVISION_RECURSION`) and independent `hash2` jitter channels (partial `7b1f4171`).
-- ahead -- parameter-space markers renamed `D1` -> `CurveParameter`, `D2` -> `SurfaceParameter` (deprecated aliases kept).
+- ahead -- parameter-space markers renamed `D1` -> `CurveParameter`, `D2` -> `SurfaceParameter`.
 - ahead -- scalar-generic `v2` trait family (no upstream equivalent).
 - skip -- `fix-geotrait-tests`: test modernization against upstream's trait surface only.
 
@@ -106,7 +106,7 @@ has diverged beyond upstream.
 ## `monstertruck-assembly` (`truck-assembly`)
 
 - ported -- `Default` impls for `NodeEntity`/`EdgeEntity`, `Dag::map`/`par_map` lifetimes -- foundation for assembly STEP output.
-- ahead -- `Node`/`Edge` `attrs()` -> `attributes()` (deprecated aliases kept).
+- ahead -- `Node`/`Edge` `attrs()` -> `attributes()`.
 
 ## `monstertruck-gpu` (`truck-platform`)/`monstertruck-render` (`truck-rendimpl`)
 

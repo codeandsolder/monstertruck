@@ -35,7 +35,7 @@ fn uniform_knot_control_point_count() {
 }
 
 fn sample_curve() -> BsplineCurve<Point3> {
-    BsplineCurve::new(
+    BsplineCurve::new_unchecked(
         KnotVector::uniform_knot(3, 5),
         vec![
             Point3::new(0.0, 0.0, 0.0),
@@ -65,13 +65,13 @@ fn interpolation_passes_through_every_point() {
         (0.9, Point3::new(2.0, 7.0, 5.0)),
         (1.0, Point3::new(-1.0, 0.0, 9.0)),
     ];
-    let curve = BsplineCurve::try_interpolate(knot_vec, points).unwrap();
+    let curve = (BsplineCurve::try_interpolate(knot_vec, points)).unwrap();
 
     // Reported as the worst of the eight rather than asserted point by point,
     // so a failure says how far off the solver is and not merely that it is.
     let worst = points
         .iter()
-        .map(|&(t, p)| curve.subs(t).distance(p))
+        .map(|&(t, p)| curve.evaluate(t).distance(p))
         .fold(0.0f64, f64::max);
     assert!(
         worst < 1.0e-12,
@@ -87,12 +87,12 @@ fn least_square_recovers_an_exactly_representable_curve() {
     let original = sample_curve();
     let samples = (0..40)
         .map(|i| {
-            let t = i as f64 / 39.0;
-            (t, original.subs(t))
+            let t = f64::from(i) / 39.0;
+            (t, original.evaluate(t))
         })
         .collect::<Vec<_>>();
 
-    let fit = BsplineCurve::least_square(KnotVector::uniform_knot(3, 5), 3, &samples).unwrap();
+    let fit = (BsplineCurve::least_square(KnotVector::uniform_knot(3, 5), 3, &samples)).unwrap();
 
     let worst = (0..8)
         .map(|i| fit.control_point(i).distance(*original.control_point(i)))
@@ -110,19 +110,19 @@ fn least_square_fits_perturbed_samples() {
     let original = sample_curve();
     let samples = (0..60)
         .map(|i| {
-            let t = i as f64 / 59.0;
+            let t = f64::from(i) / 59.0;
             // Deterministic, mean-ish-zero wobble; no RNG, so this cannot flake.
             let wobble = 0.05 * f64::sin(37.0 * t) * f64::cos(11.0 * t);
-            let p = original.subs(t);
+            let p = original.evaluate(t);
             (t, Point3::new(p.x + wobble, p.y - wobble, p.z + wobble))
         })
         .collect::<Vec<_>>();
 
-    let fit = BsplineCurve::least_square(KnotVector::uniform_knot(3, 5), 3, &samples).unwrap();
+    let fit = (BsplineCurve::least_square(KnotVector::uniform_knot(3, 5), 3, &samples)).unwrap();
 
     let worst = samples
         .iter()
-        .map(|&(t, p)| fit.subs(t).distance(p))
+        .map(|&(t, p)| fit.evaluate(t).distance(p))
         .fold(0.0f64, f64::max);
     assert!(worst < 0.1, "fit strayed from its samples by {worst:.3e}");
 }
@@ -158,8 +158,8 @@ fn least_square_refuses_when_a_span_carries_no_sample() {
     let original = sample_curve();
     let samples = (0..30)
         .map(|i| {
-            let t = 0.3 * i as f64 / 29.0;
-            (t, original.subs(t))
+            let t = 0.3 * f64::from(i) / 29.0;
+            (t, original.evaluate(t))
         })
         .collect::<Vec<_>>();
 
@@ -185,15 +185,15 @@ fn surface_least_square_recovers_an_exactly_representable_saddle() {
     let mut points = Vec::new();
     for i in 0..10 {
         for j in 0..10 {
-            let (u, v) = (i as f64 / 9.0, j as f64 / 9.0);
-            points.push(((u, v), Point3::new(u, v, u * u - v * v)));
+            let (u, v) = (f64::from(i) / 9.0, f64::from(j) / 9.0);
+            points.push(((u, v), Point3::new(u, v, f64::mul_add(v, -v, u * u))));
         }
     }
-    let surface = BsplineSurface::least_square(knots, (2, 2), &points).unwrap();
+    let surface = (BsplineSurface::least_square(knots, (2, 2), &points)).unwrap();
 
     let worst = points
         .iter()
-        .map(|((u, v), p)| surface.subs(*u, *v).distance(*p))
+        .map(|((u, v), p)| surface.evaluate(*u, *v).distance(*p))
         .fold(0.0f64, f64::max);
     assert!(
         worst < 1.0e-12,
@@ -215,13 +215,16 @@ fn interpolation_holds_across_degrees_and_a_dense_bezier_basis() {
         let pts: Vec<(f64, Point3)> = (0..n)
             .map(|i| {
                 let t = i as f64 / (n - 1) as f64;
-                (t, Point3::new(3.0 * t, f64::sin(4.0 * t), t * t - 1.0))
+                (
+                    t,
+                    Point3::new(3.0 * t, f64::sin(4.0 * t), t.mul_add(t, -1.0)),
+                )
             })
             .collect();
-        let curve = BsplineCurve::try_interpolate(knot_vec, pts.clone()).unwrap();
+        let curve = (BsplineCurve::try_interpolate(knot_vec, pts.clone())).unwrap();
         let worst = pts
             .iter()
-            .map(|&(t, p)| curve.subs(t).distance(p))
+            .map(|&(t, p)| curve.evaluate(t).distance(p))
             .fold(0.0f64, f64::max);
         assert!(
             worst < 1.0e-13,
@@ -238,10 +241,10 @@ fn interpolation_holds_across_degrees_and_a_dense_bezier_basis() {
                 (t, Point3::new(2.0 * t, 1.0 - t, f64::cos(3.0 * t)))
             })
             .collect();
-        let curve = BsplineCurve::try_interpolate(knot_vec, pts.clone()).unwrap();
+        let curve = (BsplineCurve::try_interpolate(knot_vec, pts.clone())).unwrap();
         let worst = pts
             .iter()
-            .map(|&(t, p)| curve.subs(t).distance(p))
+            .map(|&(t, p)| curve.evaluate(t).distance(p))
             .fold(0.0f64, f64::max);
         assert!(
             worst < 1.0e-13,

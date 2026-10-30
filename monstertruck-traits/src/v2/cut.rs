@@ -7,5 +7,6 @@ pub trait Cut: super::BoundedCurve {
     ///
     /// After the call, `self` covers `[a, t]` and the returned value
     /// covers `[t, b]`, where `[a, b]` was the original parameter range.
+    #[must_use]
     fn cut(&mut self, t: Self::Scalar) -> Self;
 }

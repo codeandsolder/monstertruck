@@ -2,7 +2,10 @@
 
 use std::ops::{Mul, Sub};
 
-use crate::{cgmath64::*, tolerance::*};
+use crate::{
+    cgmath64::{One, SquareMatrix, Zero, cgmath},
+    tolerance::Tolerance,
+};
 
 /// the value and jacobian corresponding to parameter
 #[derive(Clone, Debug)]
@@ -23,7 +26,7 @@ pub trait Jacobian<V>: Mul<V, Output = V> + Sized {
 impl<S> Jacobian<S> for S
 where S: Mul<S, Output = S> + Zero + One + Copy + PartialEq + std::ops::Div<Output = S>
 {
-    #[inline(always)]
+    #[inline]
     fn invert(self) -> Option<Self> {
         if self == S::zero() {
             None
@@ -38,7 +41,7 @@ where S: Mul<S, Output = S> + Zero + One + Copy + PartialEq + std::ops::Div<Outp
 macro_rules! impl_jacobian {
     ($matrix: ident, $vector: ident) => {
         impl<S: cgmath::BaseFloat> Jacobian<cgmath::$vector<S>> for cgmath::$matrix<S> {
-            #[inline(always)]
+            #[inline]
             fn invert(self) -> Option<Self> { SquareMatrix::invert(&self) }
         }
     };
@@ -49,6 +52,9 @@ impl_jacobian!(Matrix3, Vector3);
 impl_jacobian!(Matrix4, Vector4);
 
 /// Solve equation by Newton's method
+/// # Errors
+/// Returns a [`NewtonLog`] when the Jacobian becomes singular or convergence is not reached within `trials`.
+///
 /// # Examples
 /// ```
 /// # fn main() -> anyhow::Result<()> {
@@ -94,6 +100,9 @@ where
 /// Like [`solve`] but uses [`ToleranceV2`](crate::scalar::ToleranceV2) instead
 /// of the `f64`-bound [`Tolerance`] trait, allowing convergence checks with any
 /// scalar whose epsilon implements [`ToleranceScalar`](crate::scalar::ToleranceScalar).
+///
+/// # Errors
+/// Returns a [`NewtonLog`] when the Jacobian becomes singular or convergence is not reached within `trials`.
 pub fn solve_v2<V, M>(
     function: impl Fn(V) -> CalcOutput<V, M>,
     mut hint: V,
@@ -122,7 +131,7 @@ where
 }
 
 mod newtonlog {
-    use std::fmt::*;
+    use std::fmt::{Debug, Display, Formatter, Result};
     /// A structure that stores logs for debugging.
     #[derive(Clone, Debug)]
     pub struct NewtonLog<T> {
@@ -132,37 +141,43 @@ mod newtonlog {
 
     impl<T> NewtonLog<T> {
         /// constructor
-        #[inline(always)]
+        #[inline]
+        #[must_use]
         pub fn new(activate: bool, trials: usize) -> Self {
-            match activate {
-                true => NewtonLog {
+            if activate {
+                Self {
                     log: Some(Vec::with_capacity(trials)),
                     degenerate: false,
-                },
-                false => NewtonLog {
+                }
+            } else {
+                Self {
                     log: None,
                     degenerate: false,
-                },
+                }
             }
         }
         /// Returns `true` iff the Newton method terminates due to Jacobian degeneracy.
-        #[inline(always)]
-        pub fn degenerate(&self) -> bool { self.degenerate }
-        #[inline(always)]
+        #[inline]
+        #[must_use]
+        pub const fn degenerate(&self) -> bool { self.degenerate }
+        #[inline]
         pub(super) fn push(&mut self, log: T) {
             if let Some(vec) = &mut self.log {
-                vec.push(log)
+                vec.push(log);
             }
         }
-        #[inline(always)]
-        pub(super) fn set_degenerate(&mut self, degenerate: bool) { self.degenerate = degenerate }
+        #[inline]
+        pub(super) const fn set_degenerate(&mut self, degenerate: bool) {
+            self.degenerate = degenerate;
+        }
     }
 
     impl<T: Debug> Display for NewtonLog<T> {
         fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-            match self.degenerate {
-                true => f.pad("Jacobian is dengenerate. ")?,
-                false => f.pad("Newton method is not converges. ")?,
+            if self.degenerate {
+                f.pad("Jacobian is degenerate. ")?;
+            } else {
+                f.pad("Newton method did not converge. ")?;
             }
             match &self.log {
                 None => f.pad(

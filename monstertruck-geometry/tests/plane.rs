@@ -13,8 +13,8 @@ fn into_bspline() {
         for j in 0..=N {
             let u = i as f64 / N as f64;
             let v = j as f64 / N as f64;
-            let res = surface.subs(u, v);
-            let ans = plane.subs(u, v);
+            let res = surface.evaluate(u, v);
+            let ans = plane.evaluate(u, v);
             assert_near!(ans, res);
         }
     }

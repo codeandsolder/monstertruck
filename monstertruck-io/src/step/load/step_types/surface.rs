@@ -271,7 +271,7 @@ impl TryFrom<&ToroidalSurface> for step_geometry::ToroidalSurface {
     ) -> Result<Self, Self::Error> {
         refuse_degenerate_torus("TOROIDAL_SURFACE", *major_radius, *minor_radius)?;
         let mat = Matrix4::from(position);
-        let torus = Torus::new(Point3::origin(), *major_radius, *minor_radius);
+        let torus = Torus::new(Point3::origin(), *major_radius, *minor_radius)?;
         Ok(Processor::new(torus).transformed(mat))
     }
 }
@@ -328,7 +328,7 @@ impl TryFrom<&DegenerateToroidalSurface> for step_geometry::ToroidalSurface {
             .into());
         }
         let mat = Matrix4::from(position);
-        let torus = Torus::new(Point3::origin(), *major_radius, *minor_radius);
+        let torus = Torus::new(Point3::origin(), *major_radius, *minor_radius)?;
         Ok(Processor::new(torus).transformed(mat))
     }
 }
@@ -460,7 +460,7 @@ impl TryFrom<&BsplineSurfaceWithKnots> for BsplineSurface<Point3> {
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Ok(Self::try_new((uknots, vknots), ctrls)?)
+        Ok(Self::new((uknots, vknots), ctrls)?)
     }
 }
 
@@ -496,7 +496,7 @@ impl TryFrom<&UniformSurface> for BsplineSurface<Point3> {
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Ok(Self::try_new((uknots, vknots), ctrls)?)
+        Ok(Self::new((uknots, vknots), ctrls)?)
     }
 }
 
@@ -533,7 +533,7 @@ impl TryFrom<&QuasiUniformSurface> for BsplineSurface<Point3> {
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Ok(Self::try_new((uknots, vknots), ctrls)?)
+        Ok(Self::new((uknots, vknots), ctrls)?)
     }
 }
 
@@ -554,9 +554,11 @@ pub struct BezierSurface {
     self_intersect: Logical,
 }
 
-impl From<&BezierSurface> for BsplineSurface<Point3> {
+impl TryFrom<&BezierSurface> for BsplineSurface<Point3> {
+    type Error = StepConvertingError;
+
     #[inline(always)]
-    fn from(value: &BezierSurface) -> Self {
+    fn try_from(value: &BezierSurface) -> Result<Self, Self::Error> {
         let uknots = KnotVector::bezier_knot(value.u_degree as usize);
         let vknots = KnotVector::bezier_knot(value.v_degree as usize);
         let ctrls = value
@@ -564,7 +566,7 @@ impl From<&BezierSurface> for BsplineSurface<Point3> {
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Self::new((uknots, vknots), ctrls)
+        Self::new((uknots, vknots), ctrls).map_err(Into::into)
     }
 }
 
@@ -593,7 +595,7 @@ impl TryFrom<&NonRationalBsplineSurface> for BsplineSurface<Point3> {
             BsplineSurfaceWithKnots(x) => x.as_ref().try_into(),
             UniformSurface(x) => x.as_ref().try_into(),
             QuasiUniformSurface(x) => x.as_ref().try_into(),
-            BezierSurface(x) => Ok(x.as_ref().into()),
+            BezierSurface(x) => x.as_ref().try_into(),
         }
     }
 }

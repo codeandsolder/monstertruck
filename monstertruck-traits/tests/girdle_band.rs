@@ -23,7 +23,7 @@ impl ParametricSurface for TaperedTube {
     type Point = Point3;
     type Vector = Vector3;
     fn evaluate(&self, u: f64, v: f64) -> Point3 {
-        let radius = self.base_radius + (self.tip_radius - self.base_radius) * v;
+        let radius = (self.tip_radius - self.base_radius).mul_add(v, self.base_radius);
         Point3::new(radius * u.cos(), radius * u.sin(), v)
     }
     fn derivative_u(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
@@ -44,15 +44,16 @@ impl ParametricSurface for TaperedTube {
 
 /// Radius 2 -> 1 across `v` in `[0, 1]` keeps shrinking to zero at `v = 2`.
 #[test]
-fn apex_parameter_extrapolates_a_linear_taper() {
+fn apex_parameter_extrapolates_a_linear_taper() -> Result<(), &'static str> {
     let cone = TaperedTube {
         base_radius: 2.0,
         tip_radius: 1.0,
     };
 
-    let apex = apex_parameter(&cone, 1, 1.0e-6).expect("a tapering surface has an apex");
+    let apex = apex_parameter(&cone, 1, 1.0e-6).ok_or("a tapering surface has an apex")?;
 
     assert!((apex - 2.0).abs() < 1.0e-9, "got {apex}");
+    Ok(())
 }
 
 #[test]
@@ -66,20 +67,22 @@ fn apex_parameter_refuses_a_cylinder() {
 }
 
 #[test]
-fn girdle_axis_and_value_finds_a_full_lap_at_constant_cross_parameter() {
+fn girdle_axis_and_value_finds_a_full_lap_at_constant_cross_parameter() -> Result<(), &'static str>
+{
     let cylinder = TaperedTube {
         base_radius: 1.0,
         tip_radius: 1.0,
     };
     let cap: Vec<(f64, f64)> = (0..=8)
-        .map(|step| (TAU * step as f64 / 8.0, 0.25))
+        .map(|step| (TAU * f64::from(step) / 8.0, 0.25))
         .collect();
 
     let (axis, value) = girdle_axis_and_value(&cap, &cylinder, 1.0e-6)
-        .expect("a full lap at constant v is a girdle");
+        .ok_or("a full lap at constant v is a girdle")?;
 
     assert_eq!(axis, 0, "u is the periodic axis");
     assert!((value - 0.25).abs() < 1.0e-9, "got {value}");
+    Ok(())
 }
 
 #[test]
@@ -89,38 +92,40 @@ fn girdle_axis_and_value_rejects_a_partial_lap() {
         tip_radius: 1.0,
     };
     let arc: Vec<(f64, f64)> = (0..=4)
-        .map(|step| (TAU * step as f64 / 16.0, 0.25))
+        .map(|step| (TAU * f64::from(step) / 16.0, 0.25))
         .collect();
 
     assert!(girdle_axis_and_value(&arc, &cylinder, 1.0e-6).is_none());
 }
 
 #[test]
-fn girdle_band_range_spans_between_two_girdles() {
+fn girdle_band_range_spans_between_two_girdles() -> Result<(), &'static str> {
     let cylinder = TaperedTube {
         base_radius: 1.0,
         tip_radius: 1.0,
     };
 
     let (axis, (low, high)) = girdle_band_range(&[(0, 0.25), (0, 0.75)], &cylinder, 1.0e-6)
-        .expect("two girdles bound a band");
+        .ok_or("two girdles bound a band")?;
 
     assert_eq!(axis, 0);
     assert!((low - 0.25).abs() < 1.0e-9 && (high - 0.75).abs() < 1.0e-9);
+    Ok(())
 }
 
 /// A lone girdle bounds the patch that closes at the apex, which for this
 /// taper sits outside the natural parameter range.
 #[test]
-fn girdle_band_range_reaches_the_apex_from_a_lone_girdle() {
+fn girdle_band_range_reaches_the_apex_from_a_lone_girdle() -> Result<(), &'static str> {
     let cone = TaperedTube {
         base_radius: 2.0,
         tip_radius: 1.0,
     };
 
-    let (_, (low, high)) =
-        girdle_band_range(&[(0, 0.5)], &cone, 1.0e-6).expect("a lone girdle bounds the apex patch");
+    let (_, (low, high)) = girdle_band_range(&[(0, 0.5)], &cone, 1.0e-6)
+        .ok_or("a lone girdle bounds the apex patch")?;
 
     assert!((low - 0.5).abs() < 1.0e-9, "got low {low}");
     assert!((high - 2.0).abs() < 1.0e-9, "got high {high}");
+    Ok(())
 }

@@ -1,4 +1,8 @@
-use crate::*;
+use crate::{
+    Arc, CreatorCreator, Device, DeviceHandler, DynamicImage, Instance, InstanceCreator,
+    PolygonShaders, RenderError, Scene, ShaderModule, ShaderModuleDescriptor, ShaderSource,
+    Texture, ToInstance, WireShaders, image2texture,
+};
 
 impl PolygonShaders {
     /// Constructor
@@ -9,7 +13,8 @@ impl PolygonShaders {
     /// - `fragment_entry`: entry point of fragment shader module without texture
     /// - `tex_fragment_module`: fragment shader module with texture
     /// - `tex_fragment_entry`: entry point of fragment shader module with texture
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn new(
         vertex_module: Arc<ShaderModule>,
         vertex_entry: &'static str,
@@ -29,7 +34,8 @@ impl PolygonShaders {
     }
 
     /// Creates default polygon shaders.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn default(device: &Device) -> Self {
         let source = include_str!("shaders/microfacet-module.wgsl").to_string()
             + include_str!("shaders/polygon.wgsl");
@@ -55,7 +61,8 @@ impl WireShaders {
     /// - `vertex_entry`: entry point of vertex shader module
     /// - `fragment_module`: fragment shader module without texture
     /// - `fragment_entry`: entry point of fragment shader module without texture
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn new(
         vertex_module: Arc<ShaderModule>,
         vertex_entry: &'static str,
@@ -71,7 +78,7 @@ impl WireShaders {
     }
 
     /// Creates default wireframe shaders
-    #[inline(always)]
+    #[inline]
     fn default(device: &Device) -> Self {
         let shader_module = Arc::new(device.create_shader_module(ShaderModuleDescriptor {
             source: ShaderSource::Wgsl(include_str!("shaders/line.wgsl").into()),
@@ -87,7 +94,7 @@ impl WireShaders {
 }
 
 impl CreatorCreator for DeviceHandler {
-    #[inline(always)]
+    #[inline]
     fn instance_creator(&self) -> InstanceCreator {
         InstanceCreator {
             handler: self.clone(),
@@ -98,22 +105,32 @@ impl CreatorCreator for DeviceHandler {
 }
 
 impl CreatorCreator for Scene {
-    #[inline(always)]
+    #[inline]
     fn instance_creator(&self) -> InstanceCreator { self.device_handler().instance_creator() }
 }
 
 impl InstanceCreator {
     /// Creates Instance from object.
-    #[inline(always)]
-    pub fn create_instance<I, T>(&self, object: &T, state: &T::State) -> I
+    ///
+    /// # Errors
+    /// Returns [`RenderError`] when the source object cannot be represented safely as GPU render data.
+    #[inline]
+    pub fn create_instance<I, T>(
+        &self,
+        object: &T,
+        state: &T::State,
+    ) -> std::result::Result<I, RenderError>
     where
         T: ToInstance<I>,
-        I: Instance, {
+        I: Instance,
+    {
         object.to_instance(&self.handler, &I::standard_shaders(self), state)
     }
     /// Creates `Texture` for attaching faces.
-    #[inline(always)]
-    pub fn create_texture(&self, image: &DynamicImage) -> Arc<Texture> {
-        Arc::new(image2texture::image2texture(&self.handler, image))
+    #[inline]
+    /// # Errors
+    /// Returns [`RenderError`] if the texture layout cannot be represented safely for wgpu.
+    pub fn create_texture(&self, image: &DynamicImage) -> Result<Arc<Texture>, RenderError> {
+        image2texture::image2texture(&self.handler, image).map(Arc::new)
     }
 }

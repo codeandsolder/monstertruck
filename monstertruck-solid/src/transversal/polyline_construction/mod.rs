@@ -16,13 +16,16 @@ pub fn construct_polylines(lines: &[(Point3, Point3)]) -> Vec<PolylineCurve<Poin
     let mut graph: Graph = lines.iter().collect();
     let mut res = Vec::new();
     while !graph.is_empty() {
-        let (mut idx, node) = graph.first_node();
+        let Some((start_idx, node)) = graph.first_node() else {
+            break;
+        };
+        let mut idx = start_idx;
         let mut wire: VecDeque<_> = vec![node.coord].into();
         while let Some((idx0, pt)) = graph.next_node(idx) {
             idx = idx0;
             wire.push_back(pt);
         }
-        let mut idx = PointIndex::from(wire[0]);
+        idx = start_idx;
         while let Some((idx0, pt)) = graph.next_node(idx) {
             idx = idx0;
             wire.push_front(pt);
@@ -189,12 +192,14 @@ pub(super) fn stitch_nearby_polylines(
 #[derive(Clone, Debug, Copy, Hash, PartialEq, Eq)]
 struct PointIndex([i64; 3]);
 
-impl From<Point3> for PointIndex {
+impl PointIndex {
     #[inline(always)]
-    fn from(pt: Point3) -> PointIndex {
+    fn from_point(pt: Point3) -> Option<Self> {
+        if !pt.x.is_finite() || !pt.y.is_finite() || !pt.z.is_finite() {
+            return None;
+        }
         let idx = pt.add_element_wise(TOLERANCE) / (2.0 * TOLERANCE);
-        // SAFETY: point coordinates are finite, so the cast to `i64` always succeeds.
-        PointIndex(idx.cast::<i64>().unwrap().into())
+        idx.cast::<i64>().map(|idx| Self(idx.into()))
     }
 }
 
@@ -210,11 +215,10 @@ impl Node {
     #[inline(always)]
     fn new(coord: Point3, adjacency: HashSet<PointIndex>) -> Node { Node { coord, adjacency } }
 
-    fn pop_one_adjacency(&mut self) -> PointIndex {
-        // SAFETY: nodes are removed from the graph when their adjacency set becomes empty.
-        let idx = *self.adjacency.iter().next().unwrap();
+    fn pop_one_adjacency(&mut self) -> Option<PointIndex> {
+        let idx = self.adjacency.iter().next().copied()?;
         self.adjacency.remove(&idx);
-        idx
+        Some(idx)
     }
 }
 
@@ -232,9 +236,7 @@ impl std::ops::DerefMut for Graph {
 }
 
 impl Graph {
-    fn add_half_edge(&mut self, pt0: Point3, pt1: Point3) {
-        let idx0 = pt0.into();
-        let idx1 = pt1.into();
+    fn add_half_edge(&mut self, idx0: PointIndex, pt0: Point3, idx1: PointIndex) {
         if let Some(node) = self.get_mut(&idx0) {
             node.adjacency.insert(idx1);
         } else {
@@ -243,22 +245,27 @@ impl Graph {
     }
 
     fn add_edge(&mut self, line: (Point3, Point3)) {
-        if !line.0.near(&line.1) {
-            self.add_half_edge(line.0, line.1);
-            self.add_half_edge(line.1, line.0);
+        if line.0.near(&line.1) {
+            return;
         }
+        let (Some(idx0), Some(idx1)) = (
+            PointIndex::from_point(line.0),
+            PointIndex::from_point(line.1),
+        ) else {
+            return;
+        };
+        self.add_half_edge(idx0, line.0, idx1);
+        self.add_half_edge(idx1, line.1, idx0);
     }
 
     #[inline(always)]
-    fn first_node(&self) -> (PointIndex, &Node) {
-        // SAFETY: only called inside `while !graph.is_empty()`.
-        let (idx, node) = self.iter().next().unwrap();
-        (*idx, node)
+    fn first_node(&self) -> Option<(PointIndex, &Node)> {
+        self.iter().next().map(|(idx, node)| (*idx, node))
     }
 
     fn next_node(&mut self, idx: PointIndex) -> Option<(PointIndex, Point3)> {
         let node = self.get_mut(&idx)?;
-        let idx0 = node.pop_one_adjacency();
+        let idx0 = node.pop_one_adjacency()?;
         if node.adjacency.is_empty() {
             self.remove(&idx);
         }

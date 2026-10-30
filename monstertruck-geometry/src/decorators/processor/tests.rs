@@ -4,6 +4,7 @@
 //! path is unchanged.
 
 use super::*;
+use crate::prelude::{ParametricCurve, TrimmedCurve, UnitCircle};
 use std::f64::consts::FRAC_PI_2;
 
 fn assert_division_samples_match_parameters<C, P>(

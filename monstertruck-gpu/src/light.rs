@@ -1,14 +1,25 @@
-use crate::*;
+use crate::{
+    BufferHandler, BufferUsages, Device, EuclideanSpace, Light, LightInfo, LightType, Point3,
+    Vector3, narrow_f64_to_f32,
+};
 
 impl Light {
-    #[inline(always)]
+    #[inline]
     pub(super) fn light_info(&self) -> LightInfo {
         LightInfo {
-            // SAFETY: f64-to-f32 cast is always valid for finite light position values.
-            light_position: self.position.to_homogeneous().cast().unwrap().into(),
-            // SAFETY: f64-to-f32 cast is always valid for finite light color values.
-            light_color: self.color.cast().unwrap().extend(1.0).into(),
-            light_type: [self.light_type.into(), 0, 0, 0],
+            position: [
+                narrow_f64_to_f32(self.position.x),
+                narrow_f64_to_f32(self.position.y),
+                narrow_f64_to_f32(self.position.z),
+                1.0,
+            ],
+            color: [
+                narrow_f64_to_f32(self.color.x),
+                narrow_f64_to_f32(self.color.y),
+                narrow_f64_to_f32(self.color.z),
+                1.0,
+            ],
+            kind: [self.kind.into(), 0, 0, 0],
         }
     }
 
@@ -25,26 +36,27 @@ impl Light {
     ///     uvec4 light_type;   // Point => uvec4(0, 0, 0, 0), Uniform => uvec4(1, 0, 0, 0)
     /// };
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn buffer(&self, device: &Device) -> BufferHandler {
         BufferHandler::from_slice(&[self.light_info()], device, BufferUsages::UNIFORM)
     }
 }
 
 impl Default for Light {
-    #[inline(always)]
-    fn default() -> Light {
-        Light {
+    #[inline]
+    fn default() -> Self {
+        Self {
             position: Point3::origin(),
             color: Vector3::new(1.0, 1.0, 1.0),
-            light_type: LightType::Point,
+            kind: LightType::Point,
         }
     }
 }
 
 impl From<LightType> for usize {
-    #[inline(always)]
-    fn from(light_type: LightType) -> usize {
+    #[inline]
+    fn from(light_type: LightType) -> Self {
         match light_type {
             LightType::Point => 0,
             LightType::Uniform => 1,
@@ -53,8 +65,8 @@ impl From<LightType> for usize {
 }
 
 impl From<LightType> for u32 {
-    #[inline(always)]
-    fn from(light_type: LightType) -> u32 {
+    #[inline]
+    fn from(light_type: LightType) -> Self {
         match light_type {
             LightType::Point => 0,
             LightType::Uniform => 1,

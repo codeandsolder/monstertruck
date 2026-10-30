@@ -91,7 +91,7 @@ ENDSEC;
     )
     .unwrap();
     let table = Table::from_data_section(&data_section);
-    #[allow(clippy::needless_update)]
+    #[expect(clippy::needless_update, reason = "fixture uses struct update syntax so additions to the generated STEP table remain explicit")]
     let ans_table = Table {
         cartesian_point: HashMap::from_iter(vec![(
             1,

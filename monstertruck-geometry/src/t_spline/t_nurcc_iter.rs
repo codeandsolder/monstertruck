@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Arc, RwLock, TnurccAcwFaceIter, TnurccAcwPointIter, TnurccEdge, TnurccFace, TnurccFaceSide,
+    TnurccVertexEnd,
+};
 
 impl<P> TnurccAcwPointIter<P> {
     /// Creates a new `TnurccAcwPointIter` which iterates the edges around `e`'s vertex `end` in an anti-clockwise manner.
@@ -7,11 +10,13 @@ impl<P> TnurccAcwPointIter<P> {
     /// # Borrows
     /// Immutably borrows every edge connected to the point at `e`'s `end` when calling `next`.
     pub fn from_edge(e: Arc<RwLock<TnurccEdge<P>>>, end: TnurccVertexEnd) -> Self {
-        return TnurccAcwPointIter {
-            point: Arc::clone(&e.read().point_at_end(end)),
-            start: Arc::clone(&e),
-            cur: Some(Arc::clone(&e)),
-        };
+        let point = Arc::clone(&e.read().point_at_end(end));
+        let start = Arc::clone(&e);
+        Self {
+            point,
+            start,
+            cur: Some(e),
+        }
     }
 }
 
@@ -24,15 +29,13 @@ impl<P> TnurccAcwFaceIter<P> {
     ///
     /// - `Some(iter)` otherwise.
     pub fn try_from_edge(e: Arc<RwLock<TnurccEdge<P>>>, side: TnurccFaceSide) -> Option<Self> {
-        if let Some(face) = e.read().face_from_side(side) {
-            Some(TnurccAcwFaceIter {
-                face,
-                start: Arc::clone(&e),
-                cur: Some(Arc::clone(&e)),
-            })
-        } else {
-            None
-        }
+        let face = e.read().face_from_side(side)?;
+        let start = Arc::clone(&e);
+        Some(Self {
+            face,
+            start,
+            cur: Some(e),
+        })
     }
 
     /// Creates a new `TnurccAcwFaceIter` which iterates the edges around `f` in an anti-clockwise manner.
@@ -42,17 +45,18 @@ impl<P> TnurccAcwFaceIter<P> {
     /// - `None` if `f` does not have a reference edge.
     ///
     /// - `Some(iter)` otherwise.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "face-seeded traversal constructor complements the edge-seeded iterator API"
+    )]
     pub fn try_from_face(f: Arc<RwLock<TnurccFace<P>>>) -> Option<Self> {
-        if let Some(edge) = f.read().edge.as_ref() {
-            Some(TnurccAcwFaceIter {
-                face: Arc::clone(&f),
-                start: Arc::clone(edge),
-                cur: Some(Arc::clone(edge)),
-            })
-        } else {
-            None
-        }
+        let edge = f.read().edge.as_ref().map(Arc::clone)?;
+        let start = Arc::clone(&edge);
+        Some(Self {
+            face: f,
+            start,
+            cur: Some(edge),
+        })
     }
 }
 
@@ -64,10 +68,10 @@ impl<P> Iterator for TnurccAcwPointIter<P> {
         let ret = Some(Arc::clone(&edge));
 
         // Is point the origin or dest?
-        let end = edge.read().point_end(Arc::clone(&self.point))?;
+        let end = edge.read().point_end(&self.point)?;
 
         // Get the next ACW edge for point
-        let new_edge = edge.read().acw_edge_from_end(end);
+        let new_edge = edge.read().acw_edge_from_end(end)?;
 
         // If the new edge is the starting edge, stop the iterator by setting cur to none
         // Otherwise, keep going
@@ -89,10 +93,10 @@ impl<P> Iterator for TnurccAcwFaceIter<P> {
         let ret = Some(Arc::clone(&edge));
 
         // Is point the origin or dest?
-        let side = edge.read().face_side(Arc::clone(&self.face))?;
+        let side = edge.read().face_side(&self.face)?;
 
         // Get the next ACW edge for point
-        let new_edge = edge.read().acw_edge_from_side(side);
+        let new_edge = edge.read().acw_edge_from_side(side)?;
 
         // If the new edge is the starting edge, stop the iterator by setting cur to none
         // Otherwise, keep going

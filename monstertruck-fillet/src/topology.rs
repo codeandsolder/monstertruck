@@ -14,7 +14,10 @@ pub(super) fn find_adjacent_edge(face: &Face, edge_id: EdgeId) -> Option<(Edge, 
         .map(|(x, _, y)| (x, y))
 }
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "orientation helper is retained for the alternate fillet topology path"
+)]
 pub(super) fn take_ori<T>(ori: bool, (a, b): (T, T)) -> T {
     match ori {
         true => a,
@@ -53,7 +56,7 @@ pub(super) fn cut_face_by_bezier(
             cut_debug(|| format!("front closest-parameter search failed (hint={hint:?})"));
             return None;
         };
-        let v0 = Vertex::new(bezier.subs(t0));
+        let v0 = Vertex::new(bezier.evaluate(t0));
         bezier = bezier.cut(t0);
         let Some(cut) = front_edge.not_strictly_cut_with_parameter(&v0, t1) else {
             cut_debug(|| {
@@ -62,8 +65,8 @@ pub(super) fn cut_face_by_bezier(
                     "front edge cut failed at t={t1} (edge range {:?}); \
                      t0={t0} rail=({:?})..({:?}) edge=({:?})..({:?})",
                     curve.range_tuple(),
-                    bezier.subs(b0),
-                    bezier.subs(b1),
+                    bezier.evaluate(b0),
+                    bezier.evaluate(b1),
                     front_edge.front().point(),
                     front_edge.back().point(),
                 )
@@ -87,16 +90,16 @@ pub(super) fn cut_face_by_bezier(
                 format!(
                     "back closest-parameter search failed (hint={hint:?}); \
                      rail=({:?})..({:?}) edge=({:?})..({:?})",
-                    bezier.subs(b0),
-                    bezier.subs(b1),
+                    bezier.evaluate(b0),
+                    bezier.evaluate(b1),
                     back_edge.front().point(),
                     back_edge.back().point(),
                 )
             });
             return None;
         };
-        let v1 = Vertex::new(bezier.subs(t0));
-        bezier.cut(t0);
+        let v1 = Vertex::new(bezier.evaluate(t0));
+        let _ = bezier.cut(t0);
         let Some(cut) = back_edge.not_strictly_cut_with_parameter(&v1, t1) else {
             cut_debug(|| {
                 format!(
@@ -109,7 +112,8 @@ pub(super) fn cut_face_by_bezier(
         cut.1
     };
 
-    let fillet_edge = Edge::new(new_front_edge.back(), new_back_edge.front(), bezier.into());
+    let fillet_edge =
+        Edge::new_unchecked(new_front_edge.back(), new_back_edge.front(), bezier.into());
     let new_boundaries = face
         .absolute_boundaries()
         .iter()
@@ -134,7 +138,7 @@ pub(super) fn cut_face_by_bezier(
             boundary
         })
         .collect::<Vec<_>>();
-    let mut new_face = match Face::try_new(new_boundaries, face.surface()) {
+    let mut new_face = match Face::new(new_boundaries, face.surface()) {
         Ok(new_face) => new_face,
         Err(error) => {
             cut_debug(|| format!("rebuilt boundary rejected: {error}"));
@@ -155,7 +159,7 @@ pub(super) fn create_pcurve_edge(
     let uv0 = fillet_surface.search_parameter(v0.point(), hint0, 100)?;
     let uv1 = fillet_surface.search_parameter(v1.point(), hint1, 100)?;
     let curve = ParameterCurve::new(Line(uv0.into(), uv1.into()), fillet_surface.clone());
-    Some(Edge::new(v0, v1, curve.into()))
+    Some(Edge::new_unchecked(v0, v1, curve.into()))
 }
 
 pub(super) fn create_new_side(
@@ -201,7 +205,7 @@ pub(super) fn create_new_side(
     let fillet_surface = Box::new(fillet_curve.surface().clone());
     let new_curve = IntersectionCurve::new(side_surface, fillet_surface, fillet_curve);
     fillet_edge.set_curve(new_curve.into());
-    let mut new_face = Face::try_new(new_boundaries, side.surface()).ok()?;
+    let mut new_face = Face::new(new_boundaries, side.surface()).ok()?;
     if !side.orientation() {
         new_face.invert();
     }
@@ -338,14 +342,13 @@ pub(super) fn fillet_surfaces_along_wire(
             if last_wire {
                 rs.remove(0);
             }
-            let surface = match profile {
+            match profile {
                 FilletProfile::Round => expand_fillet(&rs, surface0, surface1),
                 FilletProfile::Chamfer => expand_chamfer(&rs, surface0, surface1),
-                FilletProfile::AsymmetricChamfer { .. } => return None,
+                FilletProfile::AsymmetricChamfer { .. } => None,
                 FilletProfile::Ridge => expand_ridge(&rs, surface0, surface1),
                 FilletProfile::Custom(curve) => expand_custom(&rs, surface0, surface1, curve),
-            };
-            Some(surface)
+            }
         };
     wire_faces_iter.map(create_fillet_surface).collect()
 }
@@ -359,12 +362,12 @@ pub(super) fn concat_fillet_surface(
     let len = surfaces[0].control_points().len();
     let concat_beziers = |i: usize| -> Option<NurbsCurve<Vector4>> {
         let mut collector = CurveCollector::<NurbsCurve<Vector4>>::Singleton;
-        (0..surfaces.len()).for_each(|n| {
-            let mut curve = surfaces[n].curve_v(i);
+        for (n, surface) in surfaces.iter().enumerate() {
+            let mut curve = surface.curve_v(i);
             curve.knot_translate(n as f64);
-            collector.concat(&curve);
-        });
-        collector.into()
+            collector.try_concat(&curve).ok()?;
+        }
+        collector.into_curve()
     };
     let long_beziers = (0..len).map(concat_beziers).collect::<Option<Vec<_>>>()?;
 
@@ -372,7 +375,7 @@ pub(super) fn concat_fillet_surface(
     let knot_vector_v = long_beziers[0].knot_vector().clone();
     let destruct_bezier = |bezier: NurbsCurve<Vector4>| BsplineCurve::from(bezier).destruct().1;
     let control_points = long_beziers.into_iter().map(destruct_bezier).collect();
-    Some(NurbsSurface::new(BsplineSurface::new(
+    Some(NurbsSurface::new(BsplineSurface::new_unchecked(
         (knot_vector_u, knot_vector_v),
         control_points,
     )))
@@ -381,7 +384,7 @@ pub(super) fn concat_fillet_surface(
 pub(super) fn create_free_edge(curve: Curve) -> Edge {
     let v0 = Vertex::new(curve.front());
     let v1 = Vertex::new(curve.back());
-    Edge::new(&v0, &v1, curve)
+    Edge::new_unchecked(&v0, &v1, curve)
 }
 
 pub(super) fn cut_face_by_last_bezier(

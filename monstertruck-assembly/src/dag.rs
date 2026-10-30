@@ -5,8 +5,6 @@ use std::collections::BTreeSet;
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NodeIndex(usize);
 
-const MESSAGE_OR: &str = "Out-of-range access: You might be using the index of another graph.";
-
 /// Edge of graph
 #[derive(Clone, Copy, Debug)]
 pub struct EdgeData<EE> {
@@ -20,11 +18,11 @@ pub struct Edge<'a, EE> {
     nodes: (NodeIndex, NodeIndex),
     entity: &'a EE,
 }
-impl<'a, EE> Clone for Edge<'a, EE> {
+impl<EE> Clone for Edge<'_, EE> {
     fn clone(&self) -> Self { *self }
 }
 
-impl<'a, EE> Copy for Edge<'a, EE> {}
+impl<EE> Copy for Edge<'_, EE> {}
 
 fn edge_closure<EE>(index: NodeIndex) -> impl Fn(&EdgeData<EE>) -> Edge<'_, EE> {
     move |edge| Edge {
@@ -59,9 +57,9 @@ pub struct NodeData<NE, EE> {
 impl<NE, EE> NodeData<NE, EE> {
     #[inline]
     fn new(entity: NE) -> Self {
-        NodeData {
-            edges: Default::default(),
-            parents: Default::default(),
+        Self {
+            edges: Vec::default(),
+            parents: BTreeSet::default(),
             entity,
         }
     }
@@ -83,17 +81,18 @@ impl<NE, EE> NodeData<NE, EE> {
 /// dag.create_edge(a[1], a[0], 1);
 ///
 /// // get reference of node
-/// let node = dag.node(a[1]);
+/// let Some(node) = dag.node(a[1]) else { return };
 /// assert_eq!(node.index(), a[1]);
 /// assert_eq!(node.entity(), &1);
 ///
 /// // edge information is stored in the root node.
 /// assert_eq!(node.edges().len(), 2);
-/// assert_eq!(node.edge(1).unwrap().entity(), &1);
+/// let Some(edge) = node.edge(1) else { return };
+/// assert_eq!(edge.entity(), &1);
 ///
 /// // one can follow the parent index.
-/// assert!(dag.node(a[0]).parents().contains(&a[1]));
-/// assert!(dag.node(a[1]).parents().is_empty());
+/// assert!(dag.node(a[0]).is_some_and(|node| node.parents().contains(&a[1])));
+/// assert!(dag.node(a[1]).is_some_and(|node| node.parents().is_empty()));
 /// ```
 #[derive(Debug)]
 pub struct Node<'a, NE, EE> {
@@ -101,13 +100,13 @@ pub struct Node<'a, NE, EE> {
     data: &'a NodeData<NE, EE>,
 }
 
-impl<'a, NE, EE> Clone for Node<'a, NE, EE> {
+impl<NE, EE> Clone for Node<'_, NE, EE> {
     fn clone(&self) -> Self { *self }
 }
 
-impl<'a, NE, EE> Copy for Node<'a, NE, EE> {}
+impl<NE, EE> Copy for Node<'_, NE, EE> {}
 
-fn node<NE, EE>((index, data): (usize, &NodeData<NE, EE>)) -> Node<'_, NE, EE> {
+const fn node<NE, EE>((index, data): (usize, &NodeData<NE, EE>)) -> Node<'_, NE, EE> {
     Node {
         index: NodeIndex(index),
         data,
@@ -130,16 +129,22 @@ fn node<NE, EE>((index, data): (usize, &NodeData<NE, EE>)) -> Node<'_, NE, EE> {
 /// dag.create_edge(a[1], a[0], 1);
 ///
 /// // get reference of node
-/// let mut node = dag.node_mut(a[1]);
-/// *node.entity() = 2;
+/// if let Some(mut node) = dag.node_mut(a[1]) {
+///     *node.entity() = 2;
+/// }
 ///
-/// assert_eq!(dag.node(a[1]).entity(), &2);
+/// assert!(dag.node(a[1]).is_some_and(|node| node.entity() == &2));
 ///
 /// // edge information is stored in the root node.
-/// let mut node = dag.node_mut(a[1]);
-/// let mut edge = node.edge(1).unwrap();
-/// *edge.entity() = 3;
-/// assert_eq!(dag.node(a[1]).edge(1).unwrap().entity(), &3);
+/// if let Some(mut node) = dag.node_mut(a[1]) {
+///     if let Some(mut edge) = node.edge(1) {
+///         *edge.entity() = 3;
+///     }
+/// }
+/// assert!(dag
+///     .node(a[1])
+///     .and_then(|node| node.edge(1))
+///     .is_some_and(|edge| edge.entity() == &3));
 /// ```
 #[derive(Debug)]
 pub struct NodeMut<'a, NE, EE> {
@@ -149,7 +154,7 @@ pub struct NodeMut<'a, NE, EE> {
     data: &'a mut NodeData<NE, EE>,
 }
 
-fn node_mut<NE, EE>((index, data): (usize, &mut NodeData<NE, EE>)) -> NodeMut<'_, NE, EE> {
+const fn node_mut<NE, EE>((index, data): (usize, &mut NodeData<NE, EE>)) -> NodeMut<'_, NE, EE> {
     NodeMut {
         index: NodeIndex(index),
         data,
@@ -173,7 +178,7 @@ fn node_mut<NE, EE>((index, data): (usize, &mut NodeData<NE, EE>)) -> NodeMut<'_
 /// dag.create_edge(a[3], a[2], 2);
 ///
 /// // get reference of node
-/// let node3 = dag.node(a[3]);
+/// let Some(node3) = dag.node(a[3]) else { return };
 /// // the entity of the node with index 3 is 3.
 /// assert_eq!(node3.entity(), &3);
 /// // the node with index 3 has 2 edges.
@@ -199,10 +204,12 @@ impl<NE, EE> Default for Dag<NE, EE> {
 impl<NE, EE> Dag<NE, EE> {
     /// Constructor
     #[inline]
+    #[must_use]
     pub const fn new() -> Self { Self { nodes: Vec::new() } }
 
     /// Constructs a new dag with capacity for `n` values pre-allocated.
     #[inline]
+    #[must_use]
     pub fn with_capacity(n: usize) -> Self {
         Self {
             nodes: Vec::with_capacity(n),
@@ -211,6 +218,7 @@ impl<NE, EE> Dag<NE, EE> {
 
     /// Returns `true` if the graph contains no nodes.
     #[inline]
+    #[must_use]
     pub const fn is_empty(&self) -> bool { self.nodes.is_empty() }
 
     /// Returns the number of the nodes.
@@ -222,6 +230,7 @@ impl<NE, EE> Dag<NE, EE> {
     /// assert_eq!(dag.len(), 5);
     /// ```
     #[inline]
+    #[must_use]
     pub const fn len(&self) -> usize { self.nodes.len() }
 
     /// Returns an iterator over all node indices.
@@ -356,9 +365,12 @@ impl<NE, EE> Dag<NE, EE> {
         self.nodes
             .iter()
             .enumerate()
-            .filter_map(move |(index, data)| match data.parents.is_empty() {
-                true => Some(node((index, data))),
-                false => None,
+            .filter_map(move |(index, data)| {
+                if data.parents.is_empty() {
+                    Some(node((index, data)))
+                } else {
+                    None
+                }
             })
     }
 
@@ -385,9 +397,12 @@ impl<NE, EE> Dag<NE, EE> {
         self.nodes
             .par_iter()
             .enumerate()
-            .filter_map(move |(index, data)| match data.parents.is_empty() {
-                true => Some(node((index, data))),
-                false => None,
+            .filter_map(move |(index, data)| {
+                if data.parents.is_empty() {
+                    Some(node((index, data)))
+                } else {
+                    None
+                }
             })
     }
 
@@ -410,9 +425,12 @@ impl<NE, EE> Dag<NE, EE> {
         self.nodes
             .iter_mut()
             .enumerate()
-            .filter_map(move |(index, data)| match data.parents.is_empty() {
-                true => Some(node_mut((index, data))),
-                false => None,
+            .filter_map(move |(index, data)| {
+                if data.parents.is_empty() {
+                    Some(node_mut((index, data)))
+                } else {
+                    None
+                }
             })
     }
 
@@ -439,9 +457,12 @@ impl<NE, EE> Dag<NE, EE> {
         self.nodes
             .par_iter_mut()
             .enumerate()
-            .filter_map(move |(index, data)| match data.parents.is_empty() {
-                true => Some(node_mut((index, data))),
-                false => None,
+            .filter_map(move |(index, data)| {
+                if data.parents.is_empty() {
+                    Some(node_mut((index, data)))
+                } else {
+                    None
+                }
             })
     }
 
@@ -451,7 +472,7 @@ impl<NE, EE> Dag<NE, EE> {
     /// use monstertruck_assembly::dag::*;
     /// let mut dag = Dag::<usize, ()>::new();
     /// let index = dag.create_node(4);
-    /// assert_eq!(dag.node(index).entity(), &4);
+    /// assert!(dag.node(index).is_some_and(|node| node.entity() == &4));
     /// ```
     pub fn create_node(&mut self, entity: NE) -> NodeIndex {
         let index = self.nodes.len();
@@ -465,7 +486,7 @@ impl<NE, EE> Dag<NE, EE> {
     /// use monstertruck_assembly::dag::*;
     /// let mut dag = Dag::<usize, ()>::new();
     /// let a = dag.create_nodes(0..5);
-    /// assert_eq!(dag.node(a[3]).entity(), &3);
+    /// assert!(dag.node(a[3]).is_some_and(|node| node.entity() == &3));
     /// ```
     pub fn create_nodes<I>(&mut self, iter: I) -> Vec<NodeIndex>
     where I: IntoIterator<Item = NE> {
@@ -474,24 +495,21 @@ impl<NE, EE> Dag<NE, EE> {
         (index..self.nodes.len()).map(NodeIndex).collect()
     }
 
-    /// Returns the node of graph corresponding to index.
+    /// Returns the node corresponding to `index`, or `None` if the index is
+    /// out of range (for example, an index obtained from a larger graph).
     #[inline]
-    #[track_caller]
-    pub fn node(&self, index: NodeIndex) -> Node<'_, NE, EE> {
-        Node {
-            index,
-            data: self.nodes.get(index.0).expect(MESSAGE_OR),
-        }
+    #[must_use]
+    pub fn node(&self, index: NodeIndex) -> Option<Node<'_, NE, EE>> {
+        self.nodes.get(index.0).map(|data| Node { index, data })
     }
 
-    /// Returns the node of graph corresponding to index.
+    /// Returns the mutable node corresponding to `index`, or `None` if the
+    /// index is out of range.
     #[inline]
-    #[track_caller]
-    pub fn node_mut(&mut self, index: NodeIndex) -> NodeMut<'_, NE, EE> {
-        NodeMut {
-            index,
-            data: self.nodes.get_mut(index.0).expect(MESSAGE_OR),
-        }
+    pub fn node_mut(&mut self, index: NodeIndex) -> Option<NodeMut<'_, NE, EE>> {
+        self.nodes
+            .get_mut(index.0)
+            .map(|data| NodeMut { index, data })
     }
 
     /// Add an edge. Returns `false` and do nothing if adding a edge causes a loop to occur.
@@ -501,22 +519,30 @@ impl<NE, EE> Dag<NE, EE> {
     /// let mut dag = Dag::<(), usize>::new();
     /// let a = dag.create_nodes([(); 2]);
     /// assert!(dag.create_edge(a[0], a[1], 0));
-    /// assert_eq!(dag.node(a[0]).edges().len(), 1);
+    /// assert_eq!(dag.node(a[0]).map(|node| node.edges().len()), Some(1));
     ///
     /// // allow multiple edges between the same nodes
     /// assert!(dag.create_edge(a[0], a[1], 1));
-    /// assert_eq!(dag.node(a[0]).edges().len(), 2);
+    /// assert_eq!(dag.node(a[0]).map(|node| node.edges().len()), Some(2));
     ///
     /// // a loop has occurred!
     /// assert!(!dag.create_edge(a[1], a[0], 2));
-    /// assert_eq!(dag.node(a[1]).edges().len(), 0);
+    /// assert_eq!(dag.node(a[1]).map(|node| node.edges().len()), Some(0));
     /// ```
     pub fn create_edge(&mut self, from: NodeIndex, to: NodeIndex, entity: EE) -> bool {
-        if self.has_path(to, from) {
+        if self.node(from).is_none() || self.node(to).is_none() || self.has_path(to, from) {
             return false;
         }
-        self.node_mut(from).data.edges.push(EdgeData { to, entity });
-        self.node_mut(to).data.parents.insert(from);
+
+        let Some(from_node) = self.node_mut(from) else {
+            return false;
+        };
+        from_node.data.edges.push(EdgeData { to, entity });
+
+        let Some(to_node) = self.node_mut(to) else {
+            return false;
+        };
+        to_node.data.parents.insert(from);
         true
     }
 
@@ -528,20 +554,24 @@ impl<NE, EE> Dag<NE, EE> {
     /// let a = dag.create_nodes([(); 2]);
     /// dag.create_edge(a[0], a[1], 0);
     /// dag.create_edge(a[0], a[1], 1);
-    /// assert_eq!(dag.node(a[0]).edges().len(), 2);
+    /// assert_eq!(dag.node(a[0]).map(|node| node.edges().len()), Some(2));
     ///
     /// let entity = dag.remove_edge(a[0], 1);
     /// assert_eq!(entity, Some(1));
-    /// assert_eq!(dag.node(a[0]).edges().len(), 1);
+    /// assert_eq!(dag.node(a[0]).map(|node| node.edges().len()), Some(1));
     /// ```
     pub fn remove_edge(&mut self, node: NodeIndex, index: usize) -> Option<EE> {
-        let edges = &mut self.node_mut(node).data.edges;
-        if index >= edges.len() {
-            return None;
-        }
-        let EdgeData { to, entity } = edges.remove(index);
-        if edges.iter().all(|edge_data| edge_data.to != to) {
-            self.node_mut(to).data.parents.remove(&node);
+        let (to, entity, still_connected) = {
+            let node_data = self.nodes.get_mut(node.0)?;
+            if index >= node_data.edges.len() {
+                return None;
+            }
+            let EdgeData { to, entity } = node_data.edges.remove(index);
+            let still_connected = node_data.edges.iter().any(|edge_data| edge_data.to == to);
+            (to, entity, still_connected)
+        };
+        if !still_connected && let Some(to_data) = self.nodes.get_mut(to.0) {
+            to_data.parents.remove(&node);
         }
         Some(entity)
     }
@@ -563,7 +593,7 @@ impl<NE, EE> Dag<NE, EE> {
     pub fn all_edges<'a>(
         &'a self,
     ) -> AllEdges<'a, NE, EE, impl FnMut(&'a EdgeData<EE>) -> Edge<'a, EE>> {
-        self.all_nodes().flat_map(move |node| node.edges())
+        self.all_nodes().flat_map(Node::edges)
     }
 
     /// Returns a parallel iterator on the all edges.
@@ -587,7 +617,7 @@ impl<NE, EE> Dag<NE, EE> {
     where
         NE: Sync,
         EE: Sync, {
-        self.par_all_nodes().flat_map(move |node| node.par_edges())
+        self.par_all_nodes().flat_map(Node::par_edges)
     }
 
     /// Returns an iterator for all paths with the top = `self`.
@@ -619,10 +649,10 @@ impl<NE, EE> Dag<NE, EE> {
     pub fn paths_iter(&self, node: NodeIndex) -> impl Iterator<Item = Path<'_, NE, EE>> {
         PathsIter {
             dag: self,
-            current: PathIndices {
-                nodes: vec![self.node(node)],
+            current: self.node(node).map(|node| PathIndices {
+                nodes: vec![node],
                 edges: Vec::new(),
-            },
+            }),
             end_iter: false,
         }
     }
@@ -678,7 +708,11 @@ impl<NE, EE> Dag<NE, EE> {
     /// assert!(dag.has_path(a[0], a[4]));
     /// ```
     #[inline]
+    #[must_use]
     pub fn has_path(&self, from: NodeIndex, to: NodeIndex) -> bool {
+        if self.node(from).is_none() || self.node(to).is_none() {
+            return false;
+        }
         self.sub_has_path(from, to, &mut BTreeSet::default())
     }
 
@@ -687,11 +721,14 @@ impl<NE, EE> Dag<NE, EE> {
         if from == to {
             return true;
         }
-        let to_node = self.node(to);
+        let Some(to_node) = self.node(to) else {
+            return false;
+        };
         for &parent in to_node.parents() {
             if seen.contains(&parent) {
                 continue;
-            } else if self.sub_has_path(from, parent, seen) {
+            }
+            if self.sub_has_path(from, parent, seen) {
                 return true;
             }
         }
@@ -699,16 +736,16 @@ impl<NE, EE> Dag<NE, EE> {
         false
     }
 
-    fn first_maximal_path(&self, from: NodeIndex) -> PathIndices<'_, NE, EE> {
-        let mut cursor = self.node(from);
+    fn first_maximal_path(&self, from: NodeIndex) -> Option<PathIndices<'_, NE, EE>> {
+        let mut cursor = self.node(from)?;
         let mut nodes = vec![cursor];
         let mut edges = vec![];
         while let Some(edge) = cursor.edge(0) {
             edges.push(0);
-            cursor = self.node(edge.nodes().1);
+            cursor = self.node(edge.nodes().1)?;
             nodes.push(cursor);
         }
-        PathIndices { nodes, edges }
+        Some(PathIndices { nodes, edges })
     }
 
     /// Creates a `Dag` based on node entities and adjacency lists.
@@ -956,7 +993,7 @@ impl<NE, EE> Dag<NE, EE> {
                 .into_iter()
                 .map(&mut edge_data_map)
                 .collect(),
-            parents: node_data.parents.clone(),
+            parents: node_data.parents,
         };
 
         Dag {
@@ -1013,7 +1050,7 @@ impl<NE, EE> Dag<NE, EE> {
         let node_data_map = move |node_data: NodeData<NE, EE>| NodeData {
             entity: node_map(node_data.entity),
             edges: node_data.edges.into_iter().map(&edge_data_map).collect(),
-            parents: node_data.parents.clone(),
+            parents: node_data.parents,
         };
 
         Dag {
@@ -1044,7 +1081,8 @@ fn sub_has_cycle(
     for &NodeIndex(child) in &adjacency[cursor] {
         if finished[child] {
             continue;
-        } else if seen[child] || sub_has_cycle(child, adjacency, seen, finished) {
+        }
+        if seen[child] || sub_has_cycle(child, adjacency, seen, finished) {
             return true;
         }
     }
@@ -1055,15 +1093,18 @@ fn sub_has_cycle(
 impl<'a, NE, EE> Node<'a, NE, EE> {
     /// Returns node index
     #[inline]
-    pub fn index(self) -> NodeIndex { self.index }
+    #[must_use]
+    pub const fn index(self) -> NodeIndex { self.index }
     /// Returns entity of node.
     #[inline]
-    pub fn entity(self) -> &'a NE { &self.data.entity }
+    #[must_use]
+    pub const fn entity(self) -> &'a NE { &self.data.entity }
     /// Returns the `index`th edge.
     ///
-    /// # Panics
-    /// `index` must be smaller than the number of edges from `self`.
+    ///
+    /// Returns `None` when `index` is outside the node's edge list.
     #[inline]
+    #[must_use]
     pub fn edge(self, index: usize) -> Option<Edge<'a, EE>> {
         Some(edge_closure(self.index)(self.data.edges.get(index)?))
     }
@@ -1080,7 +1121,8 @@ impl<'a, NE, EE> Node<'a, NE, EE> {
     }
     /// Returns parents from `self`.
     #[inline]
-    pub fn parents(self) -> &'a BTreeSet<NodeIndex> { &self.data.parents }
+    #[must_use]
+    pub const fn parents(self) -> &'a BTreeSet<NodeIndex> { &self.data.parents }
 
     /// Returns `true` if `self` has no parents.
     /// # Examples
@@ -1089,10 +1131,15 @@ impl<'a, NE, EE> Node<'a, NE, EE> {
     /// let mut dag = Dag::<usize, usize>::new();
     /// let a = dag.create_nodes(0..2);
     /// dag.create_edge(a[0], a[1], 0);
-    /// assert!(dag.node(a[0]).is_top());
-    /// assert!(!dag.node(a[1]).is_top());
+    /// assert!(dag.node(a[0]).is_some_and(Node::is_top));
+    /// assert!(dag.node(a[1]).is_some_and(|node| !node.is_top()));
     /// ```
     #[inline]
+    #[must_use]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "BTreeSet::is_empty is not a stable const fn on the Rust 1.99.1 toolchain"
+    )]
     pub fn is_top(self) -> bool { self.data.parents.is_empty() }
 
     /// Returns `true` if `self` has no child.
@@ -1102,20 +1149,22 @@ impl<'a, NE, EE> Node<'a, NE, EE> {
     /// let mut dag = Dag::<usize, usize>::new();
     /// let a = dag.create_nodes(0..2);
     /// dag.create_edge(a[0], a[1], 0);
-    /// assert!(dag.node(a[1]).is_terminal());
-    /// assert!(!dag.node(a[0]).is_terminal());
+    /// assert!(dag.node(a[1]).is_some_and(Node::is_terminal));
+    /// assert!(dag.node(a[0]).is_some_and(|node| !node.is_terminal()));
     /// ```
     #[inline]
-    pub fn is_terminal(self) -> bool { self.data.edges.is_empty() }
+    #[must_use]
+    pub const fn is_terminal(self) -> bool { self.data.edges.is_empty() }
 }
 
 impl<'a, NE, EE> NodeMut<'a, NE, EE> {
     /// Returns node index
     #[inline]
-    pub fn index(&self) -> NodeIndex { self.index }
+    #[must_use]
+    pub const fn index(&self) -> NodeIndex { self.index }
     /// Returns entity of node.
     #[inline]
-    pub fn entity(&'a mut self) -> &'a mut NE { &mut self.data.entity }
+    pub const fn entity(&mut self) -> &mut NE { &mut self.data.entity }
     /// Returns the `index`th edge.
     pub fn edge(&'a mut self, index: usize) -> Option<EdgeMut<'a, EE>> {
         Some(edge_mut_closure(self.index)(
@@ -1153,15 +1202,22 @@ impl<'a, NE, EE> NodeMut<'a, NE, EE> {
     }
     /// Returns parents from `self`.
     #[inline]
-    pub fn parents(&'a self) -> &'a BTreeSet<NodeIndex> { &self.data.parents }
+    #[must_use]
+    pub const fn parents(&'a self) -> &'a BTreeSet<NodeIndex> { &self.data.parents }
 
     /// Returns `true` if `self` has no parents.
     #[inline]
+    #[must_use]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "BTreeSet::is_empty is not a stable const fn on the Rust 1.99.1 toolchain"
+    )]
     pub fn is_top(&self) -> bool { self.data.parents.is_empty() }
 
     /// Returns `true` if `self` has no child.
     #[inline]
-    pub fn is_terminal(&self) -> bool { self.data.edges.is_empty() }
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool { self.data.edges.is_empty() }
 }
 
 impl<'a, EE> Edge<'a, EE> {
@@ -1172,11 +1228,12 @@ impl<'a, EE> Edge<'a, EE> {
     /// let mut dag = Dag::<usize, usize>::new();
     /// let a = dag.create_nodes(0..2);
     /// dag.create_edge(a[0], a[1], 0);
-    /// let edge = dag.node(a[0]).edge(0).unwrap();
+    /// let Some(edge) = dag.node(a[0]).and_then(|node| node.edge(0)) else { return };
     /// assert_eq!(edge.nodes(), (a[0], a[1]));
     /// ```
     #[inline]
-    pub fn nodes(self) -> (NodeIndex, NodeIndex) { self.nodes }
+    #[must_use]
+    pub const fn nodes(self) -> (NodeIndex, NodeIndex) { self.nodes }
     /// Returns entity
     /// # Examples
     /// ```
@@ -1184,11 +1241,12 @@ impl<'a, EE> Edge<'a, EE> {
     /// let mut dag = Dag::<usize, usize>::new();
     /// let a = dag.create_nodes(0..2);
     /// dag.create_edge(a[0], a[1], 3);
-    /// let edge = dag.node(a[0]).edge(0).unwrap();
+    /// let Some(edge) = dag.node(a[0]).and_then(|node| node.edge(0)) else { return };
     /// assert_eq!(edge.entity(), &3);
     /// ```
     #[inline]
-    pub fn entity(self) -> &'a EE { self.entity }
+    #[must_use]
+    pub const fn entity(self) -> &'a EE { self.entity }
 }
 
 impl<'a, EE> EdgeMut<'a, EE> {
@@ -1199,12 +1257,13 @@ impl<'a, EE> EdgeMut<'a, EE> {
     /// let mut dag = Dag::<usize, usize>::new();
     /// let a = dag.create_nodes(0..2);
     /// dag.create_edge(a[0], a[1], 0);
-    /// let mut node = dag.node_mut(a[0]);
-    /// let edge = node.edge(0).unwrap();
+    /// let Some(mut node) = dag.node_mut(a[0]) else { return };
+    /// let Some(edge) = node.edge(0) else { return };
     /// assert_eq!(edge.nodes(), (a[0], a[1]));
     /// ```
     #[inline]
-    pub fn nodes(&self) -> (NodeIndex, NodeIndex) { self.nodes }
+    #[must_use]
+    pub const fn nodes(&self) -> (NodeIndex, NodeIndex) { self.nodes }
     /// Returns entity
     /// # Examples
     /// ```
@@ -1212,20 +1271,26 @@ impl<'a, EE> EdgeMut<'a, EE> {
     /// let mut dag = Dag::<usize, usize>::new();
     /// let a = dag.create_nodes(0..2);
     /// dag.create_edge(a[0], a[1], 3);
-    /// let mut node = dag.node_mut(a[0]);
-    /// let mut edge = node.edge(0).unwrap();
-    /// let entity = edge.entity();
-    /// assert_eq!(entity, &3);
-    /// *entity = 5;
-    /// assert_eq!(dag.node(a[0]).edge(0).unwrap().entity(), &5);
+    /// {
+    ///     let Some(mut node) = dag.node_mut(a[0]) else { return };
+    ///     let Some(mut edge) = node.edge(0) else { return };
+    ///     let entity = edge.entity();
+    ///     assert_eq!(entity, &3);
+    ///     *entity = 5;
+    /// }
+    /// assert!(dag
+    ///     .node(a[0])
+    ///     .and_then(|node| node.edge(0))
+    ///     .is_some_and(|edge| edge.entity() == &5));
     /// ```
     #[inline]
-    pub fn entity(&'a mut self) -> &'a mut EE { self.entity }
+    pub const fn entity(&'a mut self) -> &'a mut EE { self.entity }
 }
 
 impl<'a, NE, EE> Path<'a, NE, EE> {
     /// Returns nodes of path.
     #[inline]
+    #[must_use]
     pub fn nodes(&self) -> &[Node<'a, NE, EE>] { &self.nodes }
     /// Returns an iterator of node indices.
     #[inline]
@@ -1234,13 +1299,12 @@ impl<'a, NE, EE> Path<'a, NE, EE> {
     }
     /// Returns nodes of path.
     #[inline]
+    #[must_use]
     pub fn edges(&self) -> &[Edge<'a, EE>] { &self.edges }
     /// Returns the terminal node
     #[inline]
-    pub fn terminal_node(&'a self) -> Node<'a, NE, EE> {
-        // SAFETY: a Path always contains at least one node (the starting node).
-        *self.nodes.last().unwrap()
-    }
+    #[must_use]
+    pub fn terminal_node(&'a self) -> Option<Node<'a, NE, EE>> { self.nodes.last().copied() }
 }
 
 #[derive(Debug)]
@@ -1249,7 +1313,7 @@ struct PathIndices<'a, NE, EE> {
     edges: Vec<usize>,
 }
 
-impl<'a, NE, EE> Clone for PathIndices<'a, NE, EE> {
+impl<NE, EE> Clone for PathIndices<'_, NE, EE> {
     fn clone(&self) -> Self {
         Self {
             nodes: self.nodes.clone(),
@@ -1259,100 +1323,119 @@ impl<'a, NE, EE> Clone for PathIndices<'a, NE, EE> {
 }
 
 impl<'a, NE, EE> PathIndices<'a, NE, EE> {
-    fn into_path(self) -> Path<'a, NE, EE> {
+    fn into_path(self) -> Option<Path<'a, NE, EE>> {
         let nodes = self.nodes;
         let edges = self
             .edges
             .into_iter()
             .zip(&nodes)
-            .map(|(index, node)| edge_closure(node.index)(&node.data.edges[index]))
-            .collect();
-        Path { nodes, edges }
+            .map(|(index, node)| node.edge(index))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Path { nodes, edges })
     }
 }
 
 #[derive(Clone, Debug)]
 struct PathsIter<'a, NE, EE> {
     dag: &'a Dag<NE, EE>,
-    current: PathIndices<'a, NE, EE>,
+    current: Option<PathIndices<'a, NE, EE>>,
     end_iter: bool,
 }
 
 impl<'a, NE, EE> Iterator for PathsIter<'a, NE, EE> {
     type Item = Path<'a, NE, EE>;
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.end_iter {
             return None;
         }
-        let res = self.current.clone();
+        let current = self.current.as_mut()?;
+        let res = current.clone();
+        let leaf = *current.nodes.last()?;
 
-        // SAFETY: current.nodes is non-empty because PathsIter is initialized with at least one node.
-        let leaf = *self.current.nodes.last().unwrap();
         if leaf.is_terminal() {
-            let len = self.current.edges.len();
-            let some_idx = (0..len)
-                .map(|i| len - i - 1)
-                .find(|&idx| self.current.edges[idx] + 1 < self.current.nodes[idx].edges().len());
+            let some_idx = current
+                .edges
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(idx, edge_idx)| {
+                    let node = current.nodes.get(idx)?;
+                    (*edge_idx + 1 < node.edges().len()).then_some(idx)
+                });
             if let Some(idx) = some_idx {
-                self.current.nodes.truncate(idx + 2);
-                self.current.edges.truncate(idx + 1);
-                self.current.edges[idx] += 1;
-                // SAFETY: the find above ensures edges[idx] + 1 < edges().len(), so edges[idx] is valid.
-                let (_, to) = self.current.nodes[idx]
-                    .edge(self.current.edges[idx])
-                    .unwrap()
-                    .nodes();
-                self.current.nodes[idx + 1] = self.dag.node(to);
+                current.nodes.truncate(idx + 2);
+                current.edges.truncate(idx + 1);
+                let edge_idx = current.edges.get_mut(idx)?;
+                *edge_idx += 1;
+                let node = *current.nodes.get(idx)?;
+                let (_, to) = node.edge(*edge_idx)?.nodes();
+                let next = self.dag.node(to)?;
+                *current.nodes.get_mut(idx + 1)? = next;
             } else {
                 self.end_iter = true;
             }
         } else {
-            // SAFETY: this branch is taken when leaf is not terminal, so edge(0) exists.
-            let (_, new_leaf_index) = leaf.edge(0).unwrap().nodes();
-            self.current.nodes.push(self.dag.node(new_leaf_index));
-            self.current.edges.push(0);
+            let (_, new_leaf_index) = leaf.edge(0)?.nodes();
+            current.nodes.push(self.dag.node(new_leaf_index)?);
+            current.edges.push(0);
         }
 
-        Some(res.into_path())
+        let result = res.into_path();
+        if result.is_none() {
+            self.end_iter = true;
+        }
+        result
     }
 }
 
 #[derive(Clone, Debug)]
 struct MaximalPathsIter<'a, NE, EE> {
     dag: &'a Dag<NE, EE>,
-    current: PathIndices<'a, NE, EE>,
+    current: Option<PathIndices<'a, NE, EE>>,
     end_iter: bool,
 }
 
 impl<'a, NE, EE> Iterator for MaximalPathsIter<'a, NE, EE> {
     type Item = Path<'a, NE, EE>;
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.end_iter {
             return None;
         }
-        let res = self.current.clone();
+        let current = self.current.as_mut()?;
+        let res = current.clone();
 
-        let len = self.current.edges.len();
-        let some_idx = (0..len)
-            .map(|i| len - i - 1)
-            .find(|&idx| self.current.edges[idx] + 1 < self.current.nodes[idx].edges().len());
+        let some_idx = current
+            .edges
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, edge_idx)| {
+                let node = current.nodes.get(idx)?;
+                (*edge_idx + 1 < node.edges().len()).then_some(idx)
+            });
         let Some(idx) = some_idx else {
             self.end_iter = true;
-            return Some(res.into_path());
+            return res.into_path();
         };
 
-        self.current.nodes.truncate(idx + 1);
-        self.current.edges.truncate(idx + 1);
-        self.current.edges[idx] += 1;
+        current.nodes.truncate(idx + 1);
+        current.edges.truncate(idx + 1);
+        let edge_idx = current.edges.get_mut(idx)?;
+        *edge_idx += 1;
 
-        let current_leaf = self.current.nodes[idx];
-        // SAFETY: the find above ensures edges[idx] + 1 < edges().len(), so edges[idx] is valid.
-        let (_, next) = current_leaf.edge(self.current.edges[idx]).unwrap().nodes();
-        let path = self.dag.first_maximal_path(next);
-        self.current.nodes.extend(path.nodes);
-        self.current.edges.extend(path.edges.into_iter().map(|_| 0));
+        let current_leaf = *current.nodes.get(idx)?;
+        let (_, next) = current_leaf.edge(*edge_idx)?.nodes();
+        let path = self.dag.first_maximal_path(next)?;
+        current.nodes.extend(path.nodes);
+        current.edges.extend(path.edges.into_iter().map(|_| 0));
 
-        Some(res.into_path())
+        let result = res.into_path();
+        if result.is_none() {
+            self.end_iter = true;
+        }
+        result
     }
 }
 

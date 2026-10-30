@@ -1,6 +1,8 @@
-use crate::*;
+use crate::{IntoWasm, PolygonMesh};
+use derive_more::{AsRef, Deref, DerefMut, From, Into};
 use js_sys::JsString;
-use monstertruck_meshing::tessellation::*;
+use monstertruck_meshing::tessellation::{MeshableShape, MeshedShape};
+use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 
 macro_rules! toporedef {
     ($($type: ident, $is: ident, $into: ident, $to: ident),*) => {
@@ -17,6 +19,10 @@ macro_rules! toporedef {
         impl $type {
             /// upcast to abstract shape
 
+            #[expect(
+                clippy::missing_const_for_fn,
+                reason = "wasm-bindgen rejects exported const functions"
+            )]
             pub fn upcast(self) -> AbstractShape {
                 AbstractShape(SubAbstractShape::$type(self))
             }
@@ -28,6 +34,10 @@ macro_rules! toporedef {
         impl AbstractShape {
             $(
                 /// check the type
+                #[expect(
+                    clippy::missing_const_for_fn,
+                    reason = "wasm-bindgen rejects exported const functions"
+                )]
                 pub fn $is(&self) -> bool {
                     match &self.0 {
                         SubAbstractShape::$type(_) => true,
@@ -49,7 +59,7 @@ macro_rules! toporedef {
         impl AbstractShape {
             $(
                 /// reference downcast
-                pub fn $to(&self) -> Option<&$type> {
+                pub const fn $to(&self) -> Option<&$type> {
                     match &self.0 {
                         SubAbstractShape::$type(got) => Some(got),
                         _ => None,
@@ -95,14 +105,12 @@ impl StepHeaderDescriptor {
     #[wasm_bindgen(getter)]
     pub fn filename(&self) -> JsString { self.file_name.as_str().into() }
     #[wasm_bindgen(setter)]
-    pub fn set_filename(&mut self, filename: JsString) {
-        self.file_name = filename.as_string().unwrap_or_default();
-    }
+    pub fn set_filename(&mut self, filename: JsString) { self.file_name = String::from(filename); }
     #[wasm_bindgen(getter)]
     pub fn time_stamp(&self) -> JsString { self.time_stamp.as_str().into() }
     #[wasm_bindgen(setter)]
     pub fn set_time_stamp(&mut self, time_stamp: JsString) {
-        self.time_stamp = time_stamp.as_string().unwrap_or_default();
+        self.time_stamp = String::from(time_stamp);
     }
     #[wasm_bindgen(getter)]
     pub fn authors(&self) -> Vec<JsString> {
@@ -110,10 +118,7 @@ impl StepHeaderDescriptor {
     }
     #[wasm_bindgen(setter)]
     pub fn set_authors(&mut self, authors: Vec<JsString>) {
-        self.authors = authors
-            .iter()
-            .map(|s| s.as_string().unwrap_or_default())
-            .collect();
+        self.authors = authors.into_iter().map(String::from).collect();
     }
     #[wasm_bindgen(getter)]
     pub fn organization(&self) -> Vec<JsString> {
@@ -124,22 +129,19 @@ impl StepHeaderDescriptor {
     }
     #[wasm_bindgen(setter)]
     pub fn set_organization(&mut self, organization: Vec<JsString>) {
-        self.organization = organization
-            .iter()
-            .map(|s| s.as_string().unwrap_or_default())
-            .collect();
+        self.organization = organization.into_iter().map(String::from).collect();
     }
     #[wasm_bindgen(getter)]
     pub fn organization_system(&self) -> JsString { self.organization_system.as_str().into() }
     #[wasm_bindgen(setter)]
     pub fn set_organization_system(&mut self, organization_system: JsString) {
-        self.organization_system = organization_system.as_string().unwrap_or_default();
+        self.organization_system = String::from(organization_system);
     }
     #[wasm_bindgen(getter)]
     pub fn authorization(&self) -> JsString { self.authorization.as_str().into() }
     #[wasm_bindgen(setter)]
     pub fn set_authorization(&mut self, authorization: JsString) {
-        self.authorization = authorization.as_string().unwrap_or_default();
+        self.authorization = String::from(authorization);
     }
 }
 
@@ -159,11 +161,12 @@ macro_rules! impl_shape {
                 .map(|res| res.into_wasm())
             }
             /// write shape to json
-            pub fn to_json(&self) -> Vec<u8> {
-                // SAFETY: serialization of valid shape data to JSON should not fail.
+            ///
+            /// # Errors
+            /// Returns a JavaScript error if serialization fails.
+            pub fn to_json(&self) -> std::result::Result<Vec<u8>, JsValue> {
                 serde_json::to_vec_pretty(&self.0)
-                    .map_err(|e| { gloo::console::error!(format!("{e}")); })
-                    .unwrap()
+                    .map_err(|error| JsValue::from_str(&error.to_string()))
             }
             /// write shape to STEP
             pub fn to_step(&self, header: StepHeaderDescriptor) -> String {
@@ -185,7 +188,7 @@ impl_shape!(Shell, Solid);
 impl Shell {
     /// Creates Solid if `self` is a closed shell.
     pub fn into_solid(self) -> Option<Solid> {
-        monstertruck_modeling::Solid::try_new(vec![self.0])
+        monstertruck_modeling::Solid::new(vec![self.0])
             .map_err(|e| {
                 gloo::console::error!(format!("{e}"));
             })

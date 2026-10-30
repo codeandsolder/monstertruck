@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Bound, CurveDerivatives, CurveParameter, Invertible, ParameterRange, SearchNearestParameter,
+    Zero, bound2opt,
+};
 use monstertruck_core::{
     assert_near,
     bounding_box::BoundingBox,
@@ -14,8 +17,6 @@ use thiserror::Error;
 /// As `t` varies over the parameter range, the returned points trace out the curve.
 /// Derivatives give the tangent (`derivative`), curvature direction (`derivative_2`), and
 /// higher-order information (`derivative_n`) at any parameter value.
-/// New code should prefer `evaluate` and `derivative*` methods.
-/// Legacy `subs` and `der*` methods are kept for compatibility.
 pub trait ParametricCurve: Clone {
     /// The point type the curve maps into (e.g. `Point2`, `Point3`).
     type Point;
@@ -31,59 +32,44 @@ pub trait ParametricCurve: Clone {
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector;
     /// Returns all derivatives at parameter `t` with order `0..=n`.
     fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector> {
-        (0..=n).map(|i| self.derivative_n(i, t)).collect()
+        let mut derivatives = CurveDerivatives::new(n);
+        for (order, derivative) in derivatives.iter_mut().enumerate() {
+            *derivative = self.derivative_n(order, t);
+        }
+        derivatives
     }
-    /// Deprecated: use [`evaluate`](ParametricCurve::evaluate).
-    #[inline(always)]
-    fn subs(&self, t: f64) -> Self::Point { self.evaluate(t) }
-    /// Deprecated: use [`derivative`](ParametricCurve::derivative).
-    #[inline(always)]
-    fn der(&self, t: f64) -> Self::Vector { self.derivative(t) }
-    /// Deprecated: use [`derivative_2`](ParametricCurve::derivative_2).
-    #[inline(always)]
-    fn der2(&self, t: f64) -> Self::Vector { self.derivative_2(t) }
-    /// Deprecated: use [`derivative_n`](ParametricCurve::derivative_n).
-    #[inline(always)]
-    fn der_n(&self, n: usize, t: f64) -> Self::Vector { self.derivative_n(n, t) }
-    /// Deprecated: use [`derivatives`](ParametricCurve::derivatives).
-    #[inline(always)]
-    fn ders(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector> { self.derivatives(n, t) }
     /// Returns default parameter range
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> ParameterRange { (Bound::Unbounded, Bound::Unbounded) }
     /// Return the ends of `parameter_range` by tuple.
     /// If the range is unbounded, return `None`.
-    #[inline(always)]
+    #[inline]
     fn try_range_tuple(&self) -> Option<(f64, f64)> {
         let (x, y) = self.parameter_range();
         bound2opt(x).zip(bound2opt(y))
     }
     /// `None` in default implementation; `Some(period)` if periodic.
-    #[inline(always)]
+    #[inline]
     fn period(&self) -> Option<f64> { None }
 }
 
-/// bounded parametric curves i.e. it is guaranteed that the return value of `parameter_range` is not `Bound::Unbounded`.
+/// Bounded parametric curve.
+///
+/// Implementors must provide finite parameter endpoints explicitly; implementing
+/// this trait is the proof that [`ParametricCurve::parameter_range`] is bounded.
 pub trait BoundedCurve: ParametricCurve {
-    /// Return the ends of `parameter_range` by tuple.
-    #[inline(always)]
-    fn range_tuple(&self) -> (f64, f64) { self.try_range_tuple().expect(UNBOUNDED_ERROR) }
+    /// Returns the finite ends of the parameter range.
+    fn range_tuple(&self) -> (f64, f64);
     /// The front end point of the curve.
-    #[inline(always)]
-    fn front(&self) -> Self::Point {
-        let (x, _) = self.parameter_range();
-        self.evaluate(bound2opt(x).expect(UNBOUNDED_ERROR))
-    }
+    #[inline]
+    fn front(&self) -> Self::Point { self.evaluate(self.range_tuple().0) }
     /// The back end point of the curve.
-    #[inline(always)]
-    fn back(&self) -> Self::Point {
-        let (_, y) = self.parameter_range();
-        self.evaluate(bound2opt(y).expect(UNBOUNDED_ERROR))
-    }
+    #[inline]
+    fn back(&self) -> Self::Point { self.evaluate(self.range_tuple().1) }
     /// Returns a certified axis-aligned spatial enclosure when this curve
     /// representation can prove one cheaply. `None` means callers must not
     /// infer any spatial bound.
-    #[inline(always)]
+    #[inline]
     fn certified_spatial_bounds(&self) -> Option<BoundingBox<Self::Point>> { None }
 }
 
@@ -92,46 +78,45 @@ impl ParametricCurve for (usize, usize) {
     type Point = usize;
     type Vector = usize;
     fn derivative_n(&self, _: usize, _: f64) -> Self::Vector { self.1 - self.0 }
-    fn evaluate(&self, t: f64) -> Self::Point {
-        match t < 0.5 {
-            true => self.0,
-            false => self.1,
-        }
-    }
+    fn evaluate(&self, t: f64) -> Self::Point { if t < 0.5 { self.0 } else { self.1 } }
     fn derivative(&self, _: f64) -> Self::Vector { self.1 - self.0 }
     fn derivative_2(&self, _: f64) -> Self::Vector { self.1 - self.0 }
     fn parameter_range(&self) -> ParameterRange { (Bound::Included(0.0), Bound::Included(1.0)) }
 }
 
 /// Implementation for the test of topological methods.
-impl BoundedCurve for (usize, usize) {}
+impl BoundedCurve for (usize, usize) {
+    fn range_tuple(&self) -> (f64, f64) { (0.0, 1.0) }
+}
 
 impl<C: ParametricCurve> ParametricCurve for &C {
     type Point = C::Point;
     type Vector = C::Vector;
     fn evaluate(&self, t: f64) -> Self::Point { (*self).evaluate(t) }
-    #[inline(always)]
+    #[inline]
     fn derivative(&self, t: f64) -> Self::Vector { (*self).derivative(t) }
-    #[inline(always)]
+    #[inline]
     fn derivative_2(&self, t: f64) -> Self::Vector { (*self).derivative_2(t) }
-    #[inline(always)]
+    #[inline]
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector { (*self).derivative_n(n, t) }
-    #[inline(always)]
+    #[inline]
     fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector> {
         (*self).derivatives(n, t)
     }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> ParameterRange { (*self).parameter_range() }
-    #[inline(always)]
+    #[inline]
     fn period(&self) -> Option<f64> { (*self).period() }
 }
 
 impl<C: BoundedCurve> BoundedCurve for &C {
-    #[inline(always)]
+    #[inline]
+    fn range_tuple(&self) -> (f64, f64) { (*self).range_tuple() }
+    #[inline]
     fn front(&self) -> Self::Point { (*self).front() }
-    #[inline(always)]
+    #[inline]
     fn back(&self) -> Self::Point { (*self).back() }
-    #[inline(always)]
+    #[inline]
     fn certified_spatial_bounds(&self) -> Option<BoundingBox<Self::Point>> {
         (*self).certified_spatial_bounds()
     }
@@ -141,36 +126,38 @@ impl<C: ParametricCurve> ParametricCurve for Box<C> {
     type Point = C::Point;
     type Vector = C::Vector;
     fn evaluate(&self, t: f64) -> Self::Point { (**self).evaluate(t) }
-    #[inline(always)]
+    #[inline]
     fn derivative(&self, t: f64) -> Self::Vector { (**self).derivative(t) }
-    #[inline(always)]
+    #[inline]
     fn derivative_2(&self, t: f64) -> Self::Vector { (**self).derivative_2(t) }
-    #[inline(always)]
+    #[inline]
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector { (**self).derivative_n(n, t) }
-    #[inline(always)]
+    #[inline]
     fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector> {
         (**self).derivatives(n, t)
     }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> ParameterRange { (**self).parameter_range() }
-    #[inline(always)]
+    #[inline]
     fn period(&self) -> Option<f64> { (**self).period() }
 }
 
 impl<C: BoundedCurve> BoundedCurve for Box<C> {
-    #[inline(always)]
+    #[inline]
+    fn range_tuple(&self) -> (f64, f64) { (**self).range_tuple() }
+    #[inline]
     fn front(&self) -> Self::Point { (**self).front() }
-    #[inline(always)]
+    #[inline]
     fn back(&self) -> Self::Point { (**self).back() }
-    #[inline(always)]
+    #[inline]
     fn certified_spatial_bounds(&self) -> Option<BoundingBox<Self::Point>> {
         (**self).certified_spatial_bounds()
     }
 }
 
 impl<C: Cut> Cut for Box<C> {
-    #[inline(always)]
-    fn cut(&mut self, t: f64) -> Self { Box::new((**self).cut(t)) }
+    #[inline]
+    fn cut(&mut self, t: f64) -> Self { Self::new((**self).cut(t)) }
 }
 
 /// 2D parametric curve
@@ -309,7 +296,7 @@ impl<C, S> BoundaryCurveFromSamples<S> for Box<C>
 where C: BoundaryCurveFromSamples<S>
 {
     fn boundary_curve_from_samples(surface: &S, points: Vec<Point2>) -> Option<Self> {
-        C::boundary_curve_from_samples(surface, points).map(Box::new)
+        C::boundary_curve_from_samples(surface, points).map(Self::new)
     }
 }
 
@@ -327,6 +314,7 @@ pub trait ParameterTransform: BoundedCurve {
     /// let curve1 = curve0.parameter_transformed(1.0, 2.0);
     /// assert_eq!(curve1.evaluate(0.5), curve0.evaluate(2.5));
     /// ```
+    #[must_use]
     fn parameter_transformed(&self, scalar: f64, r#move: f64) -> Self {
         let mut curve = self.clone();
         curve.parameter_transform(scalar, r#move);
@@ -342,16 +330,16 @@ pub trait ParameterTransform: BoundedCurve {
 }
 
 impl<C: ParameterTransform> ParameterTransform for Box<C> {
-    #[inline(always)]
+    #[inline]
     fn parameter_transform(&mut self, scalar: f64, r#move: f64) -> &mut Self {
         (**self).parameter_transform(scalar, r#move);
         self
     }
-    #[inline(always)]
+    #[inline]
     fn parameter_transformed(&self, scalar: f64, r#move: f64) -> Self {
-        Box::new((**self).parameter_transformed(scalar, r#move))
+        Self::new((**self).parameter_transformed(scalar, r#move))
     }
-    #[inline(always)]
+    #[inline]
     fn parameter_normalization(&mut self) -> &mut Self {
         (**self).parameter_normalization();
         self
@@ -364,16 +352,13 @@ pub trait Concat<Rhs: BoundedCurve<Point = Self::Point, Vector = Self::Vector>>:
 where Self::Point: Debug {
     /// The result of concat two curves
     type Output: BoundedCurve<Point = Self::Point, Vector = Self::Vector>;
-    /// Try concat two curves.
-    /// # Failure
-    /// Returns `None` if `self.range_tuple().1 != rhs.range_tuple().0`.
+    /// Tries to concatenate two curves.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConcatError`] when either curve is empty, their parameter ranges do not meet,
+    /// or their endpoint positions do not match.
     fn try_concat(&self, rhs: &Rhs) -> Result<Self::Output, ConcatError<Self::Point>>;
-    /// Try concat two curves.
-    /// # Panic
-    /// Panic occurs if `self.range_tuple().1 != rhs.range_tuple().0`.
-    fn concat(&self, rhs: &Rhs) -> Self::Output {
-        self.try_concat(rhs).unwrap_or_else(|err| panic!("{}", err))
-    }
 }
 
 impl<Rhs, C> Concat<Rhs> for Box<C>
@@ -386,12 +371,14 @@ where
     fn try_concat(&self, rhs: &Rhs) -> Result<Self::Output, ConcatError<C::Point>> {
         (**self).try_concat(rhs)
     }
-    fn concat(&self, rhs: &Rhs) -> Self::Output { (**self).concat(rhs) }
 }
 
 /// Error for concat curves
 #[derive(Clone, Copy, PartialEq, Debug, Error)]
-pub enum ConcatError<Point: Debug> {
+pub enum ConcatError<Point> {
+    /// Failed to concatenate because one curve has no control points.
+    #[error("Cannot concatenate a curve with no control points.")]
+    EmptyControlPoints,
     /// Failed to concat curves since the end parameter of the first curve is different form the start parameter of the second curve.
     #[error(
         "The end parameter {0} of the first curve is different from the start parameter {1} of the second curve."
@@ -406,12 +393,13 @@ pub enum ConcatError<Point: Debug> {
 
 impl<T: Debug> ConcatError<T> {
     /// into the
-    #[inline(always)]
+    #[inline]
     pub fn point_map<U: Debug, F>(self, f: F) -> ConcatError<U>
     where F: Fn(T) -> U {
         match self {
-            ConcatError::DisconnectedParameters(a, b) => ConcatError::DisconnectedParameters(a, b),
-            ConcatError::DisconnectedPoints(p, q) => ConcatError::DisconnectedPoints(f(p), f(q)),
+            Self::EmptyControlPoints => ConcatError::EmptyControlPoints,
+            Self::DisconnectedParameters(a, b) => ConcatError::DisconnectedParameters(a, b),
+            Self::DisconnectedPoints(p, q) => ConcatError::DisconnectedPoints(f(p), f(q)),
         }
     }
 }
@@ -426,57 +414,48 @@ pub enum CurveCollector<C> {
 }
 
 impl<C> CurveCollector<C> {
-    /// Concats two B-spline curves.
-    #[inline(always)]
+    /// Concatenates a curve onto this collector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConcatError`] if an existing collected curve cannot be joined to `curve`.
+    #[inline]
     pub fn try_concat<Rhs>(&mut self, curve: &Rhs) -> Result<&mut Self, ConcatError<C::Point>>
     where
         C: Concat<Rhs, Output = C>,
         C::Point: Debug,
         Rhs: BoundedCurve<Point = C::Point, Vector = C::Vector> + Into<C>, {
         match self {
-            CurveCollector::Singleton => {
-                *self = CurveCollector::Curve(curve.clone().into());
+            Self::Singleton => {
+                *self = Self::Curve(curve.clone().into());
             }
-            CurveCollector::Curve(curve0) => {
+            Self::Curve(curve0) => {
                 *curve0 = curve0.try_concat(curve)?;
             }
         }
         Ok(self)
     }
-    /// Concats two B-spline curves.
-    #[inline(always)]
-    pub fn concat<Rhs>(&mut self, curve: &Rhs) -> &mut Self
-    where
-        C: Concat<Rhs, Output = C>,
-        C::Point: Debug,
-        Rhs: BoundedCurve<Point = C::Point, Vector = C::Vector> + Into<C>, {
-        self.try_concat(curve)
-            .unwrap_or_else(|error| panic!("{}", error))
-    }
-
     /// Whether `self` is the singleton or not.
-    #[inline(always)]
-    pub fn is_singleton(&self) -> bool {
+    #[inline]
+    pub const fn is_singleton(&self) -> bool {
         match self {
-            CurveCollector::Singleton => true,
-            CurveCollector::Curve(_) => false,
+            Self::Singleton => true,
+            Self::Curve(_) => false,
         }
     }
-    /// Returns the entity curve.
-    /// # Panics
-    /// If `self` is `Singleton`, then panics occurs.
-    #[inline(always)]
-    pub fn unwrap(self) -> C {
+    /// Returns the collected curve, or `None` when no curve was added.
+    #[inline]
+    pub fn into_curve(self) -> Option<C> {
         match self {
-            CurveCollector::Curve(curve) => curve,
-            CurveCollector::Singleton => panic!("This curve collector is singleton."),
+            Self::Curve(curve) => Some(curve),
+            Self::Singleton => None,
         }
     }
 }
 
 impl<C> From<CurveCollector<C>> for Option<C> {
-    #[inline(always)]
-    fn from(collector: CurveCollector<C>) -> Option<C> {
+    #[inline]
+    fn from(collector: CurveCollector<C>) -> Self {
         match collector {
             CurveCollector::Singleton => None,
             CurveCollector::Curve(curve) => Some(curve),
@@ -487,6 +466,7 @@ impl<C> From<CurveCollector<C>> for Option<C> {
 /// Cuts one curve into two curves.
 pub trait Cut: BoundedCurve {
     /// Cuts one curve into two curves. Assigns the former curve to `self` and returns the later curve.
+    #[must_use]
     fn cut(&mut self, t: f64) -> Self;
 }
 
@@ -521,7 +501,7 @@ where
     C::Point: Debug + Tolerance,
     C::Vector: Debug + Tolerance + std::ops::Mul<f64, Output = C::Vector>, {
     let mut rng = trial_rng();
-    (0..trials).for_each(|_| exec_parameter_transform_random_test(curve, &mut rng))
+    (0..trials).for_each(|_| exec_parameter_transform_random_test(curve, &mut rng));
 }
 
 fn exec_parameter_transform_random_test<C>(curve: &C, rng: &mut StdRng)
@@ -534,59 +514,82 @@ where
     let transformed = curve.parameter_transformed(a, b);
 
     let (t0, t1) = curve.range_tuple();
-    assert_near!(transformed.range_tuple().0, t0 * a + b);
-    assert_near!(transformed.range_tuple().1, t1 * a + b);
+    assert_near!(transformed.range_tuple().0, f64::mul_add(t0, a, b));
+    assert_near!(transformed.range_tuple().1, f64::mul_add(t1, a, b));
     let p = rng.random::<f64>();
-    let t = (1.0 - p) * t0 + p * t1;
-    assert_near!(transformed.evaluate(t * a + b), curve.evaluate(t));
-    assert_near!(transformed.derivative(t * a + b) * a, curve.derivative(t));
+    let t = f64::mul_add(p, t1, (1.0 - p) * t0);
     assert_near!(
-        transformed.derivative_2(t * a + b) * a * a,
+        transformed.evaluate(f64::mul_add(t, a, b)),
+        curve.evaluate(t)
+    );
+    assert_near!(
+        transformed.derivative(f64::mul_add(t, a, b)) * a,
+        curve.derivative(t)
+    );
+    assert_near!(
+        transformed.derivative_2(f64::mul_add(t, a, b)) * a * a,
         curve.derivative_2(t)
     );
     assert_near!(transformed.front(), curve.front());
     assert_near!(transformed.back(), curve.back());
 }
 
-/// positive test implementation for `Concat`.
-pub fn concat_random_test<C0, C1>(curve0: &C0, curve1: &C1, trials: usize)
+/// Positive test implementation for [`Concat`].
+///
+/// # Errors
+///
+/// Returns [`ConcatError`] if the supplied curves cannot be concatenated.
+pub fn concat_random_test<C0, C1>(
+    curve0: &C0,
+    curve1: &C1,
+    trials: usize,
+) -> Result<(), ConcatError<C0::Point>>
 where
     C0: Concat<C1>,
     C0::Point: Debug + Tolerance,
     C0::Vector: Debug + Tolerance,
     C0::Output: BoundedCurve<Point = C0::Point, Vector = C0::Vector> + Debug,
-    C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>, {
+    C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>,
+{
     let mut rng = trial_rng();
-    (0..trials).for_each(|_| exec_concat_random_test(curve0, curve1, &mut rng))
+    for _ in 0..trials {
+        exec_concat_random_test(curve0, curve1, &mut rng)?;
+    }
+    Ok(())
 }
 
-fn exec_concat_random_test<C0, C1>(curve0: &C0, curve1: &C1, rng: &mut StdRng)
+fn exec_concat_random_test<C0, C1>(
+    curve0: &C0,
+    curve1: &C1,
+    rng: &mut StdRng,
+) -> Result<(), ConcatError<C0::Point>>
 where
     C0: Concat<C1>,
     C0::Point: Debug + Tolerance,
     C0::Vector: Debug + Tolerance,
     C0::Output: BoundedCurve<Point = C0::Point, Vector = C0::Vector> + Debug,
-    C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>, {
-    // SAFETY: this is a test utility; panicking on concat failure is the intended behavior.
-    let concatted = curve0.try_concat(curve1).unwrap();
+    C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>,
+{
+    let concatted = curve0.try_concat(curve1)?;
     let (t0, t1) = curve0.range_tuple();
     let (_, t2) = curve1.range_tuple();
     assert_near!(concatted.range_tuple().0, t0);
     assert_near!(concatted.range_tuple().1, t2);
 
     let p = rng.random::<f64>();
-    let t = t0 * (1.0 - p) + t1 * p;
+    let t = f64::mul_add(t1, p, t0 * (1.0 - p));
     assert_near!(concatted.evaluate(t), curve0.evaluate(t));
     assert_near!(concatted.derivative(t), curve0.derivative(t));
     assert_near!(concatted.derivative_2(t), curve0.derivative_2(t));
     assert_near!(concatted.front(), curve0.front());
 
     let p = rng.random::<f64>();
-    let t = t1 * (1.0 - p) + t2 * p;
+    let t = f64::mul_add(t2, p, t1 * (1.0 - p));
     assert_near!(concatted.evaluate(t), curve1.evaluate(t));
     assert_near!(concatted.derivative(t), curve1.derivative(t));
     assert_near!(concatted.derivative_2(t), curve1.derivative_2(t));
     assert_near!(concatted.back(), curve1.back());
+    Ok(())
 }
 
 /// positive test implementation for `Cut` by random transformation
@@ -596,7 +599,7 @@ where
     C::Point: Debug + Tolerance,
     C::Vector: Debug + Tolerance, {
     let mut rng = trial_rng();
-    (0..trials).for_each(|_| exec_cut_random_test(curve, &mut rng))
+    (0..trials).for_each(|_| exec_cut_random_test(curve, &mut rng));
 }
 
 fn exec_cut_random_test<C>(curve: &C, rng: &mut StdRng)
@@ -607,7 +610,7 @@ where
     let mut part0 = curve.clone();
     let (t0, t1) = curve.range_tuple();
     let p = rng.random::<f64>();
-    let t = t0 * (1.0 - p) + t1 * p;
+    let t = f64::mul_add(t1, p, t0 * (1.0 - p));
     let part1 = part0.cut(t);
     assert_near!(part0.range_tuple().0, t0);
     assert_near!(part0.range_tuple().1, t);
@@ -615,13 +618,13 @@ where
     assert_near!(part1.range_tuple().1, t1);
 
     let p = rng.random::<f64>();
-    let s = t0 * (1.0 - p) + t * p;
+    let s = f64::mul_add(t, p, t0 * (1.0 - p));
     assert_near!(part0.evaluate(s), curve.evaluate(s));
     assert_near!(part0.front(), curve.front());
     assert_near!(part0.back(), curve.evaluate(t));
 
     let p = rng.random::<f64>();
-    let s = t * (1.0 - p) + t1 * p;
+    let s = f64::mul_add(t1, p, t * (1.0 - p));
     assert_near!(part1.evaluate(s), curve.evaluate(s));
     assert_near!(part1.front(), curve.evaluate(t));
     assert_near!(part1.back(), curve.back());

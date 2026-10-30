@@ -1,5 +1,8 @@
-use super::*;
+use super::{InnerSpace, Matrix3, Origin, Point3, PolygonMesh, SquareMatrix, Vector3, hash};
 use derive_more::{Deref, DerefMut};
+
+#[cfg(test)]
+use crate::{Faces, StandardAttributes};
 
 #[derive(Clone, Copy, Debug)]
 struct Ray {
@@ -11,7 +14,7 @@ struct Ray {
 struct Triangle([Point3; 3]);
 
 impl Triangle {
-    #[inline(always)]
+    #[inline]
     fn normal(self) -> Vector3 { (self[1] - self[0]).cross(self[2] - self[0]).normalize() }
 
     fn is_crossing(self, ray: Ray) -> bool {
@@ -21,8 +24,9 @@ impl Triangle {
         if mat.determinant().so_small() {
             false
         } else {
-            // SAFETY: the determinant was checked to be non-small above, so the matrix is invertible.
-            let inv = mat.invert().unwrap();
+            let Some(inv) = mat.invert() else {
+                return false;
+            };
             let uvt = inv * (self[0] - ray.origin);
             uvt[0] > 0.0 && uvt[1] > 0.0 && uvt[0] + uvt[1] < 1.0 && uvt[2] > 0.0
         }
@@ -54,7 +58,7 @@ pub trait IncludingPointInDomain {
     ///         [0, 3, 2],
     ///         [1, 2, 3],
     ///     ]),
-    /// );
+    /// ).expect("fixture mesh is valid");
     ///
     /// assert_eq!(simplex.signed_crossing_faces(Point3::new(0.1, 0.1, 0.1), Vector3::unit_x()), 1);
     /// assert_eq!(simplex.signed_crossing_faces(Point3::new(-0.1, 0.1, 0.1), Vector3::unit_x()), 0);
@@ -81,7 +85,7 @@ pub trait IncludingPointInDomain {
     ///         [0, 3, 2],
     ///         [1, 2, 3],
     ///     ]),
-    /// );
+    /// ).expect("fixture mesh is valid");
     ///
     /// assert!(simplex.inside(Point3::new(0.1, 0.1, 0.1)));
     /// assert!(!simplex.inside(Point3::new(-0.1, 0.1, 0.1)));
@@ -103,7 +107,14 @@ impl IncludingPointInDomain for PolygonMesh {
                     self.positions()[face[i].pos],
                 ]);
                 if tri.is_crossing(ray) {
-                    counter += f64::signum(tri.normal().dot(ray.direction)) as isize;
+                    let direction = tri.normal().dot(ray.direction);
+                    counter += if direction > 0.0 {
+                        1
+                    } else if direction < 0.0 {
+                        -1
+                    } else {
+                        0
+                    };
                 }
             }
             counter
@@ -132,7 +143,8 @@ fn inside100() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("fixture mesh is valid");
 
     for _ in 0..100 {
         assert!(simplex.inside(Point3::new(0.1, 0.1, 0.1)));

@@ -6,7 +6,13 @@
 //! domains, and [`loops`] assembles the pieces into the boundary the
 //! triangulator consumes. What stays here is the vocabulary all four share.
 
-use super::*;
+use super::{
+    BoundedCurve, Cdt, EuclideanSpace, ExactParameterBoundary2D, ExactTrimBoundary2D,
+    FixedVertexHandle, HashGen, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools,
+    MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D, Point2,
+    Point3, PolylineCurve, PreMeshableSurface, SP, SPoint2, TOLERANCE, Tolerance, Triangulation,
+    Vector2, algo, env, mesh, resample_boundary, simplify_parameter_boundary,
+};
 
 mod loops;
 mod periodic;
@@ -14,7 +20,11 @@ mod projection;
 mod projection_debug;
 
 // `periodic` is used only within `boundary`, so its glob stays module-private.
-use periodic::*;
+use periodic::{
+    align_full_period_open_pair, align_periodic_open_pair, close_open_periodic_curve_to_singular,
+    compact_periodic_closed_loop, normalize_range, open_periodic_closed_loop,
+    periodic_axis_full_span, periodic_min_difference, periodic_open_axis_full_span,
+};
 
 pub(super) use loops::*;
 pub(super) use projection::*;
@@ -42,7 +52,7 @@ fn connect_edges<P>(vecs: impl IntoIterator<Item = Vec<P>>) -> Vec<P> {
 
 pub(super) type UvKey = (u64, u64);
 
-pub(super) fn uv_key(uv: Point2) -> UvKey { (uv.x.to_bits(), uv.y.to_bits()) }
+pub(super) const fn uv_key(uv: Point2) -> UvKey { (uv.x.to_bits(), uv.y.to_bits()) }
 
 pub(super) fn surface_point_with_cache(
     surface: &impl PreMeshableSurface,

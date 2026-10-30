@@ -1,7 +1,7 @@
 use monstertruck_core::cgmath64::{Homogeneous, control_point::ControlPoint};
 use monstertruck_traits::surface_continuity::{
-    BoundarySide, ContinuityOrder, MAX_CONTINUITY_ORDER, SurfaceContinuityCapability,
-    UnsupportedContinuityCapability,
+    BoundarySide, ContinuityOrder, InvalidContinuityCapability, MAX_CONTINUITY_ORDER,
+    SurfaceContinuityCapability, UnsupportedContinuityCapability,
 };
 
 use super::{BsplineSurface, KnotVector, NurbsSurface};
@@ -17,24 +17,30 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use monstertruck_geometry::prelude::*;
     ///
-    /// let surface = BsplineSurface::new(
+    /// let surface = BsplineSurface::new_unchecked(
     ///     (KnotVector::bezier_knot(1), KnotVector::bezier_knot(2)),
     ///     vec![vec![Point3::new(0.0, 0.0, 0.0); 3]; 2],
     /// );
     ///
     /// let capability =
-    ///     surface.continuity_capability(BoundarySide::MinV, ContinuityOrder::G2);
+    ///     surface.continuity_capability(BoundarySide::MinV, ContinuityOrder::G2)?;
     ///
     /// assert_eq!(capability.unsupported_reason(), None);
     /// assert_eq!(capability.maximum_supported_order(), Some(ContinuityOrder::G2));
+    /// # Ok(())
+    /// # }
     /// ```
+    /// # Errors
+    /// Returns [`InvalidContinuityCapability`] if the requested capability cannot be represented consistently.
+    ///
     pub fn continuity_capability(
         &self,
         side: BoundarySide,
         requested: ContinuityOrder,
-    ) -> SurfaceContinuityCapability {
+    ) -> Result<SurfaceContinuityCapability, InvalidContinuityCapability> {
         let control_points = self.control_points();
         let dimensions = control_points
             .first()
@@ -74,26 +80,32 @@ where V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use monstertruck_geometry::prelude::*;
     ///
-    /// let surface = NurbsSurface::new(BsplineSurface::new(
+    /// let surface = NurbsSurface::new(BsplineSurface::new_unchecked(
     ///     (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
     ///     vec![vec![Vector4::new(0.0, 0.0, 0.0, 1.0); 2]; 2],
     /// ));
     ///
     /// let capability =
-    ///     surface.continuity_capability(BoundarySide::MaxU, ContinuityOrder::G1);
+    ///     surface.continuity_capability(BoundarySide::MaxU, ContinuityOrder::G1)?;
     ///
     /// assert_eq!(capability.unsupported_reason(), None);
+    /// # Ok(())
+    /// # }
     /// ```
+    ///
+    /// # Errors
+    /// Returns [`InvalidContinuityCapability`] if the requested capability cannot be represented consistently.
     pub fn continuity_capability(
         &self,
         side: BoundarySide,
         requested: ContinuityOrder,
-    ) -> SurfaceContinuityCapability {
+    ) -> Result<SurfaceContinuityCapability, InvalidContinuityCapability> {
         let polynomial = self
             .non_rationalized()
-            .continuity_capability(side, requested);
+            .continuity_capability(side, requested)?;
         let mut weights = self
             .control_points()
             .iter()
@@ -101,7 +113,7 @@ where V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>
             .map(|point| point.weight());
 
         if polynomial.unsupported_reason().is_some() {
-            polynomial
+            Ok(polynomial)
         } else if weights.clone().any(|weight| !weight.is_finite()) {
             unsupported(
                 side,
@@ -117,7 +129,7 @@ where V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>
                 None,
             )
         } else {
-            polynomial
+            Ok(polynomial)
         }
     }
 }
@@ -130,15 +142,13 @@ where V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>
 /// nothing about the achievable order -- or a maximum that the surrounding
 /// insufficiency check has already proven strictly lower. Doing the unwrap here
 /// keeps that argument in one place instead of repeating it at eight call sites.
-fn unsupported(
+const fn unsupported(
     side: BoundarySide,
     requested: ContinuityOrder,
     reason: UnsupportedContinuityCapability,
     maximum_order: Option<ContinuityOrder>,
-) -> SurfaceContinuityCapability {
-    // SAFETY: `maximum_order` is `None`, or strictly below `requested` by the
-    // insufficiency test that selected this reason.
-    SurfaceContinuityCapability::try_unsupported(side, requested, reason, maximum_order).unwrap()
+) -> Result<SurfaceContinuityCapability, InvalidContinuityCapability> {
+    SurfaceContinuityCapability::try_unsupported(side, requested, reason, maximum_order)
 }
 
 fn capability_for_axis(
@@ -146,7 +156,7 @@ fn capability_for_axis(
     control_count: usize,
     side: BoundarySide,
     requested: ContinuityOrder,
-) -> SurfaceContinuityCapability {
+) -> Result<SurfaceContinuityCapability, InvalidContinuityCapability> {
     let degree = knots
         .len()
         .checked_sub(control_count)
@@ -185,7 +195,7 @@ fn capability_for_degree_and_rows(
     control_count: usize,
     side: BoundarySide,
     requested: ContinuityOrder,
-) -> SurfaceContinuityCapability {
+) -> Result<SurfaceContinuityCapability, InvalidContinuityCapability> {
     let required_degree = requested.as_usize();
     let required_rows = required_degree + 1;
     let insufficient_degree = degree < required_degree;
@@ -234,8 +244,7 @@ fn capability_for_degree_and_rows(
             Some(maximum_order),
         )
     } else {
-        // SAFETY: Both degree and row checks establish `maximum_order >= requested`.
-        SurfaceContinuityCapability::try_supported_through(side, requested, maximum_order).unwrap()
+        SurfaceContinuityCapability::try_supported_through(side, requested, maximum_order)
     }
 }
 

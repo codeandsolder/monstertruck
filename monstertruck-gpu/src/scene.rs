@@ -6,7 +6,7 @@ static MAXID: AtomicUsize = AtomicUsize::new(0);
 
 impl RenderId {
     /// Generate the unique `RenderId`.
-    #[inline(always)]
+    #[inline]
     pub fn generate() -> Self { RenderId(MAXID.fetch_add(1, Ordering::Relaxed)) }
 }
 
@@ -65,7 +65,7 @@ async fn init_default_device(
 
 impl DeviceHandler {
     /// constructor
-    #[inline(always)]
+    #[inline]
     pub const fn new(adapter: Adapter, device: Device, queue: Queue) -> DeviceHandler {
         DeviceHandler {
             adapter,
@@ -74,13 +74,13 @@ impl DeviceHandler {
         }
     }
     /// Returns the reference of the adapter.
-    #[inline(always)]
+    #[inline]
     pub const fn adapter(&self) -> &Adapter { &self.adapter }
     /// Returns the reference of the device.
-    #[inline(always)]
+    #[inline]
     pub const fn device(&self) -> &Device { &self.device }
     /// Returns the reference of the queue.
-    #[inline(always)]
+    #[inline]
     pub const fn queue(&self) -> &Queue { &self.queue }
 
     /// Creates default device handler.
@@ -88,7 +88,7 @@ impl DeviceHandler {
 }
 
 impl Default for StudioConfig {
-    #[inline(always)]
+    #[inline]
     fn default() -> StudioConfig {
         StudioConfig {
             background: Color::BLACK,
@@ -99,7 +99,7 @@ impl Default for StudioConfig {
 }
 
 impl Default for BackendBufferConfig {
-    #[inline(always)]
+    #[inline]
     fn default() -> BackendBufferConfig {
         BackendBufferConfig {
             depth_test: true,
@@ -109,7 +109,7 @@ impl Default for BackendBufferConfig {
 }
 
 impl Default for RenderTextureConfig {
-    #[inline(always)]
+    #[inline]
     fn default() -> RenderTextureConfig {
         RenderTextureConfig {
             canvas_size: (1024, 768),
@@ -120,7 +120,7 @@ impl Default for RenderTextureConfig {
 
 impl RenderTextureConfig {
     /// Returns compatible `SurfaceConfiguration`.
-    #[inline(always)]
+    #[inline]
     pub fn compatible_surface_config(self) -> SurfaceConfiguration {
         SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
@@ -147,7 +147,7 @@ impl SceneDescriptor {
     ///     mat4 camera_projection; // the projection into the normalized view volume
     /// };
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn camera_buffer(&self, device: &Device) -> BufferHandler {
         let (width, height) = self.render_texture.canvas_size;
         let as_rat = width as f64 / height as f64;
@@ -170,14 +170,14 @@ impl SceneDescriptor {
     ///     Light lights[];
     /// };
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn lights_buffer(&self, device: &Device) -> BufferHandler {
         let mut light_vec: Vec<_> = self.studio.lights.iter().map(Light::light_info).collect();
         light_vec.resize(LIGHT_MAX, LightInfo::zeroed());
         BufferHandler::from_slice(&light_vec, device, BufferUsages::UNIFORM)
     }
 
-    #[inline(always)]
+    #[inline]
     fn sampling_buffer(
         device: &Device,
         render_texture: RenderTextureConfig,
@@ -199,7 +199,7 @@ impl SceneDescriptor {
         })
     }
 
-    #[inline(always)]
+    #[inline]
     fn depth_texture(device: &Device, size: (u32, u32), sample_count: u32) -> Texture {
         device.create_texture(&TextureDescriptor {
             size: Extent3d {
@@ -248,12 +248,12 @@ pub struct SceneDescriptorMut<'a>(&'a mut Scene);
 
 impl std::ops::Deref for SceneDescriptorMut<'_> {
     type Target = SceneDescriptor;
-    #[inline(always)]
+    #[inline]
     fn deref(&self) -> &SceneDescriptor { &self.0.scene_desc }
 }
 
 impl std::ops::DerefMut for SceneDescriptorMut<'_> {
-    #[inline(always)]
+    #[inline]
     fn deref_mut(&mut self) -> &mut SceneDescriptor { &mut self.0.scene_desc }
 }
 
@@ -266,7 +266,7 @@ impl Drop for SceneDescriptorMut<'_> {
 }
 
 impl Scene {
-    #[inline(always)]
+    #[inline]
     fn camera_bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
@@ -279,7 +279,7 @@ impl Scene {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn lights_bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
@@ -292,7 +292,7 @@ impl Scene {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn scene_bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
@@ -305,7 +305,7 @@ impl Scene {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn init_scene_bind_group_layout(device: &Device) -> BindGroupLayout {
         bind_group_util::create_bind_group_layout(
             device,
@@ -320,7 +320,7 @@ impl Scene {
     /// constructor
     // About `scene_desc`, entity is better than reference for the performance.
     // This is reference because only for as wgpu is.
-    #[inline(always)]
+    #[inline]
     pub fn new(device_handler: DeviceHandler, scene_desc: &SceneDescriptor) -> Scene {
         let device = device_handler.device();
         let (forward_depth, sampling_buffer) = scene_desc.backend_buffers(device);
@@ -347,7 +347,7 @@ impl Scene {
     ///
     /// # Remarks
     /// The usage of texture is `TextureUsages::RENDER_ATTACHMENT | TetureUsages::COPY_SRC`.
-    #[inline(always)]
+    #[inline]
     pub fn compatible_texture(&self) -> Texture {
         let config = self.scene_desc.render_texture;
         self.device().create_texture(&TextureDescriptor {
@@ -367,27 +367,27 @@ impl Scene {
     }
 
     /// Returns the reference of its own `DeviceHandler`.
-    #[inline(always)]
+    #[inline]
     pub const fn device_handler(&self) -> &DeviceHandler { &self.device_handler }
 
     /// Returns the reference of the adapter.
-    #[inline(always)]
+    #[inline]
     pub const fn dapter(&self) -> &Adapter { &self.device_handler.adapter }
 
     /// Returns the reference of the device.
-    #[inline(always)]
+    #[inline]
     pub const fn device(&self) -> &Device { &self.device_handler.device }
 
     /// Returns the reference of the queue.
-    #[inline(always)]
+    #[inline]
     pub const fn queue(&self) -> &Queue { &self.device_handler.queue }
 
     /// Returns the elapsed time since the scene was created.
-    #[inline(always)]
+    #[inline]
     pub fn elapsed(&self) -> std::time::Duration { self.clock.elapsed() }
 
     /// Returns the reference of the descriptor.
-    #[inline(always)]
+    #[inline]
     pub const fn descriptor(&self) -> &SceneDescriptor { &self.scene_desc }
 
     /// Returns the mutable reference of the descriptor.
@@ -396,19 +396,19 @@ impl Scene {
     ///
     /// When the return value is dropped, the depth buffer and sampling buffer are automatically updated.
     /// Use `studio_config_mut` if you only want to update the colors of the camera, lights, and background.
-    #[inline(always)]
+    #[inline]
     pub fn descriptor_mut(&mut self) -> SceneDescriptorMut<'_> { SceneDescriptorMut(self) }
 
     /// Returns the reference of the studio configuration.
-    #[inline(always)]
+    #[inline]
     pub const fn studio_config(&self) -> &StudioConfig { &self.scene_desc.studio }
 
     /// Returns the mutable reference of the studio configuration.
-    #[inline(always)]
+    #[inline]
     pub fn studio_config_mut(&mut self) -> &mut StudioConfig { &mut self.scene_desc.studio }
 
     /// Returns the bind group layout in the scene.
-    #[inline(always)]
+    #[inline]
     pub const fn bind_group_layout(&self) -> &BindGroupLayout { &self.bind_group_layout }
 
     /// Creates a `UNIFORM` buffer of the camera.
@@ -422,7 +422,7 @@ impl Scene {
     ///     mat4 camera_projection; // the projection into the normalized view volume
     /// };
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn camera_buffer(&self) -> BufferHandler { self.scene_desc.camera_buffer(self.device()) }
 
     /// Creates a `STORAGE` buffer of all lights.
@@ -441,7 +441,7 @@ impl Scene {
     ///     Light lights[]; // the number of lights must be gotten from another place
     /// };
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn lights_buffer(&self) -> BufferHandler { self.scene_desc.lights_buffer(self.device()) }
 
     /// Creates a `UNIFORM` buffer of the scene status.
@@ -456,7 +456,7 @@ impl Scene {
     ///     uint nlights;   // the number of lights
     /// };
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn scene_status_buffer(&self) -> BufferHandler {
         let bk = self.scene_desc.studio.background;
         let size = self.scene_desc.render_texture.canvas_size;
@@ -493,7 +493,7 @@ impl Scene {
     ///     uint nlights;   // the number of lights
     /// };
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn scene_bind_group(&self) -> BindGroup {
         bind_group_util::create_bind_group(
             self.device(),
@@ -510,7 +510,7 @@ impl Scene {
     ///
     /// If there already exists a render object with the same Id,
     /// replaces the render object and returns false.
-    #[inline(always)]
+    #[inline]
     pub fn add_object<R: Rendered>(&mut self, object: &R) -> bool {
         let render_object = object.render_object(self);
         self.objects
@@ -520,7 +520,7 @@ impl Scene {
     /// Sets the visibility of a render object.
     ///
     /// If there does not exist the render object in the scene, does nothing and returns `false`.
-    #[inline(always)]
+    #[inline]
     pub fn set_visibility<R: Rendered>(&mut self, object: &R, visible: bool) -> bool {
         self.objects
             .get_mut(&object.render_id())
@@ -531,7 +531,7 @@ impl Scene {
     ///
     /// If there already exists a render object with the same Id,
     /// replaces the render object and returns false.
-    #[inline(always)]
+    #[inline]
     pub fn add_objects<'a, R, I>(&mut self, objects: I) -> bool
     where
         R: 'a + Rendered,
@@ -542,14 +542,14 @@ impl Scene {
     /// Removes a render object from the scene.
     ///
     /// If there does not exist the render object in the scene, does nothing and returns `false`.
-    #[inline(always)]
+    #[inline]
     pub fn remove_object<R: Rendered>(&mut self, object: &R) -> bool {
         self.objects.remove(&object.render_id()).is_some()
     }
     /// Removes render objects from the scene.
     ///
     /// If there exists a render object which does not exist in the scene, returns `false`.
-    #[inline(always)]
+    #[inline]
     pub fn remove_objects<'a, R, I>(&mut self, objects: I) -> bool
     where
         R: 'a + Rendered,
@@ -559,18 +559,18 @@ impl Scene {
     }
 
     /// Removes all render objects from the scene.
-    #[inline(always)]
+    #[inline]
     pub fn clear_objects(&mut self) { self.objects.clear() }
 
     /// Returns the number of the render objects in the scene.
-    #[inline(always)]
+    #[inline]
     pub fn number_of_objects(&self) -> usize { self.objects.len() }
 
     /// Synchronizes the information of vertices of `object` in the CPU memory
     /// and that in the GPU memory.
     ///
     /// If there does not exist the render object in the scene, does nothing and returns false.
-    #[inline(always)]
+    #[inline]
     pub fn update_vertex_buffer<R: Rendered>(&mut self, object: &R) -> bool {
         let (handler, objects) = (&self.device_handler, &mut self.objects);
         match objects.get_mut(&object.render_id()) {
@@ -588,7 +588,7 @@ impl Scene {
     /// and that in the GPU memory.
     ///
     /// If there exists a render object which does not exist in the scene, returns false.
-    #[inline(always)]
+    #[inline]
     pub fn update_vertex_buffers<'a, R, I>(&mut self, objects: I) -> bool
     where
         R: 'a + Rendered,
@@ -601,7 +601,7 @@ impl Scene {
     /// and that in the GPU memory.
     ///
     /// If there does not exist the render object in the scene, does nothing and returns false.
-    #[inline(always)]
+    #[inline]
     pub fn update_bind_group<R: Rendered>(&mut self, object: &R) -> bool {
         let (handler, objects) = (&self.device_handler, &mut self.objects);
         match objects.get_mut(&object.render_id()) {
@@ -617,7 +617,7 @@ impl Scene {
     /// and that in the GPU memory.
     ///
     /// If there exists a render object which does not exist in the scene, returns false.
-    #[inline(always)]
+    #[inline]
     pub fn update_bind_groups<'a, R, I>(&mut self, objects: I) -> bool
     where
         R: 'a + Rendered,
@@ -629,7 +629,7 @@ impl Scene {
     /// and that in the GPU memory.
     ///
     /// If there does not exist the render object in the scene, does nothing and returns false.
-    #[inline(always)]
+    #[inline]
     pub fn update_pipeline<R: Rendered>(&mut self, object: &R) -> bool {
         let (handler, objects) = (&self.device_handler, &mut self.objects);
         match objects.get_mut(&object.render_id()) {
@@ -653,7 +653,7 @@ impl Scene {
     /// and that in the GPU memory.
     ///
     /// If there exists a render object which does not exist in the scene, returns false.
-    #[inline(always)]
+    #[inline]
     pub fn update_pipelines<'a, R, I>(&mut self, objects: I) -> bool
     where
         R: 'a + Rendered,
@@ -661,7 +661,7 @@ impl Scene {
         let closure = move |flag, object: &R| flag && self.update_pipeline(object);
         objects.into_iter().fold(true, closure)
     }
-    #[inline(always)]
+    #[inline]
     fn depth_stencil_attachment_descriptor(
         depth_view: &TextureView,
     ) -> RenderPassDepthStencilAttachment<'_> {
@@ -817,10 +817,10 @@ impl WindowScene {
         }
     }
     /// Get the reference of initializing window.
-    #[inline(always)]
+    #[inline]
     pub const fn window(&self) -> &Arc<Window> { &self.window_handler.window }
     /// Get the reference of surface.
-    #[inline(always)]
+    #[inline]
     pub const fn surface(&self) -> &Arc<Surface<'_>> { &self.window_handler.surface }
     /// Adjusts the size of the backend buffers (depth or sampling buffer) to the size of the window.
     pub fn size_alignment(&mut self) {

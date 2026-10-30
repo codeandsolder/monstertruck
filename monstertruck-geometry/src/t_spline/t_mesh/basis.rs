@@ -72,7 +72,7 @@ fn basis_function_d1(u: f64, a: &[f64]) -> f64 {
                     let f1 = u - a[n1];
                     let f2 = a[n2] - u;
                     let denom = (a[d0] - a[d1]) * (a[d2] - a[d3]);
-                    sum + (f1 * f2 + f0 * f2 - f0 * f1) / denom
+                    sum + f0.mul_add(-f1, f0.mul_add(f2, f1 * f2)) / denom
                 })
     } else if u < a[3] {
         let scalar = 1.0 / (a[3] - a[2]);
@@ -90,7 +90,7 @@ fn basis_function_d1(u: f64, a: &[f64]) -> f64 {
                     let f1 = a[n1] - u;
                     let f2 = a[n2] - u;
                     let denom = (a[d0] - a[d1]) * (a[d2] - a[d3]);
-                    sum + (f1 * f2 - f0 * f2 - f0 * f1) / denom
+                    sum + f0.mul_add(-f1, f0.mul_add(-f2, f1 * f2)) / denom
                 })
     } else {
         // N = (a4-u)^3 / D => N' = -3(a4-u)^2 / D.
@@ -123,7 +123,7 @@ fn basis_function_d2(u: f64, a: &[f64]) -> f64 {
                     // f'' = 2[(a[n2]-u) - (u-a[n0]) - (u-a[n1])].
                     // Expanding: f'' = 2(a[n2] + a[n0] + a[n1] - 3u).
                     let denom = (a[d0] - a[d1]) * (a[d2] - a[d3]);
-                    sum + 2.0 * (a[n2] + a[n0] + a[n1] - 3.0 * u) / denom
+                    sum + 2.0 * 3.0f64.mul_add(-u, a[n2] + a[n0] + a[n1]) / denom
                 })
     } else if u < a[3] {
         let scalar = 1.0 / (a[3] - a[2]);
@@ -141,7 +141,7 @@ fn basis_function_d2(u: f64, a: &[f64]) -> f64 {
                     // f'' = -2f2 - 2f1 + 2f0 = 2(f0 - f1 - f2).
                     // f'' = 2((u-a[n0]) - (a[n1]-u) - (a[n2]-u)) = 2(3u - a[n0] - a[n1] - a[n2]).
                     let denom = (a[d0] - a[d1]) * (a[d2] - a[d3]);
-                    sum + 2.0 * (3.0 * u - a[n0] - a[n1] - a[n2]) / denom
+                    sum + 2.0 * (3.0f64.mul_add(u, -a[n0]) - a[n1] - a[n2]) / denom
                 })
     } else {
         // N'' = 6(a4-u) / D.

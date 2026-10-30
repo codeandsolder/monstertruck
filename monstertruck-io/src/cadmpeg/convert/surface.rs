@@ -123,7 +123,7 @@ pub(super) fn convert(geometry: &SurfaceGeometry, context: &Context<'_>) -> Resu
             let radius = finite_radius(*radius, "sphere", context)?;
             let sphere = Processor::new(Sphere::new(frame::point(center), radius));
             admissible(&sphere, "sphere", context)?;
-            Ok(Surface::SphericalSurface(sphere))
+            Ok(Surface::Sphere(sphere))
         }
 
         SurfaceGeometry::Torus {
@@ -139,15 +139,16 @@ pub(super) fn convert(geometry: &SurfaceGeometry, context: &Context<'_>) -> Resu
             let frame = frame::frame(center, axis, ref_direction, "torus", context)?;
             let major = finite_radius(*major_radius, "torus major radius", context)?;
             let minor = finite_radius(*minor_radius, "torus minor radius", context)?;
-            // `Torus::new` PANICS on a non-positive radius. `finite_radius` has
-            // already refused those, so this call cannot reach the panic -- which
-            // is the point of checking here rather than trusting the file.
+            // Keep construction checked at the external-data boundary even though
+            // `finite_radius` already validates the radii; this prevents future loader
+            // changes from reintroducing an unchecked torus.
             let torus = Processor::with_transform(
-                Torus::new(Point3::origin(), major, minor),
+                Torus::new(Point3::origin(), major, minor)
+                    .map_err(|error| context.malformed(error.to_string()))?,
                 frame.placement(1.0),
             );
             admissible(&torus, "torus", context)?;
-            Ok(Surface::ToroidalSurface(torus))
+            Ok(Surface::Torus(torus))
         }
 
         SurfaceGeometry::Nurbs(surface) => nurbs(surface, context),
@@ -181,7 +182,7 @@ pub(super) fn convert(geometry: &SurfaceGeometry, context: &Context<'_>) -> Resu
 
 /// Revolve a profile line about a frame's axis.
 fn revolution(profile: Line<Point3>, frame: frame::Frame) -> Result<Surface> {
-    Ok(Surface::RevolutionSurface(Processor::new(
+    Ok(Surface::Revolution(Processor::new(
         RevolutionSurface::by_revolution(Curve::Line(profile), frame.origin, frame.axis),
     )))
 }
@@ -270,7 +271,7 @@ fn nurbs(surface: &IrNurbsSurface, context: &Context<'_>) -> Result<Surface> {
                 .map(|row| rows_of(row).iter().map(frame::point).collect())
                 .collect();
             Ok(Surface::BsplineSurface(built(
-                BsplineSurface::try_new(knots, net),
+                BsplineSurface::new(knots, net),
                 context,
             )?))
         }
@@ -291,7 +292,7 @@ fn nurbs(surface: &IrNurbsSurface, context: &Context<'_>) -> Result<Surface> {
                 })
                 .collect();
             Ok(Surface::NurbsSurface(NurbsSurface::new(built(
-                BsplineSurface::try_new(knots, net),
+                BsplineSurface::new(knots, net),
                 context,
             )?)))
         }

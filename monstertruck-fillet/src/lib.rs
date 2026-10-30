@@ -12,22 +12,18 @@
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
 pub(crate) use ahash::AHashSet as HashSet;
 
-#[allow(private_interfaces)]
+#[expect(
+    private_interfaces,
+    reason = "legacy fillet module API intentionally keeps implementation helper types private"
+)]
 mod edge_select;
-#[allow(private_interfaces)]
+#[expect(
+    private_interfaces,
+    reason = "legacy fillet module API intentionally keeps implementation helper types private"
+)]
 mod ops;
 
 mod convert;

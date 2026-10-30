@@ -38,25 +38,6 @@ impl FilletProfile {
     }
 }
 
-#[cfg(test)]
-mod profile_contract_tests {
-    use super::*;
-
-    #[test]
-    fn asymmetric_chamfer_does_not_consume_radius() {
-        assert!(
-            !FilletProfile::AsymmetricChamfer {
-                first_setback_mm: 0.2,
-                second_setback_mm: 0.3,
-            }
-            .uses_radius()
-        );
-        assert!(FilletProfile::Round.uses_radius());
-        assert!(FilletProfile::Chamfer.uses_radius());
-        assert!(FilletProfile::Ridge.uses_radius());
-    }
-}
-
 /// Radius specification for fillet operations.
 pub enum RadiusSpec {
     /// Constant radius along the entire edge/wire.
@@ -96,8 +77,7 @@ impl Default for FilletOptions {
     fn default() -> Self {
         Self {
             radius: RadiusSpec::Constant(0.1),
-            // SAFETY: 5 is a non-zero constant.
-            divisions: NonZeroUsize::new(5).unwrap(),
+            divisions: NonZeroUsize::new(5).unwrap_or(NonZeroUsize::MIN),
             profile: FilletProfile::default(),
         }
     }
@@ -136,5 +116,24 @@ impl FilletOptions {
     pub fn with_profile(mut self, profile: FilletProfile) -> Self {
         self.profile = profile;
         self
+    }
+}
+
+#[cfg(test)]
+mod profile_contract_tests {
+    use super::*;
+
+    #[test]
+    fn asymmetric_chamfer_does_not_consume_radius() {
+        assert!(
+            !FilletProfile::AsymmetricChamfer {
+                first_setback_mm: 0.2,
+                second_setback_mm: 0.3,
+            }
+            .uses_radius()
+        );
+        assert!(FilletProfile::Round.uses_radius());
+        assert!(FilletProfile::Chamfer.uses_radius());
+        assert!(FilletProfile::Ridge.uses_radius());
     }
 }

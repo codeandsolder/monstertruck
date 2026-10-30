@@ -2,13 +2,20 @@
 
 // Copyright © 2021 RICOS
 // Apache license 2.0
-#![allow(deprecated)]
+#![expect(
+    deprecated,
+    reason = "example keeps the legacy winit integration visible during API migration"
+)]
 
 pub use async_trait::async_trait;
+
+pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 use std::sync::Arc;
 //use std::time::Duration;
-use winit::dpi::*;
-use winit::event::*;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::{
+    ElementState, Event, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow as WControlFlow};
 use winit::window::Window;
 
@@ -17,7 +24,6 @@ use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-#[allow(unused)]
 #[derive(Clone, Copy, Debug)]
 pub enum ControlFlow {
     Poll,
@@ -31,9 +37,9 @@ impl TryFrom<ControlFlow> for WControlFlow {
     fn try_from(value: ControlFlow) -> Result<Self, Self::Error> {
         match value {
             ControlFlow::Exit => Err(()),
-            ControlFlow::Poll => Ok(WControlFlow::Poll),
-            ControlFlow::Wait => Ok(WControlFlow::Wait),
-            ControlFlow::WaitUntil(x) => Ok(WControlFlow::WaitUntil(x)),
+            ControlFlow::Poll => Ok(Self::Poll),
+            ControlFlow::Wait => Ok(Self::Wait),
+            ControlFlow::WaitUntil(x) => Ok(Self::WaitUntil(x)),
         }
     }
 }
@@ -46,11 +52,13 @@ pub trait App: Sized + 'static {
     /// # Arguments
     /// - handler: `DeviceHandler` provided by `wgpu`
     /// - info: information of device and backend
-    async fn init(window: Arc<Window>) -> Self;
+    async fn init(window: Arc<Window>) -> AppResult<Self>;
     /// By overriding this function, you can change the display of the title bar.
     /// It is not possible to change the window while it is running.
+    #[must_use]
     fn app_title<'a>() -> Option<&'a str> { None }
     /// Default is `ControlFlow::WaitUntil(1 / 60 seconds)`.
+    #[must_use]
     fn default_control_flow() -> ControlFlow {
         /*
         let next_frame_time = Instant::now() + Duration::from_nanos(16_666_667);
@@ -95,35 +103,36 @@ pub trait App: Sized + 'static {
         Self::default_control_flow()
     }
     /// Run the application in the future.
-    async fn async_run() {
-        let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    async fn async_run() -> AppResult<()> {
+        let event_loop = winit::event_loop::EventLoop::new()?;
         let mut wa = winit::window::Window::default_attributes();
         if let Some(title) = Self::app_title() {
-            wa.title = title.to_owned();
+            title.clone_into(&mut wa.title);
         }
-        let window = event_loop
-            .create_window(wa)
-            .expect("failed to build window");
+        let window = event_loop.create_window(wa)?;
         #[cfg(target_arch = "wasm32")]
         {
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-            console_log::init().expect("could not initialize logger");
+            console_log::init().map_err(|error| {
+                std::io::Error::other(format!("could not initialize logger: {error}"))
+            })?;
             use winit::platform::web::WindowExtWebSys;
             // On wasm, append the canvas to the document body
-            web_sys::window()
+            let body = web_sys::window()
                 .and_then(|win| win.document())
                 .and_then(|doc| doc.body())
-                .and_then(|body| {
-                    let canvas = window.canvas()?;
-                    canvas.set_width(500);
-                    canvas.set_height(500);
-                    body.append_child(&web_sys::Element::from(canvas)).ok()
-                })
-                .expect("couldn't append canvas to document body");
+                .ok_or_else(|| std::io::Error::other("could not find document body"))?;
+            let canvas = window
+                .canvas()
+                .ok_or_else(|| std::io::Error::other("window has no canvas"))?;
+            canvas.set_width(500);
+            canvas.set_height(500);
+            body.append_child(&web_sys::Element::from(canvas))
+                .map_err(|_| std::io::Error::other("could not append canvas to document body"))?;
         }
 
         let window = Arc::new(window);
-        let mut app = Self::init(Arc::clone(&window)).await;
+        let mut app = Self::init(Arc::clone(&window)).await?;
 
         let routine = move |ev: Event<()>, target: &ActiveEventLoop| {
             let control_flow = match ev {
@@ -159,38 +168,48 @@ pub trait App: Sized + 'static {
             };
             match control_flow {
                 ControlFlow::Exit => target.exit(),
-                _ => target.set_control_flow(control_flow.try_into().unwrap()),
+                _ => {
+                    if let Ok(control_flow) = control_flow.try_into() {
+                        target.set_control_flow(control_flow);
+                    }
+                }
             }
         };
         #[cfg(not(target_arch = "wasm32"))]
-        event_loop.run(routine).unwrap();
+        event_loop.run(routine)?;
         #[cfg(target_arch = "wasm32")]
         {
             use winit::platform::web::EventLoopExtWebSys;
             event_loop.spawn(routine);
         }
+        Ok(())
     }
     /// Run the application.
     #[inline]
-    fn run() { block_on(Self::async_run()) }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn block_on<F: core::future::Future<Output = ()> + 'static>(f: F) { pollster::block_on(f); }
-
-#[cfg(target_arch = "wasm32")]
-pub fn block_on<F: core::future::Future<Output = ()> + 'static>(f: F) {
-    wasm_bindgen_futures::spawn_local(f);
+    fn run() {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(error) = pollster::block_on(Self::async_run()) {
+            eprintln!("application failed: {error}");
+            std::process::exit(1);
+        }
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async {
+            if let Err(error) = Self::async_run().await {
+                log::error!("application failed: {error}");
+            }
+        });
+    }
 }
 
 /// The smallest example of the trait `App`.
 /// Creates an empty window whose back ground is black.
-#[allow(dead_code)]
 fn main() {
     struct MyApp;
     #[async_trait(?Send)]
     impl App for MyApp {
-        async fn init(_: Arc<Window>) -> Self { MyApp }
+        async fn init(_: Arc<Window>) -> AppResult<Self> { Ok(Self) }
     }
-    MyApp::run()
+    MyApp::run();
 }
+
+const _: fn() = main;

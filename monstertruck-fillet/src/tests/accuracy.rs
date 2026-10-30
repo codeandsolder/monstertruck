@@ -31,7 +31,7 @@ fn radius_error_bounds() {
     // Points should be on that plane (dy≈0) at distance radius from face2 (dx≈radius).
     for j in 0..=n {
         let v = j as f64 / n as f64;
-        let pt = fillet_surface.subs(0.0, v);
+        let pt = fillet_surface.evaluate(0.0, v);
         let dy = pt.y.abs();
         let dx = (pt.x - 1.0).abs();
         assert!(dy < tol, "u=0 contact not on y=0 plane: dy={dy:.6}");
@@ -45,7 +45,7 @@ fn radius_error_bounds() {
     // Points should be on that plane (dx≈0) at distance radius from face1 (dy≈radius).
     for j in 0..=n {
         let v = j as f64 / n as f64;
-        let pt = fillet_surface.subs(1.0, v);
+        let pt = fillet_surface.evaluate(1.0, v);
         let dx = (pt.x - 1.0).abs();
         let dy = pt.y.abs();
         assert!(dx < tol, "u=1 contact not on x=1 plane: dx={dx:.6}");
@@ -60,7 +60,7 @@ fn radius_error_bounds() {
         for j in 0..=n {
             let u = i as f64 / n as f64;
             let v = j as f64 / n as f64;
-            let pt = fillet_surface.subs(u, v);
+            let pt = fillet_surface.evaluate(u, v);
             let dx = (pt.x - 1.0).abs();
             let dy = pt.y.abs();
             assert!(
@@ -90,8 +90,8 @@ fn continuity_at_wire_joins() {
     let v = Vertex::from_points(p);
 
     let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new(&v[i], &v[j], NurbsCurve::from(bsp).into())
+        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
+        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
     };
     let edge = [
         line(0, 1),
@@ -111,7 +111,7 @@ fn continuity_at_wire_joins() {
     let plane = |i: usize, j: usize, k: usize, l: usize| {
         let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
         let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new((knot_vec.clone(), knot_vec), control_points);
+        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()
@@ -129,7 +129,7 @@ fn continuity_at_wire_joins() {
                     .unwrap()
             })
             .collect();
-        Face::new(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bsp.into())
     };
 
     let mut shell: Shell = [

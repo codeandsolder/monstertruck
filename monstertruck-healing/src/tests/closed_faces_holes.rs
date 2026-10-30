@@ -30,7 +30,10 @@ fn test_split_closed_face_cylinder_with_hole() {
     enum Curve {
         Line(Line<Point3>),
         Arc(TrimmedCurve<Processor<UnitCircle<Point3>, Matrix4>>),
-        #[allow(clippy::enum_variant_names)]
+        #[expect(
+            clippy::enum_variant_names,
+            reason = "test geometry enum mirrors production curve variant names"
+        )]
         ParameterCurve(ParameterCurve<ParamCurve2D, Surface>),
     }
     impl From<ParameterCurve<Line<Point2>, Surface>> for Curve {
@@ -188,14 +191,14 @@ fn test_split_closed_face_cylinder_with_hole() {
     let curve1 = Line(Point3::new(-1.0, 0.0, 1.0), Point3::new(-1.0, 0.0, 0.75));
     for i in 0..=10 {
         let t = i as f64 / 10.0;
-        assert_near!(curve0.subs(t), curve1.subs(t));
+        assert_near!(curve0.evaluate(t), curve1.evaluate(t));
     }
     assert_eq!(edges[8].vertices, (4, 1));
     let curve0 = &edges[8].curve;
     let curve1 = Line(Point3::new(-1.0, 0.0, 0.25), Point3::new(-1.0, 0.0, 0.0));
     for i in 0..=10 {
         let t = i as f64 / 10.0;
-        assert_near!(curve0.subs(t), curve1.subs(t));
+        assert_near!(curve0.evaluate(t), curve1.evaluate(t));
     }
     assert_eq!(faces.len(), 2);
     let i = faces
@@ -358,8 +361,8 @@ fn test_split_closed_face_cylinder_with_rotated_hole() {
         Point3::new(-1.0, 0.0, 0.0),
         Point3::new(1.0, 0.0, 1.0),
         Point3::new(-1.0, 0.0, 1.0),
-        surface.subs(0.5, PI + 0.25),
-        surface.subs(0.5, PI - 0.25),
+        surface.evaluate(0.5, PI + 0.25),
+        surface.evaluate(0.5, PI - 0.25),
     ];
 
     let translate = Matrix4::from_translation(Vector3::unit_z());
@@ -490,14 +493,14 @@ fn test_split_closed_face_cylinder_with_rotated_hole() {
     let curve1 = Line(Point3::new(-1.0, 0.0, 1.0), Point3::new(-1.0, 0.0, 0.75));
     for i in 0..=10 {
         let t = i as f64 / 10.0;
-        assert_near!(curve0.subs(t), curve1.subs(t));
+        assert_near!(curve0.evaluate(t), curve1.evaluate(t));
     }
     assert_eq!(edges[10].vertices, (6, 1));
     let curve0 = &edges[10].curve;
     let curve1 = Line(Point3::new(-1.0, 0.0, 0.25), Point3::new(-1.0, 0.0, 0.0));
     for i in 0..=10 {
         let t = i as f64 / 10.0;
-        assert_near!(curve0.subs(t), curve1.subs(t));
+        assert_near!(curve0.evaluate(t), curve1.evaluate(t));
     }
     assert_eq!(faces.len(), 2);
     let i = faces

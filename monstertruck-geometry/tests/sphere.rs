@@ -15,12 +15,12 @@ proptest! {
 
         const EPS: f64 = 1.0e-4;
         let (der0, der1) = if u_derivate {
-            let der0 = sphere.der_mn(m + 1, n, u, v);
-            let der1 = (sphere.der_mn(m, n, u + EPS, v) - sphere.der_mn(m, n, u - EPS, v)) / (2.0 * EPS);
+            let der0 = sphere.derivative_mn(m + 1, n, u, v);
+            let der1 = (sphere.derivative_mn(m, n, u + EPS, v) - sphere.derivative_mn(m, n, u - EPS, v)) / (2.0 * EPS);
             (der0, der1)
         } else {
-            let der0 = sphere.der_mn(m, n + 1, u, v);
-            let der1 = (sphere.der_mn(m, n, u, v + EPS) - sphere.der_mn(m, n, u, v - EPS)) / (2.0 * EPS);
+            let der0 = sphere.derivative_mn(m, n + 1, u, v);
+            let der1 = (sphere.derivative_mn(m, n, u, v + EPS) - sphere.derivative_mn(m, n, u, v - EPS)) / (2.0 * EPS);
             (der0, der1)
         };
         prop_assert!((der0 - der1).magnitude() < 0.01 * der0.magnitude());
@@ -35,11 +35,11 @@ fn exec_search_parameter_test(
 ) -> std::result::Result<(), TestCaseError> {
     let center = Point3::from(center);
     let sphere = Sphere::new(center, radius);
-    let point = sphere.subs(u, v);
+    let point = sphere.evaluate(u, v);
     let parameter = sphere.search_parameter(point, None, 100);
     prop_assert!(parameter.is_some());
     if let Some((u0, v0)) = parameter {
-        prop_assert_near!(sphere.subs(u0, v0), point);
+        prop_assert_near!(sphere.evaluate(u0, v0), point);
     }
 
     let direction = (point - center).normalize();
@@ -48,7 +48,7 @@ fn exec_search_parameter_test(
     let nearest = sphere.search_nearest_parameter(off_surface, None, 100);
     prop_assert!(nearest.is_some());
     if let Some((u0, v0)) = nearest {
-        prop_assert_near!(sphere.subs(u0, v0), point);
+        prop_assert_near!(sphere.evaluate(u0, v0), point);
     }
     Ok(())
 }
@@ -57,12 +57,12 @@ fn exec_search_parameter_test(
 fn search_parameter_round_trip_accepts_pole_coordinate_non_uniqueness() {
     let sphere = Sphere::new(Point3::origin(), 0.1);
     let source = (0.0, 3.1563508335340376);
-    let point = sphere.subs(source.0, source.1);
+    let point = sphere.evaluate(source.0, source.1);
     let result = sphere.search_parameter(point, None, 100);
 
     assert!(result.is_some());
     if let Some((u, v)) = result {
-        assert_near!(sphere.subs(u, v), point);
+        assert_near!(sphere.evaluate(u, v), point);
     }
 }
 
@@ -70,12 +70,12 @@ fn search_parameter_round_trip_accepts_pole_coordinate_non_uniqueness() {
 fn search_parameter_round_trip_accepts_periodic_seam_equivalence() {
     let sphere = Sphere::new(Point3::origin(), 1.0);
     let source = (PI / 2.0, 2.0 * PI);
-    let point = sphere.subs(source.0, source.1);
+    let point = sphere.evaluate(source.0, source.1);
     let result = sphere.search_parameter(point, None, 100);
 
     assert!(result.is_some());
     if let Some((u, v)) = result {
-        assert_near!(sphere.subs(u, v), point);
+        assert_near!(sphere.evaluate(u, v), point);
     }
 }
 
@@ -144,8 +144,8 @@ fn sphere_derivation_test() {
             let u = PI * i as f64 / N as f64;
             let v = 2.0 * PI * j as f64 / N as f64;
             let normal = sphere.normal(u, v);
-            assert!(normal.dot(sphere.uder(u, v)).so_small());
-            assert!(normal.dot(sphere.vder(u, v)).so_small());
+            assert!(normal.dot(sphere.derivative_u(u, v)).so_small());
+            assert!(normal.dot(sphere.derivative_v(u, v)).so_small());
         }
     }
 }

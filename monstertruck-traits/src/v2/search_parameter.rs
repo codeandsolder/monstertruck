@@ -27,19 +27,11 @@ pub enum SurfaceParameter<T> {
     _Phantom(std::marker::PhantomData<T>),
 }
 
-// See the `traits::search_parameter` module for the rename rationale --
-// these aliases mirror the v1 deprecation so the v2 namespace stays in
-// sync.
-#[deprecated(since = "0.3.1", note = "renamed to `CurveParameter`.")]
-pub use self::CurveParameter as D1;
-#[deprecated(since = "0.3.1", note = "renamed to `SurfaceParameter`.")]
-pub use self::SurfaceParameter as D2;
-
 /// Scalar-generic parameter range.
 pub type ParameterRange<T> = (Bound<T>, Bound<T>);
 
 /// Hint for searching a 1D parameter.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchParameterHint1D<T> {
     /// A parameter near the answer.
     Parameter(T),
@@ -50,7 +42,7 @@ pub enum SearchParameterHint1D<T> {
 }
 
 /// Hint for searching a 2D parameter.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchParameterHint2D<T> {
     /// A parameter near the answer.
     Parameter(T, T),
@@ -60,13 +52,13 @@ pub enum SearchParameterHint2D<T> {
     None,
 }
 
-impl<T: NumericScalar> SearchParameterDimension for D1<T> {
+impl<T: NumericScalar> SearchParameterDimension for CurveParameter<T> {
     type Scalar = T;
     type Parameter = T;
     type Hint = SearchParameterHint1D<T>;
 }
 
-impl<T: NumericScalar> SearchParameterDimension for D2<T> {
+impl<T: NumericScalar> SearchParameterDimension for SurfaceParameter<T> {
     type Scalar = T;
     type Parameter = (T, T);
     type Hint = SearchParameterHint2D<T>;

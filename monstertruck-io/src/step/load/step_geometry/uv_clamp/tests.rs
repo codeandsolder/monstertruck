@@ -63,7 +63,7 @@ fn sphere_and_torus_ranges_are_measurements_not_placeholders() {
     assert_eq!(reported_range_bounds_the_surface(&sphere), (true, true));
 
     let torus = Surface::ElementarySurface(ElementarySurface::ToroidalSurface(Processor::new(
-        Torus::new(Point3::origin(), 3.0, 1.0),
+        Torus::new_unchecked(Point3::origin(), 3.0, 1.0),
     )));
     assert_eq!(reported_range_bounds_the_surface(&torus), (true, true));
 }

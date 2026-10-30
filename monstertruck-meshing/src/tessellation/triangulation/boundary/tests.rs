@@ -5,7 +5,8 @@
 
 use super::*;
 use monstertruck_geometry::prelude::{
-    Line, Matrix4, ParameterCurve, Plane, Point2, Point3, Processor, RevolutionSurface, Vector3,
+    Invertible, Line, Matrix4, ParameterCurve, ParametricSurface, Plane, Point2, Point3, Processor,
+    RevolutionSurface, Vector3,
 };
 use std::f64::consts::{FRAC_PI_2, TAU};
 
