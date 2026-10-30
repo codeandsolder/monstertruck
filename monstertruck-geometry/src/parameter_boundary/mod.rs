@@ -450,9 +450,9 @@ fn exact_nurbs_boundary_on_surface(
 }
 
 fn nearest_periodic_angle(value: f64, reference: f64) -> f64 {
-    value
-        + ((reference - value) / (2.0 * std::f64::consts::PI)).round()
-            * (2.0 * std::f64::consts::PI)
+    ((reference - value) / (2.0 * std::f64::consts::PI))
+        .round()
+        .mul_add(2.0 * std::f64::consts::PI, value)
 }
 
 fn exact_revolution_isoparametric_boundary_from_homogeneous<C>(
@@ -496,7 +496,7 @@ where
         (true, true) => {
             let nurbs = NurbsCurve::new(curve.clone());
             let (t0, t1) = nurbs.range_tuple();
-            let midpoint = nurbs.evaluate((t0 + t1) * 0.5);
+            let midpoint = nurbs.evaluate(f64::midpoint(t0, t1));
             surface
                 .search_parameter(midpoint, SearchParameterHint2D::None, 30)?
                 .1

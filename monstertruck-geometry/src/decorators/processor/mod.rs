@@ -726,7 +726,10 @@ where
 }
 
 #[inline]
-fn processor_surface_hint(hint: SearchParameterHint2D, orientation: bool) -> SearchParameterHint2D {
+const fn processor_surface_hint(
+    hint: SearchParameterHint2D,
+    orientation: bool,
+) -> SearchParameterHint2D {
     if orientation {
         return hint;
     }

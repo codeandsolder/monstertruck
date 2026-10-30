@@ -59,10 +59,10 @@ fn split_non_simple_boundaries<C, E: EdgeUseLike>(
                 // vertices (a legitimate digon), so endpoint pairs are not an
                 // identity key here.
                 let mut traversal_balance: HashMap<usize, isize> = HashMap::default();
-                sub_loop.iter().for_each(|edge_use| {
+                for edge_use in &sub_loop {
                     *traversal_balance.entry(edge_use.index()).or_insert(0) +=
                         if edge_use.orientation() { 1 } else { -1 };
-                });
+                }
                 let is_spike = traversal_balance.values().all(|balance| *balance == 0);
                 boundaries[wire_index] = outer;
                 if !is_spike {
@@ -245,7 +245,7 @@ enum SameDomainMergeFailure {
 }
 
 #[inline]
-fn oriented_edge_vertices<C, T>(
+const fn oriented_edge_vertices<C, T>(
     edges: &[CompressedEdge<C>],
     edge_use: &CompressedEdgeUse<T>,
 ) -> (usize, usize) {
@@ -255,6 +255,36 @@ fn oriented_edge_vertices<C, T>(
     } else {
         (back, front)
     }
+}
+
+fn shared_edges_are_removable(
+    edge_face_uses: &HashMap<usize, Vec<(usize, bool)>>,
+    uses0: &[(usize, bool)],
+    uses1: &[(usize, bool)],
+    shared: &std::collections::BTreeSet<usize>,
+    face_indices: (usize, usize),
+) -> bool {
+    let (face_index0, face_index1) = face_indices;
+    shared.iter().all(|&edge_index| {
+        let local0 = uses0
+            .iter()
+            .filter(|&&(index, _)| index == edge_index)
+            .collect::<Vec<_>>();
+        let local1 = uses1
+            .iter()
+            .filter(|&&(index, _)| index == edge_index)
+            .collect::<Vec<_>>();
+        edge_face_uses.get(&edge_index).is_some_and(|global| {
+            local0.len() == 1
+                && local1.len() == 1
+                && global.len() == 2
+                && global[0].0 != global[1].0
+                && local0[0].1 != local1[0].1
+                && global
+                    .iter()
+                    .all(|(face, _)| *face == face_index0 || *face == face_index1)
+        })
+    })
 }
 
 fn merged_same_domain_face<C, S: Clone, T, F>(
@@ -303,29 +333,14 @@ where
     // A removable internal edge must be used exactly once by each candidate
     // face, in opposite directions, and by no third face. Anything else is a
     // seam/non-manifold/keep-edge situation rather than a safe domain partition.
-    for &edge_index in &shared {
-        let local0 = uses0
-            .iter()
-            .filter(|&&(index, _)| index == edge_index)
-            .collect::<Vec<_>>();
-        let local1 = uses1
-            .iter()
-            .filter(|&&(index, _)| index == edge_index)
-            .collect::<Vec<_>>();
-        let Some(global) = edge_face_uses.get(&edge_index) else {
-            return Err(SameDomainMergeFailure::AmbiguousBoundary);
-        };
-        if local0.len() != 1
-            || local1.len() != 1
-            || global.len() != 2
-            || global[0].0 == global[1].0
-            || local0[0].1 == local1[0].1
-            || !global
-                .iter()
-                .all(|(face, _)| *face == face_index0 || *face == face_index1)
-        {
-            return Err(SameDomainMergeFailure::AmbiguousBoundary);
-        }
+    if !shared_edges_are_removable(
+        edge_face_uses,
+        &uses0,
+        &uses1,
+        &shared,
+        (face_index0, face_index1),
+    ) {
+        return Err(SameDomainMergeFailure::AmbiguousBoundary);
     }
 
     let reference = &face0.surface;
@@ -411,6 +426,10 @@ where
 ///
 /// The input shell itself must already be an extractable closed manifold. This
 /// function is a normalizer, not a substitute for structural healing.
+///
+/// # Errors
+///
+/// Returns an error if the input shell cannot be extracted or is not a valid solid boundary.
 pub fn unify_same_domain_compressed_trimmed_faces<P, C, S, T, D, R>(
     shell: &mut CompressedTrimmedShell<P, C, S, T>,
     same_domain: D,
@@ -506,7 +525,7 @@ where
             candidate.faces[face_index0] = merged;
             candidate.faces.remove(face_index1);
             let valid = TrimmedShell::try_from(candidate.clone())
-                .and_then(|runtime| runtime.check_solid_boundary().map(|_| runtime));
+                .and_then(|runtime| runtime.check_solid_boundary().map(|()| runtime));
             if valid.is_err() {
                 report.rejected_topology += 1;
                 continue;

@@ -59,10 +59,6 @@ fn union_with_thin_holed_profile_boss() -> Result<()> {
 }
 
 #[test]
-#[expect(
-    clippy::excessive_precision,
-    reason = "regression fixture preserves recovered STEP coordinates verbatim"
-)]
 fn union_with_step_redox_116_thin_holed_bezier_boss() -> Result<()> {
     let host_vertices_0 = builder::vertices([
         Point3::new(-20.32, 5.154083333333313, 3.88408333333333),

@@ -464,7 +464,7 @@ where
 /// ];
 /// // evals must be initialized by zero.
 /// let mut evals = [[Vector3::zero(); 3]; 3];
-/// multi_assert!(rational_derivatives(&ders, &mut evals).is_ok());
+/// assert!(multi_rational_derivatives(&ders, &mut evals).is_ok());
 ///
 /// // the projected surface: \bar{s}(u, v) = (u^2 v^2, u v^3, v)
 /// let ans: [[Vector3; 3]; 3] = [

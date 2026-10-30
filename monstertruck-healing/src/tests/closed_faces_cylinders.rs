@@ -17,10 +17,6 @@ fn test_split_closed_face_simple_cylinder_case() {
     enum Curve {
         Line(Line<Point3>),
         Arc(TrimmedCurve<Processor<UnitCircle<Point3>, Matrix4>>),
-        #[expect(
-            clippy::enum_variant_names,
-            reason = "test geometry enum mirrors production curve variant names"
-        )]
         ParameterCurve(ParameterCurve<Line<Point2>, Surface>),
     }
     impl From<ParameterCurve<Line<Point2>, Surface>> for Curve {
@@ -447,10 +443,6 @@ fn double_closed_boundary_cylinder() {
     enum Curve {
         Line(Line<Point3>),
         Arc(TrimmedCurve<Processor<UnitCircle<Point3>, Matrix4>>),
-        #[expect(
-            clippy::enum_variant_names,
-            reason = "test geometry enum mirrors production curve variant names"
-        )]
         ParameterCurve(ParameterCurve<ParamCurve2D, Surface>),
     }
     impl From<ParameterCurve<Line<Point2>, Surface>> for Curve {

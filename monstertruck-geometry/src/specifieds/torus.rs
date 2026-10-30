@@ -303,11 +303,13 @@ fn periodic_parameter_distance2((u, v): (f64, f64), hint: (f64, f64)) -> f64 {
     fn delta(a: f64, b: f64) -> f64 {
         let mut d = (a - b).rem_euclid(2.0 * PI);
         if d > PI {
-            d -= 2.0 * PI;
+            d = 2.0f64.mul_add(-PI, d);
         }
         d
     }
-    delta(u, hint.0).powi(2) + delta(v, hint.1).powi(2)
+    let du = delta(u, hint.0);
+    let dv = delta(v, hint.1);
+    du.mul_add(du, dv * dv)
 }
 
 fn choose_parameter_candidate(
@@ -322,11 +324,13 @@ fn choose_parameter_candidate(
         if distance_order != std::cmp::Ordering::Equal {
             return distance_order;
         }
-        match hint {
-            Some(hint) => periodic_parameter_distance2((a.0, a.1), hint)
-                .total_cmp(&periodic_parameter_distance2((b.0, b.1), hint)),
-            None => a.1.total_cmp(&b.1).then_with(|| a.0.total_cmp(&b.0)),
-        }
+        hint.map_or_else(
+            || a.1.total_cmp(&b.1).then_with(|| a.0.total_cmp(&b.0)),
+            |hint| {
+                periodic_parameter_distance2((a.0, a.1), hint)
+                    .total_cmp(&periodic_parameter_distance2((b.0, b.1), hint))
+            },
+        )
     });
     Some((candidates[0].0, candidates[0].1))
 }
@@ -364,11 +368,11 @@ impl Torus {
         let azimuth = if rho > eps {
             relative.y.atan2(relative.x).rem_euclid(2.0 * PI)
         } else {
-            hint.map(|h| h.0).unwrap_or(0.0)
+            hint.map_or(0.0, |h| h.0)
         };
         let mut candidates = Vec::with_capacity(v_candidates.len());
         for v0 in v_candidates {
-            let signed_radius = self.large_radius() + self.small_radius() * v0.cos();
+            let signed_radius = self.small_radius().mul_add(v0.cos(), self.large_radius());
             if (rho - signed_radius.abs()).abs() > eps.max(TOLERANCE * scale) {
                 continue;
             }
@@ -408,7 +412,7 @@ impl Torus {
         let azimuth = if rho > eps {
             relative.y.atan2(relative.x).rem_euclid(2.0 * PI)
         } else {
-            hint.map(|h| h.0).unwrap_or(0.0)
+            hint.map_or(0.0, |h| h.0)
         };
         let mut raw = Vec::<(f64, f64)>::new();
         for sign in [1.0_f64, -1.0] {
@@ -418,14 +422,14 @@ impl Torus {
             let norm = dx.hypot(dz);
             if norm > eps {
                 let v = dz.atan2(dx).rem_euclid(2.0 * PI);
-                let q = self.large_radius() + self.small_radius() * v.cos();
+                let q = self.small_radius().mul_add(v.cos(), self.large_radius());
                 if sign * q >= -eps {
                     let u = if sign > 0.0 { azimuth } else { azimuth + PI };
                     raw.push((u.rem_euclid(2.0 * PI), v));
                 }
             } else {
-                let v = hint.map(|h| h.1.rem_euclid(2.0 * PI)).unwrap_or(0.0);
-                let q = self.large_radius() + self.small_radius() * v.cos();
+                let v = hint.map_or(0.0, |h| h.1.rem_euclid(2.0 * PI));
+                let q = self.small_radius().mul_add(v.cos(), self.large_radius());
                 if sign * q >= -eps {
                     let u = if sign > 0.0 { azimuth } else { azimuth + PI };
                     raw.push((u.rem_euclid(2.0 * PI), v));
@@ -436,7 +440,7 @@ impl Torus {
             let c = (-self.large_radius() / self.small_radius()).clamp(-1.0, 1.0);
             let axis_v = c.acos();
             raw.push((azimuth, axis_v));
-            raw.push((azimuth, (2.0 * PI - axis_v).rem_euclid(2.0 * PI)));
+            raw.push((azimuth, 2.0f64.mul_add(PI, -axis_v).rem_euclid(2.0 * PI)));
         }
 
         let mut candidates = Vec::with_capacity(raw.len());

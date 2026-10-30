@@ -4,10 +4,6 @@ use monstertruck_meshing::prelude::*;
 use monstertruck_modeling::*;
 
 #[test]
-#[expect(
-    clippy::excessive_precision,
-    reason = "regression fixture preserves recovered STEP coordinates verbatim"
-)]
 fn step_redox_122_two_core_union_regression() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
         Matrix4::from_cols(
@@ -153,10 +149,6 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
 }
 
 #[test]
-#[expect(
-    clippy::excessive_precision,
-    reason = "regression fixture preserves recovered STEP coordinates verbatim"
-)]
 fn step_redox_38_three_core_union_regression() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
         Matrix4::from_cols(
@@ -411,10 +403,6 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
 }
 
 #[test]
-#[expect(
-    clippy::excessive_precision,
-    reason = "regression fixture preserves recovered STEP coordinates verbatim"
-)]
 fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
         Matrix4::from_cols(
@@ -529,10 +517,6 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
 }
 
 #[test]
-#[expect(
-    clippy::excessive_precision,
-    reason = "regression fixture preserves recovered STEP coordinates verbatim"
-)]
 fn step_redox_97_nine_core_union_regression() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
         Matrix4::from_cols(
