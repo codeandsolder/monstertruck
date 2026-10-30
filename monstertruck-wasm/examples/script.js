@@ -21,9 +21,9 @@ let vPositionLocation, vUVLocation, vNormalLocation;
 let uniLocation;
 
 const v = Truck.vertex(-0.5, -0.5, -0.5);
-const e = Truck.tsweep(v.upcast(), [1.0, 0.0, 0.0]);
-const f = Truck.tsweep(e, [0.0, 1.0, 0.0]);
-const abst = Truck.tsweep(f, [0.0, 0.0, 1.0]);
+const e = Truck.extrude(v.upcast(), [1.0, 0.0, 0.0]);
+const f = Truck.extrude(e, [0.0, 1.0, 0.0]);
+const abst = Truck.extrude(f, [0.0, 0.0, 1.0]);
 const solid = abst.into_solid();
 let polygon = solid.to_polygon(0.01);
 const object = polygon.to_buffer();

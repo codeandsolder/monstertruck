@@ -1,5 +1,5 @@
 use crate::{AbstractShape, Edge, Face, IntoWasm, Vertex, Wire, wasm_bindgen};
-use monstertruck_modeling::*;
+use monstertruck_modeling::{Point3, Rad, Vector3, builder};
 use wasm_bindgen::JsValue;
 
 fn js_error(message: impl AsRef<str>) -> JsValue { JsValue::from_str(message.as_ref()) }
@@ -20,10 +20,12 @@ fn vector3(values: &[f64], name: &str) -> std::result::Result<Vector3, JsValue> 
 
 /// Creates and returns a vertex by a three dimensional point.
 #[wasm_bindgen]
+#[must_use]
 pub fn vertex(x: f64, y: f64, z: f64) -> Vertex { builder::vertex(Point3::new(x, y, z)).into() }
 
 /// Returns a line from `vertex0` to `vertex1`.
 #[wasm_bindgen]
+#[must_use]
 pub fn line(vertex0: &Vertex, vertex1: &Vertex) -> Edge { builder::line(vertex0, vertex1).into() }
 
 /// Returns a circle arc from `vertex0` to `vertex1` via `transit`.
@@ -67,6 +69,7 @@ pub fn bezier(
 
 /// Returns a homotopic face from `edge0` to `edge1`.
 #[wasm_bindgen]
+#[must_use]
 pub fn homotopy(edge0: &Edge, edge1: &Edge) -> Face { builder::homotopy(edge0, edge1).into() }
 
 /// Try attaching a plane whose boundary is `wire`.

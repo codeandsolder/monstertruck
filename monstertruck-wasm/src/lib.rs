@@ -3,7 +3,6 @@
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
 
-use derive_more::{AsRef, Deref, DerefMut, From, Into};
 use wasm_bindgen::prelude::*;
 
 /// Monstertruck struct wrapped by wasm
