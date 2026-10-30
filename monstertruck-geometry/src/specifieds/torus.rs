@@ -4,10 +4,11 @@
 )]
 
 use super::{
-    Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, ParameterDivision1D,
-    ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D, Point2, Point3,
-    Result, SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
-    SurfaceParameterRange, TOLERANCE, Torus, UnitCircle, Vector2, Vector3, Zero,
+    Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, MetricSpace,
+    ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
+    ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
+    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, TOLERANCE, Torus, UnitCircle,
+    Vector2, Vector3, Zero,
 };
 use std::f64::consts::PI;
 
