@@ -4,7 +4,7 @@
 )]
 
 use super::{
-    Bound, Bounded, BoundingBox, BsplineCurve, BsplineSurface, Homogeneous, KnotVector, Origin,
+    Bound, Bounded, BoundingBox, BsplineCurve, BsplineSurface, Homogeneous, KnotVector,
     ParameterRange, Result, Tolerance,
 };
 use crate::errors::Error;

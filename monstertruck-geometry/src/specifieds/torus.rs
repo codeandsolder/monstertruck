@@ -4,11 +4,10 @@
 )]
 
 use super::{
-    Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, Origin,
-    ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
-    ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
-    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, TOLERANCE, Tolerance, Torus,
-    UnitCircle, Vector2, Vector3, Zero,
+    Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, ParameterDivision1D,
+    ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D, Point2, Point3,
+    Result, SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
+    SurfaceParameterRange, TOLERANCE, Torus, UnitCircle, Vector2, Vector3, Zero,
 };
 use std::f64::consts::PI;
 
@@ -379,7 +378,7 @@ impl Torus {
             };
             let u = nearest_periodic_angle(u0.rem_euclid(2.0 * PI), hint.map(|h| h.0));
             let v = nearest_periodic_angle(v0, hint.map(|h| h.1));
-            let distance2 = self.subs(u, v).distance2(point);
+            let distance2 = self.evaluate(u, v).distance2(point);
             if distance2 <= (TOLERANCE * scale).powi(2) {
                 candidates.push((u, v, distance2));
             }
@@ -443,7 +442,7 @@ impl Torus {
         for (u0, v0) in raw {
             let u = nearest_periodic_angle(u0, hint.map(|h| h.0));
             let v = nearest_periodic_angle(v0, hint.map(|h| h.1));
-            let distance2 = self.subs(u, v).distance2(point);
+            let distance2 = self.evaluate(u, v).distance2(point);
             if distance2.is_finite()
                 && !candidates.iter().any(|candidate: &(f64, f64, f64)| {
                     periodic_parameter_distance2((candidate.0, candidate.1), (u, v)) <= 1.0e-24

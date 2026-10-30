@@ -3,7 +3,7 @@
     reason = "compact symbols in basis-function recurrences follow the standard B-spline notation"
 )]
 
-use super::{BasisWindow, Deserialize, KnotVector, Origin, Result, Tolerance, Zero};
+use super::{BasisWindow, Deserialize, KnotVector, Result, Tolerance, Zero};
 use crate::errors::Error;
 use smallvec::SmallVec;
 use std::slice::SliceIndex;

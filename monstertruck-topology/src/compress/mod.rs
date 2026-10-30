@@ -1004,6 +1004,7 @@ fn compress_extract() {
     assert!(same_topology(shell0, &shell1));
 }
 
+#[cfg(test)]
 fn vmap_subroutin<P, Q>(
     v0: &Vertex<P>,
     v1: &Vertex<Q>,
@@ -1019,6 +1020,7 @@ fn vmap_subroutin<P, Q>(
     )
 }
 
+#[cfg(test)]
 fn emap_subroutin<P, Q, C, D>(
     edge0: &Edge<P, C>,
     edge1: &Edge<Q, D>,
@@ -1036,6 +1038,7 @@ fn emap_subroutin<P, Q, C, D>(
     )
 }
 
+#[cfg(test)]
 fn same_topology<P, C, S, Q, D, T>(one: &Shell<P, C, S>, other: &Shell<Q, D, T>) -> bool {
     let mut vmap = HashMap::<VertexId<P>, VertexId<Q>>::default();
     let mut emap = HashMap::<EdgeId<C>, EdgeId<D>>::default();
