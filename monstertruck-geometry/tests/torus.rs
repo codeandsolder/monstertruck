@@ -15,21 +15,21 @@ proptest! {
         let large_radius = 2.0f64.mul_add(small_radius, radius_diff);
         let torus = Torus::new_unchecked(Point3::origin(), large_radius, small_radius);
 
-        let p = torus.subs(u, v);
+        let p = torus.evaluate(u, v);
         let r = large_radius * Point3::new(f64::cos(u), f64::sin(u), 0.0);
         prop_assert_near!(p.distance(r), small_radius);
         prop_assert_near!(p.z, small_radius * f64::sin(v));
 
-        let uder0 = torus.uder(u, v);
-        let uder1 = (torus.subs(u + EPS, v) - torus.subs(u - EPS, v)) / (2.0 * EPS);
+        let uder0 = torus.derivative_u(u, v);
+        let uder1 = (torus.evaluate(u + EPS, v) - torus.evaluate(u - EPS, v)) / (2.0 * EPS);
         prop_assert!((uder0 - uder1).magnitude() < EPS, "{:?} {:?}", uder0, uder1);
 
-        let vder0 = torus.vder(u, v);
-        let vder1 = (torus.subs(u, v + EPS) - torus.subs(u, v - EPS)) / (2.0 * EPS);
+        let vder0 = torus.derivative_v(u, v);
+        let vder1 = (torus.evaluate(u, v + EPS) - torus.evaluate(u, v - EPS)) / (2.0 * EPS);
         prop_assert!((vder0 - vder1).magnitude() < EPS, "{:?} {:?}", vder0, vder1);
 
-        let uuder0 = torus.uuder(u, v);
-        let uuder1 = (torus.uder(u + EPS, v) - torus.uder(u - EPS, v)) / (2.0 * EPS);
+        let uuder0 = torus.derivative_uu(u, v);
+        let uuder1 = (torus.derivative_u(u + EPS, v) - torus.derivative_u(u - EPS, v)) / (2.0 * EPS);
         prop_assert!(
             (uuder0 - uuder1).magnitude() < EPS,
             "{:?} {:?}",
@@ -37,8 +37,8 @@ proptest! {
             uuder1
         );
 
-        let uvder0 = torus.uvder(u, v);
-        let uvder1 = (torus.vder(u + EPS, v) - torus.vder(u - EPS, v)) / (2.0 * EPS);
+        let uvder0 = torus.derivative_uv(u, v);
+        let uvder1 = (torus.derivative_v(u + EPS, v) - torus.derivative_v(u - EPS, v)) / (2.0 * EPS);
         prop_assert!(
             (uvder0 - uvder1).magnitude() < EPS,
             "{:?} {:?}",
@@ -46,8 +46,8 @@ proptest! {
             uvder1
         );
 
-        let vvder0 = torus.vvder(u, v);
-        let vvder1 = (torus.vder(u, v + EPS) - torus.vder(u, v - EPS)) / (2.0 * EPS);
+        let vvder0 = torus.derivative_vv(u, v);
+        let vvder1 = (torus.derivative_v(u, v + EPS) - torus.derivative_v(u, v - EPS)) / (2.0 * EPS);
         prop_assert!(
             (vvder0 - vvder1).magnitude() < EPS,
             "{:?} {:?}",
@@ -56,20 +56,20 @@ proptest! {
         );
 
         let n0 = torus.normal(u, v);
-        let n1 = torus.uder(u, v).cross(torus.vder(u, v)).normalize();
+        let n1 = torus.derivative_u(u, v).cross(torus.derivative_v(u, v)).normalize();
         prop_assert_near!(n0, n1);
 
         let (u0, v0) = torus.search_parameter(p, None, 1).unwrap();
         let (urange, vrange) = torus.parameter_range();
         prop_assert!(urange.contains(&u0) && vrange.contains(&v0), "{u0}, {v0}");
-        prop_assert_near!(torus.subs(u0, v0), p);
+        prop_assert_near!(torus.evaluate(u0, v0), p);
 
         let deform = deform * small_radius;
         let q = p + deform * n0;
         let (u0, v0) = torus.search_nearest_parameter(q, None, 1).unwrap();
         let (urange, vrange) = torus.parameter_range();
         prop_assert!(urange.contains(&u0) && vrange.contains(&v0), "{u0}, {v0}");
-        prop_assert_near!(torus.subs(u0, v0), p);
+        prop_assert_near!(torus.evaluate(u0, v0), p);
     }
 
     #[test]
@@ -85,12 +85,12 @@ proptest! {
 
         const EPS: f64 = 1.0e-4;
         let (der0, der1) = if u_derivate {
-            let der0 = torus.der_mn(m + 1, n, u, v);
-            let der1 = (torus.der_mn(m, n, u + EPS, v) - torus.der_mn(m, n, u - EPS, v)) / (2.0 * EPS);
+            let der0 = torus.derivative_mn(m + 1, n, u, v);
+            let der1 = (torus.derivative_mn(m, n, u + EPS, v) - torus.derivative_mn(m, n, u - EPS, v)) / (2.0 * EPS);
             (der0, der1)
         } else {
-            let der0 = torus.der_mn(m, n + 1, u, v);
-            let der1 = (torus.der_mn(m, n, u, v + EPS) - torus.der_mn(m, n, u, v - EPS)) / (2.0 * EPS);
+            let der0 = torus.derivative_mn(m, n + 1, u, v);
+            let der1 = (torus.derivative_mn(m, n, u, v + EPS) - torus.derivative_mn(m, n, u, v - EPS)) / (2.0 * EPS);
             (der0, der1)
         };
         prop_assert!((der0 - der1).magnitude() < 0.01 * der0.magnitude());
@@ -107,7 +107,7 @@ proptest! {
 /// The tempting conclusion is that the regime is refused because the analytic
 /// rational-NURBS conversion would be inexact there. It would not: with the
 /// builder's spindle guard bypassed, the emitted control net measures exact to a
-/// relative 8e-16..9e-16 against `Torus::subs` over the whole domain, with the
+/// relative 8e-16..9e-16 against `Torus::evaluate` over the whole domain, with the
 /// control hull still a superset of the analytic bbox.
 ///
 /// What actually breaks is the INVERSE map, which is what places a face's trims:
@@ -157,13 +157,13 @@ fn spindle_torus_parameter_recovery_is_unsound_while_ring_and_horn_are_exact() {
             let u = 2.0 * PI * (i as f64 + 0.37) / N as f64;
             for j in 0..N {
                 let v = 2.0 * PI * (j as f64 + 0.21) / N as f64;
-                let point = torus.subs(u, v);
+                let point = torus.evaluate(u, v);
                 total += 1;
                 if torus.search_parameter(point, None, 100).is_some() {
                     exact_recovered += 1;
                 }
                 if let Some((ru, rv)) = torus.search_nearest_parameter(point, None, 100)
-                    && torus.subs(ru, rv).distance(point) > tol
+                    && torus.evaluate(ru, rv).distance(point) > tol
                 {
                     nearest_landed_elsewhere += 1;
                 }
@@ -212,7 +212,7 @@ fn a_seam_point_takes_the_periodic_spelling_its_hint_asks_for() {
     let torus = Torus::new_unchecked(Point3::new(1.0, -2.0, 3.0), 7.0, 2.0);
     // Straddle the seam so the answers must NOT all collapse to one end.
     for v in [0.0, 0.7, PI, 5.0] {
-        let seam = torus.subs(0.0, v);
+        let seam = torus.evaluate(0.0, v);
         let below = torus
             .search_parameter(seam, Some((0.05, v)), 100)
             .expect("a point on the surface must be recovered");
@@ -231,7 +231,7 @@ fn a_seam_point_takes_the_periodic_spelling_its_hint_asks_for() {
         // makes the re-spelling exact rather than a tolerance trade.
         for (u, v) in [below, above] {
             assert!(
-                torus.subs(u, v).distance(seam) < 1.0e-9,
+                torus.evaluate(u, v).distance(seam) < 1.0e-9,
                 "re-spelled ({u}, {v}) must still evaluate to the seam point",
             );
         }
@@ -261,7 +261,7 @@ fn unhinted_search_recovers_point_in_declared_period() {
     let torus = Torus::new_unchecked(Point3::origin(), 7.0, 2.0);
     for u in [0.0, 0.3, 1.9, PI, 4.4, 2.0f64.mul_add(PI, -0.3)] {
         for v in [0.0, 0.4, 2.2, PI, 5.9] {
-            let point = torus.subs(u, v);
+            let point = torus.evaluate(u, v);
             let (recovered_u, recovered_v) = torus
                 .search_parameter(point, None, 100)
                 .expect("an on-surface point must be recovered");
@@ -273,7 +273,7 @@ fn unhinted_search_recovers_point_in_declared_period() {
                  ({recovered_u}, {recovered_v})",
             );
             assert!(
-                torus.subs(recovered_u, recovered_v).distance(point) < 1.0e-9,
+                torus.evaluate(recovered_u, recovered_v).distance(point) < 1.0e-9,
                 "unhinted ({u}, {v}) did not reproduce its point",
             );
         }

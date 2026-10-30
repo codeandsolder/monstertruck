@@ -60,12 +60,12 @@ fn cylinder() -> NurbsSurface<Vector4> {
 fn assert_projects_to_start(trim: &ParameterCurve<BsplineCurve<Point2>, NurbsSurface<Vector4>>) {
     let (start, end) = trim.range_tuple();
     assert!(
-        trim.subs(start).near(&trim.subs(end)),
+        trim.evaluate(start).near(&trim.evaluate(end)),
         "the fixture must be closed in space"
     );
     [start, end].into_iter().for_each(|at| {
         let (parameter, uv) = trim
-            .project_boundary_point(trim.subs(at), None)
+            .project_boundary_point(trim.evaluate(at), None)
             .expect("the start of the trim projects onto it");
         assert!(
             (parameter - start).abs() < (parameter - end).abs(),

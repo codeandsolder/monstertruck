@@ -5,7 +5,7 @@ use super::{
 impl<P: ControlPoint<f64>> BsplineSurface<P> {
     /// Returns the closure of substitution.
     #[inline]
-    pub fn closure(&self) -> impl Fn(f64, f64) -> P + '_ { move |u, v| self.subs(u, v) }
+    pub fn closure(&self) -> impl Fn(f64, f64) -> P + '_ { move |u, v| self.evaluate(u, v) }
 
     /// Calculate derived B-spline surface by the first parameter `u`.
     /// # Examples
@@ -26,7 +26,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     ///     for j in 0..=N {
     ///         let v = (j as f64) / (N as f64);
     ///         assert_near2!(
-    ///             uderivation.subs(u, v),
+    ///             uderivation.evaluate(u, v),
     ///             Vector2::new(0.0, 4.0 * v * (1.0 - v) + 1.0),
     ///         );
     ///     }
@@ -75,7 +75,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     ///     for j in 0..=N {
     ///         let v = (j as f64) / (N as f64);
     ///         assert_near2!(
-    ///             vderivation.subs(u, v),
+    ///             vderivation.evaluate(u, v),
     ///             Vector2::new(1.0, -2.0 * (2.0 * u - 1.0) * (2.0 * v - 1.0)),
     ///         );
     ///     }

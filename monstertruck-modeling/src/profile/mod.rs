@@ -23,7 +23,7 @@ where C: ParametricCurve3D + BoundedCurve + Clone {
             let p0 = edge.front().point();
             let curve = edge.curve();
             let (t0, t1) = curve.range_tuple();
-            let p1 = curve.subs(f64::midpoint(t0, t1));
+            let p1 = curve.evaluate(f64::midpoint(t0, t1));
             [p0, p1]
         })
         .map(|p| Point2::new(p.to_vec().dot(u_axis), p.to_vec().dot(v_axis)))
@@ -89,7 +89,7 @@ where C: ParametricCurve3D + BoundedCurve + Clone {
                 let p0 = edge.front().point();
                 let curve = edge.curve();
                 let (t0, t1) = curve.range_tuple();
-                let p1 = curve.subs(f64::midpoint(t0, t1));
+                let p1 = curve.evaluate(f64::midpoint(t0, t1));
                 [p0, p1]
             })
         })

@@ -4,8 +4,8 @@
 )]
 
 use super::{
-    Bound, BoundedCurve, BoundedSurface, BsplineCurve, D2, ElementWise, EuclideanSpace,
-    IncludeCurve, InnerSpace, MetricSpace, NurbsCurve, Origin, ParameterDivision2D, ParameterRange,
+    Bound, BoundedCurve, BoundedSurface, BsplineCurve, ElementWise, EuclideanSpace, IncludeCurve,
+    InnerSpace, MetricSpace, NurbsCurve, Origin, ParameterDivision2D, ParameterRange,
     ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, SearchNearestParameter,
     SearchParameter, SearchParameterHint2D, Sphere, SurfaceParameter, SurfaceParameterRange,
     TOLERANCE, Tolerance, Vector3, Vector4, Zero, nonpositive_tolerance,
@@ -172,7 +172,7 @@ impl v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for Sphere {
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchNearestParameter::<D2>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<SurfaceParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
@@ -185,7 +185,7 @@ impl v2::SearchParameter<v2::SurfaceParameter<f64>> for Sphere {
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchParameter::<D2>::search_parameter(self, pt, None, trials)
+        SearchParameter::<SurfaceParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
@@ -206,7 +206,7 @@ impl IncludeCurve<NurbsCurve<Vector4>> for Sphere {
             .all(move |(window, i)| {
                 let t = crate::usize_to_f64(i) / crate::usize_to_f64(degree);
                 let t = f64::mul_add(window[1], t, window[0] * (1.0 - t));
-                self.include(curve.subs(t))
+                self.include(curve.evaluate(t))
             })
     }
 }

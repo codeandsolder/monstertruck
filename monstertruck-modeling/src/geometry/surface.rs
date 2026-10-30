@@ -112,7 +112,11 @@ where S: SearchParameter<SurfaceParameter, Point = Point3> {
             let ratio = crate::usize_to_f64(index) / crate::usize_to_f64(degree);
             let parameter = window[1].mul_add(ratio, window[0] * (1.0 - ratio));
             surface
-                .search_parameter(lifted.subs(parameter), None, ANALYTIC_INCLUDE_CURVE_TRIALS)
+                .search_parameter(
+                    lifted.evaluate(parameter),
+                    None,
+                    ANALYTIC_INCLUDE_CURVE_TRIALS,
+                )
                 .is_some()
         })
     })

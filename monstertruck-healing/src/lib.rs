@@ -66,7 +66,7 @@ fn same_surface<S: ParametricSurface3D>(lhs: &S, rhs: &S) -> bool {
     sample_params(lhs)
         .into_iter()
         .zip(sample_params(rhs))
-        .all(|((lu, lv), (ru, rv))| lhs.subs(lu, lv).near(&rhs.subs(ru, rv)))
+        .all(|((lu, lv), (ru, rv))| lhs.evaluate(lu, lv).near(&rhs.evaluate(ru, rv)))
 }
 
 fn preserved_trim_for_same_edge<C, S, T>(
@@ -123,8 +123,8 @@ where
     let t_front = trim_curve.search_nearest_parameter(segment_front, None, 100)?;
     let t_back = trim_curve.search_nearest_parameter(segment_back, Some(t_front), 100)?;
     let distance_ok = |lhs: Point3, rhs: Point3| lhs.distance2(rhs) <= tol * tol;
-    if !distance_ok(trim_curve.subs(t_front), segment_front)
-        || !distance_ok(trim_curve.subs(t_back), segment_back)
+    if !distance_ok(trim_curve.evaluate(t_front), segment_front)
+        || !distance_ok(trim_curve.evaluate(t_back), segment_back)
     {
         return None;
     }
@@ -562,10 +562,10 @@ where
     let linear_trim = ParameterCurve::new(Line(uv0, uv1), surface.clone());
     let (t0, t1) = edge.curve.range_tuple();
     let quarters_ok = [0.25, 0.5, 0.75].into_iter().all(|alpha| {
-        let uv = linear_trim.subs(alpha);
+        let uv = linear_trim.evaluate(alpha);
         surface
-            .subs(uv.x, uv.y)
-            .near(&edge.curve.subs(t0 + (t1 - t0) * alpha))
+            .evaluate(uv.x, uv.y)
+            .near(&edge.curve.evaluate(t0 + (t1 - t0) * alpha))
     });
     if !quarters_ok {
         if debug_reattach {

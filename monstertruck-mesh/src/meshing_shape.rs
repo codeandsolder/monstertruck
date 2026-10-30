@@ -23,7 +23,7 @@ fn eval_row(
     u: f64,
     div1: &[f64],
 ) -> (Vec<Point3>, Vec<Vector3>) {
-    let positions = div1.iter().map(|v| surface.subs(u, *v)).collect();
+    let positions = div1.iter().map(|v| surface.evaluate(u, *v)).collect();
     let normals = div1.iter().map(|v| surface.normal(u, *v)).collect();
     (positions, normals)
 }

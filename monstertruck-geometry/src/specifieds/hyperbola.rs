@@ -4,7 +4,7 @@
 )]
 
 use super::{
-    CurveParameter, D1, EuclideanSpace, HashGen, MetricSpace, Origin, ParameterDivision1D,
+    CurveParameter, EuclideanSpace, HashGen, MetricSpace, Origin, ParameterDivision1D,
     ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
     SearchParameterHint1D, TOLERANCE, UnitHyperbola, Vector2, Vector3, algo, solver,
 };
@@ -97,7 +97,9 @@ macro_rules! impl_v2_hyperbola_search {
                 _: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchNearestParameter::<D1>::search_nearest_parameter(self, pt, None, 0)
+                SearchNearestParameter::<CurveParameter>::search_nearest_parameter(
+                    self, pt, None, 0,
+                )
             }
         }
 
@@ -110,7 +112,7 @@ macro_rules! impl_v2_hyperbola_search {
                 _: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchParameter::<D1>::search_parameter(self, pt, None, 0)
+                SearchParameter::<CurveParameter>::search_parameter(self, pt, None, 0)
             }
         }
     };
@@ -146,8 +148,8 @@ impl SearchNearestParameter<CurveParameter> for UnitHyperbola<Point2> {
             .into_iter()
             .filter_map(|z| if z.im.so_small() { Some(z.re) } else { None })
             .min_by(|s, t| {
-                p.distance2(self.subs(*s))
-                    .total_cmp(&p.distance2(self.subs(*t)))
+                p.distance2(self.evaluate(*s))
+                    .total_cmp(&p.distance2(self.evaluate(*t)))
             })?;
         Some(f64::asinh(y))
     }
@@ -174,7 +176,7 @@ impl SearchParameter<CurveParameter> for UnitHyperbola<Point2> {
         _: usize,
     ) -> Option<f64> {
         // Verify that p lies on the unit hyperbola (cosh(t), sinh(t)).
-        // The naive check `p.near(&self.subs(asinh(p.y)))` fails for large
+        // The naive check `p.near(&self.evaluate(asinh(p.y)))` fails for large
         // |t| because the absolute difference between two independently
         // computed cosh values can vastly exceed the fixed tolerance, even
         // when the relative error is at machine-epsilon level.

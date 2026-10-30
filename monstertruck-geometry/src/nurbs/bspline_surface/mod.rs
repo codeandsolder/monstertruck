@@ -5,7 +5,7 @@
 
 use super::{
     BasisWindow, Bound, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve,
-    BsplineSurface, Concat, ControlPoint, CurveCollector, D2, Deserialize, Error, EuclideanSpace,
+    BsplineSurface, Concat, ControlPoint, CurveCollector, Deserialize, Error, EuclideanSpace,
     HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace, Invertible, KnotVector,
     Matrix2, Matrix3, Matrix4, MetricSpace, NurbsCurve, Origin, PRESEARCH_DIVISION,
     ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface, ParametricSurface3D,
@@ -78,7 +78,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
                     for j1 in 0..division1 {
                         let v = self.knot_vecs.1[i1 - 1]
                             + delta1 * crate::usize_to_f64(j1) / crate::usize_to_f64(division1);
-                        if !ord(&self.subs(u, v), &other.subs(u, v)) {
+                        if !ord(&self.evaluate(u, v), &other.evaluate(u, v)) {
                             return false;
                         }
                     }
@@ -123,7 +123,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     /// let surface = BsplineSurface::least_square(knots, (2, 2), &points).unwrap();
     ///
     /// for ((u, v), p) in &points {
-    ///     assert!(surface.subs(*u, *v).distance(*p) < 0.05);
+    ///     assert!(surface.evaluate(*u, *v).distance(*p) < 0.05);
     /// }
     /// ```
     pub fn least_square(

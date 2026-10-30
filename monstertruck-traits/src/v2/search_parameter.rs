@@ -52,13 +52,13 @@ pub enum SearchParameterHint2D<T> {
     None,
 }
 
-impl<T: NumericScalar> SearchParameterDimension for D1<T> {
+impl<T: NumericScalar> SearchParameterDimension for CurveParameter<T> {
     type Scalar = T;
     type Parameter = T;
     type Hint = SearchParameterHint1D<T>;
 }
 
-impl<T: NumericScalar> SearchParameterDimension for D2<T> {
+impl<T: NumericScalar> SearchParameterDimension for SurfaceParameter<T> {
     type Scalar = T;
     type Parameter = (T, T);
     type Hint = SearchParameterHint2D<T>;

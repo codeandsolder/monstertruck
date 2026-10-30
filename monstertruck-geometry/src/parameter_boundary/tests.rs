@@ -13,8 +13,16 @@ fn plane_line_pcurve_converts_to_bspline_curve() {
     let curve = (BsplineCurve::<Point3>::try_from(ParameterCurve::new(line, plane)))
         .expect("plane line parameter curve should convert to a `BsplineCurve`.");
 
-    assert!(curve.subs(0.0).near(&plane.subs(line.0.x, line.0.y)));
-    assert!(curve.subs(1.0).near(&plane.subs(line.1.x, line.1.y)));
+    assert!(
+        curve
+            .evaluate(0.0)
+            .near(&plane.evaluate(line.0.x, line.0.y))
+    );
+    assert!(
+        curve
+            .evaluate(1.0)
+            .near(&plane.evaluate(line.1.x, line.1.y))
+    );
     assert_eq!(curve.control_points().len(), 2);
 }
 
@@ -51,7 +59,7 @@ fn revolution_surface_exact_boundary_recovers_iso_angle_nurbs_with_fixed_endpoin
     let angle = FRAC_PI_4;
     let curve = NurbsCurve::<Vector4>::from(BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
-        vec![surface.subs(0.0, angle), surface.subs(1.0, angle)],
+        vec![surface.evaluate(0.0, angle), surface.evaluate(1.0, angle)],
     ));
 
     let boundary = (curve.exact_parameter_boundary_2d(&surface))
@@ -88,7 +96,7 @@ fn nurbs_extrusion_exact_boundary_recovers_generator_line() {
     let u = 0.5;
     let v0 = 0.25;
     let v1 = 0.75;
-    let curve = Line(surface.subs(u, v0), surface.subs(u, v1));
+    let curve = Line(surface.evaluate(u, v0), surface.evaluate(u, v1));
 
     assert!((curve.1 - curve.0).near(&Vector3::new(0.0, 0.0, vector.z * (v1 - v0))));
 

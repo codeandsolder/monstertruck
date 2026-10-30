@@ -4,12 +4,12 @@
 )]
 
 use super::{
-    Bound, BoundedCurve, BoundedSurface, D2, EuclideanSpace, ExtrusionSurface, InnerSpace,
-    Invertible, Line, Matrix4, MetricSpace, PRESEARCH_DIVISION, ParameterDivision1D,
-    ParameterDivision2D, ParameterRange, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
-    Plane, Point3, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
-    SurfaceParameter, SurfaceParameterRange, ToSameGeometry, Tolerance, Transform, Transformed,
-    Vector3, VectorSpace, Zero, algo,
+    Bound, BoundedCurve, BoundedSurface, EuclideanSpace, ExtrusionSurface, InnerSpace, Invertible,
+    Line, Matrix4, MetricSpace, PRESEARCH_DIVISION, ParameterDivision1D, ParameterDivision2D,
+    ParameterRange, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Plane, Point3,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
+    SurfaceParameterRange, ToSameGeometry, Tolerance, Transform, Transformed, Vector3, VectorSpace,
+    Zero, algo,
 };
 #[cfg(test)]
 use crate::prelude::assert_near;
@@ -216,7 +216,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchParameter::<D2>::search_parameter(self, pt, None, trials)
+        SearchParameter::<SurfaceParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
@@ -231,7 +231,7 @@ impl<C: ParametricCurve3D + BoundedCurve> v2::SearchNearestParameter<v2::Surface
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchNearestParameter::<D2>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<SurfaceParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 

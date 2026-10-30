@@ -71,7 +71,7 @@ fn interpolation_passes_through_every_point() {
     // so a failure says how far off the solver is and not merely that it is.
     let worst = points
         .iter()
-        .map(|&(t, p)| curve.subs(t).distance(p))
+        .map(|&(t, p)| curve.evaluate(t).distance(p))
         .fold(0.0f64, f64::max);
     assert!(
         worst < 1.0e-12,
@@ -88,7 +88,7 @@ fn least_square_recovers_an_exactly_representable_curve() {
     let samples = (0..40)
         .map(|i| {
             let t = f64::from(i) / 39.0;
-            (t, original.subs(t))
+            (t, original.evaluate(t))
         })
         .collect::<Vec<_>>();
 
@@ -113,7 +113,7 @@ fn least_square_fits_perturbed_samples() {
             let t = f64::from(i) / 59.0;
             // Deterministic, mean-ish-zero wobble; no RNG, so this cannot flake.
             let wobble = 0.05 * f64::sin(37.0 * t) * f64::cos(11.0 * t);
-            let p = original.subs(t);
+            let p = original.evaluate(t);
             (t, Point3::new(p.x + wobble, p.y - wobble, p.z + wobble))
         })
         .collect::<Vec<_>>();
@@ -122,7 +122,7 @@ fn least_square_fits_perturbed_samples() {
 
     let worst = samples
         .iter()
-        .map(|&(t, p)| fit.subs(t).distance(p))
+        .map(|&(t, p)| fit.evaluate(t).distance(p))
         .fold(0.0f64, f64::max);
     assert!(worst < 0.1, "fit strayed from its samples by {worst:.3e}");
 }
@@ -159,7 +159,7 @@ fn least_square_refuses_when_a_span_carries_no_sample() {
     let samples = (0..30)
         .map(|i| {
             let t = 0.3 * f64::from(i) / 29.0;
-            (t, original.subs(t))
+            (t, original.evaluate(t))
         })
         .collect::<Vec<_>>();
 
@@ -193,7 +193,7 @@ fn surface_least_square_recovers_an_exactly_representable_saddle() {
 
     let worst = points
         .iter()
-        .map(|((u, v), p)| surface.subs(*u, *v).distance(*p))
+        .map(|((u, v), p)| surface.evaluate(*u, *v).distance(*p))
         .fold(0.0f64, f64::max);
     assert!(
         worst < 1.0e-12,
@@ -224,7 +224,7 @@ fn interpolation_holds_across_degrees_and_a_dense_bezier_basis() {
         let curve = (BsplineCurve::try_interpolate(knot_vec, pts.clone())).unwrap();
         let worst = pts
             .iter()
-            .map(|&(t, p)| curve.subs(t).distance(p))
+            .map(|&(t, p)| curve.evaluate(t).distance(p))
             .fold(0.0f64, f64::max);
         assert!(
             worst < 1.0e-13,
@@ -244,7 +244,7 @@ fn interpolation_holds_across_degrees_and_a_dense_bezier_basis() {
         let curve = (BsplineCurve::try_interpolate(knot_vec, pts.clone())).unwrap();
         let worst = pts
             .iter()
-            .map(|&(t, p)| curve.subs(t).distance(p))
+            .map(|&(t, p)| curve.evaluate(t).distance(p))
             .fold(0.0f64, f64::max);
         assert!(
             worst < 1.0e-13,

@@ -144,8 +144,8 @@ impl TryIntoHomogeneousBsplineCurve for Line<Point3> {
 
     /// A line is defined for every real parameter, so its restriction to any
     /// interval is the SAME line, exactly. The emitted degree-1 Bezier carries
-    /// the requested interval as its knot vector, so `subs(t)` still equals
-    /// `Line::subs(t)` for every `t` in it -- the parameterization is preserved,
+    /// the requested interval as its knot vector, so `evaluate(t)` still equals
+    /// `Line::evaluate(t)` for every `t` in it -- the parameterization is preserved,
     /// not renormalized.
     #[inline]
     fn try_into_homogeneous_bspline_curve_over(
@@ -449,7 +449,7 @@ impl<C> SupportsExactPatchDomains for RevolutionSurface<C> {
 // STEP trims and re-derive boundary parameters by search, so this matches --
 // and is no worse than -- revolve-built equivalents. The tensor product
 // separates exactly, so evaluating the emitted surface reproduces the analytic
-// `subs` at the corresponding angles to machine precision (see this module's
+// `evaluate` at the corresponding angles to machine precision (see this module's
 // tests).
 // ---------------------------------------------------------------------------
 
@@ -487,7 +487,7 @@ impl TryIntoHomogeneousBsplineSurface for Sphere {
             (1.0, -1.0, w),
             (0.0, -1.0, 1.0),
         ];
-        // u = colatitude (meridian), v = longitude (matches `Sphere::subs`).
+        // u = colatitude (meridian), v = longitude (matches `Sphere::evaluate`).
         let control_points: Vec<Vec<Vector4>> = meridian
             .iter()
             .map(|&(radial_unit, axis_unit, meridian_weight)| {
@@ -552,7 +552,7 @@ impl TryIntoHomogeneousBsplineSurface for Torus {
             .iter()
             .map(|point| (point.to_point(), point.weight()))
             .collect();
-        // u = ring/major angle, v = tube/minor angle (matches `Torus::subs`).
+        // u = ring/major angle, v = tube/minor angle (matches `Torus::evaluate`).
         let control_points: Vec<Vec<Vector4>> = polygon
             .iter()
             .map(|&(ring, ring_weight)| {

@@ -9,8 +9,6 @@ type Tuple = (f64, f64);
 /// As `(u, v)` varies over the parameter domain, the returned points sweep out the surface.
 /// Partial derivatives give tangent directions (`derivative_u`, `derivative_v`) and curvature
 /// information (`derivative_uu`, `derivative_uv`, `derivative_vv`) at any parameter pair.
-/// New code should prefer `evaluate` and `derivative*` methods.
-/// Legacy `subs` and `*der` methods are kept for compatibility.
 pub trait ParametricSurface: Clone {
     /// The point type the surface maps into (e.g. `Point3`).
     type Point;
@@ -37,34 +35,6 @@ pub trait ParametricSurface: Clone {
             (0..=max_order - m).for_each(|n| derivs[m][n] = self.derivative_mn(m, n, u, v));
         });
         derivs
-    }
-    /// Deprecated: use [`evaluate`](ParametricSurface::evaluate).
-    #[inline]
-    fn subs(&self, u: f64, v: f64) -> Self::Point { self.evaluate(u, v) }
-    /// Deprecated: use [`derivative_u`](ParametricSurface::derivative_u).
-    #[inline]
-    fn uder(&self, u: f64, v: f64) -> Self::Vector { self.derivative_u(u, v) }
-    /// Deprecated: use [`derivative_v`](ParametricSurface::derivative_v).
-    #[inline]
-    fn vder(&self, u: f64, v: f64) -> Self::Vector { self.derivative_v(u, v) }
-    /// Deprecated: use [`derivative_uu`](ParametricSurface::derivative_uu).
-    #[inline]
-    fn uuder(&self, u: f64, v: f64) -> Self::Vector { self.derivative_uu(u, v) }
-    /// Deprecated: use [`derivative_uv`](ParametricSurface::derivative_uv).
-    #[inline]
-    fn uvder(&self, u: f64, v: f64) -> Self::Vector { self.derivative_uv(u, v) }
-    /// Deprecated: use [`derivative_vv`](ParametricSurface::derivative_vv).
-    #[inline]
-    fn vvder(&self, u: f64, v: f64) -> Self::Vector { self.derivative_vv(u, v) }
-    /// Deprecated: use [`derivative_mn`](ParametricSurface::derivative_mn).
-    #[inline]
-    fn der_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
-        self.derivative_mn(m, n, u, v)
-    }
-    /// Deprecated: use [`derivatives`](ParametricSurface::derivatives).
-    #[inline]
-    fn ders(&self, max_order: usize, u: f64, v: f64) -> SurfaceDerivatives<Self::Vector> {
-        self.derivatives(max_order, u, v)
     }
     /// The range of the parameter of the surface.
     #[inline]

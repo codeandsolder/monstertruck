@@ -31,7 +31,7 @@ fn radius_error_bounds() {
     // Points should be on that plane (dy≈0) at distance radius from face2 (dx≈radius).
     for j in 0..=n {
         let v = j as f64 / n as f64;
-        let pt = fillet_surface.subs(0.0, v);
+        let pt = fillet_surface.evaluate(0.0, v);
         let dy = pt.y.abs();
         let dx = (pt.x - 1.0).abs();
         assert!(dy < tol, "u=0 contact not on y=0 plane: dy={dy:.6}");
@@ -45,7 +45,7 @@ fn radius_error_bounds() {
     // Points should be on that plane (dx≈0) at distance radius from face1 (dy≈radius).
     for j in 0..=n {
         let v = j as f64 / n as f64;
-        let pt = fillet_surface.subs(1.0, v);
+        let pt = fillet_surface.evaluate(1.0, v);
         let dx = (pt.x - 1.0).abs();
         let dy = pt.y.abs();
         assert!(dx < tol, "u=1 contact not on x=1 plane: dx={dx:.6}");
@@ -60,7 +60,7 @@ fn radius_error_bounds() {
         for j in 0..=n {
             let u = i as f64 / n as f64;
             let v = j as f64 / n as f64;
-            let pt = fillet_surface.subs(u, v);
+            let pt = fillet_surface.evaluate(u, v);
             let dx = (pt.x - 1.0).abs();
             let dy = pt.y.abs();
             assert!(

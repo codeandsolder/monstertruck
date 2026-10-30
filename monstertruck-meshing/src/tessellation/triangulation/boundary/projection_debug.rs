@@ -75,7 +75,7 @@ fn fmt_option_f64(value: Option<f64>) -> String {
 }
 
 /// Brute-force nearest point on the surface's DECLARED domain, by a coarse grid
-/// plus a shrinking local sweep. Uses only `subs`, so it needs no solver trait
+/// plus a shrinking local sweep. Uses only `evaluate`, so it needs no solver trait
 /// and answers the one question the checked solver's `None` hides: is the point
 /// on the surface at all, and if so where?
 ///
@@ -94,7 +94,7 @@ fn sampled_nearest<S: PreMeshableSurface>(
         let u = u0 + (u1 - u0) * crate::count_as_f64(i) / crate::count_as_f64(GRID);
         for j in 0..=GRID {
             let v = v0 + (v1 - v0) * crate::count_as_f64(j) / crate::count_as_f64(GRID);
-            let d = surface.subs(u, v).distance2(point);
+            let d = surface.evaluate(u, v).distance2(point);
             if d < best.1 {
                 best = ((u, v), d);
             }
@@ -108,7 +108,7 @@ fn sampled_nearest<S: PreMeshableSurface>(
             for j in -2i32..=2 {
                 let u = (bu + du * f64::from(i)).clamp(u0, u1);
                 let v = (bv + dv * f64::from(j)).clamp(v0, v1);
-                let d = surface.subs(u, v).distance2(point);
+                let d = surface.evaluate(u, v).distance2(point);
                 if d < best.1 {
                     best = ((u, v), d);
                 }
@@ -152,7 +152,7 @@ pub(super) fn report_projection_failure<S: PreMeshableSurface>(
     // surface is there -- a pole shows a vanishing derivative.
     let (residual, du, dv) = previous.map_or((f64::NAN, f64::NAN, f64::NAN), |(u, v)| {
         (
-            surface.subs(u, v).distance(point),
+            surface.evaluate(u, v).distance(point),
             surface.derivative_u(u, v).magnitude(),
             surface.derivative_v(u, v).magnitude(),
         )
@@ -205,7 +205,7 @@ pub(super) fn report_projection_failure<S: PreMeshableSurface>(
         });
         match algo::surface::search_nearest_parameter(surface, point, seed, 100) {
             Some((u, v)) => {
-                let d = surface.subs(u, v).distance(point);
+                let d = surface.evaluate(u, v).distance(point);
                 format!("uv=({u:.9},{v:.9}) dist={d:.9}")
             }
             None => "diverged".to_string(),

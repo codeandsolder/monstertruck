@@ -886,9 +886,9 @@ fn test_t_mesh_clone() {
     );
 }
 
-/// Creates a plane of the form `x + y = z` and solves it using `subs`.
+/// Creates a plane of the form `x + y = z` and solves it using `try_evaluate`.
 #[test]
-fn test_t_mesh_subs() {
+fn test_t_mesh_evaluate() {
     const C: usize = 100;
     let points = [
         Point3::from((0.0, 0.0, 0.0)),
@@ -904,11 +904,11 @@ fn test_t_mesh_subs() {
         let s = s as f64 / C as f64;
         for t in 0..C {
             let t = t as f64 / C as f64;
-            let p = (mesh.subs(s, t)).expect("Solvable T-mesh with s and t within bounds");
+            let p = (mesh.try_evaluate(s, t)).expect("Solvable T-mesh with s and t within bounds");
 
             assert!(
                 ((p.x + p.y) - p.z).so_small(),
-                "Returned subs value does not match expectation."
+                "Returned evaluation value does not match expectation."
             );
         }
     }
@@ -977,11 +977,11 @@ fn test_t_mesh_subdivide() {
 fn points_eq(a: Point3, b: Point3) -> bool { (a.x + a.y + a.z - (b.x + b.y + b.z)).so_small() }
 
 /// Test legal local knot insertion by creating two identical surfaces, then performing LKI on one of
-/// them and checking with `subs` if the surfaces differ. In order to maximize any differences between the
+/// them and checking with `try_evaluate` if the surfaces differ. In order to maximize any differences between the
 /// surfaces, the control points which are affected by the LKI are moved such that they have no lienear
 /// realtion between them in any axis. The cartesian space of the coordinates is cross-referenced with manually
 /// performed mathematics, which can be seen in desmos links in some of the inline comments on top of the manual
-/// confirmation through the use of `subs`.
+/// confirmation through the use of `try_evaluate`.
 #[test]
 fn test_t_mesh_local_knot_insertion_no_edge_conditions() -> Result<()> {
     const N: usize = 25;
@@ -1072,8 +1072,12 @@ fn test_t_mesh_local_knot_insertion_no_edge_conditions() -> Result<()> {
         let s = s as f64 / N as f64;
         for t in 0..N {
             let t = t as f64 / N as f64;
-            let mesh_sub = mesh.subs(s, t).expect("Parametric point is within bounds");
-            let test_sub = test.subs(s, t).expect("Parametric point is within bounds");
+            let mesh_sub = mesh
+                .try_evaluate(s, t)
+                .expect("Parametric point is within bounds");
+            let test_sub = test
+                .try_evaluate(s, t)
+                .expect("Parametric point is within bounds");
             assert!(
                 (mesh_sub - test_sub).so_small(),
                 "Surfaces do not match at ({s}, {t})."
@@ -1170,7 +1174,7 @@ fn test_t_mesh_absolute_local_knot_insertion_mesh_construction() {
 /// Constructs the following T-mesh, insreting a point which would require the use of the ray-casting algorithm to
 /// calculate on of the knot intervals used in the calculation of the new cartesian coordinates of the control
 /// points affected by LKI. A comparison much like the other LKI insertion tests is done, where two identical meshes
-///  are constructed, and then compared using `subs` after one has been modified through the use of LKI. Though a T-junction
+///  are constructed, and then compared using `try_evaluate` after one has been modified through the use of LKI. Though a T-junction
 /// technically exists in the LKI, none of the LKI rules are broken, since the four required control points still exist,
 /// and their perpendicular knot vectors are all equal.
 ///
@@ -1251,8 +1255,8 @@ fn test_t_mesh_local_knot_insertion_force_ray_casting() {
         let s = s as f64 / N as f64;
         for t in 0..N {
             let t = t as f64 / N as f64;
-            let mesh_sub = (mesh.subs(s, t)).expect("Parametric point is within bounds");
-            let test_sub = (test.subs(s, t)).expect("Parametric point is within bounds");
+            let mesh_sub = (mesh.try_evaluate(s, t)).expect("Parametric point is within bounds");
+            let test_sub = (test.try_evaluate(s, t)).expect("Parametric point is within bounds");
             assert!(
                 (mesh_sub - test_sub).so_small(),
                 "Surfaces do not match at ({s}, {t})."
@@ -1287,8 +1291,8 @@ fn test_to_bspline_surface_accuracy() -> Result<()> {
         let u = f64::from(i) / f64::from(n);
         for j in 1..n {
             let v = f64::from(j) / f64::from(n);
-            let p_tmesh = ParametricSurface::subs(&mesh, u, v);
-            let p_bsp = ParametricSurface::subs(&bsp, u, v);
+            let p_tmesh = ParametricSurface::evaluate(&mesh, u, v);
+            let p_bsp = ParametricSurface::evaluate(&bsp, u, v);
             let err = (p_tmesh - p_bsp).magnitude();
             max_err = max_err.max(err);
         }
@@ -1339,7 +1343,9 @@ fn make_derivative_test_mesh() -> Tmesh<Point3> {
 fn finite_diff_der(mesh: &Tmesh<Point3>, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
     let h = 1.0e-6;
     if m == 0 && n == 0 {
-        let p = mesh.subs(u, v).expect("subs should succeed");
+        let p = mesh
+            .try_evaluate(u, v)
+            .expect("T-mesh evaluation should succeed");
         return Vector3::new(p.x, p.y, p.z);
     }
     if m > 0 {
@@ -1466,8 +1472,8 @@ fn test_refine_at_existing_edge() {
         let u = f64::from(i) / f64::from(n);
         for j in 0..n {
             let v = f64::from(j) / f64::from(n);
-            let a = (mesh.subs(u, v)).expect("subs should succeed");
-            let b = (reference.subs(u, v)).expect("subs should succeed");
+            let a = (mesh.try_evaluate(u, v)).expect("T-mesh evaluation should succeed");
+            let b = (reference.try_evaluate(u, v)).expect("T-mesh evaluation should succeed");
             assert!(
                 (a - b).so_small(),
                 "Surfaces differ at ({u}, {v}): refine_at={a:?}, direct={b:?}"
@@ -1509,8 +1515,8 @@ fn test_refine_at_with_intermediate_edge() {
         let u = f64::from(i) / f64::from(n);
         for j in 0..n {
             let v = f64::from(j) / f64::from(n);
-            let a = (mesh.subs(u, v)).expect("subs should succeed");
-            let b = (original.subs(u, v)).expect("subs should succeed");
+            let a = (mesh.try_evaluate(u, v)).expect("T-mesh evaluation should succeed");
+            let b = (original.try_evaluate(u, v)).expect("T-mesh evaluation should succeed");
             assert!(
                 (a - b).so_small(),
                 "Surface changed after refine_at at ({u}, {v}): refined={a:?}, original={b:?}"
@@ -1547,8 +1553,8 @@ fn test_refine_at_shape_preserving() {
         let u = f64::from(i) / f64::from(n);
         for j in 0..n {
             let v = f64::from(j) / f64::from(n);
-            let a = (mesh.subs(u, v)).expect("subs should succeed");
-            let b = (original.subs(u, v)).expect("subs should succeed");
+            let a = (mesh.try_evaluate(u, v)).expect("T-mesh evaluation should succeed");
+            let b = (original.try_evaluate(u, v)).expect("T-mesh evaluation should succeed");
             let err = (a - b).magnitude();
             max_err = max_err.max(err);
         }
@@ -1594,8 +1600,8 @@ fn test_from_bspline_surface_round_trip() {
         let u = f64::from(i) / f64::from(n);
         for j in 1..n {
             let v = f64::from(j) / f64::from(n);
-            let p_bsp = ParametricSurface::subs(&bsp, u, v);
-            let p_tmesh = (tmesh.subs(u, v)).expect("T-mesh eval should succeed");
+            let p_bsp = ParametricSurface::evaluate(&bsp, u, v);
+            let p_tmesh = (tmesh.try_evaluate(u, v)).expect("T-mesh eval should succeed");
             let err = (p_bsp - p_tmesh).magnitude();
             max_err = max_err.max(err);
         }
@@ -1718,8 +1724,8 @@ fn test_adaptive_refine_curved_surface() {
         let u = f64::from(i) / f64::from(n);
         for j in 0..n {
             let v = f64::from(j) / f64::from(n);
-            let a = (mesh.subs(u, v)).expect("subs ok");
-            let b = (original.subs(u, v)).expect("subs ok");
+            let a = (mesh.try_evaluate(u, v)).expect("T-mesh evaluation should succeed");
+            let b = (original.try_evaluate(u, v)).expect("T-mesh evaluation should succeed");
             let err = (a - b).magnitude();
             max_err = max_err.max(err);
         }

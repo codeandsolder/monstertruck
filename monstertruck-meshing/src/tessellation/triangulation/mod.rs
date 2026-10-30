@@ -79,7 +79,7 @@ where
             .or_else(|| self.search_nearest_parameter(point, hint, 100))
             .or_else(|| self.search_parameter(point, None, 100))
             .or_else(|| self.search_nearest_parameter(point, None, 100))
-            .map(|t| (t, self.curve().subs(t)))
+            .map(|t| (t, self.curve().evaluate(t)))
     }
 }
 
@@ -129,10 +129,10 @@ fn append_lifted_trim_segment<C, S>(
         refined.push(back_uv);
     } else {
         let middle_parameter = f64::midpoint(front_parameter, back_parameter);
-        let middle_uv = trim_curve.curve().subs(middle_parameter);
-        let front_point = trim_curve.surface().subs(front_uv.x, front_uv.y);
-        let middle_point = trim_curve.surface().subs(middle_uv.x, middle_uv.y);
-        let back_point = trim_curve.surface().subs(back_uv.x, back_uv.y);
+        let middle_uv = trim_curve.curve().evaluate(middle_parameter);
+        let front_point = trim_curve.surface().evaluate(front_uv.x, front_uv.y);
+        let middle_point = trim_curve.surface().evaluate(middle_uv.x, middle_uv.y);
+        let back_point = trim_curve.surface().evaluate(back_uv.x, back_uv.y);
         if point_segment_distance2(middle_point, front_point, back_point) > tolerance2 {
             append_lifted_trim_segment(
                 trim_curve,
@@ -213,7 +213,7 @@ fn fallback_polyline_curve_with_min_points<C: PolylineableCurve>(
     );
     let curve = parameters
         .into_iter()
-        .map(|parameter| edge.curve.subs(parameter))
+        .map(|parameter| edge.curve.evaluate(parameter))
         .collect::<PolylineCurve>();
     if orientation { curve } else { curve.inverse() }
 }
@@ -322,7 +322,7 @@ where
         tolerance,
     )
     .into_iter()
-    .map(|uv| surface.subs(uv.x, uv.y))
+    .map(|uv| surface.evaluate(uv.x, uv.y))
     .collect::<Vec<_>>();
     if points.len() < 2 {
         return None;
@@ -377,7 +377,7 @@ where
     } else {
         let points = filtered
             .iter()
-            .map(|uv| surface.subs(uv.x, uv.y))
+            .map(|uv| surface.evaluate(uv.x, uv.y))
             .collect::<Vec<_>>();
         let mut keep = vec![false; filtered.len()];
         keep[0] = true;

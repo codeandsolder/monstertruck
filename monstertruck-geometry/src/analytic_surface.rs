@@ -189,7 +189,8 @@ fn spherical_revolution_from_profile(
     let profile_range = profile.range_tuple();
     let samples = [0.0, 0.25, 0.5, 0.75, 1.0].map(|parameter| {
         homogeneous_point(
-            profile.subs((profile_range.1 - profile_range.0).mul_add(parameter, profile_range.0)),
+            profile
+                .evaluate((profile_range.1 - profile_range.0).mul_add(parameter, profile_range.0)),
         )
     });
     let samples = samples.into_iter().collect::<Option<Vec<_>>>()?;

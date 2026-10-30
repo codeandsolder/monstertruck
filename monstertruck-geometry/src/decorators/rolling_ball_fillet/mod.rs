@@ -65,15 +65,9 @@ impl<C, S0, S1, R> RollingBallFilletSurface<C, S0, S1, R> {
 pub trait RadiusFunction: Clone {
     /// Returns the `n`-th derivative at parameter `t`.
     fn derivative_n(&self, n: usize, t: f64) -> f64;
-    /// Compatibility alias for [`RadiusFunction::derivative_n`].
-    #[inline]
-    fn der_n(&self, n: usize, t: f64) -> f64 { self.derivative_n(n, t) }
     /// Evaluates the radius at parameter `t`.
     #[inline]
     fn evaluate(&self, t: f64) -> f64 { self.derivative_n(0, t) }
-    /// Substitutes parameter `t` and returns the radius.
-    #[inline]
-    fn subs(&self, t: f64) -> f64 { self.evaluate(t) }
     /// Returns the first derivative at parameter `t`.
     #[inline]
     fn derivative(&self, t: f64) -> f64 { self.derivative_n(1, t) }

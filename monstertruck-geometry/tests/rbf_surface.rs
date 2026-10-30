@@ -9,23 +9,23 @@ fn contact_circle_as_curve() {
     let rfs = RollingBallFilletSurface::new(line, plane0, plane1, r);
     let cc = (rfs.contact_circle(t)).unwrap();
 
-    assert_near!(cc.subs(0.0), cc.contact_point0().point);
-    assert_near!(cc.subs(1.0), cc.contact_point1().point);
+    assert_near!(cc.evaluate(0.0), cc.contact_point0().point);
+    assert_near!(cc.evaluate(1.0), cc.contact_point1().point);
 
     let nurbs: NurbsCurve<Vector4> = cc.to_same_geometry();
-    assert_near!(cc.subs(0.0), nurbs.subs(0.0));
-    assert_near!(cc.subs(0.5), nurbs.subs(0.5));
-    assert_near!(cc.subs(1.0), nurbs.subs(1.0));
-    assert_near!((nurbs.subs(0.2) - cc.center()).magnitude(), r);
+    assert_near!(cc.evaluate(0.0), nurbs.evaluate(0.0));
+    assert_near!(cc.evaluate(0.5), nurbs.evaluate(0.5));
+    assert_near!(cc.evaluate(1.0), nurbs.evaluate(1.0));
+    assert_near!((nurbs.evaluate(0.2) - cc.center()).magnitude(), r);
 
     const EPS: f64 = 1.0e-4;
     for i in 1..=9 {
         let s = f64::from(i) / 10.0;
-        assert_near!(cc.subs(s).distance2(cc.center()), r * r);
-        let cal_der = (cc.subs(s + EPS) - cc.subs(s - EPS)) / (2.0 * EPS);
-        assert!((cal_der - cc.der(s)).magnitude() < EPS);
-        let cal_der2 = (cc.der(s + EPS) - cc.der(s - EPS)) / (2.0 * EPS);
-        assert!((cal_der2 - cc.der2(s)).magnitude() < EPS);
+        assert_near!(cc.evaluate(s).distance2(cc.center()), r * r);
+        let cal_der = (cc.evaluate(s + EPS) - cc.evaluate(s - EPS)) / (2.0 * EPS);
+        assert!((cal_der - cc.derivative(s)).magnitude() < EPS);
+        let cal_der2 = (cc.derivative(s + EPS) - cc.derivative(s - EPS)) / (2.0 * EPS);
+        assert!((cal_der2 - cc.derivative_2(s)).magnitude() < EPS);
     }
 }
 
@@ -63,31 +63,31 @@ fn fillet_between_two_spheres() {
         let t = 2.0 * PI * i as f64 / N as f64;
         let cc = (fillet.contact_circle(t)).unwrap();
 
-        let r = Radius.subs(t);
+        let r = Radius.evaluate(t);
         let center_radius = (r + 2.0).mul_add(r + 2.0, -1.0).sqrt();
-        assert_near!(cc.center(), center_radius * uc.subs(t));
+        assert_near!(cc.center(), center_radius * uc.evaluate(t));
 
         let contact_radius = 2.0 / (2.0 + r) * center_radius;
         let contact_z = r / (2.0 + r);
-        let contact_point0 = contact_radius * uc.subs(t) + contact_z * Vector3::unit_z();
-        assert_near!(cp_curve0.subs(t), contact_point0);
-        let contact_point1 = contact_radius * uc.subs(t) - contact_z * Vector3::unit_z();
-        assert_near!(cp_curve1.subs(t), contact_point1);
+        let contact_point0 = contact_radius * uc.evaluate(t) + contact_z * Vector3::unit_z();
+        assert_near!(cp_curve0.evaluate(t), contact_point0);
+        let contact_point1 = contact_radius * uc.evaluate(t) - contact_z * Vector3::unit_z();
+        assert_near!(cp_curve1.evaluate(t), contact_point1);
 
         let t0 = (cp_curve0.search_parameter(cc.contact_point0().point, None, 10)).unwrap();
-        assert_near!(cp_curve0.subs(t0), cc.contact_point0().point);
+        assert_near!(cp_curve0.evaluate(t0), cc.contact_point0().point);
         let t1 = (cp_curve1.search_parameter(cc.contact_point1().point, None, 10)).unwrap();
-        assert_near!(cp_curve1.subs(t1), cc.contact_point1().point);
+        assert_near!(cp_curve1.evaluate(t1), cc.contact_point1().point);
 
         for j in 0..=N {
             let (u, v) = (j as f64 / N as f64, t);
 
             let eps = 1.0e-4;
 
-            let ders = fillet.ders(2, u, v);
+            let ders = fillet.derivatives(2, u, v);
 
-            let ders_plus = fillet.ders(1, u + eps, v);
-            let ders_minus = fillet.ders(1, u - eps, v);
+            let ders_plus = fillet.derivatives(1, u + eps, v);
+            let ders_minus = fillet.derivatives(1, u - eps, v);
             let uder_approx = (ders_plus[0][0] - ders_minus[0][0]) / (2.0 * eps);
             assert!((ders[1][0] - uder_approx).magnitude() < eps);
             let uvder_approx = (ders_plus[0][1] - ders_minus[0][1]) / (2.0 * eps);
@@ -95,8 +95,8 @@ fn fillet_between_two_spheres() {
             let uuder_approx = (ders_plus[1][0] - ders_minus[1][0]) / (2.0 * eps);
             assert!((ders[2][0] - uuder_approx).magnitude() < eps);
 
-            let ders_plus = fillet.ders(1, u, v + eps);
-            let ders_minus = fillet.ders(1, u, v - eps);
+            let ders_plus = fillet.derivatives(1, u, v + eps);
+            let ders_minus = fillet.derivatives(1, u, v - eps);
             let vder_approx = (ders_plus[0][0] - ders_minus[0][0]) / (2.0 * eps);
             assert!((ders[0][1] - vder_approx).magnitude() < eps);
             let uvder_approx = (ders_plus[1][0] - ders_minus[1][0]) / (2.0 * eps);
@@ -104,11 +104,11 @@ fn fillet_between_two_spheres() {
             let vvder_approx = (ders_plus[0][1] - ders_minus[0][1]) / (2.0 * eps);
             assert!((ders[0][2] - vvder_approx).magnitude() < eps);
 
-            let p = cc.subs(u);
+            let p = cc.evaluate(u);
             let (u0, v0) = fillet
                 .search_parameter(p, None, 10)
                 .unwrap_or_else(|| panic!("{:?}", (u, v)));
-            assert_near!(fillet.subs(u0, v0), p);
+            assert_near!(fillet.evaluate(u0, v0), p);
         }
     }
 }

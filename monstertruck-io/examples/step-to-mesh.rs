@@ -135,17 +135,17 @@ where
         // Sample 5 points per edge to capture curvature extent.
         for i in 0..=4 {
             let t = t0 + (t1 - t0) * i as f64 / 4.0;
-            bdd.push(edge.curve.subs(t));
+            bdd.push(edge.curve.evaluate(t));
         }
     }
     for face in &shell.faces {
         let (urange, vrange) = face.surface.try_range_tuple();
         if let (Some((u0, u1)), Some((v0, v1))) = (urange, vrange) {
-            bdd.push(face.surface.subs(u0, v0));
-            bdd.push(face.surface.subs(u1, v0));
-            bdd.push(face.surface.subs(u0, v1));
-            bdd.push(face.surface.subs(u1, v1));
-            bdd.push(face.surface.subs((u0 + u1) / 2.0, (v0 + v1) / 2.0));
+            bdd.push(face.surface.evaluate(u0, v0));
+            bdd.push(face.surface.evaluate(u1, v0));
+            bdd.push(face.surface.evaluate(u0, v1));
+            bdd.push(face.surface.evaluate(u1, v1));
+            bdd.push(face.surface.evaluate((u0 + u1) / 2.0, (v0 + v1) / 2.0));
         }
     }
     bdd

@@ -44,7 +44,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!("\nGrid point verification (should match input):");
     for (v, row) in [0.0, 0.5, 1.0].into_iter().zip(&grid) {
         for (u, &expected) in [0.0, 0.5, 1.0].into_iter().zip(row) {
-            let pt = surface.subs(u, v);
+            let pt = surface.evaluate(u, v);
             let err = (pt.z - expected.z)
                 .mul_add(
                     pt.z - expected.z,

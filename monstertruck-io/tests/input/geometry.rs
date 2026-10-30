@@ -742,7 +742,7 @@ fn exec_circle(org_coord: [f64; 3], dir_array: [f64; 2], ref_dir_array: [f64; 2]
     (0..10).for_each(|i| {
         let t = 2.0 * PI * i as f64 / 10.0;
         let p = Point3::new(radius * f64::cos(t), radius * f64::sin(t), 0.0);
-        assert_near!(ellipse.subs(t), mat.transform_point(p));
+        assert_near!(ellipse.evaluate(t), mat.transform_point(p));
     });
 }
 
@@ -792,7 +792,7 @@ fn exec_ellipse(
     (0..10).for_each(|i| {
         let t = 2.0 * PI * i as f64 / 10.0;
         let p = Point3::new(radius[0] * f64::cos(t), radius[1] * f64::sin(t), 0.0);
-        assert_near!(ellipse.subs(t), mat.transform_point(p));
+        assert_near!(ellipse.evaluate(t), mat.transform_point(p));
     });
 }
 
@@ -843,7 +843,7 @@ fn exec_hyperbola(
     (0..10).for_each(|i| {
         let t = 2.0 * i as f64 / 10.0 - 1.0;
         let p = Point3::new(radius[0] * f64::cosh(t), radius[1] * f64::sinh(t), 0.0);
-        assert_near!(hyperbola.subs(t), mat.transform_point(p));
+        assert_near!(hyperbola.evaluate(t), mat.transform_point(p));
     });
 }
 
@@ -892,7 +892,7 @@ fn exec_parabola(
     (0..10).for_each(|i| {
         let t = 2.0 * i as f64 / 10.0 - 1.0;
         let p = Point3::new(focal_dist * t * t, focal_dist * 2.0 * t, 0.0);
-        assert_near!(parabola.subs(t), mat.transform_point(p));
+        assert_near!(parabola.evaluate(t), mat.transform_point(p));
     });
 }
 
@@ -984,7 +984,7 @@ fn exec_spherical_surface(
         .for_each(|(i, j)| {
             let u = 2.0 * PI * i as f64 / 10.0;
             let v = PI * j as f64 / 10.0 - PI / 2.0;
-            let res = sphere.subs(u, v);
+            let res = sphere.evaluate(u, v);
             let ans = mat.transform_point(Point3::new(
                 radius * f64::cos(u) * f64::cos(v),
                 radius * f64::sin(u) * f64::cos(v),
@@ -1053,8 +1053,8 @@ fn exec_cylindrical_surface(
         .for_each(|(i, j)| {
             let u = 2.0 * PI * i as f64 / 10.0;
             let v = j as f64;
-            let res0 = cylinder0.subs(u, v);
-            let res1 = cylinder1.subs(u, v);
+            let res0 = cylinder0.evaluate(u, v);
+            let res1 = cylinder1.evaluate(u, v);
             let ans =
                 mat.transform_point(Point3::new(radius * f64::cos(u), radius * f64::sin(u), v));
             assert_near!(res0, ans, "u:{u} v:{v} res:{res0:?} ans:{ans:?}");
@@ -1115,7 +1115,7 @@ fn exec_toroidal_surface(
         .for_each(|(i, j)| {
             let u = 2.0 * PI * i as f64 / 10.0;
             let v = 2.0 * PI * j as f64 / 10.0;
-            let res = toroidal.subs(u, v);
+            let res = toroidal.evaluate(u, v);
             let ans = mat.transform_point(Point3::new(
                 (major_radius + minor_radius * f64::cos(v)) * f64::cos(u),
                 (major_radius + minor_radius * f64::cos(v)) * f64::sin(u),
@@ -1186,8 +1186,8 @@ fn exec_conical_surface(
             let u = 2.0 * PI * i as f64 / 10.0;
             let v = j as f64 / 10.0;
             let tan = f64::tan(semi_angle);
-            let res = conical.subs(u, v);
-            let res1 = conical1.subs(u, v);
+            let res = conical.evaluate(u, v);
+            let res1 = conical1.evaluate(u, v);
             let ans = mat.transform_point(Point3::new(
                 (radius + v * tan) * f64::cos(u),
                 (radius + v * tan) * f64::sin(u),
@@ -1733,7 +1733,7 @@ fn exec_surface_of_linear_extrusion(
         .flat_map(move |i| (0..=100).map(move |j| (i, j)))
         .for_each(|(i, j)| {
             let (u, v) = (i as f64 / 10.0, j as f64 / 10.0);
-            assert_near!(surface.subs(u, v), line.subs(u) + axis * v);
+            assert_near!(surface.evaluate(u, v), line.evaluate(u) + axis * v);
         });
 }
 
@@ -1775,12 +1775,12 @@ fn exec_surface_of_revolution(
         .flat_map(move |i| (0..=100).map(move |j| (i, j)))
         .for_each(|(i, j)| {
             let (u, v) = (i as f64 / 10.0, j as f64 / 10.0);
-            let lc = line.subs(v) - origin;
+            let lc = line.evaluate(v) - origin;
             let ans = origin
                 + lc * f64::cos(u)
                 + dir * lc.dot(dir) * (1.0 - f64::cos(u))
                 + dir.cross(lc) * f64::sin(u);
-            assert_near!(surface.subs(u, v), ans);
+            assert_near!(surface.evaluate(u, v), ans);
         });
 }
 

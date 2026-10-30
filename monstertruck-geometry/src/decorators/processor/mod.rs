@@ -4,7 +4,7 @@
 )]
 
 use super::{
-    BoundedCurve, BoundedSurface, CurveParameter, Cut, D1, D2, Decomposition, Deref, DerefMut,
+    BoundedCurve, BoundedSurface, CurveParameter, Cut, Decomposition, Deref, DerefMut,
     EuclideanSpace, IncludeCurve, InnerSpace, Invertible, Matrix3, Matrix4, MetricSpace, Mul, One,
     ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
     ParametricSurface3D, Point2, Point3, Processor, SearchNearestParameter, SearchParameter,
@@ -441,7 +441,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<f64> {
-        SearchParameter::<D1>::search_parameter(self, pt, None, trials)
+        SearchParameter::<CurveParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
@@ -460,7 +460,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<f64> {
-        SearchNearestParameter::<D1>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<CurveParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
@@ -478,7 +478,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchParameter::<D2>::search_parameter(self, pt, None, trials)
+        SearchParameter::<SurfaceParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
@@ -497,7 +497,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchNearestParameter::<D2>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<SurfaceParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 

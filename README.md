@@ -78,7 +78,7 @@ Per-crate detail and porting verdicts live in [`TRUCK-PARITY.md`](TRUCK-PARITY.m
 - Assembly STEP output: `StepDesign`, `MatrixAsAxis`, full `save::assembly` module (upstream `213-assy-step-output`).
 - Tangent-based circular arc construction in `monstertruck-modeling`: `CircularArcConstraint::{ThroughPoint, StartTangent}`, `try_circle_arc_by_start_tangent` (renamed from upstream `ArcConstraint`/`circle_arc_by_tangent0`; upstream [`993e156c`](https://github.com/ricosjp/truck/commit/993e156c)).
 - Fillet engine rewrite: per-edge radii, variable-radius open wires, multi-chain + chamfer, `Ridge` and `Custom` profile modes, robust topology surgery, degenerate-edge rejection, `IntersectionCurve` support.
-- T-spline / T-NURCC promoted to first-class surface type with `BsplineSurface` conversion, curvature-based adaptive refinement, and hot-path optimization (lock-free `Tmesh::subs()`, flat-array layout for `analytical_der_mn()`).
+- T-spline / T-NURCC promoted to first-class surface type with `BsplineSurface` conversion, curvature-based adaptive refinement, and hot-path optimization (lock-free `Tmesh::try_evaluate()`, flat-array layout for `analytical_der_mn()`).
 - Scalar-generic `v2` trait family (`CurveParameter<T>`/`SurfaceParameter<T>`, `SearchParameter<v2::D2<T>>`, etc.) -- no upstream equivalent; default scalar still `f64`.
 - `SurfaceDerivatives::absolute_derivatives` + `combinatorial_derivative(s)` ported from upstream's `truck-base::ders`, backing the offset surface family.
 - `BasisWindow` active-window B-spline basis evaluation (upstream [`77e25635`](https://github.com/ricosjp/truck/commit/77e25635)), reimplemented with `SmallVec`; both `BsplineCurve` and `BsplineSurface` only touch active control points.

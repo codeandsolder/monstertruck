@@ -5,7 +5,7 @@
 
 use super::{
     Bound, Bounded, BoundedCurve, BoundingBox, BsplineCurve, Concat, ConcatError, ControlPoint,
-    CurveCollector, CurveParameter, Cut, D1, Deserialize, EuclideanSpace, HashGen, Homogeneous,
+    CurveCollector, CurveParameter, Cut, Deserialize, EuclideanSpace, HashGen, Homogeneous,
     InnerSpace, Invertible, KnotVector, MetricSpace, Origin, PRESEARCH_DIVISION,
     ParameterDivision1D, ParameterRange, ParameterTransform, ParametricCurve, Result,
     SearchNearestParameter, SearchParameter, SearchParameterHint1D, TOLERANCE, Tolerance,
@@ -129,7 +129,7 @@ impl<P> BsplineCurve<P> {
 impl<P: ControlPoint<f64>> BsplineCurve<P> {
     /// Returns the closure of substitution.
     /// # Examples
-    /// The following test code is the same test with the one of `BsplineCurve::subs()`.
+    /// The following test code is the same test with the one of `BsplineCurve::evaluate()`.
     /// ```
     /// use monstertruck_geometry::prelude::*;
     /// let knot_vec = KnotVector::from(vec![-1.0, -1.0, -1.0, 1.0, 1.0, 1.0]);
@@ -143,7 +143,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     /// res.iter().zip(&ans).for_each(|(v0, v1)| assert_near2!(v0, v1));
     /// ```
     #[inline]
-    pub fn closure(&self) -> impl Fn(f64) -> P + '_ { move |t| self.subs(t) }
+    pub fn closure(&self) -> impl Fn(f64) -> P + '_ { move |t| self.evaluate(t) }
     #[inline]
     fn delta_control_points(&self, i: usize) -> P::Diff {
         if i == 0 {
@@ -167,7 +167,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     /// const N : usize = 100; // sample size
     /// for i in 0..=N {
     ///     let t = 1.0 / (N as f64) * (i as f64);
-    ///     assert_near2!(derived.subs(t), Vector2::new(1.0, 2.0 * t));
+    ///     assert_near2!(derived.evaluate(t), Vector2::new(1.0, 2.0 * t));
     /// }
     /// ```
     #[must_use]
@@ -208,7 +208,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
             for j in 0..division {
                 let t = self.knot_vec[i]
                     + delta * crate::usize_to_f64(j) / crate::usize_to_f64(division);
-                if !ord(&self.subs(t), &other.subs(t)) {
+                if !ord(&self.evaluate(t), &other.evaluate(t)) {
                     return false;
                 }
             }
@@ -232,7 +232,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     /// let curve = BsplineCurve::try_interpolate(knot_vec, parameter_points.clone())?;
     ///
     /// parameter_points.into_iter().for_each(|(t, p)| {
-    ///     assert_near!(curve.subs(t), p);
+    ///     assert_near!(curve.evaluate(t), p);
     /// });
     /// # Ok(())
     /// # }
@@ -328,7 +328,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     ///
     /// // The fit stays near the samples without passing through each one.
     /// for (t, p) in &points {
-    ///     assert!(curve.subs(*t).distance(*p) < 0.2);
+    ///     assert!(curve.evaluate(*t).distance(*p) < 0.2);
     /// }
     /// ```
     pub fn least_square(
@@ -394,7 +394,7 @@ where P: ControlPoint<f64> + MetricSpace<Metric = f64> + HashGen<f64>
     /// const N: usize = 100;
     /// for i in 0..N {
     ///     let t = i as f64 / N as f64;
-    ///     assert!(circle.subs(t).distance(bspcurve.subs(t)) < 0.02);
+    ///     assert!(circle.evaluate(t).distance(bspcurve.evaluate(t)) < 0.02);
     /// }
     /// ```
     pub fn quadratic_approximation<C>(
@@ -414,7 +414,7 @@ where P: ControlPoint<f64> + MetricSpace<Metric = f64> + HashGen<f64>
                 .map(|i| {
                     let rat = crate::usize_to_f64(i) / crate::usize_to_f64(len);
                     let t = (range.1 - range.0).mul_add(rat, range.0);
-                    (t, curve.subs(t))
+                    (t, curve.evaluate(t))
                 })
                 .collect::<Vec<_>>();
             let bsp = Self::try_interpolate(knot_vec, parameter_points).ok()?;
@@ -422,7 +422,7 @@ where P: ControlPoint<f64> + MetricSpace<Metric = f64> + HashGen<f64>
                 let seed = *bsp.control_point(i);
                 let rat = 0.5 + 0.2f64.mul_add(HashGen::hash1(seed), -0.1);
                 let t = (range.1 - range.0).mul_add(rat, range.0);
-                curve.subs(t).distance2(bsp.subs(t)) < tol * tol
+                curve.evaluate(t).distance2(bsp.evaluate(t)) < tol * tol
             });
             if is_approx {
                 return Some(bsp);
@@ -556,7 +556,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<f64> {
-        SearchNearestParameter::<D1>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<CurveParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
@@ -577,7 +577,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<f64> {
-        SearchParameter::<D1>::search_parameter(self, pt, None, trials)
+        SearchParameter::<CurveParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
@@ -608,8 +608,8 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     ///
     /// // bspcurve is not constant.
-    /// assert_eq!(bspcurve.subs(0.0), Vector2::new(0.0, 0.0));
-    /// assert_ne!(bspcurve.subs(0.5), Vector2::new(0.0, 0.0));
+    /// assert_eq!(bspcurve.evaluate(0.0), Vector2::new(0.0, 0.0));
+    /// assert_ne!(bspcurve.evaluate(0.5), Vector2::new(0.0, 0.0));
     ///
     /// // bspcurve.is_const() is true
     /// assert!(bspcurve.is_const());
@@ -972,11 +972,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// const N: usize = 100;
     /// for i in 0..=N {
     ///     let t = 0.5 * (i as f64) / (N as f64);
-    ///     assert_near2!(bspcurve.subs(t), beziers[0].subs(t));
+    ///     assert_near2!(bspcurve.evaluate(t), beziers[0].evaluate(t));
     /// }
     /// for i in 0..=N {
     ///     let t = 0.5 + 0.5 * (i as f64) / (N as f64);
-    ///     assert_near2!(bspcurve.subs(t), beziers[1].subs(t));
+    ///     assert_near2!(bspcurve.evaluate(t), beziers[1].evaluate(t));
     /// }
     /// ```
     #[must_use]
@@ -1016,7 +1016,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// let mut flag = false;
     /// for i in 0..=N {
     ///     let t = 4.0 * (i as f64) / (N as f64);
-    ///     flag = flag || bspcurve.subs(t).near(&bspcurve.subs(t + 1.0 / (N as f64)));
+    ///     flag = flag || bspcurve.evaluate(t).near(&bspcurve.evaluate(t + 1.0 / (N as f64)));
     /// }
     /// // There exists t such that bspcurve(t) == bspcurve(t + 0.01).
     /// assert!(flag);
@@ -1025,7 +1025,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// let mut flag = false;
     /// for i in 0..=N {
     ///     let t = 1.0 * (i as f64) / (N as f64);
-    ///     flag = flag || bspcurve.subs(t).near(&bspcurve.subs(t + 1.0 / (N as f64)));
+    ///     flag = flag || bspcurve.evaluate(t).near(&bspcurve.evaluate(t + 1.0 / (N as f64)));
     /// }
     /// // There does not exist t such that bspcurve(t) == bspcurve(t + 0.01).
     /// assert!(!flag);
@@ -1143,13 +1143,13 @@ impl<P: ControlPoint<f64> + Tolerance> Cut for BsplineCurve<P> {
         // Otherwise the near-knot snapping below lands on the full-multiplicity end
         // knot blocks and produces invalid empty halves.
         if t <= knot_start && t.near(&knot_start) {
-            let point = self.subs(knot_start);
+            let point = self.evaluate(knot_start);
             let right = self.clone();
             *self =
                 Self::new_unchecked(KnotVector::from(vec![knot_start, knot_start]), vec![point]);
             return right;
         } else if t >= knot_end && t.near(&knot_end) {
-            let point = self.subs(knot_end);
+            let point = self.evaluate(knot_end);
             return Self::new_unchecked(KnotVector::from(vec![knot_end, knot_end]), vec![point]);
         }
 
@@ -1259,9 +1259,9 @@ where
 {
     /// Determines whether `self` is an arc of `curve` by repeating applying Newton method.
     ///
-    /// The parameter `hint` is the init value, required that `curve.subs(hint)` is the front point of `self`.
+    /// The parameter `hint` is the init value, required that `curve.evaluate(hint)` is the front point of `self`.
     ///
-    /// If `self` is an arc of `curve`, then returns `Some(t)` such that `curve.subs(t)` coincides with
+    /// If `self` is an arc of `curve`, then returns `Some(t)` such that `curve.evaluate(t)` coincides with
     /// the back point of `self`. Otherwise, returns `None`.
     /// # Examples
     /// ```
@@ -1294,7 +1294,7 @@ where
     pub fn is_arc_of(&self, curve: &Self, mut hint: f64) -> Option<f64> {
         let degree = std::cmp::max(self.degree(), curve.degree()) * 3 + 1;
         let (knots, _) = self.knot_vec.to_single_multi();
-        if !self.subs(knots[0]).near(&curve.subs(hint)) {
+        if !self.evaluate(knots[0]).near(&curve.evaluate(hint)) {
             return None;
         }
 
@@ -1302,9 +1302,9 @@ where
             let range = knots[i] - knots[i - 1];
             for j in 1..=degree {
                 let t = knots[i - 1] + range * crate::usize_to_f64(j) / crate::usize_to_f64(degree);
-                let pt = ParametricCurve::subs(self, t);
+                let pt = ParametricCurve::evaluate(self, t);
                 let res = curve.search_nearest_parameter(pt, Some(hint), 100)?;
-                if hint > res || !curve.subs(res).near(&pt) {
+                if hint > res || !curve.evaluate(res).near(&pt) {
                     return None;
                 }
                 hint = res;
@@ -1338,7 +1338,7 @@ where
     ///     Point3::new(0.0, 1.0, 1.0),
     /// ];
     /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
-    /// let pt = ParametricCurve::subs(&bspcurve, 1.2);
+    /// let pt = ParametricCurve::evaluate(&bspcurve, 1.2);
     /// let t = bspcurve.search_nearest_parameter(pt, Some(0.8), 100).unwrap();
     /// assert_near!(t, 1.2);
     /// ```
@@ -1359,8 +1359,8 @@ where
     /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     /// let pt = Point3::new(0.0, 0.5, 1.0);
     /// let t = bspcurve.search_nearest_parameter(pt, Some(0.8), 100).unwrap();
-    /// let pt0 = ParametricCurve::subs(&bspcurve, t);
-    /// let pt1 = ParametricCurve::subs(&bspcurve, 3.0);
+    /// let pt0 = ParametricCurve::evaluate(&bspcurve, t);
+    /// let pt1 = ParametricCurve::evaluate(&bspcurve, 3.0);
     /// // the point corresponding the obtained parameter is not
     /// // the globally nearest point in the curve.
     /// assert!((pt0 - pt).magnitude() > (pt1 - pt).magnitude());
@@ -1499,8 +1499,8 @@ where
         let seed = ends.0.midpoint(ends.1);
         let p = 0.5 + 0.2f64.mul_add(HashGen::hash1(seed), -0.1);
         let t = range.1.mul_add(p, range.0 * (1.0 - p));
-        let ders0 = bezier.ders(1, t);
-        let ders1 = curve.ders(1, t);
+        let ders0 = bezier.derivatives(1, t);
+        let ders1 = curve.derivatives(1, t);
         let pt_dist2 = (ders0[0] - ders1[0]).magnitude2();
         let der_dist2 = (ders0[1] - ders1[1]).magnitude2();
         if pt_dist2 > p_tol * p_tol || der_dist2 > d_tol * d_tol {
@@ -1508,7 +1508,7 @@ where
                 return None;
             }
             let t = f64::midpoint(range.0, range.1);
-            let ders = curve.ders(1, t);
+            let ders = curve.derivatives(1, t);
             let pt = <P as EuclideanSpace>::from_vec(ders[0]);
             let bspcurve0 = Self::sub_cubic_approximation(
                 curve,
@@ -1549,8 +1549,8 @@ where
     /// const N: usize = 100;
     /// for i in 0..N {
     ///     let t = i as f64 / N as f64;
-    ///     assert!(circle.subs(t).distance(bspcurve.subs(t)) < 0.02);
-    ///     assert!((circle.der(t) - bspcurve.der(t)).magnitude() < 0.02);
+    ///     assert!(circle.evaluate(t).distance(bspcurve.evaluate(t)) < 0.02);
+    ///     assert!((circle.derivative(t) - bspcurve.derivative(t)).magnitude() < 0.02);
     /// }
     /// ```
     pub fn cubic_approximation<C>(
@@ -1563,8 +1563,8 @@ where
     where
         C: ParametricCurve<Point = P, Vector = <P as EuclideanSpace>::Diff>,
     {
-        let ends = (curve.subs(range.0), curve.subs(range.1));
-        let enders = (curve.der(range.0), curve.der(range.1));
+        let ends = (curve.evaluate(range.0), curve.evaluate(range.1));
+        let enders = (curve.derivative(range.0), curve.derivative(range.1));
         Self::sub_cubic_approximation(curve, range, ends, enders, p_tol, d_tol, trials).map(
             |mut x| {
                 x.optimize();

@@ -56,8 +56,8 @@ fn homogeneous_point2(control: Vector3) -> Option<Point2> {
 
 fn linear_curve2d_boundary(curve: &Curve2D, tolerance: f64) -> Option<Line<Point2>> {
     let range = curve.range_tuple();
-    let start = curve.subs(range.0);
-    let end = curve.subs(range.1);
+    let start = curve.evaluate(range.0);
+    let end = curve.evaluate(range.1);
     match curve {
         Curve2D::Line(line) => Some(*line),
         Curve2D::Polyline(polyline) => {
@@ -108,8 +108,10 @@ pub(super) fn boundary_matches_surface_curve(
     [0.0, 0.5, 1.0].into_iter().all(|s| {
         let leader_t = (leader_range.1 - leader_range.0).mul_add(s, leader_range.0);
         let boundary_t = (boundary_range.1 - boundary_range.0).mul_add(s, boundary_range.0);
-        let uv = boundary.curve().subs(boundary_t);
-        surface.subs(uv.x, uv.y).near(&leader.subs(leader_t))
+        let uv = boundary.curve().evaluate(boundary_t);
+        surface
+            .evaluate(uv.x, uv.y)
+            .near(&leader.evaluate(leader_t))
     })
 }
 

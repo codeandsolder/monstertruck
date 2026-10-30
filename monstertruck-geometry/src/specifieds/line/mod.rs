@@ -79,8 +79,8 @@ impl Line<Point2> {
     /// let line0 = Line(Point2::new(0.0, 0.0), Point2::new(9.0, 3.0));
     /// let line1 = Line(Point2::new(0.0, 6.0), Point2::new(9.0, 0.0));
     /// let (s, t, p) = line0.intersection(line1).unwrap();
-    /// assert_near!(line0.subs(s), Point2::new(6.0, 2.0));
-    /// assert_near!(line1.subs(t), Point2::new(6.0, 2.0));
+    /// assert_near!(line0.evaluate(s), Point2::new(6.0, 2.0));
+    /// assert_near!(line1.evaluate(t), Point2::new(6.0, 2.0));
     /// assert_near!(p, Point2::new(6.0, 2.0));
     /// ```
     /// # Errors
@@ -96,7 +96,7 @@ impl Line<Point2> {
         let mat = Matrix2::from_cols(self.1 - self.0, other.0 - other.1);
         let v = other.0 - self.0;
         let params = mat.invert().map(|inv| inv * v)?;
-        Some((params.x, params.y, self.subs(params.x)))
+        Some((params.x, params.y, self.evaluate(params.x)))
     }
 }
 
@@ -129,7 +129,7 @@ impl<P: ControlPoint<f64>> BoundedCurve for Line<P> {
 impl<P: ControlPoint<f64>> Cut for Line<P> {
     #[inline]
     fn cut(&mut self, t: f64) -> Self {
-        let r = self.subs(t);
+        let r = self.evaluate(t);
         let res = Self(r, self.1);
         self.1 = r;
         res
@@ -142,7 +142,7 @@ impl<P: ControlPoint<f64>> ParameterDivision1D for Line<P> {
     fn parameter_division(&self, range: (f64, f64), _: f64) -> (Vec<f64>, Vec<P>) {
         (
             vec![range.0, range.1],
-            vec![self.subs(range.0), self.subs(range.1)],
+            vec![self.evaluate(range.0), self.evaluate(range.1)],
         )
     }
 }
@@ -187,7 +187,7 @@ where
     ) -> Option<f64> {
         let b = self.1 - self.0;
         let t = (pt - self.0).dot(b) / b.dot(b);
-        if self.subs(t).near(&pt) {
+        if self.evaluate(t).near(&pt) {
             Some(t)
         } else {
             None
@@ -320,8 +320,8 @@ where
 fn line() {
     let line = Line(Point2::new(1.0, 0.0), Point2::new(0.0, 1.0));
 
-    // subs
-    assert_near!(line.subs(0.4), Point2::new(0.6, 0.4));
+    // evaluate
+    assert_near!(line.evaluate(0.4), Point2::new(0.6, 0.4));
 
     // inverse
     let line_inverse = line.inverse();
@@ -332,7 +332,7 @@ fn line() {
     let mut line0 = line;
     let line1 = line0.cut(0.4);
     assert_eq!(line.0, line0.0);
-    assert_near!(line0.1, line.subs(0.4));
+    assert_near!(line0.1, line.evaluate(0.4));
     assert_eq!(line0.1, line1.0);
     assert_eq!(line1.1, line.1);
 

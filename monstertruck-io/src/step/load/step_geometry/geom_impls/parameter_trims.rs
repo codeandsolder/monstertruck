@@ -605,7 +605,7 @@ fn curve2d_from_sampled_boundary(points: Vec<Point2>) -> Option<Curve2D> {
         let line = Line(front, back);
         let is_linear = points.iter().copied().all(|point| {
             line.search_nearest_parameter(point, None, 1)
-                .is_some_and(|t| line.subs(t).near(&point))
+                .is_some_and(|t| line.evaluate(t).near(&point))
         });
         if is_linear {
             Some(Curve2D::Line(line))
@@ -867,7 +867,7 @@ fn surface_curve_line_without_pcurve_on_cylinder_stays_fallback_only() {
     let surface = Surface::ElementarySurface(ElementarySurface::CylindricalSurface(
         Processor::new(RevolutionSurface::by_revolution(profile, center, axis)),
     ));
-    let leader = Curve3D::Line(Line(surface.subs(0.0, 0.0), surface.subs(0.0, 1.0)));
+    let leader = Curve3D::Line(Line(surface.evaluate(0.0, 0.0), surface.evaluate(0.0, 1.0)));
     let curve = Curve3D::SurfaceCurve(SurfaceCurve3D::new(
         SurfaceCurveKind::SurfaceCurve,
         Box::new(leader),
@@ -888,7 +888,7 @@ fn raw_line_without_pcurve_on_cylinder_stays_fallback_only() {
     let surface = Surface::ElementarySurface(ElementarySurface::CylindricalSurface(
         Processor::new(RevolutionSurface::by_revolution(profile, center, axis)),
     ));
-    let curve = Curve3D::Line(Line(surface.subs(0.0, 0.0), surface.subs(0.0, 1.0)));
+    let curve = Curve3D::Line(Line(surface.evaluate(0.0, 0.0), surface.evaluate(0.0, 1.0)));
 
     assert!(StepParameterCurve::try_from(CurveTrimRef::new(&curve, &surface)).is_err());
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());

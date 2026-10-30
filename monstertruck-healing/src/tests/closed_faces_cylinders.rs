@@ -142,7 +142,7 @@ fn test_split_closed_face_simple_cylinder_case() {
     let curve1 = Line(Point3::new(-1.0, 0.0, 1.0), Point3::new(-1.0, 0.0, 0.0));
     for i in 0..=10 {
         let t = i as f64 / 10.0;
-        assert_near!(curve0.subs(t), curve1.subs(t));
+        assert_near!(curve0.evaluate(t), curve1.evaluate(t));
     }
     assert_eq!(faces.len(), 2);
     let i = faces

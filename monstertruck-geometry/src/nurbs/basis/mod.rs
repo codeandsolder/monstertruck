@@ -25,8 +25,8 @@
 //!     t1: Vector3::new(3.0, 0.0, 0.0),
 //! };
 //! let curve: BsplineCurve<Point3> = hermite.into();
-//! assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-//! assert_near2!(curve.subs(1.0), Point3::new(3.0, 0.0, 0.0));
+//! assert_near2!(curve.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+//! assert_near2!(curve.evaluate(1.0), Point3::new(3.0, 0.0, 0.0));
 //! ```
 
 use super::{BsplineCurve, ControlPoint, Debug, KnotVector, Tolerance};
@@ -54,9 +54,9 @@ use super::{BsplineCurve, ControlPoint, Debug, KnotVector, Tolerance};
 ///     t1: Vector3::new(3.0, -3.0, 0.0),
 /// };
 /// let curve = BsplineCurve::from(seg);
-/// assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-/// assert_near2!(curve.subs(1.0), Point3::new(3.0, 0.0, 0.0));
-/// assert_near2!(curve.der(0.0), Vector3::new(3.0, 3.0, 0.0));
+/// assert_near2!(curve.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+/// assert_near2!(curve.evaluate(1.0), Point3::new(3.0, 0.0, 0.0));
+/// assert_near2!(curve.derivative(0.0), Vector3::new(3.0, 3.0, 0.0));
 /// ```
 #[derive(Clone, Debug)]
 pub struct HermiteSegment<P: ControlPoint<f64>> {
@@ -104,8 +104,8 @@ impl<P: ControlPoint<f64> + Tolerance> From<HermiteSegment<P>> for BsplineCurve<
 ///     Point3::new(3.0, 0.0, 0.0),
 /// ]);
 /// let curve = BsplineCurve::from(spline);
-/// assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-/// assert_near2!(curve.subs(1.0), Point3::new(2.0, 0.0, 0.0));
+/// assert_near2!(curve.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+/// assert_near2!(curve.evaluate(1.0), Point3::new(2.0, 0.0, 0.0));
 /// ```
 #[derive(Clone, Debug)]
 pub struct CatmullRomSpline<P>(pub Vec<P>);
@@ -156,8 +156,8 @@ impl<P: ControlPoint<f64> + Tolerance> From<CatmullRomSpline<P>> for BsplineCurv
 ///     Point3::new(2.0, 3.0, 0.0),
 /// ]);
 /// let curve = BsplineCurve::from(poly);
-/// assert_near2!(curve.subs(0.0), Point3::new(1.0, 0.0, 0.0));
-/// assert_near2!(curve.subs(1.0), Point3::new(3.0, 3.0, 0.0));
+/// assert_near2!(curve.evaluate(0.0), Point3::new(1.0, 0.0, 0.0));
+/// assert_near2!(curve.evaluate(1.0), Point3::new(3.0, 3.0, 0.0));
 /// ```
 #[derive(Clone, Debug)]
 pub struct PowerBasisCurve<P>(pub Vec<P>);
@@ -223,8 +223,8 @@ impl<P: ControlPoint<f64> + Tolerance> From<PowerBasisCurve<P>> for BsplineCurve
 ///     ],
 /// );
 /// let combined = BsplineCurve::from(PiecewiseBezier(vec![seg1, seg2]));
-/// assert_near2!(combined.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-/// assert_near2!(combined.subs(1.0), Point3::new(6.0, 0.0, 0.0));
+/// assert_near2!(combined.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+/// assert_near2!(combined.evaluate(1.0), Point3::new(6.0, 0.0, 0.0));
 /// ```
 #[derive(Clone, Debug)]
 pub struct PiecewiseBezier<P>(pub Vec<BsplineCurve<P>>);

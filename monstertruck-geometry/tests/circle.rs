@@ -6,16 +6,16 @@ proptest! {
     #[test]
     fn search_parameter(t in 0f64..=(2.0 * PI)) {
         let circle = UnitCircle::<Point2>::new();
-        let p = circle.subs(t);
+        let p = circle.evaluate(t);
         let s = circle.search_nearest_parameter(p, None, 1).unwrap();
         prop_assert_near!(s, t);
     }
     #[test]
     fn search_nearest_parameter(t in 0f64..=(2.0 * PI), a in 0.1f64..=5f64) {
         let circle = UnitCircle::<Point2>::new();
-        let p = a * circle.subs(t);
+        let p = a * circle.evaluate(t);
         let s = circle.search_nearest_parameter(p, None, 1).unwrap();
-        let q = a * circle.subs(s);
+        let q = a * circle.evaluate(s);
         prop_assert_near!(p, q);
     }
 
@@ -58,8 +58,8 @@ proptest! {
         prop_assert_near!(bsp.back(), arc.back());
         for i in 0..=10 {
             let t = f64::from(i) / 10.0;
-            let p = bsp.subs(t).to_vec();
-            let der = bsp.der(t);
+            let p = bsp.evaluate(t).to_vec();
+            let der = bsp.derivative(t);
             prop_assert_near!(p.magnitude2(), 1.0);
             prop_assert!(der.dot(p).so_small());
         }

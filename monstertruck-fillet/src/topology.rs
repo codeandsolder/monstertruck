@@ -56,7 +56,7 @@ pub(super) fn cut_face_by_bezier(
             cut_debug(|| format!("front closest-parameter search failed (hint={hint:?})"));
             return None;
         };
-        let v0 = Vertex::new(bezier.subs(t0));
+        let v0 = Vertex::new(bezier.evaluate(t0));
         bezier = bezier.cut(t0);
         let Some(cut) = front_edge.not_strictly_cut_with_parameter(&v0, t1) else {
             cut_debug(|| {
@@ -65,8 +65,8 @@ pub(super) fn cut_face_by_bezier(
                     "front edge cut failed at t={t1} (edge range {:?}); \
                      t0={t0} rail=({:?})..({:?}) edge=({:?})..({:?})",
                     curve.range_tuple(),
-                    bezier.subs(b0),
-                    bezier.subs(b1),
+                    bezier.evaluate(b0),
+                    bezier.evaluate(b1),
                     front_edge.front().point(),
                     front_edge.back().point(),
                 )
@@ -90,15 +90,15 @@ pub(super) fn cut_face_by_bezier(
                 format!(
                     "back closest-parameter search failed (hint={hint:?}); \
                      rail=({:?})..({:?}) edge=({:?})..({:?})",
-                    bezier.subs(b0),
-                    bezier.subs(b1),
+                    bezier.evaluate(b0),
+                    bezier.evaluate(b1),
                     back_edge.front().point(),
                     back_edge.back().point(),
                 )
             });
             return None;
         };
-        let v1 = Vertex::new(bezier.subs(t0));
+        let v1 = Vertex::new(bezier.evaluate(t0));
         let _ = bezier.cut(t0);
         let Some(cut) = back_edge.not_strictly_cut_with_parameter(&v1, t1) else {
             cut_debug(|| {

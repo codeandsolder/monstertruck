@@ -15,7 +15,7 @@ fn arc_length_reparameterization_straight_line() {
     );
     let reparam = (reparameterize_arc_length(&line, 20)).unwrap();
     // At u=0.5, we should be at the midpoint.
-    let mid = reparam.subs(0.5);
+    let mid = reparam.evaluate(0.5);
     assert!((mid.x - 1.5).abs() < 0.1, "expected x~1.5, got {}", mid.x);
     assert!((mid.y - 2.0).abs() < 0.1, "expected y~2.0, got {}", mid.y);
 }
@@ -41,8 +41,8 @@ fn fair_curve_reduces_noise() {
     // The smoothed curve has fewer control points.
     assert_eq!(smooth.control_points().len(), 5);
     // Endpoints should still be approximately preserved.
-    let start = smooth.subs(0.0);
-    let end = smooth.subs(1.0);
+    let start = smooth.evaluate(0.0);
+    let end = smooth.evaluate(1.0);
     assert!((start.x - 0.0).abs() < 0.2, "start.x = {}", start.x);
     assert!((end.x - 8.0).abs() < 0.2, "end.x = {}", end.x);
 }

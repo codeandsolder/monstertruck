@@ -67,7 +67,7 @@ impl<S: Clone> BoundaryCurveFromSamples<S> for ParameterCurve<BoundaryCurve2D, S
             let line = Line(*front, *back);
             let is_linear = points.iter().copied().all(|point| {
                 line.search_nearest_parameter(point, None, 1)
-                    .is_some_and(|t| line.subs(t).near(&point))
+                    .is_some_and(|t| line.evaluate(t).near(&point))
             });
             Some(Self::new(
                 if is_linear {
@@ -98,8 +98,8 @@ impl TryFrom<ParameterCurve<Line<Point2>, Plane>> for BsplineCurve<Point3> {
     ) -> std::result::Result<Self, Self::Error> {
         let (line, plane) = value.decompose();
         Ok(Self::from(Line(
-            plane.subs(line.0.x, line.0.y),
-            plane.subs(line.1.x, line.1.y),
+            plane.evaluate(line.0.x, line.0.y),
+            plane.evaluate(line.1.x, line.1.y),
         )))
     }
 }
@@ -137,7 +137,10 @@ fn exact_line_boundary_on_plane(
     let (u0, v0) = plane.search_parameter(line.front(), None, 1)?;
     let (u1, v1) = plane.search_parameter(line.back(), None, 1)?;
     let boundary = ParameterCurve::new(Line(Point2::new(u0, v0), Point2::new(u1, v1)), *plane);
-    boundary.subs(0.5).near(&line.subs(0.5)).then_some(boundary)
+    boundary
+        .evaluate(0.5)
+        .near(&line.evaluate(0.5))
+        .then_some(boundary)
 }
 
 fn exact_line_boundary_on_affine_surface<S>(
@@ -149,11 +152,11 @@ where
 {
     let (u_range, v_range) = surface.try_range_tuple();
     let ((u0, u1), (v0, v1)) = (u_range?, v_range?);
-    let p00 = surface.subs(u0, v0);
-    let p10 = surface.subs(u1, v0);
-    let p01 = surface.subs(u0, v1);
-    let p11 = surface.subs(u1, v1);
-    let midpoint = surface.subs(f64::midpoint(u0, u1), f64::midpoint(v0, v1));
+    let p00 = surface.evaluate(u0, v0);
+    let p10 = surface.evaluate(u1, v0);
+    let p01 = surface.evaluate(u0, v1);
+    let p11 = surface.evaluate(u1, v1);
+    let midpoint = surface.evaluate(f64::midpoint(u0, u1), f64::midpoint(v0, v1));
     (p11.near(&(p10 + (p01 - p00))) && midpoint.near(&(p00 + ((p10 - p00) + (p01 - p00)) * 0.5)))
         .then_some(())?;
     let u_axis = p10 - p00;
@@ -172,16 +175,16 @@ where
         let sv = f64::mul_add(du, -uv, dv * uu) / denominator;
         let parameter = Point2::new(f64::mul_add(u1 - u0, su, u0), f64::mul_add(v1 - v0, sv, v0));
         surface
-            .subs(parameter.x, parameter.y)
+            .evaluate(parameter.x, parameter.y)
             .near(&point)
             .then_some(parameter)
     };
     let front = project(line.front())?;
-    let middle = project(line.subs(0.5))?;
+    let middle = project(line.evaluate(0.5))?;
     let back = project(line.back())?;
     let boundary = Line(front, back);
     boundary
-        .subs(0.5)
+        .evaluate(0.5)
         .near(&middle)
         .then(|| ParameterCurve::new(boundary, surface.clone()))
 }
@@ -211,7 +214,7 @@ fn exact_line_boundary_on_homogeneous_extrusion_surface(
         .search_nearest_parameter(line.back(), Some(curve_parameter), 30)
         .or_else(|| base_curve.search_nearest_parameter(line.back(), None, 30))?;
     ((back_curve_parameter - curve_parameter).abs() <= curve_tolerance).then_some(())?;
-    let base_point = base_curve.subs(curve_parameter);
+    let base_point = base_curve.evaluate(curve_parameter);
     let extrusion_parameter = |point: Point3| {
         let factor = (point - base_point).dot(vector) / vector2;
         let parameter = f64::mul_add(
@@ -228,14 +231,14 @@ fn exact_line_boundary_on_homogeneous_extrusion_surface(
             }
             _ => None?,
         };
-        surface.subs(uv.x, uv.y).near(&point).then_some(uv)
+        surface.evaluate(uv.x, uv.y).near(&point).then_some(uv)
     };
     let front = extrusion_parameter(line.front())?;
-    let middle = extrusion_parameter(line.subs(0.5))?;
+    let middle = extrusion_parameter(line.evaluate(0.5))?;
     let back = extrusion_parameter(line.back())?;
     let boundary = Line(front, back);
     boundary
-        .subs(0.5)
+        .evaluate(0.5)
         .near(&middle)
         .then(|| ParameterCurve::new(boundary, surface.clone()))
 }
@@ -259,7 +262,7 @@ where
         .into_iter()
         .all(|t| {
             boundary
-                .search_parameter(curve.subs(t), None, 100)
+                .search_parameter(curve.evaluate(t), None, 100)
                 .is_some()
         })
         .then(|| {
@@ -368,7 +371,7 @@ fn exact_linear_boundary_by_surface_search<C, S>(
 ) -> Option<ParameterCurve<Line<Point2>, S>>
 where
     C: ParametricCurve3D + BoundedCurve<Point = Point3>,
-    S: Clone + ParametricSurface3D + SearchParameter<D2, Point = Point3>,
+    S: Clone + ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
 {
     let (t0, t1) = curve.range_tuple();
     exact_linear_boundary_by_surface_search_with_parameters(
@@ -390,7 +393,7 @@ fn exact_line_boundary_by_surface_search<C, S>(
 ) -> Option<ParameterCurve<Line<Point2>, S>>
 where
     C: ParametricCurve3D + BoundedCurve<Point = Point3>,
-    S: Clone + ParametricSurface3D + SearchParameter<D2, Point = Point3>,
+    S: Clone + ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
 {
     let (t0, t1) = curve.range_tuple();
     exact_linear_boundary_by_surface_search_with_parameters(
@@ -416,7 +419,7 @@ where
             let parameter = (uv - line.0).dot(direction) / len2;
             let projected = line.0 + direction * parameter;
             surface
-                .subs(projected.x, projected.y)
+                .evaluate(projected.x, projected.y)
                 .near(&point)
                 .then_some(projected)
         })
@@ -447,14 +450,14 @@ fn exact_linear_boundary_by_surface_search_with_parameters<C, S, I>(
 ) -> Option<ParameterCurve<Line<Point2>, S>>
 where
     C: ParametricCurve3D + BoundedCurve<Point = Point3>,
-    S: Clone + ParametricSurface3D + SearchParameter<D2, Point = Point3>,
+    S: Clone + ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>,
     I: IntoIterator<Item = f64>,
 {
     let mut parameters = parameters.into_iter();
     let periods = (surface.period_u(), surface.period_v());
     let samples: SmallVec<[(Point3, Point2); 5]> =
         parameters.try_fold(SmallVec::new(), |mut samples, parameter| {
-            let point = curve.subs(parameter);
+            let point = curve.evaluate(parameter);
             let hint = samples
                 .last()
                 .map(|(_, uv): &(Point3, Point2)| (*uv).into());
@@ -492,7 +495,7 @@ where
         + TryIntoHomogeneousBsplineCurve,
     S: Clone
         + ParametricSurface3D
-        + SearchParameter<D2, Point = Point3>
+        + SearchParameter<SurfaceParameter, Point = Point3>
         + TryIntoHomogeneousBsplineSurface,
 {
     let hom_surface = surface.try_into_homogeneous_bspline_surface()?;
@@ -516,13 +519,15 @@ where
     // pi/2). Accept the matched border line only when its image on the
     // original surface reproduces the curve; otherwise report no exact
     // boundary so the surface-search fallback derives true parameters.
-    let mid = boundary.subs(0.5);
+    let mid = boundary.evaluate(0.5);
     (surface
-        .subs(boundary.0.x, boundary.0.y)
+        .evaluate(boundary.0.x, boundary.0.y)
         .near(&curve.front())
-        && surface.subs(boundary.1.x, boundary.1.y).near(&curve.back())
+        && surface
+            .evaluate(boundary.1.x, boundary.1.y)
+            .near(&curve.back())
         && curve
-            .search_parameter(surface.subs(mid.x, mid.y), None, 100)
+            .search_parameter(surface.evaluate(mid.x, mid.y), None, 100)
             .is_some())
     .then(|| ParameterCurve::new(boundary, surface.clone()))
 }
@@ -534,11 +539,11 @@ fn exact_boundary_on_homogeneous_surface<C, S>(
 where
     C: ParametricCurve3D
         + BoundedCurve<Point = Point3>
-        + SearchParameter<D1, Point = Point3>
+        + SearchParameter<CurveParameter, Point = Point3>
         + TryIntoHomogeneousBsplineCurve,
     S: Clone
         + ParametricSurface3D
-        + SearchParameter<D2, Point = Point3>
+        + SearchParameter<SurfaceParameter, Point = Point3>
         + TryIntoHomogeneousBsplineSurface,
 {
     exact_boundary_on_homogeneous_surface_only(curve, surface)
@@ -552,11 +557,11 @@ fn exact_line_boundary_on_homogeneous_surface<C, S>(
 where
     C: ParametricCurve3D
         + BoundedCurve<Point = Point3>
-        + SearchParameter<D1, Point = Point3>
+        + SearchParameter<CurveParameter, Point = Point3>
         + TryIntoHomogeneousBsplineCurve,
     S: Clone
         + ParametricSurface3D
-        + SearchParameter<D2, Point = Point3>
+        + SearchParameter<SurfaceParameter, Point = Point3>
         + TryIntoHomogeneousBsplineSurface,
 {
     exact_line_boundary_by_surface_search(curve, surface)

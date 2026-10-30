@@ -14,9 +14,9 @@ fn nurbs_circle() {
     const N: usize = 10;
     for i in 0..=N {
         let t = i as f64 / N as f64;
-        let p = curve.subs(t).to_vec();
+        let p = curve.evaluate(t).to_vec();
         assert_near!(p.magnitude(), 1.0);
-        let der = curve.der(t);
+        let der = curve.derivative(t);
         assert!(p.dot(der).so_small());
     }
 }
@@ -41,8 +41,8 @@ proptest! {
         let bsp = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
 
         const EPS: f64 = 1.0e-4;
-        let der0 = bsp.der_n(n + 1, t);
-        let der1 = (bsp.der_n(n, t + EPS) - bsp.der_n(n, t - EPS)) / (2.0 * EPS);
+        let der0 = bsp.derivative_n(n + 1, t);
+        let der1 = (bsp.derivative_n(n, t + EPS) - bsp.derivative_n(n, t - EPS)) / (2.0 * EPS);
         prop_assert!((der0 - der1).magnitude() <= 0.01 * der0.magnitude());
     }
 
@@ -64,9 +64,9 @@ proptest! {
             .collect::<Vec<_>>();
         let bsp = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
 
-        let ders0 = (0..=n).map(|i| bsp.der_n(i, t)).collect::<Vec<_>>();
+        let ders0 = (0..=n).map(|i| bsp.derivative_n(i, t)).collect::<Vec<_>>();
 
-        let ders1 =  bsp.ders(n, t);
+        let ders1 =  bsp.derivatives(n, t);
 
         prop_assert_eq!(ders0.len(), ders1.len());
 
@@ -131,12 +131,12 @@ fn test_parameter_division() {
     assert_eq!(knot_vec[0], div[0]);
     assert_eq!(knot_vec.range_length(), div.last().unwrap() - div[0]);
     for i in 1..div.len() {
-        let pt0 = curve.subs(div[i - 1]);
+        let pt0 = curve.evaluate(div[i - 1]);
         assert_eq!(pt0, pts[i - 1]);
-        let pt1 = curve.subs(div[i]);
+        let pt1 = curve.evaluate(div[i]);
         assert_eq!(pt1, pts[i]);
         let value_middle = pt0.midpoint(pt1);
-        let param_middle = curve.subs(f64::midpoint(div[i - 1], div[i]));
+        let param_middle = curve.evaluate(f64::midpoint(div[i - 1], div[i]));
         let dist = value_middle.distance(param_middle);
         assert!(dist < tol, "large distance: {dist}");
     }

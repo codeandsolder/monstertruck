@@ -17,7 +17,7 @@ where C: ParametricCurve3D<Point = Point3> + BoundedCurve<Point = Point3> {
     }
     let curve = &edge.curve;
     let (t0, t1) = curve.range_tuple();
-    let midpoint = curve.subs((t0 + t1) * 0.5);
+    let midpoint = curve.evaluate((t0 + t1) * 0.5);
     if debug == "translated" {
         midpoint.x > 0.75
             && midpoint.x < 1.01
@@ -94,13 +94,13 @@ where C: ParametricCurve3D<Point = Point3>
         })
         .filter_map(|(index, point)| {
             let t = edge.curve.search_nearest_parameter(point, None, 100)?;
-            let distance2 = edge.curve.subs(t).distance2(point);
+            let distance2 = edge.curve.evaluate(t).distance2(point);
             Some((index, point, t, distance2))
         })
         .collect();
     if debug_focus {
         let curve = &edge.curve;
-        let midpoint = curve.subs((t0 + t1) * 0.5);
+        let midpoint = curve.evaluate((t0 + t1) * 0.5);
         eprintln!(
             "debug pass-through edge front={:?} back={:?} midpoint={midpoint:?} candidates={:?}",
             vertices[edge.vertices.0], vertices[edge.vertices.1], candidates,
@@ -396,7 +396,7 @@ where
     let tol2 = tol * tol;
     let midpoint = |edge: &Edge<C>| {
         let (t0, t1) = edge.curve.range_tuple();
-        edge.curve.subs((t0 + t1) * 0.5)
+        edge.curve.evaluate((t0 + t1) * 0.5)
     };
     let mut canonical_by_pair: HashMap<(usize, usize), Vec<usize>> = HashMap::default();
     let mut remap: HashMap<usize, (usize, bool)> = HashMap::default();

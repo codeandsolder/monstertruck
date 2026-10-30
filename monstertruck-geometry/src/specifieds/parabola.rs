@@ -1,5 +1,5 @@
 use super::{
-    CurveParameter, D1, EuclideanSpace, HashGen, MetricSpace, Origin, ParameterDivision1D,
+    CurveParameter, EuclideanSpace, HashGen, MetricSpace, Origin, ParameterDivision1D,
     ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
     SearchParameterHint1D, Tolerance, UnitParabola, Vector2, Vector3, Zero, algo, solver,
 };
@@ -78,8 +78,8 @@ impl SearchNearestParameter<CurveParameter> for UnitParabola<Point2> {
             .into_iter()
             .filter_map(|x| if x.im.so_small() { Some(x.re) } else { None })
             .min_by(|s, t| {
-                pt.distance2(self.subs(*s))
-                    .total_cmp(&pt.distance2(self.subs(*t)))
+                pt.distance2(self.evaluate(*s))
+                    .total_cmp(&pt.distance2(self.evaluate(*t)))
             })
     }
 }
@@ -111,7 +111,7 @@ impl SearchParameter<CurveParameter> for UnitParabola<Point2> {
         _: usize,
     ) -> Option<f64> {
         let t = pt.y / 2.0;
-        let pt0 = self.subs(t);
+        let pt0 = self.evaluate(t);
         if pt.near(&pt0) { Some(t) } else { None }
     }
 }
@@ -200,7 +200,9 @@ macro_rules! impl_v2_parabola_search {
                 _: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchNearestParameter::<D1>::search_nearest_parameter(self, pt, None, 0)
+                SearchNearestParameter::<CurveParameter>::search_nearest_parameter(
+                    self, pt, None, 0,
+                )
             }
         }
 
@@ -213,7 +215,7 @@ macro_rules! impl_v2_parabola_search {
                 _: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchParameter::<D1>::search_parameter(self, pt, None, 0)
+                SearchParameter::<CurveParameter>::search_parameter(self, pt, None, 0)
             }
         }
     };

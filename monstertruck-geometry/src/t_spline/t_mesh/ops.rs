@@ -465,7 +465,7 @@ where P: ControlPoint<f64>
     ///
     /// # Borrows
     /// Immutably borrows every control point in `self`.
-    pub fn subs(&self, s: f64, t: f64) -> Result<P> {
+    pub fn try_evaluate(&self, s: f64, t: f64) -> Result<P> {
         // Generate knot vectors if stale.
         if self.knot_vectors.read().is_none() {
             self.generate_knot_vectors()?;

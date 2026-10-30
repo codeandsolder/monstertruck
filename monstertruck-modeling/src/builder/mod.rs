@@ -97,7 +97,7 @@ pub fn vertices<P: Into<Point3>>(points: impl IntoIterator<Item = P>) -> Vec<Ver
 /// # const N: usize = 10;
 /// # for i in 0..=N {
 /// #     let t = i as f64 / N as f64;
-/// #     assert!(curve.subs(t).near2(&(pt0 + t * (pt1 - pt0))));
+/// #     assert!(curve.evaluate(t).near2(&(pt0 + t * (pt1 - pt0))));
 /// # }
 /// ```
 #[must_use]
@@ -157,7 +157,7 @@ pub enum CircularArcConstraint {
 /// # const N: usize = 10;
 /// # for i in 0..=N {
 /// #       let t = curve.knot_vector()[0] + curve.knot_vector().range_length() * i as f64 / N as f64;
-/// #       assert!(curve.subs(t).to_vec().magnitude().near(&1.0));
+/// #       assert!(curve.evaluate(t).to_vec().magnitude().near(&1.0));
 /// # }
 /// # Ok(())
 /// # }
@@ -247,7 +247,7 @@ where
 /// # for i in 0..=N {
 /// #       let t = i as f64 / N as f64;
 /// #       let pt = Point3::new(t * 3.0, 6.0 * t * t * t - 9.0 * t * t + 3.0 * t, 0.0);
-/// #       assert!(curve.subs(t).near(&pt));
+/// #       assert!(curve.evaluate(t).near(&pt));
 /// # }
 /// ```
 #[must_use]
@@ -283,7 +283,7 @@ where BsplineCurve<Point3>: ToSameGeometry<C> {
 /// #           let s = i as f64 / N as f64;
 /// #           let t = j as f64 / N as f64;
 /// #           let pt = Point3::new(s * (1.0 - t), t, s * t);
-/// #           assert!(surface.subs(s, t).near(&pt));
+/// #           assert!(surface.evaluate(s, t).near(&pt));
 /// #       }
 /// # }
 /// ```
@@ -562,7 +562,7 @@ where
                     let p0 = edge.front().point();
                     let curve = edge.curve();
                     let (t0, t1) = curve.range_tuple();
-                    let p1 = curve.subs(f64::midpoint(t0, t1));
+                    let p1 = curve.evaluate(f64::midpoint(t0, t1));
                     [p0, p1]
                 })
                 .collect()
@@ -758,8 +758,8 @@ fn composite_edges_near(first: &crate::Edge, second: &crate::Edge, tolerance: f6
             (b0 - b1).mul_add(fraction, b1)
         };
         first_curve
-            .subs(first_t)
-            .distance(second_curve.subs(second_t))
+            .evaluate(first_t)
+            .distance(second_curve.evaluate(second_t))
             <= tolerance
     })
 }
@@ -974,7 +974,7 @@ pub fn composite_closed_sweep(
 /// #       for j in 0..=N {
 /// #           let u = i as f64 / N as f64;
 /// #           let v = j as f64 / N as f64;
-/// #           let pt = surface.subs(u, v);
+/// #           let pt = surface.evaluate(u, v);
 /// #
 /// #           // this surface is a part of torus.
 /// #           let tmp = f64::sqrt(pt[0] * pt[0] + pt[2] * pt[2]) - 2.0;
@@ -1031,7 +1031,7 @@ pub fn composite_closed_sweep(
 /// #    for j in 0..=N {
 /// #        let u = i as f64 / N as f64;
 /// #        let v = j as f64 / N as f64;
-/// #        let pt = surface.subs(u, v);
+/// #        let pt = surface.evaluate(u, v);
 /// #
 /// #        // the y coordinate is positive.
 /// #        //assert!(pt[1] >= 0.0);
@@ -1166,7 +1166,7 @@ where C: ParametricCurve3D + BoundedCurve + Cut {
     let mut curve = edge.curve();
     let (start, end) = curve.range_tuple();
     let midpoint = f64::midpoint(start, end);
-    let middle = Vertex::new(curve.subs(midpoint));
+    let middle = Vertex::new(curve.evaluate(midpoint));
     let trailing_curve = curve.cut(midpoint);
     wire.push_back(Edge::new_unchecked(&front, &middle, curve));
     wire.push_back(Edge::new_unchecked(&middle, &back, trailing_curve));

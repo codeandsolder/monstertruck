@@ -50,7 +50,7 @@ fn sampled_curve_distance_squared(curve: &Curve, point: Point3, sample_count: us
     (0..=sample_count)
         .map(|i| {
             let t = t0 + (t1 - t0) * (i as f64) / (sample_count as f64);
-            squared_distance(curve.subs(t), point)
+            squared_distance(curve.evaluate(t), point)
         })
         .fold(f64::INFINITY, f64::min)
 }

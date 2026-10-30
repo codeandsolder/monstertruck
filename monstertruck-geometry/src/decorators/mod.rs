@@ -376,7 +376,7 @@ pub struct ApproximateFilletSurface<S0, S1> {
 
 /// Curve `entity` offset by another parametric curve `offset` added pointwise.
 ///
-/// `OffsetCurve<C, N>::subs(t)` returns `entity.subs(t) + offset.subs(t)`, and
+/// `OffsetCurve<C, N>::evaluate(t)` returns `entity.evaluate(t) + offset.evaluate(t)`, and
 /// every derivative is the sum of the corresponding `entity` / `offset`
 /// derivatives. The parameter range and period come from `entity`.
 ///
@@ -392,8 +392,8 @@ pub struct OffsetCurve<C, N> {
 /// Surface `entity` offset by another parametric surface `offset` added pointwise.
 ///
 /// Analogous to [`OffsetCurve`] but for two-parameter surfaces.
-/// `OffsetSurface<S, N>::subs(u, v)` returns
-/// `entity.subs(u, v) + offset.subs(u, v)`.
+/// `OffsetSurface<S, N>::evaluate(u, v)` returns
+/// `entity.evaluate(u, v) + offset.evaluate(u, v)`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct OffsetSurface<S, N> {
     entity: S,

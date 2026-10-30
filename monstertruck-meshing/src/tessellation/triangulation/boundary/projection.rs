@@ -125,7 +125,7 @@ fn verified_footpoint<S: PreMeshableSurface>(
     if !u.is_finite() || !v.is_finite() {
         return None;
     }
-    (surface.subs(u, v).distance(point) <= tolerance).then_some((u, v))
+    (surface.evaluate(u, v).distance(point) <= tolerance).then_some((u, v))
 }
 
 fn orient_boundary_to_edge<C, S>(
@@ -624,8 +624,8 @@ impl PolyBoundaryPiece {
                         let (_, v_prev) = (*previous)?;
                         let (u0, u1) = surface.try_range_tuple().0?;
                         [u0, u1].into_iter().find_map(|u_end| {
-                            let pole = surface.subs(u_end, v_prev);
-                            let is_pole = pole.near(&surface.subs(u_end, v_prev + 1.0));
+                            let pole = surface.evaluate(u_end, v_prev);
+                            let is_pole = pole.near(&surface.evaluate(u_end, v_prev + 1.0));
                             let at_pole = (pole - pt).magnitude2() < 1.0e-6;
                             (is_pole && at_pole).then_some((u_end, v_prev))
                         })
@@ -644,7 +644,7 @@ impl PolyBoundaryPiece {
                                 },
                                 uv.0,
                                 uv.1,
-                                surface.subs(uv.0, uv.1).distance(pt),
+                                surface.evaluate(uv.0, uv.1).distance(pt),
                             );
                         }
                         Some(uv)

@@ -61,7 +61,7 @@ impl ParameterTransform for Segment {
 impl Cut for Segment {
     #[inline]
     fn cut(&mut self, t: f64) -> Self {
-        let p = self.subs(t);
+        let p = self.evaluate(t);
         let res = Segment {
             ends: (p, self.ends.1),
             range: (t, self.range.1),
@@ -129,9 +129,9 @@ impl Invertible for Segment {
 #[test]
 fn segment_test() {
     let seg = Segment::new(Point3::new(1.2, 2.3, 3.4), Point3::new(2.4, 3.5, 4.6));
-    assert_near!(seg.subs(0.5), Point3::new(1.8, 2.9, 4.0));
-    assert_near!(seg.der(0.5), Vector3::new(1.2, 1.2, 1.2));
-    assert_eq!(seg.der2(0.5), Vector3::zero());
+    assert_near!(seg.evaluate(0.5), Point3::new(1.8, 2.9, 4.0));
+    assert_near!(seg.derivative(0.5), Vector3::new(1.2, 1.2, 1.2));
+    assert_eq!(seg.derivative_2(0.5), Vector3::zero());
     parameter_transform_random_test(&seg, 100);
     cut_random_test(&seg, 100);
 
@@ -149,7 +149,7 @@ fn segment_test() {
         ConcatError::DisconnectedPoints(Point3::new(2.4, 3.5, 4.6), Point3::new(3.4, 3.5, 4.6))
     );
 
-    let pt = seg.subs(0.324);
+    let pt = seg.evaluate(0.324);
     let a = seg.search_parameter(pt, None, 0).unwrap();
     assert_near!(a, 0.324);
     assert!(

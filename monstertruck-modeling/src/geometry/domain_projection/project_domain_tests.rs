@@ -162,7 +162,7 @@ fn a_hinted_projection_that_would_leave_the_domain_falls_back_in_domain() {
     );
 
     let target = (0.02, 0.5);
-    let point = surface.subs(target.0, target.1);
+    let point = surface.evaluate(target.0, target.1);
     // A hint parked at the far domain edge is exactly the self-sustaining
     // state the sampled chain walks into.
     let hint = Some((0.999, 0.5));
@@ -176,7 +176,7 @@ fn a_hinted_projection_that_would_leave_the_domain_falls_back_in_domain() {
         "precondition: the hinted solve must escape the domain, got {legacy:?}",
     );
     assert!(
-        surface.subs(legacy.x, legacy.y).distance(point) < 1.0e-9,
+        surface.evaluate(legacy.x, legacy.y).distance(point) < 1.0e-9,
         "precondition: the off-domain answer reproduces the sample, so nothing \
          downstream can reject it",
     );
@@ -196,7 +196,7 @@ fn an_in_domain_hinted_projection_is_the_first_attempt_bit_for_bit() {
     let surface = extruded_nurbs_circle();
     let domain = SurfaceParameterDomain::of(&surface);
     let target = (0.4, 0.25);
-    let point = surface.subs(target.0, target.1);
+    let point = surface.evaluate(target.0, target.1);
     let hint = Some((0.42, 0.3));
 
     let exact = surface
@@ -430,7 +430,7 @@ fn a_knot_bounded_surface_keeps_its_domain_and_its_rejection() {
     );
 
     let target = (0.02, 0.5);
-    let point = surface.subs(target.0, target.1);
+    let point = surface.evaluate(target.0, target.1);
     let hint = Some((0.999, 0.5));
     let escaped = surface
         .search_nearest_parameter(point, hint, 100)
@@ -509,7 +509,7 @@ fn a_loaded_cylinders_axial_axis_is_not_a_bound_but_its_angular_axis_is() {
         "and it is in-domain now, so the chain stops at the first attempt",
     );
     assert!(
-        surface.subs(projected.x, projected.y).distance(point) < 1.0e-9,
+        surface.evaluate(projected.x, projected.y).distance(point) < 1.0e-9,
         "sanity: the answer is on the surface",
     );
 }

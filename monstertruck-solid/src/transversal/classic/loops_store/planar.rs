@@ -522,7 +522,7 @@ where
             let (t0, t1) = curve.range_tuple();
             let samples = [
                 edge.front().point(),
-                curve.subs((t0 + t1) * 0.5),
+                curve.evaluate((t0 + t1) * 0.5),
                 edge.back().point(),
             ];
             if !polygon.neighborhood_include(&samples, proximity) {

@@ -40,7 +40,7 @@ fn step_polyline(curve: &Curve) -> PolylineCurve<Point3> {
     let (t0, t1) = curve.range_tuple();
     let points = (0..=32)
         .map(|i| t0 + (t1 - t0) * (i as f64) / 32.0)
-        .map(|t| curve.subs(t))
+        .map(|t| curve.evaluate(t))
         .collect();
     PolylineCurve(points)
 }

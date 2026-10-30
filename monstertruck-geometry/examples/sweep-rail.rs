@@ -32,7 +32,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!("\nLeading edge (u=0) along rail:");
     for i in 0..=5 {
         let v = f64::from(i) / 5.0;
-        let pt = surface.subs(0.0, v);
+        let pt = surface.evaluate(0.0, v);
         println!("  v={v:.1}: ({:.2}, {:.2}, {:.2})", pt.x, pt.y, pt.z);
     }
     Ok(())

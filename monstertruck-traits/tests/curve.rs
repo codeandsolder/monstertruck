@@ -33,13 +33,13 @@ fn polycurve_test() {
     let poly = PolynomialCurve::<Point1>(coef);
     for i in 0..10 {
         let t = f64::from(i);
-        let res = poly.subs(t);
+        let res = poly.evaluate(t);
         let ans = Point1::new(t * t * t + 2.0 * t * t + 3.0 * t + 4.0);
         assert_eq!(res, ans);
-        let res = poly.der(t);
+        let res = poly.derivative(t);
         let ans = Vector1::new(3.0 * t * t + 4.0 * t + 3.0);
         assert_eq!(res, ans);
-        let res = poly.der2(t);
+        let res = poly.derivative_2(t);
         let ans = Vector1::new(6.0 * t + 4.0);
         assert_eq!(res, ans);
     }
@@ -69,7 +69,7 @@ fn exec_polycurve_snp_on_curve(rng: &mut StdRng) -> bool {
         .collect();
     let poly = PolynomialCurve::<Point3>(coef);
     let t = 20.0 * rng.random::<f64>() - 10.0;
-    let pt = poly.subs(t);
+    let pt = poly.evaluate(t);
     let hint = t + 1.0 * rng.random::<f64>() - 0.5;
     algo::curve::search_nearest_parameter(&poly, pt, hint, 100).map_or_else(
         || {
@@ -77,7 +77,7 @@ fn exec_polycurve_snp_on_curve(rng: &mut StdRng) -> bool {
             false
         },
         |res| {
-            if poly.subs(res).near(&pt) {
+            if poly.evaluate(res).near(&pt) {
                 true
             } else {
                 eprintln!(
@@ -115,14 +115,14 @@ fn exec_polycurve_division(rng: &mut StdRng) -> bool {
     let poly = PolynomialCurve::<Point3>(coef);
     let (division, pts) = algo::curve::parameter_division(&poly, (-10.0, 10.0), 0.05);
     division.windows(2).zip(pts).all(|(a, pt)| {
-        let pt0 = poly.subs(a[0]);
+        let pt0 = poly.evaluate(a[0]);
         assert_eq!(pt0, pt);
-        let pt1 = poly.subs(a[1]);
+        let pt1 = poly.evaluate(a[1]);
         (1..3).all(|i| {
             let t = f64::from(i) / 3.0;
             let res = pt0 + (pt1 - pt0) * t;
             let t = a[0] * (1.0 - t) + a[1] * t;
-            let ans = poly.subs(t);
+            let ans = poly.evaluate(t);
             res.distance(ans) < 0.1
         })
     })
@@ -167,8 +167,8 @@ fn exec_polycurve_closest_point(rng: &mut StdRng) -> bool {
         return false;
     };
 
-    let (p0, der0) = (poly0.subs(t0), poly0.der(t0));
-    let (p1, der1) = (poly1.subs(t1), poly1.der(t1));
+    let (p0, der0) = (poly0.evaluate(t0), poly0.derivative(t0));
+    let (p1, der1) = (poly1.evaluate(t1), poly1.derivative(t1));
     let n = p1 - p0;
 
     n.dot(der0).so_small() && n.dot(der1).so_small()
@@ -214,8 +214,8 @@ fn exec_polycurve_intersection_point(rng: &mut StdRng) -> bool {
         return false;
     };
 
-    let (p0, p1) = (poly0.subs(t0), poly1.subs(t1));
-    poly0.subs(t0).near(&p0) && poly1.subs(t1).near(&p1) && p0.near(&p1)
+    let (p0, p1) = (poly0.evaluate(t0), poly1.evaluate(t1));
+    poly0.evaluate(t0).near(&p0) && poly1.evaluate(t1).near(&p1) && p0.near(&p1)
 }
 
 #[test]

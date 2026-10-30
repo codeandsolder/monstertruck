@@ -13,7 +13,7 @@ where
 {
     let (t0, t1) = curve.range_tuple();
     let t = (t0 + t1) / 2.0;
-    vertices.push(curve.subs(t));
+    vertices.push(curve.evaluate(t));
 
     let v2 = *v1;
     *v1 = vertices.len() - 1;

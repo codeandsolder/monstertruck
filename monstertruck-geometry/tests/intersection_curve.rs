@@ -16,8 +16,8 @@ proptest! {
             ],
         );
         let curve = IntersectionCurve::new(sphere0, sphere1, bsp);
-        let p = curve.subs(t);
-        let v = curve.der(t);
+        let p = curve.evaluate(t);
+        let v = curve.derivative(t);
 
         prop_assert_near!(p.to_vec().magnitude(), 1.0);
         prop_assert!(p.to_vec().dot(v).so_small());
@@ -42,7 +42,7 @@ proptest! {
         );
         let curve = IntersectionCurve::new(cylinder0, cylinder1, lead_circle);
 
-        let p = curve.subs(t);
+        let p = curve.evaluate(t);
         prop_assert_near!(f64::mul_add(p.y, p.y, p.x * p.x), 1.0);
         prop_assert_near!(f64::mul_add(p.y, p.y, p.z * p.z), 4.0);
 
@@ -54,12 +54,12 @@ proptest! {
         prop_assert!(diff.near(&0.0) || diff.near(&(2.0 * PI)));
 
         const EPS: f64 = 1.0e-4;
-        let v0 = curve.der_n(n + 1, t);
-        let v1 = (curve.der_n(n, t + EPS) - curve.der_n(n, t - EPS)) / (2.0 * EPS);
+        let v0 = curve.derivative_n(n + 1, t);
+        let v1 = (curve.derivative_n(n, t + EPS) - curve.derivative_n(n, t - EPS)) / (2.0 * EPS);
         prop_assert!((v0 - v1).magnitude() < EPS * 10.0, "{v0:?} {v1:?}");
 
-        let ders0 = (0..=n).map(|i| curve.der_n(i, t)).collect::<Vec<_>>();
-        let ders1 = curve.ders(n, t);
+        let ders0 = (0..=n).map(|i| curve.derivative_n(i, t)).collect::<Vec<_>>();
+        let ders1 = curve.derivatives(n, t);
 
         prop_assert_eq!(ders0.len(), ders1.len());
         let mut iter = ders0.into_iter().zip(&*ders1);

@@ -1,5 +1,5 @@
 use super::{
-    Bound, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, D2, EuclideanSpace,
+    Bound, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, EuclideanSpace,
     IncludeCurve, InnerSpace, Invertible, KnotVector, Line, Matrix3, NurbsCurve, Origin,
     ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D, Plane, Point3,
     SearchNearestParameter, SearchParameter, SearchParameterHint2D, SquareMatrix, SurfaceParameter,
@@ -365,7 +365,7 @@ impl v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for Plane {
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchNearestParameter::<D2>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<SurfaceParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
@@ -378,6 +378,6 @@ impl v2::SearchParameter<v2::SurfaceParameter<f64>> for Plane {
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchParameter::<D2>::search_parameter(self, pt, None, trials)
+        SearchParameter::<SurfaceParameter>::search_parameter(self, pt, None, trials)
     }
 }

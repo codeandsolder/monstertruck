@@ -1,5 +1,5 @@
 use super::{
-    BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, ControlPoint, D2, Deserialize,
+    BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, ControlPoint, Deserialize,
     EuclideanSpace, HashGen, INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible, KnotVector, Matrix2,
     Matrix3, Matrix4, MetricSpace, NurbsCurve, PRESEARCH_DIVISION, ParameterDivision2D,
     ParametricCurve, ParametricSurface, ParametricSurface3D, Point2, Point3,
@@ -118,7 +118,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchNearestParameter::<D2>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<SurfaceParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
@@ -139,7 +139,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchParameter::<D2>::search_parameter(self, pt, None, trials)
+        SearchParameter::<SurfaceParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
@@ -219,12 +219,12 @@ impl IncludeCurve<BsplineCurve<Point2>> for BsplineSurface<Point2> {
             for j in 1..=degree {
                 let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
                 let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = ParametricCurve::subs(curve, t);
+                let pt = ParametricCurve::evaluate(curve, t);
                 hint = match algo::surface::search_parameter(self, pt, hint, INCLUDE_CURVE_TRIALS) {
                     Some(got) => got,
                     None => return false,
                 };
-                if !ParametricSurface::subs(self, hint.0, hint.1).near(&pt)
+                if !ParametricSurface::evaluate(self, hint.0, hint.1).near(&pt)
                     || hint.0 < knot_vector_u[0] - TOLERANCE
                     || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
                     || hint.1 < knot_vector_v[0] - TOLERANCE
@@ -254,12 +254,12 @@ impl IncludeCurve<BsplineCurve<Point3>> for BsplineSurface<Point3> {
             for j in 1..=degree {
                 let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
                 let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = ParametricCurve::subs(curve, t);
+                let pt = ParametricCurve::evaluate(curve, t);
                 hint = match algo::surface::search_parameter(self, pt, hint, INCLUDE_CURVE_TRIALS) {
                     Some(got) => got,
                     None => return false,
                 };
-                if !ParametricSurface::subs(self, hint.0, hint.1).near(&pt)
+                if !ParametricSurface::evaluate(self, hint.0, hint.1).near(&pt)
                     || hint.0 < knot_vector_u[0] - TOLERANCE
                     || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
                     || hint.1 < knot_vector_v[0] - TOLERANCE
@@ -275,7 +275,7 @@ impl IncludeCurve<BsplineCurve<Point3>> for BsplineSurface<Point3> {
 
 impl IncludeCurve<NurbsCurve<Vector4>> for BsplineSurface<Point3> {
     fn include(&self, curve: &NurbsCurve<Vector4>) -> bool {
-        let pt = curve.subs(curve.knot_vector()[0]);
+        let pt = curve.evaluate(curve.knot_vector()[0]);
         let mut hint = algo::surface::presearch(self, pt, self.range_tuple(), PRESEARCH_DIVISION);
         hint = match algo::surface::search_parameter(self, pt, hint, INCLUDE_CURVE_TRIALS) {
             Some(got) => got,
@@ -289,12 +289,12 @@ impl IncludeCurve<NurbsCurve<Vector4>> for BsplineSurface<Point3> {
             for j in 1..=degree {
                 let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
                 let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = curve.subs(t);
+                let pt = curve.evaluate(t);
                 hint = match algo::surface::search_parameter(self, pt, hint, INCLUDE_CURVE_TRIALS) {
                     Some(got) => got,
                     None => return false,
                 };
-                if !ParametricSurface::subs(self, hint.0, hint.1).near(&pt)
+                if !ParametricSurface::evaluate(self, hint.0, hint.1).near(&pt)
                     || hint.0 < knot_vector_u[0] - TOLERANCE
                     || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
                     || hint.1 < knot_vector_v[0] - TOLERANCE

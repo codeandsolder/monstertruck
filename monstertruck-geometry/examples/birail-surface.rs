@@ -41,10 +41,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         surf1.udegree(),
         surf1.vdegree()
     );
-    println!("  corner (0,0) = {:?}", surf1.subs(0.0, 0.0));
-    println!("  corner (1,0) = {:?}", surf1.subs(1.0, 0.0));
-    println!("  corner (0,1) = {:?}", surf1.subs(0.0, 1.0));
-    println!("  corner (1,1) = {:?}", surf1.subs(1.0, 1.0));
+    println!("  corner (0,0) = {:?}", surf1.evaluate(0.0, 0.0));
+    println!("  corner (1,0) = {:?}", surf1.evaluate(1.0, 0.0));
+    println!("  corner (0,1) = {:?}", surf1.evaluate(0.0, 1.0));
+    println!("  corner (1,1) = {:?}", surf1.evaluate(1.0, 1.0));
 
     // Birail2: two different profiles blended along the rails.
     let profile_start = BsplineCurve::new_unchecked(
@@ -71,6 +71,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         surf2.udegree(),
         surf2.vdegree()
     );
-    println!("  midpoint = {:?}", surf2.subs(0.5, 0.5));
+    println!("  midpoint = {:?}", surf2.evaluate(0.5, 0.5));
     Ok(())
 }

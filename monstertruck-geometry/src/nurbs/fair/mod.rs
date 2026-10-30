@@ -40,7 +40,7 @@ type Result<T> = StdResult<T, Error>;
 /// let reparam = fair::reparameterize_arc_length(&curve, 10).unwrap();
 /// // At u=0.5 in arc-length parameterization, we should be at the
 /// // midpoint of the curve by arc length.
-/// let mid = reparam.subs(0.5);
+/// let mid = reparam.evaluate(0.5);
 /// // The midpoint should be near x=1 (the apex of the parabola).
 /// assert!((mid.x - 1.0).abs() < 0.15, "mid.x = {}", mid.x);
 /// ```
@@ -70,7 +70,7 @@ where
         })
         .collect();
 
-    let points: Vec<P> = sample_params.iter().map(|&t| curve.subs(t)).collect();
+    let points: Vec<P> = sample_params.iter().map(|&t| curve.evaluate(t)).collect();
 
     let mut arc_lengths = Vec::with_capacity(n_samples);
     arc_lengths.push(0.0);
@@ -136,7 +136,7 @@ where
 /// // Fair to a smoother cubic with fewer control points.
 /// let smooth = fair::fair_curve(&noisy, 3, 5, 30).unwrap();
 /// // The smoothed curve should still roughly follow the original path.
-/// let mid = smooth.subs(0.5);
+/// let mid = smooth.evaluate(0.5);
 /// assert!((mid.x - 4.0).abs() < 1.0, "mid.x = {}", mid.x);
 /// ```
 pub fn fair_curve<P>(
@@ -173,7 +173,7 @@ where
         .map(|i| {
             let u = crate::usize_to_f64(i) / crate::usize_to_f64(n_control_points - 1);
             let t = f64::mul_add(t_end - t_start, u, t_start);
-            (u, curve.subs(t))
+            (u, curve.evaluate(t))
         })
         .collect();
 

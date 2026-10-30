@@ -47,10 +47,10 @@ pub fn rect<C>(r#box: BoundingBox<Point2>, plane: Plane) -> Wire<Point3, C>
 where Line<Point3>: ToSameGeometry<C> {
     let (min, max) = (r#box.min(), r#box.max());
     let v = builder::vertices([
-        plane.subs(min.x, min.y),
-        plane.subs(max.x, min.y),
-        plane.subs(max.x, max.y),
-        plane.subs(min.x, max.y),
+        plane.evaluate(min.x, min.y),
+        plane.evaluate(max.x, min.y),
+        plane.evaluate(max.x, max.y),
+        plane.evaluate(min.x, max.y),
     ]);
     wire![
         builder::line(&v[0], &v[1]),
@@ -78,8 +78,8 @@ where Line<Point3>: ToSameGeometry<C> {
 ///     for i in 0..=10 {
 ///         let u = i as f64 / 10.0;
 ///         let t = (1.0 - u) * t0 + u * t1;
-///         let p = arc.subs(t);
-///         let der = arc.der(t);
+///         let p = arc.evaluate(t);
+///         let der = arc.derivative(t);
 ///         assert_near!(p.distance(origin), 5.0);
 ///         assert!(der.dot(axis).so_small());
 ///         assert!((p - origin).cross(der).dot(axis) > 0.0);

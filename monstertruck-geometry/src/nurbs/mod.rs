@@ -153,7 +153,7 @@ impl AsRef<[f64]> for BasisWindow {
 /// const N : usize = 100; // sample size in test
 /// for i in 0..N {
 ///     let t = 1.0 / (N as f64) * (i as f64);
-///     let v = bspline.subs(t); // We can use the instances as a function.
+///     let v = bspline.evaluate(t); // We can use the instances as a function.
 ///     let c = (v[0] / v[3]).powi(2) + (v[1] / v[3]).powi(2);
 ///     assert_near2!(c, 1.0);
 /// }
@@ -216,7 +216,7 @@ pub struct BsplineCurve<P> {
 ///     for j in 0..N {
 ///         let u = 1.0 / (N as f64) * (i as f64);
 ///         let v = 1.0 / (N as f64) * (j as f64);
-///         let v = bspline.subs(u, v); // We can use the instances as a function.
+///         let v = bspline.evaluate(u, v); // We can use the instances as a function.
 ///         let c = (v[0] / v[3]).powi(2) + (v[1] / v[3]).powi(2) + (v[2] / v[3]).powi(2);
 ///         assert_near2!(c, 1.0);
 ///     }

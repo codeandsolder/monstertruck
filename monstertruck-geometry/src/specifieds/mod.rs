@@ -5,7 +5,7 @@ use crate::{Bound, Debug, Deserialize, Serialize, prelude::*};
 /// ```
 /// use monstertruck_geometry::prelude::*;
 /// let line = Line(Point2::new(0.0, 0.0), Point2::new(1.0, 1.0));
-/// assert_near!(line.subs(0.5), Point2::new(0.5, 0.5));
+/// assert_near!(line.evaluate(0.5), Point2::new(0.5, 0.5));
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct Line<P>(pub P, pub P);
@@ -69,7 +69,7 @@ pub struct Plane {
 ///         let v = 2.0 * PI * j as f64 / N as f64;
 ///
 ///         // simple relation between a point and its normal.
-///         let pt = sphere.subs(u, v);
+///         let pt = sphere.evaluate(u, v);
 ///         let n = sphere.normal(u, v);
 ///         assert_near!(pt - center, n * radius);
 ///

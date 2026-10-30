@@ -338,7 +338,7 @@ impl<P: ControlPoint<f64>> Cut for PolylineCurve<P> {
                 self.truncate(n + 1);
                 Self(v)
             } else {
-                let p = self.subs(t);
+                let p = self.evaluate(t);
                 let mut v = vec![p];
                 v.extend(&self[(n + 1)..]);
                 self.truncate(n + 1);
@@ -405,7 +405,7 @@ impl<P: ControlPoint<f64>> ParameterDivision1D for PolylineCurve<P> {
     type Point = P;
     #[inline]
     fn parameter_division(&self, range: (f64, f64), _: f64) -> (Vec<f64>, Vec<P>) {
-        let mut res = (vec![range.0], vec![self.subs(range.0)]);
+        let mut res = (vec![range.0], vec![self.evaluate(range.0)]);
         if let Some(indices) = interior_vertex_indices(range, self.len()) {
             for index in indices {
                 res.0.push(usize_to_f64(index));
@@ -413,7 +413,7 @@ impl<P: ControlPoint<f64>> ParameterDivision1D for PolylineCurve<P> {
             }
         }
         res.0.push(range.1);
-        res.1.push(self.subs(range.1));
+        res.1.push(self.evaluate(range.1));
         res
     }
 }
@@ -443,22 +443,22 @@ fn polyline_test() {
         Point3::new(1.0, 1.0, 1.0),
     ];
     let polyline = PolylineCurve(vec);
-    monstertruck_core::assert_near!(polyline.subs(2.5), Point3::new(0.0, 0.5, 0.5));
+    monstertruck_core::assert_near!(polyline.evaluate(2.5), Point3::new(0.0, 0.5, 0.5));
 
     let mut part0 = polyline.clone();
     let part1 = part0.cut(2.5);
     assert_eq!(part0.len(), 4);
     assert_eq!(part1.len(), 6);
-    monstertruck_core::assert_near!(part0.subs(2.5), Point3::new(0.0, 0.75, 0.25));
-    monstertruck_core::assert_near!(part1.subs(0.5), Point3::new(0.0, 0.25, 0.75));
+    monstertruck_core::assert_near!(part0.evaluate(2.5), Point3::new(0.0, 0.75, 0.25));
+    monstertruck_core::assert_near!(part1.evaluate(0.5), Point3::new(0.0, 0.25, 0.75));
     let mut part0 = polyline.clone();
     let part1 = part0.cut(4.0);
     assert_eq!(part0.len(), 5);
     assert_eq!(part1.len(), 4);
-    monstertruck_core::assert_near!(part0.subs(2.5), Point3::new(0.0, 0.5, 0.5));
-    monstertruck_core::assert_near!(part1.subs(0.5), Point3::new(0.5, 0.5, 1.0));
+    monstertruck_core::assert_near!(part0.evaluate(2.5), Point3::new(0.0, 0.5, 0.5));
+    monstertruck_core::assert_near!(part1.evaluate(0.5), Point3::new(0.5, 0.5, 1.0));
 
-    let pt = polyline.subs(2.13);
+    let pt = polyline.evaluate(2.13);
     let t = polyline.search_parameter(pt, None, 1).unwrap();
     monstertruck_core::assert_near!(t, 2.13);
 
@@ -468,7 +468,12 @@ fn polyline_test() {
     let pt = Point3::new(0.5, 0.5, 0.51);
     assert!(polyline.search_parameter(pt, None, 1).is_none());
     let t = polyline.search_nearest_parameter(pt, None, 1).unwrap();
-    assert!(polyline.der(t).dot(pt - polyline.subs(t)).so_small());
+    assert!(
+        polyline
+            .derivative(t)
+            .dot(pt - polyline.evaluate(t))
+            .so_small()
+    );
 
     let div = polyline.parameter_division((1.5, 6.2), 0.0);
     assert_eq!(div.0, vec![1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 6.2]);

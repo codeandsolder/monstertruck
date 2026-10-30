@@ -87,43 +87,43 @@ proptest::proptest! {
         const EPS: f64 = 1.0e-3;
         let sphere = Sphere(monstertruck_geometry::prelude::Sphere::new(center.into(), radius));
 
-        let uder0 = sphere.uder(u, v);
-        let uder1 = (sphere.subs(u + EPS, v) - sphere.subs(u - EPS, v)) / (2.0 * EPS);
+        let uder0 = sphere.derivative_u(u, v);
+        let uder1 = (sphere.evaluate(u + EPS, v) - sphere.evaluate(u - EPS, v)) / (2.0 * EPS);
         assert!(
             (uder0 - uder1).magnitude2() < EPS,
             "uder failed: {uder0:?}, {uder1:?}"
         );
 
-        let vder0 = sphere.vder(u, v);
-        let vder1 = (sphere.subs(u, v + EPS) - sphere.subs(u, v - EPS)) / (2.0 * EPS);
+        let vder0 = sphere.derivative_v(u, v);
+        let vder1 = (sphere.evaluate(u, v + EPS) - sphere.evaluate(u, v - EPS)) / (2.0 * EPS);
         assert!(
             (vder0 - vder1).magnitude2() < EPS,
             "vder failed: {vder0:?}, {vder1:?}"
         );
 
-        let uuder0 = sphere.uuder(u, v);
-        let uuder1 = (sphere.uder(u + EPS, v) - sphere.uder(u - EPS, v)) / (2.0 * EPS);
+        let uuder0 = sphere.derivative_uu(u, v);
+        let uuder1 = (sphere.derivative_u(u + EPS, v) - sphere.derivative_u(u - EPS, v)) / (2.0 * EPS);
         assert!(
             (uuder0 - uuder1).magnitude2() < EPS,
             "uuder failed: {uuder0:?}, {uuder1:?}"
         );
 
-        let uvder0 = sphere.uvder(u, v);
-        let uvder1 = (sphere.uder(u, v + EPS) - sphere.uder(u, v - EPS)) / (2.0 * EPS);
+        let uvder0 = sphere.derivative_uv(u, v);
+        let uvder1 = (sphere.derivative_u(u, v + EPS) - sphere.derivative_u(u, v - EPS)) / (2.0 * EPS);
         assert!(
             (uvder0 - uvder1).magnitude2() < EPS,
             "uvder failed: {uvder0:?}, {uvder1:?}"
         );
 
-        let vvder0 = sphere.vvder(u, v);
-        let vvder1 = (sphere.vder(u, v + EPS) - sphere.vder(u, v - EPS)) / (2.0 * EPS);
+        let vvder0 = sphere.derivative_vv(u, v);
+        let vvder1 = (sphere.derivative_v(u, v + EPS) - sphere.derivative_v(u, v - EPS)) / (2.0 * EPS);
         assert!(
             (vvder0 - vvder1).magnitude2() < EPS,
             "vvder failed: {vvder0:?}, {vvder1:?}"
         );
 
         let n0 = sphere.normal(u, v);
-        let n1 = sphere.uder(u, v).cross(sphere.vder(u, v)).normalize();
+        let n1 = sphere.derivative_u(u, v).cross(sphere.derivative_v(u, v)).normalize();
         assert!(
             (n0 - n1).magnitude2() < EPS,
             "normal failed: {n0:?}, {n1:?}"

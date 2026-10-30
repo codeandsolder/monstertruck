@@ -14,7 +14,7 @@ fn test_surface_orientation(surface: &Surface, sign: f64) {
         panic!();
     };
     let (u, v) = ((u0 + u1) / 2.0, (v0 + v1) / 2.0);
-    let p = surface.subs(u, v);
+    let p = surface.evaluate(u, v);
     let q = Point3::from_vec(Vector3::new(p.x, p.y, 0.0).normalize() * 0.75);
     let n0 = sign * (p - q).normalize();
     let n1 = surface.normal(u, v);
@@ -29,7 +29,11 @@ fn test_boundary_orientation(face: &Face) {
         .flat_map(|edge| {
             let curve = edge.oriented_curve();
             let (t0, t1) = curve.range_tuple();
-            [curve.subs(t0), curve.subs((t0 + t1) / 2.0), curve.subs(t1)]
+            [
+                curve.evaluate(t0),
+                curve.evaluate((t0 + t1) / 2.0),
+                curve.evaluate(t1),
+            ]
         })
         .map(|p| surface.search_parameter(p, None, 100).unwrap())
         .collect::<Vec<_>>();

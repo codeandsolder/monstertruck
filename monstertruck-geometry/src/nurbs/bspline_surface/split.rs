@@ -38,14 +38,14 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     for j in 0..=N {
     ///         let u = 0.68 * (i as f64) / (N as f64);
     ///         let v = 1.0 * (j as f64) / (N as f64);
-    ///         assert_near2!(bspsurface.subs(u, v), part0.subs(u, v));
+    ///         assert_near2!(bspsurface.evaluate(u, v), part0.evaluate(u, v));
     ///     }
     /// }
     /// for i in 0..=N {
     ///     for j in 0..=N {
     ///         let u = 0.68 + 0.32 * (i as f64) / (N as f64);
     ///         let v = 1.0 * (j as f64) / (N as f64);
-    ///         assert_near2!(bspsurface.subs(u, v), part1.subs(u, v));
+    ///         assert_near2!(bspsurface.evaluate(u, v), part1.evaluate(u, v));
     ///     }
     /// }
     /// ```
@@ -141,14 +141,14 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     for j in 0..=N {
     ///         let u = 1.0 * (i as f64) / (N as f64);
     ///         let v = 0.68 * (j as f64) / (N as f64);
-    ///         assert_near2!(bspsurface.subs(u, v), part0.subs(u, v));
+    ///         assert_near2!(bspsurface.evaluate(u, v), part0.evaluate(u, v));
     ///     }
     /// }
     /// for i in 0..=N {
     ///     for j in 0..=N {
     ///         let u = 1.0 * (i as f64) / (N as f64);
     ///         let v = 0.68 + 0.32 * (j as f64) / (N as f64);
-    ///         assert_near2!(bspsurface.subs(u, v), part1.subs(u, v));
+    ///         assert_near2!(bspsurface.evaluate(u, v), part1.evaluate(u, v));
     ///     }
     /// }
     /// ```
@@ -184,11 +184,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// let bnd_box = BoundingBox::from_iter(&[Vector2::new(0.2, 0.3), Vector2::new(0.8, 0.6)]);
     /// let curve = bspsurface.sectional_curve(bnd_box).expect("section is valid");
     /// const N: usize = 100;
-    /// assert_near2!(curve.subs(0.0), bspsurface.subs(0.2, 0.3));
-    /// assert_near2!(curve.subs(1.0), bspsurface.subs(0.8, 0.6));
+    /// assert_near2!(curve.evaluate(0.0), bspsurface.evaluate(0.2, 0.3));
+    /// assert_near2!(curve.evaluate(1.0), bspsurface.evaluate(0.8, 0.6));
     /// for i in 0..=N {
     ///     let t = i as f64 / N as f64;
-    ///     let pt = curve.subs(t);
+    ///     let pt = curve.evaluate(t);
     ///     assert_near2!(pt[1], pt[0] * 0.5 - 0.1);
     ///     assert_near2!(pt[2], pt[0] * pt[0] + pt[1] * pt[1]);
     /// }

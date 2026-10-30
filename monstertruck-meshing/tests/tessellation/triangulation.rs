@@ -178,7 +178,7 @@ fn robust_closed() {
         let curve = edge.curve();
 
         if let Curve::Line(line) = curve {
-            let m = line.subs(0.5);
+            let m = line.evaluate(0.5);
             let p = m + 0.2 * (o - m);
             let bsp =
                 BsplineCurve::new_unchecked(KnotVector::bezier_knot(2), vec![line.0, p, line.1]);

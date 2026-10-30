@@ -545,14 +545,14 @@ fn t_nurcc_test_to_tmesh_cube() {
         tmesh.control_points().len()
     );
 
-    // Verify subs() produces valid (non-NaN) points at several locations.
+    // Verify evaluate() produces valid (non-NaN) points at several locations.
     for &(u, v) in &[(0.25, 0.25), (0.5, 0.5), (0.75, 0.75), (0.1, 0.9)] {
         let p: Point3 = tmesh
-            .subs(u, v)
-            .unwrap_or_else(|e| panic!("subs({u}, {v}) failed: {e}"));
+            .try_evaluate(u, v)
+            .unwrap_or_else(|e| panic!("try_evaluate({u}, {v}) failed: {e}"));
         assert!(
             !p.x.is_nan() && !p.y.is_nan() && !p.z.is_nan(),
-            "subs({u}, {v}) returned NaN: {p:?}"
+            "evaluate({u}, {v}) returned NaN: {p:?}"
         );
     }
 }

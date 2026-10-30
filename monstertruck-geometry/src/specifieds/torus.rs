@@ -4,7 +4,7 @@
 )]
 
 use super::{
-    Bound, BoundedSurface, D2, ElementWise, Error, EuclideanSpace, InnerSpace, Origin,
+    Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, Origin,
     ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
     ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
     SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance, Torus, UnitCircle,
@@ -214,7 +214,7 @@ impl v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for Torus {
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchNearestParameter::<D2>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<SurfaceParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
@@ -227,7 +227,7 @@ impl v2::SearchParameter<v2::SurfaceParameter<f64>> for Torus {
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchParameter::<D2>::search_parameter(self, pt, None, trials)
+        SearchParameter::<SurfaceParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
@@ -325,10 +325,10 @@ impl SearchParameter<SurfaceParameter> for Torus {
             u
         };
         let u = nearest_periodic_angle(u, hint.map(|hint| hint.0));
-        // Still the SAME acceptance test on the SAME surface: `subs` is
+        // Still the SAME acceptance test on the SAME surface: `evaluate` is
         // `2 * PI`-periodic, so a re-spelled parameter evaluates to the very
         // same point and this check is unweakened by the re-spelling.
-        if self.subs(u, v).near(&point) {
+        if self.evaluate(u, v).near(&point) {
             Some((u, v))
         } else {
             None

@@ -15,7 +15,7 @@ fn offset_2d_straight_line() {
     // Check several points along the offset.
     for i in 0..=10 {
         let u = f64::from(i) / 10.0;
-        let pt = offset.subs(u);
+        let pt = offset.evaluate(u);
         assert!(
             (pt.y - 1.0).abs() < 0.05,
             "at u={u}: expected y~1.0, got y={}",
@@ -39,7 +39,7 @@ fn offset_3d_straight_line_z_normal() {
     let offset = (curve_offset_3d(&line, 2.0, Vector3::unit_z(), 20)).unwrap();
     for i in 0..=10 {
         let u = f64::from(i) / 10.0;
-        let pt = offset.subs(u);
+        let pt = offset.evaluate(u);
         assert!(
             (pt.z - 2.0).abs() < 0.05,
             "at u={u}: expected z~2.0, got z={}",
@@ -63,7 +63,7 @@ fn surface_offset_flat_plane() {
         for j in 0..=5 {
             let u = f64::from(i) / 5.0;
             let v = f64::from(j) / 5.0;
-            let pt = offset_surf.subs(u, v);
+            let pt = offset_surf.evaluate(u, v);
             assert!(
                 (pt.z - 1.5).abs() < 0.15,
                 "at ({u},{v}): expected z~1.5, got z={}",

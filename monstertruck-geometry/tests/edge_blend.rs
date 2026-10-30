@@ -62,7 +62,10 @@ fn test_edge_blend_ders_by_bspline_surface(
         (KnotVector::bezier_knot(4), KnotVector::bezier_knot(3)),
         control_points,
     );
-    prop_assert_near!(surface.der_mn(m, n, u, v), bsp_surface.der_mn(m, n, u, v));
+    prop_assert_near!(
+        surface.derivative_mn(m, n, u, v),
+        bsp_surface.derivative_mn(m, n, u, v)
+    );
 }
 
 #[property_test]
@@ -92,10 +95,14 @@ fn test_edge_blend_ends_by_bezier_surface(
     let line0 = Line(Point2::new(0.0, 1.0), Point2::new(1.0, 1.0));
     let line1 = Line(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0));
 
-    let normal0 = surface0.uder(t, 1.0).cross(surface0.vder(t, 1.0));
-    let normal1 = surface1.uder(t, 0.0).cross(surface1.vder(t, 0.0));
-    let axis0 = surface0.uder(t, 1.0).cross(normal0);
-    let axis1 = surface1.uder(t, 0.0).cross(normal1);
+    let normal0 = surface0
+        .derivative_u(t, 1.0)
+        .cross(surface0.derivative_v(t, 1.0));
+    let normal1 = surface1
+        .derivative_u(t, 0.0)
+        .cross(surface1.derivative_v(t, 0.0));
+    let axis0 = surface0.derivative_u(t, 1.0).cross(normal0);
+    let axis1 = surface1.derivative_u(t, 0.0).cross(normal1);
 
     prop_assume!(!normal0.so_small());
     prop_assume!(!normal1.so_small());
@@ -106,12 +113,12 @@ fn test_edge_blend_ends_by_bezier_surface(
     let pcurve1 = ParameterCurve::new(line1, surface1);
     let surface = EdgeBlendSurface::new(pcurve0.clone(), 0.6, pcurve1.clone(), 0.4);
 
-    prop_assert_near!(surface.subs(t, 0.0), pcurve0.subs(t));
-    prop_assert_near!(surface.uder(t, 0.0), pcurve0.der(t));
-    prop_assert_near!(surface.uuder(t, 0.0), pcurve0.der2(t));
-    prop_assert_near!(surface.subs(t, 1.0), pcurve1.subs(t));
-    prop_assert_near!(surface.uder(t, 1.0), pcurve1.der(t));
-    prop_assert_near!(surface.uuder(t, 1.0), pcurve1.der2(t));
+    prop_assert_near!(surface.evaluate(t, 0.0), pcurve0.evaluate(t));
+    prop_assert_near!(surface.derivative_u(t, 0.0), pcurve0.derivative(t));
+    prop_assert_near!(surface.derivative_uu(t, 0.0), pcurve0.derivative_2(t));
+    prop_assert_near!(surface.evaluate(t, 1.0), pcurve1.evaluate(t));
+    prop_assert_near!(surface.derivative_u(t, 1.0), pcurve1.derivative(t));
+    prop_assert_near!(surface.derivative_uu(t, 1.0), pcurve1.derivative_2(t));
     prop_assert_near!(surface.normal(t, 0.0), -normal0.normalize());
     prop_assert_near!(surface.normal(t, 1.0), -normal1.normalize());
 }
@@ -150,8 +157,8 @@ fn test_edge_blend_g1_continuity_along_rails() {
         let u = f64::from(i) / 8.0;
 
         // Rail positions coincide with the supporting surfaces.
-        assert_near!(blend.subs(u, 0.0), pcurve0.subs(u));
-        assert_near!(blend.subs(u, 1.0), pcurve1.subs(u));
+        assert_near!(blend.evaluate(u, 0.0), pcurve0.evaluate(u));
+        assert_near!(blend.evaluate(u, 1.0), pcurve1.evaluate(u));
 
         // G1: the blend's unit normal is parallel to each supporting surface's
         // unit normal across the shared boundary, so the tangent planes agree.
@@ -165,7 +172,7 @@ fn test_edge_blend_g1_continuity_along_rails() {
 
         // The cross-boundary (u-direction) tangent is continuous with the rail
         // tangent of the supporting surface at the boundary.
-        assert_near!(blend.uder(u, 0.0), pcurve0.der(u));
-        assert_near!(blend.uder(u, 1.0), pcurve1.der(u));
+        assert_near!(blend.derivative_u(u, 0.0), pcurve0.derivative(u));
+        assert_near!(blend.derivative_u(u, 1.0), pcurve1.derivative(u));
     }
 }

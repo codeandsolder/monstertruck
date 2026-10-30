@@ -5,13 +5,12 @@
 
 use super::{
     BasisWindow, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve, BsplineSurface,
-    ControlPoint, D2, Error, EuclideanSpace, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS,
-    IncludeCurve, InnerSpace, Invertible, KnotVector, MetricSpace, NurbsCurve, NurbsSurface,
-    PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface,
-    ParametricSurface3D, Point3, Result, SearchNearestParameter, SearchParameter,
-    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, TOLERANCE, TOLERANCE2,
-    Tolerance, Transformed, Vector3, Vector4, Zero, algo, multi_rational_derivative,
-    rational_derivative,
+    ControlPoint, Error, EuclideanSpace, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve,
+    InnerSpace, Invertible, KnotVector, MetricSpace, NurbsCurve, NurbsSurface, PRESEARCH_DIVISION,
+    ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface, ParametricSurface3D,
+    Point3, Result, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
+    SurfaceParameter, SurfaceParameterRange, TOLERANCE, TOLERANCE2, Tolerance, Transformed,
+    Vector3, Vector4, Zero, algo, multi_rational_derivative, rational_derivative,
 };
 #[cfg(test)]
 use crate::prelude::Vector2;
@@ -254,7 +253,7 @@ impl<V: Homogeneous<Scalar = f64>> NurbsSurface<V> {
 impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> NurbsSurface<V> {
     /// Returns the closure of substitution.
     #[inline]
-    pub fn closure(&self) -> impl Fn(f64, f64) -> V::Point + '_ { move |u, v| self.subs(u, v) }
+    pub fn closure(&self) -> impl Fn(f64, f64) -> V::Point + '_ { move |u, v| self.evaluate(u, v) }
 }
 
 impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> NurbsSurface<V>
@@ -603,7 +602,7 @@ where
     ///     vec![Vector3::new(0.0, 3.0, 1.0), Vector3::new(1.0, 7.0, 2.0), Vector3::new(1.0, 3.0, 1.0)],
     /// ];
     /// let surface = NurbsSurface::new(BsplineSurface::new_unchecked(knot_vecs, control_points));
-    /// let pt = surface.subs(0.3, 0.7);
+    /// let pt = surface.evaluate(0.3, 0.7);
     /// let (u, v) = surface.search_nearest_parameter(pt, Some((0.5, 0.5)), 100).unwrap();
     /// assert!(u.near(&0.3) && v.near(&0.7));
     /// ```
@@ -860,7 +859,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchNearestParameter::<D2>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<SurfaceParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
@@ -880,14 +879,14 @@ where
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchParameter::<D2>::search_parameter(self, pt, None, trials)
+        SearchParameter::<SurfaceParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
 impl IncludeCurve<NurbsCurve<Vector3>> for NurbsSurface<Vector3> {
     #[inline]
     fn include(&self, curve: &NurbsCurve<Vector3>) -> bool {
-        let pt = curve.subs(curve.knot_vector()[0]);
+        let pt = curve.evaluate(curve.knot_vector()[0]);
         let Some(mut hint) = self.search_parameter(pt, None, INCLUDE_CURVE_TRIALS) else {
             return false;
         };
@@ -899,12 +898,12 @@ impl IncludeCurve<NurbsCurve<Vector3>> for NurbsSurface<Vector3> {
             for j in 1..=degree {
                 let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
                 let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = curve.subs(t);
+                let pt = curve.evaluate(t);
                 hint = match self.search_parameter(pt, Some(hint), INCLUDE_CURVE_TRIALS) {
                     Some(got) => got,
                     None => return false,
                 };
-                if !self.subs(hint.0, hint.1).near(&pt)
+                if !self.evaluate(hint.0, hint.1).near(&pt)
                     || hint.0 < knot_vector_u[0] - TOLERANCE
                     || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
                     || hint.1 < knot_vector_v[0] - TOLERANCE
@@ -933,12 +932,12 @@ impl IncludeCurve<BsplineCurve<Point3>> for NurbsSurface<Vector4> {
             for j in 1..=degree {
                 let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
                 let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = curve.subs(t);
+                let pt = curve.evaluate(t);
                 hint = match self.search_parameter(pt, Some(hint), INCLUDE_CURVE_TRIALS) {
                     Some(got) => got,
                     None => return false,
                 };
-                if !self.subs(hint.0, hint.1).near(&pt)
+                if !self.evaluate(hint.0, hint.1).near(&pt)
                     || hint.0 < knot_vector_u[0] - TOLERANCE
                     || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
                     || hint.1 < knot_vector_v[0] - TOLERANCE
@@ -967,12 +966,12 @@ impl IncludeCurve<NurbsCurve<Vector4>> for NurbsSurface<Vector4> {
             for j in 1..=degree {
                 let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
                 let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = curve.subs(t);
+                let pt = curve.evaluate(t);
                 hint = match self.search_parameter(pt, Some(hint), INCLUDE_CURVE_TRIALS) {
                     Some(got) => got,
                     None => return false,
                 };
-                if !self.subs(hint.0, hint.1).near(&pt)
+                if !self.evaluate(hint.0, hint.1).near(&pt)
                     || hint.0 < knot_vector_u[0] - TOLERANCE
                     || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
                     || hint.1 < knot_vector_v[0] - TOLERANCE
@@ -1008,7 +1007,7 @@ where
     <V::Point as EuclideanSpace>::Diff: SearchParameterVector<Point = V::Point>,
 {
     type Point = V::Point;
-    /// Search the parameter `(u, v)` such that `self.subs(u, v).rational_projection()` is near `pt`.
+    /// Search the parameter `(u, v)` such that `self.evaluate(u, v).rational_projection()` is near `pt`.
     /// If cannot find, then return `None`.
     /// # Examples
     /// ```
@@ -1023,9 +1022,9 @@ where
     /// let bspsurface = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
     /// let surface = NurbsSurface::new(bspsurface);
     ///
-    /// let pt = surface.subs(0.3, 0.7);
+    /// let pt = surface.evaluate(0.3, 0.7);
     /// let (u, v) = surface.search_parameter(pt, Some((0.5, 0.5)), 100).unwrap();
-    /// assert_near!(surface.subs(u, v), pt);
+    /// assert_near!(surface.evaluate(u, v), pt);
     /// ```
     fn search_parameter<H: Into<SearchParameterHint2D>>(
         &self,

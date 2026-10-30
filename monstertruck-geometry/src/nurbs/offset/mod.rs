@@ -39,7 +39,7 @@ type Result<T> = StdResult<T, Error>;
 /// );
 /// let offset = offset::curve_offset_2d(&line, 1.0, 20).unwrap();
 /// // The offset should be approximately at y=1.
-/// let mid = offset.subs(0.5);
+/// let mid = offset.evaluate(0.5);
 /// assert!((mid.y - 1.0).abs() < 0.05, "mid.y = {}", mid.y);
 /// assert!((mid.x - 2.0).abs() < 0.05, "mid.x = {}", mid.x);
 /// ```
@@ -64,8 +64,8 @@ pub fn curve_offset_2d(
         .map(|i| {
             let u = crate::usize_to_f64(i) / crate::usize_to_f64(n_samples - 1);
             let t = f64::mul_add(t_end - t_start, u, t_start);
-            let pt = curve.subs(t);
-            let tangent = curve.der(t);
+            let pt = curve.evaluate(t);
+            let tangent = curve.derivative(t);
 
             // Normal: rotate tangent 90 degrees CCW in 2D.
             let normal_len = tangent.magnitude();
@@ -111,7 +111,7 @@ pub fn curve_offset_2d(
 /// );
 /// // Offset upward (in z) by 1.0 using z-axis as the reference normal.
 /// let offset = offset::curve_offset_3d(&line, 1.0, Vector3::unit_z(), 20).unwrap();
-/// let mid = offset.subs(0.5);
+/// let mid = offset.evaluate(0.5);
 /// // The tangent is along x, so the perpendicular component of z is z itself.
 /// assert!((mid.z - 1.0).abs() < 0.05, "mid.z = {}", mid.z);
 /// ```
@@ -136,8 +136,8 @@ pub fn curve_offset_3d(
         .map(|i| {
             let u = crate::usize_to_f64(i) / crate::usize_to_f64(n_samples - 1);
             let t = f64::mul_add(t_end - t_start, u, t_start);
-            let pt = curve.subs(t);
-            let tangent = curve.der(t);
+            let pt = curve.evaluate(t);
+            let tangent = curve.derivative(t);
             let tangent_len = tangent.magnitude();
 
             // Compute offset direction: component of `normal` perpendicular to tangent.
@@ -201,7 +201,7 @@ pub fn curve_offset_3d(
 ///     ],
 /// );
 /// let offset_surf = offset::surface_offset(&surface, 1.0, (10, 10)).unwrap();
-/// let mid = offset_surf.subs(0.5, 0.5);
+/// let mid = offset_surf.evaluate(0.5, 0.5);
 /// // Normal of a flat XY surface is +z, so offset should be at z=1.
 /// assert!((mid.z - 1.0).abs() < 0.1, "mid.z = {}", mid.z);
 /// ```
@@ -243,9 +243,9 @@ pub fn surface_offset(
                 .map(|j| {
                     let v_frac = crate::usize_to_f64(j) / crate::usize_to_f64(n_v - 1);
                     let v = f64::mul_add(v_end - v_start, v_frac, v_start);
-                    let pt = surface.subs(u, v);
-                    let du = surface.uder(u, v);
-                    let dv = surface.vder(u, v);
+                    let pt = surface.evaluate(u, v);
+                    let du = surface.derivative_u(u, v);
+                    let dv = surface.derivative_v(u, v);
                     let cross = du.cross(dv);
                     let cross_len = cross.magnitude();
 

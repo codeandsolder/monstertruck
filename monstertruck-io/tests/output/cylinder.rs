@@ -51,7 +51,7 @@ fn modeling_cylinder_saves_as_cylindrical_surface() {
     for i in 0..8 {
         let v = TAU * i as f64 / 8.0;
         for &u in &[0.0, 0.5, 1.0] {
-            let point = reloaded.subs(u, v);
+            let point = reloaded.evaluate(u, v);
             let offset = point - origin;
             let radial = offset - axis * offset.dot(axis);
             assert!(

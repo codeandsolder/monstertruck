@@ -18,7 +18,7 @@ fn grid_params() -> impl Iterator<Item = f64> { (0..GRID).map(|i| i as f64 / (GR
 /// conversion uses. The map is non-linear inside each 90-degree arc, so it
 /// must be *evaluated*, not assumed to be `2*pi*t`.
 fn full_circle_angle(t: f64) -> f64 {
-    let p = full_unit_circle_curve().subs(t);
+    let p = full_unit_circle_curve().evaluate(t);
     let angle = p.y.atan2(p.x);
     if angle < 0.0 {
         2.0f64.mul_add(PI, angle)
@@ -40,7 +40,7 @@ fn meridian_colatitude(s: f64) -> f64 {
             Vector4::new(0.0, -1.0, 0.0, 1.0),
         ],
     );
-    let p = curve.subs(s);
+    let p = curve.evaluate(s);
     // sin(colatitude) = radial = x/w, cos(colatitude) = axis = y/w.
     p.x.atan2(p.y)
 }
@@ -60,11 +60,11 @@ fn assert_torus_grid(torus: Torus) {
         let u_ang = full_circle_angle(s);
         for t in grid_params() {
             let v_ang = full_circle_angle(t);
-            let got = conv.subs(s, t);
-            let want = torus.subs(u_ang, v_ang);
+            let got = conv.evaluate(s, t);
+            let want = torus.evaluate(u_ang, v_ang);
             assert!(
                 got.distance(want) <= tol,
-                "torus subs mismatch at ({s},{t}) -> ({u_ang},{v_ang}): \
+                "torus evaluation mismatch at ({s},{t}) -> ({u_ang},{v_ang}): \
                  got {got:?} want {want:?} d={}",
                 got.distance(want)
             );
@@ -83,11 +83,11 @@ fn assert_sphere_grid(sphere: Sphere) {
         let u_ang = meridian_colatitude(s);
         for t in grid_params() {
             let v_ang = full_circle_angle(t);
-            let got = conv.subs(s, t);
-            let want = sphere.subs(u_ang, v_ang);
+            let got = conv.evaluate(s, t);
+            let want = sphere.evaluate(u_ang, v_ang);
             assert!(
                 got.distance(want) <= tol,
-                "sphere subs mismatch at ({s},{t}) -> ({u_ang},{v_ang}): \
+                "sphere evaluation mismatch at ({s},{t}) -> ({u_ang},{v_ang}): \
                  got {got:?} want {want:?} d={}",
                 got.distance(want)
             );
@@ -137,7 +137,7 @@ fn torus_horn_inner_equator_collapses_to_center() {
     // Tube angle pi (v-knot 0.5) is the inner equator -> a single point at
     // the center for a horn torus.
     for s in grid_params() {
-        let p = conv.subs(s, 0.5);
+        let p = conv.evaluate(s, 0.5);
         assert!(
             p.distance(torus.center()) <= 1.0e-9 * torus.large_radius(),
             "horn inner equator not at center at s={s}: {p:?}"
@@ -152,11 +152,11 @@ fn torus_seams_are_periodic() {
     let tol = 1.0e-9 * (torus.large_radius() + torus.small_radius());
     for g in grid_params() {
         assert!(
-            conv.subs(0.0, g).distance(conv.subs(1.0, g)) <= tol,
+            conv.evaluate(0.0, g).distance(conv.evaluate(1.0, g)) <= tol,
             "ring seam not periodic at v={g}"
         );
         assert!(
-            conv.subs(g, 0.0).distance(conv.subs(g, 1.0)) <= tol,
+            conv.evaluate(g, 0.0).distance(conv.evaluate(g, 1.0)) <= tol,
             "tube seam not periodic at u={g}"
         );
     }
@@ -201,11 +201,11 @@ fn sphere_poles_collapse() {
     let tol = 1.0e-9 * sphere.radius();
     for t in grid_params() {
         assert!(
-            conv.subs(0.0, t).distance(north) <= tol,
+            conv.evaluate(0.0, t).distance(north) <= tol,
             "north pole at t={t}"
         );
         assert!(
-            conv.subs(1.0, t).distance(south) <= tol,
+            conv.evaluate(1.0, t).distance(south) <= tol,
             "south pole at t={t}"
         );
     }
@@ -218,7 +218,7 @@ fn sphere_longitude_seam_is_periodic() {
     let tol = 1.0e-9 * sphere.radius();
     for s in grid_params() {
         assert!(
-            conv.subs(s, 0.0).distance(conv.subs(s, 1.0)) <= tol,
+            conv.evaluate(s, 0.0).distance(conv.evaluate(s, 1.0)) <= tol,
             "longitude seam not periodic at u={s}"
         );
     }
@@ -329,12 +329,12 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
     assert!((v_knots[v_knots.len() - 1] - 80.0).abs() < 1.0e-12);
 
     // And it is still EXACTLY the same cylinder: every evaluated point sits
-    // on radius 8, and `subs` agrees with the analytic surface.
+    // on radius 8, and `evaluate` agrees with the analytic surface.
     let conv = as_nurbs(trimmed);
     for s in grid_params() {
         for t in grid_params() {
             let v = 80.0 * t;
-            let got = conv.subs(s, v);
+            let got = conv.evaluate(s, v);
             let want = ParametricSurface::evaluate(&cylinder, s * 2.0 * PI, v);
             let radius = got.x.hypot(got.y);
             assert!(
@@ -351,7 +351,7 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
             let want_at_angle = ParametricSurface::evaluate(&cylinder, angle, v);
             assert!(
                 got.distance(want_at_angle) <= 1.0e-9 * 80.0,
-                "subs mismatch at ({s},{v}): got {got:?} want {want_at_angle:?} \
+                "evaluation mismatch at ({s},{v}): got {got:?} want {want_at_angle:?} \
                  (untrimmed reference {want:?})"
             );
         }
@@ -382,7 +382,7 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
             let angle = full_circle_angle(s);
             for fraction in grid_params() {
                 let v = f64::mul_add(v1 - v0, fraction, v0);
-                let got = surface.subs(s, v);
+                let got = surface.evaluate(s, v);
                 let want = ParametricSurface::evaluate(&cylinder, angle, v);
                 assert!(
                     got.distance(want) <= 1.0e-9,
@@ -402,7 +402,7 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
         let angle = full_circle_angle(s);
         for fraction in grid_params() {
             let v = 1.6f64.mul_add(fraction, -0.6);
-            let got = below.subs(s, v);
+            let got = below.evaluate(s, v);
             let want = ParametricSurface::evaluate(&cylinder, angle, v);
             assert!(
                 got.distance(want) <= 1.0e-9,
@@ -426,7 +426,7 @@ fn optional_trim_preserves_analytic_geometry() {
     for s in grid_params() {
         let angle = full_circle_angle(s);
         for v in grid_params() {
-            let got = cylinder_surface.subs(s, v);
+            let got = cylinder_surface.evaluate(s, v);
             let want = ParametricSurface::evaluate(&cylinder, angle, v);
             assert!(got.distance(want) <= 1.0e-9);
         }
@@ -444,8 +444,8 @@ fn optional_trim_preserves_analytic_geometry() {
         let u = meridian_colatitude(s);
         for v in grid_params() {
             let angle = full_circle_angle(v);
-            let got = sphere_surface.subs(s, v);
-            let want = sphere.subs(u, angle);
+            let got = sphere_surface.evaluate(s, v);
+            let want = sphere.evaluate(u, angle);
             assert!(got.distance(want) <= 4.0e-9);
         }
     }
@@ -460,8 +460,8 @@ fn optional_trim_preserves_analytic_geometry() {
         let u = full_circle_angle(s);
         for v in grid_params() {
             let angle = full_circle_angle(v);
-            let got = torus_surface.subs(s, v);
-            let want = torus.subs(u, angle);
+            let got = torus_surface.evaluate(s, v);
+            let want = torus.evaluate(u, angle);
             assert!(got.distance(want) <= 4.0e-9);
         }
     }
@@ -478,8 +478,8 @@ fn optional_trim_preserves_analytic_geometry() {
     );
     for u in grid_params() {
         for v in grid_params() {
-            let got = plane_surface.subs(u, v);
-            let want = plane.subs(u, v);
+            let got = plane_surface.evaluate(u, v);
+            let want = plane.evaluate(u, v);
             assert!(got.distance(want) <= 1.0e-12);
         }
     }
@@ -506,7 +506,7 @@ fn trimmed_cone_stays_an_exact_cone() {
     for s in grid_params() {
         for t in grid_params() {
             let v = 30.0f64.mul_add(t, 10.0);
-            let point = conv.subs(s, v);
+            let point = conv.evaluate(s, v);
             let radius = point.x.hypot(point.y);
             // On this cone radius == 1 + height and height == v.
             assert!((point.z - v).abs() <= 1.0e-9 * 40.0, "height at ({s},{v})");
@@ -540,7 +540,7 @@ fn transformed_torus_via_processor_lies_on_surface() {
     let tol = 1.0e-9 * (torus.large_radius() + torus.small_radius());
     for s in grid_params() {
         for t in grid_params() {
-            let got = conv.subs(s, t);
+            let got = conv.evaluate(s, t);
             let local_h = inv * got.to_homogeneous();
             let local = Point3::new(
                 local_h.x / local_h.w,

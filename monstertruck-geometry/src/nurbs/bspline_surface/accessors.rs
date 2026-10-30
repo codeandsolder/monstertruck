@@ -388,8 +388,8 @@ impl<V: Tolerance> BsplineSurface<V> {
     /// let mut bspsurface = BsplineSurface::new_unchecked((knot_vector_u, knot_vector_v), control_points);
     ///
     /// // bspsurface is not constant.
-    /// assert_eq!(bspsurface.subs(0.0, 0.0), Vector2::new(0.0, 0.0));
-    /// assert_ne!(bspsurface.subs(0.5, 0.5), Vector2::new(0.0, 0.0));
+    /// assert_eq!(bspsurface.evaluate(0.0, 0.0), Vector2::new(0.0, 0.0));
+    /// assert_ne!(bspsurface.evaluate(0.5, 0.5), Vector2::new(0.0, 0.0));
     ///
     /// // bspsurface.is_const() is true.
     /// assert!(bspsurface.is_const());

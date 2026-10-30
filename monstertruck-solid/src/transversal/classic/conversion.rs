@@ -149,15 +149,15 @@ fn prove_iso_candidate<S: ShapeOpsSurface>(
     leader: &PolylineCurve<Point3>,
 ) -> bool {
     let (t0, t1) = candidate.range_tuple();
-    if candidate.subs(t0).distance(leader.front()) > 8.0 * TOLERANCE
-        || candidate.subs(t1).distance(leader.back()) > 8.0 * TOLERANCE
+    if candidate.evaluate(t0).distance(leader.front()) > 8.0 * TOLERANCE
+        || candidate.evaluate(t1).distance(leader.back()) > 8.0 * TOLERANCE
     {
         return false;
     }
     let points = (0..=32)
         .map(|index| {
             let ratio = index as f64 / 32.0;
-            candidate.subs(t0 * (1.0 - ratio) + t1 * ratio)
+            candidate.evaluate(t0 * (1.0 - ratio) + t1 * ratio)
         })
         .collect::<Vec<_>>();
     let mut hint0 = None;

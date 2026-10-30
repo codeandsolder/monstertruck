@@ -43,7 +43,7 @@ fn square_piece(surface: &Plane, min: f64, max: f64, ccw: bool) -> PolyBoundaryP
     PolyBoundaryPiece(
         boundary
             .into_iter()
-            .map(|uv| SurfacePoint::from((uv, surface.subs(uv.x, uv.y))))
+            .map(|uv| SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y))))
             .collect(),
     )
 }
@@ -60,7 +60,7 @@ fn cylinder_patch_piece(surface: &RevolutionSurface<Line<Point3>>) -> PolyBounda
             .chain(right)
             .chain(upper)
             .chain(left)
-            .map(|uv| SurfacePoint::from((uv, surface.subs(uv.x, uv.y))))
+            .map(|uv| SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y))))
             .collect(),
     )
 }
@@ -80,7 +80,7 @@ fn cylinder_ring_piece(
     PolyBoundaryPiece(
         boundary
             .into_iter()
-            .map(|uv| SurfacePoint::from((uv, surface.subs(uv.x, uv.y))))
+            .map(|uv| SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y))))
             .collect(),
     )
 }
@@ -100,7 +100,7 @@ fn shortened_cylinder_ring_piece(
     PolyBoundaryPiece(
         boundary
             .into_iter()
-            .map(|uv| SurfacePoint::from((uv, surface.subs(uv.x, uv.y))))
+            .map(|uv| SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y))))
             .collect(),
     )
 }
@@ -130,7 +130,7 @@ fn double_lap_step_cylinder_piece(
             .chain(right)
             .chain(upper)
             .chain(left)
-            .map(|uv| SurfacePoint::from((uv, surface.subs(uv.x, uv.y))))
+            .map(|uv| SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y))))
             .collect(),
     )
 }
@@ -150,7 +150,7 @@ fn shortened_step_cylinder_ring_piece(
     PolyBoundaryPiece(
         boundary
             .into_iter()
-            .map(|uv| SurfacePoint::from((uv, surface.subs(uv.x, uv.y))))
+            .map(|uv| SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y))))
             .collect(),
     )
 }
@@ -171,7 +171,7 @@ fn shifted_step_cylinder_ring_piece(
     PolyBoundaryPiece(
         boundary
             .into_iter()
-            .map(|uv| SurfacePoint::from((uv, surface.subs(uv.x, uv.y))))
+            .map(|uv| SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y))))
             .collect(),
     )
 }
@@ -205,7 +205,7 @@ fn seam_crossing_step_cylinder_ring_piece_from(
     PolyBoundaryPiece(
         boundary
             .into_iter()
-            .map(|uv| SurfacePoint::from((uv, surface.subs(uv.x, uv.y))))
+            .map(|uv| SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y))))
             .collect(),
     )
 }
@@ -225,7 +225,7 @@ fn seam_crossing_step_cylinder_patch_piece(
             .chain(left)
             .chain(lower)
             .chain(close)
-            .map(|uv| SurfacePoint::from((uv, surface.subs(uv.x, uv.y))))
+            .map(|uv| SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y))))
             .collect(),
     )
 }
@@ -242,7 +242,7 @@ fn parameter_curve_trim_samples_curved_surface_lift() {
     let uv_points = trim.exact_trim_boundary_2d(0.01);
     let lifted = uv_points
         .iter()
-        .map(|uv| trim.surface().subs(uv.x, uv.y))
+        .map(|uv| trim.surface().evaluate(uv.x, uv.y))
         .collect::<Vec<_>>();
     let length = lifted
         .windows(2)
@@ -280,8 +280,8 @@ fn shared_polyline_preserves_exact_trim_samples() {
         &trim,
         (0, 1),
         &[
-            trim.surface().subs(TAU * 0.75, 8.0),
-            trim.surface().subs(-TAU * 0.25, 8.0),
+            trim.surface().evaluate(TAU * 0.75, 8.0),
+            trim.surface().evaluate(-TAU * 0.25, 8.0),
         ],
         0.138564065,
     )
@@ -337,10 +337,10 @@ fn trimmed_cshell_reuses_shared_edge_samples_for_exact_trims() {
     let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
     let curve_on_surface = |front, back| ParameterCurve::new(Line(front, back), surface);
     let vertices = vec![
-        surface.subs(0.0, 0.0),
-        surface.subs(0.0, FRAC_PI_2),
-        surface.subs(1.0, FRAC_PI_2),
-        surface.subs(1.0, 0.0),
+        surface.evaluate(0.0, 0.0),
+        surface.evaluate(0.0, FRAC_PI_2),
+        surface.evaluate(1.0, FRAC_PI_2),
+        surface.evaluate(1.0, 0.0),
     ];
     let edges = vec![
         CompressedEdge {

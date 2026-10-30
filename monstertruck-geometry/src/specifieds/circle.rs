@@ -1,5 +1,5 @@
 use super::{
-    Bound, BoundedCurve, BsplineCurve, CurveParameter, D1, EuclideanSpace, InnerSpace, KnotVector,
+    Bound, BoundedCurve, BsplineCurve, CurveParameter, EuclideanSpace, InnerSpace, KnotVector,
     Matrix2, Matrix3, NurbsCurve, Origin, ParameterDivision1D, ParameterRange, ParametricCurve,
     Point2, Point3, Rad, SearchNearestParameter, SearchParameter, SearchParameterHint1D, TOLERANCE,
     ToSameGeometry, Tolerance, TrimmedCurve, UnitCircle, Vector2, Vector3, Vector4,
@@ -130,7 +130,7 @@ macro_rules! impl_v2_circle_search {
                 hint: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchNearestParameter::<D1>::search_nearest_parameter(
+                SearchNearestParameter::<CurveParameter>::search_nearest_parameter(
                     self,
                     pt,
                     v2_hint_to_hint(hint.into()),
@@ -148,7 +148,12 @@ macro_rules! impl_v2_circle_search {
                 hint: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchParameter::<D1>::search_parameter(self, pt, v2_hint_to_hint(hint.into()), 0)
+                SearchParameter::<CurveParameter>::search_parameter(
+                    self,
+                    pt,
+                    v2_hint_to_hint(hint.into()),
+                    0,
+                )
             }
         }
     };
@@ -175,7 +180,7 @@ where Self: ParametricCurve<Point = P>
                 range.1.mul_add(t, range.0 * (1.0 - t))
             })
             .collect::<Vec<_>>();
-        let points = params.iter().map(|t| self.subs(*t)).collect();
+        let points = params.iter().map(|t| self.evaluate(*t)).collect();
         Some((params, points))
     }
 
@@ -183,7 +188,7 @@ where Self: ParametricCurve<Point = P>
         nonpositive_tolerance!(tol);
         self.try_parameter_division(range, tol).unwrap_or_else(|| {
             let params = vec![range.0, range.1];
-            let points = params.iter().map(|t| self.subs(*t)).collect();
+            let points = params.iter().map(|t| self.evaluate(*t)).collect();
             (params, points)
         })
     }

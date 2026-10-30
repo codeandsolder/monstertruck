@@ -17,8 +17,6 @@ use thiserror::Error;
 /// As `t` varies over the parameter range, the returned points trace out the curve.
 /// Derivatives give the tangent (`derivative`), curvature direction (`derivative_2`), and
 /// higher-order information (`derivative_n`) at any parameter value.
-/// New code should prefer `evaluate` and `derivative*` methods.
-/// Legacy `subs` and `der*` methods are kept for compatibility.
 pub trait ParametricCurve: Clone {
     /// The point type the curve maps into (e.g. `Point2`, `Point3`).
     type Point;
@@ -40,21 +38,6 @@ pub trait ParametricCurve: Clone {
         }
         derivatives
     }
-    /// Deprecated: use [`evaluate`](ParametricCurve::evaluate).
-    #[inline]
-    fn subs(&self, t: f64) -> Self::Point { self.evaluate(t) }
-    /// Deprecated: use [`derivative`](ParametricCurve::derivative).
-    #[inline]
-    fn der(&self, t: f64) -> Self::Vector { self.derivative(t) }
-    /// Deprecated: use [`derivative_2`](ParametricCurve::derivative_2).
-    #[inline]
-    fn der2(&self, t: f64) -> Self::Vector { self.derivative_2(t) }
-    /// Deprecated: use [`derivative_n`](ParametricCurve::derivative_n).
-    #[inline]
-    fn der_n(&self, n: usize, t: f64) -> Self::Vector { self.derivative_n(n, t) }
-    /// Deprecated: use [`derivatives`](ParametricCurve::derivatives).
-    #[inline]
-    fn ders(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector> { self.derivatives(n, t) }
     /// Returns default parameter range
     #[inline]
     fn parameter_range(&self) -> ParameterRange { (Bound::Unbounded, Bound::Unbounded) }

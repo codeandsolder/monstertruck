@@ -106,7 +106,7 @@ proptest! {
         // Any point on the curve is on the same side as point `p2`.
         // Check by the circular angle theorem.
         let (t0, t1) = curve.range_tuple();
-        let p3 = curve.subs((1.0 - t) * t0 + t * t1);
+        let p3 = curve.evaluate((1.0 - t) * t0 + t * t1);
         let angle2 = (p2 - p1).angle(p2 - p0);
         let angle3 = (p3 - p1).angle(p3 - p0);
         prop_assert_near!(angle2, angle3);
@@ -190,7 +190,7 @@ proptest! {
 
         // Any point on the curve lies in the same plane perpendicular to the axis.
         let (t0, t1) = curve.range_tuple();
-        let pt2 = curve.subs((1.0 - t) * t0 + t * t1);
+        let pt2 = curve.evaluate((1.0 - t) * t0 + t * t1);
         let vec0 = pt0 - origin;
         let vec2 = pt2 - origin;
         prop_assert_near!(vec0.dot(axis), vec2.dot(axis));

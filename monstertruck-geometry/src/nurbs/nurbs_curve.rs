@@ -1,6 +1,6 @@
 use super::{
     Bound, Bounded, BoundedCurve, BoundingBox, BsplineCurve, Concat, ConcatError, ControlPoint,
-    CurveDerivatives, CurveParameter, Cut, D1, Debug, Error, EuclideanSpace, HashGen, Homogeneous,
+    CurveDerivatives, CurveParameter, Cut, Debug, Error, EuclideanSpace, HashGen, Homogeneous,
     InnerSpace, Invertible, KnotVector, MetricSpace, NurbsCurve, Origin, PRESEARCH_DIVISION,
     ParameterDivision1D, ParameterRange, ParameterTransform, ParametricCurve, Result,
     SearchNearestParameter, SearchParameter, SearchParameterHint1D, Tolerance, Transformed, algo,
@@ -118,7 +118,7 @@ impl<V: Homogeneous<Scalar = f64>> NurbsCurve<V> {
 impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> NurbsCurve<V> {
     /// Returns the closure of substitution.
     #[inline]
-    pub fn closure(&self) -> impl Fn(f64) -> V::Point + '_ { move |t| self.subs(t) }
+    pub fn closure(&self) -> impl Fn(f64) -> V::Point + '_ { move |t| self.evaluate(t) }
 }
 
 impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> NurbsCurve<V>
@@ -153,8 +153,8 @@ where V::Point: Tolerance
     /// let bspcurve = BsplineCurve::new_unchecked(knot_vec, control_points);
     ///
     /// // bspcurve is not constant.
-    /// assert_eq!(bspcurve.subs(0.0), Vector2::new(0.0, 0.0));
-    /// assert_ne!(bspcurve.subs(0.5), Vector2::new(0.0, 0.0));
+    /// assert_eq!(bspcurve.evaluate(0.0), Vector2::new(0.0, 0.0));
+    /// assert_ne!(bspcurve.evaluate(0.5), Vector2::new(0.0, 0.0));
     ///
     /// // bspcurve.is_const() is true
     /// assert!(bspcurve.is_const());
@@ -369,8 +369,8 @@ where V::Point: Tolerance
     /// let mut flag = false;
     /// for i in 0..N {
     ///     let t = 4.0 * (i as f64) / (N as f64);
-    ///     let pt0 = curve.subs(t);
-    ///     let pt1 = curve.subs(t + 1.0 / (N as f64));
+    ///     let pt0 = curve.evaluate(t);
+    ///     let pt1 = curve.evaluate(t + 1.0 / (N as f64));
     ///     flag = flag || pt0.near(&pt1);
     /// }
     /// // There exists t such that bspcurve(t) == bspcurve(t + 0.01).
@@ -380,8 +380,8 @@ where V::Point: Tolerance
     /// let mut flag = false;
     /// for i in 0..N {
     ///     let t = 1.0 * (i as f64) / (N as f64);
-    ///     let pt0 = curve.subs(t);
-    ///     let pt1 = curve.subs(t + 1.0 / (N as f64));
+    ///     let pt0 = curve.evaluate(t);
+    ///     let pt1 = curve.evaluate(t + 1.0 / (N as f64));
     ///     flag = flag || pt0.near(&pt1);
     /// }
     /// // There does not exist t such that bspcurve(t) == bspcurve(t + 0.01).
@@ -477,7 +477,7 @@ where
     /// let t = curve.search_nearest_parameter(pt, Some(hint), 100).unwrap();
     ///
     /// // check the answer
-    /// let res = curve.subs(t);
+    /// let res = curve.evaluate(t);
     /// let ans = Point2::from_vec(pt.to_vec().normalize());
     /// assert_near!(res, ans);
     /// ```
@@ -560,10 +560,10 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricCurve
     type Point = V::Point;
     type Vector = <V::Point as EuclideanSpace>::Diff;
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
-        self.0.ders(n, t).rational_derivatives()[n]
+        self.0.derivatives(n, t).rational_derivatives()[n]
     }
     fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector> {
-        self.0.ders(n, t).rational_derivatives()
+        self.0.derivatives(n, t).rational_derivatives()
     }
     #[inline]
     fn evaluate(&self, t: f64) -> Self::Point { self.0.evaluate(t).to_point() }
@@ -655,7 +655,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<f64> {
-        SearchNearestParameter::<D1>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<CurveParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
@@ -673,7 +673,7 @@ where
         _: H,
         trials: usize,
     ) -> Option<f64> {
-        SearchParameter::<D1>::search_parameter(self, pt, None, trials)
+        SearchParameter::<CurveParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
