@@ -270,7 +270,7 @@ where
         boundary.clone().cut(lo)
     };
     if !hi.near(&b1) {
-        segment.cut(hi);
+        drop(segment.cut(hi));
     }
     if reversed {
         segment.invert();

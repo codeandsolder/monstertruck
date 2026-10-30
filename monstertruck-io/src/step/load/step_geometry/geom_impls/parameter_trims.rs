@@ -360,10 +360,13 @@ fn transformed_xy_support_matches_plane(transform: &Matrix4, plane: &Plane) -> b
         .max(plane.origin().to_vec().magnitude())
         .max(basis_scale)
         .max(1.0);
-    plane.parameter(origin).z.abs() <= TOLERANCE * scale && parallel_scaled(normal, plane.normal())
+    let Some(parameter) = plane.parameter(origin) else {
+        return false;
+    };
+    parameter.z.abs() <= TOLERANCE * scale && parallel_scaled(normal, plane.normal())
 }
 
-fn projected_conic_transform_on_plane(transform: &Matrix4, plane: &Plane) -> Matrix3 {
+fn projected_conic_transform_on_plane(transform: &Matrix4, plane: &Plane) -> Option<Matrix3> {
     let project = |point| {
         plane
             .parameter(transform.transform_point(point))
@@ -477,7 +480,7 @@ fn affine_uv_parameter_curve(
         (t1, t0, vec![back, front], true)
     };
     let mut curve =
-        BsplineCurve::try_new(KnotVector::from(vec![start, start, end, end]), points).ok()?;
+        BsplineCurve::new(KnotVector::from(vec![start, start, end, end]), points).ok()?;
     if reversed {
         curve.invert();
     }
@@ -808,14 +811,13 @@ fn exact_bspline_parameter_curve_on_plane(
         .iter()
         .copied()
         .map(|point| {
-            let uv = plane.parameter(point);
+            let uv = plane.parameter(point)?;
             let uv = Point2::new(uv.x, uv.y);
             plane.evaluate(uv.x, uv.y).near(&point).then_some(uv)
         })
         .collect::<Option<Vec<_>>>()?;
-    let trim = Curve2D::BsplineCurve(
-        BsplineCurve::try_new(curve.knot_vector().clone(), control_points).ok()?,
-    );
+    let trim =
+        Curve2D::BsplineCurve(BsplineCurve::new(curve.knot_vector().clone(), control_points).ok()?);
     pcurve_sanity_matches_surface_curve(curve, &trim, surface)
         .then(|| StepParameterCurve::new(Box::new(trim), Box::new(surface.clone())))
 }
@@ -837,7 +839,7 @@ fn exact_nurbs_parameter_curve_on_plane(
                 return None;
             }
             let world = Point3::new(point.x / point.w, point.y / point.w, point.z / point.w);
-            let uv = plane.parameter(world);
+            let uv = plane.parameter(world)?;
             let uv = Point2::new(uv.x, uv.y);
             plane
                 .evaluate(uv.x, uv.y)
@@ -846,7 +848,7 @@ fn exact_nurbs_parameter_curve_on_plane(
         })
         .collect::<Option<Vec<_>>>()?;
     let trim = Curve2D::NurbsCurve(NurbsCurve::new(
-        BsplineCurve::try_new(curve.knot_vector().clone(), control_points).ok()?,
+        BsplineCurve::new(curve.knot_vector().clone(), control_points).ok()?,
     ));
     pcurve_sanity_matches_surface_curve(curve, &trim, surface)
         .then(|| StepParameterCurve::new(Box::new(trim), Box::new(surface.clone())))

@@ -1067,7 +1067,7 @@ fn validate_trimmed_solid_candidate<C: Clone, S: Clone, T: Clone>(
     csolid: CompressedTrimmedSolid<Point3, C, S, T>,
 ) -> monstertruck_topology::Result<TrimmedSolid<Point3, C, S, T>> {
     let solid = TrimmedSolid::try_from(csolid)?;
-    TrimmedSolid::try_new(
+    TrimmedSolid::new(
         solid
             .into_boundaries()
             .into_iter()
@@ -1195,7 +1195,7 @@ where
         total.rejected_topology += report.rejected_topology;
     }
     let normalized = TrimmedSolid::try_from(compressed)?;
-    let normalized = TrimmedSolid::try_new(normalized.into_boundaries())?;
+    let normalized = TrimmedSolid::new(normalized.into_boundaries())?;
     Ok((normalized, total))
 }
 

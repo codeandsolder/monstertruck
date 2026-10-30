@@ -384,7 +384,7 @@ fn processor_parameter(orientation: bool, internal: Point2) -> Point2 {
 }
 
 fn exact_plane_parameter(plane: &Plane, point: Point3) -> Option<Point2> {
-    let parameter = plane.parameter(point);
+    let parameter = plane.parameter(point)?;
     let scale = point
         .to_vec()
         .magnitude()
