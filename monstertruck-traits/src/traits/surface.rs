@@ -88,20 +88,6 @@ pub trait ParametricSurface: Clone {
     /// `None` in default; `Some(period)` if periodic w.r.t. parameter v.
     #[inline]
     fn period_v(&self) -> Option<f64> { None }
-    /// Deprecated alias for [`period_u`](ParametricSurface::period_u).
-    ///
-    /// Renamed for `<property>_<direction>` consistency with `derivative_u`,
-    /// `knot_vector_u` and `cut_u`, which is the convention across this crate.
-    #[deprecated(since = "0.3.4", note = "renamed to `period_u`")]
-    #[inline]
-    fn u_period(&self) -> Option<f64> { self.period_u() }
-    /// Deprecated alias for [`period_v`](ParametricSurface::period_v).
-    ///
-    /// Renamed for `<property>_<direction>` consistency with `derivative_v`,
-    /// `knot_vector_v` and `cut_v`, which is the convention across this crate.
-    #[deprecated(since = "0.3.4", note = "renamed to `period_v`")]
-    #[inline]
-    fn v_period(&self) -> Option<f64> { self.period_v() }
 }
 
 impl<S: ParametricSurface> ParametricSurface for &S {

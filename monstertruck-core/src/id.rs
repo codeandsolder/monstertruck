@@ -31,10 +31,6 @@ impl<T> PartialEq for Id<T> {
 
 impl<T> Eq for Id<T> {}
 
-/// Renamed to [`Id`] per RFC 430 (C-CASE).
-#[deprecated(since = "0.4.1", note = "renamed to Id per RFC 430 (C-CASE)")]
-pub type ID<T> = Id<T>;
-
 impl<T> Debug for Id<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.write_fmt(format_args!("0x{:x}", self.0))

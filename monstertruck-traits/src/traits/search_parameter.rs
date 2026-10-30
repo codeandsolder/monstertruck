@@ -41,19 +41,6 @@ impl SearchParameterDimension for SurfaceParameter {
     type Hint = SearchParameterHint2D;
 }
 
-// Upstream `truck-geotrait` names the parameter-space markers `D1` and `D2`
-// (for "Dimension 1" / "Dimension 2"). The names read as abbreviated
-// labels rather than self-describing markers, and at every call site
-// `SearchParameter<CurveParameter>` / `SearchParameter<SurfaceParameter>` is in fact picking the
-// curve vs surface flavour of the trait. The canonical names are now
-// `CurveParameter` and `SurfaceParameter`; the upstream spellings stay
-// as `#[deprecated]` re-exports so code ported from `truck-geotrait`
-// continues to compile.
-#[deprecated(since = "0.3.1", note = "renamed to `CurveParameter`.")]
-pub use self::CurveParameter as D1;
-#[deprecated(since = "0.3.1", note = "renamed to `SurfaceParameter`.")]
-pub use self::SurfaceParameter as D2;
-
 /// hint for searching parameter for curve
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SearchParameterHint1D {

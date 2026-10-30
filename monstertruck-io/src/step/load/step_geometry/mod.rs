@@ -193,13 +193,6 @@ impl SurfaceCurve3D {
     }
 }
 
-/// Renamed to [`StepExtrusionSurface`].
-#[deprecated(note = "renamed to StepExtrusionSurface")]
-pub type StepExtrudedCurve = StepExtrusionSurface;
-/// Renamed to [`StepRevolutionSurface`].
-#[deprecated(note = "renamed to StepRevolutionSurface")]
-pub type StepRevolutedCurve = StepRevolutionSurface;
-
 /// `conic` in 2D, realized in `monstertruck`
 #[derive(
     Clone,

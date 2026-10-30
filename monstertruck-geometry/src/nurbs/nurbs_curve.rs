@@ -641,7 +641,7 @@ where V: HasScalar<Scalar = f64>
     fn cut(&mut self, t: f64) -> Self { Cut::cut(self, t) }
 }
 
-impl<V> v2::SearchNearestParameter<v2::D1<f64>> for NurbsCurve<V>
+impl<V> v2::SearchNearestParameter<v2::CurveParameter<f64>> for NurbsCurve<V>
 where
     V: HasScalar<Scalar = f64> + Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>,
     V::Point: MetricSpace<Metric = f64>,
@@ -659,7 +659,7 @@ where
     }
 }
 
-impl<V> v2::SearchParameter<v2::D1<f64>> for NurbsCurve<V>
+impl<V> v2::SearchParameter<v2::CurveParameter<f64>> for NurbsCurve<V>
 where
     V: HasScalar<Scalar = f64> + Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>,
     V::Point: MetricSpace<Metric = f64>,

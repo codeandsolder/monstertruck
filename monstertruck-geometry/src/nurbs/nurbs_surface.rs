@@ -845,7 +845,7 @@ where
 
 impl v2::ParametricSurface3D for NurbsSurface<Vector4> {}
 
-impl<V> v2::SearchNearestParameter<v2::D2<f64>> for NurbsSurface<V>
+impl<V> v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for NurbsSurface<V>
 where
     V: HasScalar<Scalar = f64> + Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>,
     Self: ParametricSurface<Point = V::Point, Vector = <V::Point as EuclideanSpace>::Diff>,
@@ -864,7 +864,7 @@ where
     }
 }
 
-impl<V> v2::SearchParameter<v2::D2<f64>> for NurbsSurface<V>
+impl<V> v2::SearchParameter<v2::SurfaceParameter<f64>> for NurbsSurface<V>
 where
     V: HasScalar<Scalar = f64> + Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>,
     V::Point: ControlPoint<f64, Diff = <V::Point as EuclideanSpace>::Diff>

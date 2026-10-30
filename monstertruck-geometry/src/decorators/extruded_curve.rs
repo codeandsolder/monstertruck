@@ -202,7 +202,7 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<SurfaceParamete
     }
 }
 
-impl<P, C> v2::SearchParameter<v2::D2<f64>> for ExtrusionSurface<C, P::Diff>
+impl<P, C> v2::SearchParameter<v2::SurfaceParameter<f64>> for ExtrusionSurface<C, P::Diff>
 where
     P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
     P::Diff: SearchParameterVector<Point = P>,
@@ -220,7 +220,7 @@ where
     }
 }
 
-impl<C: ParametricCurve3D + BoundedCurve> v2::SearchNearestParameter<v2::D2<f64>>
+impl<C: ParametricCurve3D + BoundedCurve> v2::SearchNearestParameter<v2::SurfaceParameter<f64>>
     for ExtrusionSurface<C, Vector3>
 {
     type Point = Point3;

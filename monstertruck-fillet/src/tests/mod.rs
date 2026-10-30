@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use monstertruck_geometry::prelude::*;
-use monstertruck_io::step::save::{DisplayByStep, StepCurve, StepLength, StepModels};
+use monstertruck_io::step::save::{StepCurve, StepFormat, StepLength, StepModels};
 use monstertruck_meshing::prelude::*;
 
 use super::geometry::*;
@@ -45,9 +45,9 @@ fn step_polyline(curve: &Curve) -> PolylineCurve<Point3> {
     PolylineCurve(points)
 }
 
-impl DisplayByStep for Curve {
+impl StepFormat for Curve {
     fn fmt(&self, idx: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        DisplayByStep::fmt(&step_polyline(self), idx, f)
+        StepFormat::fmt(&step_polyline(self), idx, f)
     }
 }
 
@@ -57,12 +57,12 @@ impl StepLength for Curve {
 
 impl StepCurve for Curve {}
 
-fn format_entity(entity: &(impl DisplayByStep + StepLength), idx: usize) -> (String, usize) {
+fn format_entity(entity: &(impl StepFormat + StepLength), idx: usize) -> (String, usize) {
     struct EntityFmt<'a, T>(&'a T, usize);
 
-    impl<T: DisplayByStep> fmt::Display for EntityFmt<'_, T> {
+    impl<T: StepFormat> fmt::Display for EntityFmt<'_, T> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            DisplayByStep::fmt(self.0, self.1, f)
+            StepFormat::fmt(self.0, self.1, f)
         }
     }
 
@@ -101,7 +101,7 @@ fn dump_shell_step(name: &str, shell: &Shell) {
 }
 
 fn dump_surface_step<S>(name: &str, surface: &S)
-where S: DisplayByStep + StepLength {
+where S: StepFormat + StepLength {
     let (entity, _) = format_entity(surface, 1);
     write_step(
         test_artifact_dir().join(format!("{name}.step")),
@@ -111,7 +111,7 @@ where S: DisplayByStep + StepLength {
 }
 
 fn dump_surface_pair_step<S>(name: &str, surface0: &S, surface1: &S)
-where S: DisplayByStep + StepLength {
+where S: StepFormat + StepLength {
     let (entity0, next) = format_entity(surface0, 1);
     let (entity1, _) = format_entity(surface1, next);
     write_step(

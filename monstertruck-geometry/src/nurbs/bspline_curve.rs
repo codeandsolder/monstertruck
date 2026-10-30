@@ -539,7 +539,7 @@ where P: HasScalar<Scalar = f64> + ControlPoint<f64> + Tolerance
     fn cut(&mut self, t: f64) -> Self { Cut::cut(self, t) }
 }
 
-impl<P> v2::SearchNearestParameter<v2::D1<f64>> for BsplineCurve<P>
+impl<P> v2::SearchNearestParameter<v2::CurveParameter<f64>> for BsplineCurve<P>
 where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>
@@ -560,7 +560,7 @@ where
     }
 }
 
-impl<P> v2::SearchParameter<v2::D1<f64>> for BsplineCurve<P>
+impl<P> v2::SearchParameter<v2::CurveParameter<f64>> for BsplineCurve<P>
 where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>

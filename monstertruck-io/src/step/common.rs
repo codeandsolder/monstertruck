@@ -55,12 +55,3 @@ pub struct PartAttributes {
     /// resolves the record before it records the id, and errors out otherwise.
     pub shape_representation: Option<u64>,
 }
-
-// `PartAttrs` is the upstream `truck-stepio` spelling. Abbreviating
-// `Attributes` to `Attrs` saves three characters of typing at the cost of
-// reading clarity at every call site; we standardise on the non-abbreviated
-// name in public APIs and keep the alias only so existing callers (and code
-// ported from `truck-stepio`) continue to compile. Slated for removal once
-// downstream callers have moved off the old name.
-#[deprecated(since = "0.3.1", note = "renamed to `PartAttributes`.")]
-pub use PartAttributes as PartAttrs;

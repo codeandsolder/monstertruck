@@ -427,7 +427,7 @@ where
     fn normal(&self, u: f64, v: f64) -> Vector3 { ParametricSurface3D::normal(self, u, v) }
 }
 
-impl<E, T> v2::SearchParameter<v2::D1<f64>> for Processor<E, T>
+impl<E, T> v2::SearchParameter<v2::CurveParameter<f64>> for Processor<E, T>
 where
     E: SearchParameter<CurveParameter> + BoundedCurve,
     <E as SearchParameter<CurveParameter>>::Point: EuclideanSpace,
@@ -445,7 +445,7 @@ where
     }
 }
 
-impl<P, E, T> v2::SearchNearestParameter<v2::D1<f64>> for Processor<E, T>
+impl<P, E, T> v2::SearchNearestParameter<v2::CurveParameter<f64>> for Processor<E, T>
 where
     E: BoundedCurve<Point = P> + SearchNearestParameter<CurveParameter, Point = P>,
     P: EuclideanSpace<Scalar = f64, Diff = E::Vector>,
@@ -464,7 +464,7 @@ where
     }
 }
 
-impl<E, T> v2::SearchParameter<v2::D2<f64>> for Processor<E, T>
+impl<E, T> v2::SearchParameter<v2::SurfaceParameter<f64>> for Processor<E, T>
 where
     E: SearchParameter<SurfaceParameter>,
     E::Point: EuclideanSpace,
@@ -482,7 +482,7 @@ where
     }
 }
 
-impl<P, E, T> v2::SearchNearestParameter<v2::D2<f64>> for Processor<E, T>
+impl<P, E, T> v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for Processor<E, T>
 where
     E: ParametricSurface<Point = P> + SearchNearestParameter<SurfaceParameter, Point = P>,
     P: EuclideanSpace<Scalar = f64, Diff = E::Vector> + MetricSpace<Metric = f64> + Tolerance,

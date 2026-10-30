@@ -272,7 +272,7 @@ where P: HasScalar + ControlPoint<<P as HasScalar>::Scalar>
     }
 }
 
-impl<P> v2::SearchNearestParameter<v2::D1<<P as HasScalar>::Scalar>> for Line<P>
+impl<P> v2::SearchNearestParameter<v2::CurveParameter<<P as HasScalar>::Scalar>> for Line<P>
 where
     P: HasScalar + ControlPoint<<P as HasScalar>::Scalar>,
     P::Diff: InnerSpace<Scalar = <P as HasScalar>::Scalar>,
@@ -291,7 +291,7 @@ where
     }
 }
 
-impl<P> v2::SearchParameter<v2::D1<<P as HasScalar>::Scalar>> for Line<P>
+impl<P> v2::SearchParameter<v2::CurveParameter<<P as HasScalar>::Scalar>> for Line<P>
 where
     P: HasScalar
         + ControlPoint<<P as HasScalar>::Scalar>

@@ -163,16 +163,6 @@ impl<T: StepFormat> StepFormat for Box<T> {
     }
 }
 
-// `DisplayByStep` is the upstream `truck-stepio` trait name. We renamed
-// it to `StepFormat` because "display by step" parses as
-// "display step-by-step" rather than the intended "format as STEP". The
-// alias is kept so external code that imports `DisplayByStep` (e.g. code
-// ported from `truck` that pre-dates our rename) keeps compiling against
-// `monstertruck`. New code should use `StepFormat`. Slated for removal
-// once downstream callers are off the old name.
-#[deprecated(since = "0.3.1", note = "renamed to `StepFormat`.")]
-pub use StepFormat as DisplayByStep;
-
 /// Display struct for outputting some objects to STEP file format.
 #[derive(Clone, Debug)]
 pub struct StepDisplay<T> {

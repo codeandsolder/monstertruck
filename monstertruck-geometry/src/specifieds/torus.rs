@@ -205,7 +205,7 @@ impl v2::BoundedSurface for Torus {
 
 impl v2::ParametricSurface3D for Torus {}
 
-impl v2::SearchNearestParameter<v2::D2<f64>> for Torus {
+impl v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for Torus {
     type Point = Point3;
     #[inline]
     fn search_nearest_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
@@ -218,7 +218,7 @@ impl v2::SearchNearestParameter<v2::D2<f64>> for Torus {
     }
 }
 
-impl v2::SearchParameter<v2::D2<f64>> for Torus {
+impl v2::SearchParameter<v2::SurfaceParameter<f64>> for Torus {
     type Point = Point3;
     #[inline]
     fn search_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(

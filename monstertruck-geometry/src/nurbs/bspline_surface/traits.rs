@@ -102,7 +102,7 @@ where
 
 impl v2::ParametricSurface3D for BsplineSurface<Point3> {}
 
-impl<P> v2::SearchNearestParameter<v2::D2<f64>> for BsplineSurface<P>
+impl<P> v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for BsplineSurface<P>
 where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>
@@ -122,7 +122,7 @@ where
     }
 }
 
-impl<P> v2::SearchParameter<v2::D2<f64>> for BsplineSurface<P>
+impl<P> v2::SearchParameter<v2::SurfaceParameter<f64>> for BsplineSurface<P>
 where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>

@@ -17,8 +17,8 @@ type Vector3F32 = cgmath::Vector3<f32>;
 const fn assert_v2_curve<C: v2::ParametricCurve>() {}
 const fn assert_v2_bounded<C: v2::BoundedCurve>() {}
 const fn assert_v2_cut<C: v2::Cut>() {}
-const fn assert_v2_search<C: v2::SearchParameter<v2::D1<f32>>>() {}
-const fn assert_v2_nearest<C: v2::SearchNearestParameter<v2::D1<f32>>>() {}
+const fn assert_v2_search<C: v2::SearchParameter<v2::CurveParameter<f32>>>() {}
+const fn assert_v2_nearest<C: v2::SearchNearestParameter<v2::CurveParameter<f32>>>() {}
 
 #[allow(
     dead_code,
@@ -98,7 +98,7 @@ fn f32_search_parameter_and_nearest() {
     let on_curve = Point3F32::new(0.25, 0.0, 0.0);
     let off_curve = Point3F32::new(0.25, 1.0, 0.0);
 
-    let found = (v2::SearchParameter::<v2::D1<f32>>::search_parameter(
+    let found = (v2::SearchParameter::<v2::CurveParameter<f32>>::search_parameter(
         &line,
         on_curve,
         v2::SearchParameterHint1D::None,
@@ -108,7 +108,7 @@ fn f32_search_parameter_and_nearest() {
     assert!((found - 0.25).abs() < 1e-6);
 
     assert!(
-        v2::SearchParameter::<v2::D1<f32>>::search_parameter(
+        v2::SearchParameter::<v2::CurveParameter<f32>>::search_parameter(
             &line,
             off_curve,
             v2::SearchParameterHint1D::None,
@@ -117,7 +117,7 @@ fn f32_search_parameter_and_nearest() {
         .is_none()
     );
 
-    let nearest = (v2::SearchNearestParameter::<v2::D1<f32>>::search_nearest_parameter(
+    let nearest = (v2::SearchNearestParameter::<v2::CurveParameter<f32>>::search_nearest_parameter(
         &line,
         off_curve,
         v2::SearchParameterHint1D::None,

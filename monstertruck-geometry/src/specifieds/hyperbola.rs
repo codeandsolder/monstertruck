@@ -88,7 +88,7 @@ impl_v2_hyperbola!(Point3, Vector3);
 
 macro_rules! impl_v2_hyperbola_search {
     ($point:ty) => {
-        impl v2::SearchNearestParameter<v2::D1<f64>> for UnitHyperbola<$point> {
+        impl v2::SearchNearestParameter<v2::CurveParameter<f64>> for UnitHyperbola<$point> {
             type Point = $point;
             #[inline]
             fn search_nearest_parameter<H: Into<v2::SearchParameterHint1D<f64>>>(
@@ -101,7 +101,7 @@ macro_rules! impl_v2_hyperbola_search {
             }
         }
 
-        impl v2::SearchParameter<v2::D1<f64>> for UnitHyperbola<$point> {
+        impl v2::SearchParameter<v2::CurveParameter<f64>> for UnitHyperbola<$point> {
             type Point = $point;
             #[inline]
             fn search_parameter<H: Into<v2::SearchParameterHint1D<f64>>>(

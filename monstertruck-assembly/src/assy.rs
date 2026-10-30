@@ -87,11 +87,6 @@ impl<'a, Shape, NodeAttrs, Matrix, EdgeAttrs>
     #[inline]
     #[must_use]
     pub const fn attributes(self) -> &'a NodeAttrs { &self.entity().attrs }
-    /// Deprecated alias for [`attributes`](Self::attributes).
-    #[deprecated(since = "0.3.1", note = "renamed to `attributes`.")]
-    #[inline]
-    #[must_use]
-    pub const fn attrs(self) -> &'a NodeAttrs { self.attributes() }
 }
 
 impl<'a, Shape, NodeAttrs, Matrix, EdgeAttrs>
@@ -103,10 +98,6 @@ impl<'a, Shape, NodeAttrs, Matrix, EdgeAttrs>
     /// Returns the node attributes.
     #[inline]
     pub const fn attributes(&'a mut self) -> &'a mut NodeAttrs { &mut self.entity().attrs }
-    /// Deprecated alias for [`attributes`](Self::attributes).
-    #[deprecated(since = "0.3.1", note = "renamed to `attributes`.")]
-    #[inline]
-    pub const fn attrs(&'a mut self) -> &'a mut NodeAttrs { self.attributes() }
 }
 
 impl<'a, Matrix, EdgeAttrs> Edge<'a, EdgeEntity<Matrix, EdgeAttrs>> {
@@ -118,11 +109,6 @@ impl<'a, Matrix, EdgeAttrs> Edge<'a, EdgeEntity<Matrix, EdgeAttrs>> {
     #[inline]
     #[must_use]
     pub const fn attributes(self) -> &'a EdgeAttrs { &self.entity().attrs }
-    /// Deprecated alias for [`attributes`](Self::attributes).
-    #[deprecated(since = "0.3.1", note = "renamed to `attributes`.")]
-    #[inline]
-    #[must_use]
-    pub const fn attrs(self) -> &'a EdgeAttrs { self.attributes() }
 }
 
 impl<'a, Matrix, EdgeAttrs> EdgeMut<'a, EdgeEntity<Matrix, EdgeAttrs>> {
@@ -132,10 +118,6 @@ impl<'a, Matrix, EdgeAttrs> EdgeMut<'a, EdgeEntity<Matrix, EdgeAttrs>> {
     /// Returns the edge attributes.
     #[inline]
     pub const fn attributes(&'a mut self) -> &'a mut EdgeAttrs { &mut self.entity().attrs }
-    /// Deprecated alias for [`attributes`](Self::attributes).
-    #[deprecated(since = "0.3.1", note = "renamed to `attributes`.")]
-    #[inline]
-    pub const fn attrs(&'a mut self) -> &'a mut EdgeAttrs { self.attributes() }
 }
 
 /// have contents which can be removed

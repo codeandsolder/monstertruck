@@ -27,14 +27,6 @@ pub enum SurfaceParameter<T> {
     _Phantom(std::marker::PhantomData<T>),
 }
 
-// See the `traits::search_parameter` module for the rename rationale --
-// these aliases mirror the v1 deprecation so the v2 namespace stays in
-// sync.
-#[deprecated(since = "0.3.1", note = "renamed to `CurveParameter`.")]
-pub use self::CurveParameter as D1;
-#[deprecated(since = "0.3.1", note = "renamed to `SurfaceParameter`.")]
-pub use self::SurfaceParameter as D2;
-
 /// Scalar-generic parameter range.
 pub type ParameterRange<T> = (Bound<T>, Bound<T>);
 

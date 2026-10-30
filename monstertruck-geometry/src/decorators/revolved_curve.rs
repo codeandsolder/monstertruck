@@ -218,7 +218,7 @@ impl<C: ParametricCurve3D + BoundedCurve> v2::ParametricSurface3D for Revolution
     fn normal(&self, u: f64, v: f64) -> Vector3 { ParametricSurface3D::normal(self, u, v) }
 }
 
-impl<C: ParametricCurve3D + BoundedCurve> v2::SearchParameter<v2::D2<f64>>
+impl<C: ParametricCurve3D + BoundedCurve> v2::SearchParameter<v2::SurfaceParameter<f64>>
     for RevolutionSurface<C>
 {
     type Point = Point3;
@@ -233,7 +233,7 @@ impl<C: ParametricCurve3D + BoundedCurve> v2::SearchParameter<v2::D2<f64>>
     }
 }
 
-impl<C: ParametricCurve3D + BoundedCurve> v2::SearchNearestParameter<v2::D2<f64>>
+impl<C: ParametricCurve3D + BoundedCurve> v2::SearchNearestParameter<v2::SurfaceParameter<f64>>
     for RevolutionSurface<C>
 {
     type Point = Point3;
