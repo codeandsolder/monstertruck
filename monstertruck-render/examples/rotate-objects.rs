@@ -9,15 +9,22 @@
 //! - Enter "P" on the keyboard to switch between parallel projection and perspective projection of the camera.
 //! - Enter "L" on the keyboard to switch the point light source/uniform light source of the light.
 
-use monstertruck_gpu::*;
+use monstertruck_gpu::{
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
+    WindowSceneDescriptor,
+};
 use monstertruck_meshing::prelude::*;
-use monstertruck_render::*;
+use monstertruck_render::{CreatorCreator, Material, PolygonInstance, PolygonState};
 use std::f64::consts::PI;
 use std::io::Read;
 use std::sync::Arc;
-use winit::{dpi::*, event::*, keyboard::*};
+use winit::{
+    dpi::PhysicalPosition,
+    event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase},
+    keyboard::{KeyCode, PhysicalKey},
+};
 mod app;
-use app::*;
+use app::{App, AppResult, ControlFlow, async_trait};
 
 const NUM_OF_OBJECTS: u32 = 8;
 
@@ -65,7 +72,7 @@ impl MyRender {
         let (size, center) = (bdd_box.size(), bdd_box.center());
         let original_mesh: PolygonInstance = scene
             .instance_creator()
-            .create_instance(&mesh, &Default::default())?;
+            .create_instance(&mesh, &PolygonState::default())?;
         let rad = Rad(2.0 * PI / f64::from(NUM_OF_OBJECTS));
         let mut mat = Matrix4::from_scale(size / 2.0);
         mat = Matrix4::from_translation(center.to_vec()) * mat;
@@ -89,7 +96,7 @@ impl MyRender {
         self.prev_time = time;
         let mat0 = Matrix4::from_axis_angle(Vector3::unit_y(), Rad(delta_time));
         for (idx, instance) in self.instances.iter_mut().enumerate() {
-            let state = &mut instance.instance_state_mut();
+            let state = instance.instance_state_mut();
             let (matrix, material) = (&mut state.matrix, &mut state.material);
             let k = if idx % 2 == 0 { 5.0 } else { -5.0 };
             let mat1 = Matrix4::from_axis_angle(Vector3::unit_y(), Rad(k * delta_time));
@@ -109,7 +116,7 @@ impl MyRender {
             *material = Material {
                 albedo: color,
                 roughness: (0.5 + (time / 5.0).sin() / 2.0),
-                reflectance: 0.04 + 0.96 * (0.5 + (time / 2.0).sin() / 2.0),
+                reflectance: 0.96_f64.mul_add(0.5 + (time / 2.0).sin() / 2.0, 0.04),
                 ambient_ratio: 0.02,
                 background_ratio: 0.0,
                 alpha_blend: false,
@@ -134,7 +141,7 @@ impl App for MyRender {
         let sample_count = 4;
         let scene_desc = WindowSceneDescriptor {
             studio: StudioConfig {
-                camera: MyRender::create_camera()?,
+                camera: Self::create_camera()?,
                 lights: vec![Light {
                     position: Point3::new(0.0, 20.0, 0.0),
                     color: Vector3::new(1.0, 1.0, 1.0) * 1.5,
@@ -147,7 +154,7 @@ impl App for MyRender {
                 ..Default::default()
             },
         };
-        let mut app = MyRender {
+        let mut app = Self {
             scene: WindowScene::from_window(window, &scene_desc).await?,
             instances: Vec::new(),
             rotate_flag: false,
@@ -209,7 +216,7 @@ impl App for MyRender {
                 }
             }
             MouseScrollDelta::PixelDelta(_) => {}
-        };
+        }
         Self::default_control_flow()
     }
 
@@ -234,9 +241,8 @@ impl App for MyRender {
         Self::default_control_flow()
     }
     fn keyboard_input(&mut self, input: KeyEvent, _: bool) -> ControlFlow {
-        let keycode = match input.physical_key {
-            PhysicalKey::Code(keycode) => keycode,
-            _ => return Self::default_control_flow(),
+        let PhysicalKey::Code(keycode) = input.physical_key else {
+            return Self::default_control_flow();
         };
         match keycode {
             KeyCode::KeyP => {

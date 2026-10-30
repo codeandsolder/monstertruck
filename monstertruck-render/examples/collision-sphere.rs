@@ -2,13 +2,22 @@
 // limit, and each example and test target is its own crate.
 #![recursion_limit = "256"]
 mod app;
-use app::*;
-use monstertruck_gpu::*;
+use app::{App, AppResult, ControlFlow, async_trait};
+use monstertruck_gpu::{
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
+    WindowSceneDescriptor,
+};
 use monstertruck_meshing::prelude::*;
-use monstertruck_render::*;
+use monstertruck_render::{
+    CreatorCreator, Material, PolygonInstance, PolygonState, WireFrameInstance, WireFrameState,
+};
 use std::f64::consts::PI;
 use std::sync::Arc;
-use winit::{dpi::*, event::*, keyboard::*};
+use winit::{
+    dpi::PhysicalPosition,
+    event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase},
+    keyboard::{KeyCode, PhysicalKey},
+};
 
 struct MyApp {
     scene: WindowScene,
@@ -89,8 +98,8 @@ impl App for MyApp {
                 ..Default::default()
             },
         )?;
-        let instance2 = creator.create_instance(&sphere0, &Default::default())?;
-        let instance3 = creator.create_instance(&sphere1, &Default::default())?;
+        let instance2 = creator.create_instance(&sphere0, &WireFrameState::default())?;
+        let instance3 = creator.create_instance(&sphere1, &WireFrameState::default())?;
         let wireinstance = creator.create_instance(
             &intersect,
             &WireFrameState {
@@ -103,7 +112,7 @@ impl App for MyApp {
         scene.add_object(&instance2);
         scene.add_object(&instance3);
         scene.add_object(&wireinstance);
-        Ok(MyApp {
+        Ok(Self {
             scene,
             rotate_flag: false,
             prev_cursor: Vector2::zero(),
@@ -155,7 +164,7 @@ impl App for MyApp {
                 }
             }
             MouseScrollDelta::PixelDelta(_) => {}
-        };
+        }
         Self::default_control_flow()
     }
 
@@ -183,9 +192,8 @@ impl App for MyApp {
         if input.state == ElementState::Released {
             return Self::default_control_flow();
         }
-        let keycode = match input.physical_key {
-            PhysicalKey::Code(keycode) => keycode,
-            _ => return Self::default_control_flow(),
+        let PhysicalKey::Code(keycode) = input.physical_key else {
+            return Self::default_control_flow();
         };
         if keycode == KeyCode::Space {
             self.render_mode = match self.render_mode {
@@ -227,6 +235,10 @@ impl App for MyApp {
     }
 }
 
+#[allow(
+    clippy::similar_names,
+    reason = "u/v division names are standard parametric-surface notation"
+)]
 fn sphere(center: Point3, radius: f64, udiv: usize, vdiv: usize) -> AppResult<PolygonMesh> {
     if udiv == 0 || vdiv < 2 {
         return Err(std::io::Error::new(

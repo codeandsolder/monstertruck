@@ -12,8 +12,10 @@ pub use async_trait::async_trait;
 pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 use std::sync::Arc;
 //use std::time::Duration;
-use winit::dpi::*;
-use winit::event::*;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::{
+    ElementState, Event, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow as WControlFlow};
 use winit::window::Window;
 
@@ -39,9 +41,9 @@ impl TryFrom<ControlFlow> for WControlFlow {
     fn try_from(value: ControlFlow) -> Result<Self, Self::Error> {
         match value {
             ControlFlow::Exit => Err(()),
-            ControlFlow::Poll => Ok(WControlFlow::Poll),
-            ControlFlow::Wait => Ok(WControlFlow::Wait),
-            ControlFlow::WaitUntil(x) => Ok(WControlFlow::WaitUntil(x)),
+            ControlFlow::Poll => Ok(Self::Poll),
+            ControlFlow::Wait => Ok(Self::Wait),
+            ControlFlow::WaitUntil(x) => Ok(Self::WaitUntil(x)),
         }
     }
 }
@@ -57,8 +59,10 @@ pub trait App: Sized + 'static {
     async fn init(window: Arc<Window>) -> AppResult<Self>;
     /// By overriding this function, you can change the display of the title bar.
     /// It is not possible to change the window while it is running.
+    #[must_use]
     fn app_title<'a>() -> Option<&'a str> { None }
     /// Default is `ControlFlow::WaitUntil(1 / 60 seconds)`.
+    #[must_use]
     fn default_control_flow() -> ControlFlow {
         /*
         let next_frame_time = Instant::now() + Duration::from_nanos(16_666_667);
@@ -107,7 +111,7 @@ pub trait App: Sized + 'static {
         let event_loop = winit::event_loop::EventLoop::new()?;
         let mut wa = winit::window::Window::default_attributes();
         if let Some(title) = Self::app_title() {
-            wa.title = title.to_owned();
+            title.clone_into(&mut wa.title);
         }
         let window = event_loop.create_window(wa)?;
         #[cfg(target_arch = "wasm32")]
@@ -211,7 +215,7 @@ fn main() {
     struct MyApp;
     #[async_trait(?Send)]
     impl App for MyApp {
-        async fn init(_: Arc<Window>) -> AppResult<Self> { Ok(MyApp) }
+        async fn init(_: Arc<Window>) -> AppResult<Self> { Ok(Self) }
     }
-    MyApp::run()
+    MyApp::run();
 }

@@ -10,16 +10,26 @@
 //! - Enter "L" on the keyboard to switch the point light source/uniform light source of the light.
 //! - Enter "Space" on the keyboard to switch the rendering mode for the wireframe and surface.
 
-use monstertruck_gpu::*;
+use monstertruck_gpu::{
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
+    WindowSceneDescriptor, wgpu,
+};
 use monstertruck_meshing::prelude::*;
-use monstertruck_render::*;
+use monstertruck_render::{
+    CreatorCreator, InstanceCreator, Material, PolygonInstance, PolygonState, WireFrameInstance,
+    WireFrameState,
+};
 use std::f64::consts::PI;
 use std::io::Read;
 use std::sync::Arc;
-use wgpu::*;
-use winit::{dpi::*, event::*, keyboard::*};
+use wgpu::Color;
+use winit::{
+    dpi::PhysicalPosition,
+    event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase},
+    keyboard::{KeyCode, PhysicalKey},
+};
 mod app;
-use app::*;
+use app::{App, AppResult, ControlFlow, async_trait};
 
 const TEAPOT_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -149,7 +159,7 @@ impl App for MyApp {
         let scene_desc = WindowSceneDescriptor {
             studio: StudioConfig {
                 background: Color::BLACK,
-                camera: MyApp::create_camera()?,
+                camera: Self::create_camera()?,
                 lights: vec![Light {
                     position: Point3::new(1.0, 1.0, 1.0),
                     color: Vector3::new(1.0, 1.0, 1.0),
@@ -163,10 +173,10 @@ impl App for MyApp {
         };
         let mut scene = WindowScene::from_window(window, &scene_desc).await?;
         let creator = scene.instance_creator();
-        let (instance, wireframe) = MyApp::load_obj(&creator, TEAPOT_BYTES)?;
+        let (instance, wireframe) = Self::load_obj(&creator, TEAPOT_BYTES)?;
         scene.add_object(&instance);
         scene.add_object(&wireframe);
-        let mut app = MyApp {
+        let mut app = Self {
             scene,
             creator,
             rotate_flag: false,
@@ -184,7 +194,7 @@ impl App for MyApp {
     fn dropped_file(&mut self, path: std::path::PathBuf) -> ControlFlow {
         let result = std::fs::File::open(path)
             .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })
-            .and_then(|file| MyApp::load_obj(&self.creator, file));
+            .and_then(|file| Self::load_obj(&self.creator, file));
         match result {
             Ok((instance, wireframe)) => {
                 self.scene.clear_objects();
@@ -239,7 +249,7 @@ impl App for MyApp {
                 }
             }
             MouseScrollDelta::PixelDelta(_) => {}
-        };
+        }
         Self::default_control_flow()
     }
 
@@ -266,9 +276,8 @@ impl App for MyApp {
         if input.state == ElementState::Released {
             return Self::default_control_flow();
         }
-        let keycode = match input.physical_key {
-            PhysicalKey::Code(keycode) => keycode,
-            _ => return Self::default_control_flow(),
+        let PhysicalKey::Code(keycode) = input.physical_key else {
+            return Self::default_control_flow();
         };
         match keycode {
             KeyCode::KeyP => {

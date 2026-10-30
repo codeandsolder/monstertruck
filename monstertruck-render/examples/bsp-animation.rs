@@ -5,17 +5,23 @@
 //!
 //! In each frame, the NURBS surface is divided into mesh.
 
-use monstertruck_gpu::*;
-use monstertruck_modeling::*;
-use monstertruck_render::*;
+use monstertruck_gpu::{
+    BackendBufferConfig, Camera, Light, LightType, StudioConfig, WindowScene, WindowSceneDescriptor,
+};
+use monstertruck_modeling::{
+    BoundedSurface, BsplineSurface, InnerSpace, KnotVector, Matrix4, Point3, Vector3, Vector4,
+};
+use monstertruck_render::{
+    CreatorCreator, InstanceCreator, PolygonInstance, PolygonState, StructuredMesh,
+};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::thread::*;
+use std::thread::JoinHandle;
 use winit::window::Window;
 mod app;
-use app::*;
+use app::{App, AppResult, ControlFlow, async_trait};
 
 struct MyApp {
     scene: WindowScene,
@@ -108,7 +114,7 @@ impl App for MyApp {
     async fn init(window: Arc<Window>) -> AppResult<Self> {
         let desc = WindowSceneDescriptor {
             studio: StudioConfig {
-                camera: MyApp::init_camera(),
+                camera: Self::init_camera(),
                 lights: vec![Light {
                     position: Point3::new(0.5, 2.0, 0.5),
                     color: Vector3::new(1.0, 1.0, 1.0),
@@ -125,22 +131,22 @@ impl App for MyApp {
         let creator = scene.instance_creator();
         let surface = Self::init_surface(3, 4)?;
         let object = StructuredMesh::from_surface(&surface, surface.range_tuple(), 0.01);
-        let instance = creator.create_instance(&object, &Default::default())?;
+        let instance = creator.create_instance(&object, &PolygonState::default())?;
         scene.add_object(&instance);
         let object = Arc::new(Mutex::new(object));
         let closed = Arc::new(AtomicBool::new(false));
         let updated = Arc::new(AtomicBool::new(false));
-        let thread = Some(MyApp::init_thread(
+        let thread = Some(Self::init_thread(
             Arc::clone(&object),
             Arc::clone(&closed),
             Arc::clone(&updated),
             Arc::new(Mutex::new(surface)),
         ));
-        Ok(MyApp {
+        Ok(Self {
             scene,
             creator,
-            instance,
             object,
+            instance,
             closed,
             updated,
             thread,
@@ -154,13 +160,17 @@ impl App for MyApp {
                 .object
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match self.creator.create_instance(&*object, &Default::default()) {
+            match self
+                .creator
+                .create_instance(&*object, &PolygonState::default())
+            {
                 Ok(mut object) => {
                     self.instance.swap_vertex(&mut object);
                     self.scene.update_vertex_buffer(&self.instance);
                 }
                 Err(error) => eprintln!("instance rebuild failed: {error}"),
             }
+            drop(object);
             self.updated.store(false, Ordering::SeqCst);
         }
         if let Err(error) = self.scene.render_frame() {

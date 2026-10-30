@@ -6,15 +6,22 @@
 // The texture is referenced by:
 // https://cc0textures.com/view?id=WoodFloor024
 
-use monstertruck_gpu::*;
+use monstertruck_gpu::{
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
+    WindowSceneDescriptor,
+};
 use monstertruck_meshing::prelude::*;
-use monstertruck_modeling::*;
-use monstertruck_render::*;
+use monstertruck_modeling::{Solid, builder};
+use monstertruck_render::{CreatorCreator, Material, PolygonInstance, PolygonState, image2texture};
 use std::f64::consts::PI;
 use std::sync::Arc;
-use winit::{dpi::*, event::*, keyboard::*};
+use winit::{
+    dpi::PhysicalPosition,
+    event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase},
+    keyboard::{KeyCode, PhysicalKey},
+};
 mod app;
-use app::*;
+use app::{App, AppResult, ControlFlow, async_trait};
 
 const TEXTURE_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -60,7 +67,7 @@ impl App for MyApp {
         let sample_count = 4;
         let desc = WindowSceneDescriptor {
             studio: StudioConfig {
-                camera: MyApp::create_camera()?,
+                camera: Self::create_camera()?,
                 lights: vec![Light {
                     position: Point3::new(1.0, 1.0, 1.0),
                     color: Vector3::new(1.0, 1.0, 1.0),
@@ -92,7 +99,7 @@ impl App for MyApp {
         let mesh = Self::create_cube().triangulation(0.05).to_polygon();
         let shape: PolygonInstance = scene.instance_creator().create_instance(&mesh, &state)?;
         scene.add_object(&shape);
-        Ok(MyApp {
+        Ok(Self {
             scene,
             rotate_flag: false,
             prev_cursor: None,
@@ -144,7 +151,7 @@ impl App for MyApp {
                 }
             }
             MouseScrollDelta::PixelDelta(_) => {}
-        };
+        }
         Self::default_control_flow()
     }
 
@@ -169,9 +176,8 @@ impl App for MyApp {
         Self::default_control_flow()
     }
     fn keyboard_input(&mut self, input: KeyEvent, _: bool) -> ControlFlow {
-        let keycode = match input.physical_key {
-            PhysicalKey::Code(keycode) => keycode,
-            _ => return Self::default_control_flow(),
+        let PhysicalKey::Code(keycode) = input.physical_key else {
+            return Self::default_control_flow();
         };
         match keycode {
             KeyCode::KeyP => {

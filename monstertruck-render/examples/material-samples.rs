@@ -10,11 +10,14 @@
 //! and no roughness in microfacet.
 
 mod app;
-use app::*;
-use monstertruck_gpu::*;
+use app::{App, AppResult, async_trait};
+use monstertruck_gpu::{
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
+    WindowSceneDescriptor, wgpu,
+};
 use monstertruck_meshing::prelude::*;
-use monstertruck_modeling::*;
-use monstertruck_render::*;
+use monstertruck_modeling::{Solid, builder};
+use monstertruck_render::{CreatorCreator, Material, PolygonInstance, PolygonState};
 use std::f64::consts::PI;
 use std::sync::Arc;
 
@@ -33,8 +36,8 @@ impl App for MyApp {
     async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let side_length = f64::from(N + 1) * 1.5;
         let camera_dist = side_length / 2.0 / (PI / 8.0).tan();
-        let a = side_length / 2.0;
-        let b = camera_dist / 2.0;
+        let half_side = side_length / 2.0;
+        let half_camera_dist = camera_dist / 2.0;
         let sample_count = 4;
         let scene_desc = WindowSceneDescriptor {
             studio: StudioConfig {
@@ -46,22 +49,22 @@ impl App for MyApp {
                 },
                 lights: vec![
                     Light {
-                        position: Point3::new(-a, -a, b),
+                        position: Point3::new(-half_side, -half_side, half_camera_dist),
                         color: Vector3::new(0.5, 0.5, 0.5),
                         kind: LightType::Point,
                     },
                     Light {
-                        position: Point3::new(-a, a, b),
+                        position: Point3::new(-half_side, half_side, half_camera_dist),
                         color: Vector3::new(0.5, 0.5, 0.5),
                         kind: LightType::Point,
                     },
                     Light {
-                        position: Point3::new(a, -a, b),
+                        position: Point3::new(half_side, -half_side, half_camera_dist),
                         color: Vector3::new(0.5, 0.5, 0.5),
                         kind: LightType::Point,
                     },
                     Light {
-                        position: Point3::new(a, a, b),
+                        position: Point3::new(half_side, half_side, half_camera_dist),
                         color: Vector3::new(0.5, 0.5, 0.5),
                         kind: LightType::Point,
                     },
@@ -79,26 +82,26 @@ impl App for MyApp {
             },
         };
         let mut scene = WindowScene::from_window(window, &scene_desc).await?;
-        let v = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
-        let e = builder::extrude(&v, Vector3::unit_x());
-        let f = builder::extrude(&e, Vector3::unit_y());
-        let cube: Solid = builder::extrude(&f, Vector3::unit_z());
+        let vertex = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
+        let edge = builder::extrude(&vertex, Vector3::unit_x());
+        let face = builder::extrude(&edge, Vector3::unit_y());
+        let cube: Solid = builder::extrude(&face, Vector3::unit_z());
         let mesh = cube.triangulation(0.01).to_polygon();
         let instance: PolygonInstance = scene
             .instance_creator()
-            .create_instance(&mesh, &Default::default())?;
+            .create_instance(&mesh, &PolygonState::default())?;
         let mut matrices = Vec::new();
         let instances: Vec<_> = (0..N)
-            .flat_map(move |i| (0..N).map(move |j| (i, j)))
-            .map(|(i, j)| {
+            .flat_map(move |row| (0..N).map(move |column| (row, column)))
+            .map(|(row, column)| {
                 let mut instance = instance.clone_instance();
-                let (s, t) = (
-                    f64::from(i) / f64::from(N - 1),
-                    f64::from(j) / f64::from(N - 1),
+                let (reflectance, roughness) = (
+                    f64::from(row) / f64::from(N - 1),
+                    f64::from(column) / f64::from(N - 1),
                 );
                 let matrix = Matrix4::from_translation(Vector3::new(
-                    1.5 * f64::from(i + 1) - side_length / 2.0,
-                    1.5 * f64::from(j + 1) - side_length / 2.0,
+                    1.5_f64.mul_add(f64::from(row + 1), -(side_length / 2.0)),
+                    1.5_f64.mul_add(f64::from(column + 1), -(side_length / 2.0)),
                     0.0,
                 ));
                 matrices.push(matrix);
@@ -106,8 +109,8 @@ impl App for MyApp {
                     matrix,
                     material: Material {
                         albedo: Vector4::from(BOXCOLOR),
-                        reflectance: s,
-                        roughness: t,
+                        reflectance,
+                        roughness,
                         ambient_ratio: 0.02,
                         background_ratio: 0.0,
                         alpha_blend: false,
@@ -117,10 +120,10 @@ impl App for MyApp {
                 instance
             })
             .collect();
-        instances.iter().for_each(|shape| {
+        for shape in &instances {
             scene.add_object(shape);
-        });
-        Ok(MyApp {
+        }
+        Ok(Self {
             scene,
             instances,
             matrices,
@@ -128,14 +131,15 @@ impl App for MyApp {
     }
     fn render(&mut self) {
         let time = self.scene.elapsed().as_secs_f64();
-        for (i, shape) in self.instances.iter_mut().enumerate() {
-            let axis = if i % 2 == 0 {
-                (-1.0_f64).powi(i as i32 / 2) * Vector3::unit_y()
+        for (index, shape) in self.instances.iter_mut().enumerate() {
+            let pair_sign = if (index / 2) % 2 == 0 { 1.0 } else { -1.0 };
+            let axis = if index % 2 == 0 {
+                pair_sign * Vector3::unit_y()
             } else {
-                -(-1.0_f64).powi(i as i32 / 2) * Vector3::unit_x()
+                -pair_sign * Vector3::unit_x()
             };
             shape.instance_state_mut().matrix =
-                self.matrices[i] * Matrix4::from_axis_angle(axis, Rad(time * PI / 2.0));
+                self.matrices[index] * Matrix4::from_axis_angle(axis, Rad(time * PI / 2.0));
             self.scene.update_bind_group(shape);
         }
         if let Err(error) = self.scene.render_frame() {
