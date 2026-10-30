@@ -320,8 +320,7 @@ fn apply_single_edge_fillet(
     if faces.len() != 2 {
         if env::var_os("MT_FILLET_DEBUG").is_some() {
             eprintln!(
-                "debug fillet edge {:?}: skipped non-manifold candidate ({} faces).",
-                edge_id,
+                "debug fillet edge {edge_id:?}: skipped non-manifold candidate ({} faces).",
                 faces.len()
             );
         }
@@ -527,8 +526,8 @@ pub fn fillet_edges(
                 resolved_pairs.push((original_eid, resolved_eid));
             } else if env::var_os("MT_FILLET_DEBUG").is_some() {
                 eprintln!(
-                    "debug fillet chain {:?}: unresolved edge {:?}, skipping.",
-                    chain.edge_ids, original_eid
+                    "debug fillet chain {:?}: unresolved edge {original_eid:?}, skipping.",
+                    chain.edge_ids
                 );
             }
         }
@@ -551,8 +550,8 @@ pub fn fillet_edges(
         let Some(faces) = edge_face_map.get(&first_eid) else {
             if env::var_os("MT_FILLET_DEBUG").is_some() {
                 eprintln!(
-                    "debug fillet chain {:?}: missing seed edge {:?}, skipping.",
-                    chain.edge_ids, first_eid
+                    "debug fillet chain {:?}: missing seed edge {first_eid:?}, skipping.",
+                    chain.edge_ids
                 );
             }
             continue;
@@ -560,9 +559,8 @@ pub fn fillet_edges(
         if faces.len() != 2 {
             if env::var_os("MT_FILLET_DEBUG").is_some() {
                 eprintln!(
-                    "debug fillet chain {:?}: skipped non-manifold seed edge {:?} ({} faces).",
+                    "debug fillet chain {:?}: skipped non-manifold seed edge {first_eid:?} ({} faces).",
                     chain.edge_ids,
-                    first_eid,
                     faces.len()
                 );
             }
@@ -592,8 +590,7 @@ pub fn fillet_edges(
             };
 
             match apply_single_edge_fillet(shell, first_eid, Some(shared_face_idx), opts) {
-                Ok(()) => {}
-                Err(FilletError::GeometryFailed { .. }) => {}
+                Ok(()) | Err(FilletError::GeometryFailed { .. }) => {}
                 Err(error) => return Err(error),
             }
         } else {
