@@ -55,7 +55,7 @@ Per-crate detail and porting verdicts live in [`TRUCK-PARITY.md`](TRUCK-PARITY.m
 - Parameter-space markers `D1`/`D2` -> `CurveParameter`/`SurfaceParameter`; `Univariate*`/`Bivariate*ScalarFunction` -> `CurveScalarFunction`/`SurfaceScalarFunction`; `KnotVec` -> `KnotVector`; `BSpline*` -> `Bspline*`.
 - Public names de-abbreviated: `attrs()` -> `attributes()`, `PartAttrs` -> `PartAttributes`, `DisplayByStep` -> `StepFormat`, `assy` -> `assembly`, `rbf_surface` -> `rolling_ball_fillet`, `af_surface` -> `approximate_fillet_surface`, `interpole` -> `interpolate`.
 - Accessors follow `<property>_<direction>`, matching `derivative_u`: `u_period`/`v_period` -> `period_u`/`period_v`, `Plane::u_axis`/`v_axis` -> `axis_u`/`axis_v`, `row_curve`/`column_curve` -> `curve_u`/`curve_v` (the row/column pair was crossed -- the *row* curve varies `u`).
-- Every rename ships a deprecated alias so upstream-style code still compiles.
+- Deprecated rename aliases have been removed; callers use the canonical names directly.
 
 **Geometry Correctness**
 - `Sphere::search_nearest_parameter` guards: `acos` clamp, exact-pole `0/0` singularity, `point == center` singularity.
@@ -79,7 +79,7 @@ Per-crate detail and porting verdicts live in [`TRUCK-PARITY.md`](TRUCK-PARITY.m
 - Tangent-based circular arc construction in `monstertruck-modeling`: `CircularArcConstraint::{ThroughPoint, StartTangent}`, `try_circle_arc_by_start_tangent` (renamed from upstream `ArcConstraint`/`circle_arc_by_tangent0`; upstream [`993e156c`](https://github.com/ricosjp/truck/commit/993e156c)).
 - Fillet engine rewrite: per-edge radii, variable-radius open wires, multi-chain + chamfer, `Ridge` and `Custom` profile modes, robust topology surgery, degenerate-edge rejection, `IntersectionCurve` support.
 - T-spline / T-NURCC promoted to first-class surface type with `BsplineSurface` conversion, curvature-based adaptive refinement, and hot-path optimization (lock-free `Tmesh::try_evaluate()`, flat-array layout for `analytical_der_mn()`).
-- Scalar-generic `v2` trait family (`CurveParameter<T>`/`SurfaceParameter<T>`, `SearchParameter<v2::D2<T>>`, etc.) -- no upstream equivalent; default scalar still `f64`.
+- Scalar-generic `v2` trait family (`CurveParameter<T>`/`SurfaceParameter<T>`, `SearchParameter<v2::SurfaceParameter<T>>`, etc.) -- no upstream equivalent; `f64` remains the established kernel scalar while selected geometry types support alternate scalars.
 - `SurfaceDerivatives::absolute_derivatives` + `combinatorial_derivative(s)` ported from upstream's `truck-base::ders`, backing the offset surface family.
 - `BasisWindow` active-window B-spline basis evaluation (upstream [`77e25635`](https://github.com/ricosjp/truck/commit/77e25635)), reimplemented with `SmallVec`; both `BsplineCurve` and `BsplineSurface` only touch active control points.
 - STEP face preview tool at [`monstertruck-io/examples/preview-step-face.rs`](monstertruck-io/examples/preview-step-face.rs) for diagnostic visualization -- canonical replacement for ad-hoc `eprintln!`-in-`loops_store` debugging; see [AGENTS.md](AGENTS.md#visual-debugging-for-meshingtrim-bugs).
