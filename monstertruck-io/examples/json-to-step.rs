@@ -6,7 +6,7 @@ use monstertruck_geometry::prelude::{
     BoundedCurve, ExactParameterBoundary2D, MetricSpace, ParameterCurve, Point2,
     SearchNearestParameter, SearchParameter,
 };
-use monstertruck_io::step::save::{CompleteStepDisplay, StepModel};
+use monstertruck_io::step::save::{CompleteStepDisplay, StepHeaderDescriptor, StepModel};
 use monstertruck_mesh::PolylineCurve as PolylineCurve2;
 use monstertruck_modeling::{Curve2D, Edge, Solid, Surface};
 use monstertruck_topology::compress::{CompressedSolid, CompressedTrimmedSolid};
@@ -31,11 +31,14 @@ enum StepExportFlavor {
 
 fn step_export_flavor() -> StepExportFlavor {
     match std::env::var("MT_STEP_EXPORT_FLAVOR").ok().as_deref() {
-        Some("curve-3d-only") => StepExportFlavor::Curve3DOnly,
         Some("shared") => StepExportFlavor::Shared,
         Some("exact-trims") => StepExportFlavor::ExactTrims,
         Some("face-trims") => StepExportFlavor::FaceTrims,
-        _ => StepExportFlavor::Curve3DOnly,
+        Some("curve-3d-only") | None => StepExportFlavor::Curve3DOnly,
+        Some(other) => {
+            eprintln!("unknown MT_STEP_EXPORT_FLAVOR={other:?}; using curve-3d-only");
+            StepExportFlavor::Curve3DOnly
+        }
     }
 }
 
@@ -122,23 +125,35 @@ fn main() -> Result<()> {
                 solid.compress().map_curves(curve3d_only_curve);
             CompleteStepDisplay::new(
                 StepModel::from_curve3d_only_solid(&compressed),
-                Default::default(),
+                StepHeaderDescriptor::default(),
             )
             .to_string()
         }
         StepExportFlavor::Shared => {
             let compressed: CompressedSolid<_, _, _> = solid.compress();
-            CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string()
+            CompleteStepDisplay::new(
+                StepModel::from(&compressed),
+                StepHeaderDescriptor::default(),
+            )
+            .to_string()
         }
         StepExportFlavor::ExactTrims => {
             let compressed: CompressedTrimmedSolid<_, _, _, _> =
                 solid.compress_with_face_trims(exact_face_trim);
-            CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string()
+            CompleteStepDisplay::new(
+                StepModel::from(&compressed),
+                StepHeaderDescriptor::default(),
+            )
+            .to_string()
         }
         StepExportFlavor::FaceTrims => {
             let compressed: CompressedTrimmedSolid<_, _, _, _> = solid
                 .compress_with_face_trims(|edge, surface| sampled_face_trim(edge, surface, 0.01));
-            CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string()
+            CompleteStepDisplay::new(
+                StepModel::from(&compressed),
+                StepHeaderDescriptor::default(),
+            )
+            .to_string()
         }
     };
     std::fs::write(&output, step)

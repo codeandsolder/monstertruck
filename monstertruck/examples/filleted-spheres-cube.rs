@@ -10,9 +10,12 @@ use monstertruck_geometry::prelude::{
     BoundedCurve, ExactParameterBoundary2D, ParameterCurve, Point2, SearchNearestParameter,
     SearchParameter,
 };
-use monstertruck_io::step::save::{CompleteStepDisplay, StepModel};
+use monstertruck_io::step::save::{CompleteStepDisplay, StepHeaderDescriptor, StepModel};
 use monstertruck_mesh::PolylineCurve as PolylineCurve2;
-use monstertruck_modeling::*;
+use monstertruck_modeling::{
+    Curve, Curve2D, Edge, EuclideanSpace, NurbsCurve, ParameterDivision1D, Point3, Rad, Solid,
+    Surface, SurfaceCurve, Tolerance, Vector3, Wire, builder,
+};
 use monstertruck_solid::{difference, or};
 use monstertruck_topology::compress::{CompressedSolid, CompressedTrimmedSolid};
 use std::f64::consts::PI;
@@ -75,11 +78,14 @@ enum StepExportFlavor {
 /// Any other value falls back to the conservative shared-edge export.
 fn step_export_flavor() -> StepExportFlavor {
     match std::env::var("MT_STEP_EXPORT_FLAVOR").ok().as_deref() {
-        Some("curve-3d-only") => StepExportFlavor::Curve3DOnly,
         Some("shared") => StepExportFlavor::Shared,
         Some("exact-trims") => StepExportFlavor::ExactTrims,
         Some("face-trims") => StepExportFlavor::FaceTrims,
-        _ => StepExportFlavor::Curve3DOnly,
+        Some("curve-3d-only") | None => StepExportFlavor::Curve3DOnly,
+        Some(other) => {
+            eprintln!("unknown MT_STEP_EXPORT_FLAVOR={other:?}; using curve-3d-only");
+            StepExportFlavor::Curve3DOnly
+        }
     }
 }
 
@@ -109,19 +115,24 @@ fn write_final_artifacts(result: &Solid, trim_tolerance: f64) -> Result<()> {
     let curve3d_only = shared.map_curves(curve3d_only_curve);
     let curve3d_only_step = CompleteStepDisplay::new(
         StepModel::from_curve3d_only_solid(&curve3d_only),
-        Default::default(),
+        StepHeaderDescriptor::default(),
     )
     .to_string();
     let shared_step =
-        CompleteStepDisplay::new(StepModel::from(&shared), Default::default()).to_string();
+        CompleteStepDisplay::new(StepModel::from(&shared), StepHeaderDescriptor::default())
+            .to_string();
     let exact: CompressedTrimmedSolid<_, _, _, _> =
         result.compress_with_face_trims(exact_face_trim);
     let exact_step =
-        CompleteStepDisplay::new(StepModel::from(&exact), Default::default()).to_string();
+        CompleteStepDisplay::new(StepModel::from(&exact), StepHeaderDescriptor::default())
+            .to_string();
     let face_trims: CompressedTrimmedSolid<_, _, _, _> = result
         .compress_with_face_trims(|edge, surface| sampled_face_trim(edge, surface, trim_tolerance));
-    let face_trims_step =
-        CompleteStepDisplay::new(StepModel::from(&face_trims), Default::default()).to_string();
+    let face_trims_step = CompleteStepDisplay::new(
+        StepModel::from(&face_trims),
+        StepHeaderDescriptor::default(),
+    )
+    .to_string();
     std::fs::write(
         example_output::artifact_path("filleted-spheres-cube-curve3d-only.step")?,
         &curve3d_only_step,
@@ -251,7 +262,7 @@ fn sphere(center: Point3, radius: f64) -> Result<Solid> {
         Vector3::unit_x(),
         builder::SweepAngle::Partial(Rad(PI)),
         3,
-    );
+    )?;
     let shell = builder::revolve_wire(
         &wire,
         Point3::origin(),

@@ -4,7 +4,7 @@
 //! one of the remaining cube edges to demonstrate `fillet_edges`
 //! working on shells that contain `IntersectionCurve` edges.
 
-use monstertruck_modeling::*;
+use monstertruck_modeling::{EuclideanSpace, Point3, Solid, Vector3, builder};
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Unit cube at origin.
