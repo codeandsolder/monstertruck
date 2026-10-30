@@ -896,8 +896,8 @@ impl<V> SurfaceDerivatives<V> {
         let max_order = self.max_order.min(other.max_order);
         let mut res = SurfaceDerivatives::new(max_order);
         for m in 0..=max_order {
-            for n in 0..=max_order - m {
-                res[m][n] = self.combinatorial_derivative(other, &binomial, m, n);
+            for (n, derivative) in res[m].iter_mut().enumerate().take((max_order - m) + 1) {
+                *derivative = self.combinatorial_derivative(other, &binomial, m, n);
             }
         }
         res

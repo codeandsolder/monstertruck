@@ -1136,10 +1136,6 @@ impl<'a, NE, EE> Node<'a, NE, EE> {
     /// ```
     #[inline]
     #[must_use]
-    #[expect(
-        clippy::missing_const_for_fn,
-        reason = "BTreeSet::is_empty is not a stable const fn on the Rust 1.99.1 toolchain"
-    )]
     pub fn is_top(self) -> bool { self.data.parents.is_empty() }
 
     /// Returns `true` if `self` has no child.
@@ -1208,10 +1204,6 @@ impl<'a, NE, EE> NodeMut<'a, NE, EE> {
     /// Returns `true` if `self` has no parents.
     #[inline]
     #[must_use]
-    #[expect(
-        clippy::missing_const_for_fn,
-        reason = "BTreeSet::is_empty is not a stable const fn on the Rust 1.99.1 toolchain"
-    )]
     pub fn is_top(&self) -> bool { self.data.parents.is_empty() }
 
     /// Returns `true` if `self` has no child.
