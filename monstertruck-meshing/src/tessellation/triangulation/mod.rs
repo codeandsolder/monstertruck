@@ -7,15 +7,17 @@ use super::{
     BoundedCurve, CdtEdge, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace,
     CompressedShell, CompressedShellTessellation, CompressedTrimmedFace, CompressedTrimmedShell,
     ConstrainedDelaunayTriangulation, CurveParameter, Edge, EuclideanSpace,
-    ExactParameterBoundary2D, Face, Faces, HashGen, IndexedParallelIterator, InnerFaceIterator,
-    InnerSpace, IntoParallelIterator, IntoParallelRefIterator, Invertible,
+    ExactParameterBoundary2D, Face, Faces, HashGen, InnerFaceIterator, InnerSpace, Invertible,
     IsoparametricCurveOptions, MIN_ALLOWED_VALUE, MeshableSurface, MetricSpace, Origin,
-    ParallelIterator, Parallelizable, ParameterBoundary2D, ParameterDivision1D, ParametricCurve2D,
-    ParametricCurve3D, ParametricSurface3D, Point3, PolygonMesh, PolylineCurve, PolylineableCurve,
-    PreMeshableSurface, RobustMeshableSurface, SearchNearestParameter, SearchParameter, Shell,
-    StandardAttributes, StandardVertex, TOLERANCE, TessellationPrimitiveMode,
-    TessellationPrimitiveOptions, Tolerance, Triangulation, Vector2, Vector3, VertexIterator, Wire,
-    Zero, algo, handles,
+    Parallelizable, ParameterBoundary2D, ParameterDivision1D, ParametricCurve2D, ParametricCurve3D,
+    ParametricSurface3D, Point3, PolygonMesh, PolylineCurve, PolylineableCurve, PreMeshableSurface,
+    RobustMeshableSurface, SearchNearestParameter, SearchParameter, Shell, StandardAttributes,
+    StandardVertex, TOLERANCE, TessellationPrimitiveMode, TessellationPrimitiveOptions, Tolerance,
+    Triangulation, Vector2, Vector3, VertexIterator, Wire, Zero, algo, handles,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 use crate::Point2;
 use crate::filters::StructuringFilter;
