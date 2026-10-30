@@ -5,27 +5,27 @@ use std::collections::BTreeSet;
 type CapLoops<T> = (Vec<CompressedEdgeUse<T>>, Vec<CompressedEdgeUse<T>>);
 
 /// The oriented (front, back) endpoint vertices of a compressed edge-use.
-fn use_endpoints<C, T>(
+const fn use_endpoints<C, T>(
     edge_use: &CompressedEdgeUse<T>,
     edges: &[CompressedEdge<C>],
 ) -> (usize, usize) {
     let (v0, v1) = edges[edge_use.index].vertices;
-    match edge_use.orientation {
-        true => (v0, v1),
-        false => (v1, v0),
+    if edge_use.orientation {
+        (v0, v1)
+    } else {
+        (v1, v0)
     }
 }
 
 /// A run of edge-uses forms a non-empty closed loop (each back meets the next
 /// front, and the last back meets the first front).
 fn is_closed_loop<C, T>(arc: &[CompressedEdgeUse<T>], edges: &[CompressedEdge<C>]) -> bool {
-    !arc.is_empty()
-        && arc
-            .windows(2)
-            .all(|pair| use_endpoints(&pair[0], edges).1 == use_endpoints(&pair[1], edges).0)
-        && arc
-            .last()
-            .is_some_and(|last| use_endpoints(last, edges).1 == use_endpoints(&arc[0], edges).0)
+    let (Some(first), Some(last)) = (arc.first(), arc.last()) else {
+        return false;
+    };
+    arc.windows(2)
+        .all(|pair| use_endpoints(&pair[0], edges).1 == use_endpoints(&pair[1], edges).0)
+        && use_endpoints(last, edges).1 == use_endpoints(first, edges).0
 }
 
 /// All endpoint vertices touched by a run of edge-uses.
@@ -36,7 +36,7 @@ fn arc_vertices<C, T>(
     arc.iter()
         .flat_map(|edge_use| {
             let (v0, v1) = edges[edge_use.index].vertices;
-            [v0, v1]
+            <[usize; 2]>::from((v0, v1))
         })
         .collect()
 }
@@ -57,7 +57,7 @@ fn arc_vertices<C, T>(
 /// final `assort_boundary`/`divide_face` step rejects faces whose param-space
 /// loops are all clockwise (inward-normal / hole cylinders, whose divided loops
 /// have no positive outer loop) or whose seam-crossing half wraps the u-period,
-/// leaving the doubled-seam wire intact. `Face::try_new` then refuses it as
+/// leaving the doubled-seam wire intact. `Face::new` then refuses it as
 /// `NotSimpleWire` (the seam endpoints are revisited), so the whole STEP solid
 /// fails to extract at solidify -- BEFORE any boolean.
 ///

@@ -1519,7 +1519,10 @@ fn surface_curve_line_without_pcurve_on_cylinder_is_exact_generator() {
         Processor::new(RevolutionSurface::by_revolution(profile, center, axis)),
     ));
     let angle = 0.7;
-    let leader = Curve3D::Line(Line(surface.evaluate(0.0, angle), surface.evaluate(1.0, angle)));
+    let leader = Curve3D::Line(Line(
+        surface.evaluate(0.0, angle),
+        surface.evaluate(1.0, angle),
+    ));
     let curve = Curve3D::SurfaceCurve(SurfaceCurve3D::new(
         SurfaceCurveKind::SurfaceCurve,
         Box::new(leader),
@@ -1543,7 +1546,10 @@ fn raw_line_without_pcurve_on_cylinder_is_exact_generator() {
         Processor::new(RevolutionSurface::by_revolution(profile, center, axis)),
     ));
     let angle = 0.7;
-    let curve = Curve3D::Line(Line(surface.evaluate(0.0, angle), surface.evaluate(1.0, angle)));
+    let curve = Curve3D::Line(Line(
+        surface.evaluate(0.0, angle),
+        surface.evaluate(1.0, angle),
+    ));
 
     let boundary = StepParameterCurve::try_from(CurveTrimRef::new(&curve, &surface))
         .expect("cylinder generator has an analytic UV-line proof");

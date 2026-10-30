@@ -7,8 +7,8 @@ use super::{
     Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, Origin,
     ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
     ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
-    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance, Torus, UnitCircle,
-    Vector2, Vector3, Zero,
+    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, TOLERANCE, Tolerance, Torus,
+    UnitCircle, Vector2, Vector3, Zero,
 };
 use std::f64::consts::PI;
 

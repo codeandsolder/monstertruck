@@ -1004,10 +1004,6 @@ fn compress_extract() {
     assert!(same_topology(shell0, &shell1));
 }
 
-#[expect(
-    dead_code,
-    reason = "topology-equivalence helper is retained for compressed-topology validation utilities"
-)]
 fn vmap_subroutin<P, Q>(
     v0: &Vertex<P>,
     v1: &Vertex<Q>,
@@ -1023,10 +1019,6 @@ fn vmap_subroutin<P, Q>(
     )
 }
 
-#[expect(
-    dead_code,
-    reason = "topology-equivalence helper is retained for compressed-topology validation utilities"
-)]
 fn emap_subroutin<P, Q, C, D>(
     edge0: &Edge<P, C>,
     edge1: &Edge<Q, D>,
@@ -1044,10 +1036,6 @@ fn emap_subroutin<P, Q, C, D>(
     )
 }
 
-#[expect(
-    dead_code,
-    reason = "topology-equivalence helper is retained for compressed-topology validation utilities"
-)]
 fn same_topology<P, C, S, Q, D, T>(one: &Shell<P, C, S>, other: &Shell<Q, D, T>) -> bool {
     let mut vmap = HashMap::<VertexId<P>, VertexId<Q>>::default();
     let mut emap = HashMap::<EdgeId<C>, EdgeId<D>>::default();
