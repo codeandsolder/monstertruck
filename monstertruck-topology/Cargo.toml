@@ -3,6 +3,7 @@ name = "monstertruck-topology"
 version = "0.4.1"
 authors = ["Yoshinori Tanimura <tanimura@ricos.co.jp>", "Moritz Moeller <virtualritz@protonmail.com>"]
 edition = "2024"
+rust-version = "1.99"
 description = "Topological data structures: vertices, edges, wires, faces, shells, and solids"
 repository = "https://github.com/virtualritz/monstertruck"
 license = "Apache-2.0"

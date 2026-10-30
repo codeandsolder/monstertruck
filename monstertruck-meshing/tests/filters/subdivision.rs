@@ -60,6 +60,6 @@ fn loop_subdivision_leaves_invalid_index_mesh_unchanged() {
 
     polygon.loop_subdivision();
 
-    assert_eq!(polygon.positions().as_slice(), before_positions.as_slice());
+    assert_eq!(polygon.positions(), before_positions.as_slice());
     assert_eq!(polygon.faces(), &before_faces);
 }
