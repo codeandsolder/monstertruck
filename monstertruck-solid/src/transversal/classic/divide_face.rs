@@ -5,11 +5,6 @@
 //! Intermediate regions remain `FaceFragment`s until compressed-topology repair and
 //! extraction establish valid [`Face`] invariants.
 
-#![expect(
-    clippy::many_single_char_names,
-    reason = "face-division formulas follow compact geometric notation"
-)]
-
 use super::faces_classification::FacesClassification;
 use super::loops_store::*;
 use super::tolerance::BooleanTolerance;
