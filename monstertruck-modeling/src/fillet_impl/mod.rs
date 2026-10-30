@@ -7,15 +7,15 @@ impl TryFrom<Surface> for NurbsSurface<Vector4> {
     type Error = ();
     fn try_from(surface: Surface) -> std::result::Result<Self, ()> {
         match surface {
-            Surface::Plane(plane) => Ok(NurbsSurface::from(BsplineSurface::from(plane))),
-            Surface::BsplineSurface(bsp) => Ok(NurbsSurface::from(bsp)),
+            Surface::Plane(plane) => Ok(Self::from(BsplineSurface::from(plane))),
+            Surface::BsplineSurface(bsp) => Ok(Self::from(bsp)),
             Surface::NurbsSurface(ns) => Ok(ns),
             // The exact rational net -- the SAME one these faces WERE before
             // spec 012 U1.2 moved them onto the analytic variants, so the
             // fillet path sees no change.
             Surface::Sphere(_) | Surface::Torus(_) => surface
                 .try_into_homogeneous_bspline_surface()
-                .map(NurbsSurface::new)
+                .map(Self::new)
                 .ok_or(()),
             Surface::Revolution(_) | Surface::Tspline(_) => Err(()),
         }
@@ -33,7 +33,7 @@ impl TryFrom<Curve> for NurbsCurve<Vector4> {
     fn try_from(curve: Curve) -> std::result::Result<Self, ()> {
         curve
             .try_into_homogeneous_bspline_curve()
-            .map(NurbsCurve::new)
+            .map(Self::new)
             .ok_or(())
     }
 }
@@ -42,7 +42,7 @@ impl TryFrom<Curve> for NurbsCurve<Vector4> {
 impl From<ParameterCurveLinear> for Curve {
     fn from(c: ParameterCurveLinear) -> Self {
         let (line, surface) = c.decompose();
-        Curve::ParameterCurve(ParameterCurve::new(
+        Self::ParameterCurve(ParameterCurve::new(
             Curve2D::Line(line),
             Box::new(Surface::NurbsSurface(surface)),
         ))
@@ -52,7 +52,7 @@ impl From<ParameterCurveLinear> for Curve {
 impl From<FilletIntersectionCurve> for Curve {
     fn from(curve: FilletIntersectionCurve) -> Self {
         let (surface0, surface1, leader) = curve.destruct();
-        Curve::Intersection(SurfaceCurve::with_boundaries(
+        Self::Intersection(SurfaceCurve::with_boundaries(
             Box::new(Surface::NurbsSurface(*surface0)),
             Box::new(Surface::NurbsSurface(*surface1)),
             Box::new(leader.into()),
