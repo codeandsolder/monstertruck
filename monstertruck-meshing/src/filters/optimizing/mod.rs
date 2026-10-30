@@ -25,7 +25,7 @@ pub trait OptimizingFilter {
     ///     },
     ///     // 0 is not used!
     ///     Faces::from_iter(&[&[1, 2, 3]]),
-    /// );
+    /// ).expect("valid example mesh");
     ///
     /// assert_eq!(mesh.positions().len(), 4);
     /// mesh.remove_unused_attrs();
@@ -52,7 +52,7 @@ pub trait OptimizingFilter {
     ///         &[2, 1, 2], // degenerate face!
     ///         &[2, 1, 3],
     ///     ]),
-    /// );
+    /// ).expect("valid example mesh");
     ///
     /// assert_eq!(mesh.faces().len(), 3);
     /// mesh.remove_degenerate_faces();
@@ -85,7 +85,7 @@ pub trait OptimizingFilter {
     ///         &[0, 1, 2],
     ///         &[3, 4, 5],
     ///     ]),
-    /// );
+    /// ).expect("valid example mesh");
     ///
     /// assert_eq!(mesh.faces()[1][1], StandardVertex { pos: 4, uv: None, nor: None });
     /// mesh.put_together_same_attrs(TOLERANCE);

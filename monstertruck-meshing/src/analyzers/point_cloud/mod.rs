@@ -29,7 +29,7 @@ pub trait WithPointCloud {
     ///         ..Default::default()
     ///     },
     ///     Faces::from_iter(vec![[0, 1, 2], [3, 4, 5]]),
-    /// );
+    /// ).expect("valid example mesh");
     ///
     /// let mut point_cloud = vec![Point3::new(0.25, 0.25, 0.0)];
     /// assert!(!mesh.is_clung_to_by(&point_cloud, 0.001));

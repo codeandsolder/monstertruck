@@ -29,7 +29,7 @@ pub trait NormalFilters {
     ///         (0, None, Some(1)),
     ///         (0, None, Some(2))
     ///     ]]),
-    /// );
+    /// ).expect("valid example mesh");
     ///
     /// mesh.normalize_normals();
     /// assert!(mesh.normals()[0].magnitude().near(&1.0));
@@ -61,7 +61,7 @@ pub trait NormalFilters {
     ///         &[1, 2, 4],
     ///         &[2, 3, 4],
     ///     ]),
-    /// );
+    /// ).expect("valid example mesh");
     ///
     /// mesh.add_naive_normals(true);
     /// let v0: StandardVertex = mesh.faces()[0][1];
@@ -104,7 +104,7 @@ pub trait NormalFilters {
     ///     Faces::from_iter(&[
     ///         &[0, 2, 1], &[0, 3, 2], &[1, 2, 4], &[2, 3, 4],
     ///     ]),
-    /// );
+    /// ).expect("valid example mesh");
     ///
     /// mesh.add_smooth_normals(0.8, true);
     /// let v0: StandardVertex = mesh.faces()[0][1];
@@ -149,7 +149,7 @@ pub trait NormalFilters {
     ///         ]],
     ///         Vec::new(),
     ///     ),
-    /// );
+    /// ).expect("valid example mesh");
     /// polymesh.make_face_compatible_to_normal();
     /// assert_eq!(polymesh.faces()[0][0].pos, 2);
     /// assert_eq!(polymesh.faces()[0][1].pos, 1);
@@ -179,7 +179,7 @@ pub trait NormalFilters {
     ///         ]],
     ///         Vec::new(),
     ///     ),
-    /// );
+    /// ).expect("valid example mesh");
     /// polymesh.make_normal_compatible_to_face();
     /// let nor = polymesh.faces()[0][0].nor.unwrap();
     /// assert_eq!(polymesh.normals()[nor], Vector3::new(0.0, 0.0, 1.0));

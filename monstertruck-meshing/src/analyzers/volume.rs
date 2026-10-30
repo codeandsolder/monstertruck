@@ -31,7 +31,7 @@ pub trait CalcVolume {
     ///     [1, 0, 3],
     ///     [0, 2, 3],
     /// ]);
-    /// let polygon = PolygonMesh::new(attrs, faces);
+    /// let polygon = PolygonMesh::new(attrs, faces).expect("valid example mesh");
     /// assert_near!(polygon.volume(), 8.0 * f64::sqrt(3.0) / 27.0);
     /// ```
     /// ```
@@ -59,7 +59,7 @@ pub trait CalcVolume {
     ///     [2, 0, 3, 4],
     ///     [3, 5, 7, 4],
     /// ]);
-    /// let polygon0 = PolygonMesh::new(attrs0, faces0);
+    /// let polygon0 = PolygonMesh::new(attrs0, faces0).expect("valid example mesh");
     /// let positions1 = vec![
     ///     Point3::new(1.0, 1.0, 1.0),
     ///     Point3::new(2.0, 1.0, 1.0),
@@ -82,7 +82,7 @@ pub trait CalcVolume {
     ///     [4, 3, 0, 2],
     ///     [4, 7, 5, 3],
     /// ]);
-    /// let polygon1 = PolygonMesh::new(attrs1, faces1);
+    /// let polygon1 = PolygonMesh::new(attrs1, faces1).expect("valid example mesh");
     /// // We consider the solid defined by two boundaries(polygon0 and polygon1).
     /// // The volume will be calculated by `position0.volume() + position1.volume()`.
     /// assert_near!(polygon0.volume() + polygon1.volume(), 26.0);
@@ -118,7 +118,7 @@ pub trait CalcVolume {
     ///     &[2, 0, 3, 5],
     ///     &[3, 4, 5],
     /// ]);
-    /// let polygon = PolygonMesh::new(attrs, faces);
+    /// let polygon = PolygonMesh::new(attrs, faces).expect("valid example mesh");
     /// let homog = polygon.center_of_gravity();
     /// assert_near!(homog.to_point(), Point3::new(-1.0, 2.0, 1.0));
     /// ```

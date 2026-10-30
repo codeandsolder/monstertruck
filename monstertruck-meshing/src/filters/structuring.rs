@@ -30,7 +30,7 @@ pub trait StructuringFilter {
     ///         &[3, 2, 1, 0], &[0, 1, 5, 4], &[1, 2, 6, 5],
     ///         &[2, 3, 7, 6], &[3, 0, 4, 7], &[4, 5, 6, 7],
     ///     ]),
-    /// );
+    /// ).expect("valid example mesh");
     ///
     /// // the number of face becomes twice since each quadrangle decompose into two triangles.
     /// assert_eq!(mesh.faces().len(), 6);
@@ -79,7 +79,7 @@ pub trait StructuringFilter {
     ///             &[1, 2, 5], &[6, 5, 2], &[2, 3, 6], &[7, 6, 3],
     ///         &[3, 0, 7], &[4, 7, 0], &[4, 5, 7], &[6, 7, 5],
     ///     ]),
-    /// );
+    /// ).expect("valid example mesh");
     ///
     /// // The number of faces becomes a half since each pair of triangles is combined.
     /// assert_eq!(mesh.faces().len(), 12);
