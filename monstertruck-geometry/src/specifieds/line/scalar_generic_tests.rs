@@ -20,10 +20,6 @@ const fn assert_v2_cut<C: v2::Cut>() {}
 const fn assert_v2_search<C: v2::SearchParameter<v2::CurveParameter<f32>>>() {}
 const fn assert_v2_nearest<C: v2::SearchNearestParameter<v2::CurveParameter<f32>>>() {}
 
-#[expect(
-    dead_code,
-    reason = "compile-time trait assertion intentionally has no runtime references"
-)]
 const _: () = {
     assert_v2_curve::<Line<Point2F32>>();
     assert_v2_curve::<Line<Point3F32>>();

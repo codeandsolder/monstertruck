@@ -309,10 +309,6 @@ impl<P> TnurccEdge<P> {
     ///
     /// # Panics
     /// Panics if `self` has been incorrectly configured with `None` connections.
-    #[expect(
-        dead_code,
-        reason = "retained as part of the complete T-NURCC adjacency traversal API"
-    )]
     pub fn connection_orientation(&self, other: &Arc<RwLock<Self>>) -> Vec<TnurccConnection> {
         self.connections
             .iter()
