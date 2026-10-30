@@ -10,14 +10,6 @@
 /// re-export [`step_p21`](https://docs.rs/step-p21/latest/step_p21/)
 pub use step_p21;
 
-/// The former name of the [`step_p21`] re-export, when the parser was upstream
-/// `ruststep`. Kept so `load::ruststep::...` paths keep compiling.
-#[deprecated(
-    since = "0.3.4",
-    note = "the parser is now `step-p21`; use `monstertruck_io::step::load::step_p21` instead"
-)]
-pub use step_p21 as ruststep;
-
 use monstertruck_assembly::assy::*;
 use serde::Deserialize;
 use std::collections::HashMap;

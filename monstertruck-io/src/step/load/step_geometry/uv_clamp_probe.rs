@@ -11,7 +11,7 @@
 //! Run:
 //!
 //! ```text
-//! MT_STEP_DEBUG_UV_CLAMP=1 cargo nextest run -p monstertruck-step \
+//! MT_STEP_DEBUG_UV_CLAMP=1 cargo nextest run -p monstertruck-io --features step \
 //!     --run-ignored all -E 'test(uv_clamp)' --no-capture --test-threads=1
 //! ```
 //!

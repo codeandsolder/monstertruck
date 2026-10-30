@@ -18,7 +18,6 @@ members = [
     "monstertruck-mesh",
     "monstertruck-render",
     "monstertruck-solid",
-    "monstertruck-step",
     "monstertruck-topology",
 ]
 

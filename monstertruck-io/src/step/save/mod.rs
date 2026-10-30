@@ -6,7 +6,6 @@ use self::topology::PreStepModel;
 
 const ERR: Result = Err(std::fmt::Error);
 
-#[cfg(feature = "derive")]
 pub use monstertruck_derive::{StepFormat, StepLength};
 
 /// display boolean number to step file

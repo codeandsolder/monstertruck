@@ -66,11 +66,11 @@ fn step_design_with_custom_application_context_round_trips() -> anyhow::Result<(
         },
     });
     let design: StepDesign<MockShape, _, _> =
-        StepDesign::with_application_context(assembly, "monstertruck-step test".to_owned());
+        StepDesign::with_application_context(assembly, "monstertruck-io test".to_owned());
     let output = format!("{design}");
 
     assert!(
-        output.contains("APPLICATION_CONTEXT('monstertruck-step test')"),
+        output.contains("APPLICATION_CONTEXT('monstertruck-io test')"),
         "custom application context should appear in the output.",
     );
     assert!(

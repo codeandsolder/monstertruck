@@ -155,7 +155,7 @@
 //! | [`meshing`]  | `monstertruck-meshing`  | [`mesh`], [`modeling`]              |
 //! | [`solid`]    | `monstertruck-solid`, `monstertruck-fillet`, `monstertruck-healing` | [`meshing`] |
 //! | [`assembly`] | `monstertruck-assembly` |                                 |
-//! | [`step`]     | `monstertruck-step`     | [`modeling`]                      |
+//! | [`step`]     | `monstertruck-io`       | [`modeling`]                      |
 //! | [`gpu`]      | `monstertruck-gpu`      |                                 |
 //! | [`render`]   | `monstertruck-render`   | [`gpu`], [`mesh`], [`meshing`]        |
 //!

@@ -25,9 +25,8 @@
 //!
 //! # STEP
 //!
-//! [`step`] is monstertruck's own reader and writer, moved here from the retired
-//! `monstertruck-step` crate. The API is unchanged -- `monstertruck_step::load`
-//! became [`step::load`], `monstertruck_step::save` became [`step::save`].
+//! [`step`] is monstertruck's native STEP reader and writer. Import through
+//! [`step::load`] and export through [`step::save`].
 //!
 //! It deliberately does **not** go through cadmpeg. It is measured against a
 //! corpus, routes analytic surfaces onto closed forms so booleans stay exact,

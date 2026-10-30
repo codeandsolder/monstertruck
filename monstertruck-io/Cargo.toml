@@ -18,18 +18,14 @@ license = "Apache-2.0"
 # writes natively and the one nearly every caller means.
 [features]
 default = ["step"]
-# Reading and writing ISO 10303-21 (STEP). `load` and `derive` mirror the feature
-# names the retired `monstertruck-step` crate used, so a consumer's feature list
-# ports across unchanged.
-step = ["load", "derive"]
-load = [
-    "derive",
+# Reading and writing ISO 10303-21 (STEP).
+step = [
     "derive_more",
     "step-p21",
     "serde",
     "monstertruck-traits",
+    "monstertruck-derive",
 ]
-derive = ["monstertruck-derive"]
 # The cadmpeg intermediate representation, its converter, and the cadmpeg-backed
 # readers. STEP is deliberately available through BOTH this and the `step`
 # feature above: ours is the measurement baseline the boolean kernel is

@@ -32,7 +32,6 @@ CRATES=(
     monstertruck-meshing
     monstertruck-solid
     monstertruck-modeling
-    monstertruck-step
     monstertruck-render
     monstertruck-wasm
     monstertruck
