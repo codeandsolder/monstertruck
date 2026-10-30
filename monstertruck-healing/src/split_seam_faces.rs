@@ -5,14 +5,15 @@ use std::collections::BTreeSet;
 type CapLoops<T> = (Vec<CompressedEdgeUse<T>>, Vec<CompressedEdgeUse<T>>);
 
 /// The oriented (front, back) endpoint vertices of a compressed edge-use.
-fn use_endpoints<C, T>(
+const fn use_endpoints<C, T>(
     edge_use: &CompressedEdgeUse<T>,
     edges: &[CompressedEdge<C>],
 ) -> (usize, usize) {
     let (v0, v1) = edges[edge_use.index].vertices;
-    match edge_use.orientation {
-        true => (v0, v1),
-        false => (v1, v0),
+    if edge_use.orientation {
+        (v0, v1)
+    } else {
+        (v1, v0)
     }
 }
 
@@ -35,7 +36,7 @@ fn arc_vertices<C, T>(
     arc.iter()
         .flat_map(|edge_use| {
             let (v0, v1) = edges[edge_use.index].vertices;
-            [v0, v1]
+            <[usize; 2]>::from((v0, v1))
         })
         .collect()
 }

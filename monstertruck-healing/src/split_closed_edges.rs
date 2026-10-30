@@ -12,7 +12,7 @@ where
     C: BoundedCurve<Point = P> + Cut,
 {
     let (t0, t1) = curve.range_tuple();
-    let t = (t0 + t1) / 2.0;
+    let t = f64::midpoint(t0, t1);
     vertices.push(curve.evaluate(t));
 
     let v2 = *v1;
@@ -51,9 +51,10 @@ fn replace_edges(wire: &mut Wire, added: &HashMap<usize, usize>) {
             index: *new_edge_index,
             orientation: edge.orientation,
         };
-        match edge.orientation {
-            true => vec![edge, new_edge],
-            false => vec![new_edge, edge],
+        if edge.orientation {
+            vec![edge, new_edge]
+        } else {
+            vec![new_edge, edge]
         }
     };
     let new_wire = wire.iter().copied().flat_map(insert_one_edge).collect();
@@ -70,7 +71,7 @@ where C: BoundedCurve<Point = P> + Cut {
 fn split_trim_curve_midpoint<T>(trim_curve: T) -> (T, T)
 where T: BoundedCurve + Cut + Clone {
     let (t0, t1) = trim_curve.range_tuple();
-    let tm = (t0 + t1) * 0.5;
+    let tm = f64::midpoint(t0, t1);
     let mut head = trim_curve;
     let tail = head.cut(tm);
     (head, tail)
@@ -88,8 +89,10 @@ where T: BoundedCurve + Cut + Clone {
             let trim_segments = edge_use
                 .trim_curve
                 .map(split_trim_curve_midpoint)
-                .map(|(front, back)| vec![Some(front), Some(back)])
-                .unwrap_or_else(|| vec![None, None]);
+                .map_or_else(
+                    || vec![None, None],
+                    |(front, back)| vec![Some(front), Some(back)],
+                );
             let indices = if edge_use.orientation {
                 [edge_use.index, new_edge_index]
             } else {

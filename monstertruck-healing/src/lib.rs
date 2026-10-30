@@ -15,8 +15,11 @@
 pub(crate) use ahash::AHashSet as HashSet;
 
 use monstertruck_geometry::prelude::*;
-use monstertruck_meshing::rexport_polymesh::*;
-use monstertruck_topology::compress::*;
+use monstertruck_meshing::rexport_polymesh::PolylineCurve;
+use monstertruck_topology::compress::{
+    CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace, CompressedShell,
+    CompressedSolid, CompressedTrimmedFace, CompressedTrimmedShell, CompressedTrimmedSolid,
+};
 use monstertruck_topology::repair::{
     split_non_simple_compressed_wires, split_pinched_compressed_faces,
 };
@@ -36,6 +39,75 @@ type Shell<P, C, S> = CompressedShell<P, C, S>;
 
 trait SP<S>: Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> {}
 impl<S, F> SP<S> for F where F: Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> {}
+
+#[expect(
+    clippy::suboptimal_flops,
+    reason = "periodic parameter normalization intentionally preserves separate multiply/add rounding"
+)]
+#[expect(
+    clippy::option_if_let_else,
+    reason = "the periodic/range cases are clearer as explicit normalization branches"
+)]
+fn normalize_parameter_axis(
+    value: f64,
+    previous: Option<f64>,
+    period: Option<f64>,
+    range: Option<(f64, f64)>,
+) -> Option<f64> {
+    if !value.is_finite() {
+        None
+    } else if let Some(previous) = previous {
+        if let Some(period) = period {
+            (-2..=2)
+                .map(|index| value + f64::from(index) * period)
+                .min_by(|lhs, rhs| {
+                    let lhs_distance = f64::abs(*lhs - previous);
+                    let rhs_distance = f64::abs(*rhs - previous);
+                    lhs_distance.total_cmp(&rhs_distance)
+                })
+        } else if let Some((min, max)) = range {
+            Some(value.clamp(min, max))
+        } else {
+            Some(value)
+        }
+    } else if let Some((min, max)) = range {
+        if let Some(period) = period {
+            let span = max - min;
+            if span.so_small() {
+                Some(min)
+            } else {
+                let mut normalized = value - f64::floor((value - min) / period) * period;
+                if normalized < min {
+                    normalized += period;
+                }
+                if normalized > max {
+                    normalized -= period;
+                }
+                Some(normalized.clamp(min, max))
+            }
+        } else {
+            Some(value.clamp(min, max))
+        }
+    } else {
+        Some(value)
+    }
+}
+
+fn search_surface_parameter<S>(
+    surface: &S,
+    point: Point3,
+    hint: Option<(f64, f64)>,
+) -> Option<(f64, f64)>
+where
+    S: SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    surface
+        .search_parameter(point, hint, 100)
+        .or_else(|| surface.search_parameter(point, None, 100))
+        .or_else(|| surface.search_nearest_parameter(point, hint, 100))
+        .or_else(|| surface.search_nearest_parameter(point, None, 100))
+}
 
 mod split_closed_edges;
 use split_closed_edges::{split_closed_edges, split_closed_edges_trimmed};
@@ -60,7 +132,7 @@ fn same_surface<S: ParametricSurface3D>(lhs: &S, rhs: &S) -> bool {
                 (u1, v0),
                 (u0, v1),
                 (u1, v1),
-                ((u0 + u1) * 0.5, (v0 + v1) * 0.5),
+                (f64::midpoint(u0, u1), f64::midpoint(v0, v1)),
             ]
         } else {
             [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)]
@@ -145,7 +217,7 @@ where
         }
     };
     let mut alphas = [map_alpha(t_front), map_alpha(t_back)];
-    alphas.sort_by(|lhs, rhs| lhs.total_cmp(rhs));
+    alphas.sort_by(f64::total_cmp);
     let [alpha0, alpha1] = alphas;
     if alpha0.so_small() && (1.0 - alpha1).so_small() {
         return Some(trim_curve);
@@ -356,51 +428,6 @@ where
         + Clone
         + Invertible,
 {
-    fn normalize_axis(
-        value: f64,
-        previous: Option<f64>,
-        period: Option<f64>,
-        range: Option<(f64, f64)>,
-    ) -> Option<f64> {
-        if !value.is_finite() {
-            None
-        } else if let Some(previous) = previous {
-            if let Some(period) = period {
-                (-2..=2)
-                    .map(|index| value + index as f64 * period)
-                    .min_by(|lhs, rhs| {
-                        let lhs_distance = f64::abs(*lhs - previous);
-                        let rhs_distance = f64::abs(*rhs - previous);
-                        lhs_distance.total_cmp(&rhs_distance)
-                    })
-            } else if let Some((min, max)) = range {
-                Some(value.clamp(min, max))
-            } else {
-                Some(value)
-            }
-        } else if let Some((min, max)) = range {
-            if let Some(period) = period {
-                let span = max - min;
-                if span.so_small() {
-                    Some(min)
-                } else {
-                    let mut normalized = value - f64::floor((value - min) / period) * period;
-                    if normalized < min {
-                        normalized += period;
-                    }
-                    if normalized > max {
-                        normalized -= period;
-                    }
-                    Some(normalized.clamp(min, max))
-                }
-            } else {
-                Some(value.clamp(min, max))
-            }
-        } else {
-            Some(value)
-        }
-    }
-
     fn sampled_trim_segment<C, S, T>(edge: &CompressedEdge<C>, surface: &S, tol: f64) -> Option<T>
     where
         C: ParametricCurve3D<Point = Point3>
@@ -413,8 +440,18 @@ where
         let normalize_uv = |uv: Point2, previous: Option<Point2>| {
             let (u_range, v_range) = surface.try_range_tuple();
             Some(Point2::new(
-                normalize_axis(uv.x, previous.map(|uv| uv.x), surface.period_u(), u_range)?,
-                normalize_axis(uv.y, previous.map(|uv| uv.y), surface.period_v(), v_range)?,
+                normalize_parameter_axis(
+                    uv.x,
+                    previous.map(|uv| uv.x),
+                    surface.period_u(),
+                    u_range,
+                )?,
+                normalize_parameter_axis(
+                    uv.y,
+                    previous.map(|uv| uv.y),
+                    surface.period_v(),
+                    v_range,
+                )?,
             ))
         };
         let project = |point: Point3, hint: Option<(f64, f64)>| {
@@ -480,56 +517,11 @@ where
         + Clone,
     T: BoundedCurve + Cut + Clone + Invertible,
 {
-    fn normalize_axis(
-        value: f64,
-        previous: Option<f64>,
-        period: Option<f64>,
-        range: Option<(f64, f64)>,
-    ) -> Option<f64> {
-        if !value.is_finite() {
-            None
-        } else if let Some(previous) = previous {
-            if let Some(period) = period {
-                (-2..=2)
-                    .map(|index| value + index as f64 * period)
-                    .min_by(|lhs, rhs| {
-                        let lhs_distance = f64::abs(*lhs - previous);
-                        let rhs_distance = f64::abs(*rhs - previous);
-                        lhs_distance.total_cmp(&rhs_distance)
-                    })
-            } else if let Some((min, max)) = range {
-                Some(value.clamp(min, max))
-            } else {
-                Some(value)
-            }
-        } else if let Some((min, max)) = range {
-            if let Some(period) = period {
-                let span = max - min;
-                if span.so_small() {
-                    Some(min)
-                } else {
-                    let mut normalized = value - f64::floor((value - min) / period) * period;
-                    if normalized < min {
-                        normalized += period;
-                    }
-                    if normalized > max {
-                        normalized -= period;
-                    }
-                    Some(normalized.clamp(min, max))
-                }
-            } else {
-                Some(value.clamp(min, max))
-            }
-        } else {
-            Some(value)
-        }
-    }
-
     let normalize_uv = |uv: Point2, previous: Option<Point2>| {
         let (u_range, v_range) = surface.try_range_tuple();
         Some(Point2::new(
-            normalize_axis(uv.x, previous.map(|uv| uv.x), surface.period_u(), u_range)?,
-            normalize_axis(uv.y, previous.map(|uv| uv.y), surface.period_v(), v_range)?,
+            normalize_parameter_axis(uv.x, previous.map(|uv| uv.x), surface.period_u(), u_range)?,
+            normalize_parameter_axis(uv.y, previous.map(|uv| uv.y), surface.period_v(), v_range)?,
         ))
     };
     let point_to_uv = |point, hint: Option<(f64, f64)>| {
@@ -657,15 +649,6 @@ where
         let skip_single_face_pass_through =
             self.faces.len() <= 1 && !force_single_face_pass_through;
         let started = Instant::now();
-        fn sp<S>(surface: &S, point: Point3, hint: Option<(f64, f64)>) -> Option<(f64, f64)>
-        where S: SearchParameter<SurfaceParameter, Point = Point3>
-                + SearchNearestParameter<SurfaceParameter, Point = Point3> {
-            surface
-                .search_parameter(point, hint, 100)
-                .or_else(|| surface.search_parameter(point, None, 100))
-                .or_else(|| surface.search_nearest_parameter(point, hint, 100))
-                .or_else(|| surface.search_nearest_parameter(point, None, 100))
-        }
         if debug_trace {
             eprintln!(
                 "trace bool robust_split start vertices={} edges={} faces={}",
@@ -691,7 +674,7 @@ where
                 skip_single_face_pass_through || !enable_pass_through,
             );
         }
-        let faces_changed = split_closed_faces(self, tol, sp);
+        let faces_changed = split_closed_faces(self, tol, search_surface_parameter::<S>);
         if debug_trace {
             eprintln!(
                 "trace bool robust_split after_faces elapsed_ms={:.3} changed={faces_changed}",
@@ -725,7 +708,7 @@ where
 {
     fn split_closed_edges_and_faces(&mut self, tol: f64) {
         let fs = SplitClosedEdgesAndFaces::split_closed_edges_and_faces;
-        self.boundaries.iter_mut().for_each(|shell| fs(shell, tol))
+        self.boundaries.iter_mut().for_each(|shell| fs(shell, tol));
     }
 }
 
@@ -762,15 +745,6 @@ where
         let skip_single_face_pass_through =
             self.faces.len() <= 1 && !force_single_face_pass_through;
         let started = Instant::now();
-        fn sp<S>(surface: &S, point: Point3, hint: Option<(f64, f64)>) -> Option<(f64, f64)>
-        where S: SearchParameter<SurfaceParameter, Point = Point3>
-                + SearchNearestParameter<SurfaceParameter, Point = Point3> {
-            surface
-                .search_parameter(point, hint, 100)
-                .or_else(|| surface.search_parameter(point, None, 100))
-                .or_else(|| surface.search_nearest_parameter(point, hint, 100))
-                .or_else(|| surface.search_nearest_parameter(point, None, 100))
-        }
         split_closed_edges_trimmed(self);
         if debug_trace {
             eprintln!(
@@ -838,7 +812,8 @@ where
             );
         }
         let mut plain = self.cloned_without_trims();
-        let first_faces_changed = split_closed_faces(&mut plain, tol, sp);
+        let first_faces_changed =
+            split_closed_faces(&mut plain, tol, search_surface_parameter::<S>);
         if debug_trace || debug_heal_split {
             eprintln!(
                 "trace bool robust_split_trimmed after_faces elapsed_ms={:.3} changed={first_faces_changed}",
@@ -850,7 +825,8 @@ where
             if enable_pass_through && !skip_single_face_pass_through {
                 split_closed_edges(&mut plain);
                 split_pass_through_edges(&mut plain, tol);
-                let second_faces_changed = split_closed_faces(&mut plain, tol, sp);
+                let second_faces_changed =
+                    split_closed_faces(&mut plain, tol, search_surface_parameter::<S>);
                 if debug_trace || debug_heal_split {
                     eprintln!(
                         "trace bool robust_split_trimmed after_faces_propagate elapsed_ms={:.3} changed={second_faces_changed}",
@@ -901,7 +877,7 @@ where
 {
     fn split_closed_edges_and_faces(&mut self, tol: f64) {
         let fs = SplitClosedEdgesAndFaces::split_closed_edges_and_faces;
-        self.boundaries.iter_mut().for_each(|shell| fs(shell, tol))
+        self.boundaries.iter_mut().for_each(|shell| fs(shell, tol));
     }
 }
 
