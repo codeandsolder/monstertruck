@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "compact symbols in surface splitting follow the standard B-spline recurrence notation"
 )]

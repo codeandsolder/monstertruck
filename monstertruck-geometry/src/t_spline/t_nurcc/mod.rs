@@ -64,7 +64,7 @@ where P: Debug
     ///
     /// - `TnurccIncompleteFaceEdge` if any edge is comprised of less than 2 points.
     ///
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "topology construction validates and wires each face in one transaction-like scope"
     )]
@@ -276,7 +276,7 @@ where P: ControlPoint<f64>
     ///
     /// # Borrows
     /// Mutably borrows `self.edges`, `self.control_points`, and `self.faces`, as well as all elements contained within.
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "the subdivision body intentionally follows the published refinement equations and phases in order"
     )]
@@ -928,7 +928,7 @@ where P: ControlPoint<f64> + Debug + Clone
     /// # Errors
     /// - `Ok(Tmesh)` on success.
     /// - Error if subdivision or mesh construction fails.
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "the conversion keeps BFS coordinate assignment and mesh reconstruction phases visibly contiguous"
     )]

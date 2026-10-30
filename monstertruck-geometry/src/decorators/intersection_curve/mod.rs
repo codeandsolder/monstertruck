@@ -1,8 +1,8 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "compact U/V and system-coordinate symbols mirror the surface-intersection equations"
 )]
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired surface-0/1 and U/V derivative names mirror the intersection equations"
 )]

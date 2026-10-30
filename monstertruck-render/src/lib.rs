@@ -101,7 +101,7 @@ pub enum RenderError {
     },
 }
 
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     reason = "wgpu vertex/material/shader interfaces intentionally use f32 while mesh/modeling data uses f64"
 )]

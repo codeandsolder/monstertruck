@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "parameter grid and indexed mesh names encode paired geometric axes and topology"
 )]

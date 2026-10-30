@@ -25,7 +25,7 @@ use super::{
     Invertible,
     SearchParameterD2,
 )]
-#[allow(
+#[expect(
     clippy::large_enum_variant,
     reason = "boxing analytic surface variants would add allocation and indirection to hot geometry dispatch"
 )]

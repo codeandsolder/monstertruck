@@ -1004,7 +1004,7 @@ fn compress_extract() {
     assert!(same_topology(shell0, &shell1));
 }
 
-#[allow(
+#[expect(
     dead_code,
     reason = "topology-equivalence helper is retained for compressed-topology validation utilities"
 )]
@@ -1023,7 +1023,7 @@ fn vmap_subroutin<P, Q>(
     )
 }
 
-#[allow(
+#[expect(
     dead_code,
     reason = "topology-equivalence helper is retained for compressed-topology validation utilities"
 )]
@@ -1044,7 +1044,7 @@ fn emap_subroutin<P, Q, C, D>(
     )
 }
 
-#[allow(
+#[expect(
     dead_code,
     reason = "topology-equivalence helper is retained for compressed-topology validation utilities"
 )]

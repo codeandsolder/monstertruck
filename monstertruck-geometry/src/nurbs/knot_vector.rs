@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "compact symbols in basis-function recurrences follow the standard B-spline notation"
 )]

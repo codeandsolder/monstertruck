@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "polynomial surface composition uses canonical paired u/v component names"
 )]

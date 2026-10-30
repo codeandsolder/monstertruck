@@ -1,8 +1,8 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "compact point/vector symbols mirror the local revolution projection equations"
 )]
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired U/V derivative and parameter names mirror the revolution equations"
 )]
@@ -770,7 +770,7 @@ fn from_axis_angle_derivation(n: usize, axis: Vector3, angle: Rad<f64>) -> Matri
         _ => -c,
     };
 
-    #[allow(clippy::deprecated_cfg_attr, reason = "rustfmt_skip is formatter-only and intentionally scoped through cfg_attr")]
+    #[expect(clippy::deprecated_cfg_attr, reason = "rustfmt_skip is formatter-only and intentionally scoped through cfg_attr")]
     #[cfg_attr(rustfmt, rustfmt_skip)]
     Matrix3::new(
         (one_minus_cosine_derivative * axis.x).mul_add(axis.x, c),

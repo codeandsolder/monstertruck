@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired U/V derivative names mirror the surface derivative equations"
 )]

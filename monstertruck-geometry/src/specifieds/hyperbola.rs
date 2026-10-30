@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "a through d are polynomial coefficients in the analytic hyperbola solve"
 )]

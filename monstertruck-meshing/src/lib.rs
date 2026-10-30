@@ -26,7 +26,7 @@ pub mod rexport_polymesh {
     pub use monstertruck_mesh::*;
 }
 
-#[allow(
+#[expect(
     clippy::cast_precision_loss,
     reason = "mesh collection/sampling counts are bounded by actually iterable/allocatable data and are converted only for normalized f64 geometry formulas"
 )]

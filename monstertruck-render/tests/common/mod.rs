@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     dead_code,
     reason = "shared render-test helpers are consumed only by selected test targets"
 )]

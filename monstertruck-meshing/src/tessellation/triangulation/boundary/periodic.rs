@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "periodic surface algorithms intentionally use canonical paired parameter range names"
 )]

@@ -48,9 +48,21 @@
 /// [`imported`]: crate::imported
 #[macro_export]
 macro_rules! prelude {
-    ($point: ty, $curve: ty, $surface: ty $(, $pub: tt $($super: tt)?)?) => {
-        #[allow(unused_imports, reason = "prelude consumers intentionally choose only a subset of convenience imports")]
-        $($pub$($super)?)? use $crate::{
+    ($point: ty, $curve: ty, $surface: ty) => {
+        $crate::prelude!(@impl []
+            [expect(unused_imports, reason = "prelude consumers intentionally choose only a subset of convenience imports")]
+            [expect(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
+            $point, $curve, $surface
+        );
+    };
+    ($point: ty, $curve: ty, $surface: ty, $pub: tt $($super: tt)?) => {
+        $crate::prelude!(@impl [$pub $($super)?] [] [] $point, $curve, $surface);
+    };
+    (@impl [$($vis: tt)*] [$($use_attr: meta)?] [$($alias_attr: meta)?]
+        $point: ty, $curve: ty, $surface: ty
+    ) => {
+        $(#[$use_attr])?
+        $($vis)* use $crate::{
             compress::CompressedEdgeIndex,
             shell::ShellCondition,
             VertexDisplayFormat,
@@ -64,52 +76,51 @@ macro_rules! prelude {
         };
 
         /// Vertex, the minimum topological unit.
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type Vertex = $crate::Vertex<$point>;
+        $(#[$alias_attr])?
+        $($vis)* type Vertex = $crate::Vertex<$point>;
         /// Edge, which consists two vertices.
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type Edge = $crate::Edge<$point, $curve>;
+        $(#[$alias_attr])?
+        $($vis)* type Edge = $crate::Edge<$point, $curve>;
         /// Wire, a path or cycle which consists some edges.
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type Wire = $crate::Wire<$point, $curve>;
+        $(#[$alias_attr])?
+        $($vis)* type Wire = $crate::Wire<$point, $curve>;
         /// Face, attached to a simple and closed wire.
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type Face = $crate::Face<$point, $curve, $surface>;
+        $(#[$alias_attr])?
+        $($vis)* type Face = $crate::Face<$point, $curve, $surface>;
         /// Shell, a connected compounded faces.
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type Shell = $crate::Shell<$point, $curve, $surface>;
+        $(#[$alias_attr])?
+        $($vis)* type Shell = $crate::Shell<$point, $curve, $surface>;
         /// Solid, attached to a closed shells.
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type Solid = $crate::Solid<$point, $curve, $surface>;
+        $(#[$alias_attr])?
+        $($vis)* type Solid = $crate::Solid<$point, $curve, $surface>;
 
         /// The id of vertex. `Copy` trait is implemented.
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type VertexId = $crate::VertexId<$point>;
+        $(#[$alias_attr])?
+        $($vis)* type VertexId = $crate::VertexId<$point>;
         /// The id that does not depend on the direction of the edge.
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type EdgeId = $crate::EdgeId<$curve>;
+        $(#[$alias_attr])?
+        $($vis)* type EdgeId = $crate::EdgeId<$curve>;
         /// The id that does not depend on the direction of the face.
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type FaceId = $crate::FaceId<$surface>;
+        $(#[$alias_attr])?
+        $($vis)* type FaceId = $crate::FaceId<$surface>;
 
         /// Serialized compressed edge
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type CompressedEdge = $crate::compress::CompressedEdge<$curve>;
+        $(#[$alias_attr])?
+        $($vis)* type CompressedEdge = $crate::compress::CompressedEdge<$curve>;
         /// Serialized compressed face
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type CompressedFace = $crate::compress::CompressedFace<$surface>;
+        $(#[$alias_attr])?
+        $($vis)* type CompressedFace = $crate::compress::CompressedFace<$surface>;
         /// Serialized compressed shell
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type CompressedShell = $crate::compress::CompressedShell<$point, $curve, $surface>;
+        $(#[$alias_attr])?
+        $($vis)* type CompressedShell = $crate::compress::CompressedShell<$point, $curve, $surface>;
         /// Serialized compressed solid
-        #[allow(dead_code, reason = "prelude consumers intentionally choose only a subset of convenience aliases")]
-        $($pub$($super)?)? type CompressedSolid = $crate::compress::CompressedSolid<$point, $curve, $surface>;
+        $(#[$alias_attr])?
+        $($vis)* type CompressedSolid = $crate::compress::CompressedSolid<$point, $curve, $surface>;
     };
 }
-
 #[doc(hidden)]
 pub mod empty_geometries {
-    #![allow(
+    #![expect(
         missing_debug_implementations,
         reason = "empty marker geometries intentionally carry no state worth formatting"
     )]

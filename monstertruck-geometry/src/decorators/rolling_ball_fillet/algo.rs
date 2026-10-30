@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired derivative-order and U/V names mirror the rolling-ball equations"
 )]

@@ -30,7 +30,7 @@ fn test_split_closed_face_cylinder_with_hole() {
     enum Curve {
         Line(Line<Point3>),
         Arc(TrimmedCurve<Processor<UnitCircle<Point3>, Matrix4>>),
-        #[allow(
+        #[expect(
             clippy::enum_variant_names,
             reason = "test geometry enum mirrors production curve variant names"
         )]

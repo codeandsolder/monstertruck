@@ -68,7 +68,7 @@ impl PolylineCurve<Point2> {
     /// let p1 = Point2::new(0.0, 1.0);
     /// assert!(!hexagon.include(p1));
     /// ```
-    #[allow(
+    #[expect(
         clippy::many_single_char_names,
         reason = "2D winding calculation uses conventional point, vector, and cross-product notation"
     )]
@@ -155,7 +155,7 @@ pub fn area<'a>(boundaries: impl IntoIterator<Item = &'a PolylineCurve<Point2>>)
 /// let p1 = Point2::new(0.0, 0.0);
 /// assert!(!polyline_curve::include(&boundaries, p1));
 /// ```
-#[allow(
+#[expect(
     clippy::many_single_char_names,
     reason = "2D winding calculation uses conventional point, vector, and cross-product notation"
 )]

@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired U/V parameter-division names are standard surface notation"
 )]

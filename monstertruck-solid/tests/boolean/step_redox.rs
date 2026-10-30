@@ -4,7 +4,7 @@ use monstertruck_meshing::prelude::*;
 use monstertruck_modeling::*;
 
 #[test]
-#[allow(
+#[expect(
     clippy::excessive_precision,
     reason = "regression fixture preserves recovered STEP coordinates verbatim"
 )]
@@ -153,7 +153,7 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::excessive_precision,
     reason = "regression fixture preserves recovered STEP coordinates verbatim"
 )]
@@ -411,7 +411,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::excessive_precision,
     reason = "regression fixture preserves recovered STEP coordinates verbatim"
 )]
@@ -529,7 +529,7 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::excessive_precision,
     reason = "regression fixture preserves recovered STEP coordinates verbatim"
 )]

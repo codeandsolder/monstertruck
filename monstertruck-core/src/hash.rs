@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "hash mixing formulas use conventional coefficient and component symbols"
 )]
@@ -17,7 +17,7 @@ impl HashFloat for f64 {
 
 impl HashFloat for f32 {
     #[inline]
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         reason = "f32 hashing deliberately uses the f32-rounded form of the fixed f64 mixing constants"
     )]

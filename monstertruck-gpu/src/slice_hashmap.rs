@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "specialized slice-key map is retained for GPU batching paths not enabled in every target"
-)]
-
 use rustc_hash::FxHashMap as HashMap;
 use std::hash::Hash;
 

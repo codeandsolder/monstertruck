@@ -6,7 +6,7 @@
 //! signatures: sampled or summary evidence may select candidates, never prove
 //! trimmed-region identity by itself.
 
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "loop-intersection formulas follow compact geometric notation"
 )]

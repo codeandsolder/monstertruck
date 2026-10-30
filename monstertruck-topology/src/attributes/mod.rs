@@ -68,7 +68,7 @@ impl Attribute {
 
     /// Returns the number of elements with values.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::missing_const_for_fn,
         reason = "BTreeMap::len is not const-stable on Rust 1.99.1"
     )]
@@ -76,7 +76,7 @@ impl Attribute {
 
     /// Returns whether no elements have values.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::missing_const_for_fn,
         reason = "BTreeMap::is_empty is not const-stable on Rust 1.99.1"
     )]
@@ -137,7 +137,7 @@ impl ElementAttributes {
 
     /// Returns whether there are no named attributes.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::missing_const_for_fn,
         reason = "BTreeMap::is_empty is not const-stable on Rust 1.99.1"
     )]
@@ -170,7 +170,7 @@ impl SolidAttributes {
 
     /// Returns whether all element attribute stores are empty.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::missing_const_for_fn,
         reason = "BTreeMap::is_empty is not const-stable on Rust 1.99.1"
     )]

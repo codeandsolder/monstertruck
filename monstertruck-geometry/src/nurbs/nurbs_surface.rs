@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired U/V range and basis names mirror standard NURBS surface notation"
 )]

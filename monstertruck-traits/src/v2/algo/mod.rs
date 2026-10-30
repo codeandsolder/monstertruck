@@ -1,8 +1,8 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "numerical geometry algorithms use compact paired parameter notation"
 )]
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "numerical geometry algorithms use compact paired parameter notation"
 )]

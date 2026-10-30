@@ -19,7 +19,7 @@ macro_rules! toporedef {
         impl $type {
             /// upcast to abstract shape
 
-            #[allow(
+            #[expect(
                 clippy::missing_const_for_fn,
                 reason = "wasm-bindgen rejects exported const functions"
             )]
@@ -34,7 +34,7 @@ macro_rules! toporedef {
         impl AbstractShape {
             $(
                 /// check the type
-                #[allow(
+                #[expect(
                     clippy::missing_const_for_fn,
                     reason = "wasm-bindgen rejects exported const functions"
                 )]

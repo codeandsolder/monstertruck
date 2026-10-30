@@ -15,12 +15,12 @@
 
 pub(crate) use ahash::AHashSet as HashSet;
 
-#[allow(
+#[expect(
     private_interfaces,
     reason = "legacy fillet module API intentionally keeps implementation helper types private"
 )]
 mod edge_select;
-#[allow(
+#[expect(
     private_interfaces,
     reason = "legacy fillet module API intentionally keeps implementation helper types private"
 )]

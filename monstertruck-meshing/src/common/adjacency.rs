@@ -2,7 +2,7 @@ use super::{Faces, Vertex};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 pub trait Adjacency {
-    #[allow(
+    #[expect(
         dead_code,
         reason = "the trait keeps vertex adjacency alongside the currently used face adjacency operation"
     )]

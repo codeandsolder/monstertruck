@@ -28,7 +28,7 @@
 //! ```
 //!
 //! Also, see the sample `newton-cuberoot.wgsl`, default shader, in `examples`.
-#![allow(
+#![expect(
     deprecated,
     reason = "example intentionally demonstrates the legacy event-loop integration while winit compatibility is maintained"
 )]
@@ -288,7 +288,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 }
 use plane::Plane;
 
-#[allow(
+#[expect(
     clippy::future_not_send,
     reason = "winit event loops and windows are deliberately thread-affine"
 )]
@@ -395,7 +395,7 @@ async fn run(
     Ok(())
 }
 
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     reason = "winit f64 cursor coordinates are intentionally narrowed to f32 shader uniforms"
 )]

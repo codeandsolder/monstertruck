@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "compact U/V derivative-order symbols mirror the tensor-product surface equations"
 )]
@@ -92,7 +92,7 @@ impl Tmesh<Point3> {
         let mut s_derivs = vec![Vector3::new(0.0, 0.0, 0.0); pq_size];
         let w0 = w_derivs[0];
 
-        #[allow(
+        #[expect(
             clippy::needless_range_loop,
             reason = "tensor derivative assembly uses p and q as mathematical derivative orders"
         )]

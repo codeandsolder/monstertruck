@@ -300,7 +300,7 @@ mod gaussian_elimination {
 
         // Disable cargo clippy warnings about needless range loops.
         // Checking the diagonal like this is simpler than any alternative.
-        #[allow(
+        #[expect(
             clippy::needless_range_loop,
             reason = "diagonal singularity detection is clearer when indexed by the matrix coordinate"
         )]

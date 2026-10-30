@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "a through h are the documented Karnaugh-map boolean variables for edge connectivity"
 )]
@@ -159,7 +159,7 @@ impl<P> TnurccEdge<P> {
     }
 
     /// Returns the next clockwise edge around `self`'s vertex `end`.
-    #[allow(
+    #[expect(
         dead_code,
         reason = "retained as part of the complete T-NURCC adjacency traversal API"
     )]
@@ -179,7 +179,7 @@ impl<P> TnurccEdge<P> {
     /// - `None` if `f` is not on either side of `self`.
     ///
     /// - `Some(edge)` otherwise.
-    #[allow(
+    #[expect(
         dead_code,
         reason = "retained as part of the complete T-NURCC adjacency traversal API"
     )]
@@ -199,7 +199,7 @@ impl<P> TnurccEdge<P> {
     /// - `None` if `f` is not on either side of `self`.
     ///
     /// - `Some(edge)` otherwise.
-    #[allow(
+    #[expect(
         dead_code,
         reason = "retained as part of the complete T-NURCC adjacency traversal API"
     )]
@@ -225,7 +225,7 @@ impl<P> TnurccEdge<P> {
     }
 
     /// Returns the next clockwise edge around `self`'s face `side`.
-    #[allow(
+    #[expect(
         dead_code,
         reason = "retained as part of the complete T-NURCC adjacency traversal API"
     )]
@@ -309,7 +309,7 @@ impl<P> TnurccEdge<P> {
     ///
     /// # Panics
     /// Panics if `self` has been incorrectly configured with `None` connections.
-    #[allow(
+    #[expect(
         dead_code,
         reason = "retained as part of the complete T-NURCC adjacency traversal API"
     )]
@@ -453,10 +453,6 @@ impl<P> TnurccEdge<P> {
     ///
     /// # Panics
     /// Panics if any borrow fails.
-    #[allow(
-        dead_code,
-        reason = "retained as part of the complete T-NURCC adjacency traversal API"
-    )]
     pub fn common_point(
         &self,
         other: &Arc<RwLock<Self>>,

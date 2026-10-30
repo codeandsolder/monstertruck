@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::too_many_arguments,
     reason = "STEP fixture constructors mirror schema entities with many independent fields"
 )]

@@ -1,12 +1,12 @@
-#![allow(
+#![expect(
     clippy::suboptimal_flops,
     reason = "reference polynomial formulas stay expanded so the oracle is readable and does not change rounding via FMA"
 )]
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "surface tests use canonical u/v parameter and compact algebraic notation"
 )]
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired u/v derivative and division names are canonical surface notation"
 )]

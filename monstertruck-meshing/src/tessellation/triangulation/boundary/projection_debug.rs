@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "surface parameter diagnostics intentionally use canonical paired parameter names"
 )]
@@ -121,7 +121,7 @@ fn sampled_nearest<S: PreMeshableSurface>(
 }
 
 /// One line per unprojectable boundary vertex. Print-only.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "diagnostic reporter names each independent projection datum explicitly"
 )]

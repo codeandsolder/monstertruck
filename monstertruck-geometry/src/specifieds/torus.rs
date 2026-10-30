@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired U/V ranges, tolerances, and divisions are standard torus parameterization notation"
 )]

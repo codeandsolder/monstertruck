@@ -131,7 +131,7 @@ impl CalcVolume for PolygonMesh {
             sum + (p.x + q.x + r.x) * ((q.y - p.y) * (r.z - p.z) - (r.y - p.y) * (q.z - p.z))
         }) / 6.0
     }
-    #[allow(
+    #[expect(
         clippy::suspicious_operation_groupings,
         reason = "this is the canonical symmetric second-moment polynomial; Clippy's suggested p*s replacement is mathematically different"
     )]

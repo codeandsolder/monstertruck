@@ -156,10 +156,6 @@ struct TnurccEdge<P> {
 /// Described in \[Sederberg et al. 2003\], building on material from \[Sederberg et al. 1998\].
 #[derive(Debug)]
 pub struct Tnurcc<P> {
-    #[allow(
-        dead_code,
-        reason = "cached extraordinary points are part of T-NURCC state used by refinement variants"
-    )]
     extraordinary_control_points: Vec<Arc<RwLock<TnurccControlPoint<P>>>>,
     control_points: Vec<Arc<RwLock<TnurccControlPoint<P>>>>,
     faces: Vec<Arc<RwLock<TnurccFace<P>>>>,

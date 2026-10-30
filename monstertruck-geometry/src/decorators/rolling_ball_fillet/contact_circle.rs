@@ -1,8 +1,8 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "compact U/V derivative symbols mirror the contact-circle equations"
 )]
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired U/V derivative names mirror the contact-circle equations"
 )]

@@ -151,7 +151,7 @@ fn add_vertex_edge(
 
 #[derive(Clone, Copy, Debug)]
 enum VertexBoundaryCondition {
-    #[allow(
+    #[expect(
         dead_code,
         reason = "corner classification remains part of the subdivision boundary model for alternate filters"
     )]

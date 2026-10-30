@@ -73,7 +73,7 @@ use web_time::Instant as TimeInstant;
 pub const LIGHT_MAX: usize = 255;
 
 #[inline]
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     reason = "wgpu shader data is f32; this helper is the intentional IEEE-754 f64-to-f32 narrowing boundary"
 )]
@@ -522,7 +522,7 @@ pub mod bind_group_util {
             u32::try_from(index).is_ok(),
             "bind-group binding index exceeds wgpu's u32 range"
         );
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             reason = "the preceding assertion proves the usize binding index fits u32"
         )]

@@ -260,26 +260,6 @@ pub(super) fn materialize_regions<P: Clone, C: Clone, S: Clone>(
     materialize_region_set(&normalized)
 }
 
-#[cfg(test)]
-mod materialization_tests {
-    use super::*;
-
-    #[test]
-    fn distinct_edge_digon_is_not_treated_as_retrace() {
-        let front = Vertex::new(());
-        let back = Vertex::new(());
-        let edge0 = Edge::new_unchecked(&front, &back, ());
-        let edge1 = Edge::new_unchecked(&back, &front, ());
-        let region = BooleanRegion::new(vec![Wire::from(vec![edge0, edge1])], (), true, 0, 0);
-
-        let materialized = materialize_regions(&[region]);
-        assert!(materialized.is_some());
-        let shell = materialized.unwrap_or_default();
-        assert_eq!(shell.len(), 1);
-        assert_eq!(shell[0].absolute_boundaries()[0].len(), 2);
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct FacesClassification<P, C, S> {
     regions: Vec<BooleanRegion<P, C, S>>,
@@ -442,5 +422,25 @@ impl<P, C, S> FacesClassification<P, C, S> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod materialization_tests {
+    use super::*;
+
+    #[test]
+    fn distinct_edge_digon_is_not_treated_as_retrace() {
+        let front = Vertex::new(());
+        let back = Vertex::new(());
+        let edge0 = Edge::new_unchecked(&front, &back, ());
+        let edge1 = Edge::new_unchecked(&back, &front, ());
+        let region = BooleanRegion::new(vec![Wire::from(vec![edge0, edge1])], (), true, 0, 0);
+
+        let materialized = materialize_regions(&[region]);
+        assert!(materialized.is_some());
+        let shell = materialized.unwrap_or_default();
+        assert_eq!(shell.len(), 1);
+        assert_eq!(shell[0].absolute_boundaries()[0].len(), 2);
     }
 }

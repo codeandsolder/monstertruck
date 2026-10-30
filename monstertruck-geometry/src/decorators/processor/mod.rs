@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired U/V ranges and divisions are standard surface-processing notation"
 )]

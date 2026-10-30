@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     dead_code,
     reason = "shared GPU test helpers are only used by target-specific test subsets"
 )]

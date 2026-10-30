@@ -235,7 +235,7 @@ impl App for MyApp {
     }
 }
 
-#[allow(
+#[expect(
     clippy::similar_names,
     reason = "u/v division names are standard parametric-surface notation"
 )]

@@ -404,10 +404,6 @@ pub mod format {
     use crate::{Debug, Formatter, Mutex};
 
     /// struct for debug formatting
-    #[allow(
-        missing_debug_implementations,
-        reason = "DebugDisplay is itself a formatting adapter whose Debug implementation would be misleading"
-    )]
     #[derive(Clone, Copy)]
     pub struct DebugDisplay<'a, T, Format> {
         pub(super) entity: &'a T,

@@ -45,7 +45,7 @@ impl<P> TnurccAcwFaceIter<P> {
     /// - `None` if `f` does not have a reference edge.
     ///
     /// - `Some(iter)` otherwise.
-    #[allow(
+    #[expect(
         dead_code,
         reason = "face-seeded traversal constructor complements the edge-seeded iterator API"
     )]

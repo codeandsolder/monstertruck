@@ -15,7 +15,7 @@ pub struct Table(StepTable);
 #[derive(Clone, Debug)]
 enum SubShapeFromStep {
     Shell(CompressedShell<Point3, Curve3D, Surface>),
-    #[allow(
+    #[expect(
         dead_code,
         reason = "WASM STEP input enum preserves solid support even when the current conversion path does not construct it"
     )]

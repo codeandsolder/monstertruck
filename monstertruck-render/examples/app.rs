@@ -2,7 +2,7 @@
 
 // Copyright © 2021 RICOS
 // Apache license 2.0
-#![allow(
+#![expect(
     deprecated,
     reason = "example keeps the legacy winit integration visible during API migration"
 )]
@@ -24,10 +24,6 @@ use std::time::Instant;
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
-#[allow(
-    dead_code,
-    reason = "example framework exposes all control-flow modes although the minimal demo does not construct each one"
-)]
 #[derive(Clone, Copy, Debug)]
 pub enum ControlFlow {
     Poll,
@@ -207,10 +203,6 @@ pub trait App: Sized + 'static {
 
 /// The smallest example of the trait `App`.
 /// Creates an empty window whose back ground is black.
-#[allow(
-    dead_code,
-    reason = "this module is included by other examples, where its standalone demonstration main is intentionally unused"
-)]
 fn main() {
     struct MyApp;
     #[async_trait(?Send)]
@@ -219,3 +211,5 @@ fn main() {
     }
     MyApp::run();
 }
+
+const _: fn() = main;

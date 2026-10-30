@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired U/V knot, degree, basis, and control-count names mirror the tensor-product equations"
 )]

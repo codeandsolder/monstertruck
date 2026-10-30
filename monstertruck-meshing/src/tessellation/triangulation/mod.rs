@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "triangulation formulas conventionally use compact geometric variable names"
 )]

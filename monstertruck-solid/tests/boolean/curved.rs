@@ -59,7 +59,7 @@ fn union_with_thin_holed_profile_boss() -> Result<()> {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::excessive_precision,
     reason = "regression fixture preserves recovered STEP coordinates verbatim"
 )]

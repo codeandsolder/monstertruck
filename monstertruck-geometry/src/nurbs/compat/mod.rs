@@ -5,7 +5,7 @@
 //! provides multi-input wrappers around the pairwise [`BsplineCurve::syncro_degree`]
 //! and [`BsplineCurve::syncro_knots`] primitives.
 
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired U/V degree names are standard tensor-product spline notation"
 )]

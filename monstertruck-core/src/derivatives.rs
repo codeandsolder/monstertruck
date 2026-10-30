@@ -900,7 +900,7 @@ impl<V> SurfaceDerivatives<V> {
             // `combinatorial_derivative` as a VALUE, not used only to index. The
             // iterator form would still have to recover it with `enumerate`, and
             // the bound depends on `m`, so it reads worse and says the same thing.
-            #[allow(
+            #[expect(
                 clippy::needless_range_loop,
                 reason = "triangular derivative storage is naturally indexed by derivative order"
             )]

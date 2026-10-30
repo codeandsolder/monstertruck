@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired U/V knot-vector names are standard tensor-product surface notation"
 )]

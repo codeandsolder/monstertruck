@@ -143,7 +143,7 @@ pub(super) fn composite_line_bezier(
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RelaySphere {
     /// Center of fillet circle.
-    #[allow(
+    #[expect(
         dead_code,
         reason = "retained with the relay-sphere state for fillet diagnostics and inspection"
     )]
@@ -299,7 +299,7 @@ pub(super) fn relay_spheres(
     range.map(generator).collect()
 }
 
-#[allow(
+#[expect(
     dead_code,
     reason = "reference construction retained for comparison with the active custom fillet implementation"
 )]
@@ -667,7 +667,7 @@ pub(super) fn expand_custom(
 // bundling and the sibling builders (`chamfer_fillet_surface`,
 // `rolling_ball_fillet_surface`) share this argument shape, so a params struct
 // here would either desync those signatures or ripple through `relay_spheres`.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "arguments mirror the two surfaces, relay spheres, and boundary derivatives without an artificial parameter bag"
 )]

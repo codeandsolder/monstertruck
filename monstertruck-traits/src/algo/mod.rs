@@ -1,8 +1,8 @@
-#![allow(
+#![expect(
     clippy::many_single_char_names,
     reason = "numerical geometry algorithms use paired u/v notation where similar names are semantically canonical"
 )]
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "numerical geometry algorithms use paired u/v notation where similar names are semantically canonical"
 )]

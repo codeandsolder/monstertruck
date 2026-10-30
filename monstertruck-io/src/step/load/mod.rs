@@ -1,8 +1,8 @@
-#![allow(
+#![expect(
     missing_docs,
     reason = "STEP schema re-exports preserve upstream entity names without duplicating generated documentation"
 )]
-#![allow(
+#![expect(
     unused_qualifications,
     reason = "STEP schema paths intentionally retain explicit qualification to mirror source entities"
 )]

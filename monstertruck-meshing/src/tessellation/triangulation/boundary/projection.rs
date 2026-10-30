@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "surface parameter algorithms intentionally use canonical paired parameter names"
 )]
@@ -518,7 +518,7 @@ impl PolyBoundaryPiece {
         }
     }
 
-    #[allow(
+    #[expect(
         clippy::option_if_let_else,
         reason = "explicit period and range case analysis is clearer than nested map_or_else closures"
     )]
@@ -578,7 +578,7 @@ impl PolyBoundaryPiece {
         uder.dot(uder) + vder.dot(vder)
     }
 
-    #[allow(
+    #[expect(
         clippy::tuple_array_conversions,
         reason = "the two parameter-range endpoints are intentionally materialized as a fixed array for iteration"
     )]

@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired S/T coordinates and U/V degree names mirror the T-spline algorithms"
 )]
@@ -497,18 +497,18 @@ where P: ControlPoint<f64>
 }
 
 impl<P> fmt::Display for Tmesh<P> {
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "the formatter keeps S/T level construction, connectivity glyph selection, and output layout together"
     )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // If only Hash Maps could use f64....
-        #[allow(
+        #[expect(
             clippy::type_complexity,
             reason = "local level buckets preserve the explicit knot coordinate beside each control-point group"
         )]
         let mut s_levels: Vec<(f64, Vec<Arc<RwLock<TmeshControlPoint<P>>>>)> = Vec::new();
-        #[allow(
+        #[expect(
             clippy::type_complexity,
             reason = "local level buckets preserve the explicit knot coordinate beside each control-point group"
         )]
@@ -855,7 +855,7 @@ where P: ControlPoint<f64> + Debug + Clone
     ///
     /// # Errors
     /// Returns `TmeshNonCubicDegree` if the surface is not degree 3 in both directions.
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "the conversion is a single grid-construction pipeline whose indexing invariants are clearest in one scope"
     )]

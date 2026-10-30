@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::suboptimal_flops,
     reason = "reference polynomial formulas stay expanded so the oracle is readable and does not change rounding via FMA"
 )]

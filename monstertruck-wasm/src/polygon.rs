@@ -43,7 +43,7 @@ impl From<StlType> for stl::StlType {
     }
 }
 
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     reason = "the JavaScript/WebGL interleaved vertex buffer is explicitly f32, so f64 geometry is intentionally narrowed at this serialization boundary"
 )]
@@ -158,7 +158,7 @@ impl PolygonBuffer {
     pub fn vertex_buffer(&self) -> Vec<f32> { self.vertices.clone() }
     /// the length (bytes) of vertex buffer. (Num of attributes) * 8 components * 4 bytes.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::missing_const_for_fn,
         reason = "wasm-bindgen rejects exported const functions"
     )]
@@ -168,7 +168,7 @@ impl PolygonBuffer {
     pub fn index_buffer(&self) -> Vec<u32> { self.indices.clone() }
     /// the length (bytes) of index buffer. (Num of triangles) * 3 vertices * 4 bytes.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::missing_const_for_fn,
         reason = "wasm-bindgen rejects exported const functions"
     )]

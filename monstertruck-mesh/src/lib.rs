@@ -93,7 +93,7 @@ pub struct StandardVertex {
 ///
 /// To optimize for the case where the polygon mesh consists only triangles and quadrangle,
 /// there are vectors which consist by each triangles and quadrilaterals, internally.
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "field names are part of the serialized Faces representation and match the public accessors"
 )]

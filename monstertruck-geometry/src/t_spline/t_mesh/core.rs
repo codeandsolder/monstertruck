@@ -1,4 +1,4 @@
-#![allow(
+#![expect(
     clippy::similar_names,
     reason = "paired S/T parametric-coordinate names are standard T-spline notation"
 )]

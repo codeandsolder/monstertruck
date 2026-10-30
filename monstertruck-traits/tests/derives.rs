@@ -4,7 +4,7 @@
 // compile the whole test target. Found 2026-07-30 when a spec-012 gate that
 // names this package could not build on master.
 #![cfg(all(feature = "derive", feature = "polynomial"))]
-#![allow(
+#![expect(
     dead_code,
     reason = "derive fixtures exist for compile-time trait coverage rather than runtime use"
 )]

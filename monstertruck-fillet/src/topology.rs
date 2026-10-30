@@ -14,7 +14,7 @@ pub(super) fn find_adjacent_edge(face: &Face, edge_id: EdgeId) -> Option<(Edge, 
         .map(|(x, _, y)| (x, y))
 }
 
-#[allow(
+#[expect(
     dead_code,
     reason = "orientation helper is retained for the alternate fillet topology path"
 )]

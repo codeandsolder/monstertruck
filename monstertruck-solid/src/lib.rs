@@ -31,7 +31,7 @@
 // unused, so allow dead code in exactly that no-backend configuration.
 #![cfg_attr(
     not(feature = "marching-ssi"),
-    allow(
+    expect(
         dead_code,
         reason = "classic SSI helpers are retained when the marching implementation is disabled"
     )
