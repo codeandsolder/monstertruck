@@ -880,4 +880,111 @@ mod tests {
             "native supports plus endpoints alone do not prove which intersection arc was intended",
         );
     }
+
+    #[test]
+    fn support_pair_preserves_short_branch_across_periodic_seam() {
+        let cylinder = cylinder();
+        let plane = xy_plane();
+        let angle = 10.0_f64.to_radians();
+        let front = Point3::new(angle.cos(), -angle.sin(), 0.0);
+        let back = Point3::new(angle.cos(), angle.sin(), 0.0);
+
+        let c0 = Point2::from(
+            cylinder
+                .search_parameter(front, None, PROJECTION_TRIALS)
+                .expect("front on cylinder"),
+        );
+        let c1_raw = Point2::from(
+            cylinder
+                .search_parameter(back, Some((c0.x, c0.y)), PROJECTION_TRIALS)
+                .expect("back on cylinder"),
+        );
+        let c1 = unwrap_uv_near(&cylinder, c1_raw, c0);
+        let p0 = Point2::from(
+            plane
+                .search_parameter(front, None, PROJECTION_TRIALS)
+                .expect("front on plane"),
+        );
+        let p1 = Point2::from(
+            plane
+                .search_parameter(back, Some((p0.x, p0.y)), PROJECTION_TRIALS)
+                .expect("back on plane"),
+        );
+
+        let cylinder_hint = SurfaceArcHint {
+            surface: cylinder.clone(),
+            evidence: SurfaceHintEvidence::ComplementPath,
+            start_uv: c0,
+            end_uv: c1,
+            period_u: cylinder.period_u(),
+            period_v: cylinder.period_v(),
+        };
+        let plane_hint = SurfaceArcHint {
+            surface: plane.clone(),
+            evidence: SurfaceHintEvidence::SupportOnly,
+            start_uv: p0,
+            end_uv: p1,
+            period_u: plane.period_u(),
+            period_v: plane.period_v(),
+        };
+
+        let curve = Table::recover_from_support_pair(0, front, back, &cylinder_hint, &plane_hint)
+            .expect("the short seam-crossing branch is uniquely proven");
+        let (t0, t1) = curve.range_tuple();
+        let midpoint = curve.evaluate((t0 + t1) * 0.5);
+        assert!(
+            midpoint.x > 0.99,
+            "recovery took the long periodic branch: {midpoint:?}"
+        );
+        assert!(midpoint.y.abs() <= 1.0e-5);
+        assert!(midpoint.z.abs() <= GEOMETRY_TOLERANCE);
+    }
+
+    #[test]
+    fn support_pair_refuses_a_misoriented_path_hint() {
+        let cylinder = cylinder();
+        let plane = xy_plane();
+        let front = Point3::new(1.0, 0.0, 0.0);
+        let back = Point3::new(0.0, 1.0, 0.0);
+        let c0 = Point2::from(
+            cylinder
+                .search_parameter(front, None, PROJECTION_TRIALS)
+                .expect("front on cylinder"),
+        );
+        let c1 = Point2::from(
+            cylinder
+                .search_parameter(back, Some((c0.x, c0.y)), PROJECTION_TRIALS)
+                .expect("back on cylinder"),
+        );
+        let p0 = Point2::from(
+            plane
+                .search_parameter(front, None, PROJECTION_TRIALS)
+                .expect("front on plane"),
+        );
+        let p1 = Point2::from(
+            plane
+                .search_parameter(back, Some((p0.x, p0.y)), PROJECTION_TRIALS)
+                .expect("back on plane"),
+        );
+        let reversed_path = SurfaceArcHint {
+            surface: cylinder.clone(),
+            evidence: SurfaceHintEvidence::ComplementPath,
+            start_uv: c1,
+            end_uv: c0,
+            period_u: cylinder.period_u(),
+            period_v: cylinder.period_v(),
+        };
+        let plane_hint = SurfaceArcHint {
+            surface: plane.clone(),
+            evidence: SurfaceHintEvidence::SupportOnly,
+            start_uv: p0,
+            end_uv: p1,
+            period_u: plane.period_u(),
+            period_v: plane.period_v(),
+        };
+
+        assert!(
+            Table::recover_from_support_pair(0, front, back, &reversed_path, &plane_hint).is_none()
+        );
+    }
 }
