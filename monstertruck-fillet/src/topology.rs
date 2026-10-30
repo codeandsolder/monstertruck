@@ -99,7 +99,7 @@ pub(super) fn cut_face_by_bezier(
             return None;
         };
         let v1 = Vertex::new(bezier.subs(t0));
-        bezier.cut(t0);
+        let _ = bezier.cut(t0);
         let Some(cut) = back_edge.not_strictly_cut_with_parameter(&v1, t1) else {
             cut_debug(|| {
                 format!(

@@ -446,7 +446,7 @@ fn fillet_along_wire_open(
                     context: "search closest parameter for last fillet edge0",
                 },
             )?;
-            bezier.cut(t0);
+            let _ = bezier.cut(t0);
             let v0 = Vertex::new(bezier.front());
             let v1 = Vertex::new(bezier.back());
             Edge::new_unchecked(&v0, &v1, bezier.into())
