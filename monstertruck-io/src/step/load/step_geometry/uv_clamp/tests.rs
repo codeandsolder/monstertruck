@@ -9,7 +9,7 @@ use crate::step::load::step_geometry::{CylindricalSurface, Plane, re_exports::*}
 /// The three placeholder axes the STEP loader actually emits, named.
 #[test]
 fn the_placeholder_axes_are_the_plane_and_a_loaded_cylinders_profile() {
-    let plane = Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy()));
+    let plane = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
     assert_eq!(
         reported_range_bounds_the_surface(&plane),
         (false, false),
@@ -27,7 +27,7 @@ fn the_placeholder_axes_are_the_plane_and_a_loaded_cylinders_profile() {
         axis,
     ));
     cylinder.invert();
-    let surface = Surface::ElementarySurface(ElementarySurface::CylindricalSurface(cylinder));
+    let surface = Surface::Elementary(ElementarySurface::CylindricalSurface(cylinder));
     assert_eq!(
         reported_range_bounds_the_surface(&surface),
         (true, false),
@@ -43,7 +43,7 @@ fn the_placeholder_axes_are_the_plane_and_a_loaded_cylinders_profile() {
         axis,
     ));
     assert_eq!(
-        reported_range_bounds_the_surface(&Surface::ElementarySurface(
+        reported_range_bounds_the_surface(&Surface::Elementary(
             ElementarySurface::CylindricalSurface(upright)
         )),
         (false, true),
@@ -54,7 +54,7 @@ fn the_placeholder_axes_are_the_plane_and_a_loaded_cylinders_profile() {
 /// dropping one would disable a clamp that has a boundary to clamp to.
 #[test]
 fn sphere_and_torus_ranges_are_measurements_not_placeholders() {
-    let sphere = Surface::ElementarySurface(ElementarySurface::Sphere(Processor::new(
+    let sphere = Surface::Elementary(ElementarySurface::Sphere(Processor::new(
         crate::step::load::step_geometry::Sphere(monstertruck_geometry::prelude::Sphere::new(
             Point3::origin(),
             2.0,
@@ -62,8 +62,8 @@ fn sphere_and_torus_ranges_are_measurements_not_placeholders() {
     )));
     assert_eq!(reported_range_bounds_the_surface(&sphere), (true, true));
 
-    let torus = Surface::ElementarySurface(ElementarySurface::ToroidalSurface(Processor::new(
-        Torus::new(Point3::origin(), 3.0, 1.0),
+    let torus = Surface::Elementary(ElementarySurface::ToroidalSurface(Processor::new(
+        Torus::new_unchecked(Point3::origin(), 3.0, 1.0),
     )));
     assert_eq!(reported_range_bounds_the_surface(&torus), (true, true));
 }

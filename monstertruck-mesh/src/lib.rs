@@ -4,6 +4,7 @@
 //!
 //! ```
 //! use monstertruck_mesh::*;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!
 //! let positions = vec![
 //!     Point3::new(0.0, 0.0, 0.0),
@@ -14,24 +15,16 @@
 //! let mesh = PolygonMesh::new(
 //!     StandardAttributes { positions, ..Default::default() },
 //!     faces,
-//! );
+//! ).expect("mesh is valid");
 //!
 //! assert_eq!(mesh.positions().len(), 3);
 //! assert_eq!(mesh.tri_faces().len(), 1);
+//! # Ok(())
+//! # }
 //! ```
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
 use array_macro::array;
 use serde::{Deserialize, Serialize};
@@ -59,6 +52,7 @@ pub trait TransformedAttributes: Clone {
     /// transform by `trans`.
     fn transform_by(&mut self, trans: Matrix4);
     /// transformed attributions by `trans`.
+    #[must_use]
     fn transformed(&self, trans: Matrix4) -> Self;
 }
 
@@ -99,6 +93,10 @@ pub struct StandardVertex {
 ///
 /// To optimize for the case where the polygon mesh consists only triangles and quadrangle,
 /// there are vectors which consist by each triangles and quadrilaterals, internally.
+#[expect(
+    clippy::struct_field_names,
+    reason = "field names are part of the serialized Faces representation and match the public accessors"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Faces<V = StandardVertex> {
     tri_faces: Vec<[V; 3]>,

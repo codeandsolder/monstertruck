@@ -19,15 +19,17 @@ pub struct UnsupportedContinuityOrder {
 
 impl UnsupportedContinuityOrder {
     /// Returns the rejected order.
+    #[must_use]
     pub const fn requested(self) -> usize { self.requested }
 
     /// Returns the highest represented order.
+    #[must_use]
     pub const fn maximum(self) -> usize { self.maximum }
 }
 
 /// Checked geometric-continuity order.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ContinuityOrder(u8);
+pub struct ContinuityOrder(usize);
 
 impl ContinuityOrder {
     /// Positional continuity.
@@ -49,7 +51,7 @@ impl ContinuityOrder {
     /// [`MAX_CONTINUITY_ORDER`].
     pub const fn new(order: usize) -> Result<Self, UnsupportedContinuityOrder> {
         if order <= MAX_CONTINUITY_ORDER {
-            Ok(Self(order as u8))
+            Ok(Self(order))
         } else {
             Err(UnsupportedContinuityOrder {
                 requested: order,
@@ -59,11 +61,13 @@ impl ContinuityOrder {
     }
 
     /// Returns the numeric derivative order.
-    #[inline(always)]
-    pub const fn as_usize(self) -> usize { self.0 as usize }
+    #[inline]
+    #[must_use]
+    pub const fn as_usize(self) -> usize { self.0 }
 
     /// Returns whether this order is experimental.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn is_experimental(self) -> bool { self.0 == Self::G4.0 }
 }
 
@@ -162,9 +166,11 @@ pub struct InvalidContinuityCapability {
 
 impl InvalidContinuityCapability {
     /// Returns the requested continuity order.
+    #[must_use]
     pub const fn requested(self) -> ContinuityOrder { self.requested }
 
     /// Returns the inconsistent maximum order.
+    #[must_use]
     pub const fn maximum(self) -> ContinuityOrder { self.maximum }
 }
 
@@ -254,15 +260,19 @@ impl SurfaceContinuityCapability {
     }
 
     /// Returns the inspected surface side.
+    #[must_use]
     pub const fn side(self) -> BoundarySide { self.side }
 
     /// Returns the requested continuity order.
+    #[must_use]
     pub const fn requested(self) -> ContinuityOrder { self.requested }
 
     /// Returns the typed support determination.
+    #[must_use]
     pub const fn support(self) -> SurfaceContinuitySupport { self.support }
 
     /// Returns the highest supported order when it is known.
+    #[must_use]
     pub const fn maximum_supported_order(self) -> Option<ContinuityOrder> {
         match self.support {
             SurfaceContinuitySupport::Supported { maximum_order } => Some(maximum_order),
@@ -271,6 +281,7 @@ impl SurfaceContinuityCapability {
     }
 
     /// Returns the typed reason that the request is unsupported.
+    #[must_use]
     pub const fn unsupported_reason(self) -> Option<UnsupportedContinuityCapability> {
         match self.support {
             SurfaceContinuitySupport::Supported { .. } => None,

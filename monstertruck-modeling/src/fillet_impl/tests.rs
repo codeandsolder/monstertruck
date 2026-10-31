@@ -14,7 +14,7 @@ fn plane_surface() -> Surface {
 }
 
 fn exact_quadratic_leader() -> NurbsCurve<Vector4> {
-    NurbsCurve::new(BsplineCurve::new(
+    NurbsCurve::new(BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
             Vector4::new(0.0, 0.0, 0.0, 1.0),
@@ -32,7 +32,7 @@ fn line_pcurve_on_plane() -> Curve {
 }
 
 fn intersection_curve_with_leader(leader: Curve) -> Curve {
-    Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+    Curve::Intersection(SurfaceCurve::with_boundaries(
         Box::new(plane_surface()),
         Box::new(plane_surface()),
         Box::new(leader),

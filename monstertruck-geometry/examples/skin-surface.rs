@@ -1,14 +1,16 @@
 //! Demonstrates `BsplineSurface::skin` -- creating a lofted surface through
 //! multiple section curves.
 
-use monstertruck_geometry::prelude::*;
+use monstertruck_geometry::prelude::{
+    BsplineCurve, BsplineSurface, KnotVector, ParametricSurface, Point3,
+};
 
-fn main() {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Three quadratic arcs at different y-positions.
     let sections: Vec<BsplineCurve<Point3>> = (0..3)
         .map(|i| {
-            let y = i as f64 * 2.0;
-            BsplineCurve::new(
+            let y = f64::from(i) * 2.0;
+            BsplineCurve::new_unchecked(
                 KnotVector::bezier_knot(2),
                 vec![
                     Point3::new(-1.0, y, 0.0),
@@ -19,13 +21,13 @@ fn main() {
         })
         .collect();
 
-    let surface = BsplineSurface::skin(sections);
+    let surface = BsplineSurface::skin(sections)?;
 
     // Verify corners.
-    let p00 = surface.subs(0.0, 0.0);
-    let p10 = surface.subs(1.0, 0.0);
-    let p01 = surface.subs(0.0, 1.0);
-    let p11 = surface.subs(1.0, 1.0);
+    let p00 = surface.evaluate(0.0, 0.0);
+    let p10 = surface.evaluate(1.0, 0.0);
+    let p01 = surface.evaluate(0.0, 1.0);
+    let p11 = surface.evaluate(1.0, 1.0);
     println!("Skin surface corners:");
     println!("  (0,0) = ({:.2}, {:.2}, {:.2})", p00.x, p00.y, p00.z);
     println!("  (1,0) = ({:.2}, {:.2}, {:.2})", p10.x, p10.y, p10.z);
@@ -35,8 +37,9 @@ fn main() {
     // Evaluate along the apex of the arcs (u=0.5).
     println!("\nApex line (u=0.5):");
     for i in 0..=4 {
-        let v = i as f64 / 4.0;
-        let pt = surface.subs(0.5, v);
-        println!("  v={:.2}: ({:.2}, {:.2}, {:.2})", v, pt.x, pt.y, pt.z);
+        let v = f64::from(i) / 4.0;
+        let pt = surface.evaluate(0.5, v);
+        println!("  v={v:.2}: ({:.2}, {:.2}, {:.2})", pt.x, pt.y, pt.z);
     }
+    Ok(())
 }

@@ -25,7 +25,7 @@
 //! Corpus-gated and `#[ignore]`d -- ~1 GB of input. Run with:
 //!
 //! ```text
-//! cargo nextest run -p monstertruck-step --run-ignored all \
+//! cargo nextest run -p monstertruck-io --features step --run-ignored all \
 //!     -E 'test(corpus_conversion_census)' --no-capture
 //! ```
 
@@ -68,8 +68,7 @@ fn install_census_panic_hook() {
                 .unwrap_or_else(|| "<non-string panic payload>".to_owned());
             let at = info
                 .location()
-                .map(|l| format!(" at {}:{}", l.file(), l.line()))
-                .unwrap_or_default();
+                .map_or_default(|l| format!(" at {}:{}", l.file(), l.line()));
             LAST_PANIC.with(|slot| *slot.borrow_mut() = Some(format!("{payload}{at}")));
         } else {
             eprintln!("{info}");
@@ -220,13 +219,14 @@ fn typed_class(table: &Table, id: u64) -> Option<&'static str> {
 fn unrecognised_name(record: &str) -> String { record.split('"').nth(1).unwrap_or("?").to_owned() }
 
 fn class_of(table: &Table, id: u64) -> Class {
-    typed_class(table, id).map(Class::Typed).unwrap_or_else(|| {
-        table
-            .dummy
-            .get(&id)
-            .map(|d| Class::Unrecognised(unrecognised_name(&d.record)))
-            .unwrap_or(Class::Absent)
-    })
+    typed_class(table, id).map_or_else(
+        || {
+            table.dummy.get(&id).map_or(Class::Absent, |d| {
+                Class::Unrecognised(unrecognised_name(&d.record))
+            })
+        },
+        Class::Typed,
+    )
 }
 
 // -------------------------------------------------------------- face fates
@@ -249,7 +249,7 @@ enum Fate {
 }
 
 /// Replace `#<digits>` with `#<id>` so N refusals that differ only in entity id
-/// group into one reported row. Without this, Rocky_House alone emits 156 lines
+/// group into one reported row. Without this, `Rocky_House` alone emits 156 lines
 /// that say the same thing, which buries every other finding.
 fn without_ids(message: &str) -> String {
     let mut out = String::with_capacity(message.len());
@@ -283,7 +283,7 @@ fn surface_any_fate(surface_any: &SurfaceAny) -> Fate {
     }
 }
 
-fn face_geometry_id(holder: &monstertruck_io::step::load::FaceSurfaceHolder) -> Option<u64> {
+const fn face_geometry_id(holder: &monstertruck_io::step::load::FaceSurfaceHolder) -> Option<u64> {
     match &holder.face_geometry {
         PlaceHolder::Ref(Name::Entity(id)) => Some(*id),
         _ => None,
@@ -335,10 +335,10 @@ fn census_faces(table: &Table) -> FileCensus {
         match fate {
             Fate::Converted => tally.converted += 1,
             Fate::RefusedConversion(e) => {
-                *tally.refused_conversion.entry(without_ids(&e)).or_default() += 1
+                *tally.refused_conversion.entry(without_ids(&e)).or_default() += 1;
             }
             Fate::RefusedResolution(e) => {
-                *tally.refused_resolution.entry(without_ids(&e)).or_default() += 1
+                *tally.refused_resolution.entry(without_ids(&e)).or_default() += 1;
             }
             Fate::Panicked(e) => *tally.panicked.entry(without_ids(&e)).or_default() += 1,
         }
@@ -385,7 +385,7 @@ fn entity_name(instance: &EntityInstance) -> String {
     }
 }
 
-fn entity_id(instance: &EntityInstance) -> u64 {
+const fn entity_id(instance: &EntityInstance) -> u64 {
     match instance {
         EntityInstance::Simple { id, .. } | EntityInstance::Complex { id, .. } => *id,
     }
@@ -939,8 +939,8 @@ fn degenerate_toroidal_surface_is_refused_typed_not_mistaken_for_a_torus() {
     assert!(
         message.contains("major_radius 0.633974596215563")
             && message.contains("minor_radius 1")
-            && message.contains("self-intersecting"),
-        "the refusal must name the radii and the regime: {message}",
+            && message.contains("sheet selection"),
+        "the refusal must name the radii and the missing sheet-domain semantics: {message}",
     );
     assert_eq!(
         fate_of(&table, plain),
@@ -1177,19 +1177,10 @@ fn negative_major_radius_torus_refuses_typed_and_does_not_panic() {
     );
 }
 
-/// A plain `TOROIDAL_SURFACE` with a POSITIVE major radius that is nonetheless
-/// SMALLER than the minor radius -- `#217930` of `NissanGT-R.STEP`
-/// (`37.525205668822764, 94.`). This is the THIRD spelling of the degenerate
-/// regime, and the Phase 0 census could not see it: such a record passes
-/// `Torus::new` (which only rejects radii `<= 0`), so it counted as `converted`.
-/// Measured 2026-07-30: 136 corpus records (NissanGT-R 126, UMC-500 10) are in
-/// this state.
-///
-/// It was never representable -- the rational-NURBS builder returns `None` for it
-/// and `Torus::search_nearest_parameter` answers 25-29% of its domain with
-/// parameters that evaluate to a different point -- so it now refuses typed at the
-/// same place as the other two spellings, with the same message modulo the entity
-/// name.
+/// A plain `TOROIDAL_SURFACE` with a POSITIVE major radius smaller than
+/// the minor radius is an immersed spindle torus. The geometry type now has a
+/// branch-complete inverse parameterisation, so the plain surface converts
+/// instead of losing every face that references it.
 const POSITIVE_MAJOR_SPINDLE_TORUS: &str = "DATA;
 #1=CARTESIAN_POINT('',(0.,0.,0.));
 #2=DIRECTION('',(0.,0.,1.));
@@ -1208,22 +1199,15 @@ ENDSEC;
 ";
 
 #[test]
-fn positive_major_spindle_torus_refuses_typed_naming_the_regime() {
+fn positive_major_spindle_torus_converts_as_a_plain_torus() {
     let section =
         DataSection::from_str(POSITIVE_MAJOR_SPINDLE_TORUS).expect("the DATA section must parse");
     let table = Table::from_data_section(&section);
     let face = table.face_surface.get(&13).expect("#13 must be a face");
-    let fate = fate_of(&table, face);
-    let Fate::RefusedConversion(message) = &fate else {
-        panic!("a positive-major spindle torus must refuse at conversion, got {fate:?}");
-    };
-    assert!(
-        message.starts_with("TOROIDAL_SURFACE refused: degenerate self-intersecting torus"),
-        "the refusal must name the regime: {message}",
-    );
-    assert!(
-        message.contains("major_radius 37.525205668822764") && message.contains("minor_radius 94"),
-        "the refusal must quote both radii: {message}",
+    assert_eq!(
+        fate_of(&table, face),
+        Fate::Converted,
+        "a positive-major spindle TOROIDAL_SURFACE is representable and must not lose its face",
     );
 }
 

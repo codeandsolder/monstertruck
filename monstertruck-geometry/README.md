@@ -16,7 +16,7 @@ let ctrl_pts = vec![
     Point3::new(1.0, 1.0, 0.0),
     Point3::new(2.0, 0.0, 0.0),
 ];
-let curve = BsplineCurve::new(knot_vec, ctrl_pts);
+let curve = BsplineCurve::new_unchecked(knot_vec, ctrl_pts);
 
 let mid = curve.evaluate(0.5);    // Point3 at parameter t=0.5
 let tan = curve.derivative(0.5);  // tangent vector

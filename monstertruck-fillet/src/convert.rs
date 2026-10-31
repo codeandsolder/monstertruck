@@ -75,10 +75,13 @@ fn sample_surface_to_nurbs<S: ParametricSurface<Point = Point3>>(
     let ((u0, u1), (v0, v1)) = u_range.zip(v_range)?;
     let control_points: Vec<Vec<Point3>> = (0..=sample_count)
         .map(|iu| {
-            let u = u0 + (u1 - u0) * (iu as f64) / (sample_count as f64);
+            let u =
+                u0 + (u1 - u0) * (crate::count_as_f64(iu)) / (crate::count_as_f64(sample_count));
             (0..=sample_count)
                 .map(|iv| {
-                    let v = v0 + (v1 - v0) * (iv as f64) / (sample_count as f64);
+                    let v = v0
+                        + (v1 - v0) * (crate::count_as_f64(iv))
+                            / (crate::count_as_f64(sample_count));
                     surface.evaluate(u, v)
                 })
                 .collect()
@@ -86,7 +89,7 @@ fn sample_surface_to_nurbs<S: ParametricSurface<Point = Point3>>(
         .collect();
     let u_knot = KnotVector::uniform_knot(1, sample_count);
     let v_knot = KnotVector::uniform_knot(1, sample_count);
-    Some(NurbsSurface::from(BsplineSurface::new(
+    Some(NurbsSurface::from(BsplineSurface::new_unchecked(
         (u_knot, v_knot),
         control_points,
     )))
@@ -107,7 +110,7 @@ impl TryFrom<Curve> for NurbsCurve<Vector4> {
 ///
 /// Returns the internal shell and the internal `EdgeId`s corresponding to
 /// the selected external edges (matched by endpoint positions).
-pub(super) fn convert_shell_in<C: FilletableCurve, S: FilletableSurface>(
+pub fn convert_shell_in<C: FilletableCurve, S: FilletableSurface>(
     shell: &monstertruck_topology::Shell<Point3, C, S>,
     edges: &[monstertruck_topology::Edge<Point3, C>],
 ) -> std::result::Result<(InternalShell, Vec<types::EdgeId>), FilletError> {
@@ -121,7 +124,7 @@ pub(super) fn convert_shell_in<C: FilletableCurve, S: FilletableSurface>(
         .try_mapped(
             |p| Some(*p),
             |c| c.to_nurbs_curve().map(Curve::NurbsCurve),
-            |s| s.to_nurbs_surface(),
+            FilletableSurface::to_nurbs_surface,
         )
         .ok_or(FilletError::UnsupportedGeometry {
             context: "failed to convert shell curves or surfaces to NURBS",
@@ -148,7 +151,7 @@ pub(super) fn convert_shell_in<C: FilletableCurve, S: FilletableSurface>(
 }
 
 /// Convert an internal fillet shell back to external types.
-pub(super) fn convert_shell_out<C: FilletableCurve, S: FilletableSurface>(
+pub fn convert_shell_out<C: FilletableCurve, S: FilletableSurface>(
     shell: &InternalShell,
 ) -> std::result::Result<monstertruck_topology::Shell<Point3, C, S>, FilletError> {
     shell

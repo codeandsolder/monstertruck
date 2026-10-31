@@ -1,5 +1,11 @@
-use super::*;
+use super::{
+    Adjacency, FaceNormal, Faces, InnerSpace, MetricSpace, Point3, PolygonMesh, StandardAttributes,
+    Vector3, Vertex, nonpositive_tolerance,
+};
 use std::f64::consts::PI;
+
+#[cfg(test)]
+use crate::EuclideanSpace;
 
 /// Splitting the faces into several clusters.
 pub trait Splitting {
@@ -28,7 +34,7 @@ pub trait Splitting {
     ///         &[3, 2, 1, 0], &[0, 1, 5, 4], &[1, 2, 6, 5],
     ///         &[2, 3, 7, 6], &[3, 0, 4, 7], &[4, 5, 6, 7],
     ///     ]),
-    /// );
+    /// ).expect("fixture mesh is valid");
     ///
     /// let submesh = mesh.create_mesh_by_face_indices(&[0, 3, 5]);
     ///
@@ -77,7 +83,7 @@ pub trait Splitting {
     ///         &[(0, None, Some(0)), (1, None, Some(0)), (2, None, Some(0)), (3, None, Some(0))],
     ///         &[(2, None, Some(0)), (1, None, Some(0)), (4, None, Some(1)), (5, None, Some(1))],
     ///     ]),
-    /// );
+    /// ).expect("fixture mesh is valid");
     /// let (plane, remained) = mesh.extract_planes(TOLERANCE); // TOLERANCE == 1.0e-7
     /// assert_eq!(plane.len(), 1); assert_eq!(plane[0], 0);
     /// assert_eq!(remained.len(), 1); assert_eq!(remained[0], 1);
@@ -112,7 +118,7 @@ pub trait Splitting {
     ///         &[1, 2, 5], &[6, 5, 2], &[2, 3, 6], &[7, 6, 3],
     ///         &[3, 0, 7], &[4, 7, 0], &[4, 5, 7], &[6, 7, 5],
     ///     ]),
-    /// );
+    /// ).expect("fixture mesh is valid");
     ///
     /// // sign up normals
     /// mesh.add_naive_normals(true).put_together_same_attrs(TOLERANCE);
@@ -136,7 +142,7 @@ impl Splitting for PolygonMesh {
         let uv_coords = self.uv_coords().to_vec();
         let normals = self.normals().to_vec();
         let faces: Faces = indices.iter().map(|i| &self.faces()[*i]).collect();
-        PolygonMesh::new(
+        Self::new_unchecked(
             StandardAttributes {
                 positions,
                 uv_coords,
@@ -185,9 +191,10 @@ impl ExperimentalSplitters for PolygonMesh {
         let mut true_faces = Vec::new();
         let mut false_faces = Vec::new();
         for (i, face) in self.face_iter().enumerate() {
-            match func(face) {
-                true => true_faces.push(i),
-                false => false_faces.push(i),
+            if func(face) {
+                true_faces.push(i);
+            } else {
+                false_faces.push(i);
             }
         }
         (true_faces, false_faces)
@@ -234,7 +241,7 @@ impl ExperimentalSplitters for PolygonMesh {
         angles
             .into_iter()
             .zip(weights)
-            .map(|(ang, weight)| (PI * 2.0 - ang) / weight)
+            .map(|(ang, weight)| PI.mul_add(2.0, -ang) / weight)
             .collect()
     }
 }
@@ -248,9 +255,8 @@ fn get_components(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let mut unchecked = vec![true; adjacency.len()];
     let mut components = Vec::new();
     loop {
-        let first = match unchecked.iter().position(|x| *x) {
-            Some(idx) => idx,
-            None => return components,
+        let Some(first) = unchecked.iter().position(|x| *x) else {
+            return components;
         };
         let mut stack = vec![first];
         let mut component = vec![first];
@@ -269,15 +275,15 @@ fn get_components(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
 }
 
 fn is_in_the_plane(positions: &[Point3], normals: &[Vector3], face: &[Vertex], tol2: f64) -> bool {
-    let n = FaceNormal::new(positions, face, 0).normal;
-    for v in face {
-        if let Some(nor) = v.nor
-            && n.distance2(normals[nor]) < tol2
-        {
-            return true;
-        }
-    }
-    false
+    let Some(normal) = FaceNormal::new(positions, face, 0).map(|face| face.normal) else {
+        return false;
+    };
+    face.iter().any(|vertex| {
+        vertex
+            .nor
+            .and_then(|idx| normals.get(idx))
+            .is_some_and(|candidate| normal.distance2(*candidate) < tol2)
+    })
 }
 
 fn is_signed_up_upper(
@@ -304,7 +310,7 @@ fn add_weights(weights: &mut [f64], positions: &[Point3], face: &[Vertex]) {
         let vec0 = positions[face[i - 1].pos] - positions[face[0].pos];
         let vec1 = positions[face[i].pos] - positions[face[0].pos];
         sum + (vec0.cross(vec1)).magnitude() / 2.0
-    }) / (face.len() as f64);
+    }) / (crate::count_as_f64(face.len()));
     for v in face {
         weights[v.pos] += area;
     }
@@ -335,7 +341,8 @@ fn into_components_test() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("fixture mesh is valid");
     let comp = mesh.components(true);
     assert_eq!(comp.len(), 2);
     assert_eq!(comp[0], vec![0, 1, 4]);

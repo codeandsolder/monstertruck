@@ -11,7 +11,7 @@ use monstertruck_topology::Shell;
 fn oriented_tetrahedron() -> Shell<(), (), ()> {
     use monstertruck_topology::{Edge, Face, Vertex, Wire};
     let v: Vec<Vertex<()>> = (0..4).map(|_| Vertex::new(())).collect();
-    let edge = |a: usize, b: usize| Edge::new(&v[a], &v[b], ());
+    let edge = |a: usize, b: usize| Edge::new_unchecked(&v[a], &v[b], ());
     let e01 = edge(0, 1);
     let e02 = edge(0, 2);
     let e03 = edge(0, 3);
@@ -20,10 +20,10 @@ fn oriented_tetrahedron() -> Shell<(), (), ()> {
     let e23 = edge(2, 3);
     let wire = |edges: [Edge<(), ()>; 3]| -> Wire<(), ()> { edges.to_vec().into() };
     [
-        Face::new(vec![wire([e01.clone(), e12.clone(), e02.inverse()])], ()),
-        Face::new(vec![wire([e02.clone(), e23.clone(), e03.inverse()])], ()),
-        Face::new(vec![wire([e03.clone(), e13.inverse(), e01.inverse()])], ()),
-        Face::new(vec![wire([e13.clone(), e23.inverse(), e12.inverse()])], ()),
+        Face::new_unchecked(vec![wire([e01.clone(), e12.clone(), e02.inverse()])], ()),
+        Face::new_unchecked(vec![wire([e02.clone(), e23.clone(), e03.inverse()])], ()),
+        Face::new_unchecked(vec![wire([e03.clone(), e13.inverse(), e01.inverse()])], ()),
+        Face::new_unchecked(vec![wire([e13.clone(), e23.inverse(), e12.inverse()])], ()),
     ]
     .into_iter()
     .collect()

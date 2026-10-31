@@ -2,16 +2,29 @@ use algo::curve::search_closest_parameter;
 use monstertruck_geometry::prelude::*;
 
 use super::error::FilletError;
-use super::geometry::*;
+use super::geometry::{
+    asymmetric_chamfer_contacts, chamfer_fillet_surface, custom_fillet_surface, expand_chamfer,
+    ridge_fillet_surface, rolling_ball_fillet_surface,
+};
 use super::params::{FilletOptions, FilletProfile, RadiusSpec};
-use super::topology::*;
-use super::types::*;
+use super::topology::{
+    FaceBoundaryEdgeIndex, concat_fillet_surface, create_free_edge, create_new_side,
+    create_pcurve_edge, cut_face_by_bezier, cut_face_by_last_bezier, enumerate_adjacent_faces,
+    fillet_surfaces_along_wire, find_adjacent_edge, find_shared_face_with_front_edge,
+    wire_edge_starts_and_spans,
+};
+use super::types::{Edge, EdgeId, Face, NotStrictlyCut, ParameterCurveLinear, Shell, Vertex, Wire};
 
 type Result<T> = std::result::Result<T, FilletError>;
 
 /// Fillets a single shared edge between two faces.
 ///
 /// Returns `(new_face0, new_face1, fillet_face)`.
+///
+/// # Errors
+///
+/// Returns [`FilletError`] when the selected edge/profile is invalid or the required fillet
+/// surface and trimmed carrier faces cannot be constructed.
 pub fn fillet(
     face0: &Face,
     face1: &Face,
@@ -26,6 +39,10 @@ pub fn fillet(
         .or_else(|_| fillet_on_side(face0, face1, filleted_edge_id, options, true))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "single-side fillet construction keeps the correlated surface, carrier cuts, and four-edge fillet boundary in one scope"
+)]
 fn fillet_on_side(
     face0: &Face,
     face1: &Face,
@@ -79,7 +96,7 @@ fn fillet_on_side(
                     extend,
                     flip_side,
                 )
-                .map(|contacts| expand_chamfer(&contacts, &surface0, &surface1)),
+                .and_then(|contacts| expand_chamfer(&contacts, &surface0, &surface1)),
                 FilletProfile::Ridge => ridge_fillet_surface(
                     &surface0, &surface1, &curve, division, radius?, extend, flip_side,
                 ),
@@ -144,7 +161,15 @@ fn fillet_on_side(
 /// Fillets a shared edge between two faces, optionally updating adjacent side faces.
 ///
 /// Returns `(new_face0, new_face1, fillet_face, new_side0, new_side1)`.
-#[allow(clippy::type_complexity)]
+///
+/// # Errors
+///
+/// Returns [`FilletError`] when the core fillet geometry cannot be built or its adjacent
+/// carrier-edge reconstruction fails.
+#[expect(
+    clippy::type_complexity,
+    reason = "the five-element tuple is the direct correlated topology result of a fillet operation"
+)]
 pub fn fillet_with_side(
     face0: &Face,
     face1: &Face,
@@ -193,6 +218,15 @@ pub fn fillet_with_side(
 ///
 /// Supports both open and closed wires. Modifies `shell` in place by replacing
 /// filleted faces and adding new fillet faces.
+///
+/// # Errors
+///
+/// Returns [`FilletError`] for discontinuous/unsupported wires, missing shared or adjacent
+/// faces, invalid per-edge radii, or failed surface/topology construction.
+#[expect(
+    clippy::too_many_lines,
+    reason = "wire validation, radius parameterization, seam reconciliation, and open/closed dispatch form one setup transaction"
+)]
 pub fn fillet_along_wire(shell: &mut Shell, wire: &Wire, options: &FilletOptions) -> Result<()> {
     if matches!(&options.profile, FilletProfile::AsymmetricChamfer { .. }) {
         return Err(FilletError::AsymmetricChamferWireUnsupported);
@@ -319,6 +353,10 @@ pub fn fillet_along_wire(shell: &mut Shell, wire: &Wire, options: &FilletOptions
 }
 
 /// Open-wire fillet face construction (original logic).
+#[expect(
+    clippy::too_many_lines,
+    reason = "open-wire reconstruction must keep first/interior/last fillet faces and the shared-face boundary rewrite synchronized"
+)]
 fn fillet_along_wire_open(
     shell: &mut Shell,
     wire: &Wire,
@@ -338,7 +376,7 @@ fn fillet_along_wire_open(
             let (u, v) = fillet_surface.search_parameter(v1.point(), (1.0, 1.0), 100)?;
             let param_line = Line((0.0, 1.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let edge3 = {
@@ -346,7 +384,7 @@ fn fillet_along_wire_open(
             let (u, v) = fillet_surface.search_parameter(v1.point(), (1.0, 2.0), 100)?;
             let param_line = Line((0.0, 2.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let boundary = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
@@ -386,7 +424,7 @@ fn fillet_along_wire_open(
             bezier = bezier.cut(t0);
             let v0 = Vertex::new(bezier.front());
             let v1 = Vertex::new(bezier.back());
-            Edge::new(&v0, &v1, bezier.into())
+            Edge::new_unchecked(&v0, &v1, bezier.into())
         };
 
         let edge1 = cut_face_by_last_bezier(shell, adjacent_faces[0], &fillet_surface).ok_or(
@@ -405,7 +443,7 @@ fn fillet_along_wire_open(
                 })?;
             let param_line = Line((0.0, t0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let edge3 = {
@@ -417,7 +455,7 @@ fn fillet_along_wire_open(
                 })?;
             let param_line = Line((0.0, 1.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let wire = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
@@ -443,10 +481,10 @@ fn fillet_along_wire_open(
                     context: "search closest parameter for last fillet edge0",
                 },
             )?;
-            bezier.cut(t0);
+            let _ = bezier.cut(t0);
             let v0 = Vertex::new(bezier.front());
             let v1 = Vertex::new(bezier.back());
-            Edge::new(&v0, &v1, bezier.into())
+            Edge::new_unchecked(&v0, &v1, bezier.into())
         };
 
         let fillet_surface = concat_fillet_surface(&fillet_surfaces[len - 2..len]).ok_or(
@@ -469,7 +507,7 @@ fn fillet_along_wire_open(
                 })?;
             let param_line = Line((0.0, 1.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let edge3 = {
@@ -482,7 +520,7 @@ fn fillet_along_wire_open(
                 })?;
             let param_line = Line((0.0, t0 + 1.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let wire = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
@@ -497,11 +535,10 @@ fn fillet_along_wire_open(
             .map(|face| {
                 let edge = &face.boundaries()[0][0];
                 let v0 = Vertex::new(edge.front().point());
-                let v1 = match &previous_vertex {
-                    Some(v) => Vertex::clone(v),
-                    None => Vertex::new(edge.back().point()),
-                };
-                let new_edge = Edge::new(&v0, &v1, edge.oriented_curve());
+                let v1 = previous_vertex
+                    .as_ref()
+                    .map_or_else(|| Vertex::new(edge.back().point()), Vertex::clone);
+                let new_edge = Edge::new_unchecked(&v0, &v1, edge.oriented_curve());
                 previous_vertex = Some(v0);
                 new_edge.inverse()
             })
@@ -564,7 +601,7 @@ fn fillet_along_wire_open(
             });
         }
         boundaries[shared_face_index.boundary_index] = new_wire;
-        *shared_face = Face::new_unchecked(boundaries, shared_face.oriented_surface())
+        *shared_face = Face::new_unchecked(boundaries, shared_face.oriented_surface());
     }
 
     shell.extend(fillet_faces);
@@ -616,7 +653,7 @@ fn fillet_along_wire_closed(
                 })?;
             let param_line = Line((0.0, 1.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let edge3 = {
@@ -628,7 +665,7 @@ fn fillet_along_wire_closed(
                 })?;
             let param_line = Line((0.0, 2.0).into(), (u, v).into());
             let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new(v0, v1, pcurve.into())
+            Edge::new_unchecked(v0, v1, pcurve.into())
         };
 
         let boundary = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
@@ -653,7 +690,7 @@ fn fillet_along_wire_closed(
             } else {
                 Vertex::new(edge.front().point())
             };
-            let new_edge = Edge::new(&v0, &v1, edge.oriented_curve());
+            let new_edge = Edge::new_unchecked(&v0, &v1, edge.oriented_curve());
             wire_edges.push(new_edge.inverse());
             previous_vertex = v0;
         }

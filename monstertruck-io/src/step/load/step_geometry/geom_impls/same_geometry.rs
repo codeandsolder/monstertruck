@@ -1,7 +1,19 @@
 //! Lifting a concrete `monstertruck-geometry` carrier back INTO the STEP
 //! enums, and the enum-level predicates that ride along with it.
 
-use super::*;
+use super::{
+    BsplineCurve, Conic2D, Conic3D, Curve2D, Curve3D, ElementarySurface, ExtrusionSurface,
+    IncludeCurve, InnerSpace, Invertible, Line, Matrix3, Matrix4, Origin, Plane, Point2, Point3,
+    Processor, RevolutionSurface, SearchParameter, Surface, SweepSurface, ToSameGeometry,
+    TrimmedCurve, UnitCircle, Vector3,
+};
+
+#[cfg(test)]
+use monstertruck_core::assert_near;
+#[cfg(test)]
+use monstertruck_geometry::prelude::KnotVector;
+#[cfg(test)]
+use std::f64::consts::TAU;
 
 impl ToSameGeometry<Curve2D> for Line<Point2> {
     #[inline]
@@ -34,11 +46,12 @@ impl ToSameGeometry<Curve3D> for BsplineCurve<Point3> {
 }
 
 impl Conic3D {
-    pub fn posture(&self) -> Matrix4 {
+    #[must_use]
+    pub const fn posture(&self) -> Matrix4 {
         match self {
-            Conic3D::Ellipse(processor) => *processor.transform(),
-            Conic3D::Hyperbola(processor) => *processor.transform(),
-            Conic3D::Parabola(processor) => *processor.transform(),
+            Self::Ellipse(processor) => *processor.transform(),
+            Self::Hyperbola(processor) => *processor.transform(),
+            Self::Parabola(processor) => *processor.transform(),
         }
     }
 }
@@ -59,7 +72,7 @@ impl IncludeCurve<Curve3D> for Plane {
                 .all(|p| self.search_parameter(*p, None, 1).is_some()),
             Curve3D::ParameterCurve(curve) => matches!(
                 curve.surface().as_ref(),
-                Surface::ElementarySurface(ElementarySurface::Plane(surface)) if self == surface
+                Surface::Elementary(ElementarySurface::Plane(surface)) if self == surface
             ),
             Curve3D::SurfaceCurve(curve) => self.include(curve.leader()),
             Curve3D::IntersectionCurve(curve) => self.include(curve.leader().as_ref()),
@@ -69,15 +82,13 @@ impl IncludeCurve<Curve3D> for Plane {
 
 impl ToSameGeometry<Surface> for Plane {
     #[inline]
-    fn to_same_geometry(&self) -> Surface {
-        Surface::ElementarySurface(ElementarySurface::Plane(*self))
-    }
+    fn to_same_geometry(&self) -> Surface { Surface::Elementary(ElementarySurface::Plane(*self)) }
 }
 
 impl ToSameGeometry<Surface> for ExtrusionSurface<Curve3D, Vector3> {
     #[inline]
     fn to_same_geometry(&self) -> Surface {
-        Surface::SweepSurface(SweepSurface::ExtrusionSurface(self.clone()))
+        Surface::Sweep(SweepSurface::ExtrusionSurface(self.clone()))
     }
 }
 
@@ -86,8 +97,8 @@ impl ToSameGeometry<Surface> for RevolutionSurface<Curve3D> {
     fn to_same_geometry(&self) -> Surface {
         let default = || {
             let (curve, origin, axis) = (self.entity_curve().inverse(), self.origin(), self.axis());
-            let processor = Processor::new(RevolutionSurface::by_revolution(curve, origin, axis));
-            Surface::SweepSurface(SweepSurface::RevolutionSurface(processor))
+            let processor = Processor::new(Self::by_revolution(curve, origin, axis));
+            Surface::Sweep(SweepSurface::RevolutionSurface(processor))
         };
         match self.entity_curve() {
             Curve3D::Line(line) => {
@@ -99,13 +110,11 @@ impl ToSameGeometry<Surface> for RevolutionSurface<Curve3D> {
                     let origin = o + (p - o).dot(axis) * axis;
                     let revo = RevolutionSurface::by_revolution(*line, origin, axis);
                     let processor = Processor::new(revo);
-                    Surface::ElementarySurface(ElementarySurface::CylindricalSurface(processor))
+                    Surface::Elementary(ElementarySurface::CylindricalSurface(processor))
                 } else {
                     default()
                 }
             }
-            Curve3D::SurfaceCurve(_) => default(),
-            Curve3D::IntersectionCurve(_) => default(),
             _ => default(),
         }
     }
@@ -123,7 +132,7 @@ fn to_same_geometry_revolution_of_axis_parallel_line_is_uninverted_cylinder() {
     let surface = revolution.to_same_geometry();
 
     match surface {
-        Surface::ElementarySurface(ElementarySurface::CylindricalSurface(processor)) => {
+        Surface::Elementary(ElementarySurface::CylindricalSurface(processor)) => {
             assert!(
                 processor.orientation(),
                 "cylinder from axis-parallel line must not be inverted.",
@@ -177,7 +186,7 @@ fn to_same_geometry_2d_bspline_curve_round_trip() {
         Point2::new(2.0, 0.0),
         Point2::new(3.0, 1.0),
     ];
-    let spline = BsplineCurve::new(knots, control);
+    let spline = BsplineCurve::new_unchecked(knots, control);
     let curve: Curve2D = spline.to_same_geometry();
     match curve {
         Curve2D::BsplineCurve(rebuilt) => assert_eq!(rebuilt, spline),
@@ -186,7 +195,7 @@ fn to_same_geometry_2d_bspline_curve_round_trip() {
 }
 
 #[test]
-fn builder() {
+fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     use monstertruck_meshing::prelude::*;
     use monstertruck_modeling::builder;
     monstertruck_topology::prelude!(Point3, Curve3D, Surface);
@@ -209,12 +218,12 @@ fn builder() {
         Vector3::unit_z(),
         builder::SweepAngle::Closed,
         2,
-    );
+    )?;
     let boundaries = shell.extract_boundaries();
     assert_eq!(boundaries.len(), 2);
-    shell.push(builder::try_attach_plane([boundaries[0].inverse()]).unwrap());
-    shell.push(builder::try_attach_plane([boundaries[1].inverse()]).unwrap());
-    let cylinder = Solid::new(vec![shell]);
+    shell.push(builder::try_attach_plane([boundaries[0].inverse()])?);
+    shell.push(builder::try_attach_plane([boundaries[1].inverse()])?);
+    let cylinder = Solid::new_unchecked(vec![shell]);
     let mut poly = cylinder.triangulation(0.1).to_polygon();
     poly.put_together_same_attrs(1.0e-3).remove_unused_attrs();
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
@@ -227,15 +236,15 @@ fn builder() {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         2,
-    );
-    let f = builder::try_attach_plane([w]).unwrap();
+    )?;
+    let f = builder::try_attach_plane([w])?;
     let torus: Solid = builder::revolve(
         &f,
         Point3::origin(),
         Vector3::unit_z(),
         builder::SweepAngle::Closed,
         2,
-    );
+    )?;
     let mut poly = torus.triangulation(0.1).to_polygon();
     poly.put_together_same_attrs(1.0e-3).remove_unused_attrs();
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
@@ -256,7 +265,7 @@ fn builder() {
         -Vector3::unit_z(),
         builder::SweepAngle::Closed,
         2,
-    );
+    )?;
     let boundary = hole.extract_boundaries();
     assert_eq!(boundary.len(), 2);
     if boundary[0][0].front().point().z < 0.0 {
@@ -267,8 +276,9 @@ fn builder() {
         let _ = shell[5].add_boundary(boundary[0].inverse());
     }
     shell.extend(hole);
-    let solid = Solid::new(vec![shell]);
+    let solid = Solid::new_unchecked(vec![shell]);
     let mut poly = solid.triangulation(0.1).to_polygon();
     poly.put_together_same_attrs(1.0e-3).remove_unused_attrs();
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
+    Ok(())
 }

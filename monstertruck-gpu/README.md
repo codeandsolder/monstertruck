@@ -11,7 +11,7 @@ use std::f64::consts::TAU;
 use monstertruck_core::cgmath64::*;
 use monstertruck_gpu::*;
 
-let handler = pollster::block_on(DeviceHandler::default_device());
+let handler = pollster::block_on(DeviceHandler::default_device()).expect("GPU device is available");
 let scene = Scene::new(handler, &SceneDescriptor {
     studio: StudioConfig {
         camera: Camera {

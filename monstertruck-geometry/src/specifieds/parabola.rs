@@ -1,8 +1,15 @@
-use super::*;
+use super::{
+    CurveParameter, EuclideanSpace, HashGen, MetricSpace, Origin, ParameterDivision1D,
+    ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
+    SearchParameterHint1D, Tolerance, UnitParabola, Vector2, Vector3, Zero, algo, solver,
+};
+#[cfg(test)]
+use crate::prelude::assert_near;
 
 impl<P> UnitParabola<P> {
     /// constructor
     #[inline]
+    #[must_use]
     pub const fn new() -> Self { Self(std::marker::PhantomData) }
 }
 
@@ -47,7 +54,7 @@ impl ParametricCurve for UnitParabola<Point3> {
 
 impl<P> ParameterDivision1D for UnitParabola<P>
 where
-    UnitParabola<P>: ParametricCurve<Point = P>,
+    Self: ParametricCurve<Point = P>,
     P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     type Point = P;
@@ -69,15 +76,10 @@ impl SearchNearestParameter<CurveParameter> for UnitParabola<Point2> {
         let q = -pt.y;
         solver::pre_solve_cubic(p, q)
             .into_iter()
-            .filter_map(|x| match x.im.so_small() {
-                true => Some(x.re),
-                false => None,
-            })
-            // SAFETY: distances are non-negative finite `f64`, so `partial_cmp` always returns `Some`.
+            .filter_map(|x| if x.im.so_small() { Some(x.re) } else { None })
             .min_by(|s, t| {
-                pt.distance2(self.subs(*s))
-                    .partial_cmp(&pt.distance2(self.subs(*t)))
-                    .unwrap()
+                pt.distance2(self.evaluate(*s))
+                    .total_cmp(&pt.distance2(self.evaluate(*t)))
             })
     }
 }
@@ -88,13 +90,13 @@ impl SearchNearestParameter<CurveParameter> for UnitParabola<Point3> {
     fn search_nearest_parameter<H: Into<SearchParameterHint1D>>(
         &self,
         pt: Point3,
-        _hint: H,
-        _trials: usize,
+        hint: H,
+        trials: usize,
     ) -> Option<f64> {
         UnitParabola::<Point2>::new().search_nearest_parameter(
             Point2::new(pt.x, pt.y),
-            _hint,
-            _trials,
+            hint,
+            trials,
         )
     }
 }
@@ -109,11 +111,8 @@ impl SearchParameter<CurveParameter> for UnitParabola<Point2> {
         _: usize,
     ) -> Option<f64> {
         let t = pt.y / 2.0;
-        let pt0 = self.subs(t);
-        match pt.near(&pt0) {
-            true => Some(t),
-            false => None,
-        }
+        let pt0 = self.evaluate(t);
+        if pt.near(&pt0) { Some(t) } else { None }
     }
 }
 
@@ -123,16 +122,13 @@ impl SearchParameter<CurveParameter> for UnitParabola<Point3> {
     fn search_parameter<H: Into<SearchParameterHint1D>>(
         &self,
         pt: Point3,
-        _hint: H,
-        _trials: usize,
+        hint: H,
+        trials: usize,
     ) -> Option<f64> {
-        match pt.z.so_small() {
-            true => UnitParabola::<Point2>::new().search_parameter(
-                Point2::new(pt.x, pt.y),
-                _hint,
-                _trials,
-            ),
-            false => None,
+        if pt.z.so_small() {
+            UnitParabola::<Point2>::new().search_parameter(Point2::new(pt.x, pt.y), hint, trials)
+        } else {
+            None
         }
     }
 }
@@ -195,7 +191,7 @@ impl v2::ParametricCurve for UnitParabola<Point3> {
 
 macro_rules! impl_v2_parabola_search {
     ($point:ty) => {
-        impl v2::SearchNearestParameter<v2::D1<f64>> for UnitParabola<$point> {
+        impl v2::SearchNearestParameter<v2::CurveParameter<f64>> for UnitParabola<$point> {
             type Point = $point;
             #[inline]
             fn search_nearest_parameter<H: Into<v2::SearchParameterHint1D<f64>>>(
@@ -204,11 +200,13 @@ macro_rules! impl_v2_parabola_search {
                 _: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchNearestParameter::<D1>::search_nearest_parameter(self, pt, None, 0)
+                SearchNearestParameter::<CurveParameter>::search_nearest_parameter(
+                    self, pt, None, 0,
+                )
             }
         }
 
-        impl v2::SearchParameter<v2::D1<f64>> for UnitParabola<$point> {
+        impl v2::SearchParameter<v2::CurveParameter<f64>> for UnitParabola<$point> {
             type Point = $point;
             #[inline]
             fn search_parameter<H: Into<v2::SearchParameterHint1D<f64>>>(
@@ -217,7 +215,7 @@ macro_rules! impl_v2_parabola_search {
                 _: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchParameter::<D1>::search_parameter(self, pt, None, 0)
+                SearchParameter::<CurveParameter>::search_parameter(self, pt, None, 0)
             }
         }
     };
@@ -231,11 +229,11 @@ fn snp_test() {
     let curve = UnitParabola::<Point2>::new();
 
     let p = Point2::new(-3.0, 0.0);
-    assert_near!(curve.search_nearest_parameter(p, None, 0).unwrap(), 0.0);
+    assert_near!((curve.search_nearest_parameter(p, None, 0)).unwrap(), 0.0);
     let p = Point2::new(-3.0, 6.0);
-    assert_near!(curve.search_nearest_parameter(p, None, 0).unwrap(), 1.0);
+    assert_near!((curve.search_nearest_parameter(p, None, 0)).unwrap(), 1.0);
     let p = Point2::new(1.5, 1.5);
-    assert_near!(curve.search_nearest_parameter(p, None, 0).unwrap(), 1.0);
+    assert_near!((curve.search_nearest_parameter(p, None, 0)).unwrap(), 1.0);
 }
 
 #[test]
@@ -243,7 +241,7 @@ fn sp_test() {
     let curve = UnitParabola::<Point2>::new();
 
     let p = Point2::new(4.0, -4.0);
-    assert_near!(curve.search_parameter(p, None, 0).unwrap(), -2.0);
+    assert_near!((curve.search_parameter(p, None, 0)).unwrap(), -2.0);
     let p = Point2::new(-3.0, 6.0);
     assert!(curve.search_parameter(p, None, 0).is_none());
 }

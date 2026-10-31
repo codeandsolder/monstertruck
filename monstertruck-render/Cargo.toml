@@ -4,7 +4,6 @@ version = "0.4.1"
 authors = ["Yoshinori Tanimura <tanimura@ricos.co.jp>", "Moritz Moeller <virtualritz@protonmail.com>"]
 edition = "2024"
 description = "Shape and polygon mesh visualization"
-homepage = "https://github.com/virtualritz/monstertruck"
 repository = "https://github.com/virtualritz/monstertruck"
 license = "Apache-2.0"
 
@@ -22,6 +21,7 @@ image = { workspace = true }
 itertools = { workspace = true }
 monstertruck-gpu = { workspace = true }
 monstertruck-mesh = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

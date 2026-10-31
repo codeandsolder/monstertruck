@@ -4,10 +4,6 @@ use monstertruck_meshing::prelude::*;
 use monstertruck_modeling::*;
 
 #[test]
-#[allow(
-    clippy::excessive_precision,
-    reason = "regression fixture preserves recovered STEP coordinates verbatim"
-)]
 fn step_redox_122_two_core_union_regression() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
         Matrix4::from_cols(
@@ -83,7 +79,7 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
                 1.5707963267948999,
                 0.8040534579990185,
             ),
-        ),
+        )?,
         builder::line(&main_vertices[2], &main_vertices[3]),
         builder::circle_arc::<Curve>(
             &main_vertices[3],
@@ -94,7 +90,7 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
                 -2.3375391955907756,
                 -1.570796326794893,
             ),
-        ),
+        )?,
         builder::line(&main_vertices[4], &main_vertices[5]),
         builder::line(&main_vertices[5], &main_vertices[6]),
         builder::line(&main_vertices[6], &main_vertices[7]),
@@ -107,7 +103,7 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
                 -1.5707963267948937,
                 -2.337539195590775,
             ),
-        ),
+        )?,
         builder::line(&main_vertices[8], &main_vertices[9]),
         builder::circle_arc::<Curve>(
             &main_vertices[9],
@@ -118,7 +114,7 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
                 0.8040534579990186,
                 1.5707963267948999,
             ),
-        ),
+        )?,
         builder::line(&main_vertices[10], &main_vertices[11]),
         builder::line(&main_vertices[11], &main_vertices[0]),
     ]
@@ -153,11 +149,6 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
 }
 
 #[test]
-#[allow(
-    clippy::approx_constant,
-    clippy::excessive_precision,
-    reason = "regression fixture preserves recovered STEP coordinates verbatim"
-)]
 fn step_redox_38_three_core_union_regression() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
         Matrix4::from_cols(
@@ -183,7 +174,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         point_on_arc(
             [0.5, -0.19999999999999996],
             0.2000000000000001,
-            1.5707963267948966,
+            std::f64::consts::FRAC_PI_2,
         ),
         Point3::new(0.7, -0.19999999999999996, 0.0),
         Point3::new(0.7, -1.7, 0.0),
@@ -191,7 +182,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         point_on_arc(
             [2.9, -0.19999999999999996],
             0.2000000000000001,
-            3.141592653589793,
+            std::f64::consts::PI,
         ),
         Point3::new(2.8999999999999995, 0.0, 0.0),
         Point3::new(3.4, 0.0, 0.0),
@@ -207,10 +198,10 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
             arc_mid(
                 [0.5, -0.19999999999999996],
                 0.2000000000000001,
-                1.5707963267948966,
+                std::f64::consts::FRAC_PI_2,
                 0.0,
             ),
-        ),
+        )?,
         builder::line(&plate_vertices[2], &plate_vertices[3]),
         builder::line(&plate_vertices[3], &plate_vertices[4]),
         builder::line(&plate_vertices[4], &plate_vertices[5]),
@@ -220,10 +211,10 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
             arc_mid(
                 [2.9, -0.19999999999999996],
                 0.2000000000000001,
-                3.141592653589793,
-                1.5707963267948988,
+                std::f64::consts::PI,
+                f64::from_bits(0x3ff9_21fb_5444_2d22),
             ),
-        ),
+        )?,
         builder::line(&plate_vertices[6], &plate_vertices[7]),
         builder::line(&plate_vertices[7], &plate_vertices[8]),
         builder::line(&plate_vertices[8], &plate_vertices[9]),
@@ -248,7 +239,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         point_on_arc(
             [0.30000000000000004, 0.0],
             0.3000000000000329,
-            -3.141592653589793,
+            -std::f64::consts::PI,
         ),
         Point3::new(0.30000000000000004, -0.30000000000000027, 0.0),
         Point3::new(1.8, -0.30000000000000027, 0.0),
@@ -270,10 +261,10 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
             arc_mid(
                 [0.30000000000000004, 0.0],
                 0.3000000000000329,
-                -3.141592653589793,
-                -1.5707963267948966,
+                -std::f64::consts::PI,
+                -std::f64::consts::FRAC_PI_2,
             ),
-        ),
+        )?,
         builder::line(&hook_vertices[1], &hook_vertices[2]),
         builder::line(&hook_vertices[2], &hook_vertices[3]),
         builder::line(&hook_vertices[3], &hook_vertices[4]),
@@ -284,9 +275,9 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
                 [0.30000000000000004, 0.0],
                 0.10000000000003278,
                 4.712388980384706,
-                3.141592653589793,
+                std::f64::consts::PI,
             ),
-        ),
+        )?,
         builder::line(&hook_vertices[5], &hook_vertices[6]),
         builder::line(&hook_vertices[6], &hook_vertices[7]),
         builder::line(&hook_vertices[7], &hook_vertices[0]),
@@ -344,10 +335,10 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
             arc_mid(
                 [0.39999999999999813, 0.2],
                 0.2000000000000001,
-                -1.5707963267948988,
+                f64::from_bits(0xbff9_21fb_5444_2d22),
                 0.0,
             ),
-        ),
+        )?,
         builder::line(&rounded_vertices[2], &rounded_vertices[3]),
         builder::circle_arc::<Curve>(
             &rounded_vertices[3],
@@ -356,9 +347,9 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
                 [0.39999999999999813, 1.7999999999999998],
                 0.2000000000000001,
                 0.0,
-                1.5707963267948988,
+                f64::from_bits(0x3ff9_21fb_5444_2d22),
             ),
-        ),
+        )?,
         builder::line(&rounded_vertices[4], &rounded_vertices[5]),
         builder::line(&rounded_vertices[5], &rounded_vertices[0]),
     ]
@@ -412,11 +403,6 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
 }
 
 #[test]
-#[allow(
-    clippy::approx_constant,
-    clippy::excessive_precision,
-    reason = "regression fixture preserves recovered STEP coordinates verbatim"
-)]
 fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
         Matrix4::from_cols(
@@ -478,7 +464,7 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
                 -0.10000000000000026 / f64::sqrt(2.0),
                 0.0,
             ),
-        ),
+        )?,
         builder::line(&rounded_vertices[1], &rounded_vertices[2]),
         builder::circle_arc::<Curve>(
             &rounded_vertices[2],
@@ -488,7 +474,7 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
                 -0.10000000000000026 / f64::sqrt(2.0),
                 0.0,
             ),
-        ),
+        )?,
         builder::line(&rounded_vertices[3], &rounded_vertices[4]),
         builder::line(&rounded_vertices[4], &rounded_vertices[5]),
         builder::line(&rounded_vertices[5], &rounded_vertices[0]),
@@ -531,11 +517,6 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
 }
 
 #[test]
-#[allow(
-    clippy::approx_constant,
-    clippy::excessive_precision,
-    reason = "regression fixture preserves recovered STEP coordinates verbatim"
-)]
 fn step_redox_97_nine_core_union_regression() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
         Matrix4::from_cols(
@@ -586,13 +567,13 @@ fn step_redox_97_nine_core_union_regression() -> Result<()> {
             &c2_v[0],
             &c2_v[1],
             Point3::new(0.23422035012881803, -0.1291274621098183, 0.0),
-        ),
+        )?,
         builder::line(&c2_v[1], &c2_v[2]),
         builder::circle_arc::<Curve>(
             &c2_v[2],
             &c2_v[3],
             Point3::new(0.39902877740509246, 0.34292993090370183, 0.0),
-        ),
+        )?,
         builder::line(&c2_v[3], &c2_v[0]),
     ]
     .into();
@@ -650,13 +631,13 @@ fn step_redox_97_nine_core_union_regression() -> Result<()> {
             &c4_v[0],
             &c4_v[1],
             Point3::new(0.07946857562744503, -0.34761252349657545, 0.0),
-        ),
+        )?,
         builder::line(&c4_v[1], &c4_v[2]),
         builder::circle_arc::<Curve>(
             &c4_v[2],
             &c4_v[3],
             Point3::new(0.5298007158602916, -0.1303546963112155, 0.0),
-        ),
+        )?,
         builder::line(&c4_v[3], &c4_v[0]),
     ]
     .into();
@@ -711,13 +692,13 @@ fn step_redox_97_nine_core_union_regression() -> Result<()> {
             &c6_v[1],
             &c6_v[2],
             Point3::new(0.5878679656440357, 0.21213203435596423, 0.0),
-        ),
+        )?,
         builder::line(&c6_v[2], &c6_v[3]),
         builder::circle_arc::<Curve>(
             &c6_v[3],
             &c6_v[0],
             Point3::new(0.2343145750507616, 0.5656854249492383, 0.0),
-        ),
+        )?,
     ]
     .into();
     let c6 = profile::solid_from_planar_profile::<Curve, Surface>(

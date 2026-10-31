@@ -5,6 +5,13 @@
 
 use super::*;
 use crate::step::load::step_geometry::SurfaceCurveRepresentation as StepSurfaceCurveRepresentation;
+use crate::step::load::step_geometry::{
+    Curve2D, ElementarySurface, SurfaceCurve3D, SurfaceCurveAssociatedGeometry,
+};
+use monstertruck_geometry::prelude::{
+    BoundedCurve, Line, ParametricCurve, ParametricSurface, Processor, RevolutionSurface,
+    Tolerance, Vector3,
+};
 use std::f64::consts::TAU;
 
 /// Loads `occt-cylinder.step` and builds its trimmed shell. The
@@ -57,7 +64,7 @@ fn cylinder_surface() -> Surface {
     let center = Point3::origin();
     let point = Point3::new(1.0, 0.0, 0.0);
     let line = Line(point, point + axis);
-    Surface::ElementarySurface(ElementarySurface::CylindricalSurface(Processor::new(
+    Surface::Elementary(ElementarySurface::CylindricalSurface(Processor::new(
         RevolutionSurface::by_revolution(line, center, axis),
     )))
 }
@@ -73,9 +80,9 @@ fn line_pcurve(surface: &Surface, u: f64) -> step_geometry::StepParameterCurve {
 }
 
 fn seam_curve(surface: &Surface) -> Curve3D {
-    let leader = Curve3D::Line(Line(surface.subs(0.0, 0.0), surface.subs(0.0, 1.0)));
+    let leader = Curve3D::Line(Line(surface.evaluate(0.0, 0.0), surface.evaluate(0.0, 1.0)));
     Curve3D::SurfaceCurve(SurfaceCurve3D::new(
-        StepSurfaceCurveKind::SeamCurve,
+        StepSurfaceCurveKind::Seam,
         Box::new(leader),
         vec![
             SurfaceCurveAssociatedGeometry::ParameterCurve(line_pcurve(surface, 0.0)),
@@ -95,8 +102,8 @@ fn seam_curve_opposite_orientations_use_opposite_parameter_curves() {
     let backward = Table::exact_trim_curve_on(&curve, &surface, false)
         .expect("backward trim curve should exist");
 
-    let forward_start = forward.curve().subs(forward.curve().range_tuple().0);
-    let backward_start = backward.curve().subs(backward.curve().range_tuple().0);
+    let forward_start = forward.curve().evaluate(forward.curve().range_tuple().0);
+    let backward_start = backward.curve().evaluate(backward.curve().range_tuple().0);
 
     assert!(forward_start.x.near(&0.0));
     assert!(backward_start.x.near(&TAU));

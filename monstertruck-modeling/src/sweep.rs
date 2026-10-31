@@ -1,6 +1,6 @@
-use crate::topo_impls::*;
-use crate::topo_traits::*;
-use monstertruck_topology::*;
+use crate::topo_impls::{connect_edges, connect_raw_wires, connect_vertices, connect_wires};
+use crate::topo_traits::{Connector, GeometricMapping, Sweep};
+use monstertruck_topology::{Edge, Face, Result, Shell, Solid, Vertex, Wire, shell};
 
 impl<P, C, T, Pc, Cc> Sweep<T, Pc, Cc, Edge<P, C>> for Vertex<P>
 where
@@ -56,7 +56,7 @@ where
     /// }
     ///
     /// let v = Vertex::from_points([1, 2]);
-    /// let edge = Edge::new(&v[0], &v[1], 100);
+    /// let edge = Edge::new_unchecked(&v[0], &v[1], 100);
     /// let face = edge.sweep(
     ///     Mapping,
     ///     (|i, j| (i * 10 + j) as isize) as fn(&usize, &usize) -> isize,
@@ -120,10 +120,10 @@ where
     ///
     /// let v = Vertex::from_points(&[1, 2, 3, 4]);
     /// let wire = Wire::from(vec![
-    ///     Edge::new(&v[0], &v[1], 100),
-    ///     Edge::new(&v[1], &v[2], 110),
-    ///     Edge::new(&v[3], &v[2], 120).inverse(),
-    ///     Edge::new(&v[3], &v[1], 130),
+    ///     Edge::new_unchecked(&v[0], &v[1], 100),
+    ///     Edge::new_unchecked(&v[1], &v[2], 110),
+    ///     Edge::new_unchecked(&v[3], &v[2], 120).inverse(),
+    ///     Edge::new_unchecked(&v[3], &v[1], 130),
     /// ]);
     /// let shell = wire.sweep(
     ///     Mapping,
@@ -200,7 +200,7 @@ where
     /// let connect_curves: fn(&isize, &isize) -> i64 = |i, j| (*i * 100 + *j) as i64;
     ///
     /// let v = Vertex::from_points(&[1, 2]);
-    /// let edge = Edge::new(&v[0], &v[1], 12);
+    /// let edge = Edge::new_unchecked(&v[0], &v[1], 12);
     /// let face = edge.sweep(Mapping(2, 22, 0), connect_points, connect_curves);
     /// let solid = face.sweep(Mapping(4, 44, 3333), connect_points, connect_curves);
     /// let shell = &solid.boundaries()[0];
@@ -241,10 +241,10 @@ where
             connect_curves,
         ));
         shell.push(seiling);
-        // Spec 012 U4: `Solid::debug_new` is fallible now, and this trait
+        // Spec 012 U4: the former profile-dependent `Solid` constructor is fallible now, and this trait
         // method's return type is a bare `Solid`, so there is nowhere to put a
         // refusal. The construction is stated as `new_unchecked` rather than
-        // left behind `debug_new`'s profile switch, which chose between an
+        // left behind the former profile-dependent constructor, which chose between an
         // abort (debug) and exactly this call (release). The check it drops is
         // MEASURED DEAD in-gate -- it validates the sweep's own output, and a
         // firing would have aborted a debug test run. Giving it a channel means
@@ -285,9 +285,9 @@ where
         self.connected_components()
             .into_iter()
             .map(move |shell| {
-                let mut bdry = Shell::new();
+                let mut bdry = Self::new();
                 let mut seiling = shell.mapped(&point_mapping, &curve_mapping, &surface_mapping);
-                bdry.extend(shell.face_iter().map(|face| face.inverse()));
+                bdry.extend(shell.face_iter().map(monstertruck_topology::Face::inverse));
                 let bdries0 = shell.extract_boundaries();
                 let bdries1 = seiling.extract_boundaries();
                 let biter0 = bdries0.iter().flat_map(Wire::edge_iter);
@@ -299,7 +299,7 @@ where
                     &connect_curves,
                 ));
                 bdry.append(&mut seiling);
-                Solid::try_new(vec![bdry])
+                Solid::new(vec![bdry])
             })
             .collect()
     }

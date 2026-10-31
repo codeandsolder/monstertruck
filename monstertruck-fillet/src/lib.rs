@@ -12,22 +12,22 @@
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
 pub(crate) use ahash::AHashSet as HashSet;
 
-#[allow(private_interfaces)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "fillet sampling and subdivision counts are bounded by iterable geometry and converted only for normalized f64 parameters"
+)]
+pub(crate) const fn count_as_f64(value: usize) -> f64 { value as f64 }
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "extended fillet sampling indices range only from -1 through a bounded subdivision count plus one"
+)]
+pub(crate) const fn signed_index_as_f64(value: isize) -> f64 { value as f64 }
+
 mod edge_select;
-#[allow(private_interfaces)]
 mod ops;
 
 mod convert;

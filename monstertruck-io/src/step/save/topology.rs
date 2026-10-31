@@ -1,4 +1,9 @@
-use super::{Result, *};
+use super::{
+    BooleanDisplay, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell,
+    CompressedSolid, CompressedTrimmedShell, CompressedTrimmedSolid, Display, Formatter,
+    IndexSliceDisplay, Result, StepCurve, StepDisplay, StepFormat, StepLength,
+    StepMeasurementContext, StepModel, StepModels, StepSurface,
+};
 trait StepAssociatedEntity {
     fn fmt(&self, idx: usize, formatter: &mut Formatter<'_>) -> Result;
     fn step_length(&self) -> usize;
@@ -80,7 +85,7 @@ where C: StepFormat + StepLength
                     indices.push(*surface_idx);
                     (indices, cursor)
                 }
-                _ => {
+                StepAssociatedGeometry::ExactParameterCurve(_) => {
                     indices.push(cursor);
                     (indices, cursor + StepLength::step_length(entry))
                 }
@@ -214,11 +219,11 @@ where
             .collect::<Vec<_>>();
         faces.iter().enumerate().for_each(|(face_pos, face)| {
             face.boundaries.iter().for_each(|wire| {
-                wire.iter().for_each(|ce| {
+                for ce in wire {
                     if let Some(associations) = edge_associations.get_mut(ce.index) {
                         associations.push(EdgeAssociationSource::FaceSurface(face_pos));
                     }
-                });
+                }
             });
         });
         Self::from_parts(
@@ -277,14 +282,15 @@ where
             .collect::<Vec<_>>();
         shell.faces.iter().enumerate().for_each(|(face_pos, face)| {
             face.boundaries.iter().for_each(|wire| {
-                wire.iter().for_each(|edge_use| {
+                for edge_use in wire {
                     let association = edge_use
                         .trim_curve
                         .as_ref()
-                        .map(|trim_curve| EdgeAssociationSource::ExactParameterCurve(trim_curve))
-                        .unwrap_or(EdgeAssociationSource::FaceSurface(face_pos));
+                        .map_or(EdgeAssociationSource::FaceSurface(face_pos), |trim_curve| {
+                            EdgeAssociationSource::ExactParameterCurve(trim_curve)
+                        });
                     edge_associations[edge_use.index].push(association);
-                });
+                }
             });
         });
         Self::from_parts(
@@ -310,19 +316,16 @@ where
             .iter()
             .map(|face| {
                 let res = cursor;
-                cursor += match face.boundaries.is_empty() {
-                    // `advanced_face`, `face_bound`, `vertex_loop`,
-                    // `vertex_point`, `point_on_surface`.
-                    true => 5,
-                    false => {
-                        // One `advanced_face` plus, per boundary, a `face_bound`,
-                        // an `edge_loop`, and one `oriented_edge` per edge.
-                        1 + face
-                            .boundaries
-                            .iter()
-                            .map(|boundary| 2 + boundary.len())
-                            .sum::<usize>()
-                    }
+                cursor += if face.boundaries.is_empty() {
+                    5
+                } else {
+                    // One `advanced_face` plus, per boundary, a `face_bound`,
+                    // an `edge_loop`, and one `oriented_edge` per edge.
+                    1 + face
+                        .boundaries
+                        .iter()
+                        .map(|boundary| 2 + boundary.len())
+                        .sum::<usize>()
                 };
                 res
             })
@@ -392,6 +395,59 @@ where
     }
 }
 
+impl<P, C, S> StepShell<'_, P, C, S>
+where
+    P: StepFormat + Copy,
+    C: StepFormat + StepLength + StepCurve,
+    S: StepFormat + StepLength + StepSurface,
+{
+    fn fmt_geometry_payload(&self, formatter: &mut Formatter<'_>) -> Result {
+        let StepShell {
+            vertices,
+            edges,
+            faces,
+            ep_edges,
+            ep_vertices,
+            surface_indices,
+            edge_geometries,
+            curve_indices,
+            ep_points,
+            ..
+        } = self;
+        edge_geometries
+            .iter()
+            .enumerate()
+            .try_for_each(|(i, geometry)| {
+                let same_sense = if geometry.same_sense() { ".T." } else { ".F." };
+                formatter.write_fmt(format_args!(
+                    "#{idx} = EDGE_CURVE('', #{edge_start}, #{edge_end}, #{edge_geometry}, {same_sense});\n",
+                    idx = ep_edges + i,
+                    edge_start = ep_vertices + edges[i].vertices.0,
+                    edge_end = ep_vertices + edges[i].vertices.1,
+                    edge_geometry = curve_indices[i],
+                ))
+            })?;
+        (0..vertices.len()).try_for_each(|i| {
+            formatter.write_fmt(format_args!(
+                "#{idx} = VERTEX_POINT('', #{vertex_geometry});\n",
+                idx = ep_vertices + i,
+                vertex_geometry = ep_points + i,
+            ))
+        })?;
+        faces.iter().zip(surface_indices).try_for_each(|(f, idx)| {
+            Display::fmt(&StepDisplay::new(&f.surface, *idx), formatter)
+        })?;
+        edge_geometries
+            .iter()
+            .zip(curve_indices)
+            .try_for_each(|(geometry, idx)| StepFormat::fmt(geometry, *idx, formatter))?;
+        vertices
+            .iter()
+            .enumerate()
+            .try_for_each(|(i, v)| Display::fmt(&StepDisplay::new(*v, ep_points + i), formatter))
+    }
+}
+
 impl<P, C, S> Display for StepShell<'_, P, C, S>
 where
     P: StepFormat + Copy,
@@ -400,17 +456,17 @@ where
 {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> Result {
         let StepShell {
-            vertices,
-            edges,
+            vertices: _,
+            edges: _,
             faces,
             idx,
             face_indices,
             ep_edges,
-            ep_vertices,
+            ep_vertices: _,
             surface_indices,
-            edge_geometries,
-            curve_indices,
-            ep_points,
+            edge_geometries: _,
+            curve_indices: _,
+            ep_points: _,
             is_open,
         } = self;
         let shell_kind = match is_open {
@@ -425,16 +481,15 @@ where
             let idx = face_indices[i];
             let mut cursor = idx + 1;
             let face_geometry = surface_indices[i];
-            let face_bounds = match f.boundaries.is_empty() {
-                true => vec![cursor],
-                false => {
-                    let closure = |b: &Vec<CompressedEdgeIndex>| {
-                        let res = cursor;
-                        cursor += 2 + b.len();
-                        res
-                    };
-                    f.boundaries.iter().map(closure).collect()
-                }
+            let face_bounds = if f.boundaries.is_empty() {
+                vec![cursor]
+            } else {
+                let closure = |b: &Vec<CompressedEdgeIndex>| {
+                    let res = cursor;
+                    cursor += 2 + b.len();
+                    res
+                };
+                f.boundaries.iter().map(closure).collect()
             };
             // `advanced_face` is the AP203/AP214/AP242 canonical shell face: a
             // `face_surface` subtype placed directly into the shell instead of
@@ -445,7 +500,7 @@ where
             formatter.write_fmt(format_args!(
                 "#{idx} = ADVANCED_FACE('', {face_bound}, #{face_geometry}, {same_sense});\n",
                 same_sense = BooleanDisplay(f.orientation == f.surface.same_sense()),
-                face_bound = IndexSliceDisplay(face_bounds.clone()),
+                face_bound = IndexSliceDisplay(face_bounds),
             ))?;
             cursor = idx + 1;
             if f.boundaries.is_empty() {
@@ -494,37 +549,7 @@ where
                 })
             })
         })?;
-        edge_geometries
-            .iter()
-            .enumerate()
-            .try_for_each(|(i, geometry)| {
-                let same_sense = if geometry.same_sense() { ".T." } else { ".F." };
-                formatter.write_fmt(format_args!(
-                    "#{idx} = EDGE_CURVE('', #{edge_start}, #{edge_end}, #{edge_geometry}, {same_sense});\n",
-                    idx = ep_edges + i,
-                    edge_start = ep_vertices + edges[i].vertices.0,
-                    edge_end = ep_vertices + edges[i].vertices.1,
-                    edge_geometry = curve_indices[i],
-                ))
-            })?;
-        (0..vertices.len()).try_for_each(|i| {
-            formatter.write_fmt(format_args!(
-                "#{idx} = VERTEX_POINT('', #{vertex_geometry});\n",
-                idx = ep_vertices + i,
-                vertex_geometry = ep_points + i,
-            ))
-        })?;
-        faces.iter().zip(surface_indices).try_for_each(|(f, idx)| {
-            Display::fmt(&StepDisplay::new(&f.surface, *idx), formatter)
-        })?;
-        edge_geometries
-            .iter()
-            .zip(curve_indices)
-            .try_for_each(|(geometry, idx)| StepFormat::fmt(geometry, *idx, formatter))?;
-        vertices
-            .iter()
-            .enumerate()
-            .try_for_each(|(i, v)| Display::fmt(&StepDisplay::new(*v, ep_points + i), formatter))
+        self.fmt_geometry_payload(formatter)
     }
 }
 
@@ -762,6 +787,7 @@ where
     S: StepLength,
 {
     /// Creates a STEP model that exports only shared 3-dimensional edge curves.
+    #[must_use]
     pub fn from_curve3d_only_shell(shell: &'a CompressedShell<P, C, S>) -> Self {
         Self(
             PreStepModel::Shell(StepShell::new_curve3d_only(shell, 17, true)),
@@ -770,6 +796,7 @@ where
     }
 
     /// Creates a STEP model that exports only shared 3-dimensional edge curves.
+    #[must_use]
     pub fn from_curve3d_only_solid(solid: &'a CompressedSolid<P, C, S>) -> Self {
         Self(
             PreStepModel::Solid(StepSolid::new_curve3d_only(solid, 16)),
@@ -780,13 +807,15 @@ where
     /// Overrides the length unit and distance accuracy written into the
     /// representation-context preamble. The default preserves millimetre
     /// lengths and a `1.0E-6` `distance_accuracy_value`.
-    pub fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
+    #[must_use]
+    pub const fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
         self.1 = context;
         self
     }
 
     /// Returns the length unit and distance accuracy written into the preamble.
-    pub fn measurement_context(&self) -> StepMeasurementContext { self.1 }
+    #[must_use]
+    pub const fn measurement_context(&self) -> StepMeasurementContext { self.1 }
 }
 
 impl<'a, P, C, S, T> From<&'a CompressedTrimmedShell<P, C, S, T>> for StepModel<'a, P, C, S>
@@ -865,29 +894,32 @@ where
     S: StepLength,
 {
     /// The next available entity index after all pushed models.
-    pub fn next_idx(&self) -> usize { self.next_idx }
+    #[must_use]
+    pub const fn next_idx(&self) -> usize { self.next_idx }
 
     /// Overrides the length unit and distance accuracy written into the
     /// representation-context preamble. The default preserves millimetre
     /// lengths and a `1.0E-6` `distance_accuracy_value`.
-    pub fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
+    #[must_use]
+    pub const fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
         self.measurement_context = context;
         self
     }
 
     /// Returns the length unit and distance accuracy written into the preamble.
-    pub fn measurement_context(&self) -> StepMeasurementContext { self.measurement_context }
+    #[must_use]
+    pub const fn measurement_context(&self) -> StepMeasurementContext { self.measurement_context }
     /// push a shell to step models
     pub fn push_shell(&mut self, shell: &'a CompressedShell<P, C, S>) {
         let model = PreStepModel::Shell(StepShell::new(shell, self.next_idx + 1, true));
         self.next_idx += model.step_length();
-        self.models.push(model)
+        self.models.push(model);
     }
     /// push a solid to step models
     pub fn push_solid(&mut self, solid: &'a CompressedSolid<P, C, S>) {
         let model = PreStepModel::Solid(StepSolid::new(solid, self.next_idx));
         self.next_idx += model.step_length();
-        self.models.push(model)
+        self.models.push(model);
     }
 
     /// Pushes a shell while exporting only shared 3-dimensional edge curves.
@@ -895,14 +927,14 @@ where
         let model =
             PreStepModel::Shell(StepShell::new_curve3d_only(shell, self.next_idx + 1, true));
         self.next_idx += model.step_length();
-        self.models.push(model)
+        self.models.push(model);
     }
 
     /// Pushes a solid while exporting only shared 3-dimensional edge curves.
     pub fn push_curve3d_only_solid(&mut self, solid: &'a CompressedSolid<P, C, S>) {
         let model = PreStepModel::Solid(StepSolid::new_curve3d_only(solid, self.next_idx));
         self.next_idx += model.step_length();
-        self.models.push(model)
+        self.models.push(model);
     }
 }
 
@@ -917,7 +949,7 @@ where
     where T: StepFormat + StepLength {
         let model = PreStepModel::Shell(StepShell::new_trimmed(shell, self.next_idx + 1, true));
         self.next_idx += model.step_length();
-        self.models.push(model)
+        self.models.push(model);
     }
 
     /// Pushes a trimmed solid to step models.
@@ -925,7 +957,7 @@ where
     where T: StepFormat + StepLength {
         let model = PreStepModel::Solid(StepSolid::new_trimmed(solid, self.next_idx));
         self.next_idx += model.step_length();
-        self.models.push(model)
+        self.models.push(model);
     }
 }
 

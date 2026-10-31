@@ -23,6 +23,7 @@ pub fn or(solid0: &Solid, solid1: &Solid, tol: Option<f64>) -> Option<Solid> {
 
 /// not operator
 #[wasm_bindgen]
+#[must_use]
 pub fn not(solid: &Solid) -> Solid {
     let mut solid = solid.clone();
     solid.not();

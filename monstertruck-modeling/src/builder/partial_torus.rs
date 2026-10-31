@@ -7,14 +7,14 @@ use crate::*;
 fn test_surface_orientation(surface: &Surface, sign: f64) {
     let rev = match surface {
         Surface::Plane(_) => return,
-        Surface::RevolutionSurface(rev) => rev,
+        Surface::Revolution(rev) => rev,
         _ => panic!(),
     };
     let (Some((u0, u1)), Some((v0, v1))) = rev.try_range_tuple() else {
         panic!();
     };
     let (u, v) = ((u0 + u1) / 2.0, (v0 + v1) / 2.0);
-    let p = surface.subs(u, v);
+    let p = surface.evaluate(u, v);
     let q = Point3::from_vec(Vector3::new(p.x, p.y, 0.0).normalize() * 0.75);
     let n0 = sign * (p - q).normalize();
     let n1 = surface.normal(u, v);
@@ -29,7 +29,11 @@ fn test_boundary_orientation(face: &Face) {
         .flat_map(|edge| {
             let curve = edge.oriented_curve();
             let (t0, t1) = curve.range_tuple();
-            [curve.subs(t0), curve.subs((t0 + t1) / 2.0), curve.subs(t1)]
+            [
+                curve.evaluate(t0),
+                curve.evaluate((t0 + t1) / 2.0),
+                curve.evaluate(t1),
+            ]
         })
         .map(|p| surface.search_parameter(p, None, 100).unwrap())
         .collect::<Vec<_>>();
@@ -48,7 +52,7 @@ fn test_shell(shell: &Shell, sign: f64) {
 }
 
 #[test]
-fn partial_torus() {
+fn partial_torus() -> Result<()> {
     let v = builder::vertex(Point3::new(0.5, 0.0, 0.0));
     let w = builder::revolve(
         &v,
@@ -56,8 +60,8 @@ fn partial_torus() {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         2,
-    );
-    let face = builder::try_attach_plane(&[w]).unwrap();
+    )?;
+    let face = builder::try_attach_plane([w])?;
     test_shell(&shell![face.clone()], 1.0);
     let torus = builder::revolve(
         &face,
@@ -65,7 +69,7 @@ fn partial_torus() {
         Vector3::unit_z(),
         builder::SweepAngle::Partial(Rad(2.0)),
         1,
-    );
+    )?;
     test_shell(&torus.boundaries()[0], 1.0);
     assert!(torus.is_geometric_consistent());
     let torus = builder::revolve(
@@ -74,7 +78,7 @@ fn partial_torus() {
         Vector3::unit_z(),
         builder::SweepAngle::Partial(Rad(5.0)),
         2,
-    );
+    )?;
     test_shell(&torus.boundaries()[0], 1.0);
     assert!(torus.is_geometric_consistent());
     let torus = builder::revolve(
@@ -83,7 +87,7 @@ fn partial_torus() {
         Vector3::unit_z(),
         builder::SweepAngle::Partial(Rad(-2.0)),
         1,
-    );
+    )?;
     test_shell(&torus.boundaries()[0], -1.0);
     assert!(torus.is_geometric_consistent());
     let torus = builder::revolve(
@@ -92,7 +96,8 @@ fn partial_torus() {
         Vector3::unit_z(),
         builder::SweepAngle::Partial(Rad(-5.0)),
         2,
-    );
+    )?;
     test_shell(&torus.boundaries()[0], -1.0);
     assert!(torus.is_geometric_consistent());
+    Ok(())
 }

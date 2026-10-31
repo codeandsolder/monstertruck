@@ -47,7 +47,10 @@ fn option_hashing() {
 #[test]
 fn f64_bit_pattern_hashing() {
     assert_eq!(1.0_f64.content_hash64(), 1.0_f64.content_hash64());
-    assert_ne!(1.0_f64.content_hash64(), 1.0000000001_f64.content_hash64());
+    assert_ne!(
+        1.0_f64.content_hash64(),
+        1.000_000_000_1_f64.content_hash64()
+    );
 }
 
 #[test]

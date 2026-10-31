@@ -1,21 +1,35 @@
-use super::*;
+#![expect(
+    clippy::similar_names,
+    reason = "paired U/V parameter-range names are standard surface notation"
+)]
+
+use super::{
+    Bound, BoundedCurve, BoundedSurface, EuclideanSpace, ExtrusionSurface, InnerSpace, Invertible,
+    Line, Matrix4, MetricSpace, PRESEARCH_DIVISION, ParameterDivision1D, ParameterDivision2D,
+    ParameterRange, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Plane, Point3,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
+    SurfaceParameterRange, ToSameGeometry, Tolerance, Transform, Transformed, Vector3, VectorSpace,
+    Zero, algo,
+};
+#[cfg(test)]
+use crate::prelude::assert_near;
 use algo::surface::SearchParameterVector;
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 
 impl<C, V: Copy> ExtrusionSurface<C, V> {
     /// Creates a linear extruded curve by extrusion.
-    #[inline(always)]
+    #[inline]
     pub const fn by_extrusion(curve: C, vector: V) -> Self { Self { curve, vector } }
 
     /// Returns the curve before extruded.
-    #[inline(always)]
+    #[inline]
     pub const fn entity_curve(&self) -> &C { &self.curve }
     /// Into the curve before revoluted.
-    #[inline(always)]
+    #[inline]
     pub fn into_entity_curve(self) -> C { self.curve }
 
     /// Returns the vector of extruded curve.
-    #[inline(always)]
+    #[inline]
     pub const fn extruding_vector(&self) -> V { self.vector }
 }
 
@@ -27,7 +41,7 @@ where
 {
     type Point = C::Point;
     type Vector = C::Vector;
-    #[inline(always)]
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         match (m, n) {
             (0, 0) => self.evaluate(u, v).to_vec(),
@@ -36,31 +50,31 @@ where
             _ => C::Vector::zero(),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> C::Point { self.curve.evaluate(u) + self.vector * v }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, _: f64) -> C::Vector { self.curve.derivative(u) }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, _: f64, _: f64) -> C::Vector { self.vector }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, _: f64) -> C::Vector { self.curve.derivative_2(u) }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, _: f64, _: f64) -> C::Vector { C::Vector::zero() }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, _: f64, _: f64) -> C::Vector { C::Vector::zero() }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
         (
             self.curve.parameter_range(),
             (Bound::Included(0.0), Bound::Included(1.0)),
         )
     }
-    #[inline(always)]
+    #[inline]
     fn period_u(&self) -> Option<f64> { self.curve.period() }
 }
 
 impl<C: ParametricCurve3D> ParametricSurface3D for ExtrusionSurface<C, Vector3> {
-    #[inline(always)]
+    #[inline]
     fn normal(&self, u: f64, _: f64) -> C::Vector {
         self.curve.derivative(u).cross(self.vector).normalize()
     }
@@ -71,6 +85,7 @@ where
     C: BoundedCurve,
     Self: ParametricSurface,
 {
+    fn range_tuple(&self) -> SurfaceParameterRange { (self.curve.range_tuple(), (0.0, 1.0)) }
 }
 
 // -- v2 scalar-generic impls ------------------------------------------------
@@ -87,43 +102,43 @@ where
     type Point = C::Point;
     type Vector = C::Vector;
 
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> C::Point { ParametricSurface::evaluate(self, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> C::Vector {
         ParametricSurface::derivative_u(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> C::Vector {
         ParametricSurface::derivative_v(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> C::Vector {
         ParametricSurface::derivative_uu(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> C::Vector {
         ParametricSurface::derivative_uv(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> C::Vector {
         ParametricSurface::derivative_vv(self, u, v)
     }
-    #[inline(always)]
+    #[inline]
     fn period_u(&self) -> Option<f64> { ParametricSurface::period_u(self) }
-    #[inline(always)]
+    #[inline]
     fn period_v(&self) -> Option<f64> { ParametricSurface::period_v(self) }
 }
 
 impl<C: ParametricCurve3D + ParametricCurveTrait> v2::ParametricSurface3D
     for ExtrusionSurface<C, Vector3>
 {
-    #[inline(always)]
+    #[inline]
     fn normal(&self, u: f64, _: f64) -> Vector3 { ParametricSurface3D::normal(self, u, 0.0) }
 }
 
 impl<C: ParameterDivision1D, V> ParameterDivision2D for ExtrusionSurface<C, V> {
-    #[inline(always)]
+    #[inline]
     fn parameter_division(
         &self,
         (urange, vrange): ((f64, f64), (f64, f64)),
@@ -143,7 +158,7 @@ where
     C: ParametricCurveTrait<Point = P, Vector = P::Diff> + BoundedCurve,
 {
     type Point = P;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<SearchParameterHint2D>>(
         &self,
         point: P,
@@ -167,7 +182,7 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<SurfaceParamete
     for ExtrusionSurface<C, Vector3>
 {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<SearchParameterHint2D>>(
         &self,
         point: Point3,
@@ -187,43 +202,43 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<SurfaceParamete
     }
 }
 
-impl<P, C> v2::SearchParameter<v2::D2<f64>> for ExtrusionSurface<C, P::Diff>
+impl<P, C> v2::SearchParameter<v2::SurfaceParameter<f64>> for ExtrusionSurface<C, P::Diff>
 where
     P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
     P::Diff: SearchParameterVector<Point = P>,
     C: ParametricCurveTrait<Point = P, Vector = P::Diff> + BoundedCurve,
 {
     type Point = P;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
         &self,
         pt: P,
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchParameter::<D2>::search_parameter(self, pt, None, trials)
+        SearchParameter::<SurfaceParameter>::search_parameter(self, pt, None, trials)
     }
 }
 
-impl<C: ParametricCurve3D + BoundedCurve> v2::SearchNearestParameter<v2::D2<f64>>
+impl<C: ParametricCurve3D + BoundedCurve> v2::SearchNearestParameter<v2::SurfaceParameter<f64>>
     for ExtrusionSurface<C, Vector3>
 {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
         &self,
         pt: Point3,
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchNearestParameter::<D2>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<SurfaceParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
 impl<C: Invertible> Invertible for ExtrusionSurface<C, Vector3> {
-    #[inline(always)]
-    fn invert(&mut self) { self.curve.invert() }
-    #[inline(always)]
+    #[inline]
+    fn invert(&mut self) { self.curve.invert(); }
+    #[inline]
     fn inverse(&self) -> Self {
         Self {
             curve: self.curve.inverse(),

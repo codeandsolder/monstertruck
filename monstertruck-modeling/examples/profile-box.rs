@@ -4,9 +4,9 @@
 //! uses the profile normalization pipeline which automatically handles
 //! winding direction.
 
-use monstertruck_modeling::*;
+use monstertruck_modeling::{Point3, Solid, Vector3, Wire, builder, profile};
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let v0 = builder::vertex(Point3::new(-1.0, -1.0, 0.0));
     let v1 = builder::vertex(Point3::new(1.0, -1.0, 0.0));
     let v2 = builder::vertex(Point3::new(1.0, 1.0, 0.0));
@@ -19,12 +19,12 @@ fn main() {
     ]
     .into();
 
-    let solid: Solid =
-        profile::solid_from_planar_profile(vec![wire], Vector3::new(0.0, 0.0, 2.0)).unwrap();
+    let solid: Solid = profile::solid_from_planar_profile(vec![wire], Vector3::new(0.0, 0.0, 2.0))?;
 
     assert!(solid.is_geometric_consistent());
     assert_eq!(solid.boundaries()[0].len(), 6);
 
-    let json = serde_json::to_vec_pretty(&solid).unwrap();
-    std::fs::write("profile-box.json", json).unwrap();
+    let json = serde_json::to_vec_pretty(&solid)?;
+    std::fs::write("profile-box.json", json)?;
+    Ok(())
 }

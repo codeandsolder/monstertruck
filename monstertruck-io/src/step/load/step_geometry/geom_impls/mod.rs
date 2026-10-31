@@ -3,7 +3,20 @@
 //! [`SurfaceCurveAssociatedGeometry`] live here because two of the parts
 //! below need them.
 
-use super::*;
+use super::{
+    BoundaryCurveFromSamples, BoundedCurve, BsplineCurve, BsplineSurface, Conic2D, Conic3D,
+    Curve2D, Curve3D, CurveParameter, CurveTrimRef, Cut, ElementarySurface, Ellipse,
+    EuclideanSpace, ExactParameterBoundary2D, ExtrusionSurface, Hyperbola, IncludeCurve,
+    InnerSpace, IntersectionCurve, Invertible, KnotVector, Line, Matrix3, Matrix4, MetricSpace,
+    NurbsCurve, NurbsSurface, Origin, Parabola, ParameterBoundary2D, ParameterCurve,
+    ParameterDivision1D, ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface,
+    Plane, Point2, Point3, Processor, RevolutionSurface, SearchNearestParameter, SearchParameter,
+    SearchParameterHint1D, SearchParameterHint2D, Sphere, SphericalSurface, SquareMatrix,
+    StepConvertingError, StepParameterCurve, StepRevolutionSurface, Surface, SurfaceCurve,
+    SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceCurveTrimRef, SweepSurface, TOLERANCE,
+    ToSameGeometry, Tolerance, ToroidalSurface, Torus, Transform, Transformed, TrimmedCurve,
+    UnitCircle, UnitHyperbola, UnitParabola, Vector3, Vector4, uv_clamp,
+};
 use monstertruck_geometry::prelude::{
     HomogeneousSurfaceConversion, SupportsExactPatchDomains, SurfaceParameterRectangle,
     TryIntoBsplineSurface, TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface,
@@ -20,14 +33,11 @@ use std::{cmp::Ordering, env};
 // `.elapsed()` call sites below stay unchanged.
 use web_time::Instant;
 
-#[cfg(test)]
-use std::f64::consts::TAU;
-
 impl SurfaceCurveAssociatedGeometry {
     fn surface(&self) -> &Surface {
         match self {
-            SurfaceCurveAssociatedGeometry::ParameterCurve(curve) => curve.surface().as_ref(),
-            SurfaceCurveAssociatedGeometry::Surface(surface) => surface,
+            Self::ParameterCurve(curve) => curve.surface().as_ref(),
+            Self::Surface(surface) => surface,
         }
     }
 }
@@ -35,12 +45,8 @@ impl SurfaceCurveAssociatedGeometry {
 impl SurfaceCurveAssociatedGeometry {
     fn split_at(&mut self, t: f64) -> Self {
         match self {
-            SurfaceCurveAssociatedGeometry::ParameterCurve(curve) => {
-                SurfaceCurveAssociatedGeometry::ParameterCurve(curve.cut(t))
-            }
-            SurfaceCurveAssociatedGeometry::Surface(surface) => {
-                SurfaceCurveAssociatedGeometry::Surface(surface.clone())
-            }
+            Self::ParameterCurve(curve) => Self::ParameterCurve(curve.cut(t)),
+            Self::Surface(surface) => Self::Surface(surface.clone()),
         }
     }
 }

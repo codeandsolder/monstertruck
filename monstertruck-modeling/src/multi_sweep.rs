@@ -1,6 +1,6 @@
-use crate::topo_impls::*;
-use crate::topo_traits::*;
-use monstertruck_topology::*;
+use crate::topo_impls::{connect_edges, connect_raw_wires, connect_vertices, connect_wires};
+use crate::topo_traits::{Connector, GeometricMapping, MultiSweep};
+use monstertruck_topology::{Edge, Face, Result, Shell, Solid, Vertex, Wire};
 
 impl<P, C, T, Pc, Cc> MultiSweep<T, Pc, Cc, Wire<P, C>> for Vertex<P>
 where
@@ -152,7 +152,7 @@ where
         self.connected_components()
             .into_iter()
             .map(move |shell| {
-                let mut bdry: Shell<P, C, S> = shell.face_iter().map(Face::inverse).collect();
+                let mut bdry: Self = shell.face_iter().map(Face::inverse).collect();
                 let mut shell_cursor = shell;
                 bdry.extend((0..division).flat_map(|_| {
                     let seiling =
@@ -167,7 +167,7 @@ where
                     vec
                 }));
                 bdry.append(&mut shell_cursor);
-                Solid::try_new(vec![bdry])
+                Solid::new(vec![bdry])
             })
             .collect()
     }

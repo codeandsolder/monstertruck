@@ -4,7 +4,10 @@ use monstertruck_geometry::prelude::*;
 /// A parametric curve defined by a line in parameter space on a NURBS surface.
 pub type ParameterCurveLinear = ParameterCurve<Line<Point2>, NurbsSurface<Vector4>>;
 
-#[allow(clippy::enum_variant_names)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "domain variant names intentionally preserve the explicit fillet entity terminology"
+)]
 #[derive(
     Clone,
     Debug,
@@ -17,7 +20,7 @@ pub type ParameterCurveLinear = ParameterCurve<Line<Point2>, NurbsSurface<Vector
     SearchParameterD1,
     SearchNearestParameterD1,
 )]
-pub(crate) enum Curve {
+pub enum Curve {
     NurbsCurve(NurbsCurve<Vector4>),
     ParameterCurve(ParameterCurveLinear),
     IntersectionCurve(
@@ -31,16 +34,16 @@ pub(crate) enum Curve {
 
 monstertruck_topology::prelude!(Point3, Curve, NurbsSurface<Vector4>, pub(super));
 
-pub(super) fn squared_distance(a: Point3, b: Point3) -> f64 {
+pub fn squared_distance(a: Point3, b: Point3) -> f64 {
     let d = a - b;
-    d.x * d.x + d.y * d.y + d.z * d.z
+    d.z.mul_add(d.z, d.y.mul_add(d.y, d.x * d.x))
 }
 
-pub(super) fn approximate_edge_length(edge: &Edge, sample_count: usize) -> f64 {
+pub fn approximate_edge_length(edge: &Edge, sample_count: usize) -> f64 {
     let curve = edge.curve();
     let (t0, t1) = curve.range_tuple();
     let points: Vec<_> = (0..=sample_count)
-        .map(|i| t0 + (t1 - t0) * (i as f64) / (sample_count as f64))
+        .map(|i| t0 + (t1 - t0) * (crate::count_as_f64(i)) / (crate::count_as_f64(sample_count)))
         .map(|t| curve.evaluate(t))
         .collect();
     points
@@ -53,7 +56,7 @@ pub(super) fn approximate_edge_length(edge: &Edge, sample_count: usize) -> f64 {
 pub trait FilletCurve: ParametricCurve3D + BoundedCurve + ParameterDivision1D {}
 impl<C: ParametricCurve3D + BoundedCurve + ParameterDivision1D> FilletCurve for C {}
 
-pub(super) trait NotStrictlyCut: Sized {
+pub trait NotStrictlyCut: Sized {
     fn pre_cut(&self, vertex: &Vertex, curve: Curve, t: f64) -> (Self, Self);
     fn not_strictly_cut(&self, vertex: &Vertex) -> Option<(Self, Self)>;
     fn not_strictly_cut_with_parameter(&self, vertex: &Vertex, t: f64) -> Option<(Self, Self)>;
@@ -62,15 +65,14 @@ pub(super) trait NotStrictlyCut: Sized {
 impl NotStrictlyCut for Edge {
     fn pre_cut(&self, vertex: &Vertex, mut curve0: Curve, t: f64) -> (Self, Self) {
         let curve1 = curve0.cut(t);
-        let mut edge0 = Edge::new(self.absolute_front(), vertex, curve0);
-        let mut edge1 = Edge::new(vertex, self.absolute_back(), curve1);
-        match self.orientation() {
-            true => (edge0, edge1),
-            false => {
-                edge0.invert();
-                edge1.invert();
-                (edge1, edge0)
-            }
+        let mut edge0 = Self::new_unchecked(self.absolute_front(), vertex, curve0);
+        let mut edge1 = Self::new_unchecked(vertex, self.absolute_back(), curve1);
+        if self.orientation() {
+            (edge0, edge1)
+        } else {
+            edge0.invert();
+            edge1.invert();
+            (edge1, edge0)
         }
     }
     fn not_strictly_cut(&self, vertex: &Vertex) -> Option<(Self, Self)> {

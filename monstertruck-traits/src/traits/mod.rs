@@ -1,4 +1,7 @@
-use monstertruck_core::cgmath64::*;
+use monstertruck_core::cgmath64::{
+    CurveDerivatives, InnerSpace, Matrix3, Matrix4, Point2, Point3, SurfaceDerivatives, Transform,
+    Vector2, Vector3, Zero,
+};
 use std::ops::Bound;
 
 mod curve;
@@ -12,19 +15,18 @@ pub use search_parameter::*;
 pub type ParameterRange = (Bound<f64>, Bound<f64>);
 fn bound2opt<T>(x: Bound<T>) -> Option<T> {
     match x {
-        Bound::Included(x) => Some(x),
-        Bound::Excluded(x) => Some(x),
+        Bound::Included(x) | Bound::Excluded(x) => Some(x),
         Bound::Unbounded => None,
     }
 }
-const UNBOUNDED_ERROR: &str = "Parameter range is unbounded.";
 
 /// Oriented and reversible
 pub trait Invertible: Clone {
     /// Inverts `self`
     fn invert(&mut self);
     /// Returns the inverse.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     fn inverse(&self) -> Self {
         let mut res = self.clone();
         res.invert();
@@ -39,17 +41,17 @@ impl Invertible for (usize, usize) {
 }
 
 impl<P: Clone> Invertible for Vec<P> {
-    #[inline(always)]
+    #[inline]
     fn invert(&mut self) { self.reverse(); }
-    #[inline(always)]
+    #[inline]
     fn inverse(&self) -> Self { self.iter().rev().cloned().collect() }
 }
 
 impl<T: Invertible> Invertible for Box<T> {
-    #[inline(always)]
-    fn invert(&mut self) { (**self).invert() }
-    #[inline(always)]
-    fn inverse(&self) -> Self { Box::new((**self).inverse()) }
+    #[inline]
+    fn invert(&mut self) { (**self).invert(); }
+    #[inline]
+    fn inverse(&self) -> Self { Self::new((**self).inverse()) }
 }
 
 /// Transform geometry
@@ -57,7 +59,8 @@ pub trait Transformed<T>: Clone {
     /// transform by `trans`.
     fn transform_by(&mut self, trans: T);
     /// transformed geometry by `trans`.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     fn transformed(&self, trans: T) -> Self {
         let mut res = self.clone();
         res.transform_by(trans);
@@ -66,18 +69,18 @@ pub trait Transformed<T>: Clone {
 }
 
 impl<S: Transformed<T>, T> Transformed<T> for Box<S> {
-    #[inline(always)]
-    fn transform_by(&mut self, trans: T) { (**self).transform_by(trans) }
-    #[inline(always)]
-    fn transformed(&self, trans: T) -> Self { Box::new((**self).transformed(trans)) }
+    #[inline]
+    fn transform_by(&mut self, trans: T) { (**self).transform_by(trans); }
+    #[inline]
+    fn transformed(&self, trans: T) -> Self { Self::new((**self).transformed(trans)) }
 }
 
 macro_rules! impl_transformed {
     ($point: ty, $matrix: ty) => {
         impl Transformed<$matrix> for $point {
-            #[inline(always)]
+            #[inline]
             fn transform_by(&mut self, trans: $matrix) { *self = trans.transform_point(*self) }
-            #[inline(always)]
+            #[inline]
             fn transformed(&self, trans: $matrix) -> Self { trans.transform_point(*self) }
         }
     };

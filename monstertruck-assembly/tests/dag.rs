@@ -24,6 +24,21 @@ fn a_little_complex_case() {
     assert!(!dag.create_edge(node[8], node[2], ()));
 }
 
+#[test]
+fn foreign_out_of_range_indices_are_recoverable() {
+    let mut source = Dag::<(), ()>::new();
+    let foreign = source.create_node(());
+    let mut target = Dag::<(), ()>::new();
+
+    assert!(target.node(foreign).is_none());
+    assert!(target.node_mut(foreign).is_none());
+    assert!(!target.has_path(foreign, foreign));
+    assert_eq!(target.paths_iter(foreign).count(), 0);
+    assert_eq!(target.maximal_paths_iter(foreign).count(), 0);
+    assert!(!target.create_edge(foreign, foreign, ()));
+    assert_eq!(target.remove_edge(foreign, 0), None);
+}
+
 const NODE_RANGE: std::ops::Range<usize> = 0..8;
 const NUM_EDGE: usize = 32;
 const NUM_REMOVE: usize = 10;
@@ -34,7 +49,7 @@ fn random_graph(
     #[strategy = prop::array::uniform32(NODE_RANGE)] to: [usize; NUM_EDGE],
     #[strategy = prop::array::uniform32(NODE_RANGE)] entity: [usize; NUM_EDGE],
     #[strategy = prop::array::uniform10(NODE_RANGE)] node4remove: [usize; NUM_REMOVE],
-    #[strategy = prop::array::uniform10(0f64..1f64)] edge4remove: [f64; NUM_REMOVE],
+    #[strategy = prop::array::uniform10(0usize..NUM_EDGE)] edge4remove: [usize; NUM_REMOVE],
 ) {
     let mut dag = Dag::<usize, usize>::new();
     let node = dag.create_nodes(NODE_RANGE);
@@ -49,16 +64,20 @@ fn random_graph(
 
     for i in 0..NUM_REMOVE {
         let node_index = node[node4remove[i]];
-        let node0 = dag.node(node_index);
-        let len = node0.edges().len() as f64;
-        let edge_index = (len * edge4remove[i]) as usize;
-        dag.remove_edge(node_index, edge_index);
+        let len = dag.node(node_index).map_or(0, |node| node.edges().len());
+        if len != 0 {
+            let edge_index = edge4remove[i] % len;
+            dag.remove_edge(node_index, edge_index);
+        }
     }
 
     // Consistency of parents
     for edge in dag.all_edges() {
         let (node0, node1) = edge.nodes();
-        assert!(dag.node(node1).parents().contains(&node0));
+        assert!(
+            dag.node(node1)
+                .is_some_and(|node| node.parents().contains(&node0))
+        );
     }
 
     assert!(!has_cycle(&dag));
@@ -84,11 +103,15 @@ fn sub_has_cycle<NE, EE>(
     finished: &mut BTreeSet<NodeIndex>,
 ) -> bool {
     seen.insert(cursor);
-    for edge in dag.node(cursor).edges() {
+    let Some(node) = dag.node(cursor) else {
+        return false;
+    };
+    for edge in node.edges() {
         let (_, child) = edge.nodes();
         if finished.contains(&child) {
             continue;
-        } else if seen.contains(&child) || sub_has_cycle(child, dag, seen, finished) {
+        }
+        if seen.contains(&child) || sub_has_cycle(child, dag, seen, finished) {
             return true;
         }
     }

@@ -1,4 +1,4 @@
-use crate::cgmath64::*;
+use crate::cgmath64::{Zero, cgmath};
 use cgmath::AbsDiffEq;
 use std::fmt::Debug;
 
@@ -60,11 +60,11 @@ macro_rules! prop_assert_near {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "assertion failed: `left` is near `right`")]
 fn assert_near_without_msg() { assert_near!(1.0, 2.0) }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "assertion failed: `left` is near `right`")]
 fn assert_near_with_msg() { assert_near!(1.0, 2.0, "{}", "test OK") }
 
 /// Asserts that `left.near2(&right)` (using `Tolerance`).
@@ -108,21 +108,21 @@ macro_rules! prop_assert_near2 {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "assertion failed: `left` is near `right`")]
 fn assert_near2_without_msg() { assert_near2!(1.0, 2.0) }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "assertion failed: `left` is near `right`")]
 fn assert_near2_with_msg() { assert_near2!(1.0, 2.0, "{}", "test OK") }
 
 /// The structs defined the origin. `f64`, `Vector`, and so on.
 pub trait Origin: Tolerance + Zero {
     /// near origin
-    #[inline(always)]
+    #[inline]
     fn so_small(&self) -> bool { self.near(&Self::zero()) }
 
     /// near origin in square order
-    #[inline(always)]
+    #[inline]
     fn so_small2(&self) -> bool { self.near2(&Self::zero()) }
 }
 

@@ -171,7 +171,7 @@ fn the_primitive_cuboid_control_is_exact_and_positive() {
 /// `CompressedFace`/`CompressedTrimmedFace` want the opposite convention:
 /// `CompressDirector::create_cface` stores `face.boundaries` -- the ABSOLUTE
 /// boundaries, in the surface's own sense -- next to the orientation flag, and
-/// `create_face` rebuilds by `Face::try_new(stored, surface)` then `invert()`.
+/// `create_face` rebuilds by `Face::new(stored, surface)` then `invert()`.
 ///
 /// So every `same_sense = .F.` face whose loops are passed through verbatim is
 /// traversed the wrong way round, and the shell is not closed. On

@@ -25,11 +25,11 @@
 //!     t1: Vector3::new(3.0, 0.0, 0.0),
 //! };
 //! let curve: BsplineCurve<Point3> = hermite.into();
-//! assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-//! assert_near2!(curve.subs(1.0), Point3::new(3.0, 0.0, 0.0));
+//! assert_near2!(curve.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+//! assert_near2!(curve.evaluate(1.0), Point3::new(3.0, 0.0, 0.0));
 //! ```
 
-use super::*;
+use super::{BsplineCurve, ControlPoint, Debug, KnotVector, Tolerance};
 
 /// A cubic Hermite segment defined by two endpoints and their tangent vectors.
 ///
@@ -54,9 +54,9 @@ use super::*;
 ///     t1: Vector3::new(3.0, -3.0, 0.0),
 /// };
 /// let curve = BsplineCurve::from(seg);
-/// assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-/// assert_near2!(curve.subs(1.0), Point3::new(3.0, 0.0, 0.0));
-/// assert_near2!(curve.der(0.0), Vector3::new(3.0, 3.0, 0.0));
+/// assert_near2!(curve.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+/// assert_near2!(curve.evaluate(1.0), Point3::new(3.0, 0.0, 0.0));
+/// assert_near2!(curve.derivative(0.0), Vector3::new(3.0, 3.0, 0.0));
 /// ```
 #[derive(Clone, Debug)]
 pub struct HermiteSegment<P: ControlPoint<f64>> {
@@ -76,7 +76,7 @@ impl<P: ControlPoint<f64> + Tolerance> From<HermiteSegment<P>> for BsplineCurve<
         let c1 = h.p0 + h.t0 / 3.0;
         let c2 = h.p1 - h.t1 / 3.0;
         let c3 = h.p1;
-        BsplineCurve::new(KnotVector::bezier_knot(3), vec![c0, c1, c2, c3])
+        Self::new_unchecked(KnotVector::bezier_knot(3), vec![c0, c1, c2, c3])
     }
 }
 
@@ -104,8 +104,8 @@ impl<P: ControlPoint<f64> + Tolerance> From<HermiteSegment<P>> for BsplineCurve<
 ///     Point3::new(3.0, 0.0, 0.0),
 /// ]);
 /// let curve = BsplineCurve::from(spline);
-/// assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-/// assert_near2!(curve.subs(1.0), Point3::new(2.0, 0.0, 0.0));
+/// assert_near2!(curve.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+/// assert_near2!(curve.evaluate(1.0), Point3::new(2.0, 0.0, 0.0));
 /// ```
 #[derive(Clone, Debug)]
 pub struct CatmullRomSpline<P>(pub Vec<P>);
@@ -118,7 +118,7 @@ impl<P: ControlPoint<f64> + Tolerance> From<CatmullRomSpline<P>> for BsplineCurv
             "CatmullRomSpline requires at least 4 points"
         );
 
-        let segments: Vec<BsplineCurve<P>> = (0..points.len() - 3)
+        let segments: Vec<Self> = (0..points.len() - 3)
             .map(|i| {
                 let h = HermiteSegment {
                     p0: points[i + 1],
@@ -126,11 +126,11 @@ impl<P: ControlPoint<f64> + Tolerance> From<CatmullRomSpline<P>> for BsplineCurv
                     p1: points[i + 2],
                     t1: (points[i + 3] - points[i + 1]) / 2.0,
                 };
-                BsplineCurve::from(h)
+                Self::from(h)
             })
             .collect();
 
-        BsplineCurve::from(PiecewiseBezier(segments))
+        Self::from(PiecewiseBezier(segments))
     }
 }
 
@@ -156,8 +156,8 @@ impl<P: ControlPoint<f64> + Tolerance> From<CatmullRomSpline<P>> for BsplineCurv
 ///     Point3::new(2.0, 3.0, 0.0),
 /// ]);
 /// let curve = BsplineCurve::from(poly);
-/// assert_near2!(curve.subs(0.0), Point3::new(1.0, 0.0, 0.0));
-/// assert_near2!(curve.subs(1.0), Point3::new(3.0, 3.0, 0.0));
+/// assert_near2!(curve.evaluate(0.0), Point3::new(1.0, 0.0, 0.0));
+/// assert_near2!(curve.evaluate(1.0), Point3::new(3.0, 3.0, 0.0));
 /// ```
 #[derive(Clone, Debug)]
 pub struct PowerBasisCurve<P>(pub Vec<P>);
@@ -178,13 +178,13 @@ impl<P: ControlPoint<f64> + Tolerance> From<PowerBasisCurve<P>> for BsplineCurve
                     .iter()
                     .enumerate()
                     .fold(P::origin(), |acc, (j, cj)| {
-                        let w = binomial(i, j) as f64 / binomial(n, j) as f64;
-                        acc + cj.to_vec() * w
+                        let weight = binomial_ratio(i, n, j);
+                        acc + cj.to_vec() * weight
                     })
             })
             .collect();
 
-        BsplineCurve::new(KnotVector::bezier_knot(n), bernstein)
+        Self::new_unchecked(KnotVector::bezier_knot(n), bernstein)
     }
 }
 
@@ -204,7 +204,7 @@ impl<P: ControlPoint<f64> + Tolerance> From<PowerBasisCurve<P>> for BsplineCurve
 /// use monstertruck_geometry::prelude::*;
 /// use monstertruck_geometry::nurbs::basis::PiecewiseBezier;
 ///
-/// let seg1 = BsplineCurve::new(
+/// let seg1 = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(3),
 ///     vec![
 ///         Point3::new(0.0, 0.0, 0.0),
@@ -213,7 +213,7 @@ impl<P: ControlPoint<f64> + Tolerance> From<PowerBasisCurve<P>> for BsplineCurve
 ///         Point3::new(3.0, 0.0, 0.0),
 ///     ],
 /// );
-/// let seg2 = BsplineCurve::new(
+/// let seg2 = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(3),
 ///     vec![
 ///         Point3::new(3.0, 0.0, 0.0),
@@ -223,23 +223,22 @@ impl<P: ControlPoint<f64> + Tolerance> From<PowerBasisCurve<P>> for BsplineCurve
 ///     ],
 /// );
 /// let combined = BsplineCurve::from(PiecewiseBezier(vec![seg1, seg2]));
-/// assert_near2!(combined.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-/// assert_near2!(combined.subs(1.0), Point3::new(6.0, 0.0, 0.0));
+/// assert_near2!(combined.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+/// assert_near2!(combined.evaluate(1.0), Point3::new(6.0, 0.0, 0.0));
 /// ```
 #[derive(Clone, Debug)]
 pub struct PiecewiseBezier<P>(pub Vec<BsplineCurve<P>>);
 
 impl<P: ControlPoint<f64> + Tolerance> From<PiecewiseBezier<P>> for BsplineCurve<P> {
     fn from(pb: PiecewiseBezier<P>) -> Self {
-        let segments = pb.0;
+        let mut segments = pb.0;
         assert!(
             !segments.is_empty(),
             "PiecewiseBezier requires at least one segment"
         );
 
         if segments.len() == 1 {
-            // SAFETY: We just checked len() == 1.
-            return segments.into_iter().next().unwrap();
+            return segments.swap_remove(0);
         }
 
         let degree = segments[0].degree();
@@ -248,12 +247,14 @@ impl<P: ControlPoint<f64> + Tolerance> From<PiecewiseBezier<P>> for BsplineCurve
         // Clamped knot vector with C⁰ internal knots at segment boundaries.
         let mut knots = Vec::with_capacity(n_segs * degree + degree + 2);
         knots.extend(std::iter::repeat_n(0.0, degree + 1));
-        (1..n_segs).for_each(|i| knots.extend(std::iter::repeat_n(i as f64, degree)));
-        knots.extend(std::iter::repeat_n(n_segs as f64, degree + 1));
+        (1..n_segs).for_each(|i| knots.extend(std::iter::repeat_n(crate::usize_to_f64(i), degree)));
+        knots.extend(std::iter::repeat_n(crate::usize_to_f64(n_segs), degree + 1));
 
         // Normalize to [0, 1].
-        let max_knot = n_segs as f64;
-        knots.iter_mut().for_each(|k| *k /= max_knot);
+        let max_knot = crate::usize_to_f64(n_segs);
+        for k in &mut knots {
+            *k /= max_knot;
+        }
 
         // First segment fully, then skip shared first CP of subsequent segments.
         let mut control_points: Vec<P> = segments[0].control_points().clone();
@@ -261,17 +262,17 @@ impl<P: ControlPoint<f64> + Tolerance> From<PiecewiseBezier<P>> for BsplineCurve
             control_points.extend_from_slice(&seg.control_points()[1..]);
         });
 
-        BsplineCurve::new(KnotVector::from(knots), control_points)
+        Self::new_unchecked(KnotVector::from(knots), control_points)
     }
 }
 
-/// Computes the binomial coefficient C(n, k).
-fn binomial(n: usize, k: usize) -> usize {
-    if k > n {
-        return 0;
-    }
-    let k = k.min(n - k);
-    (0..k).fold(1, |acc, i| acc * (n - i) / (i + 1))
+/// Computes `C(numerator_n, k) / C(denominator_n, k)` without constructing either
+/// (potentially enormous) integer binomial coefficient.
+fn binomial_ratio(numerator_n: usize, denominator_n: usize, k: usize) -> f64 {
+    (0..k).fold(1.0, |ratio, offset| {
+        ratio * crate::usize_to_f64(numerator_n - offset)
+            / crate::usize_to_f64(denominator_n - offset)
+    })
 }
 
 #[cfg(test)]

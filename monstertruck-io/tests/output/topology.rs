@@ -12,7 +12,7 @@ const SOLID_JSONS: &[&str] = &[
 
 #[test]
 fn parse_solid() {
-    for json_file in SOLID_JSONS.iter() {
+    for json_file in SOLID_JSONS {
         let json = std::fs::read(json_file).unwrap();
         let solid: CompressedSolid = serde_json::from_reader(json.as_slice()).unwrap();
         let step_string =
@@ -27,7 +27,7 @@ fn parse_solid() {
 
 #[test]
 fn parse_shell() {
-    for json_file in SOLID_JSONS.iter() {
+    for json_file in SOLID_JSONS {
         let json = std::fs::read(json_file).unwrap();
         let mut solid: CompressedSolid = serde_json::from_reader(json.as_slice()).unwrap();
         let shell = solid.boundaries.pop().unwrap();

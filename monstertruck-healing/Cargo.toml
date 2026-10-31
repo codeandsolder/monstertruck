@@ -4,7 +4,6 @@ version = "0.4.1"
 authors = ["Moritz Moeller <virtualritz@protonmail.com>"]
 edition = "2024"
 description = "Shape healing for solids imported from other CAD systems"
-homepage = "https://github.com/virtualritz/monstertruck"
 repository = "https://github.com/virtualritz/monstertruck"
 license = "Apache-2.0"
 
@@ -15,6 +14,7 @@ step-test = []
 [dependencies]
 ahash = { workspace = true }
 itertools = { workspace = true }
+num-traits = { workspace = true }
 rustc-hash = { workspace = true }
 monstertruck-geometry = { workspace = true }
 monstertruck-traits = { workspace = true }

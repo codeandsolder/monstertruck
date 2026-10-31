@@ -6,7 +6,9 @@
 use super::classic;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::tessellation::{ExactTrimBoundary2D, Parallelizable};
-use monstertruck_topology::{errors::Error as TopologyError, shell::ShellCondition, *};
+use monstertruck_topology::{
+    Edge, Face, Solid, Vertex, errors::Error as TopologyError, shell, shell::ShellCondition, wire,
+};
 use thiserror::Error;
 
 /// Only solids consisting of faces whose surface is implemented this trait can be used for set operations.
@@ -264,6 +266,11 @@ pub struct ShellOrientationHints {
 }
 
 /// AND operation between two solids.
+///
+/// # Errors
+///
+/// Returns [`ShapeOpsError`] when the tolerance is invalid, no Boolean backend is
+/// available, or the backend cannot produce a valid result topology.
 pub fn and<C: CuttableTrimAwareShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
@@ -298,6 +305,11 @@ where
 /// fallback full-shell tessellation used only to recover shell orientation.
 ///
 /// Passing wrong hints can misclassify faces and produce invalid output.
+///
+/// # Errors
+///
+/// Returns [`ShapeOpsError`] when the tolerance is invalid, no Boolean backend is
+/// available, or the backend cannot produce a valid result topology.
 pub fn and_with_orientation_hints<C: CuttableTrimAwareShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
@@ -375,7 +387,7 @@ fn half_space_clip_margin(bounds: BoundingBox<Point3>, tol: f64) -> f64 {
 
 fn line_edge<C>(front: &Vertex<Point3>, back: &Vertex<Point3>) -> Edge<Point3, C>
 where Line<Point3>: ToSameGeometry<C> {
-    Edge::new(
+    Edge::new_unchecked(
         front,
         back,
         Line(front.point(), back.point()).to_same_geometry(),
@@ -460,7 +472,7 @@ where
             shell.push(face);
             shell
         });
-    Solid::try_new(vec![shell]).map_err(|source| ShapeOpsError::InvalidOutputShell {
+    Solid::new(vec![shell]).map_err(|source| ShapeOpsError::InvalidOutputShell {
         operation: HALF_SPACE_CLIP_OPERATION,
         source,
     })
@@ -498,6 +510,12 @@ where
 ///
 /// This is an explicit inspection operator. It is not used as a hidden
 /// shape-specific rescue path by generic Boolean operations.
+///
+/// # Errors
+///
+/// Returns [`ShapeOpsError`] for an invalid tolerance, a non-invertible clip
+/// transform, a clip that discards the entire solid, or any failure of the
+/// finite half-space Boolean construction.
 pub fn clip_half_space_z<C, S>(
     solid: &Solid<Point3, C, S>,
     world_to_clip: Matrix4,
@@ -623,6 +641,11 @@ fn face_on_clip_plane<C, S: ShapeOpsSurface>(
 /// intersection. A bespoke single-plane intersector would avoid the cuboid
 /// Boolean and be substantially faster; that is deferred as a Stage-4 perf
 /// follow-up.
+///
+/// # Errors
+///
+/// Returns [`ShapeOpsError`] for any failure reported by [`clip_half_space_z`],
+/// including invalid tolerances, non-invertible transforms, or a refused Boolean.
 pub fn plane_cut<C, S>(
     solid: &Solid<Point3, C, S>,
     world_to_clip: Matrix4,
@@ -655,6 +678,11 @@ where
 }
 
 /// OR operation between two solids.
+///
+/// # Errors
+///
+/// Returns [`ShapeOpsError`] when the tolerance is invalid, no Boolean backend is
+/// available, or the backend cannot produce a valid result topology.
 pub fn or<C: CuttableTrimAwareShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
@@ -683,6 +711,11 @@ where
 }
 
 /// Difference: the region inside `solid0` but outside `solid1`.
+///
+/// # Errors
+///
+/// Returns [`ShapeOpsError`] when the tolerance is invalid, no Boolean backend is
+/// available, or the backend cannot produce a valid result topology.
 pub fn difference<C: CuttableTrimAwareShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
@@ -711,6 +744,11 @@ where
 }
 
 /// Symmetric difference (XOR): the region inside exactly one of the solids.
+///
+/// # Errors
+///
+/// Returns [`ShapeOpsError`] when the tolerance is invalid, no Boolean backend is
+/// available, or the backend cannot produce a valid result topology.
 pub fn symmetric_difference<C: CuttableTrimAwareShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,

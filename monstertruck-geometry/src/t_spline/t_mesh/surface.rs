@@ -1,5 +1,16 @@
+#![expect(
+    clippy::many_single_char_names,
+    reason = "compact U/V derivative-order symbols mirror the tensor-product surface equations"
+)]
+
 use super::basis::{DIFF_EPS, basis_function_der};
-use super::*;
+use super::{
+    Arc, BoundedSurface, BsplineCurve, BsplineSurface, Error, InnerSpace, Invertible, KnotVector,
+    Matrix4, Origin, ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D,
+    Point3, Result, RwLock, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
+    SurfaceParameter, SurfaceParameterRange, Tmesh, TmeshConnectionType, TmeshControlPoint,
+    TmeshDirection, Transformed, Vector3, algo,
+};
 use serde::{Deserialize, Serialize};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -9,19 +20,19 @@ impl Tmesh<Point3> {
     ///
     /// Supports analytical derivatives up to 2nd order in each parameter direction.
     /// Falls back to finite differences for higher orders.
-    pub(super) fn analytical_der_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
-        // Generate knot vectors if stale.
-        if self.knot_vectors.read().is_none() {
-            // SAFETY: `analytical_der_mn` is only called from trait impls and internal methods
-            // that assume a well-formed mesh. Generation failure is unrecoverable here.
-            self.generate_knot_vectors()
-                .expect("T-mesh evaluation failed");
-        }
+    pub(super) fn try_analytical_der_mn(
+        &self,
+        m: usize,
+        n: usize,
+        u: f64,
+        v: f64,
+    ) -> Result<Vector3> {
+        // Orders are at most 2 in the analytical path, so max binomial index is 2.
+        const BINOM: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 2.0, 1.0]];
 
-        let borrow = self.knot_vectors.read();
-        // SAFETY: The `is_none` check above guarantees generation ran; if it succeeded the
-        // value is `Some`.
-        let all_kvs = borrow.as_ref().expect("Knot vectors should be generated");
+        if self.knot_vectors.read().is_none() {
+            self.generate_knot_vectors()?;
+        }
 
         let num_points = self.control_points.len();
         let n_cols = n + 1;
@@ -30,18 +41,24 @@ impl Tmesh<Point3> {
         // Flat layout with strided indexing [p][q][i] populated in [i][p][q] order -- the
         // transposed iteration prevents a clean iterator chain, so imperative indexing is used.
         let bd_stride = n_cols * num_points;
-        let mut basis_derivs = vec![0.0f64; (m + 1) * bd_stride];
-        for (i, (s_kv, t_kv)) in all_kvs.iter().enumerate().take(num_points) {
-            let s_slice = s_kv.as_slice();
-            let t_slice = t_kv.as_slice();
-            for p in 0..=m {
-                let s_val = basis_function_der(u, s_slice, p);
-                for q in 0..=n {
-                    let t_val = basis_function_der(v, t_slice, q);
-                    basis_derivs[p * bd_stride + q * num_points + i] = s_val * t_val;
+        let basis_derivs = {
+            let knot_vectors = self.knot_vectors.read();
+            let all_kvs = knot_vectors.as_ref().ok_or(Error::TmeshMalformedMesh)?;
+            let mut basis_derivs = vec![0.0f64; (m + 1) * bd_stride];
+            for (i, (s_kv, t_kv)) in all_kvs.iter().enumerate().take(num_points) {
+                let s_slice = s_kv.as_slice();
+                let t_slice = t_kv.as_slice();
+                for p in 0..=m {
+                    let s_val = basis_function_der(u, s_slice, p);
+                    for q in 0..=n {
+                        let t_val = basis_function_der(v, t_slice, q);
+                        basis_derivs[p * bd_stride + q * num_points + i] = s_val * t_val;
+                    }
                 }
             }
-        }
+            drop(knot_vectors);
+            basis_derivs
+        };
 
         // Compute partial derivatives of the numerator N and denominator W.
         // Flat layout: index [p * n_cols + q].
@@ -59,9 +76,9 @@ impl Tmesh<Point3> {
                 for (i, cp) in self.control_points.iter().enumerate() {
                     let b = basis_derivs[bd_base + i];
                     let pt = *cp.read().point();
-                    nx += b * pt.x;
-                    ny += b * pt.y;
-                    nz += b * pt.z;
+                    nx = f64::mul_add(b, pt.x, nx);
+                    ny = f64::mul_add(b, pt.y, ny);
+                    nz = f64::mul_add(b, pt.z, nz);
                     w += b;
                 }
                 let idx = p * n_cols + q;
@@ -70,15 +87,15 @@ impl Tmesh<Point3> {
             }
         }
 
-        // Precompute binomial coefficients (orders are at most 2, so max index is 2).
-        const BINOM: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 2.0, 1.0]];
-
         // Apply the general Leibniz rule for the derivative of a quotient S = N/W:
         // S^(m,n) = (1/W) * (N^(m,n) - sum_{(j,k) != (0,0)} C(m,j)*C(n,k) * W^(j,k) * S^(m-j,n-k)).
         let mut s_derivs = vec![Vector3::new(0.0, 0.0, 0.0); pq_size];
         let w0 = w_derivs[0];
 
-        #[allow(clippy::needless_range_loop)]
+        #[expect(
+            clippy::needless_range_loop,
+            reason = "tensor derivative assembly uses p and q as mathematical derivative orders"
+        )]
         for p in 0..=m {
             for q in 0..=n {
                 let idx = p * n_cols + q;
@@ -97,20 +114,24 @@ impl Tmesh<Point3> {
             }
         }
 
-        s_derivs[m * n_cols + n]
+        Ok(s_derivs[m * n_cols + n])
     }
 
-    /// Computes the Gaussian curvature K at `(u, v)` from the first and second fundamental forms.
-    pub(super) fn gaussian_curvature(&self, u: f64, v: f64) -> f64 {
-        let su = self.analytical_der_mn(1, 0, u, v);
-        let sv = self.analytical_der_mn(0, 1, u, v);
-        let suu = self.analytical_der_mn(2, 0, u, v);
-        let suv = self.analytical_der_mn(1, 1, u, v);
-        let svv = self.analytical_der_mn(0, 2, u, v);
+    pub(super) fn analytical_der_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
+        self.try_analytical_der_mn(m, n, u, v)
+            .unwrap_or_else(|_| Vector3::new(f64::NAN, f64::NAN, f64::NAN))
+    }
+
+    fn try_gaussian_curvature(&self, u: f64, v: f64) -> Result<f64> {
+        let su = self.try_analytical_der_mn(1, 0, u, v)?;
+        let sv = self.try_analytical_der_mn(0, 1, u, v)?;
+        let suu = self.try_analytical_der_mn(2, 0, u, v)?;
+        let suv = self.try_analytical_der_mn(1, 1, u, v)?;
+        let svv = self.try_analytical_der_mn(0, 2, u, v)?;
 
         let normal = su.cross(sv);
         let normal_len = normal.magnitude();
-        if normal_len.so_small() {
+        let curvature = if normal_len.so_small() {
             0.0
         } else {
             let n = normal / normal_len;
@@ -125,13 +146,22 @@ impl Tmesh<Point3> {
             let f = suv.dot(n);
             let g = svv.dot(n);
 
-            let denom = cap_e * cap_g - cap_f * cap_f;
+            let cap_f_squared = cap_f * cap_f;
+            let denom = f64::mul_add(cap_e, cap_g, -cap_f_squared);
             if denom.abs().so_small() {
                 0.0
             } else {
-                (e * g - f * f) / denom
+                let f_squared = f * f;
+                f64::mul_add(e, g, -f_squared) / denom
             }
-        }
+        };
+        Ok(curvature)
+    }
+
+    /// Computes the Gaussian curvature K at `(u, v)`.
+    #[cfg(test)]
+    pub(super) fn gaussian_curvature(&self, u: f64, v: f64) -> f64 {
+        self.try_gaussian_curvature(u, v).unwrap_or(f64::NAN)
     }
 
     /// Adaptively refines the T-mesh by inserting knots where Gaussian curvature exceeds the threshold.
@@ -145,7 +175,7 @@ impl Tmesh<Point3> {
     /// * `max_iterations` - Maximum number of refinement passes.
     /// * `initial_samples` - Grid density in each direction for the first pass (doubles each iteration).
     ///
-    /// # Returns
+    /// # Errors
     /// Total number of control points inserted, or an error if refinement fails.
     pub fn adaptive_refine(
         &mut self,
@@ -174,14 +204,17 @@ impl Tmesh<Point3> {
             t_lines.dedup_by(|a, b| (*a - *b).so_small());
 
             // Sample curvature on a grid and collect cells that exceed the threshold.
-            let step = 1.0 / samples as f64;
-            let high_curvature_cells: Vec<(f64, f64)> = (0..samples)
-                .flat_map(|i| {
-                    let u = (i as f64 + 0.5) * step;
-                    (0..samples).map(move |j| (u, (j as f64 + 0.5) * step))
-                })
-                .filter(|&(u, v)| self.gaussian_curvature(u, v).abs() > curvature_threshold)
-                .collect();
+            let step = 1.0 / crate::usize_to_f64(samples);
+            let mut high_curvature_cells = Vec::new();
+            for i in 0..samples {
+                let u = (crate::usize_to_f64(i) + 0.5) * step;
+                for j in 0..samples {
+                    let v = (crate::usize_to_f64(j) + 0.5) * step;
+                    if self.try_gaussian_curvature(u, v)?.abs() > curvature_threshold {
+                        high_curvature_cells.push((u, v));
+                    }
+                }
+            }
 
             if high_curvature_cells.is_empty() {
                 break;
@@ -220,10 +253,12 @@ impl Tmesh<Point3> {
                 }));
                 match result {
                     Ok(Ok(_)) => insertions += 1,
-                    Ok(Err(Error::TmeshExistingControlPoint))
-                    | Ok(Err(Error::TmeshConnectionNotFound))
-                    | Ok(Err(Error::TmeshControlPointNotFound))
-                    | Ok(Err(Error::TmeshKnotVectorsNotEqual))
+                    Ok(Err(
+                        Error::TmeshExistingControlPoint
+                        | Error::TmeshConnectionNotFound
+                        | Error::TmeshControlPointNotFound
+                        | Error::TmeshKnotVectorsNotEqual,
+                    ))
                     | Err(_) => {
                         // Restore from backup on any structural error or panic.
                         *self = backup;
@@ -249,7 +284,7 @@ impl ParametricSurface for Tmesh<Point3> {
     type Vector = Vector3;
 
     fn evaluate(&self, u: f64, v: f64) -> Point3 {
-        Tmesh::subs(self, u, v).expect("T-mesh evaluation failed")
+        Self::try_evaluate(self, u, v).unwrap_or_else(|_| Point3::new(f64::NAN, f64::NAN, f64::NAN))
     }
 
     fn derivative_u(&self, u: f64, v: f64) -> Vector3 { self.derivative_mn(1, 0, u, v) }
@@ -291,7 +326,9 @@ impl ParametricSurface for Tmesh<Point3> {
 
 impl ParametricSurface3D for Tmesh<Point3> {}
 
-impl BoundedSurface for Tmesh<Point3> {}
+impl BoundedSurface for Tmesh<Point3> {
+    fn range_tuple(&self) -> SurfaceParameterRange { ((0.0, 1.0), (0.0, 1.0)) }
+}
 
 impl ParameterDivision2D for Tmesh<Point3> {
     fn parameter_division(
@@ -322,7 +359,7 @@ impl Invertible for Tmesh<Point3> {
 
 impl Transformed<Matrix4> for Tmesh<Point3> {
     fn transform_by(&mut self, trans: Matrix4) {
-        use monstertruck_core::cgmath64::*;
+        use monstertruck_core::cgmath64::Transform;
         for cp in &self.control_points {
             let mut w = cp.write();
             let p = *w.point();
@@ -397,26 +434,37 @@ impl Serialize for Tmesh<Point3> {
         let mut connections = Vec::with_capacity(self.control_points.len());
 
         for cp in &self.control_points {
-            let r = cp.read();
-            points.push((*r.point(), r.knot_coordinates()));
+            let (position, knot_coordinates, point_connections) = {
+                let control_point = cp.read();
+                (
+                    *control_point.point(),
+                    control_point.knot_coordinates(),
+                    [
+                        control_point.get(TmeshDirection::Up).cloned(),
+                        control_point.get(TmeshDirection::Right).cloned(),
+                        control_point.get(TmeshDirection::Down).cloned(),
+                        control_point.get(TmeshDirection::Left).cloned(),
+                    ],
+                )
+            };
+            points.push((position, knot_coordinates));
 
             let mut cons = [None; 4];
-            for dir in TmeshDirection::iter() {
-                cons[dir as usize] = match r.con_type(dir) {
-                    TmeshConnectionType::Tjunction => None,
-                    // SAFETY: `Edge` connections always have a knot interval.
-                    TmeshConnectionType::Edge => Some((None, r.connection_knot(dir).unwrap())),
-                    TmeshConnectionType::Point => {
-                        let connected = r.connected_point(dir);
-                        // SAFETY: the connected point came from this mesh,
-                        // so it must exist in `self.control_points`.
-                        let idx = self
+            for (index, connection) in point_connections.iter().enumerate() {
+                cons[index] = match connection.as_ref() {
+                    None => None,
+                    Some((None, interval)) => Some((None, *interval)),
+                    Some((Some(connected), interval)) => {
+                        let connected_index = self
                             .control_points
                             .iter()
-                            .position(|p| std::ptr::eq(p.as_ref(), connected.as_ref()))
-                            .unwrap();
-                        // SAFETY: `Point` connections always have a knot interval.
-                        Some((Some(idx), r.connection_knot(dir).unwrap()))
+                            .position(|point| Arc::ptr_eq(point, connected))
+                            .ok_or_else(|| {
+                                serde::ser::Error::custom(
+                                    "T-mesh connection points outside the serialized mesh",
+                                )
+                            })?;
+                        Some((Some(connected_index), *interval))
                     }
                 };
             }
@@ -460,8 +508,8 @@ impl<'de> Deserialize<'de> for Tmesh<Point3> {
                             .remove_connection(dir.flip())
                             .ok();
                         TmeshControlPoint::connect(
-                            Arc::clone(&points[point_index]),
-                            Arc::clone(&points[*con_index]),
+                            &points[point_index],
+                            &points[*con_index],
                             dir,
                             *ki,
                         )
@@ -485,7 +533,7 @@ impl<'de> Deserialize<'de> for Tmesh<Point3> {
             points[i].write().knot_coordinates = *kc;
         }
 
-        Ok(Tmesh {
+        Ok(Self {
             control_points: points,
             knot_vectors: RwLock::new(None),
         })
@@ -497,7 +545,7 @@ impl<'de> Deserialize<'de> for Tmesh<Point3> {
 fn greville_abscissae(knots: &KnotVector, degree: usize) -> Vec<f64> {
     let n = knots.len() - degree - 1;
     (0..n)
-        .map(|i| (1..=degree).map(|j| knots[i + j]).sum::<f64>() / degree as f64)
+        .map(|i| (1..=degree).map(|j| knots[i + j]).sum::<f64>() / crate::usize_to_f64(degree))
         .collect()
 }
 
@@ -512,7 +560,10 @@ impl Tmesh<Point3> {
     /// `division` controls the number of spans in each parametric direction.
     /// Higher values give better approximation at the cost of more control
     /// points: `division + 3` control points per direction.
-    pub fn to_bspline_surface(&self, division: usize) -> BsplineSurface<Point3> {
+    ///
+    /// # Errors
+    /// Propagates T-spline evaluation and B-spline interpolation errors.
+    pub fn to_bspline_surface(&self, division: usize) -> Result<BsplineSurface<Point3>> {
         let u_knots = KnotVector::uniform_knot(3, division);
         let v_knots = KnotVector::uniform_knot(3, division);
         let n = division + 3;
@@ -526,7 +577,7 @@ impl Tmesh<Point3> {
             .map(|&u| {
                 v_grev
                     .iter()
-                    .map(|&v| ParametricSurface::subs(self, u, v))
+                    .map(|&v| ParametricSurface::evaluate(self, u, v))
                     .collect()
             })
             .collect();
@@ -538,14 +589,13 @@ impl Tmesh<Point3> {
                 let params: Vec<(f64, Point3)> =
                     v_grev.iter().copied().zip(row.iter().copied()).collect();
                 BsplineCurve::try_interpolate(v_knots.clone(), params)
-                    .expect("V-direction interpolation failed")
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
         // Collect intermediate control points (one row per u-sample).
         let intermediate: Vec<Vec<Point3>> = row_curves
             .iter()
-            .map(|c| c.control_points().to_vec())
+            .map(|c| c.control_points().clone())
             .collect();
 
         // Interpolate each column (u-direction) through the intermediate control points.
@@ -557,11 +607,10 @@ impl Tmesh<Point3> {
                     .copied()
                     .zip(intermediate.iter().map(|row| row[j]))
                     .collect();
-                let col_curve = BsplineCurve::try_interpolate(u_knots.clone(), params)
-                    .expect("U-direction interpolation failed");
-                col_curve.control_points().to_vec()
+                BsplineCurve::try_interpolate(u_knots.clone(), params)
+                    .map(|curve| curve.control_points().clone())
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
         // Transpose from [V][U] to [U][V] for BsplineSurface.
         let control_points: Vec<Vec<Point3>> = (0..n)

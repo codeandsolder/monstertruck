@@ -28,27 +28,29 @@ impl ParametricCurve for Segment {
             _ => Vector3::zero(),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, t: f64) -> Point3 {
         self.ends.0
             + (self.ends.1 - self.ends.0) * (t - self.range.0) / (self.range.1 - self.range.0)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative(&self, _: f64) -> Vector3 {
         (self.ends.1 - self.ends.0) / (self.range.1 - self.range.0)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_2(&self, _: f64) -> Vector3 { Vector3::zero() }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> ParameterRange {
         (Bound::Included(self.range.0), Bound::Included(self.range.1))
     }
 }
 
-impl BoundedCurve for Segment {}
+impl BoundedCurve for Segment {
+    fn range_tuple(&self) -> (f64, f64) { self.range }
+}
 
 impl ParameterTransform for Segment {
-    #[inline(always)]
+    #[inline]
     fn parameter_transform(&mut self, scalar: f64, r#move: f64) -> &mut Self {
         self.range.0 = self.range.0 * scalar + r#move;
         self.range.1 = self.range.1 * scalar + r#move;
@@ -57,9 +59,9 @@ impl ParameterTransform for Segment {
 }
 
 impl Cut for Segment {
-    #[inline(always)]
+    #[inline]
     fn cut(&mut self, t: f64) -> Self {
-        let p = self.subs(t);
+        let p = self.evaluate(t);
         let res = Segment {
             ends: (p, self.ends.1),
             range: (t, self.range.1),
@@ -74,7 +76,7 @@ impl Cut for Segment {
 
 impl Concat<Segment> for Segment {
     type Output = Segment;
-    #[inline(always)]
+    #[inline]
     fn try_concat(&self, rhs: &Self) -> std::result::Result<Self, ConcatError<Point3>> {
         if !self.range.1.near(&rhs.range.0) {
             Err(ConcatError::DisconnectedParameters(
@@ -115,7 +117,7 @@ impl SearchParameter<CurveParameter> for Segment {
 }
 
 impl Invertible for Segment {
-    #[inline(always)]
+    #[inline]
     fn invert(&mut self) {
         *self = Segment {
             ends: (self.ends.1, self.ends.0),
@@ -127,9 +129,9 @@ impl Invertible for Segment {
 #[test]
 fn segment_test() {
     let seg = Segment::new(Point3::new(1.2, 2.3, 3.4), Point3::new(2.4, 3.5, 4.6));
-    assert_near!(seg.subs(0.5), Point3::new(1.8, 2.9, 4.0));
-    assert_near!(seg.der(0.5), Vector3::new(1.2, 1.2, 1.2));
-    assert_eq!(seg.der2(0.5), Vector3::zero());
+    assert_near!(seg.evaluate(0.5), Point3::new(1.8, 2.9, 4.0));
+    assert_near!(seg.derivative(0.5), Vector3::new(1.2, 1.2, 1.2));
+    assert_eq!(seg.derivative_2(0.5), Vector3::zero());
     parameter_transform_random_test(&seg, 100);
     cut_random_test(&seg, 100);
 
@@ -139,7 +141,7 @@ fn segment_test() {
         ConcatError::DisconnectedParameters(1.0, 0.0)
     );
     seg0.parameter_transform(1.0, 1.0);
-    concat_random_test(&seg, &seg0, 100);
+    concat_random_test(&seg, &seg0, 100).expect("segments concatenate");
     seg0.ends.0 += Vector3::new(1.0, 0.0, 0.0);
     seg0.ends.1 += Vector3::new(1.0, 0.0, 0.0);
     assert_eq!(
@@ -147,7 +149,7 @@ fn segment_test() {
         ConcatError::DisconnectedPoints(Point3::new(2.4, 3.5, 4.6), Point3::new(3.4, 3.5, 4.6))
     );
 
-    let pt = seg.subs(0.324);
+    let pt = seg.evaluate(0.324);
     let a = seg.search_parameter(pt, None, 0).unwrap();
     assert_near!(a, 0.324);
     assert!(
@@ -168,34 +170,34 @@ fn solid_cut_edge() -> anyhow::Result<()> {
     ];
     let v = Vertex::from_points(&p);
     let edge = [
-        Edge::new(&v[0], &v[1], Segment::new(p[0], p[1])),
-        Edge::new(&v[0], &v[2], Segment::new(p[0], p[2])),
-        Edge::new(&v[0], &v[3], Segment::new(p[0], p[3])),
-        Edge::new(&v[1], &v[2], Segment::new(p[1], p[2])),
-        Edge::new(&v[1], &v[3], Segment::new(p[1], p[3])),
-        Edge::new(&v[2], &v[3], Segment::new(p[2], p[3])),
+        Edge::new_unchecked(&v[0], &v[1], Segment::new(p[0], p[1])),
+        Edge::new_unchecked(&v[0], &v[2], Segment::new(p[0], p[2])),
+        Edge::new_unchecked(&v[0], &v[3], Segment::new(p[0], p[3])),
+        Edge::new_unchecked(&v[1], &v[2], Segment::new(p[1], p[2])),
+        Edge::new_unchecked(&v[1], &v[3], Segment::new(p[1], p[3])),
+        Edge::new_unchecked(&v[2], &v[3], Segment::new(p[2], p[3])),
     ];
     let shell: Shell<_, _, _> = vec![
-        Face::new(
+        Face::new_unchecked(
             vec![vec![edge[0].clone(), edge[3].clone(), edge[1].inverse()].into()],
             (),
         ),
-        Face::new(
+        Face::new_unchecked(
             vec![vec![edge[1].clone(), edge[5].clone(), edge[2].inverse()].into()],
             (),
         ),
-        Face::new(
+        Face::new_unchecked(
             vec![vec![edge[2].clone(), edge[4].inverse(), edge[0].inverse()].into()],
             (),
         ),
-        Face::new(
+        Face::new_unchecked(
             vec![vec![edge[3].clone(), edge[5].clone(), edge[4].inverse()].into()],
             (),
         )
         .inverse(),
     ]
     .into();
-    let mut tri = Solid::new(vec![shell]);
+    let mut tri = Solid::new_unchecked(vec![shell]);
     assert!(tri.cut_edge(edge[1].id(), &v[4]).is_some());
     let count = tri.edge_iter().count();
     assert_eq!(count, 14);
@@ -206,12 +208,12 @@ fn solid_cut_edge() -> anyhow::Result<()> {
         .map(|shell| -> Result<Shell<_, _, _>> {
             let faces: Vec<_> = shell
                 .into_iter()
-                .map(|face| Face::new(face.boundaries(), ()))
+                .map(|face| Face::new_unchecked(face.boundaries(), ()))
                 .collect();
             Ok(faces.into())
         })
         .collect::<Result<Vec<_>>>()?;
-    Solid::new(new_shells);
+    let _ = Solid::new_unchecked(new_shells);
 
     assert!(tri.remove_vertex_by_concat_edges(v[4].id()).is_some());
     let count = tri.edge_iter().count();

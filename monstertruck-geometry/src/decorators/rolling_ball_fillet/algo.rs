@@ -1,4 +1,14 @@
-use super::*;
+#![expect(
+    clippy::similar_names,
+    reason = "paired derivative-order and U/V names mirror the rolling-ball equations"
+)]
+
+use super::{
+    ContactCircle, CurveDerivatives, Debug, EuclideanSpace, HashGen, InnerSpace, Matrix, Matrix2,
+    Matrix3, MetricSpace, Mul, PI, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
+    Point2, Point3, Rad, RadiusFunction, RollingBallFilletSurface, SearchParameter, SquareMatrix,
+    SurfaceDerivatives, SurfaceParameter, Vector2, Vector3, Zero,
+};
 const MUL: fn(f64, f64) -> f64 = f64::mul;
 const DOT: fn(Vector3, Vector3) -> f64 = Vector3::dot;
 const CROSS: fn(Vector3, Vector3) -> Vector3 = Vector3::cross;
@@ -45,7 +55,7 @@ where
     }
 
     /// Calculate higher-order derivatives of the center curve and the contact curves.
-    pub fn center_contact_ders(&self, cc: ContactCircle, n: usize) -> CenterContactDers {
+    pub fn center_contact_ders(&self, cc: ContactCircle, n: usize) -> Option<CenterContactDers> {
         let rders = self.radius.derivatives(n + 1, cc.t);
         self.sub_center_contacts_ders(cc, &rders, n)
     }
@@ -55,7 +65,7 @@ where
         cc: ContactCircle,
         rders: &CurveDerivatives<f64>,
         n: usize,
-    ) -> CenterContactDers {
+    ) -> Option<CenterContactDers> {
         let Point2 { x: u0, y: v0 } = cc.contact_point0.uv;
         let mut s0info = SurfaceInfo::new(&self.surface0, (u0, v0), n + 1);
         let Point2 { x: u1, y: v1 } = cc.contact_point1.uv;
@@ -66,21 +76,23 @@ where
         let mut ders = CurveDerivatives::new(n);
         ders[0] = cc.center.to_vec();
 
-        (1..=n).for_each(|m| der_routine(&mut s0info, &mut s1info, &cders, rders, &mut ders, m));
-
-        CenterContactDers {
-            center_ders: ders,
-            contact0_ders: s0info.tders,
-            contact1_ders: s1info.tders,
-            uv0_ders: s0info.uvders,
-            uv1_ders: s1info.uvders,
+        for m in 1..=n {
+            der_routine(&mut s0info, &mut s1info, &cders, rders, &mut ders, m)?;
         }
+
+        Some(CenterContactDers {
+            center: ders,
+            contact0: s0info.tders,
+            contact1: s1info.tders,
+            uv0: s0info.uvders,
+            uv1: s1info.uvders,
+        })
     }
 
-    pub(super) fn vder_info(&self, cc: ContactCircle, n: usize) -> VderInfo {
+    pub(super) fn vder_info(&self, cc: ContactCircle, n: usize) -> Option<VderInfo> {
         let rders = self.radius.derivatives(n + 1, cc.t);
-        let cc_ders = self.sub_center_contacts_ders(cc, &rders, n);
-        cc_ders.vder_info(&rders)
+        let cc_ders = self.sub_center_contacts_ders(cc, &rders, n)?;
+        Some(cc_ders.vder_info(&rders))
     }
 
     pub(super) fn parameter_division_u(
@@ -90,15 +102,16 @@ where
     ) -> Option<Vec<f64>> {
         const N: usize = 10;
         let n_f = (0..=N).try_fold(0.0, |n_max, i| {
-            let v = v0 + (v1 - v0) * i as f64 / N as f64;
+            let v = v0 + (v1 - v0) * crate::usize_to_f64(i) / crate::usize_to_f64(N);
             let cc = self.contact_circle(v)?;
             let r = (cc.contact_point0.point - cc.center).magnitude();
             let n_f = cc.angle.0 / (2.0 * f64::acos(1.0 - tol / r));
             Some(f64::max(n_f, n_max))
         })?;
         let u_delta = u1 - u0;
-        let n = f64::ceil(u_delta * n_f) as usize;
-        let closure = move |i: usize| u0 + u_delta * i as f64 / n as f64;
+        let n = crate::ceil_segment_count(u_delta * n_f)?;
+        let closure =
+            move |i: usize| u0 + u_delta * crate::usize_to_f64(i) / crate::usize_to_f64(n);
         Some((0..=n).map(closure).collect())
     }
 }
@@ -106,26 +119,21 @@ where
 /// Derivations of centers and contact points
 #[derive(Clone, Copy, Debug)]
 pub struct CenterContactDers {
-    pub center_ders: CurveDerivatives<Vector3>,
-    pub contact0_ders: CurveDerivatives<Vector3>,
-    pub contact1_ders: CurveDerivatives<Vector3>,
-    pub uv0_ders: CurveDerivatives<Vector2>,
-    pub uv1_ders: CurveDerivatives<Vector2>,
+    pub center: CurveDerivatives<Vector3>,
+    pub contact0: CurveDerivatives<Vector3>,
+    pub contact1: CurveDerivatives<Vector3>,
+    pub uv0: CurveDerivatives<Vector2>,
+    pub uv1: CurveDerivatives<Vector2>,
 }
 
 impl CenterContactDers {
     fn cross_ders(&self) -> CurveDerivatives<Vector3> {
         let sub = |x, y| x - y;
-        let cp0 = self
-            .contact0_ders
-            .element_wise_derivatives(&self.center_ders, sub);
-        let cp1 = self
-            .contact1_ders
-            .element_wise_derivatives(&self.center_ders, sub);
+        let cp0 = self.contact0.element_wise_derivatives(&self.center, sub);
+        let cp1 = self.contact1.element_wise_derivatives(&self.center, sub);
         cp0.combinatorial_derivatives(&cp1, CROSS)
     }
     fn axis_ders(
-        &self,
         cross_ders: &CurveDerivatives<Vector3>,
         abs_cross_ders: &CurveDerivatives<f64>,
     ) -> CurveDerivatives<Vector3> {
@@ -147,11 +155,11 @@ impl CenterContactDers {
         });
 
         let cp0 = self
-            .contact0_ders
-            .element_wise_derivatives(&self.center_ders, |x, y| x - y);
+            .contact0
+            .element_wise_derivatives(&self.center, |x, y| x - y);
         let cp1 = self
-            .contact1_ders
-            .element_wise_derivatives(&self.center_ders, |x, y| x - y);
+            .contact1
+            .element_wise_derivatives(&self.center, |x, y| x - y);
         let dot_ders = cp0.combinatorial_derivatives(&cp1, DOT);
 
         let mut angle_ders = CurveDerivatives::new(n);
@@ -161,7 +169,7 @@ impl CenterContactDers {
                 .derivative()
                 .combinatorial_derivative(abs_cross_ders, MUL, m - 1);
             let sum1 = r_rat_ders.combinatorial_derivative(&dot_ders, MUL, m - 1);
-            angle_ders[m] = (2.0 * sum1 - dot_ders[m] - sum0) / abs_cross_ders[0]
+            angle_ders[m] = (2.0f64.mul_add(sum1, -dot_ders[m]) - sum0) / abs_cross_ders[0];
         });
         angle_ders
     }
@@ -169,30 +177,217 @@ impl CenterContactDers {
         let cross_ders = self.cross_ders();
         let abs_cross_ders = cross_ders.absolute_derivatives();
         VderInfo {
-            axis_ders: self.axis_ders(&cross_ders, &abs_cross_ders),
-            angle_ders: self.angle_ders(&abs_cross_ders, rders),
-            cc_ders: self,
+            axis: Self::axis_ders(&cross_ders, &abs_cross_ders),
+            angle: self.angle_ders(&abs_cross_ders, rders),
+            center_contact: self,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct VderInfo {
-    cc_ders: CenterContactDers,
-    axis_ders: CurveDerivatives<Vector3>,
-    angle_ders: CurveDerivatives<f64>,
+    center_contact: CenterContactDers,
+    axis: CurveDerivatives<Vector3>,
+    angle: CurveDerivatives<f64>,
+}
+
+/// Truncated Taylor series with coefficients normalized by `1 / n!`.
+///
+/// Using normalized coefficients makes products ordinary convolutions. The
+/// rolling-ball surface only needs a univariate jet in the edge parameter:
+/// after taking `m` derivatives in the circle parameter `u`, its remaining
+/// dependence on `v` is
+///
+/// `center(v) + angle(v)^m * d^mR/dphi^m(axis(v), angle(v) * u) * radius(v)`.
+///
+/// This lets the existing exact center/contact/axis/angle derivative machinery
+/// extend to every mixed order without numerical differencing.
+#[derive(Clone, Debug)]
+struct Taylor {
+    coeffs: Vec<f64>,
+}
+
+impl Taylor {
+    fn from_derivatives(order: usize, mut derivative: impl FnMut(usize) -> f64) -> Self {
+        let mut coeffs = Vec::with_capacity(order + 1);
+        let mut factorial = 1.0;
+        let mut next_factor = 2.0;
+        for index in 0..=order {
+            if index > 1 {
+                factorial *= next_factor;
+                next_factor += 1.0;
+            }
+            coeffs.push(derivative(index) / factorial);
+        }
+        Self { coeffs }
+    }
+
+    fn constant(value: f64, order: usize) -> Self {
+        let mut coeffs = vec![0.0; order + 1];
+        coeffs[0] = value;
+        Self { coeffs }
+    }
+
+    const fn order(&self) -> usize { self.coeffs.len() - 1 }
+
+    fn add(&self, rhs: &Self) -> Self {
+        let order = self.order().min(rhs.order());
+        Self {
+            coeffs: (0..=order)
+                .map(|index| self.coeffs[index] + rhs.coeffs[index])
+                .collect(),
+        }
+    }
+
+    fn sub(&self, rhs: &Self) -> Self {
+        let order = self.order().min(rhs.order());
+        Self {
+            coeffs: (0..=order)
+                .map(|index| self.coeffs[index] - rhs.coeffs[index])
+                .collect(),
+        }
+    }
+
+    fn mul(&self, rhs: &Self) -> Self {
+        let order = self.order().min(rhs.order());
+        let mut coeffs = vec![0.0; order + 1];
+        for (degree, coefficient) in coeffs.iter_mut().enumerate() {
+            *coefficient = (0..=degree)
+                .map(|left| self.coeffs[left] * rhs.coeffs[degree - left])
+                .sum();
+        }
+        Self { coeffs }
+    }
+
+    fn powu(&self, exponent: usize) -> Self {
+        let mut result = Self::constant(1.0, self.order());
+        for _ in 0..exponent {
+            result = result.mul(self);
+        }
+        result
+    }
+
+    fn sin_cos(&self) -> (Self, Self) {
+        let order = self.order();
+        let mut sin = vec![0.0; order + 1];
+        let mut cos = vec![0.0; order + 1];
+        (sin[0], cos[0]) = self.coeffs[0].sin_cos();
+        let mut degree_f = 1.0;
+        for degree in 1..=order {
+            let mut sin_derivative = 0.0;
+            let mut cos_derivative = 0.0;
+            let mut index_f = 1.0;
+            for index in 1..=degree {
+                let factor = index_f * self.coeffs[index];
+                sin_derivative = factor.mul_add(cos[degree - index], sin_derivative);
+                cos_derivative = factor.mul_add(-sin[degree - index], cos_derivative);
+                index_f += 1.0;
+            }
+            sin[degree] = sin_derivative / degree_f;
+            cos[degree] = cos_derivative / degree_f;
+            degree_f += 1.0;
+        }
+        (Self { coeffs: sin }, Self { coeffs: cos })
+    }
+
+    fn derivative_value(&self, order: usize) -> f64 {
+        let mut factorial = 1.0;
+        let mut factor = 2.0;
+        for _ in 2..=order {
+            factorial *= factor;
+            factor += 1.0;
+        }
+        self.coeffs[order] * factorial
+    }
+}
+
+fn vector_component_taylor(
+    derivatives: &CurveDerivatives<Vector3>,
+    order: usize,
+    component: usize,
+) -> Taylor {
+    Taylor::from_derivatives(order, |index| derivatives[index][component])
+}
+
+fn rotation_derivative_times_vector(
+    axis_ders: &CurveDerivatives<Vector3>,
+    angle_ders: &CurveDerivatives<f64>,
+    vector_ders: &CurveDerivatives<Vector3>,
+    u_order: usize,
+    v_order: usize,
+    u: f64,
+) -> Vector3 {
+    let axis = std::array::from_fn::<_, 3, _>(|component| {
+        vector_component_taylor(axis_ders, v_order, component)
+    });
+    let mut phase = Taylor::from_derivatives(v_order, |index| angle_ders[index] * u);
+    for _ in 0..u_order {
+        phase.coeffs[0] += PI / 2.0;
+    }
+    let (sin, cos) = phase.sin_cos();
+    let k = Taylor::constant(if u_order == 0 { 1.0 } else { 0.0 }, v_order).sub(&cos);
+    let angle_power = Taylor::from_derivatives(v_order, |index| angle_ders[index]).powu(u_order);
+    let vector = std::array::from_fn::<_, 3, _>(|component| {
+        vector_component_taylor(vector_ders, v_order, component)
+    });
+
+    let x_times_y = axis[0].mul(&axis[1]);
+    let x_times_z = axis[0].mul(&axis[2]);
+    let y_times_z = axis[1].mul(&axis[2]);
+    let xx = k.mul(&axis[0].mul(&axis[0])).add(&cos);
+    let yy = k.mul(&axis[1].mul(&axis[1])).add(&cos);
+    let zz = k.mul(&axis[2].mul(&axis[2])).add(&cos);
+    let xy = k.mul(&x_times_y);
+    let xz = k.mul(&x_times_z);
+    let yz = k.mul(&y_times_z);
+    let sx = sin.mul(&axis[0]);
+    let sy = sin.mul(&axis[1]);
+    let sz = sin.mul(&axis[2]);
+
+    let rotated = [
+        xx.mul(&vector[0])
+            .add(&xy.sub(&sz).mul(&vector[1]))
+            .add(&xz.add(&sy).mul(&vector[2])),
+        xy.add(&sz)
+            .mul(&vector[0])
+            .add(&yy.mul(&vector[1]))
+            .add(&yz.sub(&sx).mul(&vector[2])),
+        xz.sub(&sy)
+            .mul(&vector[0])
+            .add(&yz.add(&sx).mul(&vector[1]))
+            .add(&zz.mul(&vector[2])),
+    ];
+
+    Vector3::new(
+        angle_power.mul(&rotated[0]).derivative_value(v_order),
+        angle_power.mul(&rotated[1]).derivative_value(v_order),
+        angle_power.mul(&rotated[2]).derivative_value(v_order),
+    )
 }
 
 impl VderInfo {
+    pub(super) fn derivative_mn(&self, m: usize, n: usize, u: f64) -> Vector3 {
+        let radius_ders = self
+            .center_contact
+            .contact0
+            .element_wise_derivatives(&self.center_contact.center, |point, center| point - center);
+        let rotated =
+            rotation_derivative_times_vector(&self.axis, &self.angle, &radius_ders, m, n, u);
+        if m == 0 {
+            rotated + self.center_contact.center[n]
+        } else {
+            rotated
+        }
+    }
     pub(super) fn derivative_v(&self, u: f64) -> Vector3 {
-        let VderInfo {
-            cc_ders,
-            axis_ders,
-            angle_ders,
+        let Self {
+            center_contact: cc_ders,
+            axis: axis_ders,
+            angle: angle_ders,
         } = self;
-        let cp0 = cc_ders.contact0_ders[0] - cc_ders.center_ders[0];
-        let dp0 = cc_ders.contact0_ders[1];
-        let dc = cc_ders.center_ders[1];
+        let cp0 = cc_ders.contact0[0] - cc_ders.center[0];
+        let dp0 = cc_ders.contact0[1];
+        let dc = cc_ders.center[1];
         let rot = Matrix3::from_axis_angle(axis_ders[0], Rad(angle_ders[0] * u));
         let dm = std::array::from_fn::<_, 4, _>(|index| {
             let mut orders = [0; 4];
@@ -205,10 +400,10 @@ impl VderInfo {
         dc + drot * cp0 + rot * (dp0 - dc)
     }
     pub(super) fn derivative_uv(&self, u: f64) -> Vector3 {
-        let VderInfo {
-            cc_ders,
-            axis_ders,
-            angle_ders,
+        let Self {
+            center_contact: cc_ders,
+            axis: axis_ders,
+            angle: angle_ders,
         } = self;
 
         let (axis, daxis) = (axis_ders[0], axis_ders[1]);
@@ -221,20 +416,20 @@ impl VderInfo {
                 + daxis.y * rot_der_n([0, 1, 0, 1], axis, angle * u)
                 + daxis.z * rot_der_n([0, 0, 1, 1], axis, angle * u));
 
-        let cp0 = cc_ders.contact0_ders[0] - cc_ders.center_ders[0];
-        let dcp0 = cc_ders.contact0_ders[1] - cc_ders.center_ders[1];
+        let cp0 = cc_ders.contact0[0] - cc_ders.center[0];
+        let dcp0 = cc_ders.contact0[1] - cc_ders.center[1];
         (rot_axis + rot_uv) * cp0 + rot_u * dcp0
     }
     pub(super) fn derivative_vv(&self, u: f64) -> Vector3 {
-        let VderInfo {
-            cc_ders,
-            axis_ders,
-            angle_ders,
+        let Self {
+            center_contact: cc_ders,
+            axis: axis_ders,
+            angle: angle_ders,
         } = self;
-        let ddc = cc_ders.center_ders[2];
-        let cp0 = cc_ders.contact0_ders[0] - cc_ders.center_ders[0];
-        let dcp0 = cc_ders.contact0_ders[1] - cc_ders.center_ders[1];
-        let ddcp0 = cc_ders.contact0_ders[2] - cc_ders.center_ders[2];
+        let ddc = cc_ders.center[2];
+        let cp0 = cc_ders.contact0[0] - cc_ders.center[0];
+        let dcp0 = cc_ders.contact0[1] - cc_ders.center[1];
+        let ddcp0 = cc_ders.contact0[2] - cc_ders.center[2];
 
         let (axis, angle) = (axis_ders[0], angle_ders[0] * u);
         let aa_ders = std::array::from_fn::<_, 3, _>(|i| axis_ders[i].extend(angle_ders[i] * u));
@@ -313,8 +508,8 @@ impl SurfaceInfo {
         }
     }
 
-    fn routine(&mut self, ders: &CurveDerivatives<Vector3>, n: usize) {
-        let SurfaceInfo {
+    fn routine(&mut self, ders: &CurveDerivatives<Vector3>, n: usize) -> Option<()> {
+        let Self {
             ders: sders,
             uvders,
             tders,
@@ -324,16 +519,16 @@ impl SurfaceInfo {
             abs_crossders,
             nders,
         } = self;
-        let sder_n_prime = sders.composite_der(uvders, n);
+        let sder_n_prime = sders.composite_der(uvders, n)?;
 
         let ders_sub = tders.element_wise_derivatives(ders, |x, y| x - y);
 
         let mut lhs_u = uderders.combinatorial_derivative(&ders_sub, DOT, n);
-        let uder_n_prime = sders.derivative_u().composite_der(uvders, n);
+        let uder_n_prime = sders.derivative_u().composite_der(uvders, n)?;
         lhs_u += uderders[0].dot(sder_n_prime) + uder_n_prime.dot(ders_sub[0]);
 
         let mut lhs_v = vderders.combinatorial_derivative(&ders_sub, DOT, n);
-        let vder_n_prime = sders.derivative_v().composite_der(uvders, n);
+        let vder_n_prime = sders.derivative_v().composite_der(uvders, n)?;
         lhs_v += vderders[0].dot(sder_n_prime) + vder_n_prime.dot(ders_sub[0]);
 
         let cp = tders[0] - ders[0];
@@ -341,12 +536,10 @@ impl SurfaceInfo {
         let uv = sders[1][0].dot(sders[0][1]) + sders[1][1].dot(cp);
         let vv = sders[0][1].magnitude2() + sders[0][2].dot(cp);
         let mat = Matrix2::new(uu, uv, uv, vv);
-        // SAFETY: the matrix is the first fundamental form plus curvature terms of a
-        // regular surface, which is positive definite and therefore invertible.
-        uvders[n] = -mat.invert().unwrap() * Vector2::new(lhs_u, lhs_v);
-        tders[n] = sders.composite_der(uvders, n);
-        uderders[n] = sders.derivative_u().composite_der(uvders, n);
-        vderders[n] = sders.derivative_v().composite_der(uvders, n);
+        uvders[n] = -mat.invert()? * Vector2::new(lhs_u, lhs_v);
+        tders[n] = sders.composite_der(uvders, n)?;
+        uderders[n] = sders.derivative_u().composite_der(uvders, n)?;
+        vderders[n] = sders.derivative_v().composite_der(uvders, n)?;
 
         crossders[n] = uderders.combinatorial_derivative(vderders, CROSS, n);
         let sum = crossders
@@ -358,6 +551,7 @@ impl SurfaceInfo {
         abs_crossders[n] = sum / abs_crossders[0];
         let homog = crossders.element_wise_derivatives(abs_crossders, Vector3::extend);
         nders[n] = homog.rational_derivatives()[n];
+        Some(())
     }
 }
 
@@ -368,7 +562,7 @@ fn der_routine(
     rders: &CurveDerivatives<f64>,
     ders: &mut CurveDerivatives<Vector3>,
     n: usize,
-) {
+) -> Option<()> {
     let (n0ders, n1ders) = (&s0info.nders, &s1info.nders);
     let mat = Matrix3::from_cols(cders[1], n0ders[0], n1ders[0]).transpose();
     let (der_cders, der_ders) = (cders.derivative(), ders.derivative());
@@ -378,28 +572,32 @@ fn der_routine(
         rders[n] - der_ders.combinatorial_derivative(n0ders, DOT, n - 1),
         rders[n] - der_ders.combinatorial_derivative(n1ders, DOT, n - 1),
     );
-    // SAFETY: the matrix columns are the edge curve tangent and two surface normals,
-    // which are linearly independent at a valid fillet configuration.
-    ders[n] = mat.invert().unwrap() * b;
+    ders[n] = mat.invert()? * b;
 
-    s0info.routine(ders, n);
-    s1info.routine(ders, n);
+    s0info.routine(ders, n)?;
+    s1info.routine(ders, n)?;
+    Some(())
 }
 
 fn rot_der_n(orders: [usize; 4], axis: Vector3, angle: f64) -> Matrix3 {
-    let (s, c) = (angle + PI / 2.0 * orders[3] as f64).sin_cos();
+    // Angle derivatives cycle every four orders. Reduce in the integer domain first so
+    // arbitrarily large derivative orders cannot lose the low bits in a usize -> f64 cast.
+    let angle_order_mod_4 = orders[3] % 4;
+    let (s, c) = (PI / 2.0)
+        .mul_add(crate::usize_to_f64(angle_order_mod_4), angle)
+        .sin_cos();
     let k = -c + if orders[3] == 0 { 1.0 } else { 0.0 };
     match orders {
         [0, 0, 0, _] => Matrix3::new(
-            k * axis.x * axis.x + c,
-            k * axis.x * axis.y + s * axis.z,
-            k * axis.x * axis.z - s * axis.y,
-            k * axis.x * axis.y - s * axis.z,
-            k * axis.y * axis.y + c,
-            k * axis.y * axis.z + s * axis.x,
-            k * axis.x * axis.z + s * axis.y,
-            k * axis.y * axis.z - s * axis.x,
-            k * axis.z * axis.z + c,
+            (k * axis.x).mul_add(axis.x, c),
+            f64::mul_add(s, axis.z, k * axis.x * axis.y),
+            f64::mul_add(s, -axis.y, k * axis.x * axis.z),
+            f64::mul_add(s, -axis.z, k * axis.x * axis.y),
+            (k * axis.y).mul_add(axis.y, c),
+            f64::mul_add(s, axis.x, k * axis.y * axis.z),
+            f64::mul_add(s, axis.y, k * axis.x * axis.z),
+            f64::mul_add(s, -axis.x, k * axis.y * axis.z),
+            (k * axis.z).mul_add(axis.z, c),
         ),
         [1, 0, 0, _] => Matrix3::new(
             2.0 * axis.x * k,
@@ -445,6 +643,22 @@ fn rot_der_n(orders: [usize; 4], axis: Vector3, angle: f64) -> Matrix3 {
 }
 
 #[cfg(test)]
+use crate::prelude::{Matrix4, Processor, Sphere, UnitCircle};
+
+#[cfg(all(test, target_pointer_width = "64"))]
+#[test]
+fn rotation_angle_derivative_order_preserves_mod_four_above_f64_integer_precision() {
+    let axis = Vector3::unit_z();
+    let angle = 0.37;
+    let huge_order = (1_usize << 53) + 3;
+    let huge = rot_der_n([0, 0, 0, huge_order], axis, angle);
+    let reduced = rot_der_n([0, 0, 0, 3], axis, angle);
+    for column in 0..3 {
+        assert!((huge[column] - reduced[column]).magnitude() < 1.0e-12);
+    }
+}
+
+#[cfg(test)]
 use proptest::prelude::*;
 
 #[cfg(test)]
@@ -457,7 +671,7 @@ proptest! {
         index in 0..4usize,
     ) {
         const EPS: f64 = 1.0e-4;
-        let (r, z) = ((1.0 - v * v).sqrt(), v);
+        let (r, z) = (f64::mul_add(v, -v, 1.0).sqrt(), v);
         let (s, c) = u.sin_cos();
         let axis = Vector3::new(r * c, r * s, z);
 
@@ -501,12 +715,12 @@ pub(super) fn parameter_division_v_for_fillet<S>(
             if *ub && *vb {
                 continue;
             }
-            let (u_gen, v_gen) = ((u[0] + u[1]) / 2.0, (v[0] + v[1]) / 2.0);
+            let (u_gen, v_gen) = (f64::midpoint(u[0], u[1]), f64::midpoint(v[0], v[1]));
             let seed = surface.evaluate(u_gen, v_gen);
-            let p = 0.5 + (0.2 * HashGen::hash1(seed) - 0.1);
-            let q = 0.5 + (0.2 * HashGen::hash1(seed) - 0.1);
-            let u0 = u[0] * (1.0 - p) + u[1] * p;
-            let v0 = v[0] * (1.0 - q) + v[1] * q;
+            let p = 0.5 + 0.2f64.mul_add(HashGen::hash1(seed), -0.1);
+            let q = 0.5 + 0.2f64.mul_add(HashGen::hash1(seed), -0.1);
+            let u0 = f64::mul_add(u[1], p, u[0] * (1.0 - p));
+            let v0 = f64::mul_add(v[1], q, v[0] * (1.0 - q));
             let p0 = surface.evaluate(u0, v0);
             let pt00 = surface.evaluate(u[0], v[0]);
             let pt01 = surface.evaluate(u[0], v[1]);
@@ -528,7 +742,7 @@ pub(super) fn parameter_division_v_for_fillet<S>(
     let mut new_vdiv = vec![vdiv[0]];
     for (v, vb) in vdiv.windows(2).zip(divide_flag1) {
         if vb {
-            new_vdiv.push((v[0] + v[1]) / 2.0);
+            new_vdiv.push(f64::midpoint(v[0], v[1]));
         }
         new_vdiv.push(v[1]);
     }
@@ -537,6 +751,39 @@ pub(super) fn parameter_division_v_for_fillet<S>(
         *vdiv = new_vdiv;
         parameter_division_v_for_fillet(surface, udiv, vdiv, tol);
     }
+}
+
+#[test]
+fn zero_width_u_division_stays_finite() {
+    let sphere0 = Sphere::new(Point3::new(0.0, 0.0, 1.0), 2.0);
+    let sphere1 = Sphere::new(Point3::new(0.0, 0.0, -1.0), 2.0);
+    let edge_circle = Processor::with_transform(
+        UnitCircle::<Point3>::new(),
+        Matrix4::from_scale(f64::sqrt(3.0)),
+    );
+
+    #[derive(Clone, Copy, Debug)]
+    struct Radius;
+    impl RadiusFunction for Radius {
+        fn derivative_n(&self, n: usize, t: f64) -> f64 {
+            let constant = if n == 0 { 1.0 } else { 0.0 };
+            let periodic = match n % 4 {
+                0 => f64::cos(t),
+                1 => -f64::sin(t),
+                2 => -f64::cos(t),
+                _ => f64::sin(t),
+            };
+            0.2f64.mul_add(periodic, constant)
+        }
+    }
+
+    let fillet = RollingBallFilletSurface::new(edge_circle, sphere0, sphere1, Radius);
+    let u = 0.375;
+    let division = (fillet.parameter_division_u(((u, u), (0.2, 1.0)), 0.01))
+        .expect("regular fillet contact should admit a u division");
+
+    assert_eq!(division, vec![u, u]);
+    assert!(division.iter().all(|value| value.is_finite()));
 }
 
 #[test]
@@ -559,7 +806,7 @@ fn fillet_between_two_spheres_deralgo() {
                 2 => -f64::cos(t),
                 _ => f64::sin(t),
             };
-            o + 0.2 * x
+            0.2f64.mul_add(x, o)
         }
     }
 
@@ -567,21 +814,24 @@ fn fillet_between_two_spheres_deralgo() {
 
     const N: usize = 20;
     for i in 1..N {
-        let t = 2.0 * PI * i as f64 / N as f64;
-        let cc = fillet.contact_circle(t).unwrap();
+        let t = 2.0 * PI * crate::usize_to_f64(i) / crate::usize_to_f64(N);
+        let cc = (fillet.contact_circle(t)).unwrap();
 
         let rders = fillet.radius.derivatives(5, t);
 
         let eps = 1.0e-4;
-        let cc_plus = fillet.contact_circle(t + eps).unwrap();
+        let cc_plus = (fillet.contact_circle(t + eps)).unwrap();
         let rders_plus = fillet.radius.derivatives(4, t + eps);
 
-        let cc_minus = fillet.contact_circle(t - eps).unwrap();
+        let cc_minus = (fillet.contact_circle(t - eps)).unwrap();
         let rders_minus = fillet.radius.derivatives(4, t - eps);
 
-        let cc_ders = fillet.sub_center_contacts_ders(cc, &rders, 4);
-        let cc_ders_plus = fillet.sub_center_contacts_ders(cc_plus, &rders_plus, 3);
-        let cc_ders_minus = fillet.sub_center_contacts_ders(cc_minus, &rders_minus, 3);
+        let cc_ders = (fillet.sub_center_contacts_ders(cc, &rders, 4))
+            .expect("regular fillet derivative solve");
+        let cc_ders_plus = (fillet.sub_center_contacts_ders(cc_plus, &rders_plus, 3))
+            .expect("regular fillet derivative solve");
+        let cc_ders_minus = (fillet.sub_center_contacts_ders(cc_minus, &rders_minus, 3))
+            .expect("regular fillet derivative solve");
 
         let cross_ders = cc_ders.cross_ders();
         let cross_ders_plus = cc_ders_plus.cross_ders();
@@ -591,9 +841,10 @@ fn fillet_between_two_spheres_deralgo() {
         let abs_cross_ders_plus = cross_ders_plus.absolute_derivatives();
         let abs_cross_ders_minus = cross_ders_minus.absolute_derivatives();
 
-        let axis_ders = cc_ders.axis_ders(&cross_ders, &abs_cross_ders);
-        let axis_ders_plus = cc_ders_plus.axis_ders(&cross_ders_plus, &abs_cross_ders_plus);
-        let axis_ders_minus = cc_ders_minus.axis_ders(&cross_ders_minus, &abs_cross_ders_minus);
+        let axis_ders = CenterContactDers::axis_ders(&cross_ders, &abs_cross_ders);
+        let axis_ders_plus = CenterContactDers::axis_ders(&cross_ders_plus, &abs_cross_ders_plus);
+        let axis_ders_minus =
+            CenterContactDers::axis_ders(&cross_ders_minus, &abs_cross_ders_minus);
 
         let angle_ders = cc_ders.angle_ders(&abs_cross_ders, &rders);
         let angle_ders_plus = cc_ders_plus.angle_ders(&abs_cross_ders_plus, &rders_plus);
@@ -601,29 +852,29 @@ fn fillet_between_two_spheres_deralgo() {
 
         for m in 0..=2 {
             let center_der_approx =
-                (cc_ders_plus.center_ders[m] - cc_ders_minus.center_ders[m]) / (2.0 * eps);
+                (cc_ders_plus.center[m] - cc_ders_minus.center[m]) / (2.0 * eps);
             assert!(
-                (cc_ders.center_ders[m + 1] - center_der_approx).magnitude() < eps,
+                (cc_ders.center[m + 1] - center_der_approx).magnitude() < eps,
                 "m = {m}: {:?} {:?}",
-                cc_ders.center_ders[m + 1],
+                cc_ders.center[m + 1],
                 center_der_approx,
             );
 
             let contact0_der_approx =
-                (cc_ders_plus.contact0_ders[m] - cc_ders_minus.contact0_ders[m]) / (2.0 * eps);
+                (cc_ders_plus.contact0[m] - cc_ders_minus.contact0[m]) / (2.0 * eps);
             assert!(
-                (cc_ders.contact0_ders[m + 1] - contact0_der_approx).magnitude() < eps,
+                (cc_ders.contact0[m + 1] - contact0_der_approx).magnitude() < eps,
                 "m = {m}: {:?} {:?}",
-                cc_ders.contact0_ders[m + 1],
+                cc_ders.contact0[m + 1],
                 contact0_der_approx,
             );
 
             let contact1_der_approx =
-                (cc_ders_plus.contact1_ders[m] - cc_ders_minus.contact1_ders[m]) / (2.0 * eps);
+                (cc_ders_plus.contact1[m] - cc_ders_minus.contact1[m]) / (2.0 * eps);
             assert!(
-                (cc_ders.contact1_ders[m + 1] - contact1_der_approx).magnitude() < eps,
+                (cc_ders.contact1[m + 1] - contact1_der_approx).magnitude() < eps,
                 "m = {m}: {:?} {:?}",
-                cc_ders.contact1_ders[m + 1],
+                cc_ders.contact1[m + 1],
                 contact1_der_approx,
             );
 

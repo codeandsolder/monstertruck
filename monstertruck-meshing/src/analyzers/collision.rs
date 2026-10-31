@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BoundingBox, EuclideanSpace, InnerSpace, MetricSpace, Origin, Point3, PolygonMesh,
+    StandardVertex, TOLERANCE2, Vector3, hash,
+};
 use array_macro::array;
 
 /// Find collisions between two polygon meshes and extract interference lines.
@@ -25,11 +28,11 @@ pub trait Collision {
 }
 
 impl Collision for PolygonMesh {
-    #[inline(always)]
+    #[inline]
     fn collide_with(&self, other: &PolygonMesh) -> Option<(Point3, Point3)> {
         are_colliding(self, other)
     }
-    #[inline(always)]
+    #[inline]
     fn extract_interference(&self, other: &PolygonMesh) -> Vec<(Point3, Point3)> {
         collision(self, other)
     }
@@ -51,20 +54,20 @@ struct EndPoint {
 }
 
 impl EndPoint {
-    #[inline(always)]
-    fn new(entity: f64, r#type: EndPointType, segnum: usize, index: usize) -> EndPoint {
-        EndPoint {
+    #[inline]
+    const fn new(entity: f64, r#type: EndPointType, segnum: usize, index: usize) -> Self {
+        Self {
             entity,
             r#type,
             segnum,
             index,
         }
     }
-    #[inline(always)]
-    fn from_seg(seg: (f64, f64), segnum: usize, index: usize) -> Vec<EndPoint> {
+    #[inline]
+    fn from_seg(seg: (f64, f64), segnum: usize, index: usize) -> Vec<Self> {
         vec![
-            EndPoint::new(seg.0, EndPointType::Front, segnum, index),
-            EndPoint::new(seg.1, EndPointType::Back, segnum, index),
+            Self::new(seg.0, EndPointType::Front, segnum, index),
+            Self::new(seg.1, EndPointType::Back, segnum, index),
         ]
     }
 }
@@ -76,17 +79,17 @@ fn tri_to_seg(tri: [Point3; 3], unit: Vector3) -> (f64, f64) {
     (f64::min(f64::min(a, b), c), f64::max(f64::max(a, b), c))
 }
 
-fn sorted_endpoints<I, J>(iter0: I, iter1: J, unit: Vector3) -> Vec<EndPoint>
+fn sorted_endpoints<I, J>(first_triangles: I, second_triangles: J, unit: Vector3) -> Vec<EndPoint>
 where
     I: IntoIterator<Item = [Point3; 3]>,
     J: IntoIterator<Item = [Point3; 3]>, {
-    let mut res: Vec<EndPoint> = iter0
+    let mut res: Vec<EndPoint> = first_triangles
         .into_iter()
         .enumerate()
         .filter(|(_, tri)| !(tri[1] - tri[0]).cross(tri[2] - tri[0]).so_small())
         .flat_map(|(i, tri)| EndPoint::from_seg(tri_to_seg(tri, unit), 0, i))
         .chain(
-            iter1
+            second_triangles
                 .into_iter()
                 .enumerate()
                 .filter(|(_, tri)| !(tri[1] - tri[0]).cross(tri[2] - tri[0]).so_small())
@@ -118,13 +121,7 @@ fn colliding_segment_pairs(sort_endpoints: Vec<EndPoint>) -> impl Iterator<Item 
                     )
                 }
                 EndPointType::Back => {
-                    // SAFETY: every Back endpoint has a matching Front that pushed this index.
-                    let i = current[segnum]
-                        .iter()
-                        .enumerate()
-                        .find(|(_, idx)| **idx == index)
-                        .unwrap()
-                        .0;
+                    let i = current[segnum].iter().position(|idx| *idx == index)?;
                     current[segnum].swap_remove(i);
                     None
                 }
@@ -133,9 +130,9 @@ fn colliding_segment_pairs(sort_endpoints: Vec<EndPoint>) -> impl Iterator<Item 
         .flatten()
 }
 
-fn disjoint_bdbs(tri0: [Point3; 3], tri1: [Point3; 3]) -> bool {
-    let bdb0: BoundingBox<Point3> = tri0.iter().collect();
-    let bdb1: BoundingBox<Point3> = tri1.iter().collect();
+fn disjoint_bdbs(first_triangle: [Point3; 3], second_triangle: [Point3; 3]) -> bool {
+    let bdb0: BoundingBox<Point3> = first_triangle.iter().collect();
+    let bdb1: BoundingBox<Point3> = second_triangle.iter().collect();
     bdb0.max()[0] < bdb1.min()[0]
         || bdb1.max()[0] < bdb0.min()[0]
         || bdb0.max()[1] < bdb1.min()[1]
@@ -154,12 +151,13 @@ fn collide_seg_triangle(seg: [Point3; 2], tri: [Point3; 3]) -> Option<Point3> {
     }
     let ap = seg[0] - tri[0];
     let aq = seg[1] - tri[0];
-    let dotapnor = ap.dot(nor);
-    let dotaqnor = aq.dot(nor);
-    if dotapnor * dotaqnor > 0.0 {
+    let front_plane_distance = ap.dot(nor);
+    let back_plane_distance = aq.dot(nor);
+    if front_plane_distance * back_plane_distance > 0.0 {
         return None;
     }
-    let h = seg[0] + dotapnor / (dotapnor - dotaqnor) * (seg[1] - seg[0]);
+    let h = seg[0]
+        + front_plane_distance / (front_plane_distance - back_plane_distance) * (seg[1] - seg[0]);
     if f64::signum(ab.cross(nor).dot(h - tri[0]) + TOLERANCE2)
         + f64::signum(bc.cross(nor).dot(h - tri[1]) + TOLERANCE2)
         + f64::signum(ca.cross(nor).dot(h - tri[2]) + TOLERANCE2)
@@ -171,105 +169,114 @@ fn collide_seg_triangle(seg: [Point3; 2], tri: [Point3; 3]) -> Option<Point3> {
     }
 }
 
-fn collide_triangles(tri0: [Point3; 3], tri1: [Point3; 3]) -> Option<(Point3, Point3)> {
+fn collide_triangles(
+    first_triangle: [Point3; 3],
+    second_triangle: [Point3; 3],
+) -> Option<(Point3, Point3)> {
     let mut tuple = (None, None);
-    [
-        collide_seg_triangle([tri0[0], tri0[1]], tri1),
-        collide_seg_triangle([tri0[1], tri0[2]], tri1),
-        collide_seg_triangle([tri0[2], tri0[0]], tri1),
-        collide_seg_triangle([tri1[0], tri1[1]], tri0),
-        collide_seg_triangle([tri1[1], tri1[2]], tri0),
-        collide_seg_triangle([tri1[2], tri1[0]], tri0),
-    ]
-    .into_iter()
-    .for_each(|pt| match tuple {
-        (None, _) => tuple.0 = pt,
-        (Some(_), None) => tuple.1 = pt,
-        (Some(ref mut p), Some(ref mut q)) => {
-            if let Some(pt) = pt {
-                let dist0 = pt.distance2(*p);
-                let dist1 = pt.distance2(*q);
-                let dist2 = p.distance2(*q);
-                if dist2 < dist0 {
-                    *q = pt;
-                } else if dist2 < dist1 {
-                    *p = pt;
+    for point in [
+        collide_seg_triangle([first_triangle[0], first_triangle[1]], second_triangle),
+        collide_seg_triangle([first_triangle[1], first_triangle[2]], second_triangle),
+        collide_seg_triangle([first_triangle[2], first_triangle[0]], second_triangle),
+        collide_seg_triangle([second_triangle[0], second_triangle[1]], first_triangle),
+        collide_seg_triangle([second_triangle[1], second_triangle[2]], first_triangle),
+        collide_seg_triangle([second_triangle[2], second_triangle[0]], first_triangle),
+    ] {
+        match tuple {
+            (None, _) => tuple.0 = point,
+            (Some(_), None) => tuple.1 = point,
+            (Some(ref mut first), Some(ref mut second)) => {
+                if let Some(point) = point {
+                    let first_distance = point.distance2(*first);
+                    let second_distance = point.distance2(*second);
+                    let endpoint_distance = first.distance2(*second);
+                    if endpoint_distance < first_distance {
+                        *second = point;
+                    } else if endpoint_distance < second_distance {
+                        *first = point;
+                    }
                 }
             }
         }
-    });
+    }
     match tuple {
-        (Some(a), Some(b)) => Some((a, b)),
+        (Some(first), Some(second)) => Some((first, second)),
         _ => None,
     }
 }
 
-fn make_pos_tri(poly: &PolygonMesh, face: [StandardVertex; 3]) -> [Point3; 3] {
+const fn make_pos_tri(poly: &PolygonMesh, face: [StandardVertex; 3]) -> [Point3; 3] {
     array![i => poly.positions()[face[i].pos]; 3]
 }
 
 fn collision(poly0: &PolygonMesh, poly1: &PolygonMesh) -> Vec<(Point3, Point3)> {
-    let unit = match poly0.positions().is_empty() {
-        true => return Vec::new(),
-        false => hash::take_one_unit(poly0.positions()[0]),
+    let unit = if poly0.positions().is_empty() {
+        return Vec::new();
+    } else {
+        hash::take_one_unit(poly0.positions()[0])
     };
-    let tris0 = poly0.faces().triangle_iter().collect::<Vec<_>>();
-    let tris1 = poly1.faces().triangle_iter().collect::<Vec<_>>();
-    let iter0 = tris0.iter().map(|face| make_pos_tri(poly0, *face));
-    let iter1 = tris1.iter().map(|face| make_pos_tri(poly1, *face));
-    colliding_segment_pairs(sorted_endpoints(iter0, iter1, unit))
+    let first_faces = poly0.faces().triangle_iter().collect::<Vec<_>>();
+    let second_faces = poly1.faces().triangle_iter().collect::<Vec<_>>();
+    let first_triangles = first_faces.iter().map(|face| make_pos_tri(poly0, *face));
+    let second_triangles = second_faces.iter().map(|face| make_pos_tri(poly1, *face));
+    colliding_segment_pairs(sorted_endpoints(first_triangles, second_triangles, unit))
         .filter_map(|(idx0, idx1)| {
-            let tri0 = make_pos_tri(poly0, tris0[idx0]);
-            let tri1 = make_pos_tri(poly1, tris1[idx1]);
-            match disjoint_bdbs(tri0, tri1) {
-                true => None,
-                false => collide_triangles(tri0, tri1),
+            let first_triangle = make_pos_tri(poly0, first_faces[idx0]);
+            let second_triangle = make_pos_tri(poly1, second_faces[idx1]);
+            if disjoint_bdbs(first_triangle, second_triangle) {
+                None
+            } else {
+                collide_triangles(first_triangle, second_triangle)
             }
         })
         .collect()
 }
 
 fn are_colliding(poly0: &PolygonMesh, poly1: &PolygonMesh) -> Option<(Point3, Point3)> {
-    let unit = match poly0.positions().is_empty() {
-        true => return None,
-        false => hash::take_one_unit(poly0.positions()[0]),
+    let unit = if poly0.positions().is_empty() {
+        return None;
+    } else {
+        hash::take_one_unit(poly0.positions()[0])
     };
-    let tris0 = poly0.faces().triangle_iter().collect::<Vec<_>>();
-    let tris1 = poly1.faces().triangle_iter().collect::<Vec<_>>();
-    let iter0 = tris0.iter().map(|face| make_pos_tri(poly0, *face));
-    let iter1 = tris1.iter().map(|face| make_pos_tri(poly1, *face));
-    colliding_segment_pairs(sorted_endpoints(iter0, iter1, unit)).find_map(|(idx0, idx1)| {
-        let tri0 = make_pos_tri(poly0, tris0[idx0]);
-        let tri1 = make_pos_tri(poly1, tris1[idx1]);
-        match disjoint_bdbs(tri0, tri1) {
-            true => None,
-            false => collide_triangles(tri0, tri1),
-        }
-    })
+    let first_faces = poly0.faces().triangle_iter().collect::<Vec<_>>();
+    let second_faces = poly1.faces().triangle_iter().collect::<Vec<_>>();
+    let first_triangles = first_faces.iter().map(|face| make_pos_tri(poly0, *face));
+    let second_triangles = second_faces.iter().map(|face| make_pos_tri(poly1, *face));
+    colliding_segment_pairs(sorted_endpoints(first_triangles, second_triangles, unit)).find_map(
+        |(idx0, idx1)| {
+            let first_triangle = make_pos_tri(poly0, first_faces[idx0]);
+            let second_triangle = make_pos_tri(poly1, second_faces[idx1]);
+            if disjoint_bdbs(first_triangle, second_triangle) {
+                None
+            } else {
+                collide_triangles(first_triangle, second_triangle)
+            }
+        },
+    )
 }
 
 #[test]
 fn collide_triangles_test() {
-    let tri0 = [
+    let first_triangle = [
         Point3::origin(),
         Point3::new(1.0, 0.0, 0.0),
         Point3::new(0.0, 1.0, 0.0),
     ];
-    let tri1 = [
+    let second_triangle = [
         Point3::new(0.0, 0.0, -1.0),
         Point3::new(-1.0, -1.0, 1.0),
         Point3::new(1.0, 1.0, 1.0),
     ];
-    assert!(collide_triangles(tri0, tri1).is_some());
-    let tri0 = [
+    assert!(collide_triangles(first_triangle, second_triangle).is_some());
+    let first_triangle = [
         Point3::new(0.0, 0.0, 0.0),
         Point3::new(1.0, 0.0, 0.0),
         Point3::new(0.0, 1.0, 0.0),
     ];
-    let tri1 = [
+    let second_triangle = [
         Point3::new(0.0, 0.0, 0.5),
         Point3::new(1.0, 0.0, 1.0),
         Point3::new(1.0, 1.0, 1.0),
     ];
-    assert!(collide_triangles(tri0, tri1).is_none());
+    assert!(collide_triangles(first_triangle, second_triangle).is_none());
 }

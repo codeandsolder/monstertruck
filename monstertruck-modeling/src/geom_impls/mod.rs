@@ -1,18 +1,37 @@
 use crate::errors::Error;
-use crate::*;
+use crate::{
+    BoundingBox, Connector, EuclideanSpace, ExtrusionSurface, GeometricMapping, InnerSpace, Line,
+    Matrix3, Matrix4, Origin, Plane, Point3, Processor, Rad, RevolutionSurface, SquareMatrix,
+    ToSameGeometry, Transform, Transformed, TrimmedCurve, UnitCircle, Vector3, Zero,
+};
 use itertools::Itertools;
 use std::f64::consts::PI;
 
-pub(super) fn circle_arc_by_three_points(
+pub fn circle_arc_by_three_points(
     point0: Point3,
     point1: Point3,
     transit: Point3,
-) -> Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4> {
-    let origin = circum_center(point0, point1, transit);
+) -> std::result::Result<Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>, Error> {
+    let finite = |point: Point3| point.x.is_finite() && point.y.is_finite() && point.z.is_finite();
+    if !finite(point0) || !finite(point1) || !finite(transit) {
+        return Err(Error::DegenerateCircularArcPoints);
+    }
+
     let (vec0, vec1) = (point0 - transit, point1 - transit);
-    let axis = vec1.cross(vec0).normalize();
+    let axis_raw = vec1.cross(vec0);
+    if axis_raw.magnitude2().so_small() {
+        return Err(Error::DegenerateCircularArcPoints);
+    }
+    let origin = circum_center(point0, point1, transit);
+    if !finite(origin) {
+        return Err(Error::DegenerateCircularArcPoints);
+    }
+    let axis = axis_raw.normalize();
     let angle = Rad(PI) - vec0.angle(vec1);
-    circle_arc(point0, origin, axis, angle * 2.0)
+    if !angle.0.is_finite() {
+        return Err(Error::DegenerateCircularArcPoints);
+    }
+    Ok(circle_arc(point0, origin, axis, angle * 2.0))
 }
 
 /// Constructs the unique circular arc that starts at `point0` with the
@@ -25,7 +44,7 @@ pub(super) fn circle_arc_by_three_points(
 /// - [`Error::CircularArcTangentParallelToChord`] if `tangent` is
 ///   parallel (or anti-parallel) to `point1 - point0` -- the plane of
 ///   the arc would be under-determined and the radius infinite.
-pub(super) fn try_circle_arc_by_start_tangent(
+pub fn try_circle_arc_by_start_tangent(
     point0: Point3,
     point1: Point3,
     tangent: Vector3,
@@ -46,7 +65,7 @@ pub(super) fn try_circle_arc_by_start_tangent(
     let (vec0, vec1) = (point0 - origin, point1 - origin);
     let mut angle = f64::atan2(axis.dot(vec0.cross(vec1)), vec0.dot(vec1));
     if angle <= 0.0 {
-        angle += 2.0 * PI;
+        angle = 2.0f64.mul_add(PI, angle);
     }
     Ok(circle_arc(point0, origin, axis, Rad(angle)))
 }
@@ -54,11 +73,16 @@ pub(super) fn try_circle_arc_by_start_tangent(
 fn circum_center(pt0: Point3, pt1: Point3, pt2: Point3) -> Point3 {
     let (vec0, vec1) = (pt1 - pt0, pt2 - pt0);
     let (a2, ab, b2) = (vec0.dot(vec0), vec0.dot(vec1), vec1.dot(vec1));
-    let (det, u, v) = (a2 * b2 - ab * ab, a2 * b2 - ab * b2, a2 * b2 - ab * a2);
+    let det = ab.mul_add(-ab, a2 * b2);
+    // Solving the 2×2 Gram system for the circumcenter coefficients gives
+    // b²(a² - a·b) and a²(b² - a·b). Factoring the shared terms makes
+    // the symmetry explicit and avoids the easy-to-misread product grouping.
+    let u = (a2 - ab) * b2;
+    let v = (b2 - ab) * a2;
     pt0 + u / (2.0 * det) * vec0 + v / (2.0 * det) * vec1
 }
 
-pub(super) fn circle_arc(
+pub fn circle_arc(
     point: Point3,
     origin: Point3,
     axis: Vector3,
@@ -93,35 +117,42 @@ fn take_one_axis_by_normal(n: Vector3) -> Vector3 {
     }
 }
 
-pub(super) fn attach_plane(mut pts: Vec<Vec<Point3>>) -> Option<Plane> {
+pub fn attach_plane(mut pts: Vec<Vec<Point3>>) -> Option<Plane> {
+    let point_count = pts.iter().map(Vec::len).sum::<usize>();
+    if point_count == 0 {
+        return None;
+    }
     let center = pts
         .iter()
         .flatten()
         .fold(Point3::origin(), |sum, pt| sum + pt.to_vec())
-        / pts.len() as f64;
+        / crate::usize_to_f64(point_count);
     let normal = pts
         .iter()
         .flat_map(|vec| vec.iter().circular_tuple_windows())
         .fold(Vector3::zero(), |sum, (p0, p1)| {
             sum + (p0 - center).cross(p1 - center)
         });
-    let n = match normal.so_small() {
-        true => return None,
-        false => normal.normalize(),
+    let n = if normal.so_small() {
+        return None;
+    } else {
+        normal.normalize()
     };
     let a = take_one_axis_by_normal(n);
     let mat: Matrix4 = Matrix3::from_cols(a, n.cross(a), n).into();
+    let inverse = mat.invert()?;
     pts.iter_mut()
         .flatten()
-        .for_each(|pt| *pt = mat.invert().unwrap().transform_point(*pt));
+        .for_each(|pt| *pt = inverse.transform_point(*pt));
     let bnd_box: BoundingBox<Point3> = pts.iter().flatten().collect();
     let diag = bnd_box.diagonal();
     if !diag[2].so_small() {
         return None;
     }
-    let (max, min) = match closed_polyline_orientation(&pts) {
-        true => (bnd_box.max(), bnd_box.min()),
-        false => (bnd_box.min(), bnd_box.max()),
+    let (max, min) = if closed_polyline_orientation(&pts) {
+        (bnd_box.max(), bnd_box.min())
+    } else {
+        (bnd_box.min(), bnd_box.max())
     };
     let plane = Plane::new(
         Point3::new(min[0], min[1], min[2]),
@@ -139,7 +170,7 @@ impl<T: Clone> GeometricMapping<T> for () {
     #[inline]
     fn mapping(self) -> impl Fn(&T) -> T { Clone::clone }
 }
-impl<T: Transformed<Matrix4>> GeometricMapping<T> for Matrix4 {
+impl<T: Transformed<Self>> GeometricMapping<T> for Matrix4 {
     #[inline]
     fn mapping(self) -> impl Fn(&T) -> T { move |t| t.transformed(self) }
 }

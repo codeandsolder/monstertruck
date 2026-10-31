@@ -1,5 +1,16 @@
-use super::{rolling_ball_fillet::*, *};
-use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
+#![expect(
+    clippy::similar_names,
+    reason = "paired U/V and derivative-order names mirror the fillet equations"
+)]
+
+use super::{
+    ApproximateFilletSurface, BsplineCurve, CurveDerivatives, EuclideanSpace, InnerSpace,
+    KnotVector, Matrix3, MetricSpace, Mul, NurbsCurve, ParameterCurve, ParameterDivision2D,
+    ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
+    Point1, Point2, Point3, RollingBallFilletSurface, SearchParameter, SquareMatrix,
+    SurfaceDerivatives, SurfaceParameter, ToSameGeometry, Vector2, Vector3, Vector4, algo,
+    rolling_ball_fillet::{ContactCircle, RadiusFunction},
+};
 
 impl<S0, S1> ApproximateFilletSurface<S0, S1> {
     /// Returns the first surface.
@@ -11,13 +22,15 @@ impl<S0, S1> ApproximateFilletSurface<S0, S1> {
     /// Returns the side parameter curve on the first surface.
     pub fn side_parameter_curve0(&self) -> ParameterCurve<BsplineCurve<Point2>, S0>
     where S0: Clone {
-        let bsp = BsplineCurve::new(self.knot_vec.clone(), self.side_control_points0.clone());
+        let bsp =
+            BsplineCurve::new_unchecked(self.knot_vec.clone(), self.side_control_points0.clone());
         ParameterCurve::new(bsp, self.surface0.clone())
     }
     /// Returns the side parameter curve on the second surface.
     pub fn side_parameter_curve1(&self) -> ParameterCurve<BsplineCurve<Point2>, S1>
     where S1: Clone {
-        let bsp = BsplineCurve::new(self.knot_vec.clone(), self.side_control_points1.clone());
+        let bsp =
+            BsplineCurve::new_unchecked(self.knot_vec.clone(), self.side_control_points1.clone());
         ParameterCurve::new(bsp, self.surface1.clone())
     }
     fn vdegree(&self) -> usize { self.knot_vec.len() - self.weights.len() - 1 }
@@ -45,24 +58,24 @@ fn control_points_u<S: ParametricSurface3D>(
 }
 
 const fn bezier_3rd_basis(n: usize, u: f64) -> [f64; 4] {
-    let _1subu = 1.0 - u;
+    let one_minus_u = 1.0 - u;
     match n {
         0 => [
-            _1subu * _1subu * _1subu,
-            3.0 * _1subu * _1subu * u,
-            3.0 * _1subu * u * u,
+            one_minus_u * one_minus_u * one_minus_u,
+            3.0 * one_minus_u * one_minus_u * u,
+            3.0 * one_minus_u * u * u,
             u * u * u,
         ],
         1 => [
-            -3.0 * _1subu * _1subu,
-            3.0 * _1subu * (1.0 - 3.0 * u),
-            3.0 * u * (2.0 - 3.0 * u),
+            -3.0 * one_minus_u * one_minus_u,
+            3.0 * one_minus_u * 3.0f64.mul_add(-u, 1.0),
+            3.0 * u * 3.0f64.mul_add(-u, 2.0),
             3.0 * u * u,
         ],
         2 => [
-            6.0 * _1subu,
-            -6.0 * (2.0 - 3.0 * u),
-            6.0 * (1.0 - 3.0 * u),
+            6.0 * one_minus_u,
+            -6.0 * 3.0f64.mul_add(-u, 2.0),
+            6.0 * 3.0f64.mul_add(-u, 1.0),
             6.0 * u,
         ],
         3 => [-6.0, 18.0, -18.0, 6.0],
@@ -71,7 +84,7 @@ const fn bezier_3rd_basis(n: usize, u: f64) -> [f64; 4] {
 }
 
 mod subders {
-    use super::*;
+    use super::{CurveDerivatives, SurfaceDerivatives, Vector2, Vector3, Vector4};
     fn axis_v_ders(p_ders: &CurveDerivatives<Vector3>) -> CurveDerivatives<Vector3> {
         let p_derders = p_ders.derivative();
         let homog_ders =
@@ -119,7 +132,8 @@ mod subders {
         let p_ders = s_ders.composite_derivatives(uv_ders);
         let lift_p_ders = lift_p_ders(&p_ders);
         let wq_ders = wq_ders(w_ders, &p_ders, b_ders, &n_ders(s_ders, uv_ders));
-        let lift_q_ders = wq_ders.element_wise_derivatives(w_ders, |x, y| x.extend(y));
+        let lift_q_ders =
+            wq_ders.element_wise_derivatives(w_ders, monstertruck_core::cgmath::Vector3::extend);
         (lift_p_ders, lift_q_ders)
     }
 }
@@ -139,7 +153,7 @@ where
         (0..=max_order + 1).for_each(|order| {
             let basis = self
                 .knot_vec
-                .bspline_basis_functions(degree, order, v)
+                .bspline_basis_functions_unchecked(degree, order, v)
                 .to_full_values();
             uv0_ders[order] = basis.iter().zip(&self.side_control_points0).map(pmul).sum();
             uv1_ders[order] = basis.iter().zip(&self.side_control_points1).map(pmul).sum();
@@ -185,10 +199,10 @@ where
         } = self;
         let degree = self.vdegree();
         let basis = knot_vec
-            .bspline_basis_functions(degree, 0, v)
+            .bspline_basis_functions_unchecked(degree, 0, v)
             .to_full_values();
         let dbasis = knot_vec
-            .bspline_basis_functions(degree, 1, v)
+            .bspline_basis_functions_unchecked(degree, 1, v)
             .to_full_values();
         let weight: f64 = basis.iter().zip(weights).map(|(&b, &w)| b * w).sum();
         let striple0 = (surface0, side_control_points0, tangent_vecs0);
@@ -204,9 +218,8 @@ where
     fn derivative_uv(&self, u: f64, v: f64) -> Self::Vector { self.derivative_mn(1, 1, u, v) }
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector { self.derivative_mn(0, 2, u, v) }
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
-        use std::ops::Bound::*;
-        // SAFETY: knot vector is always non-empty by construction.
-        let (a, b) = (self.knot_vec[0], *self.knot_vec.last().unwrap());
+        use std::ops::Bound::Included;
+        let (a, b) = (self.knot_vec[0], self.knot_vec[self.knot_vec.len() - 1]);
         ((Included(0.0), Included(1.0)), (Included(a), Included(b)))
     }
 }
@@ -265,7 +278,7 @@ where
         R: RadiusFunction,
     {
         let (v0, v1) = edge_parameter_range;
-        let v_5 = (v0 + v1) / 2.0;
+        let v_5 = f64::midpoint(v0, v1);
         let cc0 = fillet_surface.contact_circle(v0)?;
         let cc_5 = fillet_surface.contact_circle(v_5)?;
         let cc1 = fillet_surface.contact_circle(v1)?;
@@ -276,21 +289,21 @@ where
             vec.extend([v0, v0, v0]);
             vec.extend({
                 let n = ccs.len() - 1;
-                ccs[1..n].windows(2).map(move |v| (v[0].0 + v[1].0) / 2.0)
+                ccs[1..n]
+                    .windows(2)
+                    .map(move |v| f64::midpoint(v[0].0, v[1].0))
             });
             vec.extend([v1, v1, v1]);
-            // SAFETY: the vector is built in sorted order (ascending `v` values with
-            // repeated boundary knots), so `try_from` cannot fail.
-            let knot_vec = KnotVector::try_from(vec).unwrap();
+            let knot_vec = KnotVector::try_from(vec).ok()?;
 
             let make_uv0 = move |&(v, cc): &(f64, ContactCircle)| (v, cc.contact_point0().uv);
             let uv0s = ccs.iter().map(make_uv0).collect::<Vec<_>>();
-            let parameter_curve0 = BsplineCurve::interpolate(knot_vec.clone(), uv0s);
+            let parameter_curve0 = BsplineCurve::try_interpolate(knot_vec.clone(), uv0s).ok()?;
             let pcurve0 = ParameterCurve::new(&parameter_curve0, fillet_surface.surface0());
 
             let make_uv1 = move |&(v, cc): &(f64, ContactCircle)| (v, cc.contact_point1().uv);
             let uv1s = ccs.iter().map(make_uv1).collect::<Vec<_>>();
-            let parameter_curve1 = BsplineCurve::interpolate(knot_vec.clone(), uv1s);
+            let parameter_curve1 = BsplineCurve::try_interpolate(knot_vec.clone(), uv1s).ok()?;
             let pcurve1 = ParameterCurve::new(&parameter_curve1, fillet_surface.surface1());
 
             let mut raw_tangent_vecs0 = Vec::new();
@@ -307,10 +320,7 @@ where
                 let n0 = fillet_surface.surface0.normal(uv0.x, uv0.y);
                 let handle0 = cder0.cross(n0);
                 let mat0 = Matrix3::from_cols(handle0, cder0, n0);
-                // SAFETY: `mat0` columns are cross-product of curve tangent and normal,
-                // the curve tangent, and the surface normal -- linearly independent at
-                // non-degenerate contact points.
-                let vec0 = mat0.invert().unwrap() * der0;
+                let vec0 = mat0.invert()? * der0;
                 raw_tangent_vecs0.push((v, vec0.truncate()));
 
                 let der1 = -nurbs.derivative(1.0);
@@ -319,14 +329,16 @@ where
                 let n1 = fillet_surface.surface1.normal(uv1.x, uv1.y);
                 let handle1 = cder1.cross(n1);
                 let mat1 = Matrix3::from_cols(handle1, cder1, n1);
-                // SAFETY: same reasoning as `mat0` above.
-                let vec1 = mat1.invert().unwrap() * der1;
+                let vec1 = mat1.invert()? * der1;
                 raw_tangent_vecs1.push((v, vec1.truncate()));
             }
 
-            let tangent_curve0 = BsplineCurve::interpolate(knot_vec.clone(), raw_tangent_vecs0);
-            let tangent_curve1 = BsplineCurve::interpolate(knot_vec.clone(), raw_tangent_vecs1);
-            let weights_curve = BsplineCurve::interpolate(knot_vec.clone(), raw_weights);
+            let tangent_curve0 =
+                BsplineCurve::try_interpolate(knot_vec.clone(), raw_tangent_vecs0).ok()?;
+            let tangent_curve1 =
+                BsplineCurve::try_interpolate(knot_vec.clone(), raw_tangent_vecs1).ok()?;
+            let weights_curve =
+                BsplineCurve::try_interpolate(knot_vec.clone(), raw_weights).ok()?;
             let weights_points = weights_curve.destruct().1;
             let weights = weights_points.into_iter().map(|x| x.x).collect();
 
@@ -340,21 +352,15 @@ where
                 tangent_vecs1: tangent_curve1.destruct().1,
                 weights,
             };
-            let added_ccs = ccs
-                .windows(2)
-                .filter_map(|v| {
-                    let v = (v[0].0 + v[1].0) / 2.0;
-                    // SAFETY: `v` is the midpoint of two consecutive valid contact
-                    // circle parameters, so `contact_circle` succeeds.
-                    let cc = fillet_surface.contact_circle(v).unwrap();
-                    let is_far =
-                        |t: f64| approx.evaluate(t, v).distance2(cc.evaluate(t)) < tol * tol;
-                    match [0.0, 0.5, 1.0].into_iter().all(is_far) {
-                        true => None,
-                        false => Some((v, cc)),
-                    }
-                })
-                .collect::<Vec<_>>();
+            let mut added_ccs = Vec::new();
+            for pair in ccs.windows(2) {
+                let v = f64::midpoint(pair[0].0, pair[1].0);
+                let cc = fillet_surface.contact_circle(v)?;
+                let is_near = |t: f64| approx.evaluate(t, v).distance2(cc.evaluate(t)) < tol * tol;
+                if ![0.0, 0.5, 1.0].into_iter().all(is_near) {
+                    added_ccs.push((v, cc));
+                }
+            }
             if added_ccs.is_empty() {
                 return Some(Self {
                     knot_vec: approx.knot_vec,
@@ -368,8 +374,7 @@ where
                 });
             }
             ccs.extend(added_ccs);
-            // SAFETY: parameters are finite `f64` values, so `partial_cmp` always returns `Some`.
-            ccs.sort_by(|(x, _), (y, _)| x.partial_cmp(y).unwrap());
+            ccs.sort_by(|(x, _), (y, _)| x.total_cmp(y));
         }
 
         None

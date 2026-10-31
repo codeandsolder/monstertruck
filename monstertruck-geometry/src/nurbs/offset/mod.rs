@@ -6,7 +6,10 @@
 //! sample, and fit a new [`BsplineCurve`] or [`BsplineSurface`] through the
 //! offset points.
 
-use super::*;
+use super::{
+    BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, InnerSpace, KnotVector, Origin,
+    ParametricCurve, ParametricSurface, Point2, Point3, Vector2, Vector3, errors,
+};
 use errors::Error;
 use std::result::Result as StdResult;
 
@@ -20,8 +23,8 @@ type Result<T> = StdResult<T, Error>;
 ///
 /// # Errors
 ///
-/// Returns an error if the interpolation system is singular (e.g., degenerate
-/// curve with coincident sample points).
+/// Returns an error if fewer than four samples are requested or if the interpolation system
+/// is singular (e.g., degenerate curve with coincident sample points).
 ///
 /// # Examples
 ///
@@ -30,13 +33,13 @@ type Result<T> = StdResult<T, Error>;
 /// use monstertruck_geometry::nurbs::offset;
 ///
 /// // A straight line along x from (0,0) to (4,0).
-/// let line = BsplineCurve::new(
+/// let line = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(1),
 ///     vec![Point2::new(0.0, 0.0), Point2::new(4.0, 0.0)],
 /// );
 /// let offset = offset::curve_offset_2d(&line, 1.0, 20).unwrap();
 /// // The offset should be approximately at y=1.
-/// let mid = offset.subs(0.5);
+/// let mid = offset.evaluate(0.5);
 /// assert!((mid.y - 1.0).abs() < 0.05, "mid.y = {}", mid.y);
 /// assert!((mid.x - 2.0).abs() < 0.05, "mid.x = {}", mid.x);
 /// ```
@@ -45,20 +48,24 @@ pub fn curve_offset_2d(
     distance: f64,
     n_samples: usize,
 ) -> Result<BsplineCurve<Point2>> {
-    assert!(
-        n_samples >= 4,
-        "curve_offset_2d requires at least 4 samples",
-    );
+    if n_samples < 4 {
+        return Err(Error::InsufficientInputCount {
+            operation: "curve_offset_2d",
+            input: "samples",
+            provided: n_samples,
+            minimum: 4,
+        });
+    }
 
     let (t_start, t_end) = curve.range_tuple();
 
     // Sample offset points.
     let param_points: Vec<(f64, Point2)> = (0..n_samples)
         .map(|i| {
-            let u = i as f64 / (n_samples - 1) as f64;
-            let t = t_start + (t_end - t_start) * u;
-            let pt = curve.subs(t);
-            let tangent = curve.der(t);
+            let u = crate::usize_to_f64(i) / crate::usize_to_f64(n_samples - 1);
+            let t = f64::mul_add(t_end - t_start, u, t_start);
+            let pt = curve.evaluate(t);
+            let tangent = curve.derivative(t);
 
             // Normal: rotate tangent 90 degrees CCW in 2D.
             let normal_len = tangent.magnitude();
@@ -89,7 +96,7 @@ pub fn curve_offset_2d(
 ///
 /// # Errors
 ///
-/// Returns an error if the interpolation system is singular.
+/// Returns an error if fewer than four samples are requested or if the interpolation system is singular.
 ///
 /// # Examples
 ///
@@ -98,13 +105,13 @@ pub fn curve_offset_2d(
 /// use monstertruck_geometry::nurbs::offset;
 ///
 /// // A straight line along x at z=0.
-/// let line = BsplineCurve::new(
+/// let line = BsplineCurve::new_unchecked(
 ///     KnotVector::bezier_knot(1),
 ///     vec![Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 0.0, 0.0)],
 /// );
 /// // Offset upward (in z) by 1.0 using z-axis as the reference normal.
 /// let offset = offset::curve_offset_3d(&line, 1.0, Vector3::unit_z(), 20).unwrap();
-/// let mid = offset.subs(0.5);
+/// let mid = offset.evaluate(0.5);
 /// // The tangent is along x, so the perpendicular component of z is z itself.
 /// assert!((mid.z - 1.0).abs() < 0.05, "mid.z = {}", mid.z);
 /// ```
@@ -114,19 +121,23 @@ pub fn curve_offset_3d(
     normal: Vector3,
     n_samples: usize,
 ) -> Result<BsplineCurve<Point3>> {
-    assert!(
-        n_samples >= 4,
-        "curve_offset_3d requires at least 4 samples",
-    );
+    if n_samples < 4 {
+        return Err(Error::InsufficientInputCount {
+            operation: "curve_offset_3d",
+            input: "samples",
+            provided: n_samples,
+            minimum: 4,
+        });
+    }
 
     let (t_start, t_end) = curve.range_tuple();
 
     let param_points: Vec<(f64, Point3)> = (0..n_samples)
         .map(|i| {
-            let u = i as f64 / (n_samples - 1) as f64;
-            let t = t_start + (t_end - t_start) * u;
-            let pt = curve.subs(t);
-            let tangent = curve.der(t);
+            let u = crate::usize_to_f64(i) / crate::usize_to_f64(n_samples - 1);
+            let t = f64::mul_add(t_end - t_start, u, t_start);
+            let pt = curve.evaluate(t);
+            let tangent = curve.derivative(t);
             let tangent_len = tangent.magnitude();
 
             // Compute offset direction: component of `normal` perpendicular to tangent.
@@ -172,7 +183,8 @@ pub fn curve_offset_3d(
 ///
 /// # Errors
 ///
-/// Returns an error if the interpolation fails for any row of the surface.
+/// Returns an error if either grid axis has fewer than four samples or if interpolation fails
+/// for any row of the surface.
 ///
 /// # Examples
 ///
@@ -181,7 +193,7 @@ pub fn curve_offset_3d(
 /// use monstertruck_geometry::nurbs::offset;
 ///
 /// // Flat surface at z=0 spanning [0,2] x [0,3].
-/// let surface = BsplineSurface::new(
+/// let surface = BsplineSurface::new_unchecked(
 ///     (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
 ///     vec![
 ///         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 3.0, 0.0)],
@@ -189,7 +201,7 @@ pub fn curve_offset_3d(
 ///     ],
 /// );
 /// let offset_surf = offset::surface_offset(&surface, 1.0, (10, 10)).unwrap();
-/// let mid = offset_surf.subs(0.5, 0.5);
+/// let mid = offset_surf.evaluate(0.5, 0.5);
 /// // Normal of a flat XY surface is +z, so offset should be at z=1.
 /// assert!((mid.z - 1.0).abs() < 0.1, "mid.z = {}", mid.z);
 /// ```
@@ -198,8 +210,22 @@ pub fn surface_offset(
     distance: f64,
     (n_u, n_v): (usize, usize),
 ) -> Result<BsplineSurface<Point3>> {
-    assert!(n_u >= 4, "surface_offset requires at least 4 u-samples");
-    assert!(n_v >= 4, "surface_offset requires at least 4 v-samples");
+    if n_u < 4 {
+        return Err(Error::InsufficientInputCount {
+            operation: "surface_offset",
+            input: "u-samples",
+            provided: n_u,
+            minimum: 4,
+        });
+    }
+    if n_v < 4 {
+        return Err(Error::InsufficientInputCount {
+            operation: "surface_offset",
+            input: "v-samples",
+            provided: n_v,
+            minimum: 4,
+        });
+    }
 
     let ((u_start, u_end), (v_start, v_end)) = surface.range_tuple();
 
@@ -210,16 +236,16 @@ pub fn surface_offset(
 
     let rows: Vec<BsplineCurve<Point3>> = (0..n_u)
         .map(|i| {
-            let u_frac = i as f64 / (n_u - 1) as f64;
-            let u = u_start + (u_end - u_start) * u_frac;
+            let u_frac = crate::usize_to_f64(i) / crate::usize_to_f64(n_u - 1);
+            let u = f64::mul_add(u_end - u_start, u_frac, u_start);
 
             let param_points: Vec<(f64, Point3)> = (0..n_v)
                 .map(|j| {
-                    let v_frac = j as f64 / (n_v - 1) as f64;
-                    let v = v_start + (v_end - v_start) * v_frac;
-                    let pt = surface.subs(u, v);
-                    let du = surface.uder(u, v);
-                    let dv = surface.vder(u, v);
+                    let v_frac = crate::usize_to_f64(j) / crate::usize_to_f64(n_v - 1);
+                    let v = f64::mul_add(v_end - v_start, v_frac, v_start);
+                    let pt = surface.evaluate(u, v);
+                    let du = surface.derivative_u(u, v);
+                    let dv = surface.derivative_v(u, v);
                     let cross = du.cross(dv);
                     let cross_len = cross.magnitude();
 
@@ -239,7 +265,7 @@ pub fn surface_offset(
         .collect::<Result<Vec<_>>>()?;
 
     // Now skin the rows into a surface.
-    Ok(BsplineSurface::skin(rows))
+    BsplineSurface::skin(rows)
 }
 
 #[cfg(test)]

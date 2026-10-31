@@ -9,17 +9,24 @@
 //! - Enter "P" on the keyboard to switch between parallel projection and perspective projection of the camera.
 //! - Enter "L" on the keyboard to switch the point light source/uniform light source of the light.
 
-use monstertruck_gpu::*;
+use monstertruck_gpu::{
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
+    WindowSceneDescriptor,
+};
 use monstertruck_meshing::prelude::*;
-use monstertruck_render::*;
+use monstertruck_render::{CreatorCreator, Material, PolygonInstance, PolygonState};
 use std::f64::consts::PI;
 use std::io::Read;
 use std::sync::Arc;
-use winit::{dpi::*, event::*, keyboard::*};
+use winit::{
+    dpi::PhysicalPosition,
+    event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase},
+    keyboard::{KeyCode, PhysicalKey},
+};
 mod app;
-use app::*;
+use app::{App, AppResult, ControlFlow, async_trait};
 
-const NUM_OF_OBJECTS: usize = 8;
+const NUM_OF_OBJECTS: u32 = 8;
 
 const TEAPOT_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -38,36 +45,40 @@ struct MyRender {
 }
 
 impl MyRender {
-    fn create_camera() -> Camera {
+    fn create_camera() -> AppResult<Camera> {
         let mat = Matrix4::look_at_rh(
             Point3::new(15.0, 15.0, 15.0),
             Point3::origin(),
             Vector3::unit_y(),
         );
-        Camera {
-            matrix: mat.invert().unwrap(),
+        Ok(Camera {
+            matrix: mat
+                .invert()
+                .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
             method: ProjectionMethod::perspective(Rad(PI / 4.0)),
             near_clip: 0.1,
             far_clip: 40.0,
-        }
+        })
     }
 
-    fn load_obj<R: Read>(&mut self, reader: R) {
+    fn load_obj<R: Read>(&mut self, reader: R) -> AppResult<()> {
         let scene = &mut self.scene;
         scene.clear_objects();
         self.instances.clear();
-        let mut mesh = obj::read(reader).unwrap();
+        let mut mesh = obj::read(reader)?;
         mesh.put_together_same_attrs(TOLERANCE)
             .add_smooth_normals(0.5, false);
         let bdd_box = mesh.bounding_box();
         let (size, center) = (bdd_box.size(), bdd_box.center());
         let original_mesh: PolygonInstance = scene
             .instance_creator()
-            .create_instance(&mesh, &Default::default());
-        let rad = Rad(2.0 * PI / NUM_OF_OBJECTS as f64);
+            .create_instance(&mesh, &PolygonState::default())?;
+        let rad = Rad(2.0 * PI / f64::from(NUM_OF_OBJECTS));
         let mut mat = Matrix4::from_scale(size / 2.0);
         mat = Matrix4::from_translation(center.to_vec()) * mat;
-        mat = mat.invert().unwrap();
+        mat = mat
+            .invert()
+            .ok_or_else(|| std::io::Error::other("object normalization matrix is singular"))?;
         mat = Matrix4::from_translation(Vector3::new(0.0, 0.5, 5.0)) * mat;
         for _ in 0..NUM_OF_OBJECTS {
             let mut instance = original_mesh.clone_instance();
@@ -76,6 +87,7 @@ impl MyRender {
             self.instances.push(instance);
             mat = Matrix4::from_axis_angle(Vector3::unit_y(), rad) * mat;
         }
+        Ok(())
     }
 
     fn update_objects(&mut self) {
@@ -84,12 +96,15 @@ impl MyRender {
         self.prev_time = time;
         let mat0 = Matrix4::from_axis_angle(Vector3::unit_y(), Rad(delta_time));
         for (idx, instance) in self.instances.iter_mut().enumerate() {
-            let state = &mut instance.instance_state_mut();
+            let state = instance.instance_state_mut();
             let (matrix, material) = (&mut state.matrix, &mut state.material);
-            let k = (-1_f64).powi(idx as i32) * 5.0;
+            let k = if idx % 2 == 0 { 5.0 } else { -5.0 };
             let mat1 = Matrix4::from_axis_angle(Vector3::unit_y(), Rad(k * delta_time));
             let x = matrix[3][2];
-            let mat = mat0 * *matrix * mat1 * matrix.invert().unwrap();
+            let Some(inverse) = matrix.invert() else {
+                continue;
+            };
+            let mat = mat0 * *matrix * mat1 * inverse;
             *matrix = mat * *matrix;
             let obj_pos = matrix[3].truncate();
             let new_length = 5.0 + time.sin() + (time * 3.0).sin() / 3.0;
@@ -101,7 +116,7 @@ impl MyRender {
             *material = Material {
                 albedo: color,
                 roughness: (0.5 + (time / 5.0).sin() / 2.0),
-                reflectance: 0.04 + 0.96 * (0.5 + (time / 2.0).sin() / 2.0),
+                reflectance: 0.96_f64.mul_add(0.5 + (time / 2.0).sin() / 2.0, 0.04),
                 ambient_ratio: 0.02,
                 background_ratio: 0.0,
                 alpha_blend: false,
@@ -122,15 +137,15 @@ impl MyRender {
 
 #[async_trait(?Send)]
 impl App for MyRender {
-    async fn init(window: Arc<winit::window::Window>) -> MyRender {
+    async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;
         let scene_desc = WindowSceneDescriptor {
             studio: StudioConfig {
-                camera: MyRender::create_camera(),
+                camera: Self::create_camera()?,
                 lights: vec![Light {
                     position: Point3::new(0.0, 20.0, 0.0),
                     color: Vector3::new(1.0, 1.0, 1.0) * 1.5,
-                    light_type: LightType::Point,
+                    kind: LightType::Point,
                 }],
                 ..Default::default()
             },
@@ -139,8 +154,8 @@ impl App for MyRender {
                 ..Default::default()
             },
         };
-        let mut app = MyRender {
-            scene: WindowScene::from_window(window, &scene_desc).await,
+        let mut app = Self {
+            scene: WindowScene::from_window(window, &scene_desc).await?,
             instances: Vec::new(),
             rotate_flag: false,
             prev_cursor: None,
@@ -149,8 +164,8 @@ impl App for MyRender {
             camera_changed: None,
             light_changed: None,
         };
-        app.load_obj(TEAPOT_BYTES);
-        app
+        app.load_obj(TEAPOT_BYTES)?;
+        Ok(app)
     }
 
     fn app_title<'a>() -> Option<&'a str> { Some("rotate objects") }
@@ -173,7 +188,7 @@ impl App for MyRender {
                     let desc = self.scene.studio_config_mut();
                     (&mut desc.lights[0], &desc.camera)
                 };
-                match light.light_type {
+                match light.kind {
                     LightType::Point => {
                         light.position = camera.position();
                     }
@@ -192,16 +207,16 @@ impl App for MyRender {
                 let camera = &mut self.scene.studio_config_mut().camera;
                 match &mut camera.method {
                     ProjectionMethod::Parallel { screen_size } => {
-                        *screen_size *= 0.9f64.powf(y as f64);
+                        *screen_size *= 0.9f64.powf(f64::from(y));
                     }
                     ProjectionMethod::Perspective { .. } => {
-                        let trans_vec = camera.eye_direction() * y as f64 * 0.2;
+                        let trans_vec = camera.eye_direction() * f64::from(y) * 0.2;
                         camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
                     }
                 }
             }
             MouseScrollDelta::PixelDelta(_) => {}
-        };
+        }
         Self::default_control_flow()
     }
 
@@ -218,17 +233,16 @@ impl App for MyRender {
                 axis += dir2d[0] * camera.matrix[1];
                 axis /= axis.magnitude();
                 let angle = dir2d.magnitude() * 0.01;
-                let mat = Matrix4::from_axis_angle(axis.truncate(), Rad(angle));
-                camera.matrix = mat.invert().unwrap() * camera.matrix;
+                let inverse_rotation = Matrix4::from_axis_angle(axis.truncate(), Rad(-angle));
+                camera.matrix = inverse_rotation * camera.matrix;
             }
             self.prev_cursor = Some(position);
         }
         Self::default_control_flow()
     }
     fn keyboard_input(&mut self, input: KeyEvent, _: bool) -> ControlFlow {
-        let keycode = match input.physical_key {
-            PhysicalKey::Code(keycode) => keycode,
-            _ => return Self::default_control_flow(),
+        let PhysicalKey::Code(keycode) = input.physical_key else {
+            return Self::default_control_flow();
         };
         match keycode {
             KeyCode::KeyP => {
@@ -259,14 +273,14 @@ impl App for MyRender {
                     let desc = self.scene.studio_config_mut();
                     (&mut desc.lights[0], &desc.camera)
                 };
-                *light = match light.light_type {
+                *light = match light.kind {
                     LightType::Point => {
                         let mut vec = camera.position();
                         vec /= vec.to_vec().magnitude();
                         Light {
                             position: vec,
                             color: Vector3::new(1.0, 1.0, 1.0),
-                            light_type: LightType::Uniform,
+                            kind: LightType::Uniform,
                         }
                     }
                     LightType::Uniform => {
@@ -274,7 +288,7 @@ impl App for MyRender {
                         Light {
                             position,
                             color: Vector3::new(1.0, 1.0, 1.0),
-                            light_type: LightType::Point,
+                            kind: LightType::Point,
                         }
                     }
                 };
@@ -286,13 +300,21 @@ impl App for MyRender {
 
     fn render(&mut self) {
         if let Some(path) = self.path.take() {
-            let file = std::fs::File::open(path).unwrap();
-            self.load_obj(file);
+            match std::fs::File::open(path) {
+                Ok(file) => {
+                    if let Err(error) = self.load_obj(file) {
+                        eprintln!("object reload failed: {error}");
+                    }
+                }
+                Err(error) => eprintln!("object reload failed: {error}"),
+            }
         }
         if self.scene.number_of_objects() != 0 {
             self.update_objects();
         }
-        self.scene.render_frame();
+        if let Err(error) = self.scene.render_frame() {
+            eprintln!("render failed: {error}");
+        }
     }
 }
 

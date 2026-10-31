@@ -46,7 +46,7 @@ fn ioi() {
                     ShellCondition::Closed,
                     "{file_name}"
                 );
-            })
+            });
         });
     });
 }

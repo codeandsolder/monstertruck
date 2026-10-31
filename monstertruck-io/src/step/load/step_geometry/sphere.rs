@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D, Point3,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, Sphere, SurfaceParameter,
+    Vector3,
+};
+#[cfg(test)]
+use monstertruck_geometry::prelude::InnerSpace;
 use std::f64::consts::PI;
 use std::ops::Bound;
 impl ParametricSurface for Sphere {
@@ -6,7 +12,15 @@ impl ParametricSurface for Sphere {
     type Vector = Vector3;
     #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
-        self.0.derivative_mn(m, n, PI / 2.0 - v, u) * (-1f64).powi(m as i32)
+        // STEP's spherical parameterization is the geometry sphere with its
+        // arguments remapped as `base(pi/2 - v, u)`. Therefore wrapper `u`
+        // derivatives are base `v` derivatives, wrapper `v` derivatives are
+        // base `u` derivatives, and only each wrapper `v` differentiation adds
+        // a minus sign. Keeping this generic path consistent with the explicit
+        // `derivative_u`/`derivative_v` methods matters because `derivatives()`
+        // is what surface/surface Newton solvers consume.
+        let sign = if n.is_multiple_of(2) { 1.0 } else { -1.0 };
+        self.0.derivative_mn(n, m, PI / 2.0 - v, u) * sign
     }
     #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 { self.0.evaluate(PI / 2.0 - v, u) }
@@ -34,6 +48,18 @@ impl ParametricSurface3D for Sphere {
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 { self.0.normal(PI / 2.0 - v, u) }
 }
+#[inline]
+fn to_geometry_sphere_hint(hint: SearchParameterHint2D) -> SearchParameterHint2D {
+    match hint {
+        // Wrapper `S(u, v) = base(pi/2 - v, u)`.
+        SearchParameterHint2D::Parameter(u, v) => SearchParameterHint2D::Parameter(PI / 2.0 - v, u),
+        SearchParameterHint2D::Range((u0, u1), (v0, v1)) => {
+            SearchParameterHint2D::Range((PI / 2.0 - v1, PI / 2.0 - v0), (u0, u1))
+        }
+        SearchParameterHint2D::None => SearchParameterHint2D::None,
+    }
+}
+
 impl SearchNearestParameter<SurfaceParameter> for Sphere {
     type Point = Point3;
     #[inline]
@@ -44,7 +70,7 @@ impl SearchNearestParameter<SurfaceParameter> for Sphere {
         trials: usize,
     ) -> Option<(f64, f64)> {
         self.0
-            .search_nearest_parameter(point, hint, trials)
+            .search_nearest_parameter(point, to_geometry_sphere_hint(hint.into()), trials)
             .map(|(u, v)| (v, PI / 2.0 - u))
     }
 }
@@ -58,7 +84,7 @@ impl SearchParameter<SurfaceParameter> for Sphere {
         trials: usize,
     ) -> Option<(f64, f64)> {
         self.0
-            .search_parameter(point, hint, trials)
+            .search_parameter(point, to_geometry_sphere_hint(hint.into()), trials)
             .map(|(u, v)| (v, PI / 2.0 - u))
     }
 }
@@ -70,9 +96,9 @@ impl ParameterDivision2D for Sphere {
         tol: f64,
     ) -> (Vec<f64>, Vec<f64>) {
         let range = ((PI / 2.0 - v1, PI / 2.0 - v0), (u0, u1));
-        let (udiv0, vdiv0) = self.0.parameter_division(range, tol);
-        let vdiv = udiv0.into_iter().map(|u| PI / 2.0 - u).collect();
-        (vdiv0, vdiv)
+        let (polar_division, azimuth_division) = self.0.parameter_division(range, tol);
+        let reflected_polar_division = polar_division.into_iter().map(|u| PI / 2.0 - u).collect();
+        (azimuth_division, reflected_polar_division)
     }
 }
 
@@ -87,43 +113,43 @@ proptest::proptest! {
         const EPS: f64 = 1.0e-3;
         let sphere = Sphere(monstertruck_geometry::prelude::Sphere::new(center.into(), radius));
 
-        let uder0 = sphere.uder(u, v);
-        let uder1 = (sphere.subs(u + EPS, v) - sphere.subs(u - EPS, v)) / (2.0 * EPS);
+        let uder0 = sphere.derivative_u(u, v);
+        let uder1 = (sphere.evaluate(u + EPS, v) - sphere.evaluate(u - EPS, v)) / (2.0 * EPS);
         assert!(
             (uder0 - uder1).magnitude2() < EPS,
             "uder failed: {uder0:?}, {uder1:?}"
         );
 
-        let vder0 = sphere.vder(u, v);
-        let vder1 = (sphere.subs(u, v + EPS) - sphere.subs(u, v - EPS)) / (2.0 * EPS);
+        let vder0 = sphere.derivative_v(u, v);
+        let vder1 = (sphere.evaluate(u, v + EPS) - sphere.evaluate(u, v - EPS)) / (2.0 * EPS);
         assert!(
             (vder0 - vder1).magnitude2() < EPS,
             "vder failed: {vder0:?}, {vder1:?}"
         );
 
-        let uuder0 = sphere.uuder(u, v);
-        let uuder1 = (sphere.uder(u + EPS, v) - sphere.uder(u - EPS, v)) / (2.0 * EPS);
+        let uuder0 = sphere.derivative_uu(u, v);
+        let uuder1 = (sphere.derivative_u(u + EPS, v) - sphere.derivative_u(u - EPS, v)) / (2.0 * EPS);
         assert!(
             (uuder0 - uuder1).magnitude2() < EPS,
             "uuder failed: {uuder0:?}, {uuder1:?}"
         );
 
-        let uvder0 = sphere.uvder(u, v);
-        let uvder1 = (sphere.uder(u, v + EPS) - sphere.uder(u, v - EPS)) / (2.0 * EPS);
+        let uvder0 = sphere.derivative_uv(u, v);
+        let uvder1 = (sphere.derivative_u(u, v + EPS) - sphere.derivative_u(u, v - EPS)) / (2.0 * EPS);
         assert!(
             (uvder0 - uvder1).magnitude2() < EPS,
             "uvder failed: {uvder0:?}, {uvder1:?}"
         );
 
-        let vvder0 = sphere.vvder(u, v);
-        let vvder1 = (sphere.vder(u, v + EPS) - sphere.vder(u, v - EPS)) / (2.0 * EPS);
+        let vvder0 = sphere.derivative_vv(u, v);
+        let vvder1 = (sphere.derivative_v(u, v + EPS) - sphere.derivative_v(u, v - EPS)) / (2.0 * EPS);
         assert!(
             (vvder0 - vvder1).magnitude2() < EPS,
             "vvder failed: {vvder0:?}, {vvder1:?}"
         );
 
         let n0 = sphere.normal(u, v);
-        let n1 = sphere.uder(u, v).cross(sphere.vder(u, v)).normalize();
+        let n1 = sphere.derivative_u(u, v).cross(sphere.derivative_v(u, v)).normalize();
         assert!(
             (n0 - n1).magnitude2() < EPS,
             "normal failed: {n0:?}, {n1:?}"

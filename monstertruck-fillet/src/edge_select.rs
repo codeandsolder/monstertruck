@@ -14,7 +14,9 @@ use super::convert::{FilletableCurve, FilletableSurface, convert_shell_in, conve
 use super::error::FilletError;
 use super::ops;
 use super::params::{FilletOptions, FilletProfile, RadiusSpec};
-use super::types::*;
+use super::types::{
+    Curve, Edge, EdgeId, Shell, VertexId, Wire, approximate_edge_length, squared_distance,
+};
 
 type Result<T> = std::result::Result<T, FilletError>;
 
@@ -49,15 +51,15 @@ fn sampled_curve_distance_squared(curve: &Curve, point: Point3, sample_count: us
     let (t0, t1) = curve.range_tuple();
     (0..=sample_count)
         .map(|i| {
-            let t = t0 + (t1 - t0) * (i as f64) / (sample_count as f64);
-            squared_distance(curve.subs(t), point)
+            let t = t0 + (t1 - t0) * crate::count_as_f64(i) / crate::count_as_f64(sample_count);
+            squared_distance(curve.evaluate(t), point)
         })
         .fold(f64::INFINITY, f64::min)
 }
 
 fn sampled_variable_radius_upper_bound(radius: &dyn Fn(f64) -> f64, sample_count: usize) -> f64 {
     (0..=sample_count)
-        .map(|i| radius(i as f64 / sample_count as f64))
+        .map(|i| radius(crate::count_as_f64(i) / crate::count_as_f64(sample_count)))
         .fold(f64::NEG_INFINITY, f64::max)
 }
 
@@ -90,7 +92,7 @@ fn sampled_curve_surface_max_distance(
 ) -> f64 {
     let (t0, t1) = curve.range_tuple();
     (0..=sample_count)
-        .map(|i| t0 + (t1 - t0) * (i as f64) / (sample_count as f64))
+        .map(|i| t0 + (t1 - t0) * crate::count_as_f64(i) / crate::count_as_f64(sample_count))
         .map(|t| curve.evaluate(t))
         .filter_map(|point| {
             surface
@@ -140,7 +142,10 @@ fn collect_boundary_runs(shell: &Shell, selected: &HashSet<EdgeId>) -> Vec<(usiz
                     }
                 } else {
                     // ALL edges selected -> one closed run covering entire boundary.
-                    let ids: Vec<EdgeId> = boundary_edges.iter().map(|e| e.id()).collect();
+                    let ids: Vec<EdgeId> = boundary_edges
+                        .iter()
+                        .map(monstertruck_topology::Edge::id)
+                        .collect();
                     candidate_runs.push((face_idx, ids));
                 }
             } else {
@@ -276,13 +281,13 @@ fn group_edges_into_chains(
 /// main faces but is not itself one of the main faces.
 fn find_side_face(
     shell: &Shell,
-    face_a_idx: usize,
-    face_b_idx: usize,
+    shared_face_idx: usize,
+    opposite_face_idx: usize,
     vertex_id: VertexId,
     edge_face_map: &HashMap<EdgeId, FaceList>,
 ) -> Option<usize> {
     // Find edges incident to vertex_id in face_a or face_b.
-    [face_a_idx, face_b_idx]
+    [shared_face_idx, opposite_face_idx]
         .iter()
         .flat_map(|&fi| {
             shell[fi].edge_iter().filter_map(move |edge| {
@@ -291,7 +296,7 @@ fn find_side_face(
                     edge_face_map.get(&edge.id()).and_then(|faces| {
                         faces
                             .iter()
-                            .find(|&&f| f != face_a_idx && f != face_b_idx)
+                            .find(|&&f| f != shared_face_idx && f != opposite_face_idx)
                             .copied()
                     })
                 } else {
@@ -315,24 +320,23 @@ fn apply_single_edge_fillet(
     if faces.len() != 2 {
         if env::var_os("MT_FILLET_DEBUG").is_some() {
             eprintln!(
-                "debug fillet edge {:?}: skipped non-manifold candidate ({} faces).",
-                edge_id,
+                "debug fillet edge {edge_id:?}: skipped non-manifold candidate ({} faces).",
                 faces.len()
             );
         }
         return Ok(());
     }
 
-    let face_a_idx = preferred_shared_face_idx
+    let shared_face_idx = preferred_shared_face_idx
         .filter(|idx| faces.contains(idx))
         .unwrap_or(faces[0]);
-    let face_b_idx = *faces
+    let opposite_face_idx = *faces
         .iter()
-        .find(|&&f| f != face_a_idx)
+        .find(|&&f| f != shared_face_idx)
         .ok_or(FilletError::EdgeNotFound)?;
 
-    let face_a = shell[face_a_idx].clone();
-    let face_b = shell[face_b_idx].clone();
+    let face_a = shell[shared_face_idx].clone();
+    let face_b = shell[opposite_face_idx].clone();
     let edge = face_a
         .edge_iter()
         .find(|edge| edge.id() == edge_id)
@@ -344,15 +348,15 @@ fn apply_single_edge_fillet(
 
     let side0_idx = find_side_face(
         shell,
-        face_a_idx,
-        face_b_idx,
+        shared_face_idx,
+        opposite_face_idx,
         front_vertex_id,
         &edge_face_map,
     );
     let side1_idx = find_side_face(
         shell,
-        face_a_idx,
-        face_b_idx,
+        shared_face_idx,
+        opposite_face_idx,
         back_vertex_id,
         &edge_face_map,
     );
@@ -378,16 +382,15 @@ fn apply_single_edge_fillet(
                 let drift_a = sampled_curve_surface_max_distance(&curve, &surface_a, 16);
                 let drift_b = sampled_curve_surface_max_distance(&curve, &surface_b, 16);
                 eprintln!(
-                    "debug fillet edge {:?}: drift_a={:.3e}, drift_b={:.3e}, error={error}",
-                    edge_id, drift_a, drift_b
+                    "debug fillet edge {edge_id:?}: drift_a={drift_a:.3e}, drift_b={drift_b:.3e}, error={error}"
                 );
             }
             return Err(error);
         }
     };
 
-    shell[face_a_idx] = new_face_a;
-    shell[face_b_idx] = new_face_b;
+    shell[shared_face_idx] = new_face_a;
+    shell[opposite_face_idx] = new_face_b;
     if let Some(new_side) = new_side0
         && let Some(idx) = side0_idx
     {
@@ -407,6 +410,15 @@ fn apply_single_edge_fillet(
 /// Resolves face adjacency automatically and dispatches to
 /// [`fillet`](super::fillet)/[`fillet_with_side`](super::fillet_with_side)
 /// for single edges or [`fillet_along_wire`](super::fillet_along_wire) for multi-edge chains.
+///
+/// # Errors
+///
+/// Returns [`FilletError`] when an edge is missing/non-manifold, radius/profile validation fails,
+/// or the required geometry/topology construction cannot be completed.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the transactional chain resolver deliberately keeps selection rematching, per-edge fallback, and rollback in one mutation scope"
+)]
 pub fn fillet_edges(
     shell: &mut Shell,
     edge_ids: &[EdgeId],
@@ -514,8 +526,8 @@ pub fn fillet_edges(
                 resolved_pairs.push((original_eid, resolved_eid));
             } else if env::var_os("MT_FILLET_DEBUG").is_some() {
                 eprintln!(
-                    "debug fillet chain {:?}: unresolved edge {:?}, skipping.",
-                    chain.edge_ids, original_eid
+                    "debug fillet chain {:?}: unresolved edge {original_eid:?}, skipping.",
+                    chain.edge_ids
                 );
             }
         }
@@ -538,8 +550,8 @@ pub fn fillet_edges(
         let Some(faces) = edge_face_map.get(&first_eid) else {
             if env::var_os("MT_FILLET_DEBUG").is_some() {
                 eprintln!(
-                    "debug fillet chain {:?}: missing seed edge {:?}, skipping.",
-                    chain.edge_ids, first_eid
+                    "debug fillet chain {:?}: missing seed edge {first_eid:?}, skipping.",
+                    chain.edge_ids
                 );
             }
             continue;
@@ -547,16 +559,15 @@ pub fn fillet_edges(
         if faces.len() != 2 {
             if env::var_os("MT_FILLET_DEBUG").is_some() {
                 eprintln!(
-                    "debug fillet chain {:?}: skipped non-manifold seed edge {:?} ({} faces).",
+                    "debug fillet chain {:?}: skipped non-manifold seed edge {first_eid:?} ({} faces).",
                     chain.edge_ids,
-                    first_eid,
                     faces.len()
                 );
             }
             continue;
         }
         // face_a is the shared face from boundary-run grouping; face_b is the other.
-        let face_a_idx = if faces.contains(&chain.shared_face_idx) {
+        let shared_face_idx = if faces.contains(&chain.shared_face_idx) {
             chain.shared_face_idx
         } else {
             faces[0]
@@ -578,25 +589,23 @@ pub fn fillet_edges(
                 options
             };
 
-            match apply_single_edge_fillet(shell, first_eid, Some(face_a_idx), opts) {
-                Ok(()) => {}
-                Err(FilletError::GeometryFailed { .. }) => continue,
+            match apply_single_edge_fillet(shell, first_eid, Some(shared_face_idx), opts) {
+                Ok(()) | Err(FilletError::GeometryFailed { .. }) => {}
                 Err(error) => return Err(error),
             }
         } else {
             // Multi-edge chain: build a Wire from the shared face's boundary
             // to get edges in the correct orientation for that face.
             let chain_id_set: HashSet<EdgeId> = resolved_edge_ids.iter().copied().collect();
-            let Some(wire): Option<Wire> =
-                shell[face_a_idx]
-                    .boundary_iters()
-                    .into_iter()
-                    .find_map(|boundary| {
-                        let edges = boundary
-                            .filter(|edge| chain_id_set.contains(&edge.id()))
-                            .collect::<Vec<_>>();
-                        (edges.len() == resolved_edge_ids.len()).then_some(edges.into())
-                    })
+            let Some(wire): Option<Wire> = shell[shared_face_idx]
+                .boundary_iters()
+                .into_iter()
+                .find_map(|boundary| {
+                    let edges = boundary
+                        .filter(|edge| chain_id_set.contains(&edge.id()))
+                        .collect::<Vec<_>>();
+                    (edges.len() == resolved_edge_ids.len()).then_some(edges.into())
+                })
             else {
                 if env::var_os("MT_FILLET_DEBUG").is_some() {
                     eprintln!(
@@ -710,7 +719,6 @@ pub fn fillet_edges(
                 }
                 if chain_failed {
                     *shell = shell_checkpoint;
-                    continue;
                 }
             }
         }
@@ -723,6 +731,11 @@ pub fn fillet_edges(
 /// Converts the shell to internal NURBS types, runs [`fillet_edges`], and
 /// converts back. This is the main entry point for external callers whose
 /// shells use types like `monstertruck_modeling::Curve` / `monstertruck_modeling::Surface`.
+///
+/// # Errors
+///
+/// Returns [`FilletError`] when conversion to/from the internal NURBS representation fails or
+/// when [`fillet_edges`] rejects or cannot construct the requested fillet.
 pub fn fillet_edges_generic<C, S>(
     shell: &mut monstertruck_topology::Shell<Point3, C, S>,
     edges: &[monstertruck_topology::Edge<Point3, C>],

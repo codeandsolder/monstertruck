@@ -2,25 +2,26 @@ use algo::curve::search_closest_parameter;
 use itertools::Itertools;
 use monstertruck_geometry::prelude::*;
 
-use super::geometry::*;
+use super::geometry::{expand_chamfer, expand_custom, expand_fillet, expand_ridge, relay_spheres};
 use super::params::FilletProfile;
-use super::types::*;
+use super::types::{
+    Curve, Edge, EdgeId, Face, NotStrictlyCut, Shell, Vertex, VertexId, Wire,
+    approximate_edge_length,
+};
 
-pub(super) fn find_adjacent_edge(face: &Face, edge_id: EdgeId) -> Option<(Edge, Edge)> {
+pub fn find_adjacent_edge(face: &Face, edge_id: EdgeId) -> Option<(Edge, Edge)> {
     face.boundary_iters()
         .into_iter()
-        .flat_map(|boundary_iter| boundary_iter.circular_tuple_windows())
+        .flat_map(itertools::Itertools::circular_tuple_windows)
         .find(|(_, edge, _)| edge.id() == edge_id)
         .map(|(x, _, y)| (x, y))
 }
 
-#[allow(dead_code)]
-pub(super) fn take_ori<T>(ori: bool, (a, b): (T, T)) -> T {
-    match ori {
-        true => a,
-        false => b,
-    }
-}
+#[expect(
+    dead_code,
+    reason = "orientation helper is retained for the alternate fillet topology path"
+)]
+pub fn take_ori<T>(ori: bool, (a, b): (T, T)) -> T { if ori { a } else { b } }
 
 /// Prints a sub-step failure diagnostic when `MT_FILLET_DEBUG` is set, so a
 /// `GeometryFailed("cut face by bezier")` can be localized without a
@@ -31,7 +32,11 @@ fn cut_debug(message: impl FnOnce() -> String) {
     }
 }
 
-pub(super) fn cut_face_by_bezier(
+#[expect(
+    clippy::too_many_lines,
+    reason = "front/back curve cutting and boundary reconstruction are one symmetric topology transaction with shared intermediate state"
+)]
+pub fn cut_face_by_bezier(
     face: &Face,
     mut bezier: NurbsCurve<Vector4>,
     filleted_edge_id: EdgeId,
@@ -53,7 +58,7 @@ pub(super) fn cut_face_by_bezier(
             cut_debug(|| format!("front closest-parameter search failed (hint={hint:?})"));
             return None;
         };
-        let v0 = Vertex::new(bezier.subs(t0));
+        let v0 = Vertex::new(bezier.evaluate(t0));
         bezier = bezier.cut(t0);
         let Some(cut) = front_edge.not_strictly_cut_with_parameter(&v0, t1) else {
             cut_debug(|| {
@@ -62,8 +67,8 @@ pub(super) fn cut_face_by_bezier(
                     "front edge cut failed at t={t1} (edge range {:?}); \
                      t0={t0} rail=({:?})..({:?}) edge=({:?})..({:?})",
                     curve.range_tuple(),
-                    bezier.subs(b0),
-                    bezier.subs(b1),
+                    bezier.evaluate(b0),
+                    bezier.evaluate(b1),
                     front_edge.front().point(),
                     front_edge.back().point(),
                 )
@@ -87,16 +92,16 @@ pub(super) fn cut_face_by_bezier(
                 format!(
                     "back closest-parameter search failed (hint={hint:?}); \
                      rail=({:?})..({:?}) edge=({:?})..({:?})",
-                    bezier.subs(b0),
-                    bezier.subs(b1),
+                    bezier.evaluate(b0),
+                    bezier.evaluate(b1),
                     back_edge.front().point(),
                     back_edge.back().point(),
                 )
             });
             return None;
         };
-        let v1 = Vertex::new(bezier.subs(t0));
-        bezier.cut(t0);
+        let v1 = Vertex::new(bezier.evaluate(t0));
+        let _ = bezier.cut(t0);
         let Some(cut) = back_edge.not_strictly_cut_with_parameter(&v1, t1) else {
             cut_debug(|| {
                 format!(
@@ -109,7 +114,8 @@ pub(super) fn cut_face_by_bezier(
         cut.1
     };
 
-    let fillet_edge = Edge::new(new_front_edge.back(), new_back_edge.front(), bezier.into());
+    let fillet_edge =
+        Edge::new_unchecked(new_front_edge.back(), new_back_edge.front(), bezier.into());
     let new_boundaries = face
         .absolute_boundaries()
         .iter()
@@ -134,7 +140,7 @@ pub(super) fn cut_face_by_bezier(
             boundary
         })
         .collect::<Vec<_>>();
-    let mut new_face = match Face::try_new(new_boundaries, face.surface()) {
+    let mut new_face = match Face::new(new_boundaries, face.surface()) {
         Ok(new_face) => new_face,
         Err(error) => {
             cut_debug(|| format!("rebuilt boundary rejected: {error}"));
@@ -147,7 +153,7 @@ pub(super) fn cut_face_by_bezier(
     Some((new_face, fillet_edge))
 }
 
-pub(super) fn create_pcurve_edge(
+pub fn create_pcurve_edge(
     (v0, hint0): (&Vertex, (f64, f64)),
     (v1, hint1): (&Vertex, (f64, f64)),
     fillet_surface: &NurbsSurface<Vector4>,
@@ -155,10 +161,10 @@ pub(super) fn create_pcurve_edge(
     let uv0 = fillet_surface.search_parameter(v0.point(), hint0, 100)?;
     let uv1 = fillet_surface.search_parameter(v1.point(), hint1, 100)?;
     let curve = ParameterCurve::new(Line(uv0.into(), uv1.into()), fillet_surface.clone());
-    Some(Edge::new(v0, v1, curve.into()))
+    Some(Edge::new_unchecked(v0, v1, curve.into()))
 }
 
-pub(super) fn create_new_side(
+pub fn create_new_side(
     side: &Face,
     fillet_edge: &Edge,
     corner_vertex_id: VertexId,
@@ -201,7 +207,7 @@ pub(super) fn create_new_side(
     let fillet_surface = Box::new(fillet_curve.surface().clone());
     let new_curve = IntersectionCurve::new(side_surface, fillet_surface, fillet_curve);
     fillet_edge.set_curve(new_curve.into());
-    let mut new_face = Face::try_new(new_boundaries, side.surface()).ok()?;
+    let mut new_face = Face::new(new_boundaries, side.surface()).ok()?;
     if !side.orientation() {
         new_face.invert();
     }
@@ -209,7 +215,11 @@ pub(super) fn create_new_side(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct FaceBoundaryEdgeIndex {
+#[expect(
+    clippy::struct_field_names,
+    reason = "the face/boundary/edge index suffix distinguishes all three coordinates from the topology objects they index"
+)]
+pub struct FaceBoundaryEdgeIndex {
     pub(super) face_index: usize,
     pub(super) boundary_index: usize,
     pub(super) edge_index: usize,
@@ -225,7 +235,7 @@ impl From<(usize, usize, usize)> for FaceBoundaryEdgeIndex {
     }
 }
 
-pub(super) fn find_shared_face_with_front_edge(
+pub fn find_shared_face_with_front_edge(
     shell: &Shell,
     wire: &Wire,
 ) -> Option<FaceBoundaryEdgeIndex> {
@@ -234,16 +244,17 @@ pub(super) fn find_shared_face_with_front_edge(
         boundary_iter.find_map(|(boundary_idx, boundary_iter)| {
             let mut edge_iter = boundary_iter.circular_tuple_windows().enumerate();
             edge_iter.find_map(|(edge_idx, (edge0, edge1))| {
-                match edge0.is_same(&wire[0]) && edge1.is_same(&wire[1]) {
-                    true => Some((face_idx, boundary_idx, edge_idx).into()),
-                    false => None,
+                if edge0.is_same(&wire[0]) && edge1.is_same(&wire[1]) {
+                    Some((face_idx, boundary_idx, edge_idx).into())
+                } else {
+                    None
                 }
             })
         })
     })
 }
 
-pub(super) fn enumerate_adjacent_faces(
+pub fn enumerate_adjacent_faces(
     shell: &Shell,
     wire: &Wire,
     shared_face: FaceBoundaryEdgeIndex,
@@ -256,9 +267,12 @@ pub(super) fn enumerate_adjacent_faces(
             let mut boundary_iter = face.boundary_iters().into_iter().enumerate();
             boundary_iter.find_map(|(boundary_idx, boundary_iter)| {
                 let mut edge_iter = boundary_iter.enumerate();
-                edge_iter.find_map(|(edge_idx, edge)| match edge.is_same(edge0) {
-                    true => Some((face_idx, boundary_idx, edge_idx).into()),
-                    false => None,
+                edge_iter.find_map(|(edge_idx, edge)| {
+                    if edge.is_same(edge0) {
+                        Some((face_idx, boundary_idx, edge_idx).into())
+                    } else {
+                        None
+                    }
                 })
             })
         })
@@ -266,7 +280,7 @@ pub(super) fn enumerate_adjacent_faces(
     iter.collect()
 }
 
-pub(super) fn wire_edge_starts_and_spans(wire: &Wire) -> Option<(Vec<f64>, Vec<f64>)> {
+pub fn wire_edge_starts_and_spans(wire: &Wire) -> Option<(Vec<f64>, Vec<f64>)> {
     let edge_count = wire.len();
     if edge_count == 0 {
         return None;
@@ -279,7 +293,7 @@ pub(super) fn wire_edge_starts_and_spans(wire: &Wire) -> Option<(Vec<f64>, Vec<f
     let spans: Vec<f64> = if total_length > TOLERANCE {
         lengths.iter().map(|length| length / total_length).collect()
     } else {
-        std::iter::repeat_n(1.0 / edge_count as f64, edge_count).collect()
+        std::iter::repeat_n(1.0 / crate::count_as_f64(edge_count), edge_count).collect()
     };
     let starts = spans
         .iter()
@@ -292,7 +306,7 @@ pub(super) fn wire_edge_starts_and_spans(wire: &Wire) -> Option<(Vec<f64>, Vec<f
     Some((starts, spans))
 }
 
-pub(super) fn fillet_surfaces_along_wire(
+pub fn fillet_surfaces_along_wire(
     shell: &Shell,
     wire: &Wire,
     shared_face_index: FaceBoundaryEdgeIndex,
@@ -316,12 +330,13 @@ pub(super) fn fillet_surfaces_along_wire(
             let start = edge_starts[edge_index];
             let span = edge_spans[edge_index];
             let radius_on_edge = |edge_t: f64| {
-                let global_t = (start + span * edge_t).clamp(0.0, 1.0);
+                let global_t = f64::mul_add(span, edge_t, start).clamp(0.0, 1.0);
                 radius(global_t)
             };
             let (first_wire, last_wire) = front_back_ids
-                .map(|(front_id, back_id)| (edge.id() == front_id, edge.id() == back_id))
-                .unwrap_or((false, false));
+                .map_or((false, false), |(front_id, back_id)| {
+                    (edge.id() == front_id, edge.id() == back_id)
+                });
             let extend = first_wire || last_wire;
             let mut rs = relay_spheres(
                 surface0,
@@ -338,33 +353,30 @@ pub(super) fn fillet_surfaces_along_wire(
             if last_wire {
                 rs.remove(0);
             }
-            let surface = match profile {
+            match profile {
                 FilletProfile::Round => expand_fillet(&rs, surface0, surface1),
                 FilletProfile::Chamfer => expand_chamfer(&rs, surface0, surface1),
-                FilletProfile::AsymmetricChamfer { .. } => return None,
+                FilletProfile::AsymmetricChamfer { .. } => None,
                 FilletProfile::Ridge => expand_ridge(&rs, surface0, surface1),
                 FilletProfile::Custom(curve) => expand_custom(&rs, surface0, surface1, curve),
-            };
-            Some(surface)
+            }
         };
     wire_faces_iter.map(create_fillet_surface).collect()
 }
 
-pub(super) fn concat_fillet_surface(
-    surfaces: &[NurbsSurface<Vector4>],
-) -> Option<NurbsSurface<Vector4>> {
+pub fn concat_fillet_surface(surfaces: &[NurbsSurface<Vector4>]) -> Option<NurbsSurface<Vector4>> {
     if surfaces.is_empty() {
         return None;
     }
     let len = surfaces[0].control_points().len();
     let concat_beziers = |i: usize| -> Option<NurbsCurve<Vector4>> {
         let mut collector = CurveCollector::<NurbsCurve<Vector4>>::Singleton;
-        (0..surfaces.len()).for_each(|n| {
-            let mut curve = surfaces[n].curve_v(i);
-            curve.knot_translate(n as f64);
-            collector.concat(&curve);
-        });
-        collector.into()
+        for (n, surface) in surfaces.iter().enumerate() {
+            let mut curve = surface.curve_v(i);
+            curve.knot_translate(crate::count_as_f64(n));
+            collector.try_concat(&curve).ok()?;
+        }
+        collector.into_curve()
     };
     let long_beziers = (0..len).map(concat_beziers).collect::<Option<Vec<_>>>()?;
 
@@ -372,19 +384,19 @@ pub(super) fn concat_fillet_surface(
     let knot_vector_v = long_beziers[0].knot_vector().clone();
     let destruct_bezier = |bezier: NurbsCurve<Vector4>| BsplineCurve::from(bezier).destruct().1;
     let control_points = long_beziers.into_iter().map(destruct_bezier).collect();
-    Some(NurbsSurface::new(BsplineSurface::new(
+    Some(NurbsSurface::new(BsplineSurface::new_unchecked(
         (knot_vector_u, knot_vector_v),
         control_points,
     )))
 }
 
-pub(super) fn create_free_edge(curve: Curve) -> Edge {
+pub fn create_free_edge(curve: Curve) -> Edge {
     let v0 = Vertex::new(curve.front());
     let v1 = Vertex::new(curve.back());
-    Edge::new(&v0, &v1, curve)
+    Edge::new_unchecked(&v0, &v1, curve)
 }
 
-pub(super) fn cut_face_by_last_bezier(
+pub fn cut_face_by_last_bezier(
     shell: &mut Shell,
     face_index: FaceBoundaryEdgeIndex,
     fillet_surface: &NurbsSurface<Vector4>,

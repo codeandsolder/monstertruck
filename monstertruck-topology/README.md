@@ -16,12 +16,12 @@ let v = Vertex::from_points(&[(); 4]);
 
 // Create edges. Vertex is implemented the Copy trait.
 let edge = [
-    Edge::new(&v[0], &v[1], ()),
-    Edge::new(&v[0], &v[2], ()),
-    Edge::new(&v[0], &v[3], ()),
-    Edge::new(&v[1], &v[2], ()),
-    Edge::new(&v[1], &v[3], ()),
-    Edge::new(&v[2], &v[3], ()),
+    Edge::new_unchecked(&v[0], &v[1], ()),
+    Edge::new_unchecked(&v[0], &v[2], ()),
+    Edge::new_unchecked(&v[0], &v[3], ()),
+    Edge::new_unchecked(&v[1], &v[2], ()),
+    Edge::new_unchecked(&v[1], &v[3], ()),
+    Edge::new_unchecked(&v[2], &v[3], ()),
 ];
 
 // Create boundaries of faces as the wire.
@@ -35,7 +35,7 @@ let wire = vec![
 
 // Create faces by the boundary wires.
 // The boundary of face must be simple and closed.
-let mut face: Vec<Face> = wire.into_iter().map(|wire| Face::new(vec![wire], ())).collect();
+let mut face: Vec<Face> = wire.into_iter().map(|wire| Face::new_unchecked(vec![wire], ())).collect();
 face[3].invert();
 
 // Create shell of faces. Shell can be created by `Vec<Face>``.
@@ -43,7 +43,7 @@ let shell: Shell = face.into();
 
 // Create a tetrahedron solid by the boundary shell.
 // The boundaries of a solid must be closed and oriented.
-let solid = Solid::new(vec![shell]);
+let solid = Solid::new_unchecked(vec![shell]);
 ```
 ### Elements and containers
 Main structures in `monstertruck_topology` consist 4 topological elements and 2 topological containers.

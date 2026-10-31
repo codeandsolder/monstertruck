@@ -4,9 +4,13 @@
 //! transformations that relate them -- the non-geometric scaffolding that
 //! says which shape belongs to which part, and where.
 
-use super::*;
+use super::{
+    Axis2Placement, Axis2PlacementHolder, Deserialize, Holder, Matrix3, Matrix4,
+    RepresentationContext, RepresentationContextHolder, RepresentationItem,
+    RepresentationItemHolder, Result, Serialize, SquareMatrix, StepConvertingError, Table,
+};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = application_context)]
 #[holder(generate_deserialize)]
@@ -14,7 +18,9 @@ pub struct ApplicationContext {
     pub application: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+impl Eq for ApplicationContextHolder {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product_context)]
 #[holder(generate_deserialize)]
@@ -25,7 +31,7 @@ pub struct ProductContext {
     pub discipline_type: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product)]
 #[holder(generate_deserialize)]
@@ -42,7 +48,7 @@ pub struct Product {
     pub frame_of_reference: Vec<ProductContext>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product_definition_formation)]
 #[holder(generate_deserialize)]
@@ -57,7 +63,7 @@ pub struct ProductDefinitionFormation {
     pub of_product: Product,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product_definition_context)]
 #[holder(generate_deserialize)]
@@ -68,7 +74,7 @@ pub struct ProductDefinitionContext {
     pub life_cycle_stage: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product_definition)]
 #[holder(generate_deserialize)]
@@ -114,7 +120,7 @@ pub struct ProductDefinitionShape {
     pub definition: CharacterizedDefinition,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = shape_representation)]
 #[holder(generate_deserialize)]
@@ -148,7 +154,7 @@ pub struct ShapeDefinitionRepresentation {
     pub used_representation: ShapeRepresentation,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = shape_representation_relationship)]
 #[holder(generate_deserialize)]
@@ -188,7 +194,7 @@ pub struct ShapeRepresentationRelationshipWithTransformation {
     pub transformation_operator: ItemDefinedTransformation,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = next_assembly_usage_occurrence)]
 #[holder(generate_deserialize)]

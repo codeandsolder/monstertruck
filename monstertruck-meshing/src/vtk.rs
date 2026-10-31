@@ -1,10 +1,17 @@
-use crate::*;
+use crate::{Faces, Invertible, Point3, PolygonMesh, PolylineCurve, Vector2, Vector3};
 use monstertruck_core::tolerance::TOLERANCE;
-use monstertruck_topology::{Vertex, compress::*, *};
+use monstertruck_mesh::StandardAttribute;
+use monstertruck_topology::{
+    Edge, Face, Shell, Vertex, Wire,
+    compress::{CompressedEdge, CompressedEdgeIndex, CompressedFace, CompressedShell},
+};
 use rustc_hash::FxHashMap as HashMap;
 use std::convert::identity;
 pub use vtkio;
-use vtkio::model::{Attributes, *};
+use vtkio::model::{
+    Attribute, Attributes, CellType, Cells, DataArray, DataSet, ElementType, IOBuffer, Piece,
+    PolyDataPiece, UnstructuredGridPiece, VertexNumbers,
+};
 
 /// Trait for convert to [`DataSet`]
 pub trait ToDataSet {
@@ -125,10 +132,7 @@ impl ToDataSet for PolygonMesh<usize, Vec<StandardAttribute>> {
         let flatten_uvs = self
             .attributes()
             .iter()
-            .flat_map(|attr| match attr.uv_coord {
-                Some(uv) => Into::<[f64; 2]>::into(uv),
-                None => [f64::NAN; 2],
-            })
+            .flat_map(|attr| attr.uv_coord.map_or([f64::NAN; 2], Into::<[f64; 2]>::into))
             .collect::<Vec<_>>();
         let uvs = Attribute::DataArray(DataArray {
             name: "TCoords".to_owned(),
@@ -138,10 +142,7 @@ impl ToDataSet for PolygonMesh<usize, Vec<StandardAttribute>> {
         let flatten_normals = self
             .attributes()
             .iter()
-            .flat_map(|attr| match attr.normal {
-                Some(normal) => Into::<[f64; 3]>::into(normal),
-                None => [f64::NAN; 3],
-            })
+            .flat_map(|attr| attr.normal.map_or([f64::NAN; 3], Into::<[f64; 3]>::into))
             .collect::<Vec<_>>();
         let normals = Attribute::DataArray(DataArray {
             name: "Normals".to_owned(),
@@ -170,23 +171,30 @@ impl ToDataSet for PolygonMesh {
             (true, true) => self.to_positions_mesh().to_data_set(),
             (false, true) => self
                 .expands(|attr| {
-                    let uv = match attr.uv_coord {
-                        Some(uv) => uv,
-                        None => Vector2::new(f64::NAN, f64::NAN),
-                    };
+                    let uv = attr
+                        .uv_coord
+                        .unwrap_or_else(|| Vector2::new(f64::NAN, f64::NAN));
                     (attr.position, uv)
                 })
-                .to_data_set(),
+                .map_or_else(
+                    |_| self.to_positions_mesh().to_data_set(),
+                    |mesh| mesh.to_data_set(),
+                ),
             (true, false) => self
                 .expands(|attr| {
-                    let normal = match attr.normal {
-                        Some(normal) => normal,
-                        None => Vector3::new(f64::NAN, f64::NAN, f64::NAN),
-                    };
+                    let normal = attr
+                        .normal
+                        .unwrap_or_else(|| Vector3::new(f64::NAN, f64::NAN, f64::NAN));
                     (attr.position, normal)
                 })
-                .to_data_set(),
-            (false, false) => self.expands(identity).to_data_set(),
+                .map_or_else(
+                    |_| self.to_positions_mesh().to_data_set(),
+                    |mesh| mesh.to_data_set(),
+                ),
+            (false, false) => self.expands(identity).map_or_else(
+                |_| self.to_positions_mesh().to_data_set(),
+                |mesh| mesh.to_data_set(),
+            ),
         }
     }
 }
@@ -210,7 +218,7 @@ impl ToDataSet for Vertex<Point3> {
                     },
                     types: vec![CellType::Vertex],
                 },
-                data: Default::default(),
+                data: Attributes::default(),
             }))],
         }
     }
@@ -238,7 +246,7 @@ impl ToDataSet for Edge<Point3, PolylineCurve<Point3>> {
                     },
                     types: vec![CellType::PolyLine, CellType::Vertex, CellType::Vertex],
                 },
-                data: Default::default(),
+                data: Attributes::default(),
             }))],
         }
     }
@@ -258,17 +266,20 @@ impl ToDataSet for Wire<Point3, PolylineCurve<Point3>> {
             },
         );
         let tmp: Vec<_> = self.vertex_iter().collect();
-        tmp.iter().for_each(|v| {
+        for v in &tmp {
             vmap.entry_or_insert(v);
-        });
+        }
         let vmap: HashMap<_, _> = vmap.into();
         self.edge_iter().for_each(|edge| {
+            let (Some(&front), Some(&back)) =
+                (vmap.get(&edge.front().id()), vmap.get(&edge.back().id()))
+            else {
+                return;
+            };
             let pts = edge.oriented_curve().0;
-            // SAFETY: vmap was built from all vertices of this wire.
-            connectivity.push(*vmap.get(&edge.front().id()).unwrap());
+            connectivity.push(front);
             connectivity.extend((1..pts.len() - 1).map(|i| (points.len() + i - 1) as u64));
-            // SAFETY: vmap was built from all vertices of this wire.
-            connectivity.push(*vmap.get(&edge.back().id()).unwrap());
+            connectivity.push(back);
             offsets.push(connectivity.len() as u64);
             points.extend(
                 pts[1..pts.len() - 1]
@@ -286,7 +297,7 @@ impl ToDataSet for Wire<Point3, PolylineCurve<Point3>> {
         DataSet::UnstructuredGrid {
             meta: None,
             pieces: vec![Piece::Inline(Box::new(UnstructuredGridPiece {
-                points: IOBuffer::F64(points.concat().to_vec()),
+                points: IOBuffer::F64(points.concat()),
                 cells: Cells {
                     cell_verts: VertexNumbers::XML {
                         connectivity,
@@ -294,7 +305,7 @@ impl ToDataSet for Wire<Point3, PolylineCurve<Point3>> {
                     },
                     types,
                 },
-                data: Default::default(),
+                data: Attributes::default(),
             }))],
         }
     }
@@ -302,8 +313,8 @@ impl ToDataSet for Wire<Point3, PolylineCurve<Point3>> {
 
 fn face_piece(
     face: &Face<Point3, PolylineCurve<Point3>, PolygonMesh>,
-) -> Piece<UnstructuredGridPiece> {
-    let polygon = face.oriented_surface().expands(identity);
+) -> Option<Piece<UnstructuredGridPiece>> {
+    let polygon = face.oriented_surface().expands(identity).ok()?;
     let mut length = 0;
     let map: HashMap<Option<[i64; 3]>, usize> = polygon
         .attributes()
@@ -321,10 +332,7 @@ fn face_piece(
     let flatten_uvs = polygon
         .attributes()
         .iter()
-        .flat_map(|attr| match attr.uv_coord {
-            Some(uv) => Into::<[f64; 2]>::into(uv),
-            None => [f64::NAN; 2],
-        })
+        .flat_map(|attr| attr.uv_coord.map_or([f64::NAN; 2], Into::<[f64; 2]>::into))
         .collect::<Vec<_>>();
     let uvs = Attribute::DataArray(DataArray {
         name: "TCoords".to_owned(),
@@ -334,10 +342,7 @@ fn face_piece(
     let flatten_normals = polygon
         .attributes()
         .iter()
-        .flat_map(|attr| match attr.normal {
-            Some(normal) => Into::<[f64; 3]>::into(normal),
-            None => [f64::NAN; 3],
-        })
+        .flat_map(|attr| attr.normal.map_or([f64::NAN; 3], Into::<[f64; 3]>::into))
         .collect::<Vec<_>>();
     let normals = Attribute::DataArray(DataArray {
         name: "Normals".to_owned(),
@@ -370,25 +375,25 @@ fn face_piece(
         } = &mut cell_verts
         {
             connectivity.push(idx);
-            offsets.push(connectivity.len() as u64)
+            offsets.push(connectivity.len() as u64);
         }
         Some(())
     });
-    Piece::Inline(Box::new(UnstructuredGridPiece {
+    Some(Piece::Inline(Box::new(UnstructuredGridPiece {
         points: IOBuffer::F64(flatten_points),
         cells: Cells { cell_verts, types },
         data: Attributes {
             point: vec![uvs, normals],
-            ..Default::default()
+            ..Attributes::default()
         },
-    }))
+    })))
 }
 
 impl ToDataSet for Face<Point3, PolylineCurve<Point3>, PolygonMesh> {
     fn to_data_set(&self) -> DataSet {
         DataSet::UnstructuredGrid {
             meta: None,
-            pieces: vec![face_piece(self)],
+            pieces: face_piece(self).into_iter().collect(),
         }
     }
 }
@@ -397,9 +402,21 @@ impl ToDataSet for Shell<Point3, PolylineCurve<Point3>, PolygonMesh> {
     fn to_data_set(&self) -> DataSet {
         DataSet::UnstructuredGrid {
             meta: None,
-            pieces: self.face_iter().map(face_piece).collect(),
+            pieces: self.face_iter().filter_map(face_piece).collect(),
         }
     }
+}
+
+fn oriented_compressed_face_edges(face: &CompressedFace<PolygonMesh>) -> Vec<&CompressedEdgeIndex> {
+    let mut edge_indices = Vec::new();
+    for boundary in &face.boundaries {
+        if face.orientation {
+            edge_indices.extend(boundary.iter());
+        } else {
+            edge_indices.extend(boundary.iter().rev());
+        }
+    }
+    edge_indices
 }
 
 fn cface_piece(
@@ -407,18 +424,17 @@ fn cface_piece(
     edges: &[CompressedEdge<PolylineCurve<Point3>>],
     face: &CompressedFace<PolygonMesh>,
 ) -> Option<Piece<UnstructuredGridPiece>> {
-    let polygon = match face.orientation {
-        true => face.surface.expands(identity),
-        false => face.surface.inverse().expands(identity),
-    };
-    let mut length = 0;
+    let polygon = if face.orientation {
+        face.surface.expands(identity)
+    } else {
+        face.surface.inverse().expands(identity)
+    }
+    .ok()?;
     let map: HashMap<Option<[i64; 3]>, usize> = polygon
         .attributes()
         .iter()
-        .map(move |attr| {
-            length += 1;
-            (hash_point(attr.position), length - 1)
-        })
+        .enumerate()
+        .map(|(index, attr)| (hash_point(attr.position), index))
         .collect();
     let flatten_points = polygon
         .attributes()
@@ -428,10 +444,7 @@ fn cface_piece(
     let flatten_uvs = polygon
         .attributes()
         .iter()
-        .flat_map(|attr| match attr.uv_coord {
-            Some(uv) => uv.into(),
-            None => [f64::NAN; 2],
-        })
+        .flat_map(|attr| attr.uv_coord.map_or([f64::NAN; 2], Into::into))
         .collect::<Vec<_>>();
     let uvs = Attribute::DataArray(DataArray {
         name: "TCoords".to_owned(),
@@ -441,10 +454,7 @@ fn cface_piece(
     let flatten_normals = polygon
         .attributes()
         .iter()
-        .flat_map(|attr| match attr.normal {
-            Some(normal) => normal.into(),
-            None => [f64::NAN; 3],
-        })
+        .flat_map(|attr| attr.normal.map_or([f64::NAN; 3], Into::into))
         .collect::<Vec<_>>();
     let normals = Attribute::DataArray(DataArray {
         name: "Normals".to_owned(),
@@ -453,20 +463,12 @@ fn cface_piece(
     });
     let mut cell_verts = to_vertex_numbers(polygon.faces());
     let mut types = vec![CellType::Polygon; cell_verts.num_cells()];
-    let edge_indices: Vec<_> = face
-        .boundaries
-        .iter()
-        .flat_map::<Box<dyn Iterator<Item = &CompressedEdgeIndex>>, _>(|boundary| {
-            match face.orientation {
-                true => Box::new(boundary.iter()),
-                false => Box::new(boundary.iter().rev()),
-            }
-        })
-        .collect();
+    let edge_indices = oriented_compressed_face_edges(face);
     edge_indices.iter().try_for_each(|edge| {
-        let curve = match face.orientation == edge.orientation {
-            true => edges[edge.index].curve.clone(),
-            false => edges[edge.index].curve.inverse(),
+        let curve = if face.orientation == edge.orientation {
+            edges[edge.index].curve.clone()
+        } else {
+            edges[edge.index].curve.inverse()
         };
         let polyline = curve
             .iter()
@@ -487,9 +489,10 @@ fn cface_piece(
         Some(())
     })?;
     edge_indices.into_iter().try_for_each(|edge| {
-        let v = match face.orientation == edge.orientation {
-            true => edges[edge.index].vertices.0,
-            false => edges[edge.index].vertices.1,
+        let v = if face.orientation == edge.orientation {
+            edges[edge.index].vertices.0
+        } else {
+            edges[edge.index].vertices.1
         };
         let idx = map.get(&hash_point(vertices[v])).map(|i| *i as u64)?;
         types.push(CellType::Vertex);
@@ -499,7 +502,7 @@ fn cface_piece(
         } = &mut cell_verts
         {
             connectivity.push(idx);
-            offsets.push(connectivity.len() as u64)
+            offsets.push(connectivity.len() as u64);
         }
         Some(())
     })?;
@@ -508,7 +511,7 @@ fn cface_piece(
         cells: Cells { cell_verts, types },
         data: Attributes {
             point: vec![uvs, normals],
-            ..Default::default()
+            ..Attributes::default()
         },
     })))
 }

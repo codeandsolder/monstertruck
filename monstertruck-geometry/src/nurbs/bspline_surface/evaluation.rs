@@ -1,9 +1,11 @@
-use super::*;
+use super::{
+    BasisWindow, BsplineSurface, ControlPoint, ParameterRange, ParametricSurface, Zero, inv_or_zero,
+};
 
 impl<P: ControlPoint<f64>> BsplineSurface<P> {
     /// Returns the closure of substitution.
-    #[inline(always)]
-    pub fn closure(&self) -> impl Fn(f64, f64) -> P + '_ { move |u, v| self.subs(u, v) }
+    #[inline]
+    pub fn closure(&self) -> impl Fn(f64, f64) -> P + '_ { move |u, v| self.evaluate(u, v) }
 
     /// Calculate derived B-spline surface by the first parameter `u`.
     /// # Examples
@@ -14,7 +16,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, -1.0), Vector2::new(1.0, 0.0)],
     ///     vec![Vector2::new(0.0, 1.0), Vector2::new(0.5, 2.0), Vector2::new(1.0, 1.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let uderivation = bspsurface.uderivation();
     ///
     /// // bspsurface: (v, 2v(1 - v)(2u - 1) + u), uderivation: (0.0, 4v(1 - v) + 1)
@@ -24,12 +26,13 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     ///     for j in 0..=N {
     ///         let v = (j as f64) / (N as f64);
     ///         assert_near2!(
-    ///             uderivation.subs(u, v),
+    ///             uderivation.evaluate(u, v),
     ///             Vector2::new(0.0, 4.0 * v * (1.0 - v) + 1.0),
     ///         );
     ///     }
     /// }
     /// ```
+    #[must_use]
     pub fn uderivation(&self) -> BsplineSurface<P::Diff> {
         let n0 = self.control_points.len();
         let n1 = self.control_points[0].len();
@@ -40,7 +43,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
             (0..=n0)
                 .map(|i| {
                     let delta = knot_vector_u[i + k] - knot_vector_u[i];
-                    let coef = (k as f64) * inv_or_zero(delta);
+                    let coef = crate::usize_to_f64(k) * inv_or_zero(delta);
                     (0..n1)
                         .map(|j| self.udelta_control_points(i, j) * coef)
                         .collect()
@@ -62,7 +65,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, -1.0), Vector2::new(1.0, 0.0)],
     ///     vec![Vector2::new(0.0, 1.0), Vector2::new(0.5, 2.0), Vector2::new(1.0, 1.0)],
     /// ];
-    /// let bspsurface = BsplineSurface::new(knot_vecs, control_points);
+    /// let bspsurface = BsplineSurface::new_unchecked(knot_vecs, control_points);
     /// let vderivation = bspsurface.vderivation();
     ///
     /// // bspsurface: (v, 2v(1 - v)(2u - 1) + u), vderivation: (1, -2(2u - 1)(2v - 1))
@@ -72,12 +75,13 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     ///     for j in 0..=N {
     ///         let v = (j as f64) / (N as f64);
     ///         assert_near2!(
-    ///             vderivation.subs(u, v),
+    ///             vderivation.evaluate(u, v),
     ///             Vector2::new(1.0, -2.0 * (2.0 * u - 1.0) * (2.0 * v - 1.0)),
     ///         );
     ///     }
     /// }
     /// ```
+    #[must_use]
     pub fn vderivation(&self) -> BsplineSurface<P::Diff> {
         let n0 = self.control_points.len();
         let n1 = self.control_points[0].len();
@@ -89,9 +93,9 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
             let mut new_points = vec![Vec::with_capacity(n1 + 1); n0];
             for j in 0..=n1 {
                 let delta = knot_vector_v[j + k] - knot_vector_v[j];
-                let coef = (k as f64) * inv_or_zero(delta);
+                let coef = crate::usize_to_f64(k) * inv_or_zero(delta);
                 for (i, vec) in new_points.iter_mut().enumerate() {
-                    vec.push(self.vdelta_control_points(i, j) * coef)
+                    vec.push(self.vdelta_control_points(i, j) * coef);
                 }
             }
             new_points
@@ -136,12 +140,12 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
     type Vector = P::Diff;
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         let (degree0, degree1) = self.degrees();
-        let BsplineSurface {
+        let Self {
             knot_vecs: (knot_vector_u, knot_vector_v),
             control_points,
         } = self;
-        let u_range_is_zero = knot_vector_u[0] == knot_vector_u[knot_vector_u.len() - 1];
-        let v_range_is_zero = knot_vector_v[0] == knot_vector_v[knot_vector_v.len() - 1];
+        let u_range_is_zero = knot_vector_u.range_length().is_zero();
+        let v_range_is_zero = knot_vector_v.range_length().is_zero();
 
         if u_range_is_zero && v_range_is_zero {
             if m == 0 && n == 0 {
@@ -151,7 +155,7 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
             }
         } else if u_range_is_zero {
             if m == 0 {
-                let basis1 = knot_vector_v.bspline_basis_functions(degree1, n, v);
+                let basis1 = knot_vector_v.bspline_basis_functions_unchecked(degree1, n, v);
                 control_points[0][basis1.start_index()..]
                     .iter()
                     .zip(basis1.values())
@@ -163,7 +167,7 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
             }
         } else if v_range_is_zero {
             if n == 0 {
-                let basis0 = knot_vector_u.bspline_basis_functions(degree0, m, u);
+                let basis0 = knot_vector_u.bspline_basis_functions_unchecked(degree0, m, u);
                 control_points[basis0.start_index()..]
                     .iter()
                     .zip(basis0.values())
@@ -172,24 +176,24 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
                 P::Diff::zero()
             }
         } else {
-            let basis0 = knot_vector_u.bspline_basis_functions(degree0, m, u);
-            let basis1 = knot_vector_v.bspline_basis_functions(degree1, n, v);
+            let basis0 = knot_vector_u.bspline_basis_functions_unchecked(degree0, m, u);
+            let basis1 = knot_vector_v.bspline_basis_functions_unchecked(degree1, n, v);
             self.combine_basis(&basis0, &basis1)
         }
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> P { P::from_vec(self.derivative_mn(0, 0, u, v)) }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(1, 0, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(0, 1, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(2, 0, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(1, 1, u, v) }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(0, 2, u, v) }
 
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) { self.parameter_range() }
 }

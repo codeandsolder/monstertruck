@@ -1,33 +1,43 @@
-use super::*;
+use super::{EuclideanSpace, InnerSpace, Point3, Vector3, Vertex, Zero};
+use monstertruck_mesh::Origin;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FaceNormal {
-    /// Only consumed by the `filters` feature's normal-clustering code.
-    /// Tagged `dead_code` so `cargo check --no-default-features --features analyzers`
-    /// stays clean under the workspace's `-D warnings`.
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(feature = "filters"),
+        expect(
+            dead_code,
+            reason = "face identity is consumed by normal filters; analyzer-only builds need only the normal vector"
+        )
+    )]
     pub face_id: usize,
     pub normal: Vector3,
 }
 
 impl FaceNormal {
-    pub fn new(positions: &[Point3], face: &[Vertex], _face_id: usize) -> FaceNormal {
-        let center = face
-            .iter()
-            .fold(Vector3::zero(), |sum, v| sum + positions[v.pos].to_vec())
-            / face.len() as f64;
+    pub fn new(positions: &[Point3], face: &[Vertex], face_id: usize) -> Option<Self> {
+        if face.len() < 3 || face.iter().any(|vertex| vertex.pos >= positions.len()) {
+            return None;
+        }
+        let center = face.iter().fold(Vector3::zero(), |sum, vertex| {
+            sum + positions[vertex.pos].to_vec()
+        }) / crate::count_as_f64(face.len());
+        let first = face[0];
+        let last = face[face.len() - 1];
         let normal = face
             .windows(2)
-            .chain(std::iter::once([face[face.len() - 1], face[0]].as_ref()))
-            .fold(Vector3::zero(), |sum, v| {
-                let vec0 = positions[v[0].pos].to_vec() - center;
-                let vec1 = positions[v[1].pos].to_vec() - center;
+            .chain(std::iter::once([last, first].as_ref()))
+            .fold(Vector3::zero(), |sum, edge| {
+                let vec0 = positions[edge[0].pos].to_vec() - center;
+                let vec1 = positions[edge[1].pos].to_vec() - center;
                 sum + vec0.cross(vec1)
-            })
-            .normalize();
-        FaceNormal {
-            face_id: _face_id,
-            normal,
+            });
+        if normal.magnitude2().so_small() || !normal.magnitude2().is_finite() {
+            return None;
         }
+        Some(Self {
+            face_id,
+            normal: normal.normalize(),
+        })
     }
 }

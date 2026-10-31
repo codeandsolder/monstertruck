@@ -19,7 +19,7 @@ where
     let samples_on = |curve: &C, other: &C| {
         let (t0, t1) = curve.range_tuple();
         [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().all(|fraction| {
-            let point = curve.evaluate(t0 + (t1 - t0) * fraction);
+            let point = curve.evaluate(f64::mul_add(t1 - t0, fraction, t0));
             other
                 .search_nearest_parameter(point.clone(), None, 100)
                 .is_some_and(|parameter| other.evaluate(parameter).near(&point))
@@ -45,15 +45,15 @@ where
         + BoundedCurve<Point = P>
         + SearchNearestParameter<CurveParameter, Point = P>, {
     let (t0, t1) = candidate.range_tuple();
-    let contained = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+    let all_samples_contained = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
         .into_iter()
         .all(|fraction| {
-            let point = candidate.evaluate(t0 + (t1 - t0) * fraction);
+            let point = candidate.evaluate(f64::mul_add(t1 - t0, fraction, t0));
             container
                 .search_nearest_parameter(point.clone(), None, 100)
                 .is_some_and(|parameter| container.evaluate(parameter).near(&point))
         });
-    if contained {
+    if all_samples_contained {
         CurveCoincidence::SampledValidation
     } else {
         CurveCoincidence::Distinct
@@ -75,12 +75,12 @@ where
     let (r0, r1) = rhs.range_tuple();
     let fractions = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
     let aligned = fractions.into_iter().all(|fraction| {
-        lhs.evaluate(l0 + (l1 - l0) * fraction)
-            .near(&rhs.evaluate(r0 + (r1 - r0) * fraction))
+        lhs.evaluate(f64::mul_add(l1 - l0, fraction, l0))
+            .near(&rhs.evaluate(f64::mul_add(r1 - r0, fraction, r0)))
     });
     let reversed = fractions.into_iter().all(|fraction| {
-        lhs.evaluate(l0 + (l1 - l0) * fraction)
-            .near(&rhs.evaluate(r1 - (r1 - r0) * fraction))
+        lhs.evaluate(f64::mul_add(l1 - l0, fraction, l0))
+            .near(&rhs.evaluate(f64::mul_add(r1 - r0, -fraction, r1)))
     });
     if aligned || reversed {
         CurveCoincidence::SampledValidation

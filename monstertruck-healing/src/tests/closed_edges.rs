@@ -32,9 +32,9 @@ fn test_split_closed_edges() {
         vertices,
         edges,
         faces,
-        vertex_stable_ids: None,
-        edge_stable_ids: None,
-        face_stable_ids: None,
+        vertex_stable_ids: Some(vec![StableId::new(11)]),
+        edge_stable_ids: Some(vec![StableId::new(21)]),
+        face_stable_ids: Some(vec![StableId::new(31), StableId::new(32)]),
     };
     assert!(Shell::extract(shell.clone()).is_err());
 
@@ -54,6 +54,18 @@ fn test_split_closed_edges() {
     assert_eq!(edges.len(), 2);
     assert_eq!(edges[0].vertices, (0, 1));
     assert_eq!(edges[1].vertices, (1, 0));
+    assert_eq!(
+        shell.vertex_stable_ids.as_deref(),
+        Some([StableId::new(11), StableId::UNASSIGNED].as_slice())
+    );
+    assert_eq!(
+        shell.edge_stable_ids.as_deref(),
+        Some([StableId::new(21), StableId::UNASSIGNED].as_slice())
+    );
+    assert_eq!(
+        shell.face_stable_ids.as_deref(),
+        Some([StableId::new(31), StableId::new(32)].as_slice())
+    );
 
     assert_eq!(
         *faces,

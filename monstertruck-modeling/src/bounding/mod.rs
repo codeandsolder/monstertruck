@@ -81,7 +81,10 @@
 //! * A `Processor`'s `Matrix4` is a similarity. It is checked, not assumed:
 //!   anything else refuses.
 
-use crate::*;
+use crate::{
+    BoundingBox, Conic2D, Curve, Curve2D, Face, InnerSpace, Line, Matrix4, ParameterCurve, Point2,
+    Point3, Solid, Surface, Vector3, Vector4,
+};
 
 /// How much an analytic sphere's axis-aligned bounding box exceeds the sphere:
 /// `(2r)^3 / (4/3 pi r^3) = 6 / pi`, independent of the radius.
@@ -96,6 +99,7 @@ pub const ANALYTIC_SPHERE_LOOSENESS: f64 = 6.0 / std::f64::consts::PI;
 /// The ratio of the certified box's volume to the enclosed ball's volume, for a
 /// ball of any radius: exactly [`ANALYTIC_SPHERE_LOOSENESS`].
 #[inline]
+#[must_use]
 pub const fn analytic_sphere_looseness() -> f64 { ANALYTIC_SPHERE_LOOSENESS }
 
 /// Relative tolerance for judging a `Matrix4` a similarity.
@@ -108,6 +112,7 @@ const SIMILARITY_TOL: f64 = 1.0e-9;
 /// The box contains the solid's SURFACE and therefore -- the surface being a
 /// closed boundary -- the solid. See the module note for the per-class
 /// arguments and for how loose the result is.
+#[must_use]
 pub fn certified_solid_bounding_box(solid: &Solid) -> Option<BoundingBox<Point3>> {
     let mut result = BoundingBox::<Point3>::new();
     let mut any = false;
@@ -121,6 +126,7 @@ pub fn certified_solid_bounding_box(solid: &Solid) -> Option<BoundingBox<Point3>
 }
 
 /// A certified axis-aligned box containing every point of `face`, or [`None`].
+#[must_use]
 pub fn certified_face_bounding_box(face: &Face) -> Option<BoundingBox<Point3>> {
     let surface = face.surface();
     let hull = face_boundary_hull(face);
@@ -156,7 +162,7 @@ pub fn certified_surface_bounding_box(
             hull_box(&points)
         }
         // The whole ball, untrimmed.
-        Surface::SphericalSurface(processor) => {
+        Surface::Sphere(processor) => {
             let scale = similarity_scale(processor.transform())?;
             let sphere = processor.entity();
             let center = transform_point(processor.transform(), sphere.center());
@@ -168,7 +174,7 @@ pub fn certified_surface_bounding_box(
         }
         // The whole ring torus, untrimmed: `|radial| <= R + r`, `|axial| <= r`
         // about its own axis, which the transform carries to world space.
-        Surface::ToroidalSurface(processor) => {
+        Surface::Torus(processor) => {
             let scale = similarity_scale(processor.transform())?;
             let torus = processor.entity();
             let center = transform_point(processor.transform(), torus.center());
@@ -180,7 +186,7 @@ pub fn certified_surface_bounding_box(
         }
         // Cylinders and cones. Bounded only via the face's own wires -- see the
         // module note on why the untrimmed surface is not bounded at all.
-        Surface::RevolutionSurface(processor) => {
+        Surface::Revolution(processor) => {
             let revolution = processor.entity();
             // The convexity/affineness argument is stated for a STRAIGHT
             // profile and is claimed for nothing else.
@@ -193,7 +199,7 @@ pub fn certified_surface_bounding_box(
             revolution_face_box(origin, axis, boundary_hull?)
         }
         // No hull argument claimed for a T-mesh here.
-        Surface::TsplineSurface(_) => None,
+        Surface::Tspline(_) => None,
     }
 }
 
@@ -203,6 +209,7 @@ pub fn certified_surface_bounding_box(
 /// Diagnosis, not certification: an empty result means every face was bounded.
 /// A caller staring at a `None` needs to know WHICH class it tripped over, and
 /// guessing is how instruments start lying.
+#[must_use]
 pub fn uncertifiable_face_classes(solid: &Solid) -> Vec<String> {
     let mut classes: Vec<String> = Vec::new();
     for shell in solid.boundaries() {
@@ -237,31 +244,32 @@ pub fn uncertifiable_face_classes(solid: &Solid) -> Vec<String> {
 }
 
 /// The [`Surface`] variant's name, for diagnosis.
-fn surface_class_name(surface: &Surface) -> &'static str {
+const fn surface_class_name(surface: &Surface) -> &'static str {
     match surface {
         Surface::Plane(_) => "Plane",
         Surface::BsplineSurface(_) => "BsplineSurface",
         Surface::NurbsSurface(_) => "NurbsSurface",
-        Surface::RevolutionSurface(_) => "RevolutionSurface",
-        Surface::TsplineSurface(_) => "TsplineSurface",
-        Surface::SphericalSurface(_) => "SphericalSurface",
-        Surface::ToroidalSurface(_) => "ToroidalSurface",
+        Surface::Revolution(_) => "RevolutionSurface",
+        Surface::Tspline(_) => "TsplineSurface",
+        Surface::Sphere(_) => "SphericalSurface",
+        Surface::Torus(_) => "ToroidalSurface",
     }
 }
 
 /// The [`Curve`] variant's name, for diagnosis.
-fn curve_class_name(curve: &Curve) -> &'static str {
+const fn curve_class_name(curve: &Curve) -> &'static str {
     match curve {
         Curve::Line(_) => "Line",
         Curve::BsplineCurve(_) => "BsplineCurve",
         Curve::NurbsCurve(_) => "NurbsCurve",
         Curve::ParameterCurve(_) => "ParameterCurve",
-        Curve::IntersectionCurve(_) => "IntersectionCurve",
+        Curve::Intersection(_) => "IntersectionCurve",
     }
 }
 
 /// Points whose convex hull encloses every boundary wire of `face`, or [`None`]
 /// when some edge carries a curve with no cheap enclosure.
+#[must_use]
 pub fn face_boundary_hull(face: &Face) -> Option<Vec<Point3>> {
     let mut points = Vec::new();
     for edge in face.edge_iter() {
@@ -302,23 +310,19 @@ pub fn push_curve_hull(curve: &Curve, points: &mut Vec<Point3>) -> Option<()> {
         Curve::Line(Line(front, back)) => {
             points.push(*front);
             points.push(*back);
-            Some(())
         }
         Curve::BsplineCurve(curve) => {
             points.extend(curve.control_points().iter().copied());
-            Some(())
         }
         Curve::NurbsCurve(curve) => {
             for control in curve.control_points() {
                 points.push(projected_control_point(*control)?);
             }
-            Some(())
         }
         Curve::ParameterCurve(pcurve) => {
             push_box_corners(&parameter_curve_box(pcurve)?, points);
-            Some(())
         }
-        Curve::IntersectionCurve(curve) => {
+        Curve::Intersection(curve) => {
             // FOUR independent enclosures, each sound on its own, so their
             // INTERSECTION is sound and no looser than the best of them.
             let candidates = [
@@ -335,9 +339,9 @@ pub fn push_curve_hull(curve: &Curve, points: &mut Vec<Point3>) -> Option<()> {
                 });
             }
             push_box_corners(&tightest?, points);
-            Some(())
         }
     }
+    Some(())
 }
 
 /// A sound box for the 3D curve `surface(c(t))`.
@@ -419,7 +423,7 @@ fn surface_patch_box(
             }
             hull_box(&points)
         }
-        Surface::RevolutionSurface(processor) => {
+        Surface::Revolution(processor) => {
             let revolution = processor.entity();
             let Curve::Line(Line(front, back)) = revolution.entity_curve() else {
                 return None;
@@ -580,7 +584,7 @@ fn revolution_region_box(
     for index in 0..3 {
         let along = axis[index];
         let (first, second) = (axial.0 * along, axial.1 * along);
-        let perpendicular = radius * (1.0 - along * along).max(0.0).sqrt();
+        let perpendicular = radius * along.mul_add(-along, 1.0).max(0.0).sqrt();
         low[index] = origin[index] + first.min(second) - perpendicular;
         high[index] = origin[index] + first.max(second) + perpendicular;
     }

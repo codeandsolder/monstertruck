@@ -4,7 +4,6 @@ version = "0.4.1"
 authors = ["Yoshinori Tanimura <tanimura@ricos.co.jp>", "Moritz Moeller <virtualritz@protonmail.com>"]
 edition = "2024"
 description = "Integrated geometric and topological modeling algorithms"
-homepage = "https://github.com/virtualritz/monstertruck"
 repository = "https://github.com/virtualritz/monstertruck"
 license = "Apache-2.0"
 
@@ -29,6 +28,7 @@ monstertruck-traits = { workspace = true, features = ["derive"] }
 monstertruck-mesh = { workspace = true }
 monstertruck-fillet = { workspace = true, optional = true }
 monstertruck-topology = { workspace = true }
+num-traits = { workspace = true }
 rayon = { workspace = true }
 ttf-parser = { workspace = true, optional = true }
 # `web_time::Instant` is `std::time::Instant` on native and falls back to the

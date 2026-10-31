@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BoundedCurve, CompressedEdgeUse, CompressedTrimmedShell, Cut, Edge, EdgeIndex, HashMap, Point3,
+    Shell, Wire, append_unassigned_stable_ids,
+};
 
 /// Cuts the edge at the middle point of the bounded curve `curve`.
 fn cut_edge<P, C>(
@@ -12,8 +15,8 @@ where
     C: BoundedCurve<Point = P> + Cut,
 {
     let (t0, t1) = curve.range_tuple();
-    let t = (t0 + t1) / 2.0;
-    vertices.push(curve.subs(t));
+    let t = f64::midpoint(t0, t1);
+    vertices.push(curve.evaluate(t));
 
     let v2 = *v1;
     *v1 = vertices.len() - 1;
@@ -51,26 +54,39 @@ fn replace_edges(wire: &mut Wire, added: &HashMap<usize, usize>) {
             index: *new_edge_index,
             orientation: edge.orientation,
         };
-        match edge.orientation {
-            true => vec![edge, new_edge],
-            false => vec![new_edge, edge],
+        if edge.orientation {
+            vec![edge, new_edge]
+        } else {
+            vec![new_edge, edge]
         }
     };
     let new_wire = wire.iter().copied().flat_map(insert_one_edge).collect();
     *wire = new_wire;
 }
 
-pub(super) fn split_closed_edges<P, C, S>(shell: &mut Shell<P, C, S>)
+pub fn split_closed_edges<P, C, S>(shell: &mut Shell<P, C, S>)
 where C: BoundedCurve<Point = P> + Cut {
+    let original_vertex_count = shell.vertices.len();
+    let original_edge_count = shell.edges.len();
     let added = add_edges(&mut shell.vertices, &mut shell.edges);
+    append_unassigned_stable_ids(
+        &mut shell.vertex_stable_ids,
+        shell.vertices.len() - original_vertex_count,
+    );
+    append_unassigned_stable_ids(
+        &mut shell.edge_stable_ids,
+        shell.edges.len() - original_edge_count,
+    );
     let wire_iter = shell.faces.iter_mut().flat_map(|face| &mut face.boundaries);
-    wire_iter.for_each(|wire| replace_edges(wire, &added));
+    for wire in wire_iter {
+        replace_edges(wire, &added);
+    }
 }
 
 fn split_trim_curve_midpoint<T>(trim_curve: T) -> (T, T)
 where T: BoundedCurve + Cut + Clone {
     let (t0, t1) = trim_curve.range_tuple();
-    let tm = (t0 + t1) * 0.5;
+    let tm = f64::midpoint(t0, t1);
     let mut head = trim_curve;
     let tail = head.cut(tm);
     (head, tail)
@@ -88,8 +104,10 @@ where T: BoundedCurve + Cut + Clone {
             let trim_segments = edge_use
                 .trim_curve
                 .map(split_trim_curve_midpoint)
-                .map(|(front, back)| vec![Some(front), Some(back)])
-                .unwrap_or_else(|| vec![None, None]);
+                .map_or_else(
+                    || vec![None, None],
+                    |(front, back)| vec![Some(front), Some(back)],
+                );
             let indices = if edge_use.orientation {
                 [edge_use.index, new_edge_index]
             } else {
@@ -108,15 +126,14 @@ where T: BoundedCurve + Cut + Clone {
         .collect();
 }
 
-pub(super) fn split_closed_edges_trimmed<C, S, T>(
-    shell: &mut CompressedTrimmedShell<Point3, C, S, T>,
-) where
+pub fn split_closed_edges_trimmed<C, S, T>(shell: &mut CompressedTrimmedShell<Point3, C, S, T>)
+where
     C: BoundedCurve<Point = Point3> + Cut,
     T: BoundedCurve + Cut + Clone, {
     let added = add_edges(&mut shell.vertices, &mut shell.edges);
-    shell.faces.iter_mut().for_each(|face| {
-        face.boundaries
-            .iter_mut()
-            .for_each(|wire| replace_trimmed_edges(wire, &added));
-    });
+    for face in &mut shell.faces {
+        for wire in &mut face.boundaries {
+            replace_trimmed_edges(wire, &added);
+        }
+    }
 }

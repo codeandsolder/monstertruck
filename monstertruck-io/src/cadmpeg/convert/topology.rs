@@ -24,7 +24,7 @@
 //!
 //! # Loop order
 //!
-//! `Face::try_new` takes the FIRST wire as the outer boundary. The representation
+//! `Face::new` takes the FIRST wire as the outer boundary. The representation
 //! says the first loop is outer "conventionally", and separately carries a
 //! [`LoopBoundaryRole`]. Convention is not a guarantee, so where the role is
 //! stated it is obeyed and the outer loop is moved to the front; where it is not,
@@ -149,7 +149,7 @@ impl<'a> ShellBuilder<'a> {
                 .context
                 .malformed(format!("face {} carries no boundary loop", face.id)));
         }
-        // Move the stated outer loop to the front, where `Face::try_new` expects
+        // Move the stated outer loop to the front, where `Face::new` expects
         // it. `swap` and not a stable rotation: the inner loops have no order of
         // their own, so the cheapest correct move is the right one.
         if let Some(position) = outer {

@@ -18,9 +18,12 @@ members = [
     "monstertruck-mesh",
     "monstertruck-render",
     "monstertruck-solid",
-    "monstertruck-step",
     "monstertruck-topology",
 ]
+
+[workspace.metadata.rust-skills2]
+allow-test-panics = true
+allow-test-panics-reason = "Inherited test suites may use panic-style assertions; production and examples remain fully strict"
 
 [workspace.dependencies]
 
@@ -97,7 +100,6 @@ monstertruck-modeling = { version = "0.4.1", path = "monstertruck-modeling" }
 monstertruck-gpu = { version = "0.4.1", path = "monstertruck-gpu" }
 monstertruck-render = { version = "0.4.1", path = "monstertruck-render" }
 monstertruck-solid = { version = "0.4.1", path = "monstertruck-solid" }
-monstertruck-step = { version = "0.4.1", path = "monstertruck-step" }
 monstertruck-topology = { version = "0.4.1", path = "monstertruck-topology" }
 monstertruck-traits = { version = "0.4.1", path = "monstertruck-traits" }
 

@@ -4,6 +4,7 @@
 //! path is unchanged.
 
 use super::*;
+use crate::prelude::{ParametricCurve, Sphere, TrimmedCurve, UnitCircle};
 use std::f64::consts::FRAC_PI_2;
 
 fn assert_division_samples_match_parameters<C, P>(
@@ -55,4 +56,31 @@ fn inverted_matrix4_curve_division_points_match_parameters() {
     curve.invert();
 
     assert_division_points_match_parameters(&curve);
+}
+
+#[test]
+fn inverted_surface_bulk_derivatives_match_named_derivatives() {
+    let mut surface: Processor<Sphere, Matrix4> =
+        Processor::new(Sphere::new(Point3::origin(), 5.0));
+    surface.invert();
+    let (u, v) = (1.2, -0.3);
+    let derivatives = surface.derivatives(1, u, v);
+    assert!(derivatives[1][0].near(&surface.derivative_u(u, v)));
+    assert!(derivatives[0][1].near(&surface.derivative_v(u, v)));
+}
+
+#[test]
+fn inverted_surface_search_hints_swap_parameter_axes() {
+    assert_eq!(
+        processor_surface_hint(SearchParameterHint2D::Parameter(2.0, 7.0), false),
+        SearchParameterHint2D::Parameter(7.0, 2.0)
+    );
+    assert_eq!(
+        processor_surface_hint(SearchParameterHint2D::Range((1.0, 2.0), (3.0, 4.0)), false,),
+        SearchParameterHint2D::Range((3.0, 4.0), (1.0, 2.0))
+    );
+    assert_eq!(
+        processor_surface_hint(SearchParameterHint2D::Parameter(2.0, 7.0), true),
+        SearchParameterHint2D::Parameter(2.0, 7.0)
+    );
 }

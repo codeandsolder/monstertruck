@@ -18,24 +18,43 @@
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
-use common::*;
+use common::{Adjacency, FaceNormal};
 
 /// re-export polymesh
 pub mod rexport_polymesh {
     pub use monstertruck_mesh::*;
 }
-use monstertruck_mesh::{StandardVertex as Vertex, *};
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "mesh collection/sampling counts are bounded by actually iterable/allocatable data and are converted only for normalized f64 geometry formulas"
+)]
+pub(crate) const fn count_as_f64(value: usize) -> f64 { value as f64 }
+#[cfg(any(feature = "analyzers", feature = "tessellation"))]
+use monstertruck_mesh::Origin;
+#[cfg(feature = "analyzers")]
+use monstertruck_mesh::PolylineCurve;
+#[cfg(all(feature = "tessellation", not(feature = "analyzers")))]
+use monstertruck_mesh::TOLERANCE;
+#[cfg(feature = "tessellation")]
+use monstertruck_mesh::{
+    BoundedCurve, CurveParameter, ExactParameterBoundary2D, HashGen, Invertible,
+    ParameterBoundary2D, ParameterDivision1D, ParameterDivision2D, ParametricCurve2D,
+    ParametricCurve3D, ParametricSurface3D, Point2, SearchNearestParameter, SearchParameter,
+    SurfaceParameter, algo,
+};
+#[cfg(any(feature = "analyzers", feature = "filters"))]
+use monstertruck_mesh::{BoundingBox, Matrix3, MetricSpace, SquareMatrix};
+#[cfg(feature = "filters")]
+use monstertruck_mesh::{ElementWise, Tolerance, Vector2, polygon_mesh};
+use monstertruck_mesh::{
+    EuclideanSpace, Faces, InnerSpace, Point3, PolygonMesh, StandardVertex as Vertex, Vector3, Zero,
+};
+#[cfg(any(feature = "analyzers", feature = "filters", feature = "tessellation"))]
+use monstertruck_mesh::{StandardAttributes, StandardVertex, nonpositive_tolerance};
+#[cfg(feature = "analyzers")]
+use monstertruck_mesh::{TOLERANCE, TOLERANCE2, Vector4, hash};
 
 /// polygon mesh analyzers, including
 ///

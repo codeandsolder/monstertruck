@@ -2,18 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
-#![warn(
-    missing_docs,
-    missing_debug_implementations,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unstable_features,
-    unused_import_braces,
-    unused_qualifications
-)]
 
-use derive_more::{AsRef, Deref, DerefMut, From, Into};
 use wasm_bindgen::prelude::*;
 
 /// Monstertruck struct wrapped by wasm
@@ -31,6 +20,6 @@ pub mod builder;
 mod polygon;
 /// the boolean operators: `and`, `or`, `not`.
 pub mod shapeops;
-pub use polygon::{PolygonBuffer, PolygonMesh, StlType};
+pub use polygon::{PolygonBuffer, PolygonMesh};
 /// STEP IO
 pub mod step_in;

@@ -30,15 +30,16 @@ impl std::fmt::Debug for ContentHasher {
 
 impl ContentHasher {
     /// Create a new hasher with the default seed.
+    #[must_use]
     pub fn new() -> Self { Self::default() }
 }
 
 impl Hasher for ContentHasher {
     fn finish(&self) -> u64 { self.0.finish() }
-    fn write(&mut self, bytes: &[u8]) { self.0.write(bytes) }
+    fn write(&mut self, bytes: &[u8]) { self.0.write(bytes); }
 }
 
-/// Deterministic content hash for BRep cache invalidation.
+/// Deterministic content hash for `BRep` cache invalidation.
 ///
 /// Implementations must be stable across runs and independent of pointer
 /// identity. Floats are hashed by their raw bit patterns; collections are
@@ -64,7 +65,7 @@ impl DeterministicContentHash for () {
 }
 
 impl DeterministicContentHash for bool {
-    fn content_hash<H: Hasher>(&self, state: &mut H) { state.write_u8(*self as u8); }
+    fn content_hash<H: Hasher>(&self, state: &mut H) { state.write_u8(u8::from(*self)); }
 }
 
 impl DeterministicContentHash for u8 {
@@ -141,13 +142,17 @@ impl DeterministicContentHash for String {
 impl<T: DeterministicContentHash> DeterministicContentHash for [T] {
     fn content_hash<H: Hasher>(&self, state: &mut H) {
         state.write_usize(self.len());
-        self.iter().for_each(|item| item.content_hash(state));
+        for item in self {
+            item.content_hash(state);
+        }
     }
 }
 
 impl<T: DeterministicContentHash, const N: usize> DeterministicContentHash for [T; N] {
     fn content_hash<H: Hasher>(&self, state: &mut H) {
-        self.iter().for_each(|item| item.content_hash(state));
+        for item in self {
+            item.content_hash(state);
+        }
     }
 }
 
@@ -177,10 +182,10 @@ impl<K: DeterministicContentHash, V: DeterministicContentHash> DeterministicCont
     fn content_hash<H: Hasher>(&self, state: &mut H) {
         state.write_usize(self.len());
         // BTreeMap iterates in key order -- deterministic.
-        self.iter().for_each(|(k, v)| {
-            k.content_hash(state);
-            v.content_hash(state);
-        });
+        for (key, value) in self {
+            key.content_hash(state);
+            value.content_hash(state);
+        }
     }
 }
 

@@ -1,4 +1,8 @@
-use crate::*;
+use crate::{
+    Angle, BoundingBox, BufferHandler, BufferUsages, Camera, CameraInfo, Device, EuclideanSpace,
+    InnerSpace, Matrix3, Matrix4, Point2, Point3, ProjectionMethod, Rad, Ray, SquareMatrix,
+    Transform, Vector3, matrix4_to_raw_f32, ortho, perspective,
+};
 
 // Since cgmath assumes a normalized view volume in OpenGL,
 // this conversion is necessary to handle it with wgpu.
@@ -13,19 +17,23 @@ pub const OPENGL_TO_WGPU_MATRIX: Matrix4 = Matrix4::new(
 
 impl Ray {
     /// Returns the origin of the ray
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn origin(&self) -> Point3 { self.origin }
     /// Returns the (normalized) direction of the ray
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn direction(&self) -> Vector3 { self.direction }
 }
 
 impl ProjectionMethod {
     /// Returns `ProjectionMethod::Perspective { fov }`.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn perspective(fov: Rad<f64>) -> Self { Self::Perspective { fov } }
     /// Returns `ProjectionMethod::Parallel { screen_size }`.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn parallel(screen_size: f64) -> Self { Self::Parallel { screen_size } }
 }
 
@@ -41,7 +49,8 @@ impl Camera {
     /// camera.matrix = Matrix4::from_translation(Vector3::new(1.0, 2.0, 3.0));
     /// assert_eq!(camera.position(), Point3::new(1.0, 2.0, 3.0));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn position(&self) -> Point3 { Point3::from_vec(self.matrix[3].truncate()) }
 
     /// Returns the eye direction of camera.
@@ -59,7 +68,8 @@ impl Camera {
     /// );
     /// assert!(camera.eye_direction().near(&-Vector3::unit_x()));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn eye_direction(&self) -> Vector3 { -self.matrix[2].truncate() }
 
     /// Returns the direction of the head vector, the y-axis of the camera matrix.
@@ -75,7 +85,8 @@ impl Camera {
     /// );
     /// assert!(camera.head_direction().near(&Vector3::unit_z()));
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn head_direction(&self) -> Vector3 { self.matrix[1].truncate() }
 
     /// Returns the projection matrix into the normalized view volume.
@@ -115,7 +126,8 @@ impl Camera {
     /// let v = h.dot(y_axis);
     ///
     /// // check the answer
-    /// let uv = camera.projection(aspect).transform_point(pt);
+    /// let Some(projection) = camera.projection(aspect) else { return };
+    /// let uv = projection.transform_point(pt);
     /// assert_near!(u, uv[0]);
     /// assert_near!(v, uv[1]);
     /// ```
@@ -149,12 +161,15 @@ impl Camera {
     /// let v = h.dot(y_axis) / (size / 2.0);
     ///
     /// // check the answer
-    /// let uv = camera.projection(aspect).transform_point(pt);
+    /// let Some(projection) = camera.projection(aspect) else { return };
+    /// let uv = projection.transform_point(pt);
     /// assert_near!(u, uv[0]);
     /// assert_near!(v, uv[1]);
     /// ```
-    #[inline(always)]
-    pub fn projection(&self, aspect: f64) -> Matrix4 {
+    /// Returns the projection matrix, or `None` when the public camera matrix is singular.
+    #[inline]
+    #[must_use]
+    pub fn projection(&self, aspect: f64) -> Option<Matrix4> {
         let (near, far) = (self.near_clip, self.far_clip);
         let normal_projection = match self.method {
             ProjectionMethod::Perspective { fov } => perspective(fov, aspect, near, far),
@@ -164,18 +179,17 @@ impl Camera {
                 ortho(-x, x, -y, y, near, far)
             }
         };
-        // SAFETY: camera matrix is a rigid-body transform (Euclidean group), always invertible.
-        OPENGL_TO_WGPU_MATRIX * normal_projection * self.matrix.invert().unwrap()
+        self.matrix
+            .invert()
+            .map(|inverse| OPENGL_TO_WGPU_MATRIX * normal_projection * inverse)
     }
 
-    #[inline(always)]
-    fn camera_info(&self, aspect: f64) -> CameraInfo {
-        CameraInfo {
-            // SAFETY: f64-to-f32 cast is always valid for finite values in a camera matrix.
-            camera_matrix: self.matrix.cast().unwrap().into(),
-            // SAFETY: f64-to-f32 cast is always valid for finite values in a projection matrix.
-            camera_projection: self.projection(aspect).cast().unwrap().into(),
-        }
+    #[inline]
+    fn camera_info(&self, aspect: f64) -> Option<CameraInfo> {
+        Some(CameraInfo {
+            camera_matrix: matrix4_to_raw_f32(self.matrix),
+            camera_projection: matrix4_to_raw_f32(self.projection(aspect)?),
+        })
     }
 
     /// Creates a `UNIFORM` buffer of camera.
@@ -189,9 +203,15 @@ impl Camera {
     ///     mat4 camera_projection; // the projection into the normalized view volume
     /// };
     /// ```
-    #[inline(always)]
-    pub fn buffer(&self, aspect: f64, device: &Device) -> BufferHandler {
-        BufferHandler::from_slice(&[self.camera_info(aspect)], device, BufferUsages::UNIFORM)
+    /// Returns `None` when the camera transform is singular and no projection can be formed.
+    #[inline]
+    #[must_use]
+    pub fn buffer(&self, aspect: f64, device: &Device) -> Option<BufferHandler> {
+        Some(BufferHandler::from_slice(
+            &[self.camera_info(aspect)?],
+            device,
+            BufferUsages::UNIFORM,
+        ))
     }
 
     /// Returns the ray from camera with aspect-ratio = 1.0.
@@ -221,11 +241,12 @@ impl Camera {
     /// // take a point in the 3D space
     /// let point = Point3::new(0.1, 0.15, 0.0);
     /// // project to the normalized view volume
-    /// let uvz = camera.projection(1.0).transform_point(point);
+    /// let Some(projection) = camera.projection(1.0) else { return };
+    /// let uvz = projection.transform_point(point);
     /// // coordinate on the screen
     /// let uv = Point2::new(uvz.x, uvz.y);
     ///
-    /// let ray = camera.ray(uv);
+    /// let Some(ray) = camera.ray(uv) else { return };
     /// // the origin of the ray is camera position
     /// assert_near!(ray.origin(), camera.position());
     /// // the direction of the ray is the normalized vector of point - camera.position().
@@ -254,38 +275,37 @@ impl Camera {
     /// let projed = point
     ///     - camera.eye_direction() * camera.eye_direction().dot(point - camera.position());
     /// // project to the normalized view volume
-    /// let uvz = camera.projection(1.0).transform_point(point);
+    /// let Some(projection) = camera.projection(1.0) else { return };
+    /// let uvz = projection.transform_point(point);
     /// // coordinate on the screen
     /// let uv = Point2::new(uvz.x, uvz.y);
     ///
-    /// let ray = camera.ray(uv);
+    /// let Some(ray) = camera.ray(uv) else { return };
     /// // the origin of the ray is the projection of the point.
     /// assert_near!(ray.origin(), projed);
     /// // the direction of the ray is eye direction.
     /// assert_near!(ray.direction(), camera.eye_direction());
     /// ```
-    pub fn ray(&self, coord: Point2) -> Ray {
+    #[must_use]
+    pub fn ray(&self, coord: Point2) -> Option<Ray> {
         match self.method {
             ProjectionMethod::Perspective { .. } => {
-                let mat = self
-                    .projection(1.0)
-                    .invert()
-                    .expect("non-invertible projection");
+                let mat = self.projection(1.0)?.invert()?;
                 let x = mat.transform_point(Point3::new(coord.x, coord.y, 0.5));
                 let y = mat.transform_point(Point3::new(coord.x, coord.y, 1.0));
-                Ray {
+                Some(Ray {
                     origin: self.position(),
                     direction: (y - x).normalize(),
-                }
+                })
             }
             ProjectionMethod::Parallel { screen_size } => {
                 let a = screen_size / 2.0;
                 let axis_x = self.matrix[0].truncate() * a;
                 let axis_y = self.matrix[1].truncate() * a;
-                Ray {
+                Some(Ray {
                     origin: self.position() + coord.x * axis_x + coord.y * axis_y,
                     direction: self.eye_direction(),
-                }
+                })
             }
         }
     }
@@ -319,7 +339,7 @@ impl Camera {
     ///     aspect,
     ///     near_clip,
     ///     points,
-    /// );
+    /// ).expect("direction matrix is invertible");
     ///
     /// assert_eq!(camera.near_clip, near_clip);
     /// assert_near!(
@@ -335,14 +355,14 @@ impl Camera {
     ///     assert!(0.0 <= n.z && n.z <= 1.0);
     /// });
     /// ```
+    #[must_use]
     pub fn parallel_view_fitting(
         direction: Matrix3,
         aspect: f64,
         near_clip: f64,
         points: &[Point3],
-    ) -> Self {
-        // SAFETY: direction is an orthonormal basis (rotation matrix), always invertible.
-        let inv_dir = direction.invert().unwrap();
+    ) -> Option<Self> {
+        let inv_dir = direction.invert()?;
         let bbox = points
             .iter()
             .map(|p| inv_dir.transform_point(*p))
@@ -350,12 +370,12 @@ impl Camera {
         let (center, diag) = (bbox.center(), bbox.diagonal());
         let screen_size = f64::max(diag.x / aspect, diag.y);
         let position = Vector3::new(center.x, center.y, center.z + diag.z / 2.0 + near_clip);
-        Self {
+        Some(Self {
             matrix: Matrix4::from(direction) * Matrix4::from_translation(position),
             method: ProjectionMethod::Parallel { screen_size },
             near_clip,
             far_clip: near_clip + diag.z,
-        }
+        })
     }
 
     /// Creates a perspective projection camera that fits the point cloud perfectly into the view volume.
@@ -387,7 +407,7 @@ impl Camera {
     ///     aspect,
     ///     fov,
     ///     points,
-    /// );
+    /// ).expect("direction matrix is invertible");
     ///
     /// assert_near!(
     ///     camera.near_clip,
@@ -407,15 +427,15 @@ impl Camera {
     /// });
     /// ```
     /// # Remarks
-    /// Depending on the arrangement of the point cloud, near_clip may take a negative value.
+    /// Depending on the arrangement of the point cloud, `near_clip` may take a negative value.
+    #[must_use]
     pub fn perspective_view_fitting(
         direction: Matrix3,
         aspect: f64,
         fov: Rad<f64>,
         points: &[Point3],
-    ) -> Camera {
-        // SAFETY: direction is an orthonormal basis (rotation matrix), always invertible.
-        let inv_dir = direction.invert().unwrap();
+    ) -> Option<Self> {
+        let inv_dir = direction.invert()?;
         let tan = (fov / 2.0).tan();
 
         let mut x_min = f64::INFINITY;
@@ -427,28 +447,32 @@ impl Camera {
 
         for p in points {
             let p = inv_dir.transform_point(*p);
-            x_min = f64::min(x_min, p.x - tan * p.z * aspect);
-            x_max = f64::max(x_max, p.x + tan * p.z * aspect);
-            y_min = f64::min(y_min, p.y - tan * p.z);
-            y_max = f64::max(y_max, p.y + tan * p.z);
+            x_min = f64::min(x_min, (tan * p.z).mul_add(-aspect, p.x));
+            x_max = f64::max(x_max, (tan * p.z).mul_add(aspect, p.x));
+            y_min = f64::min(y_min, tan.mul_add(-p.z, p.y));
+            y_max = f64::max(y_max, tan.mul_add(p.z, p.y));
             z_min = f64::min(z_min, p.z);
             z_max = f64::max(z_max, p.z);
         }
 
         let z_x = (x_max - x_min) / (2.0 * tan) / aspect;
         let z_y = (y_max - y_min) / (2.0 * tan);
-        let position = Vector3::new((x_min + x_max) / 2.0, (y_min + y_max) / 2.0, z_x.max(z_y));
-        Camera {
+        let position = Vector3::new(
+            f64::midpoint(x_min, x_max),
+            f64::midpoint(y_min, y_max),
+            z_x.max(z_y),
+        );
+        Some(Self {
             matrix: Matrix4::from(direction) * Matrix4::from_translation(position),
             method: ProjectionMethod::Perspective { fov },
             near_clip: position.z - z_max,
             far_clip: position.z - z_min,
-        }
+        })
     }
 }
 
 impl Default for Camera {
-    #[inline(always)]
+    #[inline]
     fn default() -> Self {
         Self {
             matrix: Matrix4::identity(),

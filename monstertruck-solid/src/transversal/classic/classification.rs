@@ -1,6 +1,12 @@
 //! Geometric inside/outside and coincident-face classification.
 
-use super::*;
+use super::{
+    AltRegion, BooleanTolerance, EuclideanSpace, Face, IncludingPointInDomain, InnerSpace,
+    Invertible, MeshableShape, MeshableSurface, MetricSpace, ParametricSurface3D, Point3,
+    PolyShell, PolygonMesh, PolylineCurve, PolylineableCurve, SearchNearestParameter,
+    SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SurfaceParameter, TOLERANCE, Vector3,
+    hash, loops_store,
+};
 
 /// Classify a tessellated shell point using the signed winding convention shared
 /// with [`IncludingPointInDomain`], with several deterministic ray directions to
@@ -53,6 +59,8 @@ where
     C: PolylineableCurve + Clone,
     S: MeshableSurface + Clone,
 {
+    const MAX_CLASSIFICATION_SAMPLES: usize = 9;
+
     let shell = Shell::from(vec![face.clone()]);
     let triangulated = shell.triangulation(BooleanTolerance::new(tol).mesh_seed);
     let polygon = triangulated.first()?.surface()?;
@@ -75,7 +83,6 @@ where
         return None;
     }
 
-    const MAX_CLASSIFICATION_SAMPLES: usize = 9;
     candidates.sort_by(|lhs, rhs| rhs.0.total_cmp(&lhs.0));
     let mut samples = vec![candidates.swap_remove(0).1];
     while samples.len() < MAX_CLASSIFICATION_SAMPLES && !candidates.is_empty() {
@@ -225,13 +232,15 @@ pub(super) fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurfa
     other_poly: &PolyShell,
     tol: f64,
 ) -> Option<bool> {
-    let representative = match loops_store::direct_planar_face_match(candidate, other_poly, tol)? {
-        Some(index) => index,
-        None => {
-            loops_store::single_face_matches_planar_partition(candidate, other_poly, tol)??
-                .representative
-        }
-    };
+    let representative =
+        match loops_store::direct_planar_face_match(candidate, other_poly, tol).ok()? {
+            Some(index) => index,
+            None => {
+                loops_store::single_face_matches_planar_partition(candidate, other_poly, tol)
+                    .ok()??
+                    .representative
+            }
+        };
     let other = other_regions.get(representative)?;
     let point = other
         .absolute_boundaries()

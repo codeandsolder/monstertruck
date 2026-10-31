@@ -86,7 +86,7 @@ cargo clippy --all-targets -- -W warnings
 
 When a STEP face is suspected of tessellating wrong but the failure is
 not obvious from the test output, render the face to a diagnostic
-image with `monstertruck-step/examples/preview-step-face.rs`:
+image with `monstertruck-io/examples/preview-step-face.rs`:
 
 ```bash
 cargo run --example preview-step-face -- resources/step/abc-0008.step \

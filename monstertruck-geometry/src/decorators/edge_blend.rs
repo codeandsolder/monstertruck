@@ -1,9 +1,20 @@
-use super::*;
+#![expect(
+    clippy::similar_names,
+    reason = "paired U/V derivative names mirror the surface chain-rule equations"
+)]
+
+use super::{
+    Bound, BoundedCurve, BoundedSurface, CurveDerivatives, CurveScalarFunction, EdgeBlendSurface,
+    EuclideanSpace, PRESEARCH_DIVISION, ParameterCurve, ParameterDivision2D, ParameterRange,
+    ParametricCurve, ParametricCurve2D, ParametricSurface, ParametricSurface3D, Point3,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceDerivatives,
+    SurfaceParameter, SurfaceParameterRange, Vector2, Vector3, algo, range_common_part,
+};
 
 impl<C0, S0, C1, S1, F0, F1> EdgeBlendSurface<C0, S0, F0, C1, S1, F1> {
     /// Constructor
     #[inline]
-    pub fn new(
+    pub const fn new(
         pcurve0: ParameterCurve<C0, S0>,
         magnitude0: F0,
         pcurve1: ParameterCurve<C1, S1>,
@@ -18,28 +29,28 @@ impl<C0, S0, C1, S1, F0, F1> EdgeBlendSurface<C0, S0, F0, C1, S1, F1> {
     }
     /// Returns the first boundary parameter curve.
     #[inline]
-    pub fn pcurve0(&self) -> &ParameterCurve<C0, S0> { &self.pcurve0 }
+    pub const fn pcurve0(&self) -> &ParameterCurve<C0, S0> { &self.pcurve0 }
     /// Returns the second boundary parameter curve.
     #[inline]
-    pub fn pcurve1(&self) -> &ParameterCurve<C1, S1> { &self.pcurve1 }
+    pub const fn pcurve1(&self) -> &ParameterCurve<C1, S1> { &self.pcurve1 }
     /// Returns a mutable reference to the first boundary parameter curve.
     #[inline]
-    pub fn pcurve0_mut(&mut self) -> &mut ParameterCurve<C0, S0> { &mut self.pcurve0 }
+    pub const fn pcurve0_mut(&mut self) -> &mut ParameterCurve<C0, S0> { &mut self.pcurve0 }
     /// Returns a mutable reference to the second boundary parameter curve.
     #[inline]
-    pub fn pcurve1_mut(&mut self) -> &mut ParameterCurve<C1, S1> { &mut self.pcurve1 }
+    pub const fn pcurve1_mut(&mut self) -> &mut ParameterCurve<C1, S1> { &mut self.pcurve1 }
     /// Returns the first tangent-magnitude function.
     #[inline]
-    pub fn magnitude0(&self) -> &F0 { &self.magnitude0 }
+    pub const fn magnitude0(&self) -> &F0 { &self.magnitude0 }
     /// Returns the second tangent-magnitude function.
     #[inline]
-    pub fn magnitude1(&self) -> &F1 { &self.magnitude1 }
+    pub const fn magnitude1(&self) -> &F1 { &self.magnitude1 }
     /// Returns a mutable reference to the first tangent-magnitude function.
     #[inline]
-    pub fn magnitude0_mut(&mut self) -> &mut F0 { &mut self.magnitude0 }
+    pub const fn magnitude0_mut(&mut self) -> &mut F0 { &mut self.magnitude0 }
     /// Returns a mutable reference to the second tangent-magnitude function.
     #[inline]
-    pub fn magnitude1_mut(&mut self) -> &mut F1 { &mut self.magnitude1 }
+    pub const fn magnitude1_mut(&mut self) -> &mut F1 { &mut self.magnitude1 }
 }
 
 /// The `order`-th derivative (with respect to `u`) of the four cubic Bezier
@@ -55,14 +66,14 @@ const fn bezier_cubic_basis(order: usize, u: f64) -> [f64; 4] {
         ],
         1 => [
             -3.0 * one_minus_u * one_minus_u,
-            3.0 * one_minus_u * (1.0 - 3.0 * u),
-            3.0 * u * (2.0 - 3.0 * u),
+            3.0 * one_minus_u * 3.0f64.mul_add(-u, 1.0),
+            3.0 * u * 3.0f64.mul_add(-u, 2.0),
             3.0 * u * u,
         ],
         2 => [
             6.0 * one_minus_u,
-            -6.0 * (2.0 - 3.0 * u),
-            6.0 * (1.0 - 3.0 * u),
+            -6.0 * 3.0f64.mul_add(-u, 2.0),
+            6.0 * 3.0f64.mul_add(-u, 1.0),
             6.0 * u,
         ],
         3 => [-6.0, 18.0, -18.0, 6.0],
@@ -213,6 +224,11 @@ where
     S1: ParametricSurface3D,
     F1: CurveScalarFunction,
 {
+    fn range_tuple(&self) -> SurfaceParameterRange {
+        let range0 = self.pcurve0.range_tuple();
+        let range1 = self.pcurve1.range_tuple();
+        ((range0.0.max(range1.0), range0.1.min(range1.1)), (0.0, 1.0))
+    }
 }
 
 impl<C0, S0, F0, C1, S1, F1> ParameterDivision2D for EdgeBlendSurface<C0, S0, F0, C1, S1, F1>

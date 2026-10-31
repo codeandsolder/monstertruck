@@ -18,9 +18,13 @@ fn grid_params() -> impl Iterator<Item = f64> { (0..GRID).map(|i| i as f64 / (GR
 /// conversion uses. The map is non-linear inside each 90-degree arc, so it
 /// must be *evaluated*, not assumed to be `2*pi*t`.
 fn full_circle_angle(t: f64) -> f64 {
-    let p = full_unit_circle_curve().subs(t);
+    let p = full_unit_circle_curve().evaluate(t);
     let angle = p.y.atan2(p.x);
-    if angle < 0.0 { angle + 2.0 * PI } else { angle }
+    if angle < 0.0 {
+        2.0f64.mul_add(PI, angle)
+    } else {
+        angle
+    }
 }
 
 /// Exact `param -> colatitude` map of the sphere meridian semicircle.
@@ -36,21 +40,24 @@ fn meridian_colatitude(s: f64) -> f64 {
             Vector4::new(0.0, -1.0, 0.0, 1.0),
         ],
     );
-    let p = curve.subs(s);
+    let p = curve.evaluate(s);
     // sin(colatitude) = radial = x/w, cos(colatitude) = axis = y/w.
     p.x.atan2(p.y)
 }
 
-fn torus_off_surface(torus: &Torus, point: Point3) -> f64 {
+fn torus_surface_residual(torus: &Torus, point: Point3) -> f64 {
     let c = torus.center();
-    let radial = ((point.x - c.x).powi(2) + (point.y - c.y).powi(2)).sqrt();
-    ((radial - torus.large_radius()).powi(2) + (point.z - c.z).powi(2)).sqrt()
-        - torus.small_radius()
+    let rho = ((point.x - c.x).powi(2) + (point.y - c.y).powi(2)).sqrt();
+    let z = point.z - c.z;
+    // A spindle has two signed-radial branches q = +/-rho.  Ring tori only
+    // reach the positive branch, so the same residual covers all regimes.
+    let positive = ((rho - torus.large_radius()).powi(2) + z * z).sqrt();
+    let negative = ((-rho - torus.large_radius()).powi(2) + z * z).sqrt();
+    (positive.min(negative) - torus.small_radius()).abs()
 }
 
 fn assert_torus_grid(torus: Torus) {
-    let hom = torus
-        .try_into_homogeneous_bspline_surface()
+    let hom = (torus.try_into_homogeneous_bspline_surface())
         .expect("torus converts to homogeneous NURBS");
     let conv = as_nurbs(hom);
     let tol = 1.0e-9 * (torus.large_radius() + torus.small_radius());
@@ -58,23 +65,20 @@ fn assert_torus_grid(torus: Torus) {
         let u_ang = full_circle_angle(s);
         for t in grid_params() {
             let v_ang = full_circle_angle(t);
-            let got = conv.subs(s, t);
-            let want = torus.subs(u_ang, v_ang);
+            let got = conv.evaluate(s, t);
+            let want = torus.evaluate(u_ang, v_ang);
             assert!(
                 got.distance(want) <= tol,
-                "torus subs mismatch at ({s},{t}) -> ({u_ang},{v_ang}): \
+                "torus evaluation mismatch at ({s},{t}) -> ({u_ang},{v_ang}): \
                  got {got:?} want {want:?} d={}",
                 got.distance(want)
             );
-            let off = torus_off_surface(&torus, got).abs();
-            assert!(off <= tol, "torus off-surface at ({s},{t}): {off}");
         }
     }
 }
 
 fn assert_sphere_grid(sphere: Sphere) {
-    let hom = sphere
-        .try_into_homogeneous_bspline_surface()
+    let hom = (sphere.try_into_homogeneous_bspline_surface())
         .expect("sphere converts to homogeneous NURBS");
     let conv = as_nurbs(hom);
     let tol = 1.0e-9 * sphere.radius();
@@ -82,11 +86,11 @@ fn assert_sphere_grid(sphere: Sphere) {
         let u_ang = meridian_colatitude(s);
         for t in grid_params() {
             let v_ang = full_circle_angle(t);
-            let got = conv.subs(s, t);
-            let want = sphere.subs(u_ang, v_ang);
+            let got = conv.evaluate(s, t);
+            let want = sphere.evaluate(u_ang, v_ang);
             assert!(
                 got.distance(want) <= tol,
-                "sphere subs mismatch at ({s},{t}) -> ({u_ang},{v_ang}): \
+                "sphere evaluation mismatch at ({s},{t}) -> ({u_ang},{v_ang}): \
                  got {got:?} want {want:?} d={}",
                 got.distance(want)
             );
@@ -98,25 +102,41 @@ fn assert_sphere_grid(sphere: Sphere) {
 
 #[test]
 fn torus_ring_matches_analytic_on_grid() {
-    assert_torus_grid(Torus::new(Point3::new(1.0, -2.0, 0.5), 3.0, 1.0));
+    assert_torus_grid(Torus::new_unchecked(Point3::new(1.0, -2.0, 0.5), 3.0, 1.0));
 }
 
 #[test]
 fn torus_horn_matches_analytic_on_grid() {
-    assert_torus_grid(Torus::new(Point3::origin(), 2.0, 2.0));
+    assert_torus_grid(Torus::new_unchecked(Point3::origin(), 2.0, 2.0));
 }
 
 #[test]
 fn torus_tiny_pi_scale_matches_analytic() {
     // Pi horn-fillet scale (0.1 mm).
-    assert_torus_grid(Torus::new(Point3::new(0.03, -0.01, 0.02), 0.1, 0.1));
+    assert_torus_grid(Torus::new_unchecked(
+        Point3::new(0.03, -0.01, 0.02),
+        0.1,
+        0.1,
+    ));
+}
+
+#[test]
+fn torus_spindle_matches_analytic_on_grid() {
+    // Real STEP witness ratio: the generating circle crosses the revolution axis.
+    // The rational surface itself stays exact; only inverse-parameter recovery
+    // used to make this regime unsafe to expose.
+    assert_torus_grid(Torus::new_unchecked(
+        Point3::new(-0.25, 0.5, 1.25),
+        0.633_974_596_215_563,
+        1.0,
+    ));
 }
 
 #[test]
 fn torus_fp_near_horn_is_representable() {
     // Pi torus #1: large radius a few ulps below small radius. Must NOT be
     // rejected as a spindle and must convert geometrically-exactly.
-    let torus = Torus::new(
+    let torus = Torus::new_unchecked(
         Point3::origin(),
         0.099_999_999_992_725,
         0.099_999_999_999_987_88,
@@ -127,12 +147,12 @@ fn torus_fp_near_horn_is_representable() {
 
 #[test]
 fn torus_horn_inner_equator_collapses_to_center() {
-    let torus = Torus::new(Point3::new(0.5, 0.5, 0.5), 1.5, 1.5);
-    let conv = as_nurbs(torus.try_into_homogeneous_bspline_surface().unwrap());
+    let torus = Torus::new_unchecked(Point3::new(0.5, 0.5, 0.5), 1.5, 1.5);
+    let conv = as_nurbs((torus.try_into_homogeneous_bspline_surface()).unwrap());
     // Tube angle pi (v-knot 0.5) is the inner equator -> a single point at
     // the center for a horn torus.
     for s in grid_params() {
-        let p = conv.subs(s, 0.5);
+        let p = conv.evaluate(s, 0.5);
         assert!(
             p.distance(torus.center()) <= 1.0e-9 * torus.large_radius(),
             "horn inner equator not at center at s={s}: {p:?}"
@@ -142,33 +162,35 @@ fn torus_horn_inner_equator_collapses_to_center() {
 
 #[test]
 fn torus_seams_are_periodic() {
-    let torus = Torus::new(Point3::origin(), 4.0, 1.0);
-    let conv = as_nurbs(torus.try_into_homogeneous_bspline_surface().unwrap());
+    let torus = Torus::new_unchecked(Point3::origin(), 4.0, 1.0);
+    let conv = as_nurbs((torus.try_into_homogeneous_bspline_surface()).unwrap());
     let tol = 1.0e-9 * (torus.large_radius() + torus.small_radius());
     for g in grid_params() {
         assert!(
-            conv.subs(0.0, g).distance(conv.subs(1.0, g)) <= tol,
+            conv.evaluate(0.0, g).distance(conv.evaluate(1.0, g)) <= tol,
             "ring seam not periodic at v={g}"
         );
         assert!(
-            conv.subs(g, 0.0).distance(conv.subs(g, 1.0)) <= tol,
+            conv.evaluate(g, 0.0).distance(conv.evaluate(g, 1.0)) <= tol,
             "tube seam not periodic at u={g}"
         );
     }
 }
 
 #[test]
-fn torus_spindle_is_rejected() {
-    // Small radius exceeds large radius: a self-intersecting spindle torus,
-    // not a valid B-rep face.
-    let torus = Torus::new(Point3::origin(), 1.0, 2.0);
-    assert!(torus.try_into_homogeneous_bspline_surface().is_none());
+fn torus_spindle_is_representable() {
+    // The complete spindle is an immersed surface, while trimmed patches can be
+    // perfectly valid B-rep faces. The geometry layer therefore represents it;
+    // manifold policy belongs to the topology using the patch.
+    let torus = Torus::new_unchecked(Point3::origin(), 1.0, 2.0);
+    assert!(torus.try_into_homogeneous_bspline_surface().is_some());
     assert!(torus.try_into_bspline_surface().is_none());
+    assert_torus_grid(torus);
 }
 
 #[test]
 fn torus_is_rational_not_polynomial() {
-    let torus = Torus::new(Point3::origin(), 3.0, 1.0);
+    let torus = Torus::new_unchecked(Point3::origin(), 3.0, 1.0);
     assert!(torus.try_into_bspline_surface().is_none());
 }
 
@@ -190,17 +212,17 @@ fn sphere_tiny_matches_analytic_on_grid() {
 #[test]
 fn sphere_poles_collapse() {
     let sphere = Sphere::new(Point3::new(1.0, -1.0, 2.0), 2.5);
-    let conv = as_nurbs(sphere.try_into_homogeneous_bspline_surface().unwrap());
+    let conv = as_nurbs((sphere.try_into_homogeneous_bspline_surface()).unwrap());
     let north = sphere.center() + Vector3::new(0.0, 0.0, sphere.radius());
     let south = sphere.center() + Vector3::new(0.0, 0.0, -sphere.radius());
     let tol = 1.0e-9 * sphere.radius();
     for t in grid_params() {
         assert!(
-            conv.subs(0.0, t).distance(north) <= tol,
+            conv.evaluate(0.0, t).distance(north) <= tol,
             "north pole at t={t}"
         );
         assert!(
-            conv.subs(1.0, t).distance(south) <= tol,
+            conv.evaluate(1.0, t).distance(south) <= tol,
             "south pole at t={t}"
         );
     }
@@ -209,11 +231,11 @@ fn sphere_poles_collapse() {
 #[test]
 fn sphere_longitude_seam_is_periodic() {
     let sphere = Sphere::new(Point3::origin(), 3.0);
-    let conv = as_nurbs(sphere.try_into_homogeneous_bspline_surface().unwrap());
+    let conv = as_nurbs((sphere.try_into_homogeneous_bspline_surface()).unwrap());
     let tol = 1.0e-9 * sphere.radius();
     for s in grid_params() {
         assert!(
-            conv.subs(s, 0.0).distance(conv.subs(s, 1.0)) <= tol,
+            conv.evaluate(s, 0.0).distance(conv.evaluate(s, 1.0)) <= tol,
             "longitude seam not periodic at u={s}"
         );
     }
@@ -286,9 +308,7 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
     let cylinder = step_cylinder(Point3::origin(), Vector3::unit_z(), 8.0);
 
     // Untrimmed: the one-unit stub, unchanged.
-    let stub = cylinder
-        .try_into_homogeneous_bspline_surface()
-        .expect("cylinder converts");
+    let stub = (cylinder.try_into_homogeneous_bspline_surface()).expect("cylinder converts");
     let (stub_min, stub_max) = control_net_bbox(&stub);
     assert!(
         (stub_max.z - stub_min.z - 1.0).abs() < 1.0e-12,
@@ -297,9 +317,9 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
 
     // `v` is the profile axis (the processor is inverted), so the face's
     // trim rectangle is (angle, height).
-    let converted = cylinder
-        .try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (0.0, 80.0))))
-        .expect("trimmed cylinder converts");
+    let converted = (cylinder
+        .try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (0.0, 80.0)))))
+    .expect("trimmed cylinder converts");
     assert_eq!(
         converted.surface_frame_axes,
         (false, true),
@@ -326,14 +346,14 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
     assert!((v_knots[v_knots.len() - 1] - 80.0).abs() < 1.0e-12);
 
     // And it is still EXACTLY the same cylinder: every evaluated point sits
-    // on radius 8, and `subs` agrees with the analytic surface.
+    // on radius 8, and `evaluate` agrees with the analytic surface.
     let conv = as_nurbs(trimmed);
     for s in grid_params() {
         for t in grid_params() {
             let v = 80.0 * t;
-            let got = conv.subs(s, v);
+            let got = conv.evaluate(s, v);
             let want = ParametricSurface::evaluate(&cylinder, s * 2.0 * PI, v);
-            let radius = (got.x * got.x + got.y * got.y).sqrt();
+            let radius = got.x.hypot(got.y);
             assert!(
                 (radius - 8.0).abs() <= 1.0e-9 * 80.0,
                 "off-cylinder at ({s},{v}): r={radius}"
@@ -348,7 +368,7 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
             let want_at_angle = ParametricSurface::evaluate(&cylinder, angle, v);
             assert!(
                 got.distance(want_at_angle) <= 1.0e-9 * 80.0,
-                "subs mismatch at ({s},{v}): got {got:?} want {want_at_angle:?} \
+                "evaluation mismatch at ({s},{v}): got {got:?} want {want_at_angle:?} \
                  (untrimmed reference {want:?})"
             );
         }
@@ -370,8 +390,7 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
         // Strictly inside.
         ((0.0, 1.0), (0.25, 0.75)),
     ] {
-        let converted = cylinder
-            .try_into_homogeneous_bspline_surface_over(Some(trim))
+        let converted = (cylinder.try_into_homogeneous_bspline_surface_over(Some(trim)))
             .expect("cylinder converts");
         let surface = as_nurbs(converted.surface);
         let v0 = trim.1.0.max(0.0);
@@ -379,8 +398,8 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
         for s in grid_params() {
             let angle = full_circle_angle(s);
             for fraction in grid_params() {
-                let v = v0 + (v1 - v0) * fraction;
-                let got = surface.subs(s, v);
+                let v = f64::mul_add(v1 - v0, fraction, v0);
+                let got = surface.evaluate(s, v);
                 let want = ParametricSurface::evaluate(&cylinder, angle, v);
                 assert!(
                     got.distance(want) <= 1.0e-9,
@@ -392,15 +411,15 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
 
     // A trim that genuinely reaches below the profile start must cover that
     // geometry too; how the converter chooses its control net is irrelevant.
-    let below = cylinder
-        .try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (-0.6, 1.0))))
-        .expect("cylinder converts");
+    let below = (cylinder
+        .try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (-0.6, 1.0)))))
+    .expect("cylinder converts");
     let below = as_nurbs(below.surface);
     for s in grid_params() {
         let angle = full_circle_angle(s);
         for fraction in grid_params() {
-            let v = -0.6 + 1.6 * fraction;
-            let got = below.subs(s, v);
+            let v = 1.6f64.mul_add(fraction, -0.6);
+            let got = below.evaluate(s, v);
             let want = ParametricSurface::evaluate(&cylinder, angle, v);
             assert!(
                 got.distance(want) <= 1.0e-9,
@@ -417,15 +436,14 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
 fn optional_trim_preserves_analytic_geometry() {
     let cylinder = step_cylinder(Point3::origin(), Vector3::unit_z(), 3.0);
     let cylinder_surface = as_nurbs(
-        cylinder
-            .try_into_homogeneous_bspline_surface_over(None)
+        (cylinder.try_into_homogeneous_bspline_surface_over(None))
             .expect("cylinder converts")
             .surface,
     );
     for s in grid_params() {
         let angle = full_circle_angle(s);
         for v in grid_params() {
-            let got = cylinder_surface.subs(s, v);
+            let got = cylinder_surface.evaluate(s, v);
             let want = ParametricSurface::evaluate(&cylinder, angle, v);
             assert!(got.distance(want) <= 1.0e-9);
         }
@@ -435,8 +453,7 @@ fn optional_trim_preserves_analytic_geometry() {
 
     let sphere = Sphere::new(Point3::new(1.0, 2.0, 3.0), 4.0);
     let sphere_surface = as_nurbs(
-        sphere
-            .try_into_homogeneous_bspline_surface_over(trim)
+        (sphere.try_into_homogeneous_bspline_surface_over(trim))
             .expect("sphere converts")
             .surface,
     );
@@ -444,16 +461,15 @@ fn optional_trim_preserves_analytic_geometry() {
         let u = meridian_colatitude(s);
         for v in grid_params() {
             let angle = full_circle_angle(v);
-            let got = sphere_surface.subs(s, v);
-            let want = sphere.subs(u, angle);
+            let got = sphere_surface.evaluate(s, v);
+            let want = sphere.evaluate(u, angle);
             assert!(got.distance(want) <= 4.0e-9);
         }
     }
 
-    let torus = Torus::new(Point3::origin(), 3.0, 1.0);
+    let torus = Torus::new_unchecked(Point3::origin(), 3.0, 1.0);
     let torus_surface = as_nurbs(
-        torus
-            .try_into_homogeneous_bspline_surface_over(trim)
+        (torus.try_into_homogeneous_bspline_surface_over(trim))
             .expect("torus converts")
             .surface,
     );
@@ -461,8 +477,8 @@ fn optional_trim_preserves_analytic_geometry() {
         let u = full_circle_angle(s);
         for v in grid_params() {
             let angle = full_circle_angle(v);
-            let got = torus_surface.subs(s, v);
-            let want = torus.subs(u, angle);
+            let got = torus_surface.evaluate(s, v);
+            let want = torus.evaluate(u, angle);
             assert!(got.distance(want) <= 4.0e-9);
         }
     }
@@ -473,15 +489,14 @@ fn optional_trim_preserves_analytic_geometry() {
         Point3::new(0.0, 1.0, 0.0),
     );
     let plane_surface = as_nurbs(
-        plane
-            .try_into_homogeneous_bspline_surface_over(trim)
+        (plane.try_into_homogeneous_bspline_surface_over(trim))
             .expect("plane converts")
             .surface,
     );
     for u in grid_params() {
         for v in grid_params() {
-            let got = plane_surface.subs(u, v);
-            let want = plane.subs(u, v);
+            let got = plane_surface.evaluate(u, v);
+            let want = plane.evaluate(u, v);
             assert!(got.distance(want) <= 1.0e-12);
         }
     }
@@ -501,15 +516,15 @@ fn trimmed_cone_stays_an_exact_cone() {
     ));
     cone.invert();
     let conv = as_nurbs(
-        cone.try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (10.0, 40.0))))
+        (cone.try_into_homogeneous_bspline_surface_over(Some(((0.0, 1.0), (10.0, 40.0)))))
             .expect("cone converts")
             .surface,
     );
     for s in grid_params() {
         for t in grid_params() {
-            let v = 10.0 + 30.0 * t;
-            let point = conv.subs(s, v);
-            let radius = (point.x * point.x + point.y * point.y).sqrt();
+            let v = 30.0f64.mul_add(t, 10.0);
+            let point = conv.evaluate(s, v);
+            let radius = point.x.hypot(point.y);
             // On this cone radius == 1 + height and height == v.
             assert!((point.z - v).abs() <= 1.0e-9 * 40.0, "height at ({s},{v})");
             assert!(
@@ -525,7 +540,7 @@ fn trimmed_cone_stays_an_exact_cone() {
 fn transformed_torus_via_processor_lies_on_surface() {
     // General placement rides the pre-existing `Processor<_, Matrix4>` arm;
     // confirm the composed surface is the correctly reoriented torus.
-    let torus = Torus::new(Point3::origin(), 3.0, 1.0);
+    let torus = Torus::new_unchecked(Point3::origin(), 3.0, 1.0);
     // Rotate about x by 0.6 rad (tilts the torus axis off +z), then translate.
     let (sn, cs) = 0.6f64.sin_cos();
     let rot_x = Matrix4::from_cols(
@@ -536,23 +551,20 @@ fn transformed_torus_via_processor_lies_on_surface() {
     );
     let transform = Matrix4::from_translation(Vector3::new(5.0, -3.0, 2.0)) * rot_x;
     let placed = Processor::with_transform(torus, transform);
-    let conv = as_nurbs(
-        placed
-            .try_into_homogeneous_bspline_surface()
-            .expect("placed torus converts"),
-    );
-    let inv = transform.invert().expect("rigid transform is invertible");
+    let conv =
+        as_nurbs((placed.try_into_homogeneous_bspline_surface()).expect("placed torus converts"));
+    let inv = (transform.invert()).expect("rigid transform is invertible");
     let tol = 1.0e-9 * (torus.large_radius() + torus.small_radius());
     for s in grid_params() {
         for t in grid_params() {
-            let got = conv.subs(s, t);
+            let got = conv.evaluate(s, t);
             let local_h = inv * got.to_homogeneous();
             let local = Point3::new(
                 local_h.x / local_h.w,
                 local_h.y / local_h.w,
                 local_h.z / local_h.w,
             );
-            let off = torus_off_surface(&torus, local).abs();
+            let off = torus_surface_residual(&torus, local);
             assert!(off <= tol, "placed torus off-surface at ({s},{t}): {off}");
         }
     }

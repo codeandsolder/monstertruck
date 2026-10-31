@@ -10,7 +10,7 @@
 //! values.
 //!
 //! Note: `monstertruck_solid::{and, or}` build their output through
-//! `Solid::try_new`, which only returns `Ok` when every boundary shell is a
+//! `Solid::new`, which only returns `Ok` when every boundary shell is a
 //! closed manifold. So a returned `Solid` is watertight by construction; these
 //! tests additionally confirm it tessellates to a non-empty mesh whose volume
 //! matches the analytic result. Because every primitive here is flat-faced, the
@@ -44,7 +44,7 @@ pub(super) fn square_column(cx: f64, cy: f64, half: f64) -> Solid {
     builder::extrude(&f, Vector3::unit_z() * 2.0)
 }
 
-pub(super) fn unit_cylinder_y(y0: f64) -> Solid {
+pub(super) fn unit_cylinder_y(y0: f64) -> Result<Solid> {
     let center = Point3::new(0.0, y0, 0.0);
     let vertex = builder::vertex(Point3::new(0.0, y0, 1.0));
     let circle = builder::revolve(
@@ -53,9 +53,9 @@ pub(super) fn unit_cylinder_y(y0: f64) -> Solid {
         Vector3::unit_y(),
         builder::SweepAngle::Closed,
         2,
-    );
-    let disk = builder::try_attach_plane(&[circle]).expect("cylinder disk");
-    builder::extrude(&disk, Vector3::unit_y())
+    )?;
+    let disk = builder::try_attach_plane([circle])?;
+    Ok(builder::extrude(&disk, Vector3::unit_y()))
 }
 
 /// Asserts a boolean result is watertight and geometrically correct: it has at

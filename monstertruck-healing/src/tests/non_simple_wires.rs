@@ -7,7 +7,7 @@ use monstertruck_topology::repair::{
 /// RED reproducer for the cell-8 extraction blocker: a face whose boundary
 /// wires are each SIMPLE but share one vertex (a PINCHED face, e.g. the
 /// pass-through imprint landing a T-junction vertex in two wires) is
-/// rejected by `Face::try_new` via `Wire::disjoint_wires` -- the same
+/// rejected by `Face::new` via `Wire::disjoint_wires` -- the same
 /// `NotSimpleWire` error an intra-wire revisit produces, which misled the
 /// cell-8 diagnosis until probed.
 #[test]
@@ -236,21 +236,20 @@ fn split_non_simple_wires_drops_pass_through_spikes() {
     assert!(Shell::extract(shell.clone()).is_ok());
 }
 
-/// A SLIT -- a wire retracing one span in both directions via two DISTINCT
-/// coincident edges (the cell-8 three-cover producer: a sphere patch whose
-/// boundary walks up the pole meridian and straight back) -- must be dropped
-/// like an index-level spike. Index-balance alone cannot see it.
+/// 3-D coincidence alone is not enough evidence to delete a distinct-edge
+/// digon. The same topology describes a legitimate periodic seam, so the plain
+/// shell path must fail closed and preserve the subloop when no face-local trim
+/// geometry exists to distinguish the cases.
 #[test]
-fn split_non_simple_wires_drops_geometric_slits() {
+fn split_non_simple_wires_preserves_geometrically_coincident_digon_without_trim_proof() {
     let vertices = vec![
-        Point2::new(0.0, 0.0),
-        Point2::new(1.0, 0.0),
-        Point2::new(-1.0, 0.0),
-        Point2::new(-1.0, -1.0),
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(-1.0, 0.0, 0.0),
+        Point3::new(-1.0, -1.0, 0.0),
     ];
-    let line = |a: Point2, b: Point2| TrimmedCurve::new(Line(a, b), (0.0, 1.0));
+    let line = |a: Point3, b: Point3| TrimmedCurve::new(Line(a, b), (0.0, 1.0));
     let edges = vec![
-        // The slit: two DISTINCT edges covering the same span.
         CompressedEdge {
             vertices: (0, 1),
             curve: line(vertices[0], vertices[1]),
@@ -259,7 +258,6 @@ fn split_non_simple_wires_drops_geometric_slits() {
             vertices: (1, 0),
             curve: line(vertices[1], vertices[0]),
         },
-        // The real triangle.
         CompressedEdge {
             vertices: (0, 2),
             curve: line(vertices[0], vertices[2]),
@@ -277,33 +275,87 @@ fn split_non_simple_wires_drops_geometric_slits() {
         index,
         orientation: true,
     };
-    let faces = vec![CompressedFace {
-        surface: (),
-        orientation: true,
-        boundaries: vec![vec![
-            edge_use(0),
-            edge_use(1),
-            edge_use(2),
-            edge_use(3),
-            edge_use(4),
-        ]],
-    }];
     let mut shell = CompressedShell {
         vertices,
         edges,
-        faces,
+        faces: vec![CompressedFace {
+            surface: (),
+            orientation: true,
+            boundaries: vec![vec![
+                edge_use(0),
+                edge_use(1),
+                edge_use(2),
+                edge_use(3),
+                edge_use(4),
+            ]],
+        }],
         vertex_stable_ids: None,
         edge_stable_ids: None,
         face_stable_ids: None,
     };
-    assert!(Shell::extract(shell.clone()).is_err());
 
     split_non_simple_compressed_wires(&mut shell);
+    assert_eq!(shell.faces[0].boundaries.len(), 2);
+    let mut lengths = shell.faces[0]
+        .boundaries
+        .iter()
+        .map(Vec::len)
+        .collect::<Vec<_>>();
+    lengths.sort_unstable();
+    assert_eq!(lengths, vec![2, 3]);
+    assert!(Shell::extract(shell).is_err());
+}
 
-    assert_eq!(shell.faces.len(), 1);
-    assert_eq!(shell.faces[0].boundaries.len(), 1);
-    assert_eq!(shell.faces[0].boundaries[0].len(), 3);
-    assert!(Shell::extract(shell.clone()).is_ok());
+#[test]
+fn trimmed_geometric_slit_cleanup_requires_face_local_retrace() {
+    let p0 = Point3::new(0.0, 0.0, 0.0);
+    let p1 = Point3::new(1.0, 0.0, 0.0);
+    let edges = vec![
+        CompressedEdge {
+            vertices: (0, 1),
+            curve: Line(p0, p1),
+        },
+        CompressedEdge {
+            vertices: (1, 0),
+            curve: Line(p1, p0),
+        },
+    ];
+    let edge_use = |index: usize, trim_curve: Line<Point2>| CompressedEdgeUse {
+        index,
+        orientation: true,
+        trim_curve: Some(trim_curve),
+    };
+    let make_shell = |left_trim: Line<Point2>, right_trim: Line<Point2>| CompressedTrimmedShell {
+        vertices: vec![p0, p1],
+        edges: edges.clone(),
+        faces: vec![CompressedTrimmedFace {
+            surface: (),
+            orientation: true,
+            boundaries: vec![vec![edge_use(0, left_trim), edge_use(1, right_trim)]],
+        }],
+    };
+
+    // A true zero-area slit retraces one face-local UV span exactly backwards.
+    let mut slit = make_shell(
+        Line(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)),
+        Line(Point2::new(1.0, 0.0), Point2::new(0.0, 0.0)),
+    );
+    remove_geometric_trimmed_slit_boundaries(&mut slit, TOLERANCE);
+    assert!(slit.faces.is_empty());
+
+    // A periodic seam is the same 3-D span but two different UV loci. It must
+    // remain topology even though its edge curves are geometrically coincident.
+    let mut seam = make_shell(
+        Line(Point2::new(0.0, 0.0), Point2::new(0.0, 1.0)),
+        Line(
+            Point2::new(std::f64::consts::TAU, 1.0),
+            Point2::new(std::f64::consts::TAU, 0.0),
+        ),
+    );
+    remove_geometric_trimmed_slit_boundaries(&mut seam, TOLERANCE);
+    assert_eq!(seam.faces.len(), 1);
+    assert_eq!(seam.faces[0].boundaries.len(), 1);
+    assert_eq!(seam.faces[0].boundaries[0].len(), 2);
 }
 
 /// A trimmed periodic-surface face presented as a single boundary wire that
@@ -381,4 +433,57 @@ fn split_seam_faces_resolves_doubled_seam_cylinder() {
         "cap loops must be vertex-disjoint",
     );
     assert!(TrimmedShell::try_from(shell).is_ok());
+}
+
+#[test]
+fn geometric_slit_cleanup_preserves_noncoincident_digon() {
+    let p0 = Point3::new(0.0, 0.0, 0.0);
+    let p1 = Point3::new(1.0, 0.0, 0.0);
+    let straight = BsplineCurve::new(KnotVector::bezier_knot(1), vec![p0, p1])
+        .expect("valid straight test curve");
+    let bowed = BsplineCurve::new(
+        KnotVector::bezier_knot(2),
+        vec![p1, Point3::new(0.5, 0.25, 0.0), p0],
+    )
+    .expect("valid bowed test curve");
+    let shell = CompressedShell {
+        vertices: vec![p0, p1],
+        edges: vec![
+            CompressedEdge {
+                vertices: (0, 1),
+                curve: straight,
+            },
+            CompressedEdge {
+                vertices: (1, 0),
+                curve: bowed,
+            },
+        ],
+        faces: vec![CompressedFace {
+            surface: (),
+            orientation: true,
+            boundaries: vec![vec![
+                CompressedEdgeIndex {
+                    index: 0,
+                    orientation: true,
+                },
+                CompressedEdgeIndex {
+                    index: 1,
+                    orientation: true,
+                },
+            ]],
+        }],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
+    };
+
+    assert!(!geometric_slit(
+        &shell.edges,
+        &shell.faces[0].boundaries[0],
+        1.0e-4,
+    ));
+
+    assert_eq!(shell.faces.len(), 1);
+    assert_eq!(shell.faces[0].boundaries.len(), 1);
+    assert_eq!(shell.faces[0].boundaries[0].len(), 2);
 }

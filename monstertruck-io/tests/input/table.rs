@@ -91,7 +91,6 @@ ENDSEC;
     )
     .unwrap();
     let table = Table::from_data_section(&data_section);
-    #[allow(clippy::needless_update)]
     let ans_table = Table {
         cartesian_point: HashMap::from_iter(vec![(
             1,
@@ -583,7 +582,7 @@ ENDSEC;
                 label: "EdgeCurve".to_string(),
                 edge_start: PlaceHolder::Ref(Name::Entity(100)),
                 edge_end: PlaceHolder::Ref(Name::Entity(100)),
-                edge_geometry: PlaceHolder::Ref(Name::Entity(13)),
+                edge_geometry: Some(PlaceHolder::Ref(Name::Entity(13))),
                 same_sense: true,
             },
         )]),
@@ -718,4 +717,24 @@ Record { name: \"REPRESENTATION_CONTEXT\", parameter: List([String(\"2D SPACE\")
         ..Default::default()
     };
     assert_eq!(table, ans_table);
+}
+
+#[test]
+fn edge_curve_with_missing_geometry_is_retained_for_repair() {
+    let data_section = DataSection::from_str(
+        "DATA;\n\
+#1 = CARTESIAN_POINT('', (0.0, 0.0, 0.0));\n\
+#2 = CARTESIAN_POINT('', (1.0, 0.0, 0.0));\n\
+#3 = VERTEX_POINT('', #1);\n\
+#4 = VERTEX_POINT('', #2);\n\
+#5 = EDGE_CURVE('', #3, #4, $, .T.);\n\
+ENDSEC;",
+    )
+    .expect("fixture STEP must parse");
+    let table = Table::from_data_section(&data_section);
+    let edge = table
+        .edge_curve
+        .get(&5)
+        .expect("geometryless EDGE_CURVE must remain attributable");
+    assert!(edge.edge_geometry.is_none());
 }

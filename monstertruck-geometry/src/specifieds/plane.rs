@@ -1,38 +1,34 @@
-use super::*;
+use super::{
+    Bound, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, EuclideanSpace,
+    IncludeCurve, InnerSpace, Invertible, KnotVector, Line, Matrix3, NurbsCurve, Origin,
+    ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D, Plane, Point3,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SquareMatrix, SurfaceParameter,
+    SurfaceParameterRange, ToSameGeometry, Transform3, Transformed, Vector3, Vector4, Zero,
+};
 
 impl Plane {
     /// Creates a new plane from three points.
-    #[inline(always)]
-    pub const fn new(origin: Point3, one: Point3, another: Point3) -> Plane {
-        Plane {
+    #[inline]
+    #[must_use]
+    pub const fn new(origin: Point3, one: Point3, another: Point3) -> Self {
+        Self {
             o: origin,
             p: one,
             q: another,
         }
     }
     /// Returns the origin
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn origin(&self) -> Point3 { self.o }
     /// Returns the u-axis
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn axis_u(&self) -> Vector3 { self.p - self.o }
     /// Returns the v-axis
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn axis_v(&self) -> Vector3 { self.q - self.o }
-    /// Deprecated alias for [`axis_u`](Plane::axis_u).
-    ///
-    /// Renamed for `<property>_<direction>` consistency with `derivative_u`,
-    /// `knot_vector_u` and `cut_u`, which is the convention across this crate.
-    #[deprecated(since = "0.3.4", note = "renamed to `axis_u`")]
-    #[inline(always)]
-    pub fn u_axis(&self) -> Vector3 { self.axis_u() }
-    /// Deprecated alias for [`axis_v`](Plane::axis_v).
-    ///
-    /// Renamed for `<property>_<direction>` consistency with `derivative_v`,
-    /// `knot_vector_v` and `cut_v`, which is the convention across this crate.
-    #[deprecated(since = "0.3.4", note = "renamed to `axis_v`")]
-    #[inline(always)]
-    pub fn v_axis(&self) -> Vector3 { self.axis_v() }
     /// Returns the normal
     /// # Examples
     /// ```
@@ -44,7 +40,8 @@ impl Plane {
     /// );
     /// assert_near!(plane.normal(), Vector3::unit_z());
     /// ```
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn normal(&self) -> Vector3 { self.axis_u().cross(self.axis_v()).normalize() }
     /// Gets the parameter of `pt` in plane's matrix.
     /// # Examples
@@ -57,25 +54,26 @@ impl Plane {
     /// );
     ///
     /// let pt = Point3::new(2.1, -6.5, 4.7);
-    /// let prm = plane.parameter(pt);
+    /// let prm = plane.parameter(pt).expect("valid plane basis");
     /// let rev = plane.origin()
     ///     + prm[0] * plane.axis_u()
     ///     + prm[1] * plane.axis_v()
     ///     + prm[2] * plane.normal();
     /// assert_near!(pt, rev);
     /// ```
-    #[inline(always)]
-    pub fn parameter(&self, pt: Point3) -> Vector3 {
+    #[inline]
+    #[must_use]
+    pub fn parameter(&self, pt: Point3) -> Option<Vector3> {
         let a = self.axis_u();
         let b = self.axis_v();
         let c = self.normal();
-        // SAFETY: `u_axis`, `v_axis`, and `normal` are linearly independent by
-        // the `Plane` construction invariant.
-        let mat = Matrix3::from_cols(a, b, c).invert().unwrap();
-        mat * (pt - self.o)
+        Matrix3::from_cols(a, b, c)
+            .invert()
+            .map(|mat| mat * (pt - self.o))
     }
     /// xy-plane
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn xy() -> Self {
         Self {
             o: Point3::new(0.0, 0.0, 0.0),
@@ -84,7 +82,8 @@ impl Plane {
         }
     }
     /// yz-plane
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn yz() -> Self {
         Self {
             o: Point3::new(0.0, 0.0, 0.0),
@@ -93,7 +92,8 @@ impl Plane {
         }
     }
     /// zx-plane
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn zx() -> Self {
         Self {
             o: Point3::new(0.0, 0.0, 0.0),
@@ -106,7 +106,7 @@ impl Plane {
 impl ParametricSurface for Plane {
     type Point = Point3;
     type Vector = Vector3;
-    #[inline(always)]
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         match (m, n) {
             (0, 0) => self.evaluate(u, v).to_vec(),
@@ -115,19 +115,19 @@ impl ParametricSurface for Plane {
             _ => Vector3::zero(),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 {
         self.o + u * (self.p - self.o) + v * (self.q - self.o)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, _: f64, _: f64) -> Vector3 { self.p - self.o }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, _: f64, _: f64) -> Vector3 { self.q - self.o }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
     /// The unit square `[0, 1] x [0, 1]` -- a FICTION, and a load-bearing one.
     ///
@@ -179,7 +179,7 @@ impl ParametricSurface for Plane {
     /// domain. Clamp, cull, and containment tests against it are wrong for most
     /// planar trims even though the four consumers above currently survive by
     /// agreeing with each other about the same fiction.
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
         let range = (Bound::Included(0.0), Bound::Included(1.0));
         (range, range)
@@ -187,31 +187,33 @@ impl ParametricSurface for Plane {
 }
 
 impl ParametricSurface3D for Plane {
-    #[inline(always)]
+    #[inline]
     fn normal(&self, _: f64, _: f64) -> Vector3 { self.normal() }
-    #[inline(always)]
+    #[inline]
     fn normal_uder(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-    #[inline(always)]
+    #[inline]
     fn normal_vder(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
 }
 
-impl BoundedSurface for Plane {}
+impl BoundedSurface for Plane {
+    fn range_tuple(&self) -> SurfaceParameterRange { ((0.0, 1.0), (0.0, 1.0)) }
+}
 
 impl Invertible for Plane {
-    #[inline(always)]
+    #[inline]
     fn inverse(&self) -> Self {
-        Plane {
+        Self {
             o: self.o,
             p: self.q,
             q: self.p,
         }
     }
-    #[inline(always)]
+    #[inline]
     fn invert(&mut self) { *self = self.inverse(); }
 }
 
 impl IncludeCurve<Line<Point3>> for Plane {
-    #[inline(always)]
+    #[inline]
     fn include(&self, line: &Line<Point3>) -> bool {
         self.search_parameter(line.0, None, 1).is_some()
             && self.search_parameter(line.1, None, 1).is_some()
@@ -219,7 +221,7 @@ impl IncludeCurve<Line<Point3>> for Plane {
 }
 
 impl IncludeCurve<BsplineCurve<Point3>> for Plane {
-    #[inline(always)]
+    #[inline]
     fn include(&self, curve: &BsplineCurve<Point3>) -> bool {
         let origin = self.origin();
         let normal = self.normal();
@@ -250,22 +252,22 @@ impl IncludeCurve<NurbsCurve<Vector4>> for Plane {
 }
 
 impl ParameterDivision2D for Plane {
-    #[inline(always)]
+    #[inline]
     fn parameter_division(&self, range: ((f64, f64), (f64, f64)), _: f64) -> (Vec<f64>, Vec<f64>) {
         (vec![range.0.0, range.0.1], vec![range.1.0, range.1.1])
     }
 }
 
 impl<T: Transform3<Scalar = f64>> Transformed<T> for Plane {
-    #[inline(always)]
+    #[inline]
     fn transform_by(&mut self, trans: T) {
         self.o = trans.transform_point(self.o);
         self.p = trans.transform_point(self.p);
         self.q = trans.transform_point(self.q);
     }
-    #[inline(always)]
+    #[inline]
     fn transformed(&self, trans: T) -> Self {
-        Plane {
+        Self {
             o: trans.transform_point(self.o),
             p: trans.transform_point(self.p),
             q: trans.transform_point(self.q),
@@ -275,38 +277,39 @@ impl<T: Transform3<Scalar = f64>> Transformed<T> for Plane {
 
 impl SearchParameter<SurfaceParameter> for Plane {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<SearchParameterHint2D>>(
         &self,
         point: Point3,
         _: H,
         _: usize,
     ) -> Option<(f64, f64)> {
-        let v = self.parameter(point);
-        match v[2].so_small() {
-            true => Some((v[0], v[1])),
-            false => None,
+        let v = self.parameter(point)?;
+        if v[2].so_small() {
+            Some((v[0], v[1]))
+        } else {
+            None
         }
     }
 }
 
 impl SearchNearestParameter<SurfaceParameter> for Plane {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<SearchParameterHint2D>>(
         &self,
         point: Point3,
         _: H,
         _: usize,
     ) -> Option<(f64, f64)> {
-        let v = self.parameter(point);
+        let v = self.parameter(point)?;
         Some((v[0], v[1]))
     }
 }
 
 impl From<Plane> for BsplineSurface<Point3> {
     fn from(Plane { o, p, q }: Plane) -> Self {
-        BsplineSurface::debug_new(
+        Self::new_unchecked(
             (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
             vec![vec![o, q], vec![p, p + (q - o)]],
         )
@@ -326,55 +329,55 @@ impl v2::ParametricSurface for Plane {
     type Point = Point3;
     type Vector = Vector3;
 
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 {
         self.o + u * (self.p - self.o) + v * (self.q - self.o)
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, _: f64, _: f64) -> Vector3 { self.p - self.o }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, _: f64, _: f64) -> Vector3 { self.q - self.o }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-    #[inline(always)]
+    #[inline]
     fn period_u(&self) -> Option<f64> { None }
-    #[inline(always)]
+    #[inline]
     fn period_v(&self) -> Option<f64> { None }
 }
 
 impl v2::BoundedSurface for Plane {
-    #[inline(always)]
+    #[inline]
     fn range_tuple(&self) -> ((f64, f64), (f64, f64)) { ((0.0, 1.0), (0.0, 1.0)) }
 }
 
 impl v2::ParametricSurface3D for Plane {}
 
-impl v2::SearchNearestParameter<v2::D2<f64>> for Plane {
+impl v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for Plane {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_nearest_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
         &self,
         pt: Point3,
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchNearestParameter::<D2>::search_nearest_parameter(self, pt, None, trials)
+        SearchNearestParameter::<SurfaceParameter>::search_nearest_parameter(self, pt, None, trials)
     }
 }
 
-impl v2::SearchParameter<v2::D2<f64>> for Plane {
+impl v2::SearchParameter<v2::SurfaceParameter<f64>> for Plane {
     type Point = Point3;
-    #[inline(always)]
+    #[inline]
     fn search_parameter<H: Into<v2::SearchParameterHint2D<f64>>>(
         &self,
         pt: Point3,
         _: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        SearchParameter::<D2>::search_parameter(self, pt, None, trials)
+        SearchParameter::<SurfaceParameter>::search_parameter(self, pt, None, trials)
     }
 }

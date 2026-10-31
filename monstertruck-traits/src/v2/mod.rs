@@ -4,15 +4,9 @@
 //! kernel. They mirror the existing `f64`-hardcoded traits in [`crate::traits`]
 //! but parameterize the scalar type via associated types.
 //!
-//! The default (and currently only) scalar is `f64`. Alternate scalar support
-//! is not yet exposed.
-//!
-//! # Phase 0
-//!
-//! This module is scaffolding only. No existing code is modified. The
-//! `compat` module provides blanket adapters so that any type implementing
-//! the old `f64` traits automatically implements the v2 traits with
-//! `Scalar = f64`.
+//! The established kernel remains primarily `f64`, while selected geometry
+//! types also implement these traits for alternate scalar types. Implementations
+//! are native rather than bridged through blanket compatibility adapters.
 
 mod bounded_curve;
 mod bounded_surface;
@@ -24,8 +18,6 @@ mod parameter_boundary;
 mod search_parameter;
 mod surface;
 mod surface3d;
-
-mod compat;
 
 /// Scalar-generic algorithm helpers.
 pub mod algo;
@@ -41,7 +33,5 @@ pub use search_parameter::{
     CurveParameter, ParameterRange, SearchNearestParameter, SearchParameter,
     SearchParameterDimension, SearchParameterHint1D, SearchParameterHint2D, SurfaceParameter,
 };
-#[allow(deprecated)]
-pub use search_parameter::{D1, D2};
 pub use surface::ParametricSurface;
 pub use surface3d::ParametricSurface3D;

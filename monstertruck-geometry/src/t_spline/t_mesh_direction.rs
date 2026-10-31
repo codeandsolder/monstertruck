@@ -1,98 +1,93 @@
-use super::*;
+use super::TmeshDirection;
 use std::fmt;
 
 impl TmeshDirection {
     /// Returns an iterable object which rotates clockwise starting from UP.
-    pub fn iter() -> impl Iterator<Item = TmeshDirection> {
-        [
-            TmeshDirection::Up,
-            TmeshDirection::Right,
-            TmeshDirection::Down,
-            TmeshDirection::Left,
-        ]
-        .iter()
-        .copied()
+    pub fn iter() -> impl Iterator<Item = Self> {
+        [Self::Up, Self::Right, Self::Down, Self::Left]
+            .iter()
+            .copied()
     }
 
     /// Rotates `self` a quarter of a rotation clockwise.
-    pub fn clockwise(self) -> Self {
+    #[must_use]
+    pub const fn clockwise(self) -> Self {
         match self {
-            TmeshDirection::Up => TmeshDirection::Right,
-            TmeshDirection::Right => TmeshDirection::Down,
-            TmeshDirection::Down => TmeshDirection::Left,
-            TmeshDirection::Left => TmeshDirection::Up,
+            Self::Up => Self::Right,
+            Self::Right => Self::Down,
+            Self::Down => Self::Left,
+            Self::Left => Self::Up,
         }
     }
 
     /// Rotates `self` a quarter of a turn anti-clockwise.
-    pub fn anti_clockwise(self) -> Self {
+    #[must_use]
+    pub const fn anti_clockwise(self) -> Self {
         match self {
-            TmeshDirection::Up => TmeshDirection::Left,
-            TmeshDirection::Left => TmeshDirection::Down,
-            TmeshDirection::Down => TmeshDirection::Right,
-            TmeshDirection::Right => TmeshDirection::Up,
+            Self::Up => Self::Left,
+            Self::Left => Self::Down,
+            Self::Down => Self::Right,
+            Self::Right => Self::Up,
         }
     }
 
     /// Flips `self`, rotating it half a turn.
-    pub fn flip(self) -> Self {
+    #[must_use]
+    pub const fn flip(self) -> Self {
         match self {
-            TmeshDirection::Up => TmeshDirection::Down,
-            TmeshDirection::Down => TmeshDirection::Up,
-            TmeshDirection::Left => TmeshDirection::Right,
-            TmeshDirection::Right => TmeshDirection::Left,
+            Self::Up => Self::Down,
+            Self::Down => Self::Up,
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
         }
     }
 
     /// Returns true if the direction is UP or DOWN
-    pub fn vertical(self) -> bool {
+    #[must_use]
+    pub const fn vertical(self) -> bool {
         match self {
-            TmeshDirection::Up => true,
-            TmeshDirection::Down => true,
-            TmeshDirection::Left => false,
-            TmeshDirection::Right => false,
+            Self::Up | Self::Down => true,
+            Self::Left | Self::Right => false,
         }
     }
 
     /// Returns true if the direction is RIGHT or LEFT
-    pub fn horizontal(self) -> bool {
+    #[must_use]
+    pub const fn horizontal(self) -> bool {
         match self {
-            TmeshDirection::Up => false,
-            TmeshDirection::Down => false,
-            TmeshDirection::Left => true,
-            TmeshDirection::Right => true,
+            Self::Up | Self::Down => false,
+            Self::Left | Self::Right => true,
         }
     }
 
     /// Returns true if a knot interval in the direction is a positive delta.
-    pub fn knot_delta_positive(self) -> bool {
+    #[must_use]
+    pub const fn knot_delta_positive(self) -> bool {
         match self {
-            TmeshDirection::Up => true,
-            TmeshDirection::Down => false,
-            TmeshDirection::Left => false,
-            TmeshDirection::Right => true,
+            Self::Down | Self::Left => false,
+            Self::Up | Self::Right => true,
         }
     }
 
     /// Returns true if a knot interval in the direction is a negative delta.
-    pub fn knot_delta_negative(self) -> bool {
+    #[must_use]
+    pub const fn knot_delta_negative(self) -> bool {
         match self {
-            TmeshDirection::Up => false,
-            TmeshDirection::Down => true,
-            TmeshDirection::Left => true,
-            TmeshDirection::Right => false,
+            Self::Down | Self::Left => true,
+            Self::Up | Self::Right => false,
         }
     }
 
     /// Adds `delta` to an existing set of knot `coords`, taking into account the direction `self`
     /// such that `delta` is correctly added or subtracted from one of `coords`'s members in order
     /// to move `coords` in the direction `self` by a distance `delta`.
+    #[must_use]
     pub fn mutate_knot_coordinates(self, coords: (f64, f64), delta: f64) -> (f64, f64) {
         match self {
-            TmeshDirection::Up => (coords.0, coords.1 + delta),
-            TmeshDirection::Down => (coords.0, coords.1 - delta),
-            TmeshDirection::Left => (coords.0 - delta, coords.1),
-            TmeshDirection::Right => (coords.0 + delta, coords.1),
+            Self::Up => (coords.0, coords.1 + delta),
+            Self::Down => (coords.0, coords.1 - delta),
+            Self::Left => (coords.0 - delta, coords.1),
+            Self::Right => (coords.0 + delta, coords.1),
         }
     }
 }
@@ -100,12 +95,12 @@ impl TmeshDirection {
 impl fmt::Display for TmeshDirection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let dir_string = match self {
-            TmeshDirection::Up => "up",
-            TmeshDirection::Down => "down",
-            TmeshDirection::Left => "left",
-            TmeshDirection::Right => "right",
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::Left => "left",
+            Self::Right => "right",
         };
 
-        write!(f, "{}", dir_string)
+        write!(f, "{dir_string}")
     }
 }

@@ -23,7 +23,15 @@ use std::result::Result;
 use step_p21::{Holder, ast::Name, primitive::Logical, tables::PlaceHolder};
 
 use super::Table;
-use super::step_geometry::{self, *};
+use super::step_geometry::{
+    self, BsplineCurve, BsplineSurface, Conic2D, Conic3D, Curve2D, Curve3D, ElementarySurface,
+    EuclideanSpace, Homogeneous, InnerSpace, IntersectionCurve, Invertible, KnotVector, Matrix3,
+    Matrix4, NurbsCurve, NurbsSurface, Origin, Point2, Point3, PolylineCurve, Processor,
+    RevolutionSurface, SearchNearestParameter, Sphere, SquareMatrix, StepConvertingError,
+    StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface, TOLERANCE, Tolerance,
+    Torus, Transform, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector2,
+    Vector3, Vector4, Zero,
+};
 
 mod curve;
 mod placement;
@@ -38,7 +46,7 @@ pub use surface::*;
 pub use topology::*;
 
 /// Undefined structures are parsed into this.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = dummy)]
 #[holder(generate_deserialize)]
@@ -47,9 +55,11 @@ pub struct Dummy {
     pub is_simple: bool,
 }
 
+impl Eq for DummyHolder {}
+
 /// Many geometric and topological elements are contained within this entity's child classes.
 /// Since it is essentially an `Any` type, one must manually map the reference according to the context.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = representation_item)]
 #[holder(generate_deserialize)]
@@ -57,7 +67,9 @@ pub struct RepresentationItem {
     pub name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+impl Eq for RepresentationItemHolder {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = representation_context)]
 #[holder(generate_deserialize)]
@@ -66,7 +78,9 @@ pub struct RepresentationContext {
     pub context_type: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+impl Eq for RepresentationContextHolder {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = representation)]
 #[holder(generate_deserialize)]
@@ -78,19 +92,37 @@ pub struct Representation {
     pub context_of_items: Vec<RepresentationContext>,
 }
 
-fn quasi_uniform_knots(num_ctrl: usize, degree: usize) -> KnotVector {
-    let division = num_ctrl - degree;
-    let mut knots = KnotVector::uniform_knot(degree, division);
-    knots.transform(division as f64, 0.0);
-    knots
+fn usize_as_f64(value: usize) -> Result<f64, step_geometry::StepConvertingError> {
+    Ok(f64::from(u32::try_from(value)?))
 }
 
-fn uniform_knots(num_ctrl: usize, degree: usize) -> geom::Result<KnotVector> {
-    KnotVector::try_from(
-        (0..degree + num_ctrl + 1)
-            .map(|i| i as f64 - degree as f64)
-            .collect::<Vec<_>>(),
-    )
+fn quasi_uniform_knots(
+    num_ctrl: usize,
+    degree: usize,
+) -> Result<KnotVector, step_geometry::StepConvertingError> {
+    let division = num_ctrl
+        .checked_sub(degree)
+        .ok_or("B-spline degree exceeds the number of control points")?;
+    let mut knots = KnotVector::uniform_knot(degree, division);
+    knots.transform(usize_as_f64(division)?, 0.0);
+    Ok(knots)
+}
+
+fn uniform_knots(
+    num_ctrl: usize,
+    degree: usize,
+) -> Result<KnotVector, step_geometry::StepConvertingError> {
+    let end = degree
+        .checked_add(num_ctrl)
+        .ok_or("B-spline knot count overflow")?;
+    let degree_f64 = usize_as_f64(degree)?;
+    let knots = (0..=end)
+        .map(usize_as_f64)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|value| value - degree_f64)
+        .collect::<Vec<_>>();
+    Ok(KnotVector::try_from(knots)?)
 }
 
 /// `definitional_representation`
@@ -121,7 +153,6 @@ pub struct Pcurve {
 
 impl TryFrom<&Pcurve> for step_geometry::StepParameterCurve {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &Pcurve) -> Result<Self, Self::Error> {
         let surface: Surface = (&value.basis_surface).try_into()?;
         let curve: Curve2D = value
@@ -130,10 +161,7 @@ impl TryFrom<&Pcurve> for step_geometry::StepParameterCurve {
             .first()
             .ok_or("no representation item")?
             .try_into()?;
-        Ok(step_geometry::StepParameterCurve::new(
-            Box::new(curve),
-            Box::new(surface),
-        ))
+        Ok(Self::new(Box::new(curve), Box::new(surface)))
     }
 }
 
@@ -149,7 +177,7 @@ pub enum PcurveOrSurface {
 }
 
 /// `preferred_surface_representation`
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PreferredSurfaceCurveRepresentation {
     Curve3D,
     PcurveS1,
@@ -165,7 +193,7 @@ pub enum SurfaceCurveEntityKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
-pub(crate) struct SurfaceCurveParams(
+pub struct SurfaceCurveParams(
     String,
     PlaceHolder<CurveAnyHolder>,
     Vec<PlaceHolder<PcurveOrSurfaceHolder>>,
@@ -174,7 +202,7 @@ pub(crate) struct SurfaceCurveParams(
 
 impl SurfaceCurveParams {
     pub(crate) fn into_holder(self, kind: SurfaceCurveEntityKind) -> SurfaceCurveHolder {
-        let SurfaceCurveParams(label, curve_3d, associated_geometry, master_representation) = self;
+        let Self(label, curve_3d, associated_geometry, master_representation) = self;
         SurfaceCurveHolder {
             label,
             curve_3d,
@@ -213,7 +241,6 @@ pub struct SurfaceCurve {
 
 impl TryFrom<&SurfaceCurve> for Curve3D {
     type Error = StepConvertingError;
-    #[inline(always)]
     fn try_from(value: &SurfaceCurve) -> Result<Self, Self::Error> {
         let associated_surface =
             |entry: &PcurveOrSurface| -> Result<step_geometry::Surface, StepConvertingError> {
@@ -238,11 +265,9 @@ impl TryFrom<&SurfaceCurve> for Curve3D {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let kind = match value.kind {
-            SurfaceCurveEntityKind::Surface => step_geometry::SurfaceCurveKind::SurfaceCurve,
-            SurfaceCurveEntityKind::Seam => step_geometry::SurfaceCurveKind::SeamCurve,
-            SurfaceCurveEntityKind::Intersection => {
-                step_geometry::SurfaceCurveKind::IntersectionCurve
-            }
+            SurfaceCurveEntityKind::Surface => step_geometry::SurfaceCurveKind::Surface,
+            SurfaceCurveEntityKind::Seam => step_geometry::SurfaceCurveKind::Seam,
+            SurfaceCurveEntityKind::Intersection => step_geometry::SurfaceCurveKind::Intersection,
         };
         let master_representation = match value.master_representation {
             PreferredSurfaceCurveRepresentation::Curve3D => {
@@ -278,38 +303,16 @@ impl TryFrom<&SurfaceCurve> for Curve3D {
                 .associated_geometry
                 .get(1)
                 .ok_or("The 1-indexed associated geometry is missing.")?;
-            Ok(Curve3D::IntersectionCurve(IntersectionCurve::new(
+            Ok(Self::IntersectionCurve(IntersectionCurve::new(
                 Box::new(associated_surface(surface0)?),
                 Box::new(associated_surface(surface1)?),
                 Box::new(surface_curve.leader().clone()),
             )))
         } else {
-            Ok(Curve3D::SurfaceCurve(surface_curve))
+            Ok(Self::SurfaceCurve(surface_curve))
         }
     }
 }
-
-// Deprecated aliases for types renamed per RFC 430 (C-CASE).
-#[deprecated(note = "renamed to BsplineCurveForm per RFC 430 (C-CASE)")]
-pub type BSplineCurveForm = BsplineCurveForm;
-#[deprecated(note = "renamed to BsplineCurveWithKnots per RFC 430 (C-CASE)")]
-pub type BSplineCurveWithKnots = BsplineCurveWithKnots;
-#[deprecated(note = "renamed to NonRationalBsplineCurve per RFC 430 (C-CASE)")]
-pub type NonRationalBSplineCurve = NonRationalBsplineCurve;
-#[deprecated(note = "renamed to RationalBsplineCurve per RFC 430 (C-CASE)")]
-pub type RationalBSplineCurve = RationalBsplineCurve;
-#[deprecated(note = "renamed to BsplineCurveAny per RFC 430 (C-CASE)")]
-pub type BSplineCurveAny = BsplineCurveAny;
-#[deprecated(note = "renamed to BsplineSurfaceAny per RFC 430 (C-CASE)")]
-pub type BSplineSurfaceAny = BsplineSurfaceAny;
-#[deprecated(note = "renamed to BsplineSurfaceForm per RFC 430 (C-CASE)")]
-pub type BSplineSurfaceForm = BsplineSurfaceForm;
-#[deprecated(note = "renamed to BsplineSurfaceWithKnots per RFC 430 (C-CASE)")]
-pub type BSplineSurfaceWithKnots = BsplineSurfaceWithKnots;
-#[deprecated(note = "renamed to NonRationalBsplineSurface per RFC 430 (C-CASE)")]
-pub type NonRationalBSplineSurface = NonRationalBsplineSurface;
-#[deprecated(note = "renamed to RationalBsplineSurface per RFC 430 (C-CASE)")]
-pub type RationalBSplineSurface = RationalBsplineSurface;
 
 #[cfg(test)]
 mod tests;

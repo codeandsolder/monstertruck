@@ -1,7 +1,7 @@
+use super::scalar_from_usize;
 use crate::v2;
 use monstertruck_core::MetricSpace;
 use num_traits::Float;
-
 /// Divides the domain into equal parts and returns `t` such that
 /// `curve.evaluate(t)` is closest to `point`.
 ///
@@ -12,11 +12,14 @@ where
     C: v2::ParametricCurve<Scalar = S>,
     C::Point: MetricSpace<Metric = S> + Copy, {
     let (t0, t1) = range;
+    if division == 0 {
+        return t0;
+    }
     let mut res = t0;
     let mut min = S::infinity();
-    let n = S::from(division).unwrap();
+    let n: S = scalar_from_usize(division);
     for i in 0..=division {
-        let p = S::from(i).unwrap() / n;
+        let p = scalar_from_usize::<S>(i) / n;
         let t = t0 * (S::one() - p) + t1 * p;
         let dist = curve.evaluate(t).distance2(point);
         if dist < min {

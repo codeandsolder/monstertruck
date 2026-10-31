@@ -1,3 +1,8 @@
+#![expect(
+    clippy::similar_names,
+    reason = "periodic surface algorithms intentionally use canonical paired parameter range names"
+)]
+
 //! Periodic parameter domains: wraparound normalisation, seam opening and
 //! alignment, and the singular-axis (pole) closures that make a periodic loop
 //! usable in 2D.
@@ -5,7 +10,10 @@
 //! Split out of the module file so the source stays readable; the module path
 //! is unchanged.
 
-use super::*;
+use super::{
+    HashMap, InnerSpace, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SurfacePoint,
+    TOLERANCE, Tolerance, UvKey, connect_edges, polyline_on_surface,
+};
 
 const PERIODIC_LOOP_OTHER_AXIS_TOLERANCE: f64 = 1.0e-6;
 const SINGULAR_RADIUS_RELATIVE_TOLERANCE: f64 = 1.0e-6;
@@ -13,13 +21,18 @@ const DEFAULT_SINGULAR_PARAMETER_PROBE: f64 = 1.0;
 
 fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> std::cmp::Ordering {
     let f = move |x: &f64| f64::abs(x - previous);
-    // SAFETY: UV parameters from surface evaluation are finite, so comparison succeeds.
-    move |x: &f64, y: &f64| f(x).partial_cmp(&f(y)).unwrap()
+    move |x: &f64, y: &f64| f(x).total_cmp(&f(y))
 }
 pub(super) fn periodic_min_difference(u: f64, u0: f64, up: f64) -> f64 {
-    let closure = |i| u + i as f64 * up;
-    // SAFETY: the iterator (-2..=2) is non-empty, containing five elements.
-    (-2..=2).map(closure).min_by(abs_diff(u0)).unwrap()
+    let closure = |i| f64::mul_add(f64::from(i), up, u);
+    let mut best = closure(-2);
+    for i in -1..=2 {
+        let candidate = closure(i);
+        if abs_diff(u0)(&candidate, &best).is_lt() {
+            best = candidate;
+        }
+    }
+    best
 }
 
 pub(super) fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0, u1): (f64, f64)) {
@@ -27,7 +40,9 @@ pub(super) fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0
     let q = curve[curve.len() - 1];
     let tmp = f64::min(p[compidx], q[compidx]) + TOLERANCE;
     let del = f64::floor((tmp - u0) / (u1 - u0)) * (u1 - u0);
-    curve.iter_mut().for_each(|p| p[compidx] -= del);
+    for point in curve.iter_mut() {
+        point[compidx] -= del;
+    }
     let Some(i) = curve
         .iter()
         .position(|p| (curve[0][compidx] - u1) * (p[compidx] - u1) < 0.0)
@@ -37,9 +52,10 @@ pub(super) fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0
     let mut curve1 = curve.split_off(i + 1);
     curve1.pop();
     curve1.insert(0, curve[i]);
-    match curve[0][compidx] < curve[curve.len() - 1][compidx] {
-        true => curve1.iter_mut(),
-        false => curve.iter_mut(),
+    if curve[0][compidx] < curve[curve.len() - 1][compidx] {
+        curve1.iter_mut()
+    } else {
+        curve.iter_mut()
     }
     .for_each(|p| p[compidx] -= u1 - u0);
     curve1.append(curve);
@@ -174,20 +190,20 @@ pub(super) fn compact_periodic_closed_loop(
 
 fn unwrap_periodic_open_curve(curve: &mut [SurfacePoint], axis: usize, period: f64) {
     let mut previous = None;
-    curve.iter_mut().for_each(|point| {
+    for point in curve.iter_mut() {
         if let Some(value) =
             PolyBoundaryPiece::normalize_axis(point[axis], previous, Some(period), None)
         {
             point[axis] = value;
         }
         previous = Some(point[axis]);
-    });
+    }
 }
 
 fn shift_curve_axis(curve: &mut [SurfacePoint], axis: usize, shift: f64) {
-    curve.iter_mut().for_each(|point| {
+    for point in curve.iter_mut() {
         point[axis] += shift;
-    });
+    }
 }
 
 fn paired_curve_axis_span(
@@ -217,7 +233,7 @@ pub(super) fn align_periodic_open_pair(
 ) {
     let best_shift = (-4..=4)
         .filter_map(|lap| {
-            let shift = lap as f64 * period;
+            let shift = f64::from(lap) * period;
             paired_curve_axis_span(curve0, curve1, axis, shift).map(|span| (span, shift))
         })
         .min_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0))
@@ -233,10 +249,14 @@ fn periodic_seam_bounds(
     period: f64,
     range: Option<(f64, f64)>,
 ) -> (f64, f64) {
-    let origin = range.map(|(min, _)| min).unwrap_or(0.0);
-    let mut seam_lower = origin + ((lower - origin) / period).floor() * period;
-    while upper > seam_lower + period + TOLERANCE {
-        seam_lower += period;
+    if !period.is_finite() || period <= 0.0 {
+        return (lower, upper);
+    }
+    let origin = range.map_or(0.0, |(min, _)| min);
+    let mut seam_lower = ((lower - origin) / period).floor().mul_add(period, origin);
+    let excess = upper - (seam_lower + period + TOLERANCE);
+    if excess > 0.0 {
+        seam_lower = (excess / period).ceil().mul_add(period, seam_lower);
     }
     (seam_lower, seam_lower + period)
 }
@@ -371,13 +391,15 @@ fn align_full_period_curve_to_axis(
     if curve.len() < 2 {
         false
     } else {
-        if full_period_curve_direction(curve, axis).is_some_and(|current| current != direction) {
+        if full_period_curve_direction(curve, axis)
+            .is_some_and(|current| current.is_sign_positive() != direction.is_sign_positive())
+        {
             curve.reverse();
         }
         let Some(template) = curve.first().copied() else {
             return false;
         };
-        let target_end = target_start + direction * period;
+        let target_end = direction.mul_add(period, target_start);
         let open_len = curve.len().saturating_sub(1);
         let mut aligned = curve
             .iter()
@@ -467,7 +489,8 @@ fn singular_periodic_other_parameter(
     periodic_axis: usize,
 ) -> Option<f64> {
     let other_axis = 1 - periodic_axis;
-    let other = curve.iter().map(|point| point[other_axis]).sum::<f64>() / curve.len() as f64;
+    let other =
+        curve.iter().map(|point| point[other_axis]).sum::<f64>() / crate::count_as_f64(curve.len());
     let periodic = curve[0][periodic_axis];
     let uv = uv_with_axis_values(curve[0], periodic_axis, periodic, other);
     let radius = axis_derivative_norm(surface, periodic_axis, uv)?;

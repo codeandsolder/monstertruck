@@ -11,7 +11,10 @@
 //! allowing exact representation of conics (circles, ellipses). When all weights are
 //! equal the curve reduces to a non-rational B-spline.
 
-use crate::{prelude::*, *};
+use crate::{
+    Bound, Bounded, Debug, Deserialize, INCLUDE_CURVE_TRIALS, PRESEARCH_DIVISION, Serialize,
+    errors, prelude::*,
+};
 use monstertruck_core::cgmath64::control_point::ControlPoint;
 use smallvec::SmallVec;
 
@@ -47,28 +50,33 @@ impl BasisWindow {
     /// The basis functions in the index range
     /// `start_index() .. start_index() + len()` may be non-zero; all others
     /// are exactly zero.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn start_index(&self) -> usize { self.start }
 
     /// Number of basis functions whose values are stored.
     ///
     /// Equals `degree + 1` for a non-degenerate evaluation; equals `0` for
     /// the empty window produced when `degree < der_rank`.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn len(&self) -> usize { self.values.len() }
 
     /// True when the window stores no values.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool { self.values.is_empty() }
 
     /// Stored basis-function values, ordered by ascending basis-function index.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub fn values(&self) -> &[f64] { &self.values }
 
     /// Total length of the (sparse) basis-function vector this window was extracted from.
     ///
     /// Equal to the number of control points along the corresponding axis.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn total_length(&self) -> usize { self.total_length }
 
     /// Reconstructs the full basis-function vector with zeros outside the window.
@@ -77,6 +85,7 @@ impl BasisWindow {
     /// still want the dense layout; production curve and surface evaluation
     /// should consume [`start_index`](Self::start_index) and
     /// [`values`](Self::values) directly.
+    #[must_use]
     pub fn to_full_values(&self) -> Vec<f64> {
         let mut full = vec![0.0; self.total_length];
         full[self.start..self.start + self.values.len()].copy_from_slice(&self.values);
@@ -84,8 +93,12 @@ impl BasisWindow {
     }
 
     /// Builds a window from a precomputed `start` and `values` slice.
-    #[inline(always)]
-    pub(crate) fn new(start: usize, values: SmallVec<[f64; 32]>, total_length: usize) -> Self {
+    #[inline]
+    pub(crate) const fn new(
+        start: usize,
+        values: SmallVec<[f64; 32]>,
+        total_length: usize,
+    ) -> Self {
         Self {
             start,
             values,
@@ -95,7 +108,7 @@ impl BasisWindow {
 
     /// Builds an empty window for the degenerate case where every basis
     /// function evaluates to zero (e.g. `degree < der_rank`).
-    #[inline(always)]
+    #[inline]
     pub(crate) fn empty(total_length: usize) -> Self {
         Self {
             start: 0,
@@ -106,7 +119,7 @@ impl BasisWindow {
 }
 
 impl AsRef<[f64]> for BasisWindow {
-    #[inline(always)]
+    #[inline]
     fn as_ref(&self) -> &[f64] { &self.values }
 }
 
@@ -134,13 +147,13 @@ impl AsRef<[f64]> for BasisWindow {
 /// ];
 ///
 /// // construct the B-spline curve
-/// let bspline = BsplineCurve::new(knot_vec, control_points);
+/// let bspline = BsplineCurve::new_unchecked(knot_vec, control_points);
 ///
 /// // This B-spline curve is a nurbs representation of the unit circle.
 /// const N : usize = 100; // sample size in test
 /// for i in 0..N {
 ///     let t = 1.0 / (N as f64) * (i as f64);
-///     let v = bspline.subs(t); // We can use the instances as a function.
+///     let v = bspline.evaluate(t); // We can use the instances as a function.
 ///     let c = (v[0] / v[3]).powi(2) + (v[1] / v[3]).powi(2);
 ///     assert_near2!(c, 1.0);
 /// }
@@ -196,14 +209,14 @@ pub struct BsplineCurve<P> {
 /// v[3][6] = v[3][0].clone();
 ///
 /// // cunstruct the B-spline curve
-/// let bspline = BsplineSurface::new(knot_vecs, v);
+/// let bspline = BsplineSurface::new_unchecked(knot_vecs, v);
 ///
 /// // This B-spline curve is a nurbs representation of the unit sphere.
 /// for i in 0..N {
 ///     for j in 0..N {
 ///         let u = 1.0 / (N as f64) * (i as f64);
 ///         let v = 1.0 / (N as f64) * (j as f64);
-///         let v = bspline.subs(u, v); // We can use the instances as a function.
+///         let v = bspline.evaluate(u, v); // We can use the instances as a function.
 ///         let c = (v[0] / v[3]).powi(2) + (v[1] / v[3]).powi(2) + (v[2] / v[3]).powi(2);
 ///         assert_near2!(c, 1.0);
 ///     }
@@ -229,18 +242,6 @@ pub struct NurbsCurve<V>(BsplineCurve<V>);
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize, SelfSameGeometry)]
 pub struct NurbsSurface<V>(BsplineSurface<V>);
 
-/// Renamed to [`BsplineCurve`] per RFC 430 (C-CASE).
-#[deprecated(note = "renamed to BsplineCurve per RFC 430 (C-CASE)")]
-pub type BSplineCurve<P> = BsplineCurve<P>;
-
-/// Renamed to [`BsplineSurface`] per RFC 430 (C-CASE).
-#[deprecated(note = "renamed to BsplineSurface per RFC 430 (C-CASE)")]
-pub type BSplineSurface<P> = BsplineSurface<P>;
-
-/// Renamed to [`KnotVector`] for clarity.
-#[deprecated(note = "renamed to KnotVector for clarity")]
-pub type KnotVec = KnotVector;
-
 /// Basis conversion utilities for importing non-B-spline representations.
 pub mod basis;
 
@@ -262,7 +263,8 @@ mod nurbs_curve;
 mod nurbs_surface;
 
 #[doc(hidden)]
-#[inline(always)]
+#[inline]
+#[must_use]
 pub const fn inv_or_zero(delta: f64) -> f64 {
     if delta.abs() <= TOLERANCE {
         0.0
@@ -298,7 +300,10 @@ mod gaussian_elimination {
 
         // Disable cargo clippy warnings about needless range loops.
         // Checking the diagonal like this is simpler than any alternative.
-        #[allow(clippy::needless_range_loop)]
+        #[expect(
+            clippy::needless_range_loop,
+            reason = "diagonal singularity detection is clearer when indexed by the matrix coordinate"
+        )]
         for i in 0..size {
             if matrix[i][i].is_zero() {
                 return None;
@@ -315,7 +320,7 @@ mod gaussian_elimination {
         // than a result changed.
         if matrix[i][i] != S::zero() && matrix[j + 1][i] != S::zero() {
             let factor = matrix[j + 1][i] / matrix[i][i];
-            (i..size + 1).for_each(|k| {
+            (i..=size).for_each(|k| {
                 matrix[j + 1][k] = matrix[j + 1][k] - factor * matrix[i][k];
             });
         }
@@ -324,14 +329,14 @@ mod gaussian_elimination {
     fn eliminate<S: BaseFloat>(matrix: &mut [Vec<S>], i: usize) {
         let size = matrix.len();
         if matrix[i][i] != S::zero() {
-            for j in (1..i + 1).rev() {
+            for j in (1..=i).rev() {
                 if matrix[j - 1][i] != S::zero() {
                     let factor = matrix[j - 1][i] / matrix[i][i];
                     // `i`, not `0`. Columns left of `i` were already driven to
                     // zero by `echelon`, so back-substitution has no business
                     // writing them -- and one of them is `j - 1`, the pivot
                     // this row is divided by on the way out.
-                    for k in (i..size + 1).rev() {
+                    for k in (i..=size).rev() {
                         matrix[j - 1][k] = matrix[j - 1][k] - factor * matrix[i][k];
                     }
                 }

@@ -1,7 +1,17 @@
 //! The 3-D [`Surface`] enum and every impl that belongs to it.
 
 use super::parameter_curves::{same_surface_parameterization, sampled_curve_lies_on_surface};
-use super::*;
+use super::{
+    AnalyticSurfaceKind, BoundedSurface, BsplineCurve, BsplineSurface, Curve, Deserialize,
+    ExtrusionSurface, From, Homogeneous, HomogeneousSurfaceConversion, HomotopySurface,
+    IncludeCurve, InnerSpace, Invertible, Matrix3, Matrix4, MetricSpace, NurbsCurve, NurbsSurface,
+    ParameterDivision2D, ParametricCurve, ParametricSurface, ParametricSurface3D, Plane, Point3,
+    Processor, Rad, RevolutionSurface, SearchNearestParameter, SearchParameter, SearchParameterD2,
+    SearchParameterHint2D, Serialize, Sphere, SupportsExactPatchDomains, SurfaceParameter,
+    SurfaceParameterRectangle, Tmesh, ToSameGeometry, Tolerance, Torus, Transform, Transformed,
+    TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface, TryIntoHomogeneousBsplineSurface, Vector3,
+    Vector4, algo, env,
+};
 
 /// 3-dimensional surfaces
 #[derive(
@@ -15,7 +25,10 @@ use super::*;
     Invertible,
     SearchParameterD2,
 )]
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing analytic surface variants would add allocation and indirection to hot geometry dispatch"
+)]
 pub enum Surface {
     /// Plane
     Plane(Plane),
@@ -24,20 +37,23 @@ pub enum Surface {
     /// 3-dimensional NURBS Surface
     NurbsSurface(NurbsSurface<Vector4>),
     /// revoluted curve
-    #[serde(alias = "RevolutedCurve")]
-    RevolutionSurface(Processor<RevolutionSurface<Curve>, Matrix4>),
+    #[serde(rename = "RevolutedCurve")]
+    Revolution(Processor<RevolutionSurface<Curve>, Matrix4>),
     /// T-spline surface
-    TsplineSurface(Tmesh<Point3>),
+    #[serde(rename = "TsplineSurface")]
+    Tspline(Tmesh<Point3>),
     /// Analytic sphere, posed by the processor's transform.
     ///
     /// Carried as the analytic type rather than its (exact) rational net so the
     /// CLOSED-FORM [`ParameterDivision2D`] survives the STEP conversion -- see
     /// the module note on `TryFrom<&Surface> for Surface` in
     /// `monstertruck-io/src/step/load/step_geometry/geom_impls/`. Spec 012 U1.2.
-    SphericalSurface(Processor<Sphere, Matrix4>),
+    #[serde(rename = "SphericalSurface")]
+    Sphere(Processor<Sphere, Matrix4>),
     /// Analytic torus, posed by the processor's transform. Same reason as
-    /// [`Surface::SphericalSurface`]; spindle tori never reach this variant.
-    ToroidalSurface(Processor<Torus, Matrix4>),
+    /// [`Surface::Sphere`]; spindle tori never reach this variant.
+    #[serde(rename = "ToroidalSurface")]
+    Torus(Processor<Torus, Matrix4>),
 }
 
 macro_rules! derive_surface_method {
@@ -46,10 +62,10 @@ macro_rules! derive_surface_method {
             Self::Plane(got) => $method(got, $($ver), *),
             Self::BsplineSurface(got) => $method(got, $($ver), *),
             Self::NurbsSurface(got) => $method(got, $($ver), *),
-            Self::RevolutionSurface(got) => $method(got, $($ver), *),
-            Self::TsplineSurface(got) => $method(got, $($ver), *),
-            Self::SphericalSurface(got) => $method(got, $($ver), *),
-            Self::ToroidalSurface(got) => $method(got, $($ver), *),
+            Self::Revolution(got) => $method(got, $($ver), *),
+            Self::Tspline(got) => $method(got, $($ver), *),
+            Self::Sphere(got) => $method(got, $($ver), *),
+            Self::Torus(got) => $method(got, $($ver), *),
         }
     };
 }
@@ -60,16 +76,16 @@ macro_rules! derive_surface_self_method {
             Self::Plane(got) => Self::Plane($method(got, $($ver), *)),
             Self::BsplineSurface(got) => Self::BsplineSurface($method(got, $($ver), *)),
             Self::NurbsSurface(got) => Self::NurbsSurface($method(got, $($ver), *)),
-            Self::RevolutionSurface(got) => Self::RevolutionSurface($method(got, $($ver), *)),
-            Self::TsplineSurface(got) => Self::TsplineSurface($method(got, $($ver), *)),
-            Self::SphericalSurface(got) => Self::SphericalSurface($method(got, $($ver), *)),
-            Self::ToroidalSurface(got) => Self::ToroidalSurface($method(got, $($ver), *)),
+            Self::Revolution(got) => Self::Revolution($method(got, $($ver), *)),
+            Self::Tspline(got) => Self::Tspline($method(got, $($ver), *)),
+            Self::Sphere(got) => Self::Sphere($method(got, $($ver), *)),
+            Self::Torus(got) => Self::Torus($method(got, $($ver), *)),
         }
     };
 }
 
 impl ParametricSurface3D for Surface {
-    #[inline(always)]
+    #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         derive_surface_method!(self, ParametricSurface3D::normal, u, v)
     }
@@ -77,7 +93,7 @@ impl ParametricSurface3D for Surface {
 
 /// Trials the analytic containment test allows its inverse map, matching
 /// `INCLUDE_CURVE_TRIALS` in `monstertruck-geometry`'s `NurbsSurface` impl --
-/// the one [`Surface::SphericalSurface`] and [`Surface::ToroidalSurface`]
+/// the one [`Surface::Sphere`] and [`Surface::Torus`]
 /// faces reached before spec 012 U1.2 gave them analytic variants.
 const ANALYTIC_INCLUDE_CURVE_TRIALS: usize = 100;
 
@@ -93,10 +109,14 @@ where S: SearchParameter<SurfaceParameter, Point = Point3> {
     let degree = usize::max(lifted.degree() * 2, 2);
     knots.windows(2).all(|window| {
         (0..=degree).all(|index| {
-            let ratio = index as f64 / degree as f64;
-            let parameter = window[0] * (1.0 - ratio) + window[1] * ratio;
+            let ratio = crate::usize_to_f64(index) / crate::usize_to_f64(degree);
+            let parameter = window[1].mul_add(ratio, window[0] * (1.0 - ratio));
             surface
-                .search_parameter(lifted.subs(parameter), None, ANALYTIC_INCLUDE_CURVE_TRIALS)
+                .search_parameter(
+                    lifted.evaluate(parameter),
+                    None,
+                    ANALYTIC_INCLUDE_CURVE_TRIALS,
+                )
                 .is_some()
         })
     })
@@ -111,239 +131,91 @@ impl Transformed<Matrix4> for Surface {
     }
 }
 
+fn spline_surface_includes_curve<S>(surface: &S, curve: &Curve) -> bool
+where S: IncludeCurve<BsplineCurve<Point3>> + IncludeCurve<NurbsCurve<Vector4>> {
+    match curve {
+        &Curve::Line(curve) => surface.include(&BsplineCurve::from(curve)),
+        Curve::BsplineCurve(curve) => surface.include(curve),
+        Curve::NurbsCurve(curve) => surface.include(curve),
+        Curve::Intersection(curve) => match curve.leader().as_ref() {
+            Curve::Line(curve) => surface.include(&BsplineCurve::from(*curve)),
+            Curve::BsplineCurve(curve) => surface.include(curve),
+            Curve::NurbsCurve(curve) => surface.include(curve),
+            Curve::ParameterCurve(_) | Curve::Intersection(_) => false,
+        },
+        Curve::ParameterCurve(_) => false,
+    }
+}
+
+fn revolution_surface_includes_curve(
+    surface: &Processor<RevolutionSurface<Curve>, Matrix4>,
+    curve: &Curve,
+) -> bool {
+    let origin = surface.origin();
+    let axis = surface.axis();
+    match surface.entity_curve() {
+        &Curve::Line(entity_line) => {
+            let entity_curve = BsplineCurve::from(entity_line);
+            let revolved = RevolutionSurface::by_revolution(&entity_curve, origin, axis);
+            spline_surface_includes_curve(&revolved, curve)
+        }
+        Curve::BsplineCurve(entity_curve) => {
+            let revolved = RevolutionSurface::by_revolution(entity_curve, origin, axis);
+            spline_surface_includes_curve(&revolved, curve)
+        }
+        Curve::NurbsCurve(entity_curve) => {
+            let revolved = RevolutionSurface::by_revolution(entity_curve, origin, axis);
+            spline_surface_includes_curve(&revolved, curve)
+        }
+        Curve::Intersection(entity_curve) => match entity_curve.leader().as_ref() {
+            &Curve::Line(entity_line) => {
+                let entity_curve = BsplineCurve::from(entity_line);
+                let revolved = RevolutionSurface::by_revolution(&entity_curve, origin, axis);
+                spline_surface_includes_curve(&revolved, curve)
+            }
+            Curve::BsplineCurve(entity_curve) => {
+                let revolved = RevolutionSurface::by_revolution(entity_curve, origin, axis);
+                spline_surface_includes_curve(&revolved, curve)
+            }
+            Curve::NurbsCurve(entity_curve) => {
+                let revolved = RevolutionSurface::by_revolution(entity_curve, origin, axis);
+                spline_surface_includes_curve(&revolved, curve)
+            }
+            Curve::ParameterCurve(_) | Curve::Intersection(_) => false,
+        },
+        Curve::ParameterCurve(_) => false,
+    }
+}
+
 impl IncludeCurve<Curve> for Surface {
-    #[inline(always)]
+    #[inline]
     fn include(&self, curve: &Curve) -> bool {
         if let Curve::ParameterCurve(curve) = curve {
             return same_surface_parameterization(curve.surface().as_ref(), self)
                 || sampled_curve_lies_on_surface(curve, self);
         }
-        if let Curve::IntersectionCurve(curve) = curve {
+        if let Curve::Intersection(curve) = curve {
             if same_surface_parameterization(curve.surface0().as_ref(), self)
                 || same_surface_parameterization(curve.surface1().as_ref(), self)
             {
                 return true;
             }
-            // Geometric containment is weaker than UV identity. A fillet or
-            // Boolean intersection curve can be carried by the same physical
-            // support with a different parameterization; validate its 3-D leader
-            // against this surface instead of reusing either foreign pcurve.
             if sampled_curve_lies_on_surface(curve.leader().as_ref(), self) {
                 return true;
             }
         }
-        {
-            match self {
-                Surface::BsplineSurface(surface) => match curve {
-                    &Curve::Line(curve) => surface.include(&BsplineCurve::from(curve)),
-                    Curve::BsplineCurve(curve) => surface.include(curve),
-                    Curve::NurbsCurve(curve) => surface.include(curve),
-                    Curve::IntersectionCurve(curve) => match curve.leader().as_ref() {
-                        Curve::Line(curve) => surface.include(&BsplineCurve::from(*curve)),
-                        Curve::BsplineCurve(curve) => surface.include(curve),
-                        Curve::NurbsCurve(curve) => surface.include(curve),
-                        Curve::ParameterCurve(_) => false,
-                        Curve::IntersectionCurve(_) => false,
-                    },
-                    Curve::ParameterCurve(_) => unreachable!(),
-                },
-                Surface::NurbsSurface(surface) => match curve {
-                    &Curve::Line(curve) => surface.include(&BsplineCurve::from(curve)),
-                    Curve::BsplineCurve(curve) => surface.include(curve),
-                    Curve::NurbsCurve(curve) => surface.include(curve),
-                    Curve::IntersectionCurve(curve) => match curve.leader().as_ref() {
-                        Curve::Line(curve) => surface.include(&BsplineCurve::from(*curve)),
-                        Curve::BsplineCurve(curve) => surface.include(curve),
-                        Curve::NurbsCurve(curve) => surface.include(curve),
-                        Curve::ParameterCurve(_) => false,
-                        Curve::IntersectionCurve(_) => false,
-                    },
-                    Curve::ParameterCurve(_) => unreachable!(),
-                },
-                Surface::Plane(surface) => match curve {
-                    &Curve::Line(curve) => surface.include(&BsplineCurve::from(curve)),
-                    Curve::BsplineCurve(curve) => surface.include(curve),
-                    Curve::NurbsCurve(curve) => surface.include(curve),
-                    Curve::IntersectionCurve(curve) => match curve.leader().as_ref() {
-                        Curve::Line(curve) => surface.include(&BsplineCurve::from(*curve)),
-                        Curve::BsplineCurve(curve) => surface.include(curve),
-                        Curve::NurbsCurve(curve) => surface.include(curve),
-                        Curve::ParameterCurve(_) => false,
-                        Curve::IntersectionCurve(_) => false,
-                    },
-                    Curve::ParameterCurve(_) => unreachable!(),
-                },
-                Surface::TsplineSurface(surface) => {
-                    curve.lift_up().control_points().iter().all(|v| {
-                        let p = v.to_point();
-                        surface.search_parameter(p, None, 1).is_some()
-                    })
-                }
-                // The analytic variants answer containment through their own
-                // exact inverse map. `Torus` carries no `IncludeCurve` impl at
-                // all, so the pair shares one sampled test -- and it samples
-                // the CURVE, like the `NurbsSurface` impl these faces used to
-                // reach, not the control polygon like the T-mesh arm above. A
-                // rational curve's control points are not on the curve, so
-                // testing them would have been strictly more conservative than
-                // what this replaces.
-                Surface::SphericalSurface(surface) => {
-                    analytic_surface_includes_curve(surface, curve)
-                }
-                Surface::ToroidalSurface(surface) => {
-                    analytic_surface_includes_curve(surface, curve)
-                }
-                Surface::RevolutionSurface(surface) => match surface.entity_curve() {
-                    &Curve::Line(entity_line) => {
-                        let entity_bsp = BsplineCurve::from(entity_line);
-                        let surface = RevolutionSurface::by_revolution(
-                            &entity_bsp,
-                            surface.origin(),
-                            surface.axis(),
-                        );
-                        match curve {
-                            &Curve::Line(curve) => surface.include(&BsplineCurve::from(curve)),
-                            Curve::BsplineCurve(curve) => surface.include(curve),
-                            Curve::NurbsCurve(curve) => surface.include(curve),
-                            Curve::IntersectionCurve(curve) => match curve.leader().as_ref() {
-                                Curve::Line(curve) => surface.include(&BsplineCurve::from(*curve)),
-                                Curve::BsplineCurve(curve) => surface.include(curve),
-                                Curve::NurbsCurve(curve) => surface.include(curve),
-                                Curve::ParameterCurve(_) => false,
-                                Curve::IntersectionCurve(_) => false,
-                            },
-                            Curve::ParameterCurve(_) => unreachable!(),
-                        }
-                    }
-                    Curve::BsplineCurve(entity_curve) => {
-                        let surface = RevolutionSurface::by_revolution(
-                            entity_curve,
-                            surface.origin(),
-                            surface.axis(),
-                        );
-                        match curve {
-                            &Curve::Line(curve) => surface.include(&BsplineCurve::from(curve)),
-                            Curve::BsplineCurve(curve) => surface.include(curve),
-                            Curve::NurbsCurve(curve) => surface.include(curve),
-                            Curve::IntersectionCurve(curve) => match curve.leader().as_ref() {
-                                Curve::Line(curve) => surface.include(&BsplineCurve::from(*curve)),
-                                Curve::BsplineCurve(curve) => surface.include(curve),
-                                Curve::NurbsCurve(curve) => surface.include(curve),
-                                Curve::ParameterCurve(_) => false,
-                                Curve::IntersectionCurve(_) => false,
-                            },
-                            Curve::ParameterCurve(_) => unreachable!(),
-                        }
-                    }
-                    Curve::NurbsCurve(entity_curve) => {
-                        let surface = RevolutionSurface::by_revolution(
-                            entity_curve,
-                            surface.origin(),
-                            surface.axis(),
-                        );
-                        match curve {
-                            &Curve::Line(curve) => surface.include(&BsplineCurve::from(curve)),
-                            Curve::BsplineCurve(curve) => surface.include(curve),
-                            Curve::NurbsCurve(curve) => surface.include(curve),
-                            Curve::IntersectionCurve(curve) => match curve.leader().as_ref() {
-                                Curve::Line(curve) => surface.include(&BsplineCurve::from(*curve)),
-                                Curve::BsplineCurve(curve) => surface.include(curve),
-                                Curve::NurbsCurve(curve) => surface.include(curve),
-                                Curve::ParameterCurve(_) => false,
-                                Curve::IntersectionCurve(_) => false,
-                            },
-                            Curve::ParameterCurve(_) => unreachable!(),
-                        }
-                    }
-                    Curve::IntersectionCurve(entity_curve) => {
-                        let leader = entity_curve.leader().as_ref();
-                        match leader {
-                            Curve::Line(entity_line) => {
-                                let entity_bsp = BsplineCurve::from(*entity_line);
-                                let surface = RevolutionSurface::by_revolution(
-                                    &entity_bsp,
-                                    surface.origin(),
-                                    surface.axis(),
-                                );
-                                match curve {
-                                    &Curve::Line(curve) => {
-                                        surface.include(&BsplineCurve::from(curve))
-                                    }
-                                    Curve::BsplineCurve(curve) => surface.include(curve),
-                                    Curve::NurbsCurve(curve) => surface.include(curve),
-                                    Curve::IntersectionCurve(curve) => {
-                                        match curve.leader().as_ref() {
-                                            Curve::Line(curve) => {
-                                                surface.include(&BsplineCurve::from(*curve))
-                                            }
-                                            Curve::BsplineCurve(curve) => surface.include(curve),
-                                            Curve::NurbsCurve(curve) => surface.include(curve),
-                                            Curve::ParameterCurve(_) => false,
-                                            Curve::IntersectionCurve(_) => false,
-                                        }
-                                    }
-                                    Curve::ParameterCurve(_) => unreachable!(),
-                                }
-                            }
-                            Curve::BsplineCurve(entity_curve) => {
-                                let surface = RevolutionSurface::by_revolution(
-                                    entity_curve,
-                                    surface.origin(),
-                                    surface.axis(),
-                                );
-                                match curve {
-                                    &Curve::Line(curve) => {
-                                        surface.include(&BsplineCurve::from(curve))
-                                    }
-                                    Curve::BsplineCurve(curve) => surface.include(curve),
-                                    Curve::NurbsCurve(curve) => surface.include(curve),
-                                    Curve::IntersectionCurve(curve) => {
-                                        match curve.leader().as_ref() {
-                                            Curve::Line(curve) => {
-                                                surface.include(&BsplineCurve::from(*curve))
-                                            }
-                                            Curve::BsplineCurve(curve) => surface.include(curve),
-                                            Curve::NurbsCurve(curve) => surface.include(curve),
-                                            Curve::ParameterCurve(_) => false,
-                                            Curve::IntersectionCurve(_) => false,
-                                        }
-                                    }
-                                    Curve::ParameterCurve(_) => unreachable!(),
-                                }
-                            }
-                            Curve::NurbsCurve(entity_curve) => {
-                                let surface = RevolutionSurface::by_revolution(
-                                    entity_curve,
-                                    surface.origin(),
-                                    surface.axis(),
-                                );
-                                match curve {
-                                    &Curve::Line(curve) => {
-                                        surface.include(&BsplineCurve::from(curve))
-                                    }
-                                    Curve::BsplineCurve(curve) => surface.include(curve),
-                                    Curve::NurbsCurve(curve) => surface.include(curve),
-                                    Curve::IntersectionCurve(curve) => {
-                                        match curve.leader().as_ref() {
-                                            Curve::Line(curve) => {
-                                                surface.include(&BsplineCurve::from(*curve))
-                                            }
-                                            Curve::BsplineCurve(curve) => surface.include(curve),
-                                            Curve::NurbsCurve(curve) => surface.include(curve),
-                                            Curve::ParameterCurve(_) => false,
-                                            Curve::IntersectionCurve(_) => false,
-                                        }
-                                    }
-                                    Curve::ParameterCurve(_) => unreachable!(),
-                                }
-                            }
-                            Curve::ParameterCurve(_) => false,
-                            Curve::IntersectionCurve(_) => false,
-                        }
-                    }
-                    Curve::ParameterCurve(_) => false,
-                },
-            }
+        match self {
+            Self::BsplineSurface(surface) => spline_surface_includes_curve(surface, curve),
+            Self::NurbsSurface(surface) => spline_surface_includes_curve(surface, curve),
+            Self::Plane(surface) => spline_surface_includes_curve(surface, curve),
+            Self::Tspline(surface) => curve.lift_up().control_points().iter().all(|control| {
+                surface
+                    .search_parameter(control.to_point(), None, 1)
+                    .is_some()
+            }),
+            Self::Sphere(surface) => analytic_surface_includes_curve(surface, curve),
+            Self::Torus(surface) => analytic_surface_includes_curve(surface, curve),
+            Self::Revolution(surface) => revolution_surface_includes_curve(surface, curve),
         }
     }
 }
@@ -362,9 +234,7 @@ impl ToSameGeometry<Surface> for Plane {
 }
 
 impl ToSameGeometry<Surface> for RevolutionSurface<Curve> {
-    fn to_same_geometry(&self) -> Surface {
-        Surface::RevolutionSurface(Processor::new(self.clone()))
-    }
+    fn to_same_geometry(&self) -> Surface { Surface::Revolution(Processor::new(self.clone())) }
 }
 
 fn transform_preserves_nearest_parameter(transform: &Matrix4) -> bool {
@@ -431,7 +301,7 @@ fn revolution_surface_nearest_parameter(
 fn revolution_processor_presearch_separable(
     rotted: &Processor<RevolutionSurface<Curve>, Matrix4>,
     point: Point3,
-    (urange, vrange): ((f64, f64), (f64, f64)),
+    parameter_ranges: ((f64, f64), (f64, f64)),
     division: usize,
 ) -> (f64, f64) {
     let revolution = rotted.entity();
@@ -444,11 +314,11 @@ fn revolution_processor_presearch_separable(
     // paths use 50, so nodes -- unlike a count of CALLS -- can tell a revolution
     // search apart from a NURBS one (10,201 vs 2,601).
     algo::surface::charge_presearch_nodes(algo::surface::presearch_nodes(division));
-    let ((u0, u1), (v0, v1)) = (urange, vrange);
+    let ((u0, u1), (v0, v1)) = parameter_ranges;
     // Identical to the generic presearch's grid-node expression.
     let node = |bound0: f64, bound1: f64, index: usize| {
-        let t = index as f64 / division as f64;
-        bound0 * (1.0 - t) + bound1 * t
+        let t = crate::usize_to_f64(index) / crate::usize_to_f64(division);
+        bound1.mul_add(t, bound0 * (1.0 - t))
     };
     // Each expensive separable factor is derived once per grid line and reused
     // across the crossing line (the hoist), then paired with its node value so the
@@ -522,24 +392,18 @@ impl SearchNearestParameter<SurfaceParameter> for Surface {
         trials: usize,
     ) -> Option<(f64, f64)> {
         match self {
-            Surface::Plane(plane) => plane.search_nearest_parameter(point, hint, trials),
-            Surface::BsplineSurface(bspsurface) => {
+            Self::Plane(plane) => plane.search_nearest_parameter(point, hint, trials),
+            Self::BsplineSurface(bspsurface) => {
                 bspsurface.search_nearest_parameter(point, hint, trials)
             }
-            Surface::NurbsSurface(surface) => surface.search_nearest_parameter(point, hint, trials),
-            Surface::TsplineSurface(surface) => {
-                surface.search_nearest_parameter(point, hint, trials)
-            }
+            Self::NurbsSurface(surface) => surface.search_nearest_parameter(point, hint, trials),
+            Self::Tspline(surface) => surface.search_nearest_parameter(point, hint, trials),
             // The analytic inverse map, not a Newton descent. This is the half
             // of the sphere/torus conversion that the rational net never
             // carried, and (011-T1) the half that decides where trims land.
-            Surface::SphericalSurface(surface) => {
-                surface.search_nearest_parameter(point, hint, trials)
-            }
-            Surface::ToroidalSurface(surface) => {
-                surface.search_nearest_parameter(point, hint, trials)
-            }
-            Surface::RevolutionSurface(rotted) => {
+            Self::Sphere(surface) => surface.search_nearest_parameter(point, hint, trials),
+            Self::Torus(surface) => surface.search_nearest_parameter(point, hint, trials),
+            Self::Revolution(rotted) => {
                 let hint = hint.into();
                 revolution_surface_nearest_parameter(rotted, point, hint, trials).or_else(|| {
                     let hint = match hint {
@@ -569,14 +433,12 @@ impl SearchNearestParameter<SurfaceParameter> for Surface {
 impl TryIntoBsplineSurface for Surface {
     fn try_into_bspline_surface(&self) -> Option<BsplineSurface<Point3>> {
         match self {
-            Surface::Plane(p) => p.try_into_bspline_surface(),
-            Surface::BsplineSurface(b) => b.try_into_bspline_surface(),
-            Surface::NurbsSurface(n) => n.try_into_bspline_surface(),
-            Surface::RevolutionSurface(_) => None,
-            Surface::TsplineSurface(_) => None,
-            // No exact NON-rational net exists for either; the exact form is
-            // the homogeneous one below.
-            Surface::SphericalSurface(_) | Surface::ToroidalSurface(_) => None,
+            Self::Plane(p) => p.try_into_bspline_surface(),
+            Self::BsplineSurface(b) => b.try_into_bspline_surface(),
+            Self::NurbsSurface(n) => n.try_into_bspline_surface(),
+            // No exact non-rational net exists for these variants; exact
+            // rational forms are handled by the homogeneous conversion below.
+            Self::Revolution(_) | Self::Tspline(_) | Self::Sphere(_) | Self::Torus(_) => None,
         }
     }
 }
@@ -584,17 +446,17 @@ impl TryIntoBsplineSurface for Surface {
 impl TryIntoHomogeneousBsplineSurface for Surface {
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
         match self {
-            Surface::Plane(p) => p.try_into_homogeneous_bspline_surface(),
-            Surface::BsplineSurface(b) => b.try_into_homogeneous_bspline_surface(),
-            Surface::NurbsSurface(n) => n.try_into_homogeneous_bspline_surface(),
-            Surface::RevolutionSurface(r) => r.try_into_homogeneous_bspline_surface(),
-            Surface::TsplineSurface(_) => None,
+            Self::Plane(p) => p.try_into_homogeneous_bspline_surface(),
+            Self::BsplineSurface(b) => b.try_into_homogeneous_bspline_surface(),
+            Self::NurbsSurface(n) => n.try_into_homogeneous_bspline_surface(),
+            Self::Revolution(r) => r.try_into_homogeneous_bspline_surface(),
+            Self::Tspline(_) => None,
             // The SAME call the STEP loader used to make eagerly, on the same
             // `Processor<_, Matrix4>`: the net the boolean's homogeneous path
             // prepares is byte-identical to the one it saw before this
             // variant existed. Only WHEN it is built has moved.
-            Surface::SphericalSurface(s) => s.try_into_homogeneous_bspline_surface(),
-            Surface::ToroidalSurface(t) => t.try_into_homogeneous_bspline_surface(),
+            Self::Sphere(s) => s.try_into_homogeneous_bspline_surface(),
+            Self::Torus(t) => t.try_into_homogeneous_bspline_surface(),
         }
     }
 
@@ -603,23 +465,13 @@ impl TryIntoHomogeneousBsplineSurface for Surface {
         parameter_range: Option<SurfaceParameterRectangle>,
     ) -> Option<HomogeneousSurfaceConversion> {
         match self {
-            Surface::Plane(p) => p.try_into_homogeneous_bspline_surface_over(parameter_range),
-            Surface::BsplineSurface(b) => {
-                b.try_into_homogeneous_bspline_surface_over(parameter_range)
-            }
-            Surface::NurbsSurface(n) => {
-                n.try_into_homogeneous_bspline_surface_over(parameter_range)
-            }
-            Surface::RevolutionSurface(r) => {
-                r.try_into_homogeneous_bspline_surface_over(parameter_range)
-            }
-            Surface::TsplineSurface(_) => None,
-            Surface::SphericalSurface(s) => {
-                s.try_into_homogeneous_bspline_surface_over(parameter_range)
-            }
-            Surface::ToroidalSurface(t) => {
-                t.try_into_homogeneous_bspline_surface_over(parameter_range)
-            }
+            Self::Plane(p) => p.try_into_homogeneous_bspline_surface_over(parameter_range),
+            Self::BsplineSurface(b) => b.try_into_homogeneous_bspline_surface_over(parameter_range),
+            Self::NurbsSurface(n) => n.try_into_homogeneous_bspline_surface_over(parameter_range),
+            Self::Revolution(r) => r.try_into_homogeneous_bspline_surface_over(parameter_range),
+            Self::Tspline(_) => None,
+            Self::Sphere(s) => s.try_into_homogeneous_bspline_surface_over(parameter_range),
+            Self::Torus(t) => t.try_into_homogeneous_bspline_surface_over(parameter_range),
         }
     }
 }
@@ -627,17 +479,17 @@ impl TryIntoHomogeneousBsplineSurface for Surface {
 impl SupportsExactPatchDomains for Surface {
     fn supports_exact_patch_domains(&self) -> bool {
         match self {
-            Surface::Plane(p) => p.supports_exact_patch_domains(),
-            Surface::BsplineSurface(b) => b.supports_exact_patch_domains(),
-            Surface::NurbsSurface(n) => n.supports_exact_patch_domains(),
-            Surface::RevolutionSurface(r) => r.supports_exact_patch_domains(),
-            Surface::TsplineSurface(t) => t.supports_exact_patch_domains(),
+            Self::Plane(p) => p.supports_exact_patch_domains(),
+            Self::BsplineSurface(b) => b.supports_exact_patch_domains(),
+            Self::NurbsSurface(n) => n.supports_exact_patch_domains(),
+            Self::Revolution(r) => r.supports_exact_patch_domains(),
+            Self::Tspline(t) => t.supports_exact_patch_domains(),
             // `false`, where the rational net answered `true`. This is the same
             // flip T22 made when cylinders and cones moved onto the analytic
             // revolution variant, and for the same reason: the patch domain of
             // an analytic surface is not a knot span.
-            Surface::SphericalSurface(s) => s.supports_exact_patch_domains(),
-            Surface::ToroidalSurface(t) => t.supports_exact_patch_domains(),
+            Self::Sphere(s) => s.supports_exact_patch_domains(),
+            Self::Torus(t) => t.supports_exact_patch_domains(),
         }
     }
 }
@@ -645,19 +497,19 @@ impl SupportsExactPatchDomains for Surface {
 impl TryIntoAnalyticSurfaceKind for Surface {
     fn try_into_analytic_surface_kind(&self) -> Option<AnalyticSurfaceKind> {
         match self {
-            Surface::Plane(p) => p.try_into_analytic_surface_kind(),
-            Surface::BsplineSurface(b) => b.try_into_analytic_surface_kind(),
-            Surface::NurbsSurface(n) => n.try_into_analytic_surface_kind(),
-            Surface::RevolutionSurface(r) => r.try_into_analytic_surface_kind(),
-            Surface::TsplineSurface(t) => t.try_into_analytic_surface_kind(),
+            Self::Plane(p) => p.try_into_analytic_surface_kind(),
+            Self::BsplineSurface(b) => b.try_into_analytic_surface_kind(),
+            Self::NurbsSurface(n) => n.try_into_analytic_surface_kind(),
+            Self::Revolution(r) => r.try_into_analytic_surface_kind(),
+            Self::Tspline(t) => t.try_into_analytic_surface_kind(),
             // `None`, which is exactly what these faces answered as rational
             // nets: `NurbsSurface::try_into_analytic_surface_kind` only ever
             // recognises a plane or a homogeneous extrusion, and a sphere net
             // is neither. Teaching it `SphericalRevolution` would be a
             // BOOLEAN change, and this track is the tessellation one --
             // recorded as follow-on work instead of smuggled in here.
-            Surface::SphericalSurface(s) => s.try_into_analytic_surface_kind(),
-            Surface::ToroidalSurface(t) => t.try_into_analytic_surface_kind(),
+            Self::Sphere(s) => s.try_into_analytic_surface_kind(),
+            Self::Torus(t) => t.try_into_analytic_surface_kind(),
         }
     }
 }
@@ -672,25 +524,100 @@ impl ToSameGeometry<Surface> for HomotopySurface<Curve, Curve> {
 
 impl ToSameGeometry<Surface> for ExtrusionSurface<Curve, Vector3> {
     fn to_same_geometry(&self) -> Surface {
-        let (curve0, vector) = (self.entity_curve(), self.extruding_vector());
-        let trsl = Matrix4::from_translation(vector);
-        let curve1 = self.entity_curve().transformed(trsl);
-        match (curve0, curve1) {
-            (Curve::Line(line), Curve::Line(_)) => {
-                Plane::new(line.0, line.1, line.0 + vector).into()
+        let vector = self.extruding_vector();
+        let translation = Matrix4::from_translation(vector);
+        match self.entity_curve() {
+            Curve::Line(line) => Plane::new(line.0, line.1, line.0 + vector).into(),
+            Curve::BsplineCurve(curve0) => {
+                BsplineSurface::homotopy(curve0.clone(), curve0.transformed(translation)).into()
             }
-            (Curve::BsplineCurve(curve0), Curve::BsplineCurve(curve1)) => {
-                BsplineSurface::homotopy(curve0.clone(), curve1.clone()).into()
-            }
-            (Curve::NurbsCurve(curve0), Curve::NurbsCurve(curve1)) => {
+            Curve::NurbsCurve(curve0) => {
+                let curve1 = curve0.transformed(translation);
                 NurbsSurface::new(BsplineSurface::homotopy(
                     curve0.non_rationalized().clone(),
                     curve1.non_rationalized().clone(),
                 ))
                 .into()
             }
-            (Curve::IntersectionCurve(_), Curve::IntersectionCurve(_)) => unimplemented!(),
-            _ => unreachable!(),
+            Curve::ParameterCurve(_) | Curve::Intersection(_) => {
+                // Dynamic modeling curves normalize through their 3-D leader/image.
+                // This is the same representation boundary already used by the
+                // generic homotopy conversion above, and keeps the conversion total
+                // without degrading the analytic/spline variants handled above.
+                let curve0 = self.entity_curve().lift_up();
+                let mut curve1 = curve0.clone();
+                curve1
+                    .control_points_mut()
+                    .for_each(|point| *point = translation * *point);
+                NurbsSurface::new(BsplineSurface::homotopy(curve0, curve1)).into()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod revolution_presearch_tests {
+    use super::*;
+    use crate::{EuclideanSpace, Line};
+
+    #[test]
+    fn separable_presearch_uses_exact_generic_grid_nodes() {
+        let profile = Curve::Line(Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)));
+        let surface = Processor::new(RevolutionSurface::by_revolution(
+            profile,
+            Point3::origin(),
+            Vector3::unit_z(),
+        ));
+        let ranges = ((-10.0, -3.0), (0.0, 0.0));
+        let ratio = 4.0 / 5.0;
+        let target_u = (-3.0f64).mul_add(ratio, -10.0 * (1.0 - ratio));
+        let point = surface.evaluate(target_u, 0.0);
+
+        let generic = algo::surface::presearch(&surface, point, ranges, 5);
+        let separable = revolution_processor_presearch_separable(&surface, point, ranges, 5);
+
+        assert_eq!(separable.0.to_bits(), generic.0.to_bits());
+        assert_eq!(separable.1.to_bits(), generic.1.to_bits());
+    }
+}
+
+#[cfg(test)]
+mod extrusion_same_geometry_tests {
+    use super::*;
+    use crate::{Line, SurfaceCurve, TOLERANCE};
+
+    fn plane_surface() -> Surface {
+        Surface::Plane(Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ))
+    }
+
+    #[test]
+    fn line_extrusion_stays_analytic_plane() {
+        let curve = Curve::Line(Line(Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 1.0, 0.0)));
+        let extrusion = ExtrusionSurface::by_extrusion(curve, Vector3::new(0.0, 0.0, 3.0));
+        assert!(matches!(extrusion.to_same_geometry(), Surface::Plane(_)));
+    }
+
+    #[test]
+    fn intersection_curve_extrusion_is_total_and_preserves_geometry() {
+        let leader = Curve::Line(Line(Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 1.0, 0.0)));
+        let curve = Curve::Intersection(SurfaceCurve::with_boundaries(
+            Box::new(plane_surface()),
+            Box::new(plane_surface()),
+            Box::new(leader),
+            None,
+            None,
+        ));
+        let extrusion = ExtrusionSurface::by_extrusion(curve, Vector3::new(0.0, 0.0, 3.0));
+        let converted: Surface = extrusion.to_same_geometry();
+
+        for (u, v) in [(0.0, 0.0), (0.25, 0.75), (0.8, 0.4), (1.0, 1.0)] {
+            let expected = extrusion.evaluate(u, v);
+            let actual = converted.evaluate(u, v);
+            assert!((actual - expected).magnitude() < TOLERANCE);
         }
     }
 }

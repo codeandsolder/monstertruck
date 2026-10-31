@@ -41,7 +41,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// WHAT was lost. One variant per level of the compressed-shell structure, so a
+/// WHAT was lost. One variant per level of the compressed-shell structure.
+///
+/// A
 /// caller can tell "I lost a whole face" from "I lost one boundary of a face I
 /// kept" -- the two have very different consequences downstream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -99,7 +101,8 @@ impl LossCategory {
     ];
 
     /// Lower-case singular noun, for messages.
-    pub fn noun(self) -> &'static str {
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
         match self {
             Self::Face => "face",
             Self::Wire => "wire",
@@ -113,7 +116,8 @@ impl LossCategory {
 
     /// Lower-case plural noun. Spelled out rather than `noun() + "s"` because
     /// "vertexs" in a diagnostic reads as a bug in the diagnostic.
-    pub fn plural(self) -> &'static str {
+    #[must_use]
+    pub const fn plural(self) -> &'static str {
         match self {
             Self::Face => "faces",
             Self::Wire => "wires",
@@ -126,8 +130,9 @@ impl LossCategory {
     }
 }
 
-/// WHY it was lost. Deliberately finer-grained than the code paths that raise
-/// them, because the interesting distinction is not "which `?` fired" but
+/// WHY it was lost.
+///
+/// Deliberately finer-grained than the code paths that raise them, because the interesting distinction is not "which `?` fired" but
 /// "is this a defect, a refusal, or a legitimate degeneracy".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LossReason {
@@ -166,6 +171,12 @@ pub enum LossReason {
     EdgeUseUnresolved,
     /// An `EDGE_CURVE`'s children could not be resolved out of the table.
     EdgeUnresolved,
+    /// An `EDGE_CURVE` is present and its endpoints resolve, but the required
+    /// `edge_geometry` field is `$`. Some exporters emit this malformed record
+    /// for surface/surface intersection edges; retaining the edge entity lets a
+    /// later geometry-aware repair attempt reconstruction instead of losing its
+    /// topology during deserialization.
+    EdgeGeometryMissing,
     /// An `EDGE_CURVE` resolved but its geometry refused conversion to `Curve3D`.
     EdgeCurveRefused,
     /// An `EDGE_CURVE`'s start or end vertex is not a reference, or its vertex was
@@ -201,7 +212,8 @@ pub enum LossReason {
 
 impl LossReason {
     /// One-line explanation, for messages.
-    pub fn description(self) -> &'static str {
+    #[must_use]
+    pub const fn description(self) -> &'static str {
         match self {
             Self::FaceUnresolved => "the shell's face reference resolves to no face record",
             Self::SurfaceUnresolved => "the face's surface record could not be resolved",
@@ -215,6 +227,7 @@ impl LossReason {
             }
             Self::EdgeUseUnresolved => "the wire's edge reference has no kept edge",
             Self::EdgeUnresolved => "the edge's children could not be resolved",
+            Self::EdgeGeometryMissing => "the EDGE_CURVE has no edge_geometry",
             Self::EdgeCurveRefused => "the edge's geometry refused conversion to a curve",
             Self::EdgeEndpointUnresolved => "the edge's start or end vertex has no kept vertex",
             Self::VertexUnresolved => "the vertex's children could not be resolved",
@@ -265,7 +278,8 @@ pub struct CategoryCount {
 
 impl CategoryCount {
     /// `listed - kept`, saturating (they cannot legitimately invert).
-    pub fn lost(&self) -> usize { self.listed.saturating_sub(self.kept) }
+    #[must_use]
+    pub const fn lost(&self) -> usize { self.listed.saturating_sub(self.kept) }
 }
 
 /// What one conversion kept and lost, per category, with reasons.
@@ -288,20 +302,24 @@ pub struct ShellLoadReport {
 
 impl ShellLoadReport {
     /// Listed/kept for one category.
+    #[must_use]
     pub fn count(&self, category: LossCategory) -> CategoryCount {
         self.counts.get(&category).copied().unwrap_or_default()
     }
 
     /// How many items of `category` were lost.
+    #[must_use]
     pub fn lost(&self, category: LossCategory) -> usize { self.count(category).lost() }
 
     /// How many items were lost across every category.
+    #[must_use]
     pub fn total_lost(&self) -> usize { LossCategory::ALL.iter().map(|c| self.lost(*c)).sum() }
 
     /// Did this conversion keep every single thing the STEP data listed?
     ///
     /// Note what this does NOT claim: a lossless conversion can still be
     /// geometrically wrong. It claims only that nothing silently vanished.
+    #[must_use]
     pub fn is_lossless(&self) -> bool { self.total_lost() == 0 }
 
     /// Every (category, reason) that fired, in [`LossCategory::ALL`] order then
@@ -313,6 +331,7 @@ impl ShellLoadReport {
     }
 
     /// The tally for one (category, reason) pair; zeroed when it never fired.
+    #[must_use]
     pub fn tally(&self, category: LossCategory, reason: LossReason) -> LossTally {
         self.reasons
             .get(&(category, reason))
@@ -321,6 +340,7 @@ impl ShellLoadReport {
     }
 
     /// How many items were lost for `reason`, across all categories.
+    #[must_use]
     pub fn lost_for(&self, reason: LossReason) -> usize {
         self.reasons
             .iter()
@@ -341,7 +361,7 @@ impl ShellLoadReport {
             let entry = self.reasons.entry(*key).or_default();
             if entry.count == 0 {
                 entry.first_id = tally.first_id;
-                entry.first_detail = tally.first_detail.clone();
+                entry.first_detail.clone_from(&tally.first_detail);
             }
             entry.count += tally.count;
         }
@@ -352,6 +372,9 @@ impl ShellLoadReport {
     /// **Opt-in on purpose.** Four in-repo fixtures lose wires today and are
     /// RIGHT to (see [`LossReason::DegenerateVertexLoop`]), so making this the
     /// default would refuse files the kernel handles correctly.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying STEP conversion fails.
     pub fn require_lossless(&self) -> Result<(), crate::step::load::LoadError> {
         if self.is_lossless() {
             Ok(())
@@ -408,7 +431,7 @@ impl fmt::Display for ShellLoadReport {
                 if c != category {
                     continue;
                 }
-                write!(f, " [{:?} x{}", reason, tally.count)?;
+                write!(f, " [{reason:?} x{}", tally.count)?;
                 if let Some(id) = tally.first_id {
                     write!(f, " e.g. #{id}")?;
                 }
@@ -450,15 +473,19 @@ pub struct EntityLoadReport {
 
 impl EntityLoadReport {
     /// Did the table-building pass swallow nothing at all?
+    #[must_use]
     pub fn is_empty(&self) -> bool { self.total() == 0 }
 
     /// How many records were swallowed, both kinds together.
+    #[must_use]
     pub fn total(&self) -> usize { self.total_refused() + self.total_shape_unexpected() }
 
     /// How many records had a typed `Deserialize` refusal.
+    #[must_use]
     pub fn total_refused(&self) -> usize { self.refused.values().map(|t| t.count).sum() }
 
     /// How many records vanished in an arity-guarded arm with no `else`.
+    #[must_use]
     pub fn total_shape_unexpected(&self) -> usize {
         self.shape_unexpected.values().map(|t| t.count).sum()
     }
@@ -481,6 +508,7 @@ impl EntityLoadReport {
     }
 
     /// How many records of exactly this entity type were swallowed, either way.
+    #[must_use]
     pub fn swallowed_of(&self, entity_type: &str) -> usize {
         self.refused.get(entity_type).map_or(0, |t| t.count)
             + self
@@ -491,6 +519,9 @@ impl EntityLoadReport {
 
     /// Turn any swallow into a typed error, for callers that want strictness.
     /// Opt-in; the default load path stays `Ok`.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying STEP conversion fails.
     pub fn require_empty(&self) -> Result<(), crate::step::load::LoadError> {
         if self.is_empty() {
             Ok(())

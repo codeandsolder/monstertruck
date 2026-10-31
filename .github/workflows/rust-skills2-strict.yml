@@ -1,0 +1,20 @@
+name: Strict Rust
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  strict-rust:
+    uses: codeandsolder/rust-skills2/.github/workflows/strict-rust.yml@9e239a06103a5df7ee5cdecc7937c244e877c182 # main
+    with:
+      cargo-args: "--workspace --all-targets"
+      checkout-submodules: "true"

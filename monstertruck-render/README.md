@@ -10,7 +10,7 @@ Shape and polygon mesh visualization built on `monstertruck-gpu`.
 use monstertruck_gpu::*;
 use monstertruck_render::*;
 
-let handler = pollster::block_on(DeviceHandler::default_device());
+let handler = pollster::block_on(DeviceHandler::default_device())?;
 let mut scene = Scene::new(handler, &Default::default());
 
 // Create render instances from a mesh
@@ -25,7 +25,7 @@ let instance: PolygonInstance = creator.create_instance(
         },
         ..Default::default()
     },
-);
+)?;
 scene.add_object(&instance);
 ```
 

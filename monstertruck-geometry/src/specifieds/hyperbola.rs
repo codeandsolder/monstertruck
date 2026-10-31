@@ -1,9 +1,19 @@
-use super::*;
+#![expect(
+    clippy::many_single_char_names,
+    reason = "a through d are polynomial coefficients in the analytic hyperbola solve"
+)]
+
+use super::{
+    CurveParameter, EuclideanSpace, HashGen, MetricSpace, Origin, ParameterDivision1D,
+    ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
+    SearchParameterHint1D, TOLERANCE, UnitHyperbola, Vector2, Vector3, algo, solver,
+};
 
 impl<P> UnitHyperbola<P> {
     /// constructor
     #[inline]
-    pub const fn new() -> UnitHyperbola<P> { UnitHyperbola(std::marker::PhantomData) }
+    #[must_use]
+    pub const fn new() -> Self { Self(std::marker::PhantomData) }
 }
 
 impl ParametricCurve for UnitHyperbola<Point2> {
@@ -78,7 +88,7 @@ impl_v2_hyperbola!(Point3, Vector3);
 
 macro_rules! impl_v2_hyperbola_search {
     ($point:ty) => {
-        impl v2::SearchNearestParameter<v2::D1<f64>> for UnitHyperbola<$point> {
+        impl v2::SearchNearestParameter<v2::CurveParameter<f64>> for UnitHyperbola<$point> {
             type Point = $point;
             #[inline]
             fn search_nearest_parameter<H: Into<v2::SearchParameterHint1D<f64>>>(
@@ -87,11 +97,13 @@ macro_rules! impl_v2_hyperbola_search {
                 _: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchNearestParameter::<D1>::search_nearest_parameter(self, pt, None, 0)
+                SearchNearestParameter::<CurveParameter>::search_nearest_parameter(
+                    self, pt, None, 0,
+                )
             }
         }
 
-        impl v2::SearchParameter<v2::D1<f64>> for UnitHyperbola<$point> {
+        impl v2::SearchParameter<v2::CurveParameter<f64>> for UnitHyperbola<$point> {
             type Point = $point;
             #[inline]
             fn search_parameter<H: Into<v2::SearchParameterHint1D<f64>>>(
@@ -100,7 +112,7 @@ macro_rules! impl_v2_hyperbola_search {
                 _: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchParameter::<D1>::search_parameter(self, pt, None, 0)
+                SearchParameter::<CurveParameter>::search_parameter(self, pt, None, 0)
             }
         }
     };
@@ -111,7 +123,7 @@ impl_v2_hyperbola_search!(Point3);
 
 impl<P> ParameterDivision1D for UnitHyperbola<P>
 where
-    UnitHyperbola<P>: ParametricCurve<Point = P>,
+    Self: ParametricCurve<Point = P>,
     P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     type Point = P;
@@ -129,20 +141,15 @@ impl SearchNearestParameter<CurveParameter> for UnitHyperbola<Point2> {
         _: usize,
     ) -> Option<f64> {
         let a = -p.y;
-        let b = (p.y * p.y - p.x * p.x) / 4.0 + 1.0;
+        let b = p.x.mul_add(-p.x, p.y * p.y) / 4.0 + 1.0;
         let c = -p.y;
         let d = p.y * p.y / 4.0;
         let y = solver::solve_quartic(a, b, c, d)
             .into_iter()
-            .filter_map(|z| match z.im.so_small() {
-                true => Some(z.re),
-                false => None,
-            })
-            // SAFETY: distances are non-negative finite `f64`, so `partial_cmp` always returns `Some`.
+            .filter_map(|z| if z.im.so_small() { Some(z.re) } else { None })
             .min_by(|s, t| {
-                p.distance2(self.subs(*s))
-                    .partial_cmp(&p.distance2(self.subs(*t)))
-                    .unwrap()
+                p.distance2(self.evaluate(*s))
+                    .total_cmp(&p.distance2(self.evaluate(*t)))
             })?;
         Some(f64::asinh(y))
     }
@@ -154,13 +161,9 @@ impl SearchNearestParameter<CurveParameter> for UnitHyperbola<Point3> {
         &self,
         p: Point3,
         _: H,
-        _trials: usize,
+        trials: usize,
     ) -> Option<f64> {
-        UnitHyperbola::<Point2>::new().search_nearest_parameter(
-            Point2::new(p.x, p.y),
-            None,
-            _trials,
-        )
+        UnitHyperbola::<Point2>::new().search_nearest_parameter(Point2::new(p.x, p.y), None, trials)
     }
 }
 
@@ -173,7 +176,7 @@ impl SearchParameter<CurveParameter> for UnitHyperbola<Point2> {
         _: usize,
     ) -> Option<f64> {
         // Verify that p lies on the unit hyperbola (cosh(t), sinh(t)).
-        // The naive check `p.near(&self.subs(asinh(p.y)))` fails for large
+        // The naive check `p.near(&self.evaluate(asinh(p.y)))` fails for large
         // |t| because the absolute difference between two independently
         // computed cosh values can vastly exceed the fixed tolerance, even
         // when the relative error is at machine-epsilon level.

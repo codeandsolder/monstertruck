@@ -9,14 +9,14 @@ fn nurbs_circle() {
         Vector3::new(1.0, 1.0, 1.0),
         Vector3::new(0.0, 2.0, 2.0),
     ];
-    let curve = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    let curve = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
 
     const N: usize = 10;
     for i in 0..=N {
         let t = i as f64 / N as f64;
-        let p = curve.subs(t).to_vec();
+        let p = curve.evaluate(t).to_vec();
         assert_near!(p.magnitude(), 1.0);
-        let der = curve.der(t);
+        let der = curve.derivative(t);
         assert!(p.dot(der).so_small());
     }
 }
@@ -38,11 +38,11 @@ proptest! {
             .zip(weights)
             .map(|(&p, w)| Vector4::new(p[0], p[1], p[2], w))
             .collect::<Vec<_>>();
-        let bsp = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+        let bsp = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
 
         const EPS: f64 = 1.0e-4;
-        let der0 = bsp.der_n(n + 1, t);
-        let der1 = (bsp.der_n(n, t + EPS) - bsp.der_n(n, t - EPS)) / (2.0 * EPS);
+        let der0 = bsp.derivative_n(n + 1, t);
+        let der1 = (bsp.derivative_n(n, t + EPS) - bsp.derivative_n(n, t - EPS)) / (2.0 * EPS);
         prop_assert!((der0 - der1).magnitude() <= 0.01 * der0.magnitude());
     }
 
@@ -62,11 +62,11 @@ proptest! {
             .zip(weights)
             .map(|(&p, w)| Vector4::new(p[0], p[1], p[2], w))
             .collect::<Vec<_>>();
-        let bsp = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+        let bsp = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
 
-        let ders0 = (0..=n).map(|i| bsp.der_n(i, t)).collect::<Vec<_>>();
+        let ders0 = (0..=n).map(|i| bsp.derivative_n(i, t)).collect::<Vec<_>>();
 
-        let ders1 =  bsp.ders(n, t);
+        let ders1 =  bsp.derivatives(n, t);
 
         prop_assert_eq!(ders0.len(), ders1.len());
 
@@ -84,7 +84,7 @@ fn exec_concat_positive_test(
     t: f64,
     w: f64,
 ) -> std::result::Result<(), TestCaseError> {
-    let mut part0 = NurbsCurve::new(BsplineCurve::new(
+    let mut part0 = NurbsCurve::new(BsplineCurve::new_unchecked(
         KnotVector::uniform_knot(4, 4),
         v0.into_iter()
             .zip(v1)
@@ -94,7 +94,7 @@ fn exec_concat_positive_test(
     let mut part1 = part0.cut(t);
     part1.transform_control_points(|vec| *vec *= w);
     prop_assert_near!(part0.back(), part1.front());
-    concat_random_test(&part0, &part1, 10);
+    concat_random_test(&part0, &part1, 10).expect("curves concatenate");
     Ok(())
 }
 
@@ -124,19 +124,19 @@ fn test_parameter_division() {
         Vector4::new(0.0, 0.0, 2.0, 2.0),
         Vector4::new(1.0, 1.0, 1.0, 1.0),
     ];
-    let curve = NurbsCurve::new(BsplineCurve::new(knot_vec, control_points));
+    let curve = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
     let tol = 0.01;
     let (div, pts) = curve.parameter_division(curve.range_tuple(), tol * 0.5);
     let knot_vec = curve.knot_vector();
     assert_eq!(knot_vec[0], div[0]);
     assert_eq!(knot_vec.range_length(), div.last().unwrap() - div[0]);
     for i in 1..div.len() {
-        let pt0 = curve.subs(div[i - 1]);
+        let pt0 = curve.evaluate(div[i - 1]);
         assert_eq!(pt0, pts[i - 1]);
-        let pt1 = curve.subs(div[i]);
+        let pt1 = curve.evaluate(div[i]);
         assert_eq!(pt1, pts[i]);
         let value_middle = pt0.midpoint(pt1);
-        let param_middle = curve.subs((div[i - 1] + div[i]) / 2.0);
+        let param_middle = curve.evaluate(f64::midpoint(div[i - 1], div[i]));
         let dist = value_middle.distance(param_middle);
         assert!(dist < tol, "large distance: {dist}");
     }

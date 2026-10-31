@@ -3,7 +3,7 @@
 //! # A curve is converted FOR an edge, never on its own
 //!
 //! monstertruck's [`CompressedEdge`] holds a curve whose own bounded range runs
-//! from the edge's start vertex to its end vertex: `Edge::try_new` checks the
+//! from the edge's start vertex to its end vertex: `Edge::new` checks the
 //! curve's endpoints against the vertices it is given. The intermediate
 //! representation instead stores an UNBOUNDED carrier plus the edge's parameter
 //! interval on it -- a full circle and `[t0, t1]`, an infinite line and two
@@ -193,7 +193,7 @@ fn nurbs(curve: &IrNurbsCurve, interval: Interval, context: &Context<'_>) -> Res
     let knots = KnotVector::from(curve.knots.clone());
     let mut converted = match &curve.weights {
         None => Curve::BsplineCurve(built(
-            BsplineCurve::try_new(
+            BsplineCurve::new(
                 knots,
                 curve.control_points.iter().map(frame::point).collect(),
             ),
@@ -202,7 +202,7 @@ fn nurbs(curve: &IrNurbsCurve, interval: Interval, context: &Context<'_>) -> Res
         Some(weights) => {
             expect_length(weights.len(), count, "NURBS curve weights", context)?;
             Curve::NurbsCurve(NurbsCurve::new(built(
-                BsplineCurve::try_new(
+                BsplineCurve::new(
                     knots,
                     curve
                         .control_points
@@ -267,7 +267,7 @@ fn restrict(curve: &mut Curve, start: f64, end: f64, context: &Context<'_>) -> R
         // The edge runs against the carrier's parameter direction. Inverting here
         // -- rather than leaving it to the coedge's sense -- keeps the invariant
         // this module promises: the returned curve runs start vertex to end
-        // vertex, so `Edge::try_new` can check it.
+        // vertex, so `Edge::new` can check it.
         monstertruck_modeling::Invertible::invert(curve);
     }
     Ok(())

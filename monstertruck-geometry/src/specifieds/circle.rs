@@ -1,9 +1,16 @@
-use super::*;
+use super::{
+    Bound, BoundedCurve, BsplineCurve, CurveParameter, EuclideanSpace, InnerSpace, KnotVector,
+    Matrix2, Matrix3, NurbsCurve, Origin, ParameterDivision1D, ParameterRange, ParametricCurve,
+    Point2, Point3, Rad, SearchNearestParameter, SearchParameter, SearchParameterHint1D, TOLERANCE,
+    ToSameGeometry, Tolerance, TrimmedCurve, UnitCircle, Vector2, Vector3, Vector4,
+    nonpositive_tolerance,
+};
 use std::f64::consts::TAU;
 
 impl<P> UnitCircle<P> {
     /// constructor
     #[inline]
+    #[must_use]
     pub const fn new() -> Self { Self(std::marker::PhantomData) }
 }
 
@@ -29,7 +36,9 @@ impl ParametricCurve for UnitCircle<Point2> {
     fn parameter_range(&self) -> ParameterRange { (Bound::Included(0.0), Bound::Excluded(TAU)) }
 }
 
-impl BoundedCurve for UnitCircle<Point2> {}
+impl BoundedCurve for UnitCircle<Point2> {
+    fn range_tuple(&self) -> (f64, f64) { (0.0, TAU) }
+}
 
 impl ParametricCurve for UnitCircle<Point3> {
     type Point = Point3;
@@ -55,7 +64,9 @@ impl ParametricCurve for UnitCircle<Point3> {
     fn parameter_range(&self) -> ParameterRange { (Bound::Included(0.0), Bound::Excluded(TAU)) }
 }
 
-impl BoundedCurve for UnitCircle<Point3> {}
+impl BoundedCurve for UnitCircle<Point3> {
+    fn range_tuple(&self) -> (f64, f64) { (0.0, TAU) }
+}
 
 // -- v2 scalar-generic impls ------------------------------------------------
 
@@ -65,7 +76,7 @@ use monstertruck_traits::v2;
 /// hardcoded `SearchParameter` impls. The two enums are shaped identically
 /// but unrelated, so there is no blanket `From`; this rebuilds it by hand for
 /// the `f64` scalar so the v2 search forwards the hint instead of dropping it.
-fn v2_hint_to_hint(hint: v2::SearchParameterHint1D<f64>) -> SearchParameterHint1D {
+const fn v2_hint_to_hint(hint: v2::SearchParameterHint1D<f64>) -> SearchParameterHint1D {
     match hint {
         v2::SearchParameterHint1D::Parameter(t) => SearchParameterHint1D::Parameter(t),
         v2::SearchParameterHint1D::Range(t0, t1) => SearchParameterHint1D::Range(t0, t1),
@@ -110,7 +121,7 @@ impl_v2_circle!(Point3, Vector3);
 
 macro_rules! impl_v2_circle_search {
     ($point:ty) => {
-        impl v2::SearchNearestParameter<v2::D1<f64>> for UnitCircle<$point> {
+        impl v2::SearchNearestParameter<v2::CurveParameter<f64>> for UnitCircle<$point> {
             type Point = $point;
             #[inline]
             fn search_nearest_parameter<H: Into<v2::SearchParameterHint1D<f64>>>(
@@ -119,7 +130,7 @@ macro_rules! impl_v2_circle_search {
                 hint: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchNearestParameter::<D1>::search_nearest_parameter(
+                SearchNearestParameter::<CurveParameter>::search_nearest_parameter(
                     self,
                     pt,
                     v2_hint_to_hint(hint.into()),
@@ -128,7 +139,7 @@ macro_rules! impl_v2_circle_search {
             }
         }
 
-        impl v2::SearchParameter<v2::D1<f64>> for UnitCircle<$point> {
+        impl v2::SearchParameter<v2::CurveParameter<f64>> for UnitCircle<$point> {
             type Point = $point;
             #[inline]
             fn search_parameter<H: Into<v2::SearchParameterHint1D<f64>>>(
@@ -137,7 +148,12 @@ macro_rules! impl_v2_circle_search {
                 hint: H,
                 _: usize,
             ) -> Option<f64> {
-                SearchParameter::<D1>::search_parameter(self, pt, v2_hint_to_hint(hint.into()), 0)
+                SearchParameter::<CurveParameter>::search_parameter(
+                    self,
+                    pt,
+                    v2_hint_to_hint(hint.into()),
+                    0,
+                )
             }
         }
     };
@@ -147,22 +163,34 @@ impl_v2_circle_search!(Point2);
 impl_v2_circle_search!(Point3);
 
 impl<P> ParameterDivision1D for UnitCircle<P>
-where UnitCircle<P>: ParametricCurve<Point = P>
+where Self: ParametricCurve<Point = P>
 {
     type Point = P;
-    fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<P>) {
-        nonpositive_tolerance!(tol);
+
+    fn try_parameter_division(&self, range: (f64, f64), tol: f64) -> Option<(Vec<f64>, Vec<P>)> {
+        if tol < TOLERANCE {
+            return None;
+        }
         let tol = f64::min(tol, 0.8);
         let delta = 2.0 * f64::acos(1.0 - tol);
-        let n = 1 + ((range.1 - range.0) / delta) as usize;
-        let params = (0..=n)
+        let segments = crate::strict_segment_count(range.1 - range.0, delta)?;
+        let params = (0..=segments)
             .map(|i| {
-                let t = i as f64 / n as f64;
-                range.0 * (1.0 - t) + range.1 * t
+                let t = crate::usize_to_f64(i) / crate::usize_to_f64(segments);
+                range.1.mul_add(t, range.0 * (1.0 - t))
             })
             .collect::<Vec<_>>();
-        let pts = params.iter().map(|t| self.subs(*t)).collect();
-        (params, pts)
+        let points = params.iter().map(|t| self.evaluate(*t)).collect();
+        Some((params, points))
+    }
+
+    fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<P>) {
+        nonpositive_tolerance!(tol);
+        self.try_parameter_division(range, tol).unwrap_or_else(|| {
+            let params = vec![range.0, range.1];
+            let points = params.iter().map(|t| self.evaluate(*t)).collect();
+            (params, points)
+        })
     }
 }
 
@@ -215,25 +243,28 @@ fn round_theta(theta: f64, hint: SearchParameterHint1D) -> f64 {
             [theta + floor - TAU, theta + floor, theta + floor + TAU]
                 .into_iter()
                 .fold(theta, |nearest, candidate| {
-                    match (candidate - hint).abs() < (nearest - hint).abs() {
-                        true => candidate,
-                        false => nearest,
+                    if (candidate - hint).abs() < (nearest - hint).abs() {
+                        candidate
+                    } else {
+                        nearest
                     }
                 })
         }
         SearchParameterHint1D::Range(hint0, hint1) => {
             let floor = (hint0 / TAU).floor() * TAU;
-            let theta = match theta + floor > hint0 {
-                true => theta + floor,
-                false => theta + floor + TAU,
+            let theta = if theta + floor > hint0 {
+                theta + floor
+            } else {
+                theta + floor + TAU
             };
             if theta < hint1 {
                 return theta;
             }
             let theta0 = theta - TAU;
-            match hint0 - theta0 < theta - hint1 {
-                true => theta0,
-                false => theta,
+            if hint0 - theta0 < theta - hint1 {
+                theta0
+            } else {
+                theta
             }
         }
     }

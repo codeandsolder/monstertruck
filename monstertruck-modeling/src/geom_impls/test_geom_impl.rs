@@ -4,6 +4,7 @@
 //! name is unchanged, so every test keeps its path and its identity.
 
 use super::*;
+use crate::{BoundedCurve, MetricSpace, ParametricCurve, TOLERANCE, Tolerance, prop_assert_near};
 use proptest::*;
 
 fn pole_to_normal(pole: [f64; 2]) -> Vector3 {
@@ -96,7 +97,7 @@ proptest! {
         let p0 = Point3::from(p0);
         let p1 = Point3::from(p1);
         let p2 = Point3::from(p2);
-        let curve = circle_arc_by_three_points(p0, p1, p2);
+        let curve = circle_arc_by_three_points(p0, p1, p2).expect("non-degenerate points");
 
         // The curve `curve` is from `p0` to `p1`.
         prop_assert_near!(curve.front(), p0);
@@ -105,7 +106,7 @@ proptest! {
         // Any point on the curve is on the same side as point `p2`.
         // Check by the circular angle theorem.
         let (t0, t1) = curve.range_tuple();
-        let p3 = curve.subs((1.0 - t) * t0 + t * t1);
+        let p3 = curve.evaluate((1.0 - t) * t0 + t * t1);
         let angle2 = (p2 - p1).angle(p2 - p0);
         let angle3 = (p3 - p1).angle(p3 - p0);
         prop_assert_near!(angle2, angle3);
@@ -189,7 +190,7 @@ proptest! {
 
         // Any point on the curve lies in the same plane perpendicular to the axis.
         let (t0, t1) = curve.range_tuple();
-        let pt2 = curve.subs((1.0 - t) * t0 + t * t1);
+        let pt2 = curve.evaluate((1.0 - t) * t0 + t * t1);
         let vec0 = pt0 - origin;
         let vec2 = pt2 - origin;
         prop_assert_near!(vec0.dot(axis), vec2.dot(axis));
@@ -260,4 +261,40 @@ proptest! {
         let plane = attach_plane(multiple_boundary).unwrap();
         prop_assert_near!(plane.normal(), axis);
     }
+}
+
+#[test]
+fn three_point_arc_rejects_degenerate_geometry() {
+    let p0 = Point3::new(0.0, 0.0, 0.0);
+    let p1 = Point3::new(1.0, 0.0, 0.0);
+    for transit in [
+        Point3::new(2.0, 0.0, 0.0),
+        Point3::new(f64::NAN, 1.0, 0.0),
+        Point3::new(f64::INFINITY, 1.0, 0.0),
+    ] {
+        assert!(matches!(
+            circle_arc_by_three_points(p0, p1, transit),
+            Err(Error::DegenerateCircularArcPoints)
+        ));
+    }
+}
+
+#[test]
+fn circle_arc_three_point_rejects_degenerate_inputs() {
+    let collinear = circle_arc_by_three_points(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(2.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+    );
+    assert!(matches!(collinear, Err(Error::DegenerateCircularArcPoints)));
+
+    let non_finite = circle_arc_by_three_points(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(f64::NAN, 1.0, 0.0),
+    );
+    assert!(matches!(
+        non_finite,
+        Err(Error::DegenerateCircularArcPoints)
+    ));
 }

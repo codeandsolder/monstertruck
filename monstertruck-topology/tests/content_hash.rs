@@ -5,22 +5,22 @@ use monstertruck_topology::*;
 fn make_unit_box() -> Solid<(), (), ()> {
     let v = Vertex::from_points([(); 8]);
     let edge = [
-        Edge::new(&v[0], &v[1], ()),
-        Edge::new(&v[1], &v[2], ()),
-        Edge::new(&v[2], &v[3], ()),
-        Edge::new(&v[3], &v[0], ()),
-        Edge::new(&v[0], &v[4], ()),
-        Edge::new(&v[1], &v[5], ()),
-        Edge::new(&v[2], &v[6], ()),
-        Edge::new(&v[3], &v[7], ()),
-        Edge::new(&v[4], &v[5], ()),
-        Edge::new(&v[5], &v[6], ()),
-        Edge::new(&v[6], &v[7], ()),
-        Edge::new(&v[7], &v[4], ()),
+        Edge::new_unchecked(&v[0], &v[1], ()),
+        Edge::new_unchecked(&v[1], &v[2], ()),
+        Edge::new_unchecked(&v[2], &v[3], ()),
+        Edge::new_unchecked(&v[3], &v[0], ()),
+        Edge::new_unchecked(&v[0], &v[4], ()),
+        Edge::new_unchecked(&v[1], &v[5], ()),
+        Edge::new_unchecked(&v[2], &v[6], ()),
+        Edge::new_unchecked(&v[3], &v[7], ()),
+        Edge::new_unchecked(&v[4], &v[5], ()),
+        Edge::new_unchecked(&v[5], &v[6], ()),
+        Edge::new_unchecked(&v[6], &v[7], ()),
+        Edge::new_unchecked(&v[7], &v[4], ()),
     ];
 
-    let face0 = Face::new(vec![wire![&edge[0], &edge[1], &edge[2], &edge[3]]], ());
-    let face1 = Face::new(
+    let face0 = Face::new_unchecked(vec![wire![&edge[0], &edge[1], &edge[2], &edge[3]]], ());
+    let face1 = Face::new_unchecked(
         vec![wire![
             &edge[4],
             &edge[8],
@@ -29,7 +29,7 @@ fn make_unit_box() -> Solid<(), (), ()> {
         ]],
         (),
     );
-    let face2 = Face::new(
+    let face2 = Face::new_unchecked(
         vec![wire![
             &edge[5],
             &edge[9],
@@ -38,7 +38,7 @@ fn make_unit_box() -> Solid<(), (), ()> {
         ]],
         (),
     );
-    let face3 = Face::new(
+    let face3 = Face::new_unchecked(
         vec![wire![
             &edge[6],
             &edge[10],
@@ -47,7 +47,7 @@ fn make_unit_box() -> Solid<(), (), ()> {
         ]],
         (),
     );
-    let face4 = Face::new(
+    let face4 = Face::new_unchecked(
         vec![wire![
             &edge[7],
             &edge[11],
@@ -56,7 +56,7 @@ fn make_unit_box() -> Solid<(), (), ()> {
         ]],
         (),
     );
-    let face5 = Face::new(
+    let face5 = Face::new_unchecked(
         vec![wire![
             &edge[11].inverse(),
             &edge[10].inverse(),
@@ -67,7 +67,7 @@ fn make_unit_box() -> Solid<(), (), ()> {
     );
 
     let shell: Shell<(), (), ()> = vec![face0, face1, face2, face3, face4, face5].into();
-    Solid::new(vec![shell])
+    Solid::new_unchecked(vec![shell])
 }
 
 #[test]

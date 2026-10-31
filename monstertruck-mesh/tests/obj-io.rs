@@ -123,7 +123,8 @@ fn positions_obj_oi_test() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("test mesh is valid");
     let mut gened_obj: Vec<u8> = Vec::new();
     obj::write(&mesh, &mut gened_obj).unwrap();
     let read_mesh = obj::read(AsRef::<[u8]>::as_ref(&gened_obj)).unwrap();
@@ -161,7 +162,8 @@ fn withtexcoords_obj_oi_test() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("test mesh is valid");
     let mut gened_obj: Vec<u8> = Vec::new();
     obj::write(&mesh, &mut gened_obj).unwrap();
     let read_mesh = obj::read(AsRef::<[u8]>::as_ref(&gened_obj)).unwrap();
@@ -199,7 +201,8 @@ fn withnormals_obj_oi_test() {
             ..Default::default()
         },
         faces,
-    );
+    )
+    .expect("test mesh is valid");
     let mut gened_obj: Vec<u8> = Vec::new();
     obj::write(&mesh, &mut gened_obj).unwrap();
     let read_mesh = obj::read(AsRef::<[u8]>::as_ref(&gened_obj)).unwrap();
@@ -268,9 +271,77 @@ fn incomplete_obj_oi_test() {
             normals: cube::NORMALS.to_vec(),
         },
         faces,
-    );
+    )
+    .expect("test mesh is valid");
     let mut gened_obj: Vec<u8> = Vec::new();
     obj::write(&mesh, &mut gened_obj).unwrap();
     let read_mesh = obj::read(AsRef::<[u8]>::as_ref(&gened_obj)).unwrap();
     assert_eq!(mesh, read_mesh);
+}
+
+#[test]
+fn zero_face_index_is_rejected() {
+    let obj = b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 0 2 3\n";
+    assert!(obj::read(obj.as_slice()).is_err());
+}
+
+#[test]
+fn negative_position_indices_are_relative_to_values_defined_so_far() {
+    let obj = b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf -3 -2 -1\n";
+    let mesh = obj::read(obj.as_slice()).unwrap();
+    assert_eq!(
+        mesh.tri_faces(),
+        &[[
+            StandardVertex {
+                pos: 0,
+                uv: None,
+                nor: None
+            },
+            StandardVertex {
+                pos: 1,
+                uv: None,
+                nor: None
+            },
+            StandardVertex {
+                pos: 2,
+                uv: None,
+                nor: None
+            },
+        ]]
+    );
+}
+
+#[test]
+fn negative_uv_and_normal_indices_resolve_independently() {
+    let obj = b"v 0 0 0\nv 1 0 0\nv 0 1 0\n\
+vt 0 0\nvt 1 0\nvt 0 1\n\
+vn 0 0 1\n\
+f -3/-3/-1 -2/-2/-1 -1/-1/-1\n";
+    let mesh = obj::read(obj.as_slice()).unwrap();
+    assert_eq!(
+        mesh.tri_faces(),
+        &[[
+            StandardVertex {
+                pos: 0,
+                uv: Some(0),
+                nor: Some(0)
+            },
+            StandardVertex {
+                pos: 1,
+                uv: Some(1),
+                nor: Some(0)
+            },
+            StandardVertex {
+                pos: 2,
+                uv: Some(2),
+                nor: Some(0)
+            },
+        ]]
+    );
+}
+
+#[test]
+fn malformed_nonempty_face_index_is_rejected() {
+    let obj = b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 nope 3\n";
+    assert!(obj::read(obj.as_slice()).is_err());
 }

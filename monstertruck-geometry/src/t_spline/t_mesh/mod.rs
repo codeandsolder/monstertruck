@@ -1,5 +1,5 @@
 // Re-export parent scope for submodules.
-pub(crate) use super::*;
+pub use super::*;
 
 mod basis;
 mod core;

@@ -1,7 +1,12 @@
 //! Curve behaviour on the STEP curve enums: evaluation, division, cutting,
 //! inversion, endpoint snapping, parameter search and transformation.
 
-use super::*;
+use super::{
+    BoundedCurve, BsplineCurve, Curve3D, CurveParameter, Cut, Instant, IntersectionCurve,
+    Invertible, Matrix4, ParameterDivision1D, ParameterRange, ParametricCurve, Point3,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SnapCurveEndpoints, Surface,
+    SurfaceCurve3D, SurfaceCurveAssociatedGeometry, ToSameGeometry, Transformed, Vector3, env,
+};
 
 impl ParametricCurve for SurfaceCurve3D {
     type Point = Point3;
@@ -20,7 +25,9 @@ impl ParametricCurve for SurfaceCurve3D {
     fn period(&self) -> Option<f64> { self.leader().period() }
 }
 
-impl BoundedCurve for SurfaceCurve3D {}
+impl BoundedCurve for SurfaceCurve3D {
+    fn range_tuple(&self) -> (f64, f64) { self.leader().range_tuple() }
+}
 
 impl ParameterDivision1D for SurfaceCurve3D {
     type Point = Point3;
@@ -64,21 +71,21 @@ impl SnapCurveEndpoints for SurfaceCurve3D {
 impl SnapCurveEndpoints for Curve3D {
     fn snap_endpoints(&mut self, front: Point3, back: Point3) {
         match self {
-            Curve3D::Polyline(curve) => curve.snap_endpoints(front, back),
-            Curve3D::SurfaceCurve(curve) => curve.snap_endpoints(front, back),
-            Curve3D::IntersectionCurve(curve) => curve.snap_endpoints(front, back),
-            Curve3D::Line(_)
-            | Curve3D::Conic(_)
-            | Curve3D::BsplineCurve(_)
-            | Curve3D::ParameterCurve(_)
-            | Curve3D::NurbsCurve(_) => {}
+            Self::Polyline(curve) => curve.snap_endpoints(front, back),
+            Self::SurfaceCurve(curve) => curve.snap_endpoints(front, back),
+            Self::IntersectionCurve(curve) => curve.snap_endpoints(front, back),
+            Self::Line(_)
+            | Self::Conic(_)
+            | Self::BsplineCurve(_)
+            | Self::ParameterCurve(_)
+            | Self::NurbsCurve(_) => {}
         }
     }
 }
 
 impl Invertible for SurfaceCurveAssociatedGeometry {
     fn invert(&mut self) {
-        if let SurfaceCurveAssociatedGeometry::ParameterCurve(curve) = self {
+        if let Self::ParameterCurve(curve) = self {
             curve.invert();
         }
     }
@@ -122,8 +129,8 @@ impl SearchNearestParameter<CurveParameter> for SurfaceCurve3D {
 impl Transformed<Matrix4> for SurfaceCurveAssociatedGeometry {
     fn transform_by(&mut self, trans: Matrix4) {
         match self {
-            SurfaceCurveAssociatedGeometry::ParameterCurve(curve) => curve.transform_by(trans),
-            SurfaceCurveAssociatedGeometry::Surface(surface) => surface.transform_by(trans),
+            Self::ParameterCurve(curve) => curve.transform_by(trans),
+            Self::Surface(surface) => surface.transform_by(trans),
         }
     }
 }
@@ -151,31 +158,29 @@ impl ParameterDivision1D for Curve3D {
         // an unconditional call here breaks browser STEP loading.
         let started = debug_profile.then(Instant::now);
         let result = match self {
-            Curve3D::Line(curve) => curve.try_parameter_division(range, tol),
-            Curve3D::Polyline(curve) => curve.try_parameter_division(range, tol),
-            Curve3D::Conic(curve) => curve.try_parameter_division(range, tol),
-            Curve3D::BsplineCurve(curve) => curve.try_parameter_division(range, tol),
-            Curve3D::ParameterCurve(curve) => curve.try_parameter_division(range, tol),
-            Curve3D::SurfaceCurve(curve) => curve.try_parameter_division(range, tol),
-            Curve3D::IntersectionCurve(curve) => curve.leader().try_parameter_division(range, tol),
-            Curve3D::NurbsCurve(curve) => curve.try_parameter_division(range, tol),
+            Self::Line(curve) => curve.try_parameter_division(range, tol),
+            Self::Polyline(curve) => curve.try_parameter_division(range, tol),
+            Self::Conic(curve) => curve.try_parameter_division(range, tol),
+            Self::BsplineCurve(curve) => curve.try_parameter_division(range, tol),
+            Self::ParameterCurve(curve) => curve.try_parameter_division(range, tol),
+            Self::SurfaceCurve(curve) => curve.try_parameter_division(range, tol),
+            Self::IntersectionCurve(curve) => curve.leader().try_parameter_division(range, tol),
+            Self::NurbsCurve(curve) => curve.try_parameter_division(range, tol),
         };
         if let Some(started) = started {
             let kind = match self {
-                Curve3D::Line(_) => "Line",
-                Curve3D::Polyline(_) => "Polyline",
-                Curve3D::Conic(_) => "Conic",
-                Curve3D::BsplineCurve(_) => "BsplineCurve",
-                Curve3D::ParameterCurve(_) => "StepParameterCurve",
-                Curve3D::SurfaceCurve(_) => "SurfaceCurve",
-                Curve3D::IntersectionCurve(_) => "IntersectionCurve",
-                Curve3D::NurbsCurve(_) => "NurbsCurve",
+                Self::Line(_) => "Line",
+                Self::Polyline(_) => "Polyline",
+                Self::Conic(_) => "Conic",
+                Self::BsplineCurve(_) => "BsplineCurve",
+                Self::ParameterCurve(_) => "StepParameterCurve",
+                Self::SurfaceCurve(_) => "SurfaceCurve",
+                Self::IntersectionCurve(_) => "IntersectionCurve",
+                Self::NurbsCurve(_) => "NurbsCurve",
             };
             eprintln!(
-                "trace bool curve_division kind={} points={} tol={} elapsed_ms={:.3}",
-                kind,
+                "trace bool curve_division kind={kind} points={} tol={tol} elapsed_ms={:.3}",
                 result.as_ref().map_or(0, |(_, points)| points.len()),
-                tol,
                 started.elapsed().as_secs_f64() * 1000.0,
             );
         }
@@ -187,31 +192,29 @@ impl ParameterDivision1D for Curve3D {
         // Same wasm-safety guard as `try_parameter_division` above.
         let started = debug_profile.then(Instant::now);
         let result = match self {
-            Curve3D::Line(curve) => curve.parameter_division(range, tol),
-            Curve3D::Polyline(curve) => curve.parameter_division(range, tol),
-            Curve3D::Conic(curve) => curve.parameter_division(range, tol),
-            Curve3D::BsplineCurve(curve) => curve.parameter_division(range, tol),
-            Curve3D::ParameterCurve(curve) => curve.parameter_division(range, tol),
-            Curve3D::SurfaceCurve(curve) => curve.parameter_division(range, tol),
-            Curve3D::IntersectionCurve(curve) => curve.leader().parameter_division(range, tol),
-            Curve3D::NurbsCurve(curve) => curve.parameter_division(range, tol),
+            Self::Line(curve) => curve.parameter_division(range, tol),
+            Self::Polyline(curve) => curve.parameter_division(range, tol),
+            Self::Conic(curve) => curve.parameter_division(range, tol),
+            Self::BsplineCurve(curve) => curve.parameter_division(range, tol),
+            Self::ParameterCurve(curve) => curve.parameter_division(range, tol),
+            Self::SurfaceCurve(curve) => curve.parameter_division(range, tol),
+            Self::IntersectionCurve(curve) => curve.leader().parameter_division(range, tol),
+            Self::NurbsCurve(curve) => curve.parameter_division(range, tol),
         };
         if let Some(started) = started {
             let kind = match self {
-                Curve3D::Line(_) => "Line",
-                Curve3D::Polyline(_) => "Polyline",
-                Curve3D::Conic(_) => "Conic",
-                Curve3D::BsplineCurve(_) => "BsplineCurve",
-                Curve3D::ParameterCurve(_) => "StepParameterCurve",
-                Curve3D::SurfaceCurve(_) => "SurfaceCurve",
-                Curve3D::IntersectionCurve(_) => "IntersectionCurve",
-                Curve3D::NurbsCurve(_) => "NurbsCurve",
+                Self::Line(_) => "Line",
+                Self::Polyline(_) => "Polyline",
+                Self::Conic(_) => "Conic",
+                Self::BsplineCurve(_) => "BsplineCurve",
+                Self::ParameterCurve(_) => "StepParameterCurve",
+                Self::SurfaceCurve(_) => "SurfaceCurve",
+                Self::IntersectionCurve(_) => "IntersectionCurve",
+                Self::NurbsCurve(_) => "NurbsCurve",
             };
             eprintln!(
-                "trace bool curve_division kind={} points={} tol={} elapsed_ms={:.3}",
-                kind,
+                "trace bool curve_division kind={kind} points={} tol={tol} elapsed_ms={:.3}",
                 result.1.len(),
-                tol,
                 started.elapsed().as_secs_f64() * 1000.0,
             );
         }
@@ -226,10 +229,10 @@ impl ToSameGeometry<Curve3D> for SurfaceCurve3D {
 impl From<IntersectionCurve<BsplineCurve<Point3>, Surface, Surface>> for Curve3D {
     fn from(ic: IntersectionCurve<BsplineCurve<Point3>, Surface, Surface>) -> Self {
         let (surface0, surface1, leader) = ic.destruct();
-        Curve3D::IntersectionCurve(IntersectionCurve::new(
+        Self::IntersectionCurve(IntersectionCurve::new(
             Box::new(surface0),
             Box::new(surface1),
-            Box::new(Curve3D::BsplineCurve(leader)),
+            Box::new(Self::BsplineCurve(leader)),
         ))
     }
 }

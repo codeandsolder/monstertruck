@@ -4,7 +4,6 @@ version = "0.4.1"
 authors = ["Yoshinori Tanimura <tanimura@ricos.co.jp>", "Moritz Moeller <virtualritz@protonmail.com>"]
 edition = "2024"
 description = "Graphics utility crate built on wgpu"
-homepage = "https://github.com/virtualritz/monstertruck"
 repository = "https://github.com/virtualritz/monstertruck"
 license = "Apache-2.0"
 
@@ -20,6 +19,7 @@ bytemuck = { workspace = true }
 derive_more = { workspace = true }
 futures-intrusive = { workspace = true }
 rustc-hash = { workspace = true }
+thiserror = { workspace = true }
 monstertruck-core = { workspace = true }
 wgpu = { workspace = true }
 winit = { workspace = true }

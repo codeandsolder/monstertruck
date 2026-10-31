@@ -1,9 +1,12 @@
-//! Planar profile normalization: loop orientation detection, outer/hole
-//! classification, and winding normalization for complex profiles with holes.
+//! Planar profile normalization.
+//!
+//! Handles loop orientation, outer/hole classification, and winding normalization.
 
 use crate::{Result, errors::Error};
 use itertools::Itertools;
-use monstertruck_core::cgmath64::*;
+use monstertruck_core::cgmath64::{
+    EuclideanSpace, InnerSpace, Matrix4, Point2, Point3, Vector2, Vector3, Zero,
+};
 use monstertruck_core::hash::HashGen;
 use monstertruck_geometry::prelude::*;
 
@@ -20,7 +23,7 @@ where C: ParametricCurve3D + BoundedCurve + Clone {
             let p0 = edge.front().point();
             let curve = edge.curve();
             let (t0, t1) = curve.range_tuple();
-            let p1 = curve.subs((t0 + t1) / 2.0);
+            let p1 = curve.evaluate(f64::midpoint(t0, t1));
             [p0, p1]
         })
         .map(|p| Point2::new(p.to_vec().dot(u_axis), p.to_vec().dot(v_axis)))
@@ -39,39 +42,40 @@ fn signed_area_2d(pts: &[Point2]) -> f64 {
 
 /// Centroid of 2D sample points.
 fn centroid_2d(pts: &[Point2]) -> Point2 {
-    let n = pts.len() as f64;
+    let n = crate::usize_to_f64(pts.len());
     let sum = pts.iter().fold(Vector2::zero(), |acc, p| acc + p.to_vec());
     Point2::from_vec(sum / n)
 }
 
 /// Point-in-polygon test via ray casting (winding number).
-fn point_in_polygon(pts: &[Point2], c: Point2) -> bool {
-    let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
-    let r = Vector2::new(f64::cos(t), f64::sin(t));
+fn point_in_polygon(pts: &[Point2], point: Point2) -> bool {
+    let angle = 2.0 * std::f64::consts::PI * HashGen::hash1(point);
+    let ray = Vector2::new(f64::cos(angle), f64::sin(angle));
     pts.iter()
         .circular_tuple_windows()
-        .try_fold(0_i32, |counter, (p0, p1)| {
-            if (*p0 - c).so_small() {
+        .try_fold(0_i32, |counter, (start, end)| {
+            if (*start - point).so_small() {
                 return None;
             }
-            let a = p0 - c;
-            let b = p1 - c;
-            let s0 = r.x * a.y - r.y * a.x;
-            let s1 = r.x * b.y - r.y * b.x;
-            let s2 = a.x * b.y - a.y * b.x;
-            let x = s2 / (s1 - s0);
-            if x.so_small() && s0 * s1 < 0.0 {
+            let start_delta = start - point;
+            let end_delta = end - point;
+            let start_side = ray.y.mul_add(-start_delta.x, ray.x * start_delta.y);
+            let end_side = ray.y.mul_add(-end_delta.x, ray.x * end_delta.y);
+            let segment_cross = start_delta
+                .y
+                .mul_add(-end_delta.x, start_delta.x * end_delta.y);
+            let intersection_scale = segment_cross / (end_side - start_side);
+            if intersection_scale.so_small() && start_side * end_side < 0.0 {
                 None
-            } else if x > 0.0 && s0 <= 0.0 && s1 > 0.0 {
+            } else if intersection_scale > 0.0 && start_side <= 0.0 && end_side > 0.0 {
                 Some(counter + 1)
-            } else if x > 0.0 && s0 >= 0.0 && s1 < 0.0 {
+            } else if intersection_scale > 0.0 && start_side >= 0.0 && end_side < 0.0 {
                 Some(counter - 1)
             } else {
                 Some(counter)
             }
         })
-        .map(|counter| counter > 0)
-        .unwrap_or(true)
+        .is_none_or(|counter| counter > 0)
 }
 
 /// Computes the average normal of a set of wires by accumulating cross products
@@ -85,7 +89,7 @@ where C: ParametricCurve3D + BoundedCurve + Clone {
                 let p0 = edge.front().point();
                 let curve = edge.curve();
                 let (t0, t1) = curve.range_tuple();
-                let p1 = curve.subs((t0 + t1) / 2.0);
+                let p1 = curve.evaluate(f64::midpoint(t0, t1));
                 [p0, p1]
             })
         })
@@ -95,8 +99,8 @@ where C: ParametricCurve3D + BoundedCurve + Clone {
         return None;
     }
 
-    let center =
-        all_pts.iter().fold(Point3::origin(), |s, p| s + p.to_vec()) / all_pts.len() as f64;
+    let center = all_pts.iter().fold(Point3::origin(), |s, p| s + p.to_vec())
+        / crate::usize_to_f64(all_pts.len());
 
     let normal = all_pts
         .iter()
@@ -138,8 +142,17 @@ where C: ParametricCurve3D + BoundedCurve + Clone + Invertible {
         ));
     }
 
-    // Validate all wires are closed.
-    if wires.iter().any(|w| !w.is_closed()) {
+    // `Wire::is_closed()` deliberately considers an empty wire closed, but an
+    // empty profile loop has no plane, area, or containment point. Reject it
+    // before projection/centroid arithmetic can manufacture NaNs.
+    if wires.iter().any(|wire| wire.is_empty()) {
+        return Err(Error::FromTopology(
+            monstertruck_topology::errors::Error::EmptyWire,
+        ));
+    }
+
+    // Validate all non-empty wires are closed.
+    if wires.iter().any(|wire| !wire.is_closed()) {
         return Err(Error::OpenWire);
     }
 
@@ -161,12 +174,15 @@ where C: ParametricCurve3D + BoundedCurve + Clone + Invertible {
     let projections: Vec<Vec<Point2>> = wires.iter().map(|w| project_wire_to_2d(w, u, v)).collect();
 
     let areas: Vec<f64> = projections.iter().map(|pts| signed_area_2d(pts)).collect();
+    if areas.iter().any(|area| !area.is_finite()) {
+        return Err(Error::NonFiniteProfileGeometry);
+    }
 
     // Find the outer loop: the one with the largest absolute area.
     let (outer_idx, _) = areas
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
+        .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
         .ok_or(Error::NoOuterLoop)?;
 
     // Ensure the outer wire is CCW (positive area).
@@ -249,9 +265,9 @@ where
     let normal =
         compute_plane_normal(std::slice::from_ref(outer)).ok_or(Error::WireNotInOnePlane)?;
     if normal.dot(dir) < 0.0 {
-        normalized
-            .iter_mut()
-            .for_each(|wire| *wire = wire.inverse());
+        for wire in &mut normalized {
+            *wire = wire.inverse();
+        }
     }
     let face = crate::builder::try_attach_plane(normalized)?;
     let solid: monstertruck_topology::Solid<Point3, C, S> = crate::builder::extrude(&face, dir);

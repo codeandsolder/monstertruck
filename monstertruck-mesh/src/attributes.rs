@@ -1,4 +1,7 @@
-use crate::*;
+use crate::{
+    Attributes, Matrix4, Point3, StandardAttribute, StandardAttributes, StandardVertex, Transform,
+    TransformedAttributes, Vector2, Vector3,
+};
 
 impl<T: Copy> Attributes<usize> for Vec<T> {
     type Output = T;
@@ -24,80 +27,83 @@ impl Attributes<StandardVertex> for StandardAttributes {
 
 impl StandardAttributes {
     /// Returns the vector of all positions.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn positions(&self) -> &Vec<Point3> { &self.positions }
 
     /// Returns the mutable slice of all positions.
-    #[inline(always)]
+    #[inline]
     pub fn positions_mut(&mut self) -> &mut [Point3] { &mut self.positions }
 
     /// Adds a position.
-    #[inline(always)]
+    #[inline]
     pub fn push_position(&mut self, position: Point3) { self.positions.push(position) }
 
     /// Extend positions by iterator.
-    #[inline(always)]
+    #[inline]
     pub fn extend_positions<I: IntoIterator<Item = Point3>>(&mut self, iter: I) {
-        self.positions.extend(iter)
+        self.positions.extend(iter);
     }
 
     /// Returns the vector of all uv (texture) coordinates.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn uv_coords(&self) -> &Vec<Vector2> { &self.uv_coords }
 
     /// Returns the mutable slice of all uv (texture) coordinates.
-    #[inline(always)]
+    #[inline]
     pub fn uv_coords_mut(&mut self) -> &mut [Vector2] { &mut self.uv_coords }
 
     /// Adds a uv (texture) coordinate.
-    #[inline(always)]
+    #[inline]
     pub fn push_uv_coord(&mut self, uv_coord: Vector2) { self.uv_coords.push(uv_coord) }
 
     /// Extend uv (texture) coordinates by iterator.
-    #[inline(always)]
+    #[inline]
     pub fn extend_uv_coords<I: IntoIterator<Item = Vector2>>(&mut self, iter: I) {
-        self.uv_coords.extend(iter)
+        self.uv_coords.extend(iter);
     }
 
     /// Returns the vector of all normals.
-    #[inline(always)]
+    #[inline]
+    #[must_use]
     pub const fn normals(&self) -> &Vec<Vector3> { &self.normals }
 
     /// Returns the mutable slice of all normals.
-    #[inline(always)]
+    #[inline]
     pub fn normals_mut(&mut self) -> &mut [Vector3] { &mut self.normals }
 
     /// Extend normals by iterator
-    #[inline(always)]
+    #[inline]
     pub fn extend_normals<I: IntoIterator<Item = Vector3>>(&mut self, iter: I) {
-        self.normals.extend(iter)
+        self.normals.extend(iter);
     }
 }
 
 impl TransformedAttributes for Vec<Point3> {
-    #[inline(always)]
+    #[inline]
     fn transform_by(&mut self, trans: Matrix4) {
-        self.iter_mut().for_each(|p| {
-            *p = trans.transform_point(*p);
-        });
+        for point in self.iter_mut() {
+            *point = trans.transform_point(*point);
+        }
     }
-    #[inline(always)]
+    #[inline]
     fn transformed(&self, trans: Matrix4) -> Self {
         self.iter().map(|p| trans.transform_point(*p)).collect()
     }
 }
 
 impl TransformedAttributes for Vec<StandardAttribute> {
-    #[inline(always)]
+    #[inline]
     fn transform_by(&mut self, trans: Matrix4) {
-        self.iter_mut().for_each(|attr| {
+        for attr in self.iter_mut() {
             attr.position = trans.transform_point(attr.position);
-            if let Some(n) = &mut attr.normal {
-                *n = trans.transform_vector(*n);
+            if let Some(normal) = &mut attr.normal {
+                *normal = trans.transform_vector(*normal);
             }
-        })
+        }
     }
-    #[inline(always)]
+    #[inline]
     fn transformed(&self, trans: Matrix4) -> Self {
         self.iter()
             .map(|attr| StandardAttribute {
@@ -110,7 +116,7 @@ impl TransformedAttributes for Vec<StandardAttribute> {
 }
 
 impl TransformedAttributes for StandardAttributes {
-    #[inline(always)]
+    #[inline]
     fn transform_by(&mut self, trans: Matrix4) {
         self.positions_mut().iter_mut().for_each(|p| {
             *p = trans.transform_point(*p);
@@ -119,7 +125,7 @@ impl TransformedAttributes for StandardAttributes {
             *n = trans.transform_vector(*n);
         });
     }
-    #[inline(always)]
+    #[inline]
     fn transformed(&self, trans: Matrix4) -> Self {
         Self {
             positions: self
@@ -127,7 +133,7 @@ impl TransformedAttributes for StandardAttributes {
                 .iter()
                 .map(|&p| trans.transform_point(p))
                 .collect(),
-            uv_coords: self.uv_coords().to_vec(),
+            uv_coords: self.uv_coords().clone(),
             normals: self
                 .normals()
                 .iter()

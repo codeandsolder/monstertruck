@@ -11,7 +11,7 @@ fn polynomial_surface(degree_u: usize, degree_v: usize) -> BsplineSurface<Point3
         })
         .collect();
 
-    BsplineSurface::new(
+    BsplineSurface::new_unchecked(
         (
             KnotVector::bezier_knot(degree_u),
             KnotVector::bezier_knot(degree_v),
@@ -25,14 +25,14 @@ fn boundary_side_selects_the_cross_boundary_axis() {
     let surface = polynomial_surface(1, 3);
 
     assert_eq!(
-        surface
-            .continuity_capability(BoundarySide::MinV, ContinuityOrder::G3)
+        (surface.continuity_capability(BoundarySide::MinV, ContinuityOrder::G3))
+            .expect("coherent capability")
             .unsupported_reason(),
         None
     );
     assert_eq!(
-        surface
-            .continuity_capability(BoundarySide::MinU, ContinuityOrder::G2)
+        (surface.continuity_capability(BoundarySide::MinU, ContinuityOrder::G2))
+            .expect("coherent capability")
             .unsupported_reason(),
         Some(
             UnsupportedContinuityCapability::InsufficientDegreeAndControlRows {
@@ -47,7 +47,7 @@ fn boundary_side_selects_the_cross_boundary_axis() {
 
 #[test]
 fn unclamped_cross_boundary_axis_is_unsupported() {
-    let surface = BsplineSurface::new(
+    let surface = BsplineSurface::new_unchecked(
         (
             KnotVector::from(vec![0.0, 1.0, 2.0, 3.0]),
             KnotVector::bezier_knot(1),
@@ -59,14 +59,14 @@ fn unclamped_cross_boundary_axis_is_unsupported() {
     );
 
     assert_eq!(
-        surface
-            .continuity_capability(BoundarySide::MaxU, ContinuityOrder::G1)
+        (surface.continuity_capability(BoundarySide::MaxU, ContinuityOrder::G1))
+            .expect("coherent capability")
             .unsupported_reason(),
         Some(UnsupportedContinuityCapability::UnclampedBoundary)
     );
     assert_eq!(
-        surface
-            .continuity_capability(BoundarySide::MaxV, ContinuityOrder::G1)
+        (surface.continuity_capability(BoundarySide::MaxV, ContinuityOrder::G1))
+            .expect("coherent capability")
             .unsupported_reason(),
         None
     );
@@ -74,24 +74,24 @@ fn unclamped_cross_boundary_axis_is_unsupported() {
 
 #[test]
 fn nurbs_capability_requires_positive_finite_weights() {
-    let positive = NurbsSurface::new(BsplineSurface::new(
+    let positive = NurbsSurface::new(BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
         vec![vec![Vector4::new(0.0, 0.0, 0.0, 1.0); 2]; 2],
     ));
-    let zero_weight = NurbsSurface::new(BsplineSurface::new(
+    let zero_weight = NurbsSurface::new(BsplineSurface::new_unchecked(
         (KnotVector::bezier_knot(1), KnotVector::bezier_knot(1)),
         vec![vec![Vector4::new(0.0, 0.0, 0.0, 0.0); 2]; 2],
     ));
 
     assert_eq!(
-        positive
-            .continuity_capability(BoundarySide::MinU, ContinuityOrder::G1)
+        (positive.continuity_capability(BoundarySide::MinU, ContinuityOrder::G1))
+            .expect("coherent capability")
             .unsupported_reason(),
         None
     );
     assert_eq!(
-        zero_weight
-            .continuity_capability(BoundarySide::MinU, ContinuityOrder::G0)
+        (zero_weight.continuity_capability(BoundarySide::MinU, ContinuityOrder::G0))
+            .expect("coherent capability")
             .unsupported_reason(),
         Some(UnsupportedContinuityCapability::NonPositiveWeight)
     );
@@ -106,12 +106,13 @@ fn nurbs_capability_requires_positive_finite_weights() {
 /// for `G2` hits it: the rows suffice for `G2`, the degree does not.
 #[test]
 fn insufficient_degree_alone_reports_the_achievable_order() {
-    let surface = BsplineSurface::new(
+    let surface = BsplineSurface::new_unchecked(
         (KnotVector::uniform_knot(1, 3), KnotVector::bezier_knot(2)),
         vec![vec![Point3::new(0.0, 0.0, 0.0); 3]; 4],
     );
 
-    let capability = surface.continuity_capability(BoundarySide::MinU, ContinuityOrder::G2);
+    let capability = (surface.continuity_capability(BoundarySide::MinU, ContinuityOrder::G2))
+        .expect("coherent capability");
 
     assert_eq!(
         capability.unsupported_reason(),

@@ -18,15 +18,13 @@ pub enum Alternative<T, U> {
 macro_rules! impl_from {
     ($firsttype: ty, $secondtype: ty) => {
         impl From<$firsttype> for $crate::alternative::Alternative<$firsttype, $secondtype> {
-            #[inline(always)]
             fn from(t: $firsttype) -> Self { $crate::alternative::Alternative::FirstType(t) }
         }
     };
 }
 
 impl<T, U> From<U> for Alternative<T, U> {
-    #[inline(always)]
-    fn from(u: U) -> Self { Alternative::SecondType(u) }
+    fn from(u: U) -> Self { Self::SecondType(u) }
 }
 
 // test for impl_from
@@ -73,6 +71,12 @@ where
     C0: BoundedCurve,
     C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>,
 {
+    fn range_tuple(&self) -> (f64, f64) {
+        match self {
+            Self::FirstType(curve) => curve.range_tuple(),
+            Self::SecondType(curve) => curve.range_tuple(),
+        }
+    }
 }
 
 impl<S0, S1> ParametricSurface for Alternative<S0, S1>
@@ -266,14 +270,12 @@ where
     T: Invertible,
     U: Invertible,
 {
-    #[inline(always)]
     fn invert(&mut self) {
         match self {
             Self::FirstType(entity) => entity.invert(),
             Self::SecondType(entity) => entity.invert(),
         }
     }
-    #[inline(always)]
     fn inverse(&self) -> Self {
         match self {
             Self::FirstType(entity) => Self::FirstType(entity.inverse()),
@@ -352,14 +354,14 @@ where
 
     fn period(&self) -> Option<C0::Scalar> {
         match self {
-            Alternative::FirstType(got) => v2::ParametricCurve::period(got),
-            Alternative::SecondType(got) => v2::ParametricCurve::period(got),
+            Self::FirstType(got) => v2::ParametricCurve::period(got),
+            Self::SecondType(got) => v2::ParametricCurve::period(got),
         }
     }
     fn try_range_tuple(&self) -> Option<(C0::Scalar, C0::Scalar)> {
         match self {
-            Alternative::FirstType(got) => v2::ParametricCurve::try_range_tuple(got),
-            Alternative::SecondType(got) => v2::ParametricCurve::try_range_tuple(got),
+            Self::FirstType(got) => v2::ParametricCurve::try_range_tuple(got),
+            Self::SecondType(got) => v2::ParametricCurve::try_range_tuple(got),
         }
     }
 }
@@ -371,8 +373,8 @@ where
 {
     fn range_tuple(&self) -> (C0::Scalar, C0::Scalar) {
         match self {
-            Alternative::FirstType(got) => v2::BoundedCurve::range_tuple(got),
-            Alternative::SecondType(got) => v2::BoundedCurve::range_tuple(got),
+            Self::FirstType(got) => v2::BoundedCurve::range_tuple(got),
+            Self::SecondType(got) => v2::BoundedCurve::range_tuple(got),
         }
     }
 }
@@ -395,14 +397,14 @@ where
 
     fn period_u(&self) -> Option<S0::Scalar> {
         match self {
-            Alternative::FirstType(got) => v2::ParametricSurface::period_u(got),
-            Alternative::SecondType(got) => v2::ParametricSurface::period_u(got),
+            Self::FirstType(got) => v2::ParametricSurface::period_u(got),
+            Self::SecondType(got) => v2::ParametricSurface::period_u(got),
         }
     }
     fn period_v(&self) -> Option<S0::Scalar> {
         match self {
-            Alternative::FirstType(got) => v2::ParametricSurface::period_v(got),
-            Alternative::SecondType(got) => v2::ParametricSurface::period_v(got),
+            Self::FirstType(got) => v2::ParametricSurface::period_v(got),
+            Self::SecondType(got) => v2::ParametricSurface::period_v(got),
         }
     }
 }
@@ -414,8 +416,8 @@ where
 {
     fn range_tuple(&self) -> ((S0::Scalar, S0::Scalar), (S0::Scalar, S0::Scalar)) {
         match self {
-            Alternative::FirstType(got) => v2::BoundedSurface::range_tuple(got),
-            Alternative::SecondType(got) => v2::BoundedSurface::range_tuple(got),
+            Self::FirstType(got) => v2::BoundedSurface::range_tuple(got),
+            Self::SecondType(got) => v2::BoundedSurface::range_tuple(got),
         }
     }
 }
@@ -440,8 +442,8 @@ where
 {
     fn normal(&self, u: S0::Scalar, v: S0::Scalar) -> Vector3 {
         match self {
-            Alternative::FirstType(got) => v2::ParametricSurface3D::normal(got, u, v),
-            Alternative::SecondType(got) => v2::ParametricSurface3D::normal(got, u, v),
+            Self::FirstType(got) => v2::ParametricSurface3D::normal(got, u, v),
+            Self::SecondType(got) => v2::ParametricSurface3D::normal(got, u, v),
         }
     }
 }
@@ -460,8 +462,8 @@ where
         trials: usize,
     ) -> Option<D::Parameter> {
         match self {
-            Alternative::FirstType(got) => got.search_parameter(point, hint, trials),
-            Alternative::SecondType(got) => got.search_parameter(point, hint, trials),
+            Self::FirstType(got) => got.search_parameter(point, hint, trials),
+            Self::SecondType(got) => got.search_parameter(point, hint, trials),
         }
     }
 }
@@ -480,8 +482,8 @@ where
         trials: usize,
     ) -> Option<D::Parameter> {
         match self {
-            Alternative::FirstType(got) => got.search_nearest_parameter(point, hint, trials),
-            Alternative::SecondType(got) => got.search_nearest_parameter(point, hint, trials),
+            Self::FirstType(got) => got.search_nearest_parameter(point, hint, trials),
+            Self::SecondType(got) => got.search_nearest_parameter(point, hint, trials),
         }
     }
 }

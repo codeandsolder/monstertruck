@@ -5,43 +5,43 @@ use std::f64::consts::{FRAC_PI_2, PI};
 fn revolve_test() {
     let pt0 = Point3::new(0.0, 2.0, 1.0);
     let pt1 = Point3::new(1.0, 0.0, 0.0);
-    let curve = BsplineCurve::new(KnotVector::bezier_knot(1), vec![pt0, pt1]);
+    let curve = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![pt0, pt1]);
     let surface = RevolutionSurface::by_revolution(curve, Point3::origin(), Vector3::unit_y());
     const N: usize = 100;
     for i in 0..=N {
         for j in 0..=N {
             let u = i as f64 / N as f64;
             let v = 2.0 * PI * j as f64 / N as f64;
-            let res = surface.subs(u, v);
+            let res = surface.evaluate(u, v);
             let ans = Point3::new(
-                u * f64::cos(v) + (1.0 - u) * f64::sin(v),
+                (1.0 - u).mul_add(f64::sin(v), u * f64::cos(v)),
                 2.0 * (1.0 - u),
-                -u * f64::sin(v) + (1.0 - u) * f64::cos(v),
+                (1.0 - u).mul_add(f64::cos(v), -u * f64::sin(v)),
             );
             assert_near!(res, ans);
-            let res_uder = surface.uder(u, v);
+            let res_uder = surface.derivative_u(u, v);
             let ans_uder =
                 Vector3::new(f64::cos(v) - f64::sin(v), -2.0, -f64::sin(v) - f64::cos(v));
             assert_near!(res_uder, ans_uder);
-            let res_vder = surface.vder(u, v);
+            let res_vder = surface.derivative_v(u, v);
             let ans_vder = Vector3::new(
-                -u * f64::sin(v) + (1.0 - u) * f64::cos(v),
+                (1.0 - u).mul_add(f64::cos(v), -u * f64::sin(v)),
                 0.0,
-                -u * f64::cos(v) - (1.0 - u) * f64::sin(v),
+                (1.0 - u).mul_add(-f64::sin(v), -u * f64::cos(v)),
             );
             assert_near!(res_vder, ans_vder);
-            let res_uuder = surface.uuder(u, v);
+            let res_uuder = surface.derivative_uu(u, v);
             let ans_uuder = Vector3::zero();
             assert_near!(res_uuder, ans_uuder);
-            let res_uvder = surface.uvder(u, v);
+            let res_uvder = surface.derivative_uv(u, v);
             let ans_uvder =
                 Vector3::new(-f64::sin(v) - f64::cos(v), 0.0, -f64::cos(v) + f64::sin(v));
             assert_near!(res_uvder, ans_uvder);
-            let res_vvder = surface.vvder(u, v);
+            let res_vvder = surface.derivative_vv(u, v);
             let ans_vvder = Vector3::new(
-                -u * f64::cos(v) - (1.0 - u) * f64::sin(v),
+                (1.0 - u).mul_add(-f64::sin(v), -u * f64::cos(v)),
                 0.0,
-                u * f64::sin(v) - (1.0 - u) * f64::cos(v),
+                (1.0 - u).mul_add(-f64::cos(v), u * f64::sin(v)),
             );
             assert_near!(res_vvder, ans_vvder);
             let normal = surface.normal(u, v);
@@ -53,63 +53,61 @@ fn revolve_test() {
 
 #[test]
 fn search_parameter() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 2.0, 1.0), Point3::new(1.0, 0.0, 0.0)],
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
     let pt = Point3::new(-0.5, 1.0, 0.5);
-    let (u, v) = surface.search_parameter(pt, Some((0.4, 1.2)), 100).unwrap();
-    assert_near!(surface.subs(u, v), pt);
+    let (u, v) = (surface.search_parameter(pt, Some((0.4, 1.2)), 100)).unwrap();
+    assert_near!(surface.evaluate(u, v), pt);
 }
 
 #[test]
 fn search_parameter_honors_angular_hint_across_seam() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(1.0, 0.0, -1.0), Point3::new(1.0, 0.0, 1.0)],
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
     let expected = (0.5, 0.05);
-    let point = surface.subs(expected.0, expected.1);
-    let hinted_angle = expected.1 + 2.0 * PI;
+    let point = surface.evaluate(expected.0, expected.1);
+    let hinted_angle = 2.0f64.mul_add(PI, expected.1);
 
-    let got = surface
-        .search_parameter(point, Some((expected.0, hinted_angle)), 100)
+    let got = (surface.search_parameter(point, Some((expected.0, hinted_angle)), 100))
         .expect("exact search must preserve the angular period nearest its hint");
 
     assert_near!(got.0, expected.0);
     assert_near!(got.1, hinted_angle);
-    assert_near!(surface.subs(got.0, got.1), point);
+    assert_near!(surface.evaluate(got.0, got.1), point);
 }
 
 #[test]
 fn search_nearest_parameter_honors_angular_hint_across_seam() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(1.0, 0.0, -1.0), Point3::new(1.0, 0.0, 1.0)],
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
-    let expected = (0.5, 2.0 * PI - 0.05);
+    let expected = (0.5, 2.0f64.mul_add(PI, -0.05));
     let point =
-        surface.subs(expected.0, expected.1) + 0.01 * surface.normal(expected.0, expected.1);
+        surface.evaluate(expected.0, expected.1) + 0.01 * surface.normal(expected.0, expected.1);
     let hinted_angle = -0.05;
 
-    let got = surface
-        .search_nearest_parameter(point, Some((expected.0, hinted_angle)), 100)
+    let got = (surface.search_nearest_parameter(point, Some((expected.0, hinted_angle)), 100))
         .expect("nearest search must preserve the angular period nearest its hint");
 
     assert_near!(got.0, expected.0);
     assert_near!(got.1, hinted_angle);
     assert_near!(
-        surface.subs(got.0, got.1),
-        surface.subs(expected.0, expected.1)
+        surface.evaluate(got.0, got.1),
+        surface.evaluate(expected.0, expected.1)
     );
 }
 
 #[test]
 fn search_parameter_with_fixed_points() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
             Point3::new(0.0, 1.0, 0.0),
@@ -119,34 +117,30 @@ fn search_parameter_with_fixed_points() {
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
 
-    let (u, v) = surface
-        .search_parameter(Point3::new(0.0, 1.0, 0.0), Some((0.5, 0.3)), 10)
-        .unwrap();
+    let (u, v) =
+        (surface.search_parameter(Point3::new(0.0, 1.0, 0.0), Some((0.5, 0.3)), 10)).unwrap();
     assert_near!(Vector2::new(u, v), Vector2::new(0.0, 0.3));
 
-    let (u, v) = surface
-        .search_parameter(Point3::new(0.0, -1.0, 0.0), Some((0.5, 0.3)), 10)
-        .unwrap();
+    let (u, v) =
+        (surface.search_parameter(Point3::new(0.0, -1.0, 0.0), Some((0.5, 0.3)), 10)).unwrap();
     assert_near!(Vector2::new(u, v), Vector2::new(1.0, 0.3));
 }
 
 #[test]
 fn search_nearest_parameter() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 2.0, 1.0), Point3::new(1.0, 0.0, 0.0)],
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
-    let pt = surface.subs(0.4, 1.2) + 0.1 * surface.normal(0.4, 1.2);
-    let (u, v) = surface
-        .search_nearest_parameter(pt, Some((0.4, 1.2)), 100)
-        .unwrap();
+    let pt = surface.evaluate(0.4, 1.2) + 0.1 * surface.normal(0.4, 1.2);
+    let (u, v) = (surface.search_nearest_parameter(pt, Some((0.4, 1.2)), 100)).unwrap();
     assert_near!(Vector2::new(u, v), Vector2::new(0.4, 1.2));
 }
 
 #[test]
 fn search_nearest_parameter_with_fixed_points() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
             Point3::new(0.0, 1.0, 0.0),
@@ -156,32 +150,30 @@ fn search_nearest_parameter_with_fixed_points() {
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
 
-    let (u, v) = surface
-        .search_nearest_parameter(Point3::new(0.0, 2.0, 0.0), Some((0.5, 0.3)), 10)
-        .unwrap();
+    let (u, v) =
+        (surface.search_nearest_parameter(Point3::new(0.0, 2.0, 0.0), Some((0.5, 0.3)), 10))
+            .unwrap();
     assert_near!(Vector2::new(u, v), Vector2::new(0.0, 0.3));
 
-    let (u, v) = surface
-        .search_nearest_parameter(Point3::new(0.0, -2.0, 0.0), Some((0.5, 0.3)), 10)
-        .unwrap();
+    let (u, v) =
+        (surface.search_nearest_parameter(Point3::new(0.0, -2.0, 0.0), Some((0.5, 0.3)), 10))
+            .unwrap();
     assert_near!(Vector2::new(u, v), Vector2::new(1.0, 0.3));
 }
 
 #[test]
 fn search_parameter_near_back_fixed_axis_endpoint() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(2.0, 0.0, 2.0), Point3::new(0.0, 0.0, 2.0)],
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
     let expected = (0.999_95, FRAC_PI_2);
-    let point = surface.subs(expected.0, expected.1);
+    let point = surface.evaluate(expected.0, expected.1);
 
-    let exact = surface
-        .search_parameter(point, Some((1.0, expected.1)), 100)
+    let exact = (surface.search_parameter(point, Some((1.0, expected.1)), 100))
         .expect("axis-endpoint seed must converge to the nearby on-surface point");
-    let nearest = surface
-        .search_nearest_parameter(point, Some((1.0, expected.1)), 100)
+    let nearest = (surface.search_nearest_parameter(point, Some((1.0, expected.1)), 100))
         .expect("nearest search must not fail at an axis-endpoint seed");
 
     assert_near!(
@@ -196,19 +188,17 @@ fn search_parameter_near_back_fixed_axis_endpoint() {
 
 #[test]
 fn search_parameter_near_front_fixed_axis_endpoint() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 0.0, 2.0), Point3::new(2.0, 0.0, 2.0)],
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
     let expected = (0.000_05, FRAC_PI_2);
-    let point = surface.subs(expected.0, expected.1);
+    let point = surface.evaluate(expected.0, expected.1);
 
-    let exact = surface
-        .search_parameter(point, Some((0.0, expected.1)), 100)
+    let exact = (surface.search_parameter(point, Some((0.0, expected.1)), 100))
         .expect("axis-endpoint seed must converge to the nearby on-surface point");
-    let nearest = surface
-        .search_nearest_parameter(point, Some((0.0, expected.1)), 100)
+    let nearest = (surface.search_nearest_parameter(point, Some((0.0, expected.1)), 100))
         .expect("nearest search must not fail at an axis-endpoint seed");
 
     assert_near!(
@@ -223,12 +213,12 @@ fn search_parameter_near_front_fixed_axis_endpoint() {
 
 #[test]
 fn include_curve_normal() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 2.0, 2.0)],
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
-    let parabola = BsplineCurve::new(
+    let parabola = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
             Point3::new(1.0, 1.0, 0.0),
@@ -241,12 +231,12 @@ fn include_curve_normal() {
 
 #[test]
 fn include_curve_abnormal0() {
-    let line = BsplineCurve::new(
+    let line = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 2.0, 2.0)],
     );
     let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
-    let parabola = BsplineCurve::new(
+    let parabola = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
             Point3::new(1.0, 1.0, 0.0),
@@ -259,7 +249,7 @@ fn include_curve_abnormal0() {
 
 #[test]
 fn include_curve_abnormal1() {
-    let curve = NurbsCurve::new(BsplineCurve::new(
+    let curve = NurbsCurve::new(BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(3),
         vec![
             Vector4::new(0.0, 3.0, 0.0, 1.0),
@@ -268,9 +258,9 @@ fn include_curve_abnormal1() {
             Vector4::new(0.0, 0.0, 3.0, 1.0),
         ],
     ));
-    let pt0 = curve.subs(0.2);
-    let pt1 = curve.subs(0.6);
+    let pt0 = curve.evaluate(0.2);
+    let pt1 = curve.evaluate(0.6);
     let surface = RevolutionSurface::by_revolution(curve, Point3::origin(), Vector3::unit_y());
-    let line = BsplineCurve::new(KnotVector::bezier_knot(1), vec![pt0, pt1]);
+    let line = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![pt0, pt1]);
     assert!(!surface.include(&line));
 }

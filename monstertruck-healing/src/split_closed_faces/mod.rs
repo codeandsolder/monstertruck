@@ -1,4 +1,11 @@
-use super::*;
+use super::{
+    BoundedCurve, CurveParameter, Cut, Edge, EdgeIndex, EuclideanSpace, Face, HashMap, HashSet,
+    InnerSpace, Instant, Invertible, Line, MetricSpace, Origin, ParameterBoundary2D,
+    ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface,
+    ParametricSurface3D, Point2, Point3, PolylineCurve, SP, SearchNearestParameter, Shell,
+    TOLERANCE, Tolerance, Vector2, Wire, append_unassigned_stable_ids,
+};
+use num_traits::ToPrimitive;
 use std::env;
 use std::ops::Range;
 
@@ -46,11 +53,7 @@ struct DivideFaceInput<'a, C, S, Sp> {
     tol: f64,
 }
 
-pub(super) fn split_closed_faces<C, S>(
-    shell: &mut Shell<Point3, C, S>,
-    tol: f64,
-    sp: impl SP<S>,
-) -> bool
+pub fn split_closed_faces<C, S>(shell: &mut Shell<Point3, C, S>, tol: f64, sp: impl SP<S>) -> bool
 where
     C: ParametricCurve3D
         + BoundedCurve
@@ -59,8 +62,10 @@ where
         + ParameterBoundary2D<S>
         + SearchNearestParameter<CurveParameter, Point = Point3>
         + TryFrom<ParameterCurve<Line<Point2>, S>>,
-    S: ParametricSurface3D,
-{
+    S: ParametricSurface3D, {
+    let original_vertex_count = shell.vertices.len();
+    let original_edge_count = shell.edges.len();
+    let original_face_count = shell.faces.len();
     let debug_trace = env::var("MT_BOOL_TRACE").is_ok();
     let mut changed = false;
     let to_poly = closure_to_poly(tol);
@@ -143,6 +148,18 @@ where
     let new_faces: Vec<_> = (0..len).filter_map(closure).flatten().collect();
     changed |= !new_faces.is_empty();
     shell.faces.extend(new_faces);
+    append_unassigned_stable_ids(
+        &mut shell.vertex_stable_ids,
+        shell.vertices.len() - original_vertex_count,
+    );
+    append_unassigned_stable_ids(
+        &mut shell.edge_stable_ids,
+        shell.edges.len() - original_edge_count,
+    );
+    append_unassigned_stable_ids(
+        &mut shell.face_stable_ids,
+        shell.faces.len() - original_face_count,
+    );
     changed
 }
 
@@ -263,7 +280,7 @@ where
         face_index,
         boundaries,
         surface,
-        ParamBoundaryInput {
+        &mut ParamBoundaryInput {
             edges: &shell.edges,
             poly_edges,
             param_boundary_cache,
@@ -377,11 +394,12 @@ fn reflex_vertex_index(points: &[Point2], orientation: f64, index: usize) -> Opt
     let prev = points[(index + len - 1) % len];
     let curr = points[index];
     let next = points[(index + 1) % len];
-    let cross = (curr.x - prev.x) * (next.y - curr.y) - (curr.y - prev.y) * (next.x - curr.x);
+    let cross =
+        (curr.y - prev.y).mul_add(-(next.x - curr.x), (curr.x - prev.x) * (next.y - curr.y));
     (orientation * cross < -TOLERANCE).then_some(index)
 }
 
-fn diagonal_candidate_indices(i: usize, j: usize, len: usize) -> bool {
+const fn diagonal_candidate_indices(i: usize, j: usize, len: usize) -> bool {
     i != j && (i + 1) % len != j && (j + 1) % len != i
 }
 
@@ -424,8 +442,10 @@ fn polygon_contains_point(polygon: &[Point2], point: Point2) -> bool {
             let upward = start.y <= point.y && end.y > point.y;
             let downward = start.y > point.y && end.y <= point.y;
             if upward || downward {
-                let cross = (end.x - start.x) * (point.y - start.y)
-                    - (end.y - start.y) * (point.x - start.x);
+                let cross = (end.y - start.y).mul_add(
+                    -(point.x - start.x),
+                    (end.x - start.x) * (point.y - start.y),
+                );
                 if upward && cross > TOLERANCE {
                     acc + 1
                 } else if downward && cross < -TOLERANCE {
@@ -443,7 +463,7 @@ fn polygon_contains_point(polygon: &[Point2], point: Point2) -> bool {
 fn segment_contains_point(start: Point2, end: Point2, point: Point2) -> bool {
     let edge = end - start;
     let rel = point - start;
-    let cross = edge.x * rel.y - edge.y * rel.x;
+    let cross = edge.y.mul_add(-rel.x, edge.x * rel.y);
     if cross.abs() > TOLERANCE {
         false
     } else {
@@ -490,7 +510,7 @@ where
         face_index,
         boundaries,
         surface,
-        ParamBoundaryInput {
+        &mut ParamBoundaryInput {
             edges,
             poly_edges,
             param_boundary_cache,
@@ -517,30 +537,30 @@ where
         move |(edge_index, poly): ZippedEdge<'_>| {
             let u = poly[0][i];
             let closure = move |i| {
-                let u = u + i as f64 * up;
-                f64::abs(u - u0)
+                let shifted_u = f64::from(i).mul_add(up, u);
+                f64::abs(shifted_u - u0)
             };
             let dist = (-2..=2)
                 .map(closure)
-                .min_by(|x, y| x.total_cmp(y))
+                .min_by(f64::total_cmp)
                 .unwrap_or(f64::INFINITY);
             (take_front(*edge_index), dist)
         }
     };
     let create_pre_divisor = move |(wire, poly_wire): ZippedWire<'_>| {
-        let (urange, vrange) = surface.try_range_tuple();
+        let (u_range, v_range) = surface.try_range_tuple();
         let (up, vp) = (surface.period_u(), surface.period_v());
         let p = poly_wire[0][0];
         let q = *poly_wire.last()?.last()?;
         let vertices: Vec<(usize, f64)> = if p.x.near(&q.x) {
-            if let (Some(vp), Some((v0, _))) = (vp, vrange) {
+            if let (Some(vp), Some((v0, _))) = (vp, v_range) {
                 let closure = find_nearest_to_ends(1, v0, vp);
                 Some(wire.iter().zip(poly_wire).map(closure).collect())
             } else {
                 None
             }
         } else if p.y.near(&q.y) {
-            if let (Some(up), Some((u0, _))) = (up, urange) {
+            if let (Some(up), Some((u0, _))) = (up, u_range) {
                 let closure = find_nearest_to_ends(0, u0, up);
                 Some(wire.iter().zip(poly_wire).map(closure).collect())
             } else {
@@ -558,8 +578,8 @@ where
         .iter()
         .map(|entry| create_pre_divisor((entry.0, &entry.1)))
         .collect::<Option<Vec<_>>>()?;
-    let open: Vec<_> = open.into_iter().map(|(w, _)| w.to_vec()).collect();
-    let closed: Vec<_> = closed.into_iter().map(|(w, _)| w.to_vec()).collect();
+    let open: Vec<_> = open.into_iter().map(|(wire, _)| wire.clone()).collect();
+    let closed: Vec<_> = closed.into_iter().map(|(wire, _)| wire.clone()).collect();
     let divisor = nearest_correction(
         (pre_divisor_vec[0], pre_divisor_vec[1]),
         &open[0],
@@ -656,7 +676,7 @@ where
         face_index,
         boundaries,
         surface,
-        ParamBoundaryInput {
+        &mut ParamBoundaryInput {
             edges,
             poly_edges,
             param_boundary_cache,
@@ -712,9 +732,12 @@ fn closure_find_vertex_parameter<C>(
     edges: &[Edge<C>],
 ) -> impl Fn(ZippedEdge<'_>) -> Option<Point2> + '_ {
     let take_front = closure_take_front(edges);
-    move |(edge_index, param_edge): ZippedEdge<'_>| match v == take_front(*edge_index) {
-        true => Some(param_edge[0]),
-        false => None,
+    move |(edge_index, param_edge): ZippedEdge<'_>| {
+        if v == take_front(*edge_index) {
+            Some(param_edge[0])
+        } else {
+            None
+        }
     }
 }
 
@@ -739,9 +762,10 @@ fn intersections_between_line_polyline(
     let filter = |p: &[Point2]| {
         let (s, t, _) = line.intersection(Line(p[0], p[1]))?;
         let unit = 0.0..1.0;
-        match unit.contains(&s) && unit.contains(&t) {
-            true => Some(s),
-            false => None,
+        if unit.contains(&s) && unit.contains(&t) {
+            Some(s)
+        } else {
+            None
         }
     };
     let mut vec: Vec<_> = param_edge.windows(2).filter_map(filter).collect();
@@ -793,15 +817,15 @@ where
     let mut previous0 = t0;
     let mut previous1 = None;
     for _ in 0..100 {
-        let p = pcurve.subs(t0);
+        let p = pcurve.evaluate(t0);
         let t1 = curve.search_nearest_parameter(p, previous1, 100)?;
-        let q = curve.subs(t1);
+        let q = curve.evaluate(t1);
         t0 = pcurve.search_nearest_parameter(q, t0, 100)?;
         if let Some(previous1) = previous1
             && previous0.near(&t0)
             && previous1.near(&t1)
         {
-            return Some((t0, t1, pcurve.subs(t0)));
+            return Some((t0, t1, pcurve.evaluate(t0)));
         }
         previous0 = t0;
         previous1 = Some(t1);
@@ -861,12 +885,7 @@ fn insert_new_edges(wire: &mut Wire, pivot_edge_index: usize, inserted_range: Ra
     let positions = wire
         .iter()
         .enumerate()
-        .filter_map(
-            |(i, edge_index)| match edge_index.index == pivot_edge_index {
-                true => Some(i),
-                false => None,
-            },
-        )
+        .filter_map(|(i, edge_index)| (edge_index.index == pivot_edge_index).then_some(i))
         .collect::<Vec<usize>>();
     positions.into_iter().rev().for_each(|i| {
         let orientation = wire[i].orientation;
@@ -914,7 +933,7 @@ where
         face_index,
         boundaries,
         surface,
-        ParamBoundaryInput {
+        &mut ParamBoundaryInput {
             edges,
             poly_edges,
             param_boundary_cache,
@@ -941,14 +960,14 @@ fn nearest_periodic_parameter(
     periods: (Option<f64>, Option<f64>),
 ) -> Point2 {
     let (period_u, period_v) = periods;
-    let us = match period_u {
-        Some(period) => vec![-2.0 * period, -period, 0.0, period, 2.0 * period],
-        None => vec![0.0],
-    };
-    let vs = match period_v {
-        Some(period) => vec![-2.0 * period, -period, 0.0, period, 2.0 * period],
-        None => vec![0.0],
-    };
+    let us = period_u.map_or_else(
+        || vec![0.0],
+        |period| vec![-2.0 * period, -period, 0.0, period, 2.0 * period],
+    );
+    let vs = period_v.map_or_else(
+        || vec![0.0],
+        |period| vec![-2.0 * period, -period, 0.0, period, 2.0 * period],
+    );
     us.into_iter()
         .flat_map(|du| {
             vs.iter()
@@ -998,11 +1017,9 @@ where
                     let normalized = poly
                         .into_iter()
                         .map(|point| {
-                            let adjusted = previous
-                                .map(|reference| {
-                                    nearest_periodic_parameter(point, reference, periods)
-                                })
-                                .unwrap_or(point);
+                            let adjusted = previous.map_or(point, |reference| {
+                                nearest_periodic_parameter(point, reference, periods)
+                            });
                             previous = Some(adjusted);
                             adjusted
                         })
@@ -1018,7 +1035,7 @@ fn create_param_boundaries<C, S, Sp>(
     face_index: usize,
     boundaries: &[Wire],
     surface: &S,
-    input: ParamBoundaryInput<'_, C, Sp>,
+    input: &mut ParamBoundaryInput<'_, C, Sp>,
 ) -> Option<Vec<Vec<PolylineCurve<Point2>>>>
 where
     C: ParameterBoundary2D<S>,
@@ -1092,7 +1109,7 @@ impl<P: Copy> Iterator for PolyWireIter<'_, P> {
         } else {
             self.current = self.stock.next()?;
             self.current.next()?;
-            self.current.next().cloned()
+            self.current.next().copied()
         }
     }
 }
@@ -1121,27 +1138,34 @@ fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> std::cmp::Ordering {
     move |x: &f64, y: &f64| f(x).total_cmp(&f(y))
 }
 fn get_mindiff(u: f64, u0: f64, up: f64) -> f64 {
-    let closure = |i| u + i as f64 * up;
+    let closure = |i| f64::from(i).mul_add(up, u);
     (-2..=2).map(closure).min_by(abs_diff(u0)).unwrap_or(u)
 }
 
 fn boundary_into_domain<S: ParametricSurface3D>(vec: &mut Vec<Point2>, surface: &S) {
     let (up, vp) = (surface.period_u(), surface.period_v());
-    let (urange, vrange) = surface.try_range_tuple();
-    let grav = vec.iter().fold(Point2::origin(), |g, p| g + p.to_vec()) / vec.len() as f64;
-    if let (Some(up), Some((u0, _))) = (up, urange) {
+    let (u_range, v_range) = surface.try_range_tuple();
+    let Some(point_count) = vec.len().to_f64() else {
+        return;
+    };
+    let grav = vec.iter().fold(Point2::origin(), |g, p| g + p.to_vec()) / point_count;
+    if let (Some(up), Some((u0, _))) = (up, u_range) {
         let quot = f64::floor((grav.x - u0) / up);
-        vec.iter_mut().for_each(|p| p.x -= quot * up);
+        for point in vec.iter_mut() {
+            point.x = quot.mul_add(-up, point.x);
+        }
     }
-    if let (Some(vp), Some((v0, _))) = (vp, vrange) {
+    if let (Some(vp), Some((v0, _))) = (vp, v_range) {
         let quot = f64::floor((grav.y - v0) / vp);
-        vec.iter_mut().for_each(|p| p.y -= quot * vp);
+        for point in vec.iter_mut() {
+            point.y = quot.mul_add(-vp, point.y);
+        }
     }
     if let Some(last) = vec.last().copied()
         && !vec[0].near(&last)
     {
         let Point2 { x: u0, y: v0 } = last;
-        if surface.uder(u0, v0).so_small() || surface.vder(u0, v0).so_small() {
+        if surface.derivative_u(u0, v0).so_small() || surface.derivative_v(u0, v0).so_small() {
             vec.push(vec[0]);
         }
     }
@@ -1286,13 +1310,12 @@ fn construct_boundaries<C>(
             let next_edge = {
                 let vec = vemap.get_mut(&v)?;
                 match vec.len() {
-                    0 => return None,
                     1 => vec.pop()?,
                     2 => {
-                        let is_new0 = new_edge_range.contains(&edge_index.index);
-                        let is_new1 = new_edge_range.contains(&vec[0].index);
-                        let i = if is_new0 != is_new1 { 0 } else { 1 };
-                        vec.remove(i)
+                        let current_is_new = new_edge_range.contains(&edge_index.index);
+                        let candidate_is_new = new_edge_range.contains(&vec[0].index);
+                        let index = usize::from(current_is_new == candidate_is_new);
+                        vec.remove(index)
                     }
                     _ => return None,
                 }
@@ -1329,7 +1352,7 @@ where
         face_index,
         &boundaries,
         surface,
-        ParamBoundaryInput {
+        &mut ParamBoundaryInput {
             edges,
             poly_edges,
             param_boundary_cache,
@@ -1345,7 +1368,7 @@ where
             match boundary_type(&poly_boundary) {
                 BoundaryType::Positive => positives.push((boundary, poly_boundary)),
                 BoundaryType::Negative => negatives.push((boundary, poly_boundary)),
-                _ => return None,
+                BoundaryType::NotClosed => return None,
             }
             Some(())
         })?;
@@ -1449,20 +1472,14 @@ fn closure_take_front<C>(edges: &[Edge<C>]) -> impl Fn(EdgeIndex) -> usize + '_ 
     move |edge_index: EdgeIndex| {
         let index = edge_index.index;
         let (v0, v1) = edges[index].vertices;
-        match edge_index.orientation {
-            true => v0,
-            false => v1,
-        }
+        if edge_index.orientation { v0 } else { v1 }
     }
 }
 
 fn closure_take_back<C>(edges: &[Edge<C>]) -> impl Fn(EdgeIndex) -> usize + '_ {
     move |edge_index: EdgeIndex| {
         let (v0, v1) = edges[edge_index.index].vertices;
-        match edge_index.orientation {
-            true => v1,
-            false => v0,
-        }
+        if edge_index.orientation { v1 } else { v0 }
     }
 }
 
@@ -1471,9 +1488,10 @@ fn closure_get_poly<P: Clone>(
 ) -> impl Fn(EdgeIndex) -> PolylineCurve<P> + '_ {
     move |edge_index: EdgeIndex| {
         let poly = &poly_edges[edge_index.index];
-        match edge_index.orientation {
-            true => poly.clone(),
-            false => poly.inverse(),
+        if edge_index.orientation {
+            poly.clone()
+        } else {
+            poly.inverse()
         }
     }
 }
@@ -1508,9 +1526,10 @@ fn boundary_type(poly: &PolylineCurve<Point2>) -> BoundaryType {
         return BoundaryType::NotClosed;
     };
     if first.distance2(*last) < 1.0e-3 {
-        match poly.area() > 0.0 {
-            true => BoundaryType::Positive,
-            false => BoundaryType::Negative,
+        if poly.area() > 0.0 {
+            BoundaryType::Positive
+        } else {
+            BoundaryType::Negative
         }
     } else {
         BoundaryType::NotClosed
@@ -1521,15 +1540,15 @@ fn periodic_iterator(
     p: Point2,
     (up, vp): (Option<f64>, Option<f64>),
 ) -> impl Iterator<Item = Point2> {
-    let up_range = match up {
-        Some(up) => vec![-2.0 * up, -up, 0.0, up, 2.0 * up],
-        None => vec![0.0],
-    };
-    let vp_range = match vp {
-        Some(vp) => vec![-2.0 * vp, -vp, 0.0, vp, 2.0 * vp],
-        None => vec![0.0],
-    };
-    itertools::iproduct!(up_range, vp_range).map(move |(dx, dy)| p + Vector2::new(dx, dy))
+    let u_offsets = up.map_or_else(
+        || vec![0.0],
+        |period| vec![-2.0 * period, -period, 0.0, period, 2.0 * period],
+    );
+    let v_offsets = vp.map_or_else(
+        || vec![0.0],
+        |period| vec![-2.0 * period, -period, 0.0, period, 2.0 * period],
+    );
+    itertools::iproduct!(u_offsets, v_offsets).map(move |(dx, dy)| p + Vector2::new(dx, dy))
 }
 
 fn nearest_correction(

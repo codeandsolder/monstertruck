@@ -11,9 +11,12 @@
 //! [`Assembly`] or from a single shape via [`StepDesign::from_model`] and
 //! implements [`std::fmt::Display`] to produce the STEP data section.
 
-use super::{Result, *};
+use super::{
+    ConstStepLength, Debug, Display, Formatter, IndexSliceDisplay, MatrixAsAxis, Result,
+    StepDisplay, StepFormat, StepLength, StepMeasurementContext,
+};
 use crate::step::common::PartAttributes;
-use monstertruck_assembly::assy::*;
+use monstertruck_assembly::assy::{Assembly, EdgeEntity, Node, NodeEntity};
 use monstertruck_modeling::Matrix4;
 
 /// Index of the `APPLICATION_CONTEXT` entity, always written first.
@@ -81,8 +84,8 @@ where
     }
 }
 
-impl<'a, Model, Models, Matrix> StepFormat
-    for Node<'a, NodeEntity<Models, PartAttributes>, EdgeEntity<Matrix, PartAttributes>>
+impl<Model, Models, Matrix> StepFormat
+    for Node<'_, NodeEntity<Models, PartAttributes>, EdgeEntity<Matrix, PartAttributes>>
 where
     Model: StepFormat + StepLength,
     for<'b> &'b Models: IntoIterator<Item = &'b Model>,
@@ -101,20 +104,20 @@ where
                     // future field cannot be dropped by accident. A load-side
                     // `SHAPE_REPRESENTATION` id indexes the file it was read
                     // out of; this emitter allocates its own numbering (the
-                    // `sr_idx` below), so writing the carried id back would
+                    // `representation_idx` below), so writing the carried id back would
                     // emit a dangling reference. See
                     // `PartAttributes::shape_representation`.
                     shape_representation: _,
                 },
         } = self.entity();
-        let sdr_idx = idx;
-        let pds_idx = idx + 1;
-        let pd_idx = idx + 2;
-        let pdf_idx = idx + 3;
-        let p_idx = idx + 4;
-        let pdc_idx = idx + 5;
-        let pc_idx = idx + 6;
-        let sr_idx = idx + 7;
+        let shape_link_idx = idx;
+        let property_idx = idx + 1;
+        let definition_idx = idx + 2;
+        let formation_idx = idx + 3;
+        let product_idx = idx + 4;
+        let design_context_idx = idx + 5;
+        let mechanical_context_idx = idx + 6;
+        let representation_idx = idx + 7;
 
         let mut shape_indices = vec![GLOBAL_IDENTITY_MATRIX];
         let mut cursor = idx + 8;
@@ -133,14 +136,14 @@ where
 
         let shape_indices = IndexSliceDisplay(shape_indices);
         f.write_fmt(format_args!(
-            "#{sdr_idx} = SHAPE_DEFINITION_REPRESENTATION(#{pds_idx}, #{sr_idx});
-#{pds_idx} = PRODUCT_DEFINITION_SHAPE('', '', #{pd_idx});
-#{pd_idx} = PRODUCT_DEFINITION('design', '', #{pdf_idx}, #{pdc_idx});
-#{pdf_idx} = PRODUCT_DEFINITION_FORMATION('', '', #{p_idx});
-#{p_idx} = PRODUCT('{id}', '{name}', '{description}', (#{pc_idx}));
-#{pdc_idx} = DESIGN_CONTEXT('', #{GLOBAL_APPLICATION_CONTEXT_INDEX}, 'design');
-#{pc_idx} = MECHANICAL_CONTEXT('', #{GLOBAL_APPLICATION_CONTEXT_INDEX}, 'mechanical');
-#{sr_idx} = SHAPE_REPRESENTATION('', {shape_indices}, #{COMMON_REPRESENTATION_CONTEXT_INDEX});\n"
+            "#{shape_link_idx} = SHAPE_DEFINITION_REPRESENTATION(#{property_idx}, #{representation_idx});
+#{property_idx} = PRODUCT_DEFINITION_SHAPE('', '', #{definition_idx});
+#{definition_idx} = PRODUCT_DEFINITION('design', '', #{formation_idx}, #{design_context_idx});
+#{formation_idx} = PRODUCT_DEFINITION_FORMATION('', '', #{product_idx});
+#{product_idx} = PRODUCT('{id}', '{name}', '{description}', (#{mechanical_context_idx}));
+#{design_context_idx} = DESIGN_CONTEXT('', #{GLOBAL_APPLICATION_CONTEXT_INDEX}, 'design');
+#{mechanical_context_idx} = MECHANICAL_CONTEXT('', #{GLOBAL_APPLICATION_CONTEXT_INDEX}, 'mechanical');
+#{representation_idx} = SHAPE_REPRESENTATION('', {shape_indices}, #{COMMON_REPRESENTATION_CONTEXT_INDEX});\n"
         ))?;
 
         for display in &displays {
@@ -150,8 +153,8 @@ where
     }
 }
 
-impl<'a, Model, Models, Matrix> StepLength
-    for Node<'a, NodeEntity<Models, PartAttributes>, EdgeEntity<Matrix, PartAttributes>>
+impl<Model, Models, Matrix> StepLength
+    for Node<'_, NodeEntity<Models, PartAttributes>, EdgeEntity<Matrix, PartAttributes>>
 where
     Model: StepLength,
     for<'b> &'b Models: IntoIterator<Item = &'b Model>,
@@ -162,7 +165,7 @@ where
         8 + MatrixAsAxis::<Matrix>::LENGTH * self.edges().len()
             + (&self.entity().shape)
                 .into_iter()
-                .map(|shape| shape.step_length())
+                .map(super::StepLength::step_length)
                 .sum::<usize>()
     }
 }
@@ -176,8 +179,8 @@ struct NodeInEdge {
 }
 
 impl NodeInEdge {
-    fn new(node_idx: usize) -> Self {
-        NodeInEdge {
+    const fn new(node_idx: usize) -> Self {
+        Self {
             product_definition_idx: node_idx + 2,
             shape_representation_idx: node_idx + 7,
         }
@@ -191,7 +194,7 @@ impl NodeInEdge {
 struct EdgeDisplay<'a> {
     matrix_idx: usize,
     attrs: &'a PartAttributes,
-    nodes: (NodeInEdge, NodeInEdge),
+    endpoint_nodes: (NodeInEdge, NodeInEdge),
 }
 
 impl StepFormat for EdgeDisplay<'_> {
@@ -200,19 +203,19 @@ impl StepFormat for EdgeDisplay<'_> {
         let rr_idx = cdsr_idx + 1;
         let idt_idx = rr_idx + 1;
         let mat_idx = self.matrix_idx;
-        let pds_idx = idt_idx + 1;
-        let nauo_idx = pds_idx + 1;
+        let property_idx = idt_idx + 1;
+        let nauo_idx = property_idx + 1;
 
         let (
             NodeInEdge {
-                product_definition_idx: pd_idx0,
-                shape_representation_idx: sr_idx0,
+                product_definition_idx: parent_definition_idx,
+                shape_representation_idx: parent_representation_idx,
             },
             NodeInEdge {
-                product_definition_idx: pd_idx1,
-                shape_representation_idx: sr_idx1,
+                product_definition_idx: child_definition_idx,
+                shape_representation_idx: child_representation_idx,
             },
-        ) = self.nodes;
+        ) = self.endpoint_nodes;
 
         let PartAttributes {
             name,
@@ -225,15 +228,15 @@ impl StepFormat for EdgeDisplay<'_> {
         } = &self.attrs;
 
         f.write_fmt(format_args!(
-            "#{cdsr_idx} = CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{rr_idx}, #{pds_idx});
+            "#{cdsr_idx} = CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{rr_idx}, #{property_idx});
 #{rr_idx} = (
-    REPRESENTATION_RELATIONSHIP('', '', #{sr_idx0}, #{sr_idx1})
+    REPRESENTATION_RELATIONSHIP('', '', #{parent_representation_idx}, #{child_representation_idx})
     REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#{idt_idx})
     SHAPE_REPRESENTATION_RELATIONSHIP()
 );
 #{idt_idx} = ITEM_DEFINED_TRANSFORMATION('', '', #{GLOBAL_IDENTITY_MATRIX}, #{mat_idx});
-#{pds_idx} = PRODUCT_DEFINITION_SHAPE('', '', #{nauo_idx});
-#{nauo_idx} = NEXT_ASSEMBLY_USAGE_OCCURRENCE('{id}', '{name}', '{description}', #{pd_idx0}, #{pd_idx1}, $);\n"
+#{property_idx} = PRODUCT_DEFINITION_SHAPE('', '', #{nauo_idx});
+#{nauo_idx} = NEXT_ASSEMBLY_USAGE_OCCURRENCE('{id}', '{name}', '{description}', #{parent_definition_idx}, #{child_definition_idx}, $);\n"
         ))
     }
 }
@@ -269,6 +272,7 @@ pub struct StepDesign<Model, Models, Matrix = Matrix4> {
 impl<Model, Models, Matrix> StepDesign<Model, Models, Matrix> {
     /// Builds a `StepDesign` from an explicit assembly.
     #[inline]
+    #[must_use]
     pub fn new(assembly: Assembly<Models, PartAttributes, Matrix, PartAttributes>) -> Self {
         Self {
             assembly,
@@ -280,6 +284,7 @@ impl<Model, Models, Matrix> StepDesign<Model, Models, Matrix> {
 
     /// Builds a `StepDesign` with a caller-provided application-context string.
     #[inline]
+    #[must_use]
     pub fn with_application_context(
         assembly: Assembly<Models, PartAttributes, Matrix, PartAttributes>,
         application_context: String,
@@ -296,14 +301,16 @@ impl<Model, Models, Matrix> StepDesign<Model, Models, Matrix> {
     /// representation-context preamble. The default preserves millimetre
     /// lengths and a `1.0E-6` `distance_accuracy_value`.
     #[inline]
-    pub fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
+    #[must_use]
+    pub const fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
         self.measurement_context = context;
         self
     }
 
     /// Returns the length unit and distance accuracy written into the preamble.
     #[inline]
-    pub fn measurement_context(&self) -> StepMeasurementContext { self.measurement_context }
+    #[must_use]
+    pub const fn measurement_context(&self) -> StepMeasurementContext { self.measurement_context }
 }
 
 impl<Model> StepDesign<Model, Option<Model>, Matrix4> {
@@ -358,21 +365,21 @@ where
         for node in self.assembly.all_nodes() {
             for (i, edge) in node.edges().enumerate() {
                 let (node_idx0, node_idx1) = edge.nodes();
-                // SAFETY: `node_map` was filled in the loop above for every
-                // node returned by `all_nodes`, and the edge endpoints
-                // came from that same iterator.
-                let nodes = (
-                    *node_map.get(&node_idx0).unwrap(),
-                    *node_map.get(&node_idx1).unwrap(),
-                );
+                let Some(&parent_node) = node_map.get(&node_idx0) else {
+                    return Err(std::fmt::Error);
+                };
+                let Some(&child_node) = node_map.get(&node_idx1) else {
+                    return Err(std::fmt::Error);
+                };
+                let endpoint_nodes = (parent_node, child_node);
 
                 let matrix_key = (node.index(), i);
-                // SAFETY: `matrix_map` was filled in the loop above for every
-                // (node, edge_index) pair we visit here.
-                let matrix_idx = *matrix_map.get(&matrix_key).unwrap();
+                let Some(&matrix_idx) = matrix_map.get(&matrix_key) else {
+                    return Err(std::fmt::Error);
+                };
 
                 let edge_display = EdgeDisplay {
-                    nodes,
+                    endpoint_nodes,
                     matrix_idx,
                     attrs: edge.attributes(),
                 };

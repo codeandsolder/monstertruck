@@ -17,7 +17,7 @@ fn modeling_cylinder(
         Point3::new(radius, 0.0, -half_height),
         Point3::new(radius, 0.0, half_height),
     ));
-    ModelingSurface::RevolutionSurface(Processor::new(RevolutionSurface::by_revolution(
+    ModelingSurface::Revolution(Processor::new(RevolutionSurface::by_revolution(
         profile, origin, axis,
     )))
 }
@@ -49,9 +49,9 @@ fn modeling_cylinder_saves_as_cylindrical_surface() {
 
     // Every surface point lies on the revolution axis at the recovered radius.
     for i in 0..8 {
-        let v = TAU * i as f64 / 8.0;
+        let v = TAU * f64::from(i) / 8.0;
         for &u in &[0.0, 0.5, 1.0] {
-            let point = reloaded.subs(u, v);
+            let point = reloaded.evaluate(u, v);
             let offset = point - origin;
             let radial = offset - axis * offset.dot(axis);
             assert!(

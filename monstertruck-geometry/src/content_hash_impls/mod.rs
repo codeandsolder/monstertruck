@@ -5,9 +5,12 @@ use std::hash::Hasher;
 use monstertruck_core::DeterministicContentHash;
 use monstertruck_core::One;
 
-use crate::decorators::*;
-use crate::nurbs::*;
-use crate::specifieds::*;
+use crate::decorators::{
+    ExtrusionSurface, IntersectionCurve, ParameterCurve, Processor, RevolutionSurface,
+    SurfaceCurve, TrimmedCurve,
+};
+use crate::nurbs::{BsplineCurve, BsplineSurface, KnotVector, NurbsCurve, NurbsSurface};
+use crate::specifieds::{Line, Plane, Sphere, Torus, UnitCircle, UnitHyperbola, UnitParabola};
 
 // ---------------------------------------------------------------------------
 // NURBS primitives.
@@ -191,37 +194,43 @@ impl<P: DeterministicContentHash> DeterministicContentHash for crate::t_spline::
         ];
 
         cps.iter().enumerate().for_each(|(idx, cp)| {
-            let guard = cp.read();
-            guard.point().content_hash(state);
-            guard.knot_coordinates().content_hash(state);
+            {
+                let control_point = cp.read();
+                control_point.point().content_hash(state);
+                control_point.knot_coordinates().content_hash(state);
+            }
 
             // Hash connectivity: for each direction, encode connection type
             // and neighbor index (resolved via Arc identity against the
-            // control-point vector).
-            dirs.iter().for_each(|&dir| {
-                match guard.get(dir) {
-                    None => {
-                        // T-junction.
-                        state.write_u8(0);
-                    }
-                    Some((None, weight)) => {
-                        // Edge condition.
-                        state.write_u8(1);
-                        weight.content_hash(state);
-                    }
-                    Some((Some(neighbor), weight)) => {
-                        // Connected to another control point.
-                        state.write_u8(2);
-                        weight.content_hash(state);
-                        // Resolve neighbor index in the control-point vector.
-                        let neighbor_idx = cps
-                            .iter()
-                            .position(|other| std::sync::Arc::ptr_eq(neighbor, other))
-                            .unwrap_or(idx);
-                        neighbor_idx.content_hash(state);
+            // control-point vector). Snapshot one connection at a time so no
+            // control-point guard is held while traversing the mesh.
+            for &dir in &dirs {
+                {
+                    let connection = cp.read().get(dir).cloned();
+                    match connection {
+                        None => {
+                            // T-junction.
+                            state.write_u8(0);
+                        }
+                        Some((None, weight)) => {
+                            // Edge condition.
+                            state.write_u8(1);
+                            weight.content_hash(state);
+                        }
+                        Some((Some(neighbor), weight)) => {
+                            // Connected to another control point.
+                            state.write_u8(2);
+                            weight.content_hash(state);
+                            // Resolve neighbor index in the control-point vector.
+                            let neighbor_idx = cps
+                                .iter()
+                                .position(|other| std::sync::Arc::ptr_eq(&neighbor, other))
+                                .unwrap_or(idx);
+                            neighbor_idx.content_hash(state);
+                        }
                     }
                 }
-            });
+            }
         });
     }
 }

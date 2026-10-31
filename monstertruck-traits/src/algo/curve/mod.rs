@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    CalcOutput, EuclideanSpace, HashGen, InnerSpace, MetricSpace, ParameterRange, ParametricCurve,
+    ParametricCurve3D, ParametricSurface, ParametricSurface3D, SurfaceParameterRange, TOLERANCE,
+    Tolerance, VectorSpace, Zero, newton, scalar_from_usize, surface,
+};
 use surface::{SearchNearestParameterVector, SearchParameterVector};
 
 /// Divides the domain into equal parts, examines all the values, and returns `t` such that `curve.evaluate(t)` is closest to `point`.
@@ -8,11 +12,14 @@ where
     C: ParametricCurve,
     C::Point: MetricSpace<Metric = f64> + Copy, {
     let (t0, t1) = range;
+    if division == 0 {
+        return t0;
+    }
     let mut res = t0;
     let mut min = f64::INFINITY;
     for i in 0..=division {
-        let p = i as f64 / division as f64;
-        let t = t0 * (1.0 - p) + t1 * p;
+        let p = scalar_from_usize(i) / scalar_from_usize(division);
+        let t = f64::mul_add(t1, p, t0 * (1.0 - p));
         let dist = curve.evaluate(t).distance2(point);
         if dist < min {
             min = dist;
@@ -60,12 +67,9 @@ where
             derivation: der.magnitude2(),
         }
     };
-    newton::solve(function, hint, trials).ok().and_then(|t| {
-        match curve.evaluate(t).to_vec().near(&point.to_vec()) {
-            true => Some(t),
-            false => None,
-        }
-    })
+    newton::solve(function, hint, trials)
+        .ok()
+        .filter(|&t| curve.evaluate(t).to_vec().near(&point.to_vec()))
 }
 
 /// Creates the curve division
@@ -99,11 +103,11 @@ where
     C::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     let seed = ends.0.midpoint(ends.1);
-    let p = 0.5 + (0.2 * HashGen::hash1(seed) - 0.1);
-    let t = range.0 * (1.0 - p) + range.1 * p;
+    let p = 0.5 + 0.2f64.mul_add(HashGen::hash1(seed), -0.1);
+    let t = range.1.mul_add(p, range.0 * (1.0 - p));
     let mid = ends.0 + (ends.1 - ends.0) * p;
     let dist2 = curve.evaluate(t).distance2(mid);
-    let mid_param = (range.0 + range.1) / 2.0;
+    let mid_param = f64::midpoint(range.0, range.1);
     // A non-finite deviation never satisfies the tolerance test and a range that
     // can no longer be halved never improves; both would otherwise subdivide all
     // the way down to the depth cap, i.e. an exponential amount of work.
@@ -152,7 +156,7 @@ where
 {
     type Point = P;
     type Vector = P::Diff;
-    #[inline(always)]
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         match (m, n) {
             (0, 0) => self.curve0.evaluate(u) - self.curve1.evaluate(v),
@@ -161,27 +165,27 @@ where
             _ => Self::Vector::zero(),
         }
     }
-    #[inline(always)]
+    #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Self::Point {
         P::from_vec(self.derivative_mn(0, 0, u, v))
     }
-    #[inline(always)]
+    #[inline]
     fn derivative_u(&self, u: f64, _: f64) -> Self::Vector { self.curve0.derivative(u) }
-    #[inline(always)]
+    #[inline]
     fn derivative_v(&self, _: f64, v: f64) -> Self::Vector { self.curve1.derivative(v) * (-1.0) }
-    #[inline(always)]
+    #[inline]
     fn derivative_uu(&self, u: f64, _: f64) -> Self::Vector { self.curve0.derivative_2(u) }
-    #[inline(always)]
+    #[inline]
     fn derivative_vv(&self, _: f64, v: f64) -> Self::Vector { self.curve1.derivative_2(v) * (-1.0) }
-    #[inline(always)]
+    #[inline]
     fn derivative_uv(&self, _: f64, _: f64) -> Self::Vector { P::Diff::zero() }
-    #[inline(always)]
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
         (self.curve0.parameter_range(), self.curve1.parameter_range())
     }
-    #[inline(always)]
+    #[inline]
     fn period_u(&self) -> Option<f64> { self.curve0.period() }
-    #[inline(always)]
+    #[inline]
     fn period_v(&self) -> Option<f64> { self.curve1.period() }
 }
 
@@ -192,10 +196,11 @@ where
 {
 }
 
-/// Divides the domain into equal parts, examines all the values, and returns `(t0, t1)` such that
-/// `curve0.evaluate(t0)` is closest to `curve1.evaluate(t1)`.
-/// This method is useful to get an efficient hint of [`search_closest_parameter`].
-#[inline(always)]
+/// Finds a coarse closest pair of curve parameters by uniform domain sampling.
+///
+/// Returns `(t0, t1)` such that the sampled `curve0.evaluate(t0)` is closest to
+/// `curve1.evaluate(t1)`. This is useful as a hint for [`search_closest_parameter`].
+#[inline]
 pub fn presearch_closest_point<P, C0, C1>(
     curve0: &C0,
     curve1: &C1,
@@ -217,7 +222,7 @@ where
 }
 
 /// Searches the parameters of the closest point of the two curves.
-#[inline(always)]
+#[inline]
 pub fn search_closest_parameter<P, C0, C1>(
     curve0: &C0,
     curve1: &C1,
@@ -234,7 +239,7 @@ where
 }
 
 /// Searches the parameters of the intersection point of the two curves.
-#[inline(always)]
+#[inline]
 pub fn search_intersection_parameter<P, C0, C1>(
     curve0: &C0,
     curve1: &C1,

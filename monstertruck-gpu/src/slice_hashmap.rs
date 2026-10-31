@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use rustc_hash::FxHashMap as HashMap;
 use std::hash::Hash;
 
@@ -12,7 +10,7 @@ pub struct SliceHashMap<K, V> {
 
 impl<K, V> Default for SliceHashMap<K, V> {
     fn default() -> Self {
-        SliceHashMap {
+        Self {
             vec: Vec::new(),
             map: HashMap::default(),
         }
@@ -26,18 +24,15 @@ impl<K: Copy + Eq + Hash, V> SliceHashMap<K, V> {
         let idx = *self.map.get(key)?;
         Some(&mut self.vec[idx].1)
     }
-    pub fn len(&self) -> usize { self.vec.len() }
+    pub const fn len(&self) -> usize { self.vec.len() }
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        match self.map.get(&key) {
-            Some(idx) => {
-                self.vec.push((key, value));
-                Some(self.vec.swap_remove(*idx).1)
-            }
-            None => {
-                self.map.insert(key, self.vec.len());
-                self.vec.push((key, value));
-                None
-            }
+        if let Some(idx) = self.map.get(&key) {
+            self.vec.push((key, value));
+            Some(self.vec.swap_remove(*idx).1)
+        } else {
+            self.map.insert(key, self.vec.len());
+            self.vec.push((key, value));
+            None
         }
     }
     pub fn remove(&mut self, key: &K) -> Option<V> {
@@ -45,8 +40,11 @@ impl<K: Copy + Eq + Hash, V> SliceHashMap<K, V> {
             let output = self.vec.swap_remove(idx);
             if idx < self.vec.len() {
                 let key = self.vec[idx].0;
-                // SAFETY: key was just read from vec[idx] after swap_remove, so it must exist in map.
-                *self.map.get_mut(&key).unwrap() = idx;
+                if let Some(slot) = self.map.get_mut(&key) {
+                    *slot = idx;
+                } else {
+                    self.map.insert(key, idx);
+                }
             }
             output.1
         })
@@ -87,17 +85,17 @@ fn sliced_hashmap() {
     assert_eq!(map.len(), 100);
     assert_eq!(map.vec.len(), map.map.len());
     for i in 0..100 {
-        assert_eq!(map.insert(i, i + 200).unwrap(), 100 - i);
+        assert_eq!(map.insert(i, i + 200), Some(100 - i));
         assert_eq!(map.vec.len(), map.map.len());
     }
     for i in 0..100 {
-        assert_eq!(*map.get(&i).unwrap(), i + 200);
+        assert_eq!(map.get(&i), Some(&(i + 200)));
         assert_eq!(map.vec.len(), map.map.len());
     }
     assert!(map.insert(100, 300).is_none());
     assert_eq!(map.len(), 101);
     for i in 0..100 {
-        assert_eq!(map.remove(&i).unwrap(), i + 200);
+        assert_eq!(map.remove(&i), Some(i + 200));
         assert_eq!(map.vec.len(), map.map.len());
     }
     assert_eq!(map.len(), 1);

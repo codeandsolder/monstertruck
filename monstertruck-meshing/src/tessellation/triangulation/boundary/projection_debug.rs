@@ -1,8 +1,13 @@
+#![expect(
+    clippy::similar_names,
+    reason = "surface parameter diagnostics intentionally use canonical paired parameter names"
+)]
+
 //! The boundary-projection failure lens. Split out of the module file so the
 //! source stays readable; the module path is unchanged. What it measures and
 //! why is the banner below.
 
-use super::*;
+use super::{EuclideanSpace, InnerSpace, MetricSpace, Point3, PreMeshableSurface, algo, env};
 
 // ---------------------------------------------------------------------------
 // Boundary-projection failure lens (`MT_DEBUG_BOUNDARY_PROJECTION=1`)
@@ -70,7 +75,7 @@ fn fmt_option_f64(value: Option<f64>) -> String {
 }
 
 /// Brute-force nearest point on the surface's DECLARED domain, by a coarse grid
-/// plus a shrinking local sweep. Uses only `subs`, so it needs no solver trait
+/// plus a shrinking local sweep. Uses only `evaluate`, so it needs no solver trait
 /// and answers the one question the checked solver's `None` hides: is the point
 /// on the surface at all, and if so where?
 ///
@@ -86,24 +91,24 @@ fn sampled_nearest<S: PreMeshableSurface>(
     let (v0, v1) = vrange;
     let mut best = ((u0, v0), f64::INFINITY);
     for i in 0..=GRID {
-        let u = u0 + (u1 - u0) * i as f64 / GRID as f64;
+        let u = u0 + (u1 - u0) * crate::count_as_f64(i) / crate::count_as_f64(GRID);
         for j in 0..=GRID {
-            let v = v0 + (v1 - v0) * j as f64 / GRID as f64;
-            let d = surface.subs(u, v).distance2(point);
+            let v = v0 + (v1 - v0) * crate::count_as_f64(j) / crate::count_as_f64(GRID);
+            let d = surface.evaluate(u, v).distance2(point);
             if d < best.1 {
                 best = ((u, v), d);
             }
         }
     }
-    let mut du = (u1 - u0) / GRID as f64;
-    let mut dv = (v1 - v0) / GRID as f64;
+    let mut du = (u1 - u0) / crate::count_as_f64(GRID);
+    let mut dv = (v1 - v0) / crate::count_as_f64(GRID);
     for _ in 0..60 {
         let ((bu, bv), _) = best;
         for i in -2i32..=2 {
             for j in -2i32..=2 {
-                let u = (bu + du * i as f64).clamp(u0, u1);
-                let v = (bv + dv * j as f64).clamp(v0, v1);
-                let d = surface.subs(u, v).distance2(point);
+                let u = du.mul_add(f64::from(i), bu).clamp(u0, u1);
+                let v = dv.mul_add(f64::from(j), bv).clamp(v0, v1);
+                let d = surface.evaluate(u, v).distance2(point);
                 if d < best.1 {
                     best = ((u, v), d);
                 }
@@ -116,7 +121,10 @@ fn sampled_nearest<S: PreMeshableSurface>(
 }
 
 /// One line per unprojectable boundary vertex. Print-only.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "diagnostic reporter names each independent projection datum explicitly"
+)]
 pub(super) fn report_projection_failure<S: PreMeshableSurface>(
     surface: &S,
     attempt: &str,
@@ -144,7 +152,7 @@ pub(super) fn report_projection_failure<S: PreMeshableSurface>(
     // surface is there -- a pole shows a vanishing derivative.
     let (residual, du, dv) = previous.map_or((f64::NAN, f64::NAN, f64::NAN), |(u, v)| {
         (
-            surface.subs(u, v).distance(point),
+            surface.evaluate(u, v).distance(point),
             surface.derivative_u(u, v).magnitude(),
             surface.derivative_v(u, v).magnitude(),
         )
@@ -191,13 +199,13 @@ pub(super) fn report_projection_failure<S: PreMeshableSurface>(
     // bound on `search_nearest_parameter_sp`, not the algorithm.
     let snp = |hint: Option<(f64, f64)>| -> String {
         let seed = hint.unwrap_or_else(|| {
-            let u = urange.map_or(0.0, |(lo, hi)| 0.5 * (lo + hi));
-            let v = vrange.map_or(0.0, |(lo, hi)| 0.5 * (lo + hi));
+            let u = urange.map_or(0.0, |(lo, hi)| f64::midpoint(lo, hi));
+            let v = vrange.map_or(0.0, |(lo, hi)| f64::midpoint(lo, hi));
             (u, v)
         });
         match algo::surface::search_nearest_parameter(surface, point, seed, 100) {
             Some((u, v)) => {
-                let d = surface.subs(u, v).distance(point);
+                let d = surface.evaluate(u, v).distance(point);
                 format!("uv=({u:.9},{v:.9}) dist={d:.9}")
             }
             None => "diverged".to_string(),

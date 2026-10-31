@@ -1,3 +1,15 @@
+#![expect(
+    clippy::suboptimal_flops,
+    reason = "reference polynomial formulas stay expanded so the oracle is readable and does not change rounding via FMA"
+)]
+#![expect(
+    clippy::many_single_char_names,
+    reason = "surface tests use canonical u/v parameter and compact algebraic notation"
+)]
+#![expect(
+    clippy::similar_names,
+    reason = "paired u/v derivative and division names are canonical surface notation"
+)]
 #![cfg(feature = "polynomial")]
 
 use monstertruck_core::assert_near2;
@@ -40,26 +52,35 @@ fn polysurface() {
     let curve1 = PolynomialCurve::<Point3>(coef1);
     let poly = PolynomialSurface::by_tensor(curve0, curve1);
     for i in 0..5 {
-        let u = i as f64;
+        let u = f64::from(i);
         for j in 0..5 {
-            let v = j as f64;
+            let v = f64::from(j);
             assert_eq!(
-                poly.subs(u, v)[0],
+                poly.evaluate(u, v)[0],
                 (2.0 * u * u + 3.0 * u + 1.0) * (4.0 * v * v - 6.0 * v + 2.0)
             );
             assert_eq!(
-                poly.uder(u, v)[0],
+                poly.derivative_u(u, v)[0],
                 (4.0 * u + 3.0) * (4.0 * v * v - 6.0 * v + 2.0)
             );
             assert_eq!(
-                poly.vder(u, v)[0],
+                poly.derivative_v(u, v)[0],
                 (2.0 * u * u + 3.0 * u + 1.0) * (8.0 * v - 6.0)
             );
-            assert_eq!(poly.uuder(u, v)[0], 4.0 * (4.0 * v * v - 6.0 * v + 2.0));
-            assert_eq!(poly.uvder(u, v)[0], (4.0 * u + 3.0) * (8.0 * v - 6.0));
-            assert_eq!(poly.vvder(u, v)[0], (2.0 * u * u + 3.0 * u + 1.0) * 8.0);
-            assert!(poly.normal(u, v).dot(poly.uder(u, v)).so_small());
-            assert!(poly.normal(u, v).dot(poly.vder(u, v)).so_small());
+            assert_eq!(
+                poly.derivative_uu(u, v)[0],
+                4.0 * (4.0 * v * v - 6.0 * v + 2.0)
+            );
+            assert_eq!(
+                poly.derivative_uv(u, v)[0],
+                (4.0 * u + 3.0) * (8.0 * v - 6.0)
+            );
+            assert_eq!(
+                poly.derivative_vv(u, v)[0],
+                (2.0 * u * u + 3.0 * u + 1.0) * 8.0
+            );
+            assert!(poly.normal(u, v).dot(poly.derivative_u(u, v)).so_small());
+            assert!(poly.normal(u, v).dot(poly.derivative_v(u, v)).so_small());
 
             let eps = 1.0e-4;
             let normal_uder_approx =
@@ -103,33 +124,27 @@ fn exec_polysurface_snp_on_surface(rng: &mut StdRng) -> bool {
     let poly = PolynomialSurface::by_tensor(curve0, curve1);
     let u = 10.0 * rng.random::<f64>() - 5.0;
     let v = 10.0 * rng.random::<f64>() - 5.0;
-    let pt = poly.subs(u, v);
+    let pt = poly.evaluate(u, v);
     let u0 = u + 0.2 * rng.random::<f64>() - 0.1;
     let v0 = v + 0.2 * rng.random::<f64>() - 0.1;
-    match surface::search_nearest_parameter(&poly, pt, (u0, v0), 100) {
-        Some(res) => match poly.subs(res.0, res.1).near(&pt) {
-            true => true,
-            false => {
+    let answer = (u, v);
+    let hint = (u0, v0);
+    surface::search_nearest_parameter(&poly, pt, hint, 100).map_or_else(
+        || {
+            eprintln!("not converge\npolynomial: {poly:?}\nanswer: {answer:?}\nhint: {hint:?}");
+            false
+        },
+        |res| {
+            if poly.evaluate(res.0, res.1).near(&pt) {
+                true
+            } else {
                 eprintln!(
-                    "wrong answer\npolynomial: {:?}\nanswer: {:?}\nhint: {:?}\nresult: {:?}",
-                    poly,
-                    (u, v),
-                    (u0, v0),
-                    res,
+                    "wrong answer\npolynomial: {poly:?}\nanswer: {answer:?}\nhint: {hint:?}\nresult: {res:?}",
                 );
                 false
             }
         },
-        None => {
-            eprintln!(
-                "not converge\npolynomial: {:?}\nanswer: {:?}\nhint: {:?}",
-                poly,
-                (u, v),
-                (u0, v0),
-            );
-            false
-        }
-    }
+    )
 }
 
 #[test]
@@ -163,33 +178,27 @@ fn exec_polysurface_sp_on_surface(rng: &mut StdRng) -> bool {
     let poly = PolynomialSurface::by_tensor(curve0, curve1);
     let u = 10.0 * rng.random::<f64>() - 5.0;
     let v = 10.0 * rng.random::<f64>() - 5.0;
-    let pt = poly.subs(u, v);
+    let pt = poly.evaluate(u, v);
     let u0 = u + 2.0 * rng.random::<f64>() - 1.0;
     let v0 = v + 2.0 * rng.random::<f64>() - 1.0;
-    match surface::search_parameter(&poly, pt, (u0, v0), 100) {
-        Some(res) => match poly.subs(res.0, res.1).near(&pt) {
-            true => true,
-            false => {
+    let answer = (u, v);
+    let hint = (u0, v0);
+    surface::search_parameter(&poly, pt, hint, 100).map_or_else(
+        || {
+            eprintln!("not converge\npolynomial: {poly:?}\nanswer: {answer:?}\nhint: {hint:?}");
+            false
+        },
+        |res| {
+            if poly.evaluate(res.0, res.1).near(&pt) {
+                true
+            } else {
                 eprintln!(
-                    "wrong answer\npolynomial: {:?}\nanswer: {:?}\nhint: {:?}\nresult: {:?}",
-                    poly,
-                    (u, v),
-                    (u0, v0),
-                    res,
+                    "wrong answer\npolynomial: {poly:?}\nanswer: {answer:?}\nhint: {hint:?}\nresult: {res:?}",
                 );
                 false
             }
         },
-        None => {
-            eprintln!(
-                "not converge\npolynomial: {:?}\nanswer: {:?}\nhint: {:?}",
-                poly,
-                (u, v),
-                (u0, v0),
-            );
-            false
-        }
-    }
+    )
 }
 
 #[test]
@@ -225,7 +234,7 @@ fn exec_polysurface_intersection_point(rng: &mut StdRng) -> bool {
 
     match surface::search_intersection_parameter(&surface, (0.5, 0.5), &curve, 0.0, 100) {
         Some(((x, y), z)) => {
-            let (p, q) = (surface.subs(x, y), curve.subs(z));
+            let (p, q) = (surface.evaluate(x, y), curve.evaluate(z));
             p.near(&q) && x.near(&a) && y.near(&b) && p.z.near(&z)
         }
         None => false,
@@ -269,17 +278,17 @@ fn exec_polysurface_division(rng: &mut StdRng) -> bool {
             .windows(2)
             .flat_map(move |v| (1..3).map(move |j| (j, v)))
         {
-            let p = i as f64 / 3.0;
-            let q = j as f64 / 3.0;
+            let p = f64::from(i) / 3.0;
+            let q = f64::from(j) / 3.0;
             let pt0 = Point3::from_vec(
-                poly.subs(u[0], v[0]).to_vec() * (1.0 - p) * (1.0 - q)
-                    + poly.subs(u[1], v[0]).to_vec() * p * (1.0 - q)
-                    + poly.subs(u[0], v[1]).to_vec() * (1.0 - p) * q
-                    + poly.subs(u[1], v[1]).to_vec() * p * q,
+                poly.evaluate(u[0], v[0]).to_vec() * (1.0 - p) * (1.0 - q)
+                    + poly.evaluate(u[1], v[0]).to_vec() * p * (1.0 - q)
+                    + poly.evaluate(u[0], v[1]).to_vec() * (1.0 - p) * q
+                    + poly.evaluate(u[1], v[1]).to_vec() * p * q,
             );
             let u = u[0] * (1.0 - p) + u[1] * p;
             let v = v[0] * (1.0 - q) + v[1] * q;
-            let pt1 = poly.subs(u, v);
+            let pt1 = poly.evaluate(u, v);
             if pt0.distance(pt1) > 0.2 {
                 return false;
             }

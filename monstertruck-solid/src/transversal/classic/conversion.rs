@@ -1,6 +1,12 @@
 //! Convert temporary Boolean intersection curves back to target curve types.
 
-use super::*;
+use super::{
+    AltCurveShell, Alternative, BoundaryCurve2D, BoundedCurve, BoundedSurface, BsplineCurve, Cut,
+    IntersectionCurve, Invertible, KnotVector, MetricSpace, NurbsCurve, ParameterCurve,
+    ParametricCurve, Point3, PolylineCurve, ShapeOpsCurve, ShapeOpsSurface, Shell, SurfaceCurve,
+    TOLERANCE, Vector4,
+};
+use num_traits::ToPrimitive;
 
 /// Convert a polyline leader to an exactly equivalent degree-1 B-spline.
 ///
@@ -13,8 +19,12 @@ fn polyline_leader_bspline(polyline: &PolylineCurve<Point3>) -> Option<BsplineCu
         return None;
     }
     let mut knots = KnotVector::uniform_knot(1, segment_count);
-    knots.transform(segment_count as f64, 0.0);
-    Some(BsplineCurve::new(knots, polyline.iter().copied().collect()))
+    let segment_count = segment_count.to_f64()?;
+    knots.transform(segment_count, 0.0);
+    Some(BsplineCurve::new_unchecked(
+        knots,
+        polyline.iter().copied().collect(),
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -146,15 +156,15 @@ fn prove_iso_candidate<S: ShapeOpsSurface>(
     leader: &PolylineCurve<Point3>,
 ) -> bool {
     let (t0, t1) = candidate.range_tuple();
-    if candidate.subs(t0).distance(leader.front()) > 8.0 * TOLERANCE
-        || candidate.subs(t1).distance(leader.back()) > 8.0 * TOLERANCE
+    if candidate.evaluate(t0).distance(leader.front()) > 8.0 * TOLERANCE
+        || candidate.evaluate(t1).distance(leader.back()) > 8.0 * TOLERANCE
     {
         return false;
     }
     let points = (0..=32)
         .map(|index| {
-            let ratio = index as f64 / 32.0;
-            candidate.subs(t0 * (1.0 - ratio) + t1 * ratio)
+            let ratio = f64::from(index) / 32.0;
+            candidate.evaluate(f64::mul_add(t1, ratio, t0 * (1.0 - ratio)))
         })
         .collect::<Vec<_>>();
     let mut hint0 = None;
@@ -212,7 +222,8 @@ pub(super) fn exact_iso_leader<S: ShapeOpsSurface>(
                     IsoParameter::V => v,
                 })
                 .collect::<Vec<_>>();
-            let constant = values.iter().sum::<f64>() / values.len() as f64;
+            let value_count = values.len().to_f64()?;
+            let constant = values.iter().sum::<f64>() / value_count;
             // Inverse parameter search on tightly trimmed B-spline surfaces can
             // wander by hundreds of ulps even for an exact iso-parameter
             // intersection. Prove constancy in 3D instead: every marching

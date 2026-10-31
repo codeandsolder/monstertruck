@@ -4,6 +4,8 @@
 //! path is unchanged.
 
 use super::*;
+use crate::prelude::{Point3, Vector3, assert_near2};
+use monstertruck_traits::ParametricCurve;
 
 #[test]
 fn hermite_endpoints_and_tangents() {
@@ -13,10 +15,10 @@ fn hermite_endpoints_and_tangents() {
         p1: Point3::new(3.0, 0.0, 0.0),
         t1: Vector3::new(3.0, -3.0, 0.0),
     });
-    assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-    assert_near2!(curve.subs(1.0), Point3::new(3.0, 0.0, 0.0));
-    assert_near2!(curve.der(0.0), Vector3::new(3.0, 3.0, 0.0));
-    assert_near2!(curve.der(1.0), Vector3::new(3.0, -3.0, 0.0));
+    assert_near2!(curve.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+    assert_near2!(curve.evaluate(1.0), Point3::new(3.0, 0.0, 0.0));
+    assert_near2!(curve.derivative(0.0), Vector3::new(3.0, 3.0, 0.0));
+    assert_near2!(curve.derivative(1.0), Vector3::new(3.0, -3.0, 0.0));
 }
 
 #[test]
@@ -28,8 +30,8 @@ fn catmull_rom_interpolates_interior() {
         Point3::new(2.0, 0.0, 0.0),
         Point3::new(3.0, 0.0, 0.0),
     ]));
-    assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-    assert_near2!(curve.subs(1.0), Point3::new(2.0, 0.0, 0.0));
+    assert_near2!(curve.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+    assert_near2!(curve.evaluate(1.0), Point3::new(2.0, 0.0, 0.0));
 }
 
 #[test]
@@ -38,9 +40,9 @@ fn power_basis_linear() {
         Point3::new(0.0, 0.0, 0.0),
         Point3::new(3.0, 4.0, 0.0),
     ]));
-    assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-    assert_near2!(curve.subs(1.0), Point3::new(3.0, 4.0, 0.0));
-    assert_near2!(curve.subs(0.5), Point3::new(1.5, 2.0, 0.0));
+    assert_near2!(curve.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+    assert_near2!(curve.evaluate(1.0), Point3::new(3.0, 4.0, 0.0));
+    assert_near2!(curve.evaluate(0.5), Point3::new(1.5, 2.0, 0.0));
 }
 
 #[test]
@@ -51,14 +53,23 @@ fn power_basis_quadratic() {
         Point3::new(0.0, 0.0, 0.0),
         Point3::new(1.0, 0.0, 0.0),
     ]));
-    assert_near2!(curve.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-    assert_near2!(curve.subs(1.0), Point3::new(1.0, 0.0, 0.0));
-    assert_near2!(curve.subs(0.5), Point3::new(0.25, 0.0, 0.0));
+    assert_near2!(curve.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+    assert_near2!(curve.evaluate(1.0), Point3::new(1.0, 0.0, 0.0));
+    assert_near2!(curve.evaluate(0.5), Point3::new(0.25, 0.0, 0.0));
+}
+
+#[test]
+fn power_basis_degree_68_does_not_overflow_binomial_weights() {
+    let mut coefficients = vec![Point3::new(0.0, 0.0, 0.0); 69];
+    coefficients[68] = Point3::new(1.0, 0.0, 0.0);
+    let curve = BsplineCurve::from(PowerBasisCurve(coefficients));
+    let t = 0.9_f64;
+    assert_near2!(curve.evaluate(t), Point3::new(t.powi(68), 0.0, 0.0));
 }
 
 #[test]
 fn concat_two_cubic_segments() {
-    let seg1 = BsplineCurve::new(
+    let seg1 = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(3),
         vec![
             Point3::new(0.0, 0.0, 0.0),
@@ -67,7 +78,7 @@ fn concat_two_cubic_segments() {
             Point3::new(3.0, 0.0, 0.0),
         ],
     );
-    let seg2 = BsplineCurve::new(
+    let seg2 = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(3),
         vec![
             Point3::new(3.0, 0.0, 0.0),
@@ -77,7 +88,7 @@ fn concat_two_cubic_segments() {
         ],
     );
     let combined = BsplineCurve::from(PiecewiseBezier(vec![seg1, seg2]));
-    assert_near2!(combined.subs(0.0), Point3::new(0.0, 0.0, 0.0));
-    assert_near2!(combined.subs(0.5), Point3::new(3.0, 0.0, 0.0));
-    assert_near2!(combined.subs(1.0), Point3::new(6.0, 0.0, 0.0));
+    assert_near2!(combined.evaluate(0.0), Point3::new(0.0, 0.0, 0.0));
+    assert_near2!(combined.evaluate(0.5), Point3::new(3.0, 0.0, 0.0));
+    assert_near2!(combined.evaluate(1.0), Point3::new(6.0, 0.0, 0.0));
 }

@@ -6,9 +6,13 @@
 //! parameter-space wrapper remains intentionally absent; the loops store consumes
 //! only the cleaned 3-D [`IntersectionCurve`] leader.
 
-use monstertruck_core::{cgmath64::*, tolerance::TOLERANCE};
+use monstertruck_core::{
+    cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point3},
+    tolerance::TOLERANCE,
+};
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
+use num_traits::ToPrimitive;
 
 use crate::transversal::polyline_construction::{
     construct_polylines, enumerate_endpoint_joins, merge_endpoint_join, stitch_nearby_polylines,
@@ -116,12 +120,14 @@ where
     // Refuse pathological gaps rather than spending unbounded work validating them.
     let intervals = (bridge_length / (2.0 * validation.tolerance))
         .ceil()
-        .max(2.0) as usize;
-    if intervals > 4096 {
+        .max(2.0);
+    if !intervals.is_finite() || intervals > 4096.0 {
         return false;
     }
-    let samples: Vec<_> = (0..=intervals)
-        .map(|i| a + bridge * (i as f64 / intervals as f64))
+    let samples: Vec<_> = (0_u32..=4096)
+        .map(f64::from)
+        .take_while(|&index| index <= intervals)
+        .map(|index| a + bridge * (index / intervals))
         .collect();
     let surfaces_ok = samples.iter().copied().all(|point| {
         point_is_on_surface(validation.surface0, point, validation.tolerance)
@@ -195,11 +201,11 @@ where
         // real branch ambiguity and remains fail-closed.
         let join_distance = join.distance2.sqrt();
         let ambiguous = joins.iter().skip(1).any(|other| {
-            let shares_endpoint = other.first == join.first
-                || other.second == join.first
-                || other.first == join.second
-                || other.second == join.second;
-            shares_endpoint && (other.distance2.sqrt() - join_distance).abs() <= tolerance
+            let join_endpoints = [join.first, join.second];
+            let shares_endpoint =
+                join_endpoints.contains(&other.first) || join_endpoints.contains(&other.second);
+            let distance_delta = (other.distance2.sqrt() - join_distance).abs();
+            shares_endpoint && distance_delta <= tolerance
         });
         if ambiguous {
             return polylines;
@@ -248,15 +254,17 @@ where
     };
     let mut polyline = PolylineCurve(Vec::new());
     for i in 0..len - 1 {
+        let parameter = i.to_f64()?;
         let (q, _, _) = ic
-            .search_triple(i as f64, 100)
+            .search_triple(parameter, 100)
             .or_else(|| recover_triple(raw[i]))?;
         polyline.push(q);
     }
     let q = if raw[0].near(&raw[len - 1]) {
         polyline[0]
     } else {
-        ic.search_triple((len - 1) as f64, 100)
+        let parameter = (len - 1).to_f64()?;
+        ic.search_triple(parameter, 100)
             .or_else(|| recover_triple(raw[len - 1]))?
             .0
     };
@@ -330,6 +338,7 @@ mod tests {
             },
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
         )
+        .expect("fixture mesh is valid")
     }
 
     fn disconnected_xy_mesh(gap: f64) -> PolygonMesh {
@@ -349,6 +358,7 @@ mod tests {
             },
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]]),
         )
+        .expect("fixture mesh is valid")
     }
 
     fn zx_mesh(x0: f64, x1: f64) -> PolygonMesh {
@@ -364,6 +374,7 @@ mod tests {
             },
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
         )
+        .expect("fixture mesh is valid")
     }
 
     #[test]

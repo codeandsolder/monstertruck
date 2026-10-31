@@ -33,7 +33,7 @@ fn geometry() {
         2,
     );
     step_test::<BsplineCurve<Point2>>(
-        BsplineCurve::new(
+        BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(2),
             vec![
                 Point2::new(0.0, 0.0),
@@ -49,7 +49,7 @@ fn geometry() {
     4,
     );
     step_test::<NurbsCurve<Vector3>>(
-        NurbsCurve::new(BsplineCurve::new(
+        NurbsCurve::new(BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(2),
             vec![
                 Vector3::new(0.0, 0.0, 1.0),
@@ -260,7 +260,7 @@ fn geometry() {
         5,
     );
     step_test::<Processor<Torus, Matrix4>>(
-        Processor::new(Torus::new(Point3::new(1.0, 2.0, 3.0), 5.0, 3.0)).transformed(
+        Processor::new(Torus::new_unchecked(Point3::new(1.0, 2.0, 3.0), 5.0, 3.0)).transformed(
             Matrix4::from_cols(
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(-3.0, 0.0, 0.0, 0.0),
@@ -277,7 +277,7 @@ fn geometry() {
         5,
     );
     step_test::<BsplineSurface<Point2>>(
-        BsplineSurface::new(
+        BsplineSurface::new_unchecked(
             (KnotVector::bezier_knot(2), KnotVector::uniform_knot(2, 2)),
             vec![
                 vec![
@@ -319,7 +319,7 @@ fn geometry() {
     );
 
     step_test::<NurbsSurface<Vector3>>(
-        NurbsSurface::new(BsplineSurface::new(
+        NurbsSurface::new(BsplineSurface::new_unchecked(
             (KnotVector::bezier_knot(2), KnotVector::uniform_knot(2, 2)),
             vec![
                 vec![

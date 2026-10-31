@@ -75,24 +75,3 @@ pub fn to_bodies(ir: &cadmpeg_ir::CadIr, format: &'static str) -> Result<Vec<Imp
     }
     convert::convert(ir, format)
 }
-
-/// Read solids only, discarding sheet bodies.
-///
-/// # Deprecated
-///
-/// Prefer [`to_bodies`]. This signature cannot express what IGES actually
-/// returns -- mostly sheets -- so it would silently hand back an empty list for
-/// files that are full of geometry.
-#[deprecated(
-    since = "0.4.0",
-    note = "cannot represent sheet bodies, which is most IGES content; use `to_bodies`"
-)]
-pub fn to_solids(ir: &cadmpeg_ir::CadIr, format: &'static str) -> Result<Vec<ImportedSolid>> {
-    Ok(to_bodies(ir, format)?
-        .into_iter()
-        .filter_map(|body| match body {
-            ImportedBody::Solid(solid) => Some(solid),
-            ImportedBody::Sheet(_) => None,
-        })
-        .collect())
-}

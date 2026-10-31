@@ -4,7 +4,7 @@ use monstertruck_meshing::prelude::*;
 use monstertruck_modeling::*;
 
 #[test]
-#[allow(
+#[expect(
     clippy::excessive_precision,
     reason = "regression fixture preserves recovered STEP coordinates verbatim"
 )]

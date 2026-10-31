@@ -13,20 +13,21 @@
 //!     *T-splines and T-NURCCs*. ACM Transactions on Graphics (TOG). 22. 477-484.
 //!     10.1145/882262.882295.
 
-use crate::{prelude::*, *};
+use crate::{Debug, prelude::*};
 use monstertruck_core::cgmath64::control_point::ControlPoint;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
 /// The compound type which defines a connection within a tmesh.
+///
 /// The first element of the tuple is the (optional) point the connection interfaces to.
 /// The second element of the tuple is the knot weight of the connection.
 pub type TmeshConnection<P> = (Option<Arc<RwLock<TmeshControlPoint<P>>>>, f64);
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 
 /// Describes the type of connections a Tmesh may have, and thus the expected structure of the
-/// layout of the corresponding TmeshConnection type.
+/// layout of the corresponding `TmeshConnection` type.
 pub enum TmeshConnectionType {
     /// The connection is a standard connection with a control point and a weight associated with it.
     /// The connection must have a `some(TmeshControlPoint)` and the weight is not arbitrary.
@@ -70,10 +71,10 @@ pub struct Tmesh<P> {
     knot_vectors: RwLock<Option<Vec<(KnotVector, KnotVector)>>>,
 }
 
-/// # TmeshDirection
+/// # `TmeshDirection`
 ///
 /// A C-style enum designed to enforce T-mesh control point directionality.
-#[derive(Clone, PartialEq, Debug, Copy)]
+#[derive(Clone, PartialEq, Eq, Debug, Copy)]
 pub enum TmeshDirection {
     /// The `+v` parametric direction
     Up = 0,
@@ -139,7 +140,7 @@ enum TnurccFaceSide {
 struct TnurccEdge<P> {
     index: usize,
     // Connections are always Some(con) if initialized through new
-    connections: [Option<Arc<RwLock<TnurccEdge<P>>>>; 4],
+    connections: [Option<Arc<RwLock<Self>>>; 4],
 
     face_left: Option<Arc<RwLock<TnurccFace<P>>>>,
     face_right: Option<Arc<RwLock<TnurccFace<P>>>>,
@@ -155,7 +156,6 @@ struct TnurccEdge<P> {
 /// Described in \[Sederberg et al. 2003\], building on material from \[Sederberg et al. 1998\].
 #[derive(Debug)]
 pub struct Tnurcc<P> {
-    #[allow(dead_code)]
     extraordinary_control_points: Vec<Arc<RwLock<TnurccControlPoint<P>>>>,
     control_points: Vec<Arc<RwLock<TnurccControlPoint<P>>>>,
     faces: Vec<Arc<RwLock<TnurccFace<P>>>>,

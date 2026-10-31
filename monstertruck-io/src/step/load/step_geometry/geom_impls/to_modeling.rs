@@ -2,7 +2,20 @@
 //! carriers reach an analytic modeling variant, and which fall through to
 //! the rational net.
 
-use super::*;
+use super::{
+    Conic2D, Curve2D, Curve3D, ElementarySurface, ModelingConic2D, ModelingCurve, ModelingCurve2D,
+    ModelingSurface, NurbsCurve, NurbsSurface, ParameterCurve, RevolutionSurface,
+    StepConvertingError, StepParameterCurve, Surface, SurfaceCurve, SurfaceCurveAssociatedGeometry,
+    TOLERANCE, Torus, TryIntoBsplineSurface, TryIntoHomogeneousBsplineCurve,
+    TryIntoHomogeneousBsplineSurface,
+};
+
+#[cfg(test)]
+use crate::step::load::step_geometry::Sphere;
+#[cfg(test)]
+use monstertruck_geometry::prelude::{BoundedSurface, ParameterDivision2D, Point3, Processor};
+#[cfg(test)]
+use std::f64::consts::TAU;
 
 fn to_modeling_trim(
     curve: &StepParameterCurve,
@@ -21,56 +34,52 @@ impl TryFrom<&Curve3D> for ModelingCurve {
             Curve3D::Line(line) => Ok((*line).into()),
             Curve3D::BsplineCurve(curve) => Ok(curve.clone().into()),
             Curve3D::NurbsCurve(curve) => Ok(curve.clone().into()),
-            Curve3D::ParameterCurve(curve) => {
-                Ok(ModelingCurve::ParameterCurve(ParameterCurve::new(
-                    curve.curve().as_ref().try_into()?,
-                    Box::new(curve.surface().as_ref().try_into()?),
-                )))
-            }
+            Curve3D::ParameterCurve(curve) => Ok(Self::ParameterCurve(ParameterCurve::new(
+                curve.curve().as_ref().try_into()?,
+                Box::new(curve.surface().as_ref().try_into()?),
+            ))),
             Curve3D::SurfaceCurve(curve) => {
-                let surfaces = curve
+                let associated_surfaces = curve
                     .associated_geometry()
                     .iter()
                     .map(SurfaceCurveAssociatedGeometry::surface)
                     .collect::<Vec<_>>();
-                if surfaces.len() >= 2 {
-                    let surface0 = surfaces[0].try_into()?;
-                    let surface1 = surfaces[1].try_into()?;
-                    let boundary0 = curve
-                        .parameter_curve_on(surfaces[0])
+                if associated_surfaces.len() >= 2 {
+                    let first_surface = associated_surfaces[0].try_into()?;
+                    let second_surface = associated_surfaces[1].try_into()?;
+                    let first_boundary = curve
+                        .parameter_curve_on(associated_surfaces[0])
                         .cloned()
                         .map(|trim| to_modeling_trim(&trim))
                         .transpose()?;
-                    let boundary1 = curve
-                        .parameter_curve_on(surfaces[1])
+                    let second_boundary = curve
+                        .parameter_curve_on(associated_surfaces[1])
                         .cloned()
                         .map(|trim| to_modeling_trim(&trim))
                         .transpose()?;
-                    Ok(ModelingCurve::IntersectionCurve(
-                        SurfaceCurve::with_boundaries(
-                            Box::new(surface0),
-                            Box::new(surface1),
-                            Box::new(curve.leader().try_into()?),
-                            boundary0,
-                            boundary1,
-                        ),
-                    ))
+                    Ok(Self::Intersection(SurfaceCurve::with_boundaries(
+                        Box::new(first_surface),
+                        Box::new(second_surface),
+                        Box::new(curve.leader().try_into()?),
+                        first_boundary,
+                        second_boundary,
+                    )))
                 } else {
                     curve.leader().try_into()
                 }
             }
-            Curve3D::IntersectionCurve(curve) => Ok(ModelingCurve::IntersectionCurve(
-                SurfaceCurve::with_boundaries(
+            Curve3D::IntersectionCurve(curve) => {
+                Ok(Self::Intersection(SurfaceCurve::with_boundaries(
                     Box::new(curve.surface0().as_ref().try_into()?),
                     Box::new(curve.surface1().as_ref().try_into()?),
                     Box::new(curve.leader().as_ref().try_into()?),
                     None,
                     None,
-                ),
-            )),
+                )))
+            }
             _ => value
                 .try_into_homogeneous_bspline_curve()
-                .map(|curve| ModelingCurve::NurbsCurve(NurbsCurve::new(curve)))
+                .map(|curve| Self::NurbsCurve(NurbsCurve::new(curve)))
                 .ok_or_else(|| "STEP curve cannot be represented in modeling geometry.".into()),
         }
     }
@@ -93,7 +102,7 @@ impl TryFrom<&Curve2D> for ModelingCurve2D {
         match value {
             Curve2D::Line(curve) => Ok((*curve).into()),
             Curve2D::Polyline(curve) => Ok(curve.clone().into()),
-            Curve2D::Conic(curve) => Ok(ModelingCurve2D::Conic(curve.try_into()?)),
+            Curve2D::Conic(curve) => Ok(Self::Conic(curve.try_into()?)),
             Curve2D::BsplineCurve(curve) => Ok(curve.clone().into()),
             Curve2D::NurbsCurve(curve) => Ok(curve.clone().into()),
         }
@@ -106,7 +115,7 @@ impl TryFrom<&Curve2D> for ModelingCurve2D {
 /// The predicate has to be the BUILDER's and no wider: a sphere that fails it
 /// must reach the generic arm, where the builder returns `None` and the
 /// conversion refuses -- which is what it does today.
-/// Whether STEP spheres route onto the analytic [`ModelingSurface::SphericalSurface`].
+/// Whether STEP spheres route onto the analytic [`ModelingSurface::Sphere`].
 ///
 /// **`false` -- STILL HELD, but NOT for the reason the previous revision gave.**
 /// Ledger class C14.
@@ -233,26 +242,21 @@ fn analytic_sphere_is_representable(sphere: &monstertruck_geometry::prelude::Sph
 
 /// Whether the analytic torus route is admissible.
 ///
-/// Restates `TryIntoHomogeneousBsplineSurface for Torus`
-/// (`bspline_conversion.rs`) verbatim, INCLUDING its spindle rejection. Spec
-/// 011 T1: on a spindle torus (`small - large` above the relative tolerance)
-/// the surface passes through itself and `search_parameter` is silently wrong
-/// on roughly a third of the domain, so the class refuses typed. Horn tori
-/// (`large == small`, including the near-horn fillets real STEP files carry a
-/// few ulps below) ARE representable and must keep converting.
+/// Ring, horn, and positive-major spindle tori all have exact forward and
+/// inverse parameterisations now. This guard therefore rejects only scalar
+/// domains the geometry type cannot represent at all.
 fn analytic_torus_is_representable(torus: &Torus) -> bool {
     let (large_radius, small_radius) = (torus.large_radius(), torus.small_radius());
     large_radius.is_finite()
         && small_radius.is_finite()
         && small_radius > TOLERANCE
         && large_radius > TOLERANCE
-        && small_radius - large_radius <= TOLERANCE * (large_radius + small_radius)
 }
 
 /// STEP surface -> modeling surface.
 ///
 /// Cylinders and cones map onto the ANALYTIC
-/// [`ModelingSurface::RevolutionSurface`] variant rather than being flattened.
+/// [`ModelingSurface::Revolution`] variant rather than being flattened.
 /// The flattening path is lossy in a way nothing downstream can undo: a STEP
 /// `CYLINDRICAL_SURFACE` is a revolution of a UNIT-LENGTH profile line, so the
 /// untrimmed homogeneous conversion emits a control net spanning ONE AXIAL UNIT
@@ -304,40 +308,33 @@ fn analytic_torus_is_representable(torus: &Torus) -> bool {
 /// dispatch cost is confined to `monstertruck-modeling`'s own `geometry.rs`,
 /// this crate's save side, and `fillet_impl.rs`.
 ///
-/// # The degenerate torus stays refused (spec 011 T1)
+/// # Torus routing
 ///
-/// The refusal for `|large| < small` lives in the BUILDER
-/// (`bspline_conversion.rs`), so a routing change that stops calling the
-/// builder would silently reopen it -- and it must not: on a spindle the
-/// FORWARD map is exact to 8e-16 while `search_parameter` is wrong on ~29% of
-/// the domain, which is what places trims. [`analytic_torus_is_representable`]
-/// therefore restates the builder's predicate verbatim, and a torus that fails
-/// it falls through to the generic arm, where the builder returns `None` and
-/// the conversion refuses exactly as it does today. Pinned by
-/// `spindle_torus_parameter_recovery_is_unsound_while_ring_and_horn_are_exact`
-/// (`monstertruck-geometry/tests/torus.rs`) and by
-/// `a_spindle_torus_is_still_refused_by_the_analytic_route` below.
+/// Positive-major ring, horn, and spindle tori all stay analytic. The torus
+/// inverse map explicitly handles both signed-radial branches, so retaining the
+/// analytic carrier preserves the same point set and gives exact trim projection.
+/// STEP's `DEGENERATE_TOROIDAL_SURFACE` sheet selection is handled earlier in
+/// the STEP conversion layer and never reaches this generic surface router until
+/// its semantics are representable.
 impl TryFrom<&Surface> for ModelingSurface {
     type Error = StepConvertingError;
     fn try_from(value: &Surface) -> std::result::Result<Self, Self::Error> {
         match value {
-            Surface::ElementarySurface(ElementarySurface::Plane(surface)) => Ok((*surface).into()),
+            Surface::Elementary(ElementarySurface::Plane(surface)) => Ok((*surface).into()),
             // Both arrive as `Processor<RevolutionSurface<Line<Point3>>, Matrix4>`,
             // so one or-pattern binds them. `map_ref` carries the `Matrix4` and
             // the processor's orientation across untouched; only the profile is
             // lifted into the modeling curve enum.
-            Surface::ElementarySurface(
+            Surface::Elementary(
                 ElementarySurface::CylindricalSurface(surface)
                 | ElementarySurface::ConicalSurface(surface),
-            ) => Ok(ModelingSurface::RevolutionSurface(surface.map_ref(
-                |revolution| {
-                    RevolutionSurface::by_revolution(
-                        ModelingCurve::Line(*revolution.entity_curve()),
-                        revolution.origin(),
-                        revolution.axis(),
-                    )
-                },
-            ))),
+            ) => Ok(Self::Revolution(surface.map_ref(|revolution| {
+                RevolutionSurface::by_revolution(
+                    ModelingCurve::Line(*revolution.entity_curve()),
+                    revolution.origin(),
+                    revolution.axis(),
+                )
+            }))),
             // `map_ref` again: the `Matrix4` and the orientation flag ride
             // across untouched, only the STEP newtype's `(u, v)` relabeling is
             // dropped. That relabeling has Jacobian determinant +1, so the
@@ -346,13 +343,11 @@ impl TryFrom<&Surface> for ModelingSurface {
             // ERASED (`TrimmedSolid::erase_trims`) before the geometry is
             // mapped, and every consumer re-derives `(u, v)` by projecting the
             // 3D boundary onto the modeling surface.
-            Surface::ElementarySurface(ElementarySurface::Sphere(surface))
+            Surface::Elementary(ElementarySurface::Sphere(surface))
                 if ROUTE_ANALYTIC_SPHERE
                     && analytic_sphere_is_representable(&surface.entity().0) =>
             {
-                Ok(ModelingSurface::SphericalSurface(
-                    surface.map_ref(|sphere| sphere.0),
-                ))
+                Ok(Self::Sphere(surface.map_ref(|sphere| sphere.0)))
             }
             // TORUS ROUTING, spec 012 W1: the sibling of the sphere arm above,
             // and it was HELD BACK behind an `if false &&` for one round.
@@ -388,20 +383,20 @@ impl TryFrom<&Surface> for ModelingSurface {
             // that SUCCEEDS against a closed-form volume, so the capability is
             // covered rather than only its refusal.
             //
-            // The guard below is the T1 spindle predicate restated verbatim, so
-            // spec 011's degenerate-torus refusal survives this unchanged.
-            Surface::ElementarySurface(ElementarySurface::ToroidalSurface(surface))
+            // Keep every finite positive torus analytic; STEP-specific sheet
+            // selection was already resolved or refused before this layer.
+            Surface::Elementary(ElementarySurface::ToroidalSurface(surface))
                 if analytic_torus_is_representable(surface.entity()) =>
             {
                 // `*`, not `.clone()`: `Processor<Torus, Matrix4>` is `Copy`.
                 // The dead arm carried the clone unnoticed -- clippy does not
                 // lint through an `if false` guard, which is one more reason a
                 // held-back arm is not a free thing to leave lying around.
-                Ok(ModelingSurface::ToroidalSurface(*surface))
+                Ok(Self::Torus(*surface))
             }
             _ => value
                 .try_into_homogeneous_bspline_surface()
-                .map(|surface| ModelingSurface::NurbsSurface(NurbsSurface::new(surface)))
+                .map(|surface| Self::NurbsSurface(NurbsSurface::new(surface)))
                 .or_else(|| {
                     value
                         .try_into_bspline_surface()
@@ -418,15 +413,15 @@ impl TryFrom<&Surface> for ModelingSurface {
 
 #[cfg(test)]
 fn u1_step_sphere(radius: f64) -> Surface {
-    Surface::ElementarySurface(ElementarySurface::Sphere(Processor::new(Sphere(
+    Surface::Elementary(ElementarySurface::Sphere(Processor::new(Sphere(
         monstertruck_geometry::prelude::Sphere::new(Point3::new(1.0, -2.0, 3.0), radius),
     ))))
 }
 
 #[cfg(test)]
 fn u1_step_torus(large_radius: f64, small_radius: f64) -> Surface {
-    Surface::ElementarySurface(ElementarySurface::ToroidalSurface(Processor::new(
-        Torus::new(Point3::new(1.0, -2.0, 3.0), large_radius, small_radius),
+    Surface::Elementary(ElementarySurface::ToroidalSurface(Processor::new(
+        Torus::new_unchecked(Point3::new(1.0, -2.0, 3.0), large_radius, small_radius),
     )))
 }
 
@@ -447,7 +442,7 @@ fn the_analytic_route_emits_the_same_rational_net_the_flattened_route_did() {
         assert!(
             matches!(
                 modeling,
-                ModelingSurface::SphericalSurface(_) | ModelingSurface::ToroidalSurface(_)
+                ModelingSurface::Sphere(_) | ModelingSurface::Torus(_)
             ),
             "spheres and tori must reach the analytic variants, got {modeling:?}",
         );
@@ -511,32 +506,23 @@ fn the_analytic_route_spends_no_adaptive_refinement_cells() {
     }
 }
 
-/// Spec 011 T1 must survive the routing change.
-///
-/// The spindle refusal lives in the BUILDER, so an analytic route that stopped
-/// calling the builder would reopen it silently. On a spindle the FORWARD map
-/// stays exact while `search_parameter` is wrong on ~29% of the domain, which
-/// is what places trims -- so the class must keep refusing typed in every
-/// encoding, and horn tori (the fillet form) must keep converting.
+/// Positive-major spindle tori use the same analytic route as ring and horn tori.
 #[test]
-fn a_spindle_torus_is_still_refused_by_the_analytic_route() {
-    // |large| < small in each of the spellings the corpus carries.
-    for (large_radius, small_radius) in [(1.0, 3.0), (0.5, 20.0), (1.0e-3, 1.0)] {
-        let step = u1_step_torus(large_radius, small_radius);
-        assert!(
-            ModelingSurface::try_from(&step).is_err(),
-            "spindle torus (R = {large_radius}, r = {small_radius}) must refuse typed",
-        );
-    }
-    // Horn (R == r) and ring (R > r) are unaffected and must still convert.
-    for (large_radius, small_radius) in [(2.0, 2.0), (7.0, 2.0)] {
+fn a_positive_major_spindle_torus_uses_the_analytic_route() {
+    for (large_radius, small_radius) in [
+        (1.0, 3.0),
+        (0.5, 20.0),
+        (1.0e-3, 1.0),
+        (2.0, 2.0),
+        (7.0, 2.0),
+    ] {
         let step = u1_step_torus(large_radius, small_radius);
         assert!(
             matches!(
                 ModelingSurface::try_from(&step),
-                Ok(ModelingSurface::ToroidalSurface(_))
+                Ok(ModelingSurface::Torus(_))
             ),
-            "torus (R = {large_radius}, r = {small_radius}) must convert typed",
+            "torus (R = {large_radius}, r = {small_radius}) must convert analytically",
         );
     }
 }
@@ -548,7 +534,6 @@ fn a_spindle_torus_is_still_refused_by_the_analytic_route() {
 fn the_analytic_guard_matches_the_builders_own_predicate() {
     for step in [
         u1_step_sphere(f64::INFINITY),
-        u1_step_torus(1.0, 3.0),
         u1_step_torus(f64::INFINITY, 1.0),
     ] {
         assert_eq!(

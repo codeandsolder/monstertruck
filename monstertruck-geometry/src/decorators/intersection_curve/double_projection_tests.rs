@@ -4,18 +4,21 @@
 //! name is unchanged, so every test keeps its path and its identity.
 
 use super::*;
+use crate::prelude::{RevolutionSurface, Sphere, prop_assert_near};
+use monstertruck_core::{MetricSpace, Transform, Zero};
+use monstertruck_traits::ParametricSurface;
 use proptest::prelude::*;
 use std::f64::consts::PI;
 type PResult = std::result::Result<(), TestCaseError>;
 
 fn unit_normal_candidate(u: [f64; 2]) -> Vector3 {
     let angle = 2.0 * PI * u[0];
-    let w = f64::sqrt(1.0 - u[1] * u[1]);
+    let w = f64::sqrt(u[1].mul_add(-u[1], 1.0));
     Vector3::new(w * f64::cos(angle), w * f64::sin(angle), u[1])
 }
 
 fn create_axis(n: Vector3) -> (Vector3, Vector3) {
-    let idx = if n[0].abs() < n[1].abs() { 0 } else { 1 };
+    let idx = usize::from(n[0].abs() >= n[1].abs());
     let idx = if n[idx].abs() < n[2].abs() { idx } else { 2 };
     let mut e = Vector3::zero();
     e[idx] = 1.0;
@@ -35,7 +38,7 @@ fn exec_plane_case(c0: [f64; 3], n0: [f64; 2], c1: [f64; 3], n1: [f64; 2]) -> PR
     let n = n0.cross(n1).normalize();
     let mut o = None;
     for i in 0..10 {
-        let t = i as f64;
+        let t = f64::from(i);
         let p = Point3::origin() + t * n;
         let (q, p0, p1) = double_projection(&plane0, None, &plane1, None, p, n, 100)
             .unwrap_or_else(|| panic!("plane0: {plane0:?}\nplane1: {plane1:?}\n p: {p:?}"));
@@ -80,4 +83,66 @@ proptest! {
     fn sphere_case(t in 0f64..=(2.0 * PI), r in 0.5f64..=1.5f64) {
         exec_sphere_case(t, r)?;
     }
+}
+
+#[test]
+fn transformed_inverted_supports_continue_local_intersection_branch() {
+    let transform = Matrix4::from_cols(
+        Vector4::unit_x(),
+        Vector4::unit_y(),
+        Vector4::unit_z(),
+        Vector4::new(3.0, -2.0, 5.0, 1.0),
+    );
+    let sphere: Processor<Sphere, Matrix4> =
+        Processor::with_transform(Sphere::new(Point3::origin(), f64::sqrt(2.0)), transform);
+
+    let cylinder_profile = Line(Point3::new(1.0, 0.0, -2.0), Point3::new(1.0, 0.0, 2.0));
+    let mut cylinder: Processor<RevolutionSurface<Line<Point3>>, Matrix4> =
+        Processor::with_transform(
+            RevolutionSurface::by_revolution(cylinder_profile, Point3::origin(), Vector3::unit_z()),
+            transform,
+        );
+    cylinder.invert();
+
+    // The untransformed surfaces intersect in two circles z=+-1. Continue on
+    // the z=+1 branch from angle 0.2 to a transverse slice at angle 0.3.
+    let source_angle = 0.2_f64;
+    let target_angle = 0.3_f64;
+    let transform_point = |point: Point3| transform.transform_point(point);
+    let expected = transform_point(Point3::new(target_angle.cos(), target_angle.sin(), 1.0));
+    let tangent = Vector3::new(-target_angle.sin(), target_angle.cos(), 0.0);
+    let leader = Line(
+        transform_point(Point3::new(source_angle.cos(), source_angle.sin(), 1.0)),
+        expected,
+    );
+    let intersection = IntersectionCurve::new(sphere, cylinder, leader);
+
+    let (point, uv0, uv1) = intersection
+        .search_intersection_in_plane(
+            expected,
+            tangent,
+            Some((std::f64::consts::FRAC_PI_4, source_angle)),
+            Some((source_angle, 0.75)),
+            100,
+        )
+        .expect("regular transverse continuation must converge");
+
+    assert!(
+        point.distance(expected) < 1.0e-8,
+        "{point:?} != {expected:?}"
+    );
+    assert!(
+        intersection
+            .surface0()
+            .evaluate(uv0.x, uv0.y)
+            .distance(point)
+            < 1.0e-8
+    );
+    assert!(
+        intersection
+            .surface1()
+            .evaluate(uv1.x, uv1.y)
+            .distance(point)
+            < 1.0e-8
+    );
 }
