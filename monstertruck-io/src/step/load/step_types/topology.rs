@@ -5,12 +5,11 @@
 
 use super::{
     CartesianPoint, CartesianPointHolder, Conic, Conic2D, Conic3D, Curve2D, Curve3D, CurveAny,
-    CurveAnyHolder, Deserialize, Holder, Invertible, Line, Matrix3, Matrix4, Name, PI,
-    PcurveOrSurface, PlaceHolder, Point2, Point3, PreferredSurfaceCurveRepresentation, Processor,
-    Result, SearchNearestParameter, Serialize, SquareMatrix, StepConvertingError, Surface,
-    SurfaceAny, SurfaceAnyHolder, SurfaceCurve, SurfaceCurveEntityKind, TOLERANCE, Table,
-    Tolerance, Transform, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, geom,
-    step_geometry,
+    CurveAnyHolder, Deserialize, Holder, Invertible, Matrix3, Matrix4, Name, PI, PcurveOrSurface,
+    PlaceHolder, Point2, Point3, PreferredSurfaceCurveRepresentation, Processor, Result,
+    SearchNearestParameter, Serialize, SquareMatrix, StepConvertingError, Surface, SurfaceAny,
+    SurfaceAnyHolder, SurfaceCurve, SurfaceCurveEntityKind, TOLERANCE, Table, Tolerance, Transform,
+    Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, geom, step_geometry,
 };
 
 /// `vertex_point`
@@ -79,7 +78,7 @@ impl EdgeCurve {
                 let line = geom::Line::<Point2>::from(line.as_ref());
                 let p = line.projection(p);
                 let q = line.projection(q);
-                Curve2D::Line(Line(p, q))
+                Curve2D::Line(geom::Line(p, q))
             }
             CurveAny::BoundedCurve(b) => b.as_ref().try_into()?,
             CurveAny::Conic(curve) => Self::parse_conic_2d(curve.as_ref(), p, q)?,
@@ -391,7 +390,7 @@ impl EdgeCurve {
         same_sense: bool,
     ) -> Result<Curve3D, StepConvertingError> {
         let mut curve = match curve {
-            CurveAny::Line(_) => Curve3D::Line(Line(p, q)),
+            CurveAny::Line(_) => Curve3D::Line(geom::Line(p, q)),
             CurveAny::BoundedCurve(b) => b.as_ref().try_into()?,
             CurveAny::Conic(curve) => Self::parse_conic_3d(curve.as_ref(), p, q)?,
             CurveAny::Pcurve(c) => {

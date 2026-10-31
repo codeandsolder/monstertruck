@@ -13,7 +13,7 @@ use super::{
 #[cfg(test)]
 use crate::step::load::step_geometry::Sphere;
 #[cfg(test)]
-use monstertruck_geometry::prelude::{ParameterDivision2D, Point3, Processor, Torus};
+use monstertruck_geometry::prelude::{BoundedSurface, ParameterDivision2D, Point3, Processor};
 #[cfg(test)]
 use std::f64::consts::TAU;
 

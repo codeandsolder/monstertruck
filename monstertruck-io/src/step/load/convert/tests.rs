@@ -8,7 +8,9 @@ use crate::step::load::step_geometry::SurfaceCurveRepresentation as StepSurfaceC
 use crate::step::load::step_geometry::{
     Curve2D, ElementarySurface, SurfaceCurve3D, SurfaceCurveAssociatedGeometry,
 };
-use monstertruck_geometry::prelude::{Line, Processor, RevolutionSurface, Vector3};
+use monstertruck_geometry::prelude::{
+    BoundedCurve, Line, ParametricCurve, ParametricSurface, Processor, RevolutionSurface, Vector3,
+};
 use std::f64::consts::TAU;
 
 /// Loads `occt-cylinder.step` and builds its trimmed shell. The

@@ -4,7 +4,7 @@
 use super::{
     Axis1Placement, Axis1PlacementHolder, Axis2Placement3d, Axis2Placement3dHolder, BsplineSurface,
     CartesianPoint, CartesianPointHolder, Curve3D, CurveAny, CurveAnyHolder, Deserialize,
-    ElementarySurface, EuclideanSpace, Holder, InnerSpace, Invertible, KnotType, KnotVector, Line,
+    ElementarySurface, EuclideanSpace, Holder, InnerSpace, Invertible, KnotType, KnotVector,
     Logical, Matrix4, NurbsSurface, PI, Point3, Result, RevolutionSurface, Serialize, Sphere,
     StepConvertingError, StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface,
     TOLERANCE, Table, Torus, Transformed, Vector, Vector3, Vector4, VectorHolder, geom,
@@ -142,7 +142,11 @@ impl From<&CylindricalSurface> for step_geometry::CylindricalSurface {
         let center = Point3::from_homogeneous(mat[3]);
         let radius = cs.radius;
         let p = center + x * radius;
-        let mut res = Self::new(RevolutionSurface::by_revolution(Line(p, p + z), center, z));
+        let mut res = Self::new(RevolutionSurface::by_revolution(
+            geom::Line(p, p + z),
+            center,
+            z,
+        ));
         res.invert();
         res
     }
@@ -313,8 +317,11 @@ impl From<&ConicalSurface> for step_geometry::ConicalSurface {
         let p = Point3::new(*radius, 0.0, 0.0);
         let semi_angle = normalize_conical_semi_angle(*semi_angle);
         let v = Vector3::new(f64::tan(semi_angle), 0.0, 1.0);
-        let rev =
-            RevolutionSurface::by_revolution(Line(p, p + v), Point3::origin(), Vector3::unit_z());
+        let rev = RevolutionSurface::by_revolution(
+            geom::Line(p, p + v),
+            Point3::origin(),
+            Vector3::unit_z(),
+        );
         let mut processor = Self::new(rev);
         processor.transform_by(mat);
         processor.invert();
