@@ -103,8 +103,6 @@ pub const ANALYTIC_SPHERE_LOOSENESS: f64 = 6.0 / std::f64::consts::PI;
 #[must_use]
 pub const fn analytic_sphere_looseness() -> f64 { ANALYTIC_SPHERE_LOOSENESS }
 
-/// Relative tolerance for judging a `Matrix4` a similarity is centralized in `DEFAULT_NUMERICAL_TOLERANCES`.
-
 /// A certified axis-aligned box containing every point of `solid`, or [`None`]
 /// when any one of its faces carries a class this module cannot prove a bound
 /// for.
