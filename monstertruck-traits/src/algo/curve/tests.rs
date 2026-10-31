@@ -38,3 +38,29 @@ fn parameter_division_terminates_on_degenerate_range() {
     assert_eq!(params.len(), 2);
     assert_eq!(points.len(), 2);
 }
+
+#[derive(Clone)]
+struct RecordingCurve(std::rc::Rc<std::cell::Cell<Option<f64>>>);
+
+impl ParametricCurve for RecordingCurve {
+    type Point = Point3;
+    type Vector = Vector3;
+
+    fn evaluate(&self, t: f64) -> Point3 {
+        self.0.set(Some(t));
+        Point3::new(t, 0.0, 0.0)
+    }
+    fn derivative(&self, _: f64) -> Vector3 { Vector3::zero() }
+    fn derivative_2(&self, _: f64) -> Vector3 { Vector3::zero() }
+    fn derivative_n(&self, _: usize, _: f64) -> Vector3 { Vector3::zero() }
+}
+
+#[test]
+fn zero_division_presearch_samples_range_start_once() {
+    let seen = std::rc::Rc::new(std::cell::Cell::new(None));
+    let curve = RecordingCurve(seen.clone());
+    let point = Point3::new(2.5, 0.0, 0.0);
+
+    assert_eq!(presearch(&curve, point, (2.5, 9.0), 0), 2.5);
+    assert_eq!(seen.get(), Some(2.5));
+}

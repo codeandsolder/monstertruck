@@ -8,6 +8,10 @@ where
     C: ParametricCurve,
     C::Point: MetricSpace<Metric = f64> + Copy, {
     let (t0, t1) = range;
+    if division == 0 {
+        let _ = curve.evaluate(t0);
+        return t0;
+    }
     let mut res = t0;
     let mut min = f64::INFINITY;
     for i in 0..=division {
