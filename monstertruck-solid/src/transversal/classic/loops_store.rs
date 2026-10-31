@@ -39,6 +39,13 @@ pub(in crate::transversal::classic) use planar::{
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 type PolylineCurve = monstertruck_meshing::prelude::PolylineCurve<Point3>;
+type PathGraph<C> = (Vec<Edge<Point3, C>>, HashMap<VertexId<Point3>, Vec<usize>>);
+type BranchBoundaryVertices = (
+    Vertex<Point3>,
+    Vertex<Point3>,
+    Vertex<Point3>,
+    Vertex<Point3>,
+);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ShapesOpStatus {
@@ -406,9 +413,7 @@ impl<P: Copy, C: Clone> Loops<P, C> {
     }
 }
 
-fn partition_path_graph<C: Clone>(
-    loops: &Loops<Point3, C>,
-) -> (Vec<Edge<Point3, C>>, HashMap<VertexId<Point3>, Vec<usize>>) {
+fn partition_path_graph<C: Clone>(loops: &Loops<Point3, C>) -> PathGraph<C> {
     let mut edge_index_by_id = HashMap::default();
     let mut unique_edges = Vec::new();
     let mut adjacency = HashMap::<VertexId<Point3>, Vec<usize>>::default();
@@ -1089,6 +1094,15 @@ struct OperandLoopStores<C> {
     poly: LoopsStore<Point3, PolylineCurve>,
 }
 
+struct BranchContext<'a, C, S> {
+    operand0: &'a mut OperandLoopStores<C>,
+    operand1: &'a mut OperandLoopStores<C>,
+    face_indices: [usize; 2],
+    surfaces: [&'a S; 2],
+    nearest_tolerance: f64,
+    reuse_coincident: bool,
+}
+
 #[derive(Clone, Copy)]
 struct BoundaryEndpoint<'a, S> {
     face_index: usize,
@@ -1159,21 +1173,10 @@ impl<C> OperandLoopStores<C> {
 }
 
 fn add_branch_boundary_vertices<C, S>(
-    operand0: &mut OperandLoopStores<C>,
-    operand1: &mut OperandLoopStores<C>,
-    face_index0: usize,
-    face_index1: usize,
-    surface0: &S,
-    surface1: &S,
+    context: &mut BranchContext<'_, C, S>,
     front: Point3,
     back: Point3,
-    nearest_tolerance: f64,
-) -> Option<(
-    Vertex<Point3>,
-    Vertex<Point3>,
-    Vertex<Point3>,
-    Vertex<Point3>,
-)>
+) -> Option<BranchBoundaryVertices>
 where
     C: BoundedCurve<Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>
@@ -1193,8 +1196,16 @@ where
     let mut gemap0 = HashMap::default();
     let mut gemap1 = HashMap::default();
     for (operand, face_index, other_surface) in [
-        (&mut *operand0, face_index0, surface1),
-        (&mut *operand1, face_index1, surface0),
+        (
+            &mut *context.operand0,
+            context.face_indices[0],
+            context.surfaces[1],
+        ),
+        (
+            &mut *context.operand1,
+            context.face_indices[1],
+            context.surfaces[0],
+        ),
     ] {
         operand.add_boundary_endpoint(
             &BoundaryEndpoint {
@@ -1202,7 +1213,7 @@ where
                 poly_vertex: &pv0,
                 geom_vertex: &gv0,
                 other_surface,
-                nearest_tolerance,
+                nearest_tolerance: context.nearest_tolerance,
             },
             &mut pemap0,
             &mut gemap0,
@@ -1213,7 +1224,7 @@ where
                 poly_vertex: &pv1,
                 geom_vertex: &gv1,
                 other_surface,
-                nearest_tolerance,
+                nearest_tolerance: context.nearest_tolerance,
             },
             &mut pemap1,
             &mut gemap1,
@@ -1223,18 +1234,10 @@ where
 }
 
 fn add_open_intersection_branch<C, S>(
-    operand0: &mut OperandLoopStores<C>,
-    operand1: &mut OperandLoopStores<C>,
-    face_index0: usize,
-    face_index1: usize,
-    surface0: &S,
-    surface1: &S,
+    context: &mut BranchContext<'_, C, S>,
     mut polyline: PolylineCurve,
     mut intersection_curve: IntersectionCurve<PolylineCurve, S, S>,
-    status0: ShapesOpStatus,
-    status1: ShapesOpStatus,
-    nearest_tolerance: f64,
-    reuse_coincident: bool,
+    statuses: [ShapesOpStatus; 2],
 ) -> Option<()>
 where
     C: SearchNearestParameter<CurveParameter, Point = Point3>
@@ -1251,16 +1254,16 @@ where
     let mut front = polyline.front();
     let mut back = polyline.back();
     if let Some(point) = unique_nearby_loop_point(
-        &operand0.geom[face_index0],
-        &operand1.geom[face_index1],
+        &context.operand0.geom[context.face_indices[0]],
+        &context.operand1.geom[context.face_indices[1]],
         front,
         CROSS_FACE_STITCH_TOLERANCE,
     ) {
         front = point;
     }
     if let Some(point) = unique_nearby_loop_point(
-        &operand0.geom[face_index0],
-        &operand1.geom[face_index1],
+        &context.operand0.geom[context.face_indices[0]],
+        &context.operand1.geom[context.face_indices[1]],
         back,
         CROSS_FACE_STITCH_TOLERANCE,
     ) {
@@ -1275,30 +1278,26 @@ where
     *intersection_curve.leader_mut().first_mut()? = front;
     *intersection_curve.leader_mut().last_mut()? = back;
 
-    let (pv0, pv1, gv0, gv1) = add_branch_boundary_vertices(
-        operand0,
-        operand1,
-        face_index0,
-        face_index1,
-        surface0,
-        surface1,
-        front,
-        back,
-        nearest_tolerance,
-    )?;
+    let (pv0, pv1, gv0, gv1) = add_branch_boundary_vertices(context, front, back)?;
     *intersection_curve.leader_mut().first_mut()? = gv0.point();
     *intersection_curve.leader_mut().last_mut()? = gv1.point();
 
     let pedge = Edge::new_unchecked(&pv0, &pv1, polyline);
     let gedge = Edge::new_unchecked(&gv0, &gv1, intersection_curve.into());
-    operand0.add_intersection_edge(
-        face_index0,
+    context.operand0.add_intersection_edge(
+        context.face_indices[0],
         pedge.clone(),
         gedge.clone(),
-        status0,
-        reuse_coincident,
+        statuses[0],
+        context.reuse_coincident,
     );
-    operand1.add_intersection_edge(face_index1, pedge, gedge, status1, reuse_coincident);
+    context.operand1.add_intersection_edge(
+        context.face_indices[1],
+        pedge,
+        gedge,
+        statuses[1],
+        context.reuse_coincident,
+    );
     Some(())
 }
 
@@ -1337,6 +1336,40 @@ pub(super) struct InterfaceLoops<C> {
     pub(super) full_interface_adjacency: Option<FullPlanarInterfaceMatch>,
 }
 
+struct CoplanarInterfaceAnalysis {
+    partial_overlap: bool,
+    any_overlap: bool,
+    full_interface_adjacency: Option<FullPlanarInterfaceMatch>,
+}
+
+fn analyze_coplanar_interfaces(
+    poly_shell0: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    poly_shell1: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    tolerance: f64,
+    imprint_coplanar: bool,
+) -> Option<CoplanarInterfaceAnalysis> {
+    let positive_aabb_overlap =
+        shells_have_positive_aabb_overlap(poly_shell0, poly_shell1, tolerance)?;
+    let full_interface = if imprint_coplanar {
+        shells_full_planar_interface_pair(poly_shell0, poly_shell1, tolerance).ok()?
+    } else {
+        None
+    };
+    let full_interface_adjacency = if positive_aabb_overlap {
+        None
+    } else {
+        full_interface.clone()
+    };
+    let partial_overlap = imprint_coplanar
+        && positive_aabb_overlap
+        && shells_have_partial_planar_overlap(poly_shell0, poly_shell1, tolerance)?;
+    Some(CoplanarInterfaceAnalysis {
+        partial_overlap,
+        any_overlap: full_interface.is_some() || partial_overlap,
+        full_interface_adjacency,
+    })
+}
+
 pub(super) fn create_loops_stores<C, S>(
     geom_shell0: &Shell<Point3, C, S>,
     poly_shell0: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
@@ -1370,22 +1403,8 @@ where
     let boolean_tolerance = BooleanTolerance::new(tol);
     let coplanar_tol = 2.0 * boolean_tolerance.length;
     let boundary_search_tolerance = boolean_tolerance.mesh_seed;
-    let positive_aabb_overlap =
-        shells_have_positive_aabb_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
-    let full_coplanar_interface = if imprint_coplanar {
-        shells_full_planar_interface_pair(poly_shell0, poly_shell1, coplanar_tol).ok()?
-    } else {
-        None
-    };
-    let full_interface_adjacency = if positive_aabb_overlap {
-        None
-    } else {
-        full_coplanar_interface.clone()
-    };
-    let partial_coplanar_overlap = imprint_coplanar
-        && positive_aabb_overlap
-        && shells_have_partial_planar_overlap(poly_shell0, poly_shell1, coplanar_tol)?;
-    let coplanar_overlap = full_coplanar_interface.is_some() || partial_coplanar_overlap;
+    let coplanar =
+        analyze_coplanar_interfaces(poly_shell0, poly_shell1, coplanar_tol, imprint_coplanar)?;
     (0..store0_len)
         .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
         .try_for_each(|(face_index0, face_index1)| {
@@ -1394,7 +1413,7 @@ where
             // their coincident continuation surfaces (e.g. coaxial cylinders)
             // is degenerate; downstream coplanar classification removes the
             // shared internal face and topology welding stitches the rim.
-            if full_interface_adjacency.is_some() {
+            if coplanar.full_interface_adjacency.is_some() {
                 return Some(());
             }
             let ori0 = geom_shell0[face_index0].orientation();
@@ -1441,19 +1460,19 @@ where
                         operand1.geom[face_index1]
                             .add_independent_loop(BoundaryWire::new(geom_wire, status1));
                     } else {
+                        let mut context = BranchContext {
+                            operand0: &mut operand0,
+                            operand1: &mut operand1,
+                            face_indices: [face_index0, face_index1],
+                            surfaces: [&surface0, &surface1],
+                            nearest_tolerance: boundary_search_tolerance,
+                            reuse_coincident: coplanar.partial_overlap,
+                        };
                         add_open_intersection_branch(
-                            &mut operand0,
-                            &mut operand1,
-                            face_index0,
-                            face_index1,
-                            &surface0,
-                            &surface1,
+                            &mut context,
                             polyline,
                             intersection_curve,
-                            status0,
-                            status1,
-                            boundary_search_tolerance,
-                            partial_coplanar_overlap,
+                            [status0, status1],
                         )?;
                     }
                     Some(())
@@ -1465,24 +1484,24 @@ where
     // intersections, so imprint those existing edge segments onto any face of
     // the opposite operand that contains them. This supplies the missing trim
     // lines for coplanar overlap without manufacturing approximate SSI curves.
-    if partial_coplanar_overlap {
+    if coplanar.partial_overlap {
         let source0 = operand0.geom.clone();
         let source1 = operand1.geom.clone();
         imprint_edges_on_faces(&source1, poly_shell0, &mut operand0.geom, tol)?;
         imprint_edges_on_faces(&source0, poly_shell1, &mut operand1.geom, tol)?;
     }
 
-    let sampled0 = (!partial_coplanar_overlap
+    let sampled0 = (!coplanar.partial_overlap
         && loop_stores_are_synchronized(&operand0.geom, &operand0.poly))
     .then_some(operand0.poly);
-    let sampled1 = (!partial_coplanar_overlap
+    let sampled1 = (!coplanar.partial_overlap
         && loop_stores_are_synchronized(&operand1.geom, &operand1.poly))
     .then_some(operand1.poly);
     Some(InterfaceLoops {
         geom: [operand0.geom, operand1.geom],
         sampled: [sampled0, sampled1],
-        coplanar_overlap,
-        full_interface_adjacency,
+        coplanar_overlap: coplanar.any_overlap,
+        full_interface_adjacency: coplanar.full_interface_adjacency,
     })
 }
 
