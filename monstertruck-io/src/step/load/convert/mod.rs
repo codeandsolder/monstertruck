@@ -417,7 +417,7 @@ impl Table {
         surface: &Surface,
         orientation: bool,
     ) -> Option<step_geometry::StepParameterCurve> {
-        (curve.kind() == StepSurfaceCurveKind::SeamCurve)
+        (curve.kind() == StepSurfaceCurveKind::Seam)
             .then(|| {
                 let curves = curve
                     .associated_geometry()

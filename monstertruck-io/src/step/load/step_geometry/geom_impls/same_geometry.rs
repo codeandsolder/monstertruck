@@ -72,7 +72,7 @@ impl IncludeCurve<Curve3D> for Plane {
                 .all(|p| self.search_parameter(*p, None, 1).is_some()),
             Curve3D::ParameterCurve(curve) => matches!(
                 curve.surface().as_ref(),
-                Surface::ElementarySurface(ElementarySurface::Plane(surface)) if self == surface
+                Surface::Elementary(ElementarySurface::Plane(surface)) if self == surface
             ),
             Curve3D::SurfaceCurve(curve) => self.include(curve.leader()),
             Curve3D::IntersectionCurve(curve) => self.include(curve.leader().as_ref()),
@@ -82,15 +82,13 @@ impl IncludeCurve<Curve3D> for Plane {
 
 impl ToSameGeometry<Surface> for Plane {
     #[inline]
-    fn to_same_geometry(&self) -> Surface {
-        Surface::ElementarySurface(ElementarySurface::Plane(*self))
-    }
+    fn to_same_geometry(&self) -> Surface { Surface::Elementary(ElementarySurface::Plane(*self)) }
 }
 
 impl ToSameGeometry<Surface> for ExtrusionSurface<Curve3D, Vector3> {
     #[inline]
     fn to_same_geometry(&self) -> Surface {
-        Surface::SweepSurface(SweepSurface::ExtrusionSurface(self.clone()))
+        Surface::Sweep(SweepSurface::ExtrusionSurface(self.clone()))
     }
 }
 
@@ -100,7 +98,7 @@ impl ToSameGeometry<Surface> for RevolutionSurface<Curve3D> {
         let default = || {
             let (curve, origin, axis) = (self.entity_curve().inverse(), self.origin(), self.axis());
             let processor = Processor::new(Self::by_revolution(curve, origin, axis));
-            Surface::SweepSurface(SweepSurface::RevolutionSurface(processor))
+            Surface::Sweep(SweepSurface::RevolutionSurface(processor))
         };
         match self.entity_curve() {
             Curve3D::Line(line) => {
@@ -112,7 +110,7 @@ impl ToSameGeometry<Surface> for RevolutionSurface<Curve3D> {
                     let origin = o + (p - o).dot(axis) * axis;
                     let revo = RevolutionSurface::by_revolution(*line, origin, axis);
                     let processor = Processor::new(revo);
-                    Surface::ElementarySurface(ElementarySurface::CylindricalSurface(processor))
+                    Surface::Elementary(ElementarySurface::CylindricalSurface(processor))
                 } else {
                     default()
                 }
@@ -136,7 +134,7 @@ fn to_same_geometry_revolution_of_axis_parallel_line_is_uninverted_cylinder() {
     let surface = revolution.to_same_geometry();
 
     match surface {
-        Surface::ElementarySurface(ElementarySurface::CylindricalSurface(processor)) => {
+        Surface::Elementary(ElementarySurface::CylindricalSurface(processor)) => {
             assert!(
                 processor.orientation(),
                 "cylinder from axis-parallel line must not be inverted.",

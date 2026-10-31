@@ -246,7 +246,7 @@ fn oi() {
             Point2::new(0.0, 0.0),
             Point2::new(1.0, 1.0),
         ))),
-        Box::new(step_geometry::Surface::ElementarySurface(
+        Box::new(step_geometry::Surface::Elementary(
             step_geometry::ElementarySurface::Plane(truck::Plane::new(
                 Point3::new(1.0, 2.0, 3.0),
                 Point3::new(1.0, 2.0, 4.0),

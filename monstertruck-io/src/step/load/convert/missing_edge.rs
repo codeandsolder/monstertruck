@@ -755,12 +755,12 @@ mod tests {
         let axis = Vector3::unit_z();
         let origin = Point3::origin();
         let point = Point3::new(1.0, 0.0, 0.0);
-        Surface::ElementarySurface(ElementarySurface::CylindricalSurface(Processor::new(
+        Surface::Elementary(ElementarySurface::CylindricalSurface(Processor::new(
             RevolutionSurface::by_revolution(Line(point, point + axis), origin, axis),
         )))
     }
 
-    fn xy_plane() -> Surface { Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy())) }
+    fn xy_plane() -> Surface { Surface::Elementary(ElementarySurface::Plane(Plane::xy())) }
 
     #[test]
     fn coincident_supports_do_not_define_a_recoverable_edge() {

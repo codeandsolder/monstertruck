@@ -259,11 +259,9 @@ impl TryFrom<&SurfaceCurve> for Curve3D {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let kind = match value.kind {
-            SurfaceCurveEntityKind::Surface => step_geometry::SurfaceCurveKind::SurfaceCurve,
-            SurfaceCurveEntityKind::Seam => step_geometry::SurfaceCurveKind::SeamCurve,
-            SurfaceCurveEntityKind::Intersection => {
-                step_geometry::SurfaceCurveKind::IntersectionCurve
-            }
+            SurfaceCurveEntityKind::Surface => step_geometry::SurfaceCurveKind::Surface,
+            SurfaceCurveEntityKind::Seam => step_geometry::SurfaceCurveKind::Seam,
+            SurfaceCurveEntityKind::Intersection => step_geometry::SurfaceCurveKind::Intersection,
         };
         let master_representation = match value.master_representation {
             PreferredSurfaceCurveRepresentation::Curve3D => {

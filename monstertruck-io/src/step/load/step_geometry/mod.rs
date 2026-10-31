@@ -90,9 +90,9 @@ pub enum SurfaceCurveRepresentation {
 /// STEP `surface_curve` flavor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SurfaceCurveKind {
-    SurfaceCurve,
-    SeamCurve,
-    IntersectionCurve,
+    Surface,
+    Seam,
+    Intersection,
 }
 
 /// Associated geometry entry of a STEP `surface_curve`.
@@ -432,20 +432,20 @@ pub enum SweepSurface {
     StepSurface,
 )]
 pub enum Surface {
-    ElementarySurface(ElementarySurface),
-    SweepSurface(SweepSurface),
-    BsplineSurface(BsplineSurface<Point3>),
-    NurbsSurface(NurbsSurface<Vector4>),
+    Elementary(ElementarySurface),
+    Sweep(SweepSurface),
+    Bspline(BsplineSurface<Point3>),
+    Nurbs(NurbsSurface<Vector4>),
 }
 
 impl save::StepFormat for Surface {
     fn fmt(&self, idx: usize, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use Surface::{BsplineSurface, ElementarySurface, NurbsSurface, SweepSurface};
+        use Surface::{Bspline, Elementary, Nurbs, Sweep};
         match self {
-            ElementarySurface(x) => x.fmt(idx, f),
-            SweepSurface(x) => x.fmt(idx, f),
-            BsplineSurface(x) => x.fmt(idx, f),
-            NurbsSurface(x) => x.fmt(idx, f),
+            Elementary(x) => x.fmt(idx, f),
+            Sweep(x) => x.fmt(idx, f),
+            Bspline(x) => x.fmt(idx, f),
+            Nurbs(x) => x.fmt(idx, f),
         }
     }
 }

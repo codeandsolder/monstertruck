@@ -320,12 +320,12 @@ impl TryFrom<&Surface> for ModelingSurface {
     type Error = StepConvertingError;
     fn try_from(value: &Surface) -> std::result::Result<Self, Self::Error> {
         match value {
-            Surface::ElementarySurface(ElementarySurface::Plane(surface)) => Ok((*surface).into()),
+            Surface::Elementary(ElementarySurface::Plane(surface)) => Ok((*surface).into()),
             // Both arrive as `Processor<RevolutionSurface<Line<Point3>>, Matrix4>`,
             // so one or-pattern binds them. `map_ref` carries the `Matrix4` and
             // the processor's orientation across untouched; only the profile is
             // lifted into the modeling curve enum.
-            Surface::ElementarySurface(
+            Surface::Elementary(
                 ElementarySurface::CylindricalSurface(surface)
                 | ElementarySurface::ConicalSurface(surface),
             ) => Ok(Self::Revolution(surface.map_ref(|revolution| {
@@ -343,7 +343,7 @@ impl TryFrom<&Surface> for ModelingSurface {
             // ERASED (`TrimmedSolid::erase_trims`) before the geometry is
             // mapped, and every consumer re-derives `(u, v)` by projecting the
             // 3D boundary onto the modeling surface.
-            Surface::ElementarySurface(ElementarySurface::Sphere(surface))
+            Surface::Elementary(ElementarySurface::Sphere(surface))
                 if ROUTE_ANALYTIC_SPHERE
                     && analytic_sphere_is_representable(&surface.entity().0) =>
             {
@@ -385,7 +385,7 @@ impl TryFrom<&Surface> for ModelingSurface {
             //
             // Keep every finite positive torus analytic; STEP-specific sheet
             // selection was already resolved or refused before this layer.
-            Surface::ElementarySurface(ElementarySurface::ToroidalSurface(surface))
+            Surface::Elementary(ElementarySurface::ToroidalSurface(surface))
                 if analytic_torus_is_representable(surface.entity()) =>
             {
                 // `*`, not `.clone()`: `Processor<Torus, Matrix4>` is `Copy`.
@@ -396,11 +396,11 @@ impl TryFrom<&Surface> for ModelingSurface {
             }
             _ => value
                 .try_into_homogeneous_bspline_surface()
-                .map(|surface| Self::NurbsSurface(NurbsSurface::new(surface)))
+                .map(|surface| Self::Nurbs(NurbsSurface::new(surface)))
                 .or_else(|| {
                     value
                         .try_into_bspline_surface()
-                        .map(ModelingSurface::BsplineSurface)
+                        .map(ModelingSurface::Bspline)
                 })
                 .ok_or_else(|| "STEP surface cannot be represented in modeling geometry.".into()),
         }
@@ -413,14 +413,14 @@ impl TryFrom<&Surface> for ModelingSurface {
 
 #[cfg(test)]
 fn u1_step_sphere(radius: f64) -> Surface {
-    Surface::ElementarySurface(ElementarySurface::Sphere(Processor::new(Sphere(
+    Surface::Elementary(ElementarySurface::Sphere(Processor::new(Sphere(
         monstertruck_geometry::prelude::Sphere::new(Point3::new(1.0, -2.0, 3.0), radius),
     ))))
 }
 
 #[cfg(test)]
 fn u1_step_torus(large_radius: f64, small_radius: f64) -> Surface {
-    Surface::ElementarySurface(ElementarySurface::ToroidalSurface(Processor::new(
+    Surface::Elementary(ElementarySurface::ToroidalSurface(Processor::new(
         Torus::new_unchecked(Point3::new(1.0, -2.0, 3.0), large_radius, small_radius),
     )))
 }

@@ -64,7 +64,7 @@ fn cylinder_surface() -> Surface {
     let center = Point3::origin();
     let point = Point3::new(1.0, 0.0, 0.0);
     let line = Line(point, point + axis);
-    Surface::ElementarySurface(ElementarySurface::CylindricalSurface(Processor::new(
+    Surface::Elementary(ElementarySurface::CylindricalSurface(Processor::new(
         RevolutionSurface::by_revolution(line, center, axis),
     )))
 }
@@ -82,7 +82,7 @@ fn line_pcurve(surface: &Surface, u: f64) -> step_geometry::StepParameterCurve {
 fn seam_curve(surface: &Surface) -> Curve3D {
     let leader = Curve3D::Line(Line(surface.evaluate(0.0, 0.0), surface.evaluate(0.0, 1.0)));
     Curve3D::SurfaceCurve(SurfaceCurve3D::new(
-        StepSurfaceCurveKind::SeamCurve,
+        StepSurfaceCurveKind::Seam,
         Box::new(leader),
         vec![
             SurfaceCurveAssociatedGeometry::ParameterCurve(line_pcurve(surface, 0.0)),

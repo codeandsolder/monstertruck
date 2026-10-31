@@ -328,14 +328,12 @@ fn exact_parameter_curve_on(curve: &Curve3D, surface: &Surface) -> Option<StepPa
             .parameter_curve_reparameterized_on(surface)
             .or_else(|| exact_parameter_curve_on(curve.leader(), surface)),
         (Curve3D::Line(curve), surface) => exact_line_parameter_curve_on(curve, surface),
-        (
-            Curve3D::BsplineCurve(curve),
-            Surface::ElementarySurface(ElementarySurface::Plane(plane)),
-        ) => exact_bspline_parameter_curve_on_plane(curve, plane, surface),
-        (
-            Curve3D::NurbsCurve(curve),
-            Surface::ElementarySurface(ElementarySurface::Plane(plane)),
-        ) => exact_nurbs_parameter_curve_on_plane(curve, plane, surface),
+        (Curve3D::BsplineCurve(curve), Surface::Elementary(ElementarySurface::Plane(plane))) => {
+            exact_bspline_parameter_curve_on_plane(curve, plane, surface)
+        }
+        (Curve3D::NurbsCurve(curve), Surface::Elementary(ElementarySurface::Plane(plane))) => {
+            exact_nurbs_parameter_curve_on_plane(curve, plane, surface)
+        }
         (Curve3D::Conic(curve), surface) => exact_conic_parameter_curve_on(curve, surface),
         (Curve3D::IntersectionCurve(curve), surface) => {
             exact_parameter_curve_on(curve.leader().as_ref(), surface)
@@ -794,26 +792,26 @@ fn exact_line_parameter_curve_on(
     surface: &Surface,
 ) -> Option<StepParameterCurve> {
     match surface {
-        Surface::ElementarySurface(ElementarySurface::Plane(plane)) => {
+        Surface::Elementary(ElementarySurface::Plane(plane)) => {
             exact_line_parameter_curve_on_plane(curve, plane, surface)
         }
-        Surface::ElementarySurface(
+        Surface::Elementary(
             ElementarySurface::CylindricalSurface(revolution)
             | ElementarySurface::ConicalSurface(revolution),
         ) => exact_line_parameter_curve_on_linear_revolution(curve, revolution, surface),
-        Surface::BsplineSurface(bspline) => curve
+        Surface::Bspline(bspline) => curve
             .exact_parameter_boundary_2d(bspline)
             .map(|boundary| wrap_exact_line_boundary(boundary, surface)),
-        Surface::NurbsSurface(nurbs) => curve
+        Surface::Nurbs(nurbs) => curve
             .exact_parameter_boundary_2d(nurbs)
             .map(|boundary| wrap_exact_line_boundary(boundary, surface)),
-        Surface::SweepSurface(SweepSurface::RevolutionSurface(revolution)) => {
+        Surface::Sweep(SweepSurface::RevolutionSurface(revolution)) => {
             exact_line_parameter_curve_on_step_revolution(curve, revolution, surface)
         }
-        Surface::ElementarySurface(
+        Surface::Elementary(
             ElementarySurface::Sphere(_) | ElementarySurface::ToroidalSurface(_),
         )
-        | Surface::SweepSurface(SweepSurface::ExtrusionSurface(_)) => None,
+        | Surface::Sweep(SweepSurface::ExtrusionSurface(_)) => None,
     }
 }
 
@@ -879,35 +877,32 @@ fn exact_conic_parameter_curve_on(
     surface: &Surface,
 ) -> Option<StepParameterCurve> {
     match (curve, surface) {
-        (Conic3D::Ellipse(curve), Surface::ElementarySurface(ElementarySurface::Plane(plane))) => {
+        (Conic3D::Ellipse(curve), Surface::Elementary(ElementarySurface::Plane(plane))) => {
             exact_ellipse_parameter_curve_on_plane(curve, plane, surface)
         }
-        (
-            Conic3D::Hyperbola(curve),
-            Surface::ElementarySurface(ElementarySurface::Plane(plane)),
-        ) => exact_hyperbola_parameter_curve_on_plane(curve, plane, surface),
-        (Conic3D::Parabola(curve), Surface::ElementarySurface(ElementarySurface::Plane(plane))) => {
+        (Conic3D::Hyperbola(curve), Surface::Elementary(ElementarySurface::Plane(plane))) => {
+            exact_hyperbola_parameter_curve_on_plane(curve, plane, surface)
+        }
+        (Conic3D::Parabola(curve), Surface::Elementary(ElementarySurface::Plane(plane))) => {
             exact_parabola_parameter_curve_on_plane(curve, plane, surface)
         }
         (
             Conic3D::Ellipse(curve),
-            Surface::ElementarySurface(
+            Surface::Elementary(
                 ElementarySurface::CylindricalSurface(revolution)
                 | ElementarySurface::ConicalSurface(revolution),
             ),
         ) => exact_ellipse_parameter_curve_on_revolution(curve, revolution, surface),
+        (Conic3D::Ellipse(curve), Surface::Elementary(ElementarySurface::Sphere(sphere))) => {
+            exact_ellipse_parameter_curve_on_sphere(curve, sphere, surface)
+        }
         (
             Conic3D::Ellipse(curve),
-            Surface::ElementarySurface(ElementarySurface::Sphere(sphere)),
-        ) => exact_ellipse_parameter_curve_on_sphere(curve, sphere, surface),
-        (
-            Conic3D::Ellipse(curve),
-            Surface::ElementarySurface(ElementarySurface::ToroidalSurface(torus)),
+            Surface::Elementary(ElementarySurface::ToroidalSurface(torus)),
         ) => exact_ellipse_parameter_curve_on_torus(curve, torus, surface),
-        (
-            Conic3D::Ellipse(curve),
-            Surface::SweepSurface(SweepSurface::RevolutionSurface(revolution)),
-        ) => exact_ellipse_parameter_curve_on_revolution(curve, revolution, surface),
+        (Conic3D::Ellipse(curve), Surface::Sweep(SweepSurface::RevolutionSurface(revolution))) => {
+            exact_ellipse_parameter_curve_on_revolution(curve, revolution, surface)
+        }
         _ => None,
     }
 }
@@ -1053,7 +1048,7 @@ fn near_affine_projective_conic_is_not_promoted_to_exact() {
         transform,
     );
     let curve = Curve3D::Conic(Conic3D::Ellipse(ellipse));
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy()));
+    let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());
 }
 
@@ -1072,7 +1067,7 @@ fn tilted_planar_conic_is_not_exact_even_when_old_five_samples_are_near_plane() 
     );
     let curve = Curve3D::Conic(Conic3D::Ellipse(ellipse));
     let plane = Plane::xy();
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(plane));
+    let surface = Surface::Elementary(ElementarySurface::Plane(plane));
 
     for parameter in [0.0, 0.25 * TAU, 0.5 * TAU, 0.75 * TAU, TAU] {
         assert!(
@@ -1100,10 +1095,9 @@ fn isoparametric_circle_on_cylinder_has_analytic_exact_trim() {
     let radius = 2.0;
     let axis = Vector3::unit_z();
     let point = Point3::new(radius, 0.0, 0.0);
-    let surface =
-        Surface::ElementarySurface(ElementarySurface::CylindricalSurface(Processor::new(
-            RevolutionSurface::by_revolution(Line(point, point + axis), Point3::origin(), axis),
-        )));
+    let surface = Surface::Elementary(ElementarySurface::CylindricalSurface(Processor::new(
+        RevolutionSurface::by_revolution(Line(point, point + axis), Point3::origin(), axis),
+    )));
     let curve = Curve3D::Conic(Conic3D::Ellipse(
         Processor::new(TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU)))
             .transformed(Matrix4::from_scale(radius)),
@@ -1126,7 +1120,7 @@ fn tilted_great_circle_on_sphere_is_not_claimed_as_exact_uv_line() {
     let sphere = SphericalSurface::new(super::super::Sphere(
         monstertruck_geometry::prelude::Sphere::new(Point3::origin(), 1.0),
     ));
-    let surface = Surface::ElementarySurface(ElementarySurface::Sphere(sphere));
+    let surface = Surface::Elementary(ElementarySurface::Sphere(sphere));
     let curve = Curve3D::Conic(Conic3D::Ellipse(
         Processor::new(TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU)))
             .transformed(Matrix4::from_angle_y(Rad(std::f64::consts::FRAC_PI_4))),
@@ -1138,7 +1132,7 @@ fn tilted_great_circle_on_sphere_is_not_claimed_as_exact_uv_line() {
 #[test]
 fn exact_nurbs_trim_on_plane_preserves_weights_and_curve() {
     let plane = Plane::xy();
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(plane));
+    let surface = Surface::Elementary(ElementarySurface::Plane(plane));
     let knots = KnotVector::bezier_knot(2);
     let source_control_points = vec![
         Vector4::new(0.0, 0.0, 0.0, 1.0),
@@ -1179,7 +1173,7 @@ fn exact_nurbs_trim_on_plane_preserves_weights_and_curve() {
 
 #[test]
 fn off_plane_nurbs_is_not_claimed_as_exact_planar_trim() {
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy()));
+    let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
     let curve = Curve3D::NurbsCurve(NurbsCurve::new(
         BsplineCurve::new(
             KnotVector::bezier_knot(2),
@@ -1201,7 +1195,7 @@ fn exact_bspline_trim_on_plane_preserves_curve() {
         Point3::new(5.0, -2.0, 5.0),
         Point3::new(3.0, 1.0, 5.0),
     );
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(plane));
+    let surface = Surface::Elementary(ElementarySurface::Plane(plane));
     let knots = KnotVector::bezier_knot(2);
     let curve = Curve3D::BsplineCurve(
         BsplineCurve::new(
@@ -1234,7 +1228,7 @@ fn exact_bspline_trim_on_plane_preserves_curve() {
 
 #[test]
 fn zero_range_bspline_refuses_exact_planar_retrim_without_panicking() {
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy()));
+    let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
     let curve = Curve3D::BsplineCurve(BsplineCurve::new_unchecked(
         KnotVector::from(vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
         vec![
@@ -1248,7 +1242,7 @@ fn zero_range_bspline_refuses_exact_planar_retrim_without_panicking() {
 
 #[test]
 fn zero_range_nurbs_refuses_exact_planar_retrim_without_panicking() {
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy()));
+    let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
     let curve = Curve3D::NurbsCurve(NurbsCurve::new(BsplineCurve::new_unchecked(
         KnotVector::from(vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
         vec![
@@ -1263,7 +1257,7 @@ fn zero_range_nurbs_refuses_exact_planar_retrim_without_panicking() {
 #[test]
 fn off_plane_bspline_is_not_claimed_as_exact_planar_trim() {
     let plane = Plane::xy();
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(plane));
+    let surface = Surface::Elementary(ElementarySurface::Plane(plane));
     let curve = Curve3D::BsplineCurve(
         BsplineCurve::new(
             KnotVector::bezier_knot(2),
@@ -1290,13 +1284,13 @@ fn surface_curve_leader_rebuilds_trim_on_equivalent_cylinder() {
         axis,
     ));
     cylinder.invert();
-    let surface = Surface::ElementarySurface(ElementarySurface::CylindricalSurface(cylinder));
+    let surface = Surface::Elementary(ElementarySurface::CylindricalSurface(cylinder));
     let leader = Curve3D::Line(Line(
         Point3::new(radius, 0.0, -3.0),
         Point3::new(radius, 0.0, 4.0),
     ));
     let curve = Curve3D::SurfaceCurve(SurfaceCurve3D::new(
-        SurfaceCurveKind::SurfaceCurve,
+        SurfaceCurveKind::Surface,
         Box::new(leader),
         Vec::new(),
         SurfaceCurveRepresentation::Curve3D,
@@ -1326,7 +1320,7 @@ fn exact_line_trim_is_rebuilt_on_cylindrical_surface() {
         axis,
     ));
     cylinder.invert();
-    let surface = Surface::ElementarySurface(ElementarySurface::CylindricalSurface(cylinder));
+    let surface = Surface::Elementary(ElementarySurface::CylindricalSurface(cylinder));
     let curve = Curve3D::Line(Line(
         Point3::new(radius, 0.0, -3.0),
         Point3::new(radius, 0.0, 4.0),
@@ -1359,7 +1353,7 @@ fn sampled_parameter_boundary_preserves_unbounded_cylinder_axis_parameter() {
         axis,
     ));
     cylinder.invert();
-    let surface = Surface::ElementarySurface(ElementarySurface::CylindricalSurface(cylinder));
+    let surface = Surface::Elementary(ElementarySurface::CylindricalSurface(cylinder));
     let curve = Line(
         Point3::new(radius, 0.0, -6.25),
         Point3::new(radius, 0.0, 6.25),
@@ -1383,7 +1377,7 @@ fn sampled_parameter_boundary_preserves_unbounded_cylinder_axis_parameter() {
 /// domain edge at `u = 1` on a plane; the number is a placeholder.
 #[test]
 fn a_planar_trim_sample_past_the_fictional_unit_square_is_not_snapped_to_it() {
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy()));
+    let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
     let overshoot = 5.0e-7;
     let curve = Line(
         Point3::new(1.0 - overshoot, 0.5, 0.0),
@@ -1416,7 +1410,7 @@ fn a_planar_trim_sample_past_the_fictional_unit_square_is_not_snapped_to_it() {
 #[test]
 fn a_knot_bounded_surface_still_snaps_a_sample_that_overshoots_its_knots() {
     let knots = KnotVector::bezier_knot(1);
-    let surface = Surface::BsplineSurface(BsplineSurface::new_unchecked(
+    let surface = Surface::Bspline(BsplineSurface::new_unchecked(
         (knots.clone(), knots),
         vec![
             vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
@@ -1460,13 +1454,13 @@ fn no_placeholder_axis_carries_a_period() {
     ));
 
     let surfaces = [
-        Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy())),
-        Surface::ElementarySurface(ElementarySurface::CylindricalSurface(cylinder)),
-        Surface::ElementarySurface(ElementarySurface::ConicalSurface(cone)),
-        Surface::ElementarySurface(ElementarySurface::Sphere(Processor::new(Sphere(
+        Surface::Elementary(ElementarySurface::Plane(Plane::xy())),
+        Surface::Elementary(ElementarySurface::CylindricalSurface(cylinder)),
+        Surface::Elementary(ElementarySurface::ConicalSurface(cone)),
+        Surface::Elementary(ElementarySurface::Sphere(Processor::new(Sphere(
             monstertruck_geometry::prelude::Sphere::new(center, 2.0),
         )))),
-        Surface::ElementarySurface(ElementarySurface::ToroidalSurface(Processor::new(
+        Surface::Elementary(ElementarySurface::ToroidalSurface(Processor::new(
             Torus::new_unchecked(center, 3.0, 1.0),
         ))),
     ];
@@ -1490,7 +1484,7 @@ fn raw_conic_boundary_without_pcurve_uses_sampled_projection_at_safe_tolerance()
         Processor::new(TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU)))
             .transformed(Matrix4::from_nonuniform_scale(100.0, 100.0, 100.0)),
     ));
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy()));
+    let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
 
     let boundary = curve
         .parameter_boundary_2d(&surface, 1.0e-3)
@@ -1510,7 +1504,7 @@ fn raw_line_boundary_without_pcurve_uses_sampled_projection() {
         Point3::new(0.25, 0.5, 0.0),
         Point3::new(0.75, 0.5, 0.0),
     ));
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy()));
+    let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
     let boundary = curve
         .parameter_boundary_2d(&surface, 1.0e-5)
         .expect("safe raw line projection should produce a parameter boundary.");
@@ -1535,12 +1529,12 @@ fn surface_curve_line_without_pcurve_converts_to_exact_pcurve() {
         Point3::new(0.75, 0.5, 0.0),
     ));
     let curve = Curve3D::SurfaceCurve(SurfaceCurve3D::new(
-        SurfaceCurveKind::SurfaceCurve,
+        SurfaceCurveKind::Surface,
         Box::new(leader),
         Vec::new(),
         SurfaceCurveRepresentation::Curve3D,
     ));
-    let surface = Surface::ElementarySurface(ElementarySurface::Plane(Plane::xy()));
+    let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
 
     let boundary = StepParameterCurve::try_from(CurveTrimRef::new(&curve, &surface))
         .expect("surface curve leader should produce an exact parameter boundary.");
@@ -1560,16 +1554,16 @@ fn surface_curve_line_without_pcurve_on_cylinder_is_exact_generator() {
     let center = Point3::origin();
     let point = Point3::new(1.0, 0.0, 0.0);
     let profile = Line(point, point + axis);
-    let surface = Surface::ElementarySurface(ElementarySurface::CylindricalSurface(
-        Processor::new(RevolutionSurface::by_revolution(profile, center, axis)),
-    ));
+    let surface = Surface::Elementary(ElementarySurface::CylindricalSurface(Processor::new(
+        RevolutionSurface::by_revolution(profile, center, axis),
+    )));
     let angle = 0.7;
     let leader = Curve3D::Line(Line(
         surface.evaluate(0.0, angle),
         surface.evaluate(1.0, angle),
     ));
     let curve = Curve3D::SurfaceCurve(SurfaceCurve3D::new(
-        SurfaceCurveKind::SurfaceCurve,
+        SurfaceCurveKind::Surface,
         Box::new(leader),
         Vec::new(),
         SurfaceCurveRepresentation::Curve3D,
@@ -1587,9 +1581,9 @@ fn raw_line_without_pcurve_on_cylinder_is_exact_generator() {
     let center = Point3::origin();
     let point = Point3::new(1.0, 0.0, 0.0);
     let profile = Line(point, point + axis);
-    let surface = Surface::ElementarySurface(ElementarySurface::CylindricalSurface(
-        Processor::new(RevolutionSurface::by_revolution(profile, center, axis)),
-    ));
+    let surface = Surface::Elementary(ElementarySurface::CylindricalSurface(Processor::new(
+        RevolutionSurface::by_revolution(profile, center, axis),
+    )));
     let angle = 0.7;
     let curve = Curve3D::Line(Line(
         surface.evaluate(0.0, angle),
@@ -1607,7 +1601,7 @@ fn cone_apex_generator_is_exact_in_both_edge_directions() {
     let axis = Vector3::unit_z();
     let center = Point3::origin();
     let profile = Line(center, Point3::new(1.0, 0.0, 1.0));
-    let surface = Surface::ElementarySurface(ElementarySurface::ConicalSurface(Processor::new(
+    let surface = Surface::Elementary(ElementarySurface::ConicalSurface(Processor::new(
         RevolutionSurface::by_revolution(profile, center, axis),
     )));
     let angle = std::f64::consts::FRAC_PI_4;

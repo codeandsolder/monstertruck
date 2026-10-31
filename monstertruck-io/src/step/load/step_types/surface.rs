@@ -17,21 +17,21 @@ use super::{
 #[holder(generate_deserialize)]
 pub enum SurfaceAny {
     #[holder(use_place_holder)]
-    ElementarySurface(Box<ElementarySurfaceAny>),
+    Elementary(Box<ElementarySurfaceAny>),
     #[holder(use_place_holder)]
-    BsplineSurface(Box<BsplineSurfaceAny>),
+    Bspline(Box<BsplineSurfaceAny>),
     #[holder(use_place_holder)]
-    SweptSurface(Box<SweptSurfaceAny>),
+    Swept(Box<SweptSurfaceAny>),
 }
 
 impl TryFrom<&SurfaceAny> for Surface {
     type Error = StepConvertingError;
     fn try_from(x: &SurfaceAny) -> Result<Self, Self::Error> {
-        use SurfaceAny::{BsplineSurface, ElementarySurface, SweptSurface};
+        use SurfaceAny::{Bspline, Elementary, Swept};
         Ok(match x {
-            ElementarySurface(x) => Self::ElementarySurface(x.as_ref().try_into()?),
-            BsplineSurface(x) => x.as_ref().try_into()?,
-            SweptSurface(x) => Self::SweepSurface(x.as_ref().try_into()?),
+            Elementary(x) => Self::Elementary(x.as_ref().try_into()?),
+            Bspline(x) => x.as_ref().try_into()?,
+            Swept(x) => Self::Sweep(x.as_ref().try_into()?),
         })
     }
 }
@@ -345,8 +345,8 @@ impl TryFrom<&BsplineSurfaceAny> for Surface {
     fn try_from(value: &BsplineSurfaceAny) -> Result<Self, Self::Error> {
         use BsplineSurfaceAny::{NonRationalBsplineSurface, RationalBsplineSurface};
         Ok(match value {
-            NonRationalBsplineSurface(bsp) => Self::BsplineSurface(bsp.try_into()?),
-            RationalBsplineSurface(bsp) => Self::NurbsSurface(bsp.try_into()?),
+            NonRationalBsplineSurface(bsp) => Self::Bspline(bsp.try_into()?),
+            RationalBsplineSurface(bsp) => Self::Nurbs(bsp.try_into()?),
         })
     }
 }

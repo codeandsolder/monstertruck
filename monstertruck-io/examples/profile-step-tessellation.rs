@@ -58,17 +58,15 @@ const fn curve_kind(curve: &Curve3D) -> &'static str {
 
 const fn surface_kind(surface: &Surface) -> &'static str {
     match surface {
-        Surface::ElementarySurface(ElementarySurface::Plane(_)) => "Plane",
-        Surface::ElementarySurface(ElementarySurface::Sphere(_)) => "Sphere",
-        Surface::ElementarySurface(ElementarySurface::CylindricalSurface(_)) => {
-            "CylindricalSurface"
-        }
-        Surface::ElementarySurface(ElementarySurface::ToroidalSurface(_)) => "ToroidalSurface",
-        Surface::ElementarySurface(ElementarySurface::ConicalSurface(_)) => "ConicalSurface",
-        Surface::SweepSurface(SweepSurface::ExtrusionSurface(_)) => "ExtrusionSurface",
-        Surface::SweepSurface(SweepSurface::RevolutionSurface(_)) => "RevolutionSurface",
-        Surface::BsplineSurface(_) => "BsplineSurface",
-        Surface::NurbsSurface(_) => "NurbsSurface",
+        Surface::Elementary(ElementarySurface::Plane(_)) => "Plane",
+        Surface::Elementary(ElementarySurface::Sphere(_)) => "Sphere",
+        Surface::Elementary(ElementarySurface::CylindricalSurface(_)) => "CylindricalSurface",
+        Surface::Elementary(ElementarySurface::ToroidalSurface(_)) => "ToroidalSurface",
+        Surface::Elementary(ElementarySurface::ConicalSurface(_)) => "ConicalSurface",
+        Surface::Sweep(SweepSurface::ExtrusionSurface(_)) => "ExtrusionSurface",
+        Surface::Sweep(SweepSurface::RevolutionSurface(_)) => "RevolutionSurface",
+        Surface::Bspline(_) => "BsplineSurface",
+        Surface::Nurbs(_) => "NurbsSurface",
     }
 }
 

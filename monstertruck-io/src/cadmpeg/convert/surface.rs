@@ -225,8 +225,8 @@ fn unsupported(kind: &'static str, context: &Context<'_>) -> crate::Error {
 
 /// A free-form surface, rational or not.
 ///
-/// Non-rational nets become [`Surface::BsplineSurface`] rather than a
-/// [`Surface::NurbsSurface`] with every weight at one: the polynomial form has no
+/// Non-rational nets become [`Surface::Bspline`] rather than a
+/// [`Surface::Nurbs`] with every weight at one: the polynomial form has no
 /// weight division in its evaluation, and the boolean kernel's exact-patch
 /// machinery distinguishes the two.
 fn nurbs(surface: &IrNurbsSurface, context: &Context<'_>) -> Result<Surface> {
@@ -270,7 +270,7 @@ fn nurbs(surface: &IrNurbsSurface, context: &Context<'_>) -> Result<Surface> {
             let net = (0..rows)
                 .map(|row| rows_of(row).iter().map(frame::point).collect())
                 .collect();
-            Ok(Surface::BsplineSurface(built(
+            Ok(Surface::Bspline(built(
                 BsplineSurface::new(knots, net),
                 context,
             )?))
@@ -291,7 +291,7 @@ fn nurbs(surface: &IrNurbsSurface, context: &Context<'_>) -> Result<Surface> {
                         .collect()
                 })
                 .collect();
-            Ok(Surface::NurbsSurface(NurbsSurface::new(built(
+            Ok(Surface::Nurbs(NurbsSurface::new(built(
                 BsplineSurface::new(knots, net),
                 context,
             )?)))

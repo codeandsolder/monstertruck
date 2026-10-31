@@ -124,15 +124,15 @@ impl SurfaceClass {
 
     pub(crate) const fn of(surface: &Surface) -> Self {
         match surface {
-            Surface::ElementarySurface(ElementarySurface::Plane(_)) => Self::Plane,
-            Surface::ElementarySurface(ElementarySurface::Sphere(_)) => Self::Sphere,
-            Surface::ElementarySurface(ElementarySurface::CylindricalSurface(_)) => Self::Cylinder,
-            Surface::ElementarySurface(ElementarySurface::ToroidalSurface(_)) => Self::Torus,
-            Surface::ElementarySurface(ElementarySurface::ConicalSurface(_)) => Self::Cone,
-            Surface::SweepSurface(SweepSurface::ExtrusionSurface(_)) => Self::Extrusion,
-            Surface::SweepSurface(SweepSurface::RevolutionSurface(_)) => Self::Revolution,
-            Surface::BsplineSurface(_) => Self::Bspline,
-            Surface::NurbsSurface(_) => Self::Nurbs,
+            Surface::Elementary(ElementarySurface::Plane(_)) => Self::Plane,
+            Surface::Elementary(ElementarySurface::Sphere(_)) => Self::Sphere,
+            Surface::Elementary(ElementarySurface::CylindricalSurface(_)) => Self::Cylinder,
+            Surface::Elementary(ElementarySurface::ToroidalSurface(_)) => Self::Torus,
+            Surface::Elementary(ElementarySurface::ConicalSurface(_)) => Self::Cone,
+            Surface::Sweep(SweepSurface::ExtrusionSurface(_)) => Self::Extrusion,
+            Surface::Sweep(SweepSurface::RevolutionSurface(_)) => Self::Revolution,
+            Surface::Bspline(_) => Self::Bspline,
+            Surface::Nurbs(_) => Self::Nurbs,
         }
     }
 }
@@ -191,11 +191,11 @@ fn reported_range_bounds_the_curve(curve: &Curve3D) -> bool {
 /// data outside them.
 pub fn reported_range_bounds_the_surface(surface: &Surface) -> (bool, bool) {
     match surface {
-        Surface::ElementarySurface(ElementarySurface::Plane(_)) => (false, false),
-        Surface::ElementarySurface(
+        Surface::Elementary(ElementarySurface::Plane(_)) => (false, false),
+        Surface::Elementary(
             ElementarySurface::Sphere(_) | ElementarySurface::ToroidalSurface(_),
         ) => (true, true),
-        Surface::ElementarySurface(
+        Surface::Elementary(
             ElementarySurface::CylindricalSurface(processor)
             | ElementarySurface::ConicalSurface(processor),
         ) => {
@@ -203,17 +203,17 @@ pub fn reported_range_bounds_the_surface(surface: &Surface) -> (bool, bool) {
                 reported_range_bounds_the_curve(&Curve3D::Line(*processor.entity().entity_curve()));
             axes_by_orientation(processor.orientation(), profile)
         }
-        Surface::SweepSurface(SweepSurface::RevolutionSurface(processor)) => {
+        Surface::Sweep(SweepSurface::RevolutionSurface(processor)) => {
             let profile = reported_range_bounds_the_curve(processor.entity().entity_curve());
             axes_by_orientation(processor.orientation(), profile)
         }
         // `u` is the swept curve's own range; `v` is the hardcoded unit segment
         // along the extruding vector. There is no `Processor` here, so no swap.
-        Surface::SweepSurface(SweepSurface::ExtrusionSurface(surface)) => (
+        Surface::Sweep(SweepSurface::ExtrusionSurface(surface)) => (
             reported_range_bounds_the_curve(surface.entity_curve()),
             false,
         ),
-        Surface::BsplineSurface(_) | Surface::NurbsSurface(_) => (true, true),
+        Surface::Bspline(_) | Surface::Nurbs(_) => (true, true),
     }
 }
 

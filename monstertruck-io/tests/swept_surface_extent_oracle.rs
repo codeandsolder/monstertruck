@@ -503,7 +503,7 @@ fn fidelity_pairs(surface: &Surface, profile_span: (f64, f64)) -> Vec<FramePair>
     let (p0, p1) = profile_span;
     let profile = |i: usize, n: usize| p0 + (p1 - p0) * i as f64 / n as f64;
     match surface {
-        Surface::SweepSurface(SweepSurface::RevolutionSurface(_)) => (0..=4)
+        Surface::Sweep(SweepSurface::RevolutionSurface(_)) => (0..=4)
             .flat_map(|q| {
                 let t = f64::from(q) / 4.0;
                 (0..=6).map(move |i| {
@@ -769,10 +769,10 @@ fn report_file(table: &Table) {
         };
 
         let extent = match &surface {
-            Surface::SweepSurface(SweepSurface::ExtrusionSurface(surface)) => {
+            Surface::Sweep(SweepSurface::ExtrusionSurface(surface)) => {
                 extrusion_extent(surface, &samples)
             }
-            Surface::SweepSurface(SweepSurface::RevolutionSurface(surface)) => {
+            Surface::Sweep(SweepSurface::RevolutionSurface(surface)) => {
                 revolution_extent(surface, &samples)
             }
             _ => None,
@@ -801,14 +801,14 @@ fn extrusion_fixture(control_points: Vec<Point3>, degree: usize, axis: Vector3) 
         KnotVector::uniform_knot(degree, divisions),
         control_points,
     ));
-    Surface::SweepSurface(SweepSurface::ExtrusionSurface(
+    Surface::Sweep(SweepSurface::ExtrusionSurface(
         StepExtrusionSurface::by_extrusion(profile, axis),
     ))
 }
 
 fn as_extrusion(surface: &Surface) -> &StepExtrusionSurface {
     match surface {
-        Surface::SweepSurface(SweepSurface::ExtrusionSurface(extrusion)) => extrusion,
+        Surface::Sweep(SweepSurface::ExtrusionSurface(extrusion)) => extrusion,
         _ => panic!("fixture is not an extrusion"),
     }
 }

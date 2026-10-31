@@ -332,10 +332,10 @@ impl EdgeCurve {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let kind = match c.kind {
-                SurfaceCurveEntityKind::Surface => step_geometry::SurfaceCurveKind::SurfaceCurve,
-                SurfaceCurveEntityKind::Seam => step_geometry::SurfaceCurveKind::SeamCurve,
+                SurfaceCurveEntityKind::Surface => step_geometry::SurfaceCurveKind::Surface,
+                SurfaceCurveEntityKind::Seam => step_geometry::SurfaceCurveKind::Seam,
                 SurfaceCurveEntityKind::Intersection => {
-                    step_geometry::SurfaceCurveKind::IntersectionCurve
+                    step_geometry::SurfaceCurveKind::Intersection
                 }
             };
             let master_representation = match c.master_representation {

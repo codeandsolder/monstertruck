@@ -168,22 +168,22 @@ fn elementary_support(surface: &ElementarySurface) -> Option<Support> {
 
 fn support(surface: &Surface) -> Option<Support> {
     match surface {
-        Surface::ElementarySurface(surface) => elementary_support(surface),
-        Surface::BsplineSurface(surface) => match surface.try_into_analytic_surface_kind()? {
+        Surface::Elementary(surface) => elementary_support(surface),
+        Surface::Bspline(surface) => match surface.try_into_analytic_surface_kind()? {
             AnalyticSurfaceKind::Plane(plane) => Some(Support::Plane {
                 origin: plane.origin(),
                 normal: canonical_direction(plane.normal())?,
             }),
             _ => None,
         },
-        Surface::NurbsSurface(surface) => match surface.try_into_analytic_surface_kind()? {
+        Surface::Nurbs(surface) => match surface.try_into_analytic_surface_kind()? {
             AnalyticSurfaceKind::Plane(plane) => Some(Support::Plane {
                 origin: plane.origin(),
                 normal: canonical_direction(plane.normal())?,
             }),
             _ => None,
         },
-        Surface::SweepSurface(_) => None,
+        Surface::Sweep(_) => None,
     }
 }
 
@@ -300,25 +300,22 @@ fn processor_orientation_sign<S>(surface: &Processor<S, Matrix4>) -> Option<f64>
 /// therefore return `None`.
 fn analytic_orientation_sign(surface: &Surface, support: Support) -> Option<bool> {
     let sign = match (surface, support) {
-        (
-            Surface::ElementarySurface(ElementarySurface::Plane(plane)),
-            Support::Plane { normal, .. },
-        ) => {
+        (Surface::Elementary(ElementarySurface::Plane(plane)), Support::Plane { normal, .. }) => {
             let dot = plane.normal().dot(normal);
             if dot.abs() <= TOLERANCE {
                 return None;
             }
             dot.signum()
         }
-        (Surface::ElementarySurface(ElementarySurface::Sphere(sphere)), Support::Sphere { .. }) => {
+        (Surface::Elementary(ElementarySurface::Sphere(sphere)), Support::Sphere { .. }) => {
             processor_orientation_sign(sphere)?
         }
         (
-            Surface::ElementarySurface(ElementarySurface::CylindricalSurface(revolution)),
+            Surface::Elementary(ElementarySurface::CylindricalSurface(revolution)),
             Support::Cylinder { .. },
         )
         | (
-            Surface::ElementarySurface(ElementarySurface::ConicalSurface(revolution)),
+            Surface::Elementary(ElementarySurface::ConicalSurface(revolution)),
             Support::Cone { .. },
         ) => {
             let Line(front, back) = *revolution.entity().entity_curve();
@@ -329,7 +326,7 @@ fn analytic_orientation_sign(surface: &Surface, support: Support) -> Option<bool
             -axial_step.signum() * processor_orientation_sign(revolution)?
         }
         (
-            Surface::ElementarySurface(ElementarySurface::ToroidalSurface(torus)),
+            Surface::Elementary(ElementarySurface::ToroidalSurface(torus)),
             Support::Torus {
                 major_radius,
                 minor_radius,
@@ -350,8 +347,8 @@ fn analytic_orientation_sign(surface: &Surface, support: Support) -> Option<bool
         // that its UV Jacobian keeps one sign globally. Until that stronger
         // proof exists, generic spline planes are support evidence only, not
         // orientation evidence for a topology mutation.
-        (Surface::BsplineSurface(_), Support::Plane { .. })
-        | (Surface::NurbsSurface(_), Support::Plane { .. }) => return None,
+        (Surface::Bspline(_), Support::Plane { .. })
+        | (Surface::Nurbs(_), Support::Plane { .. }) => return None,
         _ => return None,
     };
     Some(sign >= 0.0)
@@ -492,20 +489,18 @@ fn exact_torus_parameter(surface: &Processor<Torus, Matrix4>, point: Point3) -> 
 
 fn exact_supported_parameter(surface: &Surface, point: Point3) -> Option<Point2> {
     match surface {
-        Surface::ElementarySurface(ElementarySurface::Plane(plane)) => {
-            exact_plane_parameter(plane, point)
-        }
-        Surface::ElementarySurface(
+        Surface::Elementary(ElementarySurface::Plane(plane)) => exact_plane_parameter(plane, point),
+        Surface::Elementary(
             ElementarySurface::CylindricalSurface(revolution)
             | ElementarySurface::ConicalSurface(revolution),
         ) => exact_linear_revolution_parameter(revolution, point),
-        Surface::ElementarySurface(ElementarySurface::ToroidalSurface(torus)) => {
+        Surface::Elementary(ElementarySurface::ToroidalSurface(torus)) => {
             exact_torus_parameter(torus, point)
         }
-        Surface::ElementarySurface(ElementarySurface::Sphere(_))
-        | Surface::BsplineSurface(_)
-        | Surface::NurbsSurface(_)
-        | Surface::SweepSurface(_) => None,
+        Surface::Elementary(ElementarySurface::Sphere(_))
+        | Surface::Bspline(_)
+        | Surface::Nurbs(_)
+        | Surface::Sweep(_) => None,
     }
 }
 
@@ -567,24 +562,24 @@ pub fn affine_same_domain_parameter_map(source: &Surface, target: &Surface) -> O
 
     let source_parameters = match (source, target) {
         (
-            Surface::ElementarySurface(ElementarySurface::Plane(_)),
-            Surface::ElementarySurface(ElementarySurface::Plane(_)),
+            Surface::Elementary(ElementarySurface::Plane(_)),
+            Surface::Elementary(ElementarySurface::Plane(_)),
         ) => [
             Point2::new(0.0, 0.0),
             Point2::new(1.0, 0.0),
             Point2::new(0.0, 1.0),
         ],
         (
-            Surface::ElementarySurface(ElementarySurface::CylindricalSurface(source)),
-            Surface::ElementarySurface(ElementarySurface::CylindricalSurface(_)),
+            Surface::Elementary(ElementarySurface::CylindricalSurface(source)),
+            Surface::Elementary(ElementarySurface::CylindricalSurface(_)),
         )
         | (
-            Surface::ElementarySurface(ElementarySurface::ConicalSurface(source)),
-            Surface::ElementarySurface(ElementarySurface::ConicalSurface(_)),
+            Surface::Elementary(ElementarySurface::ConicalSurface(source)),
+            Surface::Elementary(ElementarySurface::ConicalSurface(_)),
         ) => safe_revolution_basis(source)?,
         (
-            Surface::ElementarySurface(ElementarySurface::ToroidalSurface(source)),
-            Surface::ElementarySurface(ElementarySurface::ToroidalSurface(_)),
+            Surface::Elementary(ElementarySurface::ToroidalSurface(source)),
+            Surface::Elementary(ElementarySurface::ToroidalSurface(_)),
         ) => [
             processor_parameter(source.orientation(), Point2::new(0.37, 0.0)),
             processor_parameter(source.orientation(), Point2::new(1.37, 0.0)),
@@ -678,7 +673,7 @@ pub fn same_surface_domain(
 mod tests {
     use super::*;
 
-    fn surface(elementary: ElementarySurface) -> Surface { Surface::ElementarySurface(elementary) }
+    fn surface(elementary: ElementarySurface) -> Surface { Surface::Elementary(elementary) }
 
     #[test]
     fn sheared_elementary_surfaces_are_not_analytic_same_domain_supports() {

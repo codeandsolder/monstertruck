@@ -29,7 +29,7 @@ fn cylinder(height: f64, radius: f64) -> monstertruck_modeling::Result<Solid> {
 const fn is_planar(surface: &step_geometry::Surface) -> bool {
     matches!(
         surface,
-        step_geometry::Surface::ElementarySurface(step_geometry::ElementarySurface::Plane(_))
+        step_geometry::Surface::Elementary(step_geometry::ElementarySurface::Plane(_))
     )
 }
 
