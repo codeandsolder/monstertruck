@@ -27,7 +27,10 @@ impl BooleanTolerance {
     }
 
     pub(super) fn area_for_span(self, span: f64) -> f64 {
-        8.0 * self.length * span.abs().max(self.length) + 16.0 * self.area_floor
+        16.0f64.mul_add(
+            self.area_floor,
+            8.0 * self.length * span.abs().max(self.length),
+        )
     }
 }
 

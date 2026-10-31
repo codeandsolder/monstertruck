@@ -6,10 +6,10 @@
 //! extraction establish valid [`Face`] invariants.
 
 use super::faces_classification::FacesClassification;
-use super::loops_store::*;
+use super::loops_store::{BoundaryWire, Loops, LoopsStore, ShapesOpStatus};
 use super::tolerance::BooleanTolerance;
 use monstertruck_meshing::prelude::*;
-use monstertruck_topology::*;
+use monstertruck_topology::{EdgeId, Face, Shell, Wire};
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::Deref;
 
@@ -77,32 +77,31 @@ where
     let p = project_to_parameter(surface, pt, None, projection_tol)?;
     let mut vec = vec![p];
     if let Some(sampled) = sampled_wire {
-        for edge in sampled.iter() {
+        for edge in sampled {
             let poly = edge.curve();
             let mut previous = vec.last().copied()?;
             let mut project = |q: &Point3| -> Option<Point2> {
                 previous = project_to_parameter(surface, *q, Some(previous), sampling_tol)?;
                 Some(previous)
             };
-            let mut add = match edge.orientation() {
-                true => poly
-                    .iter()
+            let mut add = if edge.orientation() {
+                poly.iter()
                     .skip(1)
                     .map(&mut project)
-                    .collect::<Option<Vec<_>>>()?,
-                false => poly
-                    .iter()
+                    .collect::<Option<Vec<_>>>()?
+            } else {
+                poly.iter()
                     .rev()
                     .skip(1)
                     .map(&mut project)
-                    .collect::<Option<Vec<_>>>()?,
+                    .collect::<Option<Vec<_>>>()?
             };
             vec.append(&mut add);
         }
         return Some(PolylineCurve(vec));
     }
 
-    for edge in wire.iter() {
+    for edge in wire {
         let poly = polys.entry(edge.id()).or_insert_with(|| {
             let curve = edge.curve();
             PolylineCurve(
@@ -116,18 +115,17 @@ where
             previous = project_to_parameter(surface, *q, Some(previous), tol)?;
             Some(previous)
         };
-        let mut add = match edge.orientation() {
-            true => poly
-                .iter()
+        let mut add = if edge.orientation() {
+            poly.iter()
                 .skip(1)
                 .map(&mut project)
-                .collect::<Option<Vec<_>>>()?,
-            false => poly
-                .iter()
+                .collect::<Option<Vec<_>>>()?
+        } else {
+            poly.iter()
                 .rev()
                 .skip(1)
                 .map(&mut project)
-                .collect::<Option<Vec<_>>>()?,
+                .collect::<Option<Vec<_>>>()?
         };
         vec.append(&mut add);
     }
@@ -339,7 +337,7 @@ fn polyline_signed_area(poly: &PolylineCurve<Point2>) -> f64 {
         .map(|index| {
             let lhs = poly[index] - origin;
             let rhs = poly[index + 1] - origin;
-            lhs.x * rhs.y - lhs.y * rhs.x
+            lhs.y.mul_add(-rhs.x, lhs.x * rhs.y)
         })
         .sum::<f64>()
         * 0.5
@@ -357,7 +355,7 @@ fn polyline_area_epsilon(poly: &PolylineCurve<Point2>) -> f64 {
     let mut max_x = f64::NEG_INFINITY;
     let mut min_y = f64::INFINITY;
     let mut max_y = f64::NEG_INFINITY;
-    for point in poly.iter() {
+    for point in poly {
         min_x = min_x.min(point.x);
         max_x = max_x.max(point.x);
         min_y = min_y.min(point.y);
@@ -371,6 +369,39 @@ fn polyline_area_epsilon(poly: &PolylineCurve<Point2>) -> f64 {
     } else {
         f64::INFINITY
     }
+}
+
+fn materialize_pre_face<C, S>(
+    face: &Face<Point3, C, S>,
+    pre_face: Vec<WireChunk<'_, C>>,
+) -> (FaceFragment<C, S>, ShapesOpStatus)
+where
+    S: Clone,
+{
+    let surface = face.surface();
+    let status = pre_face
+        .iter()
+        .find(|chunk| chunk.wire.status() != ShapesOpStatus::Unknown)
+        .map_or(ShapesOpStatus::Unknown, |chunk| chunk.wire.status());
+    let wires = pre_face
+        .into_iter()
+        .map(|chunk| {
+            let wire = chunk.wire.deref().clone();
+            if chunk.reverse_for_face {
+                wire.inverse()
+            } else {
+                wire
+            }
+        })
+        .collect();
+    (
+        FaceFragment {
+            wires,
+            surface,
+            orientation: face.orientation(),
+        },
+        status,
+    )
 }
 
 fn divide_one_face<C, S>(
@@ -400,17 +431,18 @@ where
             if area.abs() <= polyline_area_epsilon(&poly) {
                 return Some(());
             }
-            match area > 0.0 {
-                true => pre_faces.push(vec![WireChunk {
+            if area > 0.0 {
+                pre_faces.push(vec![WireChunk {
                     poly,
                     wire,
                     reverse_for_face: false,
-                }]),
-                false => negative_wires.push(WireChunk {
+                }]);
+            } else {
+                negative_wires.push(WireChunk {
                     poly,
                     wire,
                     reverse_for_face: false,
-                }),
+                });
             }
             Some(())
         })?;
@@ -476,32 +508,7 @@ where
         pre_faces
             .into_iter()
             .filter(|pre_face| !pre_face.is_empty())
-            .map(|pre_face| {
-                let surface = face.surface();
-                let status = pre_face
-                    .iter()
-                    .find(|chunk| chunk.wire.status() != ShapesOpStatus::Unknown)
-                    .map_or(ShapesOpStatus::Unknown, |chunk| chunk.wire.status());
-                let wires = pre_face
-                    .into_iter()
-                    .map(|chunk| {
-                        let wire = chunk.wire.deref().clone();
-                        if chunk.reverse_for_face {
-                            wire.inverse()
-                        } else {
-                            wire
-                        }
-                    })
-                    .collect();
-                (
-                    FaceFragment {
-                        wires,
-                        surface,
-                        orientation: face.orientation(),
-                    },
-                    status,
-                )
-            })
+            .map(|pre_face| materialize_pre_face(face, pre_face))
             .collect(),
     )
 }
@@ -575,7 +582,7 @@ where
                 .iter()
                 .all(|wire| wire.status() == ShapesOpStatus::Unknown)
             {
-                res.push(face.clone(), ShapesOpStatus::Unknown, source_face);
+                res.push(face, ShapesOpStatus::Unknown, source_face);
             } else {
                 divide_one_face(face, loops, sampled_loops, tol)?
                     .into_iter()
@@ -598,6 +605,7 @@ where
 mod tests {
     use super::*;
     use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, Line, Plane};
+    use monstertruck_topology::{Edge, Vertex};
 
     #[test]
     fn approximate_surface_projection_is_bounded_by_boolean_tolerance() {

@@ -6,7 +6,11 @@
 //! regions are welded/repaired into valid topology.
 
 use super::loops_store::ShapesOpStatus;
-use monstertruck_topology::{compress::*, repair, *};
+use monstertruck_topology::{
+    Edge, EdgeId, Face, Shell, Vertex, VertexId, Wire,
+    compress::{CompressedEdge, CompressedEdgeIndex, CompressedFace, CompressedShell},
+    repair,
+};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 #[derive(Clone, Debug)]
@@ -19,7 +23,7 @@ pub(super) struct BooleanRegion<P, C, S> {
 }
 
 impl<P, C, S> BooleanRegion<P, C, S> {
-    pub(super) fn new(
+    pub(super) const fn new(
         boundaries: Vec<Wire<P, C>>,
         surface: S,
         orientation: bool,
@@ -39,7 +43,7 @@ impl<P, C, S> BooleanRegion<P, C, S> {
     pub(super) const fn source_face(&self) -> usize { self.source_face }
     pub(super) const fn absolute_boundaries(&self) -> &Vec<Wire<P, C>> { &self.boundaries }
     pub(super) const fn orientation(&self) -> bool { self.orientation }
-    pub(super) fn invert(&mut self) { self.orientation = !self.orientation; }
+    pub(super) const fn invert(&mut self) { self.orientation = !self.orientation; }
 
     pub(super) fn surface(&self) -> S
     where S: Clone {
@@ -137,14 +141,12 @@ fn materialize_region_set<P: Clone, C: Clone, S: Clone>(
 
     for region in regions {
         let mut vertex_index = |vertex: &Vertex<P>| {
-            if let Some(index) = vertex_map.get(&vertex.id()).copied() {
-                index
-            } else {
+            vertex_map.get(&vertex.id()).copied().unwrap_or_else(|| {
                 let index = vertices.len();
                 vertices.push(vertex.point());
                 vertex_map.insert(vertex.id(), index);
                 index
-            }
+            })
         };
         let boundaries = region
             .absolute_boundaries()
@@ -152,9 +154,7 @@ fn materialize_region_set<P: Clone, C: Clone, S: Clone>(
             .map(|wire| {
                 wire.iter()
                     .map(|edge| {
-                        let index = if let Some(index) = edge_map.get(&edge.id()).copied() {
-                            index
-                        } else {
+                        let index = edge_map.get(&edge.id()).copied().unwrap_or_else(|| {
                             let index = edges.len();
                             edges.push(CompressedEdge {
                                 vertices: (
@@ -166,7 +166,7 @@ fn materialize_region_set<P: Clone, C: Clone, S: Clone>(
                             edge_objects.push(edge.absolute_clone());
                             edge_map.insert(edge.id(), index);
                             index
-                        };
+                        });
                         CompressedEdgeIndex {
                             index,
                             orientation: edge.orientation(),
@@ -295,11 +295,16 @@ impl<P, C, S> FacesClassification<P, C, S> {
         self.status.push(status);
     }
 
-    pub(super) fn push(&mut self, face: Face<P, C, S>, status: ShapesOpStatus, source_face: usize)
-    where
+    pub(super) fn push(
+        &mut self,
+        face: &Face<P, C, S>,
+        status: ShapesOpStatus,
+        source_face: usize,
+    ) where
         P: Clone,
         C: Clone,
-        S: Clone, {
+        S: Clone,
+    {
         self.push_region(
             face.absolute_boundaries().clone(),
             face.surface(),

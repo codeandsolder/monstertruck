@@ -43,7 +43,7 @@ use classification::{
 use conversion::altshell_to_shell;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
-use monstertruck_topology::*;
+use monstertruck_topology::{Edge, EdgeId, Face, Shell, Solid, Vertex, VertexId, Wire};
 use std::collections::{HashMap, VecDeque};
 use tolerance::BooleanTolerance;
 use weld::weld_coincident_regions;
@@ -319,7 +319,7 @@ fn partition_evidence<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let Some(polygon) = poly_face.surface() else {
             continue;
         };
-        by_key.insert(region.key(), polygon.clone());
+        by_key.insert(region.key(), polygon);
         valid_regions.push(region.clone());
         poly_faces.push(poly_face.clone());
     }
@@ -520,7 +520,7 @@ fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             if let Some((_, _, uses)) = edge_uses.iter_mut().find(|(id, _, _)| *id == edge.id()) {
                 *uses += 1;
             } else {
-                edge_uses.push((edge.id(), edge.clone(), 1));
+                edge_uses.push((edge.id(), edge, 1));
             }
         }
         let overused = edge_uses
@@ -587,7 +587,7 @@ fn and_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 }
 
 /// AND operation between two solids (classic backend).
-pub(crate) fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+pub fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
@@ -597,7 +597,7 @@ pub(crate) fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 }
 
 /// OR operation between two solids (classic backend).
-pub(crate) fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
@@ -628,7 +628,7 @@ pub(crate) fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 }
 
 /// Difference: the region inside `solid0` but outside `solid1` (classic backend).
-pub(crate) fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+pub fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
@@ -664,7 +664,7 @@ pub(crate) fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 }
 
 /// Symmetric difference (XOR): the region inside exactly one solid (classic backend).
-pub(crate) fn symmetric_difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+pub fn symmetric_difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,

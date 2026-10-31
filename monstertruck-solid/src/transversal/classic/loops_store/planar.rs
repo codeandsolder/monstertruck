@@ -1,6 +1,11 @@
 //! Planar-region evidence and coplanar interface imprinting.
 
-use super::*;
+use super::{
+    BooleanTolerance, BoundedCurve, CurveParameter, Cut, Edge, EuclideanSpace, HashMap, InnerSpace,
+    Invertible, LoopsStore, MetricSpace, Origin, ParametricCurve3D, Point2, Point3, PolygonMesh,
+    PolylineCurve, SearchNearestParameter, SearchParameter, ShapesOpStatus, Shell, StandardVertex,
+    TOLERANCE, Vector2, Vector3, WithPointCloud,
+};
 
 fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vector3)> {
     let tolerance = BooleanTolerance::new(tol);
@@ -137,7 +142,7 @@ fn planar_signatures_match(
             .all(|(lhs, rhs)| (*lhs - rhs).abs() <= 2.0 * tolerance.length)
 }
 
-fn cross2(lhs: Vector2, rhs: Vector2) -> f64 { lhs.x * rhs.y - lhs.y * rhs.x }
+fn cross2(lhs: Vector2, rhs: Vector2) -> f64 { lhs.y.mul_add(-rhs.x, lhs.x * rhs.y) }
 
 fn projected_triangle(
     polygon: &PolygonMesh,
@@ -160,7 +165,7 @@ fn polygon_area2(points: &[Point2]) -> f64 {
         .iter()
         .zip(points.iter().cycle().skip(1))
         .take(points.len())
-        .map(|(lhs, rhs)| lhs.x * rhs.y - lhs.y * rhs.x)
+        .map(|(lhs, rhs)| f64::mul_add(lhs.y, -rhs.x, lhs.x * rhs.y))
         .sum()
 }
 
@@ -317,6 +322,9 @@ fn projected_bounds_overlap(lhs: [f64; 4], rhs: [f64; 4], tol: f64) -> bool {
     lhs[1].min(rhs[1]) - lhs[0].max(rhs[0]) > tol && lhs[3].min(rhs[3]) - lhs[2].max(rhs[2]) > tol
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::transversal::classic) struct PlanarMatchIndeterminate;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::transversal::classic) struct PlanarPartitionMatch {
     pub(in crate::transversal::classic) representative: usize,
@@ -327,14 +335,14 @@ pub(in crate::transversal::classic) fn direct_planar_face_match(
     target: &PolygonMesh,
     fragments: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     tol: f64,
-) -> Option<Option<usize>> {
+) -> Result<Option<usize>, PlanarMatchIndeterminate> {
     for (index, face) in fragments.iter().enumerate() {
-        let polygon = face.surface()?;
+        let polygon = face.surface().ok_or(PlanarMatchIndeterminate)?;
         if planar_polygons_same_trimmed_face(target, &polygon, tol) {
-            return Some(Some(index));
+            return Ok(Some(index));
         }
     }
-    Some(None)
+    Ok(None)
 }
 
 /// Match one trimmed planar face against a partition of the same physical
@@ -344,22 +352,23 @@ pub(in crate::transversal::classic) fn single_face_matches_planar_partition(
     target: &PolygonMesh,
     fragments: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     tol: f64,
-) -> Option<Option<PlanarPartitionMatch>> {
+) -> Result<Option<PlanarPartitionMatch>, PlanarMatchIndeterminate> {
     let Some((origin, normal)) = planar_polygon_plane(target, tol) else {
-        return Some(None);
+        return Ok(None);
     };
     let Some(target_signature) = planar_polygon_signature(target, origin, normal) else {
-        return Some(None);
+        return Ok(None);
     };
     let mut matched = Vec::<PolygonMesh>::new();
     let mut matched_indices = Vec::<usize>::new();
     let mut representative = None;
     for (index, face) in fragments.iter().enumerate() {
-        let polygon = face.surface()?;
+        let polygon = face.surface().ok_or(PlanarMatchIndeterminate)?;
         if !planar_polygons_coplanar(target, &polygon, tol) {
             continue;
         }
-        let signature = planar_polygon_signature(&polygon, origin, normal)?;
+        let signature =
+            planar_polygon_signature(&polygon, origin, normal).ok_or(PlanarMatchIndeterminate)?;
         if !projected_bounds_overlap(target_signature.bounds, signature.bounds, tol) {
             continue;
         }
@@ -368,30 +377,34 @@ pub(in crate::transversal::classic) fn single_face_matches_planar_partition(
         representative.get_or_insert(index);
     }
     if matched.is_empty() {
-        return Some(None);
+        return Ok(None);
     }
-    let fragment_signature = planar_polygon_set_signature(matched.iter(), origin, normal)?;
+    let fragment_signature = planar_polygon_set_signature(matched.iter(), origin, normal)
+        .ok_or(PlanarMatchIndeterminate)?;
     if !planar_signatures_match(target_signature, fragment_signature, tol)
-        || planar_polygon_set_has_interior_overlap(&matched, origin, normal, tol)?
+        || planar_polygon_set_has_interior_overlap(&matched, origin, normal, tol)
+            .ok_or(PlanarMatchIndeterminate)?
     {
-        return Some(None);
+        return Ok(None);
     }
-    let overlap = matched.iter().try_fold(0.0, |sum, fragment| {
-        planar_polygon_overlap_area(target, fragment, origin, normal, tol).map(|area| sum + area)
-    })?;
+    let overlap = matched
+        .iter()
+        .try_fold(0.0, |sum, fragment| {
+            planar_polygon_overlap_area(target, fragment, origin, normal, tol)
+                .map(|area| sum + area)
+        })
+        .ok_or(PlanarMatchIndeterminate)?;
     let area_tol = planar_area_tolerance(target_signature, tol)
         .max(planar_area_tolerance(fragment_signature, tol));
     let Some(representative) = representative else {
-        return Some(None);
+        return Ok(None);
     };
-    Some(
-        ((target_signature.area - overlap).abs() <= area_tol
-            && (fragment_signature.area - overlap).abs() <= area_tol)
-            .then_some(PlanarPartitionMatch {
-                representative,
-                members: matched_indices,
-            }),
-    )
+    Ok(((target_signature.area - overlap).abs() <= area_tol
+        && (fragment_signature.area - overlap).abs() <= area_tol)
+        .then_some(PlanarPartitionMatch {
+            representative,
+            members: matched_indices,
+        }))
 }
 
 #[derive(Clone, Debug)]
@@ -404,26 +417,26 @@ pub(super) fn shells_full_planar_interface_pair(
     lhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     tol: f64,
-) -> Option<Option<FullPlanarInterfaceMatch>> {
+) -> Result<Option<FullPlanarInterfaceMatch>, PlanarMatchIndeterminate> {
     for (left_index, left) in lhs.iter().enumerate() {
-        let left_polygon = left.surface()?;
+        let left_polygon = left.surface().ok_or(PlanarMatchIndeterminate)?;
         if let Some(right) = single_face_matches_planar_partition(&left_polygon, rhs, tol)? {
-            return Some(Some(FullPlanarInterfaceMatch {
+            return Ok(Some(FullPlanarInterfaceMatch {
                 lhs_faces: vec![left_index],
                 rhs_faces: right.members,
             }));
         }
     }
     for (right_index, right) in rhs.iter().enumerate() {
-        let right_polygon = right.surface()?;
+        let right_polygon = right.surface().ok_or(PlanarMatchIndeterminate)?;
         if let Some(left) = single_face_matches_planar_partition(&right_polygon, lhs, tol)? {
-            return Some(Some(FullPlanarInterfaceMatch {
+            return Ok(Some(FullPlanarInterfaceMatch {
                 lhs_faces: left.members,
                 rhs_faces: vec![right_index],
             }));
         }
     }
-    Some(None)
+    Ok(None)
 }
 
 fn planar_polygons_partially_overlap(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: f64) -> bool {
@@ -440,7 +453,7 @@ fn shell_polygon_bounds(
 ) -> Option<(Point3, Point3)> {
     let mut points = shell
         .iter()
-        .filter_map(|face| face.surface())
+        .filter_map(monstertruck_topology::Face::surface)
         .flat_map(|polygon| polygon.positions().to_vec());
     let first = points.next()?;
     Some(points.fold((first, first), |(mut min, mut max), point| {
@@ -476,9 +489,9 @@ pub(super) fn shells_have_partial_planar_overlap(
     if !shells_have_positive_aabb_overlap(lhs, rhs, tol)? {
         return Some(false);
     }
-    for left in lhs.iter() {
+    for left in lhs {
         let left_polygon = left.surface()?;
-        for right in rhs.iter() {
+        for right in rhs {
             let right_polygon = right.surface()?;
             if planar_polygons_partially_overlap(&left_polygon, &right_polygon, tol) {
                 return Some(true);
@@ -522,7 +535,7 @@ where
             let (t0, t1) = curve.range_tuple();
             let samples = [
                 edge.front().point(),
-                curve.evaluate((t0 + t1) * 0.5),
+                curve.evaluate(f64::midpoint(t0, t1)),
                 edge.back().point(),
             ];
             if !polygon.neighborhood_include(&samples, proximity) {
@@ -558,6 +571,8 @@ pub(super) const CROSS_FACE_STITCH_TOLERANCE: f64 = 8.0 * TOLERANCE;
 #[cfg(test)]
 mod planar_region_identity_tests {
     use super::*;
+    use monstertruck_meshing::prelude::{Faces, StandardAttributes};
+    use monstertruck_topology::Face;
 
     fn diamond() -> PolygonMesh {
         PolygonMesh::new(
@@ -625,7 +640,23 @@ mod planar_region_identity_tests {
 
         assert_eq!(
             single_face_matches_planar_partition(&target, &fragments, 1.0e-8),
-            Some(None)
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn missing_fragment_surface_is_indeterminate() {
+        let target = diamond();
+        let fragments: Shell<Point3, PolylineCurve, Option<PolygonMesh>> =
+            Shell::from(vec![Face::new_unchecked(Vec::new(), None)]);
+
+        assert_eq!(
+            direct_planar_face_match(&target, &fragments, 1.0e-8),
+            Err(PlanarMatchIndeterminate)
+        );
+        assert_eq!(
+            single_face_matches_planar_partition(&target, &fragments, 1.0e-8),
+            Err(PlanarMatchIndeterminate)
         );
     }
 }

@@ -7,7 +7,10 @@
 //! adjacency graph. Resurrected from the 0.3.2 published crate (the last
 //! release that shipped a self-contained boolean backend).
 
-use monstertruck_core::{cgmath64::*, tolerance::*};
+use monstertruck_core::{
+    cgmath64::{ElementWise, EuclideanSpace, MetricSpace, Point3},
+    tolerance::{TOLERANCE, Tolerance},
+};
 use monstertruck_meshing::prelude::PolylineCurve;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::VecDeque;
@@ -193,7 +196,6 @@ pub(super) fn stitch_nearby_polylines(
 struct PointIndex([i64; 3]);
 
 impl PointIndex {
-    #[inline(always)]
     fn from_point(pt: Point3) -> Option<Self> {
         if !pt.x.is_finite() || !pt.y.is_finite() || !pt.z.is_finite() {
             return None;
@@ -212,8 +214,9 @@ struct Node {
 }
 
 impl Node {
-    #[inline(always)]
-    fn new(coord: Point3, adjacency: HashSet<PointIndex>) -> Node { Node { coord, adjacency } }
+    const fn new(coord: Point3, adjacency: HashSet<PointIndex>) -> Self {
+        Self { coord, adjacency }
+    }
 
     fn pop_one_adjacency(&mut self) -> Option<PointIndex> {
         let idx = self.adjacency.iter().next().copied()?;
@@ -226,12 +229,10 @@ struct Graph(HashMap<PointIndex, Node>);
 
 impl std::ops::Deref for Graph {
     type Target = HashMap<PointIndex, Node>;
-    #[inline(always)]
     fn deref(&self) -> &Self::Target { &self.0 }
 }
 
 impl std::ops::DerefMut for Graph {
-    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
 }
 
@@ -258,7 +259,6 @@ impl Graph {
         self.add_half_edge(idx1, line.1, idx0);
     }
 
-    #[inline(always)]
     fn first_node(&self) -> Option<(PointIndex, &Node)> {
         self.iter().next().map(|(idx, node)| (*idx, node))
     }
@@ -280,8 +280,8 @@ impl Graph {
 }
 
 impl<'a> FromIterator<&'a (Point3, Point3)> for Graph {
-    fn from_iter<I: IntoIterator<Item = &'a (Point3, Point3)>>(iter: I) -> Graph {
-        let mut res = Graph(HashMap::default());
+    fn from_iter<I: IntoIterator<Item = &'a (Point3, Point3)>>(iter: I) -> Self {
+        let mut res = Self(HashMap::default());
         iter.into_iter().for_each(|line| res.add_edge(*line));
         res
     }
