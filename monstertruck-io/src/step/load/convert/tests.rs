@@ -9,7 +9,8 @@ use crate::step::load::step_geometry::{
     Curve2D, ElementarySurface, SurfaceCurve3D, SurfaceCurveAssociatedGeometry,
 };
 use monstertruck_geometry::prelude::{
-    BoundedCurve, Line, ParametricCurve, ParametricSurface, Processor, RevolutionSurface, Vector3,
+    BoundedCurve, Line, ParametricCurve, ParametricSurface, Processor, RevolutionSurface,
+    Tolerance, Vector3,
 };
 use std::f64::consts::TAU;
 

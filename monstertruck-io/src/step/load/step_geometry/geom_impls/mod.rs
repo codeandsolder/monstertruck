@@ -4,23 +4,18 @@
 //! below need them.
 
 use super::{
-    Angle, Array, Attributes, BoundaryCurveFromSamples, Bounded, BoundedCurve, BoundedSurface,
-    BsplineCurve, BsplineSurface, Concat, Conic2D, Conic3D, Curve2D, Curve3D, CurveParameter,
-    CurveScalarFunction, CurveTrimRef, Cut, Decomposition, Deserialize, EigenValues, ElementWise,
-    ElementarySurface, Ellipse, EuclideanSpace, ExactParameterBoundary2D, Exponential,
-    ExtrusionSurface, HashGen, Homogeneous, Hyperbola, IncludeCurve, InnerSpace, IntersectionCurve,
-    Invertible, KnotVector, Line, Matrix, Matrix3, Matrix4, MetricSpace, NurbsCurve, NurbsSurface,
-    One, OperatorNorm, Origin, Parabola, ParameterBoundary2D, ParameterCurve, ParameterDivision1D,
-    ParameterDivision2D, ParameterRange, ParameterTransform, ParametricCurve, ParametricCurve2D,
-    ParametricCurve3D, ParametricSurface, ParametricSurface2D, ParametricSurface3D, Plane, Point2,
-    Point3, Processor, RevolutionSurface, Rotation, Rotation2, Rotation3, SearchNearestParameter,
-    SearchParameter, SearchParameterDimension, SearchParameterHint1D, SearchParameterHint2D,
-    Serialize, Sphere, SphericalSurface, SquareMatrix, StepConvertingError, StepParameterCurve,
-    StepRevolutionSurface, Surface, SurfaceCurve, SurfaceCurve3D, SurfaceCurveAssociatedGeometry,
-    SurfaceCurveTrimRef, SurfaceScalarFunction, SweepSurface, TOLERANCE, ToSameGeometry, Tolerance,
-    ToroidalSurface, Torus, Transform, Transform2, Transform3, Transformed, TransformedAttributes,
-    TrimmedCurve, TryIntoAnalyticSurfaceKind, UnitCircle, UnitHyperbola, UnitParabola, Vector3,
-    Vector4, VectorSpace, Zero, uv_clamp,
+    BoundaryCurveFromSamples, BoundedCurve, BsplineCurve, BsplineSurface, Conic2D, Conic3D,
+    Curve2D, Curve3D, CurveParameter, CurveTrimRef, Cut, ElementarySurface, Ellipse,
+    EuclideanSpace, ExactParameterBoundary2D, ExtrusionSurface, Hyperbola, IncludeCurve,
+    InnerSpace, IntersectionCurve, Invertible, KnotVector, Line, Matrix3, Matrix4, MetricSpace,
+    NurbsCurve, NurbsSurface, Origin, Parabola, ParameterBoundary2D, ParameterCurve,
+    ParameterDivision1D, ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface,
+    Plane, Point2, Point3, Processor, RevolutionSurface, SearchNearestParameter, SearchParameter,
+    SearchParameterHint1D, SearchParameterHint2D, Sphere, SphericalSurface, SquareMatrix,
+    StepConvertingError, StepParameterCurve, StepRevolutionSurface, Surface, SurfaceCurve,
+    SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceCurveTrimRef, SweepSurface, TOLERANCE,
+    ToSameGeometry, Tolerance, ToroidalSurface, Torus, Transform, Transformed, TrimmedCurve,
+    UnitCircle, UnitHyperbola, UnitParabola, Vector3, Vector4, uv_clamp,
 };
 use monstertruck_geometry::prelude::{
     HomogeneousSurfaceConversion, SupportsExactPatchDomains, SurfaceParameterRectangle,
@@ -37,9 +32,6 @@ use std::{cmp::Ordering, env};
 // `performance.now()` in the browser, so all the `Instant::now()` /
 // `.elapsed()` call sites below stay unchanged.
 use web_time::Instant;
-
-#[cfg(test)]
-use std::f64::consts::TAU;
 
 impl SurfaceCurveAssociatedGeometry {
     fn surface(&self) -> &Surface {

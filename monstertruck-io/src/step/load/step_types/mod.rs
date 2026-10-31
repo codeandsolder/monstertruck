@@ -24,22 +24,13 @@ use step_p21::{Holder, ast::Name, primitive::Logical, tables::PlaceHolder};
 
 use super::Table;
 use super::step_geometry::{
-    self, Angle, Array, Attributes, BoundaryCurveFromSamples, Bounded, BoundedCurve,
-    BoundedSurface, BsplineCurve, BsplineSurface, Concat, Conic2D, Conic3D, Curve2D, Curve3D,
-    CurveScalarFunction, Cut, Decomposition, EigenValues, ElementWise, ElementarySurface,
-    EuclideanSpace, ExactParameterBoundary2D, Exponential, HashGen, Homogeneous, IncludeCurve,
-    InnerSpace, IntersectionCurve, Invertible, KnotVector, Matrix, Matrix3, Matrix4, MetricSpace,
-    NurbsCurve, NurbsSurface, One, OperatorNorm, Origin, ParameterBoundary2D, ParameterDivision1D,
-    ParameterDivision2D, ParameterTransform, ParametricCurve, ParametricCurve2D, ParametricCurve3D,
-    ParametricSurface, ParametricSurface2D, ParametricSurface3D, Point2, Point3, PolylineCurve,
-    Processor, RevolutionSurface, Rotation, Rotation2, Rotation3, SearchNearestParameter,
-    SearchParameter, SearchParameterDimension, SnapCurveEndpoints, Sphere, SquareMatrix,
-    StepConvertingError, StepExtrusionSurface, StepRevolutionSurface, SupportsExactPatchDomains,
-    Surface, SurfaceScalarFunction, SweepSurface, TOLERANCE, ToSameGeometry, Tolerance, Torus,
-    Transform, Transform2, Transform3, Transformed, TransformedAttributes, TrimmedCurve,
-    TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface, TryIntoHomogeneousBsplineCurve,
-    TryIntoHomogeneousBsplineSurface, UnitCircle, UnitHyperbola, UnitParabola, Vector2, Vector3,
-    Vector4, VectorSpace, Zero,
+    self, BsplineCurve, BsplineSurface, Conic2D, Conic3D, Curve2D, Curve3D, ElementarySurface,
+    EuclideanSpace, Homogeneous, InnerSpace, IntersectionCurve, Invertible, KnotVector, Matrix3,
+    Matrix4, NurbsCurve, NurbsSurface, Origin, Point2, Point3, PolylineCurve, Processor,
+    RevolutionSurface, SearchNearestParameter, Sphere, SquareMatrix, StepConvertingError,
+    StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface, TOLERANCE, Tolerance,
+    Torus, Transform, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector2,
+    Vector3, Vector4, Zero,
 };
 
 mod curve;

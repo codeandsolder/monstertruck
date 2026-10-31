@@ -10,7 +10,7 @@
 /// re-export [`step_p21`](https://docs.rs/step-p21/latest/step_p21/)
 pub use step_p21;
 
-use monstertruck_assembly::assy::{Assembly, EdgeEntity, NodeEntity, Takeable};
+use monstertruck_assembly::assy::{Assembly, EdgeEntity, NodeEntity};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::result::Result;
@@ -72,18 +72,10 @@ impl From<String> for LoadError {
 }
 
 use step_geometry::{
-    Angle, Array, Attributes, BoundaryCurveFromSamples, Bounded, BoundedCurve, BoundedSurface,
-    Concat, Curve3D, CurveScalarFunction, Cut, Decomposition, EigenValues, ElementWise,
-    EuclideanSpace, ExactParameterBoundary2D, Exponential, HashGen, Homogeneous, IncludeCurve,
-    InnerSpace, IntersectionCurve, Invertible, Matrix, Matrix3, Matrix4, MetricSpace, One,
-    OperatorNorm, Origin, ParameterBoundary2D, ParameterDivision1D, ParameterDivision2D,
-    ParameterTransform, ParametricCurve, ParametricCurve2D, ParametricCurve3D, ParametricSurface,
-    ParametricSurface2D, ParametricSurface3D, Point2, Point3, PolylineCurve, Rotation, Rotation2,
-    Rotation3, SearchNearestParameter, SearchParameter, SearchParameterDimension,
-    SnapCurveEndpoints, SquareMatrix, SupportsExactPatchDomains, Surface, SurfaceScalarFunction,
-    TOLERANCE, ToSameGeometry, Tolerance, Transform, Transform2, Transform3, Transformed,
-    TransformedAttributes, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
-    TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface, VectorSpace, Zero,
+    Array, Attributes, BoundedSurface, Curve3D, CurveScalarFunction, EuclideanSpace, InnerSpace,
+    IntersectionCurve, Invertible, Matrix3, Matrix4, MetricSpace, ParametricSurface3D, Point2,
+    Point3, PolylineCurve, Rotation, SearchNearestParameter, SearchParameter, SquareMatrix,
+    Surface, SurfaceScalarFunction, TOLERANCE,
 };
 pub use step_types::*;
 
