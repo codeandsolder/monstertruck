@@ -291,6 +291,53 @@ impl Drop for SceneDescriptorMut<'_> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ReadbackLayout {
+    unpadded_bytes_per_row: u32,
+    padded_bytes_per_row: u32,
+    buffer_size: u64,
+    output_size_u64: u64,
+    output_size: usize,
+}
+
+impl ReadbackLayout {
+    fn new(width: u32, height: u32, format: TextureFormat) -> Result<Self, GpuError> {
+        if format.block_dimensions() != (1, 1) {
+            return Err(GpuError::UnsupportedReadbackFormat { format });
+        }
+        let bytes_per_texel = format
+            .block_copy_size(Some(TextureAspect::All))
+            .ok_or(GpuError::UnsupportedReadbackFormat { format })?;
+        let unpadded_bytes_per_row =
+            width
+                .checked_mul(bytes_per_texel)
+                .ok_or(GpuError::CountTooLarge {
+                    what: "render readback row pitch",
+                })?;
+        let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padding = (alignment - unpadded_bytes_per_row % alignment) % alignment;
+        let padded_bytes_per_row =
+            unpadded_bytes_per_row
+                .checked_add(padding)
+                .ok_or(GpuError::CountTooLarge {
+                    what: "aligned render readback row pitch",
+                })?;
+        let buffer_size = u64::from(padded_bytes_per_row) * u64::from(height);
+        let output_size_u64 = u64::from(unpadded_bytes_per_row) * u64::from(height);
+        let output_size =
+            usize::try_from(output_size_u64).map_err(|_| GpuError::ReadbackTooLarge {
+                bytes: output_size_u64,
+            })?;
+        Ok(Self {
+            unpadded_bytes_per_row,
+            padded_bytes_per_row,
+            buffer_size,
+            output_size_u64,
+            output_size,
+        })
+    }
+}
+
 impl Scene {
     #[inline]
     fn camera_bgl_entry() -> PreBindGroupLayoutEntry {
@@ -822,38 +869,12 @@ impl Scene {
         let (device, queue) = (self.device(), self.queue());
 
         let (width, height) = self.descriptor.render_texture.canvas_size;
-        let format = self.descriptor.render_texture.format;
-        if format.block_dimensions() != (1, 1) {
-            return Err(GpuError::UnsupportedReadbackFormat { format });
-        }
-        let bytes_per_texel = format
-            .block_copy_size(Some(TextureAspect::All))
-            .ok_or(GpuError::UnsupportedReadbackFormat { format })?;
-        let unpadded_bytes_per_row =
-            width
-                .checked_mul(bytes_per_texel)
-                .ok_or(GpuError::CountTooLarge {
-                    what: "render readback row pitch",
-                })?;
-        let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padding = (alignment - unpadded_bytes_per_row % alignment) % alignment;
-        let padded_bytes_per_row =
-            unpadded_bytes_per_row
-                .checked_add(padding)
-                .ok_or(GpuError::CountTooLarge {
-                    what: "aligned render readback row pitch",
-                })?;
-        let buffer_size = u64::from(padded_bytes_per_row) * u64::from(height);
-        let output_size_u64 = u64::from(unpadded_bytes_per_row) * u64::from(height);
-        let output_size =
-            usize::try_from(output_size_u64).map_err(|_| GpuError::ReadbackTooLarge {
-                bytes: output_size_u64,
-            })?;
+        let layout = ReadbackLayout::new(width, height, self.descriptor.render_texture.format)?;
         let buffer = device.create_buffer(&BufferDescriptor {
             label: None,
             mapped_at_creation: false,
             usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-            size: buffer_size,
+            size: layout.buffer_size,
         });
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
         encoder.copy_texture_to_buffer(
@@ -867,7 +888,7 @@ impl Scene {
                 buffer: &buffer,
                 layout: TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
+                    bytes_per_row: Some(layout.padded_bytes_per_row),
                     rows_per_image: Some(height),
                 },
             },
@@ -892,23 +913,24 @@ impl Scene {
         match receiver.receive().await {
             Some(Ok(())) => {
                 let mapped = buffer_slice.get_mapped_range();
-                if padded_bytes_per_row == unpadded_bytes_per_row {
+                if layout.padded_bytes_per_row == layout.unpadded_bytes_per_row {
                     return Ok(mapped.iter().copied().collect());
                 }
-                let row_bytes = usize::try_from(unpadded_bytes_per_row).map_err(|_| {
+                let row_bytes = usize::try_from(layout.unpadded_bytes_per_row).map_err(|_| {
                     GpuError::ReadbackTooLarge {
-                        bytes: output_size_u64,
+                        bytes: layout.output_size_u64,
                     }
                 })?;
-                let padded_row_bytes = usize::try_from(padded_bytes_per_row).map_err(|_| {
-                    GpuError::ReadbackTooLarge {
-                        bytes: output_size_u64,
-                    }
-                })?;
+                let padded_row_bytes =
+                    usize::try_from(layout.padded_bytes_per_row).map_err(|_| {
+                        GpuError::ReadbackTooLarge {
+                            bytes: layout.output_size_u64,
+                        }
+                    })?;
                 let rows = usize::try_from(height).map_err(|_| GpuError::ReadbackTooLarge {
-                    bytes: output_size_u64,
+                    bytes: layout.output_size_u64,
                 })?;
-                let mut output = Vec::with_capacity(output_size);
+                let mut output = Vec::with_capacity(layout.output_size);
                 for row in mapped.chunks_exact(padded_row_bytes).take(rows) {
                     output.extend_from_slice(&row[..row_bytes]);
                 }
