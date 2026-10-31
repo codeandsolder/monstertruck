@@ -4,6 +4,7 @@
 //! into topology that can be validated and extracted. Serialization itself lives
 //! in [`crate::compress`]; repair policy does not.
 
+use crate::StableId;
 use crate::compress::{
     CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace, CompressedShell,
     CompressedTrimmedFace, CompressedTrimmedShell,
@@ -95,7 +96,23 @@ pub fn split_non_simple_compressed_wires<P, C, S>(shell: &mut CompressedShell<P,
     shell.faces.iter_mut().for_each(|face| {
         split_non_simple_boundaries(edges, &mut face.boundaries);
     });
-    shell.faces.retain(|face| !face.boundaries.is_empty());
+
+    if let Some(face_stable_ids) = shell.face_stable_ids.take() {
+        let mut stable_ids = face_stable_ids.into_iter();
+        let mut retained_ids = Vec::with_capacity(shell.faces.len());
+        shell.faces.retain(|face| {
+            let stable_id = stable_ids.next().unwrap_or(StableId::UNASSIGNED);
+            if face.boundaries.is_empty() {
+                false
+            } else {
+                retained_ids.push(stable_id);
+                true
+            }
+        });
+        shell.face_stable_ids = Some(retained_ids);
+    } else {
+        shell.faces.retain(|face| !face.boundaries.is_empty());
+    }
 }
 
 /// Trim-preserving counterpart of [`split_non_simple_compressed_wires`].
@@ -544,31 +561,44 @@ where
     Ok(report)
 }
 
+const fn compressed_face_component_root(components: &mut [usize], index: usize) -> usize {
+    let mut root = index;
+    while components[root] != root {
+        root = components[root];
+    }
+    let mut cursor = index;
+    while components[cursor] != root {
+        let next = components[cursor];
+        components[cursor] = root;
+        cursor = next;
+    }
+    root
+}
+
 /// Split a compressed face whose individually simple boundary wires share vertices.
 ///
 /// Wires in a vertex-sharing component cannot coexist in one topology face, so
 /// each is emitted as a separate face on the same surface. Mutually disjoint
 /// boundaries, including ordinary outer-loop-plus-hole faces, stay together.
 pub fn split_pinched_compressed_faces<P, C, S: Clone>(shell: &mut CompressedShell<P, C, S>) {
-    const fn component_root(components: &mut [usize], index: usize) -> usize {
-        let mut root = index;
-        while components[root] != root {
-            root = components[root];
-        }
-        let mut cursor = index;
-        while components[cursor] != root {
-            let next = components[cursor];
-            components[cursor] = root;
-            cursor = next;
-        }
-        root
-    }
-
     let faces = std::mem::take(&mut shell.faces);
+    let face_stable_ids = shell.face_stable_ids.take();
+    let mut stable_ids = face_stable_ids.as_ref().map(|ids| ids.iter().copied());
     let mut new_faces = Vec::with_capacity(faces.len());
+    let mut new_stable_ids = face_stable_ids
+        .as_ref()
+        .map(|_| Vec::with_capacity(faces.len()));
     for face in faces {
+        let stable_id = stable_ids
+            .as_mut()
+            .and_then(Iterator::next)
+            .unwrap_or(StableId::UNASSIGNED);
+        let first_new_face = new_faces.len();
         if face.boundaries.len() <= 1 {
             new_faces.push(face);
+            if let Some(ids) = &mut new_stable_ids {
+                ids.push(stable_id);
+            }
             continue;
         }
         let vertex_sets = face
@@ -589,8 +619,8 @@ pub fn split_pinched_compressed_faces<P, C, S: Clone>(shell: &mut CompressedShel
             for j in (i + 1)..wire_count {
                 if !vertex_sets[i].is_disjoint(&vertex_sets[j]) {
                     let (a, b) = (
-                        component_root(&mut components, i),
-                        component_root(&mut components, j),
+                        compressed_face_component_root(&mut components, i),
+                        compressed_face_component_root(&mut components, j),
                     );
                     if a != b {
                         components[b] = a;
@@ -601,11 +631,14 @@ pub fn split_pinched_compressed_faces<P, C, S: Clone>(shell: &mut CompressedShel
         let mut component_sizes: HashMap<usize, usize> = HashMap::default();
         for index in 0..wire_count {
             *component_sizes
-                .entry(component_root(&mut components, index))
+                .entry(compressed_face_component_root(&mut components, index))
                 .or_insert(0) += 1;
         }
         if component_sizes.values().all(|size| *size == 1) {
             new_faces.push(face);
+            if let Some(ids) = &mut new_stable_ids {
+                ids.push(stable_id);
+            }
             continue;
         }
         let CompressedFace {
@@ -615,7 +648,7 @@ pub fn split_pinched_compressed_faces<P, C, S: Clone>(shell: &mut CompressedShel
         } = face;
         let mut kept_boundaries = Vec::new();
         for (index, wire) in boundaries.into_iter().enumerate() {
-            if component_sizes[&component_root(&mut components, index)] == 1 {
+            if component_sizes[&compressed_face_component_root(&mut components, index)] == 1 {
                 kept_boundaries.push(wire);
             } else {
                 new_faces.push(CompressedFace {
@@ -632,8 +665,18 @@ pub fn split_pinched_compressed_faces<P, C, S: Clone>(shell: &mut CompressedShel
                 surface,
             });
         }
+        if let Some(ids) = &mut new_stable_ids {
+            for index in first_new_face..new_faces.len() {
+                ids.push(if index == first_new_face {
+                    stable_id
+                } else {
+                    StableId::UNASSIGNED
+                });
+            }
+        }
     }
     shell.faces = new_faces;
+    shell.face_stable_ids = new_stable_ids;
 }
 
 #[cfg(test)]
@@ -917,12 +960,13 @@ mod trimmed_tests {
             }],
             vertex_stable_ids: None,
             edge_stable_ids: None,
-            face_stable_ids: None,
+            face_stable_ids: Some(vec![StableId::new(71)]),
         };
 
         split_pinched_compressed_faces(&mut shell);
         assert_eq!(shell.faces.len(), 1);
         assert_eq!(shell.faces[0].boundaries.len(), 2);
+        assert_eq!(shell.face_stable_ids, Some(vec![StableId::new(71)]));
     }
 
     #[test]
@@ -947,12 +991,44 @@ mod trimmed_tests {
             }],
             vertex_stable_ids: None,
             edge_stable_ids: None,
-            face_stable_ids: None,
+            face_stable_ids: Some(vec![StableId::new(91)]),
         };
 
         split_pinched_compressed_faces(&mut shell);
         assert_eq!(shell.faces.len(), 2);
         assert!(shell.faces.iter().all(|face| face.surface == 9));
         assert!(shell.faces.iter().all(|face| face.boundaries.len() == 1));
+        assert_eq!(
+            shell.face_stable_ids,
+            Some(vec![StableId::new(91), StableId::UNASSIGNED])
+        );
+    }
+
+    #[test]
+    fn non_simple_face_removal_keeps_face_stable_ids_aligned() {
+        let mut shell = CompressedShell {
+            vertices: vec![(); 2],
+            edges: vec![edge((0, 1)), edge((0, 1))],
+            faces: vec![
+                CompressedFace {
+                    boundaries: vec![vec![plain_use(0, true), plain_use(0, false)]],
+                    orientation: true,
+                    surface: 1_u8,
+                },
+                CompressedFace {
+                    boundaries: vec![vec![plain_use(0, true), plain_use(1, false)]],
+                    orientation: true,
+                    surface: 2_u8,
+                },
+            ],
+            vertex_stable_ids: None,
+            edge_stable_ids: None,
+            face_stable_ids: Some(vec![StableId::new(101), StableId::new(102)]),
+        };
+
+        split_non_simple_compressed_wires(&mut shell);
+        assert_eq!(shell.faces.len(), 1);
+        assert_eq!(shell.faces[0].surface, 2);
+        assert_eq!(shell.face_stable_ids, Some(vec![StableId::new(102)]));
     }
 }

@@ -63,7 +63,17 @@ fn replace_edges(wire: &mut Wire, added: &HashMap<usize, usize>) {
 
 pub(super) fn split_closed_edges<P, C, S>(shell: &mut Shell<P, C, S>)
 where C: BoundedCurve<Point = P> + Cut {
+    let original_vertex_count = shell.vertices.len();
+    let original_edge_count = shell.edges.len();
     let added = add_edges(&mut shell.vertices, &mut shell.edges);
+    append_unassigned_stable_ids(
+        &mut shell.vertex_stable_ids,
+        shell.vertices.len() - original_vertex_count,
+    );
+    append_unassigned_stable_ids(
+        &mut shell.edge_stable_ids,
+        shell.edges.len() - original_edge_count,
+    );
     let wire_iter = shell.faces.iter_mut().flat_map(|face| &mut face.boundaries);
     wire_iter.for_each(|wire| replace_edges(wire, &added));
 }

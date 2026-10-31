@@ -61,6 +61,9 @@ where
         + TryFrom<ParameterCurve<Line<Point2>, S>>,
     S: ParametricSurface3D,
 {
+    let original_vertex_count = shell.vertices.len();
+    let original_edge_count = shell.edges.len();
+    let original_face_count = shell.faces.len();
     let debug_trace = env::var("MT_BOOL_TRACE").is_ok();
     let mut changed = false;
     let to_poly = closure_to_poly(tol);
@@ -143,6 +146,18 @@ where
     let new_faces: Vec<_> = (0..len).filter_map(closure).flatten().collect();
     changed |= !new_faces.is_empty();
     shell.faces.extend(new_faces);
+    append_unassigned_stable_ids(
+        &mut shell.vertex_stable_ids,
+        shell.vertices.len() - original_vertex_count,
+    );
+    append_unassigned_stable_ids(
+        &mut shell.edge_stable_ids,
+        shell.edges.len() - original_edge_count,
+    );
+    append_unassigned_stable_ids(
+        &mut shell.face_stable_ids,
+        shell.faces.len() - original_face_count,
+    );
     changed
 }
 

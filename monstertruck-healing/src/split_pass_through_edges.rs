@@ -326,6 +326,7 @@ where C: ParametricCurve3D<Point = Point3>
             })
         })
         .collect();
+    append_unassigned_stable_ids(&mut shell.edge_stable_ids, shell.edges.len() - len);
     if replacements.is_empty() {
         return;
     }
@@ -476,4 +477,58 @@ pub(super) fn remap_trimmed_edge_uses_for_dedup<T>(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pass_through_split_preserves_existing_stable_ids_and_marks_new_edge_unassigned() {
+        let p0 = Point3::new(0.0, 0.0, 0.0);
+        let p1 = Point3::new(1.0, 0.0, 0.0);
+        let p2 = Point3::new(2.0, 0.0, 0.0);
+        let mut shell = Shell {
+            vertices: vec![p0, p1, p2],
+            edges: vec![Edge {
+                vertices: (0, 2),
+                curve: Line(p0, p2),
+            }],
+            faces: vec![Face {
+                boundaries: vec![vec![EdgeIndex {
+                    index: 0,
+                    orientation: true,
+                }]],
+                orientation: true,
+                surface: (),
+            }],
+            vertex_stable_ids: Some(vec![
+                StableId::new(11),
+                StableId::new(12),
+                StableId::new(13),
+            ]),
+            edge_stable_ids: Some(vec![StableId::new(21)]),
+            face_stable_ids: Some(vec![StableId::new(31)]),
+        };
+
+        split_pass_through_edges(&mut shell, 1.0e-6);
+
+        assert_eq!(shell.edges.len(), 2);
+        assert_eq!(shell.edges[0].vertices, (0, 1));
+        assert_eq!(shell.edges[1].vertices, (1, 2));
+        assert_eq!(shell.faces[0].boundaries[0].len(), 2);
+        assert_eq!(
+            shell.edge_stable_ids,
+            Some(vec![StableId::new(21), StableId::UNASSIGNED])
+        );
+        assert_eq!(
+            shell.vertex_stable_ids,
+            Some(vec![
+                StableId::new(11),
+                StableId::new(12),
+                StableId::new(13)
+            ])
+        );
+        assert_eq!(shell.face_stable_ids, Some(vec![StableId::new(31)]));
+    }
 }

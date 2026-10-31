@@ -53,6 +53,18 @@ pub enum Error {
     /// Some boundaries has a shared vertex.
     #[error("Some wires has a shared vertex.")]
     NotDisjointWires,
+    /// A compressed topology stable-ID sidecar must have one entry per entity.
+    #[error(
+        "Stable-ID count for compressed {entity} does not match topology: expected {expected}, got {actual}."
+    )]
+    StableIdCountMismatch {
+        /// Entity class whose sidecar is malformed.
+        entity: &'static str,
+        /// Number of topology entities.
+        expected: usize,
+        /// Number of stable IDs in the sidecar.
+        actual: usize,
+    },
     /// The empty shell cannot construct a solid.
     /// # Examples
     /// ```
