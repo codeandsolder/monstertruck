@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    BoundedCurve, CompressedEdgeUse, CompressedTrimmedShell, Cut, Edge, EdgeIndex, HashMap, Point3,
+    Shell, Wire, append_unassigned_stable_ids,
+};
 
 /// Cuts the edge at the middle point of the bounded curve `curve`.
 fn cut_edge<P, C>(
@@ -61,7 +64,7 @@ fn replace_edges(wire: &mut Wire, added: &HashMap<usize, usize>) {
     *wire = new_wire;
 }
 
-pub(super) fn split_closed_edges<P, C, S>(shell: &mut Shell<P, C, S>)
+pub fn split_closed_edges<P, C, S>(shell: &mut Shell<P, C, S>)
 where C: BoundedCurve<Point = P> + Cut {
     let original_vertex_count = shell.vertices.len();
     let original_edge_count = shell.edges.len();
@@ -75,7 +78,9 @@ where C: BoundedCurve<Point = P> + Cut {
         shell.edges.len() - original_edge_count,
     );
     let wire_iter = shell.faces.iter_mut().flat_map(|face| &mut face.boundaries);
-    wire_iter.for_each(|wire| replace_edges(wire, &added));
+    for wire in wire_iter {
+        replace_edges(wire, &added);
+    }
 }
 
 fn split_trim_curve_midpoint<T>(trim_curve: T) -> (T, T)
@@ -121,15 +126,14 @@ where T: BoundedCurve + Cut + Clone {
         .collect();
 }
 
-pub(super) fn split_closed_edges_trimmed<C, S, T>(
-    shell: &mut CompressedTrimmedShell<Point3, C, S, T>,
-) where
+pub fn split_closed_edges_trimmed<C, S, T>(shell: &mut CompressedTrimmedShell<Point3, C, S, T>)
+where
     C: BoundedCurve<Point = Point3> + Cut,
     T: BoundedCurve + Cut + Clone, {
     let added = add_edges(&mut shell.vertices, &mut shell.edges);
-    shell.faces.iter_mut().for_each(|face| {
-        face.boundaries
-            .iter_mut()
-            .for_each(|wire| replace_trimmed_edges(wire, &added));
-    });
+    for face in &mut shell.faces {
+        for wire in &mut face.boundaries {
+            replace_trimmed_edges(wire, &added);
+        }
+    }
 }

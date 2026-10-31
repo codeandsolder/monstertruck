@@ -3,8 +3,16 @@
 //! Split out of the module file so the source stays readable; the module
 //! path is unchanged.
 
-use super::*;
-use monstertruck_topology::Shell;
+use super::split_closed_faces;
+use monstertruck_geometry::prelude::{
+    BoundedCurve, Cut, EuclideanSpace, Line, Matrix4, ParameterBoundary2D, ParameterCurve,
+    ParameterDivision1D, ParametricCurve, Point2, Point3, Processor, RevolutionSurface,
+    SearchNearestParameterD1, SearchParameter, Transformed, TrimmedCurve, UnitCircle, Vector3,
+};
+use monstertruck_topology::{
+    Shell, StableId,
+    compress::{CompressedEdge, CompressedEdgeIndex, CompressedFace as Face, CompressedShell},
+};
 use std::f64::consts::PI;
 
 type Surface = RevolutionSurface<Line<Point3>>;

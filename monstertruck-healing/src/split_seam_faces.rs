@@ -1,4 +1,4 @@
-use super::*;
+use super::{CompressedEdge, CompressedEdgeUse, CompressedTrimmedShell, HashMap};
 use std::collections::BTreeSet;
 
 /// The two vertex-disjoint cap loops a seam split yields from one wire.
@@ -72,7 +72,7 @@ fn arc_vertices<C, T>(
 /// a typed `NotSimpleWire` rather than being silently corrupted.
 ///
 /// Returns the number of wires rewritten.
-pub(super) fn split_seam_faces_trimmed<P, C, S, T: Clone>(
+pub fn split_seam_faces_trimmed<P, C, S, T: Clone>(
     shell: &mut CompressedTrimmedShell<P, C, S, T>,
 ) -> usize {
     let CompressedTrimmedShell { edges, faces, .. } = shell;

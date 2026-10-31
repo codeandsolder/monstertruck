@@ -17,7 +17,10 @@ pub(crate) use ahash::AHashSet as HashSet;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::rexport_polymesh::PolylineCurve;
 use monstertruck_topology::StableId;
-use monstertruck_topology::compress::*;
+use monstertruck_topology::compress::{
+    CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace, CompressedShell,
+    CompressedSolid, CompressedTrimmedFace, CompressedTrimmedShell, CompressedTrimmedSolid,
+};
 use monstertruck_topology::repair::{
     SameDomainUnification, SurfaceDomainRelation, split_non_simple_compressed_trimmed_wires,
     split_non_simple_compressed_wires, split_pinched_compressed_faces,
@@ -56,7 +59,11 @@ where C: ParametricCurve3D<Point = Point3>
         let Some(range) = source.try_range_tuple() else {
             return false;
         };
-        if !range.0.is_finite() || !range.1.is_finite() || range.0 == range.1 {
+        let span = range.1 - range.0;
+        if !range.0.is_finite()
+            || !range.1.is_finite()
+            || matches!(span.classify(), std::num::FpCategory::Zero)
+        {
             return false;
         }
         let Some((_, points)) = source.try_parameter_division(range, tol) else {
@@ -327,14 +334,14 @@ where
             1.0 - alpha
         }
     };
-    let mut alphas = [map_alpha(t_front), map_alpha(t_back)];
-    alphas.sort_by(f64::total_cmp);
-    let [alpha0, alpha1] = alphas;
+    let mut endpoint_fractions = [map_alpha(t_front), map_alpha(t_back)];
+    endpoint_fractions.sort_by(f64::total_cmp);
+    let [alpha0, alpha1] = endpoint_fractions;
     if alpha0.so_small() && (1.0 - alpha1).so_small() {
         return Some(trim_curve);
     }
-    let trim_start = trim_t0 + trim_len * alpha0;
-    let trim_end = trim_t0 + trim_len * alpha1;
+    let trim_start = f64::mul_add(trim_len, alpha0, trim_t0);
+    let trim_end = f64::mul_add(trim_len, alpha1, trim_t0);
     let param_tol = (trim_len.abs() * 1.0e-6).max(TOLERANCE);
     if !trim_start.is_finite() || !trim_end.is_finite() || trim_end <= trim_start + param_tol {
         return None;
@@ -355,12 +362,10 @@ where
         }
     };
     if trim_start <= trim_t0 + param_tol {
-        if trim_end >= trim_t1 - param_tol {
-            Some(trim_curve)
-        } else {
+        if trim_end < trim_t1 - param_tol {
             let _tail = cut_if_interior(&mut trim_curve, trim_end)?;
-            Some(trim_curve)
         }
+        Some(trim_curve)
     } else {
         let mut middle = cut_if_interior(&mut trim_curve, trim_start)?;
         let (middle_t0, middle_t1) = middle.range_tuple();
@@ -459,16 +464,16 @@ where
                                     tol,
                                 )
                             });
-                            let regenerated_trim = regenerate_trim(&edges[index], &surface);
+                            let regenerated = regenerate_trim(&edges[index], &surface);
                             let trim_curve = if preserved_trim.is_some() {
                                 preserved_count += 1;
                                 preserved_trim
                             } else if derived_trim.is_some() {
                                 derived_count += 1;
                                 derived_trim
-                            } else if regenerated_trim.is_some() {
+                            } else if regenerated.is_some() {
                                 regenerated_count += 1;
-                                regenerated_trim
+                                regenerated
                             } else {
                                 missing_count += 1;
                                 if debug_reattach && missing_logged < 32 {
@@ -674,7 +679,7 @@ where
         let uv = linear_trim.evaluate(alpha);
         surface
             .evaluate(uv.x, uv.y)
-            .near(&edge.curve.evaluate(t0 + (t1 - t0) * alpha))
+            .near(&edge.curve.evaluate(f64::mul_add(t1 - t0, alpha, t0)))
     });
     if !quarters_ok {
         if debug_reattach {
@@ -688,7 +693,7 @@ where
         }
         return None;
     }
-    let Some(curve) = C::try_from(linear_trim.clone()).ok() else {
+    let Some(curve) = C::try_from(linear_trim).ok() else {
         if debug_reattach {
             tracing::debug!(
                 "debug reattach linear try_from failed front={:?} back={:?} uv0={:?} uv1={:?}",
@@ -826,6 +831,55 @@ where
     }
 }
 
+fn dedup_pass_through_trimmed<C, S, T>(
+    shell: &mut CompressedTrimmedShell<Point3, C, S, T>,
+    tol: f64,
+) where
+    C: ParametricCurve3D<Point = Point3> + BoundedCurve<Point = Point3>,
+{
+    let mut use_orientations: Vec<Vec<(usize, bool)>> = vec![Vec::new(); shell.edges.len()];
+    for (face_index, face) in shell.faces.iter().enumerate() {
+        for edge_use in face.boundaries.iter().flatten() {
+            if let Some(uses) = use_orientations.get_mut(edge_use.index) {
+                uses.push((face_index, edge_use.orientation));
+            }
+        }
+    }
+    let remap = dedup_coincident_pass_through_edges(&shell.edges, &use_orientations, tol);
+    if remap.is_empty() {
+        return;
+    }
+    for face in &mut shell.faces {
+        for wire in &mut face.boundaries {
+            remap_trimmed_edge_uses_for_dedup(wire, &remap);
+        }
+    }
+
+    // Orphaned duplicates would fail the compressed shell's reference validation.
+    let used: std::collections::BTreeSet<usize> = shell
+        .faces
+        .iter()
+        .flat_map(|face| face.boundaries.iter())
+        .flat_map(|wire| wire.iter().map(|edge_use| edge_use.index))
+        .collect();
+    let mut new_indices = vec![usize::MAX; shell.edges.len()];
+    let mut compacted = Vec::with_capacity(used.len());
+    for (index, edge) in std::mem::take(&mut shell.edges).into_iter().enumerate() {
+        if used.contains(&index) {
+            new_indices[index] = compacted.len();
+            compacted.push(edge);
+        }
+    }
+    shell.edges = compacted;
+    for face in &mut shell.faces {
+        for wire in &mut face.boundaries {
+            for edge_use in wire {
+                edge_use.index = new_indices[edge_use.index];
+            }
+        }
+    }
+}
+
 impl<C, S, T> SplitClosedEdgesAndFaces for CompressedTrimmedShell<Point3, C, S, T>
 where
     C: ParametricCurve3D
@@ -870,53 +924,7 @@ where
         if enable_pass_through && !skip_single_face_pass_through {
             split_pass_through_edges_trimmed(self, tol);
             if env::var("MT_BOOL_DISABLE_PASS_THROUGH_DEDUP").is_err() {
-                let mut use_orientations: Vec<Vec<(usize, bool)>> =
-                    vec![Vec::new(); self.edges.len()];
-                self.faces
-                    .iter()
-                    .enumerate()
-                    .for_each(|(face_index, face)| {
-                        face.boundaries
-                            .iter()
-                            .flat_map(|wire| wire.iter())
-                            .for_each(|edge_use| {
-                                if let Some(uses) = use_orientations.get_mut(edge_use.index) {
-                                    uses.push((face_index, edge_use.orientation));
-                                }
-                            });
-                    });
-                let remap =
-                    dedup_coincident_pass_through_edges(&self.edges, &use_orientations, tol);
-                if !remap.is_empty() {
-                    self.faces.iter_mut().for_each(|face| {
-                        face.boundaries
-                            .iter_mut()
-                            .for_each(|wire| remap_trimmed_edge_uses_for_dedup(wire, &remap));
-                    });
-                    // Compact: orphaned duplicates would fail the compressed
-                    // shell's reference validation downstream.
-                    let used: std::collections::BTreeSet<usize> = self
-                        .faces
-                        .iter()
-                        .flat_map(|face| face.boundaries.iter())
-                        .flat_map(|wire| wire.iter().map(|edge_use| edge_use.index))
-                        .collect();
-                    let mut new_indices = vec![usize::MAX; self.edges.len()];
-                    let mut compacted = Vec::with_capacity(used.len());
-                    for (index, edge) in std::mem::take(&mut self.edges).into_iter().enumerate() {
-                        if used.contains(&index) {
-                            new_indices[index] = compacted.len();
-                            compacted.push(edge);
-                        }
-                    }
-                    self.edges = compacted;
-                    self.faces.iter_mut().for_each(|face| {
-                        face.boundaries.iter_mut().for_each(|wire| {
-                            wire.iter_mut()
-                                .for_each(|edge_use| edge_use.index = new_indices[edge_use.index]);
-                        });
-                    });
-                }
+                dedup_pass_through_trimmed(self, tol);
             }
         }
         if debug_trace {
@@ -1009,6 +1017,11 @@ where
 /// Applies [`SplitClosedEdgesAndFaces`] before calling
 /// [`Shell::extract`](monstertruck_topology::Shell::extract), which avoids
 /// `NotSimpleWire` errors from STEP files with repeated vertices.
+///
+/// # Errors
+///
+/// Returns a topology extraction error if the healed compressed shell still
+/// cannot be represented as a valid shell.
 pub fn extract_healed<C, S>(
     mut cshell: CompressedShell<Point3, C, S>,
     tol: f64,
@@ -1034,6 +1047,11 @@ where
 
 /// Convenience function: heal a compressed trimmed shell and extract it while
 /// preserving exact face-local trim curves when the edge curves can supply them.
+///
+/// # Errors
+///
+/// Returns a topology extraction error if neither the original nor healed
+/// compressed trimmed shell can be represented as a valid trimmed shell.
 pub fn extract_healed_trimmed<C, S, T>(
     mut cshell: CompressedTrimmedShell<Point3, C, S, T>,
     tol: f64,
@@ -1062,12 +1080,13 @@ where
         + Invertible
         + PartialEq,
 {
-    if let Ok(shell) = TrimmedShell::try_from(cshell.clone()) {
-        Ok(shell)
-    } else {
-        cshell.split_closed_edges_and_faces(tol);
-        TrimmedShell::try_from(cshell)
-    }
+    TrimmedShell::try_from(cshell.clone()).map_or_else(
+        |_| {
+            cshell.split_closed_edges_and_faces(tol);
+            TrimmedShell::try_from(cshell)
+        },
+        Ok,
+    )
 }
 
 fn validate_trimmed_solid_candidate<C: Clone, S: Clone, T: Clone>(
@@ -1108,6 +1127,11 @@ fn validate_trimmed_solid_candidate<C: Clone, S: Clone, T: Clone>(
 /// caller who needs the reason should convert through the STEP loader's
 /// `*_reported` conversions (spec 011 T7) and read the `ShellLoadReport`
 /// alongside this refusal.
+///
+/// # Errors
+///
+/// Returns a topology extraction error if the input remains invalid after the
+/// staged topology and geometry repairs, including incomplete or non-manifold shells.
 pub fn extract_healed_trimmed_solid<C, S, T>(
     mut csolid: CompressedTrimmedSolid<Point3, C, S, T>,
     tol: f64,
@@ -1172,8 +1196,13 @@ where
 ///
 /// This is intended to run *after* [`extract_healed_trimmed_solid`], when the
 /// structural healer has already established the solid invariant.
+///
+/// # Errors
+///
+/// Returns a topology error if a same-domain merge operation fails or the
+/// normalized compressed solid cannot be reconstructed as a valid trimmed solid.
 pub fn normalize_same_domain_trimmed_solid<C, S, T, D>(
-    solid: TrimmedSolid<Point3, C, S, T>,
+    solid: &TrimmedSolid<Point3, C, S, T>,
     same_domain: D,
 ) -> monstertruck_topology::Result<(TrimmedSolid<Point3, C, S, T>, SameDomainUnification)>
 where
@@ -1187,13 +1216,13 @@ where
         + Invertible,
     D: Fn(&S, &S) -> Option<SurfaceDomainRelation>,
 {
-    let mut compressed = CompressedTrimmedSolid::from(&solid);
+    let mut compressed = CompressedTrimmedSolid::from(solid);
     let mut total = SameDomainUnification::default();
     for shell in &mut compressed.boundaries {
         let report = unify_same_domain_compressed_trimmed_faces(
             shell,
             |left, right| same_domain(left, right),
-            |curve, surface| curve.exact_parameter_boundary_2d(surface),
+            ExactParameterBoundary2D::exact_parameter_boundary_2d,
         )?;
         total.proposals += report.proposals;
         total.accepted += report.accepted;
@@ -1238,10 +1267,10 @@ fn shell_orientation_flips<P, C, S>(
     let mut conflicts = 0usize;
     let mut irregular_edges = 0usize;
     let mut adjacency: Vec<Vec<(usize, bool)>> = vec![Vec::new(); shell.len()];
-    uses.values().for_each(|edge_uses| {
+    for edge_uses in uses.values() {
         let [(face0, direction0), (face1, direction1)] = edge_uses[..] else {
             irregular_edges += 1;
-            return;
+            continue;
         };
         if face0 == face1 {
             // A closed face traverses its seam edge twice; a whole-face flip
@@ -1249,12 +1278,12 @@ fn shell_orientation_flips<P, C, S>(
             if direction0 == direction1 {
                 conflicts += 1;
             }
-            return;
+            continue;
         }
         let same_direction = direction0 == direction1;
         adjacency[face0].push((face1, same_direction));
         adjacency[face1].push((face0, same_direction));
-    });
+    }
 
     let mut flip = vec![false; shell.len()];
     let mut assigned = vec![false; shell.len()];
@@ -1293,8 +1322,10 @@ fn shell_orientation_flips<P, C, S>(
 }
 
 /// Restores consistent face orientation on a shell whose faces disagree on
-/// edge direction (shell condition `Regular`): flood-fills face flips so
-/// every shared edge is traversed in opposite directions by its two faces.
+/// edge direction (shell condition `Regular`).
+///
+/// Flood-fills face flips so every shared edge is traversed in opposite
+/// directions by its two faces.
 ///
 /// Purely topological -- it never inspects geometry, and it does NOT decide
 /// global outwardness (an all-flipped shell is equally consistent; boolean
@@ -1314,6 +1345,7 @@ pub fn normalize_shell_orientation<P, C, S>(
 /// Trimmed variant of [`normalize_shell_orientation`]. Flipping is a face
 /// orientation flag; the absolute-boundary trim layout is unaffected, so the
 /// stored trims stay valid.
+#[must_use]
 pub fn normalize_trimmed_shell_orientation<P: Clone, C: Clone, S: Clone, T: Clone>(
     shell: TrimmedShell<P, C, S, T>,
 ) -> (TrimmedShell<P, C, S, T>, OrientationNormalization) {

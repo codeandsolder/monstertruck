@@ -14,7 +14,7 @@
 //!
 //! [`Shell::extract`]: monstertruck_topology::Shell::extract
 
-use super::*;
+use super::{EdgeIndex, HashMap, Shell, Wire};
 
 /// Find a seam edge in `wire`: a pair of indices `(i, j)` with the same
 /// underlying edge but opposite orientations. Returns `None` if no such pair
@@ -65,7 +65,7 @@ fn split_one_wire(wire: &[EdgeIndex]) -> Option<Vec<Wire>> {
 /// splits are possible. Each pass can introduce new wires that themselves
 /// contain seams (rare, but possible on multi-seamed faces such as toroidal
 /// patches), so the outer loop iterates until a fixed point.
-pub(super) fn strip_seam_edges<P, C, S>(shell: &mut Shell<P, C, S>) {
+pub fn strip_seam_edges<P, C, S>(shell: &mut Shell<P, C, S>) {
     // Multi-seamed faces (e.g. toroidal patches) may surface a new seam
     // pair only after an earlier pass strips its outer seam, so iterate
     // until a fixed point. Cap the iteration depth so a buggy split
@@ -75,7 +75,7 @@ pub(super) fn strip_seam_edges<P, C, S>(shell: &mut Shell<P, C, S>) {
     let mut iters = 0;
     while changed && iters < MAX_ITERS {
         changed = false;
-        for face in shell.faces.iter_mut() {
+        for face in &mut shell.faces {
             let mut new_boundaries: Vec<Wire> = Vec::with_capacity(face.boundaries.len());
             for wire in face.boundaries.drain(..) {
                 if let Some(split) = split_one_wire(&wire) {

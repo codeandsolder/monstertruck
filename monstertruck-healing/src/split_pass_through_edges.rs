@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    BoundedCurve, CompressedEdgeUse, CompressedTrimmedShell, CurveParameter, Cut, Edge, EdgeIndex,
+    HashMap, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point3,
+    SearchNearestParameter, Shell, SnapCurveEndpoints, TOLERANCE, Wire,
+    append_unassigned_stable_ids,
+};
 use std::env;
 
 #[derive(Clone)]
@@ -17,7 +22,7 @@ where C: ParametricCurve3D<Point = Point3> + BoundedCurve<Point = Point3> {
     }
     let curve = &edge.curve;
     let (t0, t1) = curve.range_tuple();
-    let midpoint = curve.evaluate((t0 + t1) * 0.5);
+    let midpoint = curve.evaluate(f64::midpoint(t0, t1));
     if debug == "translated" {
         midpoint.x > 0.75
             && midpoint.x < 1.01
@@ -77,7 +82,7 @@ where C: ParametricCurve3D<Point = Point3>
     let debug_focus = debug_translated_focus_edge(edge);
     let tol2 = tol * tol;
     let (t0, t1) = edge.curve.range_tuple();
-    let param_eps = (t1 - t0).abs() * 1.0e-8 + 1.0e-10;
+    let param_eps = f64::mul_add((t1 - t0).abs(), 1.0e-8, 1.0e-10);
     let (min, max) = sampled_curve_aabb(edge, tol);
     let candidates: Vec<_> = vertices
         .iter()
@@ -100,7 +105,7 @@ where C: ParametricCurve3D<Point = Point3>
         .collect();
     if debug_focus {
         let curve = &edge.curve;
-        let midpoint = curve.evaluate((t0 + t1) * 0.5);
+        let midpoint = curve.evaluate(f64::midpoint(t0, t1));
         tracing::debug!(
             "debug pass-through edge front={:?} back={:?} midpoint={midpoint:?} candidates={:?}",
             vertices[edge.vertices.0],
@@ -175,9 +180,9 @@ fn replace_edge_uses(wire: &mut Wire, replacements: &HashMap<usize, EdgeSplitInf
         .iter()
         .copied()
         .flat_map(|edge| {
-            replacements
-                .get(&edge.index)
-                .map(|split_info| {
+            replacements.get(&edge.index).map_or_else(
+                || vec![edge],
+                |split_info| {
                     if edge.orientation {
                         split_info
                             .indices
@@ -200,8 +205,8 @@ fn replace_edge_uses(wire: &mut Wire, replacements: &HashMap<usize, EdgeSplitInf
                             })
                             .collect::<Vec<_>>()
                     }
-                })
-                .unwrap_or_else(|| vec![edge])
+                },
+            )
         })
         .collect();
 }
@@ -222,8 +227,8 @@ where
     if trim_scale.so_small() {
         return vec![trim_curve];
     }
-    let param_eps = edge_len.abs() * 1.0e-8 + 1.0e-10;
-    let trim_eps = trim_scale.abs() * 1.0e-8 + 1.0e-10;
+    let param_eps = f64::mul_add(edge_len.abs(), 1.0e-8, 1.0e-10);
+    let trim_eps = f64::mul_add(trim_scale.abs(), 1.0e-8, 1.0e-10);
     let mut local_splits: Vec<_> = splits
         .iter()
         .map(|(t, vertex)| {
@@ -233,7 +238,7 @@ where
                 (*t - edge_t0) / edge_len
             };
             let local_alpha = if orientation { alpha } else { 1.0 - alpha };
-            (trim_t0 + trim_scale * local_alpha, *vertex)
+            (f64::mul_add(trim_scale, local_alpha, trim_t0), *vertex)
         })
         .filter(|(t, _)| *t > trim_t0 + trim_eps && *t < trim_t1 - trim_eps)
         .collect();
@@ -245,14 +250,14 @@ where
     });
     let mut head = trim_curve;
     let mut segments = Vec::with_capacity(local_splits.len() + 1);
-    local_splits.into_iter().for_each(|(t, _)| {
+    for (t, _) in local_splits {
         let (head_t0, head_t1) = head.range_tuple();
         if t > head_t0 + trim_eps && t < head_t1 - trim_eps {
             let tail = head.cut(t);
             segments.push(head.clone());
             head = tail;
         }
-    });
+    }
     segments.push(head);
     segments
 }
@@ -269,9 +274,9 @@ fn replace_trimmed_edge_uses<T, C>(
         .iter()
         .cloned()
         .flat_map(|edge_use| {
-            replacements
-                .get(&edge_use.index)
-                .map(|split_info| {
+            replacements.get(&edge_use.index).map_or_else(
+                || vec![edge_use.clone()],
+                |split_info| {
                     let trim_segments = edge_use.trim_curve.clone().map(|trim_curve| {
                         split_trim_curve(
                             trim_curve,
@@ -285,9 +290,10 @@ fn replace_trimmed_edge_uses<T, C>(
                     } else {
                         split_info.indices.iter().rev().copied().collect()
                     };
-                    let trim_values: Vec<_> = trim_segments
-                        .map(|segments| segments.into_iter().map(Some).collect())
-                        .unwrap_or_else(|| vec![None; indices.len()]);
+                    let trim_values: Vec<_> = trim_segments.map_or_else(
+                        || vec![None; indices.len()],
+                        |segments| segments.into_iter().map(Some).collect(),
+                    );
                     indices
                         .into_iter()
                         .zip(trim_values)
@@ -297,13 +303,13 @@ fn replace_trimmed_edge_uses<T, C>(
                             trim_curve,
                         })
                         .collect::<Vec<_>>()
-                })
-                .unwrap_or_else(|| vec![edge_use])
+                },
+            )
         })
         .collect();
 }
 
-pub(super) fn split_pass_through_edges<C, S>(shell: &mut Shell<Point3, C, S>, tol: f64)
+pub fn split_pass_through_edges<C, S>(shell: &mut Shell<Point3, C, S>, tol: f64)
 where C: ParametricCurve3D<Point = Point3>
         + BoundedCurve<Point = Point3>
         + Cut
@@ -337,7 +343,7 @@ where C: ParametricCurve3D<Point = Point3>
     });
 }
 
-pub(super) fn split_pass_through_edges_trimmed<C, S, T>(
+pub fn split_pass_through_edges_trimmed<C, S, T>(
     shell: &mut CompressedTrimmedShell<Point3, C, S, T>,
     tol: f64,
 ) where
@@ -386,9 +392,9 @@ pub(super) fn split_pass_through_edges_trimmed<C, S, T>(
 /// OPPOSITE directions after vertex-order adjustment (adjacent faces across
 /// the span). Same-direction coincident edges are legitimate separate
 /// topology (e.g. doubled seams at tangency) and must survive -- unifying
-/// them deterministically breaks the or() union of offset cubes
+/// them deterministically breaks the `or()` union of offset cubes
 /// (`or_outputs_boolean_named_selections`).
-pub(super) fn dedup_coincident_pass_through_edges<C>(
+pub fn dedup_coincident_pass_through_edges<C>(
     edges: &[Edge<C>],
     use_orientations: &[Vec<(usize, bool)>],
     tol: f64,
@@ -399,7 +405,7 @@ where
     let tol2 = tol * tol;
     let midpoint = |edge: &Edge<C>| {
         let (t0, t1) = edge.curve.range_tuple();
-        edge.curve.evaluate((t0 + t1) * 0.5)
+        edge.curve.evaluate(f64::midpoint(t0, t1))
     };
     let mut canonical_by_pair: HashMap<(usize, usize), Vec<usize>> = HashMap::default();
     let mut remap: HashMap<usize, (usize, bool)> = HashMap::default();
@@ -422,12 +428,8 @@ where
             // topology (e.g. doubled seams) and must survive.
             let canonical_uses = use_orientations
                 .get(canonical_index)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            let duplicate_uses = use_orientations
-                .get(index)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
+                .map_or(&[][..], Vec::as_slice);
+            let duplicate_uses = use_orientations.get(index).map_or(&[][..], Vec::as_slice);
             let (
                 &[(canonical_face, canonical_orientation)],
                 &[(duplicate_face, duplicate_orientation)],
@@ -465,23 +467,25 @@ where
 }
 
 /// Apply a [`dedup_coincident_pass_through_edges`] remap to trimmed wires.
-pub(super) fn remap_trimmed_edge_uses_for_dedup<T>(
+pub fn remap_trimmed_edge_uses_for_dedup<T>(
     wire: &mut [CompressedEdgeUse<T>],
     remap: &HashMap<usize, (usize, bool)>,
 ) {
-    wire.iter_mut().for_each(|edge_use| {
+    for edge_use in wire {
         if let Some((canonical, reversed)) = remap.get(&edge_use.index) {
             edge_use.index = *canonical;
             if *reversed {
                 edge_use.orientation = !edge_use.orientation;
             }
         }
-    });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use monstertruck_geometry::prelude::Line;
+    use monstertruck_topology::{StableId, compress::CompressedFace as Face};
 
     #[test]
     fn pass_through_split_preserves_existing_stable_ids_and_marks_new_edge_unassigned() {
