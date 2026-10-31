@@ -1,5 +1,5 @@
 use monstertruck_geometry::prelude::*;
-use std::f64::consts::PI;
+use std::f64::consts::{FRAC_PI_2, PI};
 
 #[test]
 fn revolve_test() {
@@ -121,6 +121,92 @@ fn search_nearest_parameter_with_fixed_points() {
         .search_nearest_parameter(Point3::new(0.0, -2.0, 0.0), Some((0.5, 0.3)), 10)
         .unwrap();
     assert_near!(Vector2::new(u, v), Vector2::new(1.0, 0.3));
+}
+
+#[test]
+fn search_parameter_near_back_fixed_axis_endpoint() -> std::result::Result<(), &'static str> {
+    let line = BsplineCurve::new(
+        KnotVector::bezier_knot(1),
+        vec![Point3::new(2.0, 0.0, 2.0), Point3::new(0.0, 0.0, 2.0)],
+    );
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let expected = (0.999_95, FRAC_PI_2);
+    let point = surface.evaluate(expected.0, expected.1);
+
+    let exact = surface
+        .search_parameter(point, Some((1.0, expected.1)), 100)
+        .ok_or("exact search failed from the back axis endpoint")?;
+    let nearest = surface
+        .search_nearest_parameter(point, Some((1.0, expected.1)), 100)
+        .ok_or("nearest search failed from the back axis endpoint")?;
+
+    assert_near!(
+        Vector2::new(exact.0, exact.1),
+        Vector2::new(expected.0, expected.1)
+    );
+    assert_near!(
+        Vector2::new(nearest.0, nearest.1),
+        Vector2::new(expected.0, expected.1)
+    );
+    Ok(())
+}
+
+#[test]
+fn search_parameter_near_front_fixed_axis_endpoint() -> std::result::Result<(), &'static str> {
+    let line = BsplineCurve::new(
+        KnotVector::bezier_knot(1),
+        vec![Point3::new(0.0, 0.0, 2.0), Point3::new(2.0, 0.0, 2.0)],
+    );
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let expected = (0.000_05, FRAC_PI_2);
+    let point = surface.evaluate(expected.0, expected.1);
+
+    let exact = surface
+        .search_parameter(point, Some((0.0, expected.1)), 100)
+        .ok_or("exact search failed from the front axis endpoint")?;
+    let nearest = surface
+        .search_nearest_parameter(point, Some((0.0, expected.1)), 100)
+        .ok_or("nearest search failed from the front axis endpoint")?;
+
+    assert_near!(
+        Vector2::new(exact.0, exact.1),
+        Vector2::new(expected.0, expected.1)
+    );
+    assert_near!(
+        Vector2::new(nearest.0, nearest.1),
+        Vector2::new(expected.0, expected.1)
+    );
+    Ok(())
+}
+
+#[test]
+fn search_parameter_from_axis_endpoint_with_zero_radial_speed()
+-> std::result::Result<(), &'static str> {
+    // Quadratic Bezier with x(t) = t^2 and z(t) = 2 + t. At the front
+    // endpoint the radial first derivative is zero, but the axial first
+    // derivative is 1 and the radial second derivative is 2.
+    let curve = BsplineCurve::new(
+        KnotVector::bezier_knot(2),
+        vec![
+            Point3::new(0.0, 0.0, 2.0),
+            Point3::new(0.0, 0.0, 2.5),
+            Point3::new(1.0, 0.0, 3.0),
+        ],
+    );
+    let surface = RevolutionSurface::by_revolution(curve, Point3::origin(), Vector3::unit_z());
+    let expected = (0.001, FRAC_PI_2);
+    let point = surface.evaluate(expected.0, expected.1);
+
+    let exact = surface
+        .search_parameter(point, Some((0.0, expected.1)), 100)
+        .ok_or("exact search failed with zero radial endpoint speed")?;
+    let nearest = surface
+        .search_nearest_parameter(point, Some((0.0, expected.1)), 100)
+        .ok_or("nearest search failed with zero radial endpoint speed")?;
+
+    assert_near!(surface.evaluate(exact.0, exact.1), point);
+    assert_near!(surface.evaluate(nearest.0, nearest.1), point);
+    Ok(())
 }
 
 #[test]
