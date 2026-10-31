@@ -19,7 +19,7 @@ fn tiny_curve() -> BsplineCurve<Point3> {
 fn sub_tolerance_knot_range_is_not_zero_range() {
     let curve = tiny_curve();
     let (a, b) = curve.range_tuple();
-    assert!(b - a < TOLERANCE);
+    assert!(b - a < KERNEL_EPSILON);
     for fraction in [0.0, 0.17, 0.5, 0.83, 1.0] {
         let point = curve.evaluate(a + (b - a) * fraction);
         assert!(point.x.is_finite() && point.y.is_finite() && point.z.is_finite());

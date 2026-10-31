@@ -27,7 +27,7 @@ use monstertruck_core::{
     },
     hash::HashGen,
     newton::{self, CalcOutput},
-    tolerance::{TOLERANCE, Tolerance},
+    tolerance::{KERNEL_EPSILON, Tolerance},
 };
 
 /// curve algorithms

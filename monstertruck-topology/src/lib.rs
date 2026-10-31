@@ -74,7 +74,7 @@
 pub use monstertruck_core::{StableId, StableIdAllocator, StableIdExhausted};
 use monstertruck_core::{
     id::Id,
-    tolerance::{TOLERANCE, Tolerance},
+    tolerance::{KERNEL_EPSILON, Tolerance},
 };
 use monstertruck_traits::{
     BoundedCurve, Concat, CurveParameter, Cut, ExactParameterBoundary2D, IncludeCurve, Invertible,

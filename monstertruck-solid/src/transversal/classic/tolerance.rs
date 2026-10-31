@@ -1,4 +1,4 @@
-use monstertruck_core::tolerance::TOLERANCE;
+use monstertruck_core::tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON};
 
 /// Dimension-aware tolerances for the classic Boolean backend.
 ///
@@ -16,13 +16,15 @@ pub(super) struct BooleanTolerance {
 
 impl BooleanTolerance {
     pub(super) fn new(requested: f64) -> Self {
-        let length = requested.abs().max(TOLERANCE);
+        let length = requested.abs().max(KERNEL_EPSILON);
         Self {
             length,
             area_floor: length * length,
-            angular: TOLERANCE,
+            angular: DEFAULT_NUMERICAL_TOLERANCES.angular,
             classifier_offset: 8.0 * length,
-            mesh_seed: requested.abs().max(1.0e-3),
+            mesh_seed: requested
+                .abs()
+                .max(DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor),
         }
     }
 

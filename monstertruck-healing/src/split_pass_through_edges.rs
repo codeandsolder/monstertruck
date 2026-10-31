@@ -1,9 +1,9 @@
 use super::{
     BoundedCurve, CompressedEdgeUse, CompressedTrimmedShell, CurveParameter, Cut, Edge, EdgeIndex,
-    HashMap, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point3,
-    SearchNearestParameter, Shell, SnapCurveEndpoints, TOLERANCE, Wire,
-    append_unassigned_stable_ids,
+    HashMap, KERNEL_EPSILON, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point3,
+    SearchNearestParameter, Shell, SnapCurveEndpoints, Wire, append_unassigned_stable_ids,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::env;
 
 #[derive(Clone)]
@@ -57,9 +57,13 @@ fn sampled_curve_aabb<C>(edge: &Edge<C>, tol: f64) -> (Point3, Point3)
 where C: ParametricCurve3D<Point = Point3>
         + BoundedCurve<Point = Point3>
         + ParameterDivision1D<Point = Point3> {
-    let (_, samples) = edge
-        .curve
-        .parameter_division(edge.curve.range_tuple(), f64::max(tol, 10.0 * TOLERANCE));
+    let (_, samples) = edge.curve.parameter_division(
+        edge.curve.range_tuple(),
+        f64::max(
+            tol,
+            DEFAULT_NUMERICAL_TOLERANCES.healing_sampling_floor_factor * KERNEL_EPSILON,
+        ),
+    );
     samples.into_iter().fold(
         (
             Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
@@ -82,7 +86,11 @@ where C: ParametricCurve3D<Point = Point3>
     let debug_focus = debug_translated_focus_edge(edge);
     let tol2 = tol * tol;
     let (t0, t1) = edge.curve.range_tuple();
-    let param_eps = f64::mul_add((t1 - t0).abs(), 1.0e-8, 1.0e-10);
+    let param_eps = f64::mul_add(
+        (t1 - t0).abs(),
+        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_relative,
+        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_absolute,
+    );
     let (min, max) = sampled_curve_aabb(edge, tol);
     let candidates: Vec<_> = vertices
         .iter()
@@ -227,8 +235,16 @@ where
     if trim_scale.so_small() {
         return vec![trim_curve];
     }
-    let param_eps = f64::mul_add(edge_len.abs(), 1.0e-8, 1.0e-10);
-    let trim_eps = f64::mul_add(trim_scale.abs(), 1.0e-8, 1.0e-10);
+    let param_eps = f64::mul_add(
+        edge_len.abs(),
+        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_relative,
+        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_absolute,
+    );
+    let trim_eps = f64::mul_add(
+        trim_scale.abs(),
+        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_relative,
+        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_absolute,
+    );
     let mut local_splits: Vec<_> = splits
         .iter()
         .map(|(t, vertex)| {

@@ -31,12 +31,12 @@ pub mod rexport_polymesh {
     reason = "mesh collection/sampling counts are bounded by actually iterable/allocatable data and are converted only for normalized f64 geometry formulas"
 )]
 pub(crate) const fn count_as_f64(value: usize) -> f64 { value as f64 }
+#[cfg(all(feature = "tessellation", not(feature = "analyzers")))]
+use monstertruck_mesh::KERNEL_EPSILON;
 #[cfg(any(feature = "analyzers", feature = "tessellation"))]
 use monstertruck_mesh::Origin;
 #[cfg(feature = "analyzers")]
 use monstertruck_mesh::PolylineCurve;
-#[cfg(all(feature = "tessellation", not(feature = "analyzers")))]
-use monstertruck_mesh::TOLERANCE;
 #[cfg(feature = "tessellation")]
 use monstertruck_mesh::{
     BoundedCurve, CurveParameter, ExactParameterBoundary2D, HashGen, Invertible,
@@ -51,10 +51,10 @@ use monstertruck_mesh::{ElementWise, Tolerance, Vector2, polygon_mesh};
 use monstertruck_mesh::{
     EuclideanSpace, Faces, InnerSpace, Point3, PolygonMesh, StandardVertex as Vertex, Vector3, Zero,
 };
+#[cfg(feature = "analyzers")]
+use monstertruck_mesh::{KERNEL_EPSILON, KERNEL_EPSILON_SQUARED, Vector4, hash};
 #[cfg(any(feature = "analyzers", feature = "filters", feature = "tessellation"))]
 use monstertruck_mesh::{StandardAttributes, StandardVertex, nonpositive_tolerance};
-#[cfg(feature = "analyzers")]
-use monstertruck_mesh::{TOLERANCE, TOLERANCE2, Vector4, hash};
 
 /// polygon mesh analyzers, including
 ///

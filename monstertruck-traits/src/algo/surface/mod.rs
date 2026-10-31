@@ -1,9 +1,9 @@
 use newton::Jacobian;
 
 use super::{
-    CalcOutput, EuclideanSpace, HashGen, InnerSpace, Matrix2, Matrix3, MetricSpace,
+    CalcOutput, EuclideanSpace, HashGen, InnerSpace, KERNEL_EPSILON, Matrix2, Matrix3, MetricSpace,
     ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point2, Point3,
-    SurfaceParameterRange, TOLERANCE, Tolerance, Vector2, Vector3, newton, scalar_from_usize,
+    SurfaceParameterRange, Tolerance, Vector2, Vector3, newton, scalar_from_usize,
 };
 
 /// Maximum recursion depth used by [`parameter_division`].
@@ -460,7 +460,7 @@ where
 ///
 /// # Panics
 ///
-/// `tol` must be more than `TOLERANCE`.
+/// `tol` must be more than `KERNEL_EPSILON`.
 #[inline]
 pub fn parameter_division<S>(
     surface: &S,
@@ -502,7 +502,7 @@ pub struct BudgetedDivision {
 ///
 /// # Panics
 ///
-/// `tol` must be more than `TOLERANCE`.
+/// `tol` must be more than `KERNEL_EPSILON`.
 pub fn parameter_division_with_budget<S>(
     surface: &S,
     (urange, vrange): SurfaceParameterRange,
@@ -549,7 +549,7 @@ where
 ///
 /// # Panics
 ///
-/// `tol` must be more than `TOLERANCE`.
+/// `tol` must be more than `KERNEL_EPSILON`.
 ///
 /// # Errors
 ///

@@ -9,7 +9,7 @@
 
 use monstertruck_core::{
     cgmath64::{ElementWise, EuclideanSpace, MetricSpace, Point3},
-    tolerance::{TOLERANCE, Tolerance},
+    tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON, Tolerance},
 };
 use monstertruck_meshing::prelude::PolylineCurve;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -200,7 +200,8 @@ impl PointIndex {
         if !pt.x.is_finite() || !pt.y.is_finite() || !pt.z.is_finite() {
             return None;
         }
-        let idx = pt.add_element_wise(TOLERANCE) / (2.0 * TOLERANCE);
+        let idx = pt.add_element_wise(KERNEL_EPSILON)
+            / (DEFAULT_NUMERICAL_TOLERANCES.boolean_polyline_grid_factor * KERNEL_EPSILON);
         idx.cast::<i64>().map(|idx| Self(idx.into()))
     }
 }

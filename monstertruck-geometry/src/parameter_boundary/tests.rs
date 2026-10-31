@@ -43,10 +43,10 @@ fn revolution_surface_exact_boundary_recovers_internal_iso_angle_line() {
         .expect("iso-angle line must have an exact surface parameter boundary");
     let line = boundary.curve();
 
-    assert!((line.0.x - 0.25).abs() <= TOLERANCE);
-    assert!((line.1.x - 0.75).abs() <= TOLERANCE);
-    assert!((line.0.y - angle).abs() <= TOLERANCE);
-    assert!((line.1.y - angle).abs() <= TOLERANCE);
+    assert!((line.0.x - 0.25).abs() <= KERNEL_EPSILON);
+    assert!((line.1.x - 0.75).abs() <= KERNEL_EPSILON);
+    assert!((line.0.y - angle).abs() <= KERNEL_EPSILON);
+    assert!((line.1.y - angle).abs() <= KERNEL_EPSILON);
 }
 
 #[test]
@@ -60,10 +60,10 @@ fn revolution_line_profile_exact_boundary_extends_beyond_placeholder_range() {
         .exact_parameter_boundary_2d(&surface)
         .expect("analytic line profile must extend exactly beyond its placeholder range");
     let line = boundary.curve();
-    assert!((line.0.x + 3.0).abs() <= TOLERANCE);
-    assert!((line.1.x - 4.0).abs() <= TOLERANCE);
-    assert!((line.0.y - angle).abs() <= TOLERANCE);
-    assert!((line.1.y - angle).abs() <= TOLERANCE);
+    assert!((line.0.x + 3.0).abs() <= KERNEL_EPSILON);
+    assert!((line.1.x - 4.0).abs() <= KERNEL_EPSILON);
+    assert!((line.0.y - angle).abs() <= KERNEL_EPSILON);
+    assert!((line.1.y - angle).abs() <= KERNEL_EPSILON);
 }
 
 #[test]
@@ -83,10 +83,10 @@ fn revolution_surface_exact_boundary_recovers_iso_angle_nurbs_with_fixed_endpoin
         .expect("iso-angle NURBS with a fixed endpoint must have an exact boundary");
     let line = boundary.curve();
 
-    assert!(line.0.x.abs() <= TOLERANCE);
-    assert!((line.1.x - 1.0).abs() <= TOLERANCE);
-    assert!((line.0.y - angle).abs() <= TOLERANCE);
-    assert!((line.1.y - angle).abs() <= TOLERANCE);
+    assert!(line.0.x.abs() <= KERNEL_EPSILON);
+    assert!((line.1.x - 1.0).abs() <= KERNEL_EPSILON);
+    assert!((line.0.y - angle).abs() <= KERNEL_EPSILON);
+    assert!((line.1.y - angle).abs() <= KERNEL_EPSILON);
 }
 
 #[test]
@@ -121,9 +121,9 @@ fn exact_bspline_boundary_rejects_five_checkpoint_false_positive() {
     .expect("valid degree-5 regression curve");
 
     for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
-        assert!(curve.evaluate(t).z.abs() <= TOLERANCE);
+        assert!(curve.evaluate(t).z.abs() <= KERNEL_EPSILON);
     }
-    assert!(curve.evaluate(0.125).z.abs() > TOLERANCE);
+    assert!(curve.evaluate(0.125).z.abs() > KERNEL_EPSILON);
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());
 }
 

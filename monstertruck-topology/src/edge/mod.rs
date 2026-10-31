@@ -1,8 +1,8 @@
 use crate::{
     Arc, BoundedCurve, Concat, CurveParameter, Cut, Debug, DebugDisplay, Edge, EdgeDisplayFormat,
-    EdgeId, Formatter, Hash, Hasher, Id, Invertible, Mutex, MutexFmt, ParameterTransform, Result,
-    SEARCH_PARAMETER_TRIALS, SearchParameter, StableId, TOLERANCE, Tolerance, Vertex,
-    errors::Error,
+    EdgeId, Formatter, Hash, Hasher, Id, Invertible, KERNEL_EPSILON, Mutex, MutexFmt,
+    ParameterTransform, Result, SEARCH_PARAMETER_TRIALS, SearchParameter, StableId, Tolerance,
+    Vertex, errors::Error,
 };
 use thiserror::Error;
 
@@ -458,7 +458,7 @@ impl<P, C> Edge<P, C> {
         let curve0 = self.curve();
         let t = curve0.search_parameter(vertex.point(), None, SEARCH_PARAMETER_TRIALS)?;
         let (t0, t1) = curve0.range_tuple();
-        if t < t0 + TOLERANCE || t1 - TOLERANCE < t {
+        if t < t0 + KERNEL_EPSILON || t1 - KERNEL_EPSILON < t {
             return None;
         }
         Some(self.pre_cut(vertex, curve0, t))
@@ -477,7 +477,7 @@ impl<P, C> Edge<P, C> {
             return None;
         }
         let (t0, t1) = curve0.range_tuple();
-        if t < t0 + TOLERANCE || t1 - TOLERANCE < t {
+        if t < t0 + KERNEL_EPSILON || t1 - KERNEL_EPSILON < t {
             return None;
         }
         Some(self.pre_cut(vertex, curve0, t))

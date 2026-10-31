@@ -3,11 +3,10 @@
 //! the rational net.
 
 use super::{
-    Conic2D, Curve2D, Curve3D, ElementarySurface, ModelingConic2D, ModelingCurve, ModelingCurve2D,
-    ModelingSurface, NurbsCurve, NurbsSurface, ParameterCurve, RevolutionSurface,
+    Conic2D, Curve2D, Curve3D, ElementarySurface, KERNEL_EPSILON, ModelingConic2D, ModelingCurve,
+    ModelingCurve2D, ModelingSurface, NurbsCurve, NurbsSurface, ParameterCurve, RevolutionSurface,
     StepConvertingError, StepParameterCurve, Surface, SurfaceCurve, SurfaceCurveAssociatedGeometry,
-    TOLERANCE, Torus, TryIntoBsplineSurface, TryIntoHomogeneousBsplineCurve,
-    TryIntoHomogeneousBsplineSurface,
+    Torus, TryIntoBsplineSurface, TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface,
 };
 
 #[cfg(test)]
@@ -237,7 +236,7 @@ pub const ROUTE_ANALYTIC_SPHERE: bool = true;
 
 fn analytic_sphere_is_representable(sphere: &monstertruck_geometry::prelude::Sphere) -> bool {
     let radius = sphere.radius();
-    radius.is_finite() && radius > TOLERANCE
+    radius.is_finite() && radius > KERNEL_EPSILON
 }
 
 /// Whether the analytic torus route is admissible.
@@ -249,8 +248,8 @@ fn analytic_torus_is_representable(torus: &Torus) -> bool {
     let (large_radius, small_radius) = (torus.large_radius(), torus.small_radius());
     large_radius.is_finite()
         && small_radius.is_finite()
-        && small_radius > TOLERANCE
-        && large_radius > TOLERANCE
+        && small_radius > KERNEL_EPSILON
+        && large_radius > KERNEL_EPSILON
 }
 
 /// STEP surface -> modeling surface.

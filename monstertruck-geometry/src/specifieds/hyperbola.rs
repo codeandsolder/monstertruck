@@ -4,9 +4,9 @@
 )]
 
 use super::{
-    CurveParameter, EuclideanSpace, HashGen, MetricSpace, Origin, ParameterDivision1D,
-    ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
-    SearchParameterHint1D, TOLERANCE, UnitHyperbola, Vector2, Vector3, algo, solver,
+    CurveParameter, EuclideanSpace, HashGen, KERNEL_EPSILON, MetricSpace, Origin,
+    ParameterDivision1D, ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
+    SearchParameterHint1D, UnitHyperbola, Vector2, Vector3, algo, solver,
 };
 
 impl<P> UnitHyperbola<P> {
@@ -183,12 +183,12 @@ impl SearchParameter<CurveParameter> for UnitHyperbola<Point2> {
         //
         // Instead we check: x must be positive, and x must equal
         // sqrt(1 + y^2) to within a relative tolerance.
-        if p.x < -TOLERANCE {
+        if p.x < -KERNEL_EPSILON {
             return None;
         }
         let expected_x = f64::hypot(1.0, p.y);
         let scale = f64::max(1.0, expected_x);
-        if (p.x - expected_x).abs() > TOLERANCE * scale {
+        if (p.x - expected_x).abs() > KERNEL_EPSILON * scale {
             return None;
         }
         Some(f64::asinh(p.y))

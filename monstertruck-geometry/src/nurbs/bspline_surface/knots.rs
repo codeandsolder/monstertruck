@@ -4,8 +4,8 @@
 )]
 
 use super::{
-    BsplineCurve, BsplineSurface, ControlPoint, KnotVector, Origin, Result, TOLERANCE, Tolerance,
-    inv_or_zero,
+    BsplineCurve, BsplineSurface, ControlPoint, KERNEL_EPSILON, KnotVector, Origin, Result,
+    Tolerance, inv_or_zero,
 };
 use crate::errors::Error;
 
@@ -450,9 +450,9 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
         let mut i = 0;
         let mut j = 0;
         while !self.knot_u(i).near2(&1.0) || !self.knot_v(j).near2(&1.0) {
-            if self.knot_u(i) - self.knot_v(j) > TOLERANCE {
+            if self.knot_u(i) - self.knot_v(j) > KERNEL_EPSILON {
                 self.add_knot_u(self.knot_v(j));
-            } else if self.knot_v(j) - self.knot_u(i) > TOLERANCE {
+            } else if self.knot_v(j) - self.knot_u(i) > KERNEL_EPSILON {
                 self.add_knot_v(self.knot_u(i));
             }
             i += 1;

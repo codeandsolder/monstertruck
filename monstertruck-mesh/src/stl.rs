@@ -1,8 +1,9 @@
 use crate::{
-    Deserialize, Faces, InnerSpace, Point3, PolygonMesh, Serialize, StandardAttributes,
-    StandardVertex, TOLERANCE, Vector3, array, errors, faces,
+    Deserialize, Faces, InnerSpace, KERNEL_EPSILON, Point3, PolygonMesh, Serialize,
+    StandardAttributes, StandardVertex, Vector3, array, errors, faces,
 };
 use bytemuck::{Pod, Zeroable};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap as HashMap;
 use std::io::{BufRead, BufReader, Lines, Read, Write};
@@ -30,7 +31,10 @@ fn stl_f32(value: f64) -> f32 {
 }
 
 fn quantize_coordinate(value: f32) -> i64 {
-    let scaled = TOLERANCE.mul_add(0.25, f64::from(value)) / (TOLERANCE * 0.5);
+    let scaled = KERNEL_EPSILON.mul_add(
+        DEFAULT_NUMERICAL_TOLERANCES.stl_quantization_offset_factor,
+        f64::from(value),
+    ) / (KERNEL_EPSILON * DEFAULT_NUMERICAL_TOLERANCES.stl_quantization_step_factor);
     scaled.to_i64().unwrap_or_else(|| {
         if scaled.is_nan() {
             0
@@ -49,7 +53,7 @@ fn dequantize_coordinate(value: i64) -> f64 {
         } else {
             f64::INFINITY
         }
-    }) * TOLERANCE
+    }) * KERNEL_EPSILON
         * 0.5
 }
 

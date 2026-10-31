@@ -365,7 +365,7 @@ fn polyline_area_epsilon(poly: &PolylineCurve<Point2>) -> f64 {
     let height = (max_y - min_y).abs();
     let bbox_area = width * height;
     if bbox_area.is_finite() {
-        TOLERANCE * bbox_area
+        KERNEL_EPSILON * bbox_area
     } else {
         f64::INFINITY
     }
@@ -554,7 +554,7 @@ mod uv_area_tests {
         );
         let unit_ratio = polyline_signed_area(&unit).abs() / polyline_area_epsilon(&unit);
         let scaled_ratio = polyline_signed_area(&scaled).abs() / polyline_area_epsilon(&scaled);
-        assert!((unit_ratio / scaled_ratio - 1.0).abs() < TOLERANCE);
+        assert!((unit_ratio / scaled_ratio - 1.0).abs() < KERNEL_EPSILON);
     }
 }
 

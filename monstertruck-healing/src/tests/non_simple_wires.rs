@@ -340,7 +340,7 @@ fn trimmed_geometric_slit_cleanup_requires_face_local_retrace() {
         Line(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)),
         Line(Point2::new(1.0, 0.0), Point2::new(0.0, 0.0)),
     );
-    remove_geometric_trimmed_slit_boundaries(&mut slit, TOLERANCE);
+    remove_geometric_trimmed_slit_boundaries(&mut slit, KERNEL_EPSILON);
     assert!(slit.faces.is_empty());
 
     // A periodic seam is the same 3-D span but two different UV loci. It must
@@ -352,7 +352,7 @@ fn trimmed_geometric_slit_cleanup_requires_face_local_retrace() {
             Point2::new(std::f64::consts::TAU, 0.0),
         ),
     );
-    remove_geometric_trimmed_slit_boundaries(&mut seam, TOLERANCE);
+    remove_geometric_trimmed_slit_boundaries(&mut seam, KERNEL_EPSILON);
     assert_eq!(seam.faces.len(), 1);
     assert_eq!(seam.faces[0].boundaries.len(), 1);
     assert_eq!(seam.faces[0].boundaries[0].len(), 2);

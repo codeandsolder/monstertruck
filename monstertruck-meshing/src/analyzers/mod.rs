@@ -1,7 +1,8 @@
 use crate::{
-    Adjacency, BoundingBox, EuclideanSpace, FaceNormal, Faces, InnerSpace, Matrix3, MetricSpace,
-    Origin, Point3, PolygonMesh, PolylineCurve, SquareMatrix, StandardAttributes, StandardVertex,
-    TOLERANCE, TOLERANCE2, Vector3, Vector4, Vertex, hash, nonpositive_tolerance,
+    Adjacency, BoundingBox, EuclideanSpace, FaceNormal, Faces, InnerSpace, KERNEL_EPSILON,
+    KERNEL_EPSILON_SQUARED, Matrix3, MetricSpace, Origin, Point3, PolygonMesh, PolylineCurve,
+    SquareMatrix, StandardAttributes, StandardVertex, Vector3, Vector4, Vertex, hash,
+    nonpositive_tolerance,
 };
 
 mod collision;

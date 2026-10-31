@@ -129,7 +129,7 @@ impl MyApp {
         reader: R,
     ) -> AppResult<(PolygonInstance, WireFrameInstance)> {
         let mut mesh = obj::read(reader)?;
-        mesh.put_together_same_attrs(TOLERANCE * 2.0)
+        mesh.put_together_same_attrs(KERNEL_EPSILON * 2.0)
             .add_smooth_normals(0.5, false);
         let bdd_box = mesh.bounding_box();
         let (size, center) = (bdd_box.size(), bdd_box.center());

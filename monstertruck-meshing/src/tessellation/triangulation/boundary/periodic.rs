@@ -11,12 +11,13 @@
 //! is unchanged.
 
 use super::{
-    HashMap, InnerSpace, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SurfacePoint,
-    TOLERANCE, Tolerance, UvKey, connect_edges, polyline_on_surface,
+    HashMap, InnerSpace, KERNEL_EPSILON, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface,
+    SurfacePoint, Tolerance, UvKey, connect_edges, polyline_on_surface,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
-const PERIODIC_LOOP_OTHER_AXIS_TOLERANCE: f64 = 1.0e-6;
-const SINGULAR_RADIUS_RELATIVE_TOLERANCE: f64 = 1.0e-6;
+const PERIODIC_LOOP_OTHER_AXIS_TOLERANCE: f64 = DEFAULT_NUMERICAL_TOLERANCES.periodic_relative;
+const SINGULAR_RADIUS_RELATIVE_TOLERANCE: f64 = DEFAULT_NUMERICAL_TOLERANCES.periodic_relative;
 const DEFAULT_SINGULAR_PARAMETER_PROBE: f64 = 1.0;
 
 fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> std::cmp::Ordering {
@@ -38,7 +39,7 @@ pub(super) fn periodic_min_difference(u: f64, u0: f64, up: f64) -> f64 {
 pub(super) fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0, u1): (f64, f64)) {
     let p = curve[0];
     let q = curve[curve.len() - 1];
-    let tmp = f64::min(p[compidx], q[compidx]) + TOLERANCE;
+    let tmp = f64::min(p[compidx], q[compidx]) + KERNEL_EPSILON;
     let del = f64::floor((tmp - u0) / (u1 - u0)) * (u1 - u0);
     for point in curve.iter_mut() {
         point[compidx] -= del;
@@ -83,7 +84,7 @@ pub(super) fn periodic_axis_full_span(
                     curve_axis_span(curve, other_axis),
                 ) {
                     (Some((min, max)), Some((other_min, other_max))) => {
-                        max - min + TOLERANCE >= period * 0.75
+                        max - min + KERNEL_EPSILON >= period * 0.75
                             && other_max - other_min <= PERIODIC_LOOP_OTHER_AXIS_TOLERANCE
                     }
                     _ => false,
@@ -168,7 +169,7 @@ pub(super) fn compact_periodic_closed_loop(
         let has_periodic_jump = curve
             .windows(2)
             .any(|points| (points[1][axis] - points[0][axis]).abs() > period * 0.5);
-        if max - min <= period + TOLERANCE && !has_periodic_jump {
+        if max - min <= period + KERNEL_EPSILON && !has_periodic_jump {
             continue;
         }
         let closed_len = curve.len() - 1;
@@ -180,7 +181,7 @@ pub(super) fn compact_periodic_closed_loop(
             })
             .min_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0));
         if let Some((span, mut candidate)) = best
-            && span <= period + TOLERANCE
+            && span <= period + KERNEL_EPSILON
         {
             candidate.push(candidate[0]);
             *curve = candidate;
@@ -254,7 +255,7 @@ fn periodic_seam_bounds(
     }
     let origin = range.map_or(0.0, |(min, _)| min);
     let mut seam_lower = ((lower - origin) / period).floor().mul_add(period, origin);
-    let excess = upper - (seam_lower + period + TOLERANCE);
+    let excess = upper - (seam_lower + period + KERNEL_EPSILON);
     if excess > 0.0 {
         seam_lower = (excess / period).ceil().mul_add(period, seam_lower);
     }
@@ -317,7 +318,7 @@ pub(super) fn open_periodic_closed_loop(
         unwrap_periodic_open_curve(&mut curve, axis, period);
         if let (Some(front), Some(back)) = (curve.first().copied(), curve.last().copied()) {
             let delta = back[axis] - front[axis];
-            if delta.abs() + TOLERANCE < period {
+            if delta.abs() + KERNEL_EPSILON < period {
                 let mut seam = front;
                 seam[axis] += if delta < 0.0 { -period } else { period };
                 seam.point = surface.evaluate(seam.x, seam.y);
@@ -345,7 +346,8 @@ pub(super) fn periodic_open_axis_full_span(
                     curve_axis_span(curve, other_axis),
                 ) {
                     (Some((min, max)), Some((other_min, other_max))) => {
-                        max - min + TOLERANCE >= period * 0.75 && other_max - other_min <= 1.0e-6
+                        max - min + KERNEL_EPSILON >= period * 0.75
+                            && other_max - other_min <= PERIODIC_LOOP_OTHER_AXIS_TOLERANCE
                     }
                     _ => false,
                 }
@@ -422,8 +424,8 @@ fn align_full_period_curve_to_axis(
         aligned
             .into_iter()
             .filter(|point| {
-                (point[axis] - target_start).abs() > TOLERANCE
-                    && (point[axis] - target_end).abs() > TOLERANCE
+                (point[axis] - target_start).abs() > KERNEL_EPSILON
+                    && (point[axis] - target_end).abs() > KERNEL_EPSILON
             })
             .for_each(|point| with_seams.push(point));
         with_seams.push(periodic_seam_point(surface, template, axis, target_end));
@@ -443,7 +445,7 @@ pub(super) fn align_full_period_open_pair(
     let Some((axis1, period1)) = periodic_open_axis_full_span(curve1, surface) else {
         return false;
     };
-    if axis0 != axis1 || (period0 - period1).abs() > TOLERANCE {
+    if axis0 != axis1 || (period0 - period1).abs() > KERNEL_EPSILON {
         false
     } else {
         let Some(direction) = full_period_curve_direction(curve0, axis0) else {
@@ -494,13 +496,13 @@ fn singular_periodic_other_parameter(
     let periodic = curve[0][periodic_axis];
     let uv = uv_with_axis_values(curve[0], periodic_axis, periodic, other);
     let radius = axis_derivative_norm(surface, periodic_axis, uv)?;
-    if radius <= TOLERANCE {
+    if radius <= KERNEL_EPSILON {
         Some(other)
     } else {
         let (_, range) = surface_axis_range(surface, other_axis);
         let step = range
             .map(|(min, max)| (max - min).abs())
-            .filter(|span| span.is_finite() && *span > TOLERANCE)
+            .filter(|span| span.is_finite() && *span > KERNEL_EPSILON)
             .unwrap_or(DEFAULT_SINGULAR_PARAMETER_PROBE);
         [-step, step]
             .into_iter()
@@ -509,7 +511,7 @@ fn singular_periodic_other_parameter(
                     uv_with_axis_values(curve[0], periodic_axis, periodic, other + delta);
                 let sample_radius = axis_derivative_norm(surface, periodic_axis, sample_uv)?;
                 let slope = (sample_radius - radius) / delta;
-                if slope.abs() <= TOLERANCE {
+                if slope.abs() <= KERNEL_EPSILON {
                     None
                 } else {
                     let candidate = other - radius / slope;
@@ -519,7 +521,7 @@ fn singular_periodic_other_parameter(
                         axis_derivative_norm(surface, periodic_axis, candidate_uv)?;
                     (candidate.is_finite()
                         && candidate_radius
-                            <= TOLERANCE.max(radius * SINGULAR_RADIUS_RELATIVE_TOLERANCE))
+                            <= KERNEL_EPSILON.max(radius * SINGULAR_RADIUS_RELATIVE_TOLERANCE))
                     .then_some((candidate_radius, (candidate - other).abs(), candidate))
                 }
             })

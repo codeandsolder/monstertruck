@@ -1,3 +1,4 @@
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 /// Evaluates the cubic B-spline basis function at parameter `u` for knot vector `a` (length 5).
 ///
 /// The basis function is a piecewise cubic polynomial with 4 segments over `[a[0], a[4])`.
@@ -149,9 +150,6 @@ fn basis_function_d2(u: f64, a: &[f64]) -> f64 {
     }
 }
 
-/// Step size for central finite-difference derivative approximation (fallback for orders > 2).
-pub(super) const DIFF_EPS: f64 = 1.0e-6;
-
 /// Selects the appropriate basis function evaluator for the given derivative order.
 pub(super) fn basis_function_der(u: f64, a: &[f64], der_order: usize) -> f64 {
     match der_order {
@@ -160,7 +158,7 @@ pub(super) fn basis_function_der(u: f64, a: &[f64], der_order: usize) -> f64 {
         2 => basis_function_d2(u, a),
         _ => {
             // Fall back to finite differences for orders > 2.
-            let h = DIFF_EPS;
+            let h = DEFAULT_NUMERICAL_TOLERANCES.finite_difference_step;
             (basis_function_der(u + h, a, der_order - 1)
                 - basis_function_der(u - h, a, der_order - 1))
                 / (2.0 * h)

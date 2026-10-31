@@ -11,7 +11,7 @@ use monstertruck_core::{cgmath64::*, tolerance::Tolerance, bounding_box::Boundin
 
 let a = Point3::new(1.0, 2.0, 3.0);
 let b = Point3::new(1.0 + 1e-7, 2.0, 3.0);
-assert!(a.near(&b)); // within TOLERANCE (1e-6)
+assert!(a.near(&b)); // within KERNEL_EPSILON (1e-6)
 
 let bb: BoundingBox<Point3> = vec![
     Point3::new(0.0, 0.0, 0.0),

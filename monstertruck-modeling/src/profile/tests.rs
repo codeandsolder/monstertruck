@@ -131,7 +131,7 @@ fn clockwise_profile_extrusion_is_oriented_with_positive_sweep() {
             .iter()
             .find(|face| {
                 face.vertex_iter()
-                    .all(|vertex| (vertex.point().z - z).abs() < TOLERANCE)
+                    .all(|vertex| (vertex.point().z - z).abs() < KERNEL_EPSILON)
             })
             .map(|face| face.oriented_surface().normal(0.0, 0.0))
             .expect("extrusion must have a cap at the requested z")
@@ -151,7 +151,7 @@ fn profile_extrusion_is_oriented_with_negative_sweep() {
             .iter()
             .find(|face| {
                 face.vertex_iter()
-                    .all(|vertex| (vertex.point().z - z).abs() < TOLERANCE)
+                    .all(|vertex| (vertex.point().z - z).abs() < KERNEL_EPSILON)
             })
             .map(|face| face.oriented_surface().normal(0.0, 0.0))
             .expect("extrusion must have a cap at the requested z")

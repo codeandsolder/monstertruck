@@ -108,7 +108,7 @@ impl SearchParameter<CurveParameter> for Segment {
         let p = point - self.ends.0;
         let r = self.ends.1 - self.ends.0;
         let t = p.dot(r) / r.dot(r);
-        if (p - t * r).so_small() && -TOLERANCE < t && t < 1.0 + TOLERANCE {
+        if (p - t * r).so_small() && -KERNEL_EPSILON < t && t < 1.0 + KERNEL_EPSILON {
             Some(self.range.0 + (self.range.1 - self.range.0) * t)
         } else {
             None

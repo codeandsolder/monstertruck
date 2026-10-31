@@ -134,7 +134,7 @@ fn relative_tolerance_never_falls_below_the_floor() {
 
     assert_eq!(
         empty.relative_tolerance(1.0e-3),
-        TOLERANCE,
+        KERNEL_EPSILON,
         "a shell with no geometry must clamp to the tolerance floor",
     );
 }

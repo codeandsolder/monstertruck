@@ -1,10 +1,11 @@
 use super::{
     BoundedCurve, CurveParameter, Cut, Edge, EdgeIndex, EuclideanSpace, Face, HashMap, HashSet,
-    InnerSpace, Instant, Invertible, Line, MetricSpace, Origin, ParameterBoundary2D,
-    ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface,
-    ParametricSurface3D, Point2, Point3, PolylineCurve, SP, SearchNearestParameter, Shell,
-    TOLERANCE, Tolerance, Vector2, Wire, append_unassigned_stable_ids,
+    InnerSpace, Instant, Invertible, KERNEL_EPSILON, Line, MetricSpace, Origin,
+    ParameterBoundary2D, ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D,
+    ParametricSurface, ParametricSurface3D, Point2, Point3, PolylineCurve, SP,
+    SearchNearestParameter, Shell, Tolerance, Vector2, Wire, append_unassigned_stable_ids,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;
 use std::env;
 use std::ops::Range;
@@ -382,7 +383,7 @@ fn polygon_loop(points: &[Point2]) -> PolylineCurve<Point2> {
     let mut loop_points = points.to_vec();
     if loop_points
         .last()
-        .is_none_or(|last| loop_points[0].distance2(*last) > TOLERANCE * TOLERANCE)
+        .is_none_or(|last| loop_points[0].distance2(*last) > KERNEL_EPSILON * KERNEL_EPSILON)
     {
         loop_points.push(loop_points[0]);
     }
@@ -396,7 +397,7 @@ fn reflex_vertex_index(points: &[Point2], orientation: f64, index: usize) -> Opt
     let next = points[(index + 1) % len];
     let cross =
         (curr.y - prev.y).mul_add(-(next.x - curr.x), (curr.x - prev.x) * (next.y - curr.y));
-    (orientation * cross < -TOLERANCE).then_some(index)
+    (orientation * cross < -KERNEL_EPSILON).then_some(index)
 }
 
 const fn diagonal_candidate_indices(i: usize, j: usize, len: usize) -> bool {
@@ -425,7 +426,7 @@ fn segments_intersect_strict(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> 
     Line(a0, a1)
         .intersection(Line(b0, b1))
         .is_some_and(|(s, t, _)| {
-            let unit = TOLERANCE..(1.0 - TOLERANCE);
+            let unit = KERNEL_EPSILON..(1.0 - KERNEL_EPSILON);
             unit.contains(&s) && unit.contains(&t)
         })
 }
@@ -446,9 +447,9 @@ fn polygon_contains_point(polygon: &[Point2], point: Point2) -> bool {
                     -(point.x - start.x),
                     (end.x - start.x) * (point.y - start.y),
                 );
-                if upward && cross > TOLERANCE {
+                if upward && cross > KERNEL_EPSILON {
                     acc + 1
-                } else if downward && cross < -TOLERANCE {
+                } else if downward && cross < -KERNEL_EPSILON {
                     acc - 1
                 } else {
                     acc
@@ -464,12 +465,12 @@ fn segment_contains_point(start: Point2, end: Point2, point: Point2) -> bool {
     let edge = end - start;
     let rel = point - start;
     let cross = edge.y.mul_add(-rel.x, edge.x * rel.y);
-    if cross.abs() > TOLERANCE {
+    if cross.abs() > KERNEL_EPSILON {
         false
     } else {
         let dot = rel.dot(edge);
         let len2 = edge.magnitude2();
-        dot >= -TOLERANCE && dot <= len2 + TOLERANCE
+        dot >= -KERNEL_EPSILON && dot <= len2 + KERNEL_EPSILON
     }
 }
 
@@ -1525,7 +1526,7 @@ fn boundary_type(poly: &PolylineCurve<Point2>) -> BoundaryType {
     let (Some(first), Some(last)) = (poly.first(), poly.last()) else {
         return BoundaryType::NotClosed;
     };
-    if first.distance2(*last) < 1.0e-3 {
+    if first.distance2(*last) < DEFAULT_NUMERICAL_TOLERANCES.healing_boundary_closure_squared {
         if poly.area() > 0.0 {
             BoundaryType::Positive
         } else {

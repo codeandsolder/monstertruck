@@ -7,13 +7,14 @@
 
 use super::{
     Cdt, FixedVertexHandle, HashGen, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools,
-    MetricSpace, Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SPoint2,
-    SurfacePoint, TOLERANCE, Tolerance, Triangulation, UvKey, Vector2, align_full_period_open_pair,
+    KERNEL_EPSILON, MetricSpace, Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface,
+    SPoint2, SurfacePoint, Tolerance, Triangulation, UvKey, Vector2, align_full_period_open_pair,
     align_periodic_open_pair, close_open_periodic_curve_to_singular, compact_periodic_closed_loop,
     connect_edges, mesh, normalize_range, open_periodic_closed_loop, periodic_axis_full_span,
     periodic_open_axis_full_span, polyline_on_surface, surface_point_with_cache,
 };
 use mesh::spade_round;
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::{f64::consts::TAU, iter, mem};
 
 const ISOPARAM_BOUNDARY_SEARCH_ITERATIONS: usize = 32;
@@ -95,7 +96,9 @@ pub(in crate::tessellation::triangulation) fn boundary_segment_parameter(
         let offset = point - front;
         let parameter = offset.dot(segment) / denom;
         let projected = front + segment * parameter;
-        (parameter > 0.0 && parameter < 1.0 && projected.distance(point) <= 1.0e-9)
+        (parameter > 0.0
+            && parameter < 1.0
+            && projected.distance(point) <= DEFAULT_NUMERICAL_TOLERANCES.parameter_projection)
             .then_some(parameter)
     }
 }
@@ -145,7 +148,9 @@ fn classify_boundary_pieces(
         compact_periodic_closed_loop(&mut curve, surface);
         if let Some((axis, period)) = periodic_axis_full_span(&curve, surface) {
             open.push(open_periodic_closed_loop(curve, surface, axis, period));
-        } else if curve[0].uv.distance(curve[curve.len() - 1].uv) < 1.0e-3 {
+        } else if curve[0].uv.distance(curve[curve.len() - 1].uv)
+            < DEFAULT_NUMERICAL_TOLERANCES.mesh_uv_closure
+        {
             curve.pop();
             closed.push(curve);
         } else {
@@ -195,7 +200,7 @@ fn close_single_open_boundary(
         return None;
     };
     let (front, back) = end_points(&curve);
-    if front.x < back.x - TOLERANCE {
+    if front.x < back.x - KERNEL_EPSILON {
         normalize_range(&mut curve, 0, (u0, u1));
         Some(close_curve_via_corners(
             surface,
@@ -205,7 +210,7 @@ fn close_single_open_boundary(
             tolerance,
             point_cache,
         ))
-    } else if back.x < front.x - TOLERANCE {
+    } else if back.x < front.x - KERNEL_EPSILON {
         normalize_range(&mut curve, 0, (u0, u1));
         Some(close_curve_via_corners(
             surface,
@@ -215,7 +220,7 @@ fn close_single_open_boundary(
             tolerance,
             point_cache,
         ))
-    } else if front.y < back.y - TOLERANCE {
+    } else if front.y < back.y - KERNEL_EPSILON {
         normalize_range(&mut curve, 1, (v0, v1));
         Some(close_curve_via_corners(
             surface,
@@ -225,7 +230,7 @@ fn close_single_open_boundary(
             tolerance,
             point_cache,
         ))
-    } else if back.y < front.y - TOLERANCE {
+    } else if back.y < front.y - KERNEL_EPSILON {
         normalize_range(&mut curve, 1, (v0, v1));
         Some(close_curve_via_corners(
             surface,
@@ -265,7 +270,7 @@ fn close_open_boundary_pair(
         }
     }
     let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
-    if open_pair_connector_score(p0, p1, q1, q0) + TOLERANCE
+    if open_pair_connector_score(p0, p1, q1, q0) + KERNEL_EPSILON
         < open_pair_connector_score(p0, p1, q0, q1)
     {
         curve1.reverse();

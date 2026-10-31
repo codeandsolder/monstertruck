@@ -3,6 +3,7 @@ use std::env;
 
 use crate::HashSet;
 
+use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::{NurbsSurface, Point3, Vector4};
 use monstertruck_topology::shell::ShellCondition;
 use monstertruck_traits::{
@@ -68,7 +69,7 @@ fn rematch_selected_edge_id(
     original_curve: &Curve,
     used_ids: &HashSet<EdgeId>,
 ) -> Option<EdgeId> {
-    let tolerance = 1.0e-6;
+    let tolerance = KERNEL_EPSILON;
     let tolerance_squared = tolerance * tolerance;
     shell
         .edge_iter()

@@ -79,7 +79,7 @@ impl NotStrictlyCut for Edge {
         let curve0 = self.curve();
         let t = curve0.search_nearest_parameter(vertex.point(), None, 100)?;
         let (t0, t1) = curve0.range_tuple();
-        if t < t0 + TOLERANCE || t1 - TOLERANCE < t {
+        if t < t0 + KERNEL_EPSILON || t1 - KERNEL_EPSILON < t {
             return None;
         }
         Some(self.pre_cut(vertex, curve0, t))
@@ -88,7 +88,7 @@ impl NotStrictlyCut for Edge {
     fn not_strictly_cut_with_parameter(&self, vertex: &Vertex, t: f64) -> Option<(Self, Self)> {
         let curve0 = self.curve();
         let (t0, t1) = curve0.range_tuple();
-        if t < t0 + TOLERANCE || t1 - TOLERANCE < t {
+        if t < t0 + KERNEL_EPSILON || t1 - KERNEL_EPSILON < t {
             return None;
         }
         Some(self.pre_cut(vertex, curve0, t))

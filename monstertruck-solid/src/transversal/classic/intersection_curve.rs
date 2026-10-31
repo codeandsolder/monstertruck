@@ -8,7 +8,7 @@
 
 use monstertruck_core::{
     cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point3},
-    tolerance::TOLERANCE,
+    tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON},
 };
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
@@ -291,12 +291,13 @@ where
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     let interferences = polygon0.extract_interference(polygon1);
-    let stitch_tolerance = 4.0 * tol.max(TOLERANCE);
+    let stitch_tolerance = 4.0 * tol.max(KERNEL_EPSILON);
     let polylines = stitch_nearby_polylines(construct_polylines(&interferences), stitch_tolerance)?;
     // This pass repairs numerical fragmentation introduced by tessellation.
     // Its admission envelope is a kernel-precision bound, not the caller's
     // potentially much coarser Boolean modeling tolerance.
-    let validation_tolerance = 4.0 * TOLERANCE;
+    let validation_tolerance =
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_validation_factor * KERNEL_EPSILON;
     let polylines = stitch_validated_linear_intersection_fragments(
         polylines,
         &surface0,

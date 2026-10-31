@@ -21,7 +21,7 @@ fn normalize_axis_preserves_far_nonperiodic_values() {
         Some(68.0),
     );
     assert_eq!(
-        PolyBoundaryPiece::normalize_axis(1.0 + TOLERANCE * 0.5, None, None, Some((0.0, 1.0)),),
+        PolyBoundaryPiece::normalize_axis(1.0 + KERNEL_EPSILON * 0.5, None, None, Some((0.0, 1.0)),),
         Some(1.0),
     );
 }
@@ -48,7 +48,7 @@ fn face_local_trim_orientation_is_not_reversed_by_edge_orientation() {
         (false, Some(&trims[3]), &edges[3]),
     ];
 
-    let piece = PolyBoundaryPiece::try_new_from_trimmed(&surface, wire.into_iter(), TOLERANCE)
+    let piece = PolyBoundaryPiece::try_new_from_trimmed(&surface, wire.into_iter(), KERNEL_EPSILON)
         .expect("face-local trims should build a boundary");
     let uvs = piece
         .0
@@ -69,7 +69,7 @@ fn exact_trim_orientation_is_aligned_to_oriented_edge_endpoints() {
     let edge = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0));
     let wire = [(true, Some(&trim), &edge)];
 
-    let piece = PolyBoundaryPiece::try_new_from_trimmed(&surface, wire.into_iter(), TOLERANCE)
+    let piece = PolyBoundaryPiece::try_new_from_trimmed(&surface, wire.into_iter(), KERNEL_EPSILON)
         .expect("exact trim should build a boundary");
     let uvs = piece
         .0
@@ -88,7 +88,7 @@ fn closed_exact_trim_orientation_is_not_endpoint_aligned() {
     let edge = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
     let wire = [(true, Some(&trim), &edge)];
 
-    let piece = PolyBoundaryPiece::try_new_from_trimmed(&surface, wire.into_iter(), TOLERANCE)
+    let piece = PolyBoundaryPiece::try_new_from_trimmed(&surface, wire.into_iter(), KERNEL_EPSILON)
         .expect("closed exact trim should build a boundary");
     let uvs = piece
         .0
@@ -132,7 +132,7 @@ fn aligned_exact_projects_periodic_edge_samples_before_resampling() {
             (min.min(value), max.max(value))
         });
 
-    assert!(span.1 - span.0 <= 2.0 * half_span + TOLERANCE);
+    assert!(span.1 - span.0 <= 2.0 * half_span + KERNEL_EPSILON);
 }
 
 #[test]
@@ -153,13 +153,13 @@ fn full_period_cone_loop_closes_to_singular_side() {
     let boundary = PolyBoundary::new(vec![ring], &surface, 0.01);
 
     assert!(
-        boundary.uv_min.y <= -2.5 + TOLERANCE,
+        boundary.uv_min.y <= -2.5 + KERNEL_EPSILON,
         "expected cone cap to include the apex side, got {:?}..{:?}",
         boundary.uv_min,
         boundary.uv_max,
     );
     assert!(
-        boundary.uv_max.y <= TOLERANCE,
+        boundary.uv_max.y <= KERNEL_EPSILON,
         "expected cone cap to end at the trim ring, got {:?}..{:?}",
         boundary.uv_min,
         boundary.uv_max,
@@ -209,7 +209,7 @@ fn full_period_ring_pair_uses_shared_periodic_seam() {
     let span = boundary.uv_max.x - boundary.uv_min.x;
 
     assert!(
-        span <= TAU + TOLERANCE,
+        span <= TAU + KERNEL_EPSILON,
         "expected full-period rings to share a seam, got {:?}..{:?}",
         boundary.uv_min,
         boundary.uv_max,
@@ -219,7 +219,7 @@ fn full_period_ring_pair_uses_shared_periodic_seam() {
             .loops
             .iter()
             .flatten()
-            .any(|boundary_point| boundary_point.point.distance(*point) <= TOLERANCE)
+            .any(|boundary_point| boundary_point.point.distance(*point) <= KERNEL_EPSILON)
     }));
 }
 

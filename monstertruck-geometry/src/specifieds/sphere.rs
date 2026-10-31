@@ -5,10 +5,10 @@
 
 use super::{
     Bound, BoundedCurve, BoundedSurface, BsplineCurve, ElementWise, EuclideanSpace, IncludeCurve,
-    InnerSpace, MetricSpace, NurbsCurve, Origin, ParameterDivision2D, ParameterRange,
-    ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, SearchNearestParameter,
-    SearchParameter, SearchParameterHint2D, Sphere, SurfaceParameter, SurfaceParameterRange,
-    TOLERANCE, Tolerance, Vector3, Vector4, Zero, nonpositive_tolerance,
+    InnerSpace, KERNEL_EPSILON, MetricSpace, NurbsCurve, Origin, ParameterDivision2D,
+    ParameterRange, ParametricCurve, ParametricSurface, ParametricSurface3D, Point3,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, Sphere, SurfaceParameter,
+    SurfaceParameterRange, Tolerance, Vector3, Vector4, Zero, nonpositive_tolerance,
 };
 use std::f64::consts::PI;
 

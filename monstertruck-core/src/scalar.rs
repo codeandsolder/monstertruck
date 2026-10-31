@@ -10,6 +10,7 @@
 //! `PredicateScalar` is intentionally deferred until the predicate lane's
 //! requirements are known.
 
+use crate::tolerance::{KERNEL_EPSILON, KERNEL_EPSILON_F32, KERNEL_EPSILON_SQUARED};
 use cgmath::AbsDiffEq;
 use std::fmt::Debug;
 
@@ -27,24 +28,24 @@ impl NumericScalar for f64 {}
 /// Mirrors the constants from [`crate::tolerance::Tolerance`] but as associated
 /// functions on the scalar type rather than a global trait.
 pub trait ToleranceScalar: NumericScalar {
-    /// The primary tolerance threshold (corresponds to `TOLERANCE`).
+    /// The primary tolerance threshold (corresponds to `KERNEL_EPSILON`).
     fn tolerance() -> Self;
-    /// The squared tolerance threshold (corresponds to `TOLERANCE2`).
+    /// The squared tolerance threshold (corresponds to `KERNEL_EPSILON_SQUARED`).
     fn tolerance2() -> Self;
 }
 
 impl ToleranceScalar for f32 {
     #[inline]
-    fn tolerance() -> Self { 1.0e-4 }
+    fn tolerance() -> Self { KERNEL_EPSILON_F32 }
     #[inline]
-    fn tolerance2() -> Self { 1.0e-8 }
+    fn tolerance2() -> Self { KERNEL_EPSILON_F32 * KERNEL_EPSILON_F32 }
 }
 
 impl ToleranceScalar for f64 {
     #[inline]
-    fn tolerance() -> Self { 1.0e-6 }
+    fn tolerance() -> Self { KERNEL_EPSILON }
     #[inline]
-    fn tolerance2() -> Self { 1.0e-12 }
+    fn tolerance2() -> Self { KERNEL_EPSILON_SQUARED }
 }
 
 /// Scalar-generic tolerance trait.

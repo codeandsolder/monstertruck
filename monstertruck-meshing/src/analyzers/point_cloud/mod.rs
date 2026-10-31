@@ -1,6 +1,6 @@
 use super::{
-    BoundingBox, EuclideanSpace, InnerSpace, MetricSpace, Origin, Point3, PolygonMesh, TOLERANCE,
-    Vector3, hash, nonpositive_tolerance,
+    BoundingBox, EuclideanSpace, InnerSpace, KERNEL_EPSILON, MetricSpace, Origin, Point3,
+    PolygonMesh, Vector3, hash, nonpositive_tolerance,
 };
 mod hashed_point_cloud;
 use hashed_point_cloud::HashedPointCloud;
@@ -12,7 +12,7 @@ pub trait WithPointCloud {
     /// # Arguments
     /// - `tol`: the radius of the neighborhoods of points in point cloud.
     /// # Panics
-    /// `tol` must be greater than or equal to `TOLERANCE`.
+    /// `tol` must be greater than or equal to `KERNEL_EPSILON`.
     /// # Examples
     /// ```
     /// use monstertruck_meshing::prelude::*;

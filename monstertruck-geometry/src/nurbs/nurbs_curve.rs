@@ -170,7 +170,7 @@ where V::Point: Tolerance
     /// Determines whether `self` and `other` is near as the B-spline curves or not.
     ///
     /// Divides each knot interval into the number of degree equal parts,
-    /// and check `|self(t) - other(t)| < TOLERANCE` for each end points `t`.
+    /// and check `|self(t) - other(t)| < KERNEL_EPSILON` for each end points `t`.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
@@ -201,7 +201,7 @@ where V::Point: Tolerance
     /// Determines `self` and `other` is near in square order as the B-spline curves or not.
     ///
     /// Divide each knot interval into the number of degree equal parts,
-    /// and check `|self(t) - other(t)| < TOLERANCE`for each end points `t`.
+    /// and check `|self(t) - other(t)| < KERNEL_EPSILON`for each end points `t`.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
@@ -219,7 +219,7 @@ where V::Point: Tolerance
     /// let curve0 = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
     /// let mut curve1 = curve0.clone();
     /// assert!(curve0.near_as_curve(&curve1));
-    /// *curve1.control_point_mut(1) += Vector3::new(0.01, TOLERANCE, 0.0);
+    /// *curve1.control_point_mut(1) += Vector3::new(0.01, KERNEL_EPSILON, 0.0);
     /// assert!(!curve0.near2_as_curve(&curve1));
     /// ```
     #[inline]

@@ -12,13 +12,14 @@
 
 use super::{
     BoundedCurve, EuclideanSpace, ExactParameterBoundary2D, ExactTrimBoundary2D, HashMap,
-    InnerSpace, MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D,
-    Point2, Point3, PolylineCurve, PreMeshableSurface, SP, SurfacePoint, TOLERANCE, Tolerance,
-    algo, env, mesh, periodic_min_difference, projection_debug_enabled, projection_debug_face,
-    report_projection_failure, report_projection_outcome, resample_boundary,
+    InnerSpace, KERNEL_EPSILON, MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D,
+    ParametricSurface3D, Point2, Point3, PolylineCurve, PreMeshableSurface, SP, SurfacePoint,
+    Tolerance, algo, env, mesh, periodic_min_difference, projection_debug_enabled,
+    projection_debug_face, report_projection_failure, report_projection_outcome, resample_boundary,
     simplify_parameter_boundary,
 };
 use mesh::spade_round;
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::sync::OnceLock;
 
 /// Trials for the verified nearest-parameter rung, matching the 100 the
@@ -42,7 +43,7 @@ fn verified_footpoint_enabled() -> bool {
 /// `search_parameter(None)`. `search_parameter`'s Newton minimises the
 /// TANGENTIAL residual, so it lands on the footpoint, and then accepts it only
 /// if `surface.evaluate(u, v).near(&point)` -- an ABSOLUTE test at
-/// `TOLERANCE = 1e-6`. Boundary polylines are sampled from the EDGE CURVE,
+/// `KERNEL_EPSILON = 1e-6`. Boundary polylines are sampled from the EDGE CURVE,
 /// which in interchange data does not ride exactly on the face's surface.
 ///
 /// Every boundary vertex that drops a face on the in-repo fixtures fails by
@@ -82,7 +83,7 @@ fn verified_footpoint_enabled() -> bool {
 ///
 /// **WHY THE ARM IS NOT COSMETIC: this rung changes BOOLEAN OUTPUT, not just
 /// mesh output.** The boolean meshes shells internally at the operation's own
-/// tolerance (`max(tol, 10*TOLERANCE)` in
+/// tolerance (`max(tol, 10*KERNEL_EPSILON)` in
 /// `integrate::healing::{shell_signed_volume, solid_signed_volume}` and
 /// `pipeline::orientation::resolve_material_side`), and carries a per-face
 /// `PolygonMesh` into the SSI. A face that this rung rescues is a face those
@@ -180,9 +181,9 @@ impl PolyBoundaryPiece {
     }
 
     fn clamp_near_range(value: f64, (min, max): (f64, f64)) -> f64 {
-        if value < min && min - value < TOLERANCE {
+        if value < min && min - value < KERNEL_EPSILON {
             min
-        } else if value > max && value - max < TOLERANCE {
+        } else if value > max && value - max < KERNEL_EPSILON {
             max
         } else {
             value
@@ -626,7 +627,10 @@ impl PolyBoundaryPiece {
                         [u0, u1].into_iter().find_map(|u_end| {
                             let pole = surface.evaluate(u_end, v_prev);
                             let is_pole = pole.near(&surface.evaluate(u_end, v_prev + 1.0));
-                            let at_pole = (pole - pt).magnitude2() < 1.0e-6;
+                            let at_pole = (pole - pt).magnitude2()
+                                < DEFAULT_NUMERICAL_TOLERANCES
+                                    .mesh_singularity_distance
+                                    .powi(2);
                             (is_pole && at_pole).then_some((u_end, v_prev))
                         })
                     })

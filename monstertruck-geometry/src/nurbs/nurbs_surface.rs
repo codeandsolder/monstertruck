@@ -6,15 +6,17 @@
 use super::{
     BasisWindow, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve, BsplineSurface,
     ControlPoint, Error, EuclideanSpace, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve,
-    InnerSpace, Invertible, KnotVector, MetricSpace, NurbsCurve, NurbsSurface, PRESEARCH_DIVISION,
-    ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface, ParametricSurface3D,
-    Point3, Result, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
-    SurfaceParameter, SurfaceParameterRange, TOLERANCE, TOLERANCE2, Tolerance, Transformed,
-    Vector3, Vector4, Zero, algo, multi_rational_derivative, rational_derivative,
+    InnerSpace, Invertible, KERNEL_EPSILON, KERNEL_EPSILON_SQUARED, KnotVector, MetricSpace,
+    NurbsCurve, NurbsSurface, PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange,
+    ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, Result,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
+    SurfaceParameterRange, Tolerance, Transformed, Vector3, Vector4, Zero, algo,
+    multi_rational_derivative, rational_derivative,
 };
 #[cfg(test)]
 use crate::prelude::Vector2;
 use algo::surface::{SearchNearestParameterVector, SearchParameterVector};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 impl<V> NurbsSurface<V> {
     /// constructor
@@ -291,7 +293,7 @@ where V::Point: Tolerance
     /// Determines whether `self` and `other` is near as the B-spline rational surfaces or not.
     ///
     /// Divides each knot domain into the number of degree equal parts,
-    /// and check `|self(u, v) - other(u, v)| < TOLERANCE` for each end points `(u, v)`.
+    /// and check `|self(u, v) - other(u, v)| < KERNEL_EPSILON` for each end points `(u, v)`.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
@@ -319,11 +321,11 @@ where V::Point: Tolerance
     /// surfaces or not.
     ///
     /// Divides each knot domain into the number of degree equal parts,
-    /// and check `|self(u, v) - other(u, v)| < TOLERANCE` for each end points `(u, v)`.
+    /// and check `|self(u, v) - other(u, v)| < KERNEL_EPSILON` for each end points `(u, v)`.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
-    /// let eps = TOLERANCE;
+    /// let eps = KERNEL_EPSILON;
     /// let knot_vecs = (KnotVector::bezier_knot(3), KnotVector::bezier_knot(2));
     /// let control_points = vec![
     ///     vec![Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.5, -1.0, 2.0), Vector3::new(1.0, 0.0, 1.0)],
@@ -721,12 +723,12 @@ impl ParametricSurface3D for NurbsSurface<Vector4> {
         let ud = self.0.derivative_u(u, v);
         let vd = self.0.derivative_v(u, v);
         let n = rational_derivative(&[pt, ud]).cross(rational_derivative(&[pt, vd]));
-        if n.magnitude2() > TOLERANCE2 {
+        if n.magnitude2() > KERNEL_EPSILON_SQUARED {
             return n.normalize();
         }
         // Degenerate point (e.g. pole of a revolution surface).
         // Sample nearby non-degenerate points and average their normals.
-        let eps = 1.0e-4;
+        let eps = DEFAULT_NUMERICAL_TOLERANCES.normal_probe_step;
         let kvu = self.0.knot_vector_u();
         let kvv = self.0.knot_vector_v();
         let u_lo = kvu[0];
@@ -745,7 +747,7 @@ impl ParametricSurface3D for NurbsSurface<Vector4> {
             let ud2 = self.0.derivative_u(u2, v2);
             let vd2 = self.0.derivative_v(u2, v2);
             let n2 = rational_derivative(&[pt2, ud2]).cross(rational_derivative(&[pt2, vd2]));
-            if n2.magnitude2() > TOLERANCE2 {
+            if n2.magnitude2() > KERNEL_EPSILON_SQUARED {
                 sum += n2.normalize();
                 count += 1;
             }
@@ -904,10 +906,10 @@ impl IncludeCurve<NurbsCurve<Vector3>> for NurbsSurface<Vector3> {
                     None => return false,
                 };
                 if !self.evaluate(hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - TOLERANCE
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
-                    || hint.1 < knot_vector_v[0] - TOLERANCE
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + TOLERANCE
+                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
+                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
+                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
+                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
                 {
                     return false;
                 }
@@ -938,10 +940,10 @@ impl IncludeCurve<BsplineCurve<Point3>> for NurbsSurface<Vector4> {
                     None => return false,
                 };
                 if !self.evaluate(hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - TOLERANCE
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
-                    || hint.1 < knot_vector_v[0] - TOLERANCE
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + TOLERANCE
+                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
+                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
+                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
+                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
                 {
                     return false;
                 }
@@ -972,10 +974,10 @@ impl IncludeCurve<NurbsCurve<Vector4>> for NurbsSurface<Vector4> {
                     None => return false,
                 };
                 if !self.evaluate(hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - TOLERANCE
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
-                    || hint.1 < knot_vector_v[0] - TOLERANCE
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + TOLERANCE
+                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
+                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
+                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
+                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
                 {
                     return false;
                 }

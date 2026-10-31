@@ -4,7 +4,7 @@
 //! - Input: `irregular_sphere.obj`
 //! - Output: `regular_sphere.obj`
 
-use monstertruck_mesh::{TOLERANCE, obj};
+use monstertruck_mesh::{KERNEL_EPSILON, obj};
 use monstertruck_meshing::filters::{NormalFilters, OptimizingFilter};
 
 fn main() -> anyhow::Result<()> {
@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
     let mut mesh = obj::read(file)?;
     mesh.normalize_normals()
         .remove_unused_attrs()
-        .put_together_same_attrs(TOLERANCE * 2.0)
+        .put_together_same_attrs(KERNEL_EPSILON * 2.0)
         .remove_degenerate_faces()
         .add_smooth_normals(std::f64::consts::PI / 6.0, true)
         .remove_unused_attrs();

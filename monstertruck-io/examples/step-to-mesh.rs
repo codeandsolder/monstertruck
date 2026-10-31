@@ -79,7 +79,7 @@ fn step_to_mesh(table: &Table) -> Result<Vec<MeshedCShell>> {
                     .into_iter()
                     .map(|shell| {
                         let bdd = shell_bounding_box(&shell);
-                        let tol = f64::max(bdd.diameter() * 0.001, TOLERANCE);
+                        let tol = f64::max(bdd.diameter() * 0.001, KERNEL_EPSILON);
                         shell.robust_triangulation(tol)
                     })
                     .collect::<Vec<_>>();
@@ -163,7 +163,7 @@ fn output_obj(polyshells: &[MeshedCShell], path: &Path, condition_check: bool) -
     let mut polymesh = PolygonMesh::default();
     for shell in polyshells {
         let mut poly = shell.to_polygon();
-        poly.put_together_same_attrs(TOLERANCE * 50.0)
+        poly.put_together_same_attrs(KERNEL_EPSILON * 50.0)
             .remove_degenerate_faces()
             .remove_unused_attrs();
         if condition_check {

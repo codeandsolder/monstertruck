@@ -27,6 +27,7 @@
 //! [`CompressedEdge`]: monstertruck_topology::compress::CompressedEdge
 
 use cadmpeg_ir::geometry::{CurveGeometry, NurbsCurve as IrNurbsCurve};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::{
     BoundedCurve, BsplineCurve, Cut, KnotVector, NurbsCurve, Processor, TrimmedCurve, UnitCircle,
 };
@@ -234,7 +235,8 @@ fn nurbs(curve: &IrNurbsCurve, interval: Interval, context: &Context<'_>) -> Res
 fn restrict(curve: &mut Curve, start: f64, end: f64, context: &Context<'_>) -> Result<()> {
     let (low, high) = (start.min(end), start.max(end));
     let (own_low, own_high) = curve.range_tuple();
-    let slack = monstertruck_modeling::TOLERANCE.max((own_high - own_low).abs() * 1.0e-9);
+    let slack = monstertruck_modeling::KERNEL_EPSILON
+        .max((own_high - own_low).abs() * DEFAULT_NUMERICAL_TOLERANCES.parameter_range_relative);
     if !low.is_finite() || !high.is_finite() {
         return Err(context.malformed(format!(
             "an edge carries the parameter range [{start}, {end}]"

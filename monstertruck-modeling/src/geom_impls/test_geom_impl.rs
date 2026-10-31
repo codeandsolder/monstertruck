@@ -4,7 +4,9 @@
 //! name is unchanged, so every test keeps its path and its identity.
 
 use super::*;
-use crate::{BoundedCurve, MetricSpace, ParametricCurve, TOLERANCE, Tolerance, prop_assert_near};
+use crate::{
+    BoundedCurve, KERNEL_EPSILON, MetricSpace, ParametricCurve, Tolerance, prop_assert_near,
+};
 use proptest::*;
 
 fn pole_to_normal(pole: [f64; 2]) -> Vector3 {
@@ -92,7 +94,7 @@ proptest! {
         p0 in array::uniform3(-10.0f64..10.0),
         p1 in array::uniform3(-10.0f64..10.0),
         p2 in array::uniform3(-10.0f64..10.0),
-        t in TOLERANCE..(1.0 - TOLERANCE),
+        t in KERNEL_EPSILON..(1.0 - KERNEL_EPSILON),
     ) {
         let p0 = Point3::from(p0);
         let p1 = Point3::from(p1);
@@ -117,7 +119,7 @@ proptest! {
         p0 in array::uniform3(-10.0f64..10.0),
         p1 in array::uniform3(-10.0f64..10.0),
         tangent in array::uniform3(-10.0f64..10.0),
-        t in TOLERANCE..(1.0 - TOLERANCE),
+        t in KERNEL_EPSILON..(1.0 - KERNEL_EPSILON),
     ) {
         let p0 = Point3::from(p0);
         let p1 = Point3::from(p1);
@@ -163,16 +165,16 @@ proptest! {
         // distances under an absolute tolerance (the previous form) is the
         // wrong metric -- a large radius inflates the absolute position error
         // even when the arc itself is exact.
-        prop_assert!((origin.distance(p2) - radius).abs() <= TOLERANCE * (1.0 + radius));
+        prop_assert!((origin.distance(p2) - radius).abs() <= KERNEL_EPSILON * (1.0 + radius));
     }
 
     #[test]
     fn test_circle_arc(
         origin in array::uniform3(-10.0f64..10.0),
         axis_pole in array::uniform2(-1.0f64..1.0),
-        angle in TOLERANCE..(1.5 * PI),
+        angle in KERNEL_EPSILON..(1.5 * PI),
         pt0 in array::uniform3(-10.0f64..10.0),
-        t in TOLERANCE..(1.0 - TOLERANCE),
+        t in KERNEL_EPSILON..(1.0 - KERNEL_EPSILON),
     ) {
         let origin = Point3::from(origin);
         let axis = pole_to_normal(axis_pole);

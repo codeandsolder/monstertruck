@@ -207,7 +207,7 @@ pub trait ParameterDivision2D {
     ///
     /// # Panics
     ///
-    /// `tol` must be greater than or equal to `TOLERANCE`.
+    /// `tol` must be greater than or equal to `KERNEL_EPSILON`.
     fn parameter_division(&self, range: SurfaceParameterRange, tol: f64) -> (Vec<f64>, Vec<f64>);
 }
 

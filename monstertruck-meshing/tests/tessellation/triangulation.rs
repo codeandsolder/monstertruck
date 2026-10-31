@@ -22,7 +22,7 @@ fn solid_is_closed() {
     for (i, json) in read_jsons().into_iter().enumerate() {
         let solid: Solid = serde_json::from_reader(json.as_slice()).unwrap();
         let mut poly = solid.triangulation(0.01).to_polygon();
-        poly.put_together_same_attrs(TOLERANCE * 2.0)
+        poly.put_together_same_attrs(KERNEL_EPSILON * 2.0)
             .remove_degenerate_faces()
             .remove_unused_attrs();
         assert_eq!(
@@ -38,7 +38,7 @@ fn csolid_is_closed() {
     for (i, json) in read_jsons().into_iter().enumerate() {
         let solid: CompressedSolid = serde_json::from_reader(json.as_slice()).unwrap();
         let mut poly = solid.triangulation(0.01).to_polygon();
-        poly.put_together_same_attrs(TOLERANCE * 2.0)
+        poly.put_together_same_attrs(KERNEL_EPSILON * 2.0)
             .remove_degenerate_faces()
             .remove_unused_attrs();
         assert_eq!(
@@ -50,7 +50,7 @@ fn csolid_is_closed() {
 }
 
 fn assert_torus_punched_cube_mesh(mut mesh: PolygonMesh) {
-    mesh.put_together_same_attrs(TOLERANCE * 2.0)
+    mesh.put_together_same_attrs(KERNEL_EPSILON * 2.0)
         .remove_degenerate_faces()
         .remove_unused_attrs();
 
@@ -146,7 +146,7 @@ fn special_cylinder_model() -> Result<Shell> {
 fn special_cylinder() -> Result<()> {
     let shell = special_cylinder_model()?;
     let mut mesh = shell.triangulation(0.01).to_polygon();
-    mesh.put_together_same_attrs(TOLERANCE)
+    mesh.put_together_same_attrs(KERNEL_EPSILON)
         .remove_degenerate_faces()
         .remove_unused_attrs();
     assert_eq!(mesh.shell_condition(), ShellCondition::Closed);
@@ -157,7 +157,7 @@ fn special_cylinder() -> Result<()> {
 fn special_cylinder_csolid() -> Result<()> {
     let shell = special_cylinder_model()?.compress();
     let mut mesh = shell.triangulation(0.01).to_polygon();
-    mesh.put_together_same_attrs(TOLERANCE)
+    mesh.put_together_same_attrs(KERNEL_EPSILON)
         .remove_degenerate_faces()
         .remove_unused_attrs();
     assert_eq!(mesh.shell_condition(), ShellCondition::Closed);
@@ -193,7 +193,7 @@ fn robust_closed() {
     );
 
     let mut mesh = cube.robust_triangulation(0.01).to_polygon();
-    mesh.put_together_same_attrs(TOLERANCE2)
+    mesh.put_together_same_attrs(KERNEL_EPSILON_SQUARED)
         .remove_unused_attrs();
     assert_eq!(mesh.shell_condition(), ShellCondition::Closed);
 }

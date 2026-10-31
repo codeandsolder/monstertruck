@@ -6,12 +6,13 @@
 use super::{
     BasisWindow, Bound, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve,
     BsplineSurface, Concat, ControlPoint, CurveCollector, Deserialize, Error, EuclideanSpace,
-    HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace, Invertible, KnotVector,
-    Matrix2, Matrix3, Matrix4, MetricSpace, NurbsCurve, Origin, PRESEARCH_DIVISION,
-    ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface, ParametricSurface3D,
-    Point2, Point3, Rad, Result, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
-    SquareMatrix, SurfaceParameter, SurfaceParameterRange, TOLERANCE, Tolerance, Transform,
-    Transformed, Vector2, Vector3, Vector4, Zero, algo, compat, gaussian_elimination, inv_or_zero,
+    HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace, Invertible,
+    KERNEL_EPSILON, KnotVector, Matrix2, Matrix3, Matrix4, MetricSpace, NurbsCurve, Origin,
+    PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface,
+    ParametricSurface3D, Point2, Point3, Rad, Result, SearchNearestParameter, SearchParameter,
+    SearchParameterHint2D, SquareMatrix, SurfaceParameter, SurfaceParameterRange, Tolerance,
+    Transform, Transformed, Vector2, Vector3, Vector4, Zero, algo, compat, gaussian_elimination,
+    inv_or_zero,
 };
 
 mod accessors;
@@ -193,7 +194,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// Determines whether `self` and `other` is near as the B-spline surfaces or not.
     ///
     /// Divides each knot domain into the number of degree equal parts,
-    /// and check `|self(u, v) - other(u, v)| < TOLERANCE` for each end points `(u, v)`.
+    /// and check `|self(u, v) - other(u, v)| < KERNEL_EPSILON` for each end points `(u, v)`.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
@@ -219,11 +220,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// Determines whether `self` and `other` is near in square order as the B-spline surfaces or not.
     ///
     /// Divides each knot domain into the number of degree equal parts,
-    /// and check `|self(u, v) - other(u, v)| < TOLERANCE` for each end points `(u, v)`.
+    /// and check `|self(u, v) - other(u, v)| < KERNEL_EPSILON` for each end points `(u, v)`.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
-    /// let eps = TOLERANCE;
+    /// let eps = KERNEL_EPSILON;
     /// let knot_vecs = (KnotVector::bezier_knot(3), KnotVector::bezier_knot(2));
     /// let control_points = vec![
     ///     vec![Vector2::new(0.0, 0.0), Vector2::new(0.5, -1.0), Vector2::new(1.0, 0.0)],
@@ -358,7 +359,7 @@ fn cut_at_boundary_snapping_parameter_leaves_empty_net_but_does_not_panic() {
             vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
         ],
     );
-    // 1.0e-6 is within TOLERANCE of the v-start knot (0.0); must not panic.
+    // 1.0e-6 is within KERNEL_EPSILON of the v-start knot (0.0); must not panic.
     let _ = surface.cut_v(1.0e-6);
 }
 

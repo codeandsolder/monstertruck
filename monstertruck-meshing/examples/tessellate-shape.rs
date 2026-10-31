@@ -7,7 +7,7 @@
 //! The default `<output file>` is output.obj.
 
 use anyhow::{Context as _, bail};
-use monstertruck_mesh::{TOLERANCE, obj};
+use monstertruck_mesh::{KERNEL_EPSILON, obj};
 use monstertruck_meshing::{
     analyzers::Topology,
     filters::OptimizingFilter,
@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         bail!("input is neither a compressed solid nor a compressed shell");
     };
-    poly.put_together_same_attrs(TOLERANCE * 10.0)
+    poly.put_together_same_attrs(KERNEL_EPSILON * 10.0)
         .remove_degenerate_faces()
         .remove_unused_attrs();
     println!("polygon shell condition: {:?}", poly.shell_condition());

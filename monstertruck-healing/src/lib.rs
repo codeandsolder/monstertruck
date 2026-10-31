@@ -14,6 +14,7 @@
 
 pub(crate) use ahash::AHashSet as HashSet;
 
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::rexport_polymesh::PolylineCurve;
 use monstertruck_topology::StableId;
@@ -51,7 +52,7 @@ where C: ParametricCurve3D<Point = Point3>
         + BoundedCurve<Point = Point3>
         + ParameterDivision1D<Point = Point3>
         + SearchNearestParameter<CurveParameter, Point = Point3> {
-    if !tol.is_finite() || tol < TOLERANCE {
+    if !tol.is_finite() || tol < KERNEL_EPSILON {
         return false;
     }
     let tol2 = tol * tol;
@@ -342,7 +343,8 @@ where
     }
     let trim_start = f64::mul_add(trim_len, alpha0, trim_t0);
     let trim_end = f64::mul_add(trim_len, alpha1, trim_t0);
-    let param_tol = (trim_len.abs() * 1.0e-6).max(TOLERANCE);
+    let param_tol =
+        (trim_len.abs() * DEFAULT_NUMERICAL_TOLERANCES.trim_parameter_relative).max(KERNEL_EPSILON);
     if !trim_start.is_finite() || !trim_end.is_finite() || trim_end <= trim_start + param_tol {
         return None;
     }
@@ -352,7 +354,9 @@ where
         if range_len.so_small() {
             None
         } else {
-            let param_tol = (range_len.abs() * 1.0e-6).max(TOLERANCE);
+            let param_tol = (range_len.abs()
+                * DEFAULT_NUMERICAL_TOLERANCES.trim_parameter_relative)
+                .max(KERNEL_EPSILON);
             let t = t.clamp(range_start, range_end);
             if t <= range_start + param_tol || range_end <= t + param_tol {
                 None
@@ -369,7 +373,9 @@ where
     } else {
         let mut middle = cut_if_interior(&mut trim_curve, trim_start)?;
         let (middle_t0, middle_t1) = middle.range_tuple();
-        let middle_tol = ((middle_t1 - middle_t0).abs() * 1.0e-6).max(TOLERANCE);
+        let middle_tol = ((middle_t1 - middle_t0).abs()
+            * DEFAULT_NUMERICAL_TOLERANCES.trim_parameter_relative)
+            .max(KERNEL_EPSILON);
         if trim_end <= middle_t0 + middle_tol {
             return None;
         }

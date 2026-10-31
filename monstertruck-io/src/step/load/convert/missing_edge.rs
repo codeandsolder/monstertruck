@@ -26,10 +26,11 @@
 
 use super::{
     BoundResolution, Curve3D, EdgeCurve, EuclideanSpace, FaceBoundHolder, HashMap, InnerSpace,
-    IntersectionCurve, MetricSpace, Name, ParametricSurface3D, PlaceHolder, Point2, Point3,
-    PolylineCurve, SearchNearestParameter, SearchParameter, ShellHolder, Surface, TOLERANCE, Table,
+    IntersectionCurve, KERNEL_EPSILON, MetricSpace, Name, ParametricSurface3D, PlaceHolder, Point2,
+    Point3, PolylineCurve, SearchNearestParameter, SearchParameter, ShellHolder, Surface, Table,
     step_geometry, step_p21,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::{
     BoundedCurve, Invertible, ParameterDivision1D, ParametricCurve, ParametricSurface,
 };
@@ -37,7 +38,8 @@ use step_p21::tables::IntoOwned;
 
 const PROJECTION_TRIALS: usize = 100;
 const RECOVERY_SAMPLES: usize = 17;
-const GEOMETRY_TOLERANCE: f64 = 100.0 * TOLERANCE;
+const GEOMETRY_TOLERANCE: f64 =
+    DEFAULT_NUMERICAL_TOLERANCES.recovery_geometry_factor * KERNEL_EPSILON;
 
 #[inline]
 fn trace_recovery(edge_id: u64, stage: &str) {
@@ -84,7 +86,8 @@ struct MarchState {
 
 #[inline]
 fn unwrap_near(value: f64, reference: f64, period: Option<f64>) -> f64 {
-    let Some(period) = period.filter(|period| period.is_finite() && *period > TOLERANCE) else {
+    let Some(period) = period.filter(|period| period.is_finite() && *period > KERNEL_EPSILON)
+    else {
         return value;
     };
     ((reference - value) / period)
@@ -144,7 +147,8 @@ fn span_is_local(
     period: Option<f64>,
     coordinate: impl Fn(Point2) -> f64,
 ) -> bool {
-    let Some(period) = period.filter(|period| period.is_finite() && *period > TOLERANCE) else {
+    let Some(period) = period.filter(|period| period.is_finite() && *period > KERNEL_EPSILON)
+    else {
         return true;
     };
     let (minimum, maximum) = values.iter().copied().fold(
@@ -419,8 +423,9 @@ impl Table {
             let tangent = predictor_normal0.cross(predictor_normal1);
             let normal_scale = predictor_normal0.magnitude() * predictor_normal1.magnitude();
             if !normal_scale.is_finite()
-                || normal_scale <= TOLERANCE
-                || tangent.magnitude() <= 1.0e-8 * normal_scale
+                || normal_scale <= KERNEL_EPSILON
+                || tangent.magnitude()
+                    <= DEFAULT_NUMERICAL_TOLERANCES.transversality_relative * normal_scale
             {
                 trace_recovery(edge_id, "pair_fail=predictor_tangent");
                 return None;
@@ -451,8 +456,9 @@ impl Table {
         let normal1 = second.surface.normal(uv1.x, uv1.y);
         let normal_scale = normal0.magnitude() * normal1.magnitude();
         if !normal_scale.is_finite()
-            || normal_scale <= TOLERANCE
-            || normal0.cross(normal1).magnitude() <= 1.0e-8 * normal_scale
+            || normal_scale <= KERNEL_EPSILON
+            || normal0.cross(normal1).magnitude()
+                <= DEFAULT_NUMERICAL_TOLERANCES.transversality_relative * normal_scale
         {
             trace_recovery(edge_id, "pair_fail=tangent");
             return None;
@@ -461,7 +467,10 @@ impl Table {
         if !first_sample {
             let guide_step = previous.guide.distance(guide_point);
             let actual_step = previous.point.distance(point);
-            if actual_step > 8.0 * guide_step.max(GEOMETRY_TOLERANCE) {
+            if actual_step
+                > DEFAULT_NUMERICAL_TOLERANCES.recovery_continuation_jump_factor
+                    * guide_step.max(GEOMETRY_TOLERANCE)
+            {
                 trace_recovery(edge_id, "pair_fail=continuation_jump");
                 return None;
             }
@@ -475,7 +484,7 @@ impl Table {
         ] {
             if evidence == SurfaceHintEvidence::ComplementPath
                 && let Some(period) =
-                    period.filter(|period| period.is_finite() && *period > TOLERANCE)
+                    period.filter(|period| period.is_finite() && *period > KERNEL_EPSILON)
                 && (unwrap_near(value, expected, Some(period)) - expected).abs() >= period * 0.5
             {
                 trace_recovery(edge_id, "pair_fail=periodic_branch_drift");
@@ -556,7 +565,9 @@ impl Table {
         ] {
             let value = unwrap_near(value, target, period);
             let tolerance = period
-                .map_or(GEOMETRY_TOLERANCE, |period| period.abs() * 1.0e-6)
+                .map_or(GEOMETRY_TOLERANCE, |period| {
+                    period.abs() * DEFAULT_NUMERICAL_TOLERANCES.periodic_relative
+                })
                 .max(GEOMETRY_TOLERANCE);
             if (value - target).abs() > tolerance {
                 trace_recovery(edge_id, "pair_fail=endpoint_uv");
@@ -607,7 +618,7 @@ impl Table {
             &first.surface,
             &second.surface,
             GEOMETRY_TOLERANCE,
-            1.0e-8,
+            DEFAULT_NUMERICAL_TOLERANCES.transversality_relative,
         )
         .is_some()
         {

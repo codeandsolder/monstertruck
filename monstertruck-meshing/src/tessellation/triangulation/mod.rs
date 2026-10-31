@@ -8,12 +8,12 @@ use super::{
     CompressedShell, CompressedShellTessellation, CompressedTrimmedFace, CompressedTrimmedShell,
     ConstrainedDelaunayTriangulation, CurveParameter, Edge, EuclideanSpace,
     ExactParameterBoundary2D, Face, Faces, HashGen, InnerFaceIterator, InnerSpace, Invertible,
-    IsoparametricCurveOptions, MIN_ALLOWED_VALUE, MeshableSurface, MetricSpace, Origin,
-    Parallelizable, ParameterBoundary2D, ParameterDivision1D, ParametricCurve2D, ParametricCurve3D,
-    ParametricSurface3D, Point3, PolygonMesh, PolylineCurve, PolylineableCurve, PreMeshableSurface,
-    RobustMeshableSurface, SearchNearestParameter, SearchParameter, Shell, StandardAttributes,
-    StandardVertex, TOLERANCE, TessellationPrimitiveMode, TessellationPrimitiveOptions, Tolerance,
-    Triangulation, Vector2, Vector3, VertexIterator, Wire, Zero, algo, handles,
+    IsoparametricCurveOptions, KERNEL_EPSILON, MIN_ALLOWED_VALUE, MeshableSurface, MetricSpace,
+    Origin, Parallelizable, ParameterBoundary2D, ParameterDivision1D, ParametricCurve2D,
+    ParametricCurve3D, ParametricSurface3D, Point3, PolygonMesh, PolylineCurve, PolylineableCurve,
+    PreMeshableSurface, RobustMeshableSurface, SearchNearestParameter, SearchParameter, Shell,
+    StandardAttributes, StandardVertex, TessellationPrimitiveMode, TessellationPrimitiveOptions,
+    Tolerance, Triangulation, Vector2, Vector3, VertexIterator, Wire, Zero, algo, handles,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use super::{
@@ -163,7 +163,7 @@ fn mesh_trace_enabled() -> bool { env::var_os("MT_MESH_TRACE").is_some() }
 fn boundary_tolerance_candidates(tolerance: f64) -> Vec<f64> {
     iter::successors(Some(tolerance), |current| {
         let next = *current * 0.5;
-        (next > TOLERANCE).then_some(next)
+        (next > KERNEL_EPSILON).then_some(next)
     })
     .take(5)
     .collect()
