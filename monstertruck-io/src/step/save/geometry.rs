@@ -870,9 +870,7 @@ where C: StepLength + Transformed<Matrix4> + StepFormat
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let surface = self.entity();
         let transform = self.transform();
-        let (k, a, _) = if let Some(x) = transform.iwasawa_decomposition() {
-            x
-        } else {
+        let Some((k, a, _)) = transform.iwasawa_decomposition() else {
             f.write_str("Transform is not regular")?;
             return ERR;
         };
@@ -986,15 +984,11 @@ impl StepFormat for ModelingSurface {
             // `SPHERICAL_SURFACE` / `TOROIDAL_SURFACE` would be better save
             // fidelity and is recorded as follow-on work, but it is a save
             // OUTPUT change and this track is the tessellation one.
-            Self::Sphere(_) | Self::Torus(_) => {
-                match self.try_into_homogeneous_bspline_surface() {
-                    Some(bsp) => StepFormat::fmt(&NurbsSurface::new(bsp), idx, f),
-                    // Unreachable through the loader: the variant is only built
-                    // behind the builder's own representability predicate. An
-                    // honest formatter error rather than a panic (ledger C11).
-                    None => Err(std::fmt::Error),
-                }
-            }
+            Self::Sphere(_) | Self::Torus(_) => self
+                .try_into_homogeneous_bspline_surface()
+                .map_or(Err(std::fmt::Error), |bsp| {
+                    StepFormat::fmt(&NurbsSurface::new(bsp), idx, f)
+                }),
         }
     }
 }

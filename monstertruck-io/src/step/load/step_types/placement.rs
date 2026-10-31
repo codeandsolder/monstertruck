@@ -176,10 +176,10 @@ pub struct Axis2Placement2d {
 impl From<&Axis2Placement2d> for Matrix3 {
     fn from(axis: &Axis2Placement2d) -> Self {
         let z = Point2::from(&axis.location);
-        let x = match &axis.ref_direction {
-            Some(axis) => Vector2::from(axis),
-            None => Vector2::unit_x(),
-        };
+        let x = axis
+            .ref_direction
+            .as_ref()
+            .map_or_else(Vector2::unit_x, Vector2::from);
         let y = Vector2::new(-x.y, x.x);
         Self::from_cols(x.extend(0.0), y.extend(0.0), z.to_vec().extend(1.0))
     }
@@ -203,20 +203,17 @@ pub struct Axis2Placement3d {
 impl From<&Axis2Placement3d> for Matrix4 {
     fn from(axis: &Axis2Placement3d) -> Self {
         let w = Point3::from(&axis.location);
-        let z = match &axis.axis {
-            Some(axis) => Vector3::from(axis),
-            None => Vector3::unit_z(),
-        };
+        let z = axis
+            .axis
+            .as_ref()
+            .map_or_else(Vector3::unit_z, Vector3::from);
         // Pick a fallback reference direction that is not parallel to `z`.
         let fallback = if z.near(&Vector3::unit_x()) {
             Vector3::unit_y()
         } else {
             Vector3::unit_x()
         };
-        let x = match &axis.ref_direction {
-            Some(axis) => Vector3::from(axis),
-            None => fallback,
-        };
+        let x = axis.ref_direction.as_ref().map_or(fallback, Vector3::from);
         // Gram-Schmidt: remove the `z` component of `x`. ISO 10303 permits
         // `ref_direction` to be parallel to `axis`; in that case the projected
         // vector is zero and `normalize()` would produce `NaN`, which later

@@ -347,8 +347,6 @@ fn analytic_orientation_sign(surface: &Surface, support: Support) -> Option<bool
         // that its UV Jacobian keeps one sign globally. Until that stronger
         // proof exists, generic spline planes are support evidence only, not
         // orientation evidence for a topology mutation.
-        (Surface::Bspline(_), Support::Plane { .. })
-        | (Surface::Nurbs(_), Support::Plane { .. }) => return None,
         _ => return None,
     };
     Some(sign >= 0.0)

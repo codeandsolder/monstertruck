@@ -206,7 +206,7 @@ impl SurfaceCurve3D {
             .iter()
             .filter_map(|entry| match entry {
                 SurfaceCurveAssociatedGeometry::ParameterCurve(curve) => Some(curve),
-                _ => None,
+                SurfaceCurveAssociatedGeometry::Surface(_) => None,
             })
             .find(|curve| {
                 (curve.surface().as_ref() == surface

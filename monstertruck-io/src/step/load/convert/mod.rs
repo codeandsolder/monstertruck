@@ -108,13 +108,12 @@ impl Table {
                 // `Table::dummy` with its name intact, which is a different
                 // defect from an id that resolves to nothing at all.
                 let unrecognised = id.and_then(|id| self.dummy.get(&id));
-                let (why, detail) = match unrecognised {
-                    Some(dummy) => (
+                let (why, detail) = unrecognised.map_or((Why::BoundUnresolved, None), |dummy| {
+                    (
                         Why::BoundNotALoopWeImplement,
                         Some(dummy.record.chars().take(80).collect::<String>()),
-                    ),
-                    None => (Why::BoundUnresolved, None),
-                };
+                    )
+                });
                 sink.lost(Cat::Wire, why, id, detail);
                 None
             }
@@ -813,13 +812,16 @@ impl Table {
         let PlaceHolder::Ref(Name::Entity(outer_idx)) = &solid.outer else {
             return Err("failed to reference `solid.outer`".into());
         };
-        let outer_shell = if let Some(step_shell) = self.shell.get(outer_idx) {
-            self.to_compressed_shell_reported(step_shell)
-        } else if let Some(step_shell) = self.oriented_shell.get(outer_idx) {
-            self.to_compressed_shell_reported(step_shell)
-        } else {
-            Err("failed to reference `solid.outer`".into())
-        }?;
+        let outer_shell = self.shell.get(outer_idx).map_or_else(
+            || {
+                if let Some(step_shell) = self.oriented_shell.get(outer_idx) {
+                    self.to_compressed_shell_reported(step_shell)
+                } else {
+                    Err("failed to reference `solid.outer`".into())
+                }
+            },
+            |step_shell| self.to_compressed_shell_reported(step_shell),
+        )?;
         let mut boundaries = vec![outer_shell.0];
         let mut reports = vec![outer_shell.1];
         for shell in &solid.voids {
@@ -854,13 +856,16 @@ impl Table {
         let PlaceHolder::Ref(Name::Entity(outer_idx)) = &solid.outer else {
             return Err("failed to reference `solid.outer`".into());
         };
-        let outer_shell = if let Some(step_shell) = self.shell.get(outer_idx) {
-            self.to_compressed_trimmed_shell(step_shell)
-        } else if let Some(step_shell) = self.oriented_shell.get(outer_idx) {
-            self.to_compressed_trimmed_shell(step_shell)
-        } else {
-            Err("failed to reference `solid.outer`".into())
-        }?;
+        let outer_shell = self.shell.get(outer_idx).map_or_else(
+            || {
+                if let Some(step_shell) = self.oriented_shell.get(outer_idx) {
+                    self.to_compressed_trimmed_shell(step_shell)
+                } else {
+                    Err("failed to reference `solid.outer`".into())
+                }
+            },
+            |step_shell| self.to_compressed_trimmed_shell(step_shell),
+        )?;
         let mut boundaries = vec![outer_shell];
         for inner in &solid.voids {
             let PlaceHolder::Ref(Name::Entity(inner_idx)) = inner else {
@@ -1324,22 +1329,27 @@ impl Table {
     /// is the whole point -- "not a solid" without it sends a reader back to the
     /// file with nothing but an id.
     fn describe_unheld(&self, id: u64) -> String {
-        if let Some(dummy) = self.dummy.get(&id) {
-            // `Table::dummy` stores `format!("{record:?}")`, whose derived
-            // `Debug` puts the entity name in the first quoted field.
-            // Diagnostic convenience, not a contract: an unparseable shape
-            // degrades to the record text itself.
-            let name = dummy.record.split('"').nth(1).unwrap_or(&dummy.record);
-            format!("#{id} is `{name}`, an entity type the loader has no arm for")
-        } else if self.axis2_placement_3d.contains_key(&id) {
-            format!("#{id} is an AXIS2_PLACEMENT_3D")
-        } else if self.shell_based_surface_model.contains_key(&id) {
-            format!("#{id} is a SHELL_BASED_SURFACE_MODEL")
-        } else if self.geometric_curve_set.contains_key(&id) {
-            format!("#{id} is a GEOMETRIC_CURVE_SET")
-        } else {
-            format!("#{id} is in no table map")
-        }
+        self.dummy.get(&id).map_or_else(
+            || {
+                if self.axis2_placement_3d.contains_key(&id) {
+                    format!("#{id} is an AXIS2_PLACEMENT_3D")
+                } else if self.shell_based_surface_model.contains_key(&id) {
+                    format!("#{id} is a SHELL_BASED_SURFACE_MODEL")
+                } else if self.geometric_curve_set.contains_key(&id) {
+                    format!("#{id} is a GEOMETRIC_CURVE_SET")
+                } else {
+                    format!("#{id} is in no table map")
+                }
+            },
+            |dummy| {
+                // `Table::dummy` stores `format!("{record:?}")`, whose derived
+                // `Debug` puts the entity name in the first quoted field.
+                // Diagnostic convenience, not a contract: an unparseable shape
+                // degrades to the record text itself.
+                let name = dummy.record.split('"').nth(1).unwrap_or(&dummy.record);
+                format!("#{id} is `{name}`, an entity type the loader has no arm for")
+            },
+        )
     }
 }
 

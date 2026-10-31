@@ -297,12 +297,12 @@ struct StepHeader {
 impl Default for StepHeaderDescriptor {
     fn default() -> Self {
         Self {
-            file_name: Default::default(),
+            file_name: String::default(),
             time_stamp: chrono::Utc::now().naive_local().to_string(),
-            authors: Default::default(),
-            organization: Default::default(),
-            organization_system: Default::default(),
-            authorization: Default::default(),
+            authors: Vec::default(),
+            organization: Vec::default(),
+            organization_system: String::default(),
+            authorization: String::default(),
         }
     }
 }
@@ -445,10 +445,7 @@ impl Display for StepReal {
         if !mantissa.contains('.') {
             f.write_str(".0")?;
         }
-        match exponent {
-            Some(exponent) => f.write_fmt(format_args!("E{exponent}")),
-            None => Ok(()),
-        }
+        exponent.map_or(Ok(()), |exponent| f.write_fmt(format_args!("E{exponent}")))
     }
 }
 

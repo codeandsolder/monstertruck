@@ -1081,15 +1081,13 @@ impl Table {
     /// UTF-8 input is unaffected -- it takes the first branch and is
     /// byte-identical to calling [`Table::from_step`] directly.
     pub fn from_step_bytes(bytes: &[u8]) -> Result<Self, LoadError> {
-        match std::str::from_utf8(bytes) {
-            Ok(text) => Self::from_step(text),
-            // Infallible by construction: `u8 as char` is the ISO-8859-1 code
-            // page, so every byte has an image and no input can be refused here.
-            Err(_) => {
+        std::str::from_utf8(bytes).map_or_else(
+            |_| {
                 let text: String = bytes.iter().map(|&byte| byte as char).collect();
                 Self::from_step(&text)
-            }
-        }
+            },
+            Self::from_step,
+        )
     }
 }
 

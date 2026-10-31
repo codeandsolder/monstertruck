@@ -179,10 +179,8 @@ impl ParameterDivision1D for Curve3D {
                 Self::NurbsCurve(_) => "NurbsCurve",
             };
             eprintln!(
-                "trace bool curve_division kind={} points={} tol={} elapsed_ms={:.3}",
-                kind,
+                "trace bool curve_division kind={kind} points={} tol={tol} elapsed_ms={:.3}",
                 result.as_ref().map_or(0, |(_, points)| points.len()),
-                tol,
                 started.elapsed().as_secs_f64() * 1000.0,
             );
         }
@@ -215,10 +213,8 @@ impl ParameterDivision1D for Curve3D {
                 Self::NurbsCurve(_) => "NurbsCurve",
             };
             eprintln!(
-                "trace bool curve_division kind={} points={} tol={} elapsed_ms={:.3}",
-                kind,
+                "trace bool curve_division kind={kind} points={} tol={tol} elapsed_ms={:.3}",
                 result.1.len(),
-                tol,
                 started.elapsed().as_secs_f64() * 1000.0,
             );
         }

@@ -192,7 +192,7 @@ pub struct ShapeRepresentationRelationshipWithTransformation {
     pub transformation_operator: ItemDefinedTransformation,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = next_assembly_usage_occurrence)]
 #[holder(generate_deserialize)]

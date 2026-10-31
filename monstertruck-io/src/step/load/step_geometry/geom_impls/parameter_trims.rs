@@ -52,75 +52,84 @@ where
         if !value.is_finite() {
             None
         } else if let Some(previous) = previous {
-            if let Some(period) = period {
-                (-2..=2)
-                    .map(|index| f64::mul_add(f64::from(index), period, value))
-                    .min_by(abs_diff(previous))
-            } else if let Some(range) = range {
-                let clamped = clamp_near_range(value, range);
-                uv_clamp::record_axis(
-                    surface,
-                    axis,
-                    real_range,
-                    uv_clamp::Event::Clamp {
-                        moved: clamped - value,
-                        to_max: clamped == range.1,
-                    },
-                );
-                Some(clamped)
-            } else {
-                uv_clamp::record_axis(surface, axis, real_range, uv_clamp::Event::Unranged);
-                Some(value)
-            }
+            period.map_or_else(
+                || {
+                    if let Some(range) = range {
+                        let clamped = clamp_near_range(value, range);
+                        uv_clamp::record_axis(
+                            surface,
+                            axis,
+                            real_range,
+                            uv_clamp::Event::Clamp {
+                                moved: clamped - value,
+                                to_max: clamped == range.1,
+                            },
+                        );
+                        Some(clamped)
+                    } else {
+                        uv_clamp::record_axis(surface, axis, real_range, uv_clamp::Event::Unranged);
+                        Some(value)
+                    }
+                },
+                |period| {
+                    (-2..=2)
+                        .map(|index| f64::mul_add(f64::from(index), period, value))
+                        .min_by(abs_diff(previous))
+                },
+            )
         } else if let Some((min, max)) = range {
-            if let Some(period) = period {
-                let span = max - min;
-                if span.so_small() {
+            period.map_or_else(
+                || {
+                    let clamped = clamp_near_range(value, (min, max));
                     uv_clamp::record_axis(
                         surface,
                         axis,
                         real_range,
-                        uv_clamp::Event::Periodic {
-                            wrapped: min != value,
-                            clamped: 0.0,
-                            degenerate: true,
-                        },
-                    );
-                    Some(min)
-                } else {
-                    let mut normalized = f64::floor((value - min) / period).mul_add(-period, value);
-                    if normalized < min {
-                        normalized += period;
-                    }
-                    if normalized > max {
-                        normalized -= period;
-                    }
-                    let clamped = normalized.clamp(min, max);
-                    uv_clamp::record_axis(
-                        surface,
-                        axis,
-                        real_range,
-                        uv_clamp::Event::Periodic {
-                            wrapped: normalized != value,
-                            clamped: clamped - normalized,
-                            degenerate: false,
+                        uv_clamp::Event::Clamp {
+                            moved: clamped - value,
+                            to_max: clamped == max,
                         },
                     );
                     Some(clamped)
-                }
-            } else {
-                let clamped = clamp_near_range(value, (min, max));
-                uv_clamp::record_axis(
-                    surface,
-                    axis,
-                    real_range,
-                    uv_clamp::Event::Clamp {
-                        moved: clamped - value,
-                        to_max: clamped == max,
-                    },
-                );
-                Some(clamped)
-            }
+                },
+                |period| {
+                    let span = max - min;
+                    if span.so_small() {
+                        uv_clamp::record_axis(
+                            surface,
+                            axis,
+                            real_range,
+                            uv_clamp::Event::Periodic {
+                                wrapped: min != value,
+                                clamped: 0.0,
+                                degenerate: true,
+                            },
+                        );
+                        Some(min)
+                    } else {
+                        let mut normalized =
+                            f64::floor((value - min) / period).mul_add(-period, value);
+                        if normalized < min {
+                            normalized += period;
+                        }
+                        if normalized > max {
+                            normalized -= period;
+                        }
+                        let clamped = normalized.clamp(min, max);
+                        uv_clamp::record_axis(
+                            surface,
+                            axis,
+                            real_range,
+                            uv_clamp::Event::Periodic {
+                                wrapped: normalized != value,
+                                clamped: clamped - normalized,
+                                degenerate: false,
+                            },
+                        );
+                        Some(clamped)
+                    }
+                },
+            )
         } else {
             uv_clamp::record_axis(surface, axis, real_range, uv_clamp::Event::Unranged);
             Some(value)

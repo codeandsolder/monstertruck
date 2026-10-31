@@ -159,8 +159,8 @@ fn reported_range_bounds_the_curve(curve: &Curve3D) -> bool {
         | Curve3D::Polyline(_)
         | Curve3D::BsplineCurve(_)
         | Curve3D::NurbsCurve(_)
-        | Curve3D::IntersectionCurve(_) => true,
-        Curve3D::ParameterCurve(_) => true,
+        | Curve3D::IntersectionCurve(_)
+        | Curve3D::ParameterCurve(_) => true,
         Curve3D::SurfaceCurve(curve) => reported_range_bounds_the_curve(curve.leader()),
     }
 }
@@ -194,7 +194,9 @@ pub fn reported_range_bounds_the_surface(surface: &Surface) -> (bool, bool) {
         Surface::Elementary(ElementarySurface::Plane(_)) => (false, false),
         Surface::Elementary(
             ElementarySurface::Sphere(_) | ElementarySurface::ToroidalSurface(_),
-        ) => (true, true),
+        )
+        | Surface::Bspline(_)
+        | Surface::Nurbs(_) => (true, true),
         Surface::Elementary(
             ElementarySurface::CylindricalSurface(processor)
             | ElementarySurface::ConicalSurface(processor),
@@ -213,7 +215,6 @@ pub fn reported_range_bounds_the_surface(surface: &Surface) -> (bool, bool) {
             reported_range_bounds_the_curve(surface.entity_curve()),
             false,
         ),
-        Surface::Bspline(_) | Surface::Nurbs(_) => (true, true),
     }
 }
 

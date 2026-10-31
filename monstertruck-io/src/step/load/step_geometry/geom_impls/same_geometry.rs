@@ -115,8 +115,6 @@ impl ToSameGeometry<Surface> for RevolutionSurface<Curve3D> {
                     default()
                 }
             }
-            Curve3D::SurfaceCurve(_) => default(),
-            Curve3D::IntersectionCurve(_) => default(),
             _ => default(),
         }
     }

@@ -85,7 +85,7 @@ where C: StepFormat + StepLength
                     indices.push(*surface_idx);
                     (indices, cursor)
                 }
-                _ => {
+                StepAssociatedGeometry::ExactParameterCurve(_) => {
                     indices.push(cursor);
                     (indices, cursor + StepLength::step_length(entry))
                 }
@@ -219,11 +219,11 @@ where
             .collect::<Vec<_>>();
         faces.iter().enumerate().for_each(|(face_pos, face)| {
             face.boundaries.iter().for_each(|wire| {
-                wire.iter().for_each(|ce| {
+                for ce in wire {
                     if let Some(associations) = edge_associations.get_mut(ce.index) {
                         associations.push(EdgeAssociationSource::FaceSurface(face_pos));
                     }
-                });
+                }
             });
         });
         Self::from_parts(
@@ -282,7 +282,7 @@ where
             .collect::<Vec<_>>();
         shell.faces.iter().enumerate().for_each(|(face_pos, face)| {
             face.boundaries.iter().for_each(|wire| {
-                wire.iter().for_each(|edge_use| {
+                for edge_use in wire {
                     let association = edge_use
                         .trim_curve
                         .as_ref()
@@ -290,7 +290,7 @@ where
                             EdgeAssociationSource::ExactParameterCurve(trim_curve)
                         });
                     edge_associations[edge_use.index].push(association);
-                });
+                }
             });
         });
         Self::from_parts(

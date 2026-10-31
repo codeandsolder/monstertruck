@@ -446,7 +446,7 @@ impl OrientedEdgeHolder {
         match &self.edge_element {
             PlaceHolder::Owned(holder) => Some(holder.clone()),
             PlaceHolder::Ref(Name::Entity(idx)) => table.edge_curve.get(idx).cloned(),
-            _ => None,
+            PlaceHolder::Ref(_) => None,
         }
     }
     pub(crate) const fn edge_element_idx(&self) -> Option<u64> {
@@ -542,7 +542,7 @@ impl FaceBoundHolder {
                 },
                 BoundResolution::EdgeLoop,
             ),
-            _ => BoundResolution::Unresolved(None),
+            PlaceHolder::Ref(_) => BoundResolution::Unresolved(None),
         }
     }
 
@@ -598,7 +598,7 @@ impl FaceSurfaceHolder {
                 PlaceHolder::Ref(Name::Entity(idx)) => {
                     (Some(*idx), table.face_bound.get(idx).cloned())
                 }
-                _ => (None, None),
+                PlaceHolder::Ref(_) => (None, None),
             })
             .collect()
     }
@@ -624,7 +624,7 @@ impl OrientedFaceHolder {
         match &self.face_element {
             PlaceHolder::Ref(Name::Entity(idx)) => table.face_surface.get(idx).cloned(),
             PlaceHolder::Owned(x) => Some(x.clone()),
-            _ => None,
+            PlaceHolder::Ref(_) => None,
         }
     }
 }
@@ -662,7 +662,7 @@ impl ShellHolder {
                         .cloned()
                         .map(FaceAnyHolder::FaceSurface)
                 }),
-            _ => None,
+            PlaceHolder::Ref(_) => None,
         })
     }
 }

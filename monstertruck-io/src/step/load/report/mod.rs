@@ -358,7 +358,7 @@ impl ShellLoadReport {
             let entry = self.reasons.entry(*key).or_default();
             if entry.count == 0 {
                 entry.first_id = tally.first_id;
-                entry.first_detail = tally.first_detail.clone();
+                entry.first_detail.clone_from(&tally.first_detail);
             }
             entry.count += tally.count;
         }
@@ -425,7 +425,7 @@ impl fmt::Display for ShellLoadReport {
                 if c != category {
                     continue;
                 }
-                write!(f, " [{:?} x{}", reason, tally.count)?;
+                write!(f, " [{reason:?} x{}", tally.count)?;
                 if let Some(id) = tally.first_id {
                     write!(f, " e.g. #{id}")?;
                 }
