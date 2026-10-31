@@ -18,7 +18,7 @@ fn adjacent_cubes_or() {
     let f = builder::extrude(&w, Vector3::unit_y());
     let cube2: Solid = builder::extrude(&f, Vector3::unit_z());
 
-    let result = crate::or(&cube, &cube2, 0.05);
+    let result = crate::or(&cube, &cube2, crate::GeometryPolicy::standard(0.05));
     assert!(
         result.is_ok(),
         "Boolean OR of adjacent cubes should succeed: {:?}",
@@ -48,6 +48,30 @@ fn matrix_unit_cube() -> Solid {
     builder::extrude(&f, Vector3::unit_z())
 }
 
+#[test]
+fn equivalent_boolean_refuses_approximate_backend() {
+    let cube = matrix_unit_cube();
+    let error = crate::and(&cube, &cube, crate::GeometryPolicy::Equivalent)
+        .expect_err("the marching Boolean backend must not claim equivalence");
+    assert!(matches!(
+        error,
+        crate::ShapeOpsError::EquivalentPolicyUnsupported { operation: "and" }
+    ));
+}
+
+#[test]
+fn boolean_reports_invalid_standard_budget_as_policy_error() {
+    let cube = matrix_unit_cube();
+    let error = crate::and(&cube, &cube, crate::GeometryPolicy::standard(0.0))
+        .expect_err("a zero Standard tolerance is below kernel resolution");
+    assert!(matches!(
+        error,
+        crate::ShapeOpsError::InvalidGeometryPolicy(
+            crate::GeometryPolicyError::InvalidStandardTolerance { tolerance: 0.0 }
+        )
+    ));
+}
+
 /// specs/005 cell (Covered): a general crossing box/box AND. The intersection
 /// is the box [0.5,1]x[0.25,1]x[0.25,1].
 #[test]
@@ -58,7 +82,8 @@ fn boolean_matrix_and_crossing_cubes() {
     let f = builder::extrude(&e, Vector3::unit_y());
     let cube2: Solid = builder::extrude(&f, Vector3::unit_z());
 
-    let solid = crate::and(&cube, &cube2, 0.01).expect("crossing box/box AND must succeed");
+    let solid = crate::and(&cube, &cube2, crate::GeometryPolicy::standard(0.01))
+        .expect("crossing box/box AND must succeed");
     assert_eq!(solid.boundaries().len(), 1);
     assert_eq!(solid.face_iter().count(), 6);
     let poly = solid.triangulation(0.01).to_polygon();
@@ -87,7 +112,7 @@ fn punched_cube() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let f = builder::try_attach_plane([w])?;
     let mut cylinder = builder::extrude(&f, Vector3::unit_z() * 2.0);
     cylinder.not();
-    let and = crate::and(&cube, &cylinder, 0.05)?;
+    let and = crate::and(&cube, &cylinder, crate::GeometryPolicy::standard(0.05))?;
     assert_eq!(and.face_iter().count(), 10);
     assert_eq!(
         and.face_iter()
@@ -115,7 +140,7 @@ fn cube_clip_high_z() {
         Point3::new(2.0, 2.0, 0.8),
     ]));
 
-    let result = crate::and(&cube, &clip_box, 0.05);
+    let result = crate::and(&cube, &clip_box, crate::GeometryPolicy::standard(0.05));
     assert!(
         result.is_ok(),
         "High-Z clip should succeed: {:?}",
@@ -141,7 +166,7 @@ fn cube_clip_high_z_flip() {
         Point3::new(2.0, 2.0, 2.0),
     ]));
 
-    let result = crate::and(&cube, &clip_box, 0.05);
+    let result = crate::and(&cube, &clip_box, crate::GeometryPolicy::standard(0.05));
     assert!(
         result.is_ok(),
         "High-Z flip clip should succeed: {:?}",

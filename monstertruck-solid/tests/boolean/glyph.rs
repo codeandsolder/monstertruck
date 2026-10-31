@@ -309,7 +309,11 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
             0.69999,
         )),
     );
-    let result = monstertruck_solid::or(&host, &feature, STRICT_TOL)?;
+    let result = monstertruck_solid::or(
+        &host,
+        &feature,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "exact glyph union must stay consistent"
@@ -706,7 +710,11 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     // A disjoint thin boss can cross several already-partitioned coplanar host
     // faces. The pairwise SSI segments must share their common endpoint even
     // when independently solved adjacent face pairs differ by a few tolerances.
-    let with_holed_boss_only = monstertruck_solid::or(&result, &holed_boss, STRICT_TOL)?;
+    let with_holed_boss_only = monstertruck_solid::or(
+        &result,
+        &holed_boss,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     let rectilinear_vertices = builder::vertices([
         Point3::new(0.0, 0.0, 0.0),
         Point3::new(0.10938253279665622, 0.0, 0.0),
@@ -744,27 +752,44 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
         &rectilinear_boss,
         Matrix4::from_translation(Vector3::new(3.900871074992246, 4.321874884097263, 0.69999)),
     );
-    let with_rectilinear_boss =
-        monstertruck_solid::or(&with_holed_boss_only, &rectilinear_boss, STRICT_TOL)?;
+    let with_rectilinear_boss = monstertruck_solid::or(
+        &with_holed_boss_only,
+        &rectilinear_boss,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         with_rectilinear_boss.is_geometric_consistent(),
         "exact glyph + holed boss + rectilinear boss must stay consistent"
     );
 
-    let with_middle_boss = monstertruck_solid::or(&result, &middle_boss, STRICT_TOL)?;
-    let with_middle_rect =
-        monstertruck_solid::or(&with_middle_boss, &rectilinear_boss, STRICT_TOL)?;
+    let with_middle_boss = monstertruck_solid::or(
+        &result,
+        &middle_boss,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
+    let with_middle_rect = monstertruck_solid::or(
+        &with_middle_boss,
+        &rectilinear_boss,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         with_middle_rect.is_geometric_consistent(),
         "exact glyph + middle boss + rectilinear boss must stay consistent"
     );
-    let with_holed_boss = monstertruck_solid::or(&with_middle_boss, &holed_boss, STRICT_TOL)?;
+    let with_holed_boss = monstertruck_solid::or(
+        &with_middle_boss,
+        &holed_boss,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         with_holed_boss.is_geometric_consistent(),
         "exact glyph + middle boss + holed boss must stay consistent"
     );
-    let with_middle_holed_rect =
-        monstertruck_solid::or(&with_holed_boss, &rectilinear_boss, STRICT_TOL)?;
+    let with_middle_holed_rect = monstertruck_solid::or(
+        &with_holed_boss,
+        &rectilinear_boss,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         with_middle_holed_rect.is_geometric_consistent(),
         "exact glyph + middle boss + holed boss + rectilinear boss must stay consistent"
@@ -900,7 +925,11 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
         )),
     );
     let before_curved_boss = result;
-    let result = monstertruck_solid::or(&before_curved_boss, &curved_boss, STRICT_TOL)?;
+    let result = monstertruck_solid::or(
+        &before_curved_boss,
+        &curved_boss,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "curved second boss union must stay consistent"
@@ -942,7 +971,11 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
         Matrix4::from_translation(Vector3::new(3.900871074992246, 4.644511765530097, 0.69999)),
     );
     let before_boss = result;
-    let result = monstertruck_solid::or(&before_boss, &boss, STRICT_TOL)?;
+    let result = monstertruck_solid::or(
+        &before_boss,
+        &boss,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "second disjoint boss union must stay consistent"

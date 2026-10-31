@@ -7,7 +7,7 @@ const SHAPEOPS_TOLERANCE: f64 = 0.05;
 #[wasm_bindgen]
 pub fn and(solid0: &Solid, solid1: &Solid, tol: Option<f64>) -> Option<Solid> {
     let tol = tol.unwrap_or(SHAPEOPS_TOLERANCE);
-    shapeops::and(solid0, solid1, tol)
+    shapeops::and(solid0, solid1, shapeops::GeometryPolicy::standard(tol))
         .ok()
         .map(IntoWasm::into_wasm)
 }
@@ -16,7 +16,7 @@ pub fn and(solid0: &Solid, solid1: &Solid, tol: Option<f64>) -> Option<Solid> {
 #[wasm_bindgen]
 pub fn or(solid0: &Solid, solid1: &Solid, tol: Option<f64>) -> Option<Solid> {
     let tol = tol.unwrap_or(SHAPEOPS_TOLERANCE);
-    shapeops::or(solid0, solid1, tol)
+    shapeops::or(solid0, solid1, shapeops::GeometryPolicy::standard(tol))
         .ok()
         .map(IntoWasm::into_wasm)
 }

@@ -19,7 +19,11 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let f = builder::try_attach_plane([w])?;
     let mut cylinder = builder::extrude(&f, Vector3::unit_z() * 2.0);
     cylinder.not();
-    let and = monstertruck_solid::and(&cube, &cylinder, 0.05)?;
+    let and = monstertruck_solid::and(
+        &cube,
+        &cylinder,
+        monstertruck_solid::GeometryPolicy::standard(0.05),
+    )?;
     let json = serde_json::to_vec_pretty(&and)?;
     std::fs::write("punched-cube-shapeops.json", json)?;
     Ok(())

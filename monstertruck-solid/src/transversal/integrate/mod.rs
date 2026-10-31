@@ -1,4 +1,7 @@
-use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
+use monstertruck_core::{
+    geometry_policy::{GeometryPolicy, GeometryPolicyError},
+    tolerance::DEFAULT_NUMERICAL_TOLERANCES,
+};
 // The classic backend is the only `super` item this module dispatches to; the
 // public trait bounds (`SnapCurveEndpoints`, etc.) resolve through the prelude
 // globs below, so a no-backend (`--no-default-features`) build needs no `super`
@@ -139,6 +142,17 @@ pub enum ShapeOpsError {
     /// `tol` was non-finite or too small for robust meshing and projection.
     #[error("`tol` must be finite and at least `KERNEL_EPSILON`.")]
     InvalidTolerance,
+    /// The user-facing geometry policy is internally inconsistent.
+    #[error(transparent)]
+    InvalidGeometryPolicy(#[from] GeometryPolicyError),
+    /// The selected backend cannot establish equivalence for this operation.
+    #[error(
+        "`{operation}` has no equivalence-proving backend; select `GeometryPolicy::Standard` with an explicit model-space tolerance."
+    )]
+    EquivalentPolicyUnsupported {
+        /// Operation that cannot currently satisfy `GeometryPolicy::Equivalent`.
+        operation: &'static str,
+    },
     /// `world_to_clip` could not be inverted.
     #[error("`world_to_clip` must be invertible for `clip_half_space_z`.")]
     NonInvertibleClipTransform,
@@ -250,6 +264,13 @@ pub(super) fn validate_tolerance(tol: f64) -> std::result::Result<(), ShapeOpsEr
     }
 }
 
+fn standard_tolerance(policy: GeometryPolicy, operation: &'static str) -> ShapeOpsResult<f64> {
+    match policy.validate()? {
+        GeometryPolicy::Equivalent => Err(ShapeOpsError::EquivalentPolicyUnsupported { operation }),
+        GeometryPolicy::Standard { tolerance } => Ok(tolerance),
+    }
+}
+
 const HALF_SPACE_CLIP_OPERATION: &str = "clip_half_space_z";
 
 /// Orientation hints for the combined input shells of a boolean operation.
@@ -270,12 +291,12 @@ pub struct ShellOrientationHints {
 ///
 /// # Errors
 ///
-/// Returns [`ShapeOpsError`] when the tolerance is invalid, no Boolean backend is
+/// Returns [`ShapeOpsError`] when the geometry policy is invalid or unsupported, no Boolean backend is
 /// available, or the backend cannot produce a valid result topology.
 pub fn and<C: CuttableTrimAwareShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
-    tol: f64,
+    policy: GeometryPolicy,
 ) -> ShapeOpsResult<Solid<Point3, C, S>>
 where
     Plane: IncludeCurve<C> + ToSameGeometry<S>,
@@ -288,13 +309,14 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
+    let tol = standard_tolerance(policy, "and")?;
     #[cfg(feature = "marching-ssi")]
     {
         classic::and(solid0, solid1, tol)
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
-        let _ = (solid0, solid1, tol);
+        let _ = (solid0, solid1, policy);
         Err(ShapeOpsError::NoBackend)
     }
 }
@@ -309,13 +331,13 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`ShapeOpsError`] when the tolerance is invalid, no Boolean backend is
+/// Returns [`ShapeOpsError`] when the geometry policy is invalid or unsupported, no Boolean backend is
 /// available, or the backend cannot produce a valid result topology.
 pub fn and_with_orientation_hints<C: CuttableTrimAwareShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     orientation_hints: ShellOrientationHints,
-    tol: f64,
+    policy: GeometryPolicy,
 ) -> ShapeOpsResult<Solid<Point3, C, S>>
 where
     Plane: IncludeCurve<C> + ToSameGeometry<S>,
@@ -328,6 +350,7 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
+    let tol = standard_tolerance(policy, "and")?;
     #[cfg(feature = "marching-ssi")]
     {
         // The classic backend does not consume orientation hints; it derives
@@ -337,7 +360,7 @@ where
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
-        let _ = (solid0, solid1, orientation_hints, tol);
+        let _ = (solid0, solid1, orientation_hints, policy);
         Err(ShapeOpsError::NoBackend)
     }
 }
@@ -516,14 +539,14 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`ShapeOpsError`] for an invalid tolerance, a non-invertible clip
+/// Returns [`ShapeOpsError`] for an invalid or unsupported geometry policy, a non-invertible clip
 /// transform, a clip that discards the entire solid, or any failure of the
 /// finite half-space Boolean construction.
 pub fn clip_half_space_z<C, S>(
     solid: &Solid<Point3, C, S>,
     world_to_clip: Matrix4,
     keep_positive_z: bool,
-    tol: f64,
+    policy: GeometryPolicy,
 ) -> ShapeOpsResult<Solid<Point3, C, S>>
 where
     C: CuttableTrimAwareShapeOpsCurve<S> + Transformed<Matrix4>,
@@ -538,6 +561,7 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
+    let tol = standard_tolerance(policy, "clip_half_space_z")?;
     validate_tolerance(tol)?;
     let clip_to_world = world_to_clip
         .invert()
@@ -560,7 +584,7 @@ where
             first_inverted: false,
             second_inverted: false,
         },
-        tol,
+        policy,
     )?;
     Ok(transformed_solid(&clipped, clip_to_world))
 }
@@ -648,12 +672,12 @@ fn face_on_clip_plane<C, S: ShapeOpsSurface>(
 /// # Errors
 ///
 /// Returns [`ShapeOpsError`] for any failure reported by [`clip_half_space_z`],
-/// including invalid tolerances, non-invertible transforms, or a refused Boolean.
+/// including invalid/unsupported geometry policies, non-invertible transforms, or a refused Boolean.
 pub fn plane_cut<C, S>(
     solid: &Solid<Point3, C, S>,
     world_to_clip: Matrix4,
     keep_positive_z: bool,
-    tol: f64,
+    policy: GeometryPolicy,
 ) -> ShapeOpsResult<PlaneCut<C, S>>
 where
     C: CuttableTrimAwareShapeOpsCurve<S> + Transformed<Matrix4>,
@@ -668,7 +692,8 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let cut = clip_half_space_z(solid, world_to_clip, keep_positive_z, tol)?;
+    let tol = standard_tolerance(policy, "plane_cut")?;
+    let cut = clip_half_space_z(solid, world_to_clip, keep_positive_z, policy)?;
     let section = cut
         .face_iter()
         .filter(|face| face_on_clip_plane(face, world_to_clip, tol))
@@ -684,12 +709,12 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`ShapeOpsError`] when the tolerance is invalid, no Boolean backend is
+/// Returns [`ShapeOpsError`] when the geometry policy is invalid or unsupported, no Boolean backend is
 /// available, or the backend cannot produce a valid result topology.
 pub fn or<C: CuttableTrimAwareShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
-    tol: f64,
+    policy: GeometryPolicy,
 ) -> ShapeOpsResult<Solid<Point3, C, S>>
 where
     Plane: IncludeCurve<C> + ToSameGeometry<S>,
@@ -702,13 +727,14 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
+    let tol = standard_tolerance(policy, "or")?;
     #[cfg(feature = "marching-ssi")]
     {
         classic::or(solid0, solid1, tol)
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
-        let _ = (solid0, solid1, tol);
+        let _ = (solid0, solid1, policy);
         Err(ShapeOpsError::NoBackend)
     }
 }
@@ -717,12 +743,12 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`ShapeOpsError`] when the tolerance is invalid, no Boolean backend is
+/// Returns [`ShapeOpsError`] when the geometry policy is invalid or unsupported, no Boolean backend is
 /// available, or the backend cannot produce a valid result topology.
 pub fn difference<C: CuttableTrimAwareShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
-    tol: f64,
+    policy: GeometryPolicy,
 ) -> ShapeOpsResult<Solid<Point3, C, S>>
 where
     Plane: IncludeCurve<C> + ToSameGeometry<S>,
@@ -735,13 +761,14 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
+    let tol = standard_tolerance(policy, "difference")?;
     #[cfg(feature = "marching-ssi")]
     {
         classic::difference(solid0, solid1, tol)
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
-        let _ = (solid0, solid1, tol);
+        let _ = (solid0, solid1, policy);
         Err(ShapeOpsError::NoBackend)
     }
 }
@@ -750,12 +777,12 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`ShapeOpsError`] when the tolerance is invalid, no Boolean backend is
+/// Returns [`ShapeOpsError`] when the geometry policy is invalid or unsupported, no Boolean backend is
 /// available, or the backend cannot produce a valid result topology.
 pub fn symmetric_difference<C: CuttableTrimAwareShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
-    tol: f64,
+    policy: GeometryPolicy,
 ) -> ShapeOpsResult<Solid<Point3, C, S>>
 where
     Plane: IncludeCurve<C> + ToSameGeometry<S>,
@@ -768,13 +795,14 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
+    let tol = standard_tolerance(policy, "symmetric_difference")?;
     #[cfg(feature = "marching-ssi")]
     {
         classic::symmetric_difference(solid0, solid1, tol)
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
-        let _ = (solid0, solid1, tol);
+        let _ = (solid0, solid1, policy);
         Err(ShapeOpsError::NoBackend)
     }
 }

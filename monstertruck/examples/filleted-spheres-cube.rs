@@ -16,7 +16,7 @@ use monstertruck_modeling::{
     Curve, Curve2D, Edge, EuclideanSpace, NurbsCurve, ParameterDivision1D, Point3, Rad, Solid,
     Surface, SurfaceCurve, Tolerance, Vector3, Wire, builder,
 };
-use monstertruck_solid::{difference, or};
+use monstertruck_solid::{GeometryPolicy, difference, or};
 use monstertruck_topology::compress::{CompressedSolid, CompressedTrimmedSolid};
 use std::f64::consts::PI;
 use std::path::PathBuf;
@@ -324,11 +324,19 @@ fn main() -> Result<()> {
             let (op_name, center, next) = match *operation {
                 Operation::Difference(center) => {
                     let sphere = sphere(center, r)?;
-                    ("difference", center, difference(&body, &sphere, tol))
+                    (
+                        "difference",
+                        center,
+                        difference(&body, &sphere, GeometryPolicy::standard(tol)),
+                    )
                 }
                 Operation::Union(center) => {
                     let sphere = sphere(center, r)?;
-                    ("union", center, or(&body, &sphere, tol))
+                    (
+                        "union",
+                        center,
+                        or(&body, &sphere, GeometryPolicy::standard(tol)),
+                    )
                 }
             };
             if let Ok(next) = next {

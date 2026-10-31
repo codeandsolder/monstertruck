@@ -7,7 +7,11 @@ use monstertruck_modeling::*;
 fn union_with_thin_overlapping_bezier_protrusion_keeps_host() -> Result<()> {
     let host = unit_cube(Point3::origin());
     let feature = bezier_disk_extrusion(0.5, 0.5, 0.999_99, 0.2, 0.100_01)?;
-    let result = monstertruck_solid::or(&host, &feature, STRICT_TOL)?;
+    let result = monstertruck_solid::or(
+        &host,
+        &feature,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "union must stay consistent"
@@ -51,7 +55,11 @@ fn union_with_thin_holed_profile_boss() -> Result<()> {
         &boss,
         Matrix4::from_translation(Vector3::new(4.0, 4.0, 0.69999)),
     );
-    let result = monstertruck_solid::or(&host, &boss, STRICT_TOL)?;
+    let result = monstertruck_solid::or(
+        &host,
+        &boss,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     // Independent closed form: host = 12*12*0.7 = 100.8. The boss profile
     // area is 1 - 0.4^2 = 0.84; only 0.01000 of its 0.01001 height lies
     // above the host, so the union adds exactly 0.0084.
@@ -241,7 +249,11 @@ fn union_with_step_redox_116_thin_holed_bezier_boss() -> Result<()> {
         vec![feature_wire_0, feature_wire_1],
         Vector3::new(0.0, 0.010010000000000675, 0.0),
     )?;
-    let result = monstertruck_solid::or(&host, &feature, STRICT_TOL)?;
+    let result = monstertruck_solid::or(
+        &host,
+        &feature,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "step-redox 116 root1+microboss union must stay consistent"
