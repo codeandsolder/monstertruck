@@ -201,10 +201,11 @@ fn exact_line_boundary_on_homogeneous_extrusion_surface(
     let vector2 = vector.magnitude2();
     let line_vector2 = line_vector.magnitude2();
     (!vector2.so_small() && !line_vector2.so_small()).then_some(())?;
-    (line_vector.cross(vector).magnitude2() <= TOLERANCE * TOLERANCE * line_vector2 * vector2)
+    (line_vector.cross(vector).magnitude2()
+        <= KERNEL_EPSILON * KERNEL_EPSILON * line_vector2 * vector2)
         .then_some(())?;
     let base_curve = NurbsCurve::new(extrusion.curve.clone());
-    let curve_tolerance = TOLERANCE
+    let curve_tolerance = KERNEL_EPSILON
         * (extrusion.curve_range.1 - extrusion.curve_range.0)
             .abs()
             .max(1.0);
@@ -259,7 +260,7 @@ where
         (end, start, true)
     };
     let (b0, b1) = boundary.range_tuple();
-    if lo < b0 - TOLERANCE || hi > b1 + TOLERANCE {
+    if lo < b0 - KERNEL_EPSILON || hi > b1 + KERNEL_EPSILON {
         return None;
     }
     let lo = lo.clamp(b0, b1);
@@ -299,7 +300,7 @@ fn compatible_polynomial_control_nets(
                     .magnitude()
                     .max(right.to_vec().magnitude())
                     .max(1.0);
-                left.distance(*right) <= TOLERANCE * scale
+                left.distance(*right) <= KERNEL_EPSILON * scale
             })
 }
 
@@ -336,11 +337,11 @@ fn compatible_homogeneous_control_nets(
     let Some((left_pivot, right_pivot)) = pivot else {
         return false;
     };
-    if right_pivot.abs() <= TOLERANCE {
+    if right_pivot.abs() <= KERNEL_EPSILON {
         return false;
     }
     let ratio = left_pivot / right_pivot;
-    if !ratio.is_finite() || ratio.abs() <= TOLERANCE {
+    if !ratio.is_finite() || ratio.abs() <= KERNEL_EPSILON {
         return false;
     }
     curve
@@ -350,7 +351,7 @@ fn compatible_homogeneous_control_nets(
         .all(|(left, right)| {
             let scaled = *right * ratio;
             let scale = left.magnitude().max(scaled.magnitude()).max(1.0);
-            (*left - scaled).magnitude() <= TOLERANCE * scale
+            (*left - scaled).magnitude() <= KERNEL_EPSILON * scale
         })
 }
 
@@ -486,7 +487,7 @@ where
     let angle = match (front_singular, back_singular) {
         (false, false) => {
             let v1 = nearest_periodic_angle(raw_v1, raw_v0);
-            if (v1 - raw_v0).abs() > TOLERANCE {
+            if (v1 - raw_v0).abs() > KERNEL_EPSILON {
                 return None;
             }
             raw_v0

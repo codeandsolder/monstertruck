@@ -916,10 +916,10 @@ mod structural_classification_tests {
         assert!(samples.iter().all(|point| {
             let x = point.x;
             let y = point.y;
-            x <= 1.0 + TOLERANCE
-                || x >= 3.0 - TOLERANCE
-                || y <= 1.0 + TOLERANCE
-                || y >= 3.0 - TOLERANCE
+            x <= 1.0 + KERNEL_EPSILON
+                || x >= 3.0 - KERNEL_EPSILON
+                || y <= 1.0 + KERNEL_EPSILON
+                || y >= 3.0 - KERNEL_EPSILON
         }));
     }
 }

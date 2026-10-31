@@ -271,7 +271,7 @@ fn cut_near_domain_start_inside_preserves_requested_seam() {
 
 #[test]
 fn cut_near_domain_end_regression() {
-    // A cut parameter within `TOLERANCE` of the domain end must behave like a
+    // A cut parameter within `KERNEL_EPSILON` of the domain end must behave like a
     // cut at the end itself, not produce an invalid empty tail curve.
     let curve = near_endpoint_cut_test_curve();
     let mut front = curve.clone();

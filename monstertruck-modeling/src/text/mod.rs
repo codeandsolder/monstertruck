@@ -6,7 +6,7 @@
 //! [`Wire`](crate::Wire)s suitable for planar face construction.
 
 use crate::{Curve, Result, builder, errors::Error};
-use monstertruck_core::cgmath64::*;
+use monstertruck_core::{cgmath64::*, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
 
 type Edge = monstertruck_topology::Edge<Point3, Curve>;
 type Wire = monstertruck_topology::Wire<Point3, Curve>;
@@ -34,7 +34,7 @@ impl Default for TextOptions {
             scale: None,
             y_flip: true,
             z: 0.0,
-            closure_tolerance: 1e-7,
+            closure_tolerance: DEFAULT_NUMERICAL_TOLERANCES.text_closure,
         }
     }
 }
@@ -193,10 +193,17 @@ fn contour_to_wire(
 /// Skips degenerate contours where all segments collapse to a single point.
 fn is_degenerate_contour(start_x: f64, start_y: f64, segments: &[Segment]) -> bool {
     segments.iter().all(|seg| match *seg {
-        Segment::Line(x, y) => (x - start_x).abs() < 1e-12 && (y - start_y).abs() < 1e-12,
-        Segment::Quad(_, _, x, y) => (x - start_x).abs() < 1e-12 && (y - start_y).abs() < 1e-12,
+        Segment::Line(x, y) => {
+            (x - start_x).abs() < DEFAULT_NUMERICAL_TOLERANCES.structural
+                && (y - start_y).abs() < DEFAULT_NUMERICAL_TOLERANCES.structural
+        }
+        Segment::Quad(_, _, x, y) => {
+            (x - start_x).abs() < DEFAULT_NUMERICAL_TOLERANCES.structural
+                && (y - start_y).abs() < DEFAULT_NUMERICAL_TOLERANCES.structural
+        }
         Segment::Cubic(_, _, _, _, x, y) => {
-            (x - start_x).abs() < 1e-12 && (y - start_y).abs() < 1e-12
+            (x - start_x).abs() < DEFAULT_NUMERICAL_TOLERANCES.structural
+                && (y - start_y).abs() < DEFAULT_NUMERICAL_TOLERANCES.structural
         }
     })
 }

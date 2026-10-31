@@ -1,3 +1,4 @@
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 // The classic backend is the only `super` item this module dispatches to; the
 // public trait bounds (`SnapCurveEndpoints`, etc.) resolve through the prelude
 // globs below, so a no-backend (`--no-default-features`) build needs no `super`
@@ -136,7 +137,7 @@ where
 #[derive(Debug, Error)]
 pub enum ShapeOpsError {
     /// `tol` was non-finite or too small for robust meshing and projection.
-    #[error("`tol` must be finite and at least `TOLERANCE`.")]
+    #[error("`tol` must be finite and at least `KERNEL_EPSILON`.")]
     InvalidTolerance,
     /// `world_to_clip` could not be inverted.
     #[error("`world_to_clip` must be invertible for `clip_half_space_z`.")]
@@ -242,7 +243,7 @@ pub struct InvalidOutputShellConditionData {
 type ShapeOpsResult<T> = std::result::Result<T, ShapeOpsError>;
 
 pub(super) fn validate_tolerance(tol: f64) -> std::result::Result<(), ShapeOpsError> {
-    if !tol.is_finite() || tol < TOLERANCE {
+    if !tol.is_finite() || tol < KERNEL_EPSILON {
         Err(ShapeOpsError::InvalidTolerance)
     } else {
         Ok(())
@@ -382,7 +383,9 @@ fn half_space_discards_bounds(
 
 fn half_space_clip_margin(bounds: BoundingBox<Point3>, tol: f64) -> f64 {
     let diameter = bounds.diameter().max(1.0);
-    (diameter * 1.0e-3).max(10.0 * tol).max(100.0 * TOLERANCE)
+    (diameter * DEFAULT_NUMERICAL_TOLERANCES.half_space_relative_margin)
+        .max(10.0 * tol)
+        .max(DEFAULT_NUMERICAL_TOLERANCES.boolean_half_space_kernel_factor * KERNEL_EPSILON)
 }
 
 fn line_edge<C>(front: &Vertex<Point3>, back: &Vertex<Point3>) -> Edge<Point3, C>
@@ -567,7 +570,7 @@ where
 /// inherits the axis-aligned clip cuboid's `z = 0` face and round-trips to a
 /// deviation near `1e-12`; a merely tilted face is off by tenths. `1e-6`
 /// (a micro-radian) separates them with an enormous margin.
-const PLANE_CUT_COINCIDENCE_NORMAL_TOL: f64 = 1.0e-6;
+const PLANE_CUT_COINCIDENCE_NORMAL_TOL: f64 = DEFAULT_NUMERICAL_TOLERANCES.angular;
 
 /// The result of a planar cut through a solid: the half-space-clipped solid
 /// plus the interior cross-section (cap) faces that lie on the cutting plane.

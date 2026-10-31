@@ -415,7 +415,7 @@ Docs wording:
 
 3. Numerical robustness.
 
-   `geom_impls.rs` uses Newton solves, hard-coded iteration count `100`, `TOLERANCE`, and fixed step arc-length integration. This needs named constants and tests for failure modes.
+   `geom_impls.rs` uses Newton solves, hard-coded iteration count `100`, `KERNEL_EPSILON`, and fixed step arc-length integration. This needs named constants and tests for failure modes.
 
 4. Fixed arc-length integration step.
 
@@ -559,8 +559,8 @@ So three of the four failures are direct regressions introduced by `700138cb`. T
 The boolean regression is spread across three files that `700138cb` rewrote together: `transversal/integrate/mod.rs` (140 -> 690 lines), `transversal/loops_store/mod.rs` (+1020), and `transversal/divide_face/mod.rs` (+57). Two follow-up commits (`ae43b015`, `58bd7304`) renamed types in all three files. Surgical edits attempted during the 2026-05-15 session did not isolate a single root cause:
 
 - Reverting the multi-ray, multi-point voting in `classify_unknown_face` to the single-ray `count >= 1` rule changed which face went missing but did not close the hole.
-- Reverting the triangulation tolerance (`tol` instead of `tol * 0.25`) and the loop-store tolerance (`10.0 * TOLERANCE` instead of `tol * 0.25`) -- both matching the parent commit -- made `punched_cube` and `boolean_shell_converts_for_fillet` hang past a 30 s budget while still failing `adjacent_cubes_or`.
-- Reverting the `divide_face` tolerances (`area_tol = tol`, `cancellation_tol = tol` instead of `... * TOLERANCE`) also hung past 30 s.
+- Reverting the triangulation tolerance (`tol` instead of `tol * 0.25`) and the loop-store tolerance (`10.0 * KERNEL_EPSILON` instead of `tol * 0.25`) -- both matching the parent commit -- made `punched_cube` and `boolean_shell_converts_for_fillet` hang past a 30 s budget while still failing `adjacent_cubes_or`.
+- Reverting the `divide_face` tolerances (`area_tol = tol`, `cancellation_tol = tol` instead of `... * KERNEL_EPSILON`) also hung past 30 s.
 
 The hangs suggest the new `loops_store` rewrite produces intersection-curve outputs that downstream code (`altshell_to_shell` -> `BsplineCurve::quadratic_approximation` with `max_depth = 100`) cannot converge on when the upstream-style filters are restored. The three files were tuned together; partial reverts leave them inconsistent.
 

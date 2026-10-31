@@ -1,6 +1,6 @@
 use super::{
-    BoundingBox, EuclideanSpace, InnerSpace, MetricSpace, Origin, Point3, PolygonMesh,
-    StandardVertex, TOLERANCE2, Vector3, hash,
+    BoundingBox, EuclideanSpace, InnerSpace, KERNEL_EPSILON_SQUARED, MetricSpace, Origin, Point3,
+    PolygonMesh, StandardVertex, Vector3, hash,
 };
 use array_macro::array;
 
@@ -158,9 +158,9 @@ fn collide_seg_triangle(seg: [Point3; 2], tri: [Point3; 3]) -> Option<Point3> {
     }
     let h = seg[0]
         + front_plane_distance / (front_plane_distance - back_plane_distance) * (seg[1] - seg[0]);
-    if f64::signum(ab.cross(nor).dot(h - tri[0]) + TOLERANCE2)
-        + f64::signum(bc.cross(nor).dot(h - tri[1]) + TOLERANCE2)
-        + f64::signum(ca.cross(nor).dot(h - tri[2]) + TOLERANCE2)
+    if f64::signum(ab.cross(nor).dot(h - tri[0]) + KERNEL_EPSILON_SQUARED)
+        + f64::signum(bc.cross(nor).dot(h - tri[1]) + KERNEL_EPSILON_SQUARED)
+        + f64::signum(ca.cross(nor).dot(h - tri[2]) + KERNEL_EPSILON_SQUARED)
         >= 2.0
     {
         Some(h)

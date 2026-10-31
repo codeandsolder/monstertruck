@@ -8,12 +8,12 @@ use super::{
     Assembly, BoundResolution, Curve3D, EdgeAnyHolder, EdgeCurve, EdgeCurveHolder, EdgeEntity,
     EdgeLoopHolder, EntityTable, EuclideanSpace, FaceAnyHolder, FaceBoundHolder, FaceSurfaceHolder,
     GeometricCurveSetHolder, GeometricSetSelect, HashMap, InnerSpace, IntersectionCurve, IntoOwned,
-    Invertible, ItemDefinedTransformation, LoadError, ManifoldSolidBrepHolder, Matrix3, Matrix4,
-    MetricSpace, Name, NextAssemblyUsageOccurrenceHolder, NodeEntity, OrientedShellHolder,
-    ParametricSurface3D, PlaceHolder, Point2, Point3, PolylineCurve, ProductDefinitionHolder,
-    Result, SearchNearestParameter, SearchParameter, ShellAnyHolder, ShellBasedSurfaceModelHolder,
-    ShellHolder, ShellLoadReport, SquareMatrix, StepConvertingError, Surface, SurfaceAny,
-    TOLERANCE, Table, VertexPointHolder, step_geometry, step_p21,
+    Invertible, ItemDefinedTransformation, KERNEL_EPSILON, LoadError, ManifoldSolidBrepHolder,
+    Matrix3, Matrix4, MetricSpace, Name, NextAssemblyUsageOccurrenceHolder, NodeEntity,
+    OrientedShellHolder, ParametricSurface3D, PlaceHolder, Point2, Point3, PolylineCurve,
+    ProductDefinitionHolder, Result, SearchNearestParameter, SearchParameter, ShellAnyHolder,
+    ShellBasedSurfaceModelHolder, ShellHolder, ShellLoadReport, SquareMatrix, StepConvertingError,
+    Surface, SurfaceAny, Table, VertexPointHolder, step_geometry, step_p21,
 };
 use monstertruck_topology::compress::{
     CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace, CompressedShell,

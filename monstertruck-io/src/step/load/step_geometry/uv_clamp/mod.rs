@@ -4,7 +4,7 @@
 //! [`sampled_parameter_boundary`](super::geom_impls) normalizes every projected
 //! `(u, v)` against `surface.try_range_tuple()`. Two of its arms WRITE:
 //! `clamp_near_range` snaps a value that overshoots the reported range by less
-//! than `TOLERANCE` onto the boundary, and the periodic no-previous arm ends in
+//! than `KERNEL_EPSILON` onto the boundary, and the periodic no-previous arm ends in
 //! an UNCONDITIONAL `normalized.clamp(min, max)`.
 //!
 //! The question is not "does it clamp" but **what is it clamping against**. For
@@ -42,18 +42,20 @@
 //! `normalize_axis` / `clamp_near_range`". It has not. (The ledger's wording is
 //! quoted as written; that code now lives in `geom_impls/parameter_trims.rs`,
 //! named rather than line-numbered because line ranges rot.) `clamp_near_range` acts
-//! only on an excess BELOW `TOLERANCE`; a C3 excursion is by definition orders
+//! only on an excess BELOW `KERNEL_EPSILON`; a C3 excursion is by definition orders
 //! of magnitude outside the domain (the class's own example is `-44.146` on a
 //! `[0, 1]` domain) and passes through this function untouched. Measured on
 //! KNOT-bounded axes, where the range is a real bound and the excursion is a
 //! genuine domain violation: 2,441 in-repo and 16,347 corpus raw answers land
-//! more than `TOLERANCE` outside the knot vector, up to 21.8 past it on a
+//! more than `KERNEL_EPSILON` outside the knot vector, up to 21.8 past it on a
 //! `RATIONAL_B_SPLINE_SURFACE`. Not one is repaired here. The STEP twin's real
 //! protection is its solver ORDER (checked `search_parameter` first) and the
 //! periodic nearest-multiple arm -- not the clamp. Fixing that is a separate
 //! job with its own oracle; recorded, not attempted.
 
-use super::{Conic3D, Curve3D, ElementarySurface, Surface, SweepSurface, re_exports::TOLERANCE};
+use super::{
+    Conic3D, Curve3D, ElementarySurface, Surface, SweepSurface, re_exports::KERNEL_EPSILON,
+};
 use std::cell::RefCell;
 
 /// Which axis a recording belongs to.
@@ -269,10 +271,10 @@ pub struct ClampRow {
     /// Raw solver answers (before any normalization) that sat INSIDE the range
     /// the surface reports.
     pub(crate) reported_in: usize,
-    /// Raw answers outside the reported range by less than `TOLERANCE`. This is
+    /// Raw answers outside the reported range by less than `KERNEL_EPSILON`. This is
     /// exactly the population `clamp_near_range` can act on.
     pub(crate) reported_out_near: usize,
-    /// Raw answers outside the reported range by `TOLERANCE` OR MORE.
+    /// Raw answers outside the reported range by `KERNEL_EPSILON` OR MORE.
     /// `clamp_near_range` passes every one of these through untouched, so this
     /// column is the honest answer to "does the STEP twin guard C3?".
     pub(crate) reported_out_far: usize,
@@ -447,7 +449,7 @@ pub enum Event {
 /// REPORTS -- taken before any normalization, and independently of whether the
 /// clamp is allowed to act on that range. This is the column that separates
 /// "the clamp fires" from "the domain is violated": `clamp_near_range` only ever
-/// touches an excess below `TOLERANCE`, so everything in `reported_out_far` is a
+/// touches an excess below `KERNEL_EPSILON`, so everything in `reported_out_far` is a
 /// domain excursion the STEP twin does NOT repair.
 pub fn record_reported_excess(
     surface: &Surface,
@@ -462,7 +464,7 @@ pub fn record_reported_excess(
         let excess = f64::max(min - value, value - max);
         if excess <= 0.0 {
             row.reported_in += 1;
-        } else if excess < TOLERANCE {
+        } else if excess < KERNEL_EPSILON {
             row.reported_out_near += 1;
         } else {
             row.reported_out_far += 1;

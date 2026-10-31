@@ -1,9 +1,10 @@
 use crate::{
     BoundedCurve, CurveParameter, EuclideanSpace, ExactParameterBoundary2D, Faces, HashGen,
-    InnerSpace, Invertible, MetricSpace, Origin, ParameterBoundary2D, ParameterDivision1D,
-    ParameterDivision2D, ParametricCurve2D, ParametricCurve3D, ParametricSurface3D, Point3,
-    PolygonMesh, SearchNearestParameter, SearchParameter, StandardAttributes, StandardVertex,
-    SurfaceParameter, TOLERANCE, Tolerance, Vector2, Vector3, Zero, algo, nonpositive_tolerance,
+    InnerSpace, Invertible, KERNEL_EPSILON, MetricSpace, Origin, ParameterBoundary2D,
+    ParameterDivision1D, ParameterDivision2D, ParametricCurve2D, ParametricCurve3D,
+    ParametricSurface3D, Point3, PolygonMesh, SearchNearestParameter, SearchParameter,
+    StandardAttributes, StandardVertex, SurfaceParameter, Tolerance, Vector2, Vector3, Zero, algo,
+    nonpositive_tolerance,
 };
 use monstertruck_topology::{
     Edge, Face, Shell, Solid, Wire,
@@ -59,7 +60,7 @@ impl Default for TessellationPrimitiveOptions {
             plane_tolerance: 0.01,
             score_tolerance: 1.0,
             normal_blend_angle: std::f64::consts::PI / 4.0,
-            minimum_area: TOLERANCE * TOLERANCE,
+            minimum_area: KERNEL_EPSILON * KERNEL_EPSILON,
             maximum_corner_angle: 175.0_f64.to_radians(),
         }
     }
@@ -378,7 +379,7 @@ pub trait MeshableShape {
     ///
     /// # Panics
     ///
-    /// `tolerance` must be greater than or equal to `TOLERANCE`.
+    /// `tolerance` must be greater than or equal to `KERNEL_EPSILON`.
     ///
     /// # Remarks
     ///
@@ -405,7 +406,7 @@ pub trait MeshableShape {
     /// assert_ne!(mesh.shell_condition(), ShellCondition::Closed);
     ///
     /// // use optimization filters!
-    /// mesh.put_together_same_attrs(TOLERANCE);
+    /// mesh.put_together_same_attrs(KERNEL_EPSILON);
     /// assert_eq!(mesh.shell_condition(), ShellCondition::Closed);
     /// ```
     fn triangulation(&self, tolerance: f64) -> Self::MeshedShape;
@@ -420,7 +421,7 @@ pub trait RobustMeshableShape {
     ///
     /// # Panics
     ///
-    /// `tolerance` must be greater than or equal to `TOLERANCE`.
+    /// `tolerance` must be greater than or equal to `KERNEL_EPSILON`.
     ///
     /// # Remarks
     ///

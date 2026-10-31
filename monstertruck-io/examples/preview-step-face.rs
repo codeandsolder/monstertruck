@@ -7,8 +7,8 @@ use monstertruck_io::step::load::{
     Table,
     step_geometry::{
         Attributes, BoundedCurve, BoundingBox, Curve3D, EuclideanSpace, InnerSpace, Invertible,
-        Origin, ParametricCurve3D, ParametricSurface3D, Point2, Point3, PolygonMesh, PolylineCurve,
-        StepParameterCurve, Surface, TOLERANCE, Vector2, Vector3, Zero,
+        KERNEL_EPSILON, Origin, ParametricCurve3D, ParametricSurface3D, Point2, Point3,
+        PolygonMesh, PolylineCurve, StepParameterCurve, Surface, Vector2, Vector3, Zero,
     },
 };
 use monstertruck_meshing::prelude::*;
@@ -77,8 +77,8 @@ impl Bounds2 {
     fn project(self, point: Vector2, size: u32) -> (i32, i32) {
         let size = f64::from(size);
         let padding = 0.06 * size;
-        let width = (self.max.x - self.min.x).max(TOLERANCE);
-        let height = (self.max.y - self.min.y).max(TOLERANCE);
+        let width = (self.max.x - self.min.x).max(KERNEL_EPSILON);
+        let height = (self.max.y - self.min.y).max(KERNEL_EPSILON);
         let drawable = size - padding * 2.0;
         let scale = (drawable / width).min(drawable / height);
         let center = (self.min + self.max) * 0.5;
@@ -113,7 +113,7 @@ fn main() -> Result<()> {
     let shell = load_shell(&table, args.shell)?;
     let tolerance = f64::max(
         shell_bounding_box(&shell).diameter() * args.tolerance_factor,
-        TOLERANCE,
+        KERNEL_EPSILON,
     );
     if args.dump_trims {
         args.face

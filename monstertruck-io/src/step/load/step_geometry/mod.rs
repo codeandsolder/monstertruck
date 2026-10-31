@@ -122,7 +122,9 @@ impl SurfaceCurve3D {
     ) -> bool {
         let (curve_min, curve_max) = curve.curve().range_tuple();
         let (leader_min, leader_max) = self.leader().range_tuple();
-        let tolerance2 = (100.0 * TOLERANCE).powi(2).max(1.0e-12);
+        let tolerance2 = (DEFAULT_NUMERICAL_TOLERANCES.recovery_geometry_factor * KERNEL_EPSILON)
+            .powi(2)
+            .max(KERNEL_EPSILON_SQUARED);
         [0.0, 0.5, 1.0].into_iter().all(|fraction| {
             let curve_t = f64::mul_add(curve_max - curve_min, fraction, curve_min);
             let leader_t = f64::mul_add(leader_max - leader_min, fraction, leader_min);

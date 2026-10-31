@@ -107,6 +107,6 @@ fn quadrangulate_test() {
         quad_faces,
     )
     .expect("fixture mesh is valid");
-    tri_mesh.quadrangulate(TOLERANCE, TOLERANCE);
+    tri_mesh.quadrangulate(KERNEL_EPSILON, KERNEL_EPSILON);
     assert_eq!(tri_mesh.faces(), quad_mesh.faces());
 }

@@ -1,5 +1,5 @@
 use crate::{Faces, Invertible, Point3, PolygonMesh, PolylineCurve, Vector2, Vector3};
-use monstertruck_core::tolerance::TOLERANCE;
+use monstertruck_core::tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON};
 use monstertruck_mesh::StandardAttribute;
 use monstertruck_topology::{
     Edge, Face, Shell, Vertex, Wire,
@@ -200,9 +200,10 @@ impl ToDataSet for PolygonMesh {
 }
 
 fn hash_point(p: Point3) -> Option<[i64; 3]> {
-    (p / (TOLERANCE * 50.0) - Vector3::new(0.5, 0.5, 0.5))
-        .cast()
-        .map(Into::into)
+    (p / (KERNEL_EPSILON * DEFAULT_NUMERICAL_TOLERANCES.mesh_point_hash_factor)
+        - Vector3::new(0.5, 0.5, 0.5))
+    .cast()
+    .map(Into::into)
 }
 
 impl ToDataSet for Vertex<Point3> {

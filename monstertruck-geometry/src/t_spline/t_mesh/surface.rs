@@ -3,7 +3,7 @@
     reason = "compact U/V derivative-order symbols mirror the tensor-product surface equations"
 )]
 
-use super::basis::{DIFF_EPS, basis_function_der};
+use super::basis::basis_function_der;
 use super::{
     Arc, BoundedSurface, BsplineCurve, BsplineSurface, Error, InnerSpace, Invertible, KnotVector,
     Matrix4, Origin, ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D,
@@ -11,6 +11,7 @@ use super::{
     SurfaceParameter, SurfaceParameterRange, Tmesh, TmeshConnectionType, TmeshControlPoint,
     TmeshDirection, Transformed, Vector3, algo,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use serde::{Deserialize, Serialize};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -303,7 +304,7 @@ impl ParametricSurface for Tmesh<Point3> {
             return self.analytical_der_mn(m, n, u, v);
         }
         // Fall back to finite differences for higher orders.
-        let h = DIFF_EPS;
+        let h = DEFAULT_NUMERICAL_TOLERANCES.finite_difference_step;
         if m > 0 {
             let forward = self.derivative_mn(m - 1, n, u + h, v);
             let backward = self.derivative_mn(m - 1, n, u - h, v);

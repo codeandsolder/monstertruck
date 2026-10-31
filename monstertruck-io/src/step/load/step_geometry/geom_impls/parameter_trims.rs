@@ -5,14 +5,16 @@
 use super::{
     BoundaryCurveFromSamples, BoundedCurve, BsplineCurve, Conic2D, Conic3D, Curve2D, Curve3D,
     CurveTrimRef, ElementarySurface, Ellipse, EuclideanSpace, ExactParameterBoundary2D, Hyperbola,
-    InnerSpace, Invertible, KnotVector, Line, Matrix3, Matrix4, MetricSpace, NurbsCurve, Ordering,
-    Origin, Parabola, ParameterBoundary2D, ParameterCurve, ParameterDivision1D, ParametricCurve,
-    ParametricCurve3D, ParametricSurface, Plane, Point2, Point3, Processor, RevolutionSurface,
-    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SphericalSurface, SquareMatrix,
-    StepConvertingError, StepParameterCurve, StepRevolutionSurface, Surface, SurfaceCurve3D,
-    SurfaceCurveTrimRef, SweepSurface, TOLERANCE, Tolerance, ToroidalSurface, Transform,
-    TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector3, Vector4, uv_clamp,
+    InnerSpace, Invertible, KERNEL_EPSILON, KnotVector, Line, Matrix3, Matrix4, MetricSpace,
+    NurbsCurve, Ordering, Origin, Parabola, ParameterBoundary2D, ParameterCurve,
+    ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface, Plane, Point2,
+    Point3, Processor, RevolutionSurface, SearchNearestParameter, SearchParameter,
+    SearchParameterHint2D, SphericalSurface, SquareMatrix, StepConvertingError, StepParameterCurve,
+    StepRevolutionSurface, Surface, SurfaceCurve3D, SurfaceCurveTrimRef, SweepSurface, Tolerance,
+    ToroidalSurface, Transform, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector3,
+    Vector4, uv_clamp,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 #[cfg(test)]
 use crate::step::load::step_geometry::{Sphere, SurfaceCurveKind, SurfaceCurveRepresentation};
@@ -131,9 +133,9 @@ fn normalize_axis(
 }
 
 fn clamp_near_range(value: f64, (min, max): (f64, f64)) -> f64 {
-    if value < min && min - value < TOLERANCE {
+    if value < min && min - value < KERNEL_EPSILON {
         min
-    } else if value > max && value - max < TOLERANCE {
+    } else if value > max && value - max < KERNEL_EPSILON {
         max
     } else {
         value
@@ -143,7 +145,7 @@ fn clamp_near_range(value: f64, (min, max): (f64, f64)) -> f64 {
 // THE CLAMP IS NOT ASKED ABOUT AN AXIS THAT REPORTS A PLACEHOLDER.
 //
 // `clamp_near_range` snaps a value that overshoots the reported range by
-// less than `TOLERANCE` onto the boundary. On a knot-bounded axis that is
+// less than `KERNEL_EPSILON` onto the boundary. On a knot-bounded axis that is
 // exactly right and it is doing real work: the net carries no data past the
 // knot vector, so an unbounded Newton that walked one ULP-cloud past the end
 // must come back. On a PLACEHOLDER axis there is no boundary to come back
@@ -201,7 +203,7 @@ fn clamp_near_range(value: f64, (min, max): (f64, f64)) -> f64 {
 //
 // AND THE SQUARE IS NOT A DOMAIN, MEASURED AS SUCH: of the raw solver
 // answers on a placeholder axis, the fraction sitting OUTSIDE the reported
-// range by more than `TOLERANCE` -- where `clamp_near_range` does nothing at
+// range by more than `KERNEL_EPSILON` -- where `clamp_near_range` does nothing at
 // all -- is 437,258 of 490,007 planar u in-repo (89.2%) and 274,196 of
 // 291,687 on the corpus (94.0%), reaching `u = 5.0e5` outside `[0, 1]`. A
 // range that four out of five samples violate by five orders of magnitude
@@ -366,11 +368,10 @@ fn matrix4_is_affine(transform: &Matrix4) -> bool {
     // perspective term of 5e-7 is "near zero" at the kernel tolerance but is
     // still projective, and treating it as affine would turn an approximation
     // into proof-bearing trim geometry.
-    const STRUCTURAL_TOLERANCE: f64 = 1.0e-12;
-    transform.x.w.abs() <= STRUCTURAL_TOLERANCE
-        && transform.y.w.abs() <= STRUCTURAL_TOLERANCE
-        && transform.z.w.abs() <= STRUCTURAL_TOLERANCE
-        && (transform.w.w - 1.0).abs() <= STRUCTURAL_TOLERANCE
+    transform.x.w.abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
+        && transform.y.w.abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
+        && transform.z.w.abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
+        && (transform.w.w - 1.0).abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
 }
 
 fn transformed_xy_support_matches_plane(transform: &Matrix4, plane: &Plane) -> bool {
@@ -384,7 +385,7 @@ fn transformed_xy_support_matches_plane(transform: &Matrix4, plane: &Plane) -> b
     let u = x - origin;
     let v = y - origin;
     let basis_scale = u.magnitude().max(v.magnitude()).max(1.0);
-    if u.cross(v).magnitude() <= TOLERANCE * basis_scale * basis_scale {
+    if u.cross(v).magnitude() <= KERNEL_EPSILON * basis_scale * basis_scale {
         return false;
     }
 
@@ -398,7 +399,7 @@ fn transformed_xy_support_matches_plane(transform: &Matrix4, plane: &Plane) -> b
     let Some(parameter) = plane.parameter(origin) else {
         return false;
     };
-    parameter.z.abs() <= TOLERANCE * scale && parallel_scaled(normal, plane.normal())
+    parameter.z.abs() <= KERNEL_EPSILON * scale && parallel_scaled(normal, plane.normal())
 }
 
 fn projected_conic_transform_on_plane(transform: &Matrix4, plane: &Plane) -> Option<Matrix3> {
@@ -537,13 +538,13 @@ struct AnalyticCircleFrame {
 
 #[inline]
 fn scaled_near(left: f64, right: f64, scale: f64) -> bool {
-    (left - right).abs() <= TOLERANCE * scale.abs().max(left.abs()).max(right.abs()).max(1.0)
+    (left - right).abs() <= KERNEL_EPSILON * scale.abs().max(left.abs()).max(right.abs()).max(1.0)
 }
 
 #[inline]
 fn parallel_scaled(left: Vector3, right: Vector3) -> bool {
     let scale = left.magnitude() * right.magnitude();
-    scale > TOLERANCE && left.cross(right).magnitude() <= TOLERANCE * scale.max(1.0)
+    scale > KERNEL_EPSILON && left.cross(right).magnitude() <= KERNEL_EPSILON * scale.max(1.0)
 }
 
 fn ellipse_circle_frame_in_processor<S>(
@@ -562,16 +563,16 @@ fn ellipse_circle_frame_in_processor<S>(
     let scale = radius0.max(radius1).max(1.0);
     if !radius0.is_finite()
         || !radius1.is_finite()
-        || radius0 <= TOLERANCE
-        || radius1 <= TOLERANCE
+        || radius0 <= KERNEL_EPSILON
+        || radius1 <= KERNEL_EPSILON
         || !scaled_near(radius0, radius1, scale)
-        || axis0.dot(axis1).abs() > TOLERANCE * radius0 * radius1
+        || axis0.dot(axis1).abs() > KERNEL_EPSILON * radius0 * radius1
     {
         return None;
     }
     let cross = axis0.cross(axis1);
     let cross_magnitude = cross.magnitude();
-    if cross_magnitude <= TOLERANCE * radius0 * radius1 {
+    if cross_magnitude <= KERNEL_EPSILON * radius0 * radius1 {
         return None;
     }
     let (t0, t1) = curve.range_tuple();
@@ -598,7 +599,7 @@ fn circle_support_matches(
         .max(frame.center.to_vec().magnitude())
         .max(center.to_vec().magnitude())
         .max(1.0);
-    frame.center.distance(center) <= TOLERANCE * scale
+    frame.center.distance(center) <= KERNEL_EPSILON * scale
         && scaled_near(frame.radius, radius.abs(), scale)
         && parallel_scaled(frame.normal, normal)
 }
@@ -607,11 +608,11 @@ fn unit_angular_rate(curve_tangent: Vector3, surface_tangent: Vector3) -> Option
     let curve_speed = curve_tangent.magnitude();
     let surface_speed = surface_tangent.magnitude();
     let scale = curve_speed.max(surface_speed).max(1.0);
-    if curve_speed <= TOLERANCE
-        || surface_speed <= TOLERANCE
+    if curve_speed <= KERNEL_EPSILON
+        || surface_speed <= KERNEL_EPSILON
         || !scaled_near(curve_speed, surface_speed, scale)
         || curve_tangent.cross(surface_tangent).magnitude()
-            > TOLERANCE * curve_speed * surface_speed
+            > KERNEL_EPSILON * curve_speed * surface_speed
     {
         return None;
     }
@@ -673,7 +674,7 @@ fn exact_ellipse_parameter_curve_on_sphere(
     let z = Vector3::unit_z();
     let parallel_center = sphere.center() + z * (sphere.radius() * u.cos());
     let parallel_radius = (sphere.radius() * u.sin()).abs();
-    if parallel_radius > TOLERANCE
+    if parallel_radius > KERNEL_EPSILON
         && circle_support_matches(frame, parallel_center, parallel_radius, z)
     {
         let rate = unit_angular_rate(frame.tangent, sphere.derivative_v(u, v))?;
@@ -696,7 +697,7 @@ fn exact_ellipse_parameter_curve_on_sphere(
     }
     let rate = unit_angular_rate(frame.tangent, sphere.derivative_u(u, v))?;
     let u1 = f64::mul_add(rate, frame.range.1 - frame.range.0, u);
-    if u1 < -TOLERANCE || u1 > std::f64::consts::PI + TOLERANCE {
+    if u1 < -KERNEL_EPSILON || u1 > std::f64::consts::PI + KERNEL_EPSILON {
         return None;
     }
     let u1 = u1.clamp(0.0, std::f64::consts::PI);
@@ -719,7 +720,7 @@ fn exact_ellipse_parameter_curve_on_torus(
 
     let major_radius = torus.small_radius().mul_add(v.cos(), torus.large_radius());
     let major_center = torus.center() + z * (torus.small_radius() * v.sin());
-    if major_radius.abs() > TOLERANCE
+    if major_radius.abs() > KERNEL_EPSILON
         && circle_support_matches(frame, major_center, major_radius.abs(), z)
     {
         let rate = unit_angular_rate(frame.tangent, torus.derivative_u(u, v))?;
@@ -871,7 +872,7 @@ fn exact_nurbs_parameter_curve_on_plane(
         .iter()
         .copied()
         .map(|point| {
-            if !point.w.is_finite() || point.w.abs() <= TOLERANCE {
+            if !point.w.is_finite() || point.w.abs() <= KERNEL_EPSILON {
                 return None;
             }
             let world = Point3::new(point.x / point.w, point.y / point.w, point.z / point.w);
@@ -1062,7 +1063,7 @@ impl<'a> TryFrom<CurveTrimRef<'a>> for StepParameterCurve {
 
 #[test]
 fn near_affine_projective_conic_is_not_promoted_to_exact() {
-    let perspective = 0.5 * TOLERANCE;
+    let perspective = 0.5 * KERNEL_EPSILON;
     let transform = Matrix4::from_cols(
         Vector4::new(1.0, 0.0, 0.0, perspective),
         Vector4::new(0.0, 1.0, 0.0, 0.0),
@@ -1080,7 +1081,7 @@ fn near_affine_projective_conic_is_not_promoted_to_exact() {
 
 #[test]
 fn tilted_planar_conic_is_not_exact_even_when_old_five_samples_are_near_plane() {
-    let slope = 0.9 * TOLERANCE;
+    let slope = 0.9 * KERNEL_EPSILON;
     let transform = Matrix4::from_cols(
         Vector4::new(1.0, 0.0, slope, 0.0),
         Vector4::new(0.0, 1.0, slope, 0.0),
@@ -1102,7 +1103,7 @@ fn tilted_planar_conic_is_not_exact_even_when_old_five_samples_are_near_plane() 
                 .expect("test curve point must have plane coordinates")
                 .z
                 .abs()
-                <= TOLERANCE
+                <= KERNEL_EPSILON
         );
     }
     assert!(
@@ -1111,7 +1112,7 @@ fn tilted_planar_conic_is_not_exact_even_when_old_five_samples_are_near_plane() 
             .expect("test curve point must have plane coordinates")
             .z
             .abs()
-            > TOLERANCE
+            > KERNEL_EPSILON
     );
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());
 }
@@ -1398,7 +1399,7 @@ fn sampled_parameter_boundary_preserves_unbounded_cylinder_axis_parameter() {
 /// `[0, 1]` square keeps the value the solver produced.
 ///
 /// `Plane::xy()`'s `u` and `v` ARE world `x` and `y`, so this line's far
-/// endpoint sits at `u = 1 + 5e-7` -- inside `TOLERANCE` of the reported `max`,
+/// endpoint sits at `u = 1 + 5e-7` -- inside `KERNEL_EPSILON` of the reported `max`,
 /// which is what `clamp_near_range` used to snap to exactly `1.0`. There is no
 /// domain edge at `u = 1` on a plane; the number is a placeholder.
 #[test]
@@ -1641,8 +1642,8 @@ fn cone_apex_generator_is_exact_in_both_edge_directions() {
         let Curve2D::Line(uv) = boundary.curve().as_ref() else {
             panic!("cone generator must become a UV line");
         };
-        assert!((uv.front().y - angle).abs() <= TOLERANCE);
-        assert!((uv.back().y - angle).abs() <= TOLERANCE);
+        assert!((uv.front().y - angle).abs() <= KERNEL_EPSILON);
+        assert!((uv.back().y - angle).abs() <= KERNEL_EPSILON);
         assert!(curve.exact_parameter_boundary_2d(&surface).is_some());
     }
 }

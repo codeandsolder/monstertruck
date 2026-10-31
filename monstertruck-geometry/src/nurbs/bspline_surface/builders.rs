@@ -1,7 +1,7 @@
 use super::{
     BoundedCurve, BsplineCurve, BsplineSurface, ControlPoint, Error, InnerSpace, Invertible,
-    KnotVector, Matrix3, Origin, ParametricCurve, Point3, Rad, Result, SquareMatrix, TOLERANCE,
-    Tolerance, Vector3, compat,
+    KERNEL_EPSILON, KnotVector, Matrix3, Origin, ParametricCurve, Point3, Rad, Result,
+    SquareMatrix, Tolerance, Vector3, compat,
 };
 
 impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
@@ -453,12 +453,12 @@ fn rotation_between(from: Vector3, to: Vector3) -> Matrix3 {
     let dot = f.dot(t);
 
     // Nearly parallel -- no rotation needed.
-    if (dot - 1.0).abs() < TOLERANCE {
+    if (dot - 1.0).abs() < KERNEL_EPSILON {
         return Matrix3::from_value(1.0);
     }
 
     // Nearly anti-parallel -- rotate 180 degrees around an arbitrary perpendicular axis.
-    if (dot + 1.0).abs() < TOLERANCE {
+    if (dot + 1.0).abs() < KERNEL_EPSILON {
         let perp = if f.x.abs() < 0.9 {
             Vector3::unit_x()
         } else {

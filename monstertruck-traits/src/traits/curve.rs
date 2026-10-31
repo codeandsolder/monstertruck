@@ -6,7 +6,7 @@ use monstertruck_core::{
     assert_near,
     bounding_box::BoundingBox,
     cgmath64::{Point2, Point3, Vector2, Vector3},
-    tolerance::{TOLERANCE, Tolerance},
+    tolerance::{KERNEL_EPSILON, Tolerance},
 };
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use std::fmt::Debug;
@@ -178,14 +178,14 @@ pub trait ParameterDivision1D {
         range: (f64, f64),
         tol: f64,
     ) -> Option<(Vec<f64>, Vec<Self::Point>)> {
-        (tol >= TOLERANCE).then(|| self.parameter_division(range, tol))
+        (tol >= KERNEL_EPSILON).then(|| self.parameter_division(range, tol))
     }
 
     /// Creates the curve division (parameters, corresponding points).
     ///
     /// # Panics
     ///
-    /// `tol` must be greater than or equal to `TOLERANCE`.
+    /// `tol` must be greater than or equal to `KERNEL_EPSILON`.
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Self::Point>);
 }
 

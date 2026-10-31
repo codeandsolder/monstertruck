@@ -290,7 +290,7 @@ pub fn wire_edge_starts_and_spans(wire: &Wire) -> Option<(Vec<f64>, Vec<f64>)> {
         .map(|edge| approximate_edge_length(edge, 10))
         .collect();
     let total_length: f64 = lengths.iter().sum();
-    let spans: Vec<f64> = if total_length > TOLERANCE {
+    let spans: Vec<f64> = if total_length > KERNEL_EPSILON {
         lengths.iter().map(|length| length / total_length).collect()
     } else {
         std::iter::repeat_n(1.0 / crate::count_as_f64(edge_count), edge_count).collect()

@@ -1,10 +1,7 @@
 //! Analytic surface identity extracted from generic surface carriers.
 
 use crate::prelude::*;
-
-const EXTRUSION_IDENTITY_TOLERANCE: f64 = 1.0e-8;
-const PLANE_IDENTITY_TOLERANCE: f64 = 1.0e-6;
-const SPHERICAL_REVOLUTION_TOLERANCE: f64 = 1.0e-7;
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 /// Parameter axis used by an analytic surface identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +71,9 @@ impl TryIntoAnalyticSurfaceKind for Plane {
 }
 
 fn homogeneous_delta_vector(start: Vector4, end: Vector4) -> Option<Vector3> {
-    if (end.w - start.w).abs() > EXTRUSION_IDENTITY_TOLERANCE || start.w.so_small() {
+    if (end.w - start.w).abs() > DEFAULT_NUMERICAL_TOLERANCES.analytic_extrusion_identity
+        || start.w.so_small()
+    {
         None
     } else {
         Some(Vector3::new(
@@ -90,8 +89,9 @@ fn all_vectors_match<'a>(
     vector: Vector3,
 ) -> bool {
     pairs.into_iter().all(|(start, end)| {
-        homogeneous_delta_vector(*start, *end)
-            .is_some_and(|candidate| candidate.distance2(vector) <= EXTRUSION_IDENTITY_TOLERANCE)
+        homogeneous_delta_vector(*start, *end).is_some_and(|candidate| {
+            candidate.distance2(vector) <= DEFAULT_NUMERICAL_TOLERANCES.analytic_extrusion_identity
+        })
     })
 }
 
@@ -199,7 +199,7 @@ fn spherical_revolution_from_profile(
     let center_parameter = samples.iter().skip(1).find_map(|point| {
         let offset = *point - origin;
         let denominator = 2.0 * axis.dot(offset - reference_offset);
-        (denominator.abs() > SPHERICAL_REVOLUTION_TOLERANCE)
+        (denominator.abs() > DEFAULT_NUMERICAL_TOLERANCES.analytic_spherical_revolution)
             .then(|| (offset.magnitude2() - reference_offset.magnitude2()) / denominator)
     })?;
     let center = origin + axis * center_parameter;
@@ -208,7 +208,8 @@ fn spherical_revolution_from_profile(
         .map(|point| point.distance(center))
         .sum::<f64>()
         / crate::usize_to_f64(samples.len());
-    let radius_tolerance = SPHERICAL_REVOLUTION_TOLERANCE * radius.max(1.0);
+    let radius_tolerance =
+        DEFAULT_NUMERICAL_TOLERANCES.analytic_spherical_revolution * radius.max(1.0);
     let meridian_vector = samples
         .iter()
         .map(|point| {
@@ -254,22 +255,22 @@ fn planar_homogeneous_bspline_surface(surface: &BsplineSurface<Vector4>) -> Opti
 
 fn planar_points(points: &[Point3]) -> Option<Plane> {
     let origin = points.first().copied()?;
-    let one = points
-        .iter()
-        .copied()
-        .find(|point| point.distance2(origin) > PLANE_IDENTITY_TOLERANCE.powi(2))?;
+    let one = points.iter().copied().find(|point| {
+        point.distance2(origin) > DEFAULT_NUMERICAL_TOLERANCES.analytic_plane_identity.powi(2)
+    })?;
     let u_axis = one - origin;
     let another = points.iter().copied().find(|point| {
-        u_axis.cross(*point - origin).magnitude2() > PLANE_IDENTITY_TOLERANCE.powi(2)
+        u_axis.cross(*point - origin).magnitude2()
+            > DEFAULT_NUMERICAL_TOLERANCES.analytic_plane_identity.powi(2)
     })?;
     let plane = Plane::new(origin, one, another);
     points
         .iter()
         .copied()
         .all(|point| {
-            plane
-                .parameter(point)
-                .is_some_and(|parameter| parameter.z.abs() <= PLANE_IDENTITY_TOLERANCE)
+            plane.parameter(point).is_some_and(|parameter| {
+                parameter.z.abs() <= DEFAULT_NUMERICAL_TOLERANCES.analytic_plane_identity
+            })
         })
         .then_some(plane)
 }
@@ -358,9 +359,10 @@ fn transform_spherical_revolution(
     let meridian_scale = meridian.magnitude();
     let transverse_scale = transverse.magnitude();
     let axis_scale = axis.magnitude();
-    let scale_tolerance = SPHERICAL_REVOLUTION_TOLERANCE * meridian_scale.max(1.0);
-    (meridian_scale > SPHERICAL_REVOLUTION_TOLERANCE
-        && axis_scale > SPHERICAL_REVOLUTION_TOLERANCE
+    let scale_tolerance =
+        DEFAULT_NUMERICAL_TOLERANCES.analytic_spherical_revolution * meridian_scale.max(1.0);
+    (meridian_scale > DEFAULT_NUMERICAL_TOLERANCES.analytic_spherical_revolution
+        && axis_scale > DEFAULT_NUMERICAL_TOLERANCES.analytic_spherical_revolution
         && (transverse_scale - meridian_scale).abs() <= scale_tolerance
         && axis.dot(meridian).abs() <= scale_tolerance
         && axis.dot(transverse).abs() <= scale_tolerance

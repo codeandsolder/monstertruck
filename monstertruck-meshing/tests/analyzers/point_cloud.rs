@@ -61,6 +61,6 @@ fn tetrahedron_distance() {
         Faces::from_iter(tri_faces),
     )
     .expect("fixture mesh is valid");
-    assert!(mesh0.is_clung_to_by(mesh1.positions(), 1.0 + TOLERANCE));
-    assert!(!mesh0.is_clung_to_by(mesh1.positions(), 1.0 - TOLERANCE));
+    assert!(mesh0.is_clung_to_by(mesh1.positions(), 1.0 + KERNEL_EPSILON));
+    assert!(!mesh0.is_clung_to_by(mesh1.positions(), 1.0 - KERNEL_EPSILON));
 }

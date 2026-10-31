@@ -109,7 +109,7 @@ fn add_naive_normals_test() {
 fn add_smooth_normals() {
     let mut sphere = common::shapes::sphere(Point3::origin(), 1.0, 20, 10);
     sphere
-        .put_together_same_attrs(TOLERANCE)
+        .put_together_same_attrs(KERNEL_EPSILON)
         .remove_degenerate_faces()
         .remove_unused_attrs();
 

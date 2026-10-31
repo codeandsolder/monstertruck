@@ -172,7 +172,7 @@ fn a_hinted_projection_that_would_leave_the_domain_falls_back_in_domain() {
         .map(|(u, v)| Point2::new(u, v))
         .expect("the unbounded Newton converges");
     assert!(
-        legacy.x > 1.0 + TOLERANCE,
+        legacy.x > 1.0 + KERNEL_EPSILON,
         "precondition: the hinted solve must escape the domain, got {legacy:?}",
     );
     assert!(
@@ -181,10 +181,10 @@ fn a_hinted_projection_that_would_leave_the_domain_falls_back_in_domain() {
          downstream can reject it",
     );
 
-    let fixed = project_onto_surface_domain(&surface, point, hint, domain, TOLERANCE)
+    let fixed = project_onto_surface_domain(&surface, point, hint, domain, KERNEL_EPSILON)
         .expect("a projection is still produced");
     assert!(
-        domain.contains(fixed, TOLERANCE),
+        domain.contains(fixed, KERNEL_EPSILON),
         "the in-domain answer must win, got {fixed:?}",
     );
     assert!((fixed.x - target.0).abs() < 1.0e-6, "got {fixed:?}");
@@ -213,9 +213,9 @@ fn an_in_domain_hinted_projection_is_the_first_attempt_bit_for_bit() {
     // untouched. Deriving the expectation from the flag keeps this test
     // honest under both orders instead of turning the flag into a tripwire.
     let first = if EXACT_FIRST { exact } else { nearest };
-    assert!(domain.contains(first, TOLERANCE), "precondition");
+    assert!(domain.contains(first, KERNEL_EPSILON), "precondition");
 
-    let fixed = project_onto_surface_domain(&surface, point, hint, domain, TOLERANCE)
+    let fixed = project_onto_surface_domain(&surface, point, hint, domain, KERNEL_EPSILON)
         .expect("a projection is produced");
     assert_eq!(
         (fixed.x, fixed.y),
@@ -262,11 +262,11 @@ fn the_first_answer_survives_when_no_attempt_lands_in_domain() {
     .map(|(u, v)| Point2::new(u, v))
     .expect("the chain answers");
     assert!(
-        !domain.contains(chained, TOLERANCE),
+        !domain.contains(chained, KERNEL_EPSILON),
         "precondition: {chained:?}",
     );
 
-    let fixed = project_onto_surface_domain(&surface, point, hint, domain, TOLERANCE)
+    let fixed = project_onto_surface_domain(&surface, point, hint, domain, KERNEL_EPSILON)
         .expect("the fallback must not turn a success into None");
     assert_eq!(
         (fixed.x, fixed.y),
@@ -298,7 +298,7 @@ fn a_surface_with_no_reported_range_is_unaffected() {
         .search_nearest_parameter(point, hint, 100)
         .map(|(u, v)| Point2::new(u, v))
         .expect("a plane always answers");
-    let fixed = project_onto_surface_domain(&plane, point, hint, unbounded, TOLERANCE)
+    let fixed = project_onto_surface_domain(&plane, point, hint, unbounded, KERNEL_EPSILON)
         .expect("a plane always answers");
     assert_eq!((fixed.x, fixed.y), (legacy.x, legacy.y));
 }
@@ -337,11 +337,11 @@ fn a_plane_whose_reported_square_is_not_a_real_bound_is_unaffected() {
         .map(|(u, v)| Point2::new(u, v))
         .expect("a plane always answers");
     assert!(
-        parameter_axis_excess(legacy.x, Some((0.0, 1.0)), None) > TOLERANCE,
+        parameter_axis_excess(legacy.x, Some((0.0, 1.0)), None) > KERNEL_EPSILON,
         "precondition: the honest answer IS outside the reported square: {legacy:?}",
     );
 
-    let fixed = project_onto_surface_domain(&plane, point, hint, domain, TOLERANCE)
+    let fixed = project_onto_surface_domain(&plane, point, hint, domain, KERNEL_EPSILON)
         .expect("a plane always answers");
     assert_eq!(
         (fixed.x, fixed.y),
@@ -368,7 +368,7 @@ fn a_non_finite_solver_answer_is_never_returned() {
         period_v: None,
     };
     assert!(
-        unbounded.contains(Point2::new(f64::NAN, 0.5), TOLERANCE),
+        unbounded.contains(Point2::new(f64::NAN, 0.5), KERNEL_EPSILON),
         "precondition: an unbounded domain CONTAINS a NaN, so the domain \
          test alone cannot reject one",
     );
@@ -382,7 +382,7 @@ fn a_non_finite_solver_answer_is_never_returned() {
         period_v: None,
     };
     assert!(
-        !bounded.contains(Point2::new(f64::INFINITY, 0.5), TOLERANCE),
+        !bounded.contains(Point2::new(f64::INFINITY, 0.5), KERNEL_EPSILON),
         "precondition: a bounded domain rejects an infinity...",
     );
     assert_eq!(
@@ -397,7 +397,7 @@ fn a_non_finite_solver_answer_is_never_returned() {
     let surface = extruded_nurbs_circle();
     let point = Point3::new(f64::NAN, 0.0, 0.5);
     for domain in [unbounded, bounded, SurfaceParameterDomain::of(&surface)] {
-        let projected = project_onto_surface_domain(&surface, point, None, domain, TOLERANCE);
+        let projected = project_onto_surface_domain(&surface, point, None, domain, KERNEL_EPSILON);
         assert!(
             projected.is_none_or(|uv| uv.x.is_finite() && uv.y.is_finite()),
             "a non-finite projection escaped for domain {domain:?}: {projected:?}",
@@ -437,13 +437,13 @@ fn a_knot_bounded_surface_keeps_its_domain_and_its_rejection() {
         .map(|(u, v)| Point2::new(u, v))
         .expect("the unbounded Newton converges");
     assert!(
-        escaped.x > 1.0 + TOLERANCE,
+        escaped.x > 1.0 + KERNEL_EPSILON,
         "precondition: the hinted solve escapes: {escaped:?}",
     );
-    let fixed = project_onto_surface_domain(&surface, point, hint, domain, TOLERANCE)
+    let fixed = project_onto_surface_domain(&surface, point, hint, domain, KERNEL_EPSILON)
         .expect("a projection is still produced");
     assert!(
-        domain.contains(fixed, TOLERANCE),
+        domain.contains(fixed, KERNEL_EPSILON),
         "the excursion must still be rejected in favour of an in-domain \
          answer, got {fixed:?}",
     );
@@ -498,14 +498,14 @@ fn a_loaded_cylinders_axial_axis_is_not_a_bound_but_its_angular_axis_is() {
     // A point 20 units up the cylinder: ordinary geometry, far outside the
     // reported v-square, and the projector must now accept it outright.
     let point = Point3::new(0.0, 3.0, 20.0);
-    let projected = project_onto_surface_domain(&surface, point, None, domain, TOLERANCE)
+    let projected = project_onto_surface_domain(&surface, point, None, domain, KERNEL_EPSILON)
         .expect("a cylinder answers");
     assert!(
         (projected.y - 20.0).abs() < 1.0e-9,
         "the axial parameter is a world-scale distance: {projected:?}",
     );
     assert!(
-        domain.contains(projected, TOLERANCE),
+        domain.contains(projected, KERNEL_EPSILON),
         "and it is in-domain now, so the chain stops at the first attempt",
     );
     assert!(
@@ -548,7 +548,7 @@ fn a_placeholder_domain_costs_one_solve_per_point_not_four() {
         if let Some(uv) = found.map(|(u, v)| Point2::new(u, v))
             && uv.x.is_finite()
             && uv.y.is_finite()
-            && domain.contains(uv, TOLERANCE)
+            && domain.contains(uv, KERNEL_EPSILON)
         {
             break;
         }

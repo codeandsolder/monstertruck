@@ -266,7 +266,7 @@ mod nurbs_surface;
 #[inline]
 #[must_use]
 pub const fn inv_or_zero(delta: f64) -> f64 {
-    if delta.abs() <= TOLERANCE {
+    if delta.abs() <= KERNEL_EPSILON {
         0.0
     } else {
         1.0 / delta

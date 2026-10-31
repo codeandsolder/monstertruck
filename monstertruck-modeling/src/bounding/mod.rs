@@ -85,6 +85,7 @@ use crate::{
     BoundingBox, Conic2D, Curve, Curve2D, Face, InnerSpace, Line, Matrix4, ParameterCurve, Point2,
     Point3, Solid, Surface, Vector3, Vector4,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 /// How much an analytic sphere's axis-aligned bounding box exceeds the sphere:
 /// `(2r)^3 / (4/3 pi r^3) = 6 / pi`, independent of the radius.
@@ -102,8 +103,7 @@ pub const ANALYTIC_SPHERE_LOOSENESS: f64 = 6.0 / std::f64::consts::PI;
 #[must_use]
 pub const fn analytic_sphere_looseness() -> f64 { ANALYTIC_SPHERE_LOOSENESS }
 
-/// Relative tolerance for judging a `Matrix4` a similarity.
-const SIMILARITY_TOL: f64 = 1.0e-9;
+/// Relative tolerance for judging a `Matrix4` a similarity is centralized in `DEFAULT_NUMERICAL_TOLERANCES`.
 
 /// A certified axis-aligned box containing every point of `solid`, or [`None`]
 /// when any one of its faces carries a class this module cannot prove a bound
@@ -377,7 +377,7 @@ fn parameter_curve_uv_box(curve: &Curve2D) -> Option<BoundingBox<Point2>> {
             let matrix = processor.transform();
             for (x, y) in [(-1.0, -1.0), (-1.0, 1.0), (1.0, -1.0), (1.0, 1.0)] {
                 let mapped = matrix * Vector3::new(x, y, 1.0);
-                if (mapped.z - 1.0).abs() > 1.0e-9 {
+                if (mapped.z - 1.0).abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity {
                     return None;
                 }
                 points.push(Point2::new(mapped.x, mapped.y));
@@ -526,10 +526,10 @@ fn hull_box_iter(points: impl Iterator<Item = Point3>) -> Option<BoundingBox<Poi
 /// similarity (the only class of transform under which "revolution about an
 /// axis" and "ball of radius r" survive as such).
 fn similarity_scale(matrix: &Matrix4) -> Option<f64> {
-    if matrix.x.w.abs() > SIMILARITY_TOL
-        || matrix.y.w.abs() > SIMILARITY_TOL
-        || matrix.z.w.abs() > SIMILARITY_TOL
-        || (matrix.w.w - 1.0).abs() > SIMILARITY_TOL
+    if matrix.x.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
+        || matrix.y.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
+        || matrix.z.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
+        || (matrix.w.w - 1.0).abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
     {
         return None;
     }
@@ -542,8 +542,8 @@ fn similarity_scale(matrix: &Matrix4) -> Option<f64> {
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
-    let length_tol = SIMILARITY_TOL * scale;
-    let dot_tol = SIMILARITY_TOL * scale * scale;
+    let length_tol = DEFAULT_NUMERICAL_TOLERANCES.transform_similarity * scale;
+    let dot_tol = DEFAULT_NUMERICAL_TOLERANCES.transform_similarity * scale * scale;
     for column in &columns[1..] {
         if (column.magnitude() - scale).abs() > length_tol {
             return None;

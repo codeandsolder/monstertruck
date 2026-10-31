@@ -11,8 +11,8 @@
 )]
 
 use super::{
-    BsplineCurve, BsplineSurface, ControlPoint, Homogeneous, KnotVector, NurbsCurve, TOLERANCE,
-    Tolerance,
+    BsplineCurve, BsplineSurface, ControlPoint, Homogeneous, KERNEL_EPSILON, KnotVector,
+    NurbsCurve, Tolerance,
 };
 use crate::errors::{Error, Result};
 
@@ -239,11 +239,11 @@ fn collect_missing_knots(target: &KnotVector, source: &KnotVector) -> Vec<f64> {
     let s_slice = source.as_slice();
 
     while si < s_slice.len() && ti < t_slice.len() {
-        if s_slice[si] - t_slice[ti] > TOLERANCE {
+        if s_slice[si] - t_slice[ti] > KERNEL_EPSILON {
             // Source has a knot that target doesn't -- need to insert it.
             result.push(s_slice[si]);
             si += 1;
-        } else if t_slice[ti] - s_slice[si] > TOLERANCE {
+        } else if t_slice[ti] - s_slice[si] > KERNEL_EPSILON {
             // Target has a knot that source doesn't -- skip.
             ti += 1;
         } else {

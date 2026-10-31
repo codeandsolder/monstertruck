@@ -4,7 +4,7 @@
 //! - Input: `filleted_cube.obj`
 //! - Output: planes.obj, lower.obj, upper.obj
 
-use monstertruck_mesh::{TOLERANCE, obj};
+use monstertruck_mesh::{KERNEL_EPSILON, obj};
 use monstertruck_meshing::{
     analyzers::{ExperimentalSplitters, Splitting},
     filters::{NormalFilters, OptimizingFilter, StructuringFilter},
@@ -18,7 +18,7 @@ fn main() -> anyhow::Result<()> {
     std::fs::copy(PATH, "filleted_cube.obj")?;
     let file = std::fs::File::open(PATH)?;
     let mut mesh = obj::read(file)?;
-    mesh.put_together_same_attrs(TOLERANCE * 2.0)
+    mesh.put_together_same_attrs(KERNEL_EPSILON * 2.0)
         .quadrangulate(0.1, 1.0)
         .add_smooth_normals(std::f64::consts::PI / 3.0, true);
 

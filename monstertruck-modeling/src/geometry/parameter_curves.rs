@@ -5,10 +5,10 @@
 use super::content_hash::content_hash64;
 use super::{
     BoundedCurve, BsplineCurve, BsplineSurface, CompressedTrimmedShell, CompressedTrimmedSolid,
-    Curve, Curve2D, ExactParameterBoundary2D, HashMap, InnerSpace, KnotVector, Line, Matrix4,
-    MetricSpace, NurbsCurve, NurbsSurface, ParameterCurve, ParameterDivision1D, ParametricCurve,
-    ParametricCurve3D, ParametricSurface, Point2, Point3, Processor, RefCell, RevolutionSurface,
-    SearchNearestParameter, SearchParameter, Shell, Solid, Surface, TOLERANCE, Tolerance,
+    Curve, Curve2D, ExactParameterBoundary2D, HashMap, InnerSpace, KERNEL_EPSILON, KnotVector,
+    Line, Matrix4, MetricSpace, NurbsCurve, NurbsSurface, ParameterCurve, ParameterDivision1D,
+    ParametricCurve, ParametricCurve3D, ParametricSurface, Point2, Point3, Processor, RefCell,
+    RevolutionSurface, SearchNearestParameter, SearchParameter, Shell, Solid, Surface, Tolerance,
     TrimmedShell, TrimmedSolid, Vector3, Vector4, iter,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,7 +29,7 @@ pub(super) fn line_points(line: Line<Point2>, tolerance: f64) -> Vec<Point2> {
 fn point_segment_distance2_2d(point: Point2, start: Point2, end: Point2) -> f64 {
     let edge = end - start;
     let len2 = edge.magnitude2();
-    if len2 <= TOLERANCE * TOLERANCE {
+    if len2 <= KERNEL_EPSILON * KERNEL_EPSILON {
         point.distance2(start)
     } else {
         let t = ((point - start).dot(edge) / len2).clamp(0.0, 1.0);
@@ -43,7 +43,7 @@ fn points_are_linear_2d(
     end: Point2,
     tolerance: f64,
 ) -> bool {
-    let tolerance2 = tolerance.max(TOLERANCE).powi(2);
+    let tolerance2 = tolerance.max(KERNEL_EPSILON).powi(2);
     points
         .into_iter()
         .all(|point| point_segment_distance2_2d(point, start, end) <= tolerance2)
@@ -489,7 +489,7 @@ mod surface_identity_tests {
         );
         assert!(curve.exact_parameter_boundary_2d(&target_surface).is_none());
 
-        let uv = curve.parameter_boundary_2d(&target_surface, TOLERANCE);
+        let uv = curve.parameter_boundary_2d(&target_surface, KERNEL_EPSILON);
         assert!(uv.is_some(), "coincident support must remain projectable");
         let uv = uv.unwrap_or_default();
         let first = uv
@@ -500,10 +500,10 @@ mod surface_identity_tests {
             .last()
             .copied()
             .unwrap_or(Point2::new(f64::NAN, f64::NAN));
-        assert!((first.x + 0.375).abs() < TOLERANCE);
-        assert!((first.y + 0.25).abs() < TOLERANCE);
-        assert!((last.x + 0.125).abs() < TOLERANCE);
-        assert!((last.y + 0.25).abs() < TOLERANCE);
+        assert!((first.x + 0.375).abs() < KERNEL_EPSILON);
+        assert!((first.y + 0.25).abs() < KERNEL_EPSILON);
+        assert!((last.x + 0.125).abs() < KERNEL_EPSILON);
+        assert!((last.y + 0.25).abs() < KERNEL_EPSILON);
     }
     #[test]
     fn intersection_curve_on_coincident_support_validates_without_reusing_foreign_uv() {
@@ -529,7 +529,7 @@ mod surface_identity_tests {
         assert!(curve.exact_parameter_boundary_2d(&target_surface).is_none());
         assert!(
             curve
-                .parameter_boundary_2d(&target_surface, TOLERANCE)
+                .parameter_boundary_2d(&target_surface, KERNEL_EPSILON)
                 .is_some()
         );
     }

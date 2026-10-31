@@ -103,7 +103,7 @@ fn exact_closed_composite_sweep_has_no_duplicate_caps() -> anyhow::Result<()> {
     assert!(solid.boundaries()[0].iter().all(|face| {
         !face
             .vertex_iter()
-            .all(|vertex| (vertex.point().z - start_plane_z).abs() < TOLERANCE)
+            .all(|vertex| (vertex.point().z - start_plane_z).abs() < KERNEL_EPSILON)
     }));
     assert_eq!(
         solid.boundaries()[0].shell_condition(),

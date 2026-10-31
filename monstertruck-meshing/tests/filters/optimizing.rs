@@ -168,7 +168,7 @@ fn put_together_same_attrs_test() {
         })
         .collect();
 
-    mesh.put_together_same_attrs(TOLERANCE);
+    mesh.put_together_same_attrs(KERNEL_EPSILON);
     mesh.faces()
         .face_iter()
         .flatten()

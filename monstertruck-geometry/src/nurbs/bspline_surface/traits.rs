@@ -1,11 +1,10 @@
 use super::{
     BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, ControlPoint, Deserialize,
-    EuclideanSpace, HashGen, INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible, KnotVector, Matrix2,
-    Matrix3, Matrix4, MetricSpace, NurbsCurve, PRESEARCH_DIVISION, ParameterDivision2D,
-    ParametricCurve, ParametricSurface, ParametricSurface3D, Point2, Point3,
+    EuclideanSpace, HashGen, INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible, KERNEL_EPSILON,
+    KnotVector, Matrix2, Matrix3, Matrix4, MetricSpace, NurbsCurve, PRESEARCH_DIVISION,
+    ParameterDivision2D, ParametricCurve, ParametricSurface, ParametricSurface3D, Point2, Point3,
     SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
-    SurfaceParameterRange, TOLERANCE, Tolerance, Transform, Transformed, Vector2, Vector3, Vector4,
-    algo,
+    SurfaceParameterRange, Tolerance, Transform, Transformed, Vector2, Vector3, Vector4, algo,
 };
 use algo::surface::{SearchNearestParameterVector, SearchParameterVector};
 use std::ops::Mul;
@@ -225,10 +224,10 @@ impl IncludeCurve<BsplineCurve<Point2>> for BsplineSurface<Point2> {
                     None => return false,
                 };
                 if !ParametricSurface::evaluate(self, hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - TOLERANCE
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
-                    || hint.1 < knot_vector_v[0] - TOLERANCE
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + TOLERANCE
+                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
+                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
+                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
+                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
                 {
                     return false;
                 }
@@ -260,10 +259,10 @@ impl IncludeCurve<BsplineCurve<Point3>> for BsplineSurface<Point3> {
                     None => return false,
                 };
                 if !ParametricSurface::evaluate(self, hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - TOLERANCE
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
-                    || hint.1 < knot_vector_v[0] - TOLERANCE
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + TOLERANCE
+                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
+                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
+                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
+                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
                 {
                     return false;
                 }
@@ -295,10 +294,10 @@ impl IncludeCurve<NurbsCurve<Vector4>> for BsplineSurface<Point3> {
                     None => return false,
                 };
                 if !ParametricSurface::evaluate(self, hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - TOLERANCE
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + TOLERANCE
-                    || hint.1 < knot_vector_v[0] - TOLERANCE
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + TOLERANCE
+                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
+                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
+                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
+                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
                 {
                     return false;
                 }

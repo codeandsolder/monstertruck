@@ -4,10 +4,10 @@
 use super::{
     Axis1Placement, Axis1PlacementHolder, Axis2Placement3d, Axis2Placement3dHolder, BsplineSurface,
     CartesianPoint, CartesianPointHolder, Curve3D, CurveAny, CurveAnyHolder, Deserialize,
-    ElementarySurface, EuclideanSpace, Holder, InnerSpace, Invertible, KnotType, KnotVector,
-    Logical, Matrix4, NurbsSurface, PI, Point3, Result, RevolutionSurface, Serialize, Sphere,
-    StepConvertingError, StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface,
-    TOLERANCE, Table, Torus, Transformed, Vector, Vector3, Vector4, VectorHolder, geom,
+    ElementarySurface, EuclideanSpace, Holder, InnerSpace, Invertible, KERNEL_EPSILON, KnotType,
+    KnotVector, Logical, Matrix4, NurbsSurface, PI, Point3, Result, RevolutionSurface, Serialize,
+    Sphere, StepConvertingError, StepExtrusionSurface, StepRevolutionSurface, Surface,
+    SweepSurface, Table, Torus, Transformed, Vector, Vector3, Vector4, VectorHolder, geom,
     quasi_uniform_knots, step_geometry, uniform_knots,
 };
 
@@ -259,7 +259,7 @@ impl TryFrom<&DegenerateToroidalSurface> for step_geometry::ToroidalSurface {
         // in the true spindle regime the entity denotes ONE sheet, not the whole
         // immersed torus. Until that sheet domain is represented explicitly,
         // accepting it as a full Torus would add geometry the file did not name.
-        if *minor_radius - *major_radius > TOLERANCE * (*major_radius + *minor_radius) {
+        if *minor_radius - *major_radius > KERNEL_EPSILON * (*major_radius + *minor_radius) {
             return Err(format!(
                 "DEGENERATE_TOROIDAL_SURFACE refused: spindle sheet selection (major_radius {major_radius} < minor_radius {minor_radius}, select_outer = {select_outer}) needs an explicit sheet domain; the full analytic spindle surface is representable but would not preserve this entity's semantics."
             )

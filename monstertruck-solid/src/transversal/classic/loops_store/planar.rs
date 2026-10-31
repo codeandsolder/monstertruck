@@ -2,10 +2,11 @@
 
 use super::{
     BooleanTolerance, BoundedCurve, CurveParameter, Cut, Edge, EuclideanSpace, HashMap, InnerSpace,
-    Invertible, LoopsStore, MetricSpace, Origin, ParametricCurve3D, Point2, Point3, PolygonMesh,
-    PolylineCurve, SearchNearestParameter, SearchParameter, ShapesOpStatus, Shell, StandardVertex,
-    TOLERANCE, Vector2, Vector3, WithPointCloud,
+    Invertible, KERNEL_EPSILON, LoopsStore, MetricSpace, Origin, ParametricCurve3D, Point2, Point3,
+    PolygonMesh, PolylineCurve, SearchNearestParameter, SearchParameter, ShapesOpStatus, Shell,
+    StandardVertex, Vector2, Vector3, WithPointCloud,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vector3)> {
     let tolerance = BooleanTolerance::new(tol);
@@ -566,7 +567,8 @@ where
     Some(())
 }
 
-pub(super) const CROSS_FACE_STITCH_TOLERANCE: f64 = 8.0 * TOLERANCE;
+pub(super) const CROSS_FACE_STITCH_TOLERANCE: f64 =
+    DEFAULT_NUMERICAL_TOLERANCES.cross_face_stitch_factor * KERNEL_EPSILON;
 
 #[cfg(test)]
 mod planar_region_identity_tests {

@@ -12,6 +12,7 @@ use super::{
     TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface, TryIntoHomogeneousBsplineSurface, Vector3,
     Vector4, algo, env,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 /// 3-dimensional surfaces
 #[derive(
@@ -238,7 +239,7 @@ impl ToSameGeometry<Surface> for RevolutionSurface<Curve> {
 }
 
 fn transform_preserves_nearest_parameter(transform: &Matrix4) -> bool {
-    let tol = 1.0e-10;
+    let tol = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity;
     let x = Vector3::new(transform.x.x, transform.x.y, transform.x.z);
     let y = Vector3::new(transform.y.x, transform.y.y, transform.y.z);
     let z = Vector3::new(transform.z.x, transform.z.y, transform.z.z);
@@ -584,7 +585,7 @@ mod revolution_presearch_tests {
 #[cfg(test)]
 mod extrusion_same_geometry_tests {
     use super::*;
-    use crate::{Line, SurfaceCurve, TOLERANCE};
+    use crate::{KERNEL_EPSILON, Line, SurfaceCurve};
 
     fn plane_surface() -> Surface {
         Surface::Plane(Plane::new(
@@ -617,7 +618,7 @@ mod extrusion_same_geometry_tests {
         for (u, v) in [(0.0, 0.0), (0.25, 0.75), (0.8, 0.4), (1.0, 1.0)] {
             let expected = extrusion.evaluate(u, v);
             let actual = converted.evaluate(u, v);
-            assert!((actual - expected).magnitude() < TOLERANCE);
+            assert!((actual - expected).magnitude() < KERNEL_EPSILON);
         }
     }
 }

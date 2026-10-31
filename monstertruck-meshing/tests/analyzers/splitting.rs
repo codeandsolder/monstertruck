@@ -39,7 +39,7 @@ fn extract_planes_test() {
         ]),
     )
     .expect("fixture mesh is valid");
-    let (planes, others) = mesh.extract_planes(TOLERANCE);
+    let (planes, others) = mesh.extract_planes(KERNEL_EPSILON);
     assert_eq!(planes, vec![1, 2]);
     assert_eq!(others, vec![0, 3]);
 }
@@ -78,7 +78,7 @@ fn into_component_test() {
 
     // sign up normals
     mesh.add_naive_normals(true)
-        .put_together_same_attrs(TOLERANCE);
+        .put_together_same_attrs(KERNEL_EPSILON);
 
     let components = mesh.components(true);
     // The number of components is six because the mesh is a cube.

@@ -128,7 +128,7 @@ proptest! {
         let expected = center + Vector3::new(0.0, 0.0, direction * radius);
         // The pole evaluation drifts by ~`sqrt(2 * ulp(1.0))` in `u`,
         // which becomes ~`radius * 1.5e-8` in 3D distance. Accept up to
-        // the kernel's standard `TOLERANCE`.
+        // the kernel's standard `KERNEL_EPSILON`.
         prop_assert_near!(projected, expected);
     }
 }

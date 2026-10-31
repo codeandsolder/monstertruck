@@ -327,8 +327,8 @@ fn shared_polyline_densifies_topological_edge_curve() {
     let middle = meshed.edges[0].curve[1];
 
     assert_eq!(meshed.edges[0].curve.len(), 3);
-    assert!((middle.x - 0.5).abs() <= TOLERANCE);
-    assert!(middle.y.abs() <= TOLERANCE);
+    assert!((middle.x - 0.5).abs() <= KERNEL_EPSILON);
+    assert!(middle.y.abs() <= KERNEL_EPSILON);
 }
 
 #[test]

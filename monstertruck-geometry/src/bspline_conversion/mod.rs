@@ -1,6 +1,7 @@
 //! Traits for extracting exact B-spline surface representations.
 
 use crate::prelude::*;
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 /// A closed `(u, v)` rectangle in a surface's own parameter frame, as
 /// `((u_min, u_max), (v_min, v_max))`.
@@ -41,11 +42,11 @@ impl From<BsplineSurface<Vector4>> for HomogeneousSurfaceConversion {
 /// range carries by construction.
 ///
 /// The consumer pads every reported trim axis by
-/// `max(TOLERANCE, span * 1e-9)` (`expand_param_axis_range`) before anyone can
+/// `max(KERNEL_EPSILON, span * DEFAULT_NUMERICAL_TOLERANCES.parameter_range_relative)` (`expand_param_axis_range`) before anyone can
 /// read it, so a request that differs from the profile's own range by no more
 /// than that pad IS the profile's own range, and re-spanning on it would perturb
-/// exact geometry for nothing. The scale-relative `span * 1e-9` term is what
-/// makes this survive a large model; the `TOLERANCE` floor is not a threshold of
+/// exact geometry for nothing. The scale-relative `span * DEFAULT_NUMERICAL_TOLERANCES.parameter_range_relative` term is what
+/// makes this survive a large model; the `KERNEL_EPSILON` floor is not a threshold of
 /// this function's own choosing, it is the upstream pad reproduced.
 fn parameter_range_reaches_outside(requested: (f64, f64), own: (f64, f64)) -> bool {
     let (requested_min, requested_max) =
@@ -58,7 +59,10 @@ fn parameter_range_reaches_outside(requested: (f64, f64), own: (f64, f64)) -> bo
     {
         return false;
     }
-    let pad = TOLERANCE.max((requested_max - requested_min).abs() * 1.0e-9);
+    let pad = KERNEL_EPSILON.max(
+        (requested_max - requested_min).abs()
+            * DEFAULT_NUMERICAL_TOLERANCES.parameter_range_relative,
+    );
     requested_min < own_min - pad || requested_max > own_max + pad
 }
 
@@ -261,7 +265,7 @@ impl TryIntoBsplineSurface for NurbsSurface<Vector4> {
         let all_unit = ctrl
             .iter()
             .flat_map(|row| row.iter())
-            .all(|v| (v.w - 1.0).abs() < TOLERANCE);
+            .all(|v| (v.w - 1.0).abs() < KERNEL_EPSILON);
         if !all_unit {
             return None;
         }
@@ -371,13 +375,13 @@ where C: TryIntoHomogeneousBsplineCurve
             .iter()
             .map(|profile_point| {
                 let weight = profile_point.weight();
-                if weight.abs() <= TOLERANCE {
+                if weight.abs() <= KERNEL_EPSILON {
                     return None;
                 }
                 let point = profile_point.to_point();
                 let center = origin + axis * (point - origin).dot(axis);
                 let radial = point - center;
-                if radial.magnitude2() <= TOLERANCE * TOLERANCE {
+                if radial.magnitude2() <= KERNEL_EPSILON * KERNEL_EPSILON {
                     // All orbit points collapse to the pole, but preserve the
                     // circle weight pattern so that iso-u rational curves keep
                     // the correct weight ratios for exact circles.
@@ -462,7 +466,7 @@ fn weighted_control_point(point: Point3, weight: f64) -> Vector4 {
 impl TryIntoHomogeneousBsplineSurface for Sphere {
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
         let radius = self.radius();
-        if !radius.is_finite() || radius <= TOLERANCE {
+        if !radius.is_finite() || radius <= KERNEL_EPSILON {
             return None;
         }
         let center = self.center();
@@ -529,8 +533,8 @@ impl TryIntoHomogeneousBsplineSurface for Torus {
         let (large_radius, small_radius) = (self.large_radius(), self.small_radius());
         if !large_radius.is_finite()
             || !small_radius.is_finite()
-            || small_radius <= TOLERANCE
-            || large_radius <= TOLERANCE
+            || small_radius <= KERNEL_EPSILON
+            || large_radius <= KERNEL_EPSILON
         {
             return None;
         }
@@ -653,7 +657,7 @@ where C: TryIntoHomogeneousBsplineCurve
             .control_points()
             .iter()
             .flat_map(|row| row.iter())
-            .all(|v| (v.w - 1.0).abs() < TOLERANCE);
+            .all(|v| (v.w - 1.0).abs() < KERNEL_EPSILON);
         if !all_unit {
             return None;
         }

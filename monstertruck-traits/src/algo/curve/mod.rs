@@ -1,7 +1,7 @@
 use super::{
-    CalcOutput, EuclideanSpace, HashGen, InnerSpace, MetricSpace, ParameterRange, ParametricCurve,
-    ParametricCurve3D, ParametricSurface, ParametricSurface3D, SurfaceParameterRange, TOLERANCE,
-    Tolerance, VectorSpace, Zero, newton, scalar_from_usize, surface,
+    CalcOutput, EuclideanSpace, HashGen, InnerSpace, KERNEL_EPSILON, MetricSpace, ParameterRange,
+    ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
+    SurfaceParameterRange, Tolerance, VectorSpace, Zero, newton, scalar_from_usize, surface,
 };
 use surface::{SearchNearestParameterVector, SearchParameterVector};
 
@@ -76,7 +76,7 @@ where
 ///
 /// # Panics
 ///
-/// `tol` must be greater than or equal to `TOLERANCE`.
+/// `tol` must be greater than or equal to `KERNEL_EPSILON`.
 pub fn parameter_division<C>(curve: &C, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<C::Point>)
 where
     C: ParametricCurve,

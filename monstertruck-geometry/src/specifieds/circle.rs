@@ -1,9 +1,9 @@
 use super::{
-    Bound, BoundedCurve, BsplineCurve, CurveParameter, EuclideanSpace, InnerSpace, KnotVector,
-    Matrix2, Matrix3, NurbsCurve, Origin, ParameterDivision1D, ParameterRange, ParametricCurve,
-    Point2, Point3, Rad, SearchNearestParameter, SearchParameter, SearchParameterHint1D, TOLERANCE,
-    ToSameGeometry, Tolerance, TrimmedCurve, UnitCircle, Vector2, Vector3, Vector4,
-    nonpositive_tolerance,
+    Bound, BoundedCurve, BsplineCurve, CurveParameter, EuclideanSpace, InnerSpace, KERNEL_EPSILON,
+    KnotVector, Matrix2, Matrix3, NurbsCurve, Origin, ParameterDivision1D, ParameterRange,
+    ParametricCurve, Point2, Point3, Rad, SearchNearestParameter, SearchParameter,
+    SearchParameterHint1D, ToSameGeometry, Tolerance, TrimmedCurve, UnitCircle, Vector2, Vector3,
+    Vector4, nonpositive_tolerance,
 };
 use std::f64::consts::TAU;
 
@@ -168,7 +168,7 @@ where Self: ParametricCurve<Point = P>
     type Point = P;
 
     fn try_parameter_division(&self, range: (f64, f64), tol: f64) -> Option<(Vec<f64>, Vec<P>)> {
-        if tol < TOLERANCE {
+        if tol < KERNEL_EPSILON {
             return None;
         }
         let tol = f64::min(tol, 0.8);

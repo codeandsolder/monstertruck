@@ -84,7 +84,7 @@ pub trait Splitting {
     ///         &[(2, None, Some(0)), (1, None, Some(0)), (4, None, Some(1)), (5, None, Some(1))],
     ///     ]),
     /// ).expect("fixture mesh is valid");
-    /// let (plane, remained) = mesh.extract_planes(TOLERANCE); // TOLERANCE == 1.0e-7
+    /// let (plane, remained) = mesh.extract_planes(KERNEL_EPSILON); // KERNEL_EPSILON == 1.0e-6
     /// assert_eq!(plane.len(), 1); assert_eq!(plane[0], 0);
     /// assert_eq!(remained.len(), 1); assert_eq!(remained[0], 1);
     /// ```
@@ -121,7 +121,7 @@ pub trait Splitting {
     /// ).expect("fixture mesh is valid");
     ///
     /// // sign up normals
-    /// mesh.add_naive_normals(true).put_together_same_attrs(TOLERANCE);
+    /// mesh.add_naive_normals(true).put_together_same_attrs(KERNEL_EPSILON);
     ///
     /// // into components with normals
     /// let components = mesh.components(true);

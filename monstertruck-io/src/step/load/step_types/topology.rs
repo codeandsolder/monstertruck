@@ -5,11 +5,11 @@
 
 use super::{
     CartesianPoint, CartesianPointHolder, Conic, Conic2D, Conic3D, Curve2D, Curve3D, CurveAny,
-    CurveAnyHolder, Deserialize, Holder, Invertible, Matrix3, Matrix4, Name, PI, PcurveOrSurface,
-    PlaceHolder, Point2, Point3, PreferredSurfaceCurveRepresentation, Processor, Result,
-    SearchNearestParameter, Serialize, SquareMatrix, StepConvertingError, Surface, SurfaceAny,
-    SurfaceAnyHolder, SurfaceCurve, SurfaceCurveEntityKind, TOLERANCE, Table, Tolerance, Transform,
-    Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, geom, step_geometry,
+    CurveAnyHolder, Deserialize, Holder, Invertible, KERNEL_EPSILON, Matrix3, Matrix4, Name, PI,
+    PcurveOrSurface, PlaceHolder, Point2, Point3, PreferredSurfaceCurveRepresentation, Processor,
+    Result, SearchNearestParameter, Serialize, SquareMatrix, StepConvertingError, Surface,
+    SurfaceAny, SurfaceAnyHolder, SurfaceCurve, SurfaceCurveEntityKind, Table, Tolerance,
+    Transform, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, geom, step_geometry,
 };
 
 /// `vertex_point`
@@ -114,7 +114,7 @@ impl EdgeCurve {
                         .search_nearest_parameter(q, None, 0)
                         .ok_or_else(|| "the point is not on circle".to_string())?,
                 );
-                if v <= u + TOLERANCE {
+                if v <= u + KERNEL_EPSILON {
                     v = 2.0f64.mul_add(PI, v);
                 }
                 let circle = TrimmedCurve::new(UnitCircle::<Point2>::new(), (u, v));
@@ -137,7 +137,7 @@ impl EdgeCurve {
                         .search_nearest_parameter(q, None, 0)
                         .ok_or_else(|| "the point is not on circle".to_string())?,
                 );
-                if v <= u + TOLERANCE {
+                if v <= u + KERNEL_EPSILON {
                     v = 2.0f64.mul_add(PI, v);
                 }
                 let circle = TrimmedCurve::new(UnitCircle::<Point2>::new(), (u, v));
@@ -217,7 +217,7 @@ impl EdgeCurve {
                         .search_nearest_parameter(q, None, 0)
                         .ok_or_else(|| format!("the point is not on circle: {q:?}"))?,
                 );
-                if v <= u + TOLERANCE {
+                if v <= u + KERNEL_EPSILON {
                     v = 2.0f64.mul_add(PI, v);
                 }
                 let circle = TrimmedCurve::new(UnitCircle::<Point3>::new(), (u, v));
@@ -244,7 +244,7 @@ impl EdgeCurve {
                         .search_nearest_parameter(q, None, 0)
                         .ok_or_else(|| format!("the point is not on circle: {q:?}"))?,
                 );
-                if v <= u + TOLERANCE {
+                if v <= u + KERNEL_EPSILON {
                     v = 2.0f64.mul_add(PI, v);
                 }
                 let circle = TrimmedCurve::new(UnitCircle::<Point3>::new(), (u, v));
@@ -271,7 +271,7 @@ impl EdgeCurve {
                         .search_nearest_parameter(q, None, 0)
                         .ok_or_else(|| "the point is not on circle".to_string())?,
                 );
-                if v <= u + TOLERANCE {
+                if v <= u + KERNEL_EPSILON {
                     v = 2.0f64.mul_add(PI, v);
                 }
                 let unit = TrimmedCurve::new(UnitHyperbola::<Point3>::new(), (u, v));

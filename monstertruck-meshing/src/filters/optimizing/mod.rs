@@ -88,7 +88,7 @@ pub trait OptimizingFilter {
     /// ).expect("valid example mesh");
     ///
     /// assert_eq!(mesh.faces()[1][1], StandardVertex { pos: 4, uv: None, nor: None });
-    /// mesh.put_together_same_attrs(TOLERANCE);
+    /// mesh.put_together_same_attrs(KERNEL_EPSILON);
     /// assert_eq!(mesh.faces()[1][1], StandardVertex { pos: 2, uv: None, nor: None });
     ///
     /// // Remarks: No longer needed attributes are NOT autoremoved!

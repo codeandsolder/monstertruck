@@ -5,10 +5,11 @@ use super::curve_equivalence::{
 };
 use super::{
     AltCurve, AltCurveShell, AltRegion, Alternative, BoundedCurve, BoundingBox, Cut, Edge, EdgeId,
-    HashMap, NurbsCurve, ParametricCurve, Point3, SearchNearestParameter, SearchParameter,
-    ShapeOpsCurve, ShapeOpsSurface, SnapCurveEndpoints, TOLERANCE, Tolerance, Vector4, Vertex,
-    VertexId, Wire, conversion, faces_classification,
+    HashMap, KERNEL_EPSILON, NurbsCurve, ParametricCurve, Point3, SearchNearestParameter,
+    SearchParameter, ShapeOpsCurve, ShapeOpsSurface, SnapCurveEndpoints, Tolerance, Vector4,
+    Vertex, VertexId, Wire, conversion, faces_classification,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;
 
 fn certified_homogeneous_curve_box(curve: &NurbsCurve<Vector4>) -> Option<BoundingBox<Point3>> {
@@ -54,7 +55,7 @@ type SourceVertexId = VertexId<Point3>;
 type SourceEdgeEvidence = (SourceVertexId, SourceVertexId, Point3);
 
 fn cell_coordinate(coordinate: f64) -> i64 {
-    let value = (coordinate / TOLERANCE).floor();
+    let value = (coordinate / KERNEL_EPSILON).floor();
     value.to_i64().unwrap_or_else(|| {
         if value.is_nan() {
             0
@@ -209,7 +210,8 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                 .or_else(|| curve.search_nearest_parameter(point, None, 100))
                 .filter(|&parameter| curve.evaluate(parameter).near(&point))
         };
-        let projection_pad = 2.0 * TOLERANCE;
+        let projection_pad =
+            DEFAULT_NUMERICAL_TOLERANCES.boolean_weld_projection_factor * KERNEL_EPSILON;
         let projected_vertices = self
             .source_vertex_points
             .iter()
@@ -352,7 +354,7 @@ mod weld_tests {
     #[test]
     fn weld_drops_face_collapsed_to_exact_edge_retrace() {
         let p0 = Point3::origin();
-        let p1 = Point3::new(TOLERANCE * 0.5, 0.0, 0.0);
+        let p1 = Point3::new(KERNEL_EPSILON * 0.5, 0.0, 0.0);
         let p2 = Point3::new(1.0, 1.0, 0.0);
         let v0 = Vertex::new(p0);
         let v1 = Vertex::new(p1);

@@ -5,7 +5,7 @@
 //! ```
 
 use anyhow::Context as _;
-use monstertruck_mesh::TOLERANCE;
+use monstertruck_mesh::KERNEL_EPSILON;
 use monstertruck_meshing::{
     analyzers::Topology,
     filters::OptimizingFilter,
@@ -32,7 +32,7 @@ fn tessellate_shape(name: &str, json: &str) {
         return;
     };
     let elapsed = instant.elapsed();
-    poly.put_together_same_attrs(TOLERANCE * 10.0)
+    poly.put_together_same_attrs(KERNEL_EPSILON * 10.0)
         .remove_degenerate_faces()
         .remove_unused_attrs();
     let tri_count = poly.tri_faces().len();

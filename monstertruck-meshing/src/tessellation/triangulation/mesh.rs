@@ -3,19 +3,20 @@
     reason = "parameter grid and indexed mesh names encode paired geometric axes and topology"
 )]
 
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::iter;
 
 use super::{
     Cdt, CdtEdge, EuclideanSpace, Faces, FixedVertexHandle, HashMap, InnerFaceIterator, InnerSpace,
-    Instant, Invertible, MIN_ALLOWED_VALUE, MetricSpace, Origin, ParametricSurface3D, Point2,
-    Point3, PolygonMesh, PreMeshableSurface, SPoint2, StandardAttributes, StandardVertex,
-    StructuringFilter, TOLERANCE, TessellationPrimitiveMode, TessellationPrimitiveOptions,
-    Triangulation, Vector2, Vector3, VertexIterator, Zero, array, boundary, log_mesh_trace,
+    Instant, Invertible, KERNEL_EPSILON, MIN_ALLOWED_VALUE, MetricSpace, Origin,
+    ParametricSurface3D, Point2, Point3, PolygonMesh, PreMeshableSurface, SPoint2,
+    StandardAttributes, StandardVertex, StructuringFilter, TessellationPrimitiveMode,
+    TessellationPrimitiveOptions, Triangulation, Vector2, Vector3, VertexIterator, Zero, array,
+    boundary, log_mesh_trace,
 };
 use boundary::{PolyBoundary, UvKey, boundary_segment_parameter, uv_key};
 
 const MAX_SURFACE_SPAN_INTERVALS: usize = 32;
-const SURFACE_SPAN_TOLERANCE_FACTOR: f64 = 8.0;
 
 /// Ensures the mesh winding direction globally matches the stored vertex normals.
 ///
@@ -121,7 +122,9 @@ fn surface_is_nearly_planar(surface: &impl PreMeshableSurface, boundary: &PolyBo
         let normal = surface.normal(center.0, center.1);
         [(u0, v0), (u1, v0), (u0, v1), (u1, v1), center]
             .into_iter()
-            .all(|(u, v)| normal.dot(surface.normal(u, v)) > 1.0 - 1.0e-6)
+            .all(|(u, v)| {
+                normal.dot(surface.normal(u, v)) > 1.0 - DEFAULT_NUMERICAL_TOLERANCES.angular
+            })
     } else {
         false
     }
@@ -630,9 +633,9 @@ fn is_convex_quad(quad: [Point3; 4]) -> bool {
                 (false, false, false),
                 |(positive, negative, nonzero), turn| {
                     (
-                        positive || turn > TOLERANCE,
-                        negative || turn < -TOLERANCE,
-                        nonzero || f64::abs(turn) > TOLERANCE,
+                        positive || turn > KERNEL_EPSILON,
+                        negative || turn < -KERNEL_EPSILON,
+                        nonzero || f64::abs(turn) > KERNEL_EPSILON,
                     )
                 },
             );
@@ -812,7 +815,10 @@ fn division_axis_length<S: ParametricSurface3D>(
 }
 
 fn desired_span_intervals(length: f64, tolerance: f64) -> usize {
-    let max_segment_length = f64::max(tolerance * SURFACE_SPAN_TOLERANCE_FACTOR, TOLERANCE);
+    let max_segment_length = f64::max(
+        tolerance * DEFAULT_NUMERICAL_TOLERANCES.surface_span_factor,
+        KERNEL_EPSILON,
+    );
     if length.is_finite() && max_segment_length.is_finite() && max_segment_length > 0.0 {
         let required = f64::ceil(length / max_segment_length).max(1.0);
         let mut intervals = 1usize;

@@ -6,8 +6,8 @@
 mod project_domain_tests;
 
 use super::{
-    BoundedCurve, Curve, ParameterDivision1D, ParametricCurve3D, ParametricSurface, Point2, Point3,
-    RefCell, SearchNearestParameter, SearchParameter, Surface, TOLERANCE, env,
+    BoundedCurve, Curve, KERNEL_EPSILON, ParameterDivision1D, ParametricCurve3D, ParametricSurface,
+    Point2, Point3, RefCell, SearchNearestParameter, SearchParameter, Surface, env,
 };
 
 /// The amount by which `value` lies OUTSIDE `range` on one surface parameter
@@ -463,7 +463,7 @@ pub(super) fn sampled_parameter_boundary(
     let domain = SurfaceParameterDomain::of(surface);
     record_projection(|census| *census = ProjectionCensus::default());
     let project = |point: Point3, hint: Option<(f64, f64)>| {
-        project_onto_surface_domain(surface, point, hint, domain, TOLERANCE)
+        project_onto_surface_domain(surface, point, hint, domain, KERNEL_EPSILON)
     };
     let boundary = points
         .iter()

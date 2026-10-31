@@ -9,13 +9,15 @@
 
 use super::{
     BoundedCurve, BsplineCurve, CurveDerivatives, CurveParameter, Cut, Debug, EuclideanSpace,
-    InnerSpace, IntersectionCurve, Invertible, Line, Matrix, Matrix3, Matrix4, NurbsCurve,
-    ParameterCurve, ParameterDivision1D, ParameterRange, ParametricCurve, ParametricCurve3D,
-    ParametricSurface3D, Plane, Point2, Point3, Processor, SearchNearestParameter, SearchParameter,
-    SearchParameterHint1D, SquareMatrix, SurfaceCurve, SurfaceDerivatives, SurfaceParameter,
-    TOLERANCE, Tolerance, Transformed, TrimmedCurve, Vector2, Vector3, Vector4, algo,
+    InnerSpace, IntersectionCurve, Invertible, KERNEL_EPSILON, Line, Matrix, Matrix3, Matrix4,
+    NurbsCurve, ParameterCurve, ParameterDivision1D, ParameterRange, ParametricCurve,
+    ParametricCurve3D, ParametricSurface3D, Plane, Point2, Point3, Processor,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SquareMatrix, SurfaceCurve,
+    SurfaceDerivatives, SurfaceParameter, Tolerance, Transformed, TrimmedCurve, Vector2, Vector3,
+    Vector4, algo,
 };
 use monstertruck_core::newton::{self, CalcOutput};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_traits::{ParametricCurve as ParametricCurveTrait, SnapCurveEndpoints};
 use std::ops::Bound;
 
@@ -85,7 +87,7 @@ where
         // when surfaces are coplanar or tangent.
         // If the points are close enough and normals are parallel (indicating
         // coplanarity), accept the initial guess as a valid intersection point.
-        if pt0.near(&pt1) && n0.cross(n1).magnitude() < TOLERANCE {
+        if pt0.near(&pt1) && n0.cross(n1).magnitude() < KERNEL_EPSILON {
             let point = pt0.midpoint(pt1);
             return Some((point, Point2::new(x, y), Point2::new(z, w)));
         }
@@ -382,7 +384,11 @@ fn uv_der_n(
     let mat = Matrix3::from_cols(uder, vder, normal);
     let b = cder_n - sum;
     let uv_der_n = mat.invert()? * b;
-    debug_assert!(uv_der_n.z.abs() < 1.0e-4, "{}", uv_der_n.z.abs());
+    debug_assert!(
+        uv_der_n.z.abs() < DEFAULT_NUMERICAL_TOLERANCES.derivative_residual,
+        "{}",
+        uv_der_n.z.abs()
+    );
     Some(Vector2::new(uv_der_n.x, uv_der_n.y))
 }
 

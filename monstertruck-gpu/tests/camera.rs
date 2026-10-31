@@ -72,7 +72,7 @@ proptest! {
         let Some(camera) = Camera::perspective_view_fitting(rot, aspect, Rad(fov), &points) else {
             return Err(TestCaseError::fail("rotation unexpectedly produced a singular view basis"));
         };
-        prop_assume!(camera.near_clip > TOLERANCE);
+        prop_assume!(camera.near_clip > KERNEL_EPSILON);
 
         let Some(projection) = camera.projection(aspect) else {
             return Err(TestCaseError::fail("fitted camera must have an invertible transform"));

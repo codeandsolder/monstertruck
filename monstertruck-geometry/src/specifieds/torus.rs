@@ -4,12 +4,13 @@
 )]
 
 use super::{
-    Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, MetricSpace,
-    ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
+    Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, KERNEL_EPSILON,
+    MetricSpace, ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
     ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
-    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, TOLERANCE, Torus, UnitCircle,
-    Vector2, Vector3, Zero,
+    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Torus, UnitCircle, Vector2,
+    Vector3, Zero,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::f64::consts::PI;
 
 impl Torus {
@@ -373,7 +374,7 @@ impl Torus {
         let mut candidates = Vec::with_capacity(v_candidates.len());
         for v0 in v_candidates {
             let signed_radius = self.small_radius().mul_add(v0.cos(), self.large_radius());
-            if (rho - signed_radius.abs()).abs() > eps.max(TOLERANCE * scale) {
+            if (rho - signed_radius.abs()).abs() > eps.max(KERNEL_EPSILON * scale) {
                 continue;
             }
             let u0 = if signed_radius < 0.0 {
@@ -384,7 +385,7 @@ impl Torus {
             let u = nearest_periodic_angle(u0.rem_euclid(2.0 * PI), hint.map(|h| h.0));
             let v = nearest_periodic_angle(v0, hint.map(|h| h.1));
             let distance2 = self.evaluate(u, v).distance2(point);
-            if distance2 <= (TOLERANCE * scale).powi(2) {
+            if distance2 <= (KERNEL_EPSILON * scale).powi(2) {
                 candidates.push((u, v, distance2));
             }
         }
@@ -450,7 +451,8 @@ impl Torus {
             let distance2 = self.evaluate(u, v).distance2(point);
             if distance2.is_finite()
                 && !candidates.iter().any(|candidate: &(f64, f64, f64)| {
-                    periodic_parameter_distance2((candidate.0, candidate.1), (u, v)) <= 1.0e-24
+                    periodic_parameter_distance2((candidate.0, candidate.1), (u, v))
+                        <= DEFAULT_NUMERICAL_TOLERANCES.structural.powi(2)
                 })
             {
                 candidates.push((u, v, distance2));

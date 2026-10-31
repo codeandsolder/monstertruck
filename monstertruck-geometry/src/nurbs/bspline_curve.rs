@@ -6,10 +6,10 @@
 use super::{
     Bound, Bounded, BoundedCurve, BoundingBox, BsplineCurve, Concat, ConcatError, ControlPoint,
     CurveCollector, CurveParameter, Cut, Deserialize, EuclideanSpace, HashGen, Homogeneous,
-    InnerSpace, Invertible, KnotVector, MetricSpace, Origin, PRESEARCH_DIVISION,
+    InnerSpace, Invertible, KERNEL_EPSILON, KnotVector, MetricSpace, Origin, PRESEARCH_DIVISION,
     ParameterDivision1D, ParameterRange, ParameterTransform, ParametricCurve, Result,
-    SearchNearestParameter, SearchParameter, SearchParameterHint1D, TOLERANCE, Tolerance,
-    Transform, Transformed, Zero, algo, gaussian_elimination, inv_or_zero,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, Tolerance, Transform,
+    Transformed, Zero, algo, gaussian_elimination, inv_or_zero,
 };
 use crate::errors::Error;
 #[cfg(test)]
@@ -936,9 +936,9 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
         let mut i = 0;
         let mut j = 0;
         while !self.knot(i).near2(&1.0) || !other.knot(j).near2(&1.0) {
-            if self.knot(i) - other.knot(j) > TOLERANCE {
+            if self.knot(i) - other.knot(j) > KERNEL_EPSILON {
                 self.add_knot(other.knot(j));
-            } else if other.knot(j) - self.knot(i) > TOLERANCE {
+            } else if other.knot(j) - self.knot(i) > KERNEL_EPSILON {
                 other.add_knot(self.knot(i));
             }
             i += 1;
@@ -1066,7 +1066,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// Determine whether `self` and `other` is near as the B-spline curves or not.  
     ///
     /// Divides each knot interval into the number of degree equal parts,
-    /// and check `|self(t) - other(t)| < TOLERANCE` for each end points `t`.
+    /// and check `|self(t) - other(t)| < KERNEL_EPSILON` for each end points `t`.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
@@ -1096,11 +1096,11 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// Determines `self` and `other` is near in square order as the B-spline curves or not.  
     ///
     /// Divide each knot interval into the number of degree equal parts,
-    /// and check `|self(t) - other(t)| < TOLERANCE`for each end points `t`.
+    /// and check `|self(t) - other(t)| < KERNEL_EPSILON`for each end points `t`.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::*;
-    /// let eps = TOLERANCE;
+    /// let eps = KERNEL_EPSILON;
     /// let knot_vec = KnotVector::from(
     ///     vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0, 4.0]
     /// );
@@ -1139,7 +1139,7 @@ impl<P: ControlPoint<f64> + Tolerance> Cut for BsplineCurve<P> {
         let knot_start = self.knot_vec[0];
         let knot_end = self.knot_vec[self.knot_vec.len() - 1];
 
-        // Snap cuts within `TOLERANCE` of the domain ends onto the ends themselves.
+        // Snap cuts within `KERNEL_EPSILON` of the domain ends onto the ends themselves.
         // Otherwise the near-knot snapping below lands on the full-multiplicity end
         // knot blocks and produces invalid empty halves.
         if t <= knot_start && t.near(&knot_start) {

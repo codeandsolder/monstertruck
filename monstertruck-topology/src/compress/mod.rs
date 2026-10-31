@@ -19,9 +19,9 @@ use rustc_hash::FxHashMap as HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Debug, Edge, EdgeId, ExactParameterBoundary2D, Face, Hash, Hasher, ParametricCurve,
-    ParametricSurface, Result, Shell, Solid, SolidAttributes, StableId, StableIdAllocator,
-    TOLERANCE, Vertex, VertexId, Wire, errors::Error,
+    Debug, Edge, EdgeId, ExactParameterBoundary2D, Face, Hash, Hasher, KERNEL_EPSILON,
+    ParametricCurve, ParametricSurface, Result, Shell, Solid, SolidAttributes, StableId,
+    StableIdAllocator, Vertex, VertexId, Wire, errors::Error,
 };
 
 /// Serialized compressed edge
@@ -600,7 +600,7 @@ where
     /// Tessellation tolerances are absolute lengths, so a fixed value means
     /// something different for a 1 mm part than for a 10 m one. `factor` is a
     /// fraction of the shell's bounding-box diameter -- `1.0e-3` is a good
-    /// default -- and the result is clamped up to [`TOLERANCE`] so a
+    /// default -- and the result is clamped up to [`KERNEL_EPSILON`] so a
     /// degenerate or single-point shell can never ask for an infinitely fine
     /// mesh.
     ///
@@ -617,9 +617,9 @@ where
     pub fn relative_tolerance(&self, factor: f64) -> f64 {
         let tolerance = self.bounding_box().diameter() * factor;
         if tolerance.is_finite() {
-            f64::max(tolerance, TOLERANCE)
+            f64::max(tolerance, KERNEL_EPSILON)
         } else {
-            TOLERANCE
+            KERNEL_EPSILON
         }
     }
 }

@@ -23,7 +23,7 @@ mod planar;
 
 use monstertruck_core::{
     cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point2, Point3, Vector2, Vector3},
-    tolerance::TOLERANCE,
+    tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON},
 };
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
@@ -830,8 +830,11 @@ impl<C> LoopsStore<Point3, C> {
             + SearchParameter<CurveParameter, Point = Point3>
             + SearchNearestParameter<CurveParameter, Point = Point3>,
     {
-        let (wire_index, edge_index, kind, projected) =
-            self.search_boundary_parameter(loops_index, vertex.point(), 8.0 * TOLERANCE)?;
+        let (wire_index, edge_index, kind, projected) = self.search_boundary_parameter(
+            loops_index,
+            vertex.point(),
+            DEFAULT_NUMERICAL_TOLERANCES.boolean_boundary_search_factor * KERNEL_EPSILON,
+        )?;
         if let Some(projected) = projected {
             vertex.set_point(projected);
         }
@@ -1024,7 +1027,8 @@ where
     // the same fixed kernel-precision bound used to canonicalize adjacent SSI
     // endpoints; it deliberately does not grow with the caller's modeling
     // tolerance.
-    let seed_tolerance = 8.0 * TOLERANCE;
+    let seed_tolerance =
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_boundary_search_factor * KERNEL_EPSILON;
     if pt0.near(&pt1)
         && point.distance(pt0) <= seed_tolerance
         && point.distance(pt1) <= seed_tolerance
@@ -1574,10 +1578,10 @@ mod projection_tests {
             ShapesOpStatus::Unknown,
         )]);
         let store = LoopsStore(vec![loops]);
-        let point = Point3::new(0.5, 1.125 * TOLERANCE, 0.0);
+        let point = Point3::new(0.5, 1.125 * KERNEL_EPSILON, 0.0);
 
         let (_, _, kind, projected) = store
-            .search_boundary_parameter(0, point, 8.0 * TOLERANCE)
+            .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
             .expect("unique bounded nearest projection should recover the boundary parameter");
 
         assert!(matches!(kind, ParameterKind::Inner(_)));
@@ -1594,7 +1598,7 @@ mod projection_tests {
             ShapesOpStatus::Unknown,
         )]);
         let mut store = LoopsStore(vec![loops]);
-        let vertex = Vertex::new(Point3::new(0.5, 1.125 * TOLERANCE, 0.0));
+        let vertex = Vertex::new(Point3::new(0.5, 1.125 * KERNEL_EPSILON, 0.0));
         let mut emap = HashMap::default();
 
         let (_, _, kind) = store
@@ -1624,7 +1628,7 @@ mod projection_tests {
             None,
             &recovered,
             &Plane::xy(),
-            8.0 * TOLERANCE,
+            8.0 * KERNEL_EPSILON,
             &mut emap,
         );
         assert!(
@@ -1651,7 +1655,7 @@ mod projection_tests {
 
         assert!(
             store
-                .search_boundary_parameter(0, point, 8.0 * TOLERANCE)
+                .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
                 .is_none()
         );
         let recovered = store.search_boundary_parameter(0, point, 1.0e-3);
@@ -1801,11 +1805,11 @@ mod projection_tests {
             ShapesOpStatus::Unknown,
         )]);
         let store = LoopsStore(vec![loops]);
-        let point = Point3::new(0.5, 1.125 * TOLERANCE, 0.0);
+        let point = Point3::new(0.5, 1.125 * KERNEL_EPSILON, 0.0);
 
         assert!(
             store
-                .search_boundary_parameter(0, point, 8.0 * TOLERANCE)
+                .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
                 .is_some()
         );
     }
@@ -1822,10 +1826,10 @@ mod projection_tests {
             ShapesOpStatus::Unknown,
         )]);
         let store = LoopsStore(vec![loops]);
-        let point = Point3::new(1.0, 1.125 * TOLERANCE, 0.0);
+        let point = Point3::new(1.0, 1.125 * KERNEL_EPSILON, 0.0);
 
         let (_, _, kind, projected) = store
-            .search_boundary_parameter(0, point, 8.0 * TOLERANCE)
+            .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
             .expect("incident edges sharing one vertex are one boundary locus");
 
         assert!(matches!(kind, ParameterKind::Front | ParameterKind::Back));
@@ -1836,8 +1840,8 @@ mod projection_tests {
     fn loop_boundary_search_rejects_ambiguous_bounded_nearest_projection() {
         let a0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let a1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
-        let b0 = Vertex::new(Point3::new(0.0, 2.25 * TOLERANCE, 0.0));
-        let b1 = Vertex::new(Point3::new(1.0, 2.25 * TOLERANCE, 0.0));
+        let b0 = Vertex::new(Point3::new(0.0, 2.25 * KERNEL_EPSILON, 0.0));
+        let b1 = Vertex::new(Point3::new(1.0, 2.25 * KERNEL_EPSILON, 0.0));
         let edge_a = Edge::new_unchecked(&a0, &a1, Line(a0.point(), a1.point()));
         let edge_b = Edge::new_unchecked(&b0, &b1, Line(b0.point(), b1.point()));
         let loops = Loops(vec![
@@ -1845,11 +1849,11 @@ mod projection_tests {
             BoundaryWire::new(vec![edge_b].into(), ShapesOpStatus::Unknown),
         ]);
         let store = LoopsStore(vec![loops]);
-        let point = Point3::new(0.5, 1.125 * TOLERANCE, 0.0);
+        let point = Point3::new(0.5, 1.125 * KERNEL_EPSILON, 0.0);
 
         assert!(
             store
-                .search_boundary_parameter(0, point, 8.0 * TOLERANCE)
+                .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
                 .is_none()
         );
     }
@@ -1865,7 +1869,7 @@ mod projection_tests {
         )]);
         let rhs = Loops(Vec::new());
 
-        let kernel_near = Point3::new(0.0, 0.0, 4.0 * TOLERANCE);
+        let kernel_near = Point3::new(0.0, 0.0, 4.0 * KERNEL_EPSILON);
         assert_eq!(
             unique_nearby_loop_point(&lhs, &rhs, kernel_near, CROSS_FACE_STITCH_TOLERANCE),
             Some(a.point())
@@ -2029,13 +2033,13 @@ mod projection_tests {
     fn curve_surface_projection_accepts_agreeing_tangent_projections() {
         let line = Line(Point3::new(1.0, -1.0, 0.0), Point3::new(1.0, 1.0, 0.0));
         let sphere = Sphere::new(Point3::origin(), 1.0);
-        let seed = Point3::new(1.0 + 1.5 * TOLERANCE, 0.0, 0.0);
+        let seed = Point3::new(1.0 + 1.5 * KERNEL_EPSILON, 0.0, 0.0);
 
         let (point, parameter, _) = curve_surface_projection(&line, None, &sphere, None, seed, 100)
             .expect("agreeing exact projections should resolve a tangent SSI seed");
 
         assert!(point.near(&Point3::new(1.0, 0.0, 0.0)));
-        assert!((parameter - 0.5).abs() <= TOLERANCE);
+        assert!((parameter - 0.5).abs() <= KERNEL_EPSILON);
         assert!(sphere.include(point));
     }
 }

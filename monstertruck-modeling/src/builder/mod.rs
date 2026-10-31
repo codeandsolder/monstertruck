@@ -5,7 +5,7 @@ use crate::{
     topo_impls::connect_raw_wires,
     topo_traits::{ClosedSweep, Connector, Mapped, MultiSweep, Sweep},
 };
-use monstertruck_core::tolerance::TOLERANCE;
+use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::*;
 use monstertruck_topology::wire;
 const PI: Rad<f64> = Rad(std::f64::consts::PI);
@@ -805,11 +805,11 @@ fn sweep_composite_segment(
     let mut end_cap = None;
     let mut side_faces = Vec::new();
     for candidate in shell {
-        if composite_faces_near(&candidate, face, TOLERANCE) {
+        if composite_faces_near(&candidate, face, KERNEL_EPSILON) {
             if start_cap.replace(candidate).is_some() {
                 return Err(Error::UnexpectedCompositeSweepTopology);
             }
-        } else if composite_faces_near(&candidate, &expected_end, TOLERANCE) {
+        } else if composite_faces_near(&candidate, &expected_end, KERNEL_EPSILON) {
             if end_cap.replace(candidate).is_some() {
                 return Err(Error::UnexpectedCompositeSweepTopology);
             }
@@ -843,7 +843,7 @@ fn append_closing_composite_segment(
     segment: ValidatedCompositeSegment,
 ) -> Result<()> {
     let mapped = transformed(cursor, segment.transform());
-    if !composite_faces_near(&mapped, first, TOLERANCE) {
+    if !composite_faces_near(&mapped, first, KERNEL_EPSILON) {
         return Err(Error::CompositeSweepNotClosed);
     }
 

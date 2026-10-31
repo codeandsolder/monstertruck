@@ -1,4 +1,5 @@
 use super::{ElementarySurface, Surface};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::*;
 use monstertruck_topology::repair::SurfaceDomainRelation;
 
@@ -33,7 +34,7 @@ enum Support {
 #[inline]
 fn canonical_direction(mut vector: Vector3) -> Option<Vector3> {
     let magnitude = vector.magnitude();
-    if !magnitude.is_finite() || magnitude <= TOLERANCE {
+    if !magnitude.is_finite() || magnitude <= KERNEL_EPSILON {
         return None;
     }
     vector /= magnitude;
@@ -49,11 +50,10 @@ fn canonical_direction(mut vector: Vector3) -> Option<Vector3> {
 
 #[inline]
 fn similarity_scale(transform: Matrix4) -> Option<f64> {
-    const SIMILARITY_TOLERANCE: f64 = 1.0e-10;
-    if transform.x.w.abs() > SIMILARITY_TOLERANCE
-        || transform.y.w.abs() > SIMILARITY_TOLERANCE
-        || transform.z.w.abs() > SIMILARITY_TOLERANCE
-        || (transform.w.w - 1.0).abs() > SIMILARITY_TOLERANCE
+    if transform.x.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity
+        || transform.y.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity
+        || transform.z.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity
+        || (transform.w.w - 1.0).abs() > DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity
     {
         return None;
     }
@@ -64,11 +64,11 @@ fn similarity_scale(transform: Matrix4) -> Option<f64> {
         transform.z.truncate(),
     ];
     let scale = columns[0].magnitude();
-    if !scale.is_finite() || scale <= TOLERANCE {
+    if !scale.is_finite() || scale <= KERNEL_EPSILON {
         return None;
     }
-    let length_tolerance = SIMILARITY_TOLERANCE * scale.max(1.0);
-    let dot_tolerance = SIMILARITY_TOLERANCE * scale * scale;
+    let length_tolerance = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity * scale.max(1.0);
+    let dot_tolerance = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity * scale * scale;
     if columns[1..].iter().any(|column| {
         !column.magnitude().is_finite() || (column.magnitude() - scale).abs() > length_tolerance
     }) || [(0, 1), (0, 2), (1, 2)]
@@ -98,18 +98,20 @@ fn revolution_support(
 
     if cylinder {
         let scale = direction.magnitude().max(radial0.magnitude()).max(1.0);
-        if radial_direction.magnitude() > 1.0e-10 * scale {
+        if radial_direction.magnitude()
+            > DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity * scale
+        {
             return None;
         }
         let radius = radial0.magnitude();
-        (radius > TOLERANCE).then_some(Support::Cylinder {
+        (radius > KERNEL_EPSILON).then_some(Support::Cylinder {
             origin,
             axis,
             radius,
         })
     } else {
         let radial_direction2 = radial_direction.magnitude2();
-        if radial_direction2 <= TOLERANCE.powi(2) {
+        if radial_direction2 <= KERNEL_EPSILON.powi(2) {
             return None;
         }
         // Intersect the generating line with the revolution axis in the radial
@@ -122,11 +124,11 @@ fn revolution_support(
             .magnitude()
             .max((apex - origin).magnitude())
             .max(1.0);
-        if apex_radial.magnitude() > 1.0e-9 * scale {
+        if apex_radial.magnitude() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity * scale {
             return None;
         }
         let axial = direction.dot(axis).abs();
-        if axial <= TOLERANCE {
+        if axial <= KERNEL_EPSILON {
             return None;
         }
         Some(Support::Cone {
@@ -283,7 +285,7 @@ fn same_support(
 fn processor_orientation_sign<S>(surface: &Processor<S, Matrix4>) -> Option<f64> {
     similarity_scale(*surface.transform())?;
     let determinant = surface.transform().determinant();
-    if !determinant.is_finite() || determinant.abs() <= TOLERANCE {
+    if !determinant.is_finite() || determinant.abs() <= KERNEL_EPSILON {
         return None;
     }
     let chart = if surface.orientation() { 1.0 } else { -1.0 };
@@ -302,7 +304,7 @@ fn analytic_orientation_sign(surface: &Surface, support: Support) -> Option<bool
     let sign = match (surface, support) {
         (Surface::Elementary(ElementarySurface::Plane(plane)), Support::Plane { normal, .. }) => {
             let dot = plane.normal().dot(normal);
-            if dot.abs() <= TOLERANCE {
+            if dot.abs() <= KERNEL_EPSILON {
                 return None;
             }
             dot.signum()
@@ -320,7 +322,7 @@ fn analytic_orientation_sign(surface: &Surface, support: Support) -> Option<bool
         ) => {
             let Line(front, back) = *revolution.entity().entity_curve();
             let axial_step = (back - front).dot(revolution.entity().axis());
-            if !axial_step.is_finite() || axial_step.abs() <= TOLERANCE {
+            if !axial_step.is_finite() || axial_step.abs() <= KERNEL_EPSILON {
                 return None;
             }
             -axial_step.signum() * processor_orientation_sign(revolution)?
@@ -338,7 +340,7 @@ fn analytic_orientation_sign(surface: &Surface, support: Support) -> Option<bool
             // gradient does, so there is no one global orientation relation on
             // the self-intersecting spindle support. Refuse it rather than
             // assigning a sign from whichever branch happened to be sampled.
-            if major_radius + TOLERANCE < minor_radius {
+            if major_radius + KERNEL_EPSILON < minor_radius {
                 return None;
             }
             processor_orientation_sign(torus)?
@@ -355,7 +357,7 @@ fn analytic_orientation_sign(surface: &Surface, support: Support) -> Option<bool
 #[inline]
 fn unwrap_parameter_component(value: f64, reference: f64, period: Option<f64>) -> f64 {
     period
-        .filter(|period| period.is_finite() && *period > TOLERANCE)
+        .filter(|period| period.is_finite() && *period > KERNEL_EPSILON)
         .map_or(value, |period| {
             ((reference - value) / period)
                 .round()
@@ -387,7 +389,7 @@ fn exact_plane_parameter(plane: &Plane, point: Point3) -> Option<Point2> {
         .magnitude()
         .max(plane.origin().to_vec().magnitude())
         .max(1.0);
-    (parameter.z.abs() <= TOLERANCE * scale).then_some(Point2::new(parameter.x, parameter.y))
+    (parameter.z.abs() <= KERNEL_EPSILON * scale).then_some(Point2::new(parameter.x, parameter.y))
 }
 
 fn exact_linear_revolution_parameter(
@@ -408,7 +410,7 @@ fn exact_linear_revolution_parameter(
         .max((profile0 - origin).magnitude())
         .max((local - origin).magnitude())
         .max(1.0);
-    if axial_step.abs() <= TOLERANCE * scale {
+    if axial_step.abs() <= KERNEL_EPSILON * scale {
         return None;
     }
 
@@ -423,9 +425,9 @@ fn exact_linear_revolution_parameter(
     let profile_radius = profile_radial.magnitude();
     let point_radius = point_radial.magnitude();
     let radial_scale = profile_radius.max(point_radius).max(scale);
-    if profile_radius <= TOLERANCE * radial_scale
-        || point_radius <= TOLERANCE * radial_scale
-        || (profile_radius - point_radius).abs() > TOLERANCE * radial_scale
+    if profile_radius <= KERNEL_EPSILON * radial_scale
+        || point_radius <= KERNEL_EPSILON * radial_scale
+        || (profile_radius - point_radius).abs() > KERNEL_EPSILON * radial_scale
     {
         return None;
     }
@@ -468,7 +470,7 @@ fn exact_torus_parameter(surface: &Processor<Torus, Matrix4>, point: Point3) -> 
     .into_iter()
     .find_map(|v| {
         let signed_radial = radius.mul_add(v.cos(), torus.large_radius());
-        if (signed_radial.abs() - rho).abs() > TOLERANCE * scale {
+        if (signed_radial.abs() - rho).abs() > KERNEL_EPSILON * scale {
             return None;
         }
         let u = if signed_radial >= 0.0 {
@@ -519,9 +521,12 @@ fn safe_revolution_basis(
         .magnitude()
         .max((profile0 - origin).magnitude())
         .max(1.0);
-    let mut safe = [-2.0, -1.0, 0.0, 1.0, 2.0, 3.0]
-        .into_iter()
-        .filter(|u| radial_magnitude(*u) > 16.0 * TOLERANCE * scale);
+    let mut safe = [-2.0, -1.0, 0.0, 1.0, 2.0, 3.0].into_iter().filter(|u| {
+        radial_magnitude(*u)
+            > DEFAULT_NUMERICAL_TOLERANCES.same_domain_direction_floor_factor
+                * KERNEL_EPSILON
+                * scale
+    });
     let u0 = safe.next()?;
     let u1 = safe.find(|u| (*u - u0).abs() > 0.25)?;
     let angle = 0.37;
@@ -556,7 +561,12 @@ fn affine_map_from_correspondences(source: [Point2; 3], target: [Point2; 3]) -> 
 /// excluded: rotating a sphere's polar axis generally induces a nonlinear
 /// spherical-coordinate map.
 pub fn affine_same_domain_parameter_map(source: &Surface, target: &Surface) -> Option<Matrix3> {
-    same_surface_domain(source, target, TOLERANCE, 1.0e-10)?;
+    same_surface_domain(
+        source,
+        target,
+        KERNEL_EPSILON,
+        DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity,
+    )?;
 
     let source_parameters = match (source, target) {
         (

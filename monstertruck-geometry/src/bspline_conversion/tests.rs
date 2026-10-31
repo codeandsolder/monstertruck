@@ -385,7 +385,7 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
         // Exactly the profile's own range.
         ((0.0, 1.0), (0.0, 1.0)),
         // The upstream trim pad (`expand_param_axis_range`, at least
-        // TOLERANCE): exercise only the actual profile overlap.
+        // KERNEL_EPSILON): exercise only the actual profile overlap.
         ((0.0, 1.0), (-1.0e-6, 1.0 + 1.0e-6)),
         // Strictly inside.
         ((0.0, 1.0), (0.25, 0.75)),

@@ -2,10 +2,11 @@
 
 use super::{
     AltCurveShell, Alternative, BoundaryCurve2D, BoundedCurve, BoundedSurface, BsplineCurve, Cut,
-    IntersectionCurve, Invertible, KnotVector, MetricSpace, NurbsCurve, ParameterCurve,
-    ParametricCurve, Point3, PolylineCurve, ShapeOpsCurve, ShapeOpsSurface, Shell, SurfaceCurve,
-    TOLERANCE, Vector4,
+    IntersectionCurve, Invertible, KERNEL_EPSILON, KnotVector, MetricSpace, NurbsCurve,
+    ParameterCurve, ParametricCurve, Point3, PolylineCurve, ShapeOpsCurve, ShapeOpsSurface, Shell,
+    SurfaceCurve, Vector4,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;
 
 /// Convert a polyline leader to an exactly equivalent degree-1 B-spline.
@@ -38,20 +39,20 @@ fn trim_homogeneous_curve(
     start: f64,
     end: f64,
 ) -> Option<NurbsCurve<Vector4>> {
-    if !start.is_finite() || !end.is_finite() || (start - end).abs() <= TOLERANCE {
+    if !start.is_finite() || !end.is_finite() || (start - end).abs() <= KERNEL_EPSILON {
         return None;
     }
     let reverse = start > end;
     let (lo, hi) = if reverse { (end, start) } else { (start, end) };
     let (range0, range1) = curve.range_tuple();
-    if lo < range0 - TOLERANCE || hi > range1 + TOLERANCE {
+    if lo < range0 - KERNEL_EPSILON || hi > range1 + KERNEL_EPSILON {
         return None;
     }
-    if lo > range0 + TOLERANCE {
+    if lo > range0 + KERNEL_EPSILON {
         curve = curve.cut(lo);
     }
     let (_, current_end) = curve.range_tuple();
-    if hi < current_end - TOLERANCE {
+    if hi < current_end - KERNEL_EPSILON {
         let _tail = curve.cut(hi);
     }
     if reverse {
@@ -72,12 +73,12 @@ fn homogeneous_iso_curve<S: ShapeOpsSurface>(
     let ((u0, u1), (v0, v1)) = (u_range, v_range);
     let curve = match iso {
         IsoParameter::U => {
-            if constant < u0 - TOLERANCE || constant > u1 + TOLERANCE {
+            if constant < u0 - KERNEL_EPSILON || constant > u1 + KERNEL_EPSILON {
                 return None;
             }
-            let row = if (constant - u0).abs() <= TOLERANCE {
+            let row = if (constant - u0).abs() <= KERNEL_EPSILON {
                 0
-            } else if (constant - u1).abs() <= TOLERANCE {
+            } else if (constant - u1).abs() <= KERNEL_EPSILON {
                 homogeneous.control_points().len().checked_sub(1)?
             } else {
                 let _right = homogeneous.cut_u(constant);
@@ -86,12 +87,12 @@ fn homogeneous_iso_curve<S: ShapeOpsSurface>(
             NurbsCurve::new(homogeneous.curve_v(row))
         }
         IsoParameter::V => {
-            if constant < v0 - TOLERANCE || constant > v1 + TOLERANCE {
+            if constant < v0 - KERNEL_EPSILON || constant > v1 + KERNEL_EPSILON {
                 return None;
             }
-            let column = if (constant - v0).abs() <= TOLERANCE {
+            let column = if (constant - v0).abs() <= KERNEL_EPSILON {
                 0
-            } else if (constant - v1).abs() <= TOLERANCE {
+            } else if (constant - v1).abs() <= KERNEL_EPSILON {
                 homogeneous.control_points().first()?.len().checked_sub(1)?
             } else {
                 let _right = homogeneous.cut_v(constant);
@@ -115,7 +116,10 @@ fn surface_parameter_with_hint<S: ShapeOpsSurface>(
     };
     let hinted = search(hint);
     if hint.is_some()
-        && hinted.is_some_and(|(u, v)| surface.evaluate(u, v).distance(point) > 4.0 * TOLERANCE)
+        && hinted.is_some_and(|(u, v)| {
+            surface.evaluate(u, v).distance(point)
+                > DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * KERNEL_EPSILON
+        })
     {
         return search(None);
     }
@@ -146,7 +150,8 @@ fn point_on_surface_with_hint<S: ShapeOpsSurface>(
         return false;
     };
     *hint = Some(parameter);
-    surface.evaluate(parameter.0, parameter.1).distance(point) <= 4.0 * TOLERANCE
+    surface.evaluate(parameter.0, parameter.1).distance(point)
+        <= DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * KERNEL_EPSILON
 }
 
 fn prove_iso_candidate<S: ShapeOpsSurface>(
@@ -156,8 +161,10 @@ fn prove_iso_candidate<S: ShapeOpsSurface>(
     leader: &PolylineCurve<Point3>,
 ) -> bool {
     let (t0, t1) = candidate.range_tuple();
-    if candidate.evaluate(t0).distance(leader.front()) > 8.0 * TOLERANCE
-        || candidate.evaluate(t1).distance(leader.back()) > 8.0 * TOLERANCE
+    if candidate.evaluate(t0).distance(leader.front())
+        > DEFAULT_NUMERICAL_TOLERANCES.boolean_curve_endpoint_factor * KERNEL_EPSILON
+        || candidate.evaluate(t1).distance(leader.back())
+            > DEFAULT_NUMERICAL_TOLERANCES.boolean_curve_endpoint_factor * KERNEL_EPSILON
     {
         return false;
     }
@@ -199,7 +206,9 @@ fn leader_matches_iso_locus<S: ShapeOpsSurface>(
                     IsoParameter::U => (constant, v),
                     IsoParameter::V => (u, constant),
                 };
-                surface.evaluate(iso_u, iso_v).distance(point) <= 4.0 * TOLERANCE
+                surface.evaluate(iso_u, iso_v).distance(point)
+                    <= DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor
+                        * KERNEL_EPSILON
             })
 }
 

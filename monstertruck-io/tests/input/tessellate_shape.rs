@@ -36,7 +36,7 @@ fn tessellate_shape() {
                     let diag = bdb.max() - bdb.min();
                     let r = diag.x.min(diag.y).min(diag.z);
                     let mut poly = cshell.robust_triangulation(0.01 * r).to_polygon();
-                    poly.put_together_same_attrs(TOLERANCE * 50.0)
+                    poly.put_together_same_attrs(KERNEL_EPSILON * 50.0)
                         .remove_degenerate_faces();
                     poly.shell_condition() == ShellCondition::Closed
                 })

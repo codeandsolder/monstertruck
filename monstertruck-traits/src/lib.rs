@@ -79,7 +79,7 @@ macro_rules! nonpositive_tolerance {
         );
     };
     ($tol: expr) => {
-        nonpositive_tolerance!($tol, TOLERANCE)
+        nonpositive_tolerance!($tol, KERNEL_EPSILON)
     };
 }
 
