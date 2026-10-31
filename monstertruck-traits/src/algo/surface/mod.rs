@@ -249,9 +249,13 @@ where
     // Spec 014 W3: charged once, before the scan, so the unit is a deterministic
     // function of the grid rather than of how far the scan got.
     charge_presearch_nodes(presearch_nodes(division));
+    let ((u0, u1), (v0, v1)) = (urange, vrange);
+    if division == 0 {
+        let _ = surface.evaluate(u0, v0);
+        return (u0, v0);
+    }
     let mut res = (0.0, 0.0);
     let mut min = f64::INFINITY;
-    let ((u0, u1), (v0, v1)) = (urange, vrange);
     for i in 0..=division {
         for j in 0..=division {
             let p = scalar_from_usize(i) / scalar_from_usize(division);
@@ -802,4 +806,42 @@ where
         ),
     };
     (high - low > tolerance).then_some((axis, (low, high)))
+}
+
+#[cfg(test)]
+mod presearch_zero_division_tests {
+    use super::*;
+    use std::{cell::Cell, rc::Rc};
+
+    #[derive(Clone)]
+    struct RecordingSurface(Rc<Cell<Option<(f64, f64)>>>);
+
+    impl ParametricSurface for RecordingSurface {
+        type Point = Point3;
+        type Vector = Vector3;
+
+        fn evaluate(&self, u: f64, v: f64) -> Point3 {
+            self.0.set(Some((u, v)));
+            Point3::new(u, v, 0.0)
+        }
+        fn derivative_u(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
+        fn derivative_v(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
+        fn derivative_uu(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
+        fn derivative_uv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
+        fn derivative_vv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
+        fn derivative_mn(&self, _: usize, _: usize, _: f64, _: f64) -> Vector3 { Vector3::zero() }
+    }
+
+    #[test]
+    fn zero_division_presearch_samples_range_start_once() {
+        let seen = Rc::new(Cell::new(None));
+        let surface = RecordingSurface(seen.clone());
+        let point = Point3::new(f64::NAN, 0.0, 0.0);
+
+        assert_eq!(
+            presearch(&surface, point, ((2.0, 3.0), (4.0, 5.0)), 0),
+            (2.0, 4.0)
+        );
+        assert_eq!(seen.get(), Some((2.0, 4.0)));
+    }
 }
