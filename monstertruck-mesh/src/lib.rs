@@ -97,11 +97,52 @@ pub struct StandardVertex {
     clippy::struct_field_names,
     reason = "field names are part of the serialized Faces representation and match the public accessors"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Faces<V = StandardVertex> {
     tri_faces: Vec<[V; 3]>,
     quad_faces: Vec<[V; 4]>,
     other_faces: Vec<Vec<V>>,
+}
+
+impl<'de, V: Deserialize<'de>> Deserialize<'de> for Faces<V> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        #[derive(Deserialize)]
+        struct FacesRepr<V> {
+            tri_faces: Vec<[V; 3]>,
+            quad_faces: Vec<[V; 4]>,
+            other_faces: Vec<Vec<V>>,
+        }
+
+        let FacesRepr {
+            mut tri_faces,
+            mut quad_faces,
+            other_faces,
+        } = FacesRepr::deserialize(deserializer)?;
+        let mut ngons = Vec::with_capacity(other_faces.len());
+        for face in other_faces {
+            match face.len() {
+                0..=2 => {
+                    return Err(serde::de::Error::custom(format!(
+                        "faces must contain at least 3 vertices, got {}",
+                        face.len()
+                    )));
+                }
+                3 => tri_faces.push(face.try_into().map_err(|_| {
+                    serde::de::Error::custom("three-vertex face had an inconsistent length")
+                })?),
+                4 => quad_faces.push(face.try_into().map_err(|_| {
+                    serde::de::Error::custom("four-vertex face had an inconsistent length")
+                })?),
+                _ => ngons.push(face),
+            }
+        }
+        Ok(Self {
+            tri_faces,
+            quad_faces,
+            other_faces: ngons,
+        })
+    }
 }
 
 /// Polygon mesh
