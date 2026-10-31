@@ -16,6 +16,7 @@ pub(crate) use ahash::AHashSet as HashSet;
 
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::rexport_polymesh::PolylineCurve;
+use monstertruck_topology::StableId;
 use monstertruck_topology::compress::*;
 use monstertruck_topology::repair::{
     SameDomainUnification, SurfaceDomainRelation, split_non_simple_compressed_trimmed_wires,
@@ -35,6 +36,12 @@ type EdgeIndex = CompressedEdgeIndex;
 type Wire = Vec<EdgeIndex>;
 type Face<S> = CompressedFace<S>;
 type Shell<P, C, S> = CompressedShell<P, C, S>;
+
+fn append_unassigned_stable_ids(ids: &mut Option<Vec<StableId>>, count: usize) {
+    if let Some(ids) = ids {
+        ids.extend(std::iter::repeat_n(StableId::UNASSIGNED, count));
+    }
+}
 
 fn curves_cover_same_span<C>(left: &C, right: &C, tol: f64) -> bool
 where C: ParametricCurve3D<Point = Point3>

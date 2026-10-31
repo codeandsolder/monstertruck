@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Debug, Edge, EdgeId, ExactParameterBoundary2D, Face, Hash, Hasher, ParametricCurve,
     ParametricSurface, Result, Shell, Solid, SolidAttributes, StableId, StableIdAllocator,
-    TOLERANCE, Vertex, VertexId, Wire,
+    TOLERANCE, Vertex, VertexId, Wire, errors::Error,
 };
 
 /// Serialized compressed edge
@@ -397,6 +397,33 @@ impl<P, C, S> Shell<P, C, S> {
     /// (from `monstertruck-healing`) to the `CompressedShell` before calling `extract`.
     /// The convenience function `monstertruck_healing::extract_healed` does both steps.
     pub fn extract(cshell: CompressedShell<P, C, S>) -> Result<Self> {
+        for (entity, ids, expected) in [
+            (
+                "vertices",
+                cshell.vertex_stable_ids.as_deref(),
+                cshell.vertices.len(),
+            ),
+            (
+                "edges",
+                cshell.edge_stable_ids.as_deref(),
+                cshell.edges.len(),
+            ),
+            (
+                "faces",
+                cshell.face_stable_ids.as_deref(),
+                cshell.faces.len(),
+            ),
+        ] {
+            if let Some(ids) = ids
+                && ids.len() != expected
+            {
+                return Err(Error::StableIdCountMismatch {
+                    entity,
+                    expected,
+                    actual: ids.len(),
+                });
+            }
+        }
         let CompressedShell {
             vertices,
             edges,
@@ -1063,6 +1090,44 @@ fn same_topology<P, C, S, Q, D, T>(one: &Shell<P, C, S>, other: &Shell<Q, D, T>)
         }
     }
     true
+}
+
+#[test]
+fn extract_rejects_misaligned_stable_id_sidecars() {
+    let cube = solid::cube();
+    let shell = &cube.boundaries()[0];
+    let compressed = shell.compress();
+
+    let mut bad_vertices = compressed.clone();
+    bad_vertices.vertex_stable_ids =
+        Some(vec![StableId::UNASSIGNED; bad_vertices.vertices.len() - 1]);
+    assert!(matches!(
+        Shell::extract(bad_vertices),
+        Err(Error::StableIdCountMismatch {
+            entity: "vertices",
+            ..
+        })
+    ));
+
+    let mut bad_edges = compressed.clone();
+    bad_edges.edge_stable_ids = Some(vec![StableId::UNASSIGNED; bad_edges.edges.len() - 1]);
+    assert!(matches!(
+        Shell::extract(bad_edges),
+        Err(Error::StableIdCountMismatch {
+            entity: "edges",
+            ..
+        })
+    ));
+
+    let mut bad_faces = compressed;
+    bad_faces.face_stable_ids = Some(vec![StableId::UNASSIGNED; bad_faces.faces.len() - 1]);
+    assert!(matches!(
+        Shell::extract(bad_faces),
+        Err(Error::StableIdCountMismatch {
+            entity: "faces",
+            ..
+        })
+    ));
 }
 
 #[test]

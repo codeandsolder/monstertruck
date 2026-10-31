@@ -126,9 +126,72 @@ fn simple_cylinder_shell() -> CompressedShell<Point3, Curve, Surface> {
 #[test]
 fn split_closed_faces_reports_change_only_on_first_normalizing_pass() {
     let mut shell = simple_cylinder_shell();
+    let original_vertex_count = shell.vertices.len();
+    let original_edge_count = shell.edges.len();
+    let original_face_count = shell.faces.len();
+    shell.vertex_stable_ids = Some(
+        (100_u64..)
+            .take(original_vertex_count)
+            .map(StableId::new)
+            .collect(),
+    );
+    shell.edge_stable_ids = Some(
+        (200_u64..)
+            .take(original_edge_count)
+            .map(StableId::new)
+            .collect(),
+    );
+    shell.face_stable_ids = Some(
+        (300_u64..)
+            .take(original_face_count)
+            .map(StableId::new)
+            .collect(),
+    );
 
     assert!(split_closed_faces(&mut shell, 0.01, sp));
     assert!(Shell::extract(shell.clone()).is_ok());
+    let vertex_ids = shell.vertex_stable_ids.as_ref().expect("vertex stable ids");
+    let edge_ids = shell.edge_stable_ids.as_ref().expect("edge stable ids");
+    let face_ids = shell.face_stable_ids.as_ref().expect("face stable ids");
+    assert_eq!(vertex_ids.len(), shell.vertices.len());
+    assert_eq!(edge_ids.len(), shell.edges.len());
+    assert_eq!(face_ids.len(), shell.faces.len());
+    assert_eq!(
+        &vertex_ids[..original_vertex_count],
+        &(100_u64..)
+            .take(original_vertex_count)
+            .map(StableId::new)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        &edge_ids[..original_edge_count],
+        &(200_u64..)
+            .take(original_edge_count)
+            .map(StableId::new)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        &face_ids[..original_face_count],
+        &(300_u64..)
+            .take(original_face_count)
+            .map(StableId::new)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        vertex_ids[original_vertex_count..]
+            .iter()
+            .all(|id| *id == StableId::UNASSIGNED)
+    );
+    assert!(
+        edge_ids[original_edge_count..]
+            .iter()
+            .all(|id| *id == StableId::UNASSIGNED)
+    );
+    assert!(
+        face_ids[original_face_count..]
+            .iter()
+            .all(|id| *id == StableId::UNASSIGNED)
+    );
 
     let stabilized = shell.clone();
     assert!(!split_closed_faces(&mut shell, 0.01, sp));
