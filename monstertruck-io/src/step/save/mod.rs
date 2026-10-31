@@ -154,6 +154,9 @@ impl<I: Clone + IntoIterator<Item = usize>> Display for SliceDisplay<'_, IndexSl
 /// take subsequent indices; their count is reported via [`StepLength`].
 pub trait StepFormat {
     /// Write the STEP encoding of `self` rooted at entity index `idx`.
+    ///
+    /// # Errors
+    /// Returns an error if writing the STEP representation fails.
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result;
 }
 

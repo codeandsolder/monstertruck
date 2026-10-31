@@ -188,6 +188,9 @@ impl EdgeCurve {
         })
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the referenced curve geometry is missing or cannot be converted.
     pub fn parse_curve3d(&self) -> Result<Curve3D, StepConvertingError> {
         let p = Point3::from(&self.edge_start.vertex_geometry);
         let q = Point3::from(&self.edge_end.vertex_geometry);
@@ -385,21 +388,21 @@ impl EdgeCurve {
 
     fn sub_parse_curve3d(
         curve: &CurveAny,
-        p: Point3,
-        q: Point3,
+        start_point: Point3,
+        end_point: Point3,
         same_sense: bool,
     ) -> Result<Curve3D, StepConvertingError> {
         let mut curve = match curve {
-            CurveAny::Line(_) => Curve3D::Line(geom::Line(p, q)),
+            CurveAny::Line(_) => Curve3D::Line(geom::Line(start_point, end_point)),
             CurveAny::BoundedCurve(b) => b.as_ref().try_into()?,
-            CurveAny::Conic(curve) => Self::parse_conic_3d(curve.as_ref(), p, q)?,
+            CurveAny::Conic(curve) => Self::parse_conic_3d(curve.as_ref(), start_point, end_point)?,
             CurveAny::Pcurve(c) => {
                 let surface: Surface = (&c.basis_surface).try_into()?;
-                let u = surface
-                    .search_nearest_parameter(p, None, 100)
+                let start_uv = surface
+                    .search_nearest_parameter(start_point, None, 100)
                     .ok_or_else(|| "the point is not on surface".to_string())?;
-                let v = surface
-                    .search_nearest_parameter(q, None, 100)
+                let end_uv = surface
+                    .search_nearest_parameter(end_point, None, 100)
                     .ok_or_else(|| "the point is not on surface".to_string())?;
                 let curve2d = c
                     .reference_to_curve
@@ -408,8 +411,8 @@ impl EdgeCurve {
                     .ok_or("no representation item")?;
                 let curve2d = Self::sub_parse_2d(
                     curve2d,
-                    Point2::new(u.0, u.1),
-                    Point2::new(v.0, v.1),
+                    Point2::new(start_uv.0, start_uv.1),
+                    Point2::new(end_uv.0, end_uv.1),
                     true,
                 )?;
                 Curve3D::ParameterCurve(geom::ParameterCurve::new(
@@ -417,7 +420,9 @@ impl EdgeCurve {
                     Box::new(surface),
                 ))
             }
-            CurveAny::SurfaceCurve(c) => Self::parse_surface_curve3d(c, p, q, same_sense)?,
+            CurveAny::SurfaceCurve(c) => {
+                Self::parse_surface_curve3d(c, start_point, end_point, same_sense)?
+            }
         };
         if !same_sense {
             curve.invert();

@@ -392,26 +392,28 @@ pub struct BsplineSurfaceWithKnots {
 impl TryFrom<&BsplineSurfaceWithKnots> for BsplineSurface<Point3> {
     type Error = StepConvertingError;
     fn try_from(surface: &BsplineSurfaceWithKnots) -> Result<Self, StepConvertingError> {
-        let uknots = surface.u_knots.clone();
-        let umulti = surface
+        let horizontal_knots = surface.u_knots.clone();
+        let horizontal_multiplicities = surface
             .u_multiplicities
             .iter()
             .map(|n| usize::try_from(*n))
             .collect::<Result<Vec<_>, _>>()?;
-        let uknots = KnotVector::from_single_multi(uknots, umulti)?;
-        let vknots = surface.v_knots.clone();
-        let vmulti = surface
+        let horizontal_knots =
+            KnotVector::from_single_multi(horizontal_knots, horizontal_multiplicities)?;
+        let vertical_knots = surface.v_knots.clone();
+        let vertical_multiplicities = surface
             .v_multiplicities
             .iter()
             .map(|n| usize::try_from(*n))
             .collect::<Result<Vec<_>, _>>()?;
-        let vknots = KnotVector::from_single_multi(vknots, vmulti)?;
+        let vertical_knots =
+            KnotVector::from_single_multi(vertical_knots, vertical_multiplicities)?;
         let ctrls = surface
             .control_points_list
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Ok(Self::new((uknots, vknots), ctrls)?)
+        Ok(Self::new((horizontal_knots, vertical_knots), ctrls)?)
     }
 }
 
@@ -435,7 +437,7 @@ pub struct UniformSurface {
 impl TryFrom<&UniformSurface> for BsplineSurface<Point3> {
     type Error = StepConvertingError;
     fn try_from(surface: &UniformSurface) -> Result<Self, StepConvertingError> {
-        let uknots = uniform_knots(
+        let horizontal_knots = uniform_knots(
             surface.control_points_list.len(),
             usize::try_from(surface.u_degree)?,
         )?;
@@ -443,13 +445,13 @@ impl TryFrom<&UniformSurface> for BsplineSurface<Point3> {
             .control_points_list
             .first()
             .ok_or("control points list is empty.")?;
-        let vknots = uniform_knots(first.len(), usize::try_from(surface.v_degree)?)?;
+        let vertical_knots = uniform_knots(first.len(), usize::try_from(surface.v_degree)?)?;
         let ctrls = surface
             .control_points_list
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Ok(Self::new((uknots, vknots), ctrls)?)
+        Ok(Self::new((horizontal_knots, vertical_knots), ctrls)?)
     }
 }
 
@@ -473,7 +475,7 @@ pub struct QuasiUniformSurface {
 impl TryFrom<&QuasiUniformSurface> for BsplineSurface<Point3> {
     type Error = StepConvertingError;
     fn try_from(surface: &QuasiUniformSurface) -> Result<Self, StepConvertingError> {
-        let uknots = quasi_uniform_knots(
+        let horizontal_knots = quasi_uniform_knots(
             surface.control_points_list.len(),
             usize::try_from(surface.u_degree)?,
         )?;
@@ -481,13 +483,13 @@ impl TryFrom<&QuasiUniformSurface> for BsplineSurface<Point3> {
             .control_points_list
             .first()
             .ok_or("control points list is empty.")?;
-        let vknots = quasi_uniform_knots(first.len(), usize::try_from(surface.v_degree)?)?;
+        let vertical_knots = quasi_uniform_knots(first.len(), usize::try_from(surface.v_degree)?)?;
         let ctrls = surface
             .control_points_list
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Ok(Self::new((uknots, vknots), ctrls)?)
+        Ok(Self::new((horizontal_knots, vertical_knots), ctrls)?)
     }
 }
 
@@ -512,14 +514,14 @@ impl TryFrom<&BezierSurface> for BsplineSurface<Point3> {
     type Error = StepConvertingError;
 
     fn try_from(value: &BezierSurface) -> Result<Self, Self::Error> {
-        let uknots = KnotVector::bezier_knot(usize::try_from(value.u_degree)?);
-        let vknots = KnotVector::bezier_knot(usize::try_from(value.v_degree)?);
+        let horizontal_knots = KnotVector::bezier_knot(usize::try_from(value.u_degree)?);
+        let vertical_knots = KnotVector::bezier_knot(usize::try_from(value.v_degree)?);
         let ctrls = value
             .control_points_list
             .iter()
             .map(|vec| vec.iter().map(Point3::from).collect())
             .collect();
-        Self::new((uknots, vknots), ctrls).map_err(Into::into)
+        Self::new((horizontal_knots, vertical_knots), ctrls).map_err(Into::into)
     }
 }
 

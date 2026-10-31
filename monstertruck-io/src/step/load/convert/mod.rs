@@ -332,14 +332,14 @@ impl Table {
     /// [`Self::absolute_bound_orientation`].
     fn face_bound_to_edges(
         &self,
-        bound: FaceBoundHolder,
+        bound: &FaceBoundHolder,
         face_sense: bool,
         eidx_map: &HashMap<u64, usize>,
         sink: &LossSink,
     ) -> Option<Vec<CompressedEdgeIndex>> {
         use PlaceHolder::Ref;
-        let ori = Self::absolute_bound_orientation(&bound, face_sense);
-        let bound = self.resolved_edge_loop(&bound, sink)?;
+        let ori = Self::absolute_bound_orientation(bound, face_sense);
+        let bound = self.resolved_edge_loop(bound, sink)?;
         sink.listed(Cat::EdgeUse, bound.edge_list.len());
         let mut edges: Vec<CompressedEdgeIndex> = bound
             .edge_list
@@ -446,7 +446,7 @@ impl Table {
     /// `exact_trim_curve_on` already does off the composed orientation.
     fn face_bound_to_edge_uses(
         &self,
-        bound: FaceBoundHolder,
+        bound: &FaceBoundHolder,
         face_sense: bool,
         face_surface: &Surface,
         edges: &[CompressedEdge<Curve3D>],
@@ -454,8 +454,8 @@ impl Table {
         sink: &LossSink,
     ) -> Option<Vec<CompressedEdgeUse<step_geometry::StepParameterCurve>>> {
         use PlaceHolder::Ref;
-        let ori = Self::absolute_bound_orientation(&bound, face_sense);
-        let bound = self.resolved_edge_loop(&bound, sink)?;
+        let ori = Self::absolute_bound_orientation(bound, face_sense);
+        let bound = self.resolved_edge_loop(bound, sink)?;
         sink.listed(Cat::EdgeUse, bound.edge_list.len());
         let mut edges = bound
             .edge_list
@@ -579,7 +579,7 @@ impl Table {
                 // not two: see `absolute_bound_orientation`.
                 let face_sense = orientation == face.same_sense;
                 let boundaries = self.face_boundaries_or_report(&face, sink, |bound| {
-                    self.face_bound_to_edges(bound, face_sense, eidx_map, sink)
+                    self.face_bound_to_edges(&bound, face_sense, eidx_map, sink)
                 });
                 sink.kept(Cat::Face, 1);
                 Some(CompressedFace {
@@ -605,7 +605,9 @@ impl Table {
                 // not two: see `absolute_bound_orientation`.
                 let face_sense = orientation == face.same_sense;
                 let boundaries = self.face_boundaries_or_report(&face, sink, |bound| {
-                    self.face_bound_to_edge_uses(bound, face_sense, &surface, edges, eidx_map, sink)
+                    self.face_bound_to_edge_uses(
+                        &bound, face_sense, &surface, edges, eidx_map, sink,
+                    )
                 });
                 sink.kept(Cat::Face, 1);
                 Some(CompressedTrimmedFace {
@@ -640,6 +642,9 @@ impl Table {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     pub fn to_compressed_shell(
         &self,
         shell: &impl StepShell,
@@ -686,6 +691,9 @@ impl Table {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     pub fn to_compressed_shell_reported(
         &self,
         shell: &impl StepShell,
@@ -695,6 +703,9 @@ impl Table {
 
     /// Constructs `CompressedTrimmedShell` from `Shell` in STEP file while preserving
     /// exact face-local `ParameterCurve`s when they are present in the STEP data.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     pub fn to_compressed_trimmed_shell(
         &self,
         shell: &impl StepShell,
@@ -707,6 +718,9 @@ impl Table {
 
     /// [`Self::to_compressed_trimmed_shell`] plus the loss report. See
     /// [`Self::to_compressed_shell_reported`].
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     pub fn to_compressed_trimmed_shell_reported(
         &self,
         shell: &impl StepShell,
@@ -715,6 +729,9 @@ impl Table {
     }
 
     /// Constructs `CompressedShell`s from `ShellBasedSurfaceModel` in STEP file
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     pub fn to_compressed_shells(
         &self,
         shells: &ShellBasedSurfaceModelHolder,
@@ -736,6 +753,9 @@ impl Table {
     }
 
     /// Constructs `CompressedTrimmedShell`s from `ShellBasedSurfaceModel` in STEP file.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     pub fn to_compressed_trimmed_shells(
         &self,
         shells: &ShellBasedSurfaceModelHolder,
@@ -792,6 +812,9 @@ impl Table {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     pub fn to_compressed_solid(
         &self,
         solid: &ManifoldSolidBrepHolder,
@@ -805,6 +828,9 @@ impl Table {
     /// shell lost what, not merely that the solid lost something.
     ///
     /// See [`Self::to_compressed_shell_reported`] for why this exists.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     pub fn to_compressed_solid_reported(
         &self,
         solid: &ManifoldSolidBrepHolder,
@@ -814,11 +840,10 @@ impl Table {
         };
         let outer_shell = self.shell.get(outer_idx).map_or_else(
             || {
-                if let Some(step_shell) = self.oriented_shell.get(outer_idx) {
-                    self.to_compressed_shell_reported(step_shell)
-                } else {
-                    Err("failed to reference `solid.outer`".into())
-                }
+                self.oriented_shell.get(outer_idx).map_or_else(
+                    || Err("failed to reference `solid.outer`".into()),
+                    |step_shell| self.to_compressed_shell_reported(step_shell),
+                )
             },
             |step_shell| self.to_compressed_shell_reported(step_shell),
         )?;
@@ -846,6 +871,9 @@ impl Table {
     }
 
     /// Constructs `CompressedTrimmedSolid` from `ManifoldSolidBrep` in STEP file.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     pub fn to_compressed_trimmed_solid(
         &self,
         solid: &ManifoldSolidBrepHolder,
@@ -858,11 +886,10 @@ impl Table {
         };
         let outer_shell = self.shell.get(outer_idx).map_or_else(
             || {
-                if let Some(step_shell) = self.oriented_shell.get(outer_idx) {
-                    self.to_compressed_trimmed_shell(step_shell)
-                } else {
-                    Err("failed to reference `solid.outer`".into())
-                }
+                self.oriented_shell.get(outer_idx).map_or_else(
+                    || Err("failed to reference `solid.outer`".into()),
+                    |step_shell| self.to_compressed_trimmed_shell(step_shell),
+                )
             },
             |step_shell| self.to_compressed_trimmed_shell(step_shell),
         )?;
@@ -942,16 +969,16 @@ impl TryFrom<&NodeMatrix> for Matrix4 {
 impl Table {
     fn product_node_entity(
         &self,
-        pds_idx: u64,
+        shape_link_idx: u64,
         pd: &ProductDefinitionHolder,
     ) -> Result<ProductEntity, StepConvertingError> {
-        let PlaceHolder::Ref(Name::Entity(pdf_idx)) = &pd.formation else {
+        let PlaceHolder::Ref(Name::Entity(formation_idx)) = &pd.formation else {
             return Err("failed to reference `product_definition.formation`".into());
         };
-        let Some(pdf) = self.product_definition_formation.get(pdf_idx) else {
+        let Some(formation) = self.product_definition_formation.get(formation_idx) else {
             return Err("failed to reference `prouct_definition_formation`".into());
         };
-        let PlaceHolder::Ref(Name::Entity(p_idx)) = &pdf.of_product else {
+        let PlaceHolder::Ref(Name::Entity(p_idx)) = &formation.of_product else {
             return Err("failed to reference `product_definition_formation.of_product`".into());
         };
         let Some(product) = self.product.get(p_idx) else {
@@ -976,7 +1003,7 @@ impl Table {
             let &PlaceHolder::Ref(Name::Entity(idx)) = &sdr.definition else {
                 return false;
             };
-            pds_idx == idx
+            shape_link_idx == idx
         }) else {
             return Err("failed to find `shape_definition_representation` corresp. to `product_definition_shape`".into());
         };
@@ -1074,6 +1101,9 @@ impl Table {
         Ok((entity, (parent_idx, child_idx)))
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if assembly references cannot be resolved or converted.
     pub fn step_assy(&self) -> Result<StepAssembly, LoadError> {
         let mut product_entities = Vec::<ProductEntity>::new();
         let mut indices_map = HashMap::<u64, usize>::new();
@@ -1360,12 +1390,18 @@ impl Table {
 /// that discard it, so every existing caller keeps working unchanged.
 pub trait StepShell {
     /// Convert, and report what was kept and lost.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     fn to_compressed_shell_reported(
         &self,
         table: &Table,
     ) -> Result<(CompressedShell<Point3, Curve3D, Surface>, ShellLoadReport), StepConvertingError>;
 
     /// Convert preserving exact trim curves, and report what was kept and lost.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     fn to_compressed_trimmed_shell_reported(
         &self,
         table: &Table,
@@ -1376,6 +1412,9 @@ pub trait StepShell {
     /// A lossy conversion is indistinguishable from a clean one through this
     /// method -- that is exactly the defect spec 011 T7 exists to end. Prefer
     /// [`Self::to_compressed_shell_reported`] in new code.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     fn to_compressed_shell(
         &self,
         table: &Table,
@@ -1386,6 +1425,9 @@ pub trait StepShell {
 
     /// Convert preserving exact trim curves, DISCARDING the loss report.
     /// Prefer [`Self::to_compressed_trimmed_shell_reported`] in new code.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
     fn to_compressed_trimmed_shell(
         &self,
         table: &Table,

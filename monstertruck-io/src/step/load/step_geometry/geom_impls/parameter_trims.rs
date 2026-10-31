@@ -23,6 +23,208 @@ use monstertruck_traits::Transformed;
 #[cfg(test)]
 use std::f64::consts::TAU;
 
+fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> Ordering {
+    let distance = move |value: &f64| f64::abs(*value - previous);
+    move |lhs: &f64, rhs: &f64| distance(lhs).total_cmp(&distance(rhs))
+}
+
+/// `surface` and `axis` are carried for the `MT_STEP_DEBUG_UV_CLAMP` lens
+/// only (`uv_clamp.rs`); with the variable unset every `record_axis` call is
+/// a `OnceLock` read and a return, and no value the lens computes is read
+/// back here.
+fn normalize_axis(
+    value: f64,
+    previous: Option<f64>,
+    period: Option<f64>,
+    range: Option<(f64, f64)>,
+    surface: &Surface,
+    axis: uv_clamp::Axis,
+    real_range: bool,
+) -> Option<f64> {
+    if !value.is_finite() {
+        None
+    } else if let Some(previous) = previous {
+        period.map_or_else(
+            || {
+                range.map_or_else(
+                    || {
+                        uv_clamp::record_axis(surface, axis, real_range, uv_clamp::Event::Unranged);
+                        Some(value)
+                    },
+                    |range| {
+                        let clamped = clamp_near_range(value, range);
+                        uv_clamp::record_axis(
+                            surface,
+                            axis,
+                            real_range,
+                            uv_clamp::Event::Clamp {
+                                moved: clamped - value,
+                                to_max: clamped.partial_cmp(&range.1) == Some(Ordering::Equal),
+                            },
+                        );
+                        Some(clamped)
+                    },
+                )
+            },
+            |period| {
+                (-2..=2)
+                    .map(|index| f64::mul_add(f64::from(index), period, value))
+                    .min_by(abs_diff(previous))
+            },
+        )
+    } else if let Some((min, max)) = range {
+        period.map_or_else(
+            || {
+                let clamped = clamp_near_range(value, (min, max));
+                uv_clamp::record_axis(
+                    surface,
+                    axis,
+                    real_range,
+                    uv_clamp::Event::Clamp {
+                        moved: clamped - value,
+                        to_max: clamped.partial_cmp(&max) == Some(Ordering::Equal),
+                    },
+                );
+                Some(clamped)
+            },
+            |period| {
+                let span = max - min;
+                if span.so_small() {
+                    uv_clamp::record_axis(
+                        surface,
+                        axis,
+                        real_range,
+                        uv_clamp::Event::Periodic {
+                            wrapped: min.partial_cmp(&value) != Some(Ordering::Equal),
+                            clamped: 0.0,
+                            degenerate: true,
+                        },
+                    );
+                    Some(min)
+                } else {
+                    let mut normalized = f64::floor((value - min) / period).mul_add(-period, value);
+                    if normalized < min {
+                        normalized += period;
+                    }
+                    if normalized > max {
+                        normalized -= period;
+                    }
+                    let clamped = normalized.clamp(min, max);
+                    uv_clamp::record_axis(
+                        surface,
+                        axis,
+                        real_range,
+                        uv_clamp::Event::Periodic {
+                            wrapped: normalized.partial_cmp(&value) != Some(Ordering::Equal),
+                            clamped: clamped - normalized,
+                            degenerate: false,
+                        },
+                    );
+                    Some(clamped)
+                }
+            },
+        )
+    } else {
+        uv_clamp::record_axis(surface, axis, real_range, uv_clamp::Event::Unranged);
+        Some(value)
+    }
+}
+
+fn clamp_near_range(value: f64, (min, max): (f64, f64)) -> f64 {
+    if value < min && min - value < TOLERANCE {
+        min
+    } else if value > max && value - max < TOLERANCE {
+        max
+    } else {
+        value
+    }
+}
+
+// THE CLAMP IS NOT ASKED ABOUT AN AXIS THAT REPORTS A PLACEHOLDER.
+//
+// `clamp_near_range` snaps a value that overshoots the reported range by
+// less than `TOLERANCE` onto the boundary. On a knot-bounded axis that is
+// exactly right and it is doing real work: the net carries no data past the
+// knot vector, so an unbounded Newton that walked one ULP-cloud past the end
+// must come back. On a PLACEHOLDER axis there is no boundary to come back
+// to -- a plane's `[0, 1]^2` and a loaded cylinder's or cone's axial `[0, 1]`
+// are the values `parameter_range` returns so `range_tuple()` has something
+// to return, over an unbounded direction whose parameter is a world-scale
+// distance. Clamping there writes a number the solver did not produce, onto
+// a line in parameter space that means nothing (see
+// `uv_clamp::reported_range_bounds_the_surface`, and the 40-line doc on
+// `monstertruck-geometry/src/specifieds/plane.rs::parameter_range` that
+// forbids treating the square as a domain). Same repair as spec 011's
+// `a4604cef` on the modeling twin, and the same reason: do not ask a
+// placeholder a question it cannot answer.
+//
+// MEASURED before the change with `MT_STEP_DEBUG_UV_CLAMP=1` (the lens in
+// `uv_clamp.rs`, driven by `uv_clamp_probe.rs`), over two populations: the
+// 15 in-repo fixtures at full depth (58,244 chains, 939,416 points) and 7 of
+// the 8 big-assembly corpus files sampled by lowest solid id (81 solids,
+// 35,447 chains, 862,318 points; Scania-Engine not sampled -- its parse
+// alone exceeds nextest's 20-minute kill). **The clamp is LIVE**, and the
+// split is what decides the shape of the fix:
+//
+// | axis                     | calls   | MOVED  | -> min | -> max | max |move| |
+// |--------------------------|--------:|-------:|-------:|-------:|-----------:|
+// | IN-REPO                  |         |        |        |        |            |
+// | plane u (placeholder)    | 490,007 |  1,324 |  1,302 |     22 |    7.43e-7 |
+// | plane v (placeholder)    | 490,007 |  1,582 |  1,524 |     58 |   2.78e-10 |
+// | cylinder v (placeholder) |  67,472 |  3,655 |  3,569 |     86 |   5.63e-11 |
+// | cone v (placeholder)     |   3,926 |    704 |    704 |      0 |   9.61e-11 |
+// | bspline u+v (knots)      | 128,664 | 24,144 | 12,105 | 12,039 |    8.60e-7 |
+// | nurbs u+v (knots)        | 624,366 | 64,708 | 36,896 | 27,812 |    9.30e-7 |
+// | CORPUS                   |         |        |        |        |            |
+// | plane u (placeholder)    | 291,687 |    842 |    828 |     14 |    7.06e-7 |
+// | plane v (placeholder)    | 291,687 |    768 |    748 |     20 |    9.58e-7 |
+// | cylinder v (placeholder) | 311,100 | 17,492 | 14,717 |  2,775 |    2.50e-7 |
+// | cone v (placeholder)     | 103,061 | 26,338 | 23,057 |  3,281 |   1.21e-13 |
+// | bspline u+v (knots)      |  86,630 |  5,670 |  3,335 |  2,335 |    9.99e-7 |
+// | nurbs u+v (knots)        |  84,588 |  7,050 |  4,170 |  2,880 |    9.99e-7 |
+//
+// In-repo, 92.4% of all movement (88,852 of 96,117) is against a REAL knot
+// vector and is untouched by this change. **On the corpus the ratio
+// INVERTS**: 45,440 of 58,160 moves -- 78% -- are against a placeholder.
+// The in-repo fixtures are B-spline-heavy scan data; real assemblies are
+// analytic-heavy, so anyone measuring only in-repo would have concluded this
+// was a 7% edge case.
+//
+// The `-> min` column is why the placeholder half looked harmless: most
+// moves snap onto `min = 0`, which is the surface's own parameter ORIGIN --
+// a plane's placement point, a revolution profile's start -- so the write is
+// ~1e-10 and reads as de-noising. It is NOT principled de-noising: the same
+// face's sample at u = 5.0 gets none, and the noise floor is only small
+// because the placement happens to sit on the trim. The other **6,090
+// corpus moves snap onto `max = 1`**, one arbitrary unit along an unbounded
+// direction, which is the same write with none of the excuse.
+//
+// AND THE SQUARE IS NOT A DOMAIN, MEASURED AS SUCH: of the raw solver
+// answers on a placeholder axis, the fraction sitting OUTSIDE the reported
+// range by more than `TOLERANCE` -- where `clamp_near_range` does nothing at
+// all -- is 437,258 of 490,007 planar u in-repo (89.2%) and 274,196 of
+// 291,687 on the corpus (94.0%), reaching `u = 5.0e5` outside `[0, 1]`. A
+// range that four out of five samples violate by five orders of magnitude
+// is not a bound, and clamping the one-in-a-thousand that lands within
+// 1e-6 of it is an accident of where the placement was written.
+//
+// Only NON-PERIODIC axes are dropped. No placeholder axis carries a period
+// today (a revolution's turn and a sphere's/torus's angles are all real
+// bounds, and a `Line` profile has no period), so the guard is inert --
+// it is written this way so that the periodic wrap arm below, which is
+// selected by `range.is_some()`, provably cannot lose its range. Pinned by
+// `no_placeholder_axis_carries_a_period`.
+//
+// WHAT THIS CHANGE COSTS, measured by per-chain BIT digests of the produced
+// parameter loops, before and after, over both populations: 3,147 of 58,268
+// in-repo chains change (5.4%). NOT ONE changes its point count, and not one
+// flips between `Some` and `None` -- the chains that refused still refuse
+// and the chains that answered still answer, with the same number of
+// samples. The largest movement of any chain's u/v extent is 7.43e-7, and
+// only 19 chains move by more than 1e-9; the mode is ~1e-16, the ULP cloud
+// around the placement origin that used to be snapped flat to `0.0`.
+// Placeholder moves go 7,265 -> 0 and knot moves hold at exactly 88,852.
+
 fn sampled_parameter_boundary<C>(
     curve: &C,
     surface: &Surface,
@@ -31,220 +233,27 @@ fn sampled_parameter_boundary<C>(
 where
     C: ParametricCurve3D + BoundedCurve + ParameterDivision1D<Point = Point3>,
 {
-    fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> Ordering {
-        let distance = move |value: &f64| f64::abs(*value - previous);
-        move |lhs: &f64, rhs: &f64| distance(lhs).total_cmp(&distance(rhs))
-    }
-
-    /// `surface` and `axis` are carried for the `MT_STEP_DEBUG_UV_CLAMP` lens
-    /// only (`uv_clamp.rs`); with the variable unset every `record_axis` call is
-    /// a `OnceLock` read and a return, and no value the lens computes is read
-    /// back here.
-    fn normalize_axis(
-        value: f64,
-        previous: Option<f64>,
-        period: Option<f64>,
-        range: Option<(f64, f64)>,
-        surface: &Surface,
-        axis: uv_clamp::Axis,
-        real_range: bool,
-    ) -> Option<f64> {
-        if !value.is_finite() {
-            None
-        } else if let Some(previous) = previous {
-            period.map_or_else(
-                || {
-                    if let Some(range) = range {
-                        let clamped = clamp_near_range(value, range);
-                        uv_clamp::record_axis(
-                            surface,
-                            axis,
-                            real_range,
-                            uv_clamp::Event::Clamp {
-                                moved: clamped - value,
-                                to_max: clamped == range.1,
-                            },
-                        );
-                        Some(clamped)
-                    } else {
-                        uv_clamp::record_axis(surface, axis, real_range, uv_clamp::Event::Unranged);
-                        Some(value)
-                    }
-                },
-                |period| {
-                    (-2..=2)
-                        .map(|index| f64::mul_add(f64::from(index), period, value))
-                        .min_by(abs_diff(previous))
-                },
-            )
-        } else if let Some((min, max)) = range {
-            period.map_or_else(
-                || {
-                    let clamped = clamp_near_range(value, (min, max));
-                    uv_clamp::record_axis(
-                        surface,
-                        axis,
-                        real_range,
-                        uv_clamp::Event::Clamp {
-                            moved: clamped - value,
-                            to_max: clamped == max,
-                        },
-                    );
-                    Some(clamped)
-                },
-                |period| {
-                    let span = max - min;
-                    if span.so_small() {
-                        uv_clamp::record_axis(
-                            surface,
-                            axis,
-                            real_range,
-                            uv_clamp::Event::Periodic {
-                                wrapped: min != value,
-                                clamped: 0.0,
-                                degenerate: true,
-                            },
-                        );
-                        Some(min)
-                    } else {
-                        let mut normalized =
-                            f64::floor((value - min) / period).mul_add(-period, value);
-                        if normalized < min {
-                            normalized += period;
-                        }
-                        if normalized > max {
-                            normalized -= period;
-                        }
-                        let clamped = normalized.clamp(min, max);
-                        uv_clamp::record_axis(
-                            surface,
-                            axis,
-                            real_range,
-                            uv_clamp::Event::Periodic {
-                                wrapped: normalized != value,
-                                clamped: clamped - normalized,
-                                degenerate: false,
-                            },
-                        );
-                        Some(clamped)
-                    }
-                },
-            )
-        } else {
-            uv_clamp::record_axis(surface, axis, real_range, uv_clamp::Event::Unranged);
-            Some(value)
-        }
-    }
-
-    fn clamp_near_range(value: f64, (min, max): (f64, f64)) -> f64 {
-        if value < min && min - value < TOLERANCE {
-            min
-        } else if value > max && value - max < TOLERANCE {
-            max
-        } else {
-            value
-        }
-    }
-
-    // THE CLAMP IS NOT ASKED ABOUT AN AXIS THAT REPORTS A PLACEHOLDER.
-    //
-    // `clamp_near_range` snaps a value that overshoots the reported range by
-    // less than `TOLERANCE` onto the boundary. On a knot-bounded axis that is
-    // exactly right and it is doing real work: the net carries no data past the
-    // knot vector, so an unbounded Newton that walked one ULP-cloud past the end
-    // must come back. On a PLACEHOLDER axis there is no boundary to come back
-    // to -- a plane's `[0, 1]^2` and a loaded cylinder's or cone's axial `[0, 1]`
-    // are the values `parameter_range` returns so `range_tuple()` has something
-    // to return, over an unbounded direction whose parameter is a world-scale
-    // distance. Clamping there writes a number the solver did not produce, onto
-    // a line in parameter space that means nothing (see
-    // `uv_clamp::reported_range_bounds_the_surface`, and the 40-line doc on
-    // `monstertruck-geometry/src/specifieds/plane.rs::parameter_range` that
-    // forbids treating the square as a domain). Same repair as spec 011's
-    // `a4604cef` on the modeling twin, and the same reason: do not ask a
-    // placeholder a question it cannot answer.
-    //
-    // MEASURED before the change with `MT_STEP_DEBUG_UV_CLAMP=1` (the lens in
-    // `uv_clamp.rs`, driven by `uv_clamp_probe.rs`), over two populations: the
-    // 15 in-repo fixtures at full depth (58,244 chains, 939,416 points) and 7 of
-    // the 8 big-assembly corpus files sampled by lowest solid id (81 solids,
-    // 35,447 chains, 862,318 points; Scania-Engine not sampled -- its parse
-    // alone exceeds nextest's 20-minute kill). **The clamp is LIVE**, and the
-    // split is what decides the shape of the fix:
-    //
-    // | axis                     | calls   | MOVED  | -> min | -> max | max |move| |
-    // |--------------------------|--------:|-------:|-------:|-------:|-----------:|
-    // | IN-REPO                  |         |        |        |        |            |
-    // | plane u (placeholder)    | 490,007 |  1,324 |  1,302 |     22 |    7.43e-7 |
-    // | plane v (placeholder)    | 490,007 |  1,582 |  1,524 |     58 |   2.78e-10 |
-    // | cylinder v (placeholder) |  67,472 |  3,655 |  3,569 |     86 |   5.63e-11 |
-    // | cone v (placeholder)     |   3,926 |    704 |    704 |      0 |   9.61e-11 |
-    // | bspline u+v (knots)      | 128,664 | 24,144 | 12,105 | 12,039 |    8.60e-7 |
-    // | nurbs u+v (knots)        | 624,366 | 64,708 | 36,896 | 27,812 |    9.30e-7 |
-    // | CORPUS                   |         |        |        |        |            |
-    // | plane u (placeholder)    | 291,687 |    842 |    828 |     14 |    7.06e-7 |
-    // | plane v (placeholder)    | 291,687 |    768 |    748 |     20 |    9.58e-7 |
-    // | cylinder v (placeholder) | 311,100 | 17,492 | 14,717 |  2,775 |    2.50e-7 |
-    // | cone v (placeholder)     | 103,061 | 26,338 | 23,057 |  3,281 |   1.21e-13 |
-    // | bspline u+v (knots)      |  86,630 |  5,670 |  3,335 |  2,335 |    9.99e-7 |
-    // | nurbs u+v (knots)        |  84,588 |  7,050 |  4,170 |  2,880 |    9.99e-7 |
-    //
-    // In-repo, 92.4% of all movement (88,852 of 96,117) is against a REAL knot
-    // vector and is untouched by this change. **On the corpus the ratio
-    // INVERTS**: 45,440 of 58,160 moves -- 78% -- are against a placeholder.
-    // The in-repo fixtures are B-spline-heavy scan data; real assemblies are
-    // analytic-heavy, so anyone measuring only in-repo would have concluded this
-    // was a 7% edge case.
-    //
-    // The `-> min` column is why the placeholder half looked harmless: most
-    // moves snap onto `min = 0`, which is the surface's own parameter ORIGIN --
-    // a plane's placement point, a revolution profile's start -- so the write is
-    // ~1e-10 and reads as de-noising. It is NOT principled de-noising: the same
-    // face's sample at u = 5.0 gets none, and the noise floor is only small
-    // because the placement happens to sit on the trim. The other **6,090
-    // corpus moves snap onto `max = 1`**, one arbitrary unit along an unbounded
-    // direction, which is the same write with none of the excuse.
-    //
-    // AND THE SQUARE IS NOT A DOMAIN, MEASURED AS SUCH: of the raw solver
-    // answers on a placeholder axis, the fraction sitting OUTSIDE the reported
-    // range by more than `TOLERANCE` -- where `clamp_near_range` does nothing at
-    // all -- is 437,258 of 490,007 planar u in-repo (89.2%) and 274,196 of
-    // 291,687 on the corpus (94.0%), reaching `u = 5.0e5` outside `[0, 1]`. A
-    // range that four out of five samples violate by five orders of magnitude
-    // is not a bound, and clamping the one-in-a-thousand that lands within
-    // 1e-6 of it is an accident of where the placement was written.
-    //
-    // Only NON-PERIODIC axes are dropped. No placeholder axis carries a period
-    // today (a revolution's turn and a sphere's/torus's angles are all real
-    // bounds, and a `Line` profile has no period), so the guard is inert --
-    // it is written this way so that the periodic wrap arm below, which is
-    // selected by `range.is_some()`, provably cannot lose its range. Pinned by
-    // `no_placeholder_axis_carries_a_period`.
-    //
-    // WHAT THIS CHANGE COSTS, measured by per-chain BIT digests of the produced
-    // parameter loops, before and after, over both populations: 3,147 of 58,268
-    // in-repo chains change (5.4%). NOT ONE changes its point count, and not one
-    // flips between `Some` and `None` -- the chains that refused still refuse
-    // and the chains that answered still answer, with the same number of
-    // samples. The largest movement of any chain's u/v extent is 7.43e-7, and
-    // only 19 chains move by more than 1e-9; the mode is ~1e-16, the ULP cloud
-    // around the placement origin that used to be snapped flat to `0.0`.
-    // Placeholder moves go 7,265 -> 0 and knot moves hold at exactly 88,852.
     let (u_real, v_real) = uv_clamp::reported_range_bounds_the_surface(surface);
     let normalize_uv = |uv: Point2, previous: Option<(f64, f64)>| {
         let (period_u, period_v) = (surface.period_u(), surface.period_v());
-        let (urange, vrange) = surface.try_range_tuple();
+        let (horizontal_bounds, vertical_bounds) = surface.try_range_tuple();
         uv_clamp::record_point();
-        uv_clamp::record_reported_excess(surface, uv_clamp::Axis::U, u_real, uv.x, urange);
-        uv_clamp::record_reported_excess(surface, uv_clamp::Axis::V, v_real, uv.y, vrange);
-        let urange = urange.filter(|_| u_real || period_u.is_some());
-        let vrange = vrange.filter(|_| v_real || period_v.is_some());
+        uv_clamp::record_reported_excess(
+            surface,
+            uv_clamp::Axis::U,
+            u_real,
+            uv.x,
+            horizontal_bounds,
+        );
+        uv_clamp::record_reported_excess(surface, uv_clamp::Axis::V, v_real, uv.y, vertical_bounds);
+        let horizontal_bounds = horizontal_bounds.filter(|_| u_real || period_u.is_some());
+        let vertical_bounds = vertical_bounds.filter(|_| v_real || period_v.is_some());
         Some(Point2::new(
             normalize_axis(
                 uv.x,
                 previous.map(|(u, _)| u),
                 period_u,
-                urange,
+                horizontal_bounds,
                 surface,
                 uv_clamp::Axis::U,
                 u_real,
@@ -253,7 +262,7 @@ where
                 uv.y,
                 previous.map(|(_, v)| v),
                 period_v,
-                vrange,
+                vertical_bounds,
                 surface,
                 uv_clamp::Axis::V,
                 v_real,
@@ -1002,10 +1011,18 @@ fn curve2d_from_sampled_boundary(points: Vec<Point2>) -> Option<Curve2D> {
         if is_linear {
             Some(Curve2D::Line(line))
         } else {
-            let denom = (points.len() - 1) as f64;
+            let interval_count = u32::try_from(points.len() - 1).ok()?;
+            let denominator = f64::from(interval_count);
+            let parameters = (0..points.len())
+                .map(|index| {
+                    u32::try_from(index)
+                        .ok()
+                        .map(|index| f64::from(index) / denominator)
+                })
+                .collect::<Option<Vec<_>>>()?;
             let knot_vec = KnotVector::from(
                 std::iter::once(0.0)
-                    .chain((0..points.len()).map(|index| index as f64 / denom))
+                    .chain(parameters)
                     .chain(std::iter::once(1.0))
                     .collect::<Vec<_>>(),
             );

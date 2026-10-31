@@ -18,6 +18,8 @@ pub struct ApplicationContext {
     pub application: String,
 }
 
+impl Eq for ApplicationContextHolder {}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = product_context)]

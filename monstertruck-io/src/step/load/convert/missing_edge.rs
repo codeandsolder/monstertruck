@@ -72,6 +72,16 @@ struct SurfaceArcHint {
     period_v: Option<f64>,
 }
 
+type RecoveryIntersection = IntersectionCurve<Box<Curve3D>, Box<Surface>, Box<Surface>>;
+
+#[derive(Clone, Copy, Debug)]
+struct MarchState {
+    point: Point3,
+    uv0: Point2,
+    uv1: Point2,
+    guide: Point3,
+}
+
 #[inline]
 fn unwrap_near(value: f64, reference: f64, period: Option<f64>) -> f64 {
     let Some(period) = period.filter(|period| period.is_finite() && *period > TOLERANCE) else {
@@ -151,12 +161,12 @@ fn span_is_local(
 impl Table {
     fn ordered_recovery_uses(
         &self,
-        bound: FaceBoundHolder,
+        bound: &FaceBoundHolder,
         face_sense: bool,
     ) -> Option<Vec<RecoveryUse>> {
         use PlaceHolder::Ref;
 
-        let absolute_orientation = Self::absolute_bound_orientation(&bound, face_sense);
+        let absolute_orientation = Self::absolute_bound_orientation(bound, face_sense);
         let edge_loop = match bound.resolve_bound(self) {
             BoundResolution::EdgeLoop(edge_loop) => edge_loop,
             BoundResolution::VertexLoop(_) | BoundResolution::Unresolved(_) => return None,
@@ -193,17 +203,16 @@ impl Table {
     }
 
     fn arc_hint_from_complement(
-        &self,
         surface: &Surface,
-        uses: &[RecoveryUse],
+        recovery_uses: &[RecoveryUse],
         missing_index: usize,
         recovered: &HashMap<u64, Curve3D>,
     ) -> Option<SurfaceArcHint> {
-        if uses.len() < 2 {
+        if recovery_uses.len() < 2 {
             return None;
         }
 
-        let missing = &uses[missing_index];
+        let missing = &recovery_uses[missing_index];
         let edge_id = missing.edge_id;
         let intrinsic_start = Point3::from(&missing.edge.edge_start.vertex_geometry);
         let intrinsic_end = Point3::from(&missing.edge.edge_end.vertex_geometry);
@@ -218,22 +227,22 @@ impl Table {
         // preserves long periodic windings carried by valid neighboring edges.
         let mut projected = Vec::<Point2>::new();
         let mut previous = None;
-        for offset in 1..uses.len() {
-            let use_ = &uses[(missing_index + offset) % uses.len()];
-            let curve = if use_.edge.edge_geometry.is_none() {
-                let Some(curve) = recovered.get(&use_.edge_id).cloned() else {
+        for offset in 1..recovery_uses.len() {
+            let recovery_use = &recovery_uses[(missing_index + offset) % recovery_uses.len()];
+            let curve = if recovery_use.edge.edge_geometry.is_none() {
+                let Some(curve) = recovered.get(&recovery_use.edge_id).cloned() else {
                     trace_recovery(edge_id, "hint_fail=second_missing_edge");
                     return None;
                 };
                 curve
             } else {
-                let Ok(curve) = use_.edge.parse_curve3d() else {
+                let Ok(curve) = recovery_use.edge.parse_curve3d() else {
                     trace_recovery(edge_id, "hint_fail=known_edge_parse");
                     return None;
                 };
                 curve
             };
-            let Some(points) = sample_oriented_curve(curve, use_.orientation) else {
+            let Some(points) = sample_oriented_curve(curve, recovery_use.orientation) else {
                 trace_recovery(edge_id, "hint_fail=known_edge_division");
                 return None;
             };
@@ -333,7 +342,7 @@ impl Table {
                 let Some(bound) = bound else {
                     continue;
                 };
-                let Some(uses) = self.ordered_recovery_uses(bound, face_sense) else {
+                let Some(uses) = self.ordered_recovery_uses(&bound, face_sense) else {
                     continue;
                 };
                 let is_unresolved = |use_: &&RecoveryUse| {
@@ -357,7 +366,12 @@ impl Table {
                     // evidence rather than throwing the whole face away.
                     let path_hint = (missing_count == 1)
                         .then(|| {
-                            self.arc_hint_from_complement(&surface, &uses, missing_index, recovered)
+                            Self::arc_hint_from_complement(
+                                &surface,
+                                &uses,
+                                missing_index,
+                                recovered,
+                            )
                         })
                         .flatten();
                     let hint = path_hint.or_else(|| Self::support_only_hint(&surface, missing_use));
@@ -378,6 +392,202 @@ impl Table {
         }
 
         hints
+    }
+
+    fn support_pair_sample(
+        edge_id: u64,
+        first: &SurfaceArcHint,
+        second: &SurfaceArcHint,
+        intersection: &RecoveryIntersection,
+        fraction: f64,
+        first_sample: bool,
+        previous: MarchState,
+    ) -> Option<MarchState> {
+        let expected0 = first.start_uv + (first.end_uv - first.start_uv) * fraction;
+        let expected1 = second.start_uv + (second.end_uv - second.start_uv) * fraction;
+        let point0 = first.surface.evaluate(expected0.x, expected0.y);
+        let point1 = second.surface.evaluate(expected1.x, expected1.y);
+        let guide_point = point0.midpoint(point1);
+
+        let (point, raw_uv0, raw_uv1) = if first_sample {
+            (previous.point, previous.uv0, previous.uv1)
+        } else {
+            // Both march directions solve the same transverse plane equation;
+            // the previous UVs only seed Newton and select the local root.
+            let predictor_normal0 = first.surface.normal(expected0.x, expected0.y);
+            let predictor_normal1 = second.surface.normal(expected1.x, expected1.y);
+            let tangent = predictor_normal0.cross(predictor_normal1);
+            let normal_scale = predictor_normal0.magnitude() * predictor_normal1.magnitude();
+            if !normal_scale.is_finite()
+                || normal_scale <= TOLERANCE
+                || tangent.magnitude() <= 1.0e-8 * normal_scale
+            {
+                trace_recovery(edge_id, "pair_fail=predictor_tangent");
+                return None;
+            }
+            let Some(solution) = intersection.search_intersection_in_plane(
+                guide_point,
+                tangent,
+                Some((previous.uv0.x, previous.uv0.y)),
+                Some((previous.uv1.x, previous.uv1.y)),
+                PROJECTION_TRIALS,
+            ) else {
+                trace_recovery(edge_id, "pair_fail=plane_ssi_search");
+                return None;
+            };
+            solution
+        };
+
+        let uv0 = unwrap_uv_near(&first.surface, raw_uv0, previous.uv0);
+        let uv1 = unwrap_uv_near(&second.surface, raw_uv1, previous.uv1);
+        if !point_close(first.surface.evaluate(uv0.x, uv0.y), point)
+            || !point_close(second.surface.evaluate(uv1.x, uv1.y), point)
+        {
+            trace_recovery(edge_id, "pair_fail=support_residual");
+            return None;
+        }
+
+        let normal0 = first.surface.normal(uv0.x, uv0.y);
+        let normal1 = second.surface.normal(uv1.x, uv1.y);
+        let normal_scale = normal0.magnitude() * normal1.magnitude();
+        if !normal_scale.is_finite()
+            || normal_scale <= TOLERANCE
+            || normal0.cross(normal1).magnitude() <= 1.0e-8 * normal_scale
+        {
+            trace_recovery(edge_id, "pair_fail=tangent");
+            return None;
+        }
+
+        if !first_sample {
+            let guide_step = previous.guide.distance(guide_point);
+            let actual_step = previous.point.distance(point);
+            if actual_step > 8.0 * guide_step.max(GEOMETRY_TOLERANCE) {
+                trace_recovery(edge_id, "pair_fail=continuation_jump");
+                return None;
+            }
+        }
+
+        for (value, expected, period, evidence) in [
+            (uv0.x, expected0.x, first.period_u, first.evidence),
+            (uv0.y, expected0.y, first.period_v, first.evidence),
+            (uv1.x, expected1.x, second.period_u, second.evidence),
+            (uv1.y, expected1.y, second.period_v, second.evidence),
+        ] {
+            if evidence == SurfaceHintEvidence::ComplementPath
+                && let Some(period) =
+                    period.filter(|period| period.is_finite() && *period > TOLERANCE)
+                && (unwrap_near(value, expected, Some(period)) - expected).abs() >= period * 0.5
+            {
+                trace_recovery(edge_id, "pair_fail=periodic_branch_drift");
+                return None;
+            }
+        }
+
+        Some(MarchState {
+            point,
+            uv0,
+            uv1,
+            guide: guide_point,
+        })
+    }
+
+    fn march_support_pair(
+        edge_id: u64,
+        front: Point3,
+        back: Point3,
+        first: &SurfaceArcHint,
+        second: &SurfaceArcHint,
+        intersection: &RecoveryIntersection,
+        forward: bool,
+    ) -> Option<Vec<Point3>> {
+        let mut points = Vec::with_capacity(RECOVERY_SAMPLES);
+        let mut state = MarchState {
+            point: if forward { front } else { back },
+            uv0: if forward {
+                first.start_uv
+            } else {
+                first.end_uv
+            },
+            uv1: if forward {
+                second.start_uv
+            } else {
+                second.end_uv
+            },
+            guide: if forward { front } else { back },
+        };
+        let intervals = u32::try_from(RECOVERY_SAMPLES.checked_sub(1)?).ok()?;
+
+        for sample_index in 0..RECOVERY_SAMPLES {
+            let sample_index = u32::try_from(sample_index).ok()?;
+            let unit = f64::from(sample_index) / f64::from(intervals);
+            let fraction = if forward { unit } else { 1.0 - unit };
+            state = Self::support_pair_sample(
+                edge_id,
+                first,
+                second,
+                intersection,
+                fraction,
+                sample_index == 0,
+                state,
+            )?;
+            points.push(state.point);
+        }
+
+        let target_point = if forward { back } else { front };
+        let target_uv0 = if forward {
+            first.end_uv
+        } else {
+            first.start_uv
+        };
+        let target_uv1 = if forward {
+            second.end_uv
+        } else {
+            second.start_uv
+        };
+        if !point_close(state.point, target_point) {
+            trace_recovery(edge_id, "pair_fail=endpoint_point");
+            return None;
+        }
+        for (value, target, period) in [
+            (state.uv0.x, target_uv0.x, first.period_u),
+            (state.uv0.y, target_uv0.y, first.period_v),
+            (state.uv1.x, target_uv1.x, second.period_u),
+            (state.uv1.y, target_uv1.y, second.period_v),
+        ] {
+            let value = unwrap_near(value, target, period);
+            let tolerance = period
+                .map_or(GEOMETRY_TOLERANCE, |period| period.abs() * 1.0e-6)
+                .max(GEOMETRY_TOLERANCE);
+            if (value - target).abs() > tolerance {
+                trace_recovery(edge_id, "pair_fail=endpoint_uv");
+                return None;
+            }
+        }
+        Some(points)
+    }
+
+    fn validate_recovery_candidate(edge_id: u64, candidate: &Curve3D) -> Option<()> {
+        let Curve3D::IntersectionCurve(intersection) = candidate else {
+            return None;
+        };
+        let (t0, t1) = intersection.range_tuple();
+        let intervals = u32::try_from(RECOVERY_SAMPLES.checked_sub(1)?).ok()?;
+        for index in 0..RECOVERY_SAMPLES - 1 {
+            let index = u32::try_from(index).ok()?;
+            let fraction = (f64::from(index) + 0.5) / f64::from(intervals);
+            let t = f64::mul_add(t1 - t0, fraction, t0);
+            let Some((point, uv0, uv1)) = intersection.search_triple(t, PROJECTION_TRIALS) else {
+                trace_recovery(edge_id, "pair_fail=final_search_triple");
+                return None;
+            };
+            if !point_close(intersection.surface0().evaluate(uv0.x, uv0.y), point)
+                || !point_close(intersection.surface1().evaluate(uv1.x, uv1.y), point)
+            {
+                trace_recovery(edge_id, "pair_fail=final_support_residual");
+                return None;
+            }
+        }
+        Some(())
     }
 
     fn recover_from_support_pair(
@@ -401,11 +611,9 @@ impl Table {
         )
         .is_some()
         {
-            // Coincident supports do not define a unique intersection curve.
             trace_recovery(edge_id, "pair_fail=coincident_supports");
             return None;
         }
-
         for hint in [first, second] {
             if !point_close(
                 hint.surface.evaluate(hint.start_uv.x, hint.start_uv.y),
@@ -417,185 +625,20 @@ impl Table {
             }
         }
 
-        let seed_leader = Curve3D::Polyline(PolylineCurve(vec![front, back]));
-        let intersection = IntersectionCurve::new(
+        let intersection = RecoveryIntersection::new(
             Box::new(first.surface.clone()),
             Box::new(second.surface.clone()),
-            Box::new(seed_leader),
+            Box::new(Curve3D::Polyline(PolylineCurve(vec![front, back]))),
         );
-
-        let guide = |fraction: f64| {
-            let expected0 = first.start_uv + (first.end_uv - first.start_uv) * fraction;
-            let expected1 = second.start_uv + (second.end_uv - second.start_uv) * fraction;
-            let point0 = first.surface.evaluate(expected0.x, expected0.y);
-            let point1 = second.surface.evaluate(expected1.x, expected1.y);
-            (expected0, expected1, point0.midpoint(point1))
-        };
-
-        // Continue the local transverse SSI branch from one endpoint to the
-        // other.  The interpolated face charts are only a predictor; the
-        // actual point comes from the two native supports.  Previous solved UVs
-        // seed the next Newton step, which makes this a branch continuation
-        // rather than a sequence of unrelated nearest-point queries.
-        let march = |forward: bool| -> Option<Vec<Point3>> {
-            let mut points = Vec::with_capacity(RECOVERY_SAMPLES);
-            let mut previous_point = if forward { front } else { back };
-            let mut previous_uv0 = if forward {
-                first.start_uv
-            } else {
-                first.end_uv
-            };
-            let mut previous_uv1 = if forward {
-                second.start_uv
-            } else {
-                second.end_uv
-            };
-            let mut previous_guide = previous_point;
-
-            for step in 0..RECOVERY_SAMPLES {
-                let unit = step as f64 / (RECOVERY_SAMPLES - 1) as f64;
-                let fraction = if forward { unit } else { 1.0 - unit };
-                let (expected0, expected1, guide_point) = guide(fraction);
-
-                let (point, raw_uv0, raw_uv1) = if step == 0 {
-                    (previous_point, previous_uv0, previous_uv1)
-                } else {
-                    // Predictor/corrector continuation.  The face-chart
-                    // predictor defines a canonical transverse plane for this
-                    // fraction: both forward and reverse marches therefore
-                    // solve the same `surface0 ∩ surface1 ∩ plane` equation.  The
-                    // previous solved UVs only seed Newton and select the local
-                    // root.  This makes the later bidirectional comparison a
-                    // real branch-identity check instead of comparing two
-                    // direction-dependent parameterizations.
-                    let predictor_normal0 = first.surface.normal(expected0.x, expected0.y);
-                    let predictor_normal1 = second.surface.normal(expected1.x, expected1.y);
-                    let tangent = predictor_normal0.cross(predictor_normal1);
-                    let normal_scale =
-                        predictor_normal0.magnitude() * predictor_normal1.magnitude();
-                    if !normal_scale.is_finite()
-                        || normal_scale <= TOLERANCE
-                        || tangent.magnitude() <= 1.0e-8 * normal_scale
-                    {
-                        trace_recovery(edge_id, "pair_fail=predictor_tangent");
-                        return None;
-                    }
-                    let Some(solution) = intersection.search_intersection_in_plane(
-                        guide_point,
-                        tangent,
-                        Some((previous_uv0.x, previous_uv0.y)),
-                        Some((previous_uv1.x, previous_uv1.y)),
-                        PROJECTION_TRIALS,
-                    ) else {
-                        trace_recovery(edge_id, "pair_fail=plane_ssi_search");
-                        return None;
-                    };
-                    solution
-                };
-
-                let uv0 = unwrap_uv_near(&first.surface, raw_uv0, previous_uv0);
-                let uv1 = unwrap_uv_near(&second.surface, raw_uv1, previous_uv1);
-                if !point_close(first.surface.evaluate(uv0.x, uv0.y), point)
-                    || !point_close(second.surface.evaluate(uv1.x, uv1.y), point)
-                {
-                    trace_recovery(edge_id, "pair_fail=support_residual");
-                    return None;
-                }
-
-                // A tangential/coincident contact does not have one locally
-                // defined intersection branch.  Recovery is only proof-backed
-                // while the implicit-function intersection remains transverse.
-                let normal0 = first.surface.normal(uv0.x, uv0.y);
-                let normal1 = second.surface.normal(uv1.x, uv1.y);
-                let normal_scale = normal0.magnitude() * normal1.magnitude();
-                if !normal_scale.is_finite()
-                    || normal_scale <= TOLERANCE
-                    || normal0.cross(normal1).magnitude() <= 1.0e-8 * normal_scale
-                {
-                    trace_recovery(edge_id, "pair_fail=tangent");
-                    return None;
-                }
-
-                if step > 0 {
-                    let guide_step = previous_guide.distance(guide_point);
-                    let actual_step = previous_point.distance(point);
-                    if actual_step > 8.0 * guide_step.max(GEOMETRY_TOLERANCE) {
-                        trace_recovery(edge_id, "pair_fail=continuation_jump");
-                        return None;
-                    }
-                }
-
-                // The face loop selected a particular unwrapped periodic chart.
-                // Continuation may return an equivalent representation shifted
-                // by whole periods; unwrap it near the previous sample, then
-                // reject a branch that drifts over half a period away from the
-                // chart predictor.
-                for (value, expected, period, evidence) in [
-                    (uv0.x, expected0.x, first.period_u, first.evidence),
-                    (uv0.y, expected0.y, first.period_v, first.evidence),
-                    (uv1.x, expected1.x, second.period_u, second.evidence),
-                    (uv1.y, expected1.y, second.period_v, second.evidence),
-                ] {
-                    if evidence == SurfaceHintEvidence::ComplementPath
-                        && let Some(period) =
-                            period.filter(|period| period.is_finite() && *period > TOLERANCE)
-                        && (unwrap_near(value, expected, Some(period)) - expected).abs()
-                            >= period * 0.5
-                    {
-                        trace_recovery(edge_id, "pair_fail=periodic_branch_drift");
-                        return None;
-                    }
-                }
-
-                points.push(point);
-                previous_point = point;
-                previous_uv0 = uv0;
-                previous_uv1 = uv1;
-                previous_guide = guide_point;
-            }
-
-            let target_point = if forward { back } else { front };
-            let target_uv0 = if forward {
-                first.end_uv
-            } else {
-                first.start_uv
-            };
-            let target_uv1 = if forward {
-                second.end_uv
-            } else {
-                second.start_uv
-            };
-            let Some(last_point) = points.last().copied() else {
-                trace_recovery(edge_id, "pair_fail=empty_march");
-                return None;
-            };
-            if !point_close(last_point, target_point) {
-                trace_recovery(edge_id, "pair_fail=endpoint_point");
-                return None;
-            }
-            for (value, target, period) in [
-                (previous_uv0.x, target_uv0.x, first.period_u),
-                (previous_uv0.y, target_uv0.y, first.period_v),
-                (previous_uv1.x, target_uv1.x, second.period_u),
-                (previous_uv1.y, target_uv1.y, second.period_v),
-            ] {
-                let value = unwrap_near(value, target, period);
-                let tolerance = period
-                    .map_or(GEOMETRY_TOLERANCE, |period| period.abs() * 1.0e-6)
-                    .max(GEOMETRY_TOLERANCE);
-                if (value - target).abs() > tolerance {
-                    trace_recovery(edge_id, "pair_fail=endpoint_uv");
-                    return None;
-                }
-            }
-            Some(points)
-        };
-
-        let Some(mut forward) = march(true) else {
+        let Some(mut forward) =
+            Self::march_support_pair(edge_id, front, back, first, second, &intersection, true)
+        else {
             trace_recovery(edge_id, "pair_fail=forward_march");
             return None;
         };
-        let Some(mut backward) = march(false) else {
+        let Some(mut backward) =
+            Self::march_support_pair(edge_id, front, back, first, second, &intersection, false)
+        else {
             trace_recovery(edge_id, "pair_fail=backward_march");
             return None;
         };
@@ -605,42 +648,18 @@ impl Table {
             .zip(&backward)
             .any(|(left, right)| !point_close(*left, *right))
         {
-            // Forward and reverse continuation found different local branches.
             trace_recovery(edge_id, "pair_fail=bidirectional_disagreement");
             return None;
         }
 
         forward[0] = front;
         *forward.last_mut()? = back;
-        let candidate = Curve3D::IntersectionCurve(IntersectionCurve::new(
+        let candidate = Curve3D::IntersectionCurve(RecoveryIntersection::new(
             Box::new(first.surface.clone()),
             Box::new(second.surface.clone()),
             Box::new(Curve3D::Polyline(PolylineCurve(forward))),
         ));
-
-        // Independently require the final `IntersectionCurve` (not merely the
-        // continuation solver above) to resolve on both native supports at
-        // every inter-sample midpoint. `evaluate()` has a leader fallback, so
-        // call `search_triple()` directly and refuse that fallback.
-        let Curve3D::IntersectionCurve(intersection) = &candidate else {
-            return None;
-        };
-        let (t0, t1) = intersection.range_tuple();
-        for index in 0..RECOVERY_SAMPLES - 1 {
-            let fraction = (index as f64 + 0.5) / (RECOVERY_SAMPLES - 1) as f64;
-            let t = f64::mul_add(t1 - t0, fraction, t0);
-            let Some((point, uv0, uv1)) = intersection.search_triple(t, PROJECTION_TRIALS) else {
-                trace_recovery(edge_id, "pair_fail=final_search_triple");
-                return None;
-            };
-            if !point_close(intersection.surface0().evaluate(uv0.x, uv0.y), point)
-                || !point_close(intersection.surface1().evaluate(uv1.x, uv1.y), point)
-            {
-                trace_recovery(edge_id, "pair_fail=final_support_residual");
-                return None;
-            }
-        }
-
+        Self::validate_recovery_candidate(edge_id, &candidate)?;
         trace_recovery(edge_id, "pair_proof_ok");
         Some(candidate)
     }
@@ -651,7 +670,7 @@ impl Table {
             .filter_map(|face| self.face_any_to_orientation_and_face(face))
             .flat_map(|(_, face)| face.bounds_holder(self))
             .filter_map(|(_, bound)| bound)
-            .filter_map(|bound| self.ordered_recovery_uses(bound, true))
+            .filter_map(|bound| self.ordered_recovery_uses(&bound, true))
             .flatten()
             .any(|use_| use_.edge.edge_geometry.is_none())
     }

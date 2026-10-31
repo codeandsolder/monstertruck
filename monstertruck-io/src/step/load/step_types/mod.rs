@@ -55,6 +55,8 @@ pub struct Dummy {
     pub is_simple: bool,
 }
 
+impl Eq for DummyHolder {}
+
 /// Many geometric and topological elements are contained within this entity's child classes.
 /// Since it is essentially an `Any` type, one must manually map the reference according to the context.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
@@ -65,6 +67,8 @@ pub struct RepresentationItem {
     pub name: String,
 }
 
+impl Eq for RepresentationItemHolder {}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = representation_context)]
@@ -73,6 +77,8 @@ pub struct RepresentationContext {
     pub context_identifier: String,
     pub context_type: String,
 }
+
+impl Eq for RepresentationContextHolder {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]

@@ -41,7 +41,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// WHAT was lost. One variant per level of the compressed-shell structure, so a
+/// WHAT was lost. One variant per level of the compressed-shell structure.
+///
+/// A
 /// caller can tell "I lost a whole face" from "I lost one boundary of a face I
 /// kept" -- the two have very different consequences downstream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -128,8 +130,9 @@ impl LossCategory {
     }
 }
 
-/// WHY it was lost. Deliberately finer-grained than the code paths that raise
-/// them, because the interesting distinction is not "which `?` fired" but
+/// WHY it was lost.
+///
+/// Deliberately finer-grained than the code paths that raise them, because the interesting distinction is not "which `?` fired" but
 /// "is this a defect, a refusal, or a legitimate degeneracy".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LossReason {
@@ -369,6 +372,9 @@ impl ShellLoadReport {
     /// **Opt-in on purpose.** Four in-repo fixtures lose wires today and are
     /// RIGHT to (see [`LossReason::DegenerateVertexLoop`]), so making this the
     /// default would refuse files the kernel handles correctly.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying STEP conversion fails.
     pub fn require_lossless(&self) -> Result<(), crate::step::load::LoadError> {
         if self.is_lossless() {
             Ok(())
@@ -513,6 +519,9 @@ impl EntityLoadReport {
 
     /// Turn any swallow into a typed error, for callers that want strictness.
     /// Opt-in; the default load path stays `Ok`.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying STEP conversion fails.
     pub fn require_empty(&self) -> Result<(), crate::step::load::LoadError> {
         if self.is_empty() {
             Ok(())

@@ -1041,6 +1041,9 @@ impl Table {
     ///
     /// Returns the parser's error verbatim when the input is not a valid
     /// STEP exchange structure.
+    ///
+    /// # Errors
+    /// Returns an error if the STEP input cannot be parsed or converted.
     pub fn from_step(step_str: &str) -> Result<Self, LoadError> {
         let exchange = step_p21::parser::parse(step_str)?;
         Ok(Self::from_data_section(&exchange.data[0]))
@@ -1080,6 +1083,9 @@ impl Table {
     ///
     /// UTF-8 input is unaffected -- it takes the first branch and is
     /// byte-identical to calling [`Table::from_step`] directly.
+    ///
+    /// # Errors
+    /// Returns an error if the STEP input cannot be parsed or converted.
     pub fn from_step_bytes(bytes: &[u8]) -> Result<Self, LoadError> {
         std::str::from_utf8(bytes).map_or_else(
             |_| {

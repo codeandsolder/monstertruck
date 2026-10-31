@@ -39,30 +39,30 @@ impl TryFrom<&Curve3D> for ModelingCurve {
                 Box::new(curve.surface().as_ref().try_into()?),
             ))),
             Curve3D::SurfaceCurve(curve) => {
-                let surfaces = curve
+                let associated_surfaces = curve
                     .associated_geometry()
                     .iter()
                     .map(SurfaceCurveAssociatedGeometry::surface)
                     .collect::<Vec<_>>();
-                if surfaces.len() >= 2 {
-                    let surface0 = surfaces[0].try_into()?;
-                    let surface1 = surfaces[1].try_into()?;
-                    let boundary0 = curve
-                        .parameter_curve_on(surfaces[0])
+                if associated_surfaces.len() >= 2 {
+                    let first_surface = associated_surfaces[0].try_into()?;
+                    let second_surface = associated_surfaces[1].try_into()?;
+                    let first_boundary = curve
+                        .parameter_curve_on(associated_surfaces[0])
                         .cloned()
                         .map(|trim| to_modeling_trim(&trim))
                         .transpose()?;
-                    let boundary1 = curve
-                        .parameter_curve_on(surfaces[1])
+                    let second_boundary = curve
+                        .parameter_curve_on(associated_surfaces[1])
                         .cloned()
                         .map(|trim| to_modeling_trim(&trim))
                         .transpose()?;
                     Ok(Self::Intersection(SurfaceCurve::with_boundaries(
-                        Box::new(surface0),
-                        Box::new(surface1),
+                        Box::new(first_surface),
+                        Box::new(second_surface),
                         Box::new(curve.leader().try_into()?),
-                        boundary0,
-                        boundary1,
+                        first_boundary,
+                        second_boundary,
                     )))
                 } else {
                     curve.leader().try_into()

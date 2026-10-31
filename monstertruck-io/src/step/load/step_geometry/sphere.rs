@@ -19,7 +19,8 @@ impl ParametricSurface for Sphere {
         // a minus sign. Keeping this generic path consistent with the explicit
         // `derivative_u`/`derivative_v` methods matters because `derivatives()`
         // is what surface/surface Newton solvers consume.
-        self.0.derivative_mn(n, m, PI / 2.0 - v, u) * (-1f64).powi(n as i32)
+        let sign = if n.is_multiple_of(2) { 1.0 } else { -1.0 };
+        self.0.derivative_mn(n, m, PI / 2.0 - v, u) * sign
     }
     #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 { self.0.evaluate(PI / 2.0 - v, u) }
@@ -95,9 +96,9 @@ impl ParameterDivision2D for Sphere {
         tol: f64,
     ) -> (Vec<f64>, Vec<f64>) {
         let range = ((PI / 2.0 - v1, PI / 2.0 - v0), (u0, u1));
-        let (udiv0, vdiv0) = self.0.parameter_division(range, tol);
-        let vdiv = udiv0.into_iter().map(|u| PI / 2.0 - u).collect();
-        (vdiv0, vdiv)
+        let (polar_division, azimuth_division) = self.0.parameter_division(range, tol);
+        let reflected_polar_division = polar_division.into_iter().map(|u| PI / 2.0 - u).collect();
+        (azimuth_division, reflected_polar_division)
     }
 }
 

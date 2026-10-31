@@ -428,6 +428,7 @@ fn record(update: impl FnOnce(&mut ClampCensus)) {
 }
 
 /// What one `normalize_axis` call did with its range, as reported by the caller.
+#[derive(Clone, Copy, Debug)]
 pub enum Event {
     /// `clamp_near_range` ran. `moved` is `clamped - value`; `to_max` says
     /// which end it snapped to when it moved.

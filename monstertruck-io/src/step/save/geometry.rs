@@ -723,18 +723,18 @@ where P: Copy + StepFormat
                 IndexSliceDisplay(idx + counter - slice.len() + 1..=idx + counter)
             })
             .collect::<Vec<_>>();
-        let (uknots, umulti) = self.knot_vector_u().to_single_multi();
-        let (vknots, vmulti) = self.knot_vector_v().to_single_multi();
+        let (horizontal_knots, horizontal_multiplicities) = self.knot_vector_u().to_single_multi();
+        let (vertical_knots, vertical_multiplicities) = self.knot_vector_v().to_single_multi();
         f.write_fmt(format_args!(
             "#{idx} = B_SPLINE_SURFACE_WITH_KNOTS('', {u_degree}, {v_degree}, {control_points_list}, .UNSPECIFIED., .U., .U., .U., \
 {u_multiplicities}, {v_multiplicities}, {u_knots}, {v_knots}, .UNSPECIFIED.);\n{control_points_instances}",
             u_degree = self.udegree(),
             v_degree = self.vdegree(),
             control_points_list = SliceDisplay(&control_points_list),
-            u_multiplicities = SliceDisplay(&umulti),
-            v_multiplicities = SliceDisplay(&vmulti),
-            u_knots = SliceDisplay(&uknots),
-            v_knots = SliceDisplay(&vknots),
+            u_multiplicities = SliceDisplay(&horizontal_multiplicities),
+            v_multiplicities = SliceDisplay(&vertical_multiplicities),
+            u_knots = SliceDisplay(&horizontal_knots),
+            v_knots = SliceDisplay(&vertical_knots),
             control_points_instances = SliceDisplay(&control_points_instances),
         ))
     }
@@ -776,8 +776,8 @@ where
             .iter()
             .map(|slice| SliceDisplay(slice))
             .collect::<Vec<_>>();
-        let (uknots, umulti) = self.knot_vector_u().to_single_multi();
-        let (vknots, vmulti) = self.knot_vector_v().to_single_multi();
+        let (horizontal_knots, horizontal_multiplicities) = self.knot_vector_u().to_single_multi();
+        let (vertical_knots, vertical_multiplicities) = self.knot_vector_v().to_single_multi();
         f.write_fmt(format_args!(
             "#{idx} = (
     BOUNDED_SURFACE()
@@ -791,10 +791,10 @@ where
             u_degree = self.udegree(),
             v_degree = self.vdegree(),
             control_points_list = SliceDisplay(&control_points_list),
-            u_multiplicities = SliceDisplay(&umulti),
-            v_multiplicities = SliceDisplay(&vmulti),
-            u_knots = SliceDisplay(&uknots),
-            v_knots = SliceDisplay(&vknots),
+            u_multiplicities = SliceDisplay(&horizontal_multiplicities),
+            v_multiplicities = SliceDisplay(&vertical_multiplicities),
+            u_knots = SliceDisplay(&horizontal_knots),
+            v_knots = SliceDisplay(&vertical_knots),
             control_points_instances = SliceDisplay(&control_points_instances),
             weights = SliceDisplay(&weights),
         ))
