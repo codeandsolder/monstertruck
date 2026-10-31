@@ -2,12 +2,10 @@
 //! inversion, endpoint snapping, parameter search and transformation.
 
 use super::{
-    Array, BoundedCurve, BoundedSurface, BsplineCurve, Curve3D, CurveParameter,
-    CurveScalarFunction, Cut, Instant, IntersectionCurve, Invertible, Matrix4, ParameterDivision1D,
-    ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface, Point3, Rotation,
-    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SnapCurveEndpoints,
-    SquareMatrix, Surface, SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceScalarFunction,
-    ToSameGeometry, Transformed, TransformedAttributes, Vector3, env,
+    BoundedCurve, BsplineCurve, Curve3D, CurveParameter, Cut, Instant, IntersectionCurve,
+    Invertible, Matrix4, ParameterDivision1D, ParameterRange, ParametricCurve, Point3,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SnapCurveEndpoints, Surface,
+    SurfaceCurve3D, SurfaceCurveAssociatedGeometry, ToSameGeometry, Transformed, Vector3, env,
 };
 
 impl ParametricCurve for SurfaceCurve3D {

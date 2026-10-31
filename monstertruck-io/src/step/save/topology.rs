@@ -1,6 +1,6 @@
 use super::{
     BooleanDisplay, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell,
-    CompressedSolid, CompressedTrimmedShell, CompressedTrimmedSolid, Debug, Display, Formatter,
+    CompressedSolid, CompressedTrimmedShell, CompressedTrimmedSolid, Display, Formatter,
     IndexSliceDisplay, Result, StepCurve, StepDisplay, StepFormat, StepLength,
     StepMeasurementContext, StepModel, StepModels, StepSurface,
 };

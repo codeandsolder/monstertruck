@@ -6,9 +6,8 @@
 //! transformations are expressed in.
 
 use super::{
-    Angle, Array, Deserialize, EuclideanSpace, Holder, InnerSpace, Matrix, Matrix3, Matrix4,
-    Origin, Point2, Point3, Result, Serialize, StepConvertingError, Table, Tolerance, Vector2,
-    Vector3, Zero,
+    Deserialize, EuclideanSpace, Holder, InnerSpace, Matrix3, Matrix4, Origin, Point2, Point3,
+    Result, Serialize, StepConvertingError, Table, Tolerance, Vector2, Vector3, Zero,
 };
 
 /// `cartesian_point`

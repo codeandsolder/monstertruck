@@ -2,13 +2,12 @@
 //! swept surfaces.
 
 use super::{
-    Angle, Array, Axis1Placement, Axis1PlacementHolder, Axis2Placement3d, Axis2Placement3dHolder,
-    BsplineSurface, CartesianPoint, CartesianPointHolder, Curve3D, CurveAny, CurveAnyHolder,
-    Deserialize, ElementarySurface, EuclideanSpace, Holder, Homogeneous, InnerSpace, Invertible,
-    KnotType, KnotVector, Line, Logical, Matrix4, NurbsSurface, PI, Point3, Result,
-    RevolutionSurface, Rotation, Serialize, Sphere, SquareMatrix, StepConvertingError,
-    StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface, TOLERANCE, Table, Torus,
-    Transformed, TransformedAttributes, Vector, Vector3, Vector4, VectorHolder, geom,
+    Axis1Placement, Axis1PlacementHolder, Axis2Placement3d, Axis2Placement3dHolder, BsplineSurface,
+    CartesianPoint, CartesianPointHolder, Curve3D, CurveAny, CurveAnyHolder, Deserialize,
+    ElementarySurface, EuclideanSpace, Holder, InnerSpace, Invertible, KnotType, KnotVector, Line,
+    Logical, Matrix4, NurbsSurface, PI, Point3, Result, RevolutionSurface, Serialize, Sphere,
+    StepConvertingError, StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface,
+    TOLERANCE, Table, Torus, Transformed, Vector, Vector3, Vector4, VectorHolder, geom,
     quasi_uniform_knots, step_geometry, uniform_knots,
 };
 

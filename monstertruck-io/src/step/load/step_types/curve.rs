@@ -5,12 +5,12 @@
 //! parent module because [`topology`](super::topology) reads its fields.
 
 use super::{
-    Array, Axis2Placement, Axis2PlacementHolder, BsplineCurve, CartesianPoint,
-    CartesianPointHolder, Conic2D, Conic3D, Curve2D, Curve3D, Deserialize, EuclideanSpace, Holder,
-    Homogeneous, KnotVector, Logical, Matrix3, Matrix4, NurbsCurve, PI, Pcurve, PcurveHolder,
-    Point2, Point3, PolylineCurve, Result, Serialize, StepConvertingError, SurfaceCurve,
-    SurfaceCurveHolder, Table, Transformed, TransformedAttributes, UnitCircle, UnitHyperbola,
-    UnitParabola, Vector, VectorHolder, geom, quasi_uniform_knots, step_geometry, uniform_knots,
+    Axis2Placement, Axis2PlacementHolder, BsplineCurve, CartesianPoint, CartesianPointHolder,
+    Conic2D, Conic3D, Curve2D, Curve3D, Deserialize, EuclideanSpace, Holder, Homogeneous,
+    KnotVector, Logical, Matrix3, Matrix4, NurbsCurve, PI, Pcurve, PcurveHolder, Point2, Point3,
+    PolylineCurve, Result, Serialize, StepConvertingError, SurfaceCurve, SurfaceCurveHolder, Table,
+    Transformed, UnitCircle, UnitHyperbola, UnitParabola, Vector, VectorHolder, geom,
+    quasi_uniform_knots, step_geometry, uniform_knots,
 };
 
 /// `curve`

@@ -1,7 +1,7 @@
 use super::{
-    Angle, Array, Curve3D, ElementarySurface, EuclideanSpace, Homogeneous, InnerSpace, Matrix4,
-    Point3, Processor, Sphere, SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceCurveKind,
-    SurfaceCurveRepresentation, Transform, Transformed, TransformedAttributes, save,
+    Curve3D, ElementarySurface, Homogeneous, InnerSpace, Matrix4, Point3, Processor, Sphere,
+    SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceCurveKind, SurfaceCurveRepresentation,
+    Transform, Transformed, save,
 };
 use crate::step::load::{GeometricCurveSet, GeometricSetSelect};
 use crate::step::save::{

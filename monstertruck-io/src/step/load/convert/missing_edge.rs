@@ -25,11 +25,10 @@
 //! used by Monstertruck's existing intersection-curve implementation.
 
 use super::{
-    Array, Attributes, BoundResolution, BoundedSurface, Curve3D, CurveScalarFunction, EdgeCurve,
-    EuclideanSpace, FaceBoundHolder, HashMap, InnerSpace, IntersectionCurve, MetricSpace, Name,
-    ParametricSurface3D, PlaceHolder, Point2, Point3, PolylineCurve, Rotation,
-    SearchNearestParameter, SearchParameter, ShellHolder, SquareMatrix, Surface,
-    SurfaceScalarFunction, TOLERANCE, Table, step_geometry, step_p21,
+    BoundResolution, Curve3D, EdgeCurve, EuclideanSpace, FaceBoundHolder, HashMap, InnerSpace,
+    IntersectionCurve, MetricSpace, Name, ParametricSurface3D, PlaceHolder, Point2, Point3,
+    PolylineCurve, SearchNearestParameter, SearchParameter, ShellHolder, Surface, TOLERANCE, Table,
+    step_geometry, step_p21,
 };
 use monstertruck_geometry::prelude::{
     BoundedCurve, Invertible, ParameterDivision1D, ParametricCurve, ParametricSurface,
@@ -749,6 +748,8 @@ impl Table {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::step::load::step_geometry::ElementarySurface;
+    use monstertruck_geometry::prelude::{Line, Plane, Processor, RevolutionSurface, Vector3};
 
     fn cylinder() -> Surface {
         let axis = Vector3::unit_z();

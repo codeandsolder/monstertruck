@@ -1,6 +1,6 @@
 use super::{
-    ConstStepLength, Debug, Display, ERR, FloatDisplay, Formatter, IndexSliceDisplay, Result,
-    SliceDisplay, StepCurve, StepDisplay, StepFormat, StepLength, StepSurface,
+    ConstStepLength, Debug, ERR, FloatDisplay, Formatter, IndexSliceDisplay, Result, SliceDisplay,
+    StepCurve, StepDisplay, StepFormat, StepLength, StepSurface,
 };
 use monstertruck_geometry::prelude::*;
 use monstertruck_mesh::PolylineCurve;

@@ -5,19 +5,9 @@
 //! says which shape belongs to which part, and where.
 
 use super::{
-    Angle, Array, Attributes, Axis2Placement, Axis2PlacementHolder, BoundaryCurveFromSamples,
-    Bounded, BoundedCurve, BoundedSurface, Concat, CurveScalarFunction, Cut, Decomposition,
-    Deserialize, EigenValues, ElementWise, EuclideanSpace, ExactParameterBoundary2D, Exponential,
-    HashGen, Holder, Homogeneous, IncludeCurve, InnerSpace, Invertible, Matrix, Matrix3, Matrix4,
-    MetricSpace, One, OperatorNorm, Origin, ParameterBoundary2D, ParameterDivision1D,
-    ParameterDivision2D, ParameterTransform, ParametricCurve, ParametricCurve2D, ParametricCurve3D,
-    ParametricSurface, ParametricSurface2D, ParametricSurface3D, RepresentationContext,
-    RepresentationContextHolder, RepresentationItem, RepresentationItemHolder, Result, Rotation,
-    Rotation2, Rotation3, SearchNearestParameter, SearchParameter, SearchParameterDimension,
-    Serialize, SnapCurveEndpoints, SquareMatrix, StepConvertingError, SupportsExactPatchDomains,
-    SurfaceScalarFunction, Table, ToSameGeometry, Tolerance, Transform, Transform2, Transform3,
-    Transformed, TransformedAttributes, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
-    TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface, VectorSpace, Zero,
+    Axis2Placement, Axis2PlacementHolder, Deserialize, Holder, Matrix3, Matrix4,
+    RepresentationContext, RepresentationContextHolder, RepresentationItem,
+    RepresentationItemHolder, Result, Serialize, SquareMatrix, StepConvertingError, Table,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]

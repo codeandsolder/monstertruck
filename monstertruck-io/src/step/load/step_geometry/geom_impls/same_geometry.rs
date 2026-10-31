@@ -2,11 +2,18 @@
 //! enums, and the enum-level predicates that ride along with it.
 
 use super::{
-    BsplineCurve, Conic2D, Conic3D, Curve2D, Curve3D, ElementarySurface, EuclideanSpace,
-    ExtrusionSurface, Homogeneous, IncludeCurve, InnerSpace, Invertible, Line, Matrix3, Matrix4,
-    Origin, ParametricSurface3D, Plane, Point2, Point3, Processor, RevolutionSurface,
-    SearchParameter, Surface, SweepSurface, ToSameGeometry, TrimmedCurve, UnitCircle, Vector3,
+    BsplineCurve, Conic2D, Conic3D, Curve2D, Curve3D, ElementarySurface, ExtrusionSurface,
+    IncludeCurve, InnerSpace, Invertible, Line, Matrix3, Matrix4, Origin, Plane, Point2, Point3,
+    Processor, RevolutionSurface, SearchParameter, Surface, SweepSurface, ToSameGeometry,
+    TrimmedCurve, UnitCircle, Vector3,
 };
+
+#[cfg(test)]
+use monstertruck_core::assert_near;
+#[cfg(test)]
+use monstertruck_geometry::prelude::KnotVector;
+#[cfg(test)]
+use std::f64::consts::TAU;
 
 impl ToSameGeometry<Curve2D> for Line<Point2> {
     #[inline]

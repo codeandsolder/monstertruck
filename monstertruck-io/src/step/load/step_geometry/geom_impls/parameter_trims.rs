@@ -3,18 +3,25 @@
 //! projected sampling otherwise.
 
 use super::{
-    Angle, Array, BoundaryCurveFromSamples, BoundedCurve, BoundedSurface, BsplineCurve, Conic2D,
-    Conic3D, Curve2D, Curve3D, CurveScalarFunction, CurveTrimRef, ElementarySurface, Ellipse,
-    EuclideanSpace, ExactParameterBoundary2D, Hyperbola, InnerSpace, Invertible, KnotVector, Line,
-    Matrix3, Matrix4, MetricSpace, NurbsCurve, Ordering, Origin, Parabola, ParameterBoundary2D,
-    ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface,
-    ParametricSurface3D, Plane, Point2, Point3, Processor, RevolutionSurface, Rotation,
+    BoundaryCurveFromSamples, BoundedCurve, BsplineCurve, Conic2D, Conic3D, Curve2D, Curve3D,
+    CurveTrimRef, ElementarySurface, Ellipse, EuclideanSpace, ExactParameterBoundary2D, Hyperbola,
+    InnerSpace, Invertible, KnotVector, Line, Matrix3, Matrix4, MetricSpace, NurbsCurve, Ordering,
+    Origin, Parabola, ParameterBoundary2D, ParameterCurve, ParameterDivision1D, ParametricCurve,
+    ParametricCurve3D, ParametricSurface, Plane, Point2, Point3, Processor, RevolutionSurface,
     SearchNearestParameter, SearchParameter, SearchParameterHint2D, SphericalSurface, SquareMatrix,
     StepConvertingError, StepParameterCurve, StepRevolutionSurface, Surface, SurfaceCurve3D,
-    SurfaceCurveTrimRef, SurfaceScalarFunction, SweepSurface, TOLERANCE, Tolerance,
-    ToroidalSurface, Transform, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector3,
-    Vector4, uv_clamp,
+    SurfaceCurveTrimRef, SweepSurface, TOLERANCE, Tolerance, ToroidalSurface, Transform,
+    TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector3, Vector4, uv_clamp,
 };
+
+#[cfg(test)]
+use crate::step::load::step_geometry::{Sphere, SurfaceCurveKind, SurfaceCurveRepresentation};
+#[cfg(test)]
+use monstertruck_geometry::prelude::{BsplineSurface, Rad, Torus};
+#[cfg(test)]
+use monstertruck_traits::Transformed;
+#[cfg(test)]
+use std::f64::consts::TAU;
 
 fn sampled_parameter_boundary<C>(
     curve: &C,

@@ -1,8 +1,10 @@
 use super::{
-    CurveScalarFunction, ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricCurve,
-    ParametricSurface, ParametricSurface3D, Point3, SearchNearestParameter, SearchParameter,
-    SearchParameterHint2D, Sphere, SurfaceParameter, SurfaceScalarFunction, Vector3,
+    ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D, Point3,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, Sphere, SurfaceParameter,
+    Vector3,
 };
+#[cfg(test)]
+use monstertruck_geometry::prelude::InnerSpace;
 use std::f64::consts::PI;
 use std::ops::Bound;
 impl ParametricSurface for Sphere {

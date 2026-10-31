@@ -12,11 +12,11 @@
 //! implements [`std::fmt::Display`] to produce the STEP data section.
 
 use super::{
-    ConstStepLength, Debug, Display, Formatter, IndexSliceDisplay, MatrixAsAxis, Result, StepCurve,
-    StepDisplay, StepFormat, StepLength, StepMeasurementContext, StepSurface,
+    ConstStepLength, Debug, Display, Formatter, IndexSliceDisplay, MatrixAsAxis, Result,
+    StepDisplay, StepFormat, StepLength, StepMeasurementContext,
 };
 use crate::step::common::PartAttributes;
-use monstertruck_assembly::assy::{Assembly, EdgeEntity, Node, NodeEntity, Takeable};
+use monstertruck_assembly::assy::{Assembly, EdgeEntity, Node, NodeEntity};
 use monstertruck_modeling::Matrix4;
 
 /// Index of the `APPLICATION_CONTEXT` entity, always written first.

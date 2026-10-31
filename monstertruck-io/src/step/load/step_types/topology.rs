@@ -4,22 +4,13 @@
 //! entity's references against the entity table while loading.
 
 use super::{
-    Angle, Array, Attributes, BoundaryCurveFromSamples, Bounded, BoundedCurve, BoundedSurface,
-    CartesianPoint, CartesianPointHolder, Concat, Conic, Conic2D, Conic3D, Curve2D, Curve3D,
-    CurveAny, CurveAnyHolder, CurveScalarFunction, Cut, Decomposition, Deserialize, EigenValues,
-    ElementWise, EuclideanSpace, ExactParameterBoundary2D, Exponential, HashGen, Holder,
-    Homogeneous, IncludeCurve, InnerSpace, Invertible, Line, Matrix, Matrix3, Matrix4, MetricSpace,
-    Name, One, OperatorNorm, Origin, PI, ParameterBoundary2D, ParameterDivision1D,
-    ParameterDivision2D, ParameterTransform, ParametricCurve, ParametricCurve2D, ParametricCurve3D,
-    ParametricSurface, ParametricSurface2D, ParametricSurface3D, PcurveOrSurface, PlaceHolder,
-    Point2, Point3, PreferredSurfaceCurveRepresentation, Processor, Result, Rotation, Rotation2,
-    Rotation3, SearchNearestParameter, SearchParameter, SearchParameterDimension, Serialize,
-    SnapCurveEndpoints, SquareMatrix, StepConvertingError, SupportsExactPatchDomains, Surface,
-    SurfaceAny, SurfaceAnyHolder, SurfaceCurve, SurfaceCurveEntityKind, SurfaceScalarFunction,
-    TOLERANCE, Table, ToSameGeometry, Tolerance, Transform, Transform2, Transform3, Transformed,
-    TransformedAttributes, TrimmedCurve, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
-    TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface, UnitCircle, UnitHyperbola,
-    VectorSpace, Zero, geom, step_geometry,
+    CartesianPoint, CartesianPointHolder, Conic, Conic2D, Conic3D, Curve2D, Curve3D, CurveAny,
+    CurveAnyHolder, Deserialize, Holder, Invertible, Line, Matrix3, Matrix4, Name, PI,
+    PcurveOrSurface, PlaceHolder, Point2, Point3, PreferredSurfaceCurveRepresentation, Processor,
+    Result, SearchNearestParameter, Serialize, SquareMatrix, StepConvertingError, Surface,
+    SurfaceAny, SurfaceAnyHolder, SurfaceCurve, SurfaceCurveEntityKind, TOLERANCE, Table,
+    Tolerance, Transform, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, geom,
+    step_geometry,
 };
 
 /// `vertex_point`

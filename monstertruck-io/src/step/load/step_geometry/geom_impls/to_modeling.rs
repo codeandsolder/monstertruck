@@ -3,22 +3,19 @@
 //! the rational net.
 
 use super::{
-    Angle, Array, Attributes, BoundaryCurveFromSamples, Bounded, BoundedCurve, BoundedSurface,
-    Concat, Conic2D, Curve2D, Curve3D, CurveScalarFunction, Cut, Decomposition, Deserialize,
-    EigenValues, ElementWise, ElementarySurface, EuclideanSpace, ExactParameterBoundary2D,
-    Exponential, HashGen, Homogeneous, IncludeCurve, InnerSpace, Invertible, Matrix, MetricSpace,
-    ModelingConic2D, ModelingCurve, ModelingCurve2D, ModelingSurface, NurbsCurve, NurbsSurface,
-    One, OperatorNorm, Origin, ParameterBoundary2D, ParameterCurve, ParameterDivision1D,
-    ParameterDivision2D, ParameterTransform, ParametricCurve, ParametricCurve2D, ParametricCurve3D,
-    ParametricSurface, ParametricSurface2D, ParametricSurface3D, RevolutionSurface, Rotation,
-    Rotation2, Rotation3, SearchNearestParameter, SearchParameter, SearchParameterDimension,
-    Serialize, SnapCurveEndpoints, SquareMatrix, StepConvertingError, StepParameterCurve,
-    SupportsExactPatchDomains, Surface, SurfaceCurve, SurfaceCurveAssociatedGeometry,
-    SurfaceScalarFunction, TOLERANCE, ToSameGeometry, Tolerance, Torus, Transform, Transform2,
-    Transform3, Transformed, TransformedAttributes, TryIntoAnalyticSurfaceKind,
-    TryIntoBsplineSurface, TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface,
-    VectorSpace, Zero,
+    Conic2D, Curve2D, Curve3D, ElementarySurface, ModelingConic2D, ModelingCurve, ModelingCurve2D,
+    ModelingSurface, NurbsCurve, NurbsSurface, ParameterCurve, RevolutionSurface,
+    StepConvertingError, StepParameterCurve, Surface, SurfaceCurve, SurfaceCurveAssociatedGeometry,
+    TOLERANCE, Torus, TryIntoBsplineSurface, TryIntoHomogeneousBsplineCurve,
+    TryIntoHomogeneousBsplineSurface,
 };
+
+#[cfg(test)]
+use crate::step::load::step_geometry::Sphere;
+#[cfg(test)]
+use monstertruck_geometry::prelude::{ParameterDivision2D, Point3, Processor, Torus};
+#[cfg(test)]
+use std::f64::consts::TAU;
 
 fn to_modeling_trim(
     curve: &StepParameterCurve,
