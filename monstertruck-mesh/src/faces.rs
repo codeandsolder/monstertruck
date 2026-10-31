@@ -438,3 +438,28 @@ impl<V: Copy> Iterator for TriangleIterator<'_, V> {
 }
 
 impl<V: Copy> ExactSizeIterator for TriangleIterator<'_, V> {}
+
+#[cfg(test)]
+mod serde_invariant_tests {
+    use super::*;
+
+    #[test]
+    fn deserialization_rejects_faces_shorter_than_three_vertices() {
+        for vertices in ["[]", "[0]", "[0,1]"] {
+            let json = format!(r#"{{"tri_faces":[],"quad_faces":[],"other_faces":[{vertices}]}}"#);
+            assert!(serde_json::from_str::<Faces<usize>>(&json).is_err());
+        }
+    }
+
+    #[test]
+    fn deserialization_canonicalizes_valid_face_storage() -> Result<(), serde_json::Error> {
+        let faces: Faces<usize> = serde_json::from_str(
+            r#"{"tri_faces":[[0,1,2]],"quad_faces":[[3,4,5,6]],"other_faces":[[7,8,9],[10,11,12,13],[14,15,16,17,18]]}"#,
+        )?;
+
+        assert_eq!(faces.tri_faces(), &[[0, 1, 2], [7, 8, 9]]);
+        assert_eq!(faces.quad_faces(), &[[3, 4, 5, 6], [10, 11, 12, 13]]);
+        assert_eq!(faces.other_faces(), &[vec![14, 15, 16, 17, 18]]);
+        Ok(())
+    }
+}
