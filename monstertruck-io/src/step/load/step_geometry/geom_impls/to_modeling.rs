@@ -396,11 +396,11 @@ impl TryFrom<&Surface> for ModelingSurface {
             }
             _ => value
                 .try_into_homogeneous_bspline_surface()
-                .map(|surface| Self::Nurbs(NurbsSurface::new(surface)))
+                .map(|surface| Self::NurbsSurface(NurbsSurface::new(surface)))
                 .or_else(|| {
                     value
                         .try_into_bspline_surface()
-                        .map(ModelingSurface::Bspline)
+                        .map(ModelingSurface::BsplineSurface)
                 })
                 .ok_or_else(|| "STEP surface cannot be represented in modeling geometry.".into()),
         }
