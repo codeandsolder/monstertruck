@@ -39,6 +39,8 @@ pub mod hash;
 /// Id structure with `Copy`, `Hash` and `Eq` using raw pointers
 pub mod id;
 pub use id::{StableId, StableIdAllocator, StableIdExhausted};
+/// User-facing geometry accuracy contracts.
+pub mod geometry_policy;
 pub mod newton;
 /// Scalar trait hierarchy for scalar-generic kernel infrastructure.
 pub mod scalar;

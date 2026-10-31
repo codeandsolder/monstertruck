@@ -8,7 +8,7 @@ fn union_of_overlapping_cubes() -> Result<()> {
     // Two unit cubes overlapping in a `0.5` cube: `2 - 0.5^3 = 1.875`.
     let a = unit_cube(Point3::origin());
     let b = unit_cube(Point3::new(0.5, 0.5, 0.5));
-    let result = monstertruck_solid::or(&a, &b, TOL)?;
+    let result = monstertruck_solid::or(&a, &b, monstertruck_solid::GeometryPolicy::standard(TOL))?;
     assert_solid("union of overlapping cubes", &result, 1.875)
 }
 
@@ -17,7 +17,8 @@ fn intersection_of_overlapping_cubes() -> Result<()> {
     // The shared `0.5` cube: `0.5^3 = 0.125`.
     let a = unit_cube(Point3::origin());
     let b = unit_cube(Point3::new(0.5, 0.5, 0.5));
-    let result = monstertruck_solid::and(&a, &b, TOL)?;
+    let result =
+        monstertruck_solid::and(&a, &b, monstertruck_solid::GeometryPolicy::standard(TOL))?;
     assert_solid("intersection of overlapping cubes", &result, 0.125)
 }
 
@@ -26,7 +27,8 @@ fn difference_of_overlapping_cubes() -> Result<()> {
     // First cube minus the shared region: `1 - 0.125 = 0.875`.
     let a = unit_cube(Point3::origin());
     let b = unit_cube(Point3::new(0.5, 0.5, 0.5));
-    let result = monstertruck_solid::difference(&a, &b, TOL)?;
+    let result =
+        monstertruck_solid::difference(&a, &b, monstertruck_solid::GeometryPolicy::standard(TOL))?;
     assert_solid("difference of overlapping cubes", &result, 0.875)
 }
 
@@ -35,7 +37,11 @@ fn cube_minus_column() -> Result<()> {
     // Unit cube with a `0.4 x 0.4` column punched through: `1 - 0.4^2 = 0.84`.
     let cube = unit_cube(Point3::origin());
     let column = square_column(0.5, 0.5, 0.2);
-    let result = monstertruck_solid::difference(&cube, &column, STRICT_TOL)?;
+    let result = monstertruck_solid::difference(
+        &cube,
+        &column,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         result.boundaries().len() == 1,
         "through-column subtraction must produce one connected boundary shell, got {}",
@@ -114,7 +120,11 @@ fn profile_generated_difference_matrix() -> Result<()> {
             &transformed_profile_cutter,
         ),
     ] {
-        match monstertruck_solid::difference(host, cutter, STRICT_TOL) {
+        match monstertruck_solid::difference(
+            host,
+            cutter,
+            monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+        ) {
             Ok(result) => {
                 eprintln!("{label}: ok");
                 assert_solid(label, &result, 104.0)?;
@@ -124,8 +134,11 @@ fn profile_generated_difference_matrix() -> Result<()> {
     }
 
     // Keep the downstream construction as the actual regression assertion.
-    let result =
-        monstertruck_solid::difference(&profile_host, &transformed_profile_cutter, STRICT_TOL)?;
+    let result = monstertruck_solid::difference(
+        &profile_host,
+        &transformed_profile_cutter,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     assert_solid(
         "profile-generated box minus transformed column",
         &result,
@@ -140,7 +153,11 @@ fn cube_minus_enclosed_cube_preserves_inward_cavity_orientation() -> Result<()> 
         Point3::new(0.25, 0.25, 0.25),
         Point3::new(0.75, 0.75, 0.75),
     ]));
-    let result = monstertruck_solid::difference(&outer, &inner, TOL)?;
+    let result = monstertruck_solid::difference(
+        &outer,
+        &inner,
+        monstertruck_solid::GeometryPolicy::standard(TOL),
+    )?;
     anyhow::ensure!(
         result.boundaries().len() == 2,
         "enclosed subtraction must produce outer and cavity boundary shells"
@@ -189,7 +206,11 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
         Point3::new(2.0001, 0.25, 2.0001),
     ]));
 
-    let result = monstertruck_solid::difference(&host, &cutter, STRICT_TOL)?;
+    let result = monstertruck_solid::difference(
+        &host,
+        &cutter,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         !result.boundaries().is_empty(),
         "radial-slot difference returned an empty solid"
@@ -205,7 +226,11 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
 fn union_of_end_to_end_cylinders_with_full_circular_interface() -> Result<()> {
     let a = unit_cylinder_y(0.0)?;
     let b = unit_cylinder_y(1.0)?;
-    let result = monstertruck_solid::or(&a, &b, STRICT_TOL)?;
+    let result = monstertruck_solid::or(
+        &a,
+        &b,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(result.boundaries().len() == 1, "union must have one shell");
     anyhow::ensure!(
         result.is_geometric_consistent(),
@@ -218,7 +243,8 @@ fn union_of_end_to_end_cylinders_with_full_circular_interface() -> Result<()> {
 fn union_of_coaxial_overlapping_boxes_with_coplanar_sides() -> Result<()> {
     let a = unit_cube(Point3::origin());
     let b = unit_cube(Point3::new(0.0, 0.0, 0.5));
-    let result = monstertruck_solid::or(&a, &b, 1.0e-6)?;
+    let result =
+        monstertruck_solid::or(&a, &b, monstertruck_solid::GeometryPolicy::standard(1.0e-6))?;
     assert_solid("union of coaxial overlapping boxes", &result, 1.5)
 }
 
@@ -226,6 +252,7 @@ fn union_of_coaxial_overlapping_boxes_with_coplanar_sides() -> Result<()> {
 fn intersection_of_coaxial_overlapping_boxes_with_coplanar_sides() -> Result<()> {
     let a = unit_cube(Point3::origin());
     let b = unit_cube(Point3::new(0.0, 0.0, 0.5));
-    let result = monstertruck_solid::and(&a, &b, 1.0e-6)?;
+    let result =
+        monstertruck_solid::and(&a, &b, monstertruck_solid::GeometryPolicy::standard(1.0e-6))?;
     assert_solid("intersection of coaxial overlapping boxes", &result, 0.5)
 }

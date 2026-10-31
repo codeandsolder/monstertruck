@@ -120,7 +120,7 @@ let mut cylinder: Solid = builder::extrude(&base, Vector3::unit_z() * 1.2);
 
 // Invert the cylinder so `and` performs a subtraction.
 cylinder.not();
-let punched = solid::and(&cube, &cylinder, 0.05)?;
+let punched = solid::and(&cube, &cylinder, solid::GeometryPolicy::standard(0.05))?;
 
 // Flatten the topology and render as STEP.
 let compressed = punched.compress();

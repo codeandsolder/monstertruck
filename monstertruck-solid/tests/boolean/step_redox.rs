@@ -133,7 +133,11 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
         ),
     );
 
-    let result = monstertruck_solid::or(&main, &small, STRICT_TOL)?;
+    let result = monstertruck_solid::or(
+        &main,
+        &small,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(result.is_geometric_consistent(), "union must be consistent");
     let stats = assert_union_matches_operand_occupancy(
         "step-redox case 122 core union",
@@ -297,7 +301,11 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         ),
     );
 
-    let two_core = monstertruck_solid::or(&plate, &hook, STRICT_TOL)?;
+    let two_core = monstertruck_solid::or(
+        &plate,
+        &hook,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         two_core.is_geometric_consistent(),
         "two-core union must be consistent"
@@ -368,7 +376,11 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         ),
     );
 
-    let disconnected = monstertruck_solid::or(&rounded, &plate, STRICT_TOL)?;
+    let disconnected = monstertruck_solid::or(
+        &rounded,
+        &plate,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         disconnected.is_geometric_consistent(),
         "A+B disconnected union must be consistent"
@@ -384,7 +396,11 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         "A+B must remain two disconnected boundary shells"
     );
 
-    let result = monstertruck_solid::or(&disconnected, &hook, STRICT_TOL)?;
+    let result = monstertruck_solid::or(
+        &disconnected,
+        &hook,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "three-core union must be consistent"
@@ -494,7 +510,11 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
         ),
     );
 
-    let result = monstertruck_solid::or(&plate, &rounded, STRICT_TOL)?;
+    let result = monstertruck_solid::or(
+        &plate,
+        &rounded,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
     anyhow::ensure!(
         result.boundaries().len() == 2,
         "edge-only contact must not weld two solids into one non-manifold shell"
@@ -797,9 +817,12 @@ fn step_redox_97_nine_core_union_regression() -> Result<()> {
         .into_iter()
         .enumerate()
     {
-        let next = monstertruck_solid::or(&result, rhs, STRICT_TOL).map_err(|error| {
-            anyhow::anyhow!("case 97 union child {} failed: {error}", index + 2)
-        })?;
+        let next = monstertruck_solid::or(
+            &result,
+            rhs,
+            monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+        )
+        .map_err(|error| anyhow::anyhow!("case 97 union child {} failed: {error}", index + 2))?;
         assert_union_matches_operand_occupancy(
             &format!("step-redox case 97 union child {}", index + 2),
             &result,

@@ -9,7 +9,7 @@ healing in `monstertruck-healing`; both are post-CSG and kernel-independent.
 
 ```rust
 use monstertruck_modeling::*;
-use monstertruck_solid::or;
+use monstertruck_solid::{GeometryPolicy, or};
 
 // Two unit cubes overlapping in a 0.5 cube at one corner.
 let v = builder::vertex(Point3::origin());
@@ -23,7 +23,7 @@ let cube_b = builder::translated(&cube_a, Vector3::new(0.5, 0.5, 0.5));
 // `ShapeOpsError` -- never a silent `None`.
 // `monstertruck_modeling::*` brings its own 1-generic `Result` alias into
 // scope, so leave the binding unannotated rather than shadowing it.
-let union = or(&cube_a, &cube_b, 0.05);
+let union = or(&cube_a, &cube_b, GeometryPolicy::standard(0.05));
 assert!(union.is_ok());
 ```
 
