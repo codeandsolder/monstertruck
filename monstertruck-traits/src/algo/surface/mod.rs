@@ -243,9 +243,12 @@ where
     // Spec 014 W3: charged once, before the scan, so the unit is a deterministic
     // function of the grid rather than of how far the scan got.
     charge_presearch_nodes(presearch_nodes(division));
+    let ((u0, u1), (v0, v1)) = (urange, vrange);
+    if division == 0 {
+        return (u0, v0);
+    }
     let mut res = (0.0, 0.0);
     let mut min = f64::INFINITY;
-    let ((u0, u1), (v0, v1)) = (urange, vrange);
     for i in 0..=division {
         for j in 0..=division {
             let p = i as f64 / division as f64;
@@ -682,6 +685,33 @@ fn sub_parameter_division<S>(
 
 #[cfg(test)]
 mod division_budget_tests;
+
+#[cfg(test)]
+mod presearch_zero_division_tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct PanicSurface;
+
+    impl ParametricSurface for PanicSurface {
+        type Point = Point3;
+        type Vector = Vector3;
+
+        fn evaluate(&self, _: f64, _: f64) -> Point3 { panic!("zero-division presearch must not evaluate") }
+        fn derivative_u(&self, _: f64, _: f64) -> Vector3 { unreachable!() }
+        fn derivative_v(&self, _: f64, _: f64) -> Vector3 { unreachable!() }
+        fn derivative_uu(&self, _: f64, _: f64) -> Vector3 { unreachable!() }
+        fn derivative_uv(&self, _: f64, _: f64) -> Vector3 { unreachable!() }
+        fn derivative_vv(&self, _: f64, _: f64) -> Vector3 { unreachable!() }
+        fn derivative_mn(&self, _: usize, _: usize, _: f64, _: f64) -> Vector3 { unreachable!() }
+    }
+
+    #[test]
+    fn zero_division_presearch_returns_range_start() {
+        let point = Point3::new(0.0, 0.0, 0.0);
+        assert_eq!(presearch(&PanicSurface, point, ((2.0, 3.0), (4.0, 5.0)), 0), (2.0, 4.0));
+    }
+}
 
 /// Half the width of a surface at `band`, measured across the periodic axis.
 ///

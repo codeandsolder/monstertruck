@@ -12,6 +12,9 @@ where
     C: v2::ParametricCurve<Scalar = S>,
     C::Point: MetricSpace<Metric = S> + Copy, {
     let (t0, t1) = range;
+    if division == 0 {
+        return t0;
+    }
     let mut res = t0;
     let mut min = S::infinity();
     let n = S::from(division).unwrap();
@@ -25,4 +28,33 @@ where
         }
     }
     res
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use monstertruck_core::cgmath64::{Point2, Vector2};
+
+    #[derive(Clone)]
+    struct PanicCurve;
+
+    impl v2::ParametricCurve for PanicCurve {
+        type Scalar = f64;
+        type Point = Point2;
+        type Vector = Vector2;
+
+        fn evaluate(&self, _: f64) -> Point2 { panic!("zero-division presearch must not evaluate") }
+        fn derivative(&self, _: f64) -> Vector2 { unreachable!() }
+        fn derivative_2(&self, _: f64) -> Vector2 { unreachable!() }
+        fn derivative_n(&self, _: usize, _: f64) -> Vector2 { unreachable!() }
+        fn period(&self) -> Option<f64> { None }
+        fn try_range_tuple(&self) -> Option<(f64, f64)> { None }
+    }
+
+    #[test]
+    fn zero_division_presearch_returns_range_start() {
+        let point = Point2::new(0.0, 0.0);
+        assert_eq!(presearch(&PanicCurve, point, (2.5, 9.0), 0), 2.5);
+    }
 }

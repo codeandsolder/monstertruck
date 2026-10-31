@@ -38,3 +38,9 @@ fn parameter_division_terminates_on_degenerate_range() {
     assert_eq!(params.len(), 2);
     assert_eq!(points.len(), 2);
 }
+
+#[test]
+fn zero_division_presearch_returns_range_start() {
+    let point = Point3::new(0.0, 0.0, 0.0);
+    assert_eq!(presearch(&NanCurve, point, (2.5, 9.0), 0), 2.5);
+}
