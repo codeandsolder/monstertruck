@@ -82,7 +82,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@f360aee0f8e6f5c191901b61d94296471f320c3b # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@767cf3d17aeb6bf3c70299112b24ffddba5de871 # main
     with:
       command: |
         git submodule update --init resources
