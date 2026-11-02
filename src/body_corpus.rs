@@ -1,6 +1,12 @@
-use crate::{shape_identity, step_entities, step_graph, step_io::ParsedExchange, units};
+use crate::{
+    shape_identity,
+    step_document::{StepEntity, StepSection, StepValue},
+    step_entities, step_graph,
+    step_io::ParsedExchange,
+    units,
+};
 use anyhow::{Context, Result, bail};
-use ruststep::ast::{DataSection, EntityInstance, Exchange, Parameter, Record};
+use ruststep::ast::{DataSection, EntityInstance, Exchange, Parameter};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -160,32 +166,20 @@ fn shape_definition_root_for_representation(
     })
 }
 
-fn entity_record_named<'a>(entity: &'a EntityInstance, name: &str) -> Option<&'a Record> {
-    match entity {
-        EntityInstance::Simple { record, .. } => (record.name == name).then_some(record),
-        EntityInstance::Complex { subsuper, .. } => {
-            subsuper.0.iter().find(|record| record.name == name)
-        }
+fn representation_length_scale_mm(context_id: u64, section: &StepSection<'_>) -> Option<f64> {
+    let params = section
+        .entity(context_id)?
+        .record_named("GLOBAL_UNIT_ASSIGNED_CONTEXT")?
+        .value()
+        .list()?;
+    if params.len() != 1 {
+        return None;
     }
-}
-
-fn representation_length_scale_mm(
-    context_id: u64,
-    entities: &[EntityInstance],
-    index: &std::collections::HashMap<u64, usize>,
-) -> Option<f64> {
-    let entity = entities.get(*index.get(&context_id)?)?;
-    let record = entity_record_named(entity, "GLOBAL_UNIT_ASSIGNED_CONTEXT")?;
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
-    let [Parameter::List(units)] = params.as_slice() else {
-        return None;
-    };
-    let mut scales = units
+    let unit_values = params.get(0)?.list()?;
+    let mut scales = unit_values
         .iter()
-        .filter_map(step_graph::entity_ref_value)
-        .filter_map(|unit_id| units::length_unit_scale_mm(unit_id, entities, index));
+        .filter_map(StepValue::entity_ref)
+        .filter_map(|unit_id| units::length_unit_scale_mm(unit_id, section));
     let scale = scales.next()?;
     scales.next().is_none().then_some(scale)
 }
@@ -241,6 +235,7 @@ fn scan(path: &Path) -> Result<ScanReport> {
 
     for (data_section, section) in exchange.data.iter().enumerate() {
         let index = step_graph::build_index(&section.entities);
+        let document_section = StepSection::new(data_section, &section.entities, &index);
         let ownership = representation_ownership(&section.entities);
         let mut unit_scale_cache = HashMap::<u64, Option<f64>>::new();
         for entity in &section.entities {
@@ -252,12 +247,17 @@ fn scan(path: &Path) -> Result<ScanReport> {
             }
             manifold_solids += 1;
             let solid_id = step_graph::entity_id(entity);
+            let Some(source) = document_section.entity(solid_id).map(StepEntity::source) else {
+                continue;
+            };
+            debug_assert_eq!(source.data_section, Some(data_section));
+            debug_assert_eq!(Some(source.ordinal), index.get(&solid_id).copied());
             let owning = ownership.get(&solid_id).copied();
             let has_shape_representation = owning.is_some();
             solids_without_shape_representation += usize::from(!has_shape_representation);
             let unit_scale_mm = owning.and_then(|(_, context_id)| {
                 *unit_scale_cache.entry(context_id).or_insert_with(|| {
-                    representation_length_scale_mm(context_id, &section.entities, &index)
+                    representation_length_scale_mm(context_id, &document_section)
                 })
             });
 
@@ -294,8 +294,8 @@ fn scan(path: &Path) -> Result<ScanReport> {
             };
 
             solids.push(SolidScan {
-                data_section,
-                solid_id,
+                data_section: source.data_section.unwrap_or(data_section),
+                solid_id: source.id,
                 geometry_fingerprint,
                 identity_kind,
                 unit_scale_mm,
