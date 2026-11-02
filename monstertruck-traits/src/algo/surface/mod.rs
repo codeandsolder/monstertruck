@@ -824,12 +824,14 @@ mod presearch_zero_division_tests {
             self.0.set(Some((u, v)));
             Point3::new(u, v, 0.0)
         }
-        fn derivative_u(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-        fn derivative_v(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-        fn derivative_uu(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-        fn derivative_uv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-        fn derivative_vv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
-        fn derivative_mn(&self, _: usize, _: usize, _: f64, _: f64) -> Vector3 { Vector3::zero() }
+        fn derivative_u(&self, _: f64, _: f64) -> Vector3 { Vector3::new(0.0, 0.0, 0.0) }
+        fn derivative_v(&self, _: f64, _: f64) -> Vector3 { Vector3::new(0.0, 0.0, 0.0) }
+        fn derivative_uu(&self, _: f64, _: f64) -> Vector3 { Vector3::new(0.0, 0.0, 0.0) }
+        fn derivative_uv(&self, _: f64, _: f64) -> Vector3 { Vector3::new(0.0, 0.0, 0.0) }
+        fn derivative_vv(&self, _: f64, _: f64) -> Vector3 { Vector3::new(0.0, 0.0, 0.0) }
+        fn derivative_mn(&self, _: usize, _: usize, _: f64, _: f64) -> Vector3 {
+            Vector3::new(0.0, 0.0, 0.0)
+        }
     }
 
     #[test]
