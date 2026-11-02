@@ -18,7 +18,7 @@ jobs:
     name: cargo fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # CI cannot clone the `.blueprints` submodule (agent tooling), so do
           # not recurse. Jobs that compile or run code fetch the public
@@ -37,7 +37,7 @@ jobs:
     name: cargo clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # CI cannot clone the `.blueprints` submodule (agent tooling), so do
           # not recurse. Jobs that compile or run code fetch the public
@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # CI cannot clone the `.blueprints` submodule (agent tooling), so do
           # not recurse. Jobs that compile or run code fetch the public
@@ -94,7 +94,7 @@ jobs:
     name: monstertruck-meshing feature subsets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # CI cannot clone the `.blueprints` submodule (agent tooling), so do
           # not recurse. Jobs that compile or run code fetch the public
@@ -110,7 +110,7 @@ jobs:
     name: cargo build (wasm32)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # CI cannot clone the `.blueprints` submodule (agent tooling), so do
           # not recurse. Jobs that compile or run code fetch the public
