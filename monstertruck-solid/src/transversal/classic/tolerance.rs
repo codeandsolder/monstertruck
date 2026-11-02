@@ -3,7 +3,7 @@ use monstertruck_core::tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON}
 /// Dimension-aware tolerances for the classic Boolean backend.
 ///
 /// `mesh_seed` is a discretization choice and may be deliberately coarser than
-/// the requested geometric tolerance. It must never be reused as proof of
+/// the requested Boolean numerical tolerance. It must never be reused as proof of
 /// coplanarity, equality, containment, or topology identity.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct BooleanTolerance {

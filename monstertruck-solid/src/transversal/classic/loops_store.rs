@@ -1875,9 +1875,8 @@ mod projection_tests {
             Some(a.point())
         );
 
-        // The high-Z clip uses a modeling tolerance of 0.05. Scaling the old
-        // 8x stitch envelope by that tolerance made z=0.8 and z=1.0 topology
-        // close enough to be incorrectly canonicalized as one endpoint.
+        // A loose user-facing modeling budget must never scale this kernel-level
+        // stitch envelope: z=0.8 and z=1.0 topology remain distinct endpoints.
         let model_scale_distinct = Point3::new(0.0, 0.0, 0.2);
         assert!(
             unique_nearby_loop_point(

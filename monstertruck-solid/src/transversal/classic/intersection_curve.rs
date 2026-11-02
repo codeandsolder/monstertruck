@@ -294,8 +294,8 @@ where
     let stitch_tolerance = 4.0 * tol.max(KERNEL_EPSILON);
     let polylines = stitch_nearby_polylines(construct_polylines(&interferences), stitch_tolerance)?;
     // This pass repairs numerical fragmentation introduced by tessellation.
-    // Its admission envelope is a kernel-precision bound, not the caller's
-    // potentially much coarser Boolean modeling tolerance.
+    // Its admission envelope is an explicit kernel-precision bound rather than
+    // a threshold derived from the user-facing modeling-error budget.
     let validation_tolerance =
         DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_validation_factor * KERNEL_EPSILON;
     let polylines = stitch_validated_linear_intersection_fragments(

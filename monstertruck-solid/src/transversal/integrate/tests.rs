@@ -72,6 +72,21 @@ fn boolean_reports_invalid_standard_budget_as_policy_error() {
     ));
 }
 
+#[test]
+fn standard_budget_does_not_widen_classic_boolean_tolerance() {
+    let policy = crate::GeometryPolicy::standard(0.01);
+    assert_eq!(
+        super::classic_boolean_tolerance(policy, "difference")
+            .expect("valid Standard policy must admit the classic backend"),
+        monstertruck_core::tolerance::KERNEL_EPSILON,
+    );
+    assert_eq!(
+        super::standard_budget(policy, "difference")
+            .expect("valid Standard policy must expose its modeling budget"),
+        0.01,
+    );
+}
+
 /// specs/005 cell (Covered): a general crossing box/box AND. The intersection
 /// is the box [0.5,1]x[0.25,1]x[0.25,1].
 #[test]

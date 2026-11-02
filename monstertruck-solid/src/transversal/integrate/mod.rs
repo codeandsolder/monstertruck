@@ -1,6 +1,6 @@
 use monstertruck_core::{
     geometry_policy::{GeometryPolicy, GeometryPolicyError},
-    tolerance::DEFAULT_NUMERICAL_TOLERANCES,
+    tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON},
 };
 // The classic backend is the only `super` item this module dispatches to; the
 // public trait bounds (`SnapCurveEndpoints`, etc.) resolve through the prelude
@@ -264,11 +264,27 @@ pub(super) fn validate_tolerance(tol: f64) -> std::result::Result<(), ShapeOpsEr
     }
 }
 
-fn standard_tolerance(policy: GeometryPolicy, operation: &'static str) -> ShapeOpsResult<f64> {
+fn standard_budget(policy: GeometryPolicy, operation: &'static str) -> ShapeOpsResult<f64> {
     match policy.validate()? {
         GeometryPolicy::Equivalent => Err(ShapeOpsError::EquivalentPolicyUnsupported { operation }),
         GeometryPolicy::Standard { tolerance } => Ok(tolerance),
     }
+}
+
+/// Numerical tolerance passed to the classic Boolean implementation.
+///
+/// `GeometryPolicy::Standard` is a maximum modeling-error budget, not a request
+/// to make kernel predicates, projection, welding, or topology classification
+/// that coarse. The classic backend currently has no operation-specific error
+/// estimator that can spend part of the caller's budget deliberately, so it
+/// must stay at the kernel's normal numerical resolution. Using a tighter
+/// numerical tolerance is always within a validated Standard budget.
+fn classic_boolean_tolerance(
+    policy: GeometryPolicy,
+    operation: &'static str,
+) -> ShapeOpsResult<f64> {
+    standard_budget(policy, operation)?;
+    Ok(KERNEL_EPSILON)
 }
 
 const HALF_SPACE_CLIP_OPERATION: &str = "clip_half_space_z";
@@ -309,7 +325,7 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = standard_tolerance(policy, "and")?;
+    let tol = classic_boolean_tolerance(policy, "and")?;
     #[cfg(feature = "marching-ssi")]
     {
         classic::and(solid0, solid1, tol)
@@ -350,7 +366,7 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = standard_tolerance(policy, "and")?;
+    let tol = classic_boolean_tolerance(policy, "and")?;
     #[cfg(feature = "marching-ssi")]
     {
         // The classic backend does not consume orientation hints; it derives
@@ -561,7 +577,7 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = standard_tolerance(policy, "clip_half_space_z")?;
+    let tol = standard_budget(policy, "clip_half_space_z")?;
     validate_tolerance(tol)?;
     let clip_to_world = world_to_clip
         .invert()
@@ -692,7 +708,7 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = standard_tolerance(policy, "plane_cut")?;
+    let tol = standard_budget(policy, "plane_cut")?;
     let cut = clip_half_space_z(solid, world_to_clip, keep_positive_z, policy)?;
     let section = cut
         .face_iter()
@@ -727,7 +743,7 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = standard_tolerance(policy, "or")?;
+    let tol = classic_boolean_tolerance(policy, "or")?;
     #[cfg(feature = "marching-ssi")]
     {
         classic::or(solid0, solid1, tol)
@@ -761,7 +777,7 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = standard_tolerance(policy, "difference")?;
+    let tol = classic_boolean_tolerance(policy, "difference")?;
     #[cfg(feature = "marching-ssi")]
     {
         classic::difference(solid0, solid1, tol)
@@ -795,7 +811,7 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = standard_tolerance(policy, "symmetric_difference")?;
+    let tol = classic_boolean_tolerance(policy, "symmetric_difference")?;
     #[cfg(feature = "marching-ssi")]
     {
         classic::symmetric_difference(solid0, solid1, tol)
