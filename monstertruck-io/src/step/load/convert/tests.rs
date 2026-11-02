@@ -59,6 +59,30 @@ fn pcurve_load_path_populates_trim_curves() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn trimmed_solid_report_is_aligned_with_boundaries() -> anyhow::Result<()> {
+    let step_string = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../resources/step/occt-cylinder.step",
+    ));
+    let table = crate::step::load::Table::from_step(step_string)?;
+    let step_solid = table
+        .manifold_solid_brep
+        .values()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("the cylinder fixture must contain a STEP solid."))?;
+
+    let (trimmed, reports) = table.to_compressed_trimmed_solid_reported(step_solid)?;
+    assert_eq!(trimmed.boundaries.len(), reports.len());
+    assert_eq!(trimmed.boundaries.len(), 1);
+    assert_eq!(
+        table.to_compressed_trimmed_solid(step_solid)?,
+        trimmed,
+        "the compatibility wrapper must discard only the report",
+    );
+    Ok(())
+}
+
 fn cylinder_surface() -> Surface {
     let axis = Vector3::unit_z();
     let center = Point3::origin();
