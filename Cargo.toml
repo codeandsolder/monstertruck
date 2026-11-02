@@ -50,7 +50,7 @@ js-sys = "0.3"
 log = "0.4"
 matext4cgmath = "0.1"
 num-traits = "0.2"
-naga = { version = "29", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in"] }
 parking_lot = "0.13"
 pollster = "0.4"
 proc-macro-error = "1"
