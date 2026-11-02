@@ -41,6 +41,11 @@ pub type StepCompressedTrimmedShell =
 /// See [`StepCompressedShell`].
 pub type StepCompressedSolid = CompressedSolid<Point3, Curve3D, Surface>;
 
+/// A compressed trimmed solid (exact face-local trim curves preserved) in the
+/// STEP loader's concrete geometry types. See [`StepCompressedTrimmedShell`].
+pub type StepCompressedTrimmedSolid =
+    CompressedTrimmedSolid<Point3, Curve3D, Surface, step_geometry::StepParameterCurve>;
+
 impl Table {
     fn place_holder_edge_any_to_index_and_edge_curve(
         &self,
@@ -877,10 +882,23 @@ impl Table {
     pub fn to_compressed_trimmed_solid(
         &self,
         solid: &ManifoldSolidBrepHolder,
-    ) -> Result<
-        CompressedTrimmedSolid<Point3, Curve3D, Surface, step_geometry::StepParameterCurve>,
-        LoadError,
-    > {
+    ) -> Result<StepCompressedTrimmedSolid, LoadError> {
+        self.to_compressed_trimmed_solid_reported(solid)
+            .map(|(solid, _)| solid)
+    }
+
+    /// [`Self::to_compressed_trimmed_solid`] plus ONE [`ShellLoadReport`] per
+    /// entry of `boundaries`, positionally aligned with it. This is the trimmed
+    /// counterpart of [`Self::to_compressed_solid_reported`]: exact face-local
+    /// trims are preserved while callers retain a truthful account of anything
+    /// the STEP conversion could not represent.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
+    pub fn to_compressed_trimmed_solid_reported(
+        &self,
+        solid: &ManifoldSolidBrepHolder,
+    ) -> Result<(StepCompressedTrimmedSolid, Vec<ShellLoadReport>), LoadError> {
         let PlaceHolder::Ref(Name::Entity(outer_idx)) = &solid.outer else {
             return Err("failed to reference `solid.outer`".into());
         };
@@ -888,25 +906,28 @@ impl Table {
             || {
                 self.oriented_shell.get(outer_idx).map_or_else(
                     || Err("failed to reference `solid.outer`".into()),
-                    |step_shell| self.to_compressed_trimmed_shell(step_shell),
+                    |step_shell| self.to_compressed_trimmed_shell_reported(step_shell),
                 )
             },
-            |step_shell| self.to_compressed_trimmed_shell(step_shell),
+            |step_shell| self.to_compressed_trimmed_shell_reported(step_shell),
         )?;
-        let mut boundaries = vec![outer_shell];
+        let mut boundaries = vec![outer_shell.0];
+        let mut reports = vec![outer_shell.1];
         for inner in &solid.voids {
             let PlaceHolder::Ref(Name::Entity(inner_idx)) = inner else {
                 return Err("failed to reference a member of `solid.voids`".into());
             };
-            if let Some(shell) = self.shell.get(inner_idx) {
-                boundaries.push(self.to_compressed_trimmed_shell(shell)?);
+            let (shell, report) = if let Some(shell) = self.shell.get(inner_idx) {
+                self.to_compressed_trimmed_shell_reported(shell)?
             } else if let Some(oriented_shell) = self.oriented_shell.get(inner_idx) {
-                boundaries.push(self.to_compressed_trimmed_shell(oriented_shell)?);
+                self.to_compressed_trimmed_shell_reported(oriented_shell)?
             } else {
                 return Err("failed to reference a member of `solid.voids`".into());
-            }
+            };
+            boundaries.push(shell);
+            reports.push(report);
         }
-        Ok(CompressedTrimmedSolid { boundaries })
+        Ok((CompressedTrimmedSolid { boundaries }, reports))
     }
 
     /// Extracts [`Curve3D`] curves from a [`GeometricCurveSet`].
