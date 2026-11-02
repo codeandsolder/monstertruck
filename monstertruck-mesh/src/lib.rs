@@ -108,6 +108,7 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for Faces<V> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where D: serde::Deserializer<'de> {
         #[derive(Deserialize)]
+        #[serde(rename = "Faces")]
         struct FacesRepr<V> {
             tri_faces: Vec<[V; 3]>,
             quad_faces: Vec<[V; 4]>,
