@@ -14,7 +14,10 @@ use monstertruck_core::{
 use monstertruck_meshing::prelude::PolylineCurve;
 use num_traits::ToPrimitive;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    hash::{Hash, Hasher},
+};
 
 pub fn construct_polylines(lines: &[(Point3, Point3)]) -> Vec<PolylineCurve<Point3>> {
     let mut graph: Graph = lines.iter().collect();
@@ -193,7 +196,7 @@ pub(super) fn stitch_nearby_polylines(
     }
 }
 
-#[derive(Clone, Debug, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
 enum CoordinateIndex {
     Bucket(i64),
     Exact(u64),
@@ -217,8 +220,44 @@ impl CoordinateIndex {
     }
 }
 
-#[derive(Clone, Debug, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
 struct PointIndex([CoordinateIndex; 3]);
+
+impl Hash for PointIndex {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self.0 {
+            [
+                CoordinateIndex::Bucket(x),
+                CoordinateIndex::Bucket(y),
+                CoordinateIndex::Bucket(z),
+            ] => {
+                // Preserve the pre-fallback hash exactly for ordinary geometry.
+                // Graph traversal currently depends on hash-table iteration order,
+                // so changing the hash shape of every representable point can alter
+                // stitching even though its geometric key is unchanged.
+                [x, y, z].hash(state);
+            }
+            coordinates => {
+                // Oversized finite coordinates cannot collide semantically with
+                // an all-bucket key. Give the fallback domain an explicit tag,
+                // then hash each coordinate with its representation tag.
+                0x4d54_5049_5846_414c_u64.hash(state);
+                for coordinate in coordinates {
+                    match coordinate {
+                        CoordinateIndex::Bucket(value) => {
+                            0_u8.hash(state);
+                            value.hash(state);
+                        }
+                        CoordinateIndex::Exact(bits) => {
+                            1_u8.hash(state);
+                            bits.hash(state);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 impl PointIndex {
     fn from_point(pt: Point3) -> Option<Self> {
