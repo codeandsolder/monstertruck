@@ -191,3 +191,23 @@ fn non_finite_interference_segments_are_ignored() {
         assert_eq!(polylines[0].len(), 2);
     }
 }
+
+#[test]
+fn large_finite_interference_coordinates_are_preserved_and_stitched() {
+    let x = f64::MAX;
+    let a = Point3::new(x, 0.0, 0.0);
+    let b = Point3::new(x, 1.0, 0.0);
+    let b_near = Point3::new(x, 1.0 + 0.5 * KERNEL_EPSILON, 0.0);
+    let c = Point3::new(x, 2.0, 0.0);
+
+    let polylines = construct_polylines(&[(a, b), (b_near, c)]);
+    assert_eq!(polylines.len(), 1);
+    assert_eq!(polylines[0].len(), 3);
+
+    let front = polylines[0][0];
+    let back = polylines[0][2];
+    assert!(
+        (front.near(&a) && back.near(&c)) || (front.near(&c) && back.near(&a)),
+        "large finite coordinates must not make interference segments disappear"
+    );
+}

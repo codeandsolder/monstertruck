@@ -8,10 +8,11 @@
 //! release that shipped a self-contained boolean backend).
 
 use monstertruck_core::{
-    cgmath64::{ElementWise, EuclideanSpace, MetricSpace, Point3},
+    cgmath64::{EuclideanSpace, MetricSpace, Point3},
     tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON, Tolerance},
 };
 use monstertruck_meshing::prelude::PolylineCurve;
+use num_traits::ToPrimitive;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::VecDeque;
 
@@ -193,16 +194,39 @@ pub(super) fn stitch_nearby_polylines(
 }
 
 #[derive(Clone, Debug, Copy, Hash, PartialEq, Eq)]
-struct PointIndex([i64; 3]);
+enum CoordinateIndex {
+    Bucket(i64),
+    Exact(u64),
+}
+
+impl CoordinateIndex {
+    fn from_coordinate(value: f64) -> Option<Self> {
+        if !value.is_finite() {
+            return None;
+        }
+        let grid = DEFAULT_NUMERICAL_TOLERANCES.boolean_polyline_grid_factor * KERNEL_EPSILON;
+        let scaled = (value + KERNEL_EPSILON) / grid;
+        Some(match scaled.to_i64() {
+            Some(index) => Self::Bucket(index),
+            // Beyond the i64 grid domain, adjacent representable f64 values are
+            // already farther apart than the kernel tolerance. Exact bits are
+            // therefore a lossless key for this coordinate while the remaining
+            // coordinates can still use normal tolerance buckets.
+            None => Self::Exact(value.to_bits()),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Copy, Hash, PartialEq, Eq)]
+struct PointIndex([CoordinateIndex; 3]);
 
 impl PointIndex {
     fn from_point(pt: Point3) -> Option<Self> {
-        if !pt.x.is_finite() || !pt.y.is_finite() || !pt.z.is_finite() {
-            return None;
-        }
-        let idx = pt.add_element_wise(KERNEL_EPSILON)
-            / (DEFAULT_NUMERICAL_TOLERANCES.boolean_polyline_grid_factor * KERNEL_EPSILON);
-        idx.cast::<i64>().map(|idx| Self(idx.into()))
+        Some(Self([
+            CoordinateIndex::from_coordinate(pt.x)?,
+            CoordinateIndex::from_coordinate(pt.y)?,
+            CoordinateIndex::from_coordinate(pt.z)?,
+        ]))
     }
 }
 
