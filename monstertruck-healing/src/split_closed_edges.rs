@@ -130,7 +130,17 @@ pub fn split_closed_edges_trimmed<C, S, T>(shell: &mut CompressedTrimmedShell<Po
 where
     C: BoundedCurve<Point = Point3> + Cut,
     T: BoundedCurve + Cut + Clone, {
+    let original_vertex_count = shell.vertices.len();
+    let original_edge_count = shell.edges.len();
     let added = add_edges(&mut shell.vertices, &mut shell.edges);
+    append_unassigned_stable_ids(
+        &mut shell.vertex_stable_ids,
+        shell.vertices.len() - original_vertex_count,
+    );
+    append_unassigned_stable_ids(
+        &mut shell.edge_stable_ids,
+        shell.edges.len() - original_edge_count,
+    );
     for face in &mut shell.faces {
         for wire in &mut face.boundaries {
             replace_trimmed_edges(wire, &added);

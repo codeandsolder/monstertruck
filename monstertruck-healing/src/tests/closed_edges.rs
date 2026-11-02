@@ -3,6 +3,57 @@ use monstertruck_topology::Shell;
 use std::f64::consts::PI;
 
 #[test]
+fn trimmed_split_closed_edges_marks_new_topology_unassigned() {
+    let p0 = Point3::new(1.0, 0.0, 0.0);
+    let curve = TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, 2.0 * PI));
+    let trim = TrimmedCurve::new(UnitCircle::<Point2>::new(), (0.0, 2.0 * PI));
+    let edge_use = |orientation| CompressedEdgeUse {
+        index: 0,
+        orientation,
+        trim_curve: Some(trim),
+    };
+    let mut shell = CompressedTrimmedShell {
+        vertices: vec![p0],
+        edges: vec![CompressedEdge {
+            vertices: (0, 0),
+            curve,
+        }],
+        faces: vec![
+            CompressedTrimmedFace {
+                surface: (),
+                orientation: true,
+                boundaries: vec![vec![edge_use(true)]],
+            },
+            CompressedTrimmedFace {
+                surface: (),
+                orientation: false,
+                boundaries: vec![vec![edge_use(false)]],
+            },
+        ],
+        vertex_stable_ids: Some(vec![StableId::new(11)]),
+        edge_stable_ids: Some(vec![StableId::new(21)]),
+        face_stable_ids: Some(vec![StableId::new(31), StableId::new(32)]),
+    };
+
+    split_closed_edges_trimmed(&mut shell);
+
+    assert_eq!(shell.vertices.len(), 2);
+    assert_eq!(shell.edges.len(), 2);
+    assert_eq!(
+        shell.vertex_stable_ids,
+        Some(vec![StableId::new(11), StableId::UNASSIGNED])
+    );
+    assert_eq!(
+        shell.edge_stable_ids,
+        Some(vec![StableId::new(21), StableId::UNASSIGNED])
+    );
+    assert_eq!(
+        shell.face_stable_ids,
+        Some(vec![StableId::new(31), StableId::new(32)])
+    );
+}
+
+#[test]
 fn test_split_closed_edges() {
     let vertices = vec![Point2::new(1.0, 0.0)];
     let curve = TrimmedCurve::new(UnitCircle::<Point2>::new(), (0.0, 2.0 * PI));

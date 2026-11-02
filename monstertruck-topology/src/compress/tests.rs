@@ -9,6 +9,59 @@ use monstertruck_core::cgmath64::{Point3, Vector3, Zero};
 use monstertruck_traits::ParameterRange;
 
 #[test]
+fn face_mutations_keep_stable_id_sidecars_aligned() {
+    let face = |orientation| CompressedFace {
+        boundaries: Vec::new(),
+        orientation,
+        surface: (),
+    };
+    let mut plain = CompressedShell::<(), (), ()> {
+        vertices: Vec::new(),
+        edges: Vec::new(),
+        faces: vec![face(true), face(false), face(true)],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: Some(vec![
+            StableId::new(11),
+            StableId::new(12),
+            StableId::new(13),
+        ]),
+    };
+    plain.retain_faces(|face| face.orientation);
+    assert_eq!(
+        plain.face_stable_ids,
+        Some(vec![StableId::new(11), StableId::new(13)])
+    );
+    plain.remove_face(0);
+    assert_eq!(plain.face_stable_ids, Some(vec![StableId::new(13)]));
+
+    let trimmed_face = |orientation| CompressedTrimmedFace::<(), ()> {
+        boundaries: Vec::new(),
+        orientation,
+        surface: (),
+    };
+    let mut trimmed = CompressedTrimmedShell::<(), (), (), ()> {
+        vertices: Vec::new(),
+        edges: Vec::new(),
+        faces: vec![trimmed_face(true), trimmed_face(false), trimmed_face(true)],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: Some(vec![
+            StableId::new(21),
+            StableId::new(22),
+            StableId::new(23),
+        ]),
+    };
+    trimmed.retain_faces(|face| face.orientation);
+    assert_eq!(
+        trimmed.face_stable_ids,
+        Some(vec![StableId::new(21), StableId::new(23)])
+    );
+    trimmed.remove_face(1);
+    assert_eq!(trimmed.face_stable_ids, Some(vec![StableId::new(21)]));
+}
+
+#[test]
 fn cloned_without_trims_matches_clone_then_erase_trims() {
     let shell = CompressedTrimmedShell {
         vertices: vec![0usize, 1usize],
@@ -25,6 +78,9 @@ fn cloned_without_trims_matches_clone_then_erase_trims() {
             orientation: true,
             surface: (),
         }],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
     };
 
     assert_eq!(shell.cloned_without_trims(), shell.clone().erase_trims());
@@ -81,6 +137,9 @@ fn untrimmed_patch_shell() -> CompressedTrimmedShell<Point3, TestSegment, TestPa
             orientation: true,
             surface: TestPatch,
         }],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
     }
 }
 
@@ -130,6 +189,9 @@ fn relative_tolerance_never_falls_below_the_floor() {
         vertices: Vec::new(),
         edges: Vec::new(),
         faces: Vec::new(),
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
     };
 
     assert_eq!(

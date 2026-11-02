@@ -316,6 +316,9 @@ fn shared_polyline_densifies_topological_edge_curve() {
             orientation: true,
             surface,
         }],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
     };
 
     let meshed = trimmed_cshell_tessellation(
@@ -390,6 +393,9 @@ fn trimmed_cshell_reuses_shared_edge_samples_for_exact_trims() {
                 Point2::new(0.0, FRAC_PI_2),
             ])),
         ],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
     };
 
     let meshed = trimmed_cshell_tessellation(
@@ -462,6 +468,9 @@ fn trimmed_shell_isoparams_stay_inside_trim_domain() {
             orientation: true,
             surface,
         }],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
     };
 
     let output = compressed_trimmed_shell_tessellation_with_isoparams(

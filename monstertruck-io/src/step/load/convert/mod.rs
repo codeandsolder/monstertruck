@@ -921,7 +921,14 @@ impl Table {
             boundaries.push(shell);
             reports.push(report);
         }
-        Ok((CompressedTrimmedSolid { boundaries }, reports))
+        Ok((
+            CompressedTrimmedSolid {
+                boundaries,
+                id_allocator: None,
+                attributes: None,
+            },
+            reports,
+        ))
     }
 
     /// Extracts [`Curve3D`] curves from a [`GeometricCurveSet`].
@@ -1497,6 +1504,9 @@ impl StepShell for ShellHolder {
                 vertices,
                 edges,
                 faces,
+                vertex_stable_ids: None,
+                edge_stable_ids: None,
+                face_stable_ids: None,
             },
             sink.into_report(),
         ))

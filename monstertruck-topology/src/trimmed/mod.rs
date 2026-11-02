@@ -1,10 +1,11 @@
 use crate::compress::{
     CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedTrimmedFace,
-    CompressedTrimmedShell, CompressedTrimmedSolid,
+    CompressedTrimmedShell, CompressedTrimmedSolid, validate_stable_id_counts,
 };
 use crate::{
-    Debug, Edge, EdgeId, ExactParameterBoundary2D, Face, Result, Shell, Solid, Vertex, VertexId,
-    Wire, errors::Error,
+    Debug, Edge, EdgeId, ElementAttributes, ExactParameterBoundary2D, Face, Result, Shell, Solid,
+    SolidAttributes, StableId, StableIdAllocator, StableIdExhausted, Vertex, VertexId, Wire,
+    errors::Error,
 };
 use rustc_hash::FxHashMap as HashMap;
 
@@ -28,6 +29,8 @@ pub struct TrimmedShell<P, C, S, T> {
 #[derive(Clone, Debug)]
 pub struct TrimmedSolid<P, C, S, T> {
     boundaries: Vec<TrimmedShell<P, C, S, T>>,
+    id_allocator: StableIdAllocator,
+    attributes: SolidAttributes,
 }
 
 impl<P, C, S, T> TrimmedFace<P, C, S, T> {
@@ -156,7 +159,7 @@ impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
         for shell in &boundaries {
             shell.check_solid_boundary()?;
         }
-        Ok(Self { boundaries })
+        Ok(Self::new_unchecked(boundaries))
     }
 
     /// Creates a trimmed solid without validating its boundary shells.
@@ -165,8 +168,72 @@ impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
     /// invariants enforced by [`Self::new`].
     #[inline]
     #[must_use]
-    pub const fn new_unchecked(boundaries: Vec<TrimmedShell<P, C, S, T>>) -> Self {
-        Self { boundaries }
+    pub fn new_unchecked(boundaries: Vec<TrimmedShell<P, C, S, T>>) -> Self {
+        Self {
+            boundaries,
+            id_allocator: StableIdAllocator::new(),
+            attributes: SolidAttributes::new(),
+        }
+    }
+
+    /// Allocates a fresh [`StableId`] from this solid's allocator.
+    ///
+    /// # Errors
+    /// Returns [`StableIdExhausted`] if the identifier space is exhausted.
+    #[inline]
+    pub fn alloc_id(&mut self) -> std::result::Result<StableId, StableIdExhausted> {
+        self.id_allocator.allocate()
+    }
+
+    /// Returns this solid's stable-ID allocator.
+    #[inline]
+    #[must_use]
+    pub const fn id_allocator(&self) -> &StableIdAllocator { &self.id_allocator }
+
+    /// Returns this solid's stable-ID allocator mutably.
+    #[inline]
+    pub const fn id_allocator_mut(&mut self) -> &mut StableIdAllocator { &mut self.id_allocator }
+
+    /// Returns this solid's element attributes.
+    #[inline]
+    #[must_use]
+    pub const fn attributes(&self) -> &SolidAttributes { &self.attributes }
+
+    /// Returns this solid's element attributes mutably.
+    #[inline]
+    pub const fn attributes_mut(&mut self) -> &mut SolidAttributes { &mut self.attributes }
+
+    /// Returns the face attributes.
+    #[inline]
+    #[must_use]
+    pub const fn face_attributes(&self) -> &ElementAttributes { &self.attributes.faces }
+
+    /// Returns the face attributes mutably.
+    #[inline]
+    pub const fn face_attributes_mut(&mut self) -> &mut ElementAttributes {
+        &mut self.attributes.faces
+    }
+
+    /// Returns the edge attributes.
+    #[inline]
+    #[must_use]
+    pub const fn edge_attributes(&self) -> &ElementAttributes { &self.attributes.edges }
+
+    /// Returns the edge attributes mutably.
+    #[inline]
+    pub const fn edge_attributes_mut(&mut self) -> &mut ElementAttributes {
+        &mut self.attributes.edges
+    }
+
+    /// Returns the vertex attributes.
+    #[inline]
+    #[must_use]
+    pub const fn vertex_attributes(&self) -> &ElementAttributes { &self.attributes.vertices }
+
+    /// Returns the vertex attributes mutably.
+    #[inline]
+    pub const fn vertex_attributes_mut(&mut self) -> &mut ElementAttributes {
+        &mut self.attributes.vertices
     }
 
     /// Returns the boundary shells.
@@ -179,25 +246,103 @@ impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
     #[must_use]
     pub fn into_boundaries(self) -> Vec<TrimmedShell<P, C, S, T>> { self.boundaries }
 
+    /// Assigns stable IDs to every currently-unassigned topology element without
+    /// discarding face-local trims. Existing assigned IDs remain authoritative.
+    ///
+    /// The assignment rules intentionally reuse [`Solid::ensure_topology_stable_ids`]:
+    /// topology handles are mirrored into a temporary plain solid, IDs are reconciled
+    /// there, then copied back by topology identity. This keeps one allocation policy
+    /// for plain and exact-trim solids while preserving the trim payload.
+    ///
+    /// # Errors
+    /// Returns [`StableIdExhausted`] if there are not enough identifiers left.
+    pub fn ensure_topology_stable_ids(&mut self) -> std::result::Result<(), StableIdExhausted> {
+        let mut plain = Solid::new_unchecked(
+            self.boundaries
+                .iter()
+                .map(TrimmedShell::to_plain_shell)
+                .collect(),
+        );
+        *plain.id_allocator_mut() = self.id_allocator.clone();
+        plain.ensure_topology_stable_ids()?;
+
+        let mut vertex_ids = HashMap::<VertexId<P>, StableId>::default();
+        let mut edge_ids = HashMap::<EdgeId<C>, StableId>::default();
+        let mut face_ids = Vec::new();
+        for face in plain.face_iter() {
+            face_ids.push(face.stable_id());
+            for wire in face.absolute_boundaries() {
+                for edge in wire {
+                    edge_ids
+                        .entry(edge.id())
+                        .or_insert_with(|| edge.stable_id());
+                    let (front, back) = edge.absolute_ends();
+                    vertex_ids
+                        .entry(front.id())
+                        .or_insert_with(|| front.stable_id());
+                    vertex_ids
+                        .entry(back.id())
+                        .or_insert_with(|| back.stable_id());
+                }
+            }
+        }
+
+        let mut face_ids = face_ids.into_iter();
+        for shell in &mut self.boundaries {
+            for trimmed_face in &mut shell.face_list {
+                if let Some(stable_id) = face_ids.next() {
+                    trimmed_face.face.set_stable_id(stable_id);
+                }
+                for wire in &mut trimmed_face.face.boundaries {
+                    for edge in wire.edge_iter_mut() {
+                        if let Some(stable_id) = edge_ids.get(&edge.id()).copied() {
+                            edge.set_stable_id(stable_id);
+                        }
+                        if let Some(stable_id) = vertex_ids.get(&edge.vertices.0.id()).copied() {
+                            edge.vertices.0.set_stable_id(stable_id);
+                        }
+                        if let Some(stable_id) = vertex_ids.get(&edge.vertices.1.id()).copied() {
+                            edge.vertices.1.set_stable_id(stable_id);
+                        }
+                    }
+                }
+            }
+        }
+        self.id_allocator = plain.id_allocator().clone();
+        Ok(())
+    }
+
     /// Consumes `self` and drops trim storage.
     pub fn erase_trims(self) -> Solid<P, C, S> {
-        Solid::new_unchecked(
-            self.boundaries
+        let Self {
+            boundaries,
+            id_allocator,
+            attributes,
+        } = self;
+        let mut solid = Solid::new_unchecked(
+            boundaries
                 .into_iter()
                 .map(TrimmedShell::erase_trims)
                 .collect(),
-        )
+        );
+        *solid.id_allocator_mut() = id_allocator;
+        *solid.attributes_mut() = attributes;
+        solid
     }
 }
 
 impl<P, C, S, T> From<Solid<P, C, S>> for TrimmedSolid<P, C, S, T> {
     fn from(solid: Solid<P, C, S>) -> Self {
+        let id_allocator = solid.id_allocator().clone();
+        let attributes = solid.attributes().clone();
         Self {
             boundaries: solid
                 .into_boundaries()
                 .into_iter()
                 .map(TrimmedShell::from)
                 .collect(),
+            id_allocator,
+            attributes,
         }
     }
 }
@@ -208,9 +353,7 @@ impl<P, C, S, T> From<TrimmedSolid<P, C, S, T>> for Solid<P, C, S> {
 
 impl<P, C, S, T> FromIterator<TrimmedShell<P, C, S, T>> for TrimmedSolid<P, C, S, T> {
     fn from_iter<I: IntoIterator<Item = TrimmedShell<P, C, S, T>>>(iter: I) -> Self {
-        Self {
-            boundaries: iter.into_iter().collect(),
-        }
+        Self::new_unchecked(iter.into_iter().collect())
     }
 }
 
@@ -253,6 +396,8 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
                 .iter()
                 .map(|shell| shell.to_trimmed_with_face_trims(&mut trim_curve))
                 .collect(),
+            id_allocator: self.id_allocator().clone(),
+            attributes: self.attributes().clone(),
         }
     }
 
@@ -271,6 +416,8 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
 struct TrimmedCompressDirector<P, C> {
     vmap: HashMap<VertexId<P>, (usize, P)>,
     emap: HashMap<EdgeId<C>, (usize, CompressedEdge<C>)>,
+    vertex_stable_ids: HashMap<VertexId<P>, (usize, StableId)>,
+    edge_stable_ids: HashMap<EdgeId<C>, (usize, StableId)>,
 }
 
 impl<P: Clone, C: Clone> TrimmedCompressDirector<P, C> {
@@ -278,13 +425,19 @@ impl<P: Clone, C: Clone> TrimmedCompressDirector<P, C> {
         Self {
             vmap: HashMap::default(),
             emap: HashMap::default(),
+            vertex_stable_ids: HashMap::default(),
+            edge_stable_ids: HashMap::default(),
         }
     }
 
     fn get_vid(&mut self, vertex: &Vertex<P>) -> usize {
         let id = self.vmap.len();
+        let vertex_id = vertex.id();
+        self.vertex_stable_ids
+            .entry(vertex_id)
+            .or_insert_with(|| (id, vertex.stable_id()));
         self.vmap
-            .entry(vertex.id())
+            .entry(vertex_id)
             .or_insert_with(|| (id, vertex.point()))
             .0
     }
@@ -300,19 +453,24 @@ impl<P: Clone, C: Clone> TrimmedCompressDirector<P, C> {
                 vertices: (front_id, back_id),
                 curve: edge.curve(),
             };
+            self.edge_stable_ids
+                .insert(edge.id(), (index, edge.stable_id()));
             self.emap.insert(edge.id(), (index, cedge));
             (index, edge.orientation()).into()
         }
     }
 
-    fn into_vertices_edges(self) -> (Vec<P>, Vec<CompressedEdge<C>>) {
-        let mut vertices: Vec<_> = self.vmap.into_values().collect();
-        vertices.sort_by_key(|(index, _)| *index);
-        let mut edges: Vec<_> = self.emap.into_values().collect();
-        edges.sort_by_key(|(index, _)| *index);
+    fn into_parts(self) -> (Vec<P>, Vec<CompressedEdge<C>>, Vec<StableId>, Vec<StableId>) {
+        fn ordered_values<K, V>(map: HashMap<K, (usize, V)>) -> Vec<V> {
+            let mut values: Vec<_> = map.into_values().collect();
+            values.sort_by_key(|(index, _)| *index);
+            values.into_iter().map(|(_, value)| value).collect()
+        }
         (
-            vertices.into_iter().map(|(_, point)| point).collect(),
-            edges.into_iter().map(|(_, edge)| edge).collect(),
+            ordered_values(self.vmap),
+            ordered_values(self.emap),
+            ordered_values(self.vertex_stable_ids),
+            ordered_values(self.edge_stable_ids),
         )
     }
 }
@@ -322,6 +480,11 @@ impl<P: Clone, C: Clone, S: Clone, T: Clone> From<&TrimmedShell<P, C, S, T>>
 {
     fn from(shell: &TrimmedShell<P, C, S, T>) -> Self {
         let mut director = TrimmedCompressDirector::new();
+        let face_stable_ids = shell
+            .face_list
+            .iter()
+            .map(|face| face.face.stable_id())
+            .collect::<Vec<_>>();
         let faces = shell
             .face_list
             .iter()
@@ -350,11 +513,17 @@ impl<P: Clone, C: Clone, S: Clone, T: Clone> From<&TrimmedShell<P, C, S, T>>
                 surface: face.face.surface(),
             })
             .collect();
-        let (vertices, edges) = director.into_vertices_edges();
+        let (vertices, edges, vertex_stable_ids, edge_stable_ids) = director.into_parts();
+        let has_any_stable_id = vertex_stable_ids.iter().any(|id| id.is_assigned())
+            || edge_stable_ids.iter().any(|id| id.is_assigned())
+            || face_stable_ids.iter().any(|id| id.is_assigned());
         Self {
             vertices,
             edges,
             faces,
+            vertex_stable_ids: has_any_stable_id.then_some(vertex_stable_ids),
+            edge_stable_ids: has_any_stable_id.then_some(edge_stable_ids),
+            face_stable_ids: has_any_stable_id.then_some(face_stable_ids),
         }
     }
 }
@@ -369,6 +538,12 @@ impl<P: Clone, C: Clone, S: Clone, T: Clone> From<&TrimmedSolid<P, C, S, T>>
                 .iter()
                 .map(CompressedTrimmedShell::from)
                 .collect(),
+            id_allocator: Some(solid.id_allocator.clone()),
+            attributes: if solid.attributes.is_empty() {
+                None
+            } else {
+                Some(solid.attributes.clone())
+            },
         }
     }
 }
@@ -377,13 +552,29 @@ impl<P, C, S, T> TryFrom<CompressedTrimmedShell<P, C, S, T>> for TrimmedShell<P,
     type Error = Error;
 
     fn try_from(shell: CompressedTrimmedShell<P, C, S, T>) -> Result<Self> {
+        validate_stable_id_counts(
+            shell.vertex_stable_ids.as_deref(),
+            shell.vertices.len(),
+            shell.edge_stable_ids.as_deref(),
+            shell.edges.len(),
+            shell.face_stable_ids.as_deref(),
+            shell.faces.len(),
+        )?;
         let CompressedTrimmedShell {
             vertices,
             edges,
             faces,
+            vertex_stable_ids,
+            edge_stable_ids,
+            face_stable_ids,
         } = shell;
-        let vertices: Vec<_> = vertices.into_iter().map(Vertex::new).collect();
-        let edges = edges
+        let mut vertices: Vec<_> = vertices.into_iter().map(Vertex::new).collect();
+        if let Some(vsids) = vertex_stable_ids {
+            for (vertex, stable_id) in vertices.iter_mut().zip(vsids) {
+                vertex.set_stable_id(stable_id);
+            }
+        }
+        let mut edges = edges
             .into_iter()
             .map(|edge| {
                 let front = &vertices[edge.vertices.0];
@@ -391,7 +582,12 @@ impl<P, C, S, T> TryFrom<CompressedTrimmedShell<P, C, S, T>> for TrimmedShell<P,
                 Edge::new(front, back, edge.curve)
             })
             .collect::<Result<Vec<_>>>()?;
-        faces
+        if let Some(esids) = edge_stable_ids {
+            for (edge, stable_id) in edges.iter_mut().zip(esids) {
+                edge.set_stable_id(stable_id);
+            }
+        }
+        let shell: Self = faces
             .into_iter()
             .map(|face| {
                 let boundaries = face
@@ -424,7 +620,16 @@ impl<P, C, S, T> TryFrom<CompressedTrimmedShell<P, C, S, T>> for TrimmedShell<P,
                 }
                 TrimmedFace::new(runtime_face, trims)
             })
-            .collect()
+            .collect::<Result<Self>>()?;
+        if let Some(fsids) = face_stable_ids {
+            let mut faces = shell.face_list;
+            for (face, stable_id) in faces.iter_mut().zip(fsids) {
+                face.face.set_stable_id(stable_id);
+            }
+            Ok(Self { face_list: faces })
+        } else {
+            Ok(shell)
+        }
     }
 }
 
@@ -432,13 +637,17 @@ impl<P, C, S, T> TryFrom<CompressedTrimmedSolid<P, C, S, T>> for TrimmedSolid<P,
     type Error = Error;
 
     fn try_from(solid: CompressedTrimmedSolid<P, C, S, T>) -> Result<Self> {
-        Ok(Self {
-            boundaries: solid
-                .boundaries
-                .into_iter()
-                .map(TrimmedShell::try_from)
-                .collect::<Result<Vec<_>>>()?,
-        })
+        let id_allocator = solid.id_allocator.unwrap_or_default();
+        let attributes = solid.attributes.unwrap_or_default();
+        let boundaries = solid
+            .boundaries
+            .into_iter()
+            .map(TrimmedShell::try_from)
+            .collect::<Result<Vec<_>>>()?;
+        let mut runtime = Self::new(boundaries)?;
+        runtime.id_allocator = id_allocator;
+        runtime.attributes = attributes;
+        Ok(runtime)
     }
 }
 

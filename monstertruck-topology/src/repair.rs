@@ -97,22 +97,7 @@ pub fn split_non_simple_compressed_wires<P, C, S>(shell: &mut CompressedShell<P,
         split_non_simple_boundaries(edges, &mut face.boundaries);
     });
 
-    if let Some(face_stable_ids) = shell.face_stable_ids.take() {
-        let mut stable_ids = face_stable_ids.into_iter();
-        let mut retained_ids = Vec::with_capacity(shell.faces.len());
-        shell.faces.retain(|face| {
-            let stable_id = stable_ids.next().unwrap_or(StableId::UNASSIGNED);
-            if face.boundaries.is_empty() {
-                false
-            } else {
-                retained_ids.push(stable_id);
-                true
-            }
-        });
-        shell.face_stable_ids = Some(retained_ids);
-    } else {
-        shell.faces.retain(|face| !face.boundaries.is_empty());
-    }
+    shell.retain_faces(|face| !face.boundaries.is_empty());
 }
 
 /// Trim-preserving counterpart of [`split_non_simple_compressed_wires`].
@@ -126,7 +111,7 @@ pub fn split_non_simple_compressed_trimmed_wires<P, C, S, T: Clone>(
     shell.faces.iter_mut().for_each(|face| {
         split_non_simple_boundaries(edges, &mut face.boundaries);
     });
-    shell.faces.retain(|face| !face.boundaries.is_empty());
+    shell.retain_faces(|face| !face.boundaries.is_empty());
 }
 
 /// Split singular compressed vertices into one topological vertex per local edge fan.
@@ -218,6 +203,9 @@ pub fn split_singular_compressed_trimmed_vertices<P: Clone, C, S, T>(
                 }
             }
         }
+    }
+    if let Some(vertex_stable_ids) = &mut shell.vertex_stable_ids {
+        vertex_stable_ids.extend(std::iter::repeat_n(StableId::UNASSIGNED, created));
     }
     created
 }
@@ -540,7 +528,7 @@ where
 
             let mut candidate = shell.clone();
             candidate.faces[face_index0] = merged;
-            candidate.faces.remove(face_index1);
+            candidate.remove_face(face_index1);
             let valid = TrimmedShell::try_from(candidate.clone())
                 .and_then(|runtime| runtime.check_solid_boundary().map(|()| runtime));
             if valid.is_err() {
@@ -718,12 +706,27 @@ mod trimmed_tests {
                 orientation: true,
                 surface: (),
             }],
+            vertex_stable_ids: Some((11..=15).map(StableId::new).collect()),
+            edge_stable_ids: Some((21..=26).map(StableId::new).collect()),
+            face_stable_ids: Some(vec![StableId::new(31)]),
         };
 
         split_non_simple_compressed_trimmed_wires(&mut shell);
         assert_eq!(shell.faces[0].boundaries.len(), 2);
         assert_eq!(split_singular_compressed_trimmed_vertices(&mut shell), 1);
         assert_eq!(shell.vertices.len(), 6);
+        assert_eq!(
+            shell.vertex_stable_ids,
+            Some(vec![
+                StableId::new(11),
+                StableId::new(12),
+                StableId::new(13),
+                StableId::new(14),
+                StableId::new(15),
+                StableId::UNASSIGNED,
+            ])
+        );
+        assert_eq!(shell.face_stable_ids, Some(vec![StableId::new(31)]));
 
         let boundaries = &shell.faces[0].boundaries;
         let vertices = boundaries
@@ -808,6 +811,9 @@ mod trimmed_tests {
                 face(9, &[(4, true), (5, true), (12, false)]),
                 face(9, &[(12, true), (6, true), (7, true)]),
             ],
+            vertex_stable_ids: None,
+            edge_stable_ids: None,
+            face_stable_ids: None,
         };
 
         let before: TrimmedShell<(), u32, u8, u32> =
@@ -908,6 +914,9 @@ mod trimmed_tests {
                 face(9, &[(4, true), (5, true), (12, false)]),
                 face(9, &[(12, true), (6, true), (7, true)]),
             ],
+            vertex_stable_ids: None,
+            edge_stable_ids: None,
+            face_stable_ids: None,
         };
 
         let failed_curve_calls = Cell::new(0usize);
