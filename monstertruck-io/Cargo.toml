@@ -59,7 +59,7 @@ monstertruck-mesh = { workspace = true }
 # is why this crate holds a single converter rather than one per format.
 cadmpeg-ir = { version = "0.4", optional = true }
 cadmpeg-codec-iges = { version = "0.4", optional = true }
-cadmpeg-codec-step = { version = "0.4", optional = true }
+cadmpeg-codec-step = { version = "0.6", optional = true }
 # `ReadSeek` lives here, not in cadmpeg-ir. Renamed from `cadmpeg-codec-core`
 # at 0.4; depending on both would give two incompatible `ReadSeek` traits.
 cadmpeg-core = { version = "0.4", optional = true }
