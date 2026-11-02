@@ -164,7 +164,6 @@ impl Table {
                     Some(Point3::from(&vertex.vertex_geometry))
                 }
                 Err(e) => {
-                    eprintln!("{e}");
                     sink.lost(
                         Cat::Vertex,
                         Why::VertexUnresolved,
@@ -211,7 +210,6 @@ impl Table {
             let edge_curve = match edge.clone().into_owned(self) {
                 Ok(edge_curve) => edge_curve,
                 Err(e) => {
-                    eprintln!("{e}");
                     sink.lost(
                         Cat::Edge,
                         Why::EdgeUnresolved,
@@ -225,7 +223,6 @@ impl Table {
                 Ok(curve) => curve,
                 Err(e) if edge_curve.edge_geometry.is_none() => {
                     let Some(curve) = recovered_missing_edges.get(&idx).cloned() else {
-                        eprintln!("{e}");
                         sink.lost(
                             Cat::Edge,
                             Why::EdgeGeometryMissing,
@@ -237,7 +234,6 @@ impl Table {
                     curve
                 }
                 Err(e) => {
-                    eprintln!("{e}");
                     sink.lost(
                         Cat::Edge,
                         Why::EdgeCurveRefused,
@@ -515,7 +511,6 @@ impl Table {
         let step_surface: SurfaceAny = match face.face_geometry.clone().into_owned(self) {
             Ok(step_surface) => step_surface,
             Err(e) => {
-                eprintln!("{e}");
                 sink.lost(Cat::Face, Why::SurfaceUnresolved, id, Some(e.to_string()));
                 return None;
             }
@@ -523,7 +518,6 @@ impl Table {
         match Surface::try_from(&step_surface) {
             Ok(surface) => Some(surface),
             Err(e) => {
-                eprintln!("{e}");
                 sink.lost(Cat::Face, Why::SurfaceRefused, id, Some(e.to_string()));
                 None
             }

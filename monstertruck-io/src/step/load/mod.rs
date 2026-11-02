@@ -1100,15 +1100,12 @@ impl Table {
 impl<'a> FromIterator<&'a EntityInstance> for Table {
     /// Builds the table, RECORDING every record it has to swallow.
     ///
-    /// The `eprintln!` is kept verbatim so nothing about the observable output
-    /// changes; what is new is that the swallow also lands in
-    /// [`Table::entity_report`], where a caller can find it after the fact
-    /// instead of having to have been watching stderr.
+    /// Refusals are retained in [`Table::entity_report`]; loading is library code and
+    /// does not write diagnostics to stderr. Callers decide how to present the report.
     fn from_iter<I: IntoIterator<Item = &'a EntityInstance>>(iter: I) -> Self {
         let mut res = Self::default();
         iter.into_iter().for_each(|instance| {
             if let Err(e) = res.push_instance(instance) {
-                eprintln!("{e}");
                 res.record_refused_instance(instance, &e);
             }
         });
