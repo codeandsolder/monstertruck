@@ -166,6 +166,15 @@ pub struct CompressedTrimmedShell<P, C, S, T> {
     pub edges: Vec<CompressedEdge<C>>,
     /// all geometries and boundaries of faces, including optional face-local trims
     pub faces: Vec<CompressedTrimmedFace<S, T>>,
+    /// Stable IDs for vertices (same order as `vertices`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex_stable_ids: Option<Vec<StableId>>,
+    /// Stable IDs for edges (same order as `edges`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_stable_ids: Option<Vec<StableId>>,
+    /// Stable IDs for faces (same order as `faces`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face_stable_ids: Option<Vec<StableId>>,
 }
 
 /// Serialized compressed solid
@@ -182,10 +191,77 @@ pub struct CompressedSolid<P, C, S> {
 }
 
 /// Serialized compressed solid with exact face-local trim storage.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CompressedTrimmedSolid<P, C, S, T> {
     /// all boundaries of solid
     pub boundaries: Vec<CompressedTrimmedShell<P, C, S, T>>,
+    /// The stable ID allocator state, preserved across serialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id_allocator: Option<StableIdAllocator>,
+    /// Per-element attributes, preserved across serialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attributes: Option<SolidAttributes>,
+}
+
+fn retain_with_stable_ids<T>(
+    items: &mut Vec<T>,
+    stable_ids: &mut Option<Vec<StableId>>,
+    mut keep: impl FnMut(&T) -> bool,
+) {
+    if let Some(ids) = stable_ids.take() {
+        let mut ids = ids.into_iter();
+        let mut retained_ids = Vec::with_capacity(items.len());
+        items.retain(|item| {
+            let stable_id = ids.next().unwrap_or(StableId::UNASSIGNED);
+            if keep(item) {
+                retained_ids.push(stable_id);
+                true
+            } else {
+                false
+            }
+        });
+        *stable_ids = Some(retained_ids);
+    } else {
+        items.retain(keep);
+    }
+}
+
+fn remove_with_stable_id<T>(
+    items: &mut Vec<T>,
+    stable_ids: &mut Option<Vec<StableId>>,
+    index: usize,
+) -> T {
+    if let Some(ids) = stable_ids {
+        ids.resize(items.len(), StableId::UNASSIGNED);
+        ids.remove(index);
+    }
+    items.remove(index)
+}
+
+pub(crate) fn validate_stable_id_counts(
+    vertex_ids: Option<&[StableId]>,
+    vertex_count: usize,
+    edge_ids: Option<&[StableId]>,
+    edge_count: usize,
+    face_ids: Option<&[StableId]>,
+    face_count: usize,
+) -> Result<()> {
+    for (entity, ids, expected) in [
+        ("vertices", vertex_ids, vertex_count),
+        ("edges", edge_ids, edge_count),
+        ("faces", face_ids, face_count),
+    ] {
+        if let Some(ids) = ids
+            && ids.len() != expected
+        {
+            return Err(Error::StableIdCountMismatch {
+                entity,
+                expected,
+                actual: ids.len(),
+            });
+        }
+    }
+    Ok(())
 }
 
 struct CompressDirector<P, C> {
@@ -308,11 +384,6 @@ impl<P: Clone, C: Clone> CompressDirector<P, C> {
     }
 
     #[inline]
-    fn vertices_edges(self) -> (Vec<P>, Vec<CompressedEdge<C>>) {
-        (Self::map2vec(self.vmap), Self::map2vec(self.emap))
-    }
-
-    #[inline]
     fn stable_ids(self) -> (Vec<P>, Vec<CompressedEdge<C>>, Vec<StableId>, Vec<StableId>) {
         let vertices = Self::map2vec(self.vmap);
         let edges = Self::map2vec(self.emap);
@@ -364,14 +435,25 @@ impl<P: Clone, C: Clone, S: Clone> Shell<P, C, S> {
         F: FnMut(&Edge<P, C>, &S) -> Option<T>,
     {
         let mut director = CompressDirector::new();
+        let face_stable_ids: Vec<StableId> = self.iter().map(super::Face::stable_id).collect();
         let mut face_closure =
             |face: &Face<P, C, S>| director.create_trimmed_cface(face, &mut trim_curve);
         let faces = self.iter().map(&mut face_closure).collect();
-        let (vertices, edges) = director.vertices_edges();
+        let (vertices, edges, vsids, esids) = director.stable_ids();
+        let has_any_stable_id = vsids.iter().any(|id| id.is_assigned())
+            || esids.iter().any(|id| id.is_assigned())
+            || face_stable_ids.iter().any(|id| id.is_assigned());
         CompressedTrimmedShell {
             vertices,
             edges,
             faces,
+            vertex_stable_ids: if has_any_stable_id { Some(vsids) } else { None },
+            edge_stable_ids: if has_any_stable_id { Some(esids) } else { None },
+            face_stable_ids: if has_any_stable_id {
+                Some(face_stable_ids)
+            } else {
+                None
+            },
         }
     }
 
@@ -397,33 +479,14 @@ impl<P, C, S> Shell<P, C, S> {
     /// (from `monstertruck-healing`) to the `CompressedShell` before calling `extract`.
     /// The convenience function `monstertruck_healing::extract_healed` does both steps.
     pub fn extract(cshell: CompressedShell<P, C, S>) -> Result<Self> {
-        for (entity, ids, expected) in [
-            (
-                "vertices",
-                cshell.vertex_stable_ids.as_deref(),
-                cshell.vertices.len(),
-            ),
-            (
-                "edges",
-                cshell.edge_stable_ids.as_deref(),
-                cshell.edges.len(),
-            ),
-            (
-                "faces",
-                cshell.face_stable_ids.as_deref(),
-                cshell.faces.len(),
-            ),
-        ] {
-            if let Some(ids) = ids
-                && ids.len() != expected
-            {
-                return Err(Error::StableIdCountMismatch {
-                    entity,
-                    expected,
-                    actual: ids.len(),
-                });
-            }
-        }
+        validate_stable_id_counts(
+            cshell.vertex_stable_ids.as_deref(),
+            cshell.vertices.len(),
+            cshell.edge_stable_ids.as_deref(),
+            cshell.edges.len(),
+            cshell.face_stable_ids.as_deref(),
+            cshell.faces.len(),
+        )?;
         let CompressedShell {
             vertices,
             edges,
@@ -625,6 +688,19 @@ where
 }
 
 impl<P, C, S, T> CompressedTrimmedShell<P, C, S, T> {
+    /// Retains only faces accepted by `keep`, compacting the parallel face stable-ID sidecar.
+    pub fn retain_faces(&mut self, keep: impl FnMut(&CompressedTrimmedFace<S, T>) -> bool) {
+        retain_with_stable_ids(&mut self.faces, &mut self.face_stable_ids, keep);
+    }
+
+    /// Removes one face and the matching face stable-ID entry when present.
+    ///
+    /// # Panics
+    /// Panics when `index` is outside the face array, matching [`Vec::remove`].
+    pub fn remove_face(&mut self, index: usize) -> CompressedTrimmedFace<S, T> {
+        remove_with_stable_id(&mut self.faces, &mut self.face_stable_ids, index)
+    }
+
     /// Drops all face-local trim data and returns a plain `CompressedShell`.
     pub fn erase_trims(self) -> CompressedShell<P, C, S> {
         CompressedShell {
@@ -635,9 +711,9 @@ impl<P, C, S, T> CompressedTrimmedShell<P, C, S, T> {
                 .into_iter()
                 .map(CompressedTrimmedFace::erase_trims)
                 .collect(),
-            vertex_stable_ids: None,
-            edge_stable_ids: None,
-            face_stable_ids: None,
+            vertex_stable_ids: self.vertex_stable_ids,
+            edge_stable_ids: self.edge_stable_ids,
+            face_stable_ids: self.face_stable_ids,
         }
     }
 
@@ -655,9 +731,9 @@ impl<P, C, S, T> CompressedTrimmedShell<P, C, S, T> {
                 .iter()
                 .map(CompressedTrimmedFace::cloned_without_trims)
                 .collect(),
-            vertex_stable_ids: None,
-            edge_stable_ids: None,
-            face_stable_ids: None,
+            vertex_stable_ids: self.vertex_stable_ids.clone(),
+            edge_stable_ids: self.edge_stable_ids.clone(),
+            face_stable_ids: self.face_stable_ids.clone(),
         }
     }
 }
@@ -671,8 +747,8 @@ impl<P, C, S, T> CompressedTrimmedSolid<P, C, S, T> {
                 .into_iter()
                 .map(CompressedTrimmedShell::erase_trims)
                 .collect(),
-            id_allocator: None,
-            attributes: None,
+            id_allocator: self.id_allocator,
+            attributes: self.attributes,
         }
     }
 
@@ -688,9 +764,24 @@ impl<P, C, S, T> CompressedTrimmedSolid<P, C, S, T> {
                 .iter()
                 .map(CompressedTrimmedShell::cloned_without_trims)
                 .collect(),
-            id_allocator: None,
-            attributes: None,
+            id_allocator: self.id_allocator.clone(),
+            attributes: self.attributes.clone(),
         }
+    }
+}
+
+impl<P, C, S> CompressedShell<P, C, S> {
+    /// Retains only faces accepted by `keep`, compacting the parallel face stable-ID sidecar.
+    pub fn retain_faces(&mut self, keep: impl FnMut(&CompressedFace<S>) -> bool) {
+        retain_with_stable_ids(&mut self.faces, &mut self.face_stable_ids, keep);
+    }
+
+    /// Removes one face and the matching face stable-ID entry when present.
+    ///
+    /// # Panics
+    /// Panics when `index` is outside the face array, matching [`Vec::remove`].
+    pub fn remove_face(&mut self, index: usize) -> CompressedFace<S> {
+        remove_with_stable_id(&mut self.faces, &mut self.face_stable_ids, index)
     }
 }
 
@@ -747,6 +838,9 @@ impl<P: Clone, C: Clone, S: Clone> CompressedShell<P, C, S> {
                     surface: face.surface.clone(),
                 })
                 .collect(),
+            vertex_stable_ids: self.vertex_stable_ids.clone(),
+            edge_stable_ids: self.edge_stable_ids.clone(),
+            face_stable_ids: self.face_stable_ids.clone(),
         }
     }
 
@@ -786,6 +880,8 @@ impl<P: Clone, C: Clone, S: Clone> CompressedSolid<P, C, S> {
                 .iter()
                 .map(|shell| shell.with_face_trims(&mut trim_curve))
                 .collect(),
+            id_allocator: self.id_allocator.clone(),
+            attributes: self.attributes.clone(),
         }
     }
 
@@ -834,6 +930,12 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
                 .iter()
                 .map(|shell| shell.compress_with_face_trims(&mut trim_curve))
                 .collect(),
+            id_allocator: Some(self.id_allocator.clone()),
+            attributes: if self.attributes.is_empty() {
+                None
+            } else {
+                Some(self.attributes.clone())
+            },
         }
     }
 
@@ -1152,6 +1254,144 @@ fn stable_ids_survive_compress_extract() -> std::result::Result<(), StableIdExha
     let extracted_shell = Shell::extract(compressed).unwrap();
     let ext_sids: Vec<_> = extracted_shell.face_iter().map(|f| f.stable_id()).collect();
     assert_eq!(orig_sids, ext_sids);
+    Ok(())
+}
+
+#[test]
+fn trimmed_compression_preserves_topology_stable_ids()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let mut cube = solid::cube();
+    cube.ensure_topology_stable_ids()?;
+    let plain = cube.boundaries()[0].compress();
+    let trimmed = plain.with_face_trims(|_, _| None::<()>);
+
+    assert_eq!(trimmed.vertex_stable_ids, plain.vertex_stable_ids);
+    assert_eq!(trimmed.edge_stable_ids, plain.edge_stable_ids);
+    assert_eq!(trimmed.face_stable_ids, plain.face_stable_ids);
+    assert_eq!(trimmed.clone().erase_trims(), plain);
+    assert_eq!(trimmed.cloned_without_trims(), plain);
+    Ok(())
+}
+
+#[test]
+fn runtime_trimmed_roundtrip_preserves_topology_stable_ids()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let mut cube = solid::cube();
+    cube.ensure_topology_stable_ids()?;
+    let source = cube.boundaries()[0].compress_with_face_trims(|_, _| None::<()>);
+    let runtime: crate::trimmed::TrimmedShell<_, _, _, ()> = source.clone().try_into()?;
+    let roundtrip = CompressedTrimmedShell::from(&runtime);
+
+    assert_eq!(roundtrip.vertex_stable_ids, source.vertex_stable_ids);
+    assert_eq!(roundtrip.edge_stable_ids, source.edge_stable_ids);
+    assert_eq!(roundtrip.face_stable_ids, source.face_stable_ids);
+    Ok(())
+}
+
+#[test]
+fn trimmed_extract_rejects_misaligned_stable_id_sidecars()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let mut cube = solid::cube();
+    cube.ensure_topology_stable_ids()?;
+    let mut trimmed = cube.boundaries()[0].compress_with_face_trims(|_, _| None::<()>);
+    if let Some(ids) = &mut trimmed.vertex_stable_ids {
+        ids.pop();
+    }
+
+    assert!(matches!(
+        crate::trimmed::TrimmedShell::try_from(trimmed),
+        Err(Error::StableIdCountMismatch {
+            entity: "vertices",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+#[test]
+fn runtime_trimmed_solid_assigns_stable_ids_without_erasing_trims()
+-> std::result::Result<(), StableIdExhausted> {
+    let cube = solid::cube();
+    let mut trimmed = cube.to_trimmed_with_face_trims(|_, _| None::<()>);
+    let before = CompressedTrimmedSolid::from(&trimmed);
+    assert!(before.boundaries.iter().all(|shell| {
+        shell.vertex_stable_ids.is_none()
+            && shell.edge_stable_ids.is_none()
+            && shell.face_stable_ids.is_none()
+    }));
+
+    trimmed.ensure_topology_stable_ids()?;
+
+    let after = CompressedTrimmedSolid::from(&trimmed);
+    assert!(after.boundaries.iter().all(|shell| {
+        shell
+            .vertex_stable_ids
+            .as_ref()
+            .is_some_and(|ids| ids.iter().all(|id| id.is_assigned()))
+            && shell
+                .edge_stable_ids
+                .as_ref()
+                .is_some_and(|ids| ids.iter().all(|id| id.is_assigned()))
+            && shell
+                .face_stable_ids
+                .as_ref()
+                .is_some_and(|ids| ids.iter().all(|id| id.is_assigned()))
+    }));
+    Ok(())
+}
+
+#[test]
+fn compressed_solid_trim_roundtrip_preserves_allocator_and_attributes()
+-> std::result::Result<(), StableIdExhausted> {
+    use crate::attributes::AttributeValue;
+
+    let mut compressed = solid::cube().compress();
+    let mut allocator = StableIdAllocator::new();
+    let face_id = allocator.allocate()?;
+    let mut attributes = SolidAttributes::new();
+    attributes.faces.set(
+        "marker",
+        face_id,
+        AttributeValue::String("trimmed".to_owned()),
+    );
+    compressed.id_allocator = Some(allocator);
+    compressed.attributes = Some(attributes);
+
+    let trimmed = compressed.with_face_trims(|_, _| None::<()>);
+    assert_eq!(trimmed.id_allocator, compressed.id_allocator);
+    assert_eq!(trimmed.attributes, compressed.attributes);
+    assert_eq!(trimmed.erase_trims(), compressed);
+    Ok(())
+}
+
+#[test]
+fn runtime_trimmed_solid_preserves_allocator_and_attributes()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use crate::attributes::AttributeValue;
+
+    let mut solid = solid::cube();
+    solid.ensure_topology_stable_ids()?;
+    let face_id = solid.alloc_id()?;
+    solid.face_attributes_mut().set(
+        "marker",
+        face_id,
+        AttributeValue::String("runtime-trimmed".to_owned()),
+    );
+    let allocator_peek = solid.id_allocator().peek();
+    let attributes = solid.attributes().clone();
+
+    let trimmed = solid.to_trimmed_with_face_trims(|_, _| None::<()>);
+    assert_eq!(trimmed.id_allocator().peek(), allocator_peek);
+    assert_eq!(trimmed.attributes(), &attributes);
+
+    let compressed = CompressedTrimmedSolid::from(&trimmed);
+    let runtime: crate::trimmed::TrimmedSolid<_, _, _, ()> = compressed.try_into()?;
+    assert_eq!(runtime.id_allocator().peek(), allocator_peek);
+    assert_eq!(runtime.attributes(), &attributes);
+
+    let plain = runtime.erase_trims();
+    assert_eq!(plain.id_allocator().peek(), allocator_peek);
+    assert_eq!(plain.attributes(), &attributes);
     Ok(())
 }
 

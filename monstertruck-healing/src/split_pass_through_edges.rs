@@ -387,6 +387,7 @@ pub fn split_pass_through_edges_trimmed<C, S, T>(
             })
         })
         .collect();
+    append_unassigned_stable_ids(&mut shell.edge_stable_ids, shell.edges.len() - len);
     if replacements.is_empty() {
         return;
     }
@@ -501,7 +502,10 @@ pub fn remap_trimmed_edge_uses_for_dedup<T>(
 mod tests {
     use super::*;
     use monstertruck_geometry::prelude::Line;
-    use monstertruck_topology::{StableId, compress::CompressedFace as Face};
+    use monstertruck_topology::{
+        StableId,
+        compress::{CompressedFace as Face, CompressedTrimmedFace, CompressedTrimmedShell},
+    };
 
     #[test]
     fn pass_through_split_preserves_existing_stable_ids_and_marks_new_edge_unassigned() {
@@ -548,6 +552,44 @@ mod tests {
                 StableId::new(12),
                 StableId::new(13)
             ])
+        );
+        assert_eq!(shell.face_stable_ids, Some(vec![StableId::new(31)]));
+    }
+    #[test]
+    fn trimmed_pass_through_split_marks_new_edge_unassigned() {
+        let p0 = Point3::new(0.0, 0.0, 0.0);
+        let p1 = Point3::new(1.0, 0.0, 0.0);
+        let p2 = Point3::new(2.0, 0.0, 0.0);
+        let mut shell = CompressedTrimmedShell {
+            vertices: vec![p0, p1, p2],
+            edges: vec![Edge {
+                vertices: (0, 2),
+                curve: Line(p0, p2),
+            }],
+            faces: vec![CompressedTrimmedFace {
+                boundaries: vec![vec![CompressedEdgeUse {
+                    index: 0,
+                    orientation: true,
+                    trim_curve: Some(Line(p0, p2)),
+                }]],
+                orientation: true,
+                surface: (),
+            }],
+            vertex_stable_ids: Some(vec![
+                StableId::new(11),
+                StableId::new(12),
+                StableId::new(13),
+            ]),
+            edge_stable_ids: Some(vec![StableId::new(21)]),
+            face_stable_ids: Some(vec![StableId::new(31)]),
+        };
+
+        split_pass_through_edges_trimmed(&mut shell, 1.0e-6);
+
+        assert_eq!(shell.edges.len(), 2);
+        assert_eq!(
+            shell.edge_stable_ids,
+            Some(vec![StableId::new(21), StableId::UNASSIGNED])
         );
         assert_eq!(shell.face_stable_ids, Some(vec![StableId::new(31)]));
     }

@@ -1,8 +1,8 @@
 use super::*;
-use monstertruck_topology::Shell;
 use monstertruck_topology::repair::{
     split_non_simple_compressed_wires, split_pinched_compressed_faces,
 };
+use monstertruck_topology::{Shell, StableId};
 
 /// RED reproducer for the cell-8 extraction blocker: a face whose boundary
 /// wires are each SIMPLE but share one vertex (a PINCHED face, e.g. the
@@ -333,6 +333,9 @@ fn trimmed_geometric_slit_cleanup_requires_face_local_retrace() {
             orientation: true,
             boundaries: vec![vec![edge_use(0, left_trim), edge_use(1, right_trim)]],
         }],
+        vertex_stable_ids: Some(vec![StableId::new(11), StableId::new(12)]),
+        edge_stable_ids: Some(vec![StableId::new(21), StableId::new(22)]),
+        face_stable_ids: Some(vec![StableId::new(31)]),
     };
 
     // A true zero-area slit retraces one face-local UV span exactly backwards.
@@ -342,6 +345,7 @@ fn trimmed_geometric_slit_cleanup_requires_face_local_retrace() {
     );
     remove_geometric_trimmed_slit_boundaries(&mut slit, KERNEL_EPSILON);
     assert!(slit.faces.is_empty());
+    assert_eq!(slit.face_stable_ids, Some(Vec::new()));
 
     // A periodic seam is the same 3-D span but two different UV loci. It must
     // remain topology even though its edge curves are geometrically coincident.
@@ -356,6 +360,7 @@ fn trimmed_geometric_slit_cleanup_requires_face_local_retrace() {
     assert_eq!(seam.faces.len(), 1);
     assert_eq!(seam.faces[0].boundaries.len(), 1);
     assert_eq!(seam.faces[0].boundaries[0].len(), 2);
+    assert_eq!(seam.face_stable_ids, Some(vec![StableId::new(31)]));
 }
 
 /// A trimmed periodic-surface face presented as a single boundary wire that
@@ -402,6 +407,9 @@ fn split_seam_faces_resolves_doubled_seam_cylinder() {
         vertices,
         edges,
         faces,
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
     };
 
     // RED: the doubled-seam wire revisits vertices 0 and 1 -> NotSimpleWire.

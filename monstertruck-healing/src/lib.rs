@@ -153,7 +153,7 @@ fn remove_geometric_trimmed_slit_boundaries<C, S, T>(
             left_trim != &reversed
         });
     });
-    shell.faces.retain(|face| !face.boundaries.is_empty());
+    shell.retain_faces(|face| !face.boundaries.is_empty());
 }
 
 trait SP<S>: Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> {}
@@ -414,11 +414,90 @@ where
         })
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct TrimReattachStats {
+    preserved: usize,
+    derived: usize,
+    regenerated: usize,
+    missing: usize,
+    missing_logged: usize,
+}
+
+struct TrimReattachContext<'a, C, S, T, F> {
+    original: &'a CompressedTrimmedShell<Point3, C, S, T>,
+    vertices: &'a [Point3],
+    edges: &'a [CompressedEdge<C>],
+    tol: f64,
+    debug_missing: bool,
+    regenerate_trim: F,
+    stats: TrimReattachStats,
+}
+
+impl<C, S, T, F> TrimReattachContext<'_, C, S, T, F>
+where
+    C: ParametricCurve3D<Point = Point3>
+        + BoundedCurve<Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>
+        + Clone,
+    S: ParametricSurface3D + Clone,
+    T: ParametricCurve3D<Point = Point3>
+        + BoundedCurve<Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>
+        + Cut
+        + Clone
+        + Invertible,
+    F: FnMut(&CompressedEdge<C>, &S) -> Option<T>,
+{
+    fn edge_use(&mut self, surface: &S, index: usize, orientation: bool) -> CompressedEdgeUse<T> {
+        let preserved = preserved_trim_for_same_edge(self.original, surface, index, orientation);
+        let derived = preserved.clone().or_else(|| {
+            derive_preserved_trim_segment(
+                self.original,
+                surface,
+                orientation,
+                &self.edges[index],
+                self.vertices,
+                self.tol,
+            )
+        });
+        let regenerated = (self.regenerate_trim)(&self.edges[index], surface);
+        let trim_curve = if preserved.is_some() {
+            self.stats.preserved += 1;
+            preserved
+        } else if derived.is_some() {
+            self.stats.derived += 1;
+            derived
+        } else if regenerated.is_some() {
+            self.stats.regenerated += 1;
+            regenerated
+        } else {
+            self.stats.missing += 1;
+            if self.debug_missing && self.stats.missing_logged < 32 {
+                let edge = &self.edges[index];
+                tracing::debug!(
+                    "debug reattach missing surface_face edge={} orientation={} front={:?} back={:?}",
+                    index,
+                    orientation,
+                    self.vertices[edge.vertices.0],
+                    self.vertices[edge.vertices.1],
+                );
+                self.stats.missing_logged += 1;
+            }
+            None
+        };
+        CompressedEdgeUse {
+            index,
+            orientation,
+            trim_curve,
+        }
+    }
+}
+
 fn reattach_preserved_face_trims_with<C, S, T, F>(
     original: &CompressedTrimmedShell<Point3, C, S, T>,
     healed: CompressedShell<Point3, C, S>,
     tol: f64,
-    mut regenerate_trim: F,
+    regenerate_trim: F,
 ) -> CompressedTrimmedShell<Point3, C, S, T>
 where
     C: ParametricCurve3D<Point = Point3>
@@ -435,95 +514,64 @@ where
     F: FnMut(&CompressedEdge<C>, &S) -> Option<T>,
 {
     let debug_trace = env::var("MT_BOOL_TRACE").is_ok();
-    let debug_reattach = env::var("MT_BOOL_DEBUG_REATTACH").is_ok();
-    let vertices = healed.vertices.clone();
-    let edges = healed.edges.clone();
-    let mut preserved_count = 0usize;
-    let mut derived_count = 0usize;
-    let mut regenerated_count = 0usize;
-    let mut missing_count = 0usize;
-    let mut missing_logged = 0usize;
-    let faces = healed
-        .faces
-        .into_iter()
-        .map(|face| {
-            let surface = face.surface.clone();
-            let boundaries = face
-                .boundaries
-                .into_iter()
-                .map(|wire| {
-                    wire.into_iter()
-                        .map(|CompressedEdgeIndex { index, orientation }| {
-                            let preserved_trim = preserved_trim_for_same_edge(
-                                original,
-                                &surface,
-                                index,
-                                orientation,
-                            );
-                            let derived_trim = preserved_trim.clone().or_else(|| {
-                                derive_preserved_trim_segment(
-                                    original,
-                                    &surface,
-                                    orientation,
-                                    &edges[index],
-                                    &vertices,
-                                    tol,
-                                )
-                            });
-                            let regenerated = regenerate_trim(&edges[index], &surface);
-                            let trim_curve = if preserved_trim.is_some() {
-                                preserved_count += 1;
-                                preserved_trim
-                            } else if derived_trim.is_some() {
-                                derived_count += 1;
-                                derived_trim
-                            } else if regenerated.is_some() {
-                                regenerated_count += 1;
-                                regenerated
-                            } else {
-                                missing_count += 1;
-                                if debug_reattach && missing_logged < 32 {
-                                    let edge = &edges[index];
-                                    tracing::debug!(
-                                        "debug reattach missing surface_face edge={} orientation={} front={:?} back={:?}",
-                                        index,
-                                        orientation,
-                                        vertices[edge.vertices.0],
-                                        vertices[edge.vertices.1],
-                                    );
-                                    missing_logged += 1;
-                                }
-                                None
-                            };
-                            CompressedEdgeUse {
-                                index,
-                                orientation,
-                                trim_curve,
-                            }
-                        })
-                        .collect()
-                })
-                .collect();
-            CompressedTrimmedFace {
-                boundaries,
-                orientation: face.orientation,
-                surface: face.surface,
-            }
-        })
-        .collect();
+    let CompressedShell {
+        vertices,
+        edges,
+        faces: healed_faces,
+        vertex_stable_ids,
+        edge_stable_ids,
+        face_stable_ids,
+    } = healed;
+    let (faces, stats) = {
+        let mut context = TrimReattachContext {
+            original,
+            vertices: &vertices,
+            edges: &edges,
+            tol,
+            debug_missing: env::var("MT_BOOL_DEBUG_REATTACH").is_ok(),
+            regenerate_trim,
+            stats: TrimReattachStats::default(),
+        };
+        let faces = healed_faces
+            .into_iter()
+            .map(|face| {
+                let surface = face.surface.clone();
+                let boundaries = face
+                    .boundaries
+                    .into_iter()
+                    .map(|wire| {
+                        wire.into_iter()
+                            .map(|CompressedEdgeIndex { index, orientation }| {
+                                context.edge_use(&surface, index, orientation)
+                            })
+                            .collect()
+                    })
+                    .collect();
+                CompressedTrimmedFace {
+                    boundaries,
+                    orientation: face.orientation,
+                    surface: face.surface,
+                }
+            })
+            .collect();
+        (faces, context.stats)
+    };
     if debug_trace {
         tracing::debug!(
             "trace bool reattach_trims preserved={} derived={} regenerated={} missing={}",
-            preserved_count,
-            derived_count,
-            regenerated_count,
-            missing_count,
+            stats.preserved,
+            stats.derived,
+            stats.regenerated,
+            stats.missing,
         );
     }
     CompressedTrimmedShell {
-        vertices: healed.vertices,
-        edges: healed.edges,
+        vertices,
+        edges,
         faces,
+        vertex_stable_ids,
+        edge_stable_ids,
+        face_stable_ids,
     }
 }
 
@@ -1099,13 +1147,18 @@ fn validate_trimmed_solid_candidate<C: Clone, S: Clone, T: Clone>(
     csolid: CompressedTrimmedSolid<Point3, C, S, T>,
 ) -> monstertruck_topology::Result<TrimmedSolid<Point3, C, S, T>> {
     let solid = TrimmedSolid::try_from(csolid)?;
-    TrimmedSolid::new(
+    let id_allocator = solid.id_allocator().clone();
+    let attributes = solid.attributes().clone();
+    let mut normalized = TrimmedSolid::new(
         solid
             .into_boundaries()
             .into_iter()
             .map(|shell| normalize_trimmed_shell_orientation(shell).0)
             .collect(),
-    )
+    )?;
+    *normalized.id_allocator_mut() = id_allocator;
+    *normalized.attributes_mut() = attributes;
+    Ok(normalized)
 }
 
 /// Convenience function: heal a compressed trimmed solid and extract it while
@@ -1237,7 +1290,6 @@ where
         total.rejected_topology += report.rejected_topology;
     }
     let normalized = TrimmedSolid::try_from(compressed)?;
-    let normalized = TrimmedSolid::new(normalized.into_boundaries())?;
     Ok((normalized, total))
 }
 
