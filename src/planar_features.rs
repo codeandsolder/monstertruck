@@ -19,7 +19,7 @@ use crate::step_graph::{
 use anyhow::{Result, bail};
 use ruststep::ast::{EntityInstance, Parameter};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 mod mapped_emitter;
 pub use mapped_emitter::instance_boundary_features;
@@ -169,7 +169,7 @@ pub struct BoundaryFeatureToolMaterialization {
     pub interface_bound_ids: Vec<u64>,
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct BoundaryFeaturePeelStats {
     pub families: usize,
     pub instances: usize,
@@ -177,6 +177,28 @@ pub struct BoundaryFeaturePeelStats {
     pub subtractive_instances: usize,
     pub faces_removed_from_shells: usize,
     pub interface_bounds_healed: usize,
+}
+
+/// One shell-membership edit proven by boundary-feature analysis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundaryFeatureShellFaceRemoval {
+    pub shell_id: u64,
+    pub face_ids: Vec<u64>,
+}
+
+/// Interface bounds to remove from one retained host face.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundaryFeatureHostBoundRemoval {
+    pub host_face_id: u64,
+    pub bound_ids: Vec<u64>,
+}
+
+/// Pure, deterministic topology peel plan for one selected set of boundary-feature families.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct BoundaryFeaturePeelPlan {
+    pub shell_face_removals: Vec<BoundaryFeatureShellFaceRemoval>,
+    pub host_bound_removals: Vec<BoundaryFeatureHostBoundRemoval>,
+    pub stats: BoundaryFeaturePeelStats,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -968,8 +990,28 @@ pub fn peel_boundary_feature_family_indices_with_index(
     report: &BoundaryFeatureDiagnostics,
     selected_indices: &[usize],
 ) -> Result<BoundaryFeaturePeelStats> {
+    let plan = plan_boundary_feature_family_peel(entities, index, report, selected_indices)?;
+    apply_boundary_feature_peel_plan(entities, index, &plan)?;
+    Ok(plan.stats)
+}
+
+/// Prove the exact source-topology edits needed to peel selected boundary-feature families.
+///
+/// This function is read-only. It validates family selection, ownership and overlap, then returns
+/// deterministic shell-face removals plus host-bound removals. Callers may execute the same proof
+/// either on parser-owned STEP entities or through an authoritative kernel topology transaction.
+///
+/// # Errors
+/// Returns an error if a selected family index is invalid, host bounds are unreadable or multiply
+/// owned, or selected families overlap in faces or interface bounds.
+pub fn plan_boundary_feature_family_peel(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    report: &BoundaryFeatureDiagnostics,
+    selected_indices: &[usize],
+) -> Result<BoundaryFeaturePeelPlan> {
     if selected_indices.is_empty() {
-        return Ok(BoundaryFeaturePeelStats::default());
+        return Ok(BoundaryFeaturePeelPlan::default());
     }
     let selected = selected_indices
         .iter()
@@ -980,15 +1022,27 @@ pub fn peel_boundary_feature_family_indices_with_index(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut shell_remove = HashMap::<u64, HashSet<u64>>::new();
-    let mut host_remove = HashMap::<u64, HashSet<u64>>::new();
-    let mut bound_owner = HashMap::<u64, u64>::new();
-    let mut seen_faces = HashSet::<u64>::new();
-    let mut seen_bounds = HashSet::<u64>::new();
+    let mut shell_remove = BTreeMap::<u64, BTreeSet<u64>>::new();
+    let mut host_remove = BTreeMap::<u64, BTreeSet<u64>>::new();
+    let mut bound_owner = BTreeMap::<u64, u64>::new();
+    let mut seen_faces = BTreeSet::<u64>::new();
+    let mut seen_bounds = BTreeSet::<u64>::new();
     let mut stats = BoundaryFeaturePeelStats::default();
 
     for family in selected {
+        let shell_faces = ref_list_param(family.shell_id, 1, entities, index)
+            .ok_or_else(|| {
+                anyhow::anyhow!("feature shell #{} has no readable faces", family.shell_id)
+            })?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
         for &host in &family.host_face_ids {
+            if !shell_faces.contains(&host) {
+                bail!(
+                    "feature host face #{host} does not belong to shell #{}",
+                    family.shell_id
+                );
+            }
             let Some(bounds) = ref_list_param(host, 1, entities, index) else {
                 bail!("feature host face #{host} has no readable bounds");
             };
@@ -1010,6 +1064,12 @@ pub fn peel_boundary_feature_family_indices_with_index(
 
         for member in &family.members {
             for &face in &member.face_ids {
+                if !shell_faces.contains(&face) {
+                    bail!(
+                        "feature face #{face} does not belong to shell #{}",
+                        family.shell_id
+                    );
+                }
                 if !seen_faces.insert(face) {
                     bail!("feature peel candidates overlap at face #{face}");
                 }
@@ -1030,26 +1090,59 @@ pub fn peel_boundary_feature_family_indices_with_index(
         }
     }
 
-    for (shell, faces) in &shell_remove {
-        let Some(&shell_index) = index.get(shell) else {
-            bail!("feature shell #{shell} is missing");
-        };
-        if !remove_refs_from_list_param(&mut entities[shell_index], 1, faces) {
-            bail!("failed to remove feature faces from shell #{shell}");
-        }
-    }
-    for (host, bounds) in &host_remove {
-        let Some(&host_index) = index.get(host) else {
-            bail!("feature host face #{host} is missing");
-        };
-        if !remove_refs_from_list_param(&mut entities[host_index], 1, bounds) {
-            bail!("failed to heal interface bounds on host face #{host}");
-        }
-    }
-
     stats.faces_removed_from_shells = seen_faces.len();
     stats.interface_bounds_healed = seen_bounds.len();
-    Ok(stats)
+    Ok(BoundaryFeaturePeelPlan {
+        shell_face_removals: shell_remove
+            .into_iter()
+            .map(|(shell_id, face_ids)| BoundaryFeatureShellFaceRemoval {
+                shell_id,
+                face_ids: face_ids.into_iter().collect(),
+            })
+            .collect(),
+        host_bound_removals: host_remove
+            .into_iter()
+            .map(
+                |(host_face_id, bound_ids)| BoundaryFeatureHostBoundRemoval {
+                    host_face_id,
+                    bound_ids: bound_ids.into_iter().collect(),
+                },
+            )
+            .collect(),
+        stats,
+    })
+}
+
+fn apply_boundary_feature_peel_plan(
+    entities: &mut [EntityInstance],
+    index: &HashMap<u64, usize>,
+    plan: &BoundaryFeaturePeelPlan,
+) -> Result<()> {
+    for removal in &plan.shell_face_removals {
+        let Some(&shell_index) = index.get(&removal.shell_id) else {
+            bail!("feature shell #{} is missing", removal.shell_id);
+        };
+        let faces = removal.face_ids.iter().copied().collect::<HashSet<_>>();
+        if !remove_refs_from_list_param(&mut entities[shell_index], 1, &faces) {
+            bail!(
+                "failed to remove feature faces from shell #{}",
+                removal.shell_id
+            );
+        }
+    }
+    for removal in &plan.host_bound_removals {
+        let Some(&host_index) = index.get(&removal.host_face_id) else {
+            bail!("feature host face #{} is missing", removal.host_face_id);
+        };
+        let bounds = removal.bound_ids.iter().copied().collect::<HashSet<_>>();
+        if !remove_refs_from_list_param(&mut entities[host_index], 1, &bounds) {
+            bail!(
+                "failed to heal interface bounds on host face #{}",
+                removal.host_face_id
+            );
+        }
+    }
+    Ok(())
 }
 
 pub fn diagnose_boundary_features(entities: &[EntityInstance]) -> BoundaryFeatureDiagnostics {
@@ -1910,6 +2003,96 @@ mod tests {
     }
 
     #[test]
+    fn boundary_feature_peel_plan_is_pure_and_deterministic() -> Result<()> {
+        use ruststep::ast::Record;
+
+        fn host_face(id: u64, bounds: &[u64]) -> EntityInstance {
+            EntityInstance::Simple {
+                id,
+                record: Record {
+                    name: "ADVANCED_FACE".to_owned(),
+                    parameter: Parameter::List(vec![
+                        Parameter::String(String::new()),
+                        Parameter::List(bounds.iter().copied().map(entity_ref).collect()),
+                        Parameter::Omitted,
+                        Parameter::Enumeration("T".to_owned()),
+                    ]),
+                },
+            }
+        }
+
+        let entities = vec![
+            host_face(10, &[100, 101, 102]),
+            EntityInstance::Simple {
+                id: 1,
+                record: Record {
+                    name: "CLOSED_SHELL".to_owned(),
+                    parameter: Parameter::List(vec![
+                        Parameter::String(String::new()),
+                        Parameter::List([10, 20, 30].into_iter().map(entity_ref).collect()),
+                    ]),
+                },
+            },
+        ];
+        let index = build_index(&entities);
+        let family = |face_id: u64, bound_id: u64| BoundaryFeatureFamilyEvidence {
+            shell_id: 1,
+            polarity: FeaturePolarity::Additive,
+            host_face_ids: vec![10],
+            faces_per_instance: 1,
+            instances: 1,
+            signature: String::new(),
+            members: vec![BoundaryFeatureInstanceEvidence {
+                face_ids: vec![face_id],
+                center_mm: [0.0; 3],
+                normalized_quarter: 0,
+                interface_bound_ids: vec![bound_id],
+            }],
+            lattice: None,
+            motif_pattern: None,
+        };
+        let report = BoundaryFeatureDiagnostics {
+            families: vec![family(30, 102), family(20, 101)],
+            ..BoundaryFeatureDiagnostics::default()
+        };
+
+        let before = entities.clone();
+        let plan = plan_boundary_feature_family_peel(&entities, &index, &report, &[0, 1])?;
+        assert_eq!(entities, before);
+        let invalid = BoundaryFeatureDiagnostics {
+            families: vec![family(999, 102)],
+            ..BoundaryFeatureDiagnostics::default()
+        };
+        assert!(plan_boundary_feature_family_peel(&entities, &index, &invalid, &[0]).is_err());
+        assert_eq!(
+            plan.shell_face_removals,
+            vec![BoundaryFeatureShellFaceRemoval {
+                shell_id: 1,
+                face_ids: vec![20, 30],
+            }]
+        );
+        assert_eq!(
+            plan.host_bound_removals,
+            vec![BoundaryFeatureHostBoundRemoval {
+                host_face_id: 10,
+                bound_ids: vec![101, 102],
+            }]
+        );
+        assert_eq!(
+            plan.stats,
+            BoundaryFeaturePeelStats {
+                families: 2,
+                instances: 2,
+                additive_instances: 2,
+                subtractive_instances: 0,
+                faces_removed_from_shells: 2,
+                interface_bounds_healed: 2,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
     fn quarter_turn_translation_maps_center() {
         let source = [2.0, 3.0, 4.0];
         let target = [10.0, -7.0, 8.0];
@@ -1920,6 +2103,61 @@ mod tests {
             assert!((y + translation[1] - target[1]).abs() < 1.0e-12);
             assert!((source[2] + translation[2] - target[2]).abs() < 1.0e-12);
         }
+    }
+
+    #[test]
+    fn boss_fixture_candidate_proves_manifold_interface_and_3d_support() -> anyhow::Result<()> {
+        let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
+        let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
+        let entities = &exchange.data[0].entities;
+        let index = build_index(entities);
+        let contexts = collect_shell_contexts(entities, &index);
+        let [context] = contexts.as_slice() else {
+            bail!("expected exactly one analytic boss source shell");
+        };
+        let topology = ShellTopology::new(context.shell_id, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing boss shell topology"))?;
+        let host_face = 53;
+        let frame = plane_frame(host_face, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing boss host plane"))?;
+        assert_eq!(frame.outward, [0.0, 0.0, 1.0]);
+        let bounds = ref_list_param(host_face, 1, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing boss host bounds"))?;
+        let lookup = host_bound_lookup(&bounds, entities, &index);
+        let hosts = HashSet::from([host_face]);
+        let components = topology.components_without_hosts(&hosts);
+        assert_eq!(components.len(), 2);
+        let mut boss_candidates = 0;
+        for component in components {
+            assert!(topology.component_is_two_manifold_with_hosts(&component, &hosts));
+            let is_boss = component.contains(&94);
+            let interface_edges = topology.interface_edges(&component, host_face);
+            let matching = lookup.get(&edge_set_key(&interface_edges));
+            assert_eq!(matching.map(Vec::len), is_boss.then_some(1));
+            if is_boss {
+                let vertices =
+                    component_vertex_points(&component, &topology.face_edges, entities, &index)
+                        .ok_or_else(|| anyhow::anyhow!("boss vertices missing"))?;
+                assert_eq!(plane_side(&vertices, &frame), PlaneSide::Positive);
+                let center =
+                    bbox_center(&vertices).ok_or_else(|| anyhow::anyhow!("boss center missing"))?;
+                assert!(component_signature(&component, center, entities, &index).is_some());
+            }
+            let candidate = boundary_feature_candidate(
+                context,
+                component,
+                &hosts,
+                &HashMap::from([(host_face, frame.clone())]),
+                &HashMap::from([(host_face, lookup.clone())]),
+                &topology,
+                entities,
+                &index,
+            );
+            assert_eq!(candidate.is_some(), is_boss);
+            boss_candidates += usize::from(candidate.is_some());
+        }
+        assert_eq!(boss_candidates, 1);
+        Ok(())
     }
 
     #[test]
