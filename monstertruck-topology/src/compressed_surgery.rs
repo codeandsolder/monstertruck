@@ -80,6 +80,19 @@ pub struct CompressedFaceSplice {
     pub replacement: Vec<PatchEdgeUse>,
 }
 
+/// Replaces the complete boundary-wire set of one retained face.
+///
+/// This is the normalized operation for topology-preserving face merging where the retained face
+/// may have any prior wire decomposition. Every replacement wire must be non-empty; final runtime
+/// topology validation remains authoritative for connectivity/orientation/manifold validity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompressedFaceBoundaryReplacement {
+    /// Face whose complete boundary representation is replaced.
+    pub face: StableId,
+    /// Ordered replacement wires and their local edge orientations.
+    pub boundaries: Vec<Vec<PatchEdgeUse>>,
+}
+
 /// Proof-independent normalized patch for one compressed trimmed boundary shell.
 ///
 /// Every existing entity is addressed by `StableId`. The patch may create vertices/edges, rewrite
@@ -97,6 +110,8 @@ pub struct CompressedTrimmedTopologyPatch<P, C> {
     pub rewrite_edges: Vec<RetainedCompressedEdge<C>>,
     /// Face-boundary edits, including carrier and terminal/end-face repairs.
     pub face_splices: Vec<CompressedFaceSplice>,
+    /// Complete boundary-wire replacements for retained faces whose decomposition changes.
+    pub face_boundary_replacements: Vec<CompressedFaceBoundaryReplacement>,
     /// Existing edges that must have no surviving uses after face edits/removals.
     ///
     /// This is the fail-closed guard against an incomplete inverse-operation plan: if a treatment
@@ -152,9 +167,21 @@ pub enum CompressedTopologyPatchError {
     /// The same retained edge was rewritten more than once.
     #[error("topology patch rewrites retained edge {id} more than once")]
     DuplicateEdgeRewrite { id: StableId },
-    /// A face scheduled for deletion was also edited.
+    /// A face scheduled for deletion was also edited by a splice.
     #[error("topology patch both removes and splices face {id}")]
     RemovedFaceSpliced { id: StableId },
+    /// A face scheduled for deletion also received a complete boundary replacement.
+    #[error("topology patch both removes and replaces boundaries of face {id}")]
+    RemovedFaceBoundaryReplaced { id: StableId },
+    /// A face received both a local splice and a complete boundary replacement.
+    #[error("topology patch both splices and replaces complete boundaries of face {id}")]
+    FaceSplicedAndBoundaryReplaced { id: StableId },
+    /// The same face received more than one complete boundary replacement.
+    #[error("topology patch replaces complete boundaries of face {id} more than once")]
+    DuplicateFaceBoundaryReplacement { id: StableId },
+    /// A complete face-boundary replacement contained no usable wire.
+    #[error("face {face} complete boundary replacement contains an empty wire set or wire")]
+    EmptyFaceBoundaryReplacement { face: StableId },
     /// One face splice did not describe one unique contiguous cyclic run.
     #[error("face {face} does not contain removed edges as one unique contiguous boundary run")]
     NonContiguousFaceSplice { face: StableId },
@@ -203,12 +230,19 @@ struct ResolvedFaceSplice {
 }
 
 #[derive(Clone, Debug)]
+struct ResolvedFaceBoundaryReplacement {
+    face_index: usize,
+    boundaries: Vec<Vec<(ResolvedEdgeRef, bool)>>,
+}
+
+#[derive(Clone, Debug)]
 struct ResolvedPatch<C> {
     boundary: usize,
     remove_faces: Vec<(StableId, usize)>,
     new_edges: Vec<(ResolvedVertexRef, ResolvedVertexRef, C)>,
     rewrite_edges: Vec<ResolvedEdgeRewrite<C>>,
     face_splices: Vec<ResolvedFaceSplice>,
+    face_boundary_replacements: Vec<ResolvedFaceBoundaryReplacement>,
     require_unused_edges: Vec<(StableId, usize)>,
 }
 
@@ -405,34 +439,15 @@ fn resolve_patch<P, C: Clone, S, T>(
         });
     }
 
-    let mut face_splices = Vec::with_capacity(patch.face_splices.len());
-    for splice in &patch.face_splices {
-        if removed_face_ids.contains(&splice.face) {
-            return Err(CompressedTopologyPatchError::RemovedFaceSpliced { id: splice.face });
-        }
-        let face = resolve_target(solid, splice.face, StableIdEntity::Face)?;
-        accept_boundary(&mut boundary, face)?;
-        for &edge in &splice.remove_edges {
-            let location = resolve_target(solid, edge, StableIdEntity::Edge)?;
-            accept_boundary(&mut boundary, location)?;
-        }
-        let replacement = splice
-            .replacement
-            .iter()
-            .map(|edge_use| {
-                Ok((
-                    resolve_edge_ref(solid, edge_use.edge, patch.new_edges.len(), &mut boundary)?,
-                    edge_use.orientation,
-                ))
-            })
-            .collect::<Result<Vec<_>, CompressedTopologyPatchError>>()?;
-        face_splices.push(ResolvedFaceSplice {
-            face_id: splice.face,
-            face_index: face.index,
-            remove_edges: splice.remove_edges.clone(),
-            replacement,
-        });
-    }
+    let (face_boundary_replacements, replaced_face_ids) =
+        resolve_face_boundary_replacements(solid, patch, &removed_face_ids, &mut boundary)?;
+    let face_splices = resolve_face_splices(
+        solid,
+        patch,
+        &removed_face_ids,
+        &replaced_face_ids,
+        &mut boundary,
+    )?;
 
     let mut require_unused_edges = Vec::with_capacity(patch.require_unused_edges.len());
     let mut required_ids = BTreeSet::new();
@@ -452,8 +467,108 @@ fn resolve_patch<P, C: Clone, S, T>(
         new_edges,
         rewrite_edges,
         face_splices,
+        face_boundary_replacements,
         require_unused_edges,
     })
+}
+
+fn resolve_face_boundary_replacements<P, C, S, T>(
+    solid: &CompressedTrimmedSolid<P, C, S, T>,
+    patch: &CompressedTrimmedTopologyPatch<P, C>,
+    removed_face_ids: &BTreeSet<StableId>,
+    boundary: &mut Option<usize>,
+) -> Result<(Vec<ResolvedFaceBoundaryReplacement>, BTreeSet<StableId>), CompressedTopologyPatchError>
+{
+    let mut replaced_face_ids = BTreeSet::new();
+    let mut resolved = Vec::with_capacity(patch.face_boundary_replacements.len());
+    for replacement in &patch.face_boundary_replacements {
+        if removed_face_ids.contains(&replacement.face) {
+            return Err(CompressedTopologyPatchError::RemovedFaceBoundaryReplaced {
+                id: replacement.face,
+            });
+        }
+        if !replaced_face_ids.insert(replacement.face) {
+            return Err(
+                CompressedTopologyPatchError::DuplicateFaceBoundaryReplacement {
+                    id: replacement.face,
+                },
+            );
+        }
+        if replacement.boundaries.is_empty() || replacement.boundaries.iter().any(Vec::is_empty) {
+            return Err(CompressedTopologyPatchError::EmptyFaceBoundaryReplacement {
+                face: replacement.face,
+            });
+        }
+        let face = resolve_target(solid, replacement.face, StableIdEntity::Face)?;
+        accept_boundary(boundary, face)?;
+        let boundaries = replacement
+            .boundaries
+            .iter()
+            .map(|wire| {
+                wire.iter()
+                    .map(|edge_use| {
+                        Ok((
+                            resolve_edge_ref(
+                                solid,
+                                edge_use.edge,
+                                patch.new_edges.len(),
+                                boundary,
+                            )?,
+                            edge_use.orientation,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, CompressedTopologyPatchError>>()
+            })
+            .collect::<Result<Vec<_>, CompressedTopologyPatchError>>()?;
+        resolved.push(ResolvedFaceBoundaryReplacement {
+            face_index: face.index,
+            boundaries,
+        });
+    }
+    Ok((resolved, replaced_face_ids))
+}
+
+fn resolve_face_splices<P, C, S, T>(
+    solid: &CompressedTrimmedSolid<P, C, S, T>,
+    patch: &CompressedTrimmedTopologyPatch<P, C>,
+    removed_face_ids: &BTreeSet<StableId>,
+    replaced_face_ids: &BTreeSet<StableId>,
+    boundary: &mut Option<usize>,
+) -> Result<Vec<ResolvedFaceSplice>, CompressedTopologyPatchError> {
+    let mut resolved = Vec::with_capacity(patch.face_splices.len());
+    for splice in &patch.face_splices {
+        if removed_face_ids.contains(&splice.face) {
+            return Err(CompressedTopologyPatchError::RemovedFaceSpliced { id: splice.face });
+        }
+        if replaced_face_ids.contains(&splice.face) {
+            return Err(
+                CompressedTopologyPatchError::FaceSplicedAndBoundaryReplaced { id: splice.face },
+            );
+        }
+        let face = resolve_target(solid, splice.face, StableIdEntity::Face)?;
+        accept_boundary(boundary, face)?;
+        for &edge in &splice.remove_edges {
+            let location = resolve_target(solid, edge, StableIdEntity::Edge)?;
+            accept_boundary(boundary, location)?;
+        }
+        let replacement = splice
+            .replacement
+            .iter()
+            .map(|edge_use| {
+                Ok((
+                    resolve_edge_ref(solid, edge_use.edge, patch.new_edges.len(), boundary)?,
+                    edge_use.orientation,
+                ))
+            })
+            .collect::<Result<Vec<_>, CompressedTopologyPatchError>>()?;
+        resolved.push(ResolvedFaceSplice {
+            face_id: splice.face,
+            face_index: face.index,
+            remove_edges: splice.remove_edges.clone(),
+            replacement,
+        });
+    }
+    Ok(resolved)
 }
 
 fn max_assigned_id<P, C, S, T>(solid: &CompressedTrimmedSolid<P, C, S, T>) -> u64 {
@@ -564,6 +679,13 @@ where
     }
     changed_edges.extend(new_edge_base..shell.edges.len());
 
+    apply_face_boundary_replacements(
+        shell,
+        &resolved.face_boundary_replacements,
+        new_edge_base,
+        &mut changed_edges,
+    );
+
     for splice in &resolved.face_splices {
         let replacement = splice
             .replacement
@@ -612,6 +734,34 @@ where
         new_vertex_ids,
         new_edge_ids,
     })
+}
+
+fn apply_face_boundary_replacements<P, C, S, T>(
+    shell: &mut CompressedTrimmedShell<P, C, S, T>,
+    replacements: &[ResolvedFaceBoundaryReplacement],
+    new_edge_base: usize,
+    changed_edges: &mut HashSet<usize>,
+) {
+    for replacement in replacements {
+        let boundaries = replacement
+            .boundaries
+            .iter()
+            .map(|wire| {
+                wire.iter()
+                    .map(|&(edge, orientation)| {
+                        let index = resolved_edge_index(edge, new_edge_base);
+                        changed_edges.insert(index);
+                        CompressedEdgeUse {
+                            index,
+                            orientation,
+                            trim_curve: None,
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        shell.faces[replacement.face_index].boundaries = boundaries;
+    }
 }
 
 fn splice_face_boundary_run<P, C, S, T: Clone>(
