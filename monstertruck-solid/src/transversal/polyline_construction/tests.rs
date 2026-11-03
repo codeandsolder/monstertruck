@@ -191,3 +191,46 @@ fn non_finite_interference_segments_are_ignored() {
         assert_eq!(polylines[0].len(), 2);
     }
 }
+
+#[test]
+fn ordinary_point_index_hash_matches_legacy_bucket_hash() {
+    use rustc_hash::FxHasher;
+    use std::hash::{Hash, Hasher};
+
+    let index = PointIndex::from_point(Point3::new(1.25, -2.5, 0.125))
+        .expect("finite ordinary point must be indexable");
+    let buckets = match index.0 {
+        [
+            CoordinateIndex::Bucket(x),
+            CoordinateIndex::Bucket(y),
+            CoordinateIndex::Bucket(z),
+        ] => [x, y, z],
+        _ => panic!("ordinary point unexpectedly used exact-coordinate fallback"),
+    };
+
+    let mut current = FxHasher::default();
+    index.hash(&mut current);
+    let mut legacy = FxHasher::default();
+    buckets.hash(&mut legacy);
+    assert_eq!(current.finish(), legacy.finish());
+}
+
+#[test]
+fn large_finite_interference_coordinates_are_preserved_and_stitched() {
+    let x = f64::MAX;
+    let a = Point3::new(x, 0.0, 0.0);
+    let b = Point3::new(x, 1.0, 0.0);
+    let b_near = Point3::new(x, 1.0 + 0.5 * KERNEL_EPSILON, 0.0);
+    let c = Point3::new(x, 2.0, 0.0);
+
+    let polylines = construct_polylines(&[(a, b), (b_near, c)]);
+    assert_eq!(polylines.len(), 1);
+    assert_eq!(polylines[0].len(), 3);
+
+    let front = polylines[0][0];
+    let back = polylines[0][2];
+    assert!(
+        (front.near(&a) && back.near(&c)) || (front.near(&c) && back.near(&a)),
+        "large finite coordinates must not make interference segments disappear"
+    );
+}

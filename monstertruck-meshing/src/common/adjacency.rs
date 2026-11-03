@@ -112,8 +112,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn malformed_deserialized_faces_do_not_panic_adjacency_building() {
-        let faces: Faces = serde_json::from_value(serde_json::json!({
+    fn malformed_deserialized_faces_are_rejected_before_adjacency_building() {
+        let faces = serde_json::from_value::<Faces>(serde_json::json!({
             "tri_faces": [],
             "quad_faces": [],
             "other_faces": [
@@ -124,10 +124,25 @@ mod tests {
                     {"pos": 1, "uv": null, "nor": null}
                 ]
             ]
+        }));
+
+        assert!(faces.is_err());
+    }
+
+    #[test]
+    fn valid_deserialized_faces_keep_adjacency_total_over_bad_vertex_indices() {
+        let faces: Faces = serde_json::from_value(serde_json::json!({
+            "tri_faces": [[
+                {"pos": 0, "uv": null, "nor": null},
+                {"pos": 9, "uv": null, "nor": null},
+                {"pos": 1, "uv": null, "nor": null}
+            ]],
+            "quad_faces": [],
+            "other_faces": []
         }))
-        .expect("fixture Faces JSON is valid");
+        .expect("three-vertex face representation is valid");
 
         assert_eq!(faces.vertex_adjacency(2), vec![vec![1], vec![0]]);
-        assert_eq!(faces.face_adjacency(false), vec![Vec::<usize>::new(); 2]);
+        assert_eq!(faces.face_adjacency(false), vec![Vec::<usize>::new()]);
     }
 }

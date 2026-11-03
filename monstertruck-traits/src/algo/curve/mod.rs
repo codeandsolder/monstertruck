@@ -13,6 +13,7 @@ where
     C::Point: MetricSpace<Metric = f64> + Copy, {
     let (t0, t1) = range;
     if division == 0 {
+        let _ = curve.evaluate(t0);
         return t0;
     }
     let mut res = t0;

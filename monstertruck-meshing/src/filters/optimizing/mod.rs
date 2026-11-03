@@ -219,7 +219,7 @@ impl<T> SameAttr for T where T: Copy + CastIntVector + MetricSpace<Metric = f64>
 
 fn sub_put_together_same_attrs<T: SameAttr>(attrs: &[T], tol: f64) -> Vec<usize> {
     let mut uf = UnionFind::new(attrs.len());
-    let map = create_blocks(attrs, tol);
+    let (map, unbucketed) = create_blocks(attrs, tol);
     for indices in map.values() {
         if indices.len() > 1 {
             for (k, &i) in indices.iter().enumerate() {
@@ -231,6 +231,20 @@ fn sub_put_together_same_attrs<T: SameAttr>(attrs: &[T], tol: f64) -> Vec<usize>
                         uf.union(i, j);
                     }
                 }
+            }
+        }
+    }
+    // A coordinate can be finite yet lie outside the i64 bucket domain, or on
+    // its edge where a +/-1 neighborhood is not representable. Such points
+    // cannot use the spatial hash, but they still have the same deduplication
+    // semantics, so compare them against the whole slice without quantization.
+    for &i in &unbucketed {
+        if attrs[i].has_nan() {
+            continue;
+        }
+        for (j, attr) in attrs.iter().enumerate() {
+            if i != j && !attr.has_nan() && attrs[i].distance2(*attr) < tol * tol {
+                uf.union(i, j);
             }
         }
     }
@@ -285,20 +299,22 @@ impl UnionFind {
 }
 
 type BlockMap<'a, T> = HashMap<<T as CastIntVector>::IntVector, Vec<usize>>;
-fn create_blocks<T: SameAttr>(attrs: &[T], tol: f64) -> BlockMap<'_, T> {
+fn create_blocks<T: SameAttr>(attrs: &[T], tol: f64) -> (BlockMap<'_, T>, Vec<usize>) {
     let mut map = HashMap::default();
+    let mut unbucketed = Vec::new();
     attrs.iter().enumerate().for_each(|(i, attr)| {
         if attr.has_nan() {
             return;
         }
-        let Some(block) = attr.round(tol) else {
+        let Some(neighborhood) = attr.round(tol).and_then(IntVector::neighborhood) else {
+            unbucketed.push(i);
             return;
         };
-        block.neighborhood().into_iter().for_each(|idx| {
+        neighborhood.into_iter().for_each(|idx| {
             map.entry(idx).or_insert_with(Vec::new).push(i);
         });
     });
-    map
+    (map, unbucketed)
 }
 
 fn centralize<T: SameAttr>(
@@ -311,8 +327,12 @@ fn centralize<T: SameAttr>(
             .iter()
             .fold(T::zero(), |sum, j| sum.add_element_wise(attrs[*j]))
             / crate::count_as_f64(component.len());
-        let (mut mindist, mut mindx) = (f64::INFINITY, 0);
-        component.iter().copied().for_each(|i| {
+        let Some((&first, rest)) = component.split_first() else {
+            return;
+        };
+        let mut mindx = first;
+        let mut mindist = attrs[mindx].distance2(center);
+        rest.iter().copied().for_each(|i| {
             let dist = attrs[i].distance2(center);
             if dist < mindist {
                 mindist = dist;
@@ -397,60 +417,65 @@ impl_cast_int!(Point3, 3);
 
 trait IntVector: Copy + std::hash::Hash + Eq {
     type Neighborhood: IntoIterator<Item = Self>;
-    fn neighborhood(self) -> Self::Neighborhood;
+    fn neighborhood(self) -> Option<Self::Neighborhood>;
 }
 
 impl IntVector for [i64; 2] {
     type Neighborhood = [[i64; 2]; 9];
-    fn neighborhood(self) -> Self::Neighborhood {
+    fn neighborhood(self) -> Option<Self::Neighborhood> {
         let [a, b] = self;
-        [
-            [a - 1, b - 1],
-            [a, b - 1],
-            [a + 1, b - 1],
-            [a - 1, b],
+        let (am, ap) = (a.checked_sub(1)?, a.checked_add(1)?);
+        let (bm, bp) = (b.checked_sub(1)?, b.checked_add(1)?);
+        Some([
+            [am, bm],
+            [a, bm],
+            [ap, bm],
+            [am, b],
             [a, b],
-            [a + 1, b],
-            [a - 1, b + 1],
-            [a, b + 1],
-            [a + 1, b + 1],
-        ]
+            [ap, b],
+            [am, bp],
+            [a, bp],
+            [ap, bp],
+        ])
     }
 }
 
 impl IntVector for [i64; 3] {
     type Neighborhood = [[i64; 3]; 27];
-    fn neighborhood(self) -> Self::Neighborhood {
+    fn neighborhood(self) -> Option<Self::Neighborhood> {
         let [a, b, c] = self;
-        [
-            [a - 1, b - 1, c - 1],
-            [a, b - 1, c - 1],
-            [a + 1, b - 1, c - 1],
-            [a - 1, b, c - 1],
-            [a, b, c - 1],
-            [a + 1, b, c - 1],
-            [a - 1, b + 1, c - 1],
-            [a, b + 1, c - 1],
-            [a + 1, b + 1, c - 1],
-            [a - 1, b - 1, c],
-            [a, b - 1, c],
-            [a + 1, b - 1, c],
-            [a - 1, b, c],
+        let (am, ap) = (a.checked_sub(1)?, a.checked_add(1)?);
+        let (bm, bp) = (b.checked_sub(1)?, b.checked_add(1)?);
+        let (cm, cp) = (c.checked_sub(1)?, c.checked_add(1)?);
+        Some([
+            [am, bm, cm],
+            [a, bm, cm],
+            [ap, bm, cm],
+            [am, b, cm],
+            [a, b, cm],
+            [ap, b, cm],
+            [am, bp, cm],
+            [a, bp, cm],
+            [ap, bp, cm],
+            [am, bm, c],
+            [a, bm, c],
+            [ap, bm, c],
+            [am, b, c],
             [a, b, c],
-            [a + 1, b, c],
-            [a - 1, b + 1, c],
-            [a, b + 1, c],
-            [a + 1, b + 1, c],
-            [a - 1, b - 1, c + 1],
-            [a, b - 1, c + 1],
-            [a + 1, b - 1, c + 1],
-            [a - 1, b, c + 1],
-            [a, b, c + 1],
-            [a + 1, b, c + 1],
-            [a - 1, b + 1, c + 1],
-            [a, b + 1, c + 1],
-            [a + 1, b + 1, c + 1],
-        ]
+            [ap, b, c],
+            [am, bp, c],
+            [a, bp, c],
+            [ap, bp, c],
+            [am, bm, cp],
+            [a, bm, cp],
+            [ap, bm, cp],
+            [am, b, cp],
+            [a, b, cp],
+            [ap, b, cp],
+            [am, bp, cp],
+            [a, bp, cp],
+            [ap, bp, cp],
+        ])
     }
 }
 

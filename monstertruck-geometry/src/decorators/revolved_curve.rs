@@ -267,15 +267,19 @@ struct ProjectedCurve<C> {
 }
 
 impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
+    /// Side of the one-sided radial derivative at a bounded endpoint fixed on
+    /// the revolution axis. The special formula is valid at the endpoint
+    /// itself, not merely at a nearby parameter whose radius is small.
     #[inline]
-    fn fixed_endpoint_sign(&self, t: f64, point: Point3) -> Option<f64> {
-        if !self.revolution.proj_point(point).y.so_small() {
-            return None;
-        }
+    fn fixed_endpoint_sign(&self, t: f64) -> Option<f64> {
         let (t0, t1) = self.curve.range_tuple();
-        if t.near(&t0) && self.revolution.contains(self.curve.front()) {
+        if matches!(t.partial_cmp(&t0), Some(std::cmp::Ordering::Equal))
+            && self.revolution.contains(self.curve.front())
+        {
             Some(1.0)
-        } else if t.near(&t1) && self.revolution.contains(self.curve.back()) {
+        } else if matches!(t.partial_cmp(&t1), Some(std::cmp::Ordering::Equal))
+            && self.revolution.contains(self.curve.back())
+        {
             Some(-1.0)
         } else {
             None
@@ -337,7 +341,7 @@ impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
         let side = if leading_order == 0 {
             1.0
         } else {
-            let Some(sign) = self.fixed_endpoint_sign(t, point) else {
+            let Some(sign) = self.fixed_endpoint_sign(t) else {
                 // The norm has a cusp when the generator crosses the axis in
                 // the interior. The ordinary derivative does not exist there.
                 return Vector2::new(axial, f64::NAN);
@@ -373,12 +377,10 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
         // The radial coordinate is a norm, so its ordinary derivative divides
         // by radius. At a bounded generator endpoint on the axis that derivative
         // has a finite one-sided limit even though the two-sided formula is 0/0.
-        if let Some(sign) = self.fixed_endpoint_sign(t, point) {
+        if let Some(sign) = self.fixed_endpoint_sign(t) {
             let axial = derivative.dot(self.revolution.axis);
-            let radial = derivative - axial * self.revolution.axis;
-            if !radial.so_small() {
-                return Vector2::new(axial, sign * radial.magnitude());
-            }
+            let transverse = derivative - axial * self.revolution.axis;
+            return Vector2::new(axial, sign * transverse.magnitude());
         }
         self.revolution.proj_vector(point, derivative)
     }
@@ -387,15 +389,22 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
         let point = self.curve.evaluate(t);
         let derivative = self.curve.derivative(t);
         let derivative_2 = self.curve.derivative_2(t);
-        if let Some(sign) = self.fixed_endpoint_sign(t, point) {
+        if let Some(sign) = self.fixed_endpoint_sign(t) {
             let axial = derivative.dot(self.revolution.axis);
-            let radial = derivative - axial * self.revolution.axis;
-            let radial_speed = radial.magnitude();
-            if !radial_speed.so_small() {
-                let axial_2 = derivative_2.dot(self.revolution.axis);
-                let radial_2 = derivative_2 - axial_2 * self.revolution.axis;
-                return Vector2::new(axial_2, sign * radial.dot(radial_2) / radial_speed);
-            }
+            let transverse = derivative - axial * self.revolution.axis;
+            let axial_2 = derivative_2.dot(self.revolution.axis);
+            let transverse_2 = derivative_2 - axial_2 * self.revolution.axis;
+            let transverse_speed = transverse.magnitude();
+            let radial_2 = if transverse_speed > 0.0 {
+                sign * transverse.dot(transverse_2) / transverse_speed
+            } else if transverse_speed.is_nan() {
+                f64::NAN
+            } else {
+                // If the transverse first derivative also vanishes, the first
+                // non-zero radial term is quadratic: |a_perp| * dt^2 / 2.
+                transverse_2.magnitude()
+            };
+            return Vector2::new(axial_2, radial_2);
         }
         self.revolution
             .proj_vector2(point, derivative, derivative_2)

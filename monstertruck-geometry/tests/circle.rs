@@ -67,16 +67,25 @@ proptest! {
 }
 
 #[test]
-fn search_parameter_near_zero_preserves_precision() {
+fn search_parameter_near_zero_preserves_precision() -> std::result::Result<(), &'static str> {
     let circle = UnitCircle::<Point2>::new();
-    let t = 9.621_083_226_117_856e-6;
-    let point = circle.evaluate(t);
+    // Around 1e-8, `cos(t)` rounds to 1.0 in f64 while `sin(t)` still carries
+    // the angular information. An inverse based only on acos(cos(t)) therefore
+    // loses the parameter, while atan2(sin(t), cos(t)) does not.
+    for t in [1.0e-8, TAU - 1.0e-8] {
+        let point = Point2::new(t.cos(), t.sin());
 
-    let parameter = circle.search_parameter(point, t, 1).unwrap();
-    assert_near2!(parameter, t);
+        let parameter = circle
+            .search_parameter(point, t, 1)
+            .ok_or("circle parameter search failed")?;
+        assert_near2!(parameter, t);
 
-    let nearest = circle.search_nearest_parameter(point, t, 1).unwrap();
-    assert_near2!(nearest, t);
+        let nearest = circle
+            .search_nearest_parameter(point, t, 1)
+            .ok_or("circle nearest-parameter search failed")?;
+        assert_near2!(nearest, t);
+    }
+    Ok(())
 }
 
 #[test]
