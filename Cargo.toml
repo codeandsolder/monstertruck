@@ -52,7 +52,7 @@ matext4cgmath = "0.1"
 num-traits = "0.2"
 naga = { version = "30", features = ["wgsl-in"] }
 parking_lot = "0.13"
-pollster = "0.4"
+pollster = "1.0"
 proc-macro-error = "1"
 proc-macro-crate = "3"
 proc-macro2 = "1"
