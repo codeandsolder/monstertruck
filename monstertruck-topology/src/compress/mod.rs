@@ -688,6 +688,16 @@ where
 }
 
 impl<P, C, S, T> CompressedTrimmedShell<P, C, S, T> {
+    /// Discards all stable topology identity carried by this shell.
+    ///
+    /// Use this before arbitrary topology surgery that cannot preserve or remap the
+    /// existing identity domain. Geometry and connectivity are unchanged.
+    pub fn discard_topology_identity(&mut self) {
+        self.vertex_stable_ids = None;
+        self.edge_stable_ids = None;
+        self.face_stable_ids = None;
+    }
+
     /// Retains only faces accepted by `keep`, compacting the parallel face stable-ID sidecar.
     pub fn retain_faces(&mut self, keep: impl FnMut(&CompressedTrimmedFace<S, T>) -> bool) {
         retain_with_stable_ids(&mut self.faces, &mut self.face_stable_ids, keep);
@@ -739,6 +749,19 @@ impl<P, C, S, T> CompressedTrimmedShell<P, C, S, T> {
 }
 
 impl<P, C, S, T> CompressedTrimmedSolid<P, C, S, T> {
+    /// Discards the solid's entire stable topology identity domain.
+    ///
+    /// This is the correct operation before arbitrary topology composition or
+    /// surgery where the existing sidecars cannot be proven valid. The allocator
+    /// and attributes are discarded too because both are keyed by that identity domain.
+    pub fn discard_topology_identity(&mut self) {
+        for shell in &mut self.boundaries {
+            shell.discard_topology_identity();
+        }
+        self.id_allocator = None;
+        self.attributes = None;
+    }
+
     /// Drops all face-local trim data and returns a plain `CompressedSolid`.
     pub fn erase_trims(self) -> CompressedSolid<P, C, S> {
         CompressedSolid {
@@ -771,6 +794,13 @@ impl<P, C, S, T> CompressedTrimmedSolid<P, C, S, T> {
 }
 
 impl<P, C, S> CompressedShell<P, C, S> {
+    /// Discards all stable topology identity carried by this shell.
+    pub fn discard_topology_identity(&mut self) {
+        self.vertex_stable_ids = None;
+        self.edge_stable_ids = None;
+        self.face_stable_ids = None;
+    }
+
     /// Retains only faces accepted by `keep`, compacting the parallel face stable-ID sidecar.
     pub fn retain_faces(&mut self, keep: impl FnMut(&CompressedFace<S>) -> bool) {
         retain_with_stable_ids(&mut self.faces, &mut self.face_stable_ids, keep);
@@ -853,6 +883,20 @@ impl<P: Clone, C: Clone, S: Clone> CompressedShell<P, C, S> {
         self.with_face_trims(
             monstertruck_traits::ExactParameterBoundary2D::exact_parameter_boundary_2d,
         )
+    }
+}
+
+impl<P, C, S> CompressedSolid<P, C, S> {
+    /// Discards the solid's entire stable topology identity domain.
+    ///
+    /// The allocator and attributes are discarded with the shell sidecars because
+    /// they are meaningful only within that same stable-ID namespace.
+    pub fn discard_topology_identity(&mut self) {
+        for shell in &mut self.boundaries {
+            shell.discard_topology_identity();
+        }
+        self.id_allocator = None;
+        self.attributes = None;
     }
 }
 

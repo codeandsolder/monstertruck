@@ -649,26 +649,40 @@ pub struct Shell {
 }
 
 impl ShellHolder {
+    /// Every shell face-list entry paired with the source entity number used by
+    /// the shell when one exists.  Keeping this coordinate alongside holder
+    /// resolution lets solid import distinguish an `ORIENTED_FACE` wrapper from
+    /// the underlying face that owns kernel topology identity.
+    pub(crate) fn cfs_faces_with_source<'a>(
+        &'a self,
+        table: &'a Table,
+    ) -> impl Iterator<Item = (Option<u64>, Option<FaceAnyHolder>)> + 'a {
+        self.cfs_faces.iter().map(|face| match face {
+            PlaceHolder::Owned(holder) => (None, Some(holder.clone())),
+            PlaceHolder::Ref(Name::Entity(idx)) => (
+                Some(*idx),
+                table
+                    .oriented_face
+                    .get(idx)
+                    .cloned()
+                    .map(FaceAnyHolder::OrientedFace)
+                    .or_else(|| {
+                        table
+                            .face_surface
+                            .get(idx)
+                            .cloned()
+                            .map(FaceAnyHolder::FaceSurface)
+                    }),
+            ),
+            PlaceHolder::Ref(_) => (None, None),
+        })
+    }
+
     pub(crate) fn cfs_faces_holder<'a>(
         &'a self,
         table: &'a Table,
     ) -> impl Iterator<Item = Option<FaceAnyHolder>> + 'a {
-        self.cfs_faces.iter().map(|face| match face {
-            PlaceHolder::Owned(holder) => Some(holder.clone()),
-            PlaceHolder::Ref(Name::Entity(idx)) => table
-                .oriented_face
-                .get(idx)
-                .cloned()
-                .map(FaceAnyHolder::OrientedFace)
-                .or_else(|| {
-                    table
-                        .face_surface
-                        .get(idx)
-                        .cloned()
-                        .map(FaceAnyHolder::FaceSurface)
-                }),
-            PlaceHolder::Ref(_) => None,
-        })
+        self.cfs_faces_with_source(table).map(|(_, face)| face)
     }
 }
 

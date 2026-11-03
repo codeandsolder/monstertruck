@@ -62,6 +62,37 @@ fn face_mutations_keep_stable_id_sidecars_aligned() {
 }
 
 #[test]
+fn discarding_topology_identity_clears_sidecars_allocator_and_attributes() {
+    let mut solid = CompressedTrimmedSolid::<(), (), (), ()> {
+        boundaries: vec![CompressedTrimmedShell {
+            vertices: vec![()],
+            edges: Vec::new(),
+            faces: Vec::new(),
+            vertex_stable_ids: Some(vec![StableId::new(11)]),
+            edge_stable_ids: Some(Vec::new()),
+            face_stable_ids: Some(Vec::new()),
+        }],
+        id_allocator: Some({
+            let mut allocator = StableIdAllocator::new();
+            allocator
+                .ensure_above(11)
+                .expect("small stable id must fit");
+            allocator
+        }),
+        attributes: Some(SolidAttributes::new()),
+    };
+
+    solid.discard_topology_identity();
+
+    let shell = &solid.boundaries[0];
+    assert!(shell.vertex_stable_ids.is_none());
+    assert!(shell.edge_stable_ids.is_none());
+    assert!(shell.face_stable_ids.is_none());
+    assert!(solid.id_allocator.is_none());
+    assert!(solid.attributes.is_none());
+}
+
+#[test]
 fn cloned_without_trims_matches_clone_then_erase_trims() {
     let shell = CompressedTrimmedShell {
         vertices: vec![0usize, 1usize],

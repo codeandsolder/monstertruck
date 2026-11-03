@@ -83,6 +83,119 @@ fn trimmed_solid_report_is_aligned_with_boundaries() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn trimmed_solid_import_assigns_stable_identity_and_provenance() -> anyhow::Result<()> {
+    let step_string = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../resources/step/occt-cylinder.step",
+    ));
+    let table = crate::step::load::Table::from_step(step_string)?;
+    let step_solid = table
+        .manifold_solid_brep
+        .values()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("the cylinder fixture must contain a STEP solid."))?;
+
+    let import = table.to_compressed_trimmed_solid_import(step_solid)?;
+    assert_eq!(import.solid.boundaries.len(), import.shell_reports.len());
+
+    let mut vertex_count = 0usize;
+    let mut edge_count = 0usize;
+    let mut face_count = 0usize;
+    let mut max_stable_id = 0u64;
+    for shell in &import.solid.boundaries {
+        let vertex_ids = shell
+            .vertex_stable_ids
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("imported vertices must carry stable IDs"))?;
+        let edge_ids = shell
+            .edge_stable_ids
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("imported edges must carry stable IDs"))?;
+        let face_ids = shell
+            .face_stable_ids
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("imported faces must carry stable IDs"))?;
+        assert_eq!(vertex_ids.len(), shell.vertices.len());
+        assert_eq!(edge_ids.len(), shell.edges.len());
+        assert_eq!(face_ids.len(), shell.faces.len());
+        for id in vertex_ids.iter().chain(edge_ids).chain(face_ids) {
+            assert!(id.is_assigned());
+            max_stable_id = max_stable_id.max(id.raw());
+        }
+        vertex_count += shell.vertices.len();
+        edge_count += shell.edges.len();
+        face_count += shell.faces.len();
+    }
+
+    assert_eq!(import.provenance.vertices.len(), vertex_count);
+    assert_eq!(import.provenance.edges.len(), edge_count);
+    assert_eq!(import.provenance.faces.len(), face_count);
+    assert!(
+        import
+            .provenance
+            .vertices
+            .iter()
+            .all(|entry| entry.stable_id.is_assigned())
+    );
+    assert!(
+        import
+            .provenance
+            .edges
+            .iter()
+            .all(|entry| entry.stable_id.is_assigned())
+    );
+    assert!(
+        import
+            .provenance
+            .faces
+            .iter()
+            .all(|entry| entry.stable_id.is_assigned())
+    );
+    assert!(
+        import
+            .solid
+            .id_allocator
+            .as_ref()
+            .is_some_and(|allocator| allocator.peek() > max_stable_id),
+        "the retained allocator must continue above every imported stable ID",
+    );
+    Ok(())
+}
+
+#[test]
+fn plain_and_trimmed_solid_imports_assign_the_same_source_identity() -> anyhow::Result<()> {
+    let step_string = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../resources/step/occt-cylinder.step",
+    ));
+    let table = crate::step::load::Table::from_step(step_string)?;
+    let step_solid = table
+        .manifold_solid_brep
+        .values()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("the cylinder fixture must contain a STEP solid."))?;
+
+    let plain = table.to_compressed_solid_import(step_solid)?;
+    let trimmed = table.to_compressed_trimmed_solid_import(step_solid)?;
+    assert_eq!(plain.provenance, trimmed.provenance);
+    assert_eq!(plain.shell_reports, trimmed.shell_reports);
+    Ok(())
+}
+
+#[test]
+fn stable_id_assigner_reuses_source_identity_only_for_named_sources() -> anyhow::Result<()> {
+    let mut assigner = StableIdAssigner::default();
+    let named = assigner.id_for_source(Some(42))?;
+    assert_eq!(assigner.id_for_source(Some(42))?, named);
+
+    let first_owned = assigner.id_for_source(None)?;
+    let second_owned = assigner.id_for_source(None)?;
+    assert_ne!(named, first_owned);
+    assert_ne!(first_owned, second_owned);
+    Ok(())
+}
+
 fn cylinder_surface() -> Surface {
     let axis = Vector3::unit_z();
     let center = Point3::origin();
