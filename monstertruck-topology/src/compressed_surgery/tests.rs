@@ -243,6 +243,7 @@ fn inverse_chamfer_patch(ids: FixtureIds) -> CompressedTrimmedTopologyPatch<Poin
                 }],
             },
         ],
+        face_boundary_replacements: vec![],
         require_unused_edges: vec![ids.edges[2], ids.edges[7], ids.edges[12], ids.edges[13]],
     }
 }
@@ -341,6 +342,78 @@ fn inverse_chamfer_patch_preserves_identity_and_validates_closed_topology() -> a
         anyhow::bail!("selection attribute changed type");
     };
     assert_eq!(selection, &vec![ids.edges[0]]);
+    Ok(())
+}
+
+#[test]
+fn complete_face_boundary_replacement_reuses_edges_and_regenerates_trims() -> anyhow::Result<()> {
+    let (mut solid, ids) = chamfered_prism();
+    let patch = CompressedTrimmedTopologyPatch {
+        remove_faces: vec![],
+        new_vertices: vec![],
+        new_edges: vec![],
+        rewrite_edges: vec![],
+        face_splices: vec![],
+        face_boundary_replacements: vec![CompressedFaceBoundaryReplacement {
+            face: ids.faces[0],
+            boundaries: vec![vec![
+                PatchEdgeUse {
+                    edge: PatchEdgeRef::Existing(ids.edges[2]),
+                    orientation: true,
+                },
+                PatchEdgeUse {
+                    edge: PatchEdgeRef::Existing(ids.edges[3]),
+                    orientation: true,
+                },
+                PatchEdgeUse {
+                    edge: PatchEdgeRef::Existing(ids.edges[4]),
+                    orientation: true,
+                },
+                PatchEdgeUse {
+                    edge: PatchEdgeRef::Existing(ids.edges[0]),
+                    orientation: true,
+                },
+                PatchEdgeUse {
+                    edge: PatchEdgeRef::Existing(ids.edges[1]),
+                    orientation: true,
+                },
+            ]],
+        }],
+        require_unused_edges: vec![],
+    };
+
+    let result = solid.apply_topology_patch(&patch)?;
+    assert_eq!(result.new_vertex_ids, Vec::<StableId>::new());
+    assert_eq!(result.new_edge_ids, Vec::<StableId>::new());
+    let StableIdLocation::Unique {
+        boundary, index, ..
+    } = solid.location_by_stable_id(ids.faces[0])?
+    else {
+        anyhow::bail!("retained face StableId became non-unique");
+    };
+    let shell = &solid.boundaries[boundary];
+    let edge_ids = shell
+        .edge_stable_ids
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("edge StableIds disappeared"))?;
+    let wire = shell.faces[index]
+        .boundaries
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("replacement face lost its boundary"))?;
+    assert_eq!(
+        wire.iter()
+            .map(|edge_use| edge_ids[edge_use.index])
+            .collect::<Vec<_>>(),
+        vec![
+            ids.edges[2],
+            ids.edges[3],
+            ids.edges[4],
+            ids.edges[0],
+            ids.edges[1]
+        ]
+    );
+    assert!(wire.iter().all(|edge_use| edge_use.trim_curve.is_some()));
+    let _: crate::trimmed::TrimmedSolid<Point3, Line<Point3>, Plane, Trim> = solid.try_into()?;
     Ok(())
 }
 
