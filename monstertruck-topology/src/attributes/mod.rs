@@ -3,7 +3,7 @@
 //! Named attributes store sparse per-element data keyed by [`StableId`].
 //! Attribute values are typed via [`AttributeValue`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::Hasher;
 
 use monstertruck_core::{DeterministicContentHash, StableId};
@@ -76,6 +76,19 @@ impl Attribute {
 
     /// Removes all values.
     pub fn clear(&mut self) { self.values.clear(); }
+
+    pub(crate) fn remove_ids_and_references(
+        &mut self,
+        removed_keys: &BTreeSet<StableId>,
+        removed_references: &BTreeSet<StableId>,
+    ) {
+        self.values.retain(|id, _| !removed_keys.contains(id));
+        for value in self.values.values_mut() {
+            if let AttributeValue::IdSet(ids) = value {
+                ids.retain(|id| !removed_references.contains(id));
+            }
+        }
+    }
 }
 
 /// All named attributes for one element type.
@@ -130,6 +143,16 @@ impl ElementAttributes {
     /// Returns whether there are no named attributes.
     #[must_use]
     pub fn is_empty(&self) -> bool { self.attrs.is_empty() }
+
+    pub(crate) fn remove_ids_and_references(
+        &mut self,
+        removed_keys: &BTreeSet<StableId>,
+        removed_references: &BTreeSet<StableId>,
+    ) {
+        for attribute in self.attrs.values_mut() {
+            attribute.remove_ids_and_references(removed_keys, removed_references);
+        }
+    }
 }
 
 /// Complete attribute storage for a Solid.
@@ -164,6 +187,31 @@ impl SolidAttributes {
             && self.faces.is_empty()
             && self.trim_curves.is_empty()
             && self.iso_parameters.is_empty()
+    }
+
+    pub(crate) fn remove_topology_ids(
+        &mut self,
+        removed_vertices: &BTreeSet<StableId>,
+        removed_edges: &BTreeSet<StableId>,
+        removed_faces: &BTreeSet<StableId>,
+    ) {
+        let removed_references = removed_vertices
+            .iter()
+            .chain(removed_edges)
+            .chain(removed_faces)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        self.vertices
+            .remove_ids_and_references(removed_vertices, &removed_references);
+        self.edges
+            .remove_ids_and_references(removed_edges, &removed_references);
+        self.faces
+            .remove_ids_and_references(removed_faces, &removed_references);
+        let empty = BTreeSet::new();
+        self.trim_curves
+            .remove_ids_and_references(&empty, &removed_references);
+        self.iso_parameters
+            .remove_ids_and_references(&empty, &removed_references);
     }
 }
 
