@@ -190,6 +190,39 @@ pub struct CompressedSolid<P, C, S> {
     pub attributes: Option<SolidAttributes>,
 }
 
+/// Topology entity class addressed by stable-ID lookup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StableIdEntity {
+    /// Compressed vertex.
+    Vertex,
+    /// Compressed edge.
+    Edge,
+    /// Compressed face.
+    Face,
+}
+
+/// Result of resolving one assigned [`StableId`] against compressed topology.
+///
+/// Import provenance may intentionally reuse a stable ID when one source entity
+/// is referenced more than once. Mutators must therefore distinguish an absent
+/// identity from a unique target and an ambiguous repeated occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StableIdLocation {
+    /// The ID is unassigned or does not occur in the compressed solid.
+    Missing,
+    /// Exactly one topology entity carries the ID.
+    Unique {
+        /// Topology entity class carrying the ID.
+        entity: StableIdEntity,
+        /// Boundary-shell index in the compressed solid.
+        boundary: usize,
+        /// Entity index inside that shell's parallel topology array.
+        index: usize,
+    },
+    /// More than one topology entity carries the ID.
+    Ambiguous,
+}
+
 /// Serialized compressed solid with exact face-local trim storage.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CompressedTrimmedSolid<P, C, S, T> {
@@ -201,6 +234,89 @@ pub struct CompressedTrimmedSolid<P, C, S, T> {
     /// Per-element attributes, preserved across serialization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attributes: Option<SolidAttributes>,
+}
+
+trait StableIdIndexedShell {
+    fn validate_stable_ids(&self) -> Result<()>;
+    fn stable_ids(&self, entity: StableIdEntity) -> Option<&[StableId]>;
+}
+
+impl<P, C, S> StableIdIndexedShell for CompressedShell<P, C, S> {
+    fn validate_stable_ids(&self) -> Result<()> {
+        validate_stable_id_counts(
+            self.vertex_stable_ids.as_deref(),
+            self.vertices.len(),
+            self.edge_stable_ids.as_deref(),
+            self.edges.len(),
+            self.face_stable_ids.as_deref(),
+            self.faces.len(),
+        )
+    }
+
+    fn stable_ids(&self, entity: StableIdEntity) -> Option<&[StableId]> {
+        match entity {
+            StableIdEntity::Vertex => self.vertex_stable_ids.as_deref(),
+            StableIdEntity::Edge => self.edge_stable_ids.as_deref(),
+            StableIdEntity::Face => self.face_stable_ids.as_deref(),
+        }
+    }
+}
+
+impl<P, C, S, T> StableIdIndexedShell for CompressedTrimmedShell<P, C, S, T> {
+    fn validate_stable_ids(&self) -> Result<()> {
+        validate_stable_id_counts(
+            self.vertex_stable_ids.as_deref(),
+            self.vertices.len(),
+            self.edge_stable_ids.as_deref(),
+            self.edges.len(),
+            self.face_stable_ids.as_deref(),
+            self.faces.len(),
+        )
+    }
+
+    fn stable_ids(&self, entity: StableIdEntity) -> Option<&[StableId]> {
+        match entity {
+            StableIdEntity::Vertex => self.vertex_stable_ids.as_deref(),
+            StableIdEntity::Edge => self.edge_stable_ids.as_deref(),
+            StableIdEntity::Face => self.face_stable_ids.as_deref(),
+        }
+    }
+}
+
+fn find_stable_id_location<B: StableIdIndexedShell>(
+    boundaries: &[B],
+    target: StableId,
+) -> Result<StableIdLocation> {
+    if !target.is_assigned() {
+        return Ok(StableIdLocation::Missing);
+    }
+    let mut found = None;
+    for (boundary, shell) in boundaries.iter().enumerate() {
+        shell.validate_stable_ids()?;
+        for entity in [
+            StableIdEntity::Vertex,
+            StableIdEntity::Edge,
+            StableIdEntity::Face,
+        ] {
+            let Some(ids) = shell.stable_ids(entity) else {
+                continue;
+            };
+            for (index, &stable_id) in ids.iter().enumerate() {
+                if stable_id != target {
+                    continue;
+                }
+                if found.is_some() {
+                    return Ok(StableIdLocation::Ambiguous);
+                }
+                found = Some(StableIdLocation::Unique {
+                    entity,
+                    boundary,
+                    index,
+                });
+            }
+        }
+    }
+    Ok(found.unwrap_or(StableIdLocation::Missing))
 }
 
 fn retain_with_stable_ids<T>(
@@ -749,6 +865,14 @@ impl<P, C, S, T> CompressedTrimmedShell<P, C, S, T> {
 }
 
 impl<P, C, S, T> CompressedTrimmedSolid<P, C, S, T> {
+    /// Resolve an assigned stable topology ID to one unique compressed location.
+    ///
+    /// # Errors
+    /// Returns [`Error::StableIdCountMismatch`] when the requested stable-ID sidecar is malformed.
+    pub fn location_by_stable_id(&self, target: StableId) -> Result<StableIdLocation> {
+        find_stable_id_location(&self.boundaries, target)
+    }
+
     /// Discards the solid's entire stable topology identity domain.
     ///
     /// This is the correct operation before arbitrary topology composition or
@@ -887,6 +1011,14 @@ impl<P: Clone, C: Clone, S: Clone> CompressedShell<P, C, S> {
 }
 
 impl<P, C, S> CompressedSolid<P, C, S> {
+    /// Resolve an assigned stable topology ID to one unique compressed location.
+    ///
+    /// # Errors
+    /// Returns [`Error::StableIdCountMismatch`] when the requested stable-ID sidecar is malformed.
+    pub fn location_by_stable_id(&self, target: StableId) -> Result<StableIdLocation> {
+        find_stable_id_location(&self.boundaries, target)
+    }
+
     /// Discards the solid's entire stable topology identity domain.
     ///
     /// The allocator and attributes are discarded with the shell sidecars because

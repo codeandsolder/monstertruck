@@ -62,6 +62,118 @@ fn face_mutations_keep_stable_id_sidecars_aligned() {
 }
 
 #[test]
+fn stable_id_lookup_requires_one_assigned_occurrence() {
+    let shell = |vertex_ids: Vec<StableId>, edge_ids: Vec<StableId>, face_ids: Vec<StableId>| {
+        CompressedTrimmedShell::<(), (), (), ()> {
+            vertices: vec![(); vertex_ids.len()],
+            edges: edge_ids
+                .iter()
+                .map(|_| CompressedEdge {
+                    vertices: (0, 0),
+                    curve: (),
+                })
+                .collect(),
+            faces: face_ids
+                .iter()
+                .map(|_| CompressedTrimmedFace {
+                    boundaries: Vec::new(),
+                    orientation: true,
+                    surface: (),
+                })
+                .collect(),
+            vertex_stable_ids: Some(vertex_ids),
+            edge_stable_ids: Some(edge_ids),
+            face_stable_ids: Some(face_ids),
+        }
+    };
+    let solid = CompressedTrimmedSolid {
+        boundaries: vec![
+            shell(
+                vec![StableId::new(11), StableId::new(12)],
+                vec![StableId::new(21)],
+                vec![StableId::new(31)],
+            ),
+            shell(
+                vec![StableId::new(13), StableId::new(11)],
+                vec![StableId::new(22)],
+                vec![StableId::new(32)],
+            ),
+        ],
+        id_allocator: None,
+        attributes: None,
+    };
+
+    assert_eq!(
+        solid.location_by_stable_id(StableId::new(13)),
+        Ok(StableIdLocation::Unique {
+            entity: StableIdEntity::Vertex,
+            boundary: 1,
+            index: 0,
+        })
+    );
+    assert_eq!(
+        solid.location_by_stable_id(StableId::new(21)),
+        Ok(StableIdLocation::Unique {
+            entity: StableIdEntity::Edge,
+            boundary: 0,
+            index: 0,
+        })
+    );
+    assert_eq!(
+        solid.location_by_stable_id(StableId::new(32)),
+        Ok(StableIdLocation::Unique {
+            entity: StableIdEntity::Face,
+            boundary: 1,
+            index: 0,
+        })
+    );
+    assert_eq!(
+        solid.location_by_stable_id(StableId::new(11)),
+        Ok(StableIdLocation::Ambiguous)
+    );
+    let mut cross_class_duplicate = solid.clone();
+    cross_class_duplicate.boundaries[0].vertex_stable_ids =
+        Some(vec![StableId::new(31), StableId::new(12)]);
+    assert_eq!(
+        cross_class_duplicate.location_by_stable_id(StableId::new(31)),
+        Ok(StableIdLocation::Ambiguous)
+    );
+    assert_eq!(
+        solid.location_by_stable_id(StableId::new(99)),
+        Ok(StableIdLocation::Missing)
+    );
+    assert_eq!(
+        solid.location_by_stable_id(StableId::UNASSIGNED),
+        Ok(StableIdLocation::Missing)
+    );
+
+    let plain = solid.clone().erase_trims();
+    assert_eq!(
+        plain.location_by_stable_id(StableId::new(13)),
+        Ok(StableIdLocation::Unique {
+            entity: StableIdEntity::Vertex,
+            boundary: 1,
+            index: 0,
+        })
+    );
+    assert_eq!(
+        plain.location_by_stable_id(StableId::new(11)),
+        Ok(StableIdLocation::Ambiguous)
+    );
+
+    let mut malformed = solid;
+    malformed.boundaries[0].vertex_stable_ids = Some(vec![StableId::new(11)]);
+    assert_eq!(
+        malformed.location_by_stable_id(StableId::new(31)),
+        Err(Error::StableIdCountMismatch {
+            entity: "vertices",
+            expected: 2,
+            actual: 1,
+        })
+    );
+}
+
+#[test]
 fn discarding_topology_identity_clears_sidecars_allocator_and_attributes() {
     let mut solid = CompressedTrimmedSolid::<(), (), (), ()> {
         boundaries: vec![CompressedTrimmedShell {
