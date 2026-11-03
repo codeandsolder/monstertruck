@@ -20,6 +20,8 @@ use step_p21::{
 };
 
 pub mod convert;
+/// Stable kernel identity assigned while importing STEP topology.
+pub mod provenance;
 /// Typed accounting for what a load kept and what it lost.
 pub mod report;
 /// Geometry parsed from STEP that can be handled by monstertruck.
@@ -27,6 +29,10 @@ pub mod step_geometry;
 /// STEP type definitions: structs, enums, and their From/TryFrom impls.
 mod step_types;
 
+pub use provenance::{
+    StepEntityProvenance, StepFaceProvenance, StepFaceSource, StepSolidImport,
+    StepTopologyProvenance,
+};
 pub use report::{
     CategoryCount, EntityLoadReport, LossCategory, LossReason, LossTally, ShellLoadReport,
 };
@@ -47,6 +53,9 @@ pub enum LoadError {
     /// A per-entity conversion from STEP types into `monstertruck` types failed.
     #[error("STEP conversion error: {0}")]
     Conversion(String),
+    /// Kernel-local stable identity could not be allocated for imported topology.
+    #[error("stable ID allocation failed while importing STEP topology: {0}")]
+    StableId(#[from] monstertruck_topology::StableIdExhausted),
     /// The load SUCCEEDED but lost part of the input.
     ///
     /// Never produced by the ordinary load path -- a lossy load still returns

@@ -80,7 +80,7 @@ fn a_complete_compressed_solid_still_heals_and_extracts() {
 #[test]
 fn a_compressed_solid_that_lost_a_face_refuses_typed_instead_of_aborting() {
     let mut csolid = cube();
-    let dropped = csolid.boundaries[0].faces.pop().expect("six faces");
+    let dropped = csolid.boundaries[0].remove_face(5);
     assert_eq!(
         csolid.boundaries[0].faces.len(),
         5,
@@ -124,7 +124,8 @@ fn a_compressed_solid_that_lost_a_face_refuses_typed_instead_of_aborting() {
 #[test]
 fn the_refusal_distinguishes_an_open_shell_from_a_disconnected_one() {
     let mut open = cube();
-    open.boundaries[0].faces.pop();
+    let last_face = open.boundaries[0].faces.len() - 1;
+    open.boundaries[0].remove_face(last_face);
     assert_eq!(
         monstertruck_healing::extract_healed_trimmed_solid(open, TOL).err(),
         Some(Error::NotClosedShell),
@@ -134,6 +135,8 @@ fn the_refusal_distinguishes_an_open_shell_from_a_disconnected_one() {
     // what is wrong is that this is two solids, not one.
     let mut disconnected = cube();
     let second = cube();
+    // The cubes carry independent stable-ID domains; raw concatenation cannot preserve either.
+    disconnected.discard_topology_identity();
     let vertex_offset = disconnected.boundaries[0].vertices.len();
     let edge_offset = disconnected.boundaries[0].edges.len();
     disconnected.boundaries[0]

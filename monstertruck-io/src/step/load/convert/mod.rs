@@ -1,3 +1,7 @@
+use super::provenance::{
+    StepEntityProvenance, StepFaceProvenance, StepFaceSource, StepSolidImport,
+    StepTopologyProvenance,
+};
 use super::report::{LossCategory as Cat, LossReason as Why, LossSink};
 use super::step_geometry::{
     SurfaceCurve3D as StepSurfaceCurve3D,
@@ -19,6 +23,7 @@ use monstertruck_topology::compress::{
     CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace, CompressedShell,
     CompressedSolid, CompressedTrimmedFace, CompressedTrimmedShell, CompressedTrimmedSolid,
 };
+use monstertruck_topology::{StableId, StableIdAllocator};
 use std::collections::HashSet;
 
 mod missing_edge;
@@ -45,6 +50,103 @@ pub type StepCompressedSolid = CompressedSolid<Point3, Curve3D, Surface>;
 /// STEP loader's concrete geometry types. See [`StepCompressedTrimmedShell`].
 pub type StepCompressedTrimmedSolid =
     CompressedTrimmedSolid<Point3, Curve3D, Surface, step_geometry::StepParameterCurve>;
+
+#[derive(Clone, Debug, Default)]
+struct ShellSources {
+    vertices: Vec<u64>,
+    edges: Vec<u64>,
+    faces: Vec<StepFaceSource>,
+}
+
+#[derive(Clone, Debug)]
+struct ShellConversion<S> {
+    shell: S,
+    report: ShellLoadReport,
+    sources: ShellSources,
+}
+
+#[derive(Debug)]
+struct ShellStableIds {
+    vertices: Vec<StableId>,
+    edges: Vec<StableId>,
+    faces: Vec<StableId>,
+}
+
+#[derive(Debug, Default)]
+struct StableIdAssigner {
+    allocator: StableIdAllocator,
+    by_source: HashMap<u64, StableId>,
+}
+
+impl StableIdAssigner {
+    fn id_for_source(&mut self, source_id: Option<u64>) -> Result<StableId, LoadError> {
+        let Some(source_id) = source_id else {
+            return Ok(self.allocator.allocate()?);
+        };
+        match self.by_source.entry(source_id) {
+            std::collections::hash_map::Entry::Occupied(entry) => Ok(*entry.get()),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let stable_id = self.allocator.allocate()?;
+                entry.insert(stable_id);
+                Ok(stable_id)
+            }
+        }
+    }
+
+    fn into_allocator(self) -> StableIdAllocator { self.allocator }
+}
+
+fn assign_shell_sources(
+    assigner: &mut StableIdAssigner,
+    sources: ShellSources,
+    counts: (usize, usize, usize),
+    provenance: &mut StepTopologyProvenance,
+) -> Result<ShellStableIds, LoadError> {
+    let actual = (
+        sources.vertices.len(),
+        sources.edges.len(),
+        sources.faces.len(),
+    );
+    if actual != counts {
+        return Err(LoadError::Conversion(format!(
+            "internal STEP provenance alignment mismatch: topology {counts:?}, sources {actual:?}",
+        )));
+    }
+
+    let mut vertex_ids = Vec::with_capacity(sources.vertices.len());
+    for source_id in sources.vertices {
+        let stable_id = assigner.id_for_source(Some(source_id))?;
+        vertex_ids.push(stable_id);
+        provenance.vertices.push(StepEntityProvenance {
+            source_id,
+            stable_id,
+        });
+    }
+
+    let mut edge_ids = Vec::with_capacity(sources.edges.len());
+    for source_id in sources.edges {
+        let stable_id = assigner.id_for_source(Some(source_id))?;
+        edge_ids.push(stable_id);
+        provenance.edges.push(StepEntityProvenance {
+            source_id,
+            stable_id,
+        });
+    }
+
+    let mut face_ids = Vec::with_capacity(sources.faces.len());
+    for source in sources.faces {
+        let stable_id = assigner.id_for_source(source.face_surface_id)?;
+        face_ids.push(stable_id);
+        provenance
+            .faces
+            .push(StepFaceProvenance { source, stable_id });
+    }
+    Ok(ShellStableIds {
+        vertices: vertex_ids,
+        edges: edge_ids,
+        faces: face_ids,
+    })
+}
 
 impl Table {
     fn place_holder_edge_any_to_index_and_edge_curve(
@@ -78,6 +180,35 @@ impl Table {
             FaceAnyHolder::OrientedFace(oriented_face) => {
                 let face_element = oriented_face.face_element_holder(self)?;
                 Some((oriented_face.orientation, face_element))
+            }
+        }
+    }
+
+    fn face_any_to_source_orientation_and_face(
+        &self,
+        shell_member_id: Option<u64>,
+        face: Option<FaceAnyHolder>,
+    ) -> Option<(StepFaceSource, bool, FaceSurfaceHolder)> {
+        match face? {
+            FaceAnyHolder::FaceSurface(face) => Some((
+                StepFaceSource {
+                    face_surface_id: shell_member_id,
+                    shell_member_id,
+                },
+                true,
+                face,
+            )),
+            FaceAnyHolder::OrientedFace(oriented_face) => {
+                let face_surface_id = Self::ref_id(&oriented_face.face_element);
+                let face_element = oriented_face.face_element_holder(self)?;
+                Some((
+                    StepFaceSource {
+                        face_surface_id,
+                        shell_member_id,
+                    },
+                    oriented_face.orientation,
+                    face_element,
+                ))
             }
         }
     }
@@ -129,9 +260,10 @@ impl Table {
         &self,
         shell: &ShellHolder,
         sink: &LossSink,
-    ) -> (Vec<Point3>, HashMap<u64, usize>) {
+    ) -> (Vec<Point3>, HashMap<u64, usize>, Vec<u64>) {
         use PlaceHolder::Ref;
         let mut vidx_map = HashMap::<u64, usize>::new();
+        let mut source_ids = Vec::<u64>::new();
         // Distinct ids we have already TRIED, as opposed to ids we succeeded on.
         //
         // The dedup guard used to be `!vidx_map.contains_key(&idx)` with the
@@ -160,6 +292,7 @@ impl Table {
                 Ok(vertex) => {
                     let index = vidx_map.len();
                     vidx_map.insert(idx, index);
+                    source_ids.push(idx);
                     sink.kept(Cat::Vertex, 1);
                     Some(Point3::from(&vertex.vertex_geometry))
                 }
@@ -187,7 +320,7 @@ impl Table {
             .flat_map(move |(_, edge)| [edge.edge_start, edge.edge_end])
             .filter_map(vertex_to_point)
             .collect();
-        (vertices, vidx_map)
+        (vertices, vidx_map, source_ids)
     }
 
     fn shell_edges(
@@ -195,9 +328,10 @@ impl Table {
         shell: &ShellHolder,
         vidx_map: &HashMap<u64, usize>,
         sink: &LossSink,
-    ) -> (Vec<CompressedEdge<Curve3D>>, HashMap<u64, usize>) {
+    ) -> (Vec<CompressedEdge<Curve3D>>, HashMap<u64, usize>, Vec<u64>) {
         use PlaceHolder::Ref;
         let mut eidx_map = HashMap::<u64, usize>::new();
+        let mut source_ids = Vec::<u64>::new();
         let recovered_missing_edges = self.recover_missing_edge_curves(shell);
         // Same split as `shell_vertices`, for the same reason: a failed edge used
         // to consume an index and shift every later edge's `eidx_map` entry.
@@ -266,6 +400,7 @@ impl Table {
             };
             let index = eidx_map.len();
             eidx_map.insert(idx, index);
+            source_ids.push(idx);
             sink.kept(Cat::Edge, 1);
             Some(CompressedEdge {
                 vertices: (*front, *back),
@@ -284,7 +419,7 @@ impl Table {
             .filter_map(move |edge| self.place_holder_edge_any_to_index_and_edge_curve(&edge))
             .filter_map(edge_curve_to_compressed_edge)
             .collect();
-        (edges, eidx_map)
+        (edges, eidx_map, source_ids)
     }
     /// Composes a `FACE_BOUND`'s own orientation with the face's `same_sense`,
     /// so a boundary loop is emitted in the SURFACE's sense and not the FACE's.
@@ -554,15 +689,17 @@ impl Table {
         &'a self,
         shell: &'a ShellHolder,
         sink: &'a LossSink,
-    ) -> impl Iterator<Item = (bool, FaceSurfaceHolder)> + 'a {
-        shell.cfs_faces_holder(self).filter_map(move |face| {
-            sink.listed(Cat::Face, 1);
-            let resolved = self.face_any_to_orientation_and_face(face);
-            if resolved.is_none() {
-                sink.lost(Cat::Face, Why::FaceUnresolved, None, None);
-            }
-            resolved
-        })
+    ) -> impl Iterator<Item = (StepFaceSource, bool, FaceSurfaceHolder)> + 'a {
+        shell
+            .cfs_faces_with_source(self)
+            .filter_map(move |(shell_member_id, face)| {
+                sink.listed(Cat::Face, 1);
+                let resolved = self.face_any_to_source_orientation_and_face(shell_member_id, face);
+                if resolved.is_none() {
+                    sink.lost(Cat::Face, Why::FaceUnresolved, shell_member_id, None);
+                }
+                resolved
+            })
     }
 
     fn shell_faces(
@@ -570,9 +707,9 @@ impl Table {
         shell: &ShellHolder,
         eidx_map: &HashMap<u64, usize>,
         sink: &LossSink,
-    ) -> Vec<CompressedFace<Surface>> {
+    ) -> (Vec<CompressedFace<Surface>>, Vec<StepFaceSource>) {
         self.shell_listed_faces(shell, sink)
-            .filter_map(|(orientation, face)| {
+            .filter_map(|(source, orientation, face)| {
                 let surface = self.face_surface_or_report(&face, sink)?;
                 // The stored boundaries and the stored flag are ONE convention,
                 // not two: see `absolute_bound_orientation`.
@@ -581,13 +718,16 @@ impl Table {
                     self.face_bound_to_edges(&bound, face_sense, eidx_map, sink)
                 });
                 sink.kept(Cat::Face, 1);
-                Some(CompressedFace {
-                    surface,
-                    boundaries,
-                    orientation: face_sense,
-                })
+                Some((
+                    CompressedFace {
+                        surface,
+                        boundaries,
+                        orientation: face_sense,
+                    },
+                    source,
+                ))
             })
-            .collect()
+            .unzip()
     }
 
     fn shell_trimmed_faces(
@@ -596,9 +736,12 @@ impl Table {
         edges: &[CompressedEdge<Curve3D>],
         eidx_map: &HashMap<u64, usize>,
         sink: &LossSink,
-    ) -> Vec<CompressedTrimmedFace<Surface, step_geometry::StepParameterCurve>> {
+    ) -> (
+        Vec<CompressedTrimmedFace<Surface, step_geometry::StepParameterCurve>>,
+        Vec<StepFaceSource>,
+    ) {
         self.shell_listed_faces(shell, sink)
-            .filter_map(|(orientation, face)| {
+            .filter_map(|(source, orientation, face)| {
                 let surface = self.face_surface_or_report(&face, sink)?;
                 // The stored boundaries and the stored flag are ONE convention,
                 // not two: see `absolute_bound_orientation`.
@@ -609,13 +752,107 @@ impl Table {
                     )
                 });
                 sink.kept(Cat::Face, 1);
-                Some(CompressedTrimmedFace {
-                    surface,
-                    boundaries,
-                    orientation: face_sense,
-                })
+                Some((
+                    CompressedTrimmedFace {
+                        surface,
+                        boundaries,
+                        orientation: face_sense,
+                    },
+                    source,
+                ))
             })
-            .collect()
+            .unzip()
+    }
+
+    fn shell_conversion(&self, shell: &ShellHolder) -> ShellConversion<StepCompressedShell> {
+        let sink = LossSink::default();
+        let (vertices, vidx_map, vertex_sources) = self.shell_vertices(shell, &sink);
+        let (edges, eidx_map, edge_sources) = self.shell_edges(shell, &vidx_map, &sink);
+        let (faces, face_sources) = self.shell_faces(shell, &eidx_map, &sink);
+        ShellConversion {
+            shell: CompressedShell {
+                vertices,
+                edges,
+                faces,
+                vertex_stable_ids: None,
+                edge_stable_ids: None,
+                face_stable_ids: None,
+            },
+            report: sink.into_report(),
+            sources: ShellSources {
+                vertices: vertex_sources,
+                edges: edge_sources,
+                faces: face_sources,
+            },
+        }
+    }
+
+    fn trimmed_shell_conversion(
+        &self,
+        shell: &ShellHolder,
+    ) -> ShellConversion<StepCompressedTrimmedShell> {
+        let sink = LossSink::default();
+        let (vertices, vidx_map, vertex_sources) = self.shell_vertices(shell, &sink);
+        let (edges, eidx_map, edge_sources) = self.shell_edges(shell, &vidx_map, &sink);
+        let (faces, face_sources) = self.shell_trimmed_faces(shell, &edges, &eidx_map, &sink);
+        ShellConversion {
+            shell: CompressedTrimmedShell {
+                vertices,
+                edges,
+                faces,
+                vertex_stable_ids: None,
+                edge_stable_ids: None,
+                face_stable_ids: None,
+            },
+            report: sink.into_report(),
+            sources: ShellSources {
+                vertices: vertex_sources,
+                edges: edge_sources,
+                faces: face_sources,
+            },
+        }
+    }
+
+    fn oriented_shell_conversion(
+        &self,
+        shell: &OrientedShellHolder,
+    ) -> Result<ShellConversion<StepCompressedShell>, StepConvertingError> {
+        let PlaceHolder::Ref(Name::Entity(idx)) = &shell.shell_element else {
+            return Err("failed to reference shell".into());
+        };
+        let Some(step_shell) = self.shell.get(idx) else {
+            return Err("failed to reference shell".into());
+        };
+        let mut conversion = self.shell_conversion(step_shell);
+        if !shell.orientation {
+            conversion
+                .shell
+                .faces
+                .iter_mut()
+                .for_each(|face| face.orientation = !face.orientation);
+        }
+        Ok(conversion)
+    }
+
+    fn oriented_trimmed_shell_conversion(
+        &self,
+        shell: &OrientedShellHolder,
+    ) -> Result<ShellConversion<StepCompressedTrimmedShell>, StepConvertingError> {
+        let PlaceHolder::Ref(Name::Entity(idx)) = &shell.shell_element else {
+            return Err("failed to reference shell".into());
+        };
+        let Some(step_shell) = self.shell.get(idx) else {
+            return Err("failed to reference shell".into());
+        };
+        let mut conversion = self.trimmed_shell_conversion(step_shell);
+        if !shell.orientation {
+            conversion
+                .shell
+                .faces
+                .iter_mut()
+                .for_each(|face| face.orientation = !face.orientation);
+        }
+        Ok(conversion)
     }
 
     /// Constructs [`CompressedShell`] from a STEP `Shell`.
@@ -778,6 +1015,32 @@ impl Table {
         Ok(res)
     }
 
+    fn shell_conversion_by_id(
+        &self,
+        id: u64,
+    ) -> Result<ShellConversion<StepCompressedShell>, LoadError> {
+        if let Some(shell) = self.shell.get(&id) {
+            Ok(self.shell_conversion(shell))
+        } else if let Some(shell) = self.oriented_shell.get(&id) {
+            Ok(self.oriented_shell_conversion(shell)?)
+        } else {
+            Err(format!("failed to reference shell #{id}").into())
+        }
+    }
+
+    fn trimmed_shell_conversion_by_id(
+        &self,
+        id: u64,
+    ) -> Result<ShellConversion<StepCompressedTrimmedShell>, LoadError> {
+        if let Some(shell) = self.shell.get(&id) {
+            Ok(self.trimmed_shell_conversion(shell))
+        } else if let Some(shell) = self.oriented_shell.get(&id) {
+            Ok(self.oriented_trimmed_shell_conversion(shell)?)
+        } else {
+            Err(format!("failed to reference shell #{id}").into())
+        }
+    }
+
     /// Constructs [`CompressedSolid`] from [`ManifoldSolidBrep`] in a STEP file.
     ///
     /// The result keeps the STEP `outer` shell as the first entry of
@@ -817,59 +1080,88 @@ impl Table {
     pub fn to_compressed_solid(
         &self,
         solid: &ManifoldSolidBrepHolder,
-    ) -> Result<CompressedSolid<Point3, Curve3D, Surface>, LoadError> {
-        self.to_compressed_solid_reported(solid)
-            .map(|(solid, _)| solid)
+    ) -> Result<StepCompressedSolid, LoadError> {
+        self.to_compressed_solid_import(solid)
+            .map(|import| import.solid)
     }
 
-    /// [`Self::to_compressed_solid`] plus ONE [`ShellLoadReport`] per entry of
-    /// `boundaries`, positionally aligned with it -- so a caller can say which
-    /// shell lost what, not merely that the solid lost something.
+    /// Imports one STEP solid with kernel-local stable identity and explicit
+    /// source provenance.
     ///
-    /// See [`Self::to_compressed_shell_reported`] for why this exists.
+    /// One allocator domain covers the outer shell and every void shell. Stable
+    /// IDs are assigned while the topology is still compressed, before any
+    /// healing step can split or remove entities. STEP entity numbers remain a
+    /// separate namespace and are recorded only in `provenance`.
     ///
     /// # Errors
-    /// Returns an error if referenced STEP entities cannot be resolved or converted.
+    /// Returns an error if referenced STEP entities cannot be resolved or
+    /// converted, or if the stable-ID space is exhausted.
+    pub fn to_compressed_solid_import(
+        &self,
+        solid: &ManifoldSolidBrepHolder,
+    ) -> Result<StepSolidImport<StepCompressedSolid>, LoadError> {
+        let PlaceHolder::Ref(Name::Entity(outer_idx)) = &solid.outer else {
+            return Err("failed to reference `solid.outer`".into());
+        };
+        let mut conversions = vec![self.shell_conversion_by_id(*outer_idx)?];
+        for inner in &solid.voids {
+            let PlaceHolder::Ref(Name::Entity(inner_idx)) = inner else {
+                return Err("failed to reference a member of `solid.voids`".into());
+            };
+            conversions.push(self.shell_conversion_by_id(*inner_idx)?);
+        }
+
+        let mut assigner = StableIdAssigner::default();
+        let mut provenance = StepTopologyProvenance::default();
+        let mut boundaries = Vec::with_capacity(conversions.len());
+        let mut shell_reports = Vec::with_capacity(conversions.len());
+        for conversion in conversions {
+            let ShellConversion {
+                mut shell,
+                report,
+                sources,
+            } = conversion;
+            let counts = (shell.vertices.len(), shell.edges.len(), shell.faces.len());
+            let stable_ids = assign_shell_sources(&mut assigner, sources, counts, &mut provenance)?;
+            shell.vertex_stable_ids = Some(stable_ids.vertices);
+            shell.edge_stable_ids = Some(stable_ids.edges);
+            shell.face_stable_ids = Some(stable_ids.faces);
+            boundaries.push(shell);
+            shell_reports.push(report);
+        }
+        Ok(StepSolidImport {
+            solid: CompressedSolid {
+                boundaries,
+                id_allocator: Some(assigner.into_allocator()),
+                attributes: None,
+            },
+            shell_reports,
+            provenance,
+        })
+    }
+
+    /// [`Self::to_compressed_solid`] plus one [`ShellLoadReport`] per boundary.
+    ///
+    /// This wrapper discards only the source-provenance journal from
+    /// [`Self::to_compressed_solid_import`]; the returned solid still carries
+    /// the stable IDs assigned during import.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or
+    /// converted, or if the stable-ID space is exhausted.
     pub fn to_compressed_solid_reported(
         &self,
         solid: &ManifoldSolidBrepHolder,
     ) -> Result<(StepCompressedSolid, Vec<ShellLoadReport>), LoadError> {
-        let PlaceHolder::Ref(Name::Entity(outer_idx)) = &solid.outer else {
-            return Err("failed to reference `solid.outer`".into());
-        };
-        let outer_shell = self.shell.get(outer_idx).map_or_else(
-            || {
-                self.oriented_shell.get(outer_idx).map_or_else(
-                    || Err("failed to reference `solid.outer`".into()),
-                    |step_shell| self.to_compressed_shell_reported(step_shell),
-                )
-            },
-            |step_shell| self.to_compressed_shell_reported(step_shell),
-        )?;
-        let mut boundaries = vec![outer_shell.0];
-        let mut reports = vec![outer_shell.1];
-        for shell in &solid.voids {
-            let PlaceHolder::Ref(Name::Entity(outer_idx)) = shell else {
-                return Err("failed to reference an element of `solid.voids`".into());
-            };
-            let Some(oriented_shell) = self.oriented_shell.get(outer_idx) else {
-                return Err("failed to reference an element of `solid.voids`".into());
-            };
-            let (shell, report) = self.to_compressed_shell_reported(oriented_shell)?;
-            boundaries.push(shell);
-            reports.push(report);
-        }
-        Ok((
-            CompressedSolid {
-                boundaries,
-                id_allocator: None,
-                attributes: None,
-            },
-            reports,
-        ))
+        let StepSolidImport {
+            solid,
+            shell_reports,
+            provenance: _,
+        } = self.to_compressed_solid_import(solid)?;
+        Ok((solid, shell_reports))
     }
 
-    /// Constructs `CompressedTrimmedSolid` from `ManifoldSolidBrep` in STEP file.
+    /// Constructs a compressed trimmed solid from `ManifoldSolidBrep` in a STEP file.
     ///
     /// # Errors
     /// Returns an error if referenced STEP entities cannot be resolved or converted.
@@ -877,58 +1169,83 @@ impl Table {
         &self,
         solid: &ManifoldSolidBrepHolder,
     ) -> Result<StepCompressedTrimmedSolid, LoadError> {
-        self.to_compressed_trimmed_solid_reported(solid)
-            .map(|(solid, _)| solid)
+        self.to_compressed_trimmed_solid_import(solid)
+            .map(|import| import.solid)
     }
 
-    /// [`Self::to_compressed_trimmed_solid`] plus ONE [`ShellLoadReport`] per
-    /// entry of `boundaries`, positionally aligned with it. This is the trimmed
-    /// counterpart of [`Self::to_compressed_solid_reported`]: exact face-local
-    /// trims are preserved while callers retain a truthful account of anything
-    /// the STEP conversion could not represent.
+    /// Imports one exact-trim STEP solid with kernel-local stable identity and
+    /// explicit source provenance.
+    ///
+    /// Identity is assigned on the compressed topology before healing, so
+    /// surviving source topology keeps its stable IDs while later repair-created
+    /// topology can remain explicitly unassigned until allocated by the caller.
     ///
     /// # Errors
-    /// Returns an error if referenced STEP entities cannot be resolved or converted.
-    pub fn to_compressed_trimmed_solid_reported(
+    /// Returns an error if referenced STEP entities cannot be resolved or
+    /// converted, or if the stable-ID space is exhausted.
+    pub fn to_compressed_trimmed_solid_import(
         &self,
         solid: &ManifoldSolidBrepHolder,
-    ) -> Result<(StepCompressedTrimmedSolid, Vec<ShellLoadReport>), LoadError> {
+    ) -> Result<StepSolidImport<StepCompressedTrimmedSolid>, LoadError> {
         let PlaceHolder::Ref(Name::Entity(outer_idx)) = &solid.outer else {
             return Err("failed to reference `solid.outer`".into());
         };
-        let outer_shell = self.shell.get(outer_idx).map_or_else(
-            || {
-                self.oriented_shell.get(outer_idx).map_or_else(
-                    || Err("failed to reference `solid.outer`".into()),
-                    |step_shell| self.to_compressed_trimmed_shell_reported(step_shell),
-                )
-            },
-            |step_shell| self.to_compressed_trimmed_shell_reported(step_shell),
-        )?;
-        let mut boundaries = vec![outer_shell.0];
-        let mut reports = vec![outer_shell.1];
+        let mut conversions = vec![self.trimmed_shell_conversion_by_id(*outer_idx)?];
         for inner in &solid.voids {
             let PlaceHolder::Ref(Name::Entity(inner_idx)) = inner else {
                 return Err("failed to reference a member of `solid.voids`".into());
             };
-            let (shell, report) = if let Some(shell) = self.shell.get(inner_idx) {
-                self.to_compressed_trimmed_shell_reported(shell)?
-            } else if let Some(oriented_shell) = self.oriented_shell.get(inner_idx) {
-                self.to_compressed_trimmed_shell_reported(oriented_shell)?
-            } else {
-                return Err("failed to reference a member of `solid.voids`".into());
-            };
-            boundaries.push(shell);
-            reports.push(report);
+            conversions.push(self.trimmed_shell_conversion_by_id(*inner_idx)?);
         }
-        Ok((
-            CompressedTrimmedSolid {
+
+        let mut assigner = StableIdAssigner::default();
+        let mut provenance = StepTopologyProvenance::default();
+        let mut boundaries = Vec::with_capacity(conversions.len());
+        let mut shell_reports = Vec::with_capacity(conversions.len());
+        for conversion in conversions {
+            let ShellConversion {
+                mut shell,
+                report,
+                sources,
+            } = conversion;
+            let counts = (shell.vertices.len(), shell.edges.len(), shell.faces.len());
+            let stable_ids = assign_shell_sources(&mut assigner, sources, counts, &mut provenance)?;
+            shell.vertex_stable_ids = Some(stable_ids.vertices);
+            shell.edge_stable_ids = Some(stable_ids.edges);
+            shell.face_stable_ids = Some(stable_ids.faces);
+            boundaries.push(shell);
+            shell_reports.push(report);
+        }
+        Ok(StepSolidImport {
+            solid: CompressedTrimmedSolid {
                 boundaries,
-                id_allocator: None,
+                id_allocator: Some(assigner.into_allocator()),
                 attributes: None,
             },
-            reports,
-        ))
+            shell_reports,
+            provenance,
+        })
+    }
+
+    /// [`Self::to_compressed_trimmed_solid`] plus one [`ShellLoadReport`] per boundary.
+    ///
+    /// This wrapper discards only the source-provenance journal from
+    /// [`Self::to_compressed_trimmed_solid_import`]; exact trims and imported
+    /// stable identity remain on the returned solid.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or
+    /// converted, or if the stable-ID space is exhausted.
+    pub fn to_compressed_trimmed_solid_reported(
+        &self,
+        solid: &ManifoldSolidBrepHolder,
+    ) -> Result<(StepCompressedTrimmedSolid, Vec<ShellLoadReport>), LoadError> {
+        let StepSolidImport {
+            solid,
+            shell_reports,
+            provenance: _,
+        } = self.to_compressed_trimmed_solid_import(solid)?;
+        Ok((solid, shell_reports))
     }
 
     /// Extracts [`Curve3D`] curves from a [`GeometricCurveSet`].
@@ -1468,21 +1785,12 @@ impl StepShell for ShellHolder {
         table: &Table,
     ) -> Result<(CompressedShell<Point3, Curve3D, Surface>, ShellLoadReport), StepConvertingError>
     {
-        let sink = LossSink::default();
-        let (vertices, vidx_map) = table.shell_vertices(self, &sink);
-        let (edges, eidx_map) = table.shell_edges(self, &vidx_map, &sink);
-        let faces = table.shell_faces(self, &eidx_map, &sink);
-        Ok((
-            CompressedShell {
-                vertices,
-                edges,
-                faces,
-                vertex_stable_ids: None,
-                edge_stable_ids: None,
-                face_stable_ids: None,
-            },
-            sink.into_report(),
-        ))
+        let ShellConversion {
+            shell,
+            report,
+            sources: _,
+        } = table.shell_conversion(self);
+        Ok((shell, report))
     }
 
     fn to_compressed_trimmed_shell_reported(
@@ -1495,21 +1803,12 @@ impl StepShell for ShellHolder {
         ),
         StepConvertingError,
     > {
-        let sink = LossSink::default();
-        let (vertices, vidx_map) = table.shell_vertices(self, &sink);
-        let (edges, eidx_map) = table.shell_edges(self, &vidx_map, &sink);
-        let faces = table.shell_trimmed_faces(self, &edges, &eidx_map, &sink);
-        Ok((
-            CompressedTrimmedShell {
-                vertices,
-                edges,
-                faces,
-                vertex_stable_ids: None,
-                edge_stable_ids: None,
-                face_stable_ids: None,
-            },
-            sink.into_report(),
-        ))
+        let ShellConversion {
+            shell,
+            report,
+            sources: _,
+        } = table.trimmed_shell_conversion(self);
+        Ok((shell, report))
     }
 }
 
@@ -1519,19 +1818,12 @@ impl StepShell for OrientedShellHolder {
         table: &Table,
     ) -> Result<(CompressedShell<Point3, Curve3D, Surface>, ShellLoadReport), StepConvertingError>
     {
-        let PlaceHolder::Ref(Name::Entity(idx)) = &self.shell_element else {
-            return Err("failed to reference shell".into());
-        };
-        let Some(shell) = table.shell.get(idx) else {
-            return Err("failed to reference shell".into());
-        };
-        let (mut res, report) = shell.to_compressed_shell_reported(table)?;
-        if !self.orientation {
-            for face in &mut res.faces {
-                face.orientation = !face.orientation;
-            }
-        }
-        Ok((res, report))
+        let ShellConversion {
+            shell,
+            report,
+            sources: _,
+        } = table.oriented_shell_conversion(self)?;
+        Ok((shell, report))
     }
 
     fn to_compressed_trimmed_shell_reported(
@@ -1544,19 +1836,12 @@ impl StepShell for OrientedShellHolder {
         ),
         StepConvertingError,
     > {
-        let PlaceHolder::Ref(Name::Entity(idx)) = &self.shell_element else {
-            return Err("failed to reference shell".into());
-        };
-        let Some(shell) = table.shell.get(idx) else {
-            return Err("failed to reference shell".into());
-        };
-        let (mut res, report) = shell.to_compressed_trimmed_shell_reported(table)?;
-        if !self.orientation {
-            res.faces.iter_mut().for_each(|face| {
-                face.orientation = !face.orientation;
-            });
-        }
-        Ok((res, report))
+        let ShellConversion {
+            shell,
+            report,
+            sources: _,
+        } = table.oriented_trimmed_shell_conversion(self)?;
+        Ok((shell, report))
     }
 }
 
