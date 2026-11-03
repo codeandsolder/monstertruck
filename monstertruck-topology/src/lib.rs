@@ -382,6 +382,8 @@ pub mod attributes;
 pub use attributes::{AttributeValue, ElementAttributes, SolidAttributes};
 
 pub mod compress;
+/// StableId-addressed transactional surgery for compressed exact-trim topology.
+pub mod compressed_surgery;
 /// Repair and canonicalization passes for malformed or intermediate topology.
 pub mod repair;
 pub use compress::SolidHashOptions;
