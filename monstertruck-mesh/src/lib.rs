@@ -110,15 +110,18 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for Faces<V> {
         #[derive(Deserialize)]
         #[serde(rename = "Faces")]
         struct FacesRepr<V> {
-            tri_faces: Vec<[V; 3]>,
-            quad_faces: Vec<[V; 4]>,
-            other_faces: Vec<Vec<V>>,
+            #[serde(rename = "tri_faces")]
+            triangles: Vec<[V; 3]>,
+            #[serde(rename = "quad_faces")]
+            quads: Vec<[V; 4]>,
+            #[serde(rename = "other_faces")]
+            other: Vec<Vec<V>>,
         }
 
         let FacesRepr {
-            mut tri_faces,
-            mut quad_faces,
-            other_faces,
+            triangles: mut tri_faces,
+            quads: mut quad_faces,
+            other: other_faces,
         } = FacesRepr::deserialize(deserializer)?;
         let mut ngons = Vec::with_capacity(other_faces.len());
         for face in other_faces {

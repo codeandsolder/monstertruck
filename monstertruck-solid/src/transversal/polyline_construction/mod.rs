@@ -209,14 +209,16 @@ impl CoordinateIndex {
         }
         let grid = DEFAULT_NUMERICAL_TOLERANCES.boolean_polyline_grid_factor * KERNEL_EPSILON;
         let scaled = (value + KERNEL_EPSILON) / grid;
-        Some(match scaled.to_i64() {
-            Some(index) => Self::Bucket(index),
-            // Beyond the i64 grid domain, adjacent representable f64 values are
-            // already farther apart than the kernel tolerance. Exact bits are
-            // therefore a lossless key for this coordinate while the remaining
-            // coordinates can still use normal tolerance buckets.
-            None => Self::Exact(value.to_bits()),
-        })
+        Some(scaled.to_i64().map_or_else(
+            || {
+                // Beyond the i64 grid domain, adjacent representable f64 values are
+                // already farther apart than the kernel tolerance. Exact bits are
+                // therefore a lossless key for this coordinate while the remaining
+                // coordinates can still use normal tolerance buckets.
+                Self::Exact(value.to_bits())
+            },
+            Self::Bucket,
+        ))
     }
 }
 

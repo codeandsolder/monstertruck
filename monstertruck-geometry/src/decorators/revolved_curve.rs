@@ -273,9 +273,13 @@ impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
     #[inline]
     fn fixed_endpoint_sign(&self, t: f64) -> Option<f64> {
         let (t0, t1) = self.curve.range_tuple();
-        if t == t0 && self.revolution.contains(self.curve.front()) {
+        if matches!(t.partial_cmp(&t0), Some(std::cmp::Ordering::Equal))
+            && self.revolution.contains(self.curve.front())
+        {
             Some(1.0)
-        } else if t == t1 && self.revolution.contains(self.curve.back()) {
+        } else if matches!(t.partial_cmp(&t1), Some(std::cmp::Ordering::Equal))
+            && self.revolution.contains(self.curve.back())
+        {
             Some(-1.0)
         } else {
             None
@@ -393,12 +397,12 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
             let transverse_speed = transverse.magnitude();
             let radial_2 = if transverse_speed > 0.0 {
                 sign * transverse.dot(transverse_2) / transverse_speed
-            } else if transverse_speed == 0.0 {
+            } else if transverse_speed.is_nan() {
+                f64::NAN
+            } else {
                 // If the transverse first derivative also vanishes, the first
                 // non-zero radial term is quadratic: |a_perp| * dt^2 / 2.
                 transverse_2.magnitude()
-            } else {
-                f64::NAN
             };
             return Vector2::new(axial_2, radial_2);
         }
