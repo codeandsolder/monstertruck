@@ -174,6 +174,142 @@ fn stable_id_lookup_requires_one_assigned_occurrence() {
 }
 
 #[test]
+fn compact_unused_topology_preserves_sidecars_and_plain_trimmed_parity() -> Result<()> {
+    let trimmed = CompressedTrimmedShell::<usize, usize, (), ()> {
+        vertices: vec![100, 101, 102, 103, 104],
+        edges: vec![
+            CompressedEdge {
+                vertices: (0, 1),
+                curve: 200,
+            },
+            CompressedEdge {
+                vertices: (1, 4),
+                curve: 201,
+            },
+            CompressedEdge {
+                vertices: (1, 2),
+                curve: 202,
+            },
+            CompressedEdge {
+                vertices: (2, 0),
+                curve: 203,
+            },
+        ],
+        faces: vec![CompressedTrimmedFace {
+            boundaries: vec![vec![
+                CompressedEdgeUse {
+                    index: 0,
+                    orientation: true,
+                    trim_curve: Some(()),
+                },
+                CompressedEdgeUse {
+                    index: 2,
+                    orientation: true,
+                    trim_curve: Some(()),
+                },
+                CompressedEdgeUse {
+                    index: 3,
+                    orientation: true,
+                    trim_curve: Some(()),
+                },
+            ]],
+            orientation: true,
+            surface: (),
+        }],
+        vertex_stable_ids: Some((10..15).map(StableId::new).collect()),
+        edge_stable_ids: Some((20..24).map(StableId::new).collect()),
+        face_stable_ids: Some(vec![StableId::new(30)]),
+    };
+    let mut expected_plain = trimmed.clone().erase_trims();
+    let mut compacted = trimmed;
+
+    compacted.compact_unused_topology()?;
+    expected_plain.compact_unused_topology()?;
+
+    assert_eq!(compacted.vertices, vec![100, 101, 102]);
+    assert_eq!(
+        compacted.vertex_stable_ids,
+        Some(vec![
+            StableId::new(10),
+            StableId::new(11),
+            StableId::new(12)
+        ])
+    );
+    assert_eq!(
+        compacted
+            .edges
+            .iter()
+            .map(|edge| edge.curve)
+            .collect::<Vec<_>>(),
+        vec![200, 202, 203]
+    );
+    assert_eq!(
+        compacted.edge_stable_ids,
+        Some(vec![
+            StableId::new(20),
+            StableId::new(22),
+            StableId::new(23)
+        ])
+    );
+    assert_eq!(
+        compacted.faces[0].boundaries[0]
+            .iter()
+            .map(|edge_use| edge_use.index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert_eq!(compacted.clone().erase_trims(), expected_plain);
+    Ok(())
+}
+
+#[test]
+fn compact_unused_topology_refuses_invalid_references_without_mutation() {
+    let mut bad_edge_use = CompressedTrimmedShell::<(), (), (), ()> {
+        vertices: vec![(), ()],
+        edges: vec![CompressedEdge {
+            vertices: (0, 1),
+            curve: (),
+        }],
+        faces: vec![CompressedTrimmedFace {
+            boundaries: vec![vec![CompressedEdgeUse {
+                index: 7,
+                orientation: true,
+                trim_curve: None,
+            }]],
+            orientation: true,
+            surface: (),
+        }],
+        vertex_stable_ids: Some(vec![StableId::new(1), StableId::new(2)]),
+        edge_stable_ids: Some(vec![StableId::new(3)]),
+        face_stable_ids: Some(vec![StableId::new(4)]),
+    };
+    let before = bad_edge_use.clone();
+    assert_eq!(
+        bad_edge_use.compact_unused_topology(),
+        Err(Error::CompressedReferenceOutOfBounds {
+            entity: "edge",
+            index: 7,
+            len: 1,
+        })
+    );
+    assert_eq!(bad_edge_use, before);
+
+    let mut bad_vertex = before;
+    bad_vertex.faces[0].boundaries[0][0].index = 0;
+    bad_vertex.edges[0].vertices.1 = 9;
+    let before = bad_vertex.clone();
+    assert_eq!(
+        bad_vertex.compact_unused_topology(),
+        Err(Error::CompressedReferenceOutOfBounds {
+            entity: "vertex",
+            index: 9,
+            len: 2,
+        })
+    );
+    assert_eq!(bad_vertex, before);
+}
+
+#[test]
 fn discarding_topology_identity_clears_sidecars_allocator_and_attributes() {
     let mut solid = CompressedTrimmedSolid::<(), (), (), ()> {
         boundaries: vec![CompressedTrimmedShell {

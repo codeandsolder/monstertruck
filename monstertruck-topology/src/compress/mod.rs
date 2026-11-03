@@ -319,6 +319,68 @@ fn find_stable_id_location<B: StableIdIndexedShell>(
     Ok(found.unwrap_or(StableIdLocation::Missing))
 }
 
+fn compact_items_with_stable_ids<T>(
+    items: &mut Vec<T>,
+    stable_ids: &mut Option<Vec<StableId>>,
+    used: &[bool],
+) -> Vec<usize> {
+    debug_assert_eq!(items.len(), used.len());
+    let old_items = std::mem::take(items);
+    let old_ids = stable_ids.take();
+    let mut retained = Vec::with_capacity(used.iter().filter(|&&keep| keep).count());
+    let mut retained_ids = old_ids
+        .as_ref()
+        .map(|_| Vec::with_capacity(retained.capacity()));
+    let mut remap = vec![usize::MAX; old_items.len()];
+    for (old_index, item) in old_items.into_iter().enumerate() {
+        if !used[old_index] {
+            continue;
+        }
+        remap[old_index] = retained.len();
+        retained.push(item);
+        if let (Some(old_ids), Some(new_ids)) = (&old_ids, &mut retained_ids) {
+            new_ids.push(old_ids[old_index]);
+        }
+    }
+    *items = retained;
+    *stable_ids = retained_ids;
+    remap
+}
+
+fn compact_edge_vertex_storage<P, C>(
+    vertices: &mut Vec<P>,
+    edges: &mut Vec<CompressedEdge<C>>,
+    vertex_stable_ids: &mut Option<Vec<StableId>>,
+    edge_stable_ids: &mut Option<Vec<StableId>>,
+    used_edges: &[bool],
+) -> Result<Vec<usize>> {
+    debug_assert_eq!(edges.len(), used_edges.len());
+    let mut used_vertices = vec![false; vertices.len()];
+    for (edge_index, edge) in edges.iter().enumerate() {
+        if !used_edges[edge_index] {
+            continue;
+        }
+        for vertex in <[usize; 2]>::from(edge.vertices) {
+            let Some(used) = used_vertices.get_mut(vertex) else {
+                return Err(Error::CompressedReferenceOutOfBounds {
+                    entity: "vertex",
+                    index: vertex,
+                    len: vertices.len(),
+                });
+            };
+            *used = true;
+        }
+    }
+
+    let edge_remap = compact_items_with_stable_ids(edges, edge_stable_ids, used_edges);
+    let vertex_remap = compact_items_with_stable_ids(vertices, vertex_stable_ids, &used_vertices);
+    for edge in edges {
+        edge.vertices.0 = vertex_remap[edge.vertices.0];
+        edge.vertices.1 = vertex_remap[edge.vertices.1];
+    }
+    Ok(edge_remap)
+}
+
 fn retain_with_stable_ids<T>(
     items: &mut Vec<T>,
     stable_ids: &mut Option<Vec<StableId>>,
@@ -804,6 +866,57 @@ where
 }
 
 impl<P, C, S, T> CompressedTrimmedShell<P, C, S, T> {
+    /// Removes edges and vertices unused by any face boundary, remapping indices and stable IDs.
+    ///
+    /// The operation validates all stable-ID sidecar cardinalities and compressed references before
+    /// mutating the shell. Face order and face stable IDs are unchanged.
+    ///
+    /// # Errors
+    /// Returns a typed topology error when a stable-ID sidecar is malformed or a face/edge
+    /// references an out-of-range edge/vertex index.
+    pub fn compact_unused_topology(&mut self) -> Result<()> {
+        validate_stable_id_counts(
+            self.vertex_stable_ids.as_deref(),
+            self.vertices.len(),
+            self.edge_stable_ids.as_deref(),
+            self.edges.len(),
+            self.face_stable_ids.as_deref(),
+            self.faces.len(),
+        )?;
+        let mut used_edges = vec![false; self.edges.len()];
+        for edge_use in self
+            .faces
+            .iter()
+            .flat_map(|face| face.boundaries.iter())
+            .flatten()
+        {
+            let Some(used) = used_edges.get_mut(edge_use.index) else {
+                return Err(Error::CompressedReferenceOutOfBounds {
+                    entity: "edge",
+                    index: edge_use.index,
+                    len: self.edges.len(),
+                });
+            };
+            *used = true;
+        }
+        let edge_remap = compact_edge_vertex_storage(
+            &mut self.vertices,
+            &mut self.edges,
+            &mut self.vertex_stable_ids,
+            &mut self.edge_stable_ids,
+            &used_edges,
+        )?;
+        for edge_use in self
+            .faces
+            .iter_mut()
+            .flat_map(|face| face.boundaries.iter_mut())
+            .flatten()
+        {
+            edge_use.index = edge_remap[edge_use.index];
+        }
+        Ok(())
+    }
+
     /// Discards all stable topology identity carried by this shell.
     ///
     /// Use this before arbitrary topology surgery that cannot preserve or remap the
@@ -918,6 +1031,57 @@ impl<P, C, S, T> CompressedTrimmedSolid<P, C, S, T> {
 }
 
 impl<P, C, S> CompressedShell<P, C, S> {
+    /// Removes edges and vertices unused by any face boundary, remapping indices and stable IDs.
+    ///
+    /// The operation validates all stable-ID sidecar cardinalities and compressed references before
+    /// mutating the shell. Face order and face stable IDs are unchanged.
+    ///
+    /// # Errors
+    /// Returns a typed topology error when a stable-ID sidecar is malformed or a face/edge
+    /// references an out-of-range edge/vertex index.
+    pub fn compact_unused_topology(&mut self) -> Result<()> {
+        validate_stable_id_counts(
+            self.vertex_stable_ids.as_deref(),
+            self.vertices.len(),
+            self.edge_stable_ids.as_deref(),
+            self.edges.len(),
+            self.face_stable_ids.as_deref(),
+            self.faces.len(),
+        )?;
+        let mut used_edges = vec![false; self.edges.len()];
+        for edge_use in self
+            .faces
+            .iter()
+            .flat_map(|face| face.boundaries.iter())
+            .flatten()
+        {
+            let Some(used) = used_edges.get_mut(edge_use.index) else {
+                return Err(Error::CompressedReferenceOutOfBounds {
+                    entity: "edge",
+                    index: edge_use.index,
+                    len: self.edges.len(),
+                });
+            };
+            *used = true;
+        }
+        let edge_remap = compact_edge_vertex_storage(
+            &mut self.vertices,
+            &mut self.edges,
+            &mut self.vertex_stable_ids,
+            &mut self.edge_stable_ids,
+            &used_edges,
+        )?;
+        for edge_use in self
+            .faces
+            .iter_mut()
+            .flat_map(|face| face.boundaries.iter_mut())
+            .flatten()
+        {
+            edge_use.index = edge_remap[edge_use.index];
+        }
+        Ok(())
+    }
+
     /// Discards all stable topology identity carried by this shell.
     pub fn discard_topology_identity(&mut self) {
         self.vertex_stable_ids = None;

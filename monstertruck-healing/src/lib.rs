@@ -889,48 +889,30 @@ fn dedup_pass_through_trimmed<C, S, T>(
     shell: &mut CompressedTrimmedShell<Point3, C, S, T>,
     tol: f64,
 ) where
-    C: ParametricCurve3D<Point = Point3> + BoundedCurve<Point = Point3>,
+    C: ParametricCurve3D<Point = Point3> + BoundedCurve<Point = Point3> + Clone,
+    S: Clone,
+    T: Clone,
 {
-    let mut use_orientations: Vec<Vec<(usize, bool)>> = vec![Vec::new(); shell.edges.len()];
-    for (face_index, face) in shell.faces.iter().enumerate() {
+    let mut candidate = shell.clone();
+    let mut use_orientations: Vec<Vec<(usize, bool)>> = vec![Vec::new(); candidate.edges.len()];
+    for (face_index, face) in candidate.faces.iter().enumerate() {
         for edge_use in face.boundaries.iter().flatten() {
             if let Some(uses) = use_orientations.get_mut(edge_use.index) {
                 uses.push((face_index, edge_use.orientation));
             }
         }
     }
-    let remap = dedup_coincident_pass_through_edges(&shell.edges, &use_orientations, tol);
+    let remap = dedup_coincident_pass_through_edges(&candidate.edges, &use_orientations, tol);
     if remap.is_empty() {
         return;
     }
-    for face in &mut shell.faces {
+    for face in &mut candidate.faces {
         for wire in &mut face.boundaries {
             remap_trimmed_edge_uses_for_dedup(wire, &remap);
         }
     }
-
-    // Orphaned duplicates would fail the compressed shell's reference validation.
-    let used: std::collections::BTreeSet<usize> = shell
-        .faces
-        .iter()
-        .flat_map(|face| face.boundaries.iter())
-        .flat_map(|wire| wire.iter().map(|edge_use| edge_use.index))
-        .collect();
-    let mut new_indices = vec![usize::MAX; shell.edges.len()];
-    let mut compacted = Vec::with_capacity(used.len());
-    for (index, edge) in std::mem::take(&mut shell.edges).into_iter().enumerate() {
-        if used.contains(&index) {
-            new_indices[index] = compacted.len();
-            compacted.push(edge);
-        }
-    }
-    shell.edges = compacted;
-    for face in &mut shell.faces {
-        for wire in &mut face.boundaries {
-            for edge_use in wire {
-                edge_use.index = new_indices[edge_use.index];
-            }
-        }
+    if candidate.compact_unused_topology().is_ok() {
+        *shell = candidate;
     }
 }
 

@@ -65,6 +65,16 @@ pub enum Error {
         /// Number of stable IDs in the sidecar.
         actual: usize,
     },
+    /// A compressed topology reference points outside its backing array.
+    #[error("Compressed {entity} reference index {index} is out of bounds for {len} entries.")]
+    CompressedReferenceOutOfBounds {
+        /// Entity class referenced by the invalid index.
+        entity: &'static str,
+        /// Invalid referenced index.
+        index: usize,
+        /// Number of entries available in the backing array.
+        len: usize,
+    },
     /// The empty shell cannot construct a solid.
     /// # Examples
     /// ```
