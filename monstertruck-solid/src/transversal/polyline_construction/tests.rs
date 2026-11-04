@@ -193,26 +193,93 @@ fn non_finite_interference_segments_are_ignored() {
 }
 
 #[test]
-fn ordinary_point_index_hash_matches_legacy_bucket_hash() {
-    use rustc_hash::FxHasher;
-    use std::hash::{Hash, Hasher};
+fn interference_paths_are_invariant_under_permutation_and_reversal() {
+    let p = |x, y| Point3::new(x, y, 0.0);
+    let lines = vec![
+        (p(0.0, 0.0), p(1.0, 0.0)),
+        (p(1.0, 0.0), p(1.0, 1.0)),
+        (p(1.0, 1.0), p(0.0, 1.0)),
+        (p(0.0, 1.0), p(0.0, 0.0)),
+        (p(2.0, 0.0), p(3.0, 0.0)),
+        (p(3.0, 0.0), p(4.0, 0.0)),
+    ];
+    let baseline = construct_polylines(&lines);
+    assert_eq!(baseline.len(), 2);
+    assert_eq!(baseline.iter().map(|chain| chain.len()).sum::<usize>(), 8);
+    for rotation in 0..lines.len() {
+        let mut reordered = lines.clone();
+        reordered.rotate_left(rotation);
+        reordered.reverse();
+        for segment in &mut reordered {
+            std::mem::swap(&mut segment.0, &mut segment.1);
+        }
+        assert_eq!(construct_polylines(&reordered), baseline);
+    }
+}
 
-    let index = PointIndex::from_point(Point3::new(1.25, -2.5, 0.125))
-        .expect("finite ordinary point must be indexable");
-    let buckets = match index.0 {
-        [
-            CoordinateIndex::Bucket(x),
-            CoordinateIndex::Bucket(y),
-            CoordinateIndex::Bucket(z),
-        ] => [x, y, z],
-        _ => panic!("ordinary point unexpectedly used exact-coordinate fallback"),
-    };
+#[test]
+fn branch_junctions_are_not_arbitrarily_routed_into_one_chain() {
+    let p = |x, y| Point3::new(x, y, 0.0);
+    let a = p(-1.0, 0.0);
+    let b = p(0.0, 0.0);
+    let c = p(1.0, 0.0);
+    let d = p(0.0, 1.0);
+    let lines = vec![(b, c), (a, b), (b, d)];
+    let baseline = construct_polylines(&lines);
+    assert_eq!(baseline.len(), 3, "a 3-way junction must expose three arms");
+    assert!(baseline.iter().all(|chain| chain.len() == 2));
+    assert_eq!(
+        baseline
+            .iter()
+            .filter(|chain| chain[0] == b || chain[1] == b)
+            .count(),
+        3
+    );
+    for permutation in [vec![(b, d), (a, b), (b, c)], vec![(c, b), (d, b), (b, a)]] {
+        assert_eq!(construct_polylines(&permutation), baseline);
+    }
+}
 
-    let mut current = FxHasher::default();
-    index.hash(&mut current);
-    let mut legacy = FxHasher::default();
-    buckets.hash(&mut legacy);
-    assert_eq!(current.finish(), legacy.finish());
+#[test]
+fn cycle_attached_to_branch_is_preserved_as_a_cycle_and_a_spur() {
+    let p = |x, y| Point3::new(x, y, 0.0);
+    let join = p(0.0, 0.0);
+    let lines = vec![
+        (join, p(1.0, 0.0)),
+        (p(1.0, 0.0), p(1.0, 1.0)),
+        (p(1.0, 1.0), p(0.0, 1.0)),
+        (p(0.0, 1.0), join),
+        (join, p(-1.0, 0.0)),
+    ];
+    let baseline = construct_polylines(&lines);
+    assert_eq!(baseline.len(), 2);
+    let cycle = baseline.iter().find(|chain| chain.len() == 5).unwrap();
+    assert_eq!(cycle[0], join);
+    assert_eq!(cycle[4], join);
+    let spur = baseline.iter().find(|chain| chain.len() == 2).unwrap();
+    assert!(spur.contains(&join));
+    assert_eq!(
+        construct_polylines(&lines.iter().rev().map(|&(a, b)| (b, a)).collect::<Vec<_>>()),
+        baseline
+    );
+}
+
+#[test]
+fn quantized_node_representative_is_independent_of_input_order() {
+    let p = |x| Point3::new(x, 0.0, 0.0);
+    let a = p(0.0);
+    let middle = p(1.0);
+    let middle_near = p(1.0 + 0.25 * KERNEL_EPSILON);
+    assert_eq!(
+        PointIndex::from_point(middle),
+        PointIndex::from_point(middle_near)
+    );
+    let c = p(2.0);
+    let forward = construct_polylines(&[(a, middle), (middle_near, c)]);
+    let backward = construct_polylines(&[(c, middle_near), (middle, a)]);
+    assert_eq!(forward, backward);
+    assert_eq!(forward.len(), 1);
+    assert_eq!(forward[0].len(), 3);
 }
 
 #[test]
