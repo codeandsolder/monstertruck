@@ -13,6 +13,7 @@ use super::{
     Vector4, algo, env,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
+use monstertruck_geometry::analytic_carrier::{AnalyticCarrier, CarrierDomainRelation};
 
 /// 3-dimensional surfaces
 #[derive(
@@ -55,6 +56,58 @@ pub enum Surface {
     /// [`Surface::Sphere`]; spindle tori never reach this variant.
     #[serde(rename = "ToroidalSurface")]
     Torus(Processor<Torus, Matrix4>),
+}
+
+/// Certify the global identity of a kernel-native analytic carrier.
+///
+/// This differs from STEP-surface comparison only in how its typed geometry
+/// is decoded. The support relation, transform validation and orientation
+/// contract come from `monstertruck_geometry::analytic_carrier` in both cases.
+///
+/// A globally oriented analytic carrier is not a boundary or volume proof.
+/// Spline, T-spline and non-linear revolution carriers are not promoted by
+/// numerical sampling. A spline may be provably coplanar yet lack a proven
+/// globally consistent chart Jacobian, so it is likewise refused here.
+#[must_use]
+pub fn analytic_carrier(surface: &Surface) -> Option<AnalyticCarrier> {
+    match surface {
+        Surface::Plane(plane) => AnalyticCarrier::plane(plane),
+        Surface::Sphere(sphere) => AnalyticCarrier::sphere(sphere),
+        Surface::Torus(torus) => AnalyticCarrier::torus(torus),
+        Surface::Revolution(revolution) => match revolution.entity().entity_curve() {
+            Curve::Line(line) => AnalyticCarrier::linear_revolution(
+                *line,
+                revolution.entity().origin(),
+                revolution.entity().axis(),
+                *revolution.transform(),
+                revolution.orientation(),
+            ),
+            Curve::BsplineCurve(_)
+            | Curve::NurbsCurve(_)
+            | Curve::ParameterCurve(_)
+            | Curve::Intersection(_) => None,
+        },
+        Surface::BsplineSurface(_) | Surface::NurbsSurface(_) | Surface::Tspline(_) => None,
+    }
+}
+
+/// Compare two kernel-native analytic surface supports and their orientation.
+///
+/// A successful result certifies *only* untrimmed carrier identity. Topology
+/// proof must additionally establish valid bounded face loops, complete edge
+/// incidence and curve/surface intersection loci.
+#[must_use]
+pub fn same_analytic_surface_domain(
+    first: &Surface,
+    second: &Surface,
+    linear_tolerance: f64,
+    angular_tolerance: f64,
+) -> Option<CarrierDomainRelation> {
+    analytic_carrier(first)?.same_domain(
+        analytic_carrier(second)?,
+        linear_tolerance,
+        angular_tolerance,
+    )
 }
 
 macro_rules! derive_surface_method {
@@ -620,5 +673,86 @@ mod extrusion_same_geometry_tests {
             let actual = converted.evaluate(u, v);
             assert!((actual - expected).magnitude() < KERNEL_EPSILON);
         }
+    }
+}
+
+#[cfg(test)]
+mod analytic_carrier_tests {
+    use super::*;
+    use monstertruck_geometry::analytic_carrier::CarrierDomainRelation;
+    use monstertruck_geometry::prelude::Line;
+
+    fn cylinder(radius: f64, backwards: bool) -> Surface {
+        let first = Point3::new(radius, 0.0, if backwards { 1.0 } else { 0.0 });
+        let second = Point3::new(radius, 0.0, if backwards { 0.0 } else { 1.0 });
+        let revolution = RevolutionSurface::by_revolution(
+            Curve::Line(Line(first, second)),
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+        );
+        Surface::Revolution(Processor::new(revolution))
+    }
+
+    #[test]
+    fn native_plane_support_and_orientation_are_structurally_certified() {
+        let plane = Surface::Plane(Plane::xy());
+        assert_eq!(
+            same_analytic_surface_domain(&plane, &plane, 1.0e-9, 1.0e-9),
+            Some(CarrierDomainRelation::SameOrientation),
+        );
+        let shifted = Surface::Plane(Plane::new(
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(0.0, 1.0, 1.0),
+        ));
+        assert_eq!(
+            same_analytic_surface_domain(&plane, &shifted, 1.0e-9, 1.0e-9),
+            None,
+        );
+    }
+
+    #[test]
+    fn native_revolution_classifies_cylinders_and_opposite_profile_sense() {
+        let forward = cylinder(2.0, false);
+        let backward = cylinder(2.0, true);
+        assert_eq!(
+            same_analytic_surface_domain(&forward, &backward, 1.0e-9, 1.0e-9),
+            Some(CarrierDomainRelation::ReversedOrientation),
+        );
+        assert_eq!(
+            same_analytic_surface_domain(&forward, &cylinder(2.01, false), 1.0e-9, 1.0e-9),
+            None,
+        );
+    }
+
+    #[test]
+    fn native_spheres_are_support_equal_but_different_radii_are_not() {
+        let sphere = |radius| {
+            Surface::Sphere(Processor::new(Sphere::new(
+                Point3::new(0.0, 0.0, 0.0),
+                radius,
+            )))
+        };
+        assert_eq!(
+            same_analytic_surface_domain(&sphere(2.0), &sphere(2.0), 1.0e-9, 1.0e-9),
+            Some(CarrierDomainRelation::SameOrientation),
+        );
+        assert_eq!(
+            same_analytic_surface_domain(&sphere(2.0), &sphere(3.0), 1.0e-9, 1.0e-9),
+            None,
+        );
+    }
+
+    #[test]
+    fn invalid_tolerances_and_unsupported_splines_cannot_prove_equivalence() {
+        let plane = Surface::Plane(Plane::xy());
+        assert_eq!(
+            same_analytic_surface_domain(&plane, &plane, f64::NAN, 1.0e-9),
+            None,
+        );
+        assert_eq!(
+            same_analytic_surface_domain(&plane, &plane, 1.0e-9, -1.0),
+            None,
+        );
     }
 }
