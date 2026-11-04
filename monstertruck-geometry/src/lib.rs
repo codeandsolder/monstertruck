@@ -116,6 +116,8 @@ pub mod t_spline;
 
 /// Checked geometric identities and orientation for analytic surface carriers.
 pub mod analytic_carrier;
+/// Non-sampling, polynomial-bounded curve incidence on analytic carriers.
+pub mod analytic_curve_incidence;
 mod analytic_surface;
 /// [`DeterministicContentHash`](monstertruck_core::DeterministicContentHash) impls for geometry types.
 mod content_hash_impls;
