@@ -198,6 +198,69 @@ fn well_conditioned(points: &[[f64; 4]], support: AnalyticSupport, tolerance: f6
     resolution_floor.is_finite() && tolerance > resolution_floor
 }
 
+fn cone_bound(
+    points: &[[f64; 4]],
+    apex: Point3,
+    axis: Vector3,
+    slope: f64,
+    positive_nappe: bool,
+    tolerance: f64,
+    min_w: f64,
+) -> Option<(Vec<f64>, f64)> {
+    if !finite_point(apex) || !valid_axis(axis) || !slope.is_finite() || slope <= 0.0 {
+        return None;
+    }
+    let axial = centered(points, apex, axis)?;
+    let min_axial = axial
+        .iter()
+        .zip(points)
+        .map(|(a, p)| {
+            if positive_nappe {
+                *a / p[3]
+            } else {
+                -*a / p[3]
+            }
+        })
+        .fold(f64::INFINITY, f64::min);
+    let min_r = slope * min_axial;
+    if !min_r.is_finite() || min_r <= tolerance {
+        return None;
+    }
+    cone(points, apex, axis, slope).map(|p| {
+        (
+            p,
+            tolerance * 2.0_f64.mul_add(min_r, -tolerance) * min_w * min_w,
+        )
+    })
+}
+
+fn torus_bound(
+    points: &[[f64; 4]],
+    center: Point3,
+    axis: Vector3,
+    major_radius: f64,
+    minor_radius: f64,
+    tolerance: f64,
+    min_w: f64,
+) -> Option<(Vec<f64>, f64)> {
+    if !finite_point(center)
+        || !valid_axis(axis)
+        || !major_radius.is_finite()
+        || !minor_radius.is_finite()
+        || major_radius <= minor_radius
+        || minor_radius <= tolerance
+    {
+        return None;
+    }
+    // F = (tube_distance^2-r^2)*((rho+R)^2+z^2-r^2).
+    // The second factor is >= R^2-r^2 for a genuine ring torus.
+    let limit = tolerance
+        * 2.0_f64.mul_add(minor_radius, -tolerance)
+        * minor_radius.mul_add(-minor_radius, major_radius * major_radius)
+        * min_w.powi(4);
+    torus(points, center, axis, major_radius, minor_radius).map(|p| (p, limit))
+}
+
 fn prove_span(points: &[[f64; 4]], support: AnalyticSupport, tolerance: f64) -> CurveIncidence {
     let min_w = points.iter().map(|p| p[3]).fold(f64::INFINITY, f64::min);
     if !min_w.is_finite() || min_w <= 0.0 || !well_conditioned(points, support, tolerance) {
@@ -245,58 +308,21 @@ fn prove_span(points: &[[f64; 4]], support: AnalyticSupport, tolerance: f64) -> 
             axis,
             slope,
             positive_nappe,
-        } => {
-            if !finite_point(apex) || !valid_axis(axis) || !slope.is_finite() || slope <= 0.0 {
-                return CurveIncidence::Unsupported;
-            }
-            let Some(axial) = centered(points, apex, axis) else {
-                return CurveIncidence::Unsupported;
-            };
-            let min_axial = axial
-                .iter()
-                .zip(points)
-                .map(|(a, p)| {
-                    if positive_nappe {
-                        *a / p[3]
-                    } else {
-                        -*a / p[3]
-                    }
-                })
-                .fold(f64::INFINITY, f64::min);
-            let min_r = slope * min_axial;
-            if !min_r.is_finite() || min_r <= tolerance {
-                return CurveIncidence::Unsupported;
-            }
-            cone(points, apex, axis, slope).map(|p| {
-                (
-                    p,
-                    tolerance * (2.0_f64.mul_add(min_r, -tolerance)) * min_w * min_w,
-                )
-            })
-        }
+        } => cone_bound(points, apex, axis, slope, positive_nappe, tolerance, min_w),
         AnalyticSupport::Torus {
             center,
             axis,
             major_radius,
             minor_radius,
-        } => {
-            if !finite_point(center)
-                || !valid_axis(axis)
-                || !major_radius.is_finite()
-                || !minor_radius.is_finite()
-                || major_radius <= minor_radius
-                || minor_radius <= tolerance
-            {
-                return CurveIncidence::Unsupported;
-            }
-            // F = (tube_distance^2-r^2)*((rho+R)^2+z^2-r^2).
-            // The latter factor is >= R^2-r^2 for a non-horn ring torus.
-            let limit = tolerance
-                * (2.0_f64.mul_add(minor_radius, -tolerance))
-                * (minor_radius.mul_add(-minor_radius, major_radius * major_radius))
-                * min_w.powi(4);
-            torus(points, center, axis, major_radius, minor_radius).map(|p| (p, limit))
-        }
+        } => torus_bound(
+            points,
+            center,
+            axis,
+            major_radius,
+            minor_radius,
+            tolerance,
+            min_w,
+        ),
     };
     let Some((poly, bound)) = result else {
         return CurveIncidence::Unsupported;
