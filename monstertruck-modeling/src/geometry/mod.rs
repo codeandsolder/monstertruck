@@ -44,4 +44,4 @@ mod surface;
 
 pub use curve::{Conic2D, Curve, Curve2D};
 pub use parameter_curves::{ToCompressedTrimmedParameterCurves, ToTrimmedParameterCurves};
-pub use surface::Surface;
+pub use surface::{Surface, same_analytic_surface_domain};

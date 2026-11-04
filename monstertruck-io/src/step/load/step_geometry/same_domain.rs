@@ -3,355 +3,47 @@ use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::*;
 use monstertruck_topology::repair::SurfaceDomainRelation;
 
-#[derive(Clone, Copy, Debug)]
-enum Support {
-    Plane {
-        origin: Point3,
-        normal: Vector3,
-    },
-    Sphere {
-        center: Point3,
-        radius: f64,
-    },
-    Cylinder {
-        origin: Point3,
-        axis: Vector3,
-        radius: f64,
-    },
-    Cone {
-        apex: Point3,
-        axis: Vector3,
-        slope: f64,
-    },
-    Torus {
-        center: Point3,
-        axis: Vector3,
-        major_radius: f64,
-        minor_radius: f64,
-    },
-}
+use monstertruck_geometry::analytic_carrier::{
+    AnalyticCarrier, AnalyticSupport, CarrierDomainRelation, similarity_scale,
+};
 
-#[inline]
-fn canonical_direction(mut vector: Vector3) -> Option<Vector3> {
-    let magnitude = vector.magnitude();
-    if !magnitude.is_finite() || magnitude <= KERNEL_EPSILON {
-        return None;
-    }
-    vector /= magnitude;
-    let flip = [vector.x, vector.y, vector.z]
-        .into_iter()
-        .find(|component| component.abs() > 64.0 * f64::EPSILON)
-        .is_some_and(|component| component < 0.0);
-    if flip {
-        vector = -vector;
-    }
-    Some(vector)
-}
-
-#[inline]
-fn similarity_scale(transform: Matrix4) -> Option<f64> {
-    if transform.x.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity
-        || transform.y.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity
-        || transform.z.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity
-        || (transform.w.w - 1.0).abs() > DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity
-    {
-        return None;
-    }
-
-    let columns = [
-        transform.x.truncate(),
-        transform.y.truncate(),
-        transform.z.truncate(),
-    ];
-    let scale = columns[0].magnitude();
-    if !scale.is_finite() || scale <= KERNEL_EPSILON {
-        return None;
-    }
-    let length_tolerance = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity * scale.max(1.0);
-    let dot_tolerance = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity * scale * scale;
-    if columns[1..].iter().any(|column| {
-        !column.magnitude().is_finite() || (column.magnitude() - scale).abs() > length_tolerance
-    }) || [(0, 1), (0, 2), (1, 2)]
-        .into_iter()
-        .any(|(left, right)| columns[left].dot(columns[right]).abs() > dot_tolerance)
-    {
-        return None;
-    }
-    Some(scale)
-}
-
-fn revolution_support(
-    surface: &Processor<RevolutionSurface<Line<Point3>>, Matrix4>,
-    cylinder: bool,
-) -> Option<Support> {
-    let transform = *surface.transform();
-    similarity_scale(transform)?;
-    let revolution = surface.entity();
-    let origin = transform.transform_point(revolution.origin());
-    let axis = canonical_direction(transform.transform_vector(revolution.axis()))?;
-    let Line(p0, p1) = *revolution.entity_curve();
-    let p0 = transform.transform_point(p0);
-    let p1 = transform.transform_point(p1);
-    let direction = p1 - p0;
-    let radial0 = (p0 - origin) - axis * (p0 - origin).dot(axis);
-    let radial_direction = direction - axis * direction.dot(axis);
-
-    if cylinder {
-        let scale = direction.magnitude().max(radial0.magnitude()).max(1.0);
-        if radial_direction.magnitude()
-            > DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity * scale
-        {
-            return None;
-        }
-        let radius = radial0.magnitude();
-        (radius > KERNEL_EPSILON).then_some(Support::Cylinder {
-            origin,
-            axis,
-            radius,
-        })
-    } else {
-        let radial_direction2 = radial_direction.magnitude2();
-        if radial_direction2 <= KERNEL_EPSILON.powi(2) {
-            return None;
-        }
-        // Intersect the generating line with the revolution axis in the radial
-        // quotient. For a true cone the residual is zero; reject skew profiles
-        // instead of quietly manufacturing an apex.
-        let parameter = -radial0.dot(radial_direction) / radial_direction2;
-        let apex = p0 + direction * parameter;
-        let apex_radial = (apex - origin) - axis * (apex - origin).dot(axis);
-        let scale = (p1 - p0)
-            .magnitude()
-            .max((apex - origin).magnitude())
-            .max(1.0);
-        if apex_radial.magnitude() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity * scale {
-            return None;
-        }
-        let axial = direction.dot(axis).abs();
-        if axial <= KERNEL_EPSILON {
-            return None;
-        }
-        Some(Support::Cone {
-            apex,
-            axis,
-            slope: radial_direction.magnitude() / axial,
-        })
-    }
-}
-
-fn elementary_support(surface: &ElementarySurface) -> Option<Support> {
+fn carrier(surface: &Surface) -> Option<AnalyticCarrier> {
     match surface {
-        ElementarySurface::Plane(plane) => Some(Support::Plane {
-            origin: plane.origin(),
-            normal: canonical_direction(plane.normal())?,
-        }),
-        ElementarySurface::Sphere(sphere) => {
-            let transform = *sphere.transform();
-            let scale = similarity_scale(transform)?;
-            Some(Support::Sphere {
-                center: transform.transform_point(sphere.entity().0.center()),
-                radius: sphere.entity().0.radius() * scale,
-            })
+        Surface::Elementary(ElementarySurface::Plane(plane)) => AnalyticCarrier::plane(plane),
+        Surface::Elementary(ElementarySurface::Sphere(sphere)) => AnalyticCarrier::sphere_pose(
+            sphere.entity().0.center(),
+            sphere.entity().0.radius(),
+            *sphere.transform(),
+            sphere.orientation(),
+        ),
+        Surface::Elementary(ElementarySurface::CylindricalSurface(revolution)) => {
+            let proof = AnalyticCarrier::linear_revolution(
+                *revolution.entity().entity_curve(),
+                revolution.entity().origin(),
+                revolution.entity().axis(),
+                *revolution.transform(),
+                revolution.orientation(),
+            )?;
+            matches!(proof.support(), AnalyticSupport::Cylinder { .. }).then_some(proof)
         }
-        ElementarySurface::CylindricalSurface(cylinder) => revolution_support(cylinder, true),
-        ElementarySurface::ConicalSurface(cone) => revolution_support(cone, false),
-        ElementarySurface::ToroidalSurface(torus) => {
-            let transform = *torus.transform();
-            let scale = similarity_scale(transform)?;
-            Some(Support::Torus {
-                center: transform.transform_point(torus.entity().center()),
-                axis: canonical_direction(transform.transform_vector(Vector3::unit_z()))?,
-                major_radius: torus.entity().large_radius() * scale,
-                minor_radius: torus.entity().small_radius() * scale,
-            })
+        Surface::Elementary(ElementarySurface::ConicalSurface(revolution)) => {
+            let proof = AnalyticCarrier::linear_revolution(
+                *revolution.entity().entity_curve(),
+                revolution.entity().origin(),
+                revolution.entity().axis(),
+                *revolution.transform(),
+                revolution.orientation(),
+            )?;
+            matches!(proof.support(), AnalyticSupport::Cone { .. }).then_some(proof)
         }
+        Surface::Elementary(ElementarySurface::ToroidalSurface(torus)) => {
+            AnalyticCarrier::torus(torus)
+        }
+        // A spline's net can prove coplanarity, but unless its UV Jacobian is
+        // certified to keep one sign everywhere it cannot supply a global
+        // oriented carrier. Keep that distinction at this boundary.
+        Surface::Bspline(_) | Surface::Nurbs(_) | Surface::Sweep(_) => None,
     }
-}
-
-fn support(surface: &Surface) -> Option<Support> {
-    match surface {
-        Surface::Elementary(surface) => elementary_support(surface),
-        Surface::Bspline(surface) => match surface.try_into_analytic_surface_kind()? {
-            AnalyticSurfaceKind::Plane(plane) => Some(Support::Plane {
-                origin: plane.origin(),
-                normal: canonical_direction(plane.normal())?,
-            }),
-            _ => None,
-        },
-        Surface::Nurbs(surface) => match surface.try_into_analytic_surface_kind()? {
-            AnalyticSurfaceKind::Plane(plane) => Some(Support::Plane {
-                origin: plane.origin(),
-                normal: canonical_direction(plane.normal())?,
-            }),
-            _ => None,
-        },
-        Surface::Sweep(_) => None,
-    }
-}
-
-#[inline]
-fn parallel(left: Vector3, right: Vector3, angular_tolerance: f64) -> bool {
-    left.cross(right).magnitude() <= angular_tolerance.sin().abs().max(64.0 * f64::EPSILON)
-}
-
-#[inline]
-fn axis_line_distance(origin0: Point3, axis0: Vector3, origin1: Point3) -> f64 {
-    (origin1 - origin0).cross(axis0).magnitude()
-}
-
-fn same_support(
-    left: Support,
-    right: Support,
-    linear_tolerance: f64,
-    angular_tolerance: f64,
-) -> bool {
-    match (left, right) {
-        (
-            Support::Plane {
-                origin: o0,
-                normal: n0,
-            },
-            Support::Plane {
-                origin: o1,
-                normal: n1,
-            },
-        ) => parallel(n0, n1, angular_tolerance) && (o1 - o0).dot(n0).abs() <= linear_tolerance,
-        (
-            Support::Sphere {
-                center: c0,
-                radius: r0,
-            },
-            Support::Sphere {
-                center: c1,
-                radius: r1,
-            },
-        ) => c0.distance(c1) <= linear_tolerance && (r0 - r1).abs() <= linear_tolerance,
-        (
-            Support::Cylinder {
-                origin: o0,
-                axis: a0,
-                radius: r0,
-            },
-            Support::Cylinder {
-                origin: o1,
-                axis: a1,
-                radius: r1,
-            },
-        ) => {
-            parallel(a0, a1, angular_tolerance)
-                && axis_line_distance(o0, a0, o1) <= linear_tolerance
-                && (r0 - r1).abs() <= linear_tolerance
-        }
-        (
-            Support::Cone {
-                apex: p0,
-                axis: a0,
-                slope: s0,
-            },
-            Support::Cone {
-                apex: p1,
-                axis: a1,
-                slope: s1,
-            },
-        ) => {
-            p0.distance(p1) <= linear_tolerance
-                && parallel(a0, a1, angular_tolerance)
-                && (s0.atan() - s1.atan()).abs() <= angular_tolerance
-        }
-        (
-            Support::Torus {
-                center: c0,
-                axis: a0,
-                major_radius: r0,
-                minor_radius: m0,
-            },
-            Support::Torus {
-                center: c1,
-                axis: a1,
-                major_radius: r1,
-                minor_radius: m1,
-            },
-        ) => {
-            c0.distance(c1) <= linear_tolerance
-                && parallel(a0, a1, angular_tolerance)
-                && (r0 - r1).abs() <= linear_tolerance
-                && (m0 - m1).abs() <= linear_tolerance
-        }
-        _ => false,
-    }
-}
-
-#[inline]
-fn processor_orientation_sign<S>(surface: &Processor<S, Matrix4>) -> Option<f64> {
-    similarity_scale(*surface.transform())?;
-    let determinant = surface.transform().determinant();
-    if !determinant.is_finite() || determinant.abs() <= KERNEL_EPSILON {
-        return None;
-    }
-    let chart = if surface.orientation() { 1.0 } else { -1.0 };
-    Some(chart * determinant.signum())
-}
-
-/// Global orientation of a carrier relative to the orientation-free analytic
-/// support used by [`same_support`].
-///
-/// This is deliberately structural. A few sampled normals are not evidence of
-/// a global orientation: spheres change Cartesian octants, and a spindle torus
-/// actually changes the relation between its parametric normal and the implicit
-/// gradient across the self-intersection. Unsupported/global-ambiguous cases
-/// therefore return `None`.
-fn analytic_orientation_sign(surface: &Surface, support: Support) -> Option<bool> {
-    let sign = match (surface, support) {
-        (Surface::Elementary(ElementarySurface::Plane(plane)), Support::Plane { normal, .. }) => {
-            let dot = plane.normal().dot(normal);
-            if dot.abs() <= KERNEL_EPSILON {
-                return None;
-            }
-            dot.signum()
-        }
-        (Surface::Elementary(ElementarySurface::Sphere(sphere)), Support::Sphere { .. }) => {
-            processor_orientation_sign(sphere)?
-        }
-        (
-            Surface::Elementary(ElementarySurface::CylindricalSurface(revolution)),
-            Support::Cylinder { .. },
-        )
-        | (
-            Surface::Elementary(ElementarySurface::ConicalSurface(revolution)),
-            Support::Cone { .. },
-        ) => {
-            let Line(front, back) = *revolution.entity().entity_curve();
-            let axial_step = (back - front).dot(revolution.entity().axis());
-            if !axial_step.is_finite() || axial_step.abs() <= KERNEL_EPSILON {
-                return None;
-            }
-            -axial_step.signum() * processor_orientation_sign(revolution)?
-        }
-        (
-            Surface::Elementary(ElementarySurface::ToroidalSurface(torus)),
-            Support::Torus {
-                major_radius,
-                minor_radius,
-                ..
-            },
-        ) => {
-            // For R < r, the signed radial factor R + r cos(v) changes sign.
-            // The regular parametric normal does not, while the implicit
-            // gradient does, so there is no one global orientation relation on
-            // the self-intersecting spindle support. Refuse it rather than
-            // assigning a sign from whichever branch happened to be sampled.
-            if major_radius + KERNEL_EPSILON < minor_radius {
-                return None;
-            }
-            processor_orientation_sign(torus)?
-        }
-        // Coplanarity proves a spline surface's image lies on a plane, but not
-        // that its UV Jacobian keeps one sign globally. Until that stronger
-        // proof exists, generic spline planes are support evidence only, not
-        // orientation evidence for a topology mutation.
-        _ => return None,
-    };
-    Some(sign >= 0.0)
 }
 
 #[inline]
@@ -658,22 +350,11 @@ pub fn same_surface_domain(
     {
         return None;
     }
-    let left_support = support(left)?;
-    let right_support = support(right)?;
-    if !same_support(
-        left_support,
-        right_support,
-        linear_tolerance,
-        angular_tolerance,
-    ) {
-        return None;
-    }
-    let left_orientation = analytic_orientation_sign(left, left_support)?;
-    let right_orientation = analytic_orientation_sign(right, right_support)?;
-    Some(if left_orientation == right_orientation {
-        SurfaceDomainRelation::SameOrientation
-    } else {
-        SurfaceDomainRelation::ReversedOrientation
+    let relation =
+        carrier(left)?.same_domain(carrier(right)?, linear_tolerance, angular_tolerance)?;
+    Some(match relation {
+        CarrierDomainRelation::SameOrientation => SurfaceDomainRelation::SameOrientation,
+        CarrierDomainRelation::ReversedOrientation => SurfaceDomainRelation::ReversedOrientation,
     })
 }
 
@@ -698,7 +379,7 @@ mod tests {
             )),
             shear,
         )));
-        assert!(support(&sphere).is_none());
+        assert!(carrier(&sphere).is_none());
 
         let profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
         let cylinder = surface(ElementarySurface::CylindricalSurface(
@@ -707,7 +388,7 @@ mod tests {
                 shear,
             ),
         ));
-        assert!(support(&cylinder).is_none());
+        assert!(carrier(&cylinder).is_none());
     }
 
     #[test]

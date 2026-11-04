@@ -114,6 +114,8 @@ pub mod decorators;
 /// T-Spline and T-NURCC surface types.
 pub mod t_spline;
 
+/// Checked geometric identities and orientation for analytic surface carriers.
+pub mod analytic_carrier;
 mod analytic_surface;
 /// [`DeterministicContentHash`](monstertruck_core::DeterministicContentHash) impls for geometry types.
 mod content_hash_impls;
