@@ -13,33 +13,36 @@ use monstertruck_core::{
 };
 use monstertruck_meshing::prelude::PolylineCurve;
 use num_traits::ToPrimitive;
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use std::{
-    collections::VecDeque,
-    hash::{Hash, Hasher},
-};
+use rustc_hash::FxHashMap as HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+/// Decompose an unordered segment set into maximal non-branching chains.
+///
+/// Branches are geometric junctions, not permission to choose an arbitrary
+/// continuation. Every unique undirected edge is emitted exactly once; output
+/// order, orientation and node representatives are independent of input order.
 pub fn construct_polylines(lines: &[(Point3, Point3)]) -> Vec<PolylineCurve<Point3>> {
     let mut graph: Graph = lines.iter().collect();
-    let mut res = Vec::new();
-    while !graph.is_empty() {
-        let Some((start_idx, node)) = graph.first_node() else {
-            break;
-        };
-        let mut idx = start_idx;
-        let mut wire: VecDeque<_> = vec![node.coord].into();
-        while let Some((idx0, pt)) = graph.next_node(idx) {
-            idx = idx0;
-            wire.push_back(pt);
+    // Preserve the *original* degree classification. Removing the first arm
+    // of a junction must not turn the remaining two arms into a false through
+    // path, or results would depend on edge-removal order.
+    let terminals = graph
+        .iter()
+        .filter(|(_, node)| node.adjacency.len() != 2)
+        .map(|(index, _)| *index)
+        .collect::<BTreeSet<_>>();
+    let mut polylines = Vec::new();
+    for terminal in &terminals {
+        while graph.has_edges(*terminal) {
+            polylines.push(graph.walk_chain(*terminal, &terminals));
         }
-        idx = start_idx;
-        while let Some((idx0, pt)) = graph.next_node(idx) {
-            idx = idx0;
-            wire.push_front(pt);
-        }
-        res.push(PolylineCurve(wire.into()));
     }
-    res
+    // The only remaining edges belong to components where every vertex had
+    // degree two: closed cycles with a canonical starting point and direction.
+    while let Some((start, _)) = graph.first_node() {
+        polylines.push(graph.walk_chain(start, &terminals));
+    }
+    polylines
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -196,7 +199,7 @@ pub(super) fn stitch_nearby_polylines(
     }
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CoordinateIndex {
     Bucket(i64),
     Exact(u64),
@@ -222,44 +225,8 @@ impl CoordinateIndex {
     }
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct PointIndex([CoordinateIndex; 3]);
-
-impl Hash for PointIndex {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self.0 {
-            [
-                CoordinateIndex::Bucket(x),
-                CoordinateIndex::Bucket(y),
-                CoordinateIndex::Bucket(z),
-            ] => {
-                // Preserve the pre-fallback hash exactly for ordinary geometry.
-                // Graph traversal currently depends on hash-table iteration order,
-                // so changing the hash shape of every representable point can alter
-                // stitching even though its geometric key is unchanged.
-                [x, y, z].hash(state);
-            }
-            coordinates => {
-                // Oversized finite coordinates cannot collide semantically with
-                // an all-bucket key. Give the fallback domain an explicit tag,
-                // then hash each coordinate with its representation tag.
-                0x4d54_5049_5846_414c_u64.hash(state);
-                for coordinate in coordinates {
-                    match coordinate {
-                        CoordinateIndex::Bucket(value) => {
-                            0_u8.hash(state);
-                            value.hash(state);
-                        }
-                        CoordinateIndex::Exact(bits) => {
-                            1_u8.hash(state);
-                            bits.hash(state);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 impl PointIndex {
     fn from_point(pt: Point3) -> Option<Self> {
@@ -276,25 +243,26 @@ struct Node {
     // Interference lines describe a geometric set. Adjacent triangle pairs can
     // report the same segment more than once, so parallel edges between the
     // same tolerance-quantized endpoints must collapse here.
-    adjacency: HashSet<PointIndex>,
+    adjacency: BTreeSet<PointIndex>,
 }
 
 impl Node {
-    const fn new(coord: Point3, adjacency: HashSet<PointIndex>) -> Self {
+    const fn new(coord: Point3, adjacency: BTreeSet<PointIndex>) -> Self {
         Self { coord, adjacency }
-    }
-
-    fn pop_one_adjacency(&mut self) -> Option<PointIndex> {
-        let idx = self.adjacency.iter().next().copied()?;
-        self.adjacency.remove(&idx);
-        Some(idx)
     }
 }
 
-struct Graph(HashMap<PointIndex, Node>);
+struct Graph(BTreeMap<PointIndex, Node>);
+
+fn point_cmp(left: Point3, right: Point3) -> std::cmp::Ordering {
+    left.x
+        .total_cmp(&right.x)
+        .then_with(|| left.y.total_cmp(&right.y))
+        .then_with(|| left.z.total_cmp(&right.z))
+}
 
 impl std::ops::Deref for Graph {
-    type Target = HashMap<PointIndex, Node>;
+    type Target = BTreeMap<PointIndex, Node>;
     fn deref(&self) -> &Self::Target { &self.0 }
 }
 
@@ -305,9 +273,14 @@ impl std::ops::DerefMut for Graph {
 impl Graph {
     fn add_half_edge(&mut self, idx0: PointIndex, pt0: Point3, idx1: PointIndex) {
         if let Some(node) = self.get_mut(&idx0) {
+            // Several slightly different endpoints can quantize to one node.
+            // Choose its representative deterministically, not "first seen".
+            if point_cmp(pt0, node.coord).is_lt() {
+                node.coord = pt0;
+            }
             node.adjacency.insert(idx1);
         } else {
-            self.insert(idx0, Node::new(pt0, HashSet::from_iter([idx1])));
+            self.insert(idx0, Node::new(pt0, BTreeSet::from([idx1])));
         }
     }
 
@@ -321,33 +294,60 @@ impl Graph {
         ) else {
             return;
         };
+        if idx0 == idx1 {
+            // A nonzero segment can still collapse into a single grid node.
+            return;
+        }
         self.add_half_edge(idx0, line.0, idx1);
         self.add_half_edge(idx1, line.1, idx0);
     }
 
+    fn has_edges(&self, idx: PointIndex) -> bool {
+        self.get(&idx)
+            .is_some_and(|node| !node.adjacency.is_empty())
+    }
+
     fn first_node(&self) -> Option<(PointIndex, &Node)> {
-        self.iter().next().map(|(idx, node)| (*idx, node))
+        self.first_key_value().map(|(idx, node)| (*idx, node))
     }
 
     fn next_node(&mut self, idx: PointIndex) -> Option<(PointIndex, Point3)> {
+        let next = *self.get(&idx)?.adjacency.first()?;
         let node = self.get_mut(&idx)?;
-        let idx0 = node.pop_one_adjacency()?;
+        node.adjacency.remove(&next);
         if node.adjacency.is_empty() {
             self.remove(&idx);
         }
-        let node = self.get_mut(&idx0)?;
+        let node = self.get_mut(&next)?;
         node.adjacency.remove(&idx);
-        let pt = node.coord;
+        let point = node.coord;
         if node.adjacency.is_empty() {
-            self.remove(&idx0);
+            self.remove(&next);
         }
-        Some((idx0, pt))
+        Some((next, point))
+    }
+
+    fn walk_chain(
+        &mut self,
+        start: PointIndex,
+        terminals: &BTreeSet<PointIndex>,
+    ) -> PolylineCurve<Point3> {
+        let mut points = vec![self[&start].coord];
+        let mut current = start;
+        while let Some((next, point)) = self.next_node(current) {
+            points.push(point);
+            if next == start || terminals.contains(&next) {
+                break;
+            }
+            current = next;
+        }
+        PolylineCurve(points)
     }
 }
 
 impl<'a> FromIterator<&'a (Point3, Point3)> for Graph {
     fn from_iter<I: IntoIterator<Item = &'a (Point3, Point3)>>(iter: I) -> Self {
-        let mut res = Self(HashMap::default());
+        let mut res = Self(BTreeMap::new());
         iter.into_iter().for_each(|line| res.add_edge(*line));
         res
     }
