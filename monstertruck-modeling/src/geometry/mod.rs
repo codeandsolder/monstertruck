@@ -46,5 +46,11 @@ pub use curve::{Conic2D, Curve, Curve2D};
 pub use parameter_curves::{ToCompressedTrimmedParameterCurves, ToTrimmedParameterCurves};
 mod analytic_curve_incidence;
 pub use analytic_curve_incidence::certify_analytic_curve_on_surface;
+mod analytic_boundary_incidence;
+pub use analytic_boundary_incidence::{
+    BoundaryIncidenceError, BoundaryIncidenceFailure, NativeAnalyticBoundaryIncidence,
+    NativeEdgeIncidence, NativeEdgeUse, NativeFaceIncidence, NativeShellIncidence,
+    certify_native_analytic_boundary_incidence,
+};
 
 pub use surface::{Surface, same_analytic_surface_domain};
