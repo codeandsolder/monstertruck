@@ -50,9 +50,10 @@ pub struct NativeFaceIncidence {
     pub face_orientation: bool,
 }
 
-/// A directed edge use located by its face and its ordinal in that face's
-/// flattened ordered wire traversal. This does not use a process-local pointer
-/// identity and remains stable for the same stored B-rep topology.
+/// A directed edge use in one face's ordered boundary traversal.
+///
+/// Uses the face and edge ordinals, not process-local pointer identity.
+/// The positions remain stable for the same stored B-rep topology.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NativeEdgeUse {
     pub face_index: usize,
@@ -61,7 +62,7 @@ pub struct NativeEdgeUse {
 
 /// One topological edge's two boundary uses and their support relation.
 ///
-/// The indices refer to [NativeShellIncidence::faces]. The edge's geometry
+/// The indices refer to `NativeShellIncidence::faces`. The edge's geometry
 /// has been checked against BOTH face carriers, including all nonzero spline
 /// knot intervals and the topological endpoints. This record does not itself
 /// prove the edge is the unique complete curve of carrier intersection.
@@ -105,7 +106,7 @@ impl EdgeUse {
     }
 }
 
-fn failure(
+const fn failure(
     shell: usize,
     face: Option<usize>,
     edge: Option<usize>,
@@ -137,6 +138,22 @@ fn certify_edge(
         ));
     }
     let curve = edge.oriented_curve();
+    // Certify the curve representation before evaluating its endpoints:
+    // unsupported composed/intersection curves may run a Newton projection
+    // during evaluation, which is not admissible geometric evidence.
+    match certify_analytic_curve_on_surface(&curve, surface, tolerance) {
+        CurveIncidence::Proven => {}
+        CurveIncidence::NotProven => {
+            return Err(location_error(
+                BoundaryIncidenceFailure::CurveNotOnFaceCarrier,
+            ));
+        }
+        CurveIncidence::Unsupported => {
+            return Err(location_error(
+                BoundaryIncidenceFailure::UnsupportedEdgeCurve,
+            ));
+        }
+    }
     let (start, end) = (curve.front(), curve.back());
     if !finite(start)
         || !finite(end)
@@ -147,15 +164,7 @@ fn certify_edge(
             BoundaryIncidenceFailure::CurveEndpointMismatch,
         ));
     }
-    match certify_analytic_curve_on_surface(&curve, surface, tolerance) {
-        CurveIncidence::Proven => Ok(()),
-        CurveIncidence::NotProven => Err(location_error(
-            BoundaryIncidenceFailure::CurveNotOnFaceCarrier,
-        )),
-        CurveIncidence::Unsupported => Err(location_error(
-            BoundaryIncidenceFailure::UnsupportedEdgeCurve,
-        )),
-    }
+    Ok(())
 }
 
 fn certify_face(
