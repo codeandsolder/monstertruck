@@ -118,6 +118,8 @@ pub mod t_spline;
 pub mod analytic_carrier;
 /// Non-sampling, polynomial-bounded curve incidence on analytic carriers.
 pub mod analytic_curve_incidence;
+/// Non-sampling complete-curve locus bounds against finite line segments.
+pub mod analytic_line_segment;
 mod analytic_surface;
 /// [`DeterministicContentHash`](monstertruck_core::DeterministicContentHash) impls for geometry types.
 mod content_hash_impls;

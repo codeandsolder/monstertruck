@@ -131,7 +131,7 @@ fn torus(
     )
 }
 
-fn valid(curve: &BsplineCurve<Vector4>) -> bool {
+pub(crate) fn valid(curve: &BsplineCurve<Vector4>) -> bool {
     let cp = curve.control_points();
     let knots = curve.knot_vector();
     let n = cp.len();

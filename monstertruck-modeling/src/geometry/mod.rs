@@ -46,6 +46,8 @@ pub use curve::{Conic2D, Curve, Curve2D};
 pub use parameter_curves::{ToCompressedTrimmedParameterCurves, ToTrimmedParameterCurves};
 mod analytic_curve_incidence;
 pub use analytic_curve_incidence::certify_analytic_curve_on_surface;
+mod analytic_line_segment;
+pub use analytic_line_segment::certify_native_curve_segment_locus;
 mod analytic_boundary_incidence;
 pub use analytic_boundary_incidence::{
     BoundaryIncidenceError, BoundaryIncidenceFailure, NativeAnalyticBoundaryIncidence,
