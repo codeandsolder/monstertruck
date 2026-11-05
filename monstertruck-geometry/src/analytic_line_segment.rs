@@ -79,6 +79,20 @@ fn resolution_floor(points: &[[f64; 4]], start: Point3, end: Point3) -> Option<f
     floor.is_finite().then_some(floor)
 }
 
+// Interior knot multiplicity strictly above the degree allows a jump
+// discontinuity. Convex-hull inclusion alone cannot prove reverse coverage
+// across that jump, even when both pieces lie on the target line.
+fn has_continuous_interior_knots(curve: &BsplineCurve<Vector4>) -> bool {
+    let knots = curve.knot_vector();
+    let n = curve.control_points().len();
+    let degree = knots.len() - n - 1;
+    let (lower, upper) = (knots[degree], knots[n]);
+    !knots.windows(degree + 1).any(|run| {
+        let knot = run[0];
+        knot > lower && knot < upper && run.iter().all(|value| *value == knot)
+    })
+}
+
 /// Certify that a complete rational spline and a line segment have point-set
 /// Hausdorff distance no more than the requested geometric tolerance.
 ///
@@ -103,6 +117,7 @@ pub fn certify_nurbs_segment_locus(
         || !finite(start)
         || !finite(end)
         || !valid(curve.non_rationalized())
+        || !has_continuous_interior_knots(curve.non_rationalized())
     {
         return SegmentLocus::Unsupported;
     }
@@ -246,6 +261,28 @@ mod tests {
                 TOL
             ),
             SegmentLocus::WithinTolerance,
+        );
+    }
+
+    #[test]
+    fn discontinuous_knot_jump_cannot_claim_complete_segment_coverage() {
+        let curve = BsplineCurve::new_unchecked(
+            KnotVector::from(vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0]),
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(0.25, 0.0, 0.0),
+                p(0.75, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+            ],
+        );
+        assert_eq!(
+            certify_bspline_segment_locus(
+                &curve,
+                p(0.0, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+                TOL,
+            ),
+            SegmentLocus::Unsupported,
         );
     }
 
