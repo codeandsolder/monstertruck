@@ -8,7 +8,7 @@
 use super::analytic_curve_incidence::certify_analytic_curve_on_surface;
 use super::analytic_line_segment::certify_native_curve_segment_locus;
 use super::surface::analytic_carrier;
-use super::{BoundedCurve, Curve, MetricSpace, Point3, Solid, Surface};
+use super::{BoundedCurve, Curve, InnerSpace, MetricSpace, Point3, Solid, Surface};
 use crate::Wire;
 use monstertruck_geometry::analytic_carrier::{
     AnalyticCarrier, AnalyticSupport, CarrierDomainRelation,
@@ -36,6 +36,7 @@ pub enum BoundaryIncidenceFailure {
     InconsistentEdgeVertices,
     OpposingCoincidentFaces,
     PlaneIntersectionEdgeNotLimitedToSegment,
+    PlaneIntersectionNotTransverse,
 }
 
 /// Location of a failed proof. Face/edge indices are local to the shell; an
@@ -266,6 +267,31 @@ fn shared_edge_relation(
     }
 }
 
+fn requires_planar_segment_locus(
+    first: AnalyticSupport,
+    second: AnalyticSupport,
+    same_support: bool,
+    angular_tolerance: f64,
+) -> Result<bool, BoundaryIncidenceFailure> {
+    if same_support {
+        return Ok(false);
+    }
+    let (
+        AnalyticSupport::Plane { normal: first, .. },
+        AnalyticSupport::Plane { normal: second, .. },
+    ) = (first, second)
+    else {
+        return Ok(false);
+    };
+    // Distinct parallel planes do not intersect. Near-parallel support
+    // directions cannot establish a stable physical intersection line.
+    let transversality = first.cross(second).magnitude();
+    if !transversality.is_finite() || transversality <= angular_tolerance {
+        return Err(BoundaryIncidenceFailure::PlaneIntersectionNotTransverse);
+    }
+    Ok(true)
+}
+
 fn collect_edge_incidence(
     shell_index: usize,
     faces: &[NativeFaceIncidence],
@@ -316,17 +342,21 @@ fn collect_edge_incidence(
         // Curve-on-both-infinite-planes and matching endpoint coordinates do
         // NOT prove this edge stays between its topological vertices: it may
         // overshoot and retrace the same carrier intersection line.
-        if !same
-            && matches!(
-                faces[first.face].carrier.support(),
-                AnalyticSupport::Plane { .. }
+        let planar_intersection = requires_planar_segment_locus(
+            faces[first.face].carrier.support(),
+            faces[second.face].carrier.support(),
+            same,
+            angular_tolerance,
+        )
+        .map_err(|reason| {
+            failure(
+                shell_index,
+                Some(first.face),
+                Some(first.edge_index),
+                reason,
             )
-            && matches!(
-                faces[second.face].carrier.support(),
-                AnalyticSupport::Plane { .. }
-            )
-            && !finite_segment_locus
-        {
+        })?;
+        if planar_intersection && !finite_segment_locus {
             return Err(failure(
                 shell_index,
                 Some(first.face),
@@ -438,6 +468,29 @@ mod tests {
 
     const LINEAR: f64 = 1.0e-7;
     const ANGULAR: f64 = 1.0e-9;
+
+    #[test]
+    fn plane_intersection_requires_transverse_carriers() {
+        let p = |normal| AnalyticSupport::Plane {
+            origin: Point3::new(0.0, 0.0, 0.0),
+            normal,
+        };
+        let a = p(Vector3::unit_z());
+        let parallel = p(Vector3::unit_z());
+        let transverse = p(Vector3::unit_x());
+        assert_eq!(
+            requires_planar_segment_locus(a, parallel, false, ANGULAR),
+            Err(BoundaryIncidenceFailure::PlaneIntersectionNotTransverse)
+        );
+        assert_eq!(
+            requires_planar_segment_locus(a, transverse, false, ANGULAR),
+            Ok(true)
+        );
+        assert_eq!(
+            requires_planar_segment_locus(a, parallel, true, ANGULAR),
+            Ok(false)
+        );
+    }
 
     #[test]
     fn cube_proves_all_six_faces_and_twelve_incident_edges() {
