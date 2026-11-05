@@ -128,13 +128,9 @@ impl ReferenceGraph {
         self.forward.get(&id).map_or(&[], Vec::as_slice)
     }
 
-    pub(super) const fn forward(&self) -> &HashMap<u64, Vec<u64>> {
-        &self.forward
-    }
+    pub(super) const fn forward(&self) -> &HashMap<u64, Vec<u64>> { &self.forward }
 
-    pub(super) const fn inbound(&self) -> &HashMap<u64, Vec<u64>> {
-        &self.inbound
-    }
+    pub(super) const fn inbound(&self) -> &HashMap<u64, Vec<u64>> { &self.inbound }
 
     pub(super) fn descendant_closure(
         &self,

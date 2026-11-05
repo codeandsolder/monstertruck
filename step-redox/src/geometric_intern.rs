@@ -367,9 +367,7 @@ fn nth_number(parameter: &Parameter, idx: usize) -> Option<f64> {
     clippy::cast_possible_truncation,
     reason = "finite geometric values are intentionally quantized into stable integer identity keys"
 )]
-fn q(v: f64, tol: f64) -> i64 {
-    (v / tol).round() as i64
-}
+fn q(v: f64, tol: f64) -> i64 { (v / tol).round() as i64 }
 
 fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
     let n = dot(v, v).sqrt();
@@ -384,9 +382,7 @@ mod tests {
     use super::*;
     use ruststep::ast::{Name, Record};
 
-    fn r(id: u64) -> Parameter {
-        Parameter::Ref(Name::Entity(id))
-    }
+    fn r(id: u64) -> Parameter { Parameter::Ref(Name::Entity(id)) }
 
     fn simple(id: u64, name: &str, params: Vec<Parameter>) -> EntityInstance {
         EntityInstance::Simple {

@@ -284,26 +284,20 @@ fn direction(
         .then_some(values)
 }
 
-fn canonical_bits(value: f64) -> u64 {
-    if value == 0.0 { 0 } else { value.to_bits() }
-}
+fn canonical_bits(value: f64) -> u64 { if value == 0.0 { 0 } else { value.to_bits() } }
 
 #[expect(
     clippy::cast_possible_truncation,
     reason = "finite geometric values are intentionally quantized into stable integer identity keys"
 )]
-fn quant_transform(value: f64) -> i64 {
-    (value / TRANSFORM_TOLERANCE_MM).round() as i64
-}
+fn quant_transform(value: f64) -> i64 { (value / TRANSFORM_TOLERANCE_MM).round() as i64 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ruststep::ast::Name;
 
-    fn reference(id: u64) -> Parameter {
-        Parameter::Ref(Name::Entity(id))
-    }
+    fn reference(id: u64) -> Parameter { Parameter::Ref(Name::Entity(id)) }
 
     fn simple(id: u64, name: &str, params: Vec<Parameter>) -> EntityInstance {
         EntityInstance::Simple {

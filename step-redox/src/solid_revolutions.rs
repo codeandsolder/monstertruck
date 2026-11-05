@@ -3427,13 +3427,9 @@ fn axial_coordinate(point: [f64; 3], axis_origin: [f64; 3], axis: [f64; 3]) -> f
     dot(sub(point, axis_origin), axis)
 }
 
-fn parallel(a: [f64; 3], b: [f64; 3]) -> bool {
-    1.0 - dot(a, b).abs() <= DIR_TOL
-}
+fn parallel(a: [f64; 3], b: [f64; 3]) -> bool { 1.0 - dot(a, b).abs() <= DIR_TOL }
 
-fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> {
-    normalize3(vector, DIR_TOL)
-}
+fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> { normalize3(vector, DIR_TOL) }
 
 #[cfg(test)]
 mod tests;

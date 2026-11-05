@@ -1063,17 +1063,13 @@ const fn other_axes(axis: usize) -> [usize; 2] {
     clippy::cast_possible_truncation,
     reason = "finite geometric values are intentionally quantized into stable integer identity keys"
 )]
-fn quantize_mm(value: f64) -> i64 {
-    (value / GEOM_TOL_MM).round() as i64
-}
+fn quantize_mm(value: f64) -> i64 { (value / GEOM_TOL_MM).round() as i64 }
 
 #[expect(
     clippy::cast_possible_truncation,
     reason = "finite geometric values are intentionally quantized into stable integer identity keys"
 )]
-fn quantize_dir(value: f64) -> i64 {
-    (value / 1.0e-10).round() as i64
-}
+fn quantize_dir(value: f64) -> i64 { (value / 1.0e-10).round() as i64 }
 
 fn solid_faces(
     solid: u64,

@@ -1,22 +1,14 @@
-pub fn sub(left: [f64; 2], right: [f64; 2]) -> [f64; 2] {
-    [left[0] - right[0], left[1] - right[1]]
-}
+pub fn sub(left: [f64; 2], right: [f64; 2]) -> [f64; 2] { [left[0] - right[0], left[1] - right[1]] }
 
-pub fn dot(left: [f64; 2], right: [f64; 2]) -> f64 {
-    left[1].mul_add(right[1], left[0] * right[0])
-}
+pub fn dot(left: [f64; 2], right: [f64; 2]) -> f64 { left[1].mul_add(right[1], left[0] * right[0]) }
 
 pub fn cross(left: [f64; 2], right: [f64; 2]) -> f64 {
     left[1].mul_add(-right[0], left[0] * right[1])
 }
 
-pub fn norm(vector: [f64; 2]) -> f64 {
-    vector[0].hypot(vector[1])
-}
+pub fn norm(vector: [f64; 2]) -> f64 { vector[0].hypot(vector[1]) }
 
-pub fn distance(left: [f64; 2], right: [f64; 2]) -> f64 {
-    norm(sub(left, right))
-}
+pub fn distance(left: [f64; 2], right: [f64; 2]) -> f64 { norm(sub(left, right)) }
 
 pub fn normalize(vector: [f64; 2], min_norm: f64) -> Option<[f64; 2]> {
     let length = norm(vector);

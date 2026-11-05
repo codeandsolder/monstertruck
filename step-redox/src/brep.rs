@@ -821,9 +821,7 @@ pub fn vertex_point(
     parse_vertex_point(vertex_id, entities, index)
 }
 
-pub fn enumeration_bool(parameter: &Parameter) -> Option<bool> {
-    parse_enumeration_bool(parameter)
-}
+pub fn enumeration_bool(parameter: &Parameter) -> Option<bool> { parse_enumeration_bool(parameter) }
 
 fn default_ref_direction(axis: [f64; 3]) -> [f64; 3] {
     if axis[0].abs() <= axis[1].abs() && axis[0].abs() <= axis[2].abs() {
@@ -835,9 +833,7 @@ fn default_ref_direction(axis: [f64; 3]) -> [f64; 3] {
     }
 }
 
-fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> {
-    normalize3(vector, DIRECTION_TOLERANCE)
-}
+fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> { normalize3(vector, DIRECTION_TOLERANCE) }
 
 pub fn manifold_shell(
     solid_id: u64,

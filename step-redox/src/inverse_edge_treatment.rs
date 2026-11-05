@@ -793,9 +793,7 @@ mod tests {
         }
     }
 
-    fn kid(raw: u64) -> KernelTopologyId {
-        KernelTopologyId::from_raw(raw)
-    }
+    fn kid(raw: u64) -> KernelTopologyId { KernelTopologyId::from_raw(raw) }
 
     fn edge(
         id: u64,
@@ -1117,9 +1115,7 @@ mod tests {
         }
     }
 
-    fn circular_face(id: u64, edge: OrientedEdgeUse) -> ReducedFace {
-        plane_face(id, vec![edge])
-    }
+    fn circular_face(id: u64, edge: OrientedEdgeUse) -> ReducedFace { plane_face(id, vec![edge]) }
 
     fn circular_fixture() -> (
         ReducedSolid,

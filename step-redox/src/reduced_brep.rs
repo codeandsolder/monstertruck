@@ -108,9 +108,7 @@ impl ReducedSolid {
         })
     }
 
-    pub const fn solid_id(&self) -> u64 {
-        self.solid_id
-    }
+    pub const fn solid_id(&self) -> u64 { self.solid_id }
 
     #[cfg(test)]
     pub(crate) fn from_test_faces(solid_id: u64, faces: Vec<ReducedFace>) -> Self {
@@ -121,9 +119,7 @@ impl ReducedSolid {
         }
     }
 
-    pub fn faces(&self) -> impl Iterator<Item = &ReducedFace> {
-        self.faces.values()
-    }
+    pub fn faces(&self) -> impl Iterator<Item = &ReducedFace> { self.faces.values() }
 
     /// Remove representation-only seams between coplanar faces.
     ///

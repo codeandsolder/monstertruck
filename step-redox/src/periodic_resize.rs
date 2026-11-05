@@ -149,9 +149,7 @@ fn quantize_coord(point: [f64; 3]) -> [i64; 3] {
     ]
 }
 
-fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
-    normalize3(v, 1.0e-15)
-}
+fn normalize(v: [f64; 3]) -> Option<[f64; 3]> { normalize3(v, 1.0e-15) }
 
 #[cfg(test)]
 mod tests;

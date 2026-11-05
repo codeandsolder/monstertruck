@@ -920,9 +920,7 @@ fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey
     }
 }
 
-fn dequantize_scalar(value: i64) -> Option<f64> {
-    Some(value.to_f64()? * SCALAR_Q_MM)
-}
+fn dequantize_scalar(value: i64) -> Option<f64> { Some(value.to_f64()? * SCALAR_Q_MM) }
 
 fn dequantize_vector(vector: [i64; 3], quantum: f64) -> Option<[f64; 3]> {
     Some([
@@ -1324,9 +1322,7 @@ fn sorted_pair(first: OrientedSupportKey, second: OrientedSupportKey) -> [Orient
     }
 }
 
-fn point_key(point: [f64; 3]) -> Option<PointKey> {
-    vector_key(point, POINT_Q_MM)
-}
+fn point_key(point: [f64; 3]) -> Option<PointKey> { vector_key(point, POINT_Q_MM) }
 
 fn vector_key(vector: [f64; 3], quantum: f64) -> Option<[i64; 3]> {
     Some([

@@ -974,9 +974,7 @@ fn quantize(v: f64, q: f64) -> Option<i64> {
     Some(x as i64)
 }
 
-fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
-    normalize3(v, 1.0e-15)
-}
+fn normalize(v: [f64; 3]) -> Option<[f64; 3]> { normalize3(v, 1.0e-15) }
 
 #[cfg(test)]
 mod tests {

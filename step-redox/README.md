@@ -1,4 +1,6 @@
-# step-redox
+# STEP CAD recovery (Monstertruck workspace)
+
+This crate is developed inside the [Monstertruck](../README.md) workspace and uses local kernel crates. Its original repository history was imported with Git ancestry preserved. The canonical implementation lives here; no separate release or pinned Monstertruck checkout is required.
 
 step-redox rewrites ISO 10303-21 STEP files into smaller, semantically equivalent
 Part 21 files.

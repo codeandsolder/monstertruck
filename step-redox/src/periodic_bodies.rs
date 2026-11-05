@@ -546,9 +546,7 @@ fn orthogonal_basis(axis: [f64; 3]) -> Option<([f64; 3], [f64; 3])> {
     clippy::cast_possible_truncation,
     reason = "finite geometric values are intentionally quantized into stable integer identity keys"
 )]
-fn quantize_mm(value: f64) -> i64 {
-    (value / GEOM_TOL_MM).round() as i64
-}
+fn quantize_mm(value: f64) -> i64 { (value / GEOM_TOL_MM).round() as i64 }
 
 #[expect(
     clippy::cast_possible_truncation,
@@ -566,13 +564,9 @@ fn quantize_dir(v: [f64; 3]) -> Option<[i64; 3]> {
     Some(out)
 }
 
-fn parallel(a: [f64; 3], b: [f64; 3]) -> bool {
-    norm(cross(a, b)) <= 1.0e-8
-}
+fn parallel(a: [f64; 3], b: [f64; 3]) -> bool { norm(cross(a, b)) <= 1.0e-8 }
 
-fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
-    normalize3(v, 1.0e-15)
-}
+fn normalize(v: [f64; 3]) -> Option<[f64; 3]> { normalize3(v, 1.0e-15) }
 
 #[cfg(test)]
 mod tests {

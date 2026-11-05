@@ -167,9 +167,7 @@ mod tests {
     use super::*;
     use ruststep::ast::Name;
 
-    fn r(id: u64) -> Parameter {
-        Parameter::Ref(Name::Entity(id))
-    }
+    fn r(id: u64) -> Parameter { Parameter::Ref(Name::Entity(id)) }
 
     fn simple(id: u64, name: &str, params: Vec<Parameter>) -> EntityInstance {
         EntityInstance::Simple {

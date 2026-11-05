@@ -826,21 +826,15 @@ fn surface_radius(surface: &Record) -> Option<f64> {
     numeric_value(params.get(2)?)
 }
 
-fn parallel(a: [f64; 3], b: [f64; 3]) -> bool {
-    (dot(a, b).abs() - 1.0).abs() <= DIR_TOL
-}
+fn parallel(a: [f64; 3], b: [f64; 3]) -> bool { (dot(a, b).abs() - 1.0).abs() <= DIR_TOL }
 
-fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> {
-    normalize3(vector, DIR_TOL)
-}
+fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> { normalize3(vector, DIR_TOL) }
 
 #[expect(
     clippy::cast_possible_truncation,
     reason = "finite geometric values are intentionally quantized into stable integer identity keys"
 )]
-fn quantize_mm(value: f64) -> i64 {
-    (value / GEOM_TOL_MM).round() as i64
-}
+fn quantize_mm(value: f64) -> i64 { (value / GEOM_TOL_MM).round() as i64 }
 
 const fn list_params(record: &Record) -> Option<&[Parameter]> {
     match &record.parameter {

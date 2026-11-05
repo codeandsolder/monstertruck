@@ -177,9 +177,7 @@ impl RecoverySection<'_> {
     }
 
     fn qualify_fragments<I>(&self, fragments: I) -> Result<Vec<SourceCadFragment>>
-    where
-        I: IntoIterator<Item = CadFragment>,
-    {
+    where I: IntoIterator<Item = CadFragment> {
         fragments
             .into_iter()
             .map(|fragment| self.qualify_fragment(fragment))
@@ -218,13 +216,9 @@ impl LocalRecoveryTargets {
         })
     }
 
-    fn is_empty(&self) -> bool {
-        self.solid_ids.is_empty()
-    }
+    fn is_empty(&self) -> bool { self.solid_ids.is_empty() }
 
-    fn shell_ids(&self) -> HashSet<u64> {
-        self.shell_to_solid.keys().copied().collect()
-    }
+    fn shell_ids(&self) -> HashSet<u64> { self.shell_to_solid.keys().copied().collect() }
 
     fn solid_for_shell(&self, shell_id: u64) -> Option<u64> {
         self.shell_to_solid.get(&shell_id).copied()
@@ -355,9 +349,7 @@ impl WholeSolidRecoveryState {
     }
 
     fn add_candidates<I>(&mut self, candidates: I) -> Result<usize>
-    where
-        I: IntoIterator<Item = SourceCadFragment>,
-    {
+    where I: IntoIterator<Item = SourceCadFragment> {
         let mut changes = 0;
         for candidate in candidates {
             let SourceCadFragment {
@@ -560,7 +552,7 @@ pub fn recover_complete_ir_with_kernel_bytes<
     let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
     let mut build =
         recover_complete_ir_build_state(&exchange, input, ReducedBrepMutationMode::KernelOwned)?;
-    let source_load = kernel.inspect_source_step(input)?;
+    let source_load = kernel.inspect_source_exchange(&exchange)?;
     let mut failures = apply_kernel_recovery(&mut build.recovery, |source| {
         recover_kernel_boundary_feature_fragment(input, source, &source_load, kernel)
     });
@@ -657,7 +649,7 @@ fn recover_kernel_boundary_feature_fragment<
             &prepared.family_indices,
             &provenance,
         )?;
-        let healed = kernel.edit_source_topology(bytes, current_source, &[patch])?;
+        let healed = kernel.edit_source_topology(&exchange, current_source, &[patch])?;
         let Some((healed_source, healed_provenance)) =
             inspect_single_loaded_source(kernel, healed.as_bytes())?
         else {
@@ -717,7 +709,7 @@ fn recover_kernel_topology_normalized_fragment<
         false
     } else {
         let patch = plan_source_edge_treatment_patches(input, source, &evidence, &provenance)?;
-        let healed = kernel.edit_source_topology(input, source, &[patch])?;
+        let healed = kernel.edit_source_topology(exchange, source, &[patch])?;
         let Some((healed_source, healed_provenance)) =
             inspect_single_loaded_source(kernel, healed.as_bytes())?
         else {
@@ -733,8 +725,9 @@ fn recover_kernel_topology_normalized_fragment<
     if let Some(patch) =
         plan_source_coplanar_normalization_patch(current_bytes, current_source, &provenance)?
     {
+        let current_exchange = crate::step_io::ParsedExchange::parse(current_bytes)?.exchange;
         current_step =
-            Some(kernel.edit_source_topology(current_bytes, current_source, &[patch])?);
+            Some(kernel.edit_source_topology(&current_exchange, current_source, &[patch])?);
         normalized = true;
     }
     if !normalized {
@@ -773,7 +766,8 @@ fn inspect_single_loaded_source<K: SourceStepLoadInspector>(
     kernel: &K,
     input: &[u8],
 ) -> Result<Option<(SourceEntity, KernelTopologyProvenance)>> {
-    let load = kernel.inspect_source_step(input)?;
+    let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
+    let load = kernel.inspect_source_exchange(&exchange)?;
     let [solid] = load.solids.as_slice() else {
         return Ok(None);
     };
@@ -2031,9 +2025,7 @@ mod tests {
         }
     }
 
-    const fn test_source(solid_id: u64) -> SourceEntity {
-        test_source_in(0, solid_id)
-    }
+    const fn test_source(solid_id: u64) -> SourceEntity { test_source_in(0, solid_id) }
 
     fn qualified_fragment_in(data_section: usize, fragment: CadFragment) -> SourceCadFragment {
         SourceCadFragment {
@@ -2097,9 +2089,7 @@ mod tests {
     }
 
     fn apply_test_kernel_recovery<F>(solid_ids: &[u64], mut recover: F) -> CompleteIr
-    where
-        F: FnMut(u64) -> Result<Option<CadFragment>>,
-    {
+    where F: FnMut(u64) -> Result<Option<CadFragment>> {
         let mut build = build_state_with_unrecovered(solid_ids);
         let failures = apply_kernel_recovery(&mut build.recovery, |source| recover(source.id));
         build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, None)
@@ -2577,7 +2567,8 @@ END-ISO-10303-21;
     fn kernel_v15_square_boss_peel_has_complete_source_and_kernel_proofs() -> Result<()> {
         let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
-        let source_load = kernel.inspect_source_step(input)?;
+        let source_load = kernel
+            .inspect_source_exchange(&crate::step_io::ParsedExchange::parse(input)?.exchange)?;
         let [loaded] = source_load.solids.as_slice() else {
             bail!("single-boss fixture must import as exactly one source solid");
         };
@@ -2636,8 +2627,10 @@ END-ISO-10303-21;
         assert_eq!(patch.remove_faces.len(), 5);
         assert_eq!(patch.face_boundary_replacements.len(), 1);
         assert_eq!(patch.require_unused_edges.len(), 4);
-        let healed = kernel.edit_source_topology(input, loaded.source, &[patch])?;
-        let healed_report = kernel.inspect_source_step(healed.as_bytes())?;
+        let healed = kernel.edit_source_topology(&exchange, loaded.source, &[patch])?;
+        let healed_report = kernel.inspect_source_exchange(
+            &crate::step_io::ParsedExchange::parse(healed.as_bytes())?.exchange,
+        )?;
         assert_eq!(healed_report.solids.len(), 1);
         let host = recognize_single_healed_host(&healed)?
             .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
@@ -2688,7 +2681,8 @@ END-ISO-10303-21;
         );
 
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
-        let source_load = kernel.inspect_source_step(input)?;
+        let source_load = kernel
+            .inspect_source_exchange(&crate::step_io::ParsedExchange::parse(input)?.exchange)?;
         let [solid] = source_load.solids.as_slice() else {
             bail!("coplanar fixture should load as exactly one source solid");
         };

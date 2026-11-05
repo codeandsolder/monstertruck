@@ -25,9 +25,7 @@ impl<'a> StepSection<'a> {
         }
     }
 
-    pub const fn view(self) -> StepSectionView<'a> {
-        self.view
-    }
+    pub const fn view(self) -> StepSectionView<'a> { self.view }
 
     pub fn entity(&self, id: u64) -> Option<StepEntity<'a>> {
         let ordinal = *self.view.index.get(&id)?;
@@ -96,9 +94,7 @@ pub struct StepEntity<'a> {
 }
 
 impl<'a> StepEntity<'a> {
-    pub const fn source(self) -> SourceEntity {
-        self.source
-    }
+    pub const fn source(self) -> SourceEntity { self.source }
 
     pub fn record_named(self, name: &str) -> Option<StepRecord<'a>> {
         entity_record_named(self.entity, name)
@@ -133,9 +129,7 @@ fn entity_record_named<'a>(entity: &'a EntityInstance, name: &str) -> Option<Ste
 pub struct StepRecord<'a>(&'a Record);
 
 impl<'a> StepRecord<'a> {
-    pub const fn value(self) -> StepValue<'a> {
-        StepValue(&self.0.parameter)
-    }
+    pub const fn value(self) -> StepValue<'a> { StepValue(&self.0.parameter) }
 }
 
 #[derive(Clone, Copy)]
@@ -185,26 +179,18 @@ impl<'a> StepValue<'a> {
         }
     }
 
-    pub const fn is_not_provided(self) -> bool {
-        matches!(self.0, Parameter::NotProvided)
-    }
+    pub const fn is_not_provided(self) -> bool { matches!(self.0, Parameter::NotProvided) }
 }
 
 #[derive(Clone, Copy)]
 pub struct StepList<'a>(&'a [Parameter]);
 
 impl<'a> StepList<'a> {
-    pub const fn len(self) -> usize {
-        self.0.len()
-    }
+    pub const fn len(self) -> usize { self.0.len() }
 
-    pub fn get(self, index: usize) -> Option<StepValue<'a>> {
-        self.0.get(index).map(StepValue)
-    }
+    pub fn get(self, index: usize) -> Option<StepValue<'a>> { self.0.get(index).map(StepValue) }
 
-    pub fn iter(self) -> impl Iterator<Item = StepValue<'a>> {
-        self.0.iter().map(StepValue)
-    }
+    pub fn iter(self) -> impl Iterator<Item = StepValue<'a>> { self.0.iter().map(StepValue) }
 }
 
 #[cfg(test)]

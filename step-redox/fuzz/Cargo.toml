@@ -30,3 +30,6 @@ path = "fuzz_targets/solid_revolutions.rs"
 test = false
 doc = false
 bench = false
+
+# Dedicated nightly / external-OCCT toolchain outside production workspace.
+[workspace]

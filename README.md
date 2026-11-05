@@ -172,6 +172,7 @@ The `monstertruck` kernel is split into independent crates so you only need to p
 
 ### I/O & Bindings
 
+- [`step-redox`](step-redox/) -- constructive STEP CAD feature recovery and editable semantic IR, sharing the kernel and STEP loader in this workspace.
 - [`monstertruck-io`](monstertruck-io/) -- CAD exchange formats, one feature per format: STEP (read and write, on by default), IGES (placeholder).
 - [`monstertruck-wasm`](monstertruck-wasm/) -- Wasm/JavaScript bindings.
 

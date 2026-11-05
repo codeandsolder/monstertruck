@@ -44,15 +44,11 @@ struct SolidScan {
 struct Fnv64(u64);
 
 impl Fnv64 {
-    const fn seeded(seed: u64) -> Self {
-        Self(seed)
-    }
+    const fn seeded(seed: u64) -> Self { Self(seed) }
 }
 
 impl Hasher for Fnv64 {
-    fn finish(&self) -> u64 {
-        self.0
-    }
+    fn finish(&self) -> u64 { self.0 }
 
     fn write(&mut self, bytes: &[u8]) {
         for &byte in bytes {
@@ -515,9 +511,7 @@ fn extract(path: &Path, out_dir: &Path, selections: &[String]) -> Result<()> {
 ///
 /// # Errors
 /// Returns an error if the file cannot be read/decoded/parsed or serialization fails.
-pub fn scan_json(path: &Path) -> Result<String> {
-    Ok(serde_json::to_string(&scan(path)?)?)
-}
+pub fn scan_json(path: &Path) -> Result<String> { Ok(serde_json::to_string(&scan(path)?)?) }
 
 /// Extract selected body fingerprints into standalone STEP files.
 ///

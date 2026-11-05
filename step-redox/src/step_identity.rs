@@ -9,9 +9,7 @@ pub enum IndexBucket {
 }
 
 impl IndexBucket {
-    pub(crate) const fn one(index: usize) -> Self {
-        Self::One(index)
-    }
+    pub(crate) const fn one(index: usize) -> Self { Self::One(index) }
 
     pub(crate) fn find(&self, mut predicate: impl FnMut(usize) -> bool) -> Option<usize> {
         match self {

@@ -1,20 +1,12 @@
-pub fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
+pub fn add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] { [a[0] + b[0], a[1] + b[1], a[2] + b[2]] }
 
-pub fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
+pub fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
 
-pub fn scale(v: [f64; 3], scalar: f64) -> [f64; 3] {
-    [v[0] * scalar, v[1] * scalar, v[2] * scalar]
-}
+pub fn scale(v: [f64; 3], scalar: f64) -> [f64; 3] { [v[0] * scalar, v[1] * scalar, v[2] * scalar] }
 
 pub use scale as mul;
 
-pub fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[2].mul_add(b[2], a[1].mul_add(b[1], a[0] * b[0]))
-}
+pub fn dot(a: [f64; 3], b: [f64; 3]) -> f64 { a[2].mul_add(b[2], a[1].mul_add(b[1], a[0] * b[0])) }
 
 pub fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [
@@ -24,9 +16,7 @@ pub fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     ]
 }
 
-pub fn norm(v: [f64; 3]) -> f64 {
-    v[0].hypot(v[1]).hypot(v[2])
-}
+pub fn norm(v: [f64; 3]) -> f64 { v[0].hypot(v[1]).hypot(v[2]) }
 
 pub fn normalize(v: [f64; 3], min_norm: f64) -> Option<[f64; 3]> {
     let length = normalization_length(v, min_norm)?;
@@ -64,9 +54,7 @@ fn normalization_length(v: [f64; 3], min_norm: f64) -> Option<f64> {
     Some(length)
 }
 
-pub fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
-    norm(sub(a, b))
-}
+pub fn distance(a: [f64; 3], b: [f64; 3]) -> f64 { norm(sub(a, b)) }
 
 #[cfg(test)]
 mod tests {

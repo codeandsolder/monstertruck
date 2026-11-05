@@ -1,12 +1,12 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use monstertruck_io::step::load::Table;
+use monstertruck_meshing::prelude::*;
 use ruststep::ast::{EntityInstance, Name, Parameter, Record};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use monstertruck_meshing::prelude::*;
-use monstertruck_io::step::load::Table;
 
 #[derive(Parser, Debug)]
 #[command(about = "Generate an interactive before/after STEP body/face viewer")]

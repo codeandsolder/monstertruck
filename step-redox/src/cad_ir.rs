@@ -221,9 +221,7 @@ fn shift_node_id(id: NodeId, offset: usize) -> Result<NodeId> {
 }
 
 impl Default for CadModel {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -501,9 +499,7 @@ pub struct SweepPath3d {
 }
 
 impl SweepPath3d {
-    const fn complexity(&self) -> u64 {
-        1 + self.segments.len() as u64
-    }
+    const fn complexity(&self) -> u64 { 1 + self.segments.len() as u64 }
 
     fn validate(&self) -> Result<()> {
         if self.segments.is_empty() {

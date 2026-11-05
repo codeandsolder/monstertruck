@@ -19,6 +19,15 @@ members = [
     "monstertruck-render",
     "monstertruck-solid",
     "monstertruck-topology",
+    "step-redox",
+    "step-redox/tools/step-viewer",
+    "step-redox/experiments/kcl-monstertruck-spike",
+]
+# Fuzz harnesses and the external OCCT-WASM validator use independent toolchains.
+# They share this Git repository but are not production Cargo packages.
+exclude = [
+    "step-redox/fuzz",
+    "step-redox/tools/occt-wasm-validator",
 ]
 
 [workspace.metadata.rust-skills2]

@@ -63,6 +63,4 @@ fn main() -> Result<()> {
 }
 
 #[cfg(not(feature = "cad-kernel-monstertruck"))]
-fn main() -> Result<()> {
-    bail!("step-cad-rebuild requires --features cad-kernel-monstertruck")
-}
+fn main() -> Result<()> { bail!("step-cad-rebuild requires --features cad-kernel-monstertruck") }

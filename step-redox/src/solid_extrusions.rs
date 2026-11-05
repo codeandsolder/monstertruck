@@ -1953,13 +1953,9 @@ fn point_plane_distance(point: [f64; 3], plane: PlaneSupport) -> f64 {
     dot(plane.normal, sub(point, plane.origin_mm)).abs()
 }
 
-fn parallel(a: [f64; 3], b: [f64; 3]) -> bool {
-    (dot(a, b).abs() - 1.0).abs() <= DIR_TOL
-}
+fn parallel(a: [f64; 3], b: [f64; 3]) -> bool { (dot(a, b).abs() - 1.0).abs() <= DIR_TOL }
 
-fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> {
-    normalize3(vector, DIR_TOL)
-}
+fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> { normalize3(vector, DIR_TOL) }
 
 #[cfg(test)]
 mod tests {

@@ -298,6 +298,4 @@ pub fn push_simple(
     id
 }
 
-pub const fn entity_ref(id: u64) -> Parameter {
-    Parameter::Ref(Name::Entity(id))
-}
+pub const fn entity_ref(id: u64) -> Parameter { Parameter::Ref(Name::Entity(id)) }

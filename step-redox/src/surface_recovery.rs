@@ -778,9 +778,7 @@ fn canonical_unit_linear_v(multiplicities: &Parameter, knots: &Parameter) -> Opt
     )
 }
 
-fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> {
-    normalize3(vector, 0.0)
-}
+fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> { normalize3(vector, 0.0) }
 
 #[cfg(test)]
 mod tests {

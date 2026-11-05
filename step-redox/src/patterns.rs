@@ -49,9 +49,7 @@ pub struct InstancePattern {
     pub max_residual_mm: f64,
 }
 
-const fn default_pattern_tolerance_mm() -> f64 {
-    1.0e-7
-}
+const fn default_pattern_tolerance_mm() -> f64 { 1.0e-7 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1606,9 +1604,7 @@ fn quantize_matrix(matrix: [[f64; 3]; 3]) -> Option<[i64; 9]> {
     Some(out)
 }
 
-fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
-    normalize3(v, 1.0e-15)
-}
+fn normalize(v: [f64; 3]) -> Option<[f64; 3]> { normalize3(v, 1.0e-15) }
 
 #[cfg(test)]
 mod tests {

@@ -91,6 +91,8 @@ jobs:
       - uses: extractions/setup-just@v4
       - run: just readme-check
       - run: just test-cpu
+      - name: Constructive STEP recovery library (current Linux Rust)
+        run: cargo +1.99.1 test -p step-redox --lib --features cad-kernel-monstertruck
       - run: just test-doc
       - name: Finalize mandatory sccache
         if: always()

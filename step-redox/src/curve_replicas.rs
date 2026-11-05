@@ -355,17 +355,13 @@ fn push_point(entities: &mut Vec<EntityInstance>, next_id: &mut u64, p: [f64; 3]
     clippy::cast_possible_truncation,
     reason = "finite geometric values are intentionally quantized into stable integer identity keys"
 )]
-fn quant(v: f64) -> i64 {
-    (v / GEOMETRY_TOLERANCE_MM).round() as i64
-}
+fn quant(v: f64) -> i64 { (v / GEOMETRY_TOLERANCE_MM).round() as i64 }
 
 #[expect(
     clippy::cast_possible_truncation,
     reason = "finite geometric values are intentionally quantized into stable integer identity keys"
 )]
-fn quant_transform(v: f64) -> i64 {
-    (v / TRANSFORM_TOLERANCE_MM).round() as i64
-}
+fn quant_transform(v: f64) -> i64 { (v / TRANSFORM_TOLERANCE_MM).round() as i64 }
 
 #[cfg(test)]
 mod tests {
@@ -385,9 +381,7 @@ mod tests {
         }
     }
 
-    fn curve(id: u64, points: [u64; 2]) -> EntityInstance {
-        curve_with_degree(id, points, 1)
-    }
+    fn curve(id: u64, points: [u64; 2]) -> EntityInstance { curve_with_degree(id, points, 1) }
 
     fn curve_with_degree(id: u64, points: [u64; 2], degree: i64) -> EntityInstance {
         EntityInstance::Simple {

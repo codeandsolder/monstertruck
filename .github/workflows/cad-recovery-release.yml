@@ -1,0 +1,59 @@
+name: CAD recovery corpus (release)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jlc-cad-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb
+        with:
+          rust-toolchain: "1.99.1"
+          rustflags: "-D warnings"
+      - name: STEP recovery unit tests
+        run: cargo +1.99.1 test -p step-redox --lib --features cad-kernel-monstertruck
+      - name: Prepare STEP validation executables
+        run: |
+          cargo +1.99.1 run -p step-redox --bin step-redox -- --help >/dev/null
+          cargo +1.99.1 run -p step-redox --bin step-count-resize -- --help >/dev/null
+          cargo +1.99.1 run -p step-redox --bin step-chain-resize -- --help >/dev/null
+      - name: Resolve OCCT validation dependencies
+        working-directory: step-redox
+        run: uv sync --frozen
+      - name: Check real-model geometry and semantics
+        working-directory: step-redox
+        run: |
+          uv run --frozen python validation/harness.py run \
+            --manifest validation/fixtures.json \
+            --cache .cache/step-redox-validation \
+            --out validation/out \
+            --step-redox ../target/debug/step-redox \
+            --step-count-resize ../target/debug/step-count-resize \
+            --step-chain-resize ../target/debug/step-chain-resize
+          uv run --frozen python validation/semantic_probe.py \
+            --manifest validation/fixtures.json \
+            --cache .cache/step-redox-validation \
+            --out validation/out/semantic-probes \
+            --step-redox ../target/debug/step-redox
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb

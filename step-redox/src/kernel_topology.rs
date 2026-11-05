@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Apply normalized topology edits to one source solid without exposing backend-native topology.
 pub trait SourceTopologyEditor {
-    /// Re-import `source` from `input`, apply every patch in order transactionally,
+    /// Import `source` from `input`, apply every patch in order transactionally,
     /// and serialize the resulting single solid as a fresh STEP exchange.
     ///
     /// # Errors
@@ -21,7 +21,7 @@ pub trait SourceTopologyEditor {
     /// or the healed solid cannot be serialized.
     fn edit_source_topology(
         &self,
-        input: &[u8],
+        exchange: &ruststep::ast::Exchange,
         source: SourceEntity,
         patches: &[KernelTopologyPatch],
     ) -> Result<String>;
@@ -724,9 +724,7 @@ fn points_close(first: [f64; 3], second: [f64; 3]) -> bool {
 mod tests {
     use super::*;
 
-    const fn id(raw: u64) -> KernelTopologyId {
-        KernelTopologyId::from_raw(raw)
-    }
+    const fn id(raw: u64) -> KernelTopologyId { KernelTopologyId::from_raw(raw) }
 
     fn empty_patch() -> KernelTopologyPatch {
         KernelTopologyPatch {

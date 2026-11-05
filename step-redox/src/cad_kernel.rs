@@ -19,9 +19,7 @@ impl GeometryPolicy {
     pub const PROJECT_STANDARD_TOLERANCE_MM: f64 = 0.01;
 
     #[must_use]
-    pub const fn standard_mm(tolerance_mm: f64) -> Self {
-        Self::Standard { tolerance_mm }
-    }
+    pub const fn standard_mm(tolerance_mm: f64) -> Self { Self::Standard { tolerance_mm } }
 
     #[must_use]
     pub const fn project_standard() -> Self {
@@ -83,14 +81,10 @@ pub mod monstertruck {
 
     impl MonstertruckKernel {
         #[must_use]
-        pub const fn new(policy: GeometryPolicy) -> Self {
-            Self { policy }
-        }
+        pub const fn new(policy: GeometryPolicy) -> Self { Self { policy } }
 
         #[must_use]
-        pub const fn equivalent() -> Self {
-            Self::new(GeometryPolicy::Equivalent)
-        }
+        pub const fn equivalent() -> Self { Self::new(GeometryPolicy::Equivalent) }
 
         #[must_use]
         pub const fn standard_mm(tolerance_mm: f64) -> Self {
@@ -98,9 +92,7 @@ pub mod monstertruck {
         }
 
         #[must_use]
-        pub const fn project_standard() -> Self {
-            Self::new(GeometryPolicy::project_standard())
-        }
+        pub const fn project_standard() -> Self { Self::new(GeometryPolicy::project_standard()) }
     }
 
     /// Opaque wrapper: Monstertruck topology does not escape the backend module.
@@ -540,9 +532,7 @@ pub mod monstertruck {
         }
     }
 
-    fn point2_distance(a: [f64; 2], b: [f64; 2]) -> f64 {
-        (a[0] - b[0]).hypot(a[1] - b[1])
-    }
+    fn point2_distance(a: [f64; 2], b: [f64; 2]) -> f64 { (a[0] - b[0]).hypot(a[1] - b[1]) }
 
     const fn monstertruck_policy(policy: GeometryPolicy) -> monstertruck_solid::GeometryPolicy {
         match policy {
