@@ -13,10 +13,10 @@ const MAX_PROOF_SPANS: usize = 8192;
 const MAX_BLOSSOM_STEPS: usize = 32_000_000;
 
 /// Original positive-length knot span and its homogeneous Bernstein controls.
-pub(crate) struct ProofBezierSpan {
-    pub(crate) start: f64,
-    pub(crate) end: f64,
-    pub(crate) controls: Vec<[f64; 4]>,
+pub(super) struct ProofBezierSpan {
+    pub(super) start: f64,
+    pub(super) end: f64,
+    pub(super) controls: Vec<[f64; 4]>,
 }
 
 fn finite_homogeneous(point: Vector4) -> bool {
@@ -32,7 +32,7 @@ fn finite_homogeneous(point: Vector4) -> bool {
 /// arithmetic overflow/underflow, or exceeded explicit proof-work budget.
 /// This numerical step requires a separate arithmetic error bound when used
 /// to certify geometric tolerances.
-pub(crate) fn proof_bezier_spans(curve: &BsplineCurve<Vector4>) -> Option<Vec<ProofBezierSpan>> {
+pub(super) fn proof_bezier_spans(curve: &BsplineCurve<Vector4>) -> Option<Vec<ProofBezierSpan>> {
     let points = curve.control_points();
     let knots = curve.knot_vector();
     let count = points.len();
