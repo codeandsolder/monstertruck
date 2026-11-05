@@ -85,7 +85,11 @@ fn has_continuous_interior_knots(curve: &BsplineCurve<Vector4>) -> bool {
     let (lower, upper) = (knots[degree], knots[n]);
     !knots.windows(degree + 1).any(|run| {
         let knot = run[0];
-        knot > lower && knot < upper && run.iter().all(|value| *value == knot)
+        knot > lower
+            && knot < upper
+            // Near-duplicate knots are refused too: this overapproximates
+            // discontinuity, never silently certifies a potentially gapped locus.
+            && run.iter().all(|value| (*value - knot).abs() <= f64::EPSILON * knot.abs().max(1.0))
     })
 }
 
