@@ -607,24 +607,49 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
         process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
     };
-    let mut iter0 = solid0.boundaries().iter();
-    let mut iter1 = solid1.boundaries().iter();
-    let Some(shell0) = iter0.next() else {
-        return Ok(solid1.clone());
-    };
-    let Some(shell1) = iter1.next() else {
-        return Ok(solid0.clone());
-    };
-    let [_, mut or_shell] = pair(shell0, shell1)?;
-    for shell in iter0 {
-        let [_, res] = pair(&or_shell, shell)?;
-        or_shell = res;
+    // A valid solid may have several disconnected boundary components. Do not
+    // feed them to pairwise interface analysis as one flattened Shell: it assumes
+    // one connected operand, and can weld unrelated faces into an irregular
+    // intermediate. Keep disjoint components separate until an incoming shell
+    // actually joins them.
+    let mut components = Vec::<Shell<Point3, C, S>>::new();
+    for incoming in solid0.boundaries().iter().chain(solid1.boundaries()) {
+        let mut current = incoming.clone();
+        let mut index = 0;
+        while index < components.len() {
+            let [_, union] = pair(&components[index], &current)?;
+            let mut connected = union.connected_components();
+            if connected.len() == 1 {
+                // A real joining operation consumes the old component. Restart
+                // so a new bridge can join components examined previously.
+                current = connected.pop().expect("exactly one connected component");
+                components.remove(index);
+                index = 0;
+            } else if connected.len() == 2 {
+                // Both input connected shells remained separate. Their original
+                // boundaries already represent the same occupied set, without
+                // imposing an arbitrary topology connection at this stage.
+                index += 1;
+            } else {
+                // The two connected input boundaries cannot legitimately
+                // become zero or more than two independent outer components
+                // without additional shell nesting/region ownership logic.
+                // Returning a partial union here would silently lose the
+                // rest of the operands.
+                return Err(ShapeOpsError::RegionMaterializationFailed { operation });
+            }
+        }
+        components.push(current);
     }
-    for shell in iter1 {
-        let [_, res] = pair(&or_shell, shell)?;
-        or_shell = res;
+    for component in &mut components {
+        let _ = orient_regular_shell(component);
     }
-    finalize(operation, or_shell)
+    for component in &components {
+        if component.check_solid_boundary().is_err() {
+            return finalize(operation, component.clone());
+        }
+    }
+    Solid::new(components).map_err(|source| ShapeOpsError::InvalidOutputShell { operation, source })
 }
 
 /// Difference: the region inside `solid0` but outside `solid1` (classic backend).

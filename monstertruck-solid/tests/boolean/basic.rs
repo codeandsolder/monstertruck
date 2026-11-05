@@ -256,3 +256,43 @@ fn intersection_of_coaxial_overlapping_boxes_with_coplanar_sides() -> Result<()>
         monstertruck_solid::and(&a, &b, monstertruck_solid::GeometryPolicy::standard(1.0e-6))?;
     assert_solid("intersection of coaxial overlapping boxes", &result, 0.5)
 }
+
+#[test]
+fn four_component_union_can_join_disconnected_prefix() -> Result<()> {
+    let separated = [
+        unit_cube(Point3::new(0.0, 0.0, 0.0)),
+        unit_cube(Point3::new(3.0, 0.0, 0.0)),
+        unit_cube(Point3::new(6.0, 0.0, 0.0)),
+    ];
+    let v = builder::vertex(Point3::new(0.5, 0.25, 0.25));
+    let e = builder::extrude(&v, Vector3::unit_x() * 6.0);
+    let f = builder::extrude(&e, Vector3::unit_y() * 0.5);
+    let bridge = builder::extrude(&f, Vector3::unit_z() * 0.5);
+    let policy = monstertruck_solid::GeometryPolicy::standard(STRICT_TOL);
+
+    let mut separated_first = separated[0].clone();
+    for component in &separated[1..] {
+        separated_first = monstertruck_solid::or(&separated_first, component, policy)?;
+    }
+    anyhow::ensure!(
+        separated_first.boundaries().len() == 3,
+        "three disjoint solids must remain three real boundary shells"
+    );
+    separated_first = monstertruck_solid::or(&separated_first, &bridge, policy)?;
+    anyhow::ensure!(
+        separated_first.boundaries().len() == 1 && separated_first.is_geometric_consistent(),
+        "bridging the disjoint components must produce one valid solid"
+    );
+
+    let mut bridge_first = bridge.clone();
+    for component in &separated {
+        bridge_first = monstertruck_solid::or(&bridge_first, component, policy)?;
+    }
+    anyhow::ensure!(
+        bridge_first.boundaries().len() == 1 && bridge_first.is_geometric_consistent(),
+        "the same union with the connector first must also be valid"
+    );
+    assert_solid("disconnected first then bridged", &separated_first, 4.0)?;
+    assert_solid("bridged first then disconnected", &bridge_first, 4.0)?;
+    Ok(())
+}

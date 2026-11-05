@@ -138,6 +138,21 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
         &small,
         monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
     )?;
+    let reverse = monstertruck_solid::or(
+        &small,
+        &main,
+        monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+    )?;
+    anyhow::ensure!(
+        reverse.is_geometric_consistent(),
+        "reverse-operand union must also be consistent"
+    );
+    assert_union_matches_operand_occupancy(
+        "step-redox case 122 reversed binary union",
+        &small,
+        &main,
+        &reverse,
+    )?;
     anyhow::ensure!(result.is_geometric_consistent(), "union must be consistent");
     let stats = assert_union_matches_operand_occupancy(
         "step-redox case 122 core union",
