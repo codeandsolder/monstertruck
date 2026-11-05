@@ -3,6 +3,7 @@
 //! Every rational spline knot interval is Bezierized; no sampled points can
 //! promote an off-carrier curve into geometric equality.
 
+use crate::analytic_bezier_partition::proof_bezier_spans;
 use crate::analytic_carrier::AnalyticSupport;
 use crate::prelude::*;
 use num_traits::ToPrimitive;
@@ -131,28 +132,6 @@ fn torus(
     )
 }
 
-// Knot multiplicities are algebraic, not a geometric near comparison.
-// The kernel's generic Bezier decomposition groups knots using its kernel
-// epsilon, so it can merge distinct short spans. Proof-bearing callers
-// refuse ambiguous partitions pending exact knot-splitting implementation.
-fn proof_safe_knots(knots: &KnotVector, degree: usize) -> bool {
-    let mut multiplicity = 1_usize;
-    for (left, right) in knots.iter().zip(knots.iter().skip(1)) {
-        if left.total_cmp(right).is_eq() {
-            multiplicity += 1;
-        } else {
-            if left.near(right) {
-                return false;
-            }
-            multiplicity = 1;
-        }
-        if multiplicity > degree + 1 {
-            return false;
-        }
-    }
-    true
-}
-
 pub(crate) fn valid(curve: &BsplineCurve<Vector4>) -> bool {
     let cp = curve.control_points();
     let knots = curve.knot_vector();
@@ -167,7 +146,6 @@ pub(crate) fn valid(curve: &BsplineCurve<Vector4>) -> bool {
         && knots.iter().all(|x| x.is_finite())
         && knots.iter().zip(knots.iter().skip(1)).all(|(a, b)| a <= b)
         && knots[degree] < knots[n]
-        && proof_safe_knots(knots, degree)
         && cp
             .iter()
             .all(|p| [p.x, p.y, p.z, p.w].iter().all(|x| x.is_finite()) && p.w > 0.0)
@@ -374,20 +352,11 @@ pub fn certify_nurbs_curve_on_support(
     if !tolerance.is_finite() || tolerance <= 0.0 || !valid(curve.non_rationalized()) {
         return CurveIncidence::Unsupported;
     }
-    let pieces = curve.non_rationalized().bezier_decomposition();
-    if pieces.is_empty() {
+    let Some(pieces) = proof_bezier_spans(curve.non_rationalized()) else {
         return CurveIncidence::Unsupported;
-    }
+    };
     for piece in &pieces {
-        if !valid(piece) {
-            return CurveIncidence::Unsupported;
-        }
-        let points = piece
-            .control_points()
-            .iter()
-            .map(|p| [p.x, p.y, p.z, p.w])
-            .collect::<Vec<_>>();
-        let result = prove_span(&points, support, tolerance);
+        let result = prove_span(&piece.controls, support, tolerance);
         if result != CurveIncidence::Proven {
             return result;
         }
@@ -610,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn near_distinct_or_overmultiplicity_knots_refuse_before_decomposition() {
+    fn near_distinct_knots_prove_and_overmultiplicity_refuses() {
         let controls = vec![
             p(0.0, 0.0, 0.0),
             p(0.25, 0.0, 0.0),
@@ -623,7 +592,7 @@ mod tests {
         );
         assert_eq!(
             certify_bspline_curve_on_support(&near_distinct, point_support(), 1.0e-7),
-            CurveIncidence::Unsupported,
+            CurveIncidence::Proven,
         );
         let too_many = BsplineCurve::new_unchecked(
             KnotVector::from(vec![0.0, 0.0, 0.5, 0.5, 0.5, 1.0, 1.0]),
