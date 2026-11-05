@@ -26,6 +26,13 @@ fn finite_homogeneous(point: Vector4) -> bool {
         && point.w > 0.0
 }
 
+// `total_cmp` is useful for sorting IEEE-754 inputs but treats -0.0
+// and +0.0 as different. They are the same mathematical knot value, while
+// any two distinct finite nonzero floats must remain different spans.
+fn same_algebraic_knot(left: f64, right: f64) -> bool {
+    left.total_cmp(&right).is_eq() || (left.abs().to_bits() == 0 && right.abs().to_bits() == 0)
+}
+
 /// Extract the full active domain into exactly partitioned Bernstein pieces.
 ///
 /// None indicates invalid knot/control layout, impossible multiplicity,
@@ -53,7 +60,7 @@ pub fn proof_bezier_spans(curve: &BsplineCurve<Vector4>) -> Option<Vec<ProofBezi
     // Only genuinely equal knots contribute to multiplicity.
     let mut multiplicity = 1_usize;
     for (left, right) in knots.iter().zip(knots.iter().skip(1)) {
-        if left.total_cmp(right).is_eq() {
+        if same_algebraic_knot(*left, *right) {
             multiplicity += 1;
             if multiplicity > degree + 1 {
                 return None;
@@ -127,13 +134,13 @@ pub fn proof_bezier_spans(curve: &BsplineCurve<Vector4>) -> Option<Vec<ProofBezi
     // A certificate must never omit an active knot interval, however short.
     if spans
         .first()
-        .is_none_or(|span| span.start.total_cmp(&knots[degree]).is_ne())
+        .is_none_or(|span| !same_algebraic_knot(span.start, knots[degree]))
         || spans
             .last()
-            .is_none_or(|span| span.end.total_cmp(&knots[count]).is_ne())
+            .is_none_or(|span| !same_algebraic_knot(span.end, knots[count]))
         || spans
             .windows(2)
-            .any(|pair| pair[0].end.total_cmp(&pair[1].start).is_ne())
+            .any(|pair| !same_algebraic_knot(pair[0].end, pair[1].start))
     {
         return None;
     }
@@ -300,6 +307,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn signed_zero_is_one_algebraic_knot_for_multiplicity() {
+        // Degree one permits at most two repetitions of any knot value.
+        // -0.0 and +0.0 are algebraically the same parameter, despite
+        // total_cmp distinguishing their IEEE encodings for sorting.
+        let invalid = BsplineCurve::new_unchecked(
+            KnotVector::from(vec![-0.0, -0.0, 0.0, 0.0, 1.0, 1.0]),
+            vec![p(0.0, 0.0, 0.0, 1.0); 4],
+        );
+        assert!(proof_bezier_spans(&invalid).is_none());
+    }
+
+    #[test]
+    fn algebraically_equal_signed_zero_knots_preserve_both_real_spans() {
+        // A valid degree-one curve with exactly two interior knots at zero;
+        // the mixed signs are a harmless floating-point representation.
+        let curve = BsplineCurve::new_unchecked(
+            KnotVector::from(vec![-1.0, -1.0, -0.0, 0.0, 1.0, 1.0]),
+            vec![
+                p(0.0, 0.0, 0.0, 1.0),
+                p(0.25, 0.0, 0.0, 1.0),
+                p(0.75, 0.0, 0.0, 1.0),
+                p(1.0, 0.0, 0.0, 1.0),
+            ],
+        );
+        let spans = proof_bezier_spans(&curve).expect("valid -0/+0 join must be covered");
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].start.total_cmp(&-1.0), std::cmp::Ordering::Equal);
+        assert_eq!(spans[1].end.total_cmp(&1.0), std::cmp::Ordering::Equal);
     }
 
     #[test]
