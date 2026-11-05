@@ -52,7 +52,7 @@ mod analytic_boundary_incidence;
 pub use analytic_boundary_incidence::{
     BoundaryIncidenceError, BoundaryIncidenceFailure, NativeAnalyticBoundaryIncidence,
     NativeEdgeIncidence, NativeEdgeUse, NativeFaceIncidence, NativeShellIncidence,
-    certify_native_analytic_boundary_incidence,
+    NativeVertexIncidence, NativeWireIncidence, certify_native_analytic_boundary_incidence,
 };
 
 pub use surface::{Surface, same_analytic_surface_domain};

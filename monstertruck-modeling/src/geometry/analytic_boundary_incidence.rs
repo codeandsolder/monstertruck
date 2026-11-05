@@ -64,13 +64,41 @@ pub struct NativeFaceIncidence {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NativeEdgeUse {
     pub face_index: usize,
+    /// Flat ordinal across all boundary wires on the face.
     pub face_edge_index: usize,
+    /// Ordered wire ordinal on the face.
+    pub wire_index: usize,
+    /// Directed edge ordinal inside that wire.
+    pub wire_edge_index: usize,
+    /// Shell-local topological vertex index, before the directed edge.
+    pub start_vertex: usize,
+    /// Shell-local topological vertex index, after the directed edge.
+    pub end_vertex: usize,
+}
+
+/// A finite native topological vertex with an unrounded physical coordinate.
+///
+/// Independent solids do not share vertex identity; the index is a shell-local
+/// traversal ordinal, not a geometric equivalence key.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeVertexIncidence {
+    pub point: Point3,
+}
+
+/// An ordered native face wire, retaining directed uses and both endpoints.
+///
+/// This preserves separate wires and actual vertex identities. It does not
+/// establish a geometrically embedded or non-self-intersecting trim.
+#[derive(Clone, Debug)]
+pub struct NativeWireIncidence {
+    pub edges: Vec<NativeEdgeUse>,
 }
 
 /// One topological edge's two boundary uses and their support relation.
 ///
-/// The indices refer to `NativeShellIncidence::faces`. The edge's geometry
-/// has been checked against BOTH face carriers, including all nonzero spline
+/// The two uses refer to the same shell's ordered face wires and vertices.
+/// The edge's geometry has been checked against BOTH face carriers, including
+/// all nonzero spline
 /// knot intervals and the topological endpoints. This record does not itself
 /// prove the edge is the unique complete curve of carrier intersection.
 #[derive(Clone, Copy, Debug)]
@@ -91,6 +119,10 @@ pub struct NativeEdgeIncidence {
 #[derive(Clone, Debug)]
 pub struct NativeShellIncidence {
     pub faces: Vec<NativeFaceIncidence>,
+    /// First-seen topological vertices in deterministic face/wire/edge order.
+    pub vertices: Vec<NativeVertexIncidence>,
+    /// Ordered wires for each face, indexed identically to the face list.
+    pub face_wires: Vec<Vec<NativeWireIncidence>>,
     pub edges: Vec<NativeEdgeIncidence>,
 }
 
@@ -105,6 +137,10 @@ pub struct NativeAnalyticBoundaryIncidence {
 struct EdgeUse {
     face: usize,
     edge_index: usize,
+    wire_index: usize,
+    wire_edge_index: usize,
+    start_vertex: usize,
+    end_vertex: usize,
     orientation: bool,
     front_vertex: VertexId<Point3>,
     back_vertex: VertexId<Point3>,
@@ -116,8 +152,25 @@ impl EdgeUse {
         NativeEdgeUse {
             face_index: self.face,
             face_edge_index: self.edge_index,
+            wire_index: self.wire_index,
+            wire_edge_index: self.wire_edge_index,
+            start_vertex: self.start_vertex,
+            end_vertex: self.end_vertex,
         }
     }
+}
+
+fn vertex_ordinal(
+    id: VertexId<Point3>,
+    point: Point3,
+    ordinals: &mut HashMap<VertexId<Point3>, usize>,
+    vertices: &mut Vec<NativeVertexIncidence>,
+) -> usize {
+    *ordinals.entry(id).or_insert_with(|| {
+        let index = vertices.len();
+        vertices.push(NativeVertexIncidence { point });
+        index
+    })
 }
 
 const fn failure(
@@ -189,7 +242,9 @@ fn certify_face(
     face_index: usize,
     tolerance: f64,
     edges: &mut HashMap<EdgeId<Curve>, Vec<EdgeUse>>,
-) -> Result<NativeFaceIncidence, BoundaryIncidenceError> {
+    vertex_ordinals: &mut HashMap<VertexId<Point3>, usize>,
+    vertices: &mut Vec<NativeVertexIncidence>,
+) -> Result<(NativeFaceIncidence, Vec<NativeWireIncidence>), BoundaryIncidenceError> {
     let surface = face.surface();
     let Some(carrier) = analytic_carrier(&surface) else {
         return Err(failure(
@@ -209,7 +264,8 @@ fn certify_face(
         ));
     }
     let mut edge_index = 0;
-    for wire in &wires {
+    let mut certified_wires = Vec::with_capacity(wires.len());
+    for (wire_index, wire) in wires.iter().enumerate() {
         if wire.is_empty() || !wire.is_closed() || !wire.is_simple() {
             return Err(failure(
                 shell_index,
@@ -218,28 +274,52 @@ fn certify_face(
                 BoundaryIncidenceFailure::InvalidFaceWire,
             ));
         }
-        for edge in wire.edge_iter() {
+        let mut certified_edges = Vec::with_capacity(wire.len());
+        for (wire_edge_index, edge) in wire.edge_iter().enumerate() {
             let segment_locus = certify_edge(
                 edge,
                 &surface,
                 tolerance,
                 (shell_index, face_index, edge_index),
             )?;
-            edges.entry(edge.id()).or_default().push(EdgeUse {
+            let front_vertex = edge.front().id();
+            let back_vertex = edge.back().id();
+            // certify_edge already verified both coordinates are finite.
+            let start_vertex = vertex_ordinal(
+                front_vertex,
+                edge.front().point(),
+                vertex_ordinals,
+                vertices,
+            );
+            let end_vertex =
+                vertex_ordinal(back_vertex, edge.back().point(), vertex_ordinals, vertices);
+            let edge_use = EdgeUse {
                 face: face_index,
                 edge_index,
+                wire_index,
+                wire_edge_index,
+                start_vertex,
+                end_vertex,
                 orientation: edge.orientation(),
-                front_vertex: edge.front().id(),
-                back_vertex: edge.back().id(),
+                front_vertex,
+                back_vertex,
                 segment_locus,
-            });
+            };
+            certified_edges.push(edge_use.position());
+            edges.entry(edge.id()).or_default().push(edge_use);
             edge_index += 1;
         }
+        certified_wires.push(NativeWireIncidence {
+            edges: certified_edges,
+        });
     }
-    Ok(NativeFaceIncidence {
-        carrier,
-        face_orientation: face.orientation(),
-    })
+    Ok((
+        NativeFaceIncidence {
+            carrier,
+            face_orientation: face.orientation(),
+        },
+        certified_wires,
+    ))
 }
 
 fn shared_edge_relation(
@@ -392,14 +472,21 @@ fn certify_shell(
     })?;
     let mut edges = HashMap::<EdgeId<Curve>, Vec<EdgeUse>>::default();
     let mut faces = Vec::with_capacity(shell.len());
+    let mut face_wires = Vec::with_capacity(shell.len());
+    let mut vertices = Vec::new();
+    let mut vertex_ordinals = HashMap::<VertexId<Point3>, usize>::default();
     for (face_index, face) in shell.face_iter().enumerate() {
-        faces.push(certify_face(
+        let (incidence, wires) = certify_face(
             face,
             shell_index,
             face_index,
             linear_tolerance,
             &mut edges,
-        )?);
+            &mut vertex_ordinals,
+            &mut vertices,
+        )?;
+        faces.push(incidence);
+        face_wires.push(wires);
     }
     let edges = collect_edge_incidence(
         shell_index,
@@ -408,7 +495,12 @@ fn certify_shell(
         linear_tolerance,
         angular_tolerance,
     )?;
-    Ok(NativeShellIncidence { faces, edges })
+    Ok(NativeShellIncidence {
+        faces,
+        vertices,
+        face_wires,
+        edges,
+    })
 }
 
 /// Certifies complete native local B-rep topology/geometry incidence.
@@ -504,6 +596,84 @@ mod tests {
                 .edges
                 .iter()
                 .all(|e| !e.seam && !e.same_oriented_support && e.finite_segment_locus)
+        );
+    }
+
+    #[test]
+    fn cube_certificate_retains_complete_oriented_vertex_wire_graph() {
+        let first = certify_native_analytic_boundary_incidence(&cube(), LINEAR, ANGULAR);
+        let second = certify_native_analytic_boundary_incidence(&cube(), LINEAR, ANGULAR);
+        assert!(first.is_ok(), "first cube should certify");
+        assert!(second.is_ok(), "second cube should certify");
+        let (Ok(first), Ok(second)) = (first, second) else {
+            return;
+        };
+        let shell = &first.shells[0];
+        assert_eq!(shell.faces.len(), 6);
+        assert_eq!(shell.vertices.len(), 8);
+        assert_eq!(shell.face_wires.len(), shell.faces.len());
+        assert!(shell.vertices.iter().all(|vertex| {
+            [vertex.point.x, vertex.point.y, vertex.point.z]
+                .into_iter()
+                .all(|coordinate| coordinate.abs() == 0.5)
+        }));
+
+        let mut wire_uses = Vec::new();
+        for (face_index, wires) in shell.face_wires.iter().enumerate() {
+            assert_eq!(wires.len(), 1);
+            for (wire_index, wire) in wires.iter().enumerate() {
+                assert_eq!(wire.edges.len(), 4);
+                for (wire_edge_index, edge) in wire.edges.iter().enumerate() {
+                    assert_eq!(edge.face_index, face_index);
+                    assert_eq!(edge.wire_index, wire_index);
+                    assert_eq!(edge.wire_edge_index, wire_edge_index);
+                    assert!(edge.start_vertex < shell.vertices.len());
+                    assert!(edge.end_vertex < shell.vertices.len());
+                    let next = wire.edges[(wire_edge_index + 1) % wire.edges.len()];
+                    assert_eq!(edge.end_vertex, next.start_vertex);
+                    wire_uses.push(*edge);
+                }
+            }
+        }
+
+        let mut edge_uses = shell
+            .edges
+            .iter()
+            .flat_map(|edge| {
+                let [first, second] = edge.uses;
+                assert_eq!(first.start_vertex, second.end_vertex);
+                assert_eq!(first.end_vertex, second.start_vertex);
+                [first, second]
+            })
+            .collect::<Vec<_>>();
+        wire_uses.sort_unstable();
+        edge_uses.sort_unstable();
+        assert_eq!(wire_uses, edge_uses);
+        assert_eq!(edge_uses.len(), 24);
+
+        // These ordinals derive only from native traversal, not allocation
+        // addresses, so independent identical B-reps have identical graphs.
+        assert_eq!(
+            shell
+                .face_wires
+                .iter()
+                .flat_map(|wires| wires.iter().flat_map(|wire| &wire.edges))
+                .copied()
+                .collect::<Vec<_>>(),
+            second.shells[0]
+                .face_wires
+                .iter()
+                .flat_map(|wires| wires.iter().flat_map(|wire| &wire.edges))
+                .copied()
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            shell.vertices.iter().map(|v| v.point).collect::<Vec<_>>(),
+            second.shells[0]
+                .vertices
+                .iter()
+                .map(|v| v.point)
+                .collect::<Vec<_>>()
         );
     }
 
