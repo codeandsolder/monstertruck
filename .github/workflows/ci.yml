@@ -53,8 +53,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+        with:
+          rust-toolchain: "1.99.1"
+          rustflags: "-D warnings"
       - run: cargo clippy --all-targets -- -D warnings
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+
 
   test:
     name: cargo test (cpu)
@@ -70,7 +78,11 @@ jobs:
           submodules: false
       - run: git submodule update --init resources
       - uses: dtolnay/rust-toolchain@1.99.1
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+        with:
+          rust-toolchain: "1.99.1"
+          rustflags: "-D warnings"
       - uses: taiki-e/install-action@nextest
       # Pinned: cargo-rdme's output is not stable across major versions, so an
       # unpinned `@latest` would fail `readme-check` the day it majors.
@@ -81,6 +93,9 @@ jobs:
       - run: just readme-check
       - run: just test-cpu
       - run: just test-doc
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
 
 
   shared-sccache:
@@ -109,9 +124,17 @@ jobs:
           submodules: false
       - run: git submodule update --init resources
       - uses: dtolnay/rust-toolchain@1.99.1
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+        with:
+          rust-toolchain: "1.99.1"
+          rustflags: "-D warnings"
       - uses: extractions/setup-just@v4
       - run: just meshing-features
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+
 
   wasm-build:
     name: cargo build (wasm32)
@@ -128,6 +151,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+        with:
+          rust-toolchain: "1.99.1"
+          rustflags: "-D warnings"
       - uses: extractions/setup-just@v4
       - run: just wasm-build
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+
