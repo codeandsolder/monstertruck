@@ -20,13 +20,9 @@ pub enum SegmentLocus {
     Unsupported,
 }
 
-fn finite(point: Point3) -> bool {
-    [point.x, point.y, point.z].into_iter().all(f64::is_finite)
-}
+fn finite(point: Point3) -> bool { [point.x, point.y, point.z].into_iter().all(f64::is_finite) }
 
-fn length(a: Point3, b: Point3) -> f64 {
-    (a.x - b.x).hypot(a.y - b.y).hypot(a.z - b.z)
-}
+fn length(a: Point3, b: Point3) -> f64 { (a.x - b.x).hypot(a.y - b.y).hypot(a.z - b.z) }
 
 fn cartesian(p: [f64; 4]) -> Option<Point3> {
     if !p.iter().all(|x| x.is_finite()) || p[3] <= 0.0 {
@@ -199,10 +195,7 @@ mod tests {
     fn p(x: f64, y: f64, z: f64) -> Point3 { Point3::new(x, y, z) }
 
     fn polynomial(points: Vec<Point3>) -> BsplineCurve<Point3> {
-        BsplineCurve::new_unchecked(
-            KnotVector::bezier_knot(points.len() - 1),
-            points,
-        )
+        BsplineCurve::new_unchecked(KnotVector::bezier_knot(points.len() - 1), points)
     }
 
     #[test]
@@ -254,12 +247,7 @@ mod tests {
     fn line_segment_locus_is_independent_of_curve_orientation() {
         let curve = polynomial(vec![p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0)]);
         assert_eq!(
-            certify_bspline_segment_locus(
-                &curve,
-                p(1.0, 0.0, 0.0),
-                p(0.0, 0.0, 0.0),
-                TOL
-            ),
+            certify_bspline_segment_locus(&curve, p(1.0, 0.0, 0.0), p(0.0, 0.0, 0.0), TOL),
             SegmentLocus::WithinTolerance,
         );
     }
@@ -276,12 +264,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            certify_bspline_segment_locus(
-                &curve,
-                p(0.0, 0.0, 0.0),
-                p(1.0, 0.0, 0.0),
-                TOL,
-            ),
+            certify_bspline_segment_locus(&curve, p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), TOL,),
             SegmentLocus::Unsupported,
         );
     }

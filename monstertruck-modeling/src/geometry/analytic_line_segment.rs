@@ -20,18 +20,11 @@ pub fn certify_native_curve_segment_locus(
     match curve {
         Curve::Line(line) => {
             let Line(first, last) = *line;
-            let spline = BsplineCurve::new_unchecked(
-                KnotVector::bezier_knot(1),
-                vec![first, last],
-            );
+            let spline = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![first, last]);
             certify_bspline_segment_locus(&spline, start, end, tolerance)
         }
-        Curve::BsplineCurve(spline) => {
-            certify_bspline_segment_locus(spline, start, end, tolerance)
-        }
-        Curve::NurbsCurve(spline) => {
-            certify_nurbs_segment_locus(spline, start, end, tolerance)
-        }
+        Curve::BsplineCurve(spline) => certify_bspline_segment_locus(spline, start, end, tolerance),
+        Curve::NurbsCurve(spline) => certify_nurbs_segment_locus(spline, start, end, tolerance),
         // These variants evaluate a composed/projected spatial curve; the
         // leader alone is not a certificate for its actual geometric image.
         Curve::Intersection(_) | Curve::ParameterCurve(_) => SegmentLocus::Unsupported,
