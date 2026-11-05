@@ -6,11 +6,15 @@
 //! loci, loop coverage, seam identity and shell nesting.
 
 use super::analytic_curve_incidence::certify_analytic_curve_on_surface;
+use super::analytic_line_segment::certify_native_curve_segment_locus;
 use super::surface::analytic_carrier;
 use super::{BoundedCurve, Curve, MetricSpace, Point3, Solid, Surface};
 use crate::Wire;
-use monstertruck_geometry::analytic_carrier::{AnalyticCarrier, CarrierDomainRelation};
+use monstertruck_geometry::analytic_carrier::{
+    AnalyticCarrier, AnalyticSupport, CarrierDomainRelation,
+};
 use monstertruck_geometry::analytic_curve_incidence::CurveIncidence;
+use monstertruck_geometry::analytic_line_segment::SegmentLocus;
 use monstertruck_topology::{Edge, EdgeId, Face, Shell, VertexId};
 use rustc_hash::FxHashMap as HashMap;
 
@@ -31,6 +35,7 @@ pub enum BoundaryIncidenceFailure {
     InconsistentEdgeOrientation,
     InconsistentEdgeVertices,
     OpposingCoincidentFaces,
+    PlaneIntersectionEdgeNotLimitedToSegment,
 }
 
 /// Location of a failed proof. Face/edge indices are local to the shell; an
@@ -75,6 +80,10 @@ pub struct NativeEdgeIncidence {
     pub seam: bool,
     /// True when adjacent face normals and geometric supports coincide.
     pub same_oriented_support: bool,
+    /// The complete spatial curve has a certified finite physical locus
+    /// bounded by this topological edge's two vertices (both directed uses).
+    /// Segment evidence remains a tolerance bound, not occupied-solid equality.
+    pub finite_segment_locus: bool,
 }
 
 /// Complete native *incidence* evidence for one manifold boundary shell.
@@ -98,6 +107,7 @@ struct EdgeUse {
     orientation: bool,
     front_vertex: VertexId<Point3>,
     back_vertex: VertexId<Point3>,
+    segment_locus: SegmentLocus,
 }
 
 impl EdgeUse {
@@ -130,7 +140,7 @@ fn certify_edge(
     surface: &Surface,
     tolerance: f64,
     location: (usize, usize, usize),
-) -> Result<(), BoundaryIncidenceError> {
+) -> Result<SegmentLocus, BoundaryIncidenceError> {
     let (shell, face, index) = location;
     let location_error = |reason| failure(shell, Some(face), Some(index), reason);
     let front = edge.front().point();
@@ -167,7 +177,9 @@ fn certify_edge(
             BoundaryIncidenceFailure::CurveEndpointMismatch,
         ));
     }
-    Ok(())
+    Ok(certify_native_curve_segment_locus(
+        &curve, front, back, tolerance,
+    ))
 }
 
 fn certify_face(
@@ -206,7 +218,7 @@ fn certify_face(
             ));
         }
         for edge in wire.edge_iter() {
-            certify_edge(
+            let segment_locus = certify_edge(
                 edge,
                 &surface,
                 tolerance,
@@ -218,6 +230,7 @@ fn certify_face(
                 orientation: edge.orientation(),
                 front_vertex: edge.front().id(),
                 back_vertex: edge.back().id(),
+                segment_locus,
             });
             edge_index += 1;
         }
@@ -297,12 +310,37 @@ fn collect_edge_incidence(
             angular_tolerance,
         )
         .map_err(|reason| failure(shell_index, Some(first.face), None, reason))?;
+        let finite_segment_locus = first.segment_locus == SegmentLocus::WithinTolerance
+            && second.segment_locus == SegmentLocus::WithinTolerance;
+        // Two different planar carriers can meet only along a straight line.
+        // Curve-on-both-infinite-planes and matching endpoint coordinates do
+        // NOT prove this edge stays between its topological vertices: it may
+        // overshoot and retrace the same carrier intersection line.
+        if !same
+            && matches!(
+                faces[first.face].carrier.support(),
+                AnalyticSupport::Plane { .. }
+            )
+            && matches!(
+                faces[second.face].carrier.support(),
+                AnalyticSupport::Plane { .. }
+            )
+            && !finite_segment_locus
+        {
+            return Err(failure(
+                shell_index,
+                Some(first.face),
+                Some(first.edge_index),
+                BoundaryIncidenceFailure::PlaneIntersectionEdgeNotLimitedToSegment,
+            ));
+        }
         let mut uses = [first.position(), second.position()];
         uses.sort_unstable();
         results.push(NativeEdgeIncidence {
             uses,
             seam: first.face == second.face,
             same_oriented_support: same,
+            finite_segment_locus,
         });
     }
     Ok(results)
@@ -412,7 +450,7 @@ mod tests {
             proof.shells[0]
                 .edges
                 .iter()
-                .all(|e| !e.seam && !e.same_oriented_support)
+                .all(|e| !e.seam && !e.same_oriented_support && e.finite_segment_locus)
         );
     }
 
@@ -439,6 +477,28 @@ mod tests {
         assert_eq!(
             refused.reason,
             BoundaryIncidenceFailure::CurveNotOnFaceCarrier
+        );
+    }
+
+    #[test]
+    fn plane_plane_edge_cannot_overshoot_then_retrace_its_vertices() {
+        let solid = cube();
+        let edge = solid.edge_iter().next().expect("cube has edges");
+        let start = edge.front().point();
+        let end = edge.back().point();
+        let delta = end - start;
+        // Every control point lies on BOTH infinite planar supports, and
+        // the spline matches both stored B-rep endpoints. Its convex hull,
+        // however, extends beyond both ends of the physical edge.
+        edge.set_curve(Curve::BsplineCurve(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(3),
+            vec![start, end + delta, start - delta, end],
+        )));
+        let refused = certify_native_analytic_boundary_incidence(&solid, LINEAR, ANGULAR)
+            .expect_err("global carrier incidence alone misses the overshoot");
+        assert_eq!(
+            refused.reason,
+            BoundaryIncidenceFailure::PlaneIntersectionEdgeNotLimitedToSegment
         );
     }
 
@@ -470,6 +530,12 @@ mod tests {
         let proof = certify_native_analytic_boundary_incidence(&solid, LINEAR, ANGULAR)
             .expect("a polynomial line cannot lose incidence through reparameterization");
         assert_eq!(proof.shells[0].edges.len(), 12);
+        assert!(
+            proof.shells[0]
+                .edges
+                .iter()
+                .all(|edge| edge.finite_segment_locus)
+        );
     }
 
     #[test]
