@@ -11,7 +11,7 @@ use super::{BoundedCurve, Curve, MetricSpace, Point3, Solid, Surface};
 use crate::Wire;
 use monstertruck_geometry::analytic_carrier::{AnalyticCarrier, CarrierDomainRelation};
 use monstertruck_geometry::analytic_curve_incidence::CurveIncidence;
-use monstertruck_topology::{Edge, EdgeId, Face, Shell};
+use monstertruck_topology::{Edge, EdgeId, Face, Shell, VertexId};
 use rustc_hash::FxHashMap as HashMap;
 
 /// A specific reason why a native B-rep's complete local incidence could
@@ -29,6 +29,7 @@ pub enum BoundaryIncidenceFailure {
     CurveEndpointMismatch,
     InvalidEdgeUseCount,
     InconsistentEdgeOrientation,
+    InconsistentEdgeVertices,
     OpposingCoincidentFaces,
 }
 
@@ -95,6 +96,8 @@ struct EdgeUse {
     face: usize,
     edge_index: usize,
     orientation: bool,
+    front_vertex: VertexId<Point3>,
+    back_vertex: VertexId<Point3>,
 }
 
 impl EdgeUse {
@@ -213,6 +216,8 @@ fn certify_face(
                 face: face_index,
                 edge_index,
                 orientation: edge.orientation(),
+                front_vertex: edge.front().id(),
+                back_vertex: edge.back().id(),
             });
             edge_index += 1;
         }
@@ -275,6 +280,14 @@ fn collect_edge_incidence(
                 Some(first.face),
                 None,
                 BoundaryIncidenceFailure::InconsistentEdgeOrientation,
+            ));
+        }
+        if first.front_vertex != second.back_vertex || first.back_vertex != second.front_vertex {
+            return Err(failure(
+                shell_index,
+                Some(first.face),
+                Some(first.edge_index),
+                BoundaryIncidenceFailure::InconsistentEdgeVertices,
             ));
         }
         let same = shared_edge_relation(
