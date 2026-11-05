@@ -1,0 +1,2190 @@
+use crate::brep::{
+    self, BSplineSupport, CircleSupport, CurveSupport, OrientedEdgeUse, PlaneSupport,
+    SplineExtrusionSupport, SurfaceSupport,
+};
+use crate::math2::{
+    cross as cross2, distance as distance2, dot as dot2, normalize as normalize2, sub as sub2,
+};
+use crate::math3::{
+    add, canonical_direction, cross, distance, dot, mul, norm, normalize as normalize3,
+    point_to_unit_line_distance, sub,
+};
+pub use crate::profile_curves::RecoveredProfileCurve;
+use crate::reduced_brep::{ReducedFace, ReducedSolid};
+use crate::step_graph::{build_index, entity_id, simple_record};
+use ruststep::ast::EntityInstance;
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
+use std::f64::consts::TAU;
+
+const GEOM_TOL_MM: f64 = 1.0e-7;
+const DIR_TOL: f64 = 1.0e-10;
+const ANGLE_TOL_RAD: f64 = 1.0e-10;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RecoveredSolidExtrusion {
+    pub solid_id: u64,
+    pub cap_face_ids: [u64; 2],
+    pub side_face_ids: Vec<u64>,
+    /// Canonical outer profile loop. Kept as the historical field for single-loop API/JSON compatibility.
+    pub profile_curves: Vec<RecoveredProfileCurve>,
+    /// Canonical hole loops. Empty for the historical single-loop case and omitted from JSON then.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inner_profile_loops: Vec<Vec<RecoveredProfileCurve>>,
+    pub origin_mm: [f64; 3],
+    pub x_axis: [f64; 3],
+    pub y_axis: [f64; 3],
+    pub z_axis: [f64; 3],
+    pub height_mm: f64,
+    pub max_residual_mm: f64,
+}
+
+impl RecoveredSolidExtrusion {
+    pub fn profile_loops(&self) -> impl Iterator<Item = &[RecoveredProfileCurve]> {
+        std::iter::once(self.profile_curves.as_slice())
+            .chain(self.inner_profile_loops.iter().map(Vec::as_slice))
+    }
+
+    fn profile_complexity(&self) -> usize {
+        self.profile_loops()
+            .flatten()
+            .map(RecoveredProfileCurve::complexity)
+            .sum()
+    }
+
+    fn profile_curve_count(&self) -> usize {
+        self.profile_loops()
+            .map(<[RecoveredProfileCurve]>::len)
+            .sum()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FaceInfo {
+    id: u64,
+    surface: SurfaceSupport,
+    surface_forward: bool,
+    loops: Vec<brep::FaceLoop>,
+    /// Flattened boundary edges retained for the existing manifold/side proof.
+    loop_edges: Vec<OrientedEdgeUse>,
+}
+
+#[derive(Debug, Clone)]
+struct CanonicalProfile {
+    origin_mm: [f64; 3],
+    x_axis: [f64; 3],
+    y_axis: [f64; 3],
+    curves: Vec<RecoveredProfileCurve>,
+    inner_loops: Vec<Vec<RecoveredProfileCurve>>,
+}
+
+#[must_use]
+pub fn detect_solid_extrusions(entities: &[EntityInstance]) -> Vec<RecoveredSolidExtrusion> {
+    let index = build_index(entities);
+    detect_solid_extrusions_with_index(entities, &index)
+}
+
+/// Detect sharp extrusion cores implied by translated planar cap pairs.
+///
+/// These candidates deliberately prove only the cap-to-cap translation and
+/// canonical profile. They do not claim the source side faces are ruled
+/// extrusion walls, so callers must separately explain every residual source
+/// face before treating a candidate as whole-solid recovery.
+#[must_use]
+pub fn detect_extrusion_core_candidates(
+    entities: &[EntityInstance],
+) -> Vec<RecoveredSolidExtrusion> {
+    let index = build_index(entities);
+    detect_extrusion_core_candidates_with_index(entities, &index)
+}
+
+pub(crate) fn detect_extrusion_core_candidates_with_index(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<RecoveredSolidExtrusion> {
+    let mut out = Vec::new();
+    for entity in entities {
+        let Some(record) = simple_record(entity) else {
+            continue;
+        };
+        if record.name != "MANIFOLD_SOLID_BREP" {
+            continue;
+        }
+        let solid_id = entity_id(entity);
+        out.extend(extrusion_core_candidates_for_solid(
+            solid_id, entities, index,
+        ));
+    }
+    out.sort_by(|first, second| {
+        first
+            .solid_id
+            .cmp(&second.solid_id)
+            .then_with(|| candidate_order(first, second))
+    });
+    out
+}
+
+/// Recover the sharp extrusion core implied by one explicit planar cap pair.
+///
+/// Unlike [`detect_solid_extrusions`], this proves the two cap loops are exact
+/// translations directly from their analytic boundary curves and deliberately
+/// does not claim that the source side faces are extrusion walls. It is only a
+/// core for a higher-level reconstruction that separately proves and replays
+/// every source-side treatment.
+#[must_use]
+pub fn recover_extrusion_core_from_cap_faces(
+    solid_id: u64,
+    cap_face_ids: [u64; 2],
+    entities: &[EntityInstance],
+) -> Option<RecoveredSolidExtrusion> {
+    let index = build_index(entities);
+    recover_extrusion_core_from_cap_faces_with_index(solid_id, cap_face_ids, entities, &index)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TreatmentHealedExtrusionCoreCandidate {
+    pub core: RecoveredSolidExtrusion,
+    pub healed_treatment_face_ids: Vec<u64>,
+}
+
+/// Recover an extrusion core after analytically undoing uniquely proven local
+/// edge treatments that trim the two requested source caps.
+///
+/// This is still only a host candidate: treatment replay and whole-solid
+/// source/rebuild boundary equivalence are required before semantic admission.
+#[must_use]
+pub fn recover_treatment_healed_extrusion_core_from_cap_faces(
+    solid_id: u64,
+    cap_face_ids: [u64; 2],
+    entities: &[EntityInstance],
+) -> Option<TreatmentHealedExtrusionCoreCandidate> {
+    let index = build_index(entities);
+    recover_treatment_healed_extrusion_core_from_cap_faces_with_index(
+        solid_id,
+        cap_face_ids,
+        entities,
+        &index,
+        None,
+    )
+}
+
+pub(crate) fn recover_treatment_healed_extrusion_core_from_cap_faces_with_index(
+    solid_id: u64,
+    cap_face_ids: [u64; 2],
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    allowed_treatment_face_ids: Option<&HashSet<u64>>,
+) -> Option<TreatmentHealedExtrusionCoreCandidate> {
+    let target_solid_ids = HashSet::from([solid_id]);
+    let evidence = crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
+        entities,
+        index,
+        &target_solid_ids,
+    );
+    let mut reduced = ReducedSolid::from_step(solid_id, entities, index)?;
+    let cap_set = cap_face_ids.into_iter().collect::<HashSet<_>>();
+    let mut reductions = evidence
+        .iter()
+        .filter(|item| {
+            item.solid_id == solid_id
+                && item.carrier_pair_unique
+                && allowed_treatment_face_ids
+                    .is_none_or(|allowed| allowed.contains(&item.treatment_face_id))
+                && item
+                    .carriers
+                    .iter()
+                    .any(|carrier| cap_set.contains(&carrier.face_id))
+        })
+        .collect::<Vec<_>>();
+    reductions.sort_by_key(|item| item.treatment_face_id);
+    reductions.dedup_by_key(|item| item.treatment_face_id);
+
+    let mut healed_treatment_face_ids = Vec::new();
+    let mut max_treatment_residual_mm = 0.0_f64;
+    for item in reductions {
+        reduced.remove_edge_treatment(item)?;
+        healed_treatment_face_ids.push(item.treatment_face_id);
+        max_treatment_residual_mm = max_treatment_residual_mm.max(item.max_boundary_residual_mm);
+    }
+    if healed_treatment_face_ids.is_empty() {
+        return None;
+    }
+
+    let mut faces = Vec::new();
+    let mut unreadable_planes = Vec::<PlaneSupport>::new();
+    for face in reduced.faces() {
+        if let Some(face) = face_info_from_reduced(face) {
+            faces.push(face);
+        } else if let SurfaceSupport::Plane(plane) = face.surface {
+            unreadable_planes.push(plane);
+        }
+    }
+    let first_index = faces.iter().position(|face| face.id == cap_face_ids[0])?;
+    let second_index = faces.iter().position(|face| face.id == cap_face_ids[1])?;
+    let pair = ordered_cap_pair(first_index, second_index, &faces)?;
+    let translated_residual = prove_translated_caps(&pair)?;
+    if has_intervening_translated_boundary(&pair, &faces)
+        || unreadable_planes
+            .iter()
+            .copied()
+            .any(|plane| unreadable_parallel_plane_may_intervene(&pair, plane))
+    {
+        return None;
+    }
+    let profile = canonical_profile(pair.bottom, pair.z_axis, &pair.bottom_loop_roles)?;
+    Some(TreatmentHealedExtrusionCoreCandidate {
+        core: RecoveredSolidExtrusion {
+            solid_id,
+            cap_face_ids: [pair.bottom.id, pair.top.id],
+            side_face_ids: Vec::new(),
+            profile_curves: profile.curves,
+            inner_profile_loops: profile.inner_loops,
+            origin_mm: profile.origin_mm,
+            x_axis: profile.x_axis,
+            y_axis: profile.y_axis,
+            z_axis: pair.z_axis,
+            height_mm: pair.height_mm,
+            max_residual_mm: translated_residual.max(max_treatment_residual_mm),
+        },
+        healed_treatment_face_ids,
+    })
+}
+
+fn unreadable_parallel_plane_may_intervene(pair: &CapPairProof<'_>, plane: PlaneSupport) -> bool {
+    let SurfaceSupport::Plane(bottom_plane) = pair.bottom.surface else {
+        return true;
+    };
+    if !parallel(plane.normal, bottom_plane.normal) {
+        return false;
+    }
+    let offset = dot(pair.z_axis, sub(plane.origin_mm, bottom_plane.origin_mm));
+    offset > GEOM_TOL_MM && offset < pair.height_mm - GEOM_TOL_MM
+}
+
+fn face_info_from_reduced(face: &ReducedFace) -> Option<FaceInfo> {
+    if matches!(face.surface, SurfaceSupport::Other { .. })
+        || face.loops.is_empty()
+        || face.loops.iter().any(|loop_| {
+            loop_.edges.is_empty()
+                || loop_
+                    .edges
+                    .iter()
+                    .any(|edge| matches!(edge.support, CurveSupport::Other { .. }))
+        })
+    {
+        return None;
+    }
+    Some(FaceInfo {
+        id: face.id,
+        surface: face.surface.clone(),
+        surface_forward: face.surface_forward,
+        loops: face.loops.clone(),
+        loop_edges: face.loop_edges().cloned().collect(),
+    })
+}
+
+pub(crate) fn recover_extrusion_core_from_cap_faces_with_index(
+    solid_id: u64,
+    cap_face_ids: [u64; 2],
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<RecoveredSolidExtrusion> {
+    extrusion_core_candidates_for_solid(solid_id, entities, index)
+        .into_iter()
+        .find(|candidate| {
+            candidate.cap_face_ids == cap_face_ids
+                || candidate.cap_face_ids == [cap_face_ids[1], cap_face_ids[0]]
+        })
+}
+
+fn extrusion_core_candidates_for_solid(
+    solid_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<RecoveredSolidExtrusion> {
+    let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
+        return Vec::new();
+    };
+    let Some(faces) = face_ids
+        .iter()
+        .copied()
+        .map(|face_id| face_info(face_id, entities, index))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Vec::new();
+    };
+    // A face already carrying one unambiguous edge-treatment interpretation
+    // is not a sound cap for a *sharp* core. This is deliberately fail-closed:
+    // continuation candidates are not promoted to semantic treatment recovery;
+    // they are only grounds for declining this competing core interpretation.
+    let treatment_face_ids = crate::edge_treatments::unique_treatment_face_ids_for_solid(
+        solid_id, &face_ids, entities, index,
+    )
+    .into_iter()
+    .collect::<HashSet<_>>();
+    let mut out = Vec::new();
+    for first_index in 0..faces.len() {
+        for second_index in first_index + 1..faces.len() {
+            if let Some(candidate) = extrusion_core_candidate(
+                solid_id,
+                first_index,
+                second_index,
+                &faces,
+                &treatment_face_ids,
+            ) {
+                out.push(candidate);
+            }
+        }
+    }
+    out
+}
+
+fn extrusion_core_candidate(
+    solid_id: u64,
+    first_index: usize,
+    second_index: usize,
+    faces: &[FaceInfo],
+    treatment_face_ids: &HashSet<u64>,
+) -> Option<RecoveredSolidExtrusion> {
+    if treatment_face_ids.contains(&faces[first_index].id)
+        || treatment_face_ids.contains(&faces[second_index].id)
+    {
+        return None;
+    }
+    let pair = ordered_cap_pair(first_index, second_index, faces)?;
+    let max_residual_mm = prove_translated_caps(&pair)?;
+    if has_intervening_translated_boundary(&pair, faces) {
+        return None;
+    }
+    let profile = canonical_profile(pair.bottom, pair.z_axis, &pair.bottom_loop_roles)?;
+    Some(RecoveredSolidExtrusion {
+        solid_id,
+        cap_face_ids: [pair.bottom.id, pair.top.id],
+        side_face_ids: Vec::new(),
+        profile_curves: profile.curves,
+        inner_profile_loops: profile.inner_loops,
+        origin_mm: profile.origin_mm,
+        x_axis: profile.x_axis,
+        y_axis: profile.y_axis,
+        z_axis: pair.z_axis,
+        height_mm: pair.height_mm,
+        max_residual_mm,
+    })
+}
+
+pub(crate) fn detect_solid_extrusions_with_index(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<RecoveredSolidExtrusion> {
+    let mut out = Vec::new();
+
+    for entity in entities {
+        let Some(record) = simple_record(entity) else {
+            continue;
+        };
+        if record.name != "MANIFOLD_SOLID_BREP" {
+            continue;
+        }
+        let solid_id = entity_id(entity);
+        if let Some(candidate) = detect_one_solid(solid_id, entities, index) {
+            out.push(candidate);
+        }
+    }
+
+    out.sort_by_key(|candidate| candidate.solid_id);
+    out
+}
+
+fn detect_one_solid(
+    solid_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<RecoveredSolidExtrusion> {
+    let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
+    let faces = face_ids
+        .iter()
+        .copied()
+        .map(|face_id| face_info(face_id, entities, index))
+        .collect::<Option<Vec<_>>>()?;
+    detect_one_solid_from_faces(solid_id, &faces)
+}
+
+pub(crate) fn detect_solid_extrusion_from_reduced(
+    solid: &ReducedSolid,
+) -> Option<RecoveredSolidExtrusion> {
+    let faces = solid
+        .faces()
+        .map(face_info_from_reduced)
+        .collect::<Option<Vec<_>>>()?;
+    detect_one_solid_from_faces(solid.solid_id(), &faces)
+}
+
+fn detect_one_solid_from_faces(
+    solid_id: u64,
+    faces: &[FaceInfo],
+) -> Option<RecoveredSolidExtrusion> {
+    if faces.len() < 3 {
+        return None;
+    }
+    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
+    for (face_index, face) in faces.iter().enumerate() {
+        for edge in &face.loop_edges {
+            edge_faces.entry(edge.edge_id).or_default().push(face_index);
+        }
+    }
+    if edge_faces.values().any(|attached| attached.len() != 2) {
+        return None;
+    }
+
+    let mut candidates = Vec::new();
+    for first in 0..faces.len() {
+        for second in first + 1..faces.len() {
+            if let Some(candidate) = cap_pair_candidate(solid_id, first, second, faces, &edge_faces)
+            {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates.into_iter().min_by(candidate_order)
+}
+
+fn candidate_order(
+    first: &RecoveredSolidExtrusion,
+    second: &RecoveredSolidExtrusion,
+) -> std::cmp::Ordering {
+    first
+        .profile_complexity()
+        .cmp(&second.profile_complexity())
+        .then_with(|| {
+            first
+                .profile_curve_count()
+                .cmp(&second.profile_curve_count())
+        })
+        .then_with(|| first.z_axis[0].total_cmp(&second.z_axis[0]))
+        .then_with(|| first.z_axis[1].total_cmp(&second.z_axis[1]))
+        .then_with(|| first.z_axis[2].total_cmp(&second.z_axis[2]))
+        .then_with(|| first.height_mm.total_cmp(&second.height_mm))
+}
+
+struct CapPairProof<'a> {
+    bottom_index: usize,
+    top_index: usize,
+    bottom: &'a FaceInfo,
+    top: &'a FaceInfo,
+    z_axis: [f64; 3],
+    height_mm: f64,
+    extrusion: [f64; 3],
+    bottom_loop_roles: Vec<bool>,
+    top_loop_roles: Vec<bool>,
+    max_residual_mm: f64,
+}
+
+struct SideProof {
+    side_indices: Vec<usize>,
+    max_residual_mm: f64,
+}
+
+struct SideProofContext<'a> {
+    bottom: &'a FaceInfo,
+    top: &'a FaceInfo,
+    bottom_edges: &'a HashSet<u64>,
+    top_edges: &'a HashSet<u64>,
+    extrusion: [f64; 3],
+}
+
+fn cap_pair_candidate(
+    solid_id: u64,
+    first_index: usize,
+    second_index: usize,
+    faces: &[FaceInfo],
+    edge_faces: &HashMap<u64, Vec<usize>>,
+) -> Option<RecoveredSolidExtrusion> {
+    let pair = ordered_cap_pair(first_index, second_index, faces)?;
+    let side_proof = prove_extrusion_sides(&pair, faces, edge_faces)?;
+    let profile = canonical_profile(pair.bottom, pair.z_axis, &pair.bottom_loop_roles)?;
+
+    Some(RecoveredSolidExtrusion {
+        solid_id,
+        cap_face_ids: [pair.bottom.id, pair.top.id],
+        side_face_ids: side_proof
+            .side_indices
+            .iter()
+            .map(|&index| faces[index].id)
+            .collect(),
+        profile_curves: profile.curves,
+        inner_profile_loops: profile.inner_loops,
+        origin_mm: profile.origin_mm,
+        x_axis: profile.x_axis,
+        y_axis: profile.y_axis,
+        z_axis: pair.z_axis,
+        height_mm: pair.height_mm,
+        max_residual_mm: side_proof.max_residual_mm,
+    })
+}
+
+fn ordered_cap_pair(
+    first_index: usize,
+    second_index: usize,
+    faces: &[FaceInfo],
+) -> Option<CapPairProof<'_>> {
+    let first = &faces[first_index];
+    let second = &faces[second_index];
+    let (SurfaceSupport::Plane(first_plane), SurfaceSupport::Plane(second_plane)) =
+        (&first.surface, &second.surface)
+    else {
+        return None;
+    };
+    if first.loop_edges.is_empty()
+        || first.loop_edges.len() != second.loop_edges.len()
+        || first.loops.len() != second.loops.len()
+        || !parallel(first_plane.normal, second_plane.normal)
+    {
+        return None;
+    }
+
+    let z_axis = canonical_direction(first_plane.normal);
+    let separation = dot(z_axis, second_plane.origin_mm) - dot(z_axis, first_plane.origin_mm);
+    if !separation.is_finite() || separation.abs() <= GEOM_TOL_MM {
+        return None;
+    }
+    let (bottom_index, top_index, height_mm) = if separation > 0.0 {
+        (first_index, second_index, separation)
+    } else {
+        (second_index, first_index, -separation)
+    };
+    let bottom = &faces[bottom_index];
+    let top = &faces[top_index];
+    let SurfaceSupport::Plane(bottom_plane) = &bottom.surface else {
+        return None;
+    };
+    let SurfaceSupport::Plane(top_plane) = &top.surface else {
+        return None;
+    };
+    if !face_lies_on_plane(bottom, *bottom_plane) || !face_lies_on_plane(top, *top_plane) {
+        return None;
+    }
+
+    // A cap-derived core can only occupy source material when the two source
+    // faces bound the interval from the outside: the lower cap must face
+    // opposite the extrusion direction and the upper cap must face along it.
+    // This is necessary, not sufficient, for containment (an hourglass-shaped
+    // side wall can still cut into the prism), but it rejects translated planar
+    // pairs that geometrically match while bounding empty/outside space.
+    if !cap_faces_bound_material_interval(
+        *bottom_plane,
+        bottom.surface_forward,
+        *top_plane,
+        top.surface_forward,
+        z_axis,
+    ) {
+        return None;
+    }
+
+    Some(CapPairProof {
+        bottom_index,
+        top_index,
+        bottom,
+        top,
+        z_axis,
+        height_mm,
+        extrusion: mul(z_axis, height_mm),
+        bottom_loop_roles: cap_loop_roles(bottom, z_axis)?,
+        top_loop_roles: cap_loop_roles(top, z_axis)?,
+        max_residual_mm: bottom_plane.max_residual_mm.max(top_plane.max_residual_mm),
+    })
+}
+
+fn cap_faces_bound_material_interval(
+    bottom: PlaneSupport,
+    bottom_forward: bool,
+    top: PlaneSupport,
+    top_forward: bool,
+    z_axis: [f64; 3],
+) -> bool {
+    let bottom_outward = if bottom_forward {
+        bottom.normal
+    } else {
+        mul(bottom.normal, -1.0)
+    };
+    let top_outward = if top_forward {
+        top.normal
+    } else {
+        mul(top.normal, -1.0)
+    };
+    dot(bottom_outward, z_axis) <= -1.0 + DIR_TOL && dot(top_outward, z_axis) >= 1.0 - DIR_TOL
+}
+
+fn prove_translated_caps(pair: &CapPairProof<'_>) -> Option<f64> {
+    let mut translated_edges = HashMap::<u64, u64>::new();
+    let mut used_top_edges = HashSet::<u64>::new();
+    let mut max_residual_mm = pair.max_residual_mm;
+
+    for bottom_edge in &pair.bottom.loop_edges {
+        let matches = pair
+            .top
+            .loop_edges
+            .iter()
+            .filter(|top_edge| !used_top_edges.contains(&top_edge.edge_id))
+            .filter_map(|top_edge| {
+                let residual =
+                    translated_profile_edge_residual(bottom_edge, top_edge, pair.extrusion)?;
+                (residual <= GEOM_TOL_MM).then_some((top_edge.edge_id, residual))
+            })
+            .collect::<Vec<_>>();
+        let [(top_edge_id, residual)] = matches.as_slice() else {
+            return None;
+        };
+        used_top_edges.insert(*top_edge_id);
+        translated_edges.insert(bottom_edge.edge_id, *top_edge_id);
+        max_residual_mm = max_residual_mm.max(*residual);
+    }
+    if used_top_edges.len() != pair.top.loop_edges.len()
+        || !translated_cap_loops_match(
+            pair.bottom,
+            pair.top,
+            &translated_edges,
+            &pair.bottom_loop_roles,
+            &pair.top_loop_roles,
+        )
+    {
+        return None;
+    }
+    Some(max_residual_mm)
+}
+
+fn has_intervening_translated_boundary(pair: &CapPairProof<'_>, faces: &[FaceInfo]) -> bool {
+    let SurfaceSupport::Plane(bottom_plane) = pair.bottom.surface else {
+        return true;
+    };
+
+    faces.iter().enumerate().any(|(face_index, face)| {
+        if face_index == pair.bottom_index || face_index == pair.top_index {
+            return false;
+        }
+        let SurfaceSupport::Plane(plane) = face.surface else {
+            return false;
+        };
+        if !parallel(plane.normal, bottom_plane.normal) || !face_lies_on_plane(face, plane) {
+            return false;
+        }
+
+        let offset = dot(pair.z_axis, sub(plane.origin_mm, bottom_plane.origin_mm));
+        if offset <= GEOM_TOL_MM || offset >= pair.height_mm - GEOM_TOL_MM {
+            return false;
+        }
+        if face.loops.len() != pair.bottom.loops.len()
+            || face.loop_edges.len() != pair.bottom.loop_edges.len()
+        {
+            return false;
+        }
+        let Some(top_loop_roles) = cap_loop_roles(face, pair.z_axis) else {
+            return false;
+        };
+        let intermediate = CapPairProof {
+            bottom_index: pair.bottom_index,
+            top_index: face_index,
+            bottom: pair.bottom,
+            top: face,
+            z_axis: pair.z_axis,
+            height_mm: offset,
+            extrusion: mul(pair.z_axis, offset),
+            bottom_loop_roles: pair.bottom_loop_roles.clone(),
+            top_loop_roles,
+            max_residual_mm: pair.max_residual_mm.max(plane.max_residual_mm),
+        };
+        prove_translated_caps(&intermediate).is_some()
+    })
+}
+
+/// Prove all source side faces themselves are the exact ruled walls of an extrusion.
+fn prove_extrusion_sides(
+    pair: &CapPairProof<'_>,
+    faces: &[FaceInfo],
+    edge_faces: &HashMap<u64, Vec<usize>>,
+) -> Option<SideProof> {
+    if pair.max_residual_mm > GEOM_TOL_MM {
+        return None;
+    }
+    let bottom_edges = pair
+        .bottom
+        .loop_edges
+        .iter()
+        .map(|edge| edge.edge_id)
+        .collect::<HashSet<_>>();
+    let top_edges = pair
+        .top
+        .loop_edges
+        .iter()
+        .map(|edge| edge.edge_id)
+        .collect::<HashSet<_>>();
+    if !bottom_edges.is_disjoint(&top_edges) {
+        return None;
+    }
+
+    let side_indices = (0..faces.len())
+        .filter(|&index| index != pair.bottom_index && index != pair.top_index)
+        .collect::<Vec<_>>();
+    if side_indices.len() != pair.bottom.loop_edges.len() {
+        return None;
+    }
+
+    let context = SideProofContext {
+        bottom: pair.bottom,
+        top: pair.top,
+        bottom_edges: &bottom_edges,
+        top_edges: &top_edges,
+        extrusion: pair.extrusion,
+    };
+    let mut used_bottom_edges = HashSet::new();
+    let mut used_top_edges = HashSet::new();
+    let mut translated_edges = HashMap::new();
+    let mut max_residual_mm = pair.max_residual_mm;
+    for &side_index in &side_indices {
+        let residual = prove_side_face(
+            &faces[side_index],
+            &context,
+            &mut used_bottom_edges,
+            &mut used_top_edges,
+            &mut translated_edges,
+        )?;
+        max_residual_mm = max_residual_mm.max(residual);
+    }
+
+    if used_bottom_edges != bottom_edges
+        || used_top_edges != top_edges
+        || !translated_cap_loops_match(
+            pair.bottom,
+            pair.top,
+            &translated_edges,
+            &pair.bottom_loop_roles,
+            &pair.top_loop_roles,
+        )
+        || edge_faces.iter().any(|(edge, attached)| {
+            (bottom_edges.contains(edge) || top_edges.contains(edge)) && attached.len() != 2
+        })
+    {
+        return None;
+    }
+
+    Some(SideProof {
+        side_indices,
+        max_residual_mm,
+    })
+}
+
+fn prove_side_face(
+    side: &FaceInfo,
+    context: &SideProofContext<'_>,
+    used_bottom_edges: &mut HashSet<u64>,
+    used_top_edges: &mut HashSet<u64>,
+    translated_edges: &mut HashMap<u64, u64>,
+) -> Option<f64> {
+    if side.loops.len() != 1 || side.loop_edges.len() != 4 {
+        return None;
+    }
+    let side_edge_ids = side
+        .loop_edges
+        .iter()
+        .map(|edge| edge.edge_id)
+        .collect::<HashSet<_>>();
+    let shared_bottom = side_edge_ids
+        .intersection(context.bottom_edges)
+        .copied()
+        .collect::<Vec<_>>();
+    let shared_top = side_edge_ids
+        .intersection(context.top_edges)
+        .copied()
+        .collect::<Vec<_>>();
+    if shared_bottom.len() != 1 || shared_top.len() != 1 {
+        return None;
+    }
+    let bottom_edge_id = shared_bottom[0];
+    let top_edge_id = shared_top[0];
+    if !used_bottom_edges.insert(bottom_edge_id)
+        || !used_top_edges.insert(top_edge_id)
+        || translated_edges
+            .insert(bottom_edge_id, top_edge_id)
+            .is_some()
+    {
+        return None;
+    }
+
+    let bottom_edge = context
+        .bottom
+        .loop_edges
+        .iter()
+        .find(|edge| edge.edge_id == bottom_edge_id)?;
+    let top_edge = context
+        .top
+        .loop_edges
+        .iter()
+        .find(|edge| edge.edge_id == top_edge_id)?;
+    let profile_residual =
+        translated_profile_edge_residual(bottom_edge, top_edge, context.extrusion)?;
+    let side_residual = side_support_residual(side, bottom_edge, context.extrusion)?;
+    if profile_residual > GEOM_TOL_MM || side_residual > GEOM_TOL_MM {
+        return None;
+    }
+
+    let mut max_residual_mm = profile_residual.max(side_residual);
+    let lateral_edges = side
+        .loop_edges
+        .iter()
+        .filter(|edge| edge.edge_id != bottom_edge_id && edge.edge_id != top_edge_id)
+        .collect::<Vec<_>>();
+    if lateral_edges.len() != 2 {
+        return None;
+    }
+    for lateral in lateral_edges {
+        let residual = connector_residual(lateral, context.extrusion)?;
+        if residual > GEOM_TOL_MM {
+            return None;
+        }
+        max_residual_mm = max_residual_mm.max(residual);
+    }
+    Some(max_residual_mm)
+}
+
+fn cap_loop_roles(face: &FaceInfo, z_axis: [f64; 3]) -> Option<Vec<bool>> {
+    if face.loops.is_empty() {
+        return None;
+    }
+    if face.loops.len() == 1 {
+        return Some(vec![true]);
+    }
+
+    let explicit_outer = face
+        .loops
+        .iter()
+        .enumerate()
+        .filter_map(|(index, loop_)| loop_.outer.then_some(index))
+        .collect::<Vec<_>>();
+    if explicit_outer.len() > 1 {
+        return None;
+    }
+    if let [outer_index] = explicit_outer.as_slice() {
+        let mut roles = vec![false; face.loops.len()];
+        roles[*outer_index] = true;
+        return Some(roles);
+    }
+
+    // Some exporters emit every boundary as FACE_BOUND. Recover that case only
+    // when the geometry itself proves one unambiguous outer loop.
+    let loops = projected_cap_loops(face, z_axis)?;
+    convex_polygon_outer_roles(&loops)
+}
+
+fn projected_cap_loops(
+    face: &FaceInfo,
+    z_axis: [f64; 3],
+) -> Option<Vec<Vec<RecoveredProfileCurve>>> {
+    let (x_axis, y_axis) = profile_axes(z_axis)?;
+    let origin_mm = face.loop_edges.first()?.start_mm;
+    face.loops
+        .iter()
+        .map(|loop_| {
+            loop_
+                .edges
+                .iter()
+                .map(|edge| recovered_profile_curve(edge, origin_mm, x_axis, y_axis, z_axis))
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect()
+}
+
+fn convex_polygon_outer_roles(loops: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<bool>> {
+    let candidates = loops
+        .iter()
+        .enumerate()
+        .filter_map(|(index, curves)| {
+            let (polygon, orientation) = convex_line_polygon(curves)?;
+            loops
+                .iter()
+                .enumerate()
+                .all(|(other_index, other)| {
+                    other_index == index || loop_inside_convex_polygon(other, &polygon, orientation)
+                })
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let [outer_index] = candidates.as_slice() else {
+        return None;
+    };
+
+    let hole_boxes = loops
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index != outer_index)
+        .map(|(_, curves)| loop_conservative_bbox(curves))
+        .collect::<Option<Vec<_>>>()?;
+    for first in 0..hole_boxes.len() {
+        for second in first + 1..hole_boxes.len() {
+            if !bbox_disjoint(hole_boxes[first], hole_boxes[second]) {
+                return None;
+            }
+        }
+    }
+
+    let mut roles = vec![false; loops.len()];
+    roles[*outer_index] = true;
+    Some(roles)
+}
+
+fn convex_line_polygon(curves: &[RecoveredProfileCurve]) -> Option<(Vec<[f64; 2]>, f64)> {
+    if curves.len() < 3 {
+        return None;
+    }
+    let mut points = Vec::with_capacity(curves.len());
+    for (index, curve) in curves.iter().enumerate() {
+        let RecoveredProfileCurve::Line {
+            start_mm, end_mm, ..
+        } = curve
+        else {
+            return None;
+        };
+        let next_start = curves[(index + 1) % curves.len()].start_point()?;
+        if distance2(*end_mm, next_start) > GEOM_TOL_MM {
+            return None;
+        }
+        points.push(*start_mm);
+    }
+
+    let area = signed_area_curves(curves);
+    if !area.is_finite() || area.abs() <= GEOM_TOL_MM * GEOM_TOL_MM {
+        return None;
+    }
+    let orientation = area.signum();
+    let mut has_turn = false;
+    for index in 0..points.len() {
+        let a = points[index];
+        let b = points[(index + 1) % points.len()];
+        let c = points[(index + 2) % points.len()];
+        let first = normalize2(sub2(b, a), DIR_TOL)?;
+        let second = normalize2(sub2(c, b), DIR_TOL)?;
+        let turn = cross2(first, second) * orientation;
+        if turn < -DIR_TOL {
+            return None;
+        }
+        has_turn |= turn > DIR_TOL;
+    }
+    has_turn.then_some((points, orientation))
+}
+
+fn loop_inside_convex_polygon(
+    curves: &[RecoveredProfileCurve],
+    polygon: &[[f64; 2]],
+    orientation: f64,
+) -> bool {
+    curves.iter().all(|curve| match curve {
+        RecoveredProfileCurve::Line {
+            start_mm, end_mm, ..
+        } => {
+            point_inside_convex_polygon(*start_mm, polygon, orientation)
+                && point_inside_convex_polygon(*end_mm, polygon, orientation)
+        }
+        RecoveredProfileCurve::CircleArc {
+            center_mm,
+            radius_mm,
+            ..
+        } => circle_inside_convex_polygon(*center_mm, *radius_mm, polygon, orientation),
+        RecoveredProfileCurve::Bezier {
+            control_points_mm, ..
+        }
+        | RecoveredProfileCurve::BSpline {
+            control_points_mm, ..
+        } => control_points_mm
+            .iter()
+            .all(|point| point_inside_convex_polygon(*point, polygon, orientation)),
+    })
+}
+
+fn point_inside_convex_polygon(point: [f64; 2], polygon: &[[f64; 2]], orientation: f64) -> bool {
+    polygon.iter().enumerate().all(|(index, &a)| {
+        let b = polygon[(index + 1) % polygon.len()];
+        let edge = sub2(b, a);
+        let Some(direction) = normalize2(edge, DIR_TOL) else {
+            return false;
+        };
+        orientation * cross2(direction, sub2(point, a)) > GEOM_TOL_MM
+    })
+}
+
+fn circle_inside_convex_polygon(
+    center: [f64; 2],
+    radius: f64,
+    polygon: &[[f64; 2]],
+    orientation: f64,
+) -> bool {
+    radius.is_finite()
+        && radius > 0.0
+        && polygon.iter().enumerate().all(|(index, &a)| {
+            let b = polygon[(index + 1) % polygon.len()];
+            let edge = sub2(b, a);
+            let Some(direction) = normalize2(edge, DIR_TOL) else {
+                return false;
+            };
+            orientation.mul_add(cross2(direction, sub2(center, a)), -radius) > GEOM_TOL_MM
+        })
+}
+
+fn loop_conservative_bbox(curves: &[RecoveredProfileCurve]) -> Option<([f64; 2], [f64; 2])> {
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    let mut include = |point: [f64; 2]| {
+        min[0] = min[0].min(point[0]);
+        min[1] = min[1].min(point[1]);
+        max[0] = max[0].max(point[0]);
+        max[1] = max[1].max(point[1]);
+    };
+
+    for curve in curves {
+        match curve {
+            RecoveredProfileCurve::Line {
+                start_mm, end_mm, ..
+            } => {
+                include(*start_mm);
+                include(*end_mm);
+            }
+            RecoveredProfileCurve::CircleArc {
+                center_mm,
+                radius_mm,
+                ..
+            } => {
+                if !radius_mm.is_finite() || *radius_mm <= 0.0 {
+                    return None;
+                }
+                include([center_mm[0] - radius_mm, center_mm[1] - radius_mm]);
+                include([center_mm[0] + radius_mm, center_mm[1] + radius_mm]);
+            }
+            RecoveredProfileCurve::Bezier {
+                control_points_mm, ..
+            }
+            | RecoveredProfileCurve::BSpline {
+                control_points_mm, ..
+            } => {
+                if control_points_mm.is_empty() {
+                    return None;
+                }
+                for &point in control_points_mm {
+                    include(point);
+                }
+            }
+        }
+    }
+    min[0].is_finite().then_some((min, max))
+}
+
+fn bbox_disjoint(first: ([f64; 2], [f64; 2]), second: ([f64; 2], [f64; 2])) -> bool {
+    first.1[0] + GEOM_TOL_MM < second.0[0]
+        || second.1[0] + GEOM_TOL_MM < first.0[0]
+        || first.1[1] + GEOM_TOL_MM < second.0[1]
+        || second.1[1] + GEOM_TOL_MM < first.0[1]
+}
+
+fn profile_axes(z_axis: [f64; 3]) -> Option<([f64; 3], [f64; 3])> {
+    let reference = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        .into_iter()
+        .min_by(|a, b| dot(*a, z_axis).abs().total_cmp(&dot(*b, z_axis).abs()))?;
+    let x_axis = normalize(sub(reference, mul(z_axis, dot(reference, z_axis))))?;
+    let y_axis = normalize(cross(z_axis, x_axis))?;
+    Some((x_axis, y_axis))
+}
+
+fn translated_cap_loops_match(
+    bottom: &FaceInfo,
+    top: &FaceInfo,
+    translated_edges: &HashMap<u64, u64>,
+    bottom_roles: &[bool],
+    top_roles: &[bool],
+) -> bool {
+    if bottom.loops.len() != top.loops.len()
+        || bottom_roles.len() != bottom.loops.len()
+        || top_roles.len() != top.loops.len()
+    {
+        return false;
+    }
+    if bottom.loops.len() <= 1 {
+        return true;
+    }
+
+    let top_sets = top
+        .loops
+        .iter()
+        .zip(top_roles.iter().copied())
+        .map(|(loop_, outer)| {
+            (
+                outer,
+                loop_
+                    .edges
+                    .iter()
+                    .map(|edge| edge.edge_id)
+                    .collect::<HashSet<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut used_top_loops = HashSet::new();
+
+    for (bottom_loop, bottom_outer) in bottom.loops.iter().zip(bottom_roles.iter().copied()) {
+        let mapped = bottom_loop
+            .edges
+            .iter()
+            .map(|edge| translated_edges.get(&edge.edge_id).copied())
+            .collect::<Option<HashSet<_>>>();
+        let Some(mapped) = mapped else {
+            return false;
+        };
+        let matches = top_sets
+            .iter()
+            .enumerate()
+            .filter(|(index, (outer, edges))| {
+                !used_top_loops.contains(index) && *outer == bottom_outer && *edges == mapped
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let [top_index] = matches.as_slice() else {
+            return false;
+        };
+        used_top_loops.insert(*top_index);
+    }
+
+    used_top_loops.len() == top.loops.len()
+}
+fn face_info(
+    face_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<FaceInfo> {
+    let surface_id = brep::face_surface(face_id, entities, index)?;
+    let surface = brep::surface_support(surface_id, entities, index);
+    if matches!(surface, SurfaceSupport::Other { .. }) {
+        return None;
+    }
+
+    let loops = brep::face_loops(face_id, entities, index)?;
+    if loops.is_empty()
+        || loops.iter().any(|loop_| {
+            loop_.edges.is_empty()
+                || loop_
+                    .edges
+                    .iter()
+                    .any(|edge| matches!(edge.support, CurveSupport::Other { .. }))
+        })
+    {
+        return None;
+    }
+    let loop_edges = loops
+        .iter()
+        .flat_map(|loop_| loop_.edges.iter().cloned())
+        .collect::<Vec<_>>();
+
+    let surface_forward = match brep::face_sense(face_id, entities, index)?.as_str() {
+        "T" => true,
+        "F" => false,
+        _ => return None,
+    };
+
+    Some(FaceInfo {
+        id: face_id,
+        surface,
+        surface_forward,
+        loops,
+        loop_edges,
+    })
+}
+
+fn face_lies_on_plane(face: &FaceInfo, plane: PlaneSupport) -> bool {
+    face.loop_edges
+        .iter()
+        .all(|edge| edge_lies_on_plane(edge, plane))
+}
+
+fn edge_lies_on_plane(edge: &OrientedEdgeUse, plane: PlaneSupport) -> bool {
+    if point_plane_distance(edge.start_mm, plane) > GEOM_TOL_MM
+        || point_plane_distance(edge.end_mm, plane) > GEOM_TOL_MM
+    {
+        return false;
+    }
+    match &edge.support {
+        CurveSupport::Line(_) => true,
+        CurveSupport::Circle(circle) => {
+            point_plane_distance(circle.center_mm, plane) <= GEOM_TOL_MM
+                && parallel(circle.normal, plane.normal)
+        }
+        CurveSupport::BSpline(spline) => spline
+            .control_points_mm
+            .iter()
+            .all(|&point| point_plane_distance(point, plane) <= GEOM_TOL_MM),
+        CurveSupport::Other { .. } => false,
+    }
+}
+
+fn translated_profile_edge_residual(
+    bottom: &OrientedEdgeUse,
+    top: &OrientedEdgeUse,
+    extrusion: [f64; 3],
+) -> Option<f64> {
+    let endpoint_residual = translated_endpoints_residual(bottom, top, extrusion);
+    match (&bottom.support, &top.support) {
+        (CurveSupport::Line(_), CurveSupport::Line(_)) => Some(endpoint_residual),
+        (CurveSupport::Circle(bottom_circle), CurveSupport::Circle(top_circle)) => {
+            if !parallel(bottom_circle.normal, top_circle.normal) {
+                return None;
+            }
+            if (bottom_circle.radius_mm - top_circle.radius_mm).abs() > GEOM_TOL_MM {
+                return None;
+            }
+            let bottom_sweep = circle_edge_sweep(bottom, *bottom_circle)?;
+            let top_sweep = circle_edge_sweep(top, *top_circle)?;
+            if (bottom_sweep.abs() - top_sweep.abs()).abs() > ANGLE_TOL_RAD {
+                return None;
+            }
+            Some(
+                endpoint_residual
+                    .max(distance(
+                        add(bottom_circle.center_mm, extrusion),
+                        top_circle.center_mm,
+                    ))
+                    .max((bottom_circle.radius_mm - top_circle.radius_mm).abs()),
+            )
+        }
+        (CurveSupport::BSpline(bottom_spline), CurveSupport::BSpline(top_spline)) => {
+            let spline_residual =
+                translated_bspline_residual(bottom_spline, top_spline, extrusion)?;
+            Some(endpoint_residual.max(spline_residual))
+        }
+        _ => None,
+    }
+}
+
+fn translated_endpoints_residual(
+    bottom: &OrientedEdgeUse,
+    top: &OrientedEdgeUse,
+    extrusion: [f64; 3],
+) -> f64 {
+    let direct = distance(add(bottom.start_mm, extrusion), top.start_mm)
+        .max(distance(add(bottom.end_mm, extrusion), top.end_mm));
+    let reverse = distance(add(bottom.start_mm, extrusion), top.end_mm)
+        .max(distance(add(bottom.end_mm, extrusion), top.start_mm));
+    direct.min(reverse)
+}
+
+fn translated_bspline_residual(
+    bottom: &BSplineSupport,
+    top: &BSplineSupport,
+    extrusion: [f64; 3],
+) -> Option<f64> {
+    let direct = bspline_control_residual(bottom, top, extrusion);
+    let reversed_top = reverse_bspline_support(top);
+    let reversed = bspline_control_residual(bottom, &reversed_top, extrusion);
+    match (direct, reversed) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+fn bspline_control_residual(
+    source: &BSplineSupport,
+    target: &BSplineSupport,
+    translation: [f64; 3],
+) -> Option<f64> {
+    if !bspline_parameterization_matches(source, target)
+        || source.control_points_mm.len() != target.control_points_mm.len()
+    {
+        return None;
+    }
+    Some(
+        source
+            .control_points_mm
+            .iter()
+            .zip(&target.control_points_mm)
+            .map(|(&source_point, &target_point)| {
+                distance(add(source_point, translation), target_point)
+            })
+            .fold(0.0_f64, f64::max),
+    )
+}
+
+fn bspline_parameterization_matches(first: &BSplineSupport, second: &BSplineSupport) -> bool {
+    if first.degree != second.degree
+        || first.knots.len() != second.knots.len()
+        || first
+            .knots
+            .iter()
+            .zip(&second.knots)
+            .any(|(a, b)| (a - b).abs() > 1.0e-12)
+    {
+        return false;
+    }
+    match (&first.weights, &second.weights) {
+        (None, None) => true,
+        (Some(a), Some(b)) if a.len() == b.len() => {
+            a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 1.0e-12)
+        }
+        _ => false,
+    }
+}
+
+fn reverse_bspline_support(spline: &BSplineSupport) -> BSplineSupport {
+    BSplineSupport {
+        degree: spline.degree,
+        control_points_mm: spline.control_points_mm.iter().rev().copied().collect(),
+        knots: spline.knots.iter().rev().map(|knot| 1.0 - knot).collect(),
+        weights: spline
+            .weights
+            .as_ref()
+            .map(|weights| weights.iter().rev().copied().collect()),
+    }
+}
+
+fn side_support_residual(
+    side: &FaceInfo,
+    profile_edge: &OrientedEdgeUse,
+    extrusion: [f64; 3],
+) -> Option<f64> {
+    let z_axis = normalize(extrusion)?;
+    match (&profile_edge.support, &side.surface) {
+        (_, SurfaceSupport::Plane(plane)) => {
+            // A profile edge that lies on both the cap and this side plane is
+            // geometrically linear even when STEP encodes it as a B-spline.
+            // Prove the side directly from its plane instead of requiring a
+            // LINE entity spelling.
+            (dot(z_axis, plane.normal).abs() <= DIR_TOL
+                && edge_lies_on_plane(profile_edge, *plane)
+                && side
+                    .loop_edges
+                    .iter()
+                    .all(|edge| edge_lies_on_plane(edge, *plane)))
+            .then_some(plane.max_residual_mm)
+        }
+        (CurveSupport::Circle(circle), SurfaceSupport::Cylinder(cylinder)) => {
+            if !parallel(circle.normal, z_axis)
+                || !parallel(cylinder.axis, z_axis)
+                || (circle.radius_mm - cylinder.radius_mm).abs() > GEOM_TOL_MM
+            {
+                return None;
+            }
+            let residual = point_to_unit_line_distance(
+                circle.center_mm,
+                cylinder.axis_origin_mm,
+                cylinder.axis,
+            )
+            .max((circle.radius_mm - cylinder.radius_mm).abs());
+            (residual <= GEOM_TOL_MM).then_some(residual)
+        }
+        (CurveSupport::BSpline(profile), SurfaceSupport::SplineExtrusion(surface)) => {
+            spline_side_residual(profile, surface, extrusion)
+        }
+        _ => None,
+    }
+}
+
+fn spline_side_residual(
+    profile: &BSplineSupport,
+    surface: &SplineExtrusionSupport,
+    extrusion: [f64; 3],
+) -> Option<f64> {
+    let sweep_residual = distance(surface.extrusion_mm, extrusion)
+        .min(distance(surface.extrusion_mm, mul(extrusion, -1.0)));
+    if sweep_residual > GEOM_TOL_MM || surface.max_residual_mm > GEOM_TOL_MM {
+        return None;
+    }
+
+    let candidate_translations = [[0.0, 0.0, 0.0], extrusion, mul(extrusion, -1.0)];
+    let mut profile_residual = f64::INFINITY;
+    for translation in candidate_translations {
+        if let Some(value) = bspline_control_residual(profile, &surface.profile, translation) {
+            profile_residual = profile_residual.min(value);
+        }
+        let reversed = reverse_bspline_support(&surface.profile);
+        if let Some(value) = bspline_control_residual(profile, &reversed, translation) {
+            profile_residual = profile_residual.min(value);
+        }
+    }
+    if !profile_residual.is_finite() || profile_residual > GEOM_TOL_MM {
+        return None;
+    }
+    Some(
+        profile_residual
+            .max(sweep_residual)
+            .max(surface.max_residual_mm),
+    )
+}
+
+fn connector_residual(edge: &OrientedEdgeUse, extrusion: [f64; 3]) -> Option<f64> {
+    if !matches!(&edge.support, CurveSupport::Line(_)) {
+        return None;
+    }
+    let forward = distance(sub(edge.end_mm, edge.start_mm), extrusion);
+    let reverse = distance(sub(edge.start_mm, edge.end_mm), extrusion);
+    Some(forward.min(reverse))
+}
+
+fn canonical_profile(
+    cap: &FaceInfo,
+    z_axis: [f64; 3],
+    loop_roles: &[bool],
+) -> Option<CanonicalProfile> {
+    if loop_roles.len() != cap.loops.len() || loop_roles.iter().filter(|outer| **outer).count() != 1
+    {
+        return None;
+    }
+    if cap.loops.len() > 1 {
+        return canonical_multi_loop_profile(cap, z_axis, loop_roles);
+    }
+
+    let outer = cap.loops.first()?;
+    if !raw_loop_is_continuous(&outer.edges) {
+        return None;
+    }
+    let (x_axis, y_axis) = profile_axes(z_axis)?;
+    let origin_mm = canonical_outer_origin(outer, x_axis, y_axis, z_axis)?;
+    let curves = canonical_profile_loop(&outer.edges, origin_mm, x_axis, y_axis, z_axis, true)?;
+
+    Some(CanonicalProfile {
+        origin_mm,
+        x_axis,
+        y_axis,
+        curves,
+        inner_loops: Vec::new(),
+    })
+}
+
+fn canonical_multi_loop_profile(
+    cap: &FaceInfo,
+    z_axis: [f64; 3],
+    loop_roles: &[bool],
+) -> Option<CanonicalProfile> {
+    let outer_index = loop_roles.iter().position(|outer| *outer)?;
+    let outer = cap.loops.get(outer_index)?;
+    if cap
+        .loops
+        .iter()
+        .any(|loop_| !raw_loop_is_continuous(&loop_.edges))
+    {
+        return None;
+    }
+
+    let (x_axis, y_axis) = profile_axes(z_axis)?;
+    let origin_mm = canonical_outer_origin(outer, x_axis, y_axis, z_axis)?;
+
+    let curves = canonical_profile_loop(&outer.edges, origin_mm, x_axis, y_axis, z_axis, true)?;
+    let mut inner_loops = cap
+        .loops
+        .iter()
+        .zip(loop_roles.iter().copied())
+        .filter(|(_, outer)| !*outer)
+        .map(|(loop_, _)| {
+            canonical_profile_loop(&loop_.edges, origin_mm, x_axis, y_axis, z_axis, false)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    inner_loops.sort_by(|first, second| profile_loop_order(first, second));
+
+    Some(CanonicalProfile {
+        origin_mm,
+        x_axis,
+        y_axis,
+        curves,
+        inner_loops,
+    })
+}
+fn canonical_outer_origin(
+    outer: &brep::FaceLoop,
+    x_axis: [f64; 3],
+    y_axis: [f64; 3],
+    z_axis: [f64; 3],
+) -> Option<[f64; 3]> {
+    if outer.edges.len() == 1
+        && let CurveSupport::Circle(circle) = &outer.edges[0].support
+        && distance(outer.edges[0].start_mm, outer.edges[0].end_mm) <= GEOM_TOL_MM
+        && parallel(circle.normal, z_axis)
+    {
+        return Some(circle.center_mm);
+    }
+
+    outer
+        .edges
+        .iter()
+        .flat_map(|edge| [edge.start_mm, edge.end_mm])
+        .min_by(|a, b| {
+            let aa = [dot(*a, x_axis), dot(*a, y_axis)];
+            let bb = [dot(*b, x_axis), dot(*b, y_axis)];
+            aa[0]
+                .total_cmp(&bb[0])
+                .then_with(|| aa[1].total_cmp(&bb[1]))
+        })
+}
+
+fn raw_loop_is_continuous(edges: &[OrientedEdgeUse]) -> bool {
+    !edges.is_empty()
+        && edges.iter().enumerate().all(|(index, current)| {
+            let next = &edges[(index + 1) % edges.len()];
+            current.end_vertex == next.start_vertex
+                && distance(current.end_mm, next.start_mm) <= GEOM_TOL_MM
+        })
+}
+
+fn canonical_profile_loop(
+    edges: &[OrientedEdgeUse],
+    origin_mm: [f64; 3],
+    x_axis: [f64; 3],
+    y_axis: [f64; 3],
+    z_axis: [f64; 3],
+    outer: bool,
+) -> Option<Vec<RecoveredProfileCurve>> {
+    if !raw_loop_is_continuous(edges) {
+        return None;
+    }
+    let mut curves = edges
+        .iter()
+        .map(|edge| recovered_profile_curve(edge, origin_mm, x_axis, y_axis, z_axis))
+        .collect::<Option<Vec<_>>>()?;
+
+    if !curves.iter().any(RecoveredProfileCurve::is_spline) {
+        let area = signed_area_curves(&curves);
+        let wrong_winding = if outer { area < 0.0 } else { area > 0.0 };
+        if wrong_winding {
+            curves = curves
+                .iter()
+                .rev()
+                .map(RecoveredProfileCurve::reversed)
+                .collect();
+        }
+    }
+    curves = simplify_profile_curves(curves);
+
+    if curves.len() == 1
+        && let RecoveredProfileCurve::CircleArc {
+            source_edge_ids,
+            center_mm,
+            radius_mm,
+            start_angle_rad,
+            end_angle_rad,
+        } = &curves[0]
+        && ((end_angle_rad - start_angle_rad).abs() - TAU).abs() <= ANGLE_TOL_RAD
+    {
+        curves = vec![RecoveredProfileCurve::CircleArc {
+            source_edge_ids: source_edge_ids.clone(),
+            center_mm: *center_mm,
+            radius_mm: *radius_mm,
+            start_angle_rad: 0.0,
+            end_angle_rad: if outer { TAU } else { -TAU },
+        }];
+    }
+
+    let endpoints = curves
+        .iter()
+        .map(|curve| Some((curve.start_point()?, curve.end_point()?)))
+        .collect::<Option<Vec<_>>>()?;
+    let start_index = (0..curves.len()).min_by(|&a, &b| {
+        let aa = endpoints[a].0;
+        let bb = endpoints[b].0;
+        aa[0]
+            .total_cmp(&bb[0])
+            .then_with(|| aa[1].total_cmp(&bb[1]))
+            .then_with(|| {
+                curves[a]
+                    .first_source_edge_id()
+                    .cmp(&curves[b].first_source_edge_id())
+            })
+    })?;
+    curves.rotate_left(start_index);
+
+    let endpoints = curves
+        .iter()
+        .map(|curve| Some((curve.start_point()?, curve.end_point()?)))
+        .collect::<Option<Vec<_>>>()?;
+    if endpoints.iter().enumerate().any(|(index, (_, end))| {
+        distance2(*end, endpoints[(index + 1) % endpoints.len()].0) > GEOM_TOL_MM
+    }) {
+        return None;
+    }
+    Some(curves)
+}
+
+fn profile_loop_order(
+    first: &[RecoveredProfileCurve],
+    second: &[RecoveredProfileCurve],
+) -> std::cmp::Ordering {
+    let first_point = first
+        .iter()
+        .filter_map(RecoveredProfileCurve::start_point)
+        .min_by(|a, b| a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])));
+    let second_point = second
+        .iter()
+        .filter_map(RecoveredProfileCurve::start_point)
+        .min_by(|a, b| a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])));
+    first_point
+        .cmp_by_total(second_point)
+        .then_with(|| first.len().cmp(&second.len()))
+        .then_with(|| {
+            first
+                .first()
+                .map(RecoveredProfileCurve::first_source_edge_id)
+                .cmp(
+                    &second
+                        .first()
+                        .map(RecoveredProfileCurve::first_source_edge_id),
+                )
+        })
+}
+
+trait TotalPointOrder {
+    fn cmp_by_total(self, other: Self) -> std::cmp::Ordering;
+}
+
+impl TotalPointOrder for Option<[f64; 2]> {
+    fn cmp_by_total(self, other: Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (Some(a), Some(b)) => a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])),
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+        }
+    }
+}
+
+fn recovered_profile_curve(
+    edge: &OrientedEdgeUse,
+    origin_mm: [f64; 3],
+    x_axis: [f64; 3],
+    y_axis: [f64; 3],
+    z_axis: [f64; 3],
+) -> Option<RecoveredProfileCurve> {
+    let start_mm = project2(edge.start_mm, origin_mm, x_axis, y_axis);
+    let end_mm = project2(edge.end_mm, origin_mm, x_axis, y_axis);
+    match &edge.support {
+        CurveSupport::Line(_) => Some(RecoveredProfileCurve::Line {
+            source_edge_ids: vec![edge.edge_id],
+            start_mm,
+            end_mm,
+        }),
+        CurveSupport::Circle(circle) => {
+            if !parallel(circle.normal, z_axis) {
+                return None;
+            }
+            let center_mm = project2(circle.center_mm, origin_mm, x_axis, y_axis);
+            let start_angle = point_angle_2d(start_mm, center_mm)?;
+            let end_angle = point_angle_2d(end_mm, center_mm)?;
+            let increasing = if dot(circle.normal, z_axis) >= 0.0 {
+                edge.parameter_forward
+            } else {
+                !edge.parameter_forward
+            };
+            let closed = distance(edge.start_mm, edge.end_mm) <= GEOM_TOL_MM;
+            let sweep = directional_sweep(start_angle, end_angle, increasing, closed);
+            Some(RecoveredProfileCurve::CircleArc {
+                source_edge_ids: vec![edge.edge_id],
+                center_mm,
+                radius_mm: circle.radius_mm,
+                start_angle_rad: start_angle,
+                end_angle_rad: start_angle + sweep,
+            })
+        }
+        CurveSupport::BSpline(spline) => {
+            let oriented = if edge.parameter_forward {
+                spline.clone()
+            } else {
+                reverse_bspline_support(spline)
+            };
+            let support_start = *oriented.control_points_mm.first()?;
+            let support_end = *oriented.control_points_mm.last()?;
+            if distance(support_start, edge.start_mm) > GEOM_TOL_MM
+                || distance(support_end, edge.end_mm) > GEOM_TOL_MM
+            {
+                return None;
+            }
+            let control_points_mm = oriented
+                .control_points_mm
+                .iter()
+                .map(|&point| project2(point, origin_mm, x_axis, y_axis))
+                .collect::<Vec<_>>();
+
+            if oriented.weights.is_none() && is_bezier_support(&oriented) {
+                Some(RecoveredProfileCurve::Bezier {
+                    source_edge_ids: vec![edge.edge_id],
+                    control_points_mm,
+                })
+            } else {
+                Some(RecoveredProfileCurve::BSpline {
+                    source_edge_ids: vec![edge.edge_id],
+                    degree: oriented.degree,
+                    control_points_mm,
+                    knots: oriented.knots,
+                    weights: oriented.weights,
+                })
+            }
+        }
+        CurveSupport::Other { .. } => None,
+    }
+}
+
+fn is_bezier_support(spline: &BSplineSupport) -> bool {
+    let Some(order) = spline.degree.checked_add(1) else {
+        return false;
+    };
+    let Some(expected_knots) = order.checked_mul(2) else {
+        return false;
+    };
+    if spline.control_points_mm.len() != order || spline.knots.len() != expected_knots {
+        return false;
+    }
+    spline.knots[..order]
+        .iter()
+        .all(|knot| knot.abs() <= 1.0e-12)
+        && spline.knots[order..]
+            .iter()
+            .all(|knot| (*knot - 1.0).abs() <= 1.0e-12)
+}
+
+fn simplify_profile_curves(mut curves: Vec<RecoveredProfileCurve>) -> Vec<RecoveredProfileCurve> {
+    if curves.len() <= 1 {
+        return curves;
+    }
+
+    loop {
+        let mut changed = false;
+        let mut linear = Vec::with_capacity(curves.len());
+        let mut index = 0;
+        while index < curves.len() {
+            if index + 1 < curves.len()
+                && let Some(merged) = merge_profile_curves(&curves[index], &curves[index + 1])
+            {
+                linear.push(merged);
+                index += 2;
+                changed = true;
+                continue;
+            }
+            linear.push(curves[index].clone());
+            index += 1;
+        }
+        curves = linear;
+
+        if curves.len() > 1 {
+            let last = curves.len() - 1;
+            if let Some(merged) = merge_profile_curves(&curves[last], &curves[0]) {
+                let mut wrapped = Vec::with_capacity(curves.len() - 1);
+                wrapped.push(merged);
+                wrapped.extend(curves[1..last].iter().cloned());
+                curves = wrapped;
+                changed = true;
+            }
+        }
+
+        if !changed || curves.len() <= 1 {
+            return curves;
+        }
+    }
+}
+
+fn merge_profile_curves(
+    first: &RecoveredProfileCurve,
+    second: &RecoveredProfileCurve,
+) -> Option<RecoveredProfileCurve> {
+    if distance2(first.end_point()?, second.start_point()?) > GEOM_TOL_MM {
+        return None;
+    }
+
+    match (first, second) {
+        (
+            RecoveredProfileCurve::Line {
+                source_edge_ids: first_ids,
+                start_mm,
+                end_mm: first_end,
+            },
+            RecoveredProfileCurve::Line {
+                source_edge_ids: second_ids,
+                start_mm: second_start,
+                end_mm,
+            },
+        ) => {
+            let first_direction = normalize2(sub2(*first_end, *start_mm), DIR_TOL)?;
+            let second_direction = normalize2(sub2(*end_mm, *second_start), DIR_TOL)?;
+            if cross2(first_direction, second_direction).abs() > DIR_TOL
+                || dot2(first_direction, second_direction) < 1.0 - DIR_TOL
+            {
+                return None;
+            }
+            Some(RecoveredProfileCurve::Line {
+                source_edge_ids: merged_source_ids(first_ids, second_ids),
+                start_mm: *start_mm,
+                end_mm: *end_mm,
+            })
+        }
+        (
+            RecoveredProfileCurve::CircleArc {
+                source_edge_ids: first_ids,
+                center_mm: first_center,
+                radius_mm: first_radius,
+                start_angle_rad,
+                end_angle_rad: first_end,
+            },
+            RecoveredProfileCurve::CircleArc {
+                source_edge_ids: second_ids,
+                center_mm: second_center,
+                radius_mm: second_radius,
+                start_angle_rad: second_start,
+                end_angle_rad: second_end,
+            },
+        ) => {
+            if distance2(*first_center, *second_center) > GEOM_TOL_MM
+                || (first_radius - second_radius).abs() > GEOM_TOL_MM
+            {
+                return None;
+            }
+            let first_sweep = first_end - start_angle_rad;
+            let second_sweep = second_end - second_start;
+            if first_sweep.signum() != second_sweep.signum() {
+                return None;
+            }
+            let sweep = first_sweep + second_sweep;
+            if sweep.abs() > TAU + ANGLE_TOL_RAD {
+                return None;
+            }
+            Some(RecoveredProfileCurve::CircleArc {
+                source_edge_ids: merged_source_ids(first_ids, second_ids),
+                center_mm: *first_center,
+                radius_mm: f64::midpoint(*first_radius, *second_radius),
+                start_angle_rad: *start_angle_rad,
+                end_angle_rad: *start_angle_rad + sweep,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn merged_source_ids(first: &[u64], second: &[u64]) -> Vec<u64> {
+    let mut ids = first.iter().chain(second).copied().collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn circle_edge_sweep(edge: &OrientedEdgeUse, circle: CircleSupport) -> Option<f64> {
+    let start = circle_angle_3d(edge.start_mm, circle)?;
+    let end = circle_angle_3d(edge.end_mm, circle)?;
+    let closed = distance(edge.start_mm, edge.end_mm) <= GEOM_TOL_MM;
+    Some(directional_sweep(
+        start,
+        end,
+        edge.parameter_forward,
+        closed,
+    ))
+}
+
+fn directional_sweep(start: f64, end: f64, increasing: bool, closed: bool) -> f64 {
+    if closed {
+        return if increasing { TAU } else { -TAU };
+    }
+    if increasing {
+        (end - start).rem_euclid(TAU)
+    } else {
+        -((start - end).rem_euclid(TAU))
+    }
+}
+
+fn circle_angle_3d(point: [f64; 3], circle: CircleSupport) -> Option<f64> {
+    let y_direction = normalize(cross(circle.normal, circle.x_direction))?;
+    let relative = sub(point, circle.center_mm);
+    if dot(relative, circle.normal).abs() > GEOM_TOL_MM {
+        return None;
+    }
+    let radial = norm(relative);
+    if (radial - circle.radius_mm).abs() > GEOM_TOL_MM {
+        return None;
+    }
+    Some(dot(relative, y_direction).atan2(dot(relative, circle.x_direction)))
+}
+
+fn point_angle_2d(point: [f64; 2], center: [f64; 2]) -> Option<f64> {
+    let dx = point[0] - center[0];
+    let dy = point[1] - center[1];
+    let radius = dx.hypot(dy);
+    if !radius.is_finite() || radius <= DIR_TOL {
+        return None;
+    }
+    Some(dy.atan2(dx))
+}
+
+fn signed_area_curves(curves: &[RecoveredProfileCurve]) -> f64 {
+    curves
+        .iter()
+        .map(|curve| match curve {
+            RecoveredProfileCurve::Line {
+                start_mm, end_mm, ..
+            } => 0.5 * f64::mul_add(end_mm[0], -start_mm[1], start_mm[0] * end_mm[1]),
+            RecoveredProfileCurve::CircleArc {
+                center_mm,
+                radius_mm,
+                start_angle_rad,
+                end_angle_rad,
+                ..
+            } => {
+                let theta0 = *start_angle_rad;
+                let theta1 = *end_angle_rad;
+                let r = *radius_mm;
+                0.5 * f64::mul_add(
+                    r * r,
+                    theta1 - theta0,
+                    f64::mul_add(
+                        r * center_mm[1],
+                        -(theta1.cos() - theta0.cos()),
+                        r * center_mm[0] * (theta1.sin() - theta0.sin()),
+                    ),
+                )
+            }
+            RecoveredProfileCurve::Bezier { .. } | RecoveredProfileCurve::BSpline { .. } => 0.0,
+        })
+        .sum()
+}
+
+fn project2(point: [f64; 3], origin: [f64; 3], x_axis: [f64; 3], y_axis: [f64; 3]) -> [f64; 2] {
+    let relative = sub(point, origin);
+    let mut result = [dot(relative, x_axis), dot(relative, y_axis)];
+    for value in &mut result {
+        if value.abs() <= 1.0e-14 {
+            *value = 0.0;
+        }
+    }
+    result
+}
+
+fn point_plane_distance(point: [f64; 3], plane: PlaneSupport) -> f64 {
+    dot(plane.normal, sub(point, plane.origin_mm)).abs()
+}
+
+fn parallel(a: [f64; 3], b: [f64; 3]) -> bool {
+    (dot(a, b).abs() - 1.0).abs() <= DIR_TOL
+}
+
+fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> {
+    normalize3(vector, DIR_TOL)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line_edge(
+        edge_id: u64,
+        start_vertex: u64,
+        end_vertex: u64,
+        start_mm: [f64; 3],
+        end_mm: [f64; 3],
+    ) -> OrientedEdgeUse {
+        let delta = sub(end_mm, start_mm);
+        let length = norm(delta);
+        assert!(length > 1.0e-12, "test edge must have nonzero length");
+        let direction = mul(delta, 1.0 / length);
+        OrientedEdgeUse {
+            oriented_edge_id: edge_id + 100,
+            edge_id,
+            curve_id: edge_id + 200,
+            curve_same_sense: true,
+            parameter_forward: true,
+            start_vertex,
+            end_vertex,
+            start_mm,
+            end_mm,
+            support: CurveSupport::Line(brep::LineSupport {
+                origin_mm: start_mm,
+                direction,
+            }),
+        }
+    }
+
+    fn square_face_info(id: u64, edge_base: u64, z: f64, surface_forward: bool) -> FaceInfo {
+        let points = [[0.0, 0.0, z], [1.0, 0.0, z], [1.0, 1.0, z], [0.0, 1.0, z]];
+        let edges = (0..4)
+            .map(|index| {
+                line_edge(
+                    edge_base + index as u64,
+                    edge_base + 100 + index as u64,
+                    edge_base + 100 + ((index + 1) % 4) as u64,
+                    points[index],
+                    points[(index + 1) % 4],
+                )
+            })
+            .collect::<Vec<_>>();
+        let loop_ = brep::FaceLoop {
+            bound_id: id + 1_000,
+            loop_id: id + 2_000,
+            outer: true,
+            orientation: true,
+            edges: edges.clone(),
+        };
+        FaceInfo {
+            id,
+            surface: SurfaceSupport::Plane(PlaneSupport {
+                origin_mm: [0.0, 0.0, z],
+                normal: [0.0, 0.0, 1.0],
+                max_residual_mm: 0.0,
+            }),
+            surface_forward,
+            loops: vec![loop_],
+            loop_edges: edges,
+        }
+    }
+
+    #[test]
+    fn intervening_translated_boundary_rejects_spanning_core() -> anyhow::Result<()> {
+        let bottom = square_face_info(1, 10, 0.0, false);
+        let middle = square_face_info(2, 20, 0.5, true);
+        let top = square_face_info(3, 30, 1.0, true);
+        let faces = vec![bottom.clone(), middle, top.clone()];
+        let pair = ordered_cap_pair(0, 2, &faces)
+            .ok_or_else(|| anyhow::anyhow!("outer caps must form a candidate"))?;
+        assert!(prove_translated_caps(&pair).is_some());
+        assert!(has_intervening_translated_boundary(&pair, &faces));
+
+        let faces_without_middle = vec![bottom, top];
+        let pair = ordered_cap_pair(0, 1, &faces_without_middle)
+            .ok_or_else(|| anyhow::anyhow!("outer caps must still match"))?;
+        assert!(!has_intervening_translated_boundary(
+            &pair,
+            &faces_without_middle
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_axis_has_deterministic_sign() {
+        assert_eq!(canonical_direction([-1.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
+        assert_eq!(canonical_direction([0.0, -1.0, 0.0]), [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn cap_pair_requires_opposite_outward_normals() {
+        let down = PlaneSupport {
+            origin_mm: [0.0, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            max_residual_mm: 0.0,
+        };
+        let up = PlaneSupport {
+            origin_mm: [0.0, 0.0, 1.0],
+            normal: [0.0, 0.0, 1.0],
+            max_residual_mm: 0.0,
+        };
+        let z = [0.0, 0.0, 1.0];
+
+        assert!(cap_faces_bound_material_interval(down, false, up, true, z));
+        assert!(!cap_faces_bound_material_interval(down, true, up, false, z));
+        assert!(!cap_faces_bound_material_interval(
+            down, false, up, false, z
+        ));
+        assert!(!cap_faces_bound_material_interval(down, true, up, true, z));
+    }
+
+    #[test]
+    fn translated_line_residual_ignores_edge_orientation() {
+        let bottom = line_edge(1, 10, 11, [0.0, 0.0, 0.0], [2.0, 0.0, 0.0]);
+        let mut top = line_edge(2, 21, 20, [2.0, 0.0, 3.0], [0.0, 0.0, 3.0]);
+        top.parameter_forward = false;
+        assert_eq!(
+            translated_profile_edge_residual(&bottom, &top, [0.0, 0.0, 3.0]),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn coalesces_two_semicircles_into_full_circle() -> anyhow::Result<()> {
+        let curves = vec![
+            RecoveredProfileCurve::CircleArc {
+                source_edge_ids: vec![10],
+                center_mm: [0.0, 0.0],
+                radius_mm: 2.0,
+                start_angle_rad: 0.0,
+                end_angle_rad: std::f64::consts::PI,
+            },
+            RecoveredProfileCurve::CircleArc {
+                source_edge_ids: vec![11],
+                center_mm: [0.0, 0.0],
+                radius_mm: 2.0,
+                start_angle_rad: std::f64::consts::PI,
+                end_angle_rad: TAU,
+            },
+        ];
+        let simplified = simplify_profile_curves(curves);
+        assert_eq!(simplified.len(), 1);
+        let RecoveredProfileCurve::CircleArc {
+            source_edge_ids,
+            start_angle_rad,
+            end_angle_rad,
+            ..
+        } = &simplified[0]
+        else {
+            anyhow::bail!("expected circle");
+        };
+        assert_eq!(source_edge_ids, &vec![10, 11]);
+        assert!((*start_angle_rad).abs() < 1.0e-12);
+        assert!((*end_angle_rad - TAU).abs() < 1.0e-12);
+        Ok(())
+    }
+
+    fn profile_line(id: u64, start_mm: [f64; 2], end_mm: [f64; 2]) -> RecoveredProfileCurve {
+        RecoveredProfileCurve::Line {
+            source_edge_ids: vec![id],
+            start_mm,
+            end_mm,
+        }
+    }
+
+    fn rectangle_loop(id: u64, min: [f64; 2], max: [f64; 2]) -> Vec<RecoveredProfileCurve> {
+        vec![
+            profile_line(id, [min[0], min[1]], [max[0], min[1]]),
+            profile_line(id + 1, [max[0], min[1]], [max[0], max[1]]),
+            profile_line(id + 2, [max[0], max[1]], [min[0], max[1]]),
+            profile_line(id + 3, [min[0], max[1]], [min[0], min[1]]),
+        ]
+    }
+
+    #[test]
+    fn inferred_outer_requires_geometric_containment() {
+        let outer = rectangle_loop(1, [0.0, 0.0], [10.0, 10.0]);
+        let spline_hole = vec![RecoveredProfileCurve::BSpline {
+            source_edge_ids: vec![10],
+            degree: 3,
+            control_points_mm: vec![[3.0, 3.0], [4.0, 3.0], [4.0, 4.0], [3.0, 4.0]],
+            knots: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            weights: Some(vec![1.0, 0.8, 0.8, 1.0]),
+        }];
+        assert_eq!(
+            convex_polygon_outer_roles(&[outer, spline_hole]),
+            Some(vec![true, false])
+        );
+
+        let first = rectangle_loop(20, [0.0, 0.0], [2.0, 2.0]);
+        let second = rectangle_loop(30, [4.0, 0.0], [6.0, 2.0]);
+        assert_eq!(convex_polygon_outer_roles(&[first, second]), None);
+    }
+
+    #[test]
+    fn inferred_outer_rejects_overlapping_hole_bounds() {
+        let outer = rectangle_loop(1, [0.0, 0.0], [10.0, 10.0]);
+        let first_hole = rectangle_loop(10, [2.0, 2.0], [5.0, 5.0]);
+        let second_hole = rectangle_loop(20, [4.0, 4.0], [7.0, 7.0]);
+        assert_eq!(
+            convex_polygon_outer_roles(&[outer, first_hole, second_hole]),
+            None
+        );
+    }
+
+    #[test]
+    fn signed_area_handles_semicircle() {
+        let curves = vec![
+            RecoveredProfileCurve::Line {
+                source_edge_ids: vec![1],
+                start_mm: [-1.0, 0.0],
+                end_mm: [1.0, 0.0],
+            },
+            RecoveredProfileCurve::CircleArc {
+                source_edge_ids: vec![2],
+                center_mm: [0.0, 0.0],
+                radius_mm: 1.0,
+                start_angle_rad: 0.0,
+                end_angle_rad: std::f64::consts::PI,
+            },
+        ];
+        assert!((signed_area_curves(&curves) - std::f64::consts::FRAC_PI_2).abs() < 1.0e-12);
+    }
+}

@@ -1,0 +1,1632 @@
+use crate::cad_ir::{CadModel, NodeId};
+use anyhow::Result;
+
+/// User-facing geometry accuracy contract at the unit-aware Step Redox boundary.
+///
+/// Step Redox CAD IR stores physical lengths in millimetres, so Standard policy
+/// is expressed in millimetres here and translated to the unitless kernel's
+/// current model units only inside a backend adapter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GeometryPolicy {
+    /// Geometry-changing operations must establish equivalence or refuse.
+    Equivalent,
+    /// Bounded geometric change under an explicit millimetre budget.
+    Standard { tolerance_mm: f64 },
+}
+
+impl GeometryPolicy {
+    /// Project-wide Standard preset: 0.01 mm.
+    pub const PROJECT_STANDARD_TOLERANCE_MM: f64 = 0.01;
+
+    #[must_use]
+    pub const fn standard_mm(tolerance_mm: f64) -> Self {
+        Self::Standard { tolerance_mm }
+    }
+
+    #[must_use]
+    pub const fn project_standard() -> Self {
+        Self::standard_mm(Self::PROJECT_STANDARD_TOLERANCE_MM)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KernelSummary {
+    pub geometrically_consistent: bool,
+    pub shells: usize,
+    pub faces: usize,
+}
+
+/// Narrow execution boundary for constructive CAD.
+///
+/// The associated evaluated value is intentionally backend-defined and opaque to
+/// recovery code. The only stable outputs are a summary and serialized exchange
+/// geometry that can be validated independently.
+pub trait CadKernel {
+    type Evaluated;
+
+    /// Evaluate one canonical CAD root in the backend.
+    ///
+    /// # Errors
+    /// Returns an error when the model cannot be represented or evaluated by this kernel.
+    fn evaluate(&self, model: &CadModel, root: NodeId) -> Result<Self::Evaluated>;
+
+    fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary;
+
+    /// Serialize an evaluated shape as a STEP exchange.
+    ///
+    /// # Errors
+    /// Returns an error when the evaluated topology cannot be serialized as STEP.
+    fn to_step(&self, evaluated: &Self::Evaluated) -> Result<String>;
+}
+
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub mod monstertruck {
+    use super::{CadKernel, GeometryPolicy, KernelSummary};
+    use crate::cad_ir::{
+        Axis3, BooleanOp, CadModel, CadNode, Curve2d, EdgeSelector, EdgeTreatmentEdge,
+        EdgeTreatmentProfile, LoftSection, NodeId, Primitive, Profile2d, RigidTransform,
+        SweepPath3d, SweepSegment3d,
+    };
+    use anyhow::{Result, bail};
+    use monstertruck_fillet::{FilletOptions, FilletProfile, RadiusSpec, fillet_edges_generic};
+    use monstertruck_io::step::save::{self, CompleteStepDisplay};
+    use monstertruck_modeling::{
+        BoundedCurve, BsplineCurve, Curve, Edge, EuclideanSpace, InnerSpace, KnotVector, Matrix4,
+        NurbsCurve, ParametricCurve, Point3, Rad, Shell, Solid, Vector3, Vector4, Wire, builder,
+        primitive, profile,
+    };
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct MonstertruckKernel {
+        policy: GeometryPolicy,
+    }
+
+    impl MonstertruckKernel {
+        #[must_use]
+        pub const fn new(policy: GeometryPolicy) -> Self {
+            Self { policy }
+        }
+
+        #[must_use]
+        pub const fn equivalent() -> Self {
+            Self::new(GeometryPolicy::Equivalent)
+        }
+
+        #[must_use]
+        pub const fn standard_mm(tolerance_mm: f64) -> Self {
+            Self::new(GeometryPolicy::standard_mm(tolerance_mm))
+        }
+
+        #[must_use]
+        pub const fn project_standard() -> Self {
+            Self::new(GeometryPolicy::project_standard())
+        }
+    }
+
+    /// Opaque wrapper: Monstertruck topology does not escape the backend module.
+    pub struct EvaluatedShape {
+        solid: Solid,
+    }
+
+    fn profile_wires(profile: &Profile2d) -> Result<Vec<Wire>> {
+        if profile.loops.is_empty() {
+            bail!("profile must contain at least one loop");
+        }
+        profile
+            .loops
+            .iter()
+            .map(|loop_| profile_loop_wire(&loop_.curves))
+            .collect::<Result<Vec<_>>>()
+    }
+
+    fn extrude_profile_z(profile: &Profile2d, length_mm: f64) -> Result<Solid> {
+        if !length_mm.is_finite() || length_mm == 0.0 {
+            bail!("extrusion length must be finite and nonzero");
+        }
+        Ok(profile::solid_from_planar_profile(
+            profile_wires(profile)?,
+            Vector3::new(0.0, 0.0, length_mm),
+        )?)
+    }
+
+    fn revolve_profile(profile: &Profile2d, axis: Axis3, angle_rad: f64) -> Result<Solid> {
+        revolve_wires(profile_wires(profile)?, axis, angle_rad)
+    }
+
+    fn sweep_profile(profile: &Profile2d, path: &SweepPath3d) -> Result<Solid> {
+        if path.segments.is_empty() {
+            bail!("sweep path must contain at least one segment");
+        }
+        let face = profile::attach_plane_normalized(profile_wires(profile)?)?;
+        let face = builder::transformed(&face, rigid_matrix(&path.initial_transform));
+        let segments = path.segments.iter().map(|segment| match segment {
+            SweepSegment3d::Translation { vector_mm } => {
+                builder::CompositeSweepSegment::Translation(Vector3::new(
+                    vector_mm[0],
+                    vector_mm[1],
+                    vector_mm[2],
+                ))
+            }
+            SweepSegment3d::Rotation { axis, angle_rad } => {
+                builder::CompositeSweepSegment::Rotation {
+                    origin: Point3::new(axis.origin_mm[0], axis.origin_mm[1], axis.origin_mm[2]),
+                    axis: Vector3::new(axis.direction[0], axis.direction[1], axis.direction[2]),
+                    angle: Rad(*angle_rad),
+                    division: 1,
+                }
+            }
+        });
+        if path.closed {
+            Ok(builder::composite_closed_sweep(&face, segments)?)
+        } else {
+            Ok(builder::composite_sweep(&face, segments)?)
+        }
+    }
+
+    fn loft_sections(sections: &[LoftSection]) -> Result<Solid> {
+        if sections.len() < 2 {
+            bail!("loft needs at least two sections");
+        }
+        let wires = sections
+            .iter()
+            .map(|section| {
+                let mut wires = profile_wires(&section.profile)?;
+                if wires.len() != 1 {
+                    bail!("Monstertruck loft currently supports one loop per section");
+                }
+                let wire = wires
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("missing loft section wire"))?;
+                Ok(builder::transformed(
+                    &wire,
+                    rigid_matrix(&section.transform),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let first = wires
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing first loft wire"))?
+            .clone();
+        let last = wires
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("missing last loft wire"))?
+            .clone();
+        let start_cap = profile::attach_plane_normalized(vec![first])?;
+        let end_cap = profile::attach_plane_normalized(vec![last])?;
+        let mut shell: Shell = builder::try_skin_wires(&wires)?;
+        shell.push(start_cap.inverse());
+        shell.push(end_cap);
+        Ok(Solid::new(vec![shell])?)
+    }
+
+    fn revolve_profile_transformed(
+        profile: &Profile2d,
+        axis: Axis3,
+        angle_rad: f64,
+        transform: &RigidTransform,
+    ) -> Result<Solid> {
+        let matrix = rigid_matrix(transform);
+        let wires = profile_wires(profile)?
+            .into_iter()
+            .map(|wire| builder::transformed(&wire, matrix))
+            .collect::<Vec<_>>();
+        revolve_wires(wires, transform_axis(axis, transform), angle_rad)
+    }
+
+    fn revolve_wires(mut wires: Vec<Wire>, axis: Axis3, angle_rad: f64) -> Result<Solid> {
+        if !angle_rad.is_finite() || angle_rad == 0.0 {
+            bail!("revolution angle must be finite and nonzero");
+        }
+        if angle_rad.abs() > std::f64::consts::TAU + 1.0e-10 {
+            bail!("revolution angle must not exceed one full turn");
+        }
+        if axis.origin_mm.iter().any(|value| !value.is_finite())
+            || axis.direction.iter().any(|value| !value.is_finite())
+        {
+            bail!("revolution axis must be finite");
+        }
+
+        let direction = Vector3::new(axis.direction[0], axis.direction[1], axis.direction[2]);
+        let magnitude = direction.magnitude();
+        if !magnitude.is_finite() || magnitude <= 1.0e-12 {
+            bail!("revolution axis direction must be nonzero");
+        }
+        let direction = direction / magnitude;
+        let origin = Point3::new(axis.origin_mm[0], axis.origin_mm[1], axis.origin_mm[2]);
+        let closed = (angle_rad.abs() - std::f64::consts::TAU).abs() <= 1.0e-10;
+        let sweep = if closed {
+            builder::SweepAngle::Closed
+        } else {
+            builder::SweepAngle::Partial(Rad(angle_rad))
+        };
+
+        let touches_axis = wires.iter().any(|wire| {
+            wire.vertex_iter()
+                .any(|vertex| point_axis_distance(vertex.point(), origin, direction) <= 1.0e-9)
+        });
+
+        if touches_axis {
+            if !closed {
+                bail!("partial revolution with a profile touching the axis is not yet supported");
+            }
+            if wires.len() != 1 {
+                bail!("axis-touching revolution with profile holes is not yet supported");
+            }
+
+            let mut wire = wires
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("missing profile wire"))?;
+            let axis_edges = wire
+                .iter()
+                .enumerate()
+                .filter_map(|(index, edge)| {
+                    let curve = edge.oriented_curve();
+                    let (start, end) = curve.range_tuple();
+                    let midpoint = curve.evaluate(f64::midpoint(start, end));
+                    (point_axis_distance(edge.front().point(), origin, direction) <= 1.0e-9
+                        && point_axis_distance(edge.back().point(), origin, direction) <= 1.0e-9
+                        && point_axis_distance(midpoint, origin, direction) <= 1.0e-9)
+                        .then_some(index)
+                })
+                .collect::<Vec<_>>();
+            let [axis_edge_index] = axis_edges.as_slice() else {
+                bail!("axis-touching closed profile needs exactly one line segment on the axis");
+            };
+
+            wire.rotate_left(*axis_edge_index);
+            wire.pop_front()
+                .ok_or_else(|| anyhow::anyhow!("missing axis profile edge"))?;
+            let Some(front) = wire.front_vertex() else {
+                bail!("axis-touching revolution has no generatrix");
+            };
+            let Some(back) = wire.back_vertex() else {
+                bail!("axis-touching revolution has no generatrix");
+            };
+            if point_axis_distance(front.point(), origin, direction) > 1.0e-9
+                || point_axis_distance(back.point(), origin, direction) > 1.0e-9
+            {
+                bail!("revolution generatrix endpoints must lie on the axis");
+            }
+
+            let shell =
+                builder::revolve_wire(&wire, origin, direction, builder::SweepAngle::Closed, 2)?;
+            return Ok(Solid::new(vec![shell])?);
+        }
+
+        let face = profile::attach_plane_normalized(wires)?;
+        Ok(builder::revolve(
+            &face,
+            origin,
+            direction,
+            sweep,
+            if closed { 4 } else { 1 },
+        )?)
+    }
+
+    const fn rigid_matrix(transform: &RigidTransform) -> Matrix4 {
+        let m = transform.matrix;
+        Matrix4::from_cols(
+            Vector4::new(m[0][0], m[1][0], m[2][0], m[3][0]),
+            Vector4::new(m[0][1], m[1][1], m[2][1], m[3][1]),
+            Vector4::new(m[0][2], m[1][2], m[2][2], m[3][2]),
+            Vector4::new(m[0][3], m[1][3], m[2][3], m[3][3]),
+        )
+    }
+
+    fn transform_axis(axis: Axis3, transform: &RigidTransform) -> Axis3 {
+        let m = transform.matrix;
+        let [x, y, z] = axis.origin_mm;
+        let [dx, dy, dz] = axis.direction;
+        Axis3 {
+            origin_mm: [
+                m[0][2].mul_add(z, m[0][1].mul_add(y, m[0][0].mul_add(x, m[0][3]))),
+                m[1][2].mul_add(z, m[1][1].mul_add(y, m[1][0].mul_add(x, m[1][3]))),
+                m[2][2].mul_add(z, m[2][1].mul_add(y, m[2][0].mul_add(x, m[2][3]))),
+            ],
+            direction: [
+                m[0][2].mul_add(dz, m[0][1].mul_add(dy, m[0][0] * dx)),
+                m[1][2].mul_add(dz, m[1][1].mul_add(dy, m[1][0] * dx)),
+                m[2][2].mul_add(dz, m[2][1].mul_add(dy, m[2][0] * dx)),
+            ],
+        }
+    }
+
+    fn point_axis_distance(point: Point3, origin: Point3, direction: Vector3) -> f64 {
+        (point - origin).cross(direction).magnitude()
+    }
+
+    fn profile_loop_wire(curves: &[Curve2d]) -> Result<Wire> {
+        if curves.is_empty() {
+            bail!("profile loop must contain at least one curve");
+        }
+        if curves.len() == 1
+            && let Curve2d::CircleArc {
+                center_mm,
+                radius_mm,
+                start_angle_rad,
+                end_angle_rad,
+            } = &curves[0]
+            && ((end_angle_rad - start_angle_rad).abs() - std::f64::consts::TAU).abs() <= 1.0e-9
+        {
+            let start = Point3::new(
+                center_mm[0] + radius_mm * start_angle_rad.cos(),
+                center_mm[1] + radius_mm * start_angle_rad.sin(),
+                0.0,
+            );
+            return Ok(primitive::circle(
+                start,
+                Point3::new(center_mm[0], center_mm[1], 0.0),
+                Vector3::new(0.0, 0.0, 1.0),
+                2,
+            ));
+        }
+        profile_wire(curves)
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"
+    )]
+    fn profile_wire(curves: &[Curve2d]) -> Result<Wire> {
+        let starts = curves
+            .iter()
+            .map(curve_start_point)
+            .collect::<Result<Vec<_>>>()?;
+        let vertices = starts
+            .iter()
+            .map(|[x, y]| builder::vertex(Point3::new(*x, *y, 0.0)))
+            .collect::<Vec<_>>();
+        let mut edges = Vec::with_capacity(curves.len());
+
+        for (index, curve) in curves.iter().enumerate() {
+            let next = (index + 1) % curves.len();
+            let expected_end = curve_end_point(curve)?;
+            if point2_distance(expected_end, starts[next]) > 1.0e-8 {
+                bail!("profile curve endpoints are not topologically continuous");
+            }
+            match curve {
+                Curve2d::Line { .. } => {
+                    edges.push(builder::line(&vertices[index], &vertices[next]));
+                }
+                Curve2d::CircleArc {
+                    center_mm,
+                    radius_mm,
+                    start_angle_rad,
+                    end_angle_rad,
+                } => {
+                    let sweep = end_angle_rad - start_angle_rad;
+                    if !sweep.is_finite() || sweep.abs() <= 1.0e-12 {
+                        bail!("circle arc sweep must be finite and nonzero");
+                    }
+                    if sweep.abs() >= std::f64::consts::TAU - 1.0e-9 {
+                        bail!("full circles must be represented by one profile curve");
+                    }
+                    let midpoint = f64::midpoint(*start_angle_rad, *end_angle_rad);
+                    let transit = Point3::new(
+                        center_mm[0] + radius_mm * midpoint.cos(),
+                        center_mm[1] + radius_mm * midpoint.sin(),
+                        0.0,
+                    );
+                    edges.push(builder::circle_arc(
+                        &vertices[index],
+                        &vertices[next],
+                        transit,
+                    )?);
+                }
+                Curve2d::Bezier { control_points_mm } => {
+                    if control_points_mm.len() < 2 {
+                        bail!("Bezier profile curve needs at least two control points");
+                    }
+                    let inter_points = control_points_mm[1..control_points_mm.len() - 1]
+                        .iter()
+                        .map(|[x, y]| Point3::new(*x, *y, 0.0))
+                        .collect::<Vec<_>>();
+                    edges.push(builder::bezier(
+                        &vertices[index],
+                        &vertices[next],
+                        inter_points,
+                    ));
+                }
+                Curve2d::BSpline {
+                    degree,
+                    control_points_mm,
+                    knots,
+                    weights,
+                } => {
+                    let Some(min_control_points) = degree.checked_add(1) else {
+                        bail!("B-spline profile degree overflows dimensions");
+                    };
+                    let Some(expected_knots) =
+                        control_points_mm.len().checked_add(min_control_points)
+                    else {
+                        bail!("B-spline profile knot count overflows dimensions");
+                    };
+                    let finite_points = control_points_mm
+                        .iter()
+                        .flatten()
+                        .all(|value| value.is_finite());
+                    let endpoint_clamped =
+                        min_control_points.checked_mul(2).is_some_and(|min_knots| {
+                            knots.len() >= min_knots
+                                && knots[..min_control_points]
+                                    .iter()
+                                    .all(|knot| knot.to_bits() == knots[0].to_bits())
+                                && knots[knots.len() - min_control_points..]
+                                    .iter()
+                                    .all(|knot| knot.to_bits() == knots[knots.len() - 1].to_bits())
+                        });
+                    if *degree == 0
+                        || control_points_mm.len() < min_control_points
+                        || knots.len() != expected_knots
+                        || !finite_points
+                        || !knots.iter().all(|knot| knot.is_finite())
+                        || knots.windows(2).any(|pair| pair[0] > pair[1])
+                        || knots.first().map(|value| value.to_bits())
+                            == knots.last().map(|value| value.to_bits())
+                        || !endpoint_clamped
+                    {
+                        bail!("invalid B-spline profile geometry");
+                    }
+                    if let Some(weights) = weights
+                        && (weights.len() != control_points_mm.len()
+                            || weights
+                                .iter()
+                                .any(|weight| !weight.is_finite() || *weight <= 0.0))
+                    {
+                        bail!("invalid B-spline profile weights");
+                    }
+                    let control_points = control_points_mm
+                        .iter()
+                        .map(|[x, y]| Point3::new(*x, *y, 0.0))
+                        .collect::<Vec<_>>();
+                    let curve = BsplineCurve::new(KnotVector::from(knots.clone()), control_points)?;
+                    let geometry = if let Some(weights) = weights {
+                        Curve::NurbsCurve(NurbsCurve::try_from_bspline_and_weights(
+                            curve,
+                            weights.clone(),
+                        )?)
+                    } else {
+                        Curve::BsplineCurve(curve)
+                    };
+                    edges.push(Edge::new(&vertices[index], &vertices[next], geometry)?);
+                }
+            }
+        }
+
+        Ok(edges.into())
+    }
+
+    fn curve_start_point(curve: &Curve2d) -> Result<[f64; 2]> {
+        match curve {
+            Curve2d::Line { start_mm, .. } => Ok(*start_mm),
+            Curve2d::CircleArc {
+                center_mm,
+                radius_mm,
+                start_angle_rad,
+                ..
+            } => Ok([
+                center_mm[0] + radius_mm * start_angle_rad.cos(),
+                center_mm[1] + radius_mm * start_angle_rad.sin(),
+            ]),
+            Curve2d::Bezier { control_points_mm }
+            | Curve2d::BSpline {
+                control_points_mm, ..
+            } => control_points_mm
+                .first()
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("spline profile has no control points")),
+        }
+    }
+
+    fn curve_end_point(curve: &Curve2d) -> Result<[f64; 2]> {
+        match curve {
+            Curve2d::Line { end_mm, .. } => Ok(*end_mm),
+            Curve2d::CircleArc {
+                center_mm,
+                radius_mm,
+                end_angle_rad,
+                ..
+            } => Ok([
+                center_mm[0] + radius_mm * end_angle_rad.cos(),
+                center_mm[1] + radius_mm * end_angle_rad.sin(),
+            ]),
+            Curve2d::Bezier { control_points_mm }
+            | Curve2d::BSpline {
+                control_points_mm, ..
+            } => control_points_mm
+                .last()
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("spline profile has no control points")),
+        }
+    }
+
+    fn point2_distance(a: [f64; 2], b: [f64; 2]) -> f64 {
+        (a[0] - b[0]).hypot(a[1] - b[1])
+    }
+
+    const fn monstertruck_policy(policy: GeometryPolicy) -> monstertruck_solid::GeometryPolicy {
+        match policy {
+            GeometryPolicy::Equivalent => monstertruck_solid::GeometryPolicy::Equivalent,
+            GeometryPolicy::Standard { tolerance_mm } => {
+                monstertruck_solid::GeometryPolicy::standard(tolerance_mm)
+            }
+        }
+    }
+
+    fn evaluate_boolean(
+        model: &CadModel,
+        op: BooleanOp,
+        children: &[NodeId],
+        policy: GeometryPolicy,
+    ) -> Result<Solid> {
+        let Some((&first, rest)) = children.split_first() else {
+            bail!("boolean node needs at least one child");
+        };
+        let mut result = evaluate_node(model, first, policy)?;
+        for &child in rest {
+            let rhs = evaluate_node(model, child, policy)?;
+            let kernel_policy = monstertruck_policy(policy);
+            result = match op {
+                BooleanOp::Union => monstertruck_solid::or(&result, &rhs, kernel_policy)?,
+                BooleanOp::Intersection => monstertruck_solid::and(&result, &rhs, kernel_policy)?,
+                BooleanOp::Difference => {
+                    monstertruck_solid::difference(&result, &rhs, kernel_policy)?
+                }
+            };
+        }
+        Ok(result)
+    }
+
+    fn primitive_solid(primitive: &Primitive) -> Result<Solid> {
+        match primitive {
+            Primitive::Box { size_mm } => {
+                let [x, y, z] = *size_mm;
+                if [x, y, z]
+                    .into_iter()
+                    .any(|value| !value.is_finite() || value <= 0.0)
+                {
+                    bail!("box dimensions must be finite and positive");
+                }
+                let vertex = builder::vertex(Point3::origin());
+                let edge = builder::extrude(&vertex, Vector3::new(x, 0.0, 0.0));
+                let face = builder::extrude(&edge, Vector3::new(0.0, y, 0.0));
+                Ok(builder::extrude(&face, Vector3::new(0.0, 0.0, z)))
+            }
+            Primitive::Cylinder {
+                radius_mm,
+                height_mm,
+            } => {
+                if !radius_mm.is_finite()
+                    || *radius_mm <= 0.0
+                    || !height_mm.is_finite()
+                    || *height_mm <= 0.0
+                {
+                    bail!("cylinder dimensions must be finite and positive");
+                }
+                let vertex = builder::vertex(Point3::new(0.0, 0.0, *radius_mm));
+                let circle = builder::revolve(
+                    &vertex,
+                    Point3::origin(),
+                    Vector3::unit_y(),
+                    builder::SweepAngle::Closed,
+                    2,
+                )?;
+                let disk = profile::attach_plane_normalized(vec![circle])?;
+                Ok(builder::extrude(&disk, Vector3::new(0.0, *height_mm, 0.0)))
+            }
+            Primitive::Sphere { .. } => {
+                bail!("Monstertruck backend does not yet evaluate full-sphere primitives")
+            }
+        }
+    }
+
+    const EDGE_SELECTOR_TOLERANCE_MM: f64 = 1.0e-7;
+
+    const fn segment_point(point_mm: [f64; 3]) -> Point3 {
+        Point3::new(point_mm[0], point_mm[1], point_mm[2])
+    }
+
+    fn points_match(left: Point3, right: Point3) -> bool {
+        (left - right).magnitude() <= EDGE_SELECTOR_TOLERANCE_MM
+    }
+
+    const CIRCLE_SELECTOR_SAMPLES: usize = 16;
+
+    fn circle_point_matches(
+        point: Point3,
+        center: Point3,
+        normal: Vector3,
+        radius_mm: f64,
+    ) -> bool {
+        let offset = point - center;
+        offset.dot(normal).abs() <= EDGE_SELECTOR_TOLERANCE_MM
+            && (offset.magnitude() - radius_mm).abs() <= EDGE_SELECTOR_TOLERANCE_MM
+    }
+
+    fn edge_matches_circle(edge: &Edge, center: Point3, normal: Vector3, radius_mm: f64) -> bool {
+        let curve = edge.oriented_curve();
+        let (start, end) = curve.range_tuple();
+        if !start.is_finite()
+            || !end.is_finite()
+            || (start - end).abs() <= f64::EPSILON * start.abs().max(end.abs()).max(1.0)
+        {
+            return false;
+        }
+        (0..=CIRCLE_SELECTOR_SAMPLES).all(|index| {
+            let Ok(index) = u32::try_from(index) else {
+                return false;
+            };
+            let fraction = f64::from(index) / 16.0;
+            let parameter = f64::mul_add(end - start, fraction, start);
+            circle_point_matches(curve.evaluate(parameter), center, normal, radius_mm)
+        })
+    }
+
+    fn endpoint_cluster(points: &mut Vec<Point3>, point: Point3) -> usize {
+        points
+            .iter()
+            .position(|candidate| points_match(*candidate, point))
+            .unwrap_or_else(|| {
+                points.push(point);
+                points.len() - 1
+            })
+    }
+
+    fn circle_edges_form_one_cycle(edges: &[Edge]) -> bool {
+        if edges.is_empty() {
+            return false;
+        }
+        let mut points = Vec::<Point3>::new();
+        let endpoints = edges
+            .iter()
+            .map(|edge| {
+                let front = endpoint_cluster(&mut points, edge.absolute_front().point());
+                let back = endpoint_cluster(&mut points, edge.absolute_back().point());
+                (front, back)
+            })
+            .collect::<Vec<_>>();
+        let mut degrees = vec![0_usize; points.len()];
+        let mut adjacency = vec![Vec::<usize>::new(); points.len()];
+        for &(front, back) in &endpoints {
+            if front == back {
+                degrees[front] += 2;
+                adjacency[front].push(front);
+            } else {
+                degrees[front] += 1;
+                degrees[back] += 1;
+                adjacency[front].push(back);
+                adjacency[back].push(front);
+            }
+        }
+        if degrees.iter().any(|degree| *degree != 2) {
+            return false;
+        }
+        let mut visited = vec![false; points.len()];
+        let mut stack = vec![0_usize];
+        while let Some(index) = stack.pop() {
+            if visited[index] {
+                continue;
+            }
+            visited[index] = true;
+            stack.extend(adjacency[index].iter().copied());
+        }
+        visited.into_iter().all(std::convert::identity)
+    }
+
+    fn select_edges(shell: &Shell, selector: &EdgeSelector) -> Result<Vec<Edge>> {
+        match selector {
+            EdgeSelector::Segment { start_mm, end_mm } => {
+                let start = segment_point(*start_mm);
+                let end = segment_point(*end_mm);
+                let mut matched = None;
+                let mut matched_id = None;
+                for edge in shell.edge_iter() {
+                    let front = edge.absolute_front().point();
+                    let back = edge.absolute_back().point();
+                    let endpoints_match = (points_match(front, start) && points_match(back, end))
+                        || (points_match(front, end) && points_match(back, start));
+                    if !endpoints_match || matched_id == Some(edge.id()) {
+                        continue;
+                    }
+                    if matched_id.is_some() {
+                        bail!("edge-treatment selector matched more than one topological edge");
+                    }
+                    matched_id = Some(edge.id());
+                    matched = Some(edge);
+                }
+                Ok(vec![matched.ok_or_else(|| {
+                    anyhow::anyhow!("edge-treatment selector matched no edge")
+                })?])
+            }
+            EdgeSelector::Circle {
+                center_mm,
+                normal,
+                radius_mm,
+            } => {
+                let center = segment_point(*center_mm);
+                let normal = Vector3::new(normal[0], normal[1], normal[2]);
+                let normal_magnitude = normal.magnitude();
+                if !normal_magnitude.is_finite() || normal_magnitude <= 1.0e-12 {
+                    bail!("edge-treatment circle selector has invalid normal");
+                }
+                let normal = normal / normal_magnitude;
+                let mut matched = Vec::<Edge>::new();
+                for edge in shell.edge_iter() {
+                    if matched.iter().any(|candidate| candidate.id() == edge.id())
+                        || !edge_matches_circle(&edge, center, normal, *radius_mm)
+                    {
+                        continue;
+                    }
+                    matched.push(edge);
+                }
+                if matched.is_empty() {
+                    bail!("edge-treatment circle selector matched no edge");
+                }
+                if !circle_edges_form_one_cycle(&matched) {
+                    bail!(
+                        "edge-treatment circle selector did not resolve to one closed edge cycle"
+                    );
+                }
+                Ok(matched)
+            }
+        }
+    }
+
+    fn evaluate_edge_treatment(
+        model: &CadModel,
+        child: NodeId,
+        profile: EdgeTreatmentProfile,
+        edges: &[EdgeTreatmentEdge],
+        policy: GeometryPolicy,
+    ) -> Result<Solid> {
+        let child = evaluate_node(model, child, policy)?;
+        let mut boundaries = child.into_boundaries();
+        let [shell] = boundaries.as_mut_slice() else {
+            bail!("edge treatment currently requires exactly one boundary shell");
+        };
+        let mut selected = Vec::<Edge>::new();
+        let mut radii = Vec::new();
+        for treatment in edges {
+            for edge in select_edges(shell, &treatment.selector)? {
+                if selected.iter().any(|existing| existing.id() == edge.id()) {
+                    bail!("edge-treatment selectors overlap on one topological edge");
+                }
+                selected.push(edge);
+                radii.push(treatment.radius_mm);
+            }
+        }
+        let fillet_profile = match profile {
+            EdgeTreatmentProfile::Round => FilletProfile::Round,
+            EdgeTreatmentProfile::Chamfer => FilletProfile::Chamfer,
+            EdgeTreatmentProfile::AsymmetricChamfer {
+                first_setback_mm,
+                second_setback_mm,
+            } => FilletProfile::AsymmetricChamfer {
+                first_setback_mm,
+                second_setback_mm,
+            },
+        };
+        let options = FilletOptions {
+            radius: RadiusSpec::PerEdge(radii),
+            profile: fillet_profile,
+            ..FilletOptions::default()
+        };
+        fillet_edges_generic(shell, &selected, Some(&options))?;
+        Ok(Solid::new(boundaries)?)
+    }
+
+    fn evaluate_node(model: &CadModel, root: NodeId, policy: GeometryPolicy) -> Result<Solid> {
+        match model.node(root)? {
+            CadNode::Primitive(primitive) => primitive_solid(primitive),
+            CadNode::Extrude { profile, vector_mm } => {
+                if vector_mm[0] != 0.0 || vector_mm[1] != 0.0 {
+                    bail!("Monstertruck backend currently supports local Z extrusion only");
+                }
+                extrude_profile_z(profile, vector_mm[2])
+            }
+            CadNode::Revolve {
+                profile,
+                axis,
+                angle_rad,
+            } => revolve_profile(profile, *axis, *angle_rad),
+            CadNode::Sweep { profile, path } => sweep_profile(profile, path),
+            CadNode::Loft { sections } => loft_sections(sections),
+            CadNode::Boolean { op, children } => evaluate_boolean(model, *op, children, policy),
+            CadNode::EdgeTreatment {
+                child,
+                profile,
+                edges,
+            } => evaluate_edge_treatment(model, *child, *profile, edges, policy),
+            CadNode::Transform { transform, child } => {
+                if let CadNode::Revolve {
+                    profile,
+                    axis,
+                    angle_rad,
+                } = model.node(*child)?
+                {
+                    return revolve_profile_transformed(profile, *axis, *angle_rad, transform);
+                }
+                let child = evaluate_node(model, *child, policy)?;
+                Ok(builder::transformed(&child, rigid_matrix(transform)))
+            }
+            unsupported => {
+                bail!("Monstertruck backend does not yet evaluate node {root:?}: {unsupported:?}")
+            }
+        }
+    }
+
+    impl CadKernel for MonstertruckKernel {
+        type Evaluated = EvaluatedShape;
+
+        fn evaluate(&self, model: &CadModel, root: NodeId) -> Result<Self::Evaluated> {
+            model.validate()?;
+            Ok(EvaluatedShape {
+                solid: evaluate_node(model, root, self.policy)?,
+            })
+        }
+
+        fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary {
+            let boundaries = evaluated.solid.boundaries();
+            KernelSummary {
+                geometrically_consistent: evaluated.solid.is_geometric_consistent(),
+                shells: boundaries.len(),
+                faces: boundaries.iter().map(|shell| shell.len()).sum(),
+            }
+        }
+
+        fn to_step(&self, evaluated: &Self::Evaluated) -> Result<String> {
+            let compressed = evaluated.solid.compress();
+            Ok(CompleteStepDisplay::new(
+                save::StepModel::from(&compressed),
+                save::StepHeaderDescriptor {
+                    organization_system: "step-redox Monstertruck backend".into(),
+                    ..Default::default()
+                },
+            )
+            .to_string())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #![expect(
+            clippy::manual_let_else,
+            reason = "legacy test fixture code is allowed narrow lint exceptions; production paths remain strict"
+        )]
+        use super::*;
+        use crate::cad_ir::{
+            Axis3, CadNode, Curve2d, LoftSection, Profile2d, ProfileLoop, RigidTransform,
+            SweepPath3d, SweepSegment3d,
+        };
+
+        fn box_model() -> Result<(CadModel, NodeId)> {
+            let mut model = CadModel::new();
+            let profile =
+                Profile2d::polygon(vec![[0.0, 0.0], [10.0, 0.0], [10.0, 6.0], [0.0, 6.0]])?;
+            let root = model.add_node(CadNode::Extrude {
+                profile,
+                vector_mm: [0.0, 0.0, 2.0],
+            });
+            model.add_root(root)?;
+            Ok((model, root))
+        }
+
+        #[test]
+        fn evaluates_tapered_rectangular_loft() -> Result<()> {
+            let mut model = CadModel::new();
+            let base =
+                Profile2d::polygon(vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]])?;
+            let end = Profile2d::polygon(vec![[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]])?;
+            let root = model.add_node(CadNode::Loft {
+                sections: vec![
+                    LoftSection {
+                        profile: base,
+                        transform: RigidTransform::identity(),
+                    },
+                    LoftSection {
+                        profile: end,
+                        transform: RigidTransform::translation_mm([0.0, 0.0, 2.0]),
+                    },
+                ],
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            assert_eq!(summary.faces, 6);
+            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
+        }
+
+        fn curved_profile_model(curve: Curve2d) -> Result<(CadModel, NodeId)> {
+            let mut model = CadModel::new();
+            let profile = Profile2d {
+                loops: vec![ProfileLoop {
+                    curves: vec![
+                        curve,
+                        Curve2d::Line {
+                            start_mm: [2.0, 0.0],
+                            end_mm: [0.0, 0.0],
+                        },
+                    ],
+                }],
+            };
+            let root = model.add_node(CadNode::Extrude {
+                profile,
+                vector_mm: [0.0, 0.0, 2.0],
+            });
+            model.add_root(root)?;
+            Ok((model, root))
+        }
+
+        fn assert_curved_profile_evaluates(
+            curve: Curve2d,
+            expected_step_fragment: &str,
+        ) -> Result<()> {
+            let (model, root) = curved_profile_model(curve)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            assert_eq!(summary.faces, 4);
+
+            let step = kernel.to_step(&evaluated)?;
+            assert!(step.contains(expected_step_fragment));
+            ruststep::parser::parse(&step)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_exact_line_arc_line_sweep() -> Result<()> {
+            let mut model = CadModel::new();
+            let profile = Profile2d::polygon(vec![
+                [-0.25, -0.25],
+                [0.25, -0.25],
+                [0.25, 0.25],
+                [-0.25, 0.25],
+            ])?;
+            let root = model.add_node(CadNode::Sweep {
+                profile,
+                path: SweepPath3d {
+                    initial_transform: RigidTransform::translation_mm([2.0, 0.0, 4.0]),
+                    closed: false,
+                    segments: vec![
+                        SweepSegment3d::Translation {
+                            vector_mm: [0.0, 0.0, -4.0],
+                        },
+                        SweepSegment3d::Rotation {
+                            axis: Axis3 {
+                                origin_mm: [0.0, 0.0, 0.0],
+                                direction: [0.0, 1.0, 0.0],
+                            },
+                            angle_rad: std::f64::consts::FRAC_PI_2,
+                        },
+                        SweepSegment3d::Translation {
+                            vector_mm: [-4.0, 0.0, 0.0],
+                        },
+                    ],
+                },
+            });
+            model.add_root(root)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            assert_eq!(summary.faces, 14);
+
+            let step = kernel.to_step(&evaluated)?;
+            ruststep::parser::parse(&step)?;
+            Ok(())
+        }
+
+        fn box_edge_treatment(profile: EdgeTreatmentProfile) -> Result<()> {
+            let mut model = CadModel::new();
+            let box_node = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [4.0, 3.0, 2.0],
+            }));
+            let root = model.add_node(CadNode::EdgeTreatment {
+                child: box_node,
+                profile,
+                edges: vec![EdgeTreatmentEdge {
+                    selector: EdgeSelector::Segment {
+                        start_mm: [0.0, 0.0, 0.0],
+                        end_mm: [4.0, 0.0, 0.0],
+                    },
+                    radius_mm: 0.25,
+                }],
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            assert!(summary.faces > 6);
+            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_round_edge_treatment() -> Result<()> {
+            box_edge_treatment(EdgeTreatmentProfile::Round)
+        }
+
+        #[test]
+        fn evaluates_chamfer_edge_treatment() -> Result<()> {
+            box_edge_treatment(EdgeTreatmentProfile::Chamfer)
+        }
+
+        #[test]
+        fn evaluates_asymmetric_chamfer_edge_treatment() -> Result<()> {
+            box_edge_treatment(EdgeTreatmentProfile::AsymmetricChamfer {
+                first_setback_mm: 0.2,
+                second_setback_mm: 0.3,
+            })
+        }
+
+        #[test]
+        fn evaluates_round_circle_edge_treatment() -> Result<()> {
+            let mut model = CadModel::new();
+            let cylinder = model.add_node(CadNode::Primitive(Primitive::Cylinder {
+                radius_mm: 1.0,
+                height_mm: 2.0,
+            }));
+            let root = model.add_node(CadNode::EdgeTreatment {
+                child: cylinder,
+                profile: EdgeTreatmentProfile::Round,
+                edges: vec![EdgeTreatmentEdge {
+                    selector: EdgeSelector::Circle {
+                        center_mm: [0.0, 2.0, 0.0],
+                        normal: [0.0, 1.0, 0.0],
+                        radius_mm: 1.0,
+                    },
+                    radius_mm: 0.1,
+                }],
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            assert!(summary.faces > 3);
+            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn project_standard_maps_exactly_to_point_zero_one_mm() {
+            assert_eq!(
+                monstertruck_policy(GeometryPolicy::project_standard()).tolerance(),
+                Some(0.01)
+            );
+        }
+
+        #[test]
+        fn equivalent_refuses_approximate_boolean_backend() -> Result<()> {
+            let mut model = CadModel::new();
+            let first = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [2.0, 2.0, 2.0],
+            }));
+            let second_body = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [2.0, 2.0, 2.0],
+            }));
+            let second = model.add_node(CadNode::Transform {
+                transform: RigidTransform::translation_mm([1.0, 0.0, 0.0]),
+                child: second_body,
+            });
+            let root = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children: vec![first, second],
+            });
+            model.add_root(root)?;
+
+            let error = match MonstertruckKernel::equivalent().evaluate(&model, root) {
+                Ok(_) => bail!("Equivalent unexpectedly admitted the approximate Boolean backend"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("no equivalence-proving backend"),
+                "unexpected refusal: {error:#}"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_adjacent_cylinders_union() -> Result<()> {
+            let mut model = CadModel::new();
+            let first = model.add_node(CadNode::Primitive(Primitive::Cylinder {
+                radius_mm: 1.0,
+                height_mm: 1.0,
+            }));
+            let second_body = model.add_node(CadNode::Primitive(Primitive::Cylinder {
+                radius_mm: 1.0,
+                height_mm: 1.0,
+            }));
+            let second = model.add_node(CadNode::Transform {
+                transform: RigidTransform::translation_mm([0.0, 1.0, 0.0]),
+                child: second_body,
+            });
+            let root = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children: vec![first, second],
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_boolean_difference() -> Result<()> {
+            use crate::cad_ir::BooleanOp;
+
+            let mut model = CadModel::new();
+            let base = model.add_node(CadNode::Extrude {
+                profile: Profile2d::polygon(vec![
+                    [0.0, 0.0],
+                    [10.0, 0.0],
+                    [10.0, 6.0],
+                    [0.0, 6.0],
+                ])?,
+                vector_mm: [0.0, 0.0, 2.0],
+            });
+            let cutter_body = model.add_node(CadNode::Extrude {
+                profile: Profile2d::polygon(vec![[3.0, 2.0], [7.0, 2.0], [7.0, 4.0], [3.0, 4.0]])?,
+                vector_mm: [0.0, 0.0, 4.0],
+            });
+            let cutter = model.add_node(CadNode::Transform {
+                transform: RigidTransform::translation_mm([0.0, 0.0, -1.0]),
+                child: cutter_body,
+            });
+            let root = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Difference,
+                children: vec![base, cutter],
+            });
+            model.add_root(root)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert!(summary.faces >= 8);
+            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_full_profile_revolution() -> Result<()> {
+            let mut model = CadModel::new();
+            let profile =
+                Profile2d::polygon(vec![[1.0, -1.0], [2.0, -1.0], [2.0, 1.0], [1.0, 1.0]])?;
+            let root = model.add_node(CadNode::Revolve {
+                profile,
+                axis: Axis3 {
+                    origin_mm: [0.0, 0.0, 0.0],
+                    direction: [0.0, 1.0, 0.0],
+                },
+                angle_rad: std::f64::consts::TAU,
+            });
+            model.add_root(root)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            let step = kernel.to_step(&evaluated)?;
+            ruststep::parser::parse(&step)?;
+            let recovered = crate::detect_solid_revolutions_bytes(step.as_bytes())?;
+            assert_eq!(recovered.len(), 1);
+            let fragment = crate::cad_recovery::recover_solid_revolution_fragment(&recovered[0])?;
+            let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
+            assert!(kernel.summarize(&rebuilt).geometrically_consistent);
+            ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_partial_profile_revolution() -> Result<()> {
+            let mut model = CadModel::new();
+            let profile = Profile2d::polygon(vec![[2.0, 0.0], [3.0, 0.0], [3.0, 1.0], [2.0, 1.0]])?;
+            let root = model.add_node(CadNode::Revolve {
+                profile,
+                axis: Axis3 {
+                    origin_mm: [0.0, 0.0, 0.0],
+                    direction: [0.0, 1.0, 0.0],
+                },
+                angle_rad: std::f64::consts::FRAC_PI_2,
+            });
+            model.add_root(root)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            let step = kernel.to_step(&evaluated)?;
+            ruststep::parser::parse(&step)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_on_axis_profile_revolution() -> Result<()> {
+            let mut model = CadModel::new();
+            let profile =
+                Profile2d::polygon(vec![[0.0, -1.0], [2.0, -1.0], [2.0, 1.0], [0.0, 1.0]])?;
+            let root = model.add_node(CadNode::Revolve {
+                profile,
+                axis: Axis3 {
+                    origin_mm: [0.0, 0.0, 0.0],
+                    direction: [0.0, 1.0, 0.0],
+                },
+                angle_rad: std::f64::consts::TAU,
+            });
+            model.add_root(root)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            let step = kernel.to_step(&evaluated)?;
+            ruststep::parser::parse(&step)?;
+            let recovered = crate::detect_solid_revolutions_bytes(step.as_bytes())?;
+            assert_eq!(recovered.len(), 1);
+            let fragment = crate::cad_recovery::recover_solid_revolution_fragment(&recovered[0])?;
+            let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
+            assert!(kernel.summarize(&rebuilt).geometrically_consistent);
+            ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_apex_cone_profile_revolution() -> Result<()> {
+            let mut model = CadModel::new();
+            let profile = Profile2d::polygon(vec![[0.0, -1.0], [2.0, 1.0], [0.0, 1.0]])?;
+            let root = model.add_node(CadNode::Revolve {
+                profile,
+                axis: Axis3 {
+                    origin_mm: [0.0, 0.0, 0.0],
+                    direction: [0.0, 1.0, 0.0],
+                },
+                angle_rad: std::f64::consts::TAU,
+            });
+            model.add_root(root)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            assert!(kernel.summarize(&evaluated).geometrically_consistent);
+            let step = kernel.to_step(&evaluated)?;
+            ruststep::parser::parse(&step)?;
+
+            // Re-recognition of whichever STEP surface grammar Monstertruck chooses
+            // is a separate detector concern. This test proves exact construction and
+            // exchange serialization without pinning the writer to one representation.
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_transformed_profile_revolution_without_post_transform_breakage() -> Result<()>
+        {
+            let mut model = CadModel::new();
+            let profile = Profile2d::polygon(vec![[0.0, 0.0], [2.0, 0.0], [2.0, 3.0], [0.0, 3.0]])?;
+            let body = model.add_node(CadNode::Revolve {
+                profile,
+                axis: Axis3 {
+                    origin_mm: [0.0, 0.0, 0.0],
+                    direction: [0.0, 1.0, 0.0],
+                },
+                angle_rad: std::f64::consts::TAU,
+            });
+            let root = model.add_node(CadNode::Transform {
+                transform: RigidTransform {
+                    matrix: [
+                        [0.0, 0.0, 1.0, 10.0],
+                        [1.0, 0.0, 0.0, 20.0],
+                        [0.0, 1.0, 0.0, 30.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                },
+                child: body,
+            });
+            model.add_root(root)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_quadratic_bezier_profile_extrusion() -> Result<()> {
+            assert_curved_profile_evaluates(
+                Curve2d::Bezier {
+                    control_points_mm: vec![[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]],
+                },
+                "B_SPLINE_CURVE",
+            )
+        }
+
+        #[test]
+        fn evaluates_quadratic_bspline_profile_extrusion() -> Result<()> {
+            assert_curved_profile_evaluates(
+                Curve2d::BSpline {
+                    degree: 2,
+                    control_points_mm: vec![[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]],
+                    knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    weights: None,
+                },
+                "B_SPLINE_CURVE",
+            )
+        }
+
+        #[test]
+        fn evaluates_rational_bspline_profile_extrusion() -> Result<()> {
+            assert_curved_profile_evaluates(
+                Curve2d::BSpline {
+                    degree: 2,
+                    control_points_mm: vec![[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]],
+                    knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    weights: Some(vec![1.0, 0.75, 1.0]),
+                },
+                "RATIONAL_B_SPLINE_CURVE",
+            )
+        }
+
+        #[test]
+        fn roundtrips_holed_extrusion_through_recovery() -> Result<()> {
+            let mut model = CadModel::new();
+            let profile = Profile2d {
+                loops: vec![
+                    ProfileLoop {
+                        curves: vec![
+                            Curve2d::Line {
+                                start_mm: [0.0, 0.0],
+                                end_mm: [8.0, 0.0],
+                            },
+                            Curve2d::Line {
+                                start_mm: [8.0, 0.0],
+                                end_mm: [8.0, 6.0],
+                            },
+                            Curve2d::Line {
+                                start_mm: [8.0, 6.0],
+                                end_mm: [0.0, 6.0],
+                            },
+                            Curve2d::Line {
+                                start_mm: [0.0, 6.0],
+                                end_mm: [0.0, 0.0],
+                            },
+                        ],
+                    },
+                    ProfileLoop {
+                        curves: vec![Curve2d::CircleArc {
+                            center_mm: [4.0, 3.0],
+                            radius_mm: 1.25,
+                            start_angle_rad: 0.0,
+                            end_angle_rad: -std::f64::consts::TAU,
+                        }],
+                    },
+                ],
+            };
+            let root = model.add_node(CadNode::Extrude {
+                profile,
+                vector_mm: [0.0, 0.0, 2.5],
+            });
+            model.add_root(root)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            assert_eq!(summary.faces, 8);
+
+            let step = kernel.to_step(&evaluated)?;
+            ruststep::parser::parse(&step)?;
+            let recovered = crate::detect_solid_extrusions_bytes(step.as_bytes())?;
+            assert_eq!(recovered.len(), 1);
+            assert_eq!(recovered[0].inner_profile_loops.len(), 1);
+            assert_eq!(recovered[0].inner_profile_loops[0].len(), 2);
+            assert!(
+                recovered[0].inner_profile_loops[0]
+                    .iter()
+                    .all(|curve| matches!(
+                        curve,
+                        crate::solid_extrusions::RecoveredProfileCurve::BSpline {
+                            weights: Some(_),
+                            ..
+                        }
+                    ))
+            );
+
+            let fragment = crate::cad_recovery::recover_solid_extrusion_fragment(&recovered[0])?;
+            let CadNode::Transform { child, .. } = fragment.model.node(fragment.root)? else {
+                bail!("expected transform root");
+            };
+            let CadNode::Extrude { profile, .. } = fragment.model.node(*child)? else {
+                bail!("expected extrusion child");
+            };
+            assert_eq!(profile.loops.len(), 2);
+
+            let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
+            let rebuilt_summary = kernel.summarize(&rebuilt);
+            assert!(rebuilt_summary.geometrically_consistent);
+            assert_eq!(rebuilt_summary.faces, 8);
+            ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn roundtrips_rational_bspline_extrusion_through_recovery() -> Result<()> {
+            let (model, root) = curved_profile_model(Curve2d::BSpline {
+                degree: 2,
+                control_points_mm: vec![[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]],
+                knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                weights: Some(vec![1.0, 0.75, 1.0]),
+            })?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let step = kernel.to_step(&evaluated)?;
+            let recovered = crate::detect_solid_extrusions_bytes(step.as_bytes())?;
+            assert_eq!(recovered.len(), 1);
+            assert!(recovered[0].profile_curves.iter().any(|curve| matches!(
+                curve,
+                crate::solid_extrusions::RecoveredProfileCurve::BSpline {
+                    weights: Some(_),
+                    ..
+                }
+            )));
+
+            let fragment = crate::cad_recovery::recover_solid_extrusion_fragment(&recovered[0])?;
+            let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
+            assert!(kernel.summarize(&rebuilt).geometrically_consistent);
+            ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn malformed_bspline_profile_fails_closed() -> Result<()> {
+            let mut model = CadModel::new();
+            let profile = Profile2d {
+                loops: vec![ProfileLoop {
+                    curves: vec![
+                        Curve2d::Line {
+                            start_mm: [0.0, 0.0],
+                            end_mm: [2.0, 0.0],
+                        },
+                        Curve2d::BSpline {
+                            degree: usize::MAX,
+                            control_points_mm: vec![[2.0, 0.0], [1.0, 1.0], [0.0, 0.0]],
+                            knots: Vec::new(),
+                            weights: None,
+                        },
+                    ],
+                }],
+            };
+            let root = model.add_node(CadNode::Extrude {
+                profile,
+                vector_mm: [0.0, 0.0, 1.0],
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            assert!(kernel.evaluate(&model, root).is_err());
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_semicircular_profile_extrusion() -> Result<()> {
+            let mut model = CadModel::new();
+            let profile = Profile2d {
+                loops: vec![ProfileLoop {
+                    curves: vec![
+                        Curve2d::Line {
+                            start_mm: [-1.0, 0.0],
+                            end_mm: [1.0, 0.0],
+                        },
+                        Curve2d::CircleArc {
+                            center_mm: [0.0, 0.0],
+                            radius_mm: 1.0,
+                            start_angle_rad: 0.0,
+                            end_angle_rad: std::f64::consts::PI,
+                        },
+                    ],
+                }],
+            };
+            let root = model.add_node(CadNode::Extrude {
+                profile,
+                vector_mm: [0.0, 0.0, 2.0],
+            });
+            model.add_root(root)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            let step = kernel.to_step(&evaluated)?;
+            ruststep::parser::parse(&step)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_full_circle_profile_extrusion() -> Result<()> {
+            let mut model = CadModel::new();
+            let profile = Profile2d {
+                loops: vec![ProfileLoop {
+                    curves: vec![Curve2d::CircleArc {
+                        center_mm: [0.0, 0.0],
+                        radius_mm: 2.0,
+                        start_angle_rad: 0.0,
+                        end_angle_rad: std::f64::consts::TAU,
+                    }],
+                }],
+            };
+            let root = model.add_node(CadNode::Extrude {
+                profile,
+                vector_mm: [0.0, 0.0, 5.0],
+            });
+            model.add_root(root)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            let step = kernel.to_step(&evaluated)?;
+            assert!(step.starts_with("ISO-10303-21;"));
+            ruststep::parser::parse(&step)?;
+            Ok(())
+        }
+
+        #[test]
+        fn refuses_unimplemented_pattern_execution() -> Result<()> {
+            use crate::cad_ir::PatternSpec;
+
+            let (mut model, body) = box_model()?;
+            model.roots.clear();
+            let patterned = model.add_node(CadNode::Pattern {
+                pattern: PatternSpec::Linear {
+                    count: 4,
+                    step_mm: [2.54, 0.0, 0.0],
+                },
+                child: body,
+            });
+            model.add_root(patterned)?;
+
+            let error = match MonstertruckKernel::project_standard().evaluate(&model, patterned) {
+                Ok(_) => bail!("unimplemented pattern unexpectedly evaluated"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("does not yet evaluate"));
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_box_without_exposing_monstertruck_topology() -> Result<()> {
+            let (model, root) = box_model()?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            assert_eq!(summary.faces, 6);
+
+            let step = kernel.to_step(&evaluated)?;
+            assert!(step.starts_with("ISO-10303-21;"));
+            ruststep::parser::parse(&step)?;
+            Ok(())
+        }
+    }
+}
