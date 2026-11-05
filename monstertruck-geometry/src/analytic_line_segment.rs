@@ -117,7 +117,7 @@ pub fn certify_nurbs_segment_locus(
     let mut max_junction_gap = 0.0_f64;
     for (index, piece) in pieces.iter().enumerate() {
         let points = &piece.controls;
-        let Some(floor) = resolution_floor(&points, start, end) else {
+        let Some(floor) = resolution_floor(points, start, end) else {
             return SegmentLocus::Unsupported;
         };
         if floor >= tolerance {
