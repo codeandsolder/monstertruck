@@ -1,8 +1,8 @@
 //! Whole-curve geometric locus coverage of a finite straight segment.
 //!
 //! Uses positive rational Bernstein convex-hull containment, not samples.
-//! A continuous curve that stays in a segment's tolerance tube and reaches
-//! both endpoints has the same point-set locus up to that tolerance.
+//! Connected pieces (or pieces with certified small junction gaps) that stay
+//! in a segment's tolerance tube and reach both endpoints cover its locus.
 
 use crate::analytic_curve_incidence::valid;
 use crate::prelude::*;
@@ -75,32 +75,14 @@ fn resolution_floor(points: &[[f64; 4]], start: Point3, end: Point3) -> Option<f
     floor.is_finite().then_some(floor)
 }
 
-// Interior knot multiplicity strictly above the degree allows a jump
-// discontinuity. Convex-hull inclusion alone cannot prove reverse coverage
-// across that jump, even when both pieces lie on the target line.
-fn has_continuous_interior_knots(curve: &BsplineCurve<Vector4>) -> bool {
-    let knots = curve.knot_vector();
-    let n = curve.control_points().len();
-    let degree = knots.len() - n - 1;
-    let (lower, upper) = (knots[degree], knots[n]);
-    !knots.windows(degree + 1).any(|run| {
-        let knot = run[0];
-        knot > lower
-            && knot < upper
-            // Near-duplicate knots are refused too: this overapproximates
-            // discontinuity, never silently certifies a potentially gapped locus.
-            && run.iter().all(|value| (*value - knot).abs() <= f64::EPSILON * knot.abs().max(1.0))
-    })
-}
-
 /// Certify that a complete rational spline and a line segment have point-set
 /// Hausdorff distance no more than the requested geometric tolerance.
 ///
 /// All knot intervals are converted into homogeneous Bezier pieces. Positive
 /// weights make each piece a convex combination of its Euclidean controls.
 /// If every control is close to the target segment, the whole curve is close
-/// to it. Continuity and endpoint coverage give the reverse inclusion,
-/// independently of parameter speed or repeated traversal.
+/// to it. Certified junction gaps and endpoint coverage give the reverse
+/// inclusion, independently of parameter speed or repeated traversal.
 ///
 /// This is a tolerance and arithmetic-conditioning claim, not a proof that
 /// two CAD solids enclose the same occupied set. In particular it does not
@@ -117,7 +99,6 @@ pub fn certify_nurbs_segment_locus(
         || !finite(start)
         || !finite(end)
         || !valid(curve.non_rationalized())
-        || !has_continuous_interior_knots(curve.non_rationalized())
     {
         return SegmentLocus::Unsupported;
     }
@@ -130,7 +111,10 @@ pub fn certify_nurbs_segment_locus(
         return SegmentLocus::Unsupported;
     }
     let mut endpoints = [None, None];
+    let mut previous_end = None;
     let mut max_floor = 0.0_f64;
+    let mut max_hull_deviation = 0.0_f64;
+    let mut max_junction_gap = 0.0_f64;
     for (index, piece) in pieces.iter().enumerate() {
         if !valid(piece) {
             return SegmentLocus::Unsupported;
@@ -147,12 +131,24 @@ pub fn certify_nurbs_segment_locus(
             return SegmentLocus::Unsupported;
         }
         max_floor = max_floor.max(floor);
-        let margin = tolerance - floor;
-        if index == 0 {
-            endpoints[0] = points.first().copied().and_then(cartesian);
+        let Some(front) = points.first().copied().and_then(cartesian) else {
+            return SegmentLocus::Unsupported;
+        };
+        let Some(back) = points.last().copied().and_then(cartesian) else {
+            return SegmentLocus::Unsupported;
+        };
+        if let Some(previous) = previous_end {
+            let gap = length(previous, front);
+            if !gap.is_finite() {
+                return SegmentLocus::Unsupported;
+            }
+            max_junction_gap = max_junction_gap.max(gap);
+        } else {
+            endpoints[0] = Some(front);
         }
+        previous_end = Some(back);
         if index + 1 == pieces.len() {
-            endpoints[1] = points.last().copied().and_then(cartesian);
+            endpoints[1] = Some(back);
         }
         for point in points {
             let Some(point) = cartesian(point) else {
@@ -161,10 +157,20 @@ pub fn certify_nurbs_segment_locus(
             let Some(distance) = distance_to_segment(point, start, end) else {
                 return SegmentLocus::Unsupported;
             };
-            if distance > margin {
-                return SegmentLocus::NotProven;
-            }
+            max_hull_deviation = max_hull_deviation.max(distance);
         }
+    }
+    // Every piece stays within the segment's convex tolerance tube. Each
+    // connected piece covers all intermediate projected positions; if two
+    // consecutive pieces jump, their projected coverage can miss only a gap
+    // bounded by the actual spatial endpoint distance. Triangle inequality
+    // then bounds any missing target point by hull deviation + junction gap.
+    let total_bound = max_hull_deviation + max_junction_gap + max_floor;
+    if !total_bound.is_finite() {
+        return SegmentLocus::Unsupported;
+    }
+    if total_bound > tolerance {
+        return SegmentLocus::NotProven;
     }
     let [Some(front), Some(back)] = endpoints else {
         return SegmentLocus::Unsupported;
@@ -269,7 +275,76 @@ mod tests {
         );
         assert_eq!(
             certify_bspline_segment_locus(&curve, p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), TOL,),
-            SegmentLocus::Unsupported,
+            SegmentLocus::NotProven,
+        );
+    }
+
+    #[test]
+    fn zero_gap_full_multiplicity_knot_is_supported() {
+        let curve = BsplineCurve::new_unchecked(
+            KnotVector::from(vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0]),
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(0.5, 0.0, 0.0),
+                p(0.5, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+            ],
+        );
+        assert_eq!(
+            certify_bspline_segment_locus(&curve, p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), TOL),
+            SegmentLocus::WithinTolerance,
+        );
+    }
+
+    #[test]
+    fn a_small_actual_jump_can_be_proven_within_the_same_tolerance_budget() {
+        let curve = BsplineCurve::new_unchecked(
+            KnotVector::from(vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0]),
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(0.5, 0.0, 0.0),
+                p(0.5 + 1.0e-8, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+            ],
+        );
+        assert_eq!(
+            certify_bspline_segment_locus(&curve, p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), TOL),
+            SegmentLocus::WithinTolerance,
+        );
+    }
+
+    #[test]
+    fn hull_deviation_and_knot_jump_share_one_error_budget() {
+        let curve = BsplineCurve::new_unchecked(
+            KnotVector::from(vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0]),
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(0.5, 0.0, 0.0),
+                p(0.56, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+            ],
+        );
+        // The 0.06 gap is resolvable by a 0.1 tolerance when the
+        // control hull itself lies exactly on the line.
+        assert_eq!(
+            certify_bspline_segment_locus(&curve, p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), 0.1,),
+            SegmentLocus::WithinTolerance,
+        );
+
+        let displaced = BsplineCurve::new_unchecked(
+            KnotVector::from(vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0]),
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(0.5, 0.08, 0.0),
+                p(0.56, 0.08, 0.0),
+                p(1.0, 0.0, 0.0),
+            ],
+        );
+        // A valid bound must account for BOTH displacement and missing
+        // junction coverage, not grant each a separate 0.1 allowance.
+        assert_eq!(
+            certify_bspline_segment_locus(&displaced, p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), 0.1,),
+            SegmentLocus::NotProven,
         );
     }
 
