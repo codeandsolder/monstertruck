@@ -31,10 +31,12 @@ pub fn certify_analytic_curve_on_surface(
         Curve::NurbsCurve(spline) => {
             certify_nurbs_curve_on_support(spline, carrier.support(), tolerance)
         }
-        Curve::Intersection(intersection) => {
-            certify_analytic_curve_on_surface(intersection.leader(), surface, tolerance)
-        }
-        Curve::ParameterCurve(_) => CurveIncidence::Unsupported,
+        // IntersectionCurve::evaluate runs a Newton projection onto its two
+        // source surfaces (with a leader fallback). The evaluated curve is NOT
+        // structurally identical to its leader, even when the leader itself
+        // is globally on the requested support. Do not promote a leader
+        // certificate into a claim about the projected curve.
+        Curve::Intersection(_) | Curve::ParameterCurve(_) => CurveIncidence::Unsupported,
     }
 }
 
@@ -57,6 +59,29 @@ mod tests {
         assert_eq!(
             certify_analytic_curve_on_surface(&above, &plane, TOL),
             CurveIncidence::NotProven
+        );
+    }
+
+    #[test]
+    fn projected_intersection_cannot_inherit_a_leader_only_certificate() {
+        use crate::SurfaceCurve;
+        let xy = Surface::Plane(Plane::xy());
+        let yz = Surface::Plane(Plane::yz());
+        let leader = Curve::Line(Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)));
+        assert_eq!(
+            certify_analytic_curve_on_surface(&leader, &xy, TOL),
+            CurveIncidence::Proven,
+        );
+        let projected = Curve::Intersection(SurfaceCurve::with_boundaries(
+            Box::new(xy.clone()),
+            Box::new(yz),
+            Box::new(leader),
+            None,
+            None,
+        ));
+        assert_eq!(
+            certify_analytic_curve_on_surface(&projected, &xy, TOL),
+            CurveIncidence::Unsupported,
         );
     }
 
