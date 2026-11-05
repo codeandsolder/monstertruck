@@ -3,8 +3,13 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -35,6 +40,7 @@ jobs:
 
   clippy:
     name: cargo clippy
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -47,8 +53,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+        with:
+          rust-toolchain: "1.99.1"
+          rustflags: "-D warnings"
       - run: cargo clippy --all-targets -- -D warnings
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+
 
   test:
     name: cargo test (cpu)
@@ -63,7 +77,11 @@ jobs:
           submodules: false
       - run: git submodule update --init resources
       - uses: dtolnay/rust-toolchain@1.99.1
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+        with:
+          rust-toolchain: "1.99.1"
+          rustflags: "-D warnings"
       - uses: taiki-e/install-action@nextest
       # Pinned: cargo-rdme's output is not stable across major versions, so an
       # unpinned `@latest` would fail `readme-check` the day it majors.
@@ -74,11 +92,14 @@ jobs:
       - run: just readme-check
       - run: just test-cpu
       - run: just test-doc
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
 
 
   shared-sccache:
     name: workspace lib tests (shared sccache)
-    if: github.event_name != 'pull_request'
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: read
       id-token: write
@@ -92,6 +113,7 @@ jobs:
 
   meshing-features:
     name: monstertruck-meshing feature subsets
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -102,12 +124,21 @@ jobs:
           submodules: false
       - run: git submodule update --init resources
       - uses: dtolnay/rust-toolchain@1.99.1
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+        with:
+          rust-toolchain: "1.99.1"
+          rustflags: "-D warnings"
       - uses: extractions/setup-just@v4
       - run: just meshing-features
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+
 
   wasm-build:
     name: cargo build (wasm32)
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -120,6 +151,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
+        with:
+          rust-toolchain: "1.99.1"
+          rustflags: "-D warnings"
       - uses: extractions/setup-just@v4
       - run: just wasm-build
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
