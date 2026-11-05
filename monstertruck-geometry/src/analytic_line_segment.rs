@@ -4,6 +4,7 @@
 //! Connected pieces (or pieces with certified small junction gaps) that stay
 //! in a segment's tolerance tube and reach both endpoints cover its locus.
 
+use crate::analytic_bezier_partition::proof_bezier_spans;
 use crate::analytic_curve_incidence::valid;
 use crate::prelude::*;
 
@@ -106,25 +107,17 @@ pub fn certify_nurbs_segment_locus(
     if !chord.is_finite() || chord <= 2.0 * tolerance {
         return SegmentLocus::Unsupported;
     }
-    let pieces = curve.non_rationalized().bezier_decomposition();
-    if pieces.is_empty() || pieces.len() > 8192 {
+    let Some(pieces) = proof_bezier_spans(curve.non_rationalized()) else {
         return SegmentLocus::Unsupported;
-    }
+    };
     let mut endpoints = [None, None];
     let mut previous_end = None;
     let mut max_floor = 0.0_f64;
     let mut max_hull_deviation = 0.0_f64;
     let mut max_junction_gap = 0.0_f64;
     for (index, piece) in pieces.iter().enumerate() {
-        if !valid(piece) {
-            return SegmentLocus::Unsupported;
-        }
-        let points = piece
-            .control_points()
-            .iter()
-            .map(|p| [p.x, p.y, p.z, p.w])
-            .collect::<Vec<_>>();
-        let Some(floor) = resolution_floor(&points, start, end) else {
+        let points = &piece.controls;
+        let Some(floor) = resolution_floor(points, start, end) else {
             return SegmentLocus::Unsupported;
         };
         if floor >= tolerance {
@@ -150,7 +143,7 @@ pub fn certify_nurbs_segment_locus(
         if index + 1 == pieces.len() {
             endpoints[1] = Some(back);
         }
-        for point in points {
+        for &point in points {
             let Some(point) = cartesian(point) else {
                 return SegmentLocus::Unsupported;
             };

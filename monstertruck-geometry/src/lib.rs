@@ -114,6 +114,7 @@ pub mod decorators;
 /// T-Spline and T-NURCC surface types.
 pub mod t_spline;
 
+mod analytic_bezier_partition;
 /// Checked geometric identities and orientation for analytic surface carriers.
 pub mod analytic_carrier;
 /// Non-sampling, polynomial-bounded curve incidence on analytic carriers.
