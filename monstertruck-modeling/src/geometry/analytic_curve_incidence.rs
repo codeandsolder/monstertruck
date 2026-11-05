@@ -36,8 +36,7 @@ pub fn certify_analytic_curve_on_surface(
         // structurally identical to its leader, even when the leader itself
         // is globally on the requested support. Do not promote a leader
         // certificate into a claim about the projected curve.
-        Curve::Intersection(_) => CurveIncidence::Unsupported,
-        Curve::ParameterCurve(_) => CurveIncidence::Unsupported,
+        Curve::Intersection(_) | Curve::ParameterCurve(_) => CurveIncidence::Unsupported,
     }
 }
 
