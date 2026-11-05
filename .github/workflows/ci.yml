@@ -161,4 +161,3 @@ jobs:
       - name: Finalize mandatory sccache
         if: always()
         uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@18397eb8f0bd8a76f90010a66a8519011f7992ca # main
-
