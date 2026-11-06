@@ -26,6 +26,7 @@ mod divide_face;
 mod faces_classification;
 mod intersection_curve;
 mod loops_store;
+mod planar_union;
 mod tolerance;
 mod weld;
 
@@ -417,6 +418,10 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             FaceRelation::Outside => or1.push(region),
         }
     }
+    let mut and0 = planar_union::overlay_source_regions(and0, tol);
+    let mut and1 = planar_union::overlay_source_regions(and1, tol);
+    let mut or0 = planar_union::overlay_source_regions(or0, tol);
+    let mut or1 = planar_union::overlay_source_regions(or1, tol);
     and0.append(&mut and1);
     or0.append(&mut or1);
     Ok([

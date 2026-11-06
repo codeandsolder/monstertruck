@@ -54,7 +54,7 @@ where
     None
 }
 
-fn create_parameter_boundary_on_surface<C, S>(
+pub(super) fn create_parameter_boundary_on_surface<C, S>(
     surface: &S,
     wire: &Wire<Point3, C>,
     sampled_wire: Option<&Wire<Point3, PolylineCurve<Point3>>>,
