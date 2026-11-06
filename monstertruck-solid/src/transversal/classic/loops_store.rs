@@ -103,6 +103,28 @@ impl ShapesOpStatus {
     }
 }
 
+/// Give each regular SSI branch one geometrically defined tangent orientation.
+///
+/// Marching mesh segments are undirected. Region labels derived from the
+/// ordered carrier-surface normals must not depend on the edge order of a
+/// tessellation adjacency graph. Normalize the *same* raw and exact projected
+/// curves together, and reject degenerate intersections with no consistent
+/// oriented tangent rather than inventing a face-region label.
+fn orient_intersection_branch<S>(
+    polyline: &mut PolylineCurve,
+    intersection_curve: &mut IntersectionCurve<PolylineCurve, S, S>,
+) -> Option<ShapesOpStatus>
+where
+    S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3> + Clone,
+{
+    if ShapesOpStatus::from_is_curve(intersection_curve)? == ShapesOpStatus::And {
+        polyline.invert();
+        intersection_curve.invert();
+    }
+    (ShapesOpStatus::from_is_curve(intersection_curve)? == ShapesOpStatus::Or)
+        .then_some(ShapesOpStatus::Or)
+}
+
 impl<P, C> std::ops::Deref for BoundaryWire<P, C> {
     type Target = Wire<P, C>;
     fn deref(&self) -> &Self::Target { &self.wire }
@@ -1444,8 +1466,9 @@ where
             )?;
             curves
                 .into_iter()
-                .try_for_each(|(polyline, intersection_curve)| {
-                    let status = ShapesOpStatus::from_is_curve(&intersection_curve)?;
+                .try_for_each(|(mut polyline, mut intersection_curve)| {
+                    let status =
+                        orient_intersection_branch(&mut polyline, &mut intersection_curve)?;
                     let (status0, status1) = match (ori0, ori1) {
                         (true, true) => (status, status.not()),
                         (true, false) => (status.not(), status.not()),
@@ -1512,6 +1535,24 @@ where
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+
+    #[test]
+    fn ssi_carrier_normal_orientation_is_independent_of_polyline_direction() {
+        let start = Point3::new(0.0, -1.0, 0.0);
+        let end = Point3::new(0.0, 1.0, 0.0);
+        let mut normalized = Vec::new();
+        for points in [vec![start, end], vec![end, start]] {
+            let mut polyline = PolylineCurve(points);
+            let mut curve = IntersectionCurve::new(Plane::xy(), Plane::yz(), polyline.clone());
+            assert_eq!(
+                orient_intersection_branch(&mut polyline, &mut curve),
+                Some(ShapesOpStatus::Or)
+            );
+            assert_eq!(curve.leader().0, polyline.0);
+            normalized.push(polyline.0);
+        }
+        assert_eq!(normalized[0], normalized[1]);
+    }
 
     #[test]
     fn synchronized_sampling_evidence_rejects_structural_drift() {
