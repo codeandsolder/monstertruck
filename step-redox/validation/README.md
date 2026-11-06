@@ -38,7 +38,7 @@ Local invocation:
 
     uv sync --frozen
     cargo build --release --bin step-redox --bin step-count-resize
-    uv run --frozen python validation/harness.py run \
+    uv run --frozen --project ../.github/ci/step-redox python ../.github/ci/step-redox/harness.py run \
       --manifest validation/fixtures.json \
       --cache .cache/step-redox-validation \
       --out validation/out \

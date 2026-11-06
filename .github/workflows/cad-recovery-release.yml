@@ -37,19 +37,18 @@ jobs:
           cargo +1.99.1 run -p step-redox --bin step-count-resize -- --help >/dev/null
           cargo +1.99.1 run -p step-redox --bin step-chain-resize -- --help >/dev/null
       - name: Resolve OCCT validation dependencies
-        working-directory: step-redox
-        run: uv sync --frozen
+        run: uv sync --frozen --project .github/ci/step-redox
       - name: Check real-model geometry and semantics
         working-directory: step-redox
         run: |
-          uv run --frozen python validation/harness.py run \
+          uv run --frozen --project ../.github/ci/step-redox python ../.github/ci/step-redox/harness.py run \
             --manifest validation/fixtures.json \
             --cache .cache/step-redox-validation \
             --out validation/out \
             --step-redox ../target/debug/step-redox \
             --step-count-resize ../target/debug/step-count-resize \
             --step-chain-resize ../target/debug/step-chain-resize
-          uv run --frozen python validation/semantic_probe.py \
+          uv run --frozen --project ../.github/ci/step-redox python ../.github/ci/step-redox/semantic_probe.py \
             --manifest validation/fixtures.json \
             --cache .cache/step-redox-validation \
             --out validation/out/semantic-probes \

@@ -108,7 +108,12 @@ def fetch_fixture(name: str, spec: dict[str, Any], cache: Path) -> Path:
 
     bundled_gzip = spec.get("bundled_gzip")
     if bundled_gzip:
-        bundled_path = Path(__file__).resolve().parent / bundled_gzip
+        bundled_path = (
+            Path(__file__).resolve().parents[3]
+            / "step-redox"
+            / "validation"
+            / bundled_gzip
+        )
         if bundled_path.exists():
             tmp = path.with_suffix(path.suffix + ".part")
             tmp.unlink(missing_ok=True)
@@ -136,7 +141,12 @@ def fetch_fixture(name: str, spec: dict[str, Any], cache: Path) -> Path:
         if not archive_ok:
             bundled_archive = spec.get("bundled_archive")
             bundled_path = (
-                Path(__file__).resolve().parent / bundled_archive
+                (
+                    Path(__file__).resolve().parents[3]
+                    / "step-redox"
+                    / "validation"
+                    / bundled_archive
+                )
                 if bundled_archive
                 else None
             )

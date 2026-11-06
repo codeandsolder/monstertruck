@@ -121,7 +121,7 @@ Run locally with:
 
     cargo build --release --bin step-redox
     uv sync --frozen
-    uv run --frozen python validation/harness.py run \
+    uv run --frozen --project ../.github/ci/step-redox python ../.github/ci/step-redox/harness.py run \
       --manifest validation/fixtures.json \
       --cache .cache/step-redox-validation \
       --out validation/out \
@@ -215,7 +215,7 @@ The aggressive output is byte-idempotent under a second cleanup pass.
 
 ### OpenCascade validation
 
-The mapped-item path is independently tested with OpenCascade 8 via the scripts under `tools/`.
+The mapped-item path is independently tested with OpenCascade 8 via the validation scripts under `.github/ci/step-redox/`.
 
 For both QFN and SOP examples, STEP import succeeds; solid count and topology counts are preserved; individual solid volume, surface area, center of mass, and bounding box match; matched-solid boolean overlap is complete to floating-point noise; and bidirectional boolean cuts leave no measurable residual geometry.
 
