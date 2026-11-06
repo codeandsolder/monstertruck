@@ -583,20 +583,12 @@ fn recover_kernel_boundary_feature_fragment<
     let Some(mut provenance) = load.topology_provenance.clone() else {
         return Ok(None);
     };
-    let mut current_step = None::<String>;
+    let mut current_document = None::<K::Document>;
     let mut current_source = source;
     let mut replay = Vec::<RecoveredBoundaryFeatureFamily>::new();
 
     for pass in 0..MAX_LOCAL_REDUCTION_ROUNDS {
-        let updated_document = current_step
-            .as_deref()
-            .map(|step| {
-                kernel.resolve_source_exchange(
-                    monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange,
-                )
-            })
-            .transpose()?;
-        let document = updated_document.as_ref().unwrap_or(source_document);
+        let document = current_document.as_ref().unwrap_or(source_document);
         let exchange = document.as_ref();
         let section = exchange
             .data
@@ -651,9 +643,18 @@ fn recover_kernel_boundary_feature_fragment<
             &prepared.family_indices,
             &provenance,
         )?;
-        let healed = kernel.edit_source_topology(document, current_source, &[patch])?;
+        let edited = kernel.edit_source_topology(document, current_source, &[patch])?;
+        if kernel.inspect_edited_source(&edited)?.faces == 0 {
+            return Ok(None);
+        }
+        // The edit remains native exact-trim topology until the raw-entity
+        // semantic detector explicitly needs the next STEP snapshot.
+        let snapshot = kernel.edited_source_to_step(&edited)?;
+        let next_document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
+        )?;
         let Some((healed_source, healed_provenance)) =
-            inspect_single_loaded_source(kernel, healed.as_bytes())?
+            inspect_single_loaded_source(kernel, &next_document)?
         else {
             return Ok(None);
         };
@@ -665,15 +666,15 @@ fn recover_kernel_boundary_feature_fragment<
         }
         current_source = healed_source;
         provenance = healed_provenance;
-        current_step = Some(healed);
+        current_document = Some(next_document);
         if pass + 1 == MAX_LOCAL_REDUCTION_ROUNDS {
             bail!("kernel boundary-feature peeling did not reach a fixed point");
         }
     }
-    let Some(final_step) = current_step else {
+    let Some(final_document) = current_document else {
         return Ok(None);
     };
-    let Some(mut host) = recognize_single_healed_host(&final_step)? else {
+    let Some(mut host) = recognize_single_healed_host(final_document.as_ref())? else {
         return Ok(None);
     };
     host.model.provenance.clear();
@@ -705,46 +706,51 @@ fn recover_kernel_topology_normalized_fragment<
     };
 
     let evidence = replayable_source_treatments(exchange, source)?;
-    let mut current_step = None::<String>;
+    let mut current_document = None::<K::Document>;
+    let mut last_edited = None::<K::EditedSource>;
     let mut current_source = source;
     let mut normalized = if evidence.is_empty() {
         false
     } else {
         let patch = plan_source_edge_treatment_patches(exchange, source, &evidence, &provenance)?;
-        let healed = kernel.edit_source_topology(document, source, &[patch])?;
+        let edited = kernel.edit_source_topology(document, source, &[patch])?;
+        if kernel.inspect_edited_source(&edited)?.faces == 0 {
+            return Ok(None);
+        }
+        let snapshot = kernel.edited_source_to_step(&edited)?;
+        let next_document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
+        )?;
         let Some((healed_source, healed_provenance)) =
-            inspect_single_loaded_source(kernel, healed.as_bytes())?
+            inspect_single_loaded_source(kernel, &next_document)?
         else {
             return Ok(None);
         };
         current_source = healed_source;
         provenance = healed_provenance;
-        current_step = Some(healed);
+        current_document = Some(next_document);
+        last_edited = Some(edited);
         true
     };
 
-    let updated_document = current_step
-        .as_deref()
-        .map(|step| {
-            kernel.resolve_source_exchange(
-                monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange,
-            )
-        })
-        .transpose()?;
-    let document = updated_document.as_ref().unwrap_or(document);
+    let document = current_document.as_ref().unwrap_or(document);
     if let Some(patch) =
         plan_source_coplanar_normalization_patch(document.as_ref(), current_source, &provenance)?
     {
-        current_step = Some(kernel.edit_source_topology(document, current_source, &[patch])?);
+        last_edited = Some(kernel.edit_source_topology(document, current_source, &[patch])?);
         normalized = true;
     }
     if !normalized {
         return Ok(None);
     }
-    let final_step = current_step
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("kernel topology normalization lost its edited STEP"))?;
-    let Some(mut host) = recognize_single_healed_host(final_step)? else {
+    let edited = last_edited
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("kernel topology normalization lost its native solid"))?;
+    let snapshot = kernel.edited_source_to_step(edited)?;
+    let final_document = kernel.resolve_source_exchange(
+        monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
+    )?;
+    let Some(mut host) = recognize_single_healed_host(final_document.as_ref())? else {
         return Ok(None);
     };
     // Regenerated STEP identities are an internal handoff, not source provenance.
@@ -772,11 +778,9 @@ fn recover_kernel_topology_normalized_fragment<
 
 fn inspect_single_loaded_source<K: SourceStepLoadInspector>(
     kernel: &K,
-    input: &[u8],
+    document: &K::Document,
 ) -> Result<Option<(SourceEntity, KernelTopologyProvenance)>> {
-    let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
-    let document = kernel.resolve_source_exchange(exchange)?;
-    let load = kernel.inspect_source_document(&document)?;
+    let load = kernel.inspect_source_document(document)?;
     let [solid] = load.solids.as_slice() else {
         return Ok(None);
     };
@@ -813,9 +817,7 @@ fn replayable_source_treatments(
     Ok(evidence)
 }
 
-fn recognize_single_healed_host(healed_step: &str) -> Result<Option<CadFragment>> {
-    let healed =
-        monstertruck_io::step::load::ParsedStepSource::parse(healed_step.as_bytes())?.exchange;
+fn recognize_single_healed_host(healed: &Exchange) -> Result<Option<CadFragment>> {
     let [section] = healed.data.as_slice() else {
         return Ok(None);
     };
@@ -2636,6 +2638,30 @@ END-ISO-10303-21;
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
+    fn assert_boss_native_edit(
+        document: &monstertruck_io::step::load::ResolvedStepDocument,
+        source: SourceEntity,
+        provenance: &KernelTopologyProvenance,
+        edited: &crate::kernel_topology::KernelEditedSourceEvidence,
+    ) -> Result<()> {
+        let original_face_count = document
+            .import_solid(source.data_section, source.id)?
+            .solid
+            .boundaries
+            .iter()
+            .map(|shell| shell.faces.len())
+            .sum::<usize>();
+        assert_eq!(edited.source, source);
+        assert_eq!(edited.boundary_shells, 1);
+        assert_eq!(edited.faces + 5, original_face_count);
+        assert_eq!(
+            edited.retained_source_topology.faces.len() + 5,
+            provenance.faces.len()
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn kernel_v15_square_boss_peel_has_complete_source_and_kernel_proofs() -> Result<()> {
         let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
@@ -2702,13 +2728,30 @@ END-ISO-10303-21;
         assert_eq!(patch.remove_faces.len(), 5);
         assert_eq!(patch.face_boundary_replacements.len(), 1);
         assert_eq!(patch.require_unused_edges.len(), 4);
-        let healed = kernel.edit_source_topology(&document, loaded.source, &[patch])?;
+        let mut edited = kernel.edit_source_topology(&document, loaded.source, &[])?;
+        kernel.apply_edited_source_patches(&mut edited, std::slice::from_ref(&patch))?;
+        let committed = kernel.inspect_edited_source(&edited)?;
+        // Trying to remove the same faces twice must leave the first valid
+        // native transaction intact, without export or re-import.
+        assert!(
+            kernel
+                .apply_edited_source_patches(&mut edited, &[patch])
+                .is_err()
+        );
+        assert_eq!(kernel.inspect_edited_source(&edited)?, committed);
+        assert_boss_native_edit(
+            &document,
+            loaded.source,
+            provenance,
+            &kernel.inspect_edited_source(&edited)?,
+        )?;
+        let snapshot = kernel.edited_source_to_step(&edited)?;
         let healed_document = kernel.resolve_source_exchange(
-            monstertruck_io::step::load::ParsedStepSource::parse(healed.as_bytes())?.exchange,
+            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
         )?;
         let healed_report = kernel.inspect_source_document(&healed_document)?;
         assert_eq!(healed_report.solids.len(), 1);
-        let host = recognize_single_healed_host(&healed)?
+        let host = recognize_single_healed_host(healed_document.as_ref())?
             .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
         assert!(matches!(
             host.source,

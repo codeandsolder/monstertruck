@@ -6,25 +6,73 @@
 //! leave the imported source solid unchanged.
 
 use crate::SourceEntity;
-use crate::kernel_source_load::KernelTopologyId;
+use crate::kernel_source_load::{KernelTopologyId, KernelTopologyProvenance};
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Apply normalized topology edits to one source solid without exposing backend-native topology.
+/// In-memory identity of an edited native solid.
+///
+/// Removed source entities are absent. Surviving source IDs retain their
+/// original kernel identity; new topology has no invented STEP source ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelEditedSourceEvidence {
+    pub source: SourceEntity,
+    pub boundary_shells: usize,
+    pub faces: usize,
+    pub retained_source_topology: KernelTopologyProvenance,
+}
+
+/// Apply normalized topology edits to a backend-owned native solid.
+///
+/// The returned edited value retains exact geometry and kernel Stable Ids.
+/// A STEP snapshot is only requested when a downstream raw-entity recognizer
+/// needs STEP records; editing itself never serializes/reimports the solid.
 pub trait SourceTopologyEditor: crate::kernel_source_load::SourceStepLoadInspector {
-    /// Import `source` from `input`, apply every patch in order transactionally,
-    /// and serialize the resulting single solid as a fresh STEP exchange.
+    /// Owned backend-native exact-trim topology after a successful transaction.
+    type EditedSource;
+
+    /// Clone an imported solid and apply all patches transactionally.
     ///
     /// # Errors
-    /// Returns an error if the source solid cannot be imported, any normalized
-    /// patch is invalid for the current topology, exact trim regeneration fails,
-    /// or the healed solid cannot be serialized.
+    /// Returns an error if the source cannot be imported, any patch fails,
+    /// or the resulting exact-trim native topology is invalid.
     fn edit_source_topology(
         &self,
         document: &Self::Document,
         source: SourceEntity,
         patches: &[KernelTopologyPatch],
-    ) -> Result<String>;
+    ) -> Result<Self::EditedSource>;
+
+    /// Apply further stable-ID-addressed edits to an existing native solid.
+    ///
+    /// All patches form one transaction: failure leaves the edited source
+    /// and its exact geometry unchanged. This permits iterative recovery
+    /// to retain kernel topology identities between semantic passes.
+    ///
+    /// # Errors
+    /// Returns an error if any patch cannot be applied with exact topology.
+    fn apply_edited_source_patches(
+        &self,
+        edited: &mut Self::EditedSource,
+        patches: &[KernelTopologyPatch],
+    ) -> Result<()>;
+
+    /// Inspect retained STEP-source identities and shell/face counts directly
+    /// from exact native topology, without any STEP export or re-import.
+    ///
+    /// # Errors
+    /// Returns an error if the edited native shape cannot be inspected.
+    fn inspect_edited_source(
+        &self,
+        edited: &Self::EditedSource,
+    ) -> Result<KernelEditedSourceEvidence>;
+
+    /// Export the edited native solid only when a STEP-form semantic view or
+    /// an external STEP artifact is actually needed.
+    ///
+    /// # Errors
+    /// Returns an error if exact native geometry cannot be serialized to STEP.
+    fn edited_source_to_step(&self, edited: &Self::EditedSource) -> Result<String>;
 }
 
 /// Vertex reference used by a normalized backend-neutral topology patch.

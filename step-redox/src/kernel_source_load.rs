@@ -297,23 +297,26 @@ mod monstertruck_adapter {
     };
     use crate::cad_kernel::monstertruck::MonstertruckKernel;
     use crate::kernel_topology::{
-        KernelFaceBoundaryReplacement, KernelFaceSplice, KernelPatchCurve, KernelPatchEdgeRef,
-        KernelPatchVertexRef, KernelTopologyPatch, SourceTopologyEditor,
+        KernelEditedSourceEvidence, KernelFaceBoundaryReplacement, KernelFaceSplice,
+        KernelPatchCurve, KernelPatchEdgeRef, KernelPatchVertexRef, KernelTopologyPatch,
+        SourceTopologyEditor,
     };
     use crate::step_document::StepSection;
     use crate::step_graph;
     use anyhow::Result;
     #[cfg(test)]
     use monstertruck_io::step::load::ParsedStepSource;
+    use monstertruck_io::step::load::convert::StepCompressedTrimmedSolid;
     use monstertruck_io::step::load::step_geometry::{
         Conic3D, Curve3D, Line, Matrix4, Point3, Processor, TrimmedCurve, UnitCircle, Vector4,
     };
     use monstertruck_io::step::load::{
         EntityLoadReport, LossCategory, LossReason, LossTally, ResolvedStepDocument,
-        ShellLoadReport, StepTopologyProvenance,
+        ShellLoadReport, StepSolidImport, StepTopologyProvenance,
     };
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
     use monstertruck_topology::StableId;
+    use monstertruck_topology::compress::StableIdEntity;
     use monstertruck_topology::compressed_surgery::{
         CompressedFaceBoundaryReplacement, CompressedFaceSplice, CompressedTrimmedTopologyPatch,
         NewCompressedEdge, PatchEdgeRef, PatchEdgeUse, PatchVertexRef, RetainedCompressedEdge,
@@ -474,13 +477,24 @@ mod monstertruck_adapter {
         })
     }
 
+    /// Exact-trim compressed solid and original STEP provenance after a
+    /// transactional edit. Stable IDs and allocator state remain alive until a
+    /// downstream consumer explicitly requests a STEP snapshot.
+    pub struct MonstertruckEditedSource {
+        source: SourceEntity,
+        imported: StepSolidImport<StepCompressedTrimmedSolid>,
+        source_topology: KernelTopologyProvenance,
+    }
+
     impl SourceTopologyEditor for MonstertruckKernel {
+        type EditedSource = MonstertruckEditedSource;
+
         fn edit_source_topology(
             &self,
             document: &Self::Document,
             source: SourceEntity,
             patches: &[KernelTopologyPatch],
-        ) -> Result<String> {
+        ) -> Result<Self::EditedSource> {
             let section = document
                 .exchange()
                 .data
@@ -512,17 +526,94 @@ mod monstertruck_adapter {
             if !table.manifold_solid_brep.contains_key(&source.id) {
                 anyhow::bail!("source solid #{} is unavailable to Monstertruck", source.id);
             }
-            let mut imported = document
+            let imported = document
                 .import_solid(source.data_section, source.id)?
                 .clone();
-            for patch in patches {
-                imported
-                    .solid
-                    .apply_topology_patch(&translate_patch(patch))?;
-            }
+            let source_topology = map_topology_provenance(&imported.provenance, section_source)?;
+            let mut edited = MonstertruckEditedSource {
+                source,
+                imported,
+                source_topology,
+            };
+            self.apply_edited_source_patches(&mut edited, patches)?;
+            Ok(edited)
+        }
 
+        fn apply_edited_source_patches(
+            &self,
+            edited: &mut Self::EditedSource,
+            patches: &[KernelTopologyPatch],
+        ) -> Result<()> {
+            let mut candidate = edited.imported.solid.clone();
+            for patch in patches {
+                candidate.apply_topology_patch(&translate_patch(patch))?;
+            }
+            edited.imported.solid = candidate;
+            Ok(())
+        }
+
+        fn inspect_edited_source(
+            &self,
+            edited: &Self::EditedSource,
+        ) -> Result<KernelEditedSourceEvidence> {
+            let solid = &edited.imported.solid;
+            // Build one native StableId index across all boundary shells.
+            // Duplicated IDs are not unique topology identities and must not
+            // be reported as unambiguously retained source entities.
+            let mut native_ids = std::collections::HashMap::<u64, (StableIdEntity, usize)>::new();
+            for boundary in &solid.boundaries {
+                for (ids, entity) in [
+                    (
+                        boundary.vertex_stable_ids.as_deref(),
+                        StableIdEntity::Vertex,
+                    ),
+                    (boundary.edge_stable_ids.as_deref(), StableIdEntity::Edge),
+                    (boundary.face_stable_ids.as_deref(), StableIdEntity::Face),
+                ] {
+                    for id in ids.into_iter().flatten().filter(|id| id.is_assigned()) {
+                        native_ids
+                            .entry(id.raw())
+                            .and_modify(|entry| entry.1 += 1)
+                            .or_insert((entity, 1));
+                    }
+                }
+            }
+            let retained = |id: KernelTopologyId, class| {
+                native_ids
+                    .get(&id.raw())
+                    .is_some_and(|&(entity, count)| entity == class && count == 1)
+            };
+            let source_topology = &edited.source_topology;
+            Ok(KernelEditedSourceEvidence {
+                source: edited.source,
+                boundary_shells: solid.boundaries.len(),
+                faces: solid.boundaries.iter().map(|shell| shell.faces.len()).sum(),
+                retained_source_topology: KernelTopologyProvenance {
+                    vertices: source_topology
+                        .vertices
+                        .iter()
+                        .filter(|entry| retained(entry.topology_id, StableIdEntity::Vertex))
+                        .cloned()
+                        .collect(),
+                    edges: source_topology
+                        .edges
+                        .iter()
+                        .filter(|entry| retained(entry.topology_id, StableIdEntity::Edge))
+                        .cloned()
+                        .collect(),
+                    faces: source_topology
+                        .faces
+                        .iter()
+                        .filter(|entry| retained(entry.topology_id, StableIdEntity::Face))
+                        .cloned()
+                        .collect(),
+                },
+            })
+        }
+
+        fn edited_source_to_step(&self, edited: &Self::EditedSource) -> Result<String> {
             Ok(CompleteStepDisplay::new(
-                save::StepModel::from(&imported.solid),
+                save::StepModel::from(&edited.imported.solid),
                 save::StepHeaderDescriptor {
                     organization_system: "step-redox Monstertruck source-topology surgery".into(),
                     ..Default::default()
@@ -846,7 +937,8 @@ mod monstertruck_adapter {
                 .ok_or_else(|| anyhow::anyhow!("fixture has no source solid"))?
                 .source;
             let edited = kernel.edit_source_topology(&document, source, &[])?;
-            let exchange = ParsedStepSource::parse(edited.as_bytes())?.exchange;
+            let snapshot = kernel.edited_source_to_step(&edited)?;
+            let exchange = ParsedStepSource::parse(snapshot.as_bytes())?.exchange;
             assert_eq!(exchange.data.len(), 1);
             let document = ResolvedStepDocument::from_exchange(exchange);
             let section = document
