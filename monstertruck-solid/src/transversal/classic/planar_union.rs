@@ -495,15 +495,16 @@ fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
     let reference = source.first()?;
-    let initial = project_source(source, tol)?;
-    let noded = if needs_exact_noding(&initial.edges, initial.span) {
+    // Separate STEP faces may encode coincident curves with independent IDs.
+    // Canonicalize their exact geometric edge identities before computing
+    // occupancy; otherwise two independently encoded copies would be emitted
+    // as two exterior boundaries rather than one filled face.
+    let canonical_regions = node_selected_regions(source, &[]);
+    let initial = project_source(&canonical_regions, tol)?;
+    let arrangement = if needs_exact_noding(&initial.edges, initial.span) {
         let points = exact_node_points(&initial, tol)?;
-        Some(node_selected_regions(source, &points))
-    } else {
-        None
-    };
-    let arrangement = if let Some(ref regions) = noded {
-        project_source(regions, tol)?
+        let noded = node_selected_regions(&canonical_regions, &points);
+        project_source(&noded, tol)?
     } else {
         initial
     };
@@ -520,19 +521,79 @@ fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     assemble_regions(loops, reference, &arrangement.surface)
 }
 
-/// Unify coincident selected cells from each original planar source face.
+/// Verify coplanarity over the actual trimmed geometry, not just at a plane
+/// origin. Nearly parallel supports may diverge by macroscopic distances
+/// across a large face even when their normals look identical.
+fn region_lies_on_plane<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    region: &AltRegion<C, S>,
+    plane: &Plane,
+    tol: f64,
+) -> bool {
+    let normal = plane.normal();
+    let origin = plane.origin();
+    region
+        .absolute_boundaries()
+        .iter()
+        .flat_map(|wire| wire.iter())
+        .all(|edge| {
+            let curve = edge.oriented_curve();
+            let (start, end) = curve.range_tuple();
+            [start, f64::midpoint(start, end), end]
+                .into_iter()
+                .all(|parameter| {
+                    let point = curve.evaluate(parameter);
+                    (point - origin).dot(normal).abs() <= tol
+                })
+        })
+}
+
+/// Coplanar faces with the same oriented world-space normal share material
+/// ownership even if STEP supplied distinct source faces or parameter frames.
+///
+/// Comparing carrier geometry instead of STEP entity IDs avoids retaining
+/// multiple coincident caps; comparing the *oriented* normal prevents merging
+/// the two opposite sides of a thin zero-thickness interface.
+fn same_oriented_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    lhs: &AltRegion<C, S>,
+    rhs: &AltRegion<C, S>,
+    tol: f64,
+) -> bool {
+    let (Some(AnalyticSurfaceKind::Plane(lhs_plane)), Some(AnalyticSurfaceKind::Plane(rhs_plane))) = (
+        lhs.surface().try_into_analytic_surface_kind(),
+        rhs.surface().try_into_analytic_surface_kind(),
+    ) else {
+        return false;
+    };
+    let lhs_normal = if lhs.orientation() {
+        lhs_plane.normal()
+    } else {
+        -lhs_plane.normal()
+    };
+    let rhs_normal = if rhs.orientation() {
+        rhs_plane.normal()
+    } else {
+        -rhs_plane.normal()
+    };
+    lhs_normal.dot(rhs_normal) >= 1.0 - 1.0e-10
+        && region_lies_on_plane(lhs, &rhs_plane, tol)
+        && region_lies_on_plane(rhs, &lhs_plane, tol)
+}
+
+/// Union selected cells sharing oriented planar support, including distinct source faces.
 pub(super) fn overlay_source_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: Vec<AltRegion<C, S>>,
     tol: f64,
 ) -> Vec<AltRegion<C, S>> {
     let mut groups = Vec::<Vec<AltRegion<C, S>>>::new();
-    let mut group_indices = HashMap::<(usize, bool), usize>::default();
     for region in regions {
-        let key = (region.source_face(), region.orientation());
-        if let Some(&index) = group_indices.get(&key) {
+        let group = groups.iter().position(|group| {
+            same_oriented_support(&group[0], &region, tol)
+                || group[0].source_face() == region.source_face()
+                    && group[0].orientation() == region.orientation()
+        });
+        if let Some(index) = group {
             groups[index].push(region);
         } else {
-            group_indices.insert(key, groups.len());
             groups.push(vec![region]);
         }
     }
@@ -591,17 +652,159 @@ mod tests {
         }
 
         fn region(&mut self, path: &[usize]) -> TestRegion {
+            self.region_on(path, Plane::xy(), true, 0)
+        }
+
+        fn region_on(
+            &mut self,
+            path: &[usize],
+            plane: Plane,
+            orientation: bool,
+            source_face: usize,
+        ) -> TestRegion {
             let wire = (0..path.len() - 1)
                 .map(|i| self.edge(path[i], path[i + 1]))
                 .collect::<Vec<_>>();
             BooleanRegion::new(
                 vec![Wire::from(wire)],
-                Surface::Plane(Plane::xy()),
-                true,
+                Surface::Plane(plane),
+                orientation,
                 0,
-                0,
+                source_face,
             )
         }
+    }
+
+    #[test]
+    fn different_source_faces_on_same_plane_share_union_boundary() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 2.0],
+            [0.0, 2.0],
+            [1.0, -1.0],
+            [3.0, -1.0],
+            [3.0, 1.0],
+            [1.0, 1.0],
+        ]);
+        let first = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 11);
+        let transformed = Plane::new(
+            Point3::new(3.0, 7.0, 0.0),
+            Point3::new(3.0, 8.0, 0.0),
+            Point3::new(2.0, 7.0, 0.0),
+        );
+        let second = fixture.region_on(&[4, 5, 6, 7, 4], transformed, true, 22);
+        let union = overlay_source_regions(vec![first, second], 1.0e-7);
+        assert_eq!(union.len(), 1);
+        assert_eq!(union[0].absolute_boundaries()[0].len(), 8);
+        let mut samples = HashMap::default();
+        let projected = create_parameter_boundary_on_surface(
+            &union[0].surface(),
+            &union[0].absolute_boundaries()[0],
+            None,
+            &mut samples,
+            1.0e-7,
+        )
+        .unwrap();
+        assert!((signed_area(&projected.0) - 7.0).abs() < 1.0e-8);
+    }
+
+    #[test]
+    fn reversed_parameter_orientation_with_flipped_face_normal_still_unifies() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 2.0],
+            [0.0, 2.0],
+            [1.0, -1.0],
+            [3.0, -1.0],
+            [3.0, 1.0],
+            [1.0, 1.0],
+        ]);
+        let first = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 11);
+        let flipped = Plane::new(
+            Point3::new(-2.0, 4.0, 0.0),
+            Point3::new(-1.0, 4.0, 0.0),
+            Point3::new(-2.0, 3.0, 0.0),
+        );
+        let second = fixture.region_on(&[4, 5, 6, 7, 4], flipped, false, 22);
+        let union = overlay_source_regions(vec![first, second], 1.0e-7);
+        assert_eq!(union.len(), 1);
+        assert_eq!(union[0].absolute_boundaries()[0].len(), 8);
+        let mut samples = HashMap::default();
+        let projected = create_parameter_boundary_on_surface(
+            &union[0].surface(),
+            &union[0].absolute_boundaries()[0],
+            None,
+            &mut samples,
+            1.0e-7,
+        )
+        .unwrap();
+        assert!((signed_area(&projected.0) - 7.0).abs() < 1.0e-8);
+    }
+
+    #[test]
+    fn opposite_oriented_plane_faces_do_not_merge() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]);
+        let first = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 11);
+        let second = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), false, 22);
+        let union = overlay_source_regions(vec![first, second], 1.0e-7);
+        assert_eq!(union.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_independent_face_topologies_unify_once() {
+        // Two source shells often encode coincident faces with entirely
+        // independent vertices/edges. Equality of STEP IDs is irrelevant.
+        let points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]];
+        let mut first_fixture = PlanarFixture::new(&points);
+        let mut second_fixture = PlanarFixture::new(&points);
+        let first = first_fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 11);
+        let second = second_fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 22);
+        let union = overlay_source_regions(vec![first, second], 1.0e-7);
+        assert_eq!(
+            union.len(),
+            1,
+            "two coincident independent caps share coverage"
+        );
+        assert_eq!(union[0].absolute_boundaries().len(), 1);
+        assert_eq!(union[0].absolute_boundaries()[0].len(), 4);
+    }
+
+    #[test]
+    fn nearly_parallel_planes_are_not_coplanar_across_large_faces() {
+        let points = [[0.0, 0.0], [10_000.0, 0.0], [10_000.0, 2.0], [0.0, 2.0]];
+        let mut flat_fixture = PlanarFixture::new(&points);
+        let mut tilted_fixture = PlanarFixture::new(&points);
+        // Inclination of 1 µrad passes a naive normal-dot threshold and
+        // coincident origins, but produces 10 mm separation at the far end.
+        tilted_fixture.vertices = points
+            .iter()
+            .map(|p| Vertex::new(Point3::new(p[0], p[1], p[0] * 1.0e-6)))
+            .collect();
+        let flat = flat_fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 11);
+        let tilted_plane = Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 1.0e-6),
+            Point3::new(0.0, 1.0, 0.0),
+        );
+        let tilted = tilted_fixture.region_on(&[0, 1, 2, 3, 0], tilted_plane, true, 22);
+        assert!(!same_oriented_support(&flat, &tilted, 1.0e-6));
+        assert_eq!(overlay_source_regions(vec![flat, tilted], 1.0e-6).len(), 2);
+    }
+
+    #[test]
+    fn parallel_offset_planes_do_not_merge() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]);
+        let first = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 11);
+        let offset = Plane::new(
+            Point3::new(0.0, 0.0, 0.01),
+            Point3::new(1.0, 0.0, 0.01),
+            Point3::new(0.0, 1.0, 0.01),
+        );
+        let second = fixture.region_on(&[0, 1, 2, 3, 0], offset, true, 22);
+        let union = overlay_source_regions(vec![first, second], 1.0e-7);
+        assert_eq!(union.len(), 2);
     }
 
     #[test]

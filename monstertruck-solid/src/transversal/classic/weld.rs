@@ -318,7 +318,7 @@ pub(super) fn node_selected_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> Vec<AltRegion<C, S>> {
     let mut context = WeldContext::new(regions);
     context.additional_nodes = nodes.to_vec();
-    let rebuilt_regions = regions
+    regions
         .iter()
         .map(|region| {
             let wires = region
@@ -340,8 +340,7 @@ pub(super) fn node_selected_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 region.source_face(),
             )
         })
-        .collect::<Vec<_>>();
-    rebuilt_regions
+        .collect()
 }
 
 pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
