@@ -549,7 +549,7 @@ pub fn recover_complete_ir_with_kernel_bytes<
     input: &[u8],
     kernel: &K,
 ) -> Result<CompleteIr> {
-    let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
+    let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
     let document = kernel.resolve_source_exchange(exchange)?;
     let mut build = recover_complete_ir_build_state(
         document.as_ref(),
@@ -602,7 +602,7 @@ fn recover_kernel_boundary_feature_fragment<
             .as_deref()
             .map(|step| {
                 kernel.resolve_source_exchange(
-                    crate::step_io::ParsedExchange::parse(step.as_bytes())?.exchange,
+                    monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange,
                 )
             })
             .transpose()?;
@@ -737,7 +737,7 @@ fn recover_kernel_topology_normalized_fragment<
         .as_deref()
         .map(|step| {
             kernel.resolve_source_exchange(
-                crate::step_io::ParsedExchange::parse(step.as_bytes())?.exchange,
+                monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange,
             )
         })
         .transpose()?;
@@ -784,7 +784,7 @@ fn inspect_single_loaded_source<K: SourceStepLoadInspector>(
     kernel: &K,
     input: &[u8],
 ) -> Result<Option<(SourceEntity, KernelTopologyProvenance)>> {
-    let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
+    let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
     let document = kernel.resolve_source_exchange(exchange)?;
     let load = kernel.inspect_source_document(&document)?;
     let [solid] = load.solids.as_slice() else {
@@ -824,7 +824,8 @@ fn replayable_source_treatments(
 }
 
 fn recognize_single_healed_host(healed_step: &str) -> Result<Option<CadFragment>> {
-    let healed = crate::step_io::ParsedExchange::parse(healed_step.as_bytes())?.exchange;
+    let healed =
+        monstertruck_io::step::load::ParsedStepSource::parse(healed_step.as_bytes())?.exchange;
     let [section] = healed.data.as_slice() else {
         return Ok(None);
     };
@@ -878,7 +879,8 @@ fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragmen
         return Ok(false);
     }
     let rebuilt = kernel.to_step(&evaluated)?;
-    let exchange = crate::step_io::ParsedExchange::parse(rebuilt.as_bytes())?.exchange;
+    let exchange =
+        monstertruck_io::step::load::ParsedStepSource::parse(rebuilt.as_bytes())?.exchange;
     if exchange.data.len() != 1 {
         return Ok(false);
     }
@@ -2332,7 +2334,7 @@ mod tests {
     #[test]
     fn parser_peel_journal_is_atomic_and_keeps_original_step_immutable() -> Result<()> {
         let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
-        let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
         let entities = &exchange.data[0].entities;
         let original = entities.clone();
         let index = crate::step_graph::build_index(entities);
@@ -2586,8 +2588,9 @@ END-ISO-10303-21;
     fn kernel_v15_square_boss_peel_has_complete_source_and_kernel_proofs() -> Result<()> {
         let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
-        let document = kernel
-            .resolve_source_exchange(crate::step_io::ParsedExchange::parse(input)?.exchange)?;
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange,
+        )?;
         let source_load = kernel.inspect_source_document(&document)?;
         let [loaded] = source_load.solids.as_slice() else {
             bail!("single-boss fixture must import as exactly one source solid");
@@ -2649,7 +2652,7 @@ END-ISO-10303-21;
         assert_eq!(patch.require_unused_edges.len(), 4);
         let healed = kernel.edit_source_topology(&document, loaded.source, &[patch])?;
         let healed_document = kernel.resolve_source_exchange(
-            crate::step_io::ParsedExchange::parse(healed.as_bytes())?.exchange,
+            monstertruck_io::step::load::ParsedStepSource::parse(healed.as_bytes())?.exchange,
         )?;
         let healed_report = kernel.inspect_source_document(&healed_document)?;
         assert_eq!(healed_report.solids.len(), 1);
@@ -2726,8 +2729,9 @@ END-ISO-10303-21;
         );
 
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
-        let document = kernel
-            .resolve_source_exchange(crate::step_io::ParsedExchange::parse(input)?.exchange)?;
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange,
+        )?;
         let source_load = kernel.inspect_source_document(&document)?;
         let [solid] = source_load.solids.as_slice() else {
             bail!("coplanar fixture should load as exactly one source solid");

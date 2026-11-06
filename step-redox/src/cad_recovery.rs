@@ -5,8 +5,8 @@ use crate::cad_kernel::CadKernel;
 use crate::math3::dot;
 use crate::periodic_chains::PeriodicChainPattern;
 use crate::step_graph::{build_index, entity_id, simple_record};
-use crate::step_io::ParsedExchange;
 use anyhow::{Result, bail};
+use monstertruck_io::step::load::ParsedStepSource;
 use serde::Serialize;
 
 mod solid;
@@ -233,7 +233,7 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
         bail!("extrusion-core union cap pairs must be unique");
     }
 
-    let source = ParsedExchange::parse(source_step)?.exchange;
+    let source = ParsedStepSource::parse(source_step)?.exchange;
     let Some(section) = source.data.get(data_section) else {
         bail!("extrusion-core union DATA section {data_section} does not exist");
     };
@@ -265,7 +265,7 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     }
 
     let rebuilt_step = kernel.to_step(&evaluated)?;
-    let rebuilt = ParsedExchange::parse(rebuilt_step.as_bytes())?.exchange;
+    let rebuilt = ParsedStepSource::parse(rebuilt_step.as_bytes())?.exchange;
     if rebuilt.data.len() != 1 {
         return Ok(None);
     }
@@ -342,7 +342,7 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
 ) -> Result<Option<CadFragment>> {
     const MAX_SINGLE_OMISSION_CANDIDATES: usize = 8;
 
-    let source = ParsedExchange::parse(source_step)?.exchange;
+    let source = ParsedStepSource::parse(source_step)?.exchange;
     let Some(section) = source.data.get(data_section) else {
         bail!("automatic extrusion-core union DATA section {data_section} does not exist");
     };

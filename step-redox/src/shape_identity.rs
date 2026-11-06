@@ -1128,7 +1128,7 @@ mod surface_curve_tests {
     #[test]
     fn surface_curve_signs_its_3d_locus_not_the_exporters_pcurves() -> anyhow::Result<()> {
         let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
-        let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
         let entities = &exchange.data[0].entities;
         let index = crate::step_graph::build_index(entities);
         let signature = |id| {

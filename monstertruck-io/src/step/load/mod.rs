@@ -21,7 +21,7 @@ use step_p21::{
 
 pub mod convert;
 mod document;
-pub use document::ResolvedStepDocument;
+pub use document::{ParsedStepSource, ResolvedStepDocument, decode_step_input};
 /// Stable kernel identity assigned while importing STEP topology.
 pub mod provenance;
 /// Typed accounting for what a load kept and what it lost.
@@ -1056,55 +1056,21 @@ impl Table {
     /// # Errors
     /// Returns an error if the STEP input cannot be parsed or converted.
     pub fn from_step(step_str: &str) -> Result<Self, LoadError> {
-        let exchange = step_p21::parser::parse(step_str)?;
-        Ok(Self::from_data_section(&exchange.data[0]))
+        Self::from_step_bytes(step_str.as_bytes())
     }
 
-    /// Parses STEP file BYTES, decoding UTF-8 where possible and falling back to
-    /// ISO-8859-1 where it is not.
-    ///
-    /// # Why this exists
-    ///
-    /// [`Table::from_step`] takes `&str`, so decoding is the caller's problem --
-    /// and every caller in this workspace solved it with `String::from_utf8`,
-    /// which REJECTS a class of file customers actually send. ISO 10303-21 wants
-    /// non-ASCII carried as `\X2\` escapes, but exporters in non-English locales
-    /// routinely emit raw 8-bit bytes in string literals instead.
-    ///
-    /// Measured on a 100 MB AP203 export from a mainstream converter
-    /// (`Ai-14R.stp`, ASCON, Cyrillic `FILE_NAME`): **11 lines out of 1,543,843
-    /// contain a byte above 127, and every one of them is inside a string
-    /// literal** -- the header `FILE_NAME` and three `REPRESENTATION_ITEM` names.
-    /// Not one is in geometry. Rejecting the whole file over four display strings
-    /// is not a defensible trade.
-    ///
-    /// # What the fallback can and cannot cost you
-    ///
-    /// ISO-8859-1 is a total, lossless byte-to-codepoint map: every byte decodes,
-    /// nothing is dropped or replaced, and the operation cannot fail. So the
-    /// GEOMETRY IS EXACT either way -- coordinates are ASCII in both encodings.
-    ///
-    /// What it can get wrong is the rendering of those few strings. The file
-    /// above is really CP1251, so its `FILE_NAME` decodes to Latin-1 mojibake
-    /// rather than Cyrillic. That is a display concern in a metadata field, and
-    /// this function deliberately does NOT guess the true 8-bit encoding:
-    /// guessing would risk a *wrong* answer where mojibake is merely an ugly one.
-    /// A caller that needs the real text should decode it itself and use
-    /// [`Table::from_step`].
-    ///
-    /// UTF-8 input is unaffected -- it takes the first branch and is
-    /// byte-identical to calling [`Table::from_step`] directly.
+    /// Parse STEP bytes using the canonical source loader, then return the
+    /// first DATA section's typed entities. For all sections use
+    /// ParsedStepSource::resolve instead.
     ///
     /// # Errors
-    /// Returns an error if the STEP input cannot be parsed or converted.
+    /// Returns an error for invalid Part 21 syntax or a missing DATA section.
     pub fn from_step_bytes(bytes: &[u8]) -> Result<Self, LoadError> {
-        std::str::from_utf8(bytes).map_or_else(
-            |_| {
-                let text: String = bytes.iter().map(|&byte| byte as char).collect();
-                Self::from_step(&text)
-            },
-            Self::from_step,
-        )
+        let parsed = ParsedStepSource::parse(bytes)?;
+        let first = parsed.exchange.data.first().ok_or_else(|| {
+            LoadError::Conversion("STEP exchange contains no DATA section".to_owned())
+        })?;
+        Ok(Self::from_data_section(first))
     }
 }
 

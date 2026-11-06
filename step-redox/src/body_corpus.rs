@@ -1,11 +1,10 @@
 use crate::{
     shape_identity,
     step_document::{StepEntity, StepSection, StepValue},
-    step_entities, step_graph,
-    step_io::ParsedExchange,
-    units,
+    step_entities, step_graph, units,
 };
 use anyhow::{Context, Result, bail};
+use monstertruck_io::step::load::ParsedStepSource;
 use ruststep::ast::{DataSection, EntityInstance, Exchange, Parameter};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -112,7 +111,7 @@ fn fingerprint(value: &shape_identity::ShapeKey) -> String {
 
 fn parse_exchange(path: &Path) -> Result<ruststep::ast::Exchange> {
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    Ok(ParsedExchange::parse(&bytes)?.exchange)
+    Ok(ParsedStepSource::parse(&bytes)?.exchange)
 }
 
 fn representation_ownership(entities: &[EntityInstance]) -> HashMap<u64, (u64, u64)> {

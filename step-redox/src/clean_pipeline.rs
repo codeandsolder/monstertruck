@@ -2,13 +2,13 @@ use super::{CleanOutput, Options, Stats, audit_exchange_compatibility, detect_ex
 use crate::normalization::{
     consolidate_presentation, dense_renumber, intern_section, minify_placeholder_names,
 };
-use crate::step_io::ParsedExchange;
 use crate::{
     bezier_recovery, curve_replicas, face_coalesce, geometric_intern, instances, line_recovery,
     partition_recovery, planar_features, spherical_caps, surface_recovery, surface_replicas,
     write_exchange,
 };
 use anyhow::Result;
+use monstertruck_io::step::load::ParsedStepSource;
 use ruststep::ast::Exchange;
 
 #[expect(
@@ -16,7 +16,7 @@ use ruststep::ast::Exchange;
     reason = "entity counts and lattice indices are bounded by in-memory STEP data and stay below f64 exact-integer limits"
 )]
 pub fn clean_bytes(input: &[u8], options: &Options) -> Result<CleanOutput> {
-    let parsed = ParsedExchange::parse(input)?;
+    let parsed = ParsedStepSource::parse(input)?;
     let input_encoding = parsed.input_encoding;
     let mut exchange = parsed.exchange;
 

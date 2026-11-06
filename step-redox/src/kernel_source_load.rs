@@ -302,9 +302,9 @@ mod monstertruck_adapter {
     };
     use crate::step_document::StepSection;
     use crate::step_graph;
-    #[cfg(test)]
-    use crate::step_io::ParsedExchange;
     use anyhow::Result;
+    #[cfg(test)]
+    use monstertruck_io::step::load::ParsedStepSource;
     use monstertruck_io::step::load::step_geometry::{
         Conic3D, Curve3D, Line, Matrix4, Point3, Processor, TrimmedCurve, UnitCircle, Vector4,
     };
@@ -784,7 +784,7 @@ mod monstertruck_adapter {
         fn inspect_bytes(input: &[u8]) -> Result<KernelSourceLoadEvidence> {
             let kernel = MonstertruckKernel::project_standard();
             let document =
-                kernel.resolve_source_exchange(ParsedExchange::parse(input)?.exchange)?;
+                kernel.resolve_source_exchange(ParsedStepSource::parse(input)?.exchange)?;
             kernel.inspect_source_document(&document)
         }
 
@@ -838,7 +838,7 @@ mod monstertruck_adapter {
             let input = include_bytes!("../validation/fixtures/production_radial_slot.step");
             let kernel = MonstertruckKernel::project_standard();
             let document =
-                kernel.resolve_source_exchange(ParsedExchange::parse(input)?.exchange)?;
+                kernel.resolve_source_exchange(ParsedStepSource::parse(input)?.exchange)?;
             let evidence = kernel.inspect_source_document(&document)?;
             let source = evidence
                 .solids
@@ -846,7 +846,7 @@ mod monstertruck_adapter {
                 .ok_or_else(|| anyhow::anyhow!("fixture has no source solid"))?
                 .source;
             let edited = kernel.edit_source_topology(&document, source, &[])?;
-            let exchange = ParsedExchange::parse(edited.as_bytes())?.exchange;
+            let exchange = ParsedStepSource::parse(edited.as_bytes())?.exchange;
             assert_eq!(exchange.data.len(), 1);
             let document = ResolvedStepDocument::from_exchange(exchange);
             assert_ne!(document.table(0).unwrap().manifold_solid_brep.len(), 0);

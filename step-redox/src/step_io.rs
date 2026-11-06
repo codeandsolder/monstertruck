@@ -1,25 +1,6 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use ruststep::ast::{EntityInstance, Exchange, Name, Parameter, Record};
 use std::fmt::Write as _;
-
-#[derive(Debug)]
-pub struct ParsedExchange {
-    pub exchange: Exchange,
-    pub input_encoding: &'static str,
-}
-
-impl ParsedExchange {
-    pub(crate) fn parse(input: &[u8]) -> Result<Self> {
-        let (input_text, input_encoding) = decode_input(input)?;
-        let exchange =
-            ruststep::parser::parse(&input_text).context("parse STEP exchange structure")?;
-        require_supported_sections(&exchange)?;
-        Ok(Self {
-            exchange,
-            input_encoding,
-        })
-    }
-}
 
 pub fn require_supported_sections(exchange: &Exchange) -> Result<()> {
     if !exchange.anchor.is_empty()
@@ -142,18 +123,6 @@ fn write_param(param: &Parameter, out: &mut String) {
         Parameter::NotProvided => out.push('$'),
         Parameter::Omitted => out.push('*'),
     }
-}
-
-pub fn decode_input(input: &[u8]) -> Result<(std::borrow::Cow<'_, str>, &'static str)> {
-    if let Ok(s) = std::str::from_utf8(input) {
-        return Ok((std::borrow::Cow::Borrowed(s), "utf-8"));
-    }
-
-    let (decoded, _used_encoding, had_errors) = encoding_rs::GBK.decode(input);
-    if had_errors {
-        bail!("STEP input is neither valid UTF-8 nor valid GBK");
-    }
-    Ok((decoded, "gbk"))
 }
 
 pub fn write_step_string(s: &str, out: &mut String) {

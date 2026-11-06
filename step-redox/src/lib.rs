@@ -52,8 +52,8 @@ mod step_entities;
 mod step_graph;
 mod step_identity;
 mod step_io;
+use monstertruck_io::step::load::ParsedStepSource;
 use normalization::{dense_renumber, intern_section};
-use step_io::ParsedExchange;
 pub use step_io::write_exchange;
 mod surface_recovery;
 mod surface_replicas;
@@ -298,7 +298,7 @@ pub fn peel_boundary_features_for_analysis_bytes(
         bail!("boundary feature decomposition requires max_passes > 0");
     }
 
-    let mut exchange = ParsedExchange::parse(input)?.exchange;
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
 
     let mut report = BoundaryFeatureDecompositionReport::default();
     for pass_index in 0..max_passes {
@@ -365,7 +365,7 @@ pub fn peel_boundary_features_for_analysis_bytes(
 pub fn analyze_open_chain_patterns_bytes(
     input: &[u8],
 ) -> Result<planar_features::OpenChainDiagnostics> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     let mut merged = planar_features::OpenChainDiagnostics::default();
     for section in &exchange.data {
@@ -404,7 +404,7 @@ pub fn materialize_boundary_feature_tools_for_analysis_bytes(
     planar_features::BoundaryFeatureDiagnostics,
     Vec<planar_features::BoundaryFeatureToolMaterialization>,
 )> {
-    let mut exchange = ParsedExchange::parse(input)?.exchange;
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
     if exchange.data.len() != 1 {
         bail!("boundary feature tool materialization currently requires exactly one DATA section");
     }
@@ -430,7 +430,7 @@ pub fn materialize_boundary_feature_tools_for_analysis_bytes(
 pub fn analyze_boundary_features_bytes(
     input: &[u8],
 ) -> Result<planar_features::BoundaryFeatureDiagnostics> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     let mut merged = planar_features::BoundaryFeatureDiagnostics::default();
     for section in &exchange.data {
@@ -461,7 +461,7 @@ pub fn analyze_boundary_features_bytes(
 /// # Errors
 /// Returns an error if `input` is not valid STEP data.
 pub fn analyze_planar_feature_candidates_bytes(input: &[u8]) -> Result<PlanarFeatureDiagnostics> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     let mut merged = PlanarFeatureDiagnostics::default();
     for section in &exchange.data {
@@ -495,7 +495,7 @@ pub fn analyze_planar_feature_candidates_bytes(input: &[u8]) -> Result<PlanarFea
 pub fn detect_formed_sheet_evidence_bytes(
     input: &[u8],
 ) -> Result<Vec<formed_sheet::FormedSheetEvidence>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     Ok(exchange
         .data
@@ -523,8 +523,8 @@ pub fn compare_analytic_solid_boundaries_bytes(
     second: &[u8],
     second_solid_id: u64,
 ) -> Result<boundary_proof::AnalyticBoundaryComparison> {
-    let first = ParsedExchange::parse(first)?.exchange;
-    let second = ParsedExchange::parse(second)?.exchange;
+    let first = ParsedStepSource::parse(first)?.exchange;
+    let second = ParsedStepSource::parse(second)?.exchange;
     if first.data.len() != 1 || second.data.len() != 1 {
         bail!("analytic boundary comparison currently requires one DATA section per exchange");
     }
@@ -547,7 +547,7 @@ pub fn compare_analytic_solid_boundaries_bytes(
 pub fn detect_solid_surface_signatures_bytes(
     input: &[u8],
 ) -> Result<Vec<solid_revolutions::SolidSurfaceSignature>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     Ok(exchange
         .data
@@ -567,7 +567,7 @@ pub fn detect_solid_surface_signatures_bytes(
 pub fn detect_solid_revolutions_bytes(
     input: &[u8],
 ) -> Result<Vec<solid_revolutions::RecoveredSolidRevolution>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     Ok(exchange
         .data
@@ -587,7 +587,7 @@ pub fn detect_solid_revolutions_bytes(
 pub fn detect_radial_slot_revolutions_bytes(
     input: &[u8],
 ) -> Result<Vec<solid_revolutions::RecoveredRadialSlotRevolution>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     Ok(exchange
         .data
@@ -607,7 +607,7 @@ pub fn detect_radial_slot_revolutions_bytes(
 pub fn detect_solid_extrusions_bytes(
     input: &[u8],
 ) -> Result<Vec<solid_extrusions::RecoveredSolidExtrusion>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     Ok(exchange
         .data
@@ -642,7 +642,7 @@ pub fn detect_dominant_extrusion_candidates_bytes(
 pub fn detect_extrusion_core_candidates_bytes(
     input: &[u8],
 ) -> Result<Vec<solid_extrusions::RecoveredSolidExtrusion>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
     Ok(exchange
         .data
         .iter()
@@ -663,7 +663,7 @@ pub fn recover_extrusion_core_from_cap_faces_bytes(
     solid_id: u64,
     cap_face_ids: [u64; 2],
 ) -> Result<Option<solid_extrusions::RecoveredSolidExtrusion>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
     Ok(exchange.data.iter().find_map(|section| {
         solid_extrusions::recover_extrusion_core_from_cap_faces(
             solid_id,
@@ -686,7 +686,7 @@ pub fn recover_treatment_healed_extrusion_core_from_cap_faces_bytes(
     solid_id: u64,
     cap_face_ids: [u64; 2],
 ) -> Result<Option<solid_extrusions::TreatmentHealedExtrusionCoreCandidate>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
     Ok(exchange.data.iter().find_map(|section| {
         solid_extrusions::recover_treatment_healed_extrusion_core_from_cap_faces(
             solid_id,
@@ -707,7 +707,7 @@ pub fn recover_treatment_healed_extrusion_core_from_cap_faces_bytes(
 pub fn detect_edge_treatment_evidence_bytes(
     input: &[u8],
 ) -> Result<Vec<edge_treatments::EdgeTreatmentEvidence>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
     Ok(exchange
         .data
         .iter()
@@ -725,7 +725,7 @@ pub fn detect_edge_treatment_evidence_bytes(
 pub fn detect_closed_round_sweeps_bytes(
     input: &[u8],
 ) -> Result<Vec<solid_sweeps::RecoveredClosedRoundSweep>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     Ok(exchange
         .data
@@ -745,7 +745,7 @@ pub fn detect_closed_round_sweeps_bytes(
 pub fn detect_revolved_round_tails_bytes(
     input: &[u8],
 ) -> Result<Vec<solid_sweeps::RecoveredRevolvedRoundTail>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     Ok(exchange
         .data
@@ -765,7 +765,7 @@ pub fn detect_revolved_round_tails_bytes(
 pub fn detect_open_rectangular_sweeps_bytes(
     input: &[u8],
 ) -> Result<Vec<solid_sweeps::RecoveredOpenRectangularSweep>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     Ok(exchange
         .data
@@ -786,7 +786,7 @@ pub fn detect_open_rectangular_sweeps_bytes(
 pub fn detect_periodic_chains_bytes(
     input: &[u8],
 ) -> Result<Vec<periodic_chains::PeriodicChainPattern>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
 
     Ok(exchange
         .data
@@ -889,7 +889,7 @@ fn resize_periodic_chain_bytes_one_side(
     anchor: CountAnchor,
 ) -> Result<PeriodicChainEditOutput> {
     debug_assert_ne!(anchor, CountAnchor::Center);
-    let mut exchange = ParsedExchange::parse(input)?.exchange;
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
     if exchange.data.len() != 1 {
         bail!("periodic-chain editing currently requires exactly one DATA section");
     }
@@ -1130,7 +1130,7 @@ fn resize_count_parameter_bytes_one_side(
     anchor: CountAnchor,
 ) -> Result<CountEditOutput> {
     debug_assert_ne!(anchor, CountAnchor::Center);
-    let mut exchange = ParsedExchange::parse(input)?.exchange;
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
     if exchange.data.len() != 1 {
         bail!("count-parameter editing currently requires exactly one DATA section");
     }
@@ -1332,7 +1332,7 @@ fn reverse_periodic_body(
 }
 
 fn detect_count_parameters_bytes(input: &[u8]) -> Result<Vec<parameters::RecoveredCountParameter>> {
-    let exchange = ParsedExchange::parse(input)?.exchange;
+    let exchange = ParsedStepSource::parse(input)?.exchange;
     if exchange.data.len() != 1 {
         bail!("count-parameter editing currently requires exactly one DATA section");
     }
@@ -1395,7 +1395,7 @@ pub fn expand_periodic_body_bytes(
     body_index: usize,
     new_sites: usize,
 ) -> Result<PeriodicBodyEditOutput> {
-    let mut exchange = ParsedExchange::parse(input)?.exchange;
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
 
     let mut remaining = body_index;
     let mut resize = None;
@@ -1440,7 +1440,7 @@ pub fn resize_linear_pattern_bytes(
     new_count: usize,
     anchor: patterns::PatternAnchor,
 ) -> Result<PatternEditOutput> {
-    let mut exchange = ParsedExchange::parse(input)?.exchange;
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
 
     let mut remaining = pattern_index;
     let mut resize = None;

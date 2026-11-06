@@ -2166,7 +2166,7 @@ mod tests {
     #[test]
     fn boss_fixture_candidate_proves_manifold_interface_and_3d_support() -> anyhow::Result<()> {
         let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
-        let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
         let entities = &exchange.data[0].entities;
         let index = build_index(entities);
         let contexts = collect_shell_contexts(entities, &index);

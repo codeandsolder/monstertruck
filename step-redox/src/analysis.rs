@@ -1,6 +1,6 @@
 use crate::{
     complete_ir, dominant_extrusions, formed_sheet, periodic_chains, solid_extrusions,
-    solid_revolutions, step_io,
+    solid_revolutions,
 };
 use anyhow::Result;
 use ruststep::ast::Exchange;
@@ -22,7 +22,7 @@ impl<'a> AnalysisSession<'a> {
     /// Returns an error when the input cannot be decoded or parsed, or when it
     /// contains optional exchange sections that step-redox does not support.
     pub fn from_bytes(input: &'a [u8]) -> Result<Self> {
-        let exchange = step_io::ParsedExchange::parse(input)?.exchange;
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
         Ok(Self { input, exchange })
     }
 
