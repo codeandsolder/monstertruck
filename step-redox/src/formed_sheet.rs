@@ -124,8 +124,10 @@ struct PlanePairCandidate {
 
 #[must_use]
 pub fn detect_formed_sheet_evidence(entities: &[EntityInstance]) -> Vec<FormedSheetEvidence> {
+    let index = build_index(entities);
     detect_formed_sheet_evidence_with_min_pairs(
         entities,
+        &index,
         MIN_COAXIAL_PAIRS,
         MIN_PARALLEL_PLANE_PAIRS,
     )
@@ -147,13 +149,13 @@ pub fn detect_formed_sheet_evidence(entities: &[EntityInstance]) -> Vec<FormedSh
 )]
 pub(crate) fn detect_formed_sheet_evidence_with_min_pairs(
     entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
     min_coaxial_pairs: usize,
     min_parallel_plane_pairs: usize,
 ) -> Vec<FormedSheetEvidence> {
     if min_coaxial_pairs == 0 || min_parallel_plane_pairs == 0 {
         return Vec::new();
     }
-    let index = build_index(entities);
     let mut out = Vec::new();
 
     for entity in entities {
@@ -164,21 +166,21 @@ pub(crate) fn detect_formed_sheet_evidence_with_min_pairs(
             continue;
         }
         let solid_id = entity_id(entity);
-        let Some(face_ids) = solid_faces(solid_id, entities, &index) else {
+        let Some(face_ids) = solid_faces(solid_id, entities, index) else {
             continue;
         };
 
         let mut planes = Vec::new();
         let mut cylinders = Vec::new();
         for &face_id in &face_ids {
-            let Some((surface_id, surface)) = face_surface(face_id, entities, &index) else {
+            let Some((surface_id, surface)) = face_surface(face_id, entities, index) else {
                 continue;
             };
             match surface.name.as_str() {
                 "PLANE" => {
                     if let (Some((origin, normal)), Some(vertices)) = (
-                        surface_axis(surface_id, entities, &index),
-                        face_vertices(face_id, entities, &index),
+                        surface_axis(surface_id, entities, index),
+                        face_vertices(face_id, entities, index),
                     ) && vertices.len() >= 3
                     {
                         planes.push(PlaneFace {
@@ -190,7 +192,7 @@ pub(crate) fn detect_formed_sheet_evidence_with_min_pairs(
                     }
                 }
                 "CYLINDRICAL_SURFACE" => {
-                    let Some((origin, axis)) = surface_axis(surface_id, entities, &index) else {
+                    let Some((origin, axis)) = surface_axis(surface_id, entities, index) else {
                         continue;
                     };
                     let Some(radius_mm) = surface_radius(surface) else {
@@ -259,7 +261,7 @@ pub(crate) fn detect_formed_sheet_evidence_with_min_pairs(
         let paired_planar_faces = plane_pairs.len() * 2;
         let paired_cylinder_face_ratio = paired_cylindrical_faces as f64 / cylinders.len() as f64;
 
-        let face_edge_map = face_edge_map(&face_ids, entities, &index);
+        let face_edge_map = face_edge_map(&face_ids, entities, index);
         let patch_adjacencies = patch_adjacencies(&plane_pairs, &cylinder_pairs, &face_edge_map);
         let paired_support_patch_count = plane_pairs.len() + cylinder_pairs.len();
         let patch_graph_connected =
@@ -274,7 +276,7 @@ pub(crate) fn detect_formed_sheet_evidence_with_min_pairs(
             &patch_adjacencies,
             &face_edge_map,
             entities,
-            &index,
+            index,
         );
 
         out.push(FormedSheetEvidence {

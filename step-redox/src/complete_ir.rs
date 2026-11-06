@@ -23,15 +23,14 @@ use crate::planar_features::{
     BoundaryFeatureInstanceEvidence, BoundaryFeaturePeelPlan, FeaturePolarity,
 };
 use crate::solid_revolutions::SolidSurfaceSignature;
-use crate::{Options, OutputProfile, Stats};
 use anyhow::{Result, bail};
 use ruststep::ast::{EntityInstance, Exchange};
 use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v10";
-pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v15";
+pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v11";
+pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v16";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReducedBrepMutationMode {
@@ -101,8 +100,6 @@ pub struct KernelRecoveryFailure {
 #[derive(Debug, Clone, Serialize)]
 pub struct CompleteIr {
     pub schema: &'static str,
-    pub idempotent_compact_rewrite: bool,
-    pub compact_second_pass_stats: Stats,
     pub surface_signature_summaries: Vec<SurfaceSignatureSummary>,
     pub instance_pattern_diagnostics: Vec<SourceInstancePattern>,
     pub solid_extrusions: Vec<SourceCadFragment>,
@@ -425,8 +422,6 @@ impl WholeSolidRecoveryState {
 
 #[derive(Debug)]
 struct CompleteIrBuildState {
-    idempotent_compact_rewrite: bool,
-    compact_second_pass_stats: Stats,
     surface_signature_summaries: Vec<SurfaceSignatureSummary>,
     instance_pattern_diagnostics: Vec<SourceInstancePattern>,
     body_scan: Vec<SourceSolidSummary>,
@@ -455,8 +450,6 @@ impl CompleteIrBuildState {
 
         CompleteIr {
             schema,
-            idempotent_compact_rewrite: self.idempotent_compact_rewrite,
-            compact_second_pass_stats: self.compact_second_pass_stats,
             surface_signature_summaries: self.surface_signature_summaries,
             instance_pattern_diagnostics: self.instance_pattern_diagnostics,
             solid_extrusions: selected_category(&selected, |source| {
@@ -551,11 +544,8 @@ pub fn recover_complete_ir_with_kernel_bytes<
 ) -> Result<CompleteIr> {
     let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
     let document = kernel.resolve_source_exchange(exchange)?;
-    let mut build = recover_complete_ir_build_state(
-        document.as_ref(),
-        input,
-        ReducedBrepMutationMode::KernelOwned,
-    )?;
+    let mut build =
+        recover_complete_ir_build_state(document.as_ref(), ReducedBrepMutationMode::KernelOwned)?;
     let source_load = kernel.inspect_source_document(&document)?;
     let mut failures = apply_kernel_recovery(&mut build.recovery, |source| {
         recover_kernel_boundary_feature_fragment(source, &source_load, &document, kernel)
@@ -874,25 +864,7 @@ fn recognize_single_healed_host(healed_step: &str) -> Result<Option<CadFragment>
 
 fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> Result<bool> {
     let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
-    let summary = kernel.summarize(&evaluated);
-    if !summary.geometrically_consistent || summary.shells != 1 {
-        return Ok(false);
-    }
-    let rebuilt = kernel.to_step(&evaluated)?;
-    let exchange =
-        monstertruck_io::step::load::ParsedStepSource::parse(rebuilt.as_bytes())?.exchange;
-    if exchange.data.len() != 1 {
-        return Ok(false);
-    }
-    Ok(exchange.data[0]
-        .entities
-        .iter()
-        .filter(|entity| {
-            crate::step_graph::simple_record(entity)
-                .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
-        })
-        .count()
-        == 1)
+    Ok(kernel.summarize(&evaluated).is_single_solid())
 }
 
 fn apply_kernel_recovery<F>(
@@ -935,19 +907,18 @@ where
     failures
 }
 
-pub(crate) fn recover_complete_ir_exchange(
-    exchange: &Exchange,
-    input: &[u8],
-) -> Result<CompleteIr> {
+pub(crate) fn recover_complete_ir_exchange(exchange: &Exchange) -> Result<CompleteIr> {
     Ok(
-        recover_complete_ir_build_state(exchange, input, ReducedBrepMutationMode::ParserOwned)?
-            .finish(COMPLETE_IR_SCHEMA, Vec::new(), None),
+        recover_complete_ir_build_state(exchange, ReducedBrepMutationMode::ParserOwned)?.finish(
+            COMPLETE_IR_SCHEMA,
+            Vec::new(),
+            None,
+        ),
     )
 }
 
 fn recover_complete_ir_build_state(
     exchange: &Exchange,
-    input: &[u8],
     mutation_mode: ReducedBrepMutationMode,
 ) -> Result<CompleteIrBuildState> {
     let mut signatures = Vec::new();
@@ -1017,10 +988,7 @@ fn recover_complete_ir_build_state(
         mutation_mode,
     )?;
 
-    let second = crate::clean_bytes(input, &Options::for_profile(OutputProfile::Compact))?;
     Ok(CompleteIrBuildState {
-        idempotent_compact_rewrite: second.bytes == input,
-        compact_second_pass_stats: second.stats,
         surface_signature_summaries,
         instance_pattern_diagnostics,
         body_scan,
@@ -1455,9 +1423,9 @@ fn recover_constructive_fragments_from_entities_with_index(
         crate::solid_revolutions::detect_solid_revolutions_with_index(entities, index);
     let radial_slots =
         crate::solid_revolutions::detect_radial_slot_revolutions_with_index(entities, index);
-    let closed_sweeps = crate::solid_sweeps::detect_closed_round_sweeps(entities);
-    let revolved_round_tails = crate::solid_sweeps::detect_revolved_round_tails(entities);
-    let open_sweeps = crate::solid_sweeps::detect_open_rectangular_sweeps(entities);
+    let closed_sweeps = crate::solid_sweeps::detect_closed_round_sweeps(entities, index);
+    let revolved_round_tails = crate::solid_sweeps::detect_revolved_round_tails(entities, index);
+    let open_sweeps = crate::solid_sweeps::sheet::detect_open_rectangular_sweeps(entities, index);
 
     let mut out = recover_solid_extrusion_fragments(&extrusions)?;
     out.extend(recover_solid_revolution_fragments(&revolutions)?);
@@ -2036,7 +2004,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AnalysisSession;
     use crate::cad_ir::{CadModel, CadNode, Primitive};
+
+    #[test]
+    fn owned_analysis_session_outlives_its_step_input_and_omits_rewrite_diagnostics() -> Result<()>
+    {
+        let session = {
+            let input =
+                include_bytes!("../validation/fixtures/production_radial_slot.step").to_vec();
+            AnalysisSession::from_bytes(&input)?
+        };
+        let report = session.complete_ir()?;
+        assert_eq!(report.schema, COMPLETE_IR_SCHEMA);
+        assert_eq!(report.body_count, 1);
+        let serialized = serde_json::to_value(&report)?;
+        assert!(serialized.get("idempotent_compact_rewrite").is_none());
+        assert!(serialized.get("compact_second_pass_stats").is_none());
+        Ok(())
+    }
 
     const fn test_source_in(data_section: usize, solid_id: u64) -> SourceEntity {
         SourceEntity {
@@ -2071,8 +2057,6 @@ mod tests {
             .collect::<Vec<_>>();
         CompleteIr {
             schema: COMPLETE_IR_SCHEMA,
-            idempotent_compact_rewrite: true,
-            compact_second_pass_stats: Stats::default(),
             surface_signature_summaries: Vec::new(),
             instance_pattern_diagnostics: Vec::new(),
             solid_extrusions: Vec::new(),
@@ -2100,8 +2084,6 @@ mod tests {
         let body_scan = report.body_scan.solids;
         let recovery = WholeSolidRecoveryState::new(&body_scan);
         CompleteIrBuildState {
-            idempotent_compact_rewrite: report.idempotent_compact_rewrite,
-            compact_second_pass_stats: report.compact_second_pass_stats,
             surface_signature_summaries: report.surface_signature_summaries,
             instance_pattern_diagnostics: report.instance_pattern_diagnostics,
             body_scan,
@@ -2143,6 +2125,76 @@ mod tests {
             model,
             root,
         })
+    }
+
+    struct SummaryOnlyKernel {
+        summary: crate::cad_kernel::KernelSummary,
+    }
+
+    impl CadKernel for SummaryOnlyKernel {
+        type Evaluated = crate::cad_kernel::KernelSummary;
+
+        fn evaluate(&self, _: &CadModel, _: NodeId) -> Result<Self::Evaluated> { Ok(self.summary) }
+
+        fn summarize(&self, evaluated: &Self::Evaluated) -> crate::cad_kernel::KernelSummary {
+            *evaluated
+        }
+
+        fn to_step(&self, _: &Self::Evaluated) -> Result<String> {
+            bail!("kernel replay must not export and reparse a previously evaluated solid")
+        }
+    }
+
+    #[test]
+    fn kernel_replay_admits_single_native_solid_without_step_roundtrip() -> Result<()> {
+        use crate::cad_kernel::KernelSummary;
+        let fragment = constructive_fragment(12, 1)?;
+        for (summary, expected) in [
+            (
+                KernelSummary {
+                    geometrically_consistent: true,
+                    shells: 1,
+                    faces: 6,
+                },
+                true,
+            ),
+            (
+                KernelSummary {
+                    geometrically_consistent: true,
+                    shells: 0,
+                    faces: 0,
+                },
+                false,
+            ),
+            (
+                KernelSummary {
+                    geometrically_consistent: true,
+                    shells: 1,
+                    faces: 0,
+                },
+                false,
+            ),
+            (
+                KernelSummary {
+                    geometrically_consistent: true,
+                    shells: 2,
+                    faces: 12,
+                },
+                false,
+            ),
+            (
+                KernelSummary {
+                    geometrically_consistent: false,
+                    shells: 1,
+                    faces: 6,
+                },
+                false,
+            ),
+        ] {
+            let kernel = SummaryOnlyKernel { summary };
+            assert_eq!(kernel_replay_is_single_solid(&kernel, &fragment)?, expected);
+        }
+        Ok(())
     }
 
     fn test_treatment_evidence(

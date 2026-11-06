@@ -10,20 +10,19 @@ use ruststep::ast::Exchange;
 /// Construct this once when multiple read-only detectors are needed for the
 /// same input. The convenience `*_bytes` APIs remain available, but each of
 /// those necessarily owns its own parse.
-pub struct AnalysisSession<'a> {
-    input: &'a [u8],
+pub struct AnalysisSession {
     exchange: Exchange,
 }
 
-impl<'a> AnalysisSession<'a> {
+impl AnalysisSession {
     /// Decode and parse one supported STEP exchange.
     ///
     /// # Errors
     /// Returns an error when the input cannot be decoded or parsed, or when it
     /// contains optional exchange sections that step-redox does not support.
-    pub fn from_bytes(input: &'a [u8]) -> Result<Self> {
+    pub fn from_bytes(input: &[u8]) -> Result<Self> {
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
-        Ok(Self { input, exchange })
+        Ok(Self { exchange })
     }
 
     #[must_use]
@@ -91,11 +90,14 @@ impl<'a> AnalysisSession<'a> {
             .collect()
     }
 
-    /// Build the compact complete semantic IR without reparsing this exchange.
+    /// Build complete semantic CAD IR directly from the already parsed exchange.
+    ///
+    /// Unlike explicit Compact STEP cleanup, this analysis does not rewrite,
+    /// serialize, or reparse the input solely to measure rewrite idempotence.
     ///
     /// # Errors
     /// Returns an error if detector output cannot be converted into exact CAD IR.
     pub fn complete_ir(&self) -> Result<complete_ir::CompleteIr> {
-        complete_ir::recover_complete_ir_exchange(&self.exchange, self.input)
+        complete_ir::recover_complete_ir_exchange(&self.exchange)
     }
 }

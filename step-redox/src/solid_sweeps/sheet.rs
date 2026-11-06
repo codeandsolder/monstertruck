@@ -8,7 +8,6 @@ use crate::math3::{
     add, canonical_direction, cross, distance, dot, mul, norm, normalize,
     point_to_unit_line_distance, sub,
 };
-use crate::step_graph::build_index;
 use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -65,13 +64,13 @@ struct SkinTangent {
 }
 
 #[must_use]
-pub fn detect_open_rectangular_sweeps(
+pub(crate) fn detect_open_rectangular_sweeps(
     entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredOpenRectangularSweep> {
-    let index = build_index(entities);
-    let mut out = formed_sheet::detect_formed_sheet_evidence_with_min_pairs(entities, 1, 1)
+    let mut out = formed_sheet::detect_formed_sheet_evidence_with_min_pairs(entities, index, 1, 1)
         .iter()
-        .filter_map(|evidence| detect_one(evidence, entities, &index))
+        .filter_map(|evidence| detect_one(evidence, entities, index))
         .collect::<Vec<_>>();
     out.sort_by_key(|sweep| sweep.solid_id);
     out

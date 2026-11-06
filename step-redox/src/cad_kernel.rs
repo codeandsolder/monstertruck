@@ -34,11 +34,24 @@ pub struct KernelSummary {
     pub faces: usize,
 }
 
+impl KernelSummary {
+    /// One non-empty, geometrically valid closed boundary component.
+    ///
+    /// The evaluated value already owns a single native Solid; re-exporting
+    /// it to STEP and reparsing entities adds no geometric information.
+    #[must_use]
+    pub const fn is_single_solid(self) -> bool {
+        self.geometrically_consistent && self.shells == 1 && self.faces != 0
+    }
+}
+
 /// Narrow execution boundary for constructive CAD.
 ///
 /// The associated evaluated value is intentionally backend-defined and opaque to
-/// recovery code. The only stable outputs are a summary and serialized exchange
-/// geometry that can be validated independently.
+/// recovery code, but always represents one native solid (which may contain
+/// multiple boundary shells). Its in-memory summary is authoritative for shell
+/// count and topology validity. Serialization is requested only when an external
+/// STEP representation or independent boundary comparison is actually needed.
 pub trait CadKernel {
     type Evaluated;
 

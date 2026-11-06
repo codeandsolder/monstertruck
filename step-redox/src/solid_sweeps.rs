@@ -1,7 +1,6 @@
-mod sheet;
+pub(crate) mod sheet;
 pub use sheet::{
     RecoveredOpenRectangularSweep, RecoveredPlanarSweepLeg, RecoveredRectangularTaperTip,
-    detect_open_rectangular_sweeps,
 };
 
 use crate::brep::{
@@ -14,7 +13,7 @@ use crate::math3::{
 use crate::solid_revolutions::{
     RecoveredSolidRevolution, recover_axisymmetric_subbody_with_circular_cap,
 };
-use crate::step_graph::{build_index, entity_id, simple_record};
+use crate::step_graph::{entity_id, simple_record};
 use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -95,8 +94,10 @@ struct ClosedRoundSupports {
 }
 
 #[must_use]
-pub fn detect_closed_round_sweeps(entities: &[EntityInstance]) -> Vec<RecoveredClosedRoundSweep> {
-    let index = build_index(entities);
+pub(crate) fn detect_closed_round_sweeps(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<RecoveredClosedRoundSweep> {
     let mut out = Vec::new();
 
     for entity in entities {
@@ -107,7 +108,7 @@ pub fn detect_closed_round_sweeps(entities: &[EntityInstance]) -> Vec<RecoveredC
             continue;
         }
         let solid_id = entity_id(entity);
-        if let Some(sweep) = detect_one_closed_round_sweep(solid_id, entities, &index) {
+        if let Some(sweep) = detect_one_closed_round_sweep(solid_id, entities, index) {
             out.push(sweep);
         }
     }
@@ -117,8 +118,10 @@ pub fn detect_closed_round_sweeps(entities: &[EntityInstance]) -> Vec<RecoveredC
 }
 
 #[must_use]
-pub fn detect_revolved_round_tails(entities: &[EntityInstance]) -> Vec<RecoveredRevolvedRoundTail> {
-    let index = build_index(entities);
+pub(crate) fn detect_revolved_round_tails(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<RecoveredRevolvedRoundTail> {
     let mut out = Vec::new();
     for entity in entities {
         let Some(record) = simple_record(entity) else {
@@ -128,7 +131,7 @@ pub fn detect_revolved_round_tails(entities: &[EntityInstance]) -> Vec<Recovered
             continue;
         }
         let solid_id = entity_id(entity);
-        if let Some(candidate) = detect_one_revolved_round_tail(solid_id, entities, &index) {
+        if let Some(candidate) = detect_one_revolved_round_tail(solid_id, entities, index) {
             out.push(candidate);
         }
     }

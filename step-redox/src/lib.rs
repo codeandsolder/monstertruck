@@ -730,7 +730,10 @@ pub fn detect_closed_round_sweeps_bytes(
     Ok(exchange
         .data
         .iter()
-        .flat_map(|section| solid_sweeps::detect_closed_round_sweeps(&section.entities))
+        .flat_map(|section| {
+            let index = step_graph::build_index(&section.entities);
+            solid_sweeps::detect_closed_round_sweeps(&section.entities, &index)
+        })
         .collect())
 }
 
@@ -750,7 +753,10 @@ pub fn detect_revolved_round_tails_bytes(
     Ok(exchange
         .data
         .iter()
-        .flat_map(|section| solid_sweeps::detect_revolved_round_tails(&section.entities))
+        .flat_map(|section| {
+            let index = step_graph::build_index(&section.entities);
+            solid_sweeps::detect_revolved_round_tails(&section.entities, &index)
+        })
         .collect())
 }
 
@@ -770,7 +776,10 @@ pub fn detect_open_rectangular_sweeps_bytes(
     Ok(exchange
         .data
         .iter()
-        .flat_map(|section| solid_sweeps::detect_open_rectangular_sweeps(&section.entities))
+        .flat_map(|section| {
+            let index = step_graph::build_index(&section.entities);
+            solid_sweeps::sheet::detect_open_rectangular_sweeps(&section.entities, &index)
+        })
         .collect())
 }
 
