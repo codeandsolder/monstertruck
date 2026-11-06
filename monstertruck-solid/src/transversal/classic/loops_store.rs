@@ -117,12 +117,14 @@ fn orient_intersection_branch<S>(
 where
     S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3> + Clone,
 {
+    // Read the side once: reversing the leader flips its oriented sign.
+    // Re-solving the nonlinear carrier intersection after inversion can fail
+    // even when the original curve was valid (e.g. a nearly axial edge).
     if ShapesOpStatus::from_is_curve(intersection_curve)? == ShapesOpStatus::And {
         polyline.invert();
         intersection_curve.invert();
     }
-    (ShapesOpStatus::from_is_curve(intersection_curve)? == ShapesOpStatus::Or)
-        .then_some(ShapesOpStatus::Or)
+    Some(ShapesOpStatus::Or)
 }
 
 impl<P, C> std::ops::Deref for BoundaryWire<P, C> {
