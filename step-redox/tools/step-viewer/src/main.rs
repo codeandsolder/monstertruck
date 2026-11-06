@@ -290,26 +290,20 @@ fn build_face_target(
     } else {
         surface.map_or_else(String::new, |id| format!(" · surface #{id}"))
     };
+    let solid_suffix = if solids.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " · solid {}",
+            solids
+                .iter()
+                .map(|id| format!("#{id}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
     let label = format!(
-        "{} #{} · face #{}{} · {} #{}{}",
-        requested_kind,
-        requested_id,
-        face,
-        surface_suffix,
-        shell_kind,
-        shell,
-        if solids.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " · solid {}",
-                solids
-                    .iter()
-                    .map(|id| format!("#{id}"))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        }
+        "{requested_kind} #{requested_id} · face #{face}{surface_suffix} · {shell_kind} #{shell}{solid_suffix}"
     );
 
     Ok(TargetMeshes {
@@ -432,7 +426,7 @@ fn render_html(before: &Path, after: &Path, targets: &[TargetMeshes]) -> Result<
     let mut html = String::new();
     write!(
         html,
-        r###"<!doctype html>
+        r##"<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -513,12 +507,12 @@ function resize(){{left.resize();right.resize();}}window.addEventListener("resiz
 (function loop(){{requestAnimationFrame(loop);left.controls.update();right.controls.update();left.renderer.render(left.scene,left.camera);right.renderer.render(right.scene,right.camera);}})();
 </script>
 </body>
-</html>"###
+</html>"##
     )?;
     Ok(html)
 }
 
-fn entity_id(entity: &EntityInstance) -> u64 {
+const fn entity_id(entity: &EntityInstance) -> u64 {
     match entity {
         EntityInstance::Simple { id, .. } | EntityInstance::Complex { id, .. } => *id,
     }
@@ -531,7 +525,7 @@ fn entity_type(entity: &EntityInstance) -> String {
     }
 }
 
-fn simple_record(entity: &EntityInstance) -> Option<&Record> {
+const fn simple_record(entity: &EntityInstance) -> Option<&Record> {
     match entity {
         EntityInstance::Simple { record, .. } => Some(record),
         EntityInstance::Complex { .. } => None,
@@ -574,7 +568,7 @@ fn visit_parameter_refs(parameter: &Parameter, out: &mut Vec<u64>) {
     }
 }
 
-fn entity_ref_value(parameter: &Parameter) -> Option<u64> {
+const fn entity_ref_value(parameter: &Parameter) -> Option<u64> {
     match parameter {
         Parameter::Ref(Name::Entity(id)) => Some(*id),
         _ => None,
