@@ -3,10 +3,11 @@ use step_redox::cad_ir::{CadModel, CadNode, Profile2d, emit_kcl};
 use step_redox::cad_kernel::CadKernel;
 use step_redox::cad_kernel::monstertruck::MonstertruckKernel;
 
-fn validate_kcl(kcl_text: &str) -> Result<String> {
+fn emit_validated_kcl(model: &CadModel) -> Result<String> {
+    let kcl_text = emit_kcl(model)?;
     #[cfg(feature = "kcl-conformance")]
     {
-        let program = kcl_lib::Program::parse_no_errs(kcl_text)?;
+        let program = kcl_lib::Program::parse_no_errs(&kcl_text)?;
         let recast = program.recast();
         let reparsed = kcl_lib::Program::parse_no_errs(&recast)?;
         if recast != reparsed.recast() {
@@ -29,7 +30,7 @@ fn main() -> Result<()> {
     });
     model.add_root(body)?;
 
-    let kcl_text = validate_kcl(&emit_kcl(&model)?)?;
+    let kcl_text = emit_validated_kcl(&model)?;
     let kernel = MonstertruckKernel::project_standard();
     let evaluated = kernel.evaluate(&model, body)?;
     let summary = kernel.summarize(&evaluated);
