@@ -404,6 +404,62 @@ where
     )
 }
 
+/// Two planar parameter-space loops can form a hole/parent relationship only
+/// when their boundaries are *strictly disjoint*. An interior witness alone
+/// cannot prove this: tangencies, shared edges and crossing nonconvex boundaries
+/// all admit interior witnesses while representing sibling regions instead.
+fn uv_boundaries_meet(lhs: &PolylineCurve<Point2>, rhs: &PolylineCurve<Point2>) -> bool {
+    if lhs.len() < 2 || rhs.len() < 2 {
+        return true;
+    }
+    let extent = lhs.iter().chain(rhs.iter()).fold(
+        (
+            Point2::new(f64::INFINITY, f64::INFINITY),
+            Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        ),
+        |(lo, hi), p| {
+            (
+                Point2::new(lo.x.min(p.x), lo.y.min(p.y)),
+                Point2::new(hi.x.max(p.x), hi.y.max(p.y)),
+            )
+        },
+    );
+    let scale = (extent.1.x - extent.0.x).max(extent.1.y - extent.0.y);
+    if !scale.is_finite() || scale <= 0.0 {
+        return true;
+    }
+    let tol2 = (KERNEL_EPSILON * scale).powi(2);
+    let cross = |a: Vector2, b: Vector2| a.x.mul_add(b.y, -(a.y * b.x));
+    let near_segment = |p: Point2, a: Point2, b: Point2| {
+        let ab = b - a;
+        let length2 = ab.magnitude2();
+        let t = if length2 > 0.0 {
+            ((p - a).dot(ab) / length2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + ab * t)).magnitude2() <= tol2
+    };
+    (0..lhs.len()).any(|i| {
+        let (a, b) = (lhs[i], lhs[(i + 1) % lhs.len()]);
+        (0..rhs.len()).any(|j| {
+            let (c, d) = (rhs[j], rhs[(j + 1) % rhs.len()]);
+            if near_segment(a, c, d)
+                || near_segment(b, c, d)
+                || near_segment(c, a, b)
+                || near_segment(d, a, b)
+            {
+                return true;
+            }
+            let (ab, cd) = (b - a, d - c);
+            let (c0, c1) = (cross(ab, c - a), cross(ab, d - a));
+            let (a0, a1) = (cross(cd, a - c), cross(cd, b - c));
+            (c0 < 0.0 && c1 > 0.0 || c0 > 0.0 && c1 < 0.0)
+                && (a0 < 0.0 && a1 > 0.0 || a0 > 0.0 && a1 < 0.0)
+        })
+    })
+}
+
 fn divide_one_face<C, S>(
     face: &Face<Point3, C, S>,
     loops: &Loops<Point3, C>,
@@ -464,6 +520,7 @@ where
                     polyline_area_epsilon(&outer.poly).max(polyline_area_epsilon(&chunk.poly));
                 polyline_signed_area(&outer.poly).abs() > chunk_area_abs + area_tol
                     && outer.poly.include(witness)
+                    && !uv_boundaries_meet(&outer.poly, &chunk.poly)
             })
             .min_by(|(_, lhs), (_, rhs)| {
                 polyline_signed_area(&lhs[0].poly)
@@ -606,6 +663,45 @@ mod tests {
     use super::*;
     use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, Line, Plane};
     use monstertruck_topology::{Edge, Vertex};
+
+    #[test]
+    fn nesting_requires_disjoint_boundaries_even_when_a_witness_is_inside() {
+        let outer = PolylineCurve(vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(4.0, 0.0),
+            Point2::new(4.0, 4.0),
+            Point2::new(0.0, 4.0),
+        ]);
+        let strict_hole = PolylineCurve(vec![
+            Point2::new(1.0, 1.0),
+            Point2::new(2.0, 1.0),
+            Point2::new(2.0, 2.0),
+            Point2::new(1.0, 2.0),
+        ]);
+        let touching = PolylineCurve(vec![
+            Point2::new(0.0, 1.0),
+            Point2::new(1.0, 1.0),
+            Point2::new(1.0, 2.0),
+            Point2::new(0.0, 2.0),
+        ]);
+        let crossing = PolylineCurve(vec![
+            Point2::new(-1.0, 1.0),
+            Point2::new(2.0, 1.0),
+            Point2::new(2.0, 3.0),
+            Point2::new(-1.0, 3.0),
+        ]);
+        let disjoint = PolylineCurve(vec![
+            Point2::new(5.0, 1.0),
+            Point2::new(6.0, 1.0),
+            Point2::new(6.0, 2.0),
+            Point2::new(5.0, 2.0),
+        ]);
+        assert!(!uv_boundaries_meet(&outer, &strict_hole));
+        assert!(uv_boundaries_meet(&outer, &touching));
+        assert!(uv_boundaries_meet(&outer, &crossing));
+        assert!(!uv_boundaries_meet(&outer, &disjoint));
+        assert!(outer.include(Point2::new(0.5, 1.5)));
+    }
 
     #[test]
     fn approximate_surface_projection_is_bounded_by_boolean_tolerance() {
