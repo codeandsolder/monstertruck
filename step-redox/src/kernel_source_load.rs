@@ -849,7 +849,10 @@ mod monstertruck_adapter {
             let exchange = ParsedStepSource::parse(edited.as_bytes())?.exchange;
             assert_eq!(exchange.data.len(), 1);
             let document = ResolvedStepDocument::from_exchange(exchange);
-            assert_ne!(document.table(0).unwrap().manifold_solid_brep.len(), 0);
+            let section = document
+                .table(0)
+                .ok_or_else(|| anyhow::anyhow!("kernel-edited STEP omitted DATA section 0"))?;
+            assert!(!section.manifold_solid_brep.is_empty());
             Ok(())
         }
 
