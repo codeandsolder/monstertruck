@@ -17,7 +17,7 @@ fn emit_validated_kcl(model: &CadModel) -> Result<String> {
     }
     #[cfg(not(feature = "kcl-conformance"))]
     {
-        Ok(kcl_text.to_owned())
+        Ok(kcl_text)
     }
 }
 
