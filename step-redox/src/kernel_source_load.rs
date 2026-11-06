@@ -308,7 +308,8 @@ mod monstertruck_adapter {
     use monstertruck_io::step::load::ParsedStepSource;
     use monstertruck_io::step::load::convert::StepCompressedTrimmedSolid;
     use monstertruck_io::step::load::step_geometry::{
-        Conic3D, Curve3D, Line, Matrix4, Point3, Processor, TrimmedCurve, UnitCircle, Vector4,
+        Conic3D, Curve3D, DEFAULT_NUMERICAL_TOLERANCES, ExactParameterBoundary2D, KERNEL_EPSILON,
+        Line, Matrix4, Point3, Processor, TrimmedCurve, UnitCircle, Vector4,
     };
     use monstertruck_io::step::load::{
         EntityLoadReport, LossCategory, LossReason, LossTally, ResolvedStepDocument,
@@ -321,6 +322,7 @@ mod monstertruck_adapter {
         CompressedFaceBoundaryReplacement, CompressedFaceSplice, CompressedTrimmedTopologyPatch,
         NewCompressedEdge, PatchEdgeRef, PatchEdgeUse, PatchVertexRef, RetainedCompressedEdge,
     };
+    use monstertruck_topology::repair::unify_same_domain_compressed_trimmed_faces;
 
     impl SourceStepLoadInspector for MonstertruckKernel {
         type Document = ResolvedStepDocument;
@@ -550,6 +552,29 @@ mod monstertruck_adapter {
             }
             edited.imported.solid = candidate;
             Ok(())
+        }
+
+        fn normalize_edited_source(&self, edited: &mut Self::EditedSource) -> Result<usize> {
+            let mut candidate = edited.imported.solid.clone();
+            let mut accepted = 0;
+            for shell in &mut candidate.boundaries {
+                let result = unify_same_domain_compressed_trimmed_faces(
+                    shell,
+                    |left, right| {
+                        monstertruck_io::step::load::step_geometry::same_surface_domain(
+                            left,
+                            right,
+                            KERNEL_EPSILON,
+                            DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity,
+                        )
+                    },
+                    ExactParameterBoundary2D::exact_parameter_boundary_2d,
+                )?;
+                accepted += result.accepted;
+            }
+            // All shells must have succeeded before modifying the native shape.
+            edited.imported.solid = candidate;
+            Ok(accepted)
         }
 
         fn inspect_edited_source(

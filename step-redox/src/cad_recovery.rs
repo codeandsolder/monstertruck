@@ -71,7 +71,7 @@ pub enum CadFragmentSource {
         solid_id: u64,
         treatment_face_ids: Vec<u64>,
     },
-    CoplanarNormalized {
+    SameDomainNormalized {
         solid_id: u64,
     },
 }

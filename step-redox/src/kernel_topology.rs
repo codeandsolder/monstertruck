@@ -57,6 +57,17 @@ pub trait SourceTopologyEditor: crate::kernel_source_load::SourceStepLoadInspect
         patches: &[KernelTopologyPatch],
     ) -> Result<()>;
 
+    /// Merge same-domain adjacent faces on the authoritative edited solid,
+    /// retaining surviving Stable IDs and exact trim curves. The operation
+    /// commits only after every boundary shell passes geometric validation.
+    ///
+    /// Returns the number of successfully merged face partitions.
+    ///
+    /// # Errors
+    /// Returns an error when native topology cannot be inspected or repaired
+    /// without violating exact trim or closed-manifold constraints.
+    fn normalize_edited_source(&self, edited: &mut Self::EditedSource) -> Result<usize>;
+
     /// Inspect retained STEP-source identities and shell/face counts directly
     /// from exact native topology, without any STEP export or re-import.
     ///

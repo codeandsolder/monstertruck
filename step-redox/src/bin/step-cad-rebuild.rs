@@ -39,7 +39,7 @@ fn main() -> Result<()> {
         .chain(report.periodic_chains)
         .chain(report.boundary_feature_composites)
         .chain(report.edge_treatment_composites)
-        .chain(report.coplanar_normalized_solids)
+        .chain(report.same_domain_normalized_solids)
         .chain(report.extrusion_core_unions)
         .map(|recovered| recovered.fragment)
         .collect::<Vec<_>>();

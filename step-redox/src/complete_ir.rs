@@ -14,9 +14,11 @@ use crate::cad_recovery::{
 use crate::kernel_source_load::{
     KernelSourceLoadEvidence, KernelTopologyProvenance, SourceStepLoadInspector,
 };
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
+use crate::kernel_topology::plan_source_coplanar_normalization_patch;
 use crate::kernel_topology::{
     SourceTopologyEditor, plan_source_boundary_feature_peel_patch,
-    plan_source_coplanar_normalization_patch, plan_source_edge_treatment_patches,
+    plan_source_edge_treatment_patches,
 };
 use crate::patterns::InstancePattern;
 use crate::planar_features::{
@@ -29,8 +31,8 @@ use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v11";
-pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v16";
+pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v12";
+pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v17";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReducedBrepMutationMode {
@@ -111,7 +113,7 @@ pub struct CompleteIr {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub edge_treatment_composites: Vec<SourceCadFragment>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub coplanar_normalized_solids: Vec<SourceCadFragment>,
+    pub same_domain_normalized_solids: Vec<SourceCadFragment>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extrusion_core_unions: Vec<SourceCadFragment>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -477,8 +479,8 @@ impl CompleteIrBuildState {
             edge_treatment_composites: selected_category(&selected, |source| {
                 matches!(source, CadFragmentSource::EdgeTreatmentComposite { .. })
             }),
-            coplanar_normalized_solids: selected_category(&selected, |source| {
-                matches!(source, CadFragmentSource::CoplanarNormalized { .. })
+            same_domain_normalized_solids: selected_category(&selected, |source| {
+                matches!(source, CadFragmentSource::SameDomainNormalized { .. })
             }),
             extrusion_core_unions: selected_category(&selected, |source| {
                 matches!(source, CadFragmentSource::ExtrusionCoreUnion { .. })
@@ -701,52 +703,34 @@ fn recover_kernel_topology_normalized_fragment<
     if load.failure.is_some() {
         return Ok(None);
     }
-    let Some(mut provenance) = load.topology_provenance.clone() else {
+    let Some(provenance) = load.topology_provenance.clone() else {
         return Ok(None);
     };
 
     let evidence = replayable_source_treatments(exchange, source)?;
-    let mut current_document = None::<K::Document>;
-    let mut last_edited = None::<K::EditedSource>;
-    let mut current_source = source;
-    let mut normalized = if evidence.is_empty() {
-        false
+    let patches = if evidence.is_empty() {
+        Vec::new()
     } else {
-        let patch = plan_source_edge_treatment_patches(exchange, source, &evidence, &provenance)?;
-        let edited = kernel.edit_source_topology(document, source, &[patch])?;
-        if kernel.inspect_edited_source(&edited)?.faces == 0 {
-            return Ok(None);
-        }
-        let snapshot = kernel.edited_source_to_step(&edited)?;
-        let next_document = kernel.resolve_source_exchange(
-            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
-        )?;
-        let Some((healed_source, healed_provenance)) =
-            inspect_single_loaded_source(kernel, &next_document)?
-        else {
-            return Ok(None);
-        };
-        current_source = healed_source;
-        provenance = healed_provenance;
-        current_document = Some(next_document);
-        last_edited = Some(edited);
-        true
+        vec![plan_source_edge_treatment_patches(
+            exchange,
+            source,
+            &evidence,
+            &provenance,
+        )?]
     };
-
-    let document = current_document.as_ref().unwrap_or(document);
-    if let Some(patch) =
-        plan_source_coplanar_normalization_patch(document.as_ref(), current_source, &provenance)?
-    {
-        last_edited = Some(kernel.edit_source_topology(document, current_source, &[patch])?);
-        normalized = true;
-    }
-    if !normalized {
+    // Keep one exact kernel-owned source throughout both reduction stages.
+    // The source identity journal does not depend on temporary STEP numbers.
+    let mut edited = kernel.edit_source_topology(document, source, &patches)?;
+    if kernel.inspect_edited_source(&edited)?.faces == 0 {
         return Ok(None);
     }
-    let edited = last_edited
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("kernel topology normalization lost its native solid"))?;
-    let snapshot = kernel.edited_source_to_step(edited)?;
+    let same_domain_merges = kernel.normalize_edited_source(&mut edited)?;
+    if patches.is_empty() && same_domain_merges == 0 {
+        return Ok(None);
+    }
+    // Recognition of the resulting *host* still consumes STEP records.
+    // One export and one resolved document suffice, after all native edits.
+    let snapshot = kernel.edited_source_to_step(&edited)?;
     let final_document = kernel.resolve_source_exchange(
         monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
     )?;
@@ -757,7 +741,7 @@ fn recover_kernel_topology_normalized_fragment<
     host.model.provenance.clear();
 
     if evidence.is_empty() {
-        host.source = CadFragmentSource::CoplanarNormalized {
+        host.source = CadFragmentSource::SameDomainNormalized {
             solid_id: source.id,
         };
         return Ok(Some(host));
@@ -1934,7 +1918,7 @@ const fn source_solid_id(source: &CadFragmentSource) -> u64 {
         | CadFragmentSource::ExtrusionCoreUnion { solid_id, .. }
         | CadFragmentSource::BoundaryFeatureComposite { solid_id, .. }
         | CadFragmentSource::EdgeTreatmentComposite { solid_id, .. }
-        | CadFragmentSource::CoplanarNormalized { solid_id } => *solid_id,
+        | CadFragmentSource::SameDomainNormalized { solid_id } => *solid_id,
     }
 }
 
@@ -2068,7 +2052,7 @@ mod tests {
             periodic_chains: Vec::new(),
             boundary_feature_composites: Vec::new(),
             edge_treatment_composites: Vec::new(),
-            coplanar_normalized_solids: Vec::new(),
+            same_domain_normalized_solids: Vec::new(),
             extrusion_core_unions: Vec::new(),
             kernel_recovery_failures: Vec::new(),
             kernel_source_load: None,
@@ -2819,7 +2803,7 @@ END-ISO-10303-21;
         assert_eq!(parser.unrecovered_solid_count, 0);
         assert_eq!(parser.solid_extrusions.len(), 1);
         assert_eq!(
-            parser.coplanar_normalized_solids,
+            parser.same_domain_normalized_solids,
             Vec::<SourceCadFragment>::new()
         );
 
@@ -2858,19 +2842,31 @@ END-ISO-10303-21;
             Vec::<crate::kernel_topology::KernelFaceSplice>::new()
         );
 
+        let mut native = kernel.edit_source_topology(&document, solid.source, &[])?;
+        let before = kernel.inspect_edited_source(&native)?;
+        assert_eq!(kernel.normalize_edited_source(&mut native)?, 1);
+        let after = kernel.inspect_edited_source(&native)?;
+        assert_eq!(before.faces, after.faces + 1);
+        assert_eq!(after.boundary_shells, before.boundary_shells);
+        assert_eq!(
+            after.retained_source_topology.faces.len() + 1,
+            provenance.faces.len()
+        );
+        assert_eq!(kernel.normalize_edited_source(&mut native)?, 0);
+
         let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
         assert_eq!(report.schema, KERNEL_COMPLETE_IR_SCHEMA);
         assert_eq!(report.semantically_recovered_solid_count, 1);
         assert_eq!(report.unrecovered_solid_count, 0);
         assert_eq!(report.solid_extrusions, Vec::<SourceCadFragment>::new());
-        assert_eq!(report.coplanar_normalized_solids.len(), 1);
+        assert_eq!(report.same_domain_normalized_solids.len(), 1);
         assert_eq!(
             report.kernel_recovery_failures,
             Vec::<KernelRecoveryFailure>::new()
         );
         assert!(matches!(
-            report.coplanar_normalized_solids[0].fragment.source,
-            CadFragmentSource::CoplanarNormalized { .. }
+            report.same_domain_normalized_solids[0].fragment.source,
+            CadFragmentSource::SameDomainNormalized { .. }
         ));
         Ok(())
     }
