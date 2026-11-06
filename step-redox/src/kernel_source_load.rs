@@ -295,15 +295,22 @@ mod monstertruck_adapter {
         KernelSourceSolidLoadFailure, KernelTopologyEntityProvenance, KernelTopologyId,
         KernelTopologyProvenance, SourceEntity, SourceStepLoadInspector,
     };
+    use crate::brep::{
+        self, CurveSupport, FaceLoop, LineSupport, OrientedEdgeUse, PlaneSupport, SurfaceSupport,
+    };
     use crate::cad_kernel::monstertruck::MonstertruckKernel;
     use crate::kernel_topology::{
         KernelEditedSourceEvidence, KernelFaceBoundaryReplacement, KernelFaceSplice,
         KernelPatchCurve, KernelPatchEdgeRef, KernelPatchVertexRef, KernelTopologyPatch,
         SourceTopologyEditor,
     };
+    use crate::reduced_brep::{ReducedFace, ReducedSolid};
     use crate::step_document::StepSection;
     use crate::step_graph;
     use anyhow::Result;
+    use monstertruck_geometry::analytic_line_segment::{
+        SegmentLocus, certify_bspline_segment_locus, certify_nurbs_segment_locus,
+    };
     #[cfg(test)]
     use monstertruck_io::step::load::ParsedStepSource;
     use monstertruck_io::step::load::convert::StepCompressedTrimmedSolid;
@@ -479,6 +486,69 @@ mod monstertruck_adapter {
         })
     }
 
+    /// Extract analytic curve support directly from the kernel's exact 3D
+    /// carrier. Polynomial and rational splines are promoted to a line only
+    /// when a whole-curve control-hull certificate covers the complete chord;
+    /// unknown geometry is never replaced by sampled polyline segments.
+    fn native_curve_support(curve: &Curve3D, start: Point3, end: Point3, id: u64) -> CurveSupport {
+        let line = || {
+            let vector = end - start;
+            CurveSupport::Line(LineSupport {
+                origin_mm: [start.x, start.y, start.z],
+                direction: [vector.x, vector.y, vector.z],
+            })
+        };
+        let is_line = match curve {
+            Curve3D::Line(_) => true,
+            Curve3D::BsplineCurve(spline) => {
+                certify_bspline_segment_locus(spline, start, end, 1.0e-7)
+                    == SegmentLocus::WithinTolerance
+            }
+            Curve3D::NurbsCurve(spline) => {
+                certify_nurbs_segment_locus(spline, start, end, 1.0e-7)
+                    == SegmentLocus::WithinTolerance
+            }
+            Curve3D::SurfaceCurve(surface) => {
+                return native_curve_support(surface.leader(), start, end, id);
+            }
+            Curve3D::IntersectionCurve(intersection) => {
+                return native_curve_support(intersection.leader(), start, end, id);
+            }
+            _ => false,
+        };
+        if is_line {
+            return line();
+        }
+        match curve {
+            Curve3D::BsplineCurve(spline) => CurveSupport::BSpline(brep::BSplineSupport {
+                degree: spline.degree(),
+                control_points_mm: spline
+                    .control_points()
+                    .iter()
+                    .map(|p| [p.x, p.y, p.z])
+                    .collect(),
+                knots: spline.knot_vector().iter().copied().collect(),
+                weights: None,
+            }),
+            Curve3D::NurbsCurve(spline) => {
+                let points = spline.control_points();
+                if points.iter().any(|p| p.w <= 0.0 || !p.w.is_finite()) {
+                    return CurveSupport::Other { entity_id: id };
+                }
+                CurveSupport::BSpline(brep::BSplineSupport {
+                    degree: spline.degree(),
+                    control_points_mm: points
+                        .iter()
+                        .map(|p| [p.x / p.w, p.y / p.w, p.z / p.w])
+                        .collect(),
+                    knots: spline.knot_vector().iter().copied().collect(),
+                    weights: Some(points.iter().map(|p| p.w).collect()),
+                })
+            }
+            _ => CurveSupport::Other { entity_id: id },
+        }
+    }
+
     /// Exact-trim compressed solid and original STEP provenance after a
     /// transactional edit. Stable IDs and allocator state remain alive until a
     /// downstream consumer explicitly requests a STEP snapshot.
@@ -575,6 +645,99 @@ mod monstertruck_adapter {
             // All shells must have succeeded before modifying the native shape.
             edited.imported.solid = candidate;
             Ok(accepted)
+        }
+
+        fn edited_source_reduced_brep(&self, edited: &Self::EditedSource) -> Result<ReducedSolid> {
+            let mut faces = Vec::new();
+            // Dense synthetic identities are deliberately independent of the
+            // original source journal. They identify a *current* exact shape.
+            let mut next_id = 1_u64;
+            let mut allocate = || {
+                let id = next_id;
+                next_id += 1;
+                id
+            };
+            for shell in &edited.imported.solid.boundaries {
+                let vertex_ids = shell
+                    .vertices
+                    .iter()
+                    .map(|_| allocate())
+                    .collect::<Vec<_>>();
+                let edge_ids = shell.edges.iter().map(|_| allocate()).collect::<Vec<_>>();
+                for face in &shell.faces {
+                    let face_id = allocate();
+                    let surface = match &face.surface {
+                        monstertruck_io::step::load::step_geometry::Surface::Elementary(
+                            monstertruck_io::step::load::step_geometry::ElementarySurface::Plane(
+                                plane,
+                            ),
+                        ) => {
+                            let origin = plane.origin();
+                            let normal = plane.normal();
+                            SurfaceSupport::Plane(PlaneSupport {
+                                origin_mm: [origin.x, origin.y, origin.z],
+                                normal: [normal.x, normal.y, normal.z],
+                                max_residual_mm: 0.0,
+                            })
+                        }
+                        _ => SurfaceSupport::Other { entity_id: face_id },
+                    };
+                    let loops = face
+                        .boundaries
+                        .iter()
+                        .enumerate()
+                        .map(|(wire_index, wire)| {
+                            let bound_id = allocate();
+                            let loop_id = allocate();
+                            let edges = wire
+                                .iter()
+                                .map(|use_| {
+                                    let edge = &shell.edges[use_.index];
+                                    let (front, back) = if use_.orientation {
+                                        edge.vertices
+                                    } else {
+                                        (edge.vertices.1, edge.vertices.0)
+                                    };
+                                    let start = shell.vertices[front];
+                                    let end = shell.vertices[back];
+                                    let support = native_curve_support(
+                                        &edge.curve,
+                                        start,
+                                        end,
+                                        edge_ids[use_.index],
+                                    );
+                                    OrientedEdgeUse {
+                                        oriented_edge_id: allocate(),
+                                        edge_id: edge_ids[use_.index],
+                                        curve_id: edge_ids[use_.index],
+                                        curve_same_sense: true,
+                                        parameter_forward: use_.orientation,
+                                        start_vertex: vertex_ids[front],
+                                        end_vertex: vertex_ids[back],
+                                        start_mm: [start.x, start.y, start.z],
+                                        end_mm: [end.x, end.y, end.z],
+                                        support,
+                                    }
+                                })
+                                .collect();
+                            FaceLoop {
+                                bound_id,
+                                loop_id,
+                                outer: wire_index == 0,
+                                orientation: true,
+                                edges,
+                            }
+                        })
+                        .collect();
+                    faces.push(ReducedFace {
+                        id: face_id,
+                        surface,
+                        surface_forward: face.orientation,
+                        loops,
+                    });
+                }
+            }
+            Ok(ReducedSolid::from_native_faces(edited.source.id, faces))
         }
 
         fn inspect_edited_source(

@@ -586,6 +586,7 @@ fn recover_kernel_boundary_feature_fragment<
         return Ok(None);
     };
     let mut current_document = None::<K::Document>;
+    let mut last_edited = None::<K::EditedSource>;
     let mut current_source = source;
     let mut replay = Vec::<RecoveredBoundaryFeatureFamily>::new();
 
@@ -669,18 +670,34 @@ fn recover_kernel_boundary_feature_fragment<
         current_source = healed_source;
         provenance = healed_provenance;
         current_document = Some(next_document);
+        last_edited = Some(edited);
         if pass + 1 == MAX_LOCAL_REDUCTION_ROUNDS {
             bail!("kernel boundary-feature peeling did not reach a fixed point");
         }
     }
-    let Some(final_document) = current_document else {
+    let (Some(final_document), Some(last_edited)) = (current_document, last_edited) else {
         return Ok(None);
     };
-    let Some(mut host) = recognize_single_healed_host(final_document.as_ref())? else {
+    finish_native_boundary_feature_replay(kernel, source, &last_edited, &final_document, &replay)
+}
+
+fn finish_native_boundary_feature_replay<
+    K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
+>(
+    kernel: &K,
+    source: SourceEntity,
+    edited: &K::EditedSource,
+    document: &K::Document,
+    replay: &[RecoveredBoundaryFeatureFamily],
+) -> Result<Option<CadFragment>> {
+    let Some(mut host) = recognize_edited_host_with_fallback(kernel, edited, || {
+        recognize_single_healed_host(document.as_ref())
+    })?
+    else {
         return Ok(None);
     };
     host.model.provenance.clear();
-    let fragment = compose_boundary_feature_fragment(source.id, &host, &replay)?;
+    let fragment = compose_boundary_feature_fragment(source.id, &host, replay)?;
     kernel_replay_is_single_solid(kernel, &fragment).map(|accepted| accepted.then_some(fragment))
 }
 
@@ -728,13 +745,14 @@ fn recover_kernel_topology_normalized_fragment<
     if patches.is_empty() && same_domain_merges == 0 {
         return Ok(None);
     }
-    // Recognition of the resulting *host* still consumes STEP records.
-    // One export and one resolved document suffice, after all native edits.
-    let snapshot = kernel.edited_source_to_step(&edited)?;
-    let final_document = kernel.resolve_source_exchange(
-        monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
-    )?;
-    let Some(mut host) = recognize_single_healed_host(final_document.as_ref())? else {
+    let Some(mut host) = recognize_edited_host_with_fallback(kernel, &edited, || {
+        let snapshot = kernel.edited_source_to_step(&edited)?;
+        let final_document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
+        )?;
+        recognize_single_healed_host(final_document.as_ref())
+    })?
+    else {
         return Ok(None);
     };
     // Regenerated STEP identities are an internal handoff, not source provenance.
@@ -799,6 +817,30 @@ fn replayable_source_treatments(
     evidence.sort_by_key(|item| item.treatment_face_id);
     evidence.dedup_by_key(|item| item.treatment_face_id);
     Ok(evidence)
+}
+
+/// Prefer native exact-trim semantic recognition while retaining the general
+/// STEP-record recognizer for shapes not yet consumed by the native adapter.
+fn recognize_edited_host_with_fallback<K: SourceTopologyEditor>(
+    kernel: &K,
+    edited: &K::EditedSource,
+    fallback: impl FnOnce() -> Result<Option<CadFragment>>,
+) -> Result<Option<CadFragment>> {
+    recognize_native_edited_host(kernel, edited)?.map_or_else(fallback, |host| Ok(Some(host)))
+}
+
+/// Recognize exact analytic hosts from the edited native B-rep, with no STEP
+/// serialization. Unknown surface/curve classes remain unclassified in the
+/// native view; the existing general STEP recognizer handles those separately.
+fn recognize_native_edited_host<K: SourceTopologyEditor>(
+    kernel: &K,
+    edited: &K::EditedSource,
+) -> Result<Option<CadFragment>> {
+    let reduced = kernel.edited_source_reduced_brep(edited)?;
+    crate::solid_extrusions::detect_solid_extrusion_from_reduced(&reduced)
+        .as_ref()
+        .map(recover_solid_extrusion_fragment)
+        .transpose()
 }
 
 fn recognize_single_healed_host(healed: &Exchange) -> Result<Option<CadFragment>> {
@@ -2853,6 +2895,27 @@ END-ISO-10303-21;
             provenance.faces.len()
         );
         assert_eq!(kernel.normalize_edited_source(&mut native)?, 0);
+        let direct = kernel.edited_source_reduced_brep(&native)?;
+        let exact_host = crate::solid_extrusions::detect_solid_extrusion_from_reduced(&direct)
+            .ok_or_else(|| anyhow::anyhow!("native planar extrusion recognition failed"))?;
+        assert_eq!(exact_host.height_mm, 1.0);
+        let native_fragment = recognize_native_edited_host(&kernel, &native)?.ok_or_else(|| {
+            anyhow::anyhow!("native edited host was not constructively recovered")
+        })?;
+        native_fragment.model.validate()?;
+        let legacy_snapshot = kernel.edited_source_to_step(&native)?;
+        let legacy_document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(legacy_snapshot.as_bytes())?
+                .exchange,
+        )?;
+        let legacy = recognize_single_healed_host(legacy_document.as_ref())?
+            .ok_or_else(|| anyhow::anyhow!("legacy STEP host was not constructively recovered"))?;
+        assert!(kernel_replay_is_single_solid(&kernel, &native_fragment)?);
+        assert_eq!(
+            kernel.summarize(&kernel.evaluate(&native_fragment.model, native_fragment.root)?),
+            kernel.summarize(&kernel.evaluate(&legacy.model, legacy.root)?),
+            "native and previously exported host must have equal evaluated topology"
+        );
 
         let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
         assert_eq!(report.schema, KERNEL_COMPLETE_IR_SCHEMA);

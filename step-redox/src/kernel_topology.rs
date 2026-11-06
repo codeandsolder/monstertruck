@@ -68,6 +68,19 @@ pub trait SourceTopologyEditor: crate::kernel_source_load::SourceStepLoadInspect
     /// without violating exact trim or closed-manifold constraints.
     fn normalize_edited_source(&self, edited: &mut Self::EditedSource) -> Result<usize>;
 
+    /// Read the currently edited exact topology as a source-neutral semantic
+    /// B-rep, without constructing STEP records.
+    ///
+    /// Unsupported analytic geometry remains explicitly unclassified rather
+    /// than being approximated by line segments or faceted surfaces.
+    ///
+    /// # Errors
+    /// Returns an error if the topology cannot be inspected consistently.
+    fn edited_source_reduced_brep(
+        &self,
+        edited: &Self::EditedSource,
+    ) -> Result<crate::reduced_brep::ReducedSolid>;
+
     /// Inspect retained STEP-source identities and shell/face counts directly
     /// from exact native topology, without any STEP export or re-import.
     ///

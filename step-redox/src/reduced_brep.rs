@@ -110,6 +110,38 @@ impl ReducedSolid {
 
     pub const fn solid_id(&self) -> u64 { self.solid_id }
 
+    /// Build a semantic B-rep view directly from a kernel-owned native solid.
+    ///
+    /// The caller supplies its already ordered, exact-trim faces. Synthetic
+    /// topology identities are assigned by that caller and never masquerade
+    /// as STEP source provenance.
+    pub(crate) fn from_native_faces(solid_id: u64, faces: Vec<ReducedFace>) -> Self {
+        let max_id = faces
+            .iter()
+            .flat_map(|face| {
+                std::iter::once(face.id).chain(face.loops.iter().flat_map(|wire| {
+                    [wire.bound_id, wire.loop_id]
+                        .into_iter()
+                        .chain(wire.edges.iter().flat_map(|edge| {
+                            [
+                                edge.oriented_edge_id,
+                                edge.curve_id,
+                                edge.edge_id,
+                                edge.start_vertex,
+                                edge.end_vertex,
+                            ]
+                        }))
+                }))
+            })
+            .max()
+            .unwrap_or(0);
+        Self {
+            solid_id,
+            faces: faces.into_iter().map(|face| (face.id, face)).collect(),
+            next_virtual_id: max_id.saturating_add(1),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn from_test_faces(solid_id: u64, faces: Vec<ReducedFace>) -> Self {
         Self {
