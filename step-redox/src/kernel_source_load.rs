@@ -364,7 +364,7 @@ mod monstertruck_adapter {
                             failure: Some(KernelSourceSolidLoadFailure::TableEntryUnavailable),
                         });
                         continue;
-                    };
+                    }
 
                     match document.import_solid(data_section, source_entity.id) {
                         Ok(import) => evidence.solids.push(KernelSourceSolidLoadEvidence {
