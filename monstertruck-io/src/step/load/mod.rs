@@ -1061,7 +1061,7 @@ impl Table {
 
     /// Parse STEP bytes using the canonical source loader, then return the
     /// first DATA section's typed entities. For all sections use
-    /// ParsedStepSource::resolve instead.
+    /// [ParsedStepSource::resolve] instead.
     ///
     /// # Errors
     /// Returns an error for invalid Part 21 syntax or a missing DATA section.
