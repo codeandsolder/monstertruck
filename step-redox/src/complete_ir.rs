@@ -550,14 +550,18 @@ pub fn recover_complete_ir_with_kernel_bytes<
     kernel: &K,
 ) -> Result<CompleteIr> {
     let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
-    let mut build =
-        recover_complete_ir_build_state(&exchange, input, ReducedBrepMutationMode::KernelOwned)?;
-    let source_load = kernel.inspect_source_exchange(&exchange)?;
+    let document = kernel.resolve_source_exchange(exchange)?;
+    let mut build = recover_complete_ir_build_state(
+        document.as_ref(),
+        input,
+        ReducedBrepMutationMode::KernelOwned,
+    )?;
+    let source_load = kernel.inspect_source_document(&document)?;
     let mut failures = apply_kernel_recovery(&mut build.recovery, |source| {
-        recover_kernel_boundary_feature_fragment(input, source, &source_load, kernel)
+        recover_kernel_boundary_feature_fragment(input, source, &source_load, &document, kernel)
     });
     failures.extend(apply_kernel_recovery(&mut build.recovery, |source| {
-        recover_kernel_topology_normalized_fragment(input, &exchange, source, &source_load, kernel)
+        recover_kernel_topology_normalized_fragment(input, &document, source, &source_load, kernel)
     }));
     failures.extend(apply_kernel_recovery(&mut build.recovery, |source| {
         recover_auto_proven_extrusion_core_union_fragment(
@@ -578,6 +582,7 @@ fn recover_kernel_boundary_feature_fragment<
     input: &[u8],
     source: SourceEntity,
     source_load: &KernelSourceLoadEvidence,
+    source_document: &K::Document,
     kernel: &K,
 ) -> Result<Option<CadFragment>> {
     let Some(load) = source_load.solids.iter().find(|item| item.source == source) else {
@@ -595,7 +600,16 @@ fn recover_kernel_boundary_feature_fragment<
 
     for pass in 0..MAX_LOCAL_REDUCTION_ROUNDS {
         let bytes = current_step.as_deref().map_or(input, str::as_bytes);
-        let exchange = crate::step_io::ParsedExchange::parse(bytes)?.exchange;
+        let updated_document = current_step
+            .as_deref()
+            .map(|step| {
+                kernel.resolve_source_exchange(
+                    crate::step_io::ParsedExchange::parse(step.as_bytes())?.exchange,
+                )
+            })
+            .transpose()?;
+        let document = updated_document.as_ref().unwrap_or(source_document);
+        let exchange = document.as_ref();
         let section = exchange
             .data
             .get(current_source.data_section)
@@ -649,7 +663,7 @@ fn recover_kernel_boundary_feature_fragment<
             &prepared.family_indices,
             &provenance,
         )?;
-        let healed = kernel.edit_source_topology(&exchange, current_source, &[patch])?;
+        let healed = kernel.edit_source_topology(document, current_source, &[patch])?;
         let Some((healed_source, healed_provenance)) =
             inspect_single_loaded_source(kernel, healed.as_bytes())?
         else {
@@ -683,11 +697,12 @@ fn recover_kernel_topology_normalized_fragment<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
     input: &[u8],
-    exchange: &Exchange,
+    document: &K::Document,
     source: SourceEntity,
     source_load: &KernelSourceLoadEvidence,
     kernel: &K,
 ) -> Result<Option<CadFragment>> {
+    let exchange = document.as_ref();
     let Some(load) = source_load
         .solids
         .iter()
@@ -709,7 +724,7 @@ fn recover_kernel_topology_normalized_fragment<
         false
     } else {
         let patch = plan_source_edge_treatment_patches(input, source, &evidence, &provenance)?;
-        let healed = kernel.edit_source_topology(exchange, source, &[patch])?;
+        let healed = kernel.edit_source_topology(document, source, &[patch])?;
         let Some((healed_source, healed_provenance)) =
             inspect_single_loaded_source(kernel, healed.as_bytes())?
         else {
@@ -725,9 +740,16 @@ fn recover_kernel_topology_normalized_fragment<
     if let Some(patch) =
         plan_source_coplanar_normalization_patch(current_bytes, current_source, &provenance)?
     {
-        let current_exchange = crate::step_io::ParsedExchange::parse(current_bytes)?.exchange;
-        current_step =
-            Some(kernel.edit_source_topology(&current_exchange, current_source, &[patch])?);
+        let updated_document = current_step
+            .as_deref()
+            .map(|step| {
+                kernel.resolve_source_exchange(
+                    crate::step_io::ParsedExchange::parse(step.as_bytes())?.exchange,
+                )
+            })
+            .transpose()?;
+        let document = updated_document.as_ref().unwrap_or(document);
+        current_step = Some(kernel.edit_source_topology(document, current_source, &[patch])?);
         normalized = true;
     }
     if !normalized {
@@ -767,7 +789,8 @@ fn inspect_single_loaded_source<K: SourceStepLoadInspector>(
     input: &[u8],
 ) -> Result<Option<(SourceEntity, KernelTopologyProvenance)>> {
     let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
-    let load = kernel.inspect_source_exchange(&exchange)?;
+    let document = kernel.resolve_source_exchange(exchange)?;
+    let load = kernel.inspect_source_document(&document)?;
     let [solid] = load.solids.as_slice() else {
         return Ok(None);
     };
@@ -2567,8 +2590,9 @@ END-ISO-10303-21;
     fn kernel_v15_square_boss_peel_has_complete_source_and_kernel_proofs() -> Result<()> {
         let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
-        let source_load = kernel
-            .inspect_source_exchange(&crate::step_io::ParsedExchange::parse(input)?.exchange)?;
+        let document = kernel
+            .resolve_source_exchange(crate::step_io::ParsedExchange::parse(input)?.exchange)?;
+        let source_load = kernel.inspect_source_document(&document)?;
         let [loaded] = source_load.solids.as_slice() else {
             bail!("single-boss fixture must import as exactly one source solid");
         };
@@ -2576,7 +2600,7 @@ END-ISO-10303-21;
             .topology_provenance
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("boss fixture did not retain kernel StableIds"))?;
-        let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
+        let exchange = document.as_ref();
         let section = &exchange.data[loaded.source.data_section];
         let index = crate::step_graph::build_index(&section.entities);
         let shell = crate::brep::manifold_shell(loaded.source.id, &section.entities, &index)
@@ -2627,10 +2651,11 @@ END-ISO-10303-21;
         assert_eq!(patch.remove_faces.len(), 5);
         assert_eq!(patch.face_boundary_replacements.len(), 1);
         assert_eq!(patch.require_unused_edges.len(), 4);
-        let healed = kernel.edit_source_topology(&exchange, loaded.source, &[patch])?;
-        let healed_report = kernel.inspect_source_exchange(
-            &crate::step_io::ParsedExchange::parse(healed.as_bytes())?.exchange,
+        let healed = kernel.edit_source_topology(&document, loaded.source, &[patch])?;
+        let healed_document = kernel.resolve_source_exchange(
+            crate::step_io::ParsedExchange::parse(healed.as_bytes())?.exchange,
         )?;
+        let healed_report = kernel.inspect_source_document(&healed_document)?;
         assert_eq!(healed_report.solids.len(), 1);
         let host = recognize_single_healed_host(&healed)?
             .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
@@ -2705,8 +2730,9 @@ END-ISO-10303-21;
         );
 
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
-        let source_load = kernel
-            .inspect_source_exchange(&crate::step_io::ParsedExchange::parse(input)?.exchange)?;
+        let document = kernel
+            .resolve_source_exchange(crate::step_io::ParsedExchange::parse(input)?.exchange)?;
+        let source_load = kernel.inspect_source_document(&document)?;
         let [solid] = source_load.solids.as_slice() else {
             bail!("coplanar fixture should load as exactly one source solid");
         };

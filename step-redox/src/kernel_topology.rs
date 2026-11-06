@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Apply normalized topology edits to one source solid without exposing backend-native topology.
-pub trait SourceTopologyEditor {
+pub trait SourceTopologyEditor: crate::kernel_source_load::SourceStepLoadInspector {
     /// Import `source` from `input`, apply every patch in order transactionally,
     /// and serialize the resulting single solid as a fresh STEP exchange.
     ///
@@ -21,7 +21,7 @@ pub trait SourceTopologyEditor {
     /// or the healed solid cannot be serialized.
     fn edit_source_topology(
         &self,
-        exchange: &ruststep::ast::Exchange,
+        document: &Self::Document,
         source: SourceEntity,
         patches: &[KernelTopologyPatch],
     ) -> Result<String>;

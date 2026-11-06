@@ -13,9 +13,22 @@ pub trait SourceStepLoadInspector {
     /// # Errors
     /// Returns an error when the previously parsed source cannot be resolved or when the
     /// backend's diagnostic load path itself fails unexpectedly.
-    fn inspect_source_exchange(
+    /// One parsed exchange and its kernel-owned typed entity tables.
+    type Document: AsRef<ruststep::ast::Exchange>;
+
+    /// Build the typed resolution graph once per source document.
+    ///
+    /// # Errors
+    /// Returns an error if the backend cannot initialize the source document.
+    fn resolve_source_exchange(&self, exchange: ruststep::ast::Exchange) -> Result<Self::Document>;
+
+    /// Inspect the already resolved source document.
+    ///
+    /// # Errors
+    /// Returns an error if the backend cannot import or describe a source solid.
+    fn inspect_source_document(
         &self,
-        exchange: &ruststep::ast::Exchange,
+        document: &Self::Document,
     ) -> Result<KernelSourceLoadEvidence>;
 }
 
@@ -296,8 +309,8 @@ mod monstertruck_adapter {
         Conic3D, Curve3D, Line, Matrix4, Point3, Processor, TrimmedCurve, UnitCircle, Vector4,
     };
     use monstertruck_io::step::load::{
-        EntityLoadReport, LossCategory, LossReason, LossTally, ShellLoadReport,
-        StepTopologyProvenance, Table,
+        EntityLoadReport, LossCategory, LossReason, LossTally, ResolvedStepDocument,
+        ShellLoadReport, StepTopologyProvenance,
     };
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
     use monstertruck_topology::StableId;
@@ -307,10 +320,20 @@ mod monstertruck_adapter {
     };
 
     impl SourceStepLoadInspector for MonstertruckKernel {
-        fn inspect_source_exchange(
+        type Document = ResolvedStepDocument;
+
+        fn resolve_source_exchange(
             &self,
-            exchange: &ruststep::ast::Exchange,
+            exchange: ruststep::ast::Exchange,
+        ) -> Result<Self::Document> {
+            Ok(ResolvedStepDocument::from_exchange(exchange))
+        }
+
+        fn inspect_source_document(
+            &self,
+            document: &Self::Document,
         ) -> Result<KernelSourceLoadEvidence> {
+            let exchange = document.exchange();
             let mut evidence = KernelSourceLoadEvidence {
                 sections: Vec::with_capacity(exchange.data.len()),
                 solids: Vec::new(),
@@ -319,7 +342,9 @@ mod monstertruck_adapter {
             for (data_section, section) in exchange.data.iter().enumerate() {
                 let index = step_graph::build_index(&section.entities);
                 let source = StepSection::new(data_section, &section.entities, &index);
-                let table = Table::from_data_section(section);
+                let table = document.table(data_section).ok_or_else(|| {
+                    anyhow::anyhow!("typed source document omitted DATA section {data_section}")
+                })?;
 
                 evidence.sections.push(KernelSourceSectionLoadEvidence {
                     data_section,
@@ -331,7 +356,7 @@ mod monstertruck_adapter {
                     .filter(|entity| entity.record_named("MANIFOLD_SOLID_BREP").is_some())
                 {
                     let source_entity = entity.source();
-                    let Some(solid) = table.manifold_solid_brep.get(&source_entity.id) else {
+                    if !table.manifold_solid_brep.contains_key(&source_entity.id) {
                         evidence.solids.push(KernelSourceSolidLoadEvidence {
                             source: source_entity,
                             boundaries: Vec::new(),
@@ -341,7 +366,7 @@ mod monstertruck_adapter {
                         continue;
                     };
 
-                    match table.to_compressed_trimmed_solid_import(solid) {
+                    match document.import_solid(data_section, source_entity.id) {
                         Ok(import) => evidence.solids.push(KernelSourceSolidLoadEvidence {
                             source: source_entity,
                             boundaries: import
@@ -452,16 +477,20 @@ mod monstertruck_adapter {
     impl SourceTopologyEditor for MonstertruckKernel {
         fn edit_source_topology(
             &self,
-            exchange: &ruststep::ast::Exchange,
+            document: &Self::Document,
             source: SourceEntity,
             patches: &[KernelTopologyPatch],
         ) -> Result<String> {
-            let section = exchange.data.get(source.data_section).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "source solid references missing DATA section {}",
-                    source.data_section
-                )
-            })?;
+            let section = document
+                .exchange()
+                .data
+                .get(source.data_section)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "source solid references missing DATA section {}",
+                        source.data_section
+                    )
+                })?;
             let index = step_graph::build_index(&section.entities);
             let section_source = StepSection::new(source.data_section, &section.entities, &index);
             let actual_source = section_source
@@ -474,11 +503,18 @@ mod monstertruck_adapter {
                 );
             }
 
-            let table = Table::from_data_section(section);
-            let solid = table.manifold_solid_brep.get(&source.id).ok_or_else(|| {
-                anyhow::anyhow!("source solid #{} is unavailable to Monstertruck", source.id)
+            let table = document.table(source.data_section).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "typed source document omitted DATA section {}",
+                    source.data_section
+                )
             })?;
-            let mut imported = table.to_compressed_trimmed_solid_import(solid)?;
+            if !table.manifold_solid_brep.contains_key(&source.id) {
+                anyhow::bail!("source solid #{} is unavailable to Monstertruck", source.id);
+            }
+            let mut imported = document
+                .import_solid(source.data_section, source.id)?
+                .clone();
             for patch in patches {
                 imported
                     .solid
@@ -745,11 +781,17 @@ mod monstertruck_adapter {
     mod tests {
         use super::*;
 
+        fn inspect_bytes(input: &[u8]) -> Result<KernelSourceLoadEvidence> {
+            let kernel = MonstertruckKernel::project_standard();
+            let document =
+                kernel.resolve_source_exchange(ParsedExchange::parse(input)?.exchange)?;
+            kernel.inspect_source_document(&document)
+        }
+
         #[test]
         fn maps_table_swallow_to_parser_neutral_source() -> Result<()> {
             let input = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'1');\nFILE_NAME('a','b',(''),(''),'x','y','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n#11=ORIENTED_EDGE('bad');\nENDSEC;\nEND-ISO-10303-21;\n";
-            let evidence = MonstertruckKernel::project_standard()
-                .inspect_source_exchange(&ParsedExchange::parse(input)?.exchange)?;
+            let evidence = inspect_bytes(input)?;
             assert_eq!(evidence.sections.len(), 1);
             assert_eq!(evidence.sections[0].entity_losses.len(), 1);
             let loss = &evidence.sections[0].entity_losses[0];
@@ -770,8 +812,7 @@ mod monstertruck_adapter {
         #[test]
         fn distinguishes_unretained_source_solid_from_conversion_failure() -> Result<()> {
             let unretained = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'1');\nFILE_NAME('a','b',(''),(''),'x','y','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n#11=MANIFOLD_SOLID_BREP('bad');\nENDSEC;\nEND-ISO-10303-21;\n";
-            let evidence = MonstertruckKernel::project_standard()
-                .inspect_source_exchange(&ParsedExchange::parse(unretained)?.exchange)?;
+            let evidence = inspect_bytes(unretained)?;
             assert_eq!(evidence.solids.len(), 1);
             assert_eq!(
                 evidence.solids[0].failure,
@@ -780,8 +821,7 @@ mod monstertruck_adapter {
             assert!(evidence.solids[0].topology_provenance.is_none());
 
             let conversion_failure = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'1');\nFILE_NAME('a','b',(''),(''),'x','y','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n#11=MANIFOLD_SOLID_BREP('bad',#12);\nENDSEC;\nEND-ISO-10303-21;\n";
-            let evidence = MonstertruckKernel::project_standard()
-                .inspect_source_exchange(&ParsedExchange::parse(conversion_failure)?.exchange)?;
+            let evidence = inspect_bytes(conversion_failure)?;
             assert_eq!(evidence.solids.len(), 1);
             let Some(KernelSourceSolidLoadFailure::ConversionFailed { detail }) =
                 evidence.solids[0].failure.as_ref()
@@ -797,34 +837,26 @@ mod monstertruck_adapter {
         fn topology_editor_roundtrips_exact_selected_source_solid() -> Result<()> {
             let input = include_bytes!("../validation/fixtures/production_radial_slot.step");
             let kernel = MonstertruckKernel::project_standard();
-            let evidence =
-                kernel.inspect_source_exchange(&ParsedExchange::parse(input)?.exchange)?;
+            let document =
+                kernel.resolve_source_exchange(ParsedExchange::parse(input)?.exchange)?;
+            let evidence = kernel.inspect_source_document(&document)?;
             let source = evidence
                 .solids
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("fixture has no source solid"))?
                 .source;
-            let edited = kernel.edit_source_topology(
-                &ParsedExchange::parse(input)?.exchange,
-                source,
-                &[],
-            )?;
+            let edited = kernel.edit_source_topology(&document, source, &[])?;
             let exchange = ParsedExchange::parse(edited.as_bytes())?.exchange;
             assert_eq!(exchange.data.len(), 1);
-            let section = exchange
-                .data
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("edited STEP omitted DATA section"))?;
-            let table = Table::from_data_section(section);
-            assert_ne!(table.manifold_solid_brep.len(), 0);
+            let document = ResolvedStepDocument::from_exchange(exchange);
+            assert_ne!(document.table(0).unwrap().manifold_solid_brep.len(), 0);
             Ok(())
         }
 
         #[test]
         fn reports_source_solid_boundaries_positionally() -> Result<()> {
             let input = include_bytes!("../validation/fixtures/production_radial_slot.step");
-            let evidence = MonstertruckKernel::project_standard()
-                .inspect_source_exchange(&ParsedExchange::parse(input)?.exchange)?;
+            let evidence = inspect_bytes(input)?;
             assert_ne!(evidence.solids.len(), 0);
             for solid in &evidence.solids {
                 assert!(solid.failure.is_none());

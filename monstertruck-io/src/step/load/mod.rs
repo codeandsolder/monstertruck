@@ -20,6 +20,8 @@ use step_p21::{
 };
 
 pub mod convert;
+mod document;
+pub use document::ResolvedStepDocument;
 /// Stable kernel identity assigned while importing STEP topology.
 pub mod provenance;
 /// Typed accounting for what a load kept and what it lost.
