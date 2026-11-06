@@ -127,12 +127,12 @@ const PATCH_POINT_TOL_MM: f64 = 1.0e-7;
 /// match the evidence, a required source entity has no unique kernel topology identity, or the
 /// treatment cannot be normalized into a complete fail-closed patch.
 pub fn plan_source_edge_treatment_patch(
-    input: &[u8],
+    exchange: &ruststep::ast::Exchange,
     source: SourceEntity,
     evidence: &crate::edge_treatments::EdgeTreatmentEvidence,
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
 ) -> Result<KernelTopologyPatch> {
-    plan_source_edge_treatment_patches(input, source, std::slice::from_ref(evidence), provenance)
+    plan_source_edge_treatment_patches(exchange, source, std::slice::from_ref(evidence), provenance)
 }
 
 /// Normalize every proven treatment on one source solid into one atomic topology transaction.
@@ -146,7 +146,7 @@ pub fn plan_source_edge_treatment_patch(
 /// treatment cannot be normalized, or two local plans make incompatible claims about retained
 /// topology.
 pub fn plan_source_edge_treatment_patches(
-    input: &[u8],
+    exchange: &ruststep::ast::Exchange,
     source: SourceEntity,
     evidence: &[crate::edge_treatments::EdgeTreatmentEvidence],
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
@@ -154,7 +154,7 @@ pub fn plan_source_edge_treatment_patches(
     if evidence.is_empty() {
         bail!("edge-treatment patch batch cannot be empty");
     }
-    let solid = source_reduced_solid(input, source)?;
+    let solid = source_reduced_solid(exchange, source)?;
     let mut ordered = evidence.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|item| item.treatment_face_id);
     let patches = ordered
@@ -182,11 +182,11 @@ pub fn plan_source_edge_treatment_patches(
 /// Returns an error when source identity cannot be resolved or any proven source face/edge lacks a
 /// unique retained kernel topology identity.
 pub fn plan_source_coplanar_normalization_patch(
-    input: &[u8],
+    exchange: &ruststep::ast::Exchange,
     source: SourceEntity,
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
 ) -> Result<Option<KernelTopologyPatch>> {
-    let solid = source_reduced_solid(input, source)?;
+    let solid = source_reduced_solid(exchange, source)?;
     plan_coplanar_normalization_patch(&solid, source.data_section, provenance)
 }
 
@@ -203,13 +203,12 @@ pub fn plan_source_coplanar_normalization_patch(
 /// a requested interface bound is not present on its host, a host would lose every boundary, or an
 /// interface edge has any surviving source-face user outside the planned peel.
 pub fn plan_source_boundary_feature_peel_patch(
-    input: &[u8],
+    exchange: &ruststep::ast::Exchange,
     source: SourceEntity,
     report: &crate::planar_features::BoundaryFeatureDiagnostics,
     selected_indices: &[usize],
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
 ) -> Result<KernelTopologyPatch> {
-    let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
     let section = exchange
         .data
         .get(source.data_section)
@@ -507,10 +506,9 @@ fn topology_face(
 }
 
 fn source_reduced_solid(
-    input: &[u8],
+    exchange: &ruststep::ast::Exchange,
     source: SourceEntity,
 ) -> Result<crate::reduced_brep::ReducedSolid> {
-    let exchange = crate::step_io::ParsedExchange::parse(input)?.exchange;
     let section = exchange
         .data
         .get(source.data_section)

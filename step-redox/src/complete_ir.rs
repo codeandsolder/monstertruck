@@ -558,10 +558,10 @@ pub fn recover_complete_ir_with_kernel_bytes<
     )?;
     let source_load = kernel.inspect_source_document(&document)?;
     let mut failures = apply_kernel_recovery(&mut build.recovery, |source| {
-        recover_kernel_boundary_feature_fragment(input, source, &source_load, &document, kernel)
+        recover_kernel_boundary_feature_fragment(source, &source_load, &document, kernel)
     });
     failures.extend(apply_kernel_recovery(&mut build.recovery, |source| {
-        recover_kernel_topology_normalized_fragment(input, &document, source, &source_load, kernel)
+        recover_kernel_topology_normalized_fragment(&document, source, &source_load, kernel)
     }));
     failures.extend(apply_kernel_recovery(&mut build.recovery, |source| {
         recover_auto_proven_extrusion_core_union_fragment(
@@ -579,7 +579,6 @@ pub fn recover_complete_ir_with_kernel_bytes<
 fn recover_kernel_boundary_feature_fragment<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
-    input: &[u8],
     source: SourceEntity,
     source_load: &KernelSourceLoadEvidence,
     source_document: &K::Document,
@@ -599,7 +598,6 @@ fn recover_kernel_boundary_feature_fragment<
     let mut replay = Vec::<RecoveredBoundaryFeatureFamily>::new();
 
     for pass in 0..MAX_LOCAL_REDUCTION_ROUNDS {
-        let bytes = current_step.as_deref().map_or(input, str::as_bytes);
         let updated_document = current_step
             .as_deref()
             .map(|step| {
@@ -657,7 +655,7 @@ fn recover_kernel_boundary_feature_fragment<
             break;
         }
         let patch = plan_source_boundary_feature_peel_patch(
-            bytes,
+            exchange,
             current_source,
             &report,
             &prepared.family_indices,
@@ -696,7 +694,6 @@ fn recover_kernel_boundary_feature_fragment<
 fn recover_kernel_topology_normalized_fragment<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
-    input: &[u8],
     document: &K::Document,
     source: SourceEntity,
     source_load: &KernelSourceLoadEvidence,
@@ -723,7 +720,7 @@ fn recover_kernel_topology_normalized_fragment<
     let mut normalized = if evidence.is_empty() {
         false
     } else {
-        let patch = plan_source_edge_treatment_patches(input, source, &evidence, &provenance)?;
+        let patch = plan_source_edge_treatment_patches(exchange, source, &evidence, &provenance)?;
         let healed = kernel.edit_source_topology(document, source, &[patch])?;
         let Some((healed_source, healed_provenance)) =
             inspect_single_loaded_source(kernel, healed.as_bytes())?
@@ -736,19 +733,18 @@ fn recover_kernel_topology_normalized_fragment<
         true
     };
 
-    let current_bytes = current_step.as_deref().map_or(input, str::as_bytes);
+    let updated_document = current_step
+        .as_deref()
+        .map(|step| {
+            kernel.resolve_source_exchange(
+                crate::step_io::ParsedExchange::parse(step.as_bytes())?.exchange,
+            )
+        })
+        .transpose()?;
+    let document = updated_document.as_ref().unwrap_or(document);
     if let Some(patch) =
-        plan_source_coplanar_normalization_patch(current_bytes, current_source, &provenance)?
+        plan_source_coplanar_normalization_patch(document.as_ref(), current_source, &provenance)?
     {
-        let updated_document = current_step
-            .as_deref()
-            .map(|step| {
-                kernel.resolve_source_exchange(
-                    crate::step_io::ParsedExchange::parse(step.as_bytes())?.exchange,
-                )
-            })
-            .transpose()?;
-        let document = updated_document.as_ref().unwrap_or(document);
         current_step = Some(kernel.edit_source_topology(document, current_source, &[patch])?);
         normalized = true;
     }
@@ -2642,7 +2638,7 @@ END-ISO-10303-21;
             "boss evidence did not produce exactly one constructive tool: {report:?}"
         );
         let patch = plan_source_boundary_feature_peel_patch(
-            input,
+            exchange,
             loaded.source,
             &report,
             &prepared.family_indices,
@@ -2741,10 +2737,11 @@ END-ISO-10303-21;
             .topology_provenance
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("coplanar fixture omitted topology provenance"))?;
-        let patch = plan_source_coplanar_normalization_patch(input, solid.source, provenance)?
-            .ok_or_else(|| {
-                anyhow::anyhow!("coplanar fixture did not produce a normalization patch")
-            })?;
+        let patch =
+            plan_source_coplanar_normalization_patch(document.as_ref(), solid.source, provenance)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("coplanar fixture did not produce a normalization patch")
+                })?;
         assert_eq!(patch.remove_faces.len(), 1);
         assert_eq!(patch.face_boundary_replacements.len(), 1);
         assert_eq!(patch.require_unused_edges.len(), 1);
