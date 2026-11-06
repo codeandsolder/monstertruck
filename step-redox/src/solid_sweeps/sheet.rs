@@ -64,7 +64,7 @@ struct SkinTangent {
 }
 
 #[must_use]
-pub(crate) fn detect_open_rectangular_sweeps(
+pub fn detect_open_rectangular_sweeps(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredOpenRectangularSweep> {
