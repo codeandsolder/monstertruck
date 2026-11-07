@@ -821,21 +821,35 @@ fn recover_kernel_topology_normalized_fragment<
         return Ok(None);
     }
     let same_domain_merges = kernel.normalize_edited_source(&mut edited)?;
-    if patches.is_empty() && same_domain_merges == 0 {
-        return Ok(None);
-    }
-    let Some(mut host) = recognize_edited_host_with_fallback(kernel, &edited, || {
-        let snapshot = kernel.edited_source_to_step(&edited)?;
-        let final_document = kernel.resolve_source_exchange(
-            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
-        )?;
-        recognize_single_healed_host(final_document.as_ref())
-    })?
-    else {
+    let unchanged = patches.is_empty() && same_domain_merges == 0;
+    // Even an unedited source can have a native constructive representation
+    // that the parser-only path did not recognize (e.g. an exact U-directed
+    // rational spline extrusion). Do not needlessly serialize that source or
+    // mislabel direct recovery as a topology-normalization operation.
+    let native = recognize_native_edited_host(kernel, &edited)?;
+    let Some(mut host) = (if unchanged {
+        native
+    } else {
+        native.map_or_else(
+            || {
+                let snapshot = kernel.edited_source_to_step(&edited)?;
+                let final_document = kernel.resolve_source_exchange(
+                    monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?
+                        .exchange,
+                )?;
+                recognize_single_healed_host(final_document.as_ref())
+            },
+            |fragment| Ok(Some(fragment)),
+        )?
+    }) else {
         return Ok(None);
     };
-    // Regenerated STEP identities are an internal handoff, not source provenance.
+    // Synthetic edited-native identifiers are never original STEP provenance.
     host.model.provenance.clear();
+    if unchanged {
+        return kernel_replay_is_single_solid(kernel, &host)
+            .map(|accepted| accepted.then_some(host));
+    }
 
     if evidence.is_empty() {
         host.source = CadFragmentSource::SameDomainNormalized {
@@ -3081,6 +3095,43 @@ END-ISO-10303-21;
                 "{label}: recovered CAD did not evaluate to a valid solid"
             );
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_curved_u_sweep_recovers_native_rational_extrusion_without_step_snapshot() -> Result<()>
+    {
+        // A real STEP solid whose caps use a three-pole rational quadratic
+        // arc but whose exactly swept side describes the *same* arc with five
+        // poles and a different knot basis. Both cap faces are encoded as
+        // B-spline surfaces, not as PLANE records.
+        let input = include_bytes!("../validation/fixtures/native_rational_u_sweep.step");
+        let kernel = NoSourceSnapshotKernel(
+            crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard(),
+        );
+        let result = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+        assert_eq!(result.body_count, 1);
+        assert_eq!(
+            result.constructively_recovered_solid_count, 1,
+            "{:?}",
+            result.kernel_recovery_failures
+        );
+        assert_eq!(result.unrecovered_solid_count, 0);
+        let [recovered] = result.solid_extrusions.as_slice() else {
+            bail!("native U-sweep must recover exactly one executable extrusion");
+        };
+        let fragment = &recovered.fragment;
+        assert!(matches!(
+            fragment.source,
+            CadFragmentSource::SolidExtrusion { .. }
+        ));
+        fragment.model.validate()?;
+        let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
+        assert!(
+            kernel.summarize(&rebuilt).is_single_solid(),
+            "native U-sweep CAD did not rebuild a single geometric solid"
+        );
         Ok(())
     }
 

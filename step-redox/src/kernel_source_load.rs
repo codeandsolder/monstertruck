@@ -633,67 +633,122 @@ mod monstertruck_adapter {
         Some(normalized)
     }
 
-    /// Recognize native ruled spline surfaces from their *exact* homogeneous
-    /// control net. This handles both explicit linear sweeps and polynomial /
-    /// rational B-spline surfaces with a linearly generated V parameter.
-    ///
-    /// A two-pole, degree-one V direction with equal per-row weights is
-    /// identically C(u) + v D. The homogeneous conversion is provided by
-    /// Monstertruck, so there is no STEP spelling dependency or fitted curve.
-    fn native_spline_extrusion(surface: &Surface) -> Option<SplineExtrusionSupport> {
-        let net: BsplineSurface<Vector4> = surface.try_into_homogeneous_bspline_surface()?;
-        if net.udegree() == 0
-            || net.vdegree() != 1
-            || net.control_points().len() < 2
-            || net.control_points().iter().any(|row| row.len() != 2)
-        {
-            return None;
-        }
-        let v_knots = net.knot_vector_v();
-        if v_knots.len() != 4
-            || !v_knots.iter().all(|knot| knot.is_finite())
-            || (v_knots[0] - v_knots[1]).abs() > 1.0e-12
-            || (v_knots[2] - v_knots[3]).abs() > 1.0e-12
-            || v_knots[1] >= v_knots[2]
-        {
-            return None;
-        }
-        let u_knots = net.knot_vector_u().iter().copied().collect::<Vec<_>>();
-        if u_knots.iter().any(|knot| !knot.is_finite()) {
-            return None;
-        }
-
-        let mut profile_points = Vec::with_capacity(net.control_points().len());
-        let mut profile_weights = Vec::with_capacity(net.control_points().len());
-        let mut sweep = None::<Vector3>;
-        let mut max_residual_mm = 0.0_f64;
-        for row in net.control_points() {
-            let [first, last] = row.as_slice() else {
-                return None;
-            };
-            if ![
-                first.x, first.y, first.z, first.w, last.x, last.y, last.z, last.w,
-            ]
+    /// Extract an actual Euclidean control point, not a homogeneous pole.
+    fn native_net_point(point: Vector4) -> Option<Point3> {
+        if ![point.x, point.y, point.z, point.w]
             .into_iter()
             .all(f64::is_finite)
+            || point.w <= 0.0
+        {
+            return None;
+        }
+        let euclidean = point.truncate() / point.w;
+        Some(Point3::new(euclidean.x, euclidean.y, euclidean.z))
+    }
+
+    /// A positive-weight B-spline lies exactly in a plane when every one of
+    /// its Euclidean control points lies in that plane. Preserve the U x V
+    /// normal rather than canonicalizing away the native chart orientation.
+    fn native_planar_net(net: &BsplineSurface<Vector4>) -> Option<PlaneSupport> {
+        let rows = net.control_points();
+        let first = rows.first()?;
+        let origin = native_net_point(*first.first()?)?;
+        let u = rows.iter().skip(1).find_map(|row| {
+            let delta = native_net_point(*row.first()?)? - origin;
+            (delta.magnitude() > KERNEL_EPSILON).then_some(delta)
+        })?;
+        let v = first.iter().skip(1).find_map(|pole| {
+            let delta = native_net_point(*pole)? - origin;
+            (delta.magnitude() > KERNEL_EPSILON).then_some(delta)
+        })?;
+        let cross = u.cross(v);
+        let length = cross.magnitude();
+        if !length.is_finite() || length <= KERNEL_EPSILON {
+            return None;
+        }
+        let normal = cross / length;
+        let mut max_residual_mm = 0.0_f64;
+        for pole in rows.iter().flatten() {
+            let point = native_net_point(*pole)?;
+            let residual = (point - origin).dot(normal).abs();
+            if !residual.is_finite() || residual > 1.0e-7 {
+                return None;
+            }
+            max_residual_mm = max_residual_mm.max(residual);
+        }
+        Some(PlaneSupport {
+            origin_mm: [origin.x, origin.y, origin.z],
+            normal: [normal.x, normal.y, normal.z],
+            max_residual_mm,
+        })
+    }
+
+    /// Recognize exact ruled spline surfaces independently of which parameter
+    /// runs along the profile. The native B-rep lets us transpose this *view*
+    /// without modifying STEP parameter curves or their trims.
+    fn native_spline_extrusion(net: &BsplineSurface<Vector4>) -> Option<SplineExtrusionSupport> {
+        let control = net.control_points();
+        let (profile_degree, profile_knots, sweep_knots, rows) = if net.vdegree() == 1
+            && net.udegree() > 0
+            && control.len() >= 2
+            && control.iter().all(|row| row.len() == 2)
+        {
+            (
+                net.udegree(),
+                net.knot_vector_u(),
+                net.knot_vector_v(),
+                control
+                    .iter()
+                    .map(|row| [row[0], row[1]])
+                    .collect::<Vec<_>>(),
+            )
+        } else if net.udegree() == 1
+            && net.vdegree() > 0
+            && control.len() == 2
+            && control[0].len() >= 2
+            && control[0].len() == control[1].len()
+        {
+            (
+                net.vdegree(),
+                net.knot_vector_v(),
+                net.knot_vector_u(),
+                (0..control[0].len())
+                    .map(|index| [control[0][index], control[1][index]])
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            return None;
+        };
+        if sweep_knots.len() != 4
+            || !sweep_knots.iter().all(|knot| knot.is_finite())
+            || (sweep_knots[0] - sweep_knots[1]).abs() > 1.0e-12
+            || (sweep_knots[2] - sweep_knots[3]).abs() > 1.0e-12
+            || sweep_knots[1] >= sweep_knots[2]
+            || profile_knots.iter().any(|knot| !knot.is_finite())
+        {
+            return None;
+        }
+        let mut profile_points = Vec::with_capacity(rows.len());
+        let mut profile_weights = Vec::with_capacity(rows.len());
+        let mut sweep = None::<Vector3>;
+        let mut max_residual_mm = 0.0_f64;
+        for [first, last] in rows {
+            if ![first.w, last.w].into_iter().all(f64::is_finite)
                 || first.w <= 0.0
                 || last.w <= 0.0
                 || (first.w - last.w).abs() > 1.0e-12 * first.w.abs().max(last.w.abs())
             {
                 return None;
             }
-            let p0 = first.truncate() / first.w;
-            let p1 = last.truncate() / last.w;
+            let p0 = native_net_point(first)?;
+            let p1 = native_net_point(last)?;
             let delta = p1 - p0;
-            let length = delta.x.hypot(delta.y).hypot(delta.z);
+            let length = delta.magnitude();
             if !length.is_finite() || length <= 1.0e-7 {
                 return None;
             }
             if let Some(expected) = sweep {
-                let residual = (delta - expected)
-                    .x
-                    .hypot((delta - expected).y)
-                    .hypot((delta - expected).z);
+                let residual = (delta - expected).magnitude();
                 if residual > 1.0e-7 {
                     return None;
                 }
@@ -712,9 +767,9 @@ mod monstertruck_adapter {
         let delta = sweep?;
         Some(SplineExtrusionSupport {
             profile: brep::BSplineSupport {
-                degree: net.udegree(),
+                degree: profile_degree,
                 control_points_mm: profile_points,
-                knots: u_knots,
+                knots: profile_knots.iter().copied().collect(),
                 weights,
             },
             extrusion_mm: [delta.x, delta.y, delta.z],
@@ -722,25 +777,25 @@ mod monstertruck_adapter {
         })
     }
 
-    /// Convert full checked analytic carriers from the edited native B-rep.
-    /// Unknown geometry stays unknown, with no fitted or sampled replacement.
-    fn native_surface_support(surface: &Surface, id: u64) -> SurfaceSupport {
-        if let Surface::Sweep(SweepSurface::ExtrusionSurface(sweep)) = surface
-            && let Curve3D::Line(Line(start, end)) = sweep.entity_curve()
-        {
+    /// Classify a true native sweep without requiring STEP's surface name:
+    /// line-generated sweeps are planar and circular sweeps are cylindrical.
+    fn native_exact_sweep_surface(surface: &Surface) -> Option<SurfaceSupport> {
+        let Surface::Sweep(SweepSurface::ExtrusionSurface(sweep)) = surface else {
+            return None;
+        };
+        if let Curve3D::Line(Line(start, end)) = sweep.entity_curve() {
             let normal = (*end - *start).cross(sweep.extruding_vector());
             let magnitude = normal.magnitude();
             if magnitude.is_finite() && magnitude > KERNEL_EPSILON {
                 let normal = normal / magnitude;
-                return SurfaceSupport::Plane(PlaneSupport {
+                return Some(SurfaceSupport::Plane(PlaneSupport {
                     origin_mm: [start.x, start.y, start.z],
                     normal: [normal.x, normal.y, normal.z],
                     max_residual_mm: 0.0,
-                });
+                }));
             }
         }
-        if let Surface::Sweep(SweepSurface::ExtrusionSurface(sweep)) = surface
-            && let Curve3D::Conic(Conic3D::Ellipse(circle)) = sweep.entity_curve()
+        if let Curve3D::Conic(Conic3D::Ellipse(circle)) = sweep.entity_curve()
             && let Some(circle) = native_circle_support(circle)
         {
             let vector = sweep.extruding_vector();
@@ -751,13 +806,22 @@ mod monstertruck_adapter {
                 && (normal.dot(vector / norm).abs() - 1.0).abs() <= 1.0e-10
             {
                 let axis = vector / norm;
-                return SurfaceSupport::Cylinder(CylinderSupport {
+                return Some(SurfaceSupport::Cylinder(CylinderSupport {
                     axis_origin_mm: circle.center_mm,
                     axis: [axis.x, axis.y, axis.z],
                     x_direction: circle.x_direction,
                     radius_mm: circle.radius_mm,
-                });
+                }));
             }
+        }
+        None
+    }
+
+    /// Convert full checked analytic carriers from the edited native B-rep.
+    /// Unknown geometry stays unknown, with no fitted or sampled replacement.
+    fn native_surface_support(surface: &Surface, id: u64) -> SurfaceSupport {
+        if let Some(support) = native_exact_sweep_surface(surface) {
+            return support;
         }
         let certificate = native_surface_certificate(surface);
         match certificate.map(AnalyticCarrier::support) {
@@ -821,10 +885,18 @@ mod monstertruck_adapter {
                 major_radius_mm: major_radius,
                 minor_radius_mm: minor_radius,
             }),
-            None => native_spline_extrusion(surface).map_or(
-                SurfaceSupport::Other { entity_id: id },
-                SurfaceSupport::SplineExtrusion,
-            ),
+            None => {
+                let Some(net) = surface.try_into_homogeneous_bspline_surface() else {
+                    return SurfaceSupport::Other { entity_id: id };
+                };
+                if let Some(plane) = native_planar_net(&net) {
+                    return SurfaceSupport::Plane(plane);
+                }
+                native_spline_extrusion(&net).map_or(
+                    SurfaceSupport::Other { entity_id: id },
+                    SurfaceSupport::SplineExtrusion,
+                )
+            }
         }
     }
 

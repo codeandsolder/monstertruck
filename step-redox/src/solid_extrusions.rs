@@ -1,6 +1,6 @@
 use crate::brep::{
     self, BSplineSupport, CircleSupport, CurveSupport, OrientedEdgeUse, PlaneSupport,
-    SplineExtrusionSupport, SurfaceSupport,
+    SurfaceSupport,
 };
 use crate::math2::{
     cross as cross2, distance as distance2, dot as dot2, normalize as normalize2, sub as sub2,
@@ -1382,47 +1382,26 @@ fn side_support_residual(
             .max((circle.radius_mm - cylinder.radius_mm).abs());
             (residual <= GEOM_TOL_MM).then_some(residual)
         }
-        (CurveSupport::BSpline(profile), SurfaceSupport::SplineExtrusion(surface)) => {
-            spline_side_residual(profile, surface, extrusion)
+        (_, SurfaceSupport::SplineExtrusion(surface)) => {
+            // The side topology already proves one boundary edge from each
+            // cap, plus two straight connectors along the extrusion. For a
+            // native exactly ruled surface, its generating curve need not have
+            // the same B-spline control net as either *trimmed* cap edge:
+            // knot insertion/removal and non-affine rational parameterization
+            // can represent the identical geometric arc differently.
+            //
+            // Therefore prove the axis of the entire side carrier rather
+            // than comparing unrelated parameter-domain control polygons.
+            // The adjacent edges are checked separately against the two
+            // cap loops in prove_side_face.
+            let axis = normalize(extrusion)?;
+            let surface_axis = normalize(surface.extrusion_mm)?;
+            let sweep_residual = norm(cross(axis, surface_axis)) * norm(extrusion);
+            (sweep_residual <= GEOM_TOL_MM && surface.max_residual_mm <= GEOM_TOL_MM)
+                .then_some(sweep_residual.max(surface.max_residual_mm))
         }
         _ => None,
     }
-}
-
-/// Match the *unbounded ruled carrier*, not an arbitrary STEP sweep-vector
-/// magnitude. A linear extrusion surface may use unit-length V direction
-/// even when the distance between the solid's caps is several millimetres.
-/// The profile itself may also be placed at any point on that sweep axis.
-fn spline_side_residual(
-    profile: &BSplineSupport,
-    surface: &SplineExtrusionSupport,
-    extrusion: [f64; 3],
-) -> Option<f64> {
-    let axis = normalize(extrusion)?;
-    let surface_axis = normalize(surface.extrusion_mm)?;
-    let sweep_residual = norm(cross(axis, surface_axis)) * norm(extrusion);
-    if sweep_residual > GEOM_TOL_MM || surface.max_residual_mm > GEOM_TOL_MM {
-        return None;
-    }
-
-    let aligned_profile_residual = |carrier: &BSplineSupport| -> Option<f64> {
-        let first_profile = *profile.control_points_mm.first()?;
-        let first_carrier = *carrier.control_points_mm.first()?;
-        let axial_offset = dot(sub(first_carrier, first_profile), axis);
-        bspline_control_residual(profile, carrier, mul(axis, axial_offset))
-    };
-    let direct = aligned_profile_residual(&surface.profile);
-    let reversed = aligned_profile_residual(&reverse_bspline_support(&surface.profile));
-    let profile_residual = match (direct, reversed) {
-        (Some(a), Some(b)) => a.min(b),
-        (Some(value), None) | (None, Some(value)) => value,
-        (None, None) => return None,
-    };
-    (profile_residual <= GEOM_TOL_MM).then_some(
-        profile_residual
-            .max(sweep_residual)
-            .max(surface.max_residual_mm),
-    )
 }
 
 fn connector_residual(edge: &OrientedEdgeUse, extrusion: [f64; 3]) -> Option<f64> {
