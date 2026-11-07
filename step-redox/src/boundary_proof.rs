@@ -1231,7 +1231,7 @@ fn evaluate_homogeneous_bspline(spline: &BSplineSupport, parameter: f64) -> Opti
         .then_some(homogeneous)
 }
 
-fn bspline_domain(spline: &BSplineSupport) -> Option<(f64, f64)> {
+pub(crate) fn bspline_domain(spline: &BSplineSupport) -> Option<(f64, f64)> {
     let control_count = spline.control_points_mm.len();
     if control_count == 0
         || spline.degree == 0
@@ -1244,7 +1244,7 @@ fn bspline_domain(spline: &BSplineSupport) -> Option<(f64, f64)> {
     (start.is_finite() && end.is_finite() && end > start).then_some((start, end))
 }
 
-fn evaluate_bspline(spline: &BSplineSupport, parameter: f64) -> Option<[f64; 3]> {
+pub(crate) fn evaluate_bspline(spline: &BSplineSupport, parameter: f64) -> Option<[f64; 3]> {
     let control_count = spline.control_points_mm.len();
     let (domain_start, domain_end) = bspline_domain(spline)?;
     if !parameter.is_finite() || parameter < domain_start || parameter > domain_end {

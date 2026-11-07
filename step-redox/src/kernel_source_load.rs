@@ -1331,6 +1331,32 @@ mod monstertruck_adapter {
             KernelPatchCurve::Line { start_mm, end_mm } => {
                 Curve3D::Line(Line(point3(start_mm), point3(end_mm)))
             }
+            KernelPatchCurve::EllipseArc {
+                center_mm,
+                cosine_mm,
+                sine_mm,
+                start_angle_rad,
+                end_angle_rad,
+            } => {
+                let normal = [
+                    cosine_mm[1].mul_add(sine_mm[2], -cosine_mm[2] * sine_mm[1]),
+                    cosine_mm[2].mul_add(sine_mm[0], -cosine_mm[0] * sine_mm[2]),
+                    cosine_mm[0].mul_add(sine_mm[1], -cosine_mm[1] * sine_mm[0]),
+                ];
+                let transform = Matrix4::from_cols(
+                    Vector4::new(cosine_mm[0], cosine_mm[1], cosine_mm[2], 0.0),
+                    Vector4::new(sine_mm[0], sine_mm[1], sine_mm[2], 0.0),
+                    Vector4::new(normal[0], normal[1], normal[2], 0.0),
+                    Vector4::new(center_mm[0], center_mm[1], center_mm[2], 1.0),
+                );
+                Curve3D::Conic(Conic3D::Ellipse(Processor::with_transform(
+                    TrimmedCurve::new(
+                        UnitCircle::<Point3>::new(),
+                        (start_angle_rad, end_angle_rad),
+                    ),
+                    transform,
+                )))
+            }
             KernelPatchCurve::CircleArc {
                 center_mm,
                 normal,

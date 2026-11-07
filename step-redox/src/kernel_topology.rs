@@ -125,6 +125,16 @@ pub enum KernelPatchCurve {
         start_mm: [f64; 3],
         end_mm: [f64; 3],
     },
+    /// A bounded affine image of a unit-circle arc. The two spanning vectors
+    /// are independent but not necessarily perpendicular: an oblique
+    /// plane/cylinder intersection is an exact ellipse in this representation.
+    EllipseArc {
+        center_mm: [f64; 3],
+        cosine_mm: [f64; 3],
+        sine_mm: [f64; 3],
+        start_angle_rad: f64,
+        end_angle_rad: f64,
+    },
     /// Bounded circular arc in a deterministic orthonormal frame.
     CircleArc {
         center_mm: [f64; 3],
@@ -773,7 +783,7 @@ fn merge_endpoint(
 const fn line_points(curve: &KernelPatchCurve) -> Option<[[f64; 3]; 2]> {
     match *curve {
         KernelPatchCurve::Line { start_mm, end_mm } => Some([start_mm, end_mm]),
-        KernelPatchCurve::CircleArc { .. } => None,
+        KernelPatchCurve::CircleArc { .. } | KernelPatchCurve::EllipseArc { .. } => None,
     }
 }
 

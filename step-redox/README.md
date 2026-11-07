@@ -115,7 +115,15 @@ consistency check for native patch vertex identity and constructed edge curves.
 A feature fit does not by itself make an inconsistent topology transaction or
 a displaced spline/adjacent-surface boundary valid. The recovery operation
 must still produce a coherent manifold and a usable CAD feature, with source/
-rebuild geometry comparisons used for qualification. In particular, an inferred
+rebuild geometry comparisons used for qualification. The native inverse
+chamfer reducer can reconstruct retained supplier B-spline approximations
+of oblique plane/cylinder intersection curves as analytic 3D elliptical arcs,
+after verifying the source spline fits both original surfaces within the
+supplier-fit budget. The associated cylinder-local UV trim is an explicitly
+bounded piecewise-linear approximation to the analytic sinusoidal axial
+coordinate, with a maximum 1e-8 mm interpolation deviation; the shared
+3D curve remains the exact conic. Carrier and terminal faces must still close
+as one manifold after the atomic native topology edit. In particular, an inferred
 sharp corner that sits near a cylindrical support requires rebuilding the
 actual neighboring curves/surfaces; raising the kernel epsilon is not a fix.
 

@@ -22,6 +22,8 @@ use std::collections::{BTreeMap, BTreeSet};
 const GEOM_TOL_MM: f64 = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM;
 const DIR_TOL: f64 = 1.0e-10;
 
+mod curved_segment;
+
 #[derive(Debug, Clone)]
 struct EndpointEdit {
     carrier_face_id: u64,
@@ -29,6 +31,7 @@ struct EndpointEdit {
     old_vertex: u64,
     new_vertex: usize,
     new_point: [f64; 3],
+    replacement_curve: Option<KernelPatchCurve>,
 }
 
 #[derive(Debug)]
@@ -566,6 +569,7 @@ fn circle_line_endpoint_edit(
         old_vertex,
         new_vertex,
         new_point,
+        replacement_curve: None,
     })
 }
 
@@ -778,6 +782,16 @@ fn plan_segment_patch(
         "inverse segment for treatment face #{} is degenerate",
         evidence.treatment_face_id
     );
+    if let Some(patch) = curved_segment::plan_curved_segment_patch(
+        solid,
+        evidence,
+        data_section,
+        provenance,
+        virtual_start,
+        virtual_end,
+    )? {
+        return Ok(patch);
+    }
     let treatment = face(solid, evidence.treatment_face_id)?;
     let treatment_edges = unique_face_edges(treatment)?;
     let treatment_face = topology_face(provenance, data_section, evidence.treatment_face_id)?;
@@ -989,6 +1003,7 @@ fn plan_segment_carrier(
                 edge: previous,
                 new_vertex: start_vertex,
                 new_point: healed_start,
+                replacement_curve: None,
             },
             EndpointEdit {
                 carrier_face_id: face.id,
@@ -996,6 +1011,7 @@ fn plan_segment_carrier(
                 edge: next,
                 new_vertex: end_vertex,
                 new_point: healed_end,
+                replacement_curve: None,
             },
         ],
     })
@@ -1080,9 +1096,23 @@ fn normalize_retained_edge_rewrites(
             .first()
             .context("retained edge rewrite lost its representative use")?;
         let (vertices, mut points) = global_edge_endpoints(&representative.edge);
-        let CurveSupport::Line(_) = representative.edge.support else {
-            bail!("retained edge #{edge_id} is not linear");
-        };
+        let curve_replacement = edits
+            .iter()
+            .find_map(|edit| edit.replacement_curve.as_ref());
+        match &representative.edge.support {
+            CurveSupport::Line(_) => ensure!(
+                curve_replacement.is_none(),
+                "retained line #{edge_id} cannot use a curved replacement"
+            ),
+            CurveSupport::BSpline(_) => ensure!(
+                curve_replacement.is_some()
+                    && edits
+                        .iter()
+                        .all(|edit| edit.replacement_curve.as_ref() == curve_replacement),
+                "retained spline #{edge_id} lacks a consistent analytic replacement"
+            ),
+            _ => bail!("retained edge #{edge_id} is not reconstructible"),
+        }
         let mut changed = [false; 2];
         let mut new_refs = [None, None];
         for edit in edits {
@@ -1126,10 +1156,12 @@ fn normalize_retained_edge_rewrites(
         out.push(KernelRetainedEdge {
             edge: topology_edge(provenance, data_section, edge_id)?,
             vertices: (front?, back?),
-            curve: KernelPatchCurve::Line {
-                start_mm: points[0],
-                end_mm: points[1],
-            },
+            curve: curve_replacement
+                .cloned()
+                .unwrap_or(KernelPatchCurve::Line {
+                    start_mm: points[0],
+                    end_mm: points[1],
+                }),
         });
     }
     Ok(out)
@@ -1876,6 +1908,12 @@ mod tests {
             4570,
             &[131, 1542, 463, 2621, 2031, 3387, 4057, 4159],
             81,
+        )?;
+        verify_real_split_ring_native_transaction(
+            include_bytes!("../validation/fixtures/native_split_ring_hollow_cylinder.step"),
+            7849,
+            &[4123],
+            178,
         )?;
         verify_real_split_ring_native_transaction(
             include_bytes!("../validation/fixtures/native_split_ring_hollow_cylinder.step"),
