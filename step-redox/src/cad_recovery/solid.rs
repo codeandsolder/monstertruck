@@ -11,8 +11,8 @@ use crate::solid_revolutions::{
     RecoveredRadialSlotRevolution, RecoveredSolidRevolution,
 };
 use crate::solid_sweeps::{
-    RecoveredClosedRoundSweep, RecoveredOpenRectangularSweep, RecoveredPlanarSweepLeg,
-    RecoveredRevolvedRoundTail, RecoveredSweepSegment,
+    RecoveredOpenRectangularSweep, RecoveredPlanarSweepLeg, RecoveredRevolvedRoundTail,
+    RecoveredRoundSweep, RecoveredSweepSegment,
 };
 use anyhow::{Result, bail};
 
@@ -105,9 +105,7 @@ pub fn recover_solid_extrusion_fragments(
 ///
 /// # Errors
 /// Returns an error if the recovered frame/path is malformed or cannot form valid CAD IR.
-pub fn recover_closed_round_sweep_fragment(
-    sweep: &RecoveredClosedRoundSweep,
-) -> Result<CadFragment> {
+pub fn recover_round_sweep_fragment(sweep: &RecoveredRoundSweep) -> Result<CadFragment> {
     if sweep.solid_id == 0
         || !sweep.profile_radius_mm.is_finite()
         || sweep.profile_radius_mm <= 0.0
@@ -115,7 +113,7 @@ pub fn recover_closed_round_sweep_fragment(
         || sweep.max_residual_mm > 1.0e-6
         || sweep.segments.is_empty()
     {
-        bail!("closed round sweep proof is invalid");
+        bail!("round sweep proof is invalid");
     }
     for axis in [
         sweep.profile_x_axis,
@@ -184,7 +182,7 @@ pub fn recover_closed_round_sweep_fragment(
                 sweep.path_tangent,
             ),
             segments,
-            closed: true,
+            closed: sweep.closed,
         },
     });
 
@@ -208,24 +206,19 @@ pub fn recover_closed_round_sweep_fragment(
         source: CadFragmentSource::SolidSweep {
             solid_id: sweep.solid_id,
             face_ids: sweep.source_face_ids.clone(),
-            closed: true,
+            closed: sweep.closed,
         },
         model,
         root,
     })
 }
 
-/// Lower every proven closed round sweep into CAD IR.
+/// Lower every proven open or closed round sweep into CAD IR.
 ///
 /// # Errors
 /// Returns the first malformed detector result.
-pub fn recover_closed_round_sweep_fragments(
-    sweeps: &[RecoveredClosedRoundSweep],
-) -> Result<Vec<CadFragment>> {
-    sweeps
-        .iter()
-        .map(recover_closed_round_sweep_fragment)
-        .collect()
+pub fn recover_round_sweep_fragments(sweeps: &[RecoveredRoundSweep]) -> Result<Vec<CadFragment>> {
+    sweeps.iter().map(recover_round_sweep_fragment).collect()
 }
 
 /// Recover an axisymmetric head fused to one round bent tail and hemispherical end.

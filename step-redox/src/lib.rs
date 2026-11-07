@@ -722,9 +722,7 @@ pub fn detect_edge_treatment_evidence_bytes(
 ///
 /// # Errors
 /// Returns an error if the STEP bytes cannot be decoded or parsed.
-pub fn detect_closed_round_sweeps_bytes(
-    input: &[u8],
-) -> Result<Vec<solid_sweeps::RecoveredClosedRoundSweep>> {
+pub fn detect_round_sweeps_bytes(input: &[u8]) -> Result<Vec<solid_sweeps::RecoveredRoundSweep>> {
     let exchange = ParsedStepSource::parse(input)?.exchange;
 
     Ok(exchange
@@ -732,7 +730,7 @@ pub fn detect_closed_round_sweeps_bytes(
         .iter()
         .flat_map(|section| {
             let index = step_graph::build_index(&section.entities);
-            solid_sweeps::detect_closed_round_sweeps(&section.entities, &index)
+            solid_sweeps::detect_round_sweeps(&section.entities, &index)
         })
         .collect())
 }

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 #[derive(Serialize)]
 struct SweepScan {
-    closed_round: Vec<step_redox::solid_sweeps::RecoveredClosedRoundSweep>,
+    round_sweeps: Vec<step_redox::solid_sweeps::RecoveredRoundSweep>,
     revolved_round_tail: Vec<step_redox::solid_sweeps::RecoveredRevolvedRoundTail>,
     open_rectangular: Vec<step_redox::solid_sweeps::RecoveredOpenRectangularSweep>,
 }
@@ -18,7 +18,7 @@ fn main() -> Result<()> {
     serde_json::to_writer(
         std::io::stdout(),
         &SweepScan {
-            closed_round: step_redox::detect_closed_round_sweeps_bytes(&bytes)?,
+            round_sweeps: step_redox::detect_round_sweeps_bytes(&bytes)?,
             revolved_round_tail: step_redox::detect_revolved_round_tails_bytes(&bytes)?,
             open_rectangular: step_redox::detect_open_rectangular_sweeps_bytes(&bytes)?,
         },

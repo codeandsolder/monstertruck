@@ -6,9 +6,9 @@ use crate::cad_ir::{
 use crate::cad_kernel::CadKernel;
 use crate::cad_recovery::{
     CadFragment, CadFragmentSource, recover_auto_proven_extrusion_core_union_fragment,
-    recover_closed_round_sweep_fragments, recover_open_rectangular_sweep_fragments,
-    recover_periodic_chain_fragments, recover_radial_slot_revolution_fragments,
-    recover_revolved_round_tail_fragments, recover_solid_extrusion_fragment,
+    recover_open_rectangular_sweep_fragments, recover_periodic_chain_fragments,
+    recover_radial_slot_revolution_fragments, recover_revolved_round_tail_fragments,
+    recover_round_sweep_fragments, recover_solid_extrusion_fragment,
     recover_solid_extrusion_fragments, recover_solid_revolution_fragments,
 };
 use crate::kernel_source_load::{
@@ -1531,14 +1531,14 @@ fn recover_constructive_fragments_from_entities_with_index(
         crate::solid_revolutions::detect_solid_revolutions_with_index(entities, index);
     let radial_slots =
         crate::solid_revolutions::detect_radial_slot_revolutions_with_index(entities, index);
-    let closed_sweeps = crate::solid_sweeps::detect_closed_round_sweeps(entities, index);
+    let closed_sweeps = crate::solid_sweeps::detect_round_sweeps(entities, index);
     let revolved_round_tails = crate::solid_sweeps::detect_revolved_round_tails(entities, index);
     let open_sweeps = crate::solid_sweeps::sheet::detect_open_rectangular_sweeps(entities, index);
 
     let mut out = recover_solid_extrusion_fragments(&extrusions)?;
     out.extend(recover_solid_revolution_fragments(&revolutions)?);
     out.extend(recover_radial_slot_revolution_fragments(&radial_slots)?);
-    out.extend(recover_closed_round_sweep_fragments(&closed_sweeps)?);
+    out.extend(recover_round_sweep_fragments(&closed_sweeps)?);
     out.extend(recover_revolved_round_tail_fragments(
         &revolved_round_tails,
     )?);
@@ -3132,6 +3132,66 @@ END-ISO-10303-21;
             kernel.summarize(&rebuilt).is_single_solid(),
             "native U-sweep CAD did not rebuild a single geometric solid"
         );
+        Ok(())
+    }
+
+    /// Four distinct real JLCPCB closed solids comprised of two round
+    /// elbows, three cylindrical legs and planar circular end caps.
+    /// No source-specific dimensions, face count or bend count is encoded
+    /// in the detector; these fixtures cover exporter face partitioning.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_open_round_bend_paths_recover_as_executable_cad_sweeps() -> Result<()> {
+        let kernel = NoSourceSnapshotKernel(
+            crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard(),
+        );
+        for (name, input) in [
+            (
+                "a",
+                include_bytes!("../validation/fixtures/open_round_two_bend_a.step").as_slice(),
+            ),
+            (
+                "b",
+                include_bytes!("../validation/fixtures/open_round_two_bend_b.step").as_slice(),
+            ),
+            (
+                "c",
+                include_bytes!("../validation/fixtures/open_round_two_bend_c.step").as_slice(),
+            ),
+            (
+                "d",
+                include_bytes!("../validation/fixtures/open_round_two_bend_d.step").as_slice(),
+            ),
+        ] {
+            let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+            assert_eq!(report.body_count, 1, "{name}");
+            assert_eq!(
+                report.constructively_recovered_solid_count, 1,
+                "{name}: {:?}",
+                report.kernel_recovery_failures
+            );
+            assert_eq!(report.unrecovered_solid_count, 0, "{name}");
+            let [recovered] = report.solid_sweeps.as_slice() else {
+                bail!("{name}: expected precisely one complete sweep");
+            };
+            assert!(
+                matches!(
+                    recovered.fragment.source,
+                    CadFragmentSource::SolidSweep { closed: false, .. }
+                ),
+                "{name}"
+            );
+            let fragment = &recovered.fragment;
+            let [crate::cad_ir::CadNode::Sweep { path, .. }] = fragment.model.nodes.as_slice()
+            else {
+                bail!("{name}: expected one editable sweep node");
+            };
+            assert!(!path.closed, "{name}");
+            assert_eq!(path.segments.len(), 5, "{name}");
+            fragment.model.validate()?;
+            let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
+            assert!(kernel.summarize(&rebuilt).is_single_solid(), "{name}");
+        }
         Ok(())
     }
 
