@@ -1918,7 +1918,19 @@ mod tests {
         verify_real_split_ring_native_transaction(
             include_bytes!("../validation/fixtures/native_split_ring_hollow_cylinder.step"),
             7849,
+            &[7044],
+            178,
+        )?;
+        verify_real_split_ring_native_transaction(
+            include_bytes!("../validation/fixtures/native_split_ring_hollow_cylinder.step"),
+            7849,
             &[3393, 3413, 7654, 7840],
+            178,
+        )?;
+        verify_real_split_ring_native_transaction(
+            include_bytes!("../validation/fixtures/native_split_ring_hollow_cylinder.step"),
+            7849,
+            &[3393, 3413, 4123, 7044, 7654, 7840],
             178,
         )
     }
