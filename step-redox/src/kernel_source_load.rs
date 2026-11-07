@@ -321,7 +321,7 @@ mod monstertruck_adapter {
     use monstertruck_io::step::load::step_geometry::{
         Conic3D, Curve3D, DEFAULT_NUMERICAL_TOLERANCES, ElementarySurface,
         ExactParameterBoundary2D, KERNEL_EPSILON, Line, Matrix4, Point3, Processor, Surface,
-        Transform, TrimmedCurve, UnitCircle, Vector3, Vector4,
+        SweepSurface, Transform, TrimmedCurve, UnitCircle, Vector3, Vector4,
     };
     use monstertruck_io::step::load::{
         EntityLoadReport, LossCategory, LossReason, LossTally, ResolvedStepDocument,
@@ -510,10 +510,11 @@ mod monstertruck_adapter {
         [radial.x / length, radial.y / length, radial.z / length]
     }
 
-    /// Convert full checked analytic carriers from the edited native B-rep.
-    /// Unknown geometry stays unknown, with no fitted or sampled replacement.
-    fn native_surface_support(surface: &Surface, id: u64) -> SurfaceSupport {
-        let certificate = match surface {
+    /// Classify the full geometric carrier independently of trim and STEP
+    /// entity spelling. Line-generated sweep surfaces use the same analytic
+    /// identities as elementary cylinders/cones.
+    fn native_surface_certificate(surface: &Surface) -> Option<AnalyticCarrier> {
+        match surface {
             Surface::Elementary(ElementarySurface::Plane(plane)) => AnalyticCarrier::plane(plane),
             Surface::Elementary(ElementarySurface::Sphere(sphere)) => AnalyticCarrier::sphere_pose(
                 sphere.entity().0.center(),
@@ -542,8 +543,26 @@ mod monstertruck_adapter {
             Surface::Elementary(ElementarySurface::ToroidalSurface(torus)) => {
                 AnalyticCarrier::torus(torus)
             }
+            Surface::Sweep(SweepSurface::RevolutionSurface(revolution)) => {
+                match revolution.entity().entity_curve() {
+                    Curve3D::Line(line) => AnalyticCarrier::linear_revolution(
+                        *line,
+                        revolution.entity().origin(),
+                        revolution.entity().axis(),
+                        *revolution.transform(),
+                        revolution.orientation(),
+                    ),
+                    _ => None,
+                }
+            }
             _ => None,
-        };
+        }
+    }
+
+    /// Convert full checked analytic carriers from the edited native B-rep.
+    /// Unknown geometry stays unknown, with no fitted or sampled replacement.
+    fn native_surface_support(surface: &Surface, id: u64) -> SurfaceSupport {
+        let certificate = native_surface_certificate(surface);
         match certificate.map(AnalyticCarrier::support) {
             Some(AnalyticSupport::Plane { origin, .. }) => {
                 let Surface::Elementary(ElementarySurface::Plane(plane)) = surface else {

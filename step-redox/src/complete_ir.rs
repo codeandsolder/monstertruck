@@ -2949,6 +2949,18 @@ END-ISO-10303-21;
                 include_bytes!("../validation/fixtures/native_conical_frustum.step").as_slice(),
             ),
             (
+                "line-generated revolution",
+                include_bytes!(
+                    "../validation/fixtures/native_line_surface_of_revolution_frustum.step"
+                )
+                .as_slice(),
+            ),
+            (
+                "hollow conical frustum",
+                include_bytes!("../validation/fixtures/native_hollow_conical_frustum.step")
+                    .as_slice(),
+            ),
+            (
                 "ring torus",
                 include_bytes!("../validation/fixtures/native_torus.step").as_slice(),
             ),
