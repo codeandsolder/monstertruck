@@ -92,6 +92,7 @@ struct WeldContext<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> {
     edges: HashMap<(VertexKey, VertexKey), Vec<AltEdge<C, S>>>,
     source_vertex_points: HashMap<SourceVertexId, Point3>,
     source_edges: Vec<SourceEdgeEvidence>,
+    additional_nodes: Vec<Point3>,
 }
 
 impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
@@ -129,6 +130,7 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
             edges: HashMap::new(),
             source_vertex_points,
             source_edges,
+            additional_nodes: Vec::new(),
         };
         let source_points = context
             .source_vertex_points
@@ -224,6 +226,24 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
             })
             .collect::<HashMap<_, _>>();
         let mut raw_splits = Vec::new();
+        // Explicit noding uses verified exact on-curve points, including
+        // T-junction endpoints and proper intersections of two curves.
+        // The ordinary topology weld retains its existing segment evidence.
+        if !self.additional_nodes.is_empty() {
+            for &point in &self.additional_nodes {
+                if curve_bounds
+                    .is_some_and(|bounds| !point_inside_padded_box(bounds, point, projection_pad))
+                {
+                    continue;
+                }
+                if let Some(parameter) = parameter_on_curve(point) {
+                    let progress = (parameter - t0) / span;
+                    if progress > 0.0 && progress < 1.0 {
+                        raw_splits.push((progress, parameter, point));
+                    }
+                }
+            }
+        }
         for (candidate_front, candidate_back, candidate_midpoint) in &self.source_edges {
             let Some(&(front_point, front_parameter)) = projected_vertices.get(candidate_front)
             else {
@@ -289,11 +309,16 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
     }
 }
 
-pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+/// Rebuild selected regions with shared exact edges noded at verified 3D
+/// intersections and T-junctions. Analytic curves are cut at exact parameters,
+/// not replaced with polygon segments.
+pub(super) fn node_selected_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
-) -> Option<AltCurveShell<C, S>> {
+    nodes: &[Point3],
+) -> Vec<AltRegion<C, S>> {
     let mut context = WeldContext::new(regions);
-    let rebuilt_regions = regions
+    context.additional_nodes = nodes.to_vec();
+    regions
         .iter()
         .map(|region| {
             let wires = region
@@ -315,7 +340,13 @@ pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 region.source_face(),
             )
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    regions: &[AltRegion<C, S>],
+) -> Option<AltCurveShell<C, S>> {
+    let rebuilt_regions = node_selected_regions(regions, &[]);
     faces_classification::materialize_regions(&rebuilt_regions)
 }
 
