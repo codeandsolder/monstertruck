@@ -1133,7 +1133,7 @@ pub fn materialize_boundary_feature_peel_plans(
     Ok(projected)
 }
 
-fn apply_boundary_feature_peel_plan(
+pub fn apply_boundary_feature_peel_plan(
     entities: &mut [EntityInstance],
     index: &HashMap<u64, usize>,
     plan: &BoundaryFeaturePeelPlan,

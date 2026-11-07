@@ -17,7 +17,7 @@ use crate::kernel_source_load::{
 #[cfg(all(test, feature = "cad-kernel-monstertruck"))]
 use crate::kernel_topology::plan_source_coplanar_normalization_patch;
 use crate::kernel_topology::{
-    SourceTopologyEditor, plan_source_boundary_feature_peel_patch,
+    SourceTopologyEditor, plan_source_boundary_feature_peel_from_entities,
     plan_source_edge_treatment_patches,
 };
 use crate::patterns::InstancePattern;
@@ -582,37 +582,36 @@ fn recover_kernel_boundary_feature_fragment<
     if load.failure.is_some() {
         return Ok(None);
     }
-    let Some(mut provenance) = load.topology_provenance.clone() else {
+    let Some(provenance) = load.topology_provenance.as_ref() else {
         return Ok(None);
     };
-    let mut current_document = None::<K::Document>;
-    let mut last_edited = None::<K::EditedSource>;
-    let mut current_source = source;
+    let source_exchange = source_document.as_ref();
+    let section = source_exchange
+        .data
+        .get(source.data_section)
+        .ok_or_else(|| anyhow::anyhow!("kernel peel lost its source DATA section"))?;
+    let mut projected_entities = section.entities.clone();
+    // Only shell membership and host FACE_BOUND references are ever changed
+    // in this semantic projection; the original entity index stays valid.
+    let index = crate::step_graph::build_index(&projected_entities);
+    let original_outer_faces = crate::brep::solid_face_ids(source.id, &projected_entities, &index)
+        .ok_or_else(|| anyhow::anyhow!("source solid has no readable outer-shell faces"))?;
+    let mut edited = None::<K::EditedSource>;
     let mut replay = Vec::<RecoveredBoundaryFeatureFamily>::new();
 
     for pass in 0..MAX_LOCAL_REDUCTION_ROUNDS {
-        let document = current_document.as_ref().unwrap_or(source_document);
-        let exchange = document.as_ref();
-        let section = exchange
-            .data
-            .get(current_source.data_section)
-            .ok_or_else(|| anyhow::anyhow!("kernel peel lost its current DATA section"))?;
-        let index = crate::step_graph::build_index(&section.entities);
         let targets = LocalRecoveryTargets::from_solids(
-            &BTreeSet::from([current_source.id]),
-            &section.entities,
+            &BTreeSet::from([source.id]),
+            &projected_entities,
             &index,
         )?;
         if targets.is_empty() {
             break;
         }
 
-        // Kernel-owned peeling only reads the source for feature evidence.
-        // The sole mutable copy is temporary tool materialization, never a
-        // competing authoritative B-rep or parser-side replay state.
         let shells = targets.shell_ids();
         let report = crate::planar_features::diagnose_boundary_features_for_shells_with_index(
-            &section.entities,
+            &projected_entities,
             &index,
             &shells,
         );
@@ -628,7 +627,7 @@ fn recover_kernel_boundary_feature_fragment<
             break;
         }
         let prepared = prepare_boundary_feature_reduction(
-            &section.entities,
+            &projected_entities,
             &index,
             &targets,
             &shells,
@@ -639,46 +638,121 @@ fn recover_kernel_boundary_feature_fragment<
         if prepared.family_indices.is_empty() {
             break;
         }
-        let patch = plan_source_boundary_feature_peel_patch(
-            exchange,
-            current_source,
+        let (patch, plan) = plan_source_boundary_feature_peel_from_entities(
+            source,
+            &projected_entities,
+            &index,
             &report,
             &prepared.family_indices,
-            &provenance,
+            provenance,
         )?;
-        let edited = kernel.edit_source_topology(document, current_source, &[patch])?;
-        if kernel.inspect_edited_source(&edited)?.faces == 0 {
-            return Ok(None);
+        // The native geometry transaction commits first. Then update only
+        // shell membership and FACE_BOUND references in the disposable source
+        // projection. Its preflight is atomic, and we never clone/reimport a
+        // second geometric source at any pass.
+        if let Some(existing) = &mut edited {
+            kernel.apply_edited_source_patches(existing, &[patch])?;
+        } else {
+            edited = Some(kernel.edit_source_topology(source_document, source, &[patch])?);
         }
-        // The edit remains native exact-trim topology until the raw-entity
-        // semantic detector explicitly needs the next STEP snapshot.
-        let snapshot = kernel.edited_source_to_step(&edited)?;
-        let next_document = kernel.resolve_source_exchange(
-            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
+        crate::planar_features::apply_boundary_feature_peel_plan(
+            &mut projected_entities,
+            &index,
+            &plan,
         )?;
-        let Some((healed_source, healed_provenance)) =
-            inspect_single_loaded_source(kernel, &next_document)?
-        else {
-            return Ok(None);
-        };
+        let current = edited
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("kernel peel dropped its edited source"))?;
+        validate_native_peel_projection(
+            source,
+            &original_outer_faces,
+            &projected_entities,
+            &index,
+            provenance,
+            load.boundaries.len(),
+            &kernel.inspect_edited_source(current)?,
+        )?;
 
-        // Only after a successful kernel transaction may semantic replay advance.
+        // Advance semantic replay only after the authoritative native
+        // transaction has passed the source-identity consistency check.
         for (_, LocalReductionStep::BoundaryFeature(mut feature)) in prepared.steps {
             feature.original_source_ids = pass == 0;
             replay.push(feature);
         }
-        current_source = healed_source;
-        provenance = healed_provenance;
-        current_document = Some(next_document);
-        last_edited = Some(edited);
         if pass + 1 == MAX_LOCAL_REDUCTION_ROUNDS {
             bail!("kernel boundary-feature peeling did not reach a fixed point");
         }
     }
-    let (Some(final_document), Some(last_edited)) = (current_document, last_edited) else {
+    let Some(edited) = edited else {
         return Ok(None);
     };
-    finish_native_boundary_feature_replay(kernel, source, &last_edited, &final_document, &replay)
+    finish_native_boundary_feature_replay(kernel, source, &edited, &replay)
+}
+
+/// Ensure projected shell membership exactly matches the retained native
+/// `StableIds` after every peel; a semantic-view drift must never be replayed.
+fn validate_native_peel_projection(
+    source: SourceEntity,
+    original_outer_faces: &[u64],
+    projected_entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    provenance: &KernelTopologyProvenance,
+    boundary_shells: usize,
+    native: &crate::kernel_topology::KernelEditedSourceEvidence,
+) -> Result<()> {
+    let projected_outer_faces =
+        crate::brep::solid_face_ids(source.id, projected_entities, index)
+            .ok_or_else(|| anyhow::anyhow!("projected source shell is not readable"))?;
+    let native_face_ids = |faces: &[u64]| -> Result<BTreeSet<_>> {
+        faces
+            .iter()
+            .map(|&face| {
+                provenance
+                    .face_for_source_id(source.data_section, face)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("source face #{face} has no original native identity")
+                    })
+            })
+            .collect()
+    };
+    let original_outer_ids = native_face_ids(original_outer_faces)?;
+    let projected_outer_ids = native_face_ids(&projected_outer_faces)?;
+    if !projected_outer_ids.is_subset(&original_outer_ids) {
+        bail!("kernel peel projection introduced source faces not in the original outer shell");
+    }
+    // Outer-shell faces removed by feature peeling disappear from the native
+    // shape. Face identities from every other boundary shell (including voids)
+    // must survive unchanged; they are not in the editable source projection.
+    let removed_ids = original_outer_ids
+        .difference(&projected_outer_ids)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let expected_ids = provenance
+        .faces
+        .iter()
+        .map(|face| face.topology_id)
+        .filter(|id| !removed_ids.contains(id))
+        .collect::<BTreeSet<_>>();
+    let retained_ids = native
+        .retained_source_topology
+        .faces
+        .iter()
+        .map(|face| face.topology_id)
+        .collect::<BTreeSet<_>>();
+    if native.source != source
+        || native.boundary_shells != boundary_shells
+        || native.faces != expected_ids.len()
+        || expected_ids != retained_ids
+    {
+        bail!(
+            "kernel peel diverged from source face membership: projected_outer={} native_faces={} expected_retained={} actual_retained={}",
+            projected_outer_faces.len(),
+            native.faces,
+            expected_ids.len(),
+            retained_ids.len()
+        );
+    }
+    Ok(())
 }
 
 fn finish_native_boundary_feature_replay<
@@ -687,10 +761,15 @@ fn finish_native_boundary_feature_replay<
     kernel: &K,
     source: SourceEntity,
     edited: &K::EditedSource,
-    document: &K::Document,
     replay: &[RecoveredBoundaryFeatureFamily],
 ) -> Result<Option<CadFragment>> {
     let Some(mut host) = recognize_edited_host_with_fallback(kernel, edited, || {
+        // Rare non-native analytic families still use one final snapshot, not
+        // a serialization/reimport on every feature-peeling round.
+        let snapshot = kernel.edited_source_to_step(edited)?;
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
+        )?;
         recognize_single_healed_host(document.as_ref())
     })?
     else {
@@ -776,23 +855,6 @@ fn recover_kernel_topology_normalized_fragment<
     }
     let fragment = replay_edge_treatments(host, source.id, replay)?;
     kernel_replay_is_single_solid(kernel, &fragment).map(|accepted| accepted.then_some(fragment))
-}
-
-fn inspect_single_loaded_source<K: SourceStepLoadInspector>(
-    kernel: &K,
-    document: &K::Document,
-) -> Result<Option<(SourceEntity, KernelTopologyProvenance)>> {
-    let load = kernel.inspect_source_document(document)?;
-    let [solid] = load.solids.as_slice() else {
-        return Ok(None);
-    };
-    if solid.failure.is_some() {
-        return Ok(None);
-    }
-    let Some(provenance) = solid.topology_provenance.clone() else {
-        return Ok(None);
-    };
-    Ok(Some((solid.source, provenance)))
 }
 
 fn replayable_source_treatments(
@@ -2748,9 +2810,10 @@ END-ISO-10303-21;
             1,
             "boss evidence did not produce exactly one constructive tool: {report:?}"
         );
-        let patch = plan_source_boundary_feature_peel_patch(
-            exchange,
+        let (patch, _) = plan_source_boundary_feature_peel_from_entities(
             loaded.source,
+            &section.entities,
+            &index,
             &report,
             &prepared.family_indices,
             provenance,
@@ -2812,6 +2875,120 @@ END-ISO-10303-21;
                 ..
             }
         ));
+        Ok(())
+    }
+
+    /// Exact kernel adapter for native-peeling tests: any intermediate or final
+    /// STEP serialization makes the test fail instead of silently falling back.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    struct NoSourceSnapshotKernel(crate::cad_kernel::monstertruck::MonstertruckKernel);
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    impl CadKernel for NoSourceSnapshotKernel {
+        type Evaluated =
+            <crate::cad_kernel::monstertruck::MonstertruckKernel as CadKernel>::Evaluated;
+
+        fn evaluate(&self, model: &CadModel, root: NodeId) -> Result<Self::Evaluated> {
+            self.0.evaluate(model, root)
+        }
+
+        fn summarize(&self, evaluated: &Self::Evaluated) -> crate::cad_kernel::KernelSummary {
+            self.0.summarize(evaluated)
+        }
+
+        fn to_step(&self, _: &Self::Evaluated) -> Result<String> {
+            bail!("native feature peeling must not require CAD STEP serialization")
+        }
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    impl SourceStepLoadInspector for NoSourceSnapshotKernel {
+        type Document = <crate::cad_kernel::monstertruck::MonstertruckKernel as SourceStepLoadInspector>::Document;
+
+        fn resolve_source_exchange(&self, exchange: Exchange) -> Result<Self::Document> {
+            self.0.resolve_source_exchange(exchange)
+        }
+
+        fn inspect_source_document(
+            &self,
+            document: &Self::Document,
+        ) -> Result<KernelSourceLoadEvidence> {
+            self.0.inspect_source_document(document)
+        }
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    impl SourceTopologyEditor for NoSourceSnapshotKernel {
+        type EditedSource = <crate::cad_kernel::monstertruck::MonstertruckKernel as SourceTopologyEditor>::EditedSource;
+
+        fn edit_source_topology(
+            &self,
+            document: &Self::Document,
+            source: SourceEntity,
+            patches: &[crate::kernel_topology::KernelTopologyPatch],
+        ) -> Result<Self::EditedSource> {
+            self.0.edit_source_topology(document, source, patches)
+        }
+
+        fn apply_edited_source_patches(
+            &self,
+            edited: &mut Self::EditedSource,
+            patches: &[crate::kernel_topology::KernelTopologyPatch],
+        ) -> Result<()> {
+            self.0.apply_edited_source_patches(edited, patches)
+        }
+
+        fn normalize_edited_source(&self, edited: &mut Self::EditedSource) -> Result<usize> {
+            self.0.normalize_edited_source(edited)
+        }
+
+        fn edited_source_reduced_brep(
+            &self,
+            edited: &Self::EditedSource,
+        ) -> Result<crate::reduced_brep::ReducedSolid> {
+            self.0.edited_source_reduced_brep(edited)
+        }
+
+        fn inspect_edited_source(
+            &self,
+            edited: &Self::EditedSource,
+        ) -> Result<crate::kernel_topology::KernelEditedSourceEvidence> {
+            self.0.inspect_edited_source(edited)
+        }
+
+        fn edited_source_to_step(&self, _: &Self::EditedSource) -> Result<String> {
+            bail!("native feature peeling must not export intermediate STEP")
+        }
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn kernel_nested_boss_peels_two_passes_with_original_native_identity() -> Result<()> {
+        let input = include_bytes!("../validation/fixtures/boundary_boss_nested.step");
+        let kernel = NoSourceSnapshotKernel(
+            crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard(),
+        );
+        let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+        assert!(
+            report.kernel_recovery_failures.is_empty(),
+            "{:?}",
+            report.kernel_recovery_failures
+        );
+        assert_eq!(report.unrecovered_solid_count, 0);
+        let [composite] = report.boundary_feature_composites.as_slice() else {
+            bail!("kernel-owned nested boss did not reconstruct the boundary composite");
+        };
+        assert!(matches!(
+            composite.fragment.source,
+            CadFragmentSource::BoundaryFeatureComposite {
+                passes: 2,
+                feature_families: 2,
+                feature_instances: 2,
+                ..
+            }
+        ));
+        composite.fragment.model.validate()?;
+        assert!(kernel_replay_is_single_solid(&kernel, &composite.fragment)?);
         Ok(())
     }
 

@@ -262,46 +262,32 @@ pub fn plan_source_coplanar_normalization_patch(
     plan_coplanar_normalization_patch(&solid, source.data_section, provenance)
 }
 
-/// Translate one already-proven boundary-feature peel into an authoritative kernel topology edit.
-///
-/// The feature proof stays in `planar_features`; this layer only translates the pure peel plan
-/// through retained source topology identity. Host faces are rebuilt from every surviving source
-/// `FACE_BOUND`, using the same bound-orientation × face-sense composition as the Monstertruck STEP
-/// importer. Interface edges are retired only when their complete source-face usage is proven to be
-/// contained in the retained host plus feature faces removed by this transaction.
+/// Plan matching native topology surgery and a *semantic-only* source projection
+/// from the same proven feature selections. The projection retains original
+/// STEP entity numbers and is never reimported as a geometric B-rep.
 ///
 /// # Errors
-/// Returns an error when source identity changes, a selected face/edge lacks unique kernel identity,
-/// a requested interface bound is not present on its host, a host would lose every boundary, or an
-/// interface edge has any surviving source-face user outside the planned peel.
-pub fn plan_source_boundary_feature_peel_patch(
-    exchange: &ruststep::ast::Exchange,
+/// Returns an error if a selected feature cannot be removed consistently from
+/// its source shell and retained kernel `StableId` journal.
+pub(crate) fn plan_source_boundary_feature_peel_from_entities(
     source: SourceEntity,
+    entities: &[ruststep::ast::EntityInstance],
+    index: &std::collections::HashMap<u64, usize>,
     report: &crate::planar_features::BoundaryFeatureDiagnostics,
     selected_indices: &[usize],
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
-) -> Result<KernelTopologyPatch> {
-    let section = exchange
-        .data
-        .get(source.data_section)
-        .ok_or_else(|| anyhow::anyhow!("missing DATA section {}", source.data_section))?;
-    let index = crate::step_graph::build_index(&section.entities);
-    let actual_source =
-        crate::step_document::StepSection::new(source.data_section, &section.entities, &index)
-            .entity(source.id)
-            .ok_or_else(|| anyhow::anyhow!("source solid #{} is missing", source.id))?
-            .source();
-    if actual_source != source {
-        bail!("source solid identity changed: requested {source:?}, found {actual_source:?}");
-    }
-
+) -> Result<(
+    KernelTopologyPatch,
+    crate::planar_features::BoundaryFeaturePeelPlan,
+)> {
     let peel = crate::planar_features::plan_boundary_feature_family_peel(
-        &section.entities,
-        &index,
+        entities,
+        index,
         report,
         selected_indices,
     )?;
-    boundary_feature_peel_patch(source, &section.entities, &index, &peel, provenance)
+    let patch = boundary_feature_peel_patch(source, entities, index, &peel, provenance)?;
+    Ok((patch, peel))
 }
 
 #[expect(
