@@ -331,8 +331,7 @@ fn circle_interface_sweep(
     for edge in run {
         let CurveSupport::Circle(circle) = edge.support else {
             bail!(
-                "circular carrier face #{} has a non-circular interface edge #{}",
-                face_id,
+                "circular carrier face #{face_id} has a non-circular interface edge #{}",
                 edge.edge_id
             );
         };
@@ -549,8 +548,7 @@ fn circle_line_endpoint_edit(
 ) -> Result<EndpointEdit> {
     let CurveSupport::Line(_) = edge.support else {
         bail!(
-            "circular carrier #{} has a non-linear retained neighbor #{}",
-            carrier_id,
+            "circular carrier #{carrier_id} has a non-linear retained neighbor #{}",
             edge.edge_id
         );
     };
