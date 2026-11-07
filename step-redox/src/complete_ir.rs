@@ -2994,6 +2994,98 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn native_curved_extrusions_reconstruct_executable_cad_from_real_step_exchange() -> Result<()> {
+        use crate::brep::SurfaceSupport;
+        use crate::cad_ir::{Curve2d, Profile2d, ProfileLoop};
+
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let rectangle_tail = |right: f64| {
+            [
+                Curve2d::Line {
+                    start_mm: [right, 0.0],
+                    end_mm: [right, -2.0],
+                },
+                Curve2d::Line {
+                    start_mm: [right, -2.0],
+                    end_mm: [0.0, -2.0],
+                },
+                Curve2d::Line {
+                    start_mm: [0.0, -2.0],
+                    end_mm: [0.0, 0.0],
+                },
+            ]
+        };
+        let mut profiles = Vec::new();
+        profiles.push((
+            "circular wall",
+            vec![Curve2d::CircleArc {
+                center_mm: [0.0, 0.0],
+                radius_mm: 2.0,
+                start_angle_rad: 0.0,
+                end_angle_rad: std::f64::consts::TAU,
+            }],
+        ));
+        let mut bezier = vec![Curve2d::Bezier {
+            control_points_mm: vec![[0.0, 0.0], [1.0, 1.0], [2.0, 1.0], [3.0, 0.0]],
+        }];
+        bezier.extend(rectangle_tail(3.0));
+        profiles.push(("Bezier wall", bezier));
+        let mut rational = vec![Curve2d::BSpline {
+            degree: 2,
+            control_points_mm: vec![[0.0, 0.0], [1.0, 1.5], [2.0, 0.0]],
+            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            weights: Some(vec![1.0, 0.7, 1.0]),
+        }];
+        rational.extend(rectangle_tail(2.0));
+        profiles.push(("rational spline wall", rational));
+
+        for (label, curves) in profiles {
+            let mut model = CadModel::new();
+            let source_root = model.add_node(CadNode::Extrude {
+                profile: Profile2d {
+                    loops: vec![ProfileLoop { curves }],
+                },
+                vector_mm: [0.0, 0.0, 4.0],
+            });
+            model.add_root(source_root)?;
+            let original = kernel.evaluate(&model, source_root)?;
+            assert!(kernel.summarize(&original).is_single_solid(), "{label}");
+
+            let step = kernel.to_step(&original)?;
+            let document = kernel.resolve_source_exchange(
+                monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange,
+            )?;
+            let inspected = kernel.inspect_source_document(&document)?;
+            let [load] = inspected.solids.as_slice() else {
+                bail!("{label}: expected exactly one STEP source solid");
+            };
+            let native = kernel.edit_source_topology(&document, load.source, &[])?;
+            let reduced = kernel.edited_source_reduced_brep(&native)?;
+            assert!(
+                reduced.faces().any(|face| matches!(
+                    &face.surface,
+                    SurfaceSupport::SplineExtrusion(_) | SurfaceSupport::Cylinder(_)
+                )),
+                "{label}: native side support was not recognized: {:?}",
+                reduced
+                    .faces()
+                    .map(|face| &face.surface)
+                    .collect::<Vec<_>>()
+            );
+            let host = recognize_native_edited_host(&kernel, &native)?
+                .ok_or_else(|| anyhow::anyhow!("{label}: native CAD reconstruction failed"))?;
+            host.model.validate()?;
+            let rebuilt = kernel.evaluate(&host.model, host.root)?;
+            assert!(
+                kernel.summarize(&rebuilt).is_single_solid(),
+                "{label}: recovered CAD did not evaluate to a valid solid"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn real_corpus_ssi_orientation_regression_122_recovers_in_source_order() -> Result<()> {
         // Monstertruck PR #57 reversed 24 out of 78 geometrically identical
         // SSI chains. The source-order four-extrusion union must be stable.

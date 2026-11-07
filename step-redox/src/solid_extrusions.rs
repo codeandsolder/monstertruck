@@ -1326,10 +1326,20 @@ fn bspline_parameterization_matches(first: &BSplineSupport, second: &BSplineSupp
 }
 
 fn reverse_bspline_support(spline: &BSplineSupport) -> BSplineSupport {
+    // Reversing a spline maps its *actual* knot interval [a,b] by
+    // t -> a+b-t. Native STEP carriers are not necessarily normalized to
+    // [0,1], unlike some parser-only normalization paths.
+    let interval_sum =
+        spline.knots.first().copied().unwrap_or(0.0) + spline.knots.last().copied().unwrap_or(1.0);
     BSplineSupport {
         degree: spline.degree,
         control_points_mm: spline.control_points_mm.iter().rev().copied().collect(),
-        knots: spline.knots.iter().rev().map(|knot| 1.0 - knot).collect(),
+        knots: spline
+            .knots
+            .iter()
+            .rev()
+            .map(|knot| interval_sum - knot)
+            .collect(),
         weights: spline
             .weights
             .as_ref()
@@ -1379,32 +1389,36 @@ fn side_support_residual(
     }
 }
 
+/// Match the *unbounded ruled carrier*, not an arbitrary STEP sweep-vector
+/// magnitude. A linear extrusion surface may use unit-length V direction
+/// even when the distance between the solid's caps is several millimetres.
+/// The profile itself may also be placed at any point on that sweep axis.
 fn spline_side_residual(
     profile: &BSplineSupport,
     surface: &SplineExtrusionSupport,
     extrusion: [f64; 3],
 ) -> Option<f64> {
-    let sweep_residual = distance(surface.extrusion_mm, extrusion)
-        .min(distance(surface.extrusion_mm, mul(extrusion, -1.0)));
+    let axis = normalize(extrusion)?;
+    let surface_axis = normalize(surface.extrusion_mm)?;
+    let sweep_residual = norm(cross(axis, surface_axis)) * norm(extrusion);
     if sweep_residual > GEOM_TOL_MM || surface.max_residual_mm > GEOM_TOL_MM {
         return None;
     }
 
-    let candidate_translations = [[0.0, 0.0, 0.0], extrusion, mul(extrusion, -1.0)];
-    let mut profile_residual = f64::INFINITY;
-    for translation in candidate_translations {
-        if let Some(value) = bspline_control_residual(profile, &surface.profile, translation) {
-            profile_residual = profile_residual.min(value);
-        }
-        let reversed = reverse_bspline_support(&surface.profile);
-        if let Some(value) = bspline_control_residual(profile, &reversed, translation) {
-            profile_residual = profile_residual.min(value);
-        }
-    }
-    if !profile_residual.is_finite() || profile_residual > GEOM_TOL_MM {
-        return None;
-    }
-    Some(
+    let aligned_profile_residual = |carrier: &BSplineSupport| -> Option<f64> {
+        let first_profile = *profile.control_points_mm.first()?;
+        let first_carrier = *carrier.control_points_mm.first()?;
+        let axial_offset = dot(sub(first_carrier, first_profile), axis);
+        bspline_control_residual(profile, carrier, mul(axis, axial_offset))
+    };
+    let direct = aligned_profile_residual(&surface.profile);
+    let reversed = aligned_profile_residual(&reverse_bspline_support(&surface.profile));
+    let profile_residual = match (direct, reversed) {
+        (Some(a), Some(b)) => a.min(b),
+        (Some(value), None) | (None, Some(value)) => value,
+        (None, None) => return None,
+    };
+    (profile_residual <= GEOM_TOL_MM).then_some(
         profile_residual
             .max(sweep_residual)
             .max(surface.max_residual_mm),

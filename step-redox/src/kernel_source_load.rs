@@ -297,7 +297,8 @@ mod monstertruck_adapter {
     };
     use crate::brep::{
         self, CircleSupport, ConeSupport, CurveSupport, CylinderSupport, FaceLoop, LineSupport,
-        OrientedEdgeUse, PlaneSupport, SphereSupport, SurfaceSupport, TorusSupport,
+        OrientedEdgeUse, PlaneSupport, SphereSupport, SplineExtrusionSupport, SurfaceSupport,
+        TorusSupport,
     };
     use crate::cad_kernel::monstertruck::MonstertruckKernel;
     use crate::kernel_topology::{
@@ -309,9 +310,7 @@ mod monstertruck_adapter {
     use crate::step_document::StepSection;
     use crate::step_graph;
     use anyhow::Result;
-    use monstertruck_geometry::analytic_carrier::{
-        AnalyticCarrier, AnalyticSupport, similarity_scale,
-    };
+    use monstertruck_geometry::analytic_carrier::{AnalyticCarrier, AnalyticSupport};
     use monstertruck_geometry::analytic_line_segment::{
         SegmentLocus, certify_bspline_segment_locus, certify_nurbs_segment_locus,
     };
@@ -319,15 +318,17 @@ mod monstertruck_adapter {
     use monstertruck_io::step::load::ParsedStepSource;
     use monstertruck_io::step::load::convert::StepCompressedTrimmedSolid;
     use monstertruck_io::step::load::step_geometry::{
-        Conic3D, Curve3D, DEFAULT_NUMERICAL_TOLERANCES, ElementarySurface,
+        BsplineSurface, Conic3D, Curve3D, DEFAULT_NUMERICAL_TOLERANCES, ElementarySurface,
         ExactParameterBoundary2D, KERNEL_EPSILON, Line, Matrix4, Point3, Processor, Surface,
-        SweepSurface, Transform, TrimmedCurve, UnitCircle, Vector3, Vector4,
+        SweepSurface, Transform, TrimmedCurve, TryIntoHomogeneousBsplineSurface, UnitCircle,
+        Vector3, Vector4,
     };
     use monstertruck_io::step::load::{
         EntityLoadReport, LossCategory, LossReason, LossTally, ResolvedStepDocument,
         ShellLoadReport, StepSolidImport, StepTopologyProvenance,
     };
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
+    use monstertruck_modeling::InnerSpace;
     use monstertruck_topology::StableId;
     use monstertruck_topology::compress::StableIdEntity;
     use monstertruck_topology::compressed_surgery::{
@@ -559,9 +560,205 @@ mod monstertruck_adapter {
         }
     }
 
+    /// A transformed *planar* unit circle needs equal, orthogonal X/Y
+    /// columns. The perpendicular Z column is irrelevant to its 3D locus:
+    /// actual STEP placements commonly scale X/Y by the radius but leave Z
+    /// unit length, so a 3D-similarity requirement would discard them.
+    fn native_circle_support(
+        circle: &Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>,
+    ) -> Option<CircleSupport> {
+        let transform = *circle.transform();
+        if ![
+            transform.x.x,
+            transform.x.y,
+            transform.x.z,
+            transform.x.w,
+            transform.y.x,
+            transform.y.y,
+            transform.y.z,
+            transform.y.w,
+            transform.z.x,
+            transform.z.y,
+            transform.z.z,
+            transform.z.w,
+            transform.w.x,
+            transform.w.y,
+            transform.w.z,
+            transform.w.w,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
+            || transform.x.w.abs() > 1.0e-12
+            || transform.y.w.abs() > 1.0e-12
+            || (transform.w.w - 1.0).abs() > 1.0e-12
+        {
+            return None;
+        }
+        let x = transform.x.truncate();
+        let y = transform.y.truncate();
+        let radius_mm = x.magnitude();
+        let tolerance = 1.0e-10 * radius_mm.max(1.0);
+        if radius_mm <= KERNEL_EPSILON
+            || (y.magnitude() - radius_mm).abs() > tolerance
+            || x.dot(y).abs() > tolerance * radius_mm
+        {
+            return None;
+        }
+        let normal = x.cross(y).normalize();
+        let center = transform.transform_point(Point3::new(0.0, 0.0, 0.0));
+        let radial = x / radius_mm;
+        Some(CircleSupport {
+            center_mm: [center.x, center.y, center.z],
+            normal: [normal.x, normal.y, normal.z],
+            x_direction: [radial.x, radial.y, radial.z],
+            radius_mm,
+        })
+    }
+
+    /// Homogeneous spline control weights are defined only up to a shared
+    /// positive scale. Normalize edges and faces identically before comparing
+    /// their exact source profiles.
+    fn native_spline_weights(raw: &[f64]) -> Option<Vec<f64>> {
+        let scale = *raw.first()?;
+        if !scale.is_finite() || scale <= 0.0 {
+            return None;
+        }
+        let normalized = raw.iter().map(|weight| weight / scale).collect::<Vec<_>>();
+        if normalized
+            .iter()
+            .any(|weight| !weight.is_finite() || *weight <= 0.0)
+        {
+            return None;
+        }
+        Some(normalized)
+    }
+
+    /// Recognize native ruled spline surfaces from their *exact* homogeneous
+    /// control net. This handles both explicit linear sweeps and polynomial /
+    /// rational B-spline surfaces with a linearly generated V parameter.
+    ///
+    /// A two-pole, degree-one V direction with equal per-row weights is
+    /// identically C(u) + v D. The homogeneous conversion is provided by
+    /// Monstertruck, so there is no STEP spelling dependency or fitted curve.
+    fn native_spline_extrusion(surface: &Surface) -> Option<SplineExtrusionSupport> {
+        let net: BsplineSurface<Vector4> = surface.try_into_homogeneous_bspline_surface()?;
+        if net.udegree() == 0
+            || net.vdegree() != 1
+            || net.control_points().len() < 2
+            || net.control_points().iter().any(|row| row.len() != 2)
+        {
+            return None;
+        }
+        let v_knots = net.knot_vector_v();
+        if v_knots.len() != 4
+            || !v_knots.iter().all(|knot| knot.is_finite())
+            || (v_knots[0] - v_knots[1]).abs() > 1.0e-12
+            || (v_knots[2] - v_knots[3]).abs() > 1.0e-12
+            || v_knots[1] >= v_knots[2]
+        {
+            return None;
+        }
+        let u_knots = net.knot_vector_u().iter().copied().collect::<Vec<_>>();
+        if u_knots.iter().any(|knot| !knot.is_finite()) {
+            return None;
+        }
+
+        let mut profile_points = Vec::with_capacity(net.control_points().len());
+        let mut profile_weights = Vec::with_capacity(net.control_points().len());
+        let mut sweep = None::<Vector3>;
+        let mut max_residual_mm = 0.0_f64;
+        for row in net.control_points() {
+            let [first, last] = row.as_slice() else {
+                return None;
+            };
+            if ![
+                first.x, first.y, first.z, first.w, last.x, last.y, last.z, last.w,
+            ]
+            .into_iter()
+            .all(f64::is_finite)
+                || first.w <= 0.0
+                || last.w <= 0.0
+                || (first.w - last.w).abs() > 1.0e-12 * first.w.abs().max(last.w.abs())
+            {
+                return None;
+            }
+            let p0 = first.truncate() / first.w;
+            let p1 = last.truncate() / last.w;
+            let delta = p1 - p0;
+            let length = delta.x.hypot(delta.y).hypot(delta.z);
+            if !length.is_finite() || length <= 1.0e-7 {
+                return None;
+            }
+            if let Some(expected) = sweep {
+                let residual = (delta - expected)
+                    .x
+                    .hypot((delta - expected).y)
+                    .hypot((delta - expected).z);
+                if residual > 1.0e-7 {
+                    return None;
+                }
+                max_residual_mm = max_residual_mm.max(residual);
+            } else {
+                sweep = Some(delta);
+            }
+            profile_points.push([p0.x, p0.y, p0.z]);
+            profile_weights.push(first.w);
+        }
+        let normalized_weights = native_spline_weights(&profile_weights)?;
+        let weights = normalized_weights
+            .iter()
+            .any(|weight| (weight - 1.0).abs() > 1.0e-12)
+            .then_some(normalized_weights);
+        let delta = sweep?;
+        Some(SplineExtrusionSupport {
+            profile: brep::BSplineSupport {
+                degree: net.udegree(),
+                control_points_mm: profile_points,
+                knots: u_knots,
+                weights,
+            },
+            extrusion_mm: [delta.x, delta.y, delta.z],
+            max_residual_mm,
+        })
+    }
+
     /// Convert full checked analytic carriers from the edited native B-rep.
     /// Unknown geometry stays unknown, with no fitted or sampled replacement.
     fn native_surface_support(surface: &Surface, id: u64) -> SurfaceSupport {
+        if let Surface::Sweep(SweepSurface::ExtrusionSurface(sweep)) = surface
+            && let Curve3D::Line(Line(start, end)) = sweep.entity_curve()
+        {
+            let normal = (*end - *start).cross(sweep.extruding_vector());
+            let magnitude = normal.magnitude();
+            if magnitude.is_finite() && magnitude > KERNEL_EPSILON {
+                let normal = normal / magnitude;
+                return SurfaceSupport::Plane(PlaneSupport {
+                    origin_mm: [start.x, start.y, start.z],
+                    normal: [normal.x, normal.y, normal.z],
+                    max_residual_mm: 0.0,
+                });
+            }
+        }
+        if let Surface::Sweep(SweepSurface::ExtrusionSurface(sweep)) = surface
+            && let Curve3D::Conic(Conic3D::Ellipse(circle)) = sweep.entity_curve()
+            && let Some(circle) = native_circle_support(circle)
+        {
+            let vector = sweep.extruding_vector();
+            let norm = vector.x.hypot(vector.y).hypot(vector.z);
+            let normal = Vector3::new(circle.normal[0], circle.normal[1], circle.normal[2]);
+            if norm.is_finite()
+                && norm > KERNEL_EPSILON
+                && (normal.dot(vector / norm).abs() - 1.0).abs() <= 1.0e-10
+            {
+                let axis = vector / norm;
+                return SurfaceSupport::Cylinder(CylinderSupport {
+                    axis_origin_mm: circle.center_mm,
+                    axis: [axis.x, axis.y, axis.z],
+                    x_direction: circle.x_direction,
+                    radius_mm: circle.radius_mm,
+                });
+            }
+        }
         let certificate = native_surface_certificate(surface);
         match certificate.map(AnalyticCarrier::support) {
             Some(AnalyticSupport::Plane { origin, .. }) => {
@@ -624,7 +821,10 @@ mod monstertruck_adapter {
                 major_radius_mm: major_radius,
                 minor_radius_mm: minor_radius,
             }),
-            None => SurfaceSupport::Other { entity_id: id },
+            None => native_spline_extrusion(surface).map_or(
+                SurfaceSupport::Other { entity_id: id },
+                SurfaceSupport::SplineExtrusion,
+            ),
         }
     }
 
@@ -662,21 +862,8 @@ mod monstertruck_adapter {
             return line();
         }
         match curve {
-            Curve3D::Conic(Conic3D::Ellipse(circle)) => {
-                let transform = *circle.transform();
-                let Some(radius_mm) = similarity_scale(transform) else {
-                    return CurveSupport::Other { entity_id: id };
-                };
-                let center = transform.transform_point(Point3::new(0.0, 0.0, 0.0));
-                let normal = transform.transform_vector(Vector3::unit_z()) / radius_mm;
-                let x = transform.transform_vector(Vector3::unit_x()) / radius_mm;
-                CurveSupport::Circle(CircleSupport {
-                    center_mm: [center.x, center.y, center.z],
-                    normal: [normal.x, normal.y, normal.z],
-                    x_direction: [x.x, x.y, x.z],
-                    radius_mm,
-                })
-            }
+            Curve3D::Conic(Conic3D::Ellipse(circle)) => native_circle_support(circle)
+                .map_or(CurveSupport::Other { entity_id: id }, CurveSupport::Circle),
             Curve3D::BsplineCurve(spline) => CurveSupport::BSpline(brep::BSplineSupport {
                 degree: spline.degree(),
                 control_points_mm: spline
@@ -699,7 +886,17 @@ mod monstertruck_adapter {
                         .map(|p| [p.x / p.w, p.y / p.w, p.z / p.w])
                         .collect(),
                     knots: spline.knot_vector().iter().copied().collect(),
-                    weights: Some(points.iter().map(|p| p.w).collect()),
+                    weights: {
+                        let Some(weights) =
+                            native_spline_weights(&points.iter().map(|p| p.w).collect::<Vec<_>>())
+                        else {
+                            return CurveSupport::Other { entity_id: id };
+                        };
+                        weights
+                            .iter()
+                            .any(|weight| (weight - 1.0).abs() > 1.0e-12)
+                            .then_some(weights)
+                    },
                 })
             }
             _ => CurveSupport::Other { entity_id: id },
@@ -1251,6 +1448,95 @@ mod monstertruck_adapter {
             };
             assert_ne!(detail, "");
             assert!(evidence.solids[0].topology_provenance.is_none());
+            Ok(())
+        }
+
+        #[test]
+        fn exact_native_sweep_and_spline_nets_supply_constructive_side_support() -> Result<()> {
+            use monstertruck_io::step::load::step_geometry::{
+                KnotVector, NurbsSurface, StepExtrusionSurface,
+            };
+            let cylinder_transform = Matrix4::from_cols(
+                Vector4::new(3.0, 0.0, 0.0, 0.0),
+                Vector4::new(0.0, 3.0, 0.0, 0.0),
+                Vector4::new(0.0, 0.0, 1.0, 0.0),
+                Vector4::new(1.0, -2.0, 0.0, 1.0),
+            );
+            let circle = Curve3D::Conic(Conic3D::Ellipse(Processor::with_transform(
+                TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, std::f64::consts::TAU)),
+                cylinder_transform,
+            )));
+            let circle_wall = Surface::Sweep(SweepSurface::ExtrusionSurface(
+                StepExtrusionSurface::by_extrusion(circle, Vector3::new(0.0, 0.0, 4.0)),
+            ));
+            let SurfaceSupport::Cylinder(cylinder) = native_surface_support(&circle_wall, 1) else {
+                anyhow::bail!("native radius-three circular sweep did not become a cylinder");
+            };
+            assert!((cylinder.radius_mm - 3.0).abs() < 1.0e-12);
+            assert_eq!(cylinder.axis_origin_mm, [1.0, -2.0, 0.0]);
+
+            let plane_wall = Surface::Sweep(SweepSurface::ExtrusionSurface(
+                StepExtrusionSurface::by_extrusion(
+                    Curve3D::Line(Line(Point3::new(0.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0))),
+                    Vector3::new(0.0, 0.0, 4.0),
+                ),
+            ));
+            assert!(matches!(
+                native_surface_support(&plane_wall, 2),
+                SurfaceSupport::Plane(_)
+            ));
+
+            let knots = (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1));
+            let points = [
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+                Point3::new(2.0, 0.0, 0.0),
+            ];
+            let polynomial_net = BsplineSurface::new(
+                knots.clone(),
+                points
+                    .iter()
+                    .map(|point| vec![*point, *point + Vector3::new(0.0, 0.0, 4.0)])
+                    .collect(),
+            )?;
+            let SurfaceSupport::SplineExtrusion(polynomial) =
+                native_surface_support(&Surface::Bspline(polynomial_net), 3)
+            else {
+                anyhow::bail!("polynomial native net did not supply spline extrusion support");
+            };
+            assert_eq!(polynomial.profile.degree, 2);
+            assert_eq!(polynomial.profile.weights, None);
+            assert_eq!(polynomial.extrusion_mm, [0.0, 0.0, 4.0]);
+
+            // Homogeneous source weights may be globally rescaled without
+            // changing the represented curve; recover a normalized profile.
+            let weights = [4.0, 3.0, 4.0];
+            let rational_net = BsplineSurface::new(
+                knots,
+                points
+                    .iter()
+                    .zip(weights)
+                    .map(|(point, weight)| {
+                        [
+                            Vector4::new(
+                                point.x * weight,
+                                point.y * weight,
+                                point.z * weight,
+                                weight,
+                            ),
+                            Vector4::new(point.x * weight, point.y * weight, 4.0 * weight, weight),
+                        ]
+                        .to_vec()
+                    })
+                    .collect(),
+            )?;
+            let SurfaceSupport::SplineExtrusion(rational) =
+                native_surface_support(&Surface::Nurbs(NurbsSurface::new(rational_net)), 4)
+            else {
+                anyhow::bail!("rational native net did not supply spline extrusion support");
+            };
+            assert_eq!(rational.profile.weights, Some(vec![1.0, 0.75, 1.0]));
+            assert_eq!(rational.extrusion_mm, [0.0, 0.0, 4.0]);
             Ok(())
         }
 
