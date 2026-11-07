@@ -1,5 +1,30 @@
 use num_traits::ToPrimitive;
 
+/// Internal numerical consistency bound, measured in millimetres.
+///
+/// This is for evaluating geometry the kernel has *already* constructed and
+/// for proving exact geometric identities. It is not a supplier-model
+/// feature-healing threshold.
+pub const NUMERICAL_GEOMETRY_TOL_MM: f64 = 1.0e-7;
+
+/// Default absolute deviation budget for recognizing an *intended* common
+/// feature in imported supplier CAD, measured in millimetres (10 micrometres).
+///
+/// The budget is not a permission to connect arbitrarily close unrelated
+/// bodies, collapse genuine small features, or accept a non-manifold result.
+/// A healing operation must still build a coherent common curve/surface and
+/// validate its output topology. Keep numerical consistency tests separate.
+pub const DEFAULT_FEATURE_HEAL_TOL_MM: f64 = 0.01;
+
+/// Can two measurements be treated as the same *intended* feature?
+///
+/// Always compare independent source measurements against this threshold;
+/// do not use it in place of exact topology identity or kernel validation.
+#[must_use]
+pub fn near_imported_feature_mm(residual_mm: f64) -> bool {
+    residual_mm.is_finite() && (0.0..=DEFAULT_FEATURE_HEAL_TOL_MM).contains(&residual_mm)
+}
+
 const MAX_EXACT_F64_INTEGER: u64 = 1_u64 << 53;
 const TWO_POW_32: f64 = 4_294_967_296.0;
 
@@ -60,6 +85,17 @@ pub fn exact_usize_to_f64(value: usize) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_feature_tolerance_accepts_micron_scale_fits_without_weakening_numerics() {
+        assert!(near_imported_feature_mm(0.006_701_7));
+        assert!(near_imported_feature_mm(0.01));
+        assert!(!near_imported_feature_mm(0.010_001));
+        assert!(!near_imported_feature_mm(0.05));
+        assert!(!near_imported_feature_mm(-1.0));
+        assert!(!near_imported_feature_mm(f64::NAN));
+        assert!(!near_imported_feature_mm(f64::INFINITY));
+    }
 
     #[test]
     fn i64_conversion_preserves_exact_binary64_integer_range() {

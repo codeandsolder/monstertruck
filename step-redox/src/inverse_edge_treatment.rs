@@ -19,7 +19,7 @@ use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::{BTreeMap, BTreeSet};
 
-const GEOM_TOL_MM: f64 = 1.0e-7;
+const GEOM_TOL_MM: f64 = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM;
 const DIR_TOL: f64 = 1.0e-10;
 
 #[derive(Debug, Clone)]

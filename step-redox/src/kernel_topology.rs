@@ -185,7 +185,7 @@ pub struct KernelTopologyPatch {
     pub require_unused_edges: Vec<KernelTopologyId>,
 }
 
-const PATCH_POINT_TOL_MM: f64 = 1.0e-7;
+const PATCH_POINT_TOL_MM: f64 = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM;
 
 /// Normalize one proven source edge treatment into a backend-neutral topology patch.
 ///

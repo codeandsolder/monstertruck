@@ -1698,10 +1698,17 @@ fn replayable_edge_treatment(
     let (profile, radius_mm) = match item.kind {
         crate::edge_treatments::EdgeTreatmentKind::PlanarChamfer => {
             let [first, second] = item.inferred_setbacks_mm?;
-            let tolerance = 1.0e-7_f64.max(first.abs().max(second.abs()) * 1.0e-8);
-            if (first - second).abs() > tolerance {
+            if !first.is_finite()
+                || !second.is_finite()
+                || first <= 0.0
+                || second <= 0.0
+                || !crate::numeric::near_imported_feature_mm((first - second).abs())
+            {
                 return None;
             }
+            // Supplier exports with micrometre-scale asymmetric setbacks
+            // represent the same intended nominal chamfer. Fit both setbacks
+            // to one canonical dimension rather than declaring non-recovery.
             (EdgeTreatmentProfile::Chamfer, first.midpoint(second))
         }
         crate::edge_treatments::EdgeTreatmentKind::CylindricalFillet
@@ -2354,6 +2361,21 @@ mod tests {
             },
             max_boundary_residual_mm: 1.0e-8,
         }
+    }
+
+    #[test]
+    fn supplier_chamfer_micron_setback_drift_replays_at_common_nominal_size() -> Result<()> {
+        let mut evidence = test_treatment_evidence(42, 77);
+        evidence.inferred_setbacks_mm = Some([0.5, 0.506_7]);
+        let (profile, edge) = replayable_edge_treatment(&evidence)
+            .ok_or_else(|| anyhow::anyhow!("6.7 micrometre difference must replay"))?;
+        assert_eq!(profile, EdgeTreatmentProfile::Chamfer);
+        assert!((edge.radius_mm - 0.503_35).abs() < 1.0e-12);
+        evidence.inferred_setbacks_mm = Some([0.5, 0.510_1]);
+        assert!(replayable_edge_treatment(&evidence).is_none());
+        evidence.inferred_setbacks_mm = Some([0.5, f64::NAN]);
+        assert!(replayable_edge_treatment(&evidence).is_none());
+        Ok(())
     }
 
     #[test]

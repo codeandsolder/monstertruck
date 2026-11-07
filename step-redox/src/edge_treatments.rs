@@ -7,7 +7,7 @@ use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-const GEOM_TOL_MM: f64 = 1.0e-7;
+const GEOM_TOL_MM: f64 = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM;
 const DIR_TOL: f64 = 1.0e-8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -23,6 +23,9 @@ pub enum EdgeTreatmentKind {
 #[serde(rename_all = "snake_case")]
 pub enum EdgeTreatmentEvidenceStrength {
     AnalyticTangency,
+    /// Analytic feature identity fitted within the imported-part tolerance;
+    /// source supports are not asserted to coincide at numerical precision.
+    FittedTangency,
     ContinuationCandidate,
 }
 
@@ -352,7 +355,7 @@ fn prove_cylindrical_fillet(
         - cylinder.radius_mm)
         .abs();
     let mut max_boundary_residual_mm = first_tangent_residual.max(second_tangent_residual);
-    if max_boundary_residual_mm > GEOM_TOL_MM {
+    if !crate::numeric::near_imported_feature_mm(max_boundary_residual_mm) {
         return None;
     }
 
@@ -370,7 +373,7 @@ fn prove_cylindrical_fillet(
         &treatment.surface,
         &second.surface,
     )?);
-    if max_boundary_residual_mm > GEOM_TOL_MM {
+    if !crate::numeric::near_imported_feature_mm(max_boundary_residual_mm) {
         return None;
     }
     let virtual_edge = plane_intersection_segment(
@@ -440,7 +443,7 @@ fn prove_planar_chamfer(
         &treatment.surface,
         &second.surface,
     )?);
-    if max_boundary_residual_mm > GEOM_TOL_MM {
+    if !crate::numeric::near_imported_feature_mm(max_boundary_residual_mm) {
         return None;
     }
     let reference_origin = first_edges
@@ -515,7 +518,7 @@ fn prove_toroidal_fillet(
     let mut max_boundary_residual_mm = (first_tangent_residual - torus.minor_radius_mm)
         .abs()
         .max((second_tangent_residual - torus.minor_radius_mm).abs());
-    if max_boundary_residual_mm > GEOM_TOL_MM {
+    if !crate::numeric::near_imported_feature_mm(max_boundary_residual_mm) {
         return None;
     }
 
@@ -533,7 +536,7 @@ fn prove_toroidal_fillet(
         &treatment.surface,
         &second.surface,
     )?);
-    if max_boundary_residual_mm > GEOM_TOL_MM {
+    if !crate::numeric::near_imported_feature_mm(max_boundary_residual_mm) {
         return None;
     }
     let virtual_edge = EdgeTreatmentVirtualEdge::Circle {
@@ -599,7 +602,7 @@ fn prove_conical_chamfer(
         &treatment.surface,
         &second.surface,
     )?);
-    if max_boundary_residual_mm > GEOM_TOL_MM {
+    if !crate::numeric::near_imported_feature_mm(max_boundary_residual_mm) {
         return None;
     }
     let virtual_edge = EdgeTreatmentVirtualEdge::Circle {
@@ -660,6 +663,11 @@ fn evidence(
         treatment_face_id: treatment.face_id,
         kind,
         strength: match kind {
+            EdgeTreatmentKind::CylindricalFillet | EdgeTreatmentKind::ToroidalFillet
+                if max_boundary_residual_mm > crate::numeric::NUMERICAL_GEOMETRY_TOL_MM =>
+            {
+                EdgeTreatmentEvidenceStrength::FittedTangency
+            }
             EdgeTreatmentKind::CylindricalFillet | EdgeTreatmentKind::ToroidalFillet => {
                 EdgeTreatmentEvidenceStrength::AnalyticTangency
             }
@@ -751,8 +759,8 @@ fn plane_intersection_segment(
         boundary_axial_range(first_edges, edge_geometry, reference_origin, direction)?;
     let second_range =
         boundary_axial_range(second_edges, edge_geometry, reference_origin, direction)?;
-    if (first_range.0 - second_range.0).abs() > GEOM_TOL_MM
-        || (first_range.1 - second_range.1).abs() > GEOM_TOL_MM
+    if !crate::numeric::near_imported_feature_mm((first_range.0 - second_range.0).abs())
+        || !crate::numeric::near_imported_feature_mm((first_range.1 - second_range.1).abs())
     {
         return None;
     }
@@ -930,7 +938,11 @@ fn axisymmetric_meridian_line(
         SurfaceSupport::Cylinder(cylinder) => {
             let source_axis = normalize(cylinder.axis, DIR_TOL)?;
             if !parallel(source_axis, axis)
-                || point_to_unit_line_distance(cylinder.axis_origin_mm, origin, axis) > GEOM_TOL_MM
+                || !crate::numeric::near_imported_feature_mm(point_to_unit_line_distance(
+                    cylinder.axis_origin_mm,
+                    origin,
+                    axis,
+                ))
             {
                 return None;
             }
@@ -944,7 +956,11 @@ fn axisymmetric_meridian_line(
             let source_axis = normalize(cone.axis, DIR_TOL)?;
             let alignment = dot(source_axis, axis);
             if 1.0 - alignment.abs() > DIR_TOL
-                || point_to_unit_line_distance(cone.reference_origin_mm, origin, axis) > GEOM_TOL_MM
+                || !crate::numeric::near_imported_feature_mm(point_to_unit_line_distance(
+                    cone.reference_origin_mm,
+                    origin,
+                    axis,
+                ))
             {
                 return None;
             }
@@ -1073,6 +1089,24 @@ mod tests {
         assert!((setbacks[0] - 0.35).abs() < 1.0e-12);
         assert!((setbacks[1] - 0.2).abs() < 1.0e-12);
         Ok(())
+    }
+
+    #[test]
+    fn supplier_axisymmetric_carriers_with_six_micron_axis_drift_still_match() {
+        let mut carrier = brep::CylinderSupport {
+            axis_origin_mm: [0.006_7, 0.0, 0.0],
+            axis: [0.0, 0.0, 1.0],
+            x_direction: [1.0, 0.0, 0.0],
+            radius_mm: 2.37,
+        };
+        let origin = [0.0, 0.0, 0.0];
+        let axis = [0.0, 0.0, 1.0];
+        let inferred = axisymmetric_meridian_line(&SurfaceSupport::Cylinder(carrier), origin, axis);
+        assert!(inferred.is_some());
+        carrier.axis_origin_mm[0] = 0.010_1;
+        assert!(
+            axisymmetric_meridian_line(&SurfaceSupport::Cylinder(carrier), origin, axis,).is_none()
+        );
     }
 
     #[test]

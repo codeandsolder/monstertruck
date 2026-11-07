@@ -98,6 +98,30 @@ loops do not acquire coincident end caps. STEP emitted by the backend is indepen
 checked with OpenCascade during development. The architecture spike is in
 `experiments/kcl-monstertruck-spike/`.
 
+## Geometry tolerance policy
+
+All distances below are in millimetres. **Imported inverse-edge-treatment
+recognition** uses a default **0.01 mm (10 micrometre)** fit budget for
+near-coincident tangencies, carrier axes, shared feature-end ranges and nominal
+chamfer setbacks. Other constructive recognizers are migrated individually:
+their numerical B-rep proof thresholds are not silently loosened.
+Suppliers do not guarantee sub-nanometre consistency between independently
+exported faces; these fits are marked distinctly from exact analytic evidence,
+and the measured residual is retained. For example, chamfer setbacks differing
+by 0.0067 mm can produce one nominal editable chamfer.
+
+**Numerical B-rep integrity** is separate: 1e-7 mm remains the current internal
+consistency check for native patch vertex identity and constructed edge curves.
+A feature fit does not by itself make an inconsistent topology transaction or
+a displaced spline/adjacent-surface boundary valid. The recovery operation
+must still produce a coherent manifold and a usable CAD feature, with source/
+rebuild geometry comparisons used for qualification. In particular, an inferred
+sharp corner that sits near a cylindrical support requires rebuilding the
+actual neighboring curves/surfaces; raising the kernel epsilon is not a fix.
+
+See numeric.rs for shared thresholds and edge_treatments.rs for their
+application to source-feature evidence.
+
 ## Validation and CI
 
 The regression harness under `validation/` downloads public upstream CAD fixtures
