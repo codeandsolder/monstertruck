@@ -5,14 +5,16 @@
 //! backend-neutral patch addressed entirely by the kernel `StableId` journal.  Mutation belongs to
 //! [`crate::kernel_topology::SourceTopologyEditor`].
 
-use crate::brep::{CurveSupport, OrientedEdgeUse};
+use crate::brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport};
 use crate::edge_treatments::{EdgeTreatmentEvidence, EdgeTreatmentVirtualEdge};
 use crate::kernel_source_load::{KernelTopologyId, KernelTopologyProvenance};
 use crate::kernel_topology::{
     KernelFaceSplice, KernelNewEdge, KernelPatchCurve, KernelPatchEdgeRef, KernelPatchEdgeUse,
     KernelPatchVertexRef, KernelRetainedEdge, KernelTopologyPatch,
 };
-use crate::math3::{cross, distance, dot, normalize, point_to_unit_line_distance, sub};
+use crate::math3::{
+    add, cross, distance, dot, mul, norm, normalize, point_to_unit_line_distance, sub,
+};
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::{BTreeMap, BTreeSet};
@@ -72,6 +74,697 @@ pub fn plan_edge_treatment_patch(
             radius_mm,
         ),
     }
+}
+
+/// Partition physical treatments into connected families with the same exact
+/// inverse circle. STEP exporters commonly split one fillet around its azimuth:
+/// each `ADVANCED_FACE` is then only half of the actual inverse feature.
+pub fn edge_treatment_families<'a>(
+    solid: &ReducedSolid,
+    evidence: &[&'a EdgeTreatmentEvidence],
+) -> Vec<Vec<&'a EdgeTreatmentEvidence>> {
+    let boundaries = evidence
+        .iter()
+        .map(|item| {
+            face(solid, item.treatment_face_id)
+                .ok()
+                .map_or_else(BTreeSet::new, |face| {
+                    face.loop_edges()
+                        .map(|edge| edge.edge_id)
+                        .collect::<BTreeSet<_>>()
+                })
+        })
+        .collect::<Vec<_>>();
+    let mut seen = vec![false; evidence.len()];
+    let mut families = Vec::new();
+    for index in 0..evidence.len() {
+        if seen[index] {
+            continue;
+        }
+        seen[index] = true;
+        let mut stack = vec![index];
+        let mut group = Vec::new();
+        while let Some(current) = stack.pop() {
+            group.push(evidence[current]);
+            for next in 0..evidence.len() {
+                if seen[next]
+                    || evidence[current].kind != evidence[next].kind
+                    || !same_virtual_circle(
+                        &evidence[current].virtual_edge,
+                        &evidence[next].virtual_edge,
+                    )
+                    || boundaries[current].is_disjoint(&boundaries[next])
+                {
+                    continue;
+                }
+                seen[next] = true;
+                stack.push(next);
+            }
+        }
+        group.sort_by_key(|item| item.treatment_face_id);
+        families.push(group);
+    }
+    families
+}
+
+fn same_virtual_circle(
+    first: &EdgeTreatmentVirtualEdge,
+    second: &EdgeTreatmentVirtualEdge,
+) -> bool {
+    let (
+        EdgeTreatmentVirtualEdge::Circle {
+            center_mm: first_center,
+            normal: first_normal,
+            radius_mm: first_radius,
+        },
+        EdgeTreatmentVirtualEdge::Circle {
+            center_mm: second_center,
+            normal: second_normal,
+            radius_mm: second_radius,
+        },
+    ) = (first, second)
+    else {
+        return false;
+    };
+    distance(*first_center, *second_center) <= GEOM_TOL_MM
+        && (first_radius - second_radius).abs() <= GEOM_TOL_MM
+        && normalize(*first_normal, DIR_TOL)
+            .zip(normalize(*second_normal, DIR_TOL))
+            .is_some_and(|(a, b)| dot(a, b).abs() >= 1.0 - DIR_TOL)
+}
+
+#[derive(Debug)]
+struct CircleCarrierRun {
+    face_id: u64,
+    shell_forward: bool,
+    shared: BTreeSet<u64>,
+    first: OrientedEdgeUse,
+    last: OrientedEdgeUse,
+    previous: Option<OrientedEdgeUse>,
+    next: Option<OrientedEdgeUse>,
+    start_angle: f64,
+    sweep: f64,
+}
+
+#[derive(Clone, Copy)]
+struct CircleFrame {
+    center: [f64; 3],
+    normal: [f64; 3],
+    x: [f64; 3],
+    y: [f64; 3],
+    radius: f64,
+}
+
+impl CircleFrame {
+    fn from_edge(edge: &EdgeTreatmentVirtualEdge) -> Result<Self> {
+        let EdgeTreatmentVirtualEdge::Circle {
+            center_mm,
+            normal,
+            radius_mm,
+        } = edge
+        else {
+            bail!("mixed linear and circular treatment family");
+        };
+        ensure!(
+            radius_mm.is_finite() && *radius_mm > GEOM_TOL_MM,
+            "invalid inverse circle radius"
+        );
+        let normal = normalize(*normal, DIR_TOL).context("invalid inverse circle normal")?;
+        let x = deterministic_perpendicular(normal).context("inverse circle has no radial axis")?;
+        Ok(Self {
+            center: *center_mm,
+            normal,
+            x,
+            y: cross(normal, x),
+            radius: *radius_mm,
+        })
+    }
+
+    fn angle(self, point: [f64; 3]) -> Result<f64> {
+        let relative = sub(point, self.center);
+        let radial = sub(relative, mul(self.normal, dot(relative, self.normal)));
+        let length = norm(radial);
+        ensure!(
+            length.is_finite() && length > GEOM_TOL_MM,
+            "circular edge endpoint is on the inverse axis"
+        );
+        Ok(dot(radial, self.y)
+            .atan2(dot(radial, self.x))
+            .rem_euclid(std::f64::consts::TAU))
+    }
+
+    fn point(self, angle: f64) -> [f64; 3] {
+        add(
+            self.center,
+            mul(
+                add(mul(self.x, angle.cos()), mul(self.y, angle.sin())),
+                self.radius,
+            ),
+        )
+    }
+}
+
+fn circle_carrier_run(
+    face: &ReducedFace,
+    shared: BTreeSet<u64>,
+    frame: CircleFrame,
+) -> Result<CircleCarrierRun> {
+    let matching = face
+        .loops
+        .iter()
+        .filter(|wire| wire.edges.iter().any(|edge| shared.contains(&edge.edge_id)))
+        .collect::<Vec<_>>();
+    let [wire] = matching.as_slice() else {
+        bail!(
+            "circular carrier face #{} has more than one treatment boundary wire",
+            face.id
+        );
+    };
+    ensure!(
+        !wire.edges.is_empty() && shared.len() <= wire.edges.len(),
+        "circular carrier has invalid run"
+    );
+    // The native STEP loader orients a boundary wire relative to the
+    // oriented ADVANCED_FACE. The raw EDGE_LOOP order alone is not always
+    // the traversal order used by the kernel, especially for reversed
+    // cylinders and FACE_BOUND(...,.F.) loops.
+    let oriented_edges = if face.surface_forward == wire.orientation {
+        wire.edges.clone()
+    } else {
+        wire.edges
+            .iter()
+            .rev()
+            .map(|edge| {
+                let mut edge = edge.clone();
+                std::mem::swap(&mut edge.start_vertex, &mut edge.end_vertex);
+                std::mem::swap(&mut edge.start_mm, &mut edge.end_mm);
+                edge.parameter_forward = !edge.parameter_forward;
+                edge
+            })
+            .collect::<Vec<_>>()
+    };
+    let count = oriented_edges.len();
+    let starts = (0..count)
+        .filter(|&i| {
+            shared.contains(&oriented_edges[i].edge_id)
+                && (shared.len() == count
+                    || !shared.contains(&oriented_edges[(i + count - 1) % count].edge_id))
+        })
+        .collect::<Vec<_>>();
+    let start = if shared.len() == count {
+        0
+    } else {
+        let [start] = starts.as_slice() else {
+            bail!(
+                "circular carrier face #{} has disconnected treatment run",
+                face.id
+            );
+        };
+        *start
+    };
+    let run = (0..shared.len())
+        .map(|i| &oriented_edges[(start + i) % count])
+        .collect::<Vec<_>>();
+    ensure!(
+        run.iter().all(|edge| shared.contains(&edge.edge_id)),
+        "circular carrier face #{} has noncontiguous interfaces",
+        face.id
+    );
+    let sweep = circle_interface_sweep(face.id, &run, frame)?;
+    let first = (*run[0]).clone();
+    let last = (*run[run.len() - 1]).clone();
+    let full = shared.len() == count;
+    let start_angle = frame.angle(first.start_mm)?;
+    let end_angle = frame.angle(last.end_mm)?;
+    let expected = if full {
+        std::f64::consts::TAU
+    } else if sweep > 0.0 {
+        (end_angle - start_angle).rem_euclid(std::f64::consts::TAU)
+    } else {
+        (start_angle - end_angle).rem_euclid(std::f64::consts::TAU)
+    };
+    ensure!(
+        (expected - sweep.abs()).abs() <= 1.0e-6,
+        "circular carrier interface angles do not match its exact curve traversal"
+    );
+    let previous = (!full).then(|| oriented_edges[(start + count - 1) % count].clone());
+    let next = (!full).then(|| oriented_edges[(start + run.len()) % count].clone());
+    Ok(CircleCarrierRun {
+        face_id: face.id,
+        shell_forward: face.surface_forward,
+        shared,
+        first,
+        last,
+        previous,
+        next,
+        start_angle,
+        sweep,
+    })
+}
+
+fn circle_interface_sweep(
+    face_id: u64,
+    run: &[&OrientedEdgeUse],
+    frame: CircleFrame,
+) -> Result<f64> {
+    let mut sweep = 0.0_f64;
+    for edge in run {
+        let CurveSupport::Circle(circle) = edge.support else {
+            bail!(
+                "circular carrier face #{} has a non-circular interface edge #{}",
+                face_id,
+                edge.edge_id
+            );
+        };
+        ensure!(
+            normalize(circle.normal, DIR_TOL)
+                .is_some_and(|normal| dot(normal, frame.normal).abs() >= 1.0 - DIR_TOL)
+                && point_to_unit_line_distance(circle.center_mm, frame.center, frame.normal)
+                    <= GEOM_TOL_MM,
+            "circular interface #{} does not share the inverse axis",
+            edge.edge_id
+        );
+        let from = frame.angle(edge.start_mm)?;
+        let to = frame.angle(edge.end_mm)?;
+        let increasing = edge.parameter_forward == (dot(circle.normal, frame.normal) > 0.0);
+        let span = if distance(edge.start_mm, edge.end_mm) <= GEOM_TOL_MM {
+            std::f64::consts::TAU
+        } else if increasing {
+            (to - from).rem_euclid(std::f64::consts::TAU)
+        } else {
+            -(from - to).rem_euclid(std::f64::consts::TAU)
+        };
+        ensure!(
+            sweep == 0.0 || sweep.signum() == span.signum(),
+            "circular carrier has opposing interface windings"
+        );
+        sweep += span;
+    }
+    ensure!(
+        sweep.abs() <= std::f64::consts::TAU + 1.0e-7,
+        "circular carrier interface covers more than one turn"
+    );
+    Ok(sweep)
+}
+
+fn circle_carrier_supports_inverse(face: &ReducedFace, frame: CircleFrame) -> bool {
+    match &face.surface {
+        SurfaceSupport::Plane(plane) => {
+            normalize(plane.normal, DIR_TOL)
+                .is_some_and(|n| dot(n, frame.normal).abs() >= 1.0 - DIR_TOL)
+                && dot(sub(frame.center, plane.origin_mm), plane.normal).abs() <= GEOM_TOL_MM
+        }
+        SurfaceSupport::Cylinder(cylinder) => {
+            normalize(cylinder.axis, DIR_TOL).is_some_and(|axis| {
+                dot(axis, frame.normal).abs() >= 1.0 - DIR_TOL
+                    && point_to_unit_line_distance(frame.center, cylinder.axis_origin_mm, axis)
+                        <= GEOM_TOL_MM
+            }) && (cylinder.radius_mm - frame.radius).abs() <= GEOM_TOL_MM
+        }
+        SurfaceSupport::Cone(cone) => normalize(cone.axis, DIR_TOL).is_some_and(|axis| {
+            dot(axis, frame.normal).abs() >= 1.0 - DIR_TOL
+                && point_to_unit_line_distance(frame.center, cone.reference_origin_mm, axis)
+                    <= GEOM_TOL_MM
+                && (cone.semi_angle_rad.tan().mul_add(
+                    dot(sub(frame.center, cone.reference_origin_mm), axis),
+                    cone.reference_radius_mm,
+                ) - frame.radius)
+                    .abs()
+                    <= GEOM_TOL_MM
+        }),
+        _ => false,
+    }
+}
+
+fn inverse_circle_angles(frame: CircleFrame, runs: &[CircleCarrierRun]) -> Result<Vec<f64>> {
+    let mut breaks = vec![0.0];
+    for run in runs {
+        for point in [run.first.start_mm, run.last.end_mm] {
+            let angle = frame.angle(point)?;
+            if !breaks.iter().any(|a| {
+                frame.radius * (a - angle).sin().abs() <= GEOM_TOL_MM
+                    && frame.radius * (a - angle).cos() >= frame.radius - GEOM_TOL_MM
+            }) {
+                breaks.push(angle);
+            }
+        }
+    }
+    breaks.sort_by(f64::total_cmp);
+    // Any original segment is split further into bounded arcs without
+    // interpolating its geometric locus: all pieces use the same exact circle.
+    let mut bounded = Vec::new();
+    for i in 0..breaks.len() {
+        let start = breaks[i];
+        let end = breaks
+            .get(i + 1)
+            .copied()
+            .unwrap_or(breaks[0] + std::f64::consts::TAU);
+        let span = end - start;
+        let pieces = (1_u32..=4)
+            .find(|&count| span <= f64::from(count).mul_add(std::f64::consts::FRAC_PI_2, 1.0e-10))
+            .context("inverse circle has an invalid angular partition")?;
+        for j in 0..pieces {
+            bounded.push(
+                (f64::from(j) / f64::from(pieces))
+                    .mul_add(span, start)
+                    .rem_euclid(std::f64::consts::TAU),
+            );
+        }
+    }
+    ensure!(
+        bounded.len() >= 2 && bounded.len() <= 128,
+        "inverse ring exceeds supported exact arc partition size"
+    );
+    Ok(bounded)
+}
+
+fn circle_arc_cycle(frame: CircleFrame, angles: &[f64]) -> (Vec<[f64; 3]>, Vec<KernelNewEdge>) {
+    let vertices = angles.iter().map(|a| frame.point(*a)).collect::<Vec<_>>();
+    let edges = angles
+        .iter()
+        .enumerate()
+        .map(|(i, a)| KernelNewEdge {
+            vertices: (
+                KernelPatchVertexRef::New(i),
+                KernelPatchVertexRef::New((i + 1) % angles.len()),
+            ),
+            curve: KernelPatchCurve::CircleArc {
+                center_mm: frame.center,
+                normal: frame.normal,
+                x_direction: frame.x,
+                radius_mm: frame.radius,
+                start_angle_rad: *a,
+                end_angle_rad: angles
+                    .get(i + 1)
+                    .copied()
+                    .unwrap_or(angles[0] + std::f64::consts::TAU),
+            },
+        })
+        .collect();
+    (vertices, edges)
+}
+
+fn circle_run_replacement(
+    run: &CircleCarrierRun,
+    frame: CircleFrame,
+    angles: &[f64],
+    flip_full_loop: bool,
+) -> Result<Vec<KernelPatchEdgeUse>> {
+    ensure!(
+        !flip_full_loop || run.previous.is_none(),
+        "cannot reverse a retained partial circular wire"
+    );
+    let tolerance = GEOM_TOL_MM / frame.radius;
+    let start = angles
+        .iter()
+        .position(|a| {
+            ((a - run.start_angle).rem_euclid(std::f64::consts::TAU))
+                .min((run.start_angle - a).rem_euclid(std::f64::consts::TAU))
+                <= tolerance
+        })
+        .context("circular interface start has no shared vertex")?;
+    let full = run.previous.is_none();
+    let end_angle = frame.angle(run.last.end_mm)?;
+    let end = if full {
+        start
+    } else {
+        angles
+            .iter()
+            .position(|a| {
+                ((a - end_angle).rem_euclid(std::f64::consts::TAU))
+                    .min((end_angle - a).rem_euclid(std::f64::consts::TAU))
+                    <= tolerance
+            })
+            .context("circular interface end has no shared vertex")?
+    };
+    let mut result = Vec::new();
+    let mut at = start;
+    loop {
+        if result.len() >= angles.len() {
+            bail!("circular run would reuse a replacement arc");
+        }
+        let increasing = (run.sweep > 0.0) != flip_full_loop;
+        let next = if increasing {
+            (at + 1) % angles.len()
+        } else {
+            (at + angles.len() - 1) % angles.len()
+        };
+        let edge = if increasing { at } else { next };
+        result.push(KernelPatchEdgeUse {
+            edge: KernelPatchEdgeRef::New(edge),
+            orientation: increasing,
+        });
+        at = next;
+        if at == end && (!full || result.len() == angles.len()) {
+            break;
+        }
+    }
+    let span = result
+        .iter()
+        .map(|use_| {
+            let KernelPatchEdgeRef::New(i) = use_.edge else {
+                unreachable!()
+            };
+            let from = angles[i];
+            let to = angles
+                .get(i + 1)
+                .copied()
+                .unwrap_or(angles[0] + std::f64::consts::TAU);
+            to - from
+        })
+        .sum::<f64>();
+    ensure!(
+        (span - run.sweep.abs()).abs() <= 1.0e-6,
+        "reconstructed circular run has wrong total angular span"
+    );
+    Ok(result)
+}
+
+fn circle_line_endpoint_edit(
+    carrier_id: u64,
+    edge: OrientedEdgeUse,
+    old_vertex: u64,
+    new_vertex: usize,
+    new_point: [f64; 3],
+) -> Result<EndpointEdit> {
+    let CurveSupport::Line(_) = edge.support else {
+        bail!(
+            "circular carrier #{} has a non-linear retained neighbor #{}",
+            carrier_id,
+            edge.edge_id
+        );
+    };
+    let delta = sub(edge.end_mm, edge.start_mm);
+    let length = norm(delta);
+    ensure!(
+        length > GEOM_TOL_MM
+            && norm(cross(delta, sub(new_point, edge.start_mm))) / length <= GEOM_TOL_MM,
+        "retained edge #{} does not extend onto inverse circle",
+        edge.edge_id
+    );
+    Ok(EndpointEdit {
+        carrier_face_id: carrier_id,
+        edge,
+        old_vertex,
+        new_vertex,
+        new_point,
+    })
+}
+
+/// A complete circular carrier has no retained endpoints, so its winding
+/// can be selected from the native two-sided edge incidence. Partial carrier
+/// runs have retained neighbors and therefore keep their original winding.
+fn choose_two_sided_circle_runs(
+    runs: &[CircleCarrierRun],
+    frame: CircleFrame,
+    angles: &[f64],
+) -> Result<Vec<Vec<KernelPatchEdgeUse>>> {
+    let full_runs = runs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, run)| run.previous.is_none().then_some(index))
+        .collect::<Vec<_>>();
+    ensure!(
+        full_runs.len() <= 2,
+        "inverse circle has more than two complete carriers"
+    );
+    for mask in 0..(1_usize << full_runs.len()) {
+        let replacements = runs
+            .iter()
+            .enumerate()
+            .map(|(index, run)| {
+                let flip = full_runs
+                    .iter()
+                    .enumerate()
+                    .any(|(bit, &selected)| selected == index && mask & (1 << bit) != 0);
+                circle_run_replacement(run, frame, angles, flip)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut uses = vec![[0_usize; 2]; angles.len()];
+        for (run, replacement) in runs.iter().zip(&replacements) {
+            for edge_use in replacement {
+                let KernelPatchEdgeRef::New(index) = edge_use.edge else {
+                    unreachable!()
+                };
+                // The runtime shell inverts edge use when its face
+                // orientation is reversed. Count *effective* shell uses,
+                // not the face-local wire directions.
+                uses[index][usize::from(edge_use.orientation == run.shell_forward)] += 1;
+            }
+        }
+        if uses.iter().all(|uses| *uses == [1, 1]) {
+            return Ok(replacements);
+        }
+    }
+    bail!("inverse ring is not a complete two-sided shared circular interface")
+}
+
+fn circle_family_carrier_patch(
+    runs: &[CircleCarrierRun],
+    frame: CircleFrame,
+    angles: &[f64],
+    data_section: usize,
+    provenance: &KernelTopologyProvenance,
+) -> Result<(Vec<KernelFaceSplice>, Vec<KernelRetainedEdge>)> {
+    let mut splices = Vec::new();
+    let mut edits = Vec::new();
+    let replacements = choose_two_sided_circle_runs(runs, frame, angles)?;
+    for (run, replacement) in runs.iter().zip(replacements) {
+        splices.push(KernelFaceSplice {
+            face: topology_face(provenance, data_section, run.face_id)?,
+            remove_edges: topology_edges(provenance, data_section, run.shared.iter().copied())?,
+            replacement,
+        });
+        if let (Some(previous), Some(next)) = (&run.previous, &run.next) {
+            let start_idx = angles
+                .iter()
+                .position(|a| {
+                    distance(frame.point(*a), frame.point(run.start_angle)) <= GEOM_TOL_MM
+                })
+                .context("missing inverse run start")?;
+            let end_angle = frame.angle(run.last.end_mm)?;
+            let end_idx = angles
+                .iter()
+                .position(|a| distance(frame.point(*a), frame.point(end_angle)) <= GEOM_TOL_MM)
+                .context("missing inverse run end")?;
+            edits.push(circle_line_endpoint_edit(
+                run.face_id,
+                previous.clone(),
+                previous.end_vertex,
+                start_idx,
+                frame.point(angles[start_idx]),
+            )?);
+            edits.push(circle_line_endpoint_edit(
+                run.face_id,
+                next.clone(),
+                next.start_vertex,
+                end_idx,
+                frame.point(angles[end_idx]),
+            )?);
+        }
+    }
+    Ok((
+        splices,
+        normalize_retained_edge_rewrites(&edits, data_section, provenance)?,
+    ))
+}
+
+/// Replace a connected, full-azimuth family of partial toroidal/conical
+/// treatment faces as one exact native topology transaction.
+pub fn plan_circle_family_patch(
+    solid: &ReducedSolid,
+    family: &[&EdgeTreatmentEvidence],
+    data_section: usize,
+    provenance: &KernelTopologyProvenance,
+) -> Result<KernelTopologyPatch> {
+    ensure!(
+        family.len() > 1,
+        "partial circular family requires multiple source treatment faces"
+    );
+    let frame = CircleFrame::from_edge(&family[0].virtual_edge)?;
+    let mut removed = BTreeSet::new();
+    let mut treatment_edges = BTreeSet::new();
+    let mut by_carrier = BTreeMap::<u64, BTreeSet<u64>>::new();
+    for member in family {
+        ensure!(
+            member.carrier_pair_unique
+                && same_virtual_circle(&member.virtual_edge, &family[0].virtual_edge)
+                && member.kind == family[0].kind,
+            "inconsistent circular treatment family"
+        );
+        ensure!(
+            removed.insert(member.treatment_face_id),
+            "duplicated circular treatment face"
+        );
+        treatment_edges.extend(unique_face_edges(face(solid, member.treatment_face_id)?)?);
+        for carrier in &member.carriers {
+            let entry = by_carrier.entry(carrier.face_id).or_default();
+            for &edge in &carrier.shared_edge_ids {
+                ensure!(
+                    entry.insert(edge),
+                    "circular treatment family assigns shared interface edge more than once"
+                );
+            }
+        }
+    }
+    ensure!(
+        by_carrier.keys().all(|id| !removed.contains(id)),
+        "circular treatment overlaps its own carrier"
+    );
+    let interfaces = by_carrier
+        .values()
+        .flat_map(|edges| edges.iter().copied())
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        interfaces.is_subset(&treatment_edges),
+        "circular family interface is not a treatment boundary"
+    );
+    for &edge in &treatment_edges {
+        let users = edge_face_users(solid, edge);
+        ensure!(
+            users.len() == 2 && users.iter().any(|id| removed.contains(id)),
+            "circular treatment edge #{edge} is not manifold in its source solid"
+        );
+        if interfaces.contains(&edge) {
+            ensure!(
+                users.iter().filter(|id| removed.contains(id)).count() == 1
+                    && users
+                        .iter()
+                        .any(|id| by_carrier.get(id).is_some_and(|set| set.contains(&edge))),
+                "circular treatment edge #{edge} has an invalid surviving carrier"
+            );
+        } else {
+            ensure!(
+                users.iter().all(|id| removed.contains(id)),
+                "circular treatment family has a real terminal boundary at edge #{edge}"
+            );
+        }
+    }
+    let mut runs = Vec::new();
+    for (face_id, shared) in by_carrier {
+        let carrier = face(solid, face_id)?;
+        ensure!(
+            circle_carrier_supports_inverse(carrier, frame),
+            "circular inverse circle is not on carrier face #{face_id}"
+        );
+        runs.push(circle_carrier_run(carrier, shared, frame)?);
+    }
+    let angles = inverse_circle_angles(frame, &runs)?;
+    let (new_vertices, new_edges) = circle_arc_cycle(frame, &angles);
+    let (face_splices, rewrite_edges) =
+        circle_family_carrier_patch(&runs, frame, &angles, data_section, provenance)?;
+    Ok(KernelTopologyPatch {
+        remove_faces: removed
+            .into_iter()
+            .map(|id| topology_face(provenance, data_section, id))
+            .collect::<Result<Vec<_>>>()?,
+        new_vertices,
+        new_edges,
+        rewrite_edges,
+        face_splices,
+        face_boundary_replacements: Vec::new(),
+        require_unused_edges: topology_edges(provenance, data_section, treatment_edges)?,
+    })
 }
 
 fn plan_segment_patch(
@@ -781,6 +1474,98 @@ mod tests {
         EdgeTreatmentCarrier, EdgeTreatmentEvidenceStrength, EdgeTreatmentKind,
     };
     use crate::kernel_source_load::{KernelFaceTopologyProvenance, KernelTopologyEntityProvenance};
+
+    /// A real 81-face antenna body with three split-ring families, and a
+    /// real 178-face perforated cylinder with a split fillet at each end.
+    /// Source STEP representations are imported once; surgery operates
+    /// entirely on Monstertruck's exact-trim native topology.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn verify_real_split_ring_native_transaction(
+        input: &[u8],
+        source_id: u64,
+        treatment_ids: &[u64],
+        original_faces: usize,
+    ) -> Result<()> {
+        use crate::cad_kernel::monstertruck::MonstertruckKernel;
+        use crate::kernel_source_load::SourceStepLoadInspector;
+        use crate::kernel_topology::{SourceTopologyEditor, plan_source_edge_treatment_patches};
+
+        let kernel = MonstertruckKernel::project_standard();
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange,
+        )?;
+        let source_load = kernel.inspect_source_document(&document)?;
+        let loaded = source_load
+            .solids
+            .iter()
+            .find(|item| item.source.id == source_id)
+            .context("real split-ring fixture source is missing")?;
+        let provenance = loaded
+            .topology_provenance
+            .as_ref()
+            .context("real split-ring fixture has no stable topology provenance")?;
+        let section = &document.as_ref().data[loaded.source.data_section];
+        let index = crate::step_graph::build_index(&section.entities);
+        let evidence =
+            crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
+                &section.entities,
+                &index,
+                &std::collections::HashSet::from([source_id]),
+            )
+            .into_iter()
+            .filter(|item| treatment_ids.contains(&item.treatment_face_id))
+            .collect::<Vec<_>>();
+        ensure!(
+            evidence.len() == treatment_ids.len(),
+            "fixture lost one or more split-ring treatments"
+        );
+        let patch = plan_source_edge_treatment_patches(
+            document.as_ref(),
+            loaded.source,
+            &evidence,
+            provenance,
+        )?;
+        assert_eq!(patch.remove_faces.len(), treatment_ids.len());
+        let removed = patch.remove_faces.iter().copied().collect::<BTreeSet<_>>();
+        let retained = provenance
+            .faces
+            .iter()
+            .map(|face| face.topology_id)
+            .filter(|id| !removed.contains(id))
+            .collect::<BTreeSet<_>>();
+        let edited = kernel.edit_source_topology(&document, loaded.source, &[patch])?;
+        let actual = kernel.inspect_edited_source(&edited)?;
+        assert_eq!(actual.boundary_shells, 1);
+        assert_eq!(actual.faces, original_faces - treatment_ids.len());
+        assert_eq!(
+            actual
+                .retained_source_topology
+                .faces
+                .iter()
+                .map(|face| face.topology_id)
+                .collect::<BTreeSet<_>>(),
+            retained,
+            "native surgery changed identities outside the selected treatment faces",
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_split_ring_families_apply_atomically_with_original_native_identity() -> Result<()> {
+        verify_real_split_ring_native_transaction(
+            include_bytes!("../validation/fixtures/native_split_ring_antenna.step"),
+            4570,
+            &[131, 1542, 463, 2621, 4057, 4159],
+            81,
+        )?;
+        verify_real_split_ring_native_transaction(
+            include_bytes!("../validation/fixtures/native_split_ring_hollow_cylinder.step"),
+            7849,
+            &[3393, 3413, 7654, 7840],
+            178,
+        )
+    }
 
     const DATA_SECTION: usize = 0;
     const SOLID_ID: u64 = 500;

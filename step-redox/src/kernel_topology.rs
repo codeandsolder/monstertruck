@@ -229,15 +229,25 @@ pub fn plan_source_edge_treatment_patches(
     let solid = source_reduced_solid(exchange, source)?;
     let mut ordered = evidence.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|item| item.treatment_face_id);
-    let patches = ordered
+    let families = crate::inverse_edge_treatment::edge_treatment_families(&solid, &ordered);
+    let patches = families
         .into_iter()
-        .map(|item| {
-            crate::inverse_edge_treatment::plan_edge_treatment_patch(
-                &solid,
-                item,
-                source.data_section,
-                provenance,
-            )
+        .map(|family| {
+            if family.len() == 1 {
+                crate::inverse_edge_treatment::plan_edge_treatment_patch(
+                    &solid,
+                    family[0],
+                    source.data_section,
+                    provenance,
+                )
+            } else {
+                crate::inverse_edge_treatment::plan_circle_family_patch(
+                    &solid,
+                    &family,
+                    source.data_section,
+                    provenance,
+                )
+            }
         })
         .collect::<Result<Vec<_>>>()?;
     merge_topology_patches(patches)
