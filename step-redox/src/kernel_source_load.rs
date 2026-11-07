@@ -296,7 +296,8 @@ mod monstertruck_adapter {
         KernelTopologyProvenance, SourceEntity, SourceStepLoadInspector,
     };
     use crate::brep::{
-        self, CurveSupport, FaceLoop, LineSupport, OrientedEdgeUse, PlaneSupport, SurfaceSupport,
+        self, CircleSupport, ConeSupport, CurveSupport, CylinderSupport, FaceLoop, LineSupport,
+        OrientedEdgeUse, PlaneSupport, SphereSupport, SurfaceSupport, TorusSupport,
     };
     use crate::cad_kernel::monstertruck::MonstertruckKernel;
     use crate::kernel_topology::{
@@ -308,6 +309,9 @@ mod monstertruck_adapter {
     use crate::step_document::StepSection;
     use crate::step_graph;
     use anyhow::Result;
+    use monstertruck_geometry::analytic_carrier::{
+        AnalyticCarrier, AnalyticSupport, similarity_scale,
+    };
     use monstertruck_geometry::analytic_line_segment::{
         SegmentLocus, certify_bspline_segment_locus, certify_nurbs_segment_locus,
     };
@@ -315,8 +319,9 @@ mod monstertruck_adapter {
     use monstertruck_io::step::load::ParsedStepSource;
     use monstertruck_io::step::load::convert::StepCompressedTrimmedSolid;
     use monstertruck_io::step::load::step_geometry::{
-        Conic3D, Curve3D, DEFAULT_NUMERICAL_TOLERANCES, ExactParameterBoundary2D, KERNEL_EPSILON,
-        Line, Matrix4, Point3, Processor, TrimmedCurve, UnitCircle, Vector4,
+        Conic3D, Curve3D, DEFAULT_NUMERICAL_TOLERANCES, ElementarySurface,
+        ExactParameterBoundary2D, KERNEL_EPSILON, Line, Matrix4, Point3, Processor, Surface,
+        Transform, TrimmedCurve, UnitCircle, Vector3, Vector4,
     };
     use monstertruck_io::step::load::{
         EntityLoadReport, LossCategory, LossReason, LossTally, ResolvedStepDocument,
@@ -486,6 +491,124 @@ mod monstertruck_adapter {
         })
     }
 
+    /// A deterministic radial frame for axisymmetric support geometry.
+    fn native_radial_direction(axis: Vector3) -> [f64; 3] {
+        let candidate = if axis.x.abs() < 0.8 {
+            Vector3::unit_x()
+        } else {
+            Vector3::unit_y()
+        };
+        let radial = candidate
+            - axis
+                * candidate
+                    .x
+                    .mul_add(axis.x, candidate.y.mul_add(axis.y, candidate.z * axis.z));
+        let length = radial
+            .x
+            .mul_add(radial.x, radial.y.mul_add(radial.y, radial.z * radial.z))
+            .sqrt();
+        [radial.x / length, radial.y / length, radial.z / length]
+    }
+
+    /// Convert full checked analytic carriers from the edited native B-rep.
+    /// Unknown geometry stays unknown, with no fitted or sampled replacement.
+    fn native_surface_support(surface: &Surface, id: u64) -> SurfaceSupport {
+        let certificate = match surface {
+            Surface::Elementary(ElementarySurface::Plane(plane)) => AnalyticCarrier::plane(plane),
+            Surface::Elementary(ElementarySurface::Sphere(sphere)) => AnalyticCarrier::sphere_pose(
+                sphere.entity().0.center(),
+                sphere.entity().0.radius(),
+                *sphere.transform(),
+                sphere.orientation(),
+            ),
+            Surface::Elementary(ElementarySurface::CylindricalSurface(cylinder)) => {
+                AnalyticCarrier::linear_revolution(
+                    *cylinder.entity().entity_curve(),
+                    cylinder.entity().origin(),
+                    cylinder.entity().axis(),
+                    *cylinder.transform(),
+                    cylinder.orientation(),
+                )
+            }
+            Surface::Elementary(ElementarySurface::ConicalSurface(cone)) => {
+                AnalyticCarrier::linear_revolution(
+                    *cone.entity().entity_curve(),
+                    cone.entity().origin(),
+                    cone.entity().axis(),
+                    *cone.transform(),
+                    cone.orientation(),
+                )
+            }
+            Surface::Elementary(ElementarySurface::ToroidalSurface(torus)) => {
+                AnalyticCarrier::torus(torus)
+            }
+            _ => None,
+        };
+        match certificate.map(AnalyticCarrier::support) {
+            Some(AnalyticSupport::Plane { origin, .. }) => {
+                let Surface::Elementary(ElementarySurface::Plane(plane)) = surface else {
+                    return SurfaceSupport::Other { entity_id: id };
+                };
+                // A carrier certificate canonicalizes an unoriented plane.
+                // Preserve the native chart normal for face-sense recovery.
+                let normal = plane.normal();
+                SurfaceSupport::Plane(PlaneSupport {
+                    origin_mm: [origin.x, origin.y, origin.z],
+                    normal: [normal.x, normal.y, normal.z],
+                    max_residual_mm: 0.0,
+                })
+            }
+            Some(AnalyticSupport::Cylinder {
+                origin,
+                axis,
+                radius,
+            }) => SurfaceSupport::Cylinder(CylinderSupport {
+                axis_origin_mm: [origin.x, origin.y, origin.z],
+                axis: [axis.x, axis.y, axis.z],
+                x_direction: native_radial_direction(axis),
+                radius_mm: radius,
+            }),
+            Some(AnalyticSupport::Cone {
+                apex,
+                axis,
+                slope,
+                positive_nappe,
+            }) => {
+                let directed = axis * if positive_nappe { 1.0 } else { -1.0 };
+                let reference = apex + directed;
+                SurfaceSupport::Cone(ConeSupport {
+                    reference_origin_mm: [reference.x, reference.y, reference.z],
+                    axis: [directed.x, directed.y, directed.z],
+                    x_direction: native_radial_direction(directed),
+                    reference_radius_mm: slope,
+                    semi_angle_rad: slope.atan(),
+                })
+            }
+            Some(AnalyticSupport::Sphere { center, radius }) => {
+                let axis = Vector3::unit_z();
+                SurfaceSupport::Sphere(SphereSupport {
+                    center_mm: [center.x, center.y, center.z],
+                    axis: [axis.x, axis.y, axis.z],
+                    x_direction: native_radial_direction(axis),
+                    radius_mm: radius,
+                })
+            }
+            Some(AnalyticSupport::Torus {
+                center,
+                axis,
+                major_radius,
+                minor_radius,
+            }) => SurfaceSupport::Torus(TorusSupport {
+                center_mm: [center.x, center.y, center.z],
+                axis: [axis.x, axis.y, axis.z],
+                x_direction: native_radial_direction(axis),
+                major_radius_mm: major_radius,
+                minor_radius_mm: minor_radius,
+            }),
+            None => SurfaceSupport::Other { entity_id: id },
+        }
+    }
+
     /// Extract analytic curve support directly from the kernel's exact 3D
     /// carrier. Polynomial and rational splines are promoted to a line only
     /// when a whole-curve control-hull certificate covers the complete chord;
@@ -520,6 +643,21 @@ mod monstertruck_adapter {
             return line();
         }
         match curve {
+            Curve3D::Conic(Conic3D::Ellipse(circle)) => {
+                let transform = *circle.transform();
+                let Some(radius_mm) = similarity_scale(transform) else {
+                    return CurveSupport::Other { entity_id: id };
+                };
+                let center = transform.transform_point(Point3::new(0.0, 0.0, 0.0));
+                let normal = transform.transform_vector(Vector3::unit_z()) / radius_mm;
+                let x = transform.transform_vector(Vector3::unit_x()) / radius_mm;
+                CurveSupport::Circle(CircleSupport {
+                    center_mm: [center.x, center.y, center.z],
+                    normal: [normal.x, normal.y, normal.z],
+                    x_direction: [x.x, x.y, x.z],
+                    radius_mm,
+                })
+            }
             Curve3D::BsplineCurve(spline) => CurveSupport::BSpline(brep::BSplineSupport {
                 degree: spline.degree(),
                 control_points_mm: spline
@@ -666,22 +804,7 @@ mod monstertruck_adapter {
                 let edge_ids = shell.edges.iter().map(|_| allocate()).collect::<Vec<_>>();
                 for face in &shell.faces {
                     let face_id = allocate();
-                    let surface = match &face.surface {
-                        monstertruck_io::step::load::step_geometry::Surface::Elementary(
-                            monstertruck_io::step::load::step_geometry::ElementarySurface::Plane(
-                                plane,
-                            ),
-                        ) => {
-                            let origin = plane.origin();
-                            let normal = plane.normal();
-                            SurfaceSupport::Plane(PlaneSupport {
-                                origin_mm: [origin.x, origin.y, origin.z],
-                                normal: [normal.x, normal.y, normal.z],
-                                max_residual_mm: 0.0,
-                            })
-                        }
-                        _ => SurfaceSupport::Other { entity_id: face_id },
-                    };
+                    let surface = native_surface_support(&face.surface, face_id);
                     let loops = face
                         .boundaries
                         .iter()

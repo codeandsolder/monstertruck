@@ -837,9 +837,13 @@ fn recognize_native_edited_host<K: SourceTopologyEditor>(
     edited: &K::EditedSource,
 ) -> Result<Option<CadFragment>> {
     let reduced = kernel.edited_source_reduced_brep(edited)?;
-    crate::solid_extrusions::detect_solid_extrusion_from_reduced(&reduced)
+    if let Some(extrusion) = crate::solid_extrusions::detect_solid_extrusion_from_reduced(&reduced)
+    {
+        return recover_solid_extrusion_fragment(&extrusion).map(Some);
+    }
+    crate::solid_revolutions::detect_native_solid_revolution_from_reduced(&reduced)
         .as_ref()
-        .map(recover_solid_extrusion_fragment)
+        .map(crate::cad_recovery::recover_solid_revolution_fragment)
         .transpose()
 }
 
@@ -2931,6 +2935,60 @@ END-ISO-10303-21;
             report.same_domain_normalized_solids[0].fragment.source,
             CadFragmentSource::SameDomainNormalized { .. }
         ));
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_turning_hosts_recover_from_edited_analytic_brep() -> Result<()> {
+        use crate::brep::SurfaceSupport;
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        for (name, input) in [
+            (
+                "conical frustum",
+                include_bytes!("../validation/fixtures/native_conical_frustum.step").as_slice(),
+            ),
+            (
+                "ring torus",
+                include_bytes!("../validation/fixtures/native_torus.step").as_slice(),
+            ),
+            (
+                "spherical cap",
+                include_bytes!("../validation/fixtures/native_spherical_cap.step").as_slice(),
+            ),
+        ] {
+            let document = kernel.resolve_source_exchange(
+                monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange,
+            )?;
+            let source_load = kernel.inspect_source_document(&document)?;
+            let [loaded] = source_load.solids.as_slice() else {
+                bail!("{name} should load exactly one solid");
+            };
+            if let Some(failure) = &loaded.failure {
+                bail!("{name} native STEP import failed: {failure:?}");
+            }
+            let edited = kernel.edit_source_topology(&document, loaded.source, &[])?;
+            let native = kernel.edited_source_reduced_brep(&edited)?;
+            let analytic = native
+                .faces()
+                .filter(|face| {
+                    matches!(
+                        face.surface,
+                        SurfaceSupport::Cone(_)
+                            | SurfaceSupport::Cylinder(_)
+                            | SurfaceSupport::Sphere(_)
+                            | SurfaceSupport::Torus(_)
+                    )
+                })
+                .count();
+            assert!(analytic > 0, "{name} lost native analytic surfaces");
+            let host = recognize_native_edited_host(&kernel, &edited)?
+                .ok_or_else(|| anyhow::anyhow!("{name} was not reconstructed from native B-rep"))?;
+            host.model.validate()?;
+            let evaluated = kernel.evaluate(&host.model, host.root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.is_single_solid(), "{name} produced {summary:?}");
+        }
         Ok(())
     }
 

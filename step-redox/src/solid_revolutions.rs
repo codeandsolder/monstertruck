@@ -534,6 +534,14 @@ pub(crate) fn detect_solid_revolution_from_reduced(
     )
 }
 
+/// Recover a native edited solid without requiring a serialized STEP source
+/// table. The default geometry tolerance applies to these new topology IDs.
+pub(crate) fn detect_native_solid_revolution_from_reduced(
+    solid: &ReducedSolid,
+) -> Option<RecoveredSolidRevolution> {
+    detect_solid_revolution_from_reduced(solid, &[], &HashMap::new())
+}
+
 fn detect_one_solid_from_faces(
     solid_id: u64,
     face_ids: Vec<u64>,
