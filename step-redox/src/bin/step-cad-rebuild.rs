@@ -33,6 +33,7 @@ fn main() -> Result<()> {
     let mut fragments = report
         .solid_extrusions
         .into_iter()
+        .chain(report.solid_lofts)
         .chain(report.solid_revolutions)
         .chain(report.radial_slot_revolutions)
         .chain(report.solid_sweeps)

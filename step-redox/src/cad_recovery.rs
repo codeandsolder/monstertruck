@@ -34,6 +34,11 @@ pub enum CadFragmentSource {
         cap_face_ids: [u64; 2],
         side_face_ids: Vec<u64>,
     },
+    SolidLoft {
+        solid_id: u64,
+        cap_face_ids: [u64; 2],
+        side_face_ids: Vec<u64>,
+    },
     SolidRevolution {
         solid_id: u64,
         face_ids: Vec<u64>,

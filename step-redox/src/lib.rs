@@ -43,6 +43,7 @@ pub mod profile_curves;
 mod reduced_brep;
 mod shape_identity;
 pub mod solid_extrusions;
+mod solid_lofts;
 pub mod solid_revolutions;
 pub mod solid_sweeps;
 mod spherical_caps;

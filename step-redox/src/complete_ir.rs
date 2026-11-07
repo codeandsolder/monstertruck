@@ -31,8 +31,8 @@ use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v12";
-pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v17";
+pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
+pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v18";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReducedBrepMutationMode {
@@ -105,6 +105,7 @@ pub struct CompleteIr {
     pub surface_signature_summaries: Vec<SurfaceSignatureSummary>,
     pub instance_pattern_diagnostics: Vec<SourceInstancePattern>,
     pub solid_extrusions: Vec<SourceCadFragment>,
+    pub solid_lofts: Vec<SourceCadFragment>,
     pub solid_revolutions: Vec<SourceCadFragment>,
     pub radial_slot_revolutions: Vec<SourceCadFragment>,
     pub solid_sweeps: Vec<SourceCadFragment>,
@@ -456,6 +457,9 @@ impl CompleteIrBuildState {
             instance_pattern_diagnostics: self.instance_pattern_diagnostics,
             solid_extrusions: selected_category(&selected, |source| {
                 matches!(source, CadFragmentSource::SolidExtrusion { .. })
+            }),
+            solid_lofts: selected_category(&selected, |source| {
+                matches!(source, CadFragmentSource::SolidLoft { .. })
             }),
             solid_revolutions: selected_category(&selected, |source| {
                 matches!(source, CadFragmentSource::SolidRevolution { .. })
@@ -916,6 +920,9 @@ fn recognize_native_edited_host<K: SourceTopologyEditor>(
     if let Some(extrusion) = crate::solid_extrusions::detect_solid_extrusion_from_reduced(&reduced)
     {
         return recover_solid_extrusion_fragment(&extrusion).map(Some);
+    }
+    if let Some(loft) = crate::solid_lofts::detect_sectioned_planar_loft(&reduced) {
+        return Ok(Some(loft));
     }
     crate::solid_revolutions::detect_native_solid_revolution_from_reduced(&reduced)
         .as_ref()
@@ -1537,6 +1544,9 @@ fn recover_constructive_fragments_from_entities_with_index(
 
     let mut out = recover_solid_extrusion_fragments(&extrusions)?;
     out.extend(recover_solid_revolution_fragments(&revolutions)?);
+    out.extend(crate::solid_lofts::detect_sectioned_planar_lofts(
+        entities, index,
+    ));
     out.extend(recover_radial_slot_revolution_fragments(&radial_slots)?);
     out.extend(recover_round_sweep_fragments(&closed_sweeps)?);
     out.extend(recover_revolved_round_tail_fragments(
@@ -2032,6 +2042,7 @@ fn scan_source_solids(section: &RecoverySection<'_>) -> Vec<SourceSolidSummary> 
 const fn source_solid_id(source: &CadFragmentSource) -> u64 {
     match source {
         CadFragmentSource::SolidExtrusion { solid_id, .. }
+        | CadFragmentSource::SolidLoft { solid_id, .. }
         | CadFragmentSource::SolidRevolution { solid_id, .. }
         | CadFragmentSource::RadialSlotRevolution { solid_id, .. }
         | CadFragmentSource::SolidSweep { solid_id, .. }
@@ -2168,6 +2179,7 @@ mod tests {
             surface_signature_summaries: Vec::new(),
             instance_pattern_diagnostics: Vec::new(),
             solid_extrusions: Vec::new(),
+            solid_lofts: Vec::new(),
             solid_revolutions: Vec::new(),
             radial_slot_revolutions: Vec::new(),
             solid_sweeps: Vec::new(),
@@ -3139,6 +3151,40 @@ END-ISO-10303-21;
     /// elbows, three cylindrical legs and planar circular end caps.
     /// No source-specific dimensions, face count or bend count is encoded
     /// in the detector; these fixtures cover exporter face partitioning.
+    /// A real JLCPCB 14-face rectangular bar with independent four-sided
+    /// chamfers at both ends: four coplanar, line-edged rectangle stations
+    /// spanning a long constant section and two short tapered sections.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_staged_rectangle_recovers_complete_native_ruled_loft() -> Result<()> {
+        let input = include_bytes!("../validation/fixtures/native_staged_rectangular_loft.step");
+        let parser = recover_complete_ir_bytes(input)?;
+        assert_eq!(parser.constructively_recovered_solid_count, 1);
+        let kernel = NoSourceSnapshotKernel(
+            crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard(),
+        );
+        let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(
+            report.constructively_recovered_solid_count, 1,
+            "{:?}",
+            report.kernel_recovery_failures
+        );
+        assert_eq!(report.unrecovered_solid_count, 0);
+        let [loft] = report.solid_lofts.as_slice() else {
+            bail!("expected one complete parametric loft");
+        };
+        let fragment = &loft.fragment;
+        let [CadNode::Loft { sections }] = fragment.model.nodes.as_slice() else {
+            bail!("expected one editable loft node");
+        };
+        assert_eq!(sections.len(), 4);
+        fragment.model.validate()?;
+        let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
+        assert!(kernel.summarize(&rebuilt).is_single_solid());
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn real_open_round_bend_paths_recover_as_executable_cad_sweeps() -> Result<()> {

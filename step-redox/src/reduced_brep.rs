@@ -431,7 +431,7 @@ impl ReducedSolid {
         Some(())
     }
 
-    fn validate_closed_topology(&self) -> Option<()> {
+    pub fn validate_closed_topology(&self) -> Option<()> {
         let mut uses = HashMap::<u64, Vec<(u64, u64)>>::new();
         for face in self.faces.values() {
             for loop_ in &face.loops {
