@@ -6,8 +6,17 @@
 //! preserving the original edge's `StableId` on both neighboring source faces.
 //! This changes the *geometric carrier*, not the numerical patch tolerance.
 
-use super::*;
+use super::{
+    CurveSupport, DIR_TOL, EdgeTreatmentEvidence, EndpointEdit, GEOM_TOL_MM, KernelFaceSplice,
+    KernelNewEdge, KernelPatchCurve, KernelPatchEdgeRef, KernelPatchEdgeUse, KernelPatchVertexRef,
+    KernelTopologyPatch, KernelTopologyProvenance, OrientedEdgeUse, ReducedFace, ReducedSolid,
+    SurfaceSupport, add, carrier_run_neighbors, cross, distance, dot, edge_face_users, face,
+    global_edge_endpoints, mul, norm, normalize, normalize_retained_edge_rewrites,
+    plan_terminal_splices, sub, topology_edges, topology_face, unique_face_edges,
+};
 use crate::brep::{BSplineSupport, CylinderSupport, PlaneSupport};
+use anyhow::{Context, Result, bail, ensure};
+use std::collections::BTreeSet;
 
 const FIT_MM: f64 = crate::numeric::DEFAULT_FEATURE_HEAL_TOL_MM;
 const SAMPLES_PER_KNOT_SPAN: u32 = 32;
