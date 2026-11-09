@@ -26,7 +26,7 @@ use crate::planar_features::{
     BoundaryFeatureInstanceEvidence, BoundaryFeaturePeelPlan, FeaturePolarity,
 };
 use crate::solid_revolutions::SolidSurfaceSignature;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use ruststep::ast::{EntityInstance, Exchange};
 use serde::Serialize;
 use std::borrow::Cow;
@@ -901,20 +901,22 @@ fn recover_kernel_topology_normalized_fragment<
     let patches = if evidence.is_empty() {
         Vec::new()
     } else {
-        vec![plan_source_edge_treatment_patches(
-            exchange,
-            source,
-            &evidence,
-            &provenance,
-        )?]
+        vec![
+            plan_source_edge_treatment_patches(exchange, source, &evidence, &provenance)
+                .context("construct inverse edge-treatment topology patch")?,
+        ]
     };
     // Keep one exact kernel-owned source throughout both reduction stages.
     // The source identity journal does not depend on temporary STEP numbers.
-    let mut edited = kernel.edit_source_topology(document, source, &patches)?;
+    let mut edited = kernel
+        .edit_source_topology(document, source, &patches)
+        .context("apply inverse edge-treatment topology patch to source")?;
     if kernel.inspect_edited_source(&edited)?.faces == 0 {
         return Ok(None);
     }
-    let same_domain_merges = kernel.normalize_edited_source(&mut edited)?;
+    let same_domain_merges = kernel
+        .normalize_edited_source(&mut edited)
+        .context("normalize native source faces after inverse treatments")?;
     let unchanged = patches.is_empty() && same_domain_merges == 0;
     // Even an unedited source can have a native constructive representation
     // that the parser-only path did not recognize (e.g. an exact U-directed
@@ -1117,7 +1119,7 @@ where
             Ok(None) => {}
             Err(error) => failures.push(KernelRecoveryFailure {
                 source,
-                error: error.to_string(),
+                error: format!("{error:#}"),
             }),
         }
     }

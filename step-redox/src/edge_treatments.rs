@@ -402,6 +402,53 @@ fn prove_cylindrical_fillet(
     ))
 }
 
+/// A whole planar face can be removed as one edge chamfer only when its
+/// complete boundary is a strip: one loop, two opposite carrier runs, and
+/// two terminal runs joining them. A cutout or extra boundary component
+/// belongs to the host geometry and cannot disappear with the chamfer.
+fn is_complete_planar_chamfer_strip(
+    treatment: &FaceInfo,
+    first_edges: &[u64],
+    second_edges: &[u64],
+) -> bool {
+    let [boundary] = treatment.loops.as_slice() else {
+        return false;
+    };
+    let first = first_edges.iter().copied().collect::<HashSet<_>>();
+    let second = second_edges.iter().copied().collect::<HashSet<_>>();
+    if first.is_empty() || second.is_empty() || !first.is_disjoint(&second) {
+        return false;
+    }
+    let states = boundary
+        .edges
+        .iter()
+        .map(|edge| {
+            if first.contains(&edge.edge_id) {
+                1
+            } else if second.contains(&edge.edge_id) {
+                2
+            } else {
+                0
+            }
+        })
+        .collect::<Vec<_>>();
+    if states.len() < 4
+        || states.iter().filter(|&&state| state == 1).count() != first.len()
+        || states.iter().filter(|&&state| state == 2).count() != second.len()
+    {
+        return false;
+    }
+    let runs = (0..states.len())
+        .filter(|&i| states[i] != states[(i + states.len() - 1) % states.len()])
+        .map(|i| states[i])
+        .collect::<Vec<_>>();
+    runs.len() == 4
+        && (runs == [1, 0, 2, 0]
+            || runs == [0, 2, 0, 1]
+            || runs == [2, 0, 1, 0]
+            || runs == [0, 1, 0, 2])
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "proof helpers keep carrier evidence explicit"
@@ -421,6 +468,9 @@ fn prove_planar_chamfer(
     else {
         return None;
     };
+    if !is_complete_planar_chamfer_strip(treatment, first_edges, second_edges) {
+        return None;
+    }
     let treatment_normal = normalize(treatment_plane.normal, DIR_TOL)?;
     let first_normal = normalize(first_plane.normal, DIR_TOL)?;
     let second_normal = normalize(second_plane.normal, DIR_TOL)?;
@@ -1044,6 +1094,18 @@ const fn support_name(surface: &SurfaceSupport) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn real_multiwire_host_face_is_not_a_removable_chamfer_strip() -> anyhow::Result<()> {
+        let source =
+            include_bytes!("../validation/fixtures/native_mixed_carrier_chamfer_06d018ae.step");
+        let evidence = crate::detect_edge_treatment_evidence_bytes(source)?;
+        assert!(
+            evidence.iter().all(|item| item.treatment_face_id != 268),
+            "source face #268 has both a 12-edge external boundary and a circular hole; it cannot be one removable chamfer strip"
+        );
+        Ok(())
+    }
 
     #[test]
     fn meridian_lines_intersect_deterministically() {
