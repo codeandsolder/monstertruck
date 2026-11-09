@@ -205,7 +205,24 @@ pub mod monstertruck {
             .clone();
         let start_cap = profile::attach_plane_normalized(vec![first])?;
         let end_cap = profile::attach_plane_normalized(vec![last])?;
-        let mut shell: Shell = builder::try_skin_wires(&wires)?;
+        // A ruled wall between straight source edges may be an exact plane.
+        // Retain its analytic carrier and coedges when provably coplanar;
+        // twisted and curved walls keep the original homotopy surface.
+        let mut shell = Shell::new();
+        for face in builder::try_skin_wires(&wires)? {
+            let boundaries = face.boundaries();
+            if let [wire] = boundaries.as_slice()
+                && wire.len() == 4
+                && wire
+                    .edge_iter()
+                    .all(|edge| matches!(edge.curve(), Curve::Line(_)))
+                && let Ok(plane) = builder::try_attach_plane(boundaries)
+            {
+                shell.push(plane);
+            } else {
+                shell.push(face);
+            }
+        }
         shell.push(start_cap.inverse());
         shell.push(end_cap);
         Ok(Solid::new(vec![shell])?)
@@ -948,7 +965,12 @@ pub mod monstertruck {
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
             assert_eq!(summary.faces, 6);
-            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            let step = kernel.to_step(&evaluated)?;
+            ruststep::parser::parse(&step)?;
+            assert!(
+                !step.contains("B_SPLINE_SURFACE"),
+                "coplanar straight-edge loft walls should remain analytic planes"
+            );
             Ok(())
         }
 
