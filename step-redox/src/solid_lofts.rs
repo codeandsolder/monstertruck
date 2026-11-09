@@ -326,6 +326,232 @@ pub fn detect_sectioned_planar_loft(solid: &ReducedSolid) -> Option<CadFragment>
     candidates.into_iter().next().map(|(_, fragment)| fragment)
 }
 
+/// An exact planar end treatment, whose terminal face and four ruled walls
+/// are real source topology. The shoulder section is an implied interface,
+/// never an invented source face.
+pub(crate) struct RuledEndExtension {
+    pub fragment: CadFragment,
+    pub tip_face_id: u64,
+    pub wall_face_ids: [u64; 4],
+    pub axis: [f64; 3],
+}
+
+/// Discover terminal four-sided ruled caps. Unlike the whole-solid loft
+/// recognizer, this works with a mixed analytic source: curved elbow walls
+/// remain untouched while the exact planar tip treatment is recovered.
+pub(crate) fn detect_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
+    solid
+        .faces()
+        .filter_map(|cap| terminal_ruled_extension(solid, cap))
+        .collect()
+}
+
+fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<RuledEndExtension> {
+    if !plane_quad(cap) {
+        return None;
+    }
+    let SurfaceSupport::Plane(plane) = &cap.surface else {
+        return None;
+    };
+    let cap_edges = &cap.loops[0].edges;
+    let cap_vertices = cap_edges
+        .iter()
+        .map(|e| (e.start_vertex, e.start_mm))
+        .collect::<BTreeMap<_, _>>();
+    if cap_vertices.len() != 4 {
+        return None;
+    }
+
+    let mut matching_shoulder = BTreeMap::<u64, Vertex>::new();
+    let mut walls = Vec::new();
+    let mut shoulder_edges = BTreeSet::new();
+    for edge in cap_edges {
+        let adjacent = solid
+            .faces()
+            .filter(|f| f.id != cap.id && f.loop_edges().any(|use_| use_.edge_id == edge.edge_id))
+            .collect::<Vec<_>>();
+        let [wall] = adjacent.as_slice() else {
+            return None;
+        };
+        if !plane_quad(wall) || walls.contains(&wall.id) {
+            return None;
+        }
+        walls.push(wall.id);
+        let opposite = wall
+            .loop_edges()
+            .filter(|other| {
+                !cap_vertices.contains_key(&other.start_vertex)
+                    && !cap_vertices.contains_key(&other.end_vertex)
+            })
+            .collect::<Vec<_>>();
+        let [shoulder_edge] = opposite.as_slice() else {
+            return None;
+        };
+        shoulder_edges.insert(shoulder_edge.edge_id);
+        for end_id in [edge.start_vertex, edge.end_vertex] {
+            let connectors = wall
+                .loop_edges()
+                .filter_map(|other| {
+                    if other.start_vertex == end_id && !cap_vertices.contains_key(&other.end_vertex)
+                    {
+                        Some(Vertex {
+                            id: other.end_vertex,
+                            point: other.end_mm,
+                        })
+                    } else if other.end_vertex == end_id
+                        && !cap_vertices.contains_key(&other.start_vertex)
+                    {
+                        Some(Vertex {
+                            id: other.start_vertex,
+                            point: other.start_mm,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            let [shoulder_vertex] = connectors.as_slice() else {
+                return None;
+            };
+            if matching_shoulder
+                .insert(end_id, *shoulder_vertex)
+                .is_some_and(|prior| {
+                    prior.id != shoulder_vertex.id
+                        || distance(prior.point, shoulder_vertex.point) > TOL_MM
+                })
+            {
+                return None;
+            }
+        }
+    }
+    if walls.len() != 4
+        || matching_shoulder.len() != 4
+        || matching_shoulder
+            .values()
+            .map(|v| v.id)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != 4
+        || shoulder_edges.len() != 4
+    {
+        return None;
+    }
+    // If the shoulder itself is another source cap, this is already a
+    // complete simple prism/loft, not a terminal added material feature.
+    if solid.faces().any(|f| {
+        plane_quad(f)
+            && f.loop_edges().map(|e| e.edge_id).collect::<BTreeSet<_>>() == shoulder_edges
+    }) {
+        return None;
+    }
+
+    let axis = normalize(plane.normal, DIR_TOL)?;
+    let origin = cap_edges[0].start_mm;
+    let x = normalize(sub(cap_edges[0].end_mm, origin), DIR_TOL)?;
+    if dot(axis, x).abs() > DIR_TOL {
+        return None;
+    }
+    let y = normalize(cross(axis, x), DIR_TOL)?;
+    let tip_vertices = cap_edges
+        .iter()
+        .map(|edge| Vertex {
+            id: edge.start_vertex,
+            point: edge.start_mm,
+        })
+        .collect::<Vec<_>>();
+    let shoulder_vertices = cap_edges
+        .iter()
+        .map(|edge| matching_shoulder.get(&edge.start_vertex).copied())
+        .collect::<Option<Vec<_>>>()?;
+    let depth = dot(sub(shoulder_vertices[0].point, origin), axis);
+    if depth.abs() <= TOL_MM
+        || shoulder_vertices
+            .iter()
+            .any(|v| (dot(sub(v.point, origin), axis) - depth).abs() > TOL_MM)
+    {
+        return None;
+    }
+    let tip = section(0.0, &tip_vertices, origin, x, y)?;
+    let shoulder = section(depth, &shoulder_vertices, origin, x, y)?;
+    let sections = [tip, shoulder]
+        .into_iter()
+        .map(|section| LoftSection {
+            profile: section.profile,
+            transform: RigidTransform {
+                matrix: [
+                    [
+                        x[0],
+                        y[0],
+                        axis[0],
+                        axis[0].mul_add(section.level, origin[0]),
+                    ],
+                    [
+                        x[1],
+                        y[1],
+                        axis[1],
+                        axis[1].mul_add(section.level, origin[1]),
+                    ],
+                    [
+                        x[2],
+                        y[2],
+                        axis[2],
+                        axis[2].mul_add(section.level, origin[2]),
+                    ],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            },
+        })
+        .collect::<Vec<_>>();
+    let mut model = CadModel::new();
+    let root = model.add_node(CadNode::Loft { sections });
+    model.add_root(root).ok()?;
+    model.validate().ok()?;
+    let wall_face_ids: [u64; 4] = walls.try_into().ok()?;
+    Some(RuledEndExtension {
+        fragment: CadFragment {
+            source: CadFragmentSource::RuledEndExtension {
+                solid_id: solid.solid_id(),
+                tip_face_id: cap.id,
+                wall_face_ids,
+            },
+            model,
+            root,
+        },
+        tip_face_id: cap.id,
+        wall_face_ids,
+        axis,
+    })
+}
+
+#[cfg(test)]
+mod terminal_extension_tests {
+    use super::*;
+    use crate::step_graph::build_index;
+    use monstertruck_io::step::load::ParsedStepSource;
+
+    #[test]
+    fn discovers_exact_planar_beveled_ends_of_mixed_analytic_elbow() {
+        let bytes = include_bytes!("../validation/fixtures/native_beveled_l_hook.step");
+        let source = ParsedStepSource::parse(bytes)
+            .expect("source STEP")
+            .exchange;
+        let entities = &source.data[0].entities;
+        let reduced = ReducedSolid::from_step(84, entities, &build_index(entities)).expect("B-rep");
+        let mut ends = detect_ruled_end_extensions(&reduced)
+            .into_iter()
+            .map(|extension| (extension.tip_face_id, extension.wall_face_ids))
+            .collect::<Vec<_>>();
+        ends.sort_unstable_by_key(|entry| entry.0);
+        assert_eq!(
+            ends.len(),
+            2,
+            "both source end treatments must be reconstructed"
+        );
+        assert_eq!(ends[0].0, 330);
+        assert_eq!(ends[1].0, 355);
+    }
+}
+
 /// Read-only parser witness for any original STEP solid; the same immutable
 /// reduced-B-rep recognizer also consumes the kernel-owned native B-rep.
 pub fn detect_sectioned_planar_lofts(

@@ -2394,6 +2394,29 @@ fn point_angle_2d(point: [f64; 2], center: [f64; 2]) -> Option<f64> {
     Some(dy.atan2(dx))
 }
 
+/// Ordering hint only: the exact swept volume of a source-derived core
+/// whose profile contains only lines and circular arcs. This is *not* an
+/// admission criterion; every candidate is still independently checked
+/// against the whole source boundary.
+pub(crate) fn analytic_extrusion_volume(core: &RecoveredSolidExtrusion) -> Option<f64> {
+    if core.profile_loops().flatten().any(|curve| {
+        !matches!(
+            curve,
+            RecoveredProfileCurve::Line { .. } | RecoveredProfileCurve::CircleArc { .. }
+        )
+    }) {
+        return None;
+    }
+    let outer = signed_area_curves(&core.profile_curves).abs();
+    let holes: f64 = core
+        .inner_profile_loops
+        .iter()
+        .map(|loop_| signed_area_curves(loop_).abs())
+        .sum();
+    let volume = (outer - holes) * core.height_mm;
+    (volume.is_finite() && volume > 0.0).then_some(volume)
+}
+
 fn signed_area_curves(curves: &[RecoveredProfileCurve]) -> f64 {
     curves
         .iter()

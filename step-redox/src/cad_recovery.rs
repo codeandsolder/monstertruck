@@ -66,6 +66,19 @@ pub enum CadFragmentSource {
         solid_id: u64,
         cap_face_ids: Vec<[u64; 2]>,
     },
+    /// Exact ruled end caps added to an extrusion-core union.
+    ExtrusionCoreRuledEnds {
+        solid_id: u64,
+        cap_face_ids: Vec<[u64; 2]>,
+        tip_face_ids: Vec<u64>,
+    },
+    /// A verified partial solid: one real terminal cap plus four source
+    /// planar walls; never by itself a recovered complete source body.
+    RuledEndExtension {
+        solid_id: u64,
+        tip_face_id: u64,
+        wall_face_ids: [u64; 4],
+    },
     BoundaryFeatureComposite {
         solid_id: u64,
         passes: usize,
@@ -215,8 +228,8 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     cap_face_ids: &[[u64; 2]],
     kernel: &K,
 ) -> Result<Option<CadFragment>> {
-    if solid_id == 0 || cap_face_ids.len() < 2 {
-        bail!("extrusion-core union admission needs one solid and at least two cap pairs");
+    if solid_id == 0 || cap_face_ids.is_empty() {
+        bail!("extrusion-core construction admission needs a solid and at least one cap pair");
     }
 
     let mut canonical_pairs = cap_face_ids
@@ -264,7 +277,29 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
         fragments.push(recover_solid_extrusion_fragment(&core)?);
     }
 
-    let (mut model, root) = compose_extrusion_core_union_model(&fragments, &axes)?;
+    // Source-exact planar end treatments can extend beyond every constant
+    // section without being separate translated-cap extrusion candidates.
+    // Each loft is built from a genuine terminal source cap, its four
+    // incident planar walls and their exact shoulder vertices.
+    let mut tips = Vec::new();
+    if let Some(reduced) = crate::reduced_brep::ReducedSolid::from_step(solid_id, entities, &index)
+    {
+        for extension in crate::solid_lofts::detect_ruled_end_extensions(&reduced) {
+            tips.push(extension.tip_face_id);
+            axes.push(extension.axis);
+            fragments.push(extension.fragment);
+        }
+    }
+    tips.sort_unstable();
+    let admitted_single = (fragments.len() == 1).then(|| fragments[0].source.clone());
+    let (mut model, root) = if fragments.len() == 1 {
+        let one = fragments
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("missing core"))?;
+        (one.model, one.root)
+    } else {
+        compose_extrusion_core_union_model(&fragments, &axes)?
+    };
     let evaluated = kernel.evaluate(&model, root)?;
     let summary = kernel.summarize(&evaluated);
     if !summary.geometrically_consistent || summary.shells != 1 {
@@ -314,9 +349,19 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     model.validate()?;
 
     Ok(Some(CadFragment {
-        source: CadFragmentSource::ExtrusionCoreUnion {
-            solid_id,
-            cap_face_ids: canonical_pairs,
+        source: if let Some(single) = admitted_single {
+            single
+        } else if tips.is_empty() {
+            CadFragmentSource::ExtrusionCoreUnion {
+                solid_id,
+                cap_face_ids: canonical_pairs,
+            }
+        } else {
+            CadFragmentSource::ExtrusionCoreRuledEnds {
+                solid_id,
+                cap_face_ids: canonical_pairs,
+                tip_face_ids: tips,
+            }
         },
         model,
         root,
@@ -353,27 +398,50 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
             .into_iter()
             .filter(|candidate| candidate.solid_id == solid_id)
             .collect();
-    let filtered = crate::solid_extrusions::discard_boundary_penetrating_extrusion_cores(
+    let mut filtered = crate::solid_extrusions::discard_boundary_penetrating_extrusion_cores(
         solid_id, proposed, entities, &index,
     );
-    let mut cap_pairs = filtered
-        .into_iter()
-        .map(|candidate| {
-            let mut pair = candidate.cap_face_ids;
-            pair.sort_unstable();
-            pair
-        })
-        .collect::<Vec<_>>();
-    cap_pairs.sort_unstable();
-    cap_pairs.dedup();
-    if cap_pairs.len() < 2 {
+    // Prefer an independently source-proven full core (possibly with exact
+    // ruled ends) to an overlapping union of redundant partial interpretations.
+    // Volume is a discovery-order hint only, never admission evidence.
+    filtered.sort_by(|a, b| {
+        crate::solid_extrusions::analytic_extrusion_volume(b)
+            .unwrap_or(0.0)
+            .total_cmp(&crate::solid_extrusions::analytic_extrusion_volume(a).unwrap_or(0.0))
+            .then_with(|| a.cap_face_ids.cmp(&b.cap_face_ids))
+    });
+    let mut seen = std::collections::HashSet::new();
+    let mut pairs = Vec::new();
+    for candidate in filtered {
+        let mut pair = candidate.cap_face_ids;
+        pair.sort_unstable();
+        if seen.insert(pair) {
+            pairs.push(pair);
+        }
+    }
+    for &pair in &pairs {
+        // Failure of one candidate's tentative kernel evaluation does not
+        // imply the next independent candidate is invalid. Only the final
+        // comparison to the original source can admit semantic geometry.
+        if let Ok(Some(fragment)) = recover_proven_extrusion_core_union_fragment(
+            source_step,
+            data_section,
+            solid_id,
+            &[pair],
+            kernel,
+        ) {
+            return Ok(Some(fragment));
+        }
+    }
+    if pairs.len() < 2 {
         return Ok(None);
     }
+    pairs.sort_unstable();
     recover_proven_extrusion_core_union_fragment(
         source_step,
         data_section,
         solid_id,
-        &cap_pairs,
+        &pairs,
         kernel,
     )
 }
@@ -571,6 +639,45 @@ mod tests {
         reason = "legacy test fixture code is allowed narrow lint exceptions; production paths remain strict"
     )]
     use super::*;
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn source_single_spine_plus_ruled_ends_has_exact_geometry() -> Result<()> {
+        let source = include_bytes!("../validation/fixtures/native_beveled_l_hook.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let recovered =
+            recover_proven_extrusion_core_union_fragment(source, 0, 84, &[[50, 245]], &kernel)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("complete spine and both end treatments must admit")
+                })?;
+        assert_eq!(
+            recovered.source,
+            CadFragmentSource::ExtrusionCoreRuledEnds {
+                solid_id: 84,
+                cap_face_ids: vec![[50, 245]],
+                tip_face_ids: vec![330, 355],
+            }
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn source_ruled_end_extensions_recover_beveled_elbow() -> Result<()> {
+        let source = include_bytes!("../validation/fixtures/native_beveled_l_hook.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let recovered = recover_auto_proven_extrusion_core_union_fragment(source, 0, 84, &kernel)?
+            .ok_or_else(|| anyhow::anyhow!("beveled source must admit its ruled end extensions"))?;
+        assert_eq!(
+            recovered.source,
+            CadFragmentSource::ExtrusionCoreRuledEnds {
+                solid_id: 84,
+                cap_face_ids: vec![[50, 245]],
+                tip_face_ids: vec![330, 355],
+            }
+        );
+        Ok(())
+    }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]

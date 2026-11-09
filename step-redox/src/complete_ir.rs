@@ -487,7 +487,11 @@ impl CompleteIrBuildState {
                 matches!(source, CadFragmentSource::SameDomainNormalized { .. })
             }),
             extrusion_core_unions: selected_category(&selected, |source| {
-                matches!(source, CadFragmentSource::ExtrusionCoreUnion { .. })
+                matches!(
+                    source,
+                    CadFragmentSource::ExtrusionCoreUnion { .. }
+                        | CadFragmentSource::ExtrusionCoreRuledEnds { .. }
+                )
             }),
             kernel_recovery_failures,
             kernel_source_load,
@@ -2056,6 +2060,8 @@ const fn source_solid_id(source: &CadFragmentSource) -> u64 {
         | CadFragmentSource::RevolvedRoundTail { solid_id, .. }
         | CadFragmentSource::PeriodicChain { solid_id, .. }
         | CadFragmentSource::ExtrusionCoreUnion { solid_id, .. }
+        | CadFragmentSource::ExtrusionCoreRuledEnds { solid_id, .. }
+        | CadFragmentSource::RuledEndExtension { solid_id, .. }
         | CadFragmentSource::BoundaryFeatureComposite { solid_id, .. }
         | CadFragmentSource::EdgeTreatmentComposite { solid_id, .. }
         | CadFragmentSource::SameDomainNormalized { solid_id } => *solid_id,
@@ -2063,7 +2069,10 @@ const fn source_solid_id(source: &CadFragmentSource) -> u64 {
 }
 
 const fn is_constructive_source(source: &CadFragmentSource) -> bool {
-    !matches!(source, CadFragmentSource::PeriodicChain { .. })
+    !matches!(
+        source,
+        CadFragmentSource::PeriodicChain { .. } | CadFragmentSource::RuledEndExtension { .. }
+    )
 }
 
 const fn whole_solid_candidate_is_preferred(
