@@ -568,6 +568,65 @@ mod terminal_extension_tests {
     use monstertruck_io::step::load::ParsedStepSource;
 
     #[test]
+    fn four_section_beveled_bar_is_an_exact_editable_loft() -> anyhow::Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_four_section_beveled_bar.step");
+        let source = ParsedStepSource::parse(bytes)?.exchange;
+        let entities = &source.data[0].entities;
+        let reduced = ReducedSolid::from_step(24, entities, &build_index(entities))
+            .ok_or_else(|| anyhow::anyhow!("no source B-rep"))?;
+        let recovered = detect_sectioned_planar_loft(&reduced)
+            .ok_or_else(|| anyhow::anyhow!("real four-section beveled bar not recovered"))?;
+        assert!(matches!(
+            recovered.source,
+            CadFragmentSource::SolidLoft { solid_id: 24, .. }
+        ));
+        recovered.model.validate()?;
+        #[cfg(feature = "cad-kernel-monstertruck")]
+        {
+            use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&recovered.model, recovered.root)?;
+            assert!(kernel.summarize(&evaluated).is_single_solid());
+            let reconstructed = kernel.to_step(&evaluated)?;
+            let output = ParsedStepSource::parse(reconstructed.as_bytes())?.exchange;
+            let out_entities = &output.data[0].entities;
+            let solid_ids = out_entities
+                .iter()
+                .filter_map(|e| {
+                    crate::step_graph::simple_record(e)
+                        .filter(|record| record.name == "MANIFOLD_SOLID_BREP")
+                        .map(|_| crate::step_graph::entity_id(e))
+                })
+                .collect::<Vec<_>>();
+            let [output_id] = solid_ids.as_slice() else {
+                anyhow::bail!("ruled loft did not produce exactly one STEP solid");
+            };
+            let boundary = crate::boundary_proof::compare_analytic_boundaries(
+                24,
+                entities,
+                *output_id,
+                out_entities,
+            );
+            assert!(
+                boundary.equivalent,
+                "source vs ruled loft boundary differs: {boundary:?}"
+            );
+            let report = crate::complete_ir::recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+            assert_eq!(report.body_count, 1);
+            assert_eq!(
+                report.unrecovered_solid_count, 0,
+                "{:?}",
+                report.kernel_recovery_failures
+            );
+            let [chosen] = report.solid_lofts.as_slice() else {
+                anyhow::bail!("complete IR did not select the source-exact four-section loft");
+            };
+            assert_eq!(chosen.fragment.source, recovered.source);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn discovers_exact_planar_beveled_ends_of_mixed_analytic_elbow() -> anyhow::Result<()> {
         let bytes = include_bytes!("../validation/fixtures/native_beveled_l_hook.step");
         let source = ParsedStepSource::parse(bytes)?.exchange;

@@ -930,6 +930,30 @@ fn dequantize_vector(vector: [i64; 3], quantum: f64) -> Option<[f64; 3]> {
     ])
 }
 
+/// The constructive surface classifier preserves exact extrusion
+/// parameters, including when the spline's profile is a straight line.
+/// A source-boundary certificate, instead, needs the *geometric locus*.
+/// Prefer an independently certified plane for those doubly representable
+/// surfaces; retain the spline extrusion for genuinely curved profiles.
+fn boundary_surface_support(
+    surface_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> SurfaceSupport {
+    let constructive = brep::surface_support(surface_id, entities, index);
+    if matches!(constructive, SurfaceSupport::SplineExtrusion(_))
+        && let Some(plane) =
+            crate::surface_recovery::analyze_planar_surface(surface_id, entities, index, 1.0e-7)
+    {
+        return SurfaceSupport::Plane(brep::PlaneSupport {
+            origin_mm: plane.origin_mm,
+            normal: plane.normal,
+            max_residual_mm: plane.max_residual_mm,
+        });
+    }
+    constructive
+}
+
 fn oriented_support_key(
     face_id: u64,
     entities: &[EntityInstance],
@@ -942,7 +966,7 @@ fn oriented_support_key(
         _ => return None,
     };
 
-    match brep::surface_support(surface_id, entities, index) {
+    match boundary_surface_support(surface_id, entities, index) {
         SurfaceSupport::Plane(plane) => {
             let raw_normal = normalize(plane.normal, 0.0)?;
             let normal = canonical_direction(raw_normal);

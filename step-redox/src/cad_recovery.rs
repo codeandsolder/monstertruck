@@ -225,7 +225,7 @@ fn normalize_extrusion_cap_pairs(cap_face_ids: &[[u64; 2]]) -> Result<Vec<[u64; 
     Ok(pairs)
 }
 
-fn rebuilt_kernel_boundary_matches_source<K: CadKernel>(
+pub(crate) fn rebuilt_kernel_boundary_matches_source<K: CadKernel>(
     kernel: &K,
     evaluated: &K::Evaluated,
     source_solid_id: u64,

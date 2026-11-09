@@ -5,11 +5,12 @@ use crate::cad_ir::{
 };
 use crate::cad_kernel::CadKernel;
 use crate::cad_recovery::{
-    CadFragment, CadFragmentSource, recover_auto_proven_extrusion_core_union_fragment,
-    recover_open_rectangular_sweep_fragments, recover_periodic_chain_fragments,
-    recover_radial_slot_revolution_fragments, recover_revolved_round_tail_fragments,
-    recover_round_sweep_fragments, recover_solid_extrusion_fragment,
-    recover_solid_extrusion_fragments, recover_solid_revolution_fragments,
+    CadFragment, CadFragmentSource, rebuilt_kernel_boundary_matches_source,
+    recover_auto_proven_extrusion_core_union_fragment, recover_open_rectangular_sweep_fragments,
+    recover_periodic_chain_fragments, recover_radial_slot_revolution_fragments,
+    recover_revolved_round_tail_fragments, recover_round_sweep_fragments,
+    recover_solid_extrusion_fragment, recover_solid_extrusion_fragments,
+    recover_solid_revolution_fragments,
 };
 use crate::kernel_source_load::{
     KernelSourceLoadEvidence, KernelTopologyProvenance, SourceStepLoadInspector,
@@ -565,6 +566,45 @@ pub fn recover_complete_ir_bytes(input: &[u8]) -> Result<CompleteIr> {
 ///
 /// # Errors
 /// Returns an error if STEP parsing/Complete IR construction fails or if the selected kernel cannot inspect the original STEP source.
+/// Independently certify each source-derived constructive candidate against
+/// the original closed, oriented analytic STEP boundary. Parser recognition is
+/// a proposal, not proof of occupied material; rejected candidates do not
+/// prevent another valid representation of the same source solid from winning.
+fn recover_verified_direct_constructive_fragment<K: CadKernel>(
+    source: SourceEntity,
+    exchange: &Exchange,
+    kernel: &K,
+) -> Result<Option<CadFragment>> {
+    let Some(section) = exchange.data.get(source.data_section) else {
+        bail!("missing DATA section {}", source.data_section);
+    };
+    let entities = &section.entities;
+    let index = crate::step_graph::build_index(entities);
+    let mut candidates = recover_constructive_fragments_from_entities_with_index(entities, &index)?
+        .into_iter()
+        .filter(|fragment| {
+            source_solid_id(&fragment.source) == source.id
+                && is_constructive_source(&fragment.source)
+        })
+        .map(|fragment| Ok((fragment.model.complexity_score(fragment.root)?, fragment)))
+        .collect::<Result<Vec<_>>>()?;
+    candidates.sort_by_key(|(complexity, _)| *complexity);
+    for (_, fragment) in candidates {
+        let Ok(evaluated) = kernel.evaluate(&fragment.model, fragment.root) else {
+            continue;
+        };
+        if !kernel.summarize(&evaluated).is_single_solid() {
+            continue;
+        }
+        if rebuilt_kernel_boundary_matches_source(kernel, &evaluated, source.id, entities)
+            .unwrap_or(false)
+        {
+            return Ok(Some(fragment));
+        }
+    }
+    Ok(None)
+}
+
 pub fn recover_complete_ir_with_kernel_bytes<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
@@ -598,6 +638,13 @@ pub fn recover_complete_ir_with_kernel_bytes<
                     source.id,
                     kernel,
                 )
+            },
+            true,
+        ));
+        failures.extend(apply_kernel_recovery(
+            &mut build.recovery,
+            |source| {
+                recover_verified_direct_constructive_fragment(source, document.as_ref(), kernel)
             },
             true,
         ));
