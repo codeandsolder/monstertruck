@@ -3,7 +3,8 @@ use crate::brep::{
     SurfaceSupport,
 };
 use crate::math2::{
-    cross as cross2, distance as distance2, dot as dot2, normalize as normalize2, sub as sub2,
+    cross as cross2, distance as distance2, dot as dot2, norm as norm2, normalize as normalize2,
+    sub as sub2,
 };
 use crate::math3::{
     add, canonical_direction, cross, distance, dot, mul, norm, normalize as normalize3,
@@ -493,10 +494,11 @@ pub(crate) fn recover_any_extrusion_core_from_cap_faces_with_index(
 /// any material-only extrusion core. Such a core necessarily invents material
 /// across an original void or exterior boundary.
 ///
-/// A source line is itself an exact boundary witness, so points along it do
-/// not depend on a tessellator or a face-centroid guess. The inside predicate
-/// handles arbitrary simple line profiles (including nonconvex loops and
-/// cavities); unsupported curves simply provide no pruning evidence. This is
+/// STEP lines and circles supply exact analytic boundary witnesses. Full-span
+/// B-splines can also supply evaluated witnesses when both source endpoints
+/// match the corresponding curve endpoints. The inside predicate supports
+/// planar line and circular-arc profiles (including cavities and nonconvex
+/// loops). Unsupported or ambiguous geometry supplies no pruning evidence. This is
 /// a candidate filter, *not* a source-equivalence proof: the final evaluated
 /// union must still pass the complete analytic boundary comparison.
 pub(crate) fn discard_boundary_penetrating_extrusion_cores(
@@ -515,15 +517,10 @@ pub(crate) fn discard_boundary_penetrating_extrusion_cores(
             continue;
         };
         for edge in face.loop_edges {
-            if !seen_edges.insert(edge.edge_id) || !matches!(edge.support, CurveSupport::Line(_)) {
+            if !seen_edges.insert(edge.edge_id) {
                 continue;
             }
-            for fraction in [0.25, 0.5, 0.75] {
-                witness_points.push(add(
-                    edge.start_mm,
-                    mul(sub(edge.end_mm, edge.start_mm), fraction),
-                ));
-            }
+            witness_points.extend(source_boundary_edge_witness_points(&edge));
         }
     }
     candidates
@@ -534,6 +531,77 @@ pub(crate) fn discard_boundary_penetrating_extrusion_cores(
                 .any(|point| core_strictly_contains_source_boundary_point(core, *point))
         })
         .collect()
+}
+
+/// Exact locations on a STEP edge, not approximations of its mesh.
+/// A B-spline edge may be a proper trim of its parent spline; without a
+/// proven parameter interval we deliberately skip those interior samples.
+fn source_boundary_edge_witness_points(edge: &OrientedEdgeUse) -> Vec<[f64; 3]> {
+    const FRACTIONS: [f64; 3] = [0.25, 0.5, 0.75];
+    match &edge.support {
+        CurveSupport::Line(_) => FRACTIONS
+            .map(|fraction| {
+                add(
+                    edge.start_mm,
+                    mul(sub(edge.end_mm, edge.start_mm), fraction),
+                )
+            })
+            .into(),
+        CurveSupport::Circle(circle) => {
+            let Some(start) = circle_angle_3d(edge.start_mm, *circle) else {
+                return Vec::new();
+            };
+            let Some(sweep) = circle_edge_sweep(edge, *circle) else {
+                return Vec::new();
+            };
+            let Some(y_axis) = normalize(cross(circle.normal, circle.x_direction)) else {
+                return Vec::new();
+            };
+            if !sweep.is_finite() || sweep.abs() <= DIR_TOL || circle.radius_mm <= GEOM_TOL_MM {
+                return Vec::new();
+            }
+            FRACTIONS
+                .map(|fraction| {
+                    let theta = sweep.mul_add(fraction, start);
+                    add(
+                        circle.center_mm,
+                        add(
+                            mul(circle.x_direction, circle.radius_mm * theta.cos()),
+                            mul(y_axis, circle.radius_mm * theta.sin()),
+                        ),
+                    )
+                })
+                .into()
+        }
+        CurveSupport::BSpline(spline) => {
+            let Some((start, end)) = crate::boundary_proof::bspline_domain(spline) else {
+                return Vec::new();
+            };
+            let Some(first) = crate::boundary_proof::evaluate_bspline(spline, start) else {
+                return Vec::new();
+            };
+            let Some(last) = crate::boundary_proof::evaluate_bspline(spline, end) else {
+                return Vec::new();
+            };
+            let endpoints_match = (distance(first, edge.start_mm) <= GEOM_TOL_MM
+                && distance(last, edge.end_mm) <= GEOM_TOL_MM)
+                || (distance(first, edge.end_mm) <= GEOM_TOL_MM
+                    && distance(last, edge.start_mm) <= GEOM_TOL_MM);
+            if !endpoints_match {
+                return Vec::new();
+            }
+            FRACTIONS
+                .into_iter()
+                .filter_map(|fraction| {
+                    crate::boundary_proof::evaluate_bspline(
+                        spline,
+                        (end - start).mul_add(fraction, start),
+                    )
+                })
+                .collect()
+        }
+        CurveSupport::Other { .. } => Vec::new(),
+    }
 }
 
 fn core_strictly_contains_source_boundary_point(
@@ -549,51 +617,165 @@ fn core_strictly_contains_source_boundary_point(
         return false;
     }
     let local = [dot(relative, core.x_axis), dot(relative, core.y_axis)];
-    if strict_line_profile_contains(&core.profile_curves, local, margin) != Some(true) {
+    if strict_profile_contains(&core.profile_curves, local, margin) != Some(true) {
         return false;
     }
     core.inner_profile_loops
         .iter()
-        .all(|hole| strict_line_profile_contains(hole, local, margin) == Some(false))
+        .all(|hole| strict_profile_contains(hole, local, margin) == Some(false))
 }
 
-/// Evaluate a point against an arbitrary closed line-loop, refusing points
-/// within the source tolerance of its boundary and all non-line curves.
-fn strict_line_profile_contains(
+/// Strict odd-even inclusion for closed line/circular-arc profiles. This
+/// rejects uncertain ray crossings, tangencies and boundary proximity rather
+/// than interpreting a numerical tie as inside. Spline profiles are not
+/// classified by this filter until their true trim interval is represented.
+fn strict_profile_contains(
     loop_: &[RecoveredProfileCurve],
     point: [f64; 2],
     margin: f64,
 ) -> Option<bool> {
-    if loop_.len() < 3 {
+    if loop_.is_empty() || !point.iter().all(|v| v.is_finite()) {
         return None;
     }
-    let mut inside = false;
-    for curve in loop_ {
-        let RecoveredProfileCurve::Line {
-            start_mm: a,
-            end_mm: b,
-            ..
-        } = curve
-        else {
-            return None;
-        };
-        let edge = sub2(*b, *a);
-        let length2 = dot2(edge, edge);
-        if !length2.is_finite() || length2 <= GEOM_TOL_MM * GEOM_TOL_MM {
-            return None;
-        }
-        let t = (dot2(sub2(point, *a), edge) / length2).clamp(0.0, 1.0);
-        let nearest = [t.mul_add(edge[0], a[0]), t.mul_add(edge[1], a[1])];
-        if distance2(point, nearest) <= margin {
-            return None;
-        }
-        if (a[1] > point[1]) != (b[1] > point[1])
-            && point[0] < a[0] + (point[1] - a[1]) * edge[0] / edge[1]
+    // Invalid or open profiles cannot establish a material contradiction.
+    for (index, curve) in loop_.iter().enumerate() {
+        if distance2(
+            curve.end_point()?,
+            loop_[(index + 1) % loop_.len()].start_point()?,
+        ) > margin
         {
-            inside = !inside;
+            return None;
         }
     }
-    Some(inside)
+
+    if let [
+        RecoveredProfileCurve::CircleArc {
+            center_mm,
+            radius_mm,
+            start_angle_rad,
+            end_angle_rad,
+            ..
+        },
+    ] = loop_
+        && (*end_angle_rad - *start_angle_rad).abs() >= TAU - DIR_TOL
+    {
+        let radial = distance2(point, *center_mm);
+        return ((radial - radius_mm).abs() > margin).then_some(radial < *radius_mm);
+    }
+    let mut crossings = 0_usize;
+    for curve in loop_ {
+        match curve {
+            RecoveredProfileCurve::Line {
+                start_mm: a,
+                end_mm: b,
+                ..
+            } => {
+                let edge = sub2(*b, *a);
+                let length2 = dot2(edge, edge);
+                if !length2.is_finite() || length2 <= GEOM_TOL_MM * GEOM_TOL_MM {
+                    return None;
+                }
+                let t = (dot2(sub2(point, *a), edge) / length2).clamp(0.0, 1.0);
+                let nearest = [t.mul_add(edge[0], a[0]), t.mul_add(edge[1], a[1])];
+                if distance2(point, nearest) <= margin {
+                    return None;
+                }
+                // Intersections at an endpoint are uncertain unless they lie
+                // strictly to the left of the ray origin (no contribution).
+                if (point[1] - a[1]).abs() <= margin || (point[1] - b[1]).abs() <= margin {
+                    return None;
+                }
+                if (a[1] > point[1]) != (b[1] > point[1])
+                    && point[0] < a[0] + (point[1] - a[1]) * edge[0] / edge[1]
+                {
+                    crossings += 1;
+                }
+            }
+            RecoveredProfileCurve::CircleArc {
+                center_mm: center,
+                radius_mm: radius,
+                start_angle_rad: start,
+                end_angle_rad: end,
+                ..
+            } => {
+                if *radius <= GEOM_TOL_MM || !radius.is_finite() {
+                    return None;
+                }
+                crossings +=
+                    circle_arc_ray_crossings(*center, *radius, *start, *end, point, margin)?;
+            }
+            RecoveredProfileCurve::Bezier { .. } | RecoveredProfileCurve::BSpline { .. } => {
+                return None;
+            }
+        }
+    }
+    Some(crossings % 2 == 1)
+}
+
+/// Analytic intersections of an arc with the positive horizontal ray.
+/// Refuse endpoint, tangent and boundary ambiguity instead of guessing.
+fn circle_arc_ray_crossings(
+    center: [f64; 2],
+    radius: f64,
+    start: f64,
+    end: f64,
+    point: [f64; 2],
+    margin: f64,
+) -> Option<usize> {
+    if !start.is_finite()
+        || !end.is_finite()
+        || (end - start).abs() <= DIR_TOL
+        || (end - start).abs() > TAU + DIR_TOL
+    {
+        return None;
+    }
+    let relative = sub2(point, center);
+    let radial = norm2(relative);
+    let full_circle = (end - start).abs() >= TAU - DIR_TOL;
+    let angle = relative[1].atan2(relative[0]);
+    if (radial - radius).abs() <= margin && (full_circle || angle_on_arc(angle, start, end, 0.0)) {
+        return None;
+    }
+    if !full_circle {
+        let a = [
+            radius.mul_add(start.cos(), center[0]),
+            radius.mul_add(start.sin(), center[1]),
+        ];
+        let b = [
+            radius.mul_add(end.cos(), center[0]),
+            radius.mul_add(end.sin(), center[1]),
+        ];
+        if distance2(point, a) <= margin
+            || distance2(point, b) <= margin
+            || (point[1] - a[1]).abs() <= margin
+            || (point[1] - b[1]).abs() <= margin
+        {
+            return None;
+        }
+    }
+    let dy = relative[1];
+    if dy.abs() >= radius - margin {
+        return ((dy.abs() - radius).abs() > margin).then_some(0);
+    }
+    let dx = dy.mul_add(-dy, radius * radius).sqrt();
+    Some(
+        [
+            (dy.atan2(dx), center[0] + dx),
+            (dy.atan2(-dx), center[0] - dx),
+        ]
+        .into_iter()
+        .filter(|&(theta, x)| x > point[0] && (full_circle || angle_on_arc(theta, start, end, 0.0)))
+        .count(),
+    )
+}
+
+fn angle_on_arc(angle: f64, start: f64, end: f64, tolerance: f64) -> bool {
+    let sweep = end - start;
+    if sweep >= 0.0 {
+        (angle - start).rem_euclid(TAU) <= sweep + tolerance
+    } else {
+        (start - angle).rem_euclid(TAU) <= -sweep + tolerance
+    }
 }
 
 pub(crate) fn recover_extrusion_core_from_cap_faces_with_index(
@@ -2311,23 +2493,127 @@ mod tests {
     }
 
     #[test]
+    fn exact_circular_profiles_support_full_circle_and_both_arc_directions() {
+        use std::f64::consts::PI;
+        let full = vec![RecoveredProfileCurve::CircleArc {
+            source_edge_ids: vec![90],
+            center_mm: [0.0, 0.0],
+            radius_mm: 2.0,
+            start_angle_rad: 0.0,
+            end_angle_rad: TAU,
+        }];
+        assert_eq!(
+            strict_profile_contains(&full, [0.0, 0.0], 1.0e-7),
+            Some(true)
+        );
+        assert_eq!(
+            strict_profile_contains(&full, [3.0, 0.0], 1.0e-7),
+            Some(false)
+        );
+        assert_eq!(strict_profile_contains(&full, [2.0, 0.0], 1.0e-7), None);
+
+        for clockwise in [false, true] {
+            let segment = vec![
+                if clockwise {
+                    profile_line(91, [1.0, 0.0], [-1.0, 0.0])
+                } else {
+                    profile_line(91, [-1.0, 0.0], [1.0, 0.0])
+                },
+                RecoveredProfileCurve::CircleArc {
+                    source_edge_ids: vec![92],
+                    center_mm: [0.0, 0.0],
+                    radius_mm: 1.0,
+                    start_angle_rad: if clockwise { PI } else { 0.0 },
+                    end_angle_rad: if clockwise { 0.0 } else { PI },
+                },
+            ];
+            assert_eq!(
+                strict_profile_contains(&segment, [0.0, 0.5], 1.0e-7),
+                Some(true),
+            );
+            assert_eq!(
+                strict_profile_contains(&segment, [0.0, -0.5], 1.0e-7),
+                Some(false),
+            );
+            assert_eq!(strict_profile_contains(&segment, [0.0, 1.0], 1.0e-7), None);
+        }
+    }
+
+    #[test]
+    fn source_curves_supply_only_genuine_boundary_witnesses() {
+        use std::f64::consts::FRAC_PI_2;
+        let circle = CircleSupport {
+            center_mm: [0.0, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            x_direction: [1.0, 0.0, 0.0],
+            radius_mm: 2.0,
+        };
+        let mut edge = OrientedEdgeUse {
+            oriented_edge_id: 2,
+            edge_id: 1,
+            curve_id: 1,
+            curve_same_sense: true,
+            parameter_forward: true,
+            start_vertex: 10,
+            end_vertex: 11,
+            start_mm: [2.0, 0.0, 0.0],
+            end_mm: [0.0, 2.0, 0.0],
+            support: CurveSupport::Circle(circle),
+        };
+        let points = source_boundary_edge_witness_points(&edge);
+        assert_eq!(points.len(), 3);
+        for (fraction, point) in [0.25, 0.5, 0.75].into_iter().zip(&points) {
+            let theta = FRAC_PI_2 * fraction;
+            assert!(distance(*point, [2.0 * theta.cos(), 2.0 * theta.sin(), 0.0]) < 1.0e-8);
+        }
+        edge.start_mm = [0.0, 2.0, 0.0];
+        edge.end_mm = [2.0, 0.0, 0.0];
+        edge.parameter_forward = false;
+        let reverse = source_boundary_edge_witness_points(&edge);
+        assert_eq!(reverse.len(), 3);
+        assert!(distance(reverse[0], points[2]) < 1.0e-8);
+
+        let spline = BSplineSupport {
+            degree: 2,
+            control_points_mm: vec![[0.0, 0.0, 0.0], [1.0, 1.0, 0.0], [2.0, 0.0, 0.0]],
+            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            weights: None,
+        };
+        edge.start_mm = [0.0, 0.0, 0.0];
+        edge.end_mm = [2.0, 0.0, 0.0];
+        edge.support = CurveSupport::BSpline(spline);
+        let sampled = source_boundary_edge_witness_points(&edge);
+        assert_eq!(sampled.len(), 3);
+        assert!(distance(sampled[1], [1.0, 0.5, 0.0]) < 1.0e-8);
+
+        // STEP edges can trim their parent B-spline. Sampling its complete
+        // parameter domain then would produce points *not on that edge*.
+        edge.start_mm = [0.5, 0.375, 0.0];
+        edge.end_mm = [1.5, 0.375, 0.0];
+        assert_eq!(
+            source_boundary_edge_witness_points(&edge),
+            Vec::<[f64; 3]>::new()
+        );
+    }
+
+    #[test]
     fn strict_core_interior_observes_nonconvex_profiles_and_holes() {
         let rectangle = rectangle_loop(1, [0.0, 0.0], [4.0, 4.0]);
         let hole = rectangle_loop(10, [1.0, 1.0], [3.0, 3.0]);
         assert_eq!(
-            strict_line_profile_contains(&rectangle, [0.5, 0.5], 1.0e-6),
+            strict_profile_contains(&rectangle, [0.5, 0.5], 1.0e-6),
             Some(true)
         );
         assert_eq!(
-            strict_line_profile_contains(&hole, [0.5, 0.5], 1.0e-6),
+            strict_profile_contains(&hole, [0.5, 0.5], 1.0e-6),
             Some(false)
         );
         assert_eq!(
-            strict_line_profile_contains(&rectangle, [0.0, 1.0], 1.0e-6),
+            strict_profile_contains(&rectangle, [0.0, 1.0], 1.0e-6),
             None
         );
         assert_eq!(
-            strict_line_profile_contains(&rectangle, [5.0, 1.0], 1.0e-6),
+            strict_profile_contains(&rectangle, [5.0, 1.0], 1.0e-6),
             Some(false)
         );
         let concave = vec![
@@ -2339,11 +2625,11 @@ mod tests {
             profile_line(25, [0.0, 4.0], [0.0, 0.0]),
         ];
         assert_eq!(
-            strict_line_profile_contains(&concave, [0.5, 3.5], 1.0e-6),
+            strict_profile_contains(&concave, [0.5, 3.5], 1.0e-6),
             Some(true)
         );
         assert_eq!(
-            strict_line_profile_contains(&concave, [3.5, 3.5], 1.0e-6),
+            strict_profile_contains(&concave, [3.5, 3.5], 1.0e-6),
             Some(false)
         );
     }
