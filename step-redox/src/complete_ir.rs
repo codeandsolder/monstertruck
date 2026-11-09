@@ -2700,7 +2700,7 @@ mod tests {
     #[test]
     fn source_boundary_verified_candidate_outranks_cheaper_structural_guess() -> Result<()> {
         let report = report_with_unrecovered(&[7]);
-        let mut state = WholeSolidRecoveryState::new(&report.body_scan);
+        let mut state = WholeSolidRecoveryState::new(&report.body_scan.solids);
         state.add_candidates([qualified_fragment(constructive_fragment(7, 1)?)])?;
         state
             .add_candidates_with_proof([qualified_fragment(constructive_fragment(7, 5)?)], true)?;
