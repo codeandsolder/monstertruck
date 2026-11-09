@@ -511,6 +511,7 @@ impl CompleteIrBuildState {
                     source,
                     CadFragmentSource::ExtrusionCoreUnion { .. }
                         | CadFragmentSource::ExtrusionCoreRuledEnds { .. }
+                        | CadFragmentSource::CapExtrusionRuledEnds { .. }
                 )
             }),
             kernel_recovery_failures,
@@ -2161,6 +2162,7 @@ const fn source_solid_id(source: &CadFragmentSource) -> u64 {
         | CadFragmentSource::PeriodicChain { solid_id, .. }
         | CadFragmentSource::ExtrusionCoreUnion { solid_id, .. }
         | CadFragmentSource::ExtrusionCoreRuledEnds { solid_id, .. }
+        | CadFragmentSource::CapExtrusionRuledEnds { solid_id, .. }
         | CadFragmentSource::RuledEndExtension { solid_id, .. }
         | CadFragmentSource::BoundaryFeatureComposite { solid_id, .. }
         | CadFragmentSource::EdgeTreatmentComposite { solid_id, .. }

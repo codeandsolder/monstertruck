@@ -345,6 +345,18 @@ pub fn detect_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtensio
         .collect()
 }
 
+/// Discover exact ruled end sections even when adjacent analytic planar walls
+/// extend into an earlier material core instead of ending at their shoulder.
+pub fn detect_extended_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
+    solid
+        .faces()
+        .filter_map(|cap| {
+            terminal_ruled_extension(solid, cap)
+                .or_else(|| terminal_extended_planar_ruled_extension(solid, cap))
+        })
+        .collect()
+}
+
 fn matching_ruled_end_shoulder(
     solid: &ReducedSolid,
     cap: &ReducedFace,
@@ -540,6 +552,161 @@ fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<R
         tip_face_id: cap.id,
         axis,
     })
+}
+
+// A terminal loft may share its side carriers with a preceding extrusion.
+// In that case two side faces extend past the shoulder and are not four-edge
+// quads. Their analytic planes still determine the exact bounded shoulder.
+fn terminal_extended_planar_ruled_extension(
+    solid: &ReducedSolid,
+    cap: &ReducedFace,
+) -> Option<RuledEndExtension> {
+    if !plane_quad(cap) {
+        return None;
+    }
+    let SurfaceSupport::Plane(cap_plane) = cap.surface else {
+        return None;
+    };
+    let cap_edges = &cap.loops[0].edges;
+    let mut wall_planes = Vec::with_capacity(cap_edges.len());
+    let mut wall_face_ids = Vec::with_capacity(cap_edges.len());
+    for edge in cap_edges {
+        let mut touching = solid.faces().filter(|face| {
+            face.id != cap.id && face.loop_edges().any(|used| used.edge_id == edge.edge_id)
+        });
+        let wall = touching.next()?;
+        if touching.next().is_some() || wall_face_ids.contains(&wall.id) {
+            return None;
+        }
+        let SurfaceSupport::Plane(plane) = wall.surface else {
+            return None;
+        };
+        wall_face_ids.push(wall.id);
+        wall_planes.push(plane);
+    }
+
+    let axis = normalize(cap_plane.normal, DIR_TOL)?;
+    let origin = cap_edges.first()?.start_mm;
+    let x = normalize(sub(cap_edges.first()?.end_mm, origin), DIR_TOL)?;
+    let y = normalize(cross(axis, x), DIR_TOL)?;
+    // A shoulder must be witnessed by actual source wall vertices. Select
+    // the first distinct station past the terminal cap, not an extrapolated
+    // intersection at a convenient synthetic distance.
+    let cap_vertices = cap_edges
+        .iter()
+        .map(|edge| edge.start_vertex)
+        .collect::<BTreeSet<_>>();
+    let depth = solid
+        .faces()
+        .filter(|wall| wall_face_ids.contains(&wall.id))
+        .flat_map(ReducedFace::loop_edges)
+        .flat_map(|edge| {
+            [
+                (edge.start_vertex, edge.start_mm),
+                (edge.end_vertex, edge.end_mm),
+            ]
+        })
+        .filter(|(id, _)| !cap_vertices.contains(id))
+        .filter_map(|(_, point)| {
+            let distance = dot(sub(point, origin), axis);
+            (distance.abs() > TOL_MM).then_some(distance)
+        })
+        .min_by(|a, b| a.abs().total_cmp(&b.abs()))?;
+    if depth.abs() <= TOL_MM {
+        return None;
+    }
+
+    let shoulder_origin = crate::math3::add(origin, crate::math3::mul(axis, depth));
+    let mut shoulder = Vec::with_capacity(4);
+    for i in 0..4 {
+        let prior = wall_planes[(i + 3) % 4];
+        let next = wall_planes[i];
+        let point = intersect_three_planes(
+            (axis, shoulder_origin),
+            (prior.normal, prior.origin_mm),
+            (next.normal, next.origin_mm),
+        )?;
+        if !point.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        shoulder.push(point);
+    }
+
+    let profile = |points: &[[f64; 3]]| {
+        Profile2d::polygon(
+            points
+                .iter()
+                .map(|&p| [dot(sub(p, origin), x), dot(sub(p, origin), y)])
+                .collect(),
+        )
+        .ok()
+    };
+    let tip = cap_edges
+        .iter()
+        .map(|edge| edge.start_mm)
+        .collect::<Vec<_>>();
+    let tip_profile = profile(&tip)?;
+    let shoulder_profile = profile(&shoulder)?;
+    let frame = |level| RigidTransform {
+        matrix: [
+            [x[0], y[0], axis[0], axis[0].mul_add(level, origin[0])],
+            [x[1], y[1], axis[1], axis[1].mul_add(level, origin[1])],
+            [x[2], y[2], axis[2], axis[2].mul_add(level, origin[2])],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    };
+    let tip = LoftSection {
+        profile: tip_profile,
+        transform: frame(0.0),
+    };
+    let shoulder = LoftSection {
+        profile: shoulder_profile,
+        transform: frame(depth),
+    };
+    let sections = if depth < 0.0 {
+        vec![shoulder, tip]
+    } else {
+        vec![tip, shoulder]
+    };
+    let mut model = CadModel::new();
+    let root = model.add_node(CadNode::Loft { sections });
+    model.add_root(root).ok()?;
+    model.validate().ok()?;
+    Some(RuledEndExtension {
+        fragment: CadFragment {
+            source: CadFragmentSource::RuledEndExtension {
+                solid_id: solid.solid_id(),
+                tip_face_id: cap.id,
+                wall_face_ids: wall_face_ids.try_into().ok()?,
+            },
+            model,
+            root,
+        },
+        tip_face_id: cap.id,
+        axis,
+    })
+}
+
+fn intersect_three_planes(
+    a: ([f64; 3], [f64; 3]),
+    b: ([f64; 3], [f64; 3]),
+    c: ([f64; 3], [f64; 3]),
+) -> Option<[f64; 3]> {
+    let ab = cross(a.0, b.0);
+    let bc = cross(b.0, c.0);
+    let ca = cross(c.0, a.0);
+    let det = dot(a.0, bc);
+    if det.abs() <= DIR_TOL {
+        return None;
+    }
+    let out = crate::math3::add(
+        crate::math3::add(
+            crate::math3::mul(bc, dot(a.0, a.1)),
+            crate::math3::mul(ca, dot(b.0, b.1)),
+        ),
+        crate::math3::mul(ab, dot(c.0, c.1)),
+    );
+    Some(crate::math3::mul(out, 1.0 / det))
 }
 
 /// Read-only parser witness for any original STEP solid; the same immutable

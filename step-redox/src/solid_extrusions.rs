@@ -137,6 +137,136 @@ pub(crate) fn detect_extrusion_core_candidates_with_index(
     out
 }
 
+/// Recover a source cap as a *partial* extrusion, stopping at the earliest
+/// source-witnessed axial generator station. The opposite cap need not be
+/// exposed: this remains an unverified proposal until a union is independently
+/// matched against the original solid's complete oriented boundary.
+pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
+    solid_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<RecoveredSolidExtrusion> {
+    let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
+        return Vec::new();
+    };
+    let faces = face_ids
+        .into_iter()
+        .filter_map(|id| face_info(id, entities, index))
+        .collect::<Vec<_>>();
+    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
+    for (face_index, face) in faces.iter().enumerate() {
+        for edge in &face.loop_edges {
+            edge_faces.entry(edge.edge_id).or_default().push(face_index);
+        }
+    }
+    let mut candidates = Vec::new();
+    for (cap_index, cap) in faces.iter().enumerate() {
+        let SurfaceSupport::Plane(plane) = cap.surface else {
+            continue;
+        };
+        if !face_lies_on_plane(cap, plane) {
+            continue;
+        }
+        let Some(normal) = normalize3(plane.normal, DIR_TOL) else {
+            continue;
+        };
+        let inward = mul(normal, if cap.surface_forward { -1.0 } else { 1.0 });
+        let Some(profile) =
+            cap_loop_roles(cap, inward).and_then(|roles| canonical_profile(cap, inward, &roles))
+        else {
+            continue;
+        };
+        let mut side_indices = HashSet::new();
+        let mut all_edges_attached = true;
+        for edge in &cap.loop_edges {
+            let Some(attached) = edge_faces.get(&edge.edge_id) else {
+                all_edges_attached = false;
+                break;
+            };
+            let [first, second] = attached.as_slice() else {
+                all_edges_attached = false;
+                break;
+            };
+            let neighbor = if *first == cap_index { *second } else { *first };
+            if neighbor == cap_index {
+                all_edges_attached = false;
+                break;
+            }
+            side_indices.insert(neighbor);
+        }
+        if !all_edges_attached {
+            continue;
+        }
+        let mut heights = Vec::new();
+        for edge in &cap.loop_edges {
+            for (vertex, at) in [
+                (edge.start_vertex, edge.start_mm),
+                (edge.end_vertex, edge.end_mm),
+            ] {
+                for &side_index in &side_indices {
+                    for wall_edge in &faces[side_index].loop_edges {
+                        if !matches!(wall_edge.support, CurveSupport::Line(_)) {
+                            continue;
+                        }
+                        let beyond = if wall_edge.start_vertex == vertex {
+                            Some(wall_edge.end_mm)
+                        } else if wall_edge.end_vertex == vertex {
+                            Some(wall_edge.start_mm)
+                        } else {
+                            None
+                        };
+                        let Some(other) = beyond else {
+                            continue;
+                        };
+                        let delta = sub(other, at);
+                        let height = dot(delta, inward);
+                        if height > GEOM_TOL_MM
+                            && norm(sub(delta, mul(inward, height))) <= GEOM_TOL_MM
+                        {
+                            heights.push(height);
+                        }
+                    }
+                }
+            }
+        }
+        // An observed station shared by at least two independent generators
+        // avoids treating a lone wall-edge artifact as a complete material core.
+        heights.sort_by(f64::total_cmp);
+        let Some(&height) = heights.first() else {
+            continue;
+        };
+        if heights
+            .iter()
+            .filter(|value| (**value - height).abs() <= GEOM_TOL_MM)
+            .count()
+            < 2
+        {
+            continue;
+        }
+        candidates.push(RecoveredSolidExtrusion {
+            solid_id,
+            // This candidate has only one source cap; its composite wrapper
+            // records the actual source provenance rather than a cap pair.
+            cap_face_ids: [cap.id, cap.id],
+            side_face_ids: Vec::new(),
+            profile_curves: profile.curves,
+            inner_profile_loops: profile.inner_loops,
+            origin_mm: profile.origin_mm,
+            x_axis: profile.x_axis,
+            y_axis: profile.y_axis,
+            z_axis: inward,
+            height_mm: height,
+            max_residual_mm: plane.max_residual_mm,
+        });
+    }
+    candidates.sort_by(|a, b| {
+        a.height_mm
+            .total_cmp(&b.height_mm)
+            .then_with(|| a.cap_face_ids.cmp(&b.cap_face_ids))
+    });
+    candidates
+}
+
 /// Recover the sharp extrusion core implied by one explicit planar cap pair.
 ///
 /// Unlike [`detect_solid_extrusions`], this proves the two cap loops are exact

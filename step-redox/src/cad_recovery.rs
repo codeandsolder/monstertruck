@@ -67,6 +67,11 @@ pub enum CadFragmentSource {
         cap_face_ids: Vec<[u64; 2]>,
     },
     /// Exact ruled end caps added to an extrusion-core union.
+    CapExtrusionRuledEnds {
+        solid_id: u64,
+        cap_face_id: u64,
+        tip_face_ids: Vec<u64>,
+    },
     ExtrusionCoreRuledEnds {
         solid_id: u64,
         cap_face_ids: Vec<[u64; 2]>,
@@ -376,6 +381,84 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     }))
 }
 
+/// Propose a partial extrusion from each actual source cap, together with all
+/// source-derived terminal lofts, and accept only an independently exact union.
+///
+/// This handles source solids whose rear cap is intact but whose front cap is
+/// partly occluded by ruled protrusions. The source cap, generator station and
+/// ruled carrier intersections are all derived from the STEP B-rep.
+fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
+    solid_id: u64,
+    entities: &[ruststep::ast::EntityInstance],
+    index: &std::collections::HashMap<u64, usize>,
+    kernel: &K,
+) -> Result<Option<CadFragment>> {
+    let Some(reduced) = crate::reduced_brep::ReducedSolid::from_step(solid_id, entities, index)
+    else {
+        return Ok(None);
+    };
+    let extensions = crate::solid_lofts::detect_extended_ruled_end_extensions(&reduced);
+    if extensions.is_empty() {
+        return Ok(None);
+    }
+    let cap_candidates =
+        crate::solid_extrusions::partial_source_cap_extrusion_candidates_with_index(
+            solid_id, entities, index,
+        );
+    for cap in cap_candidates {
+        let aligned = extensions
+            .iter()
+            .filter(|ext| dot(ext.axis, cap.z_axis).abs() >= 1.0 - AXIS_GROUP_DOT_TOLERANCE)
+            .collect::<Vec<_>>();
+        if aligned.is_empty() {
+            continue;
+        }
+        let tip_face_ids = aligned
+            .iter()
+            .map(|ext| ext.tip_face_id)
+            .collect::<Vec<_>>();
+        let cap_face_id = cap.cap_face_ids[0];
+        let mut fragments = Vec::with_capacity(1 + aligned.len());
+        fragments.push(recover_solid_extrusion_fragment(&cap)?);
+        fragments.extend(aligned.iter().map(|ext| ext.fragment.clone()));
+        let (mut model, root) = compose_union_model(&fragments)?;
+        let Ok(shape) = kernel.evaluate(&model, root) else {
+            continue;
+        };
+        if !kernel.summarize(&shape).is_single_solid() {
+            continue;
+        }
+        if !rebuilt_kernel_boundary_matches_source(kernel, &shape, solid_id, entities)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let mut source_entity_ids = vec![solid_id, cap_face_id];
+        source_entity_ids.extend(&tip_face_ids);
+        source_entity_ids.sort_unstable();
+        source_entity_ids.dedup();
+        model.set_provenance(
+            root,
+            Provenance {
+                source_entity_ids,
+                proof: ProofStatus::WithinTolerance,
+                max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
+            },
+        )?;
+        model.validate()?;
+        return Ok(Some(CadFragment {
+            source: CadFragmentSource::CapExtrusionRuledEnds {
+                solid_id,
+                cap_face_id,
+                tip_face_ids,
+            },
+            model,
+            root,
+        }));
+    }
+    Ok(None)
+}
+
 /// Detect all source-derived extrusion cores, discard those that contradict
 /// known source boundary geometry, and admit only the complete surviving union.
 ///
@@ -441,17 +524,19 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
             return Ok(Some(fragment));
         }
     }
-    if pairs.len() < 2 {
-        return Ok(None);
+    if pairs.len() >= 2 {
+        pairs.sort_unstable();
+        if let Ok(Some(fragment)) = recover_proven_extrusion_core_union_fragment(
+            source_step,
+            data_section,
+            solid_id,
+            &pairs,
+            kernel,
+        ) {
+            return Ok(Some(fragment));
+        }
     }
-    pairs.sort_unstable();
-    recover_proven_extrusion_core_union_fragment(
-        source_step,
-        data_section,
-        solid_id,
-        &pairs,
-        kernel,
-    )
+    recover_auto_proven_partial_cap_ruled_ends_fragment(solid_id, entities, &index, kernel)
 }
 
 /// Recover a first-class fused periodic-chain IR fragment from a proven source partition.
@@ -647,6 +732,55 @@ mod tests {
         reason = "legacy test fixture code is allowed narrow lint exceptions; production paths remain strict"
     )]
     use super::*;
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn original_bored_cap_and_two_bounded_lobes_recover_automatically() -> Result<()> {
+        let source =
+            include_bytes!("../validation/fixtures/native_mixed_carrier_chamfer_06d018ae.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let fragment = recover_auto_proven_extrusion_core_union_fragment(source, 0, 19, &kernel)?
+            .ok_or_else(|| {
+            anyhow::anyhow!("real bored-cap source must admit exact editable CAD")
+        })?;
+        assert_eq!(
+            fragment.source,
+            CadFragmentSource::CapExtrusionRuledEnds {
+                solid_id: 19,
+                cap_face_id: 400,
+                tip_face_ids: vec![301, 416],
+            },
+        );
+        assert_eq!(
+            fragment
+                .model
+                .nodes
+                .iter()
+                .filter(|node| matches!(node, CadNode::Loft { .. }))
+                .count(),
+            2,
+        );
+        assert_eq!(
+            fragment
+                .model
+                .nodes
+                .iter()
+                .filter(|node| matches!(node, CadNode::Extrude { .. }))
+                .count(),
+            1,
+        );
+        fragment.model.validate()?;
+        let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
+        assert!(kernel.summarize(&evaluated).is_single_solid());
+        let exchange = ParsedStepSource::parse(source)?.exchange;
+        assert!(rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &evaluated,
+            19,
+            &exchange.data[0].entities
+        )?);
+        Ok(())
+    }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
