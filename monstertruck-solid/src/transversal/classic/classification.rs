@@ -4,8 +4,8 @@ use super::{
     AltRegion, BooleanTolerance, EuclideanSpace, Face, IncludingPointInDomain, InnerSpace,
     Invertible, KERNEL_EPSILON, MeshableShape, MeshableSurface, MetricSpace, ParametricSurface3D,
     Point3, PolyShell, PolygonMesh, PolylineCurve, PolylineableCurve, SearchNearestParameter,
-    SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SurfaceParameter, Vector3, hash,
-    loops_store,
+    SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SurfaceParameter, Vector3, divide_face,
+    hash, loops_store,
 };
 
 /// Classify a tessellated shell point using the signed winding convention shared
@@ -57,7 +57,7 @@ pub(super) fn sample_points_on_face<C, S>(
 ) -> Option<Vec<Point3>>
 where
     C: PolylineableCurve + Clone,
-    S: MeshableSurface + Clone,
+    S: MeshableSurface + Clone + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     const MAX_CLASSIFICATION_SAMPLES: usize = 9;
 
@@ -80,7 +80,15 @@ where
         })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
-        return None;
+        // A perfectly valid face may have just two curved edges and two
+        // topological vertices. When its tessellator emits no triangles, use
+        // the already-shared trimmed-UV region sampling rather than letting
+        // the absence of a mesh decide the Boolean operation.
+        return divide_face::sample_points_on_region(
+            face.absolute_boundaries(),
+            &face.surface(),
+            tol,
+        );
     }
 
     candidates.sort_by(|lhs, rhs| rhs.0.total_cmp(&lhs.0));
@@ -135,7 +143,7 @@ pub(super) fn classify_unknown_face<C, S>(
 ) -> Option<bool>
 where
     C: PolylineableCurve + Clone,
-    S: MeshableSurface + Clone,
+    S: MeshableSurface + Clone + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     classify_points_inside(poly_shell, sample_points_on_face(face, tol)?)
 }
@@ -268,6 +276,35 @@ pub(super) fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurfa
 #[cfg(test)]
 mod vote_tests {
     use super::*;
+
+    #[test]
+    fn curved_two_edge_face_samples_from_its_trimmed_interior() {
+        use monstertruck_geometry::prelude::Plane;
+        use monstertruck_modeling::{Curve, Surface, builder};
+
+        // A closed circular lens has only two topological vertices. Meshers
+        // need not emit any triangles at a given tolerance, but its trimmed
+        // surface has a well-defined interior for Boolean classification.
+        let left = builder::vertex(Point3::new(-1.0, 0.0, 0.0));
+        let right = builder::vertex(Point3::new(1.0, 0.0, 0.0));
+        let upper = builder::circle_arc::<Curve>(&left, &right, Point3::new(0.0, 1.0, 0.0))
+            .expect("upper semicircle");
+        let lower = builder::circle_arc::<Curve>(&right, &left, Point3::new(0.0, -1.0, 0.0))
+            .expect("lower semicircle");
+        let face = Face::new(vec![vec![upper, lower].into()], Surface::Plane(Plane::xy()))
+            .expect("two-edge face is topologically valid");
+
+        let samples = sample_points_on_face(&face, 1.0e-6)
+            .expect("a trimmed two-edge face must admit interior samples");
+        assert!(!samples.is_empty());
+        assert!(samples.iter().all(|p| p.x.is_finite()
+            && p.y.is_finite()
+            && p.z.abs() < 1.0e-8
+            && p.x * p.x + p.y * p.y < 1.0));
+        // The no-mesh direct-UV path is exercised by the nine-core
+        // STEP regression; it is not universally necessary when the
+        // tessellator already provides valid samples for a curved face.
+    }
 
     #[test]
     fn binary_ties_are_inconclusive() {
