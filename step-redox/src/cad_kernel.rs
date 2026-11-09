@@ -63,6 +63,13 @@ pub trait CadKernel {
 
     fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary;
 
+    /// Whether this kernel supports exporting evaluated CAD as STEP.
+    ///
+    /// Native topology editing and replay need no serialization. Independent
+    /// cross-STEP source-boundary admission requires it, and is skipped
+    /// entirely if the adapter cannot provide it.
+    fn supports_step_export(&self) -> bool;
+
     /// Serialize an evaluated shape as a STEP exchange.
     ///
     /// # Errors
@@ -876,6 +883,8 @@ pub mod monstertruck {
                 faces: boundaries.iter().map(|shell| shell.len()).sum(),
             }
         }
+
+        fn supports_step_export(&self) -> bool { true }
 
         fn to_step(&self, evaluated: &Self::Evaluated) -> Result<String> {
             let compressed = evaluated.solid.compress();

@@ -588,18 +588,20 @@ pub fn recover_complete_ir_with_kernel_bytes<
         },
         false,
     ));
-    failures.extend(apply_kernel_recovery(
-        &mut build.recovery,
-        |source| {
-            recover_auto_proven_extrusion_core_union_fragment(
-                input,
-                source.data_section,
-                source.id,
-                kernel,
-            )
-        },
-        true,
-    ));
+    if kernel.supports_step_export() {
+        failures.extend(apply_kernel_recovery(
+            &mut build.recovery,
+            |source| {
+                recover_auto_proven_extrusion_core_union_fragment(
+                    input,
+                    source.data_section,
+                    source.id,
+                    kernel,
+                )
+            },
+            true,
+        ));
+    }
     Ok(build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, Some(source_load)))
 }
 
@@ -2318,6 +2320,8 @@ mod tests {
             *evaluated
         }
 
+        fn supports_step_export(&self) -> bool { false }
+
         fn to_step(&self, _: &Self::Evaluated) -> Result<String> {
             bail!("kernel replay must not export and reparse a previously evaluated solid")
         }
@@ -2701,14 +2705,21 @@ mod tests {
     fn source_boundary_verified_candidate_outranks_cheaper_structural_guess() -> Result<()> {
         let report = report_with_unrecovered(&[7]);
         let mut state = WholeSolidRecoveryState::new(&report.body_scan.solids);
+        let verified = constructive_fragment(7, 5)?;
+        let expected_complexity = verified.model.complexity_score(verified.root)?;
         state.add_candidates([qualified_fragment(constructive_fragment(7, 1)?)])?;
-        state
-            .add_candidates_with_proof([qualified_fragment(constructive_fragment(7, 5)?)], true)?;
+        state.add_candidates_with_proof([qualified_fragment(verified)], true)?;
         assert!(state.selected[&test_source(7)].boundary_verified);
-        assert_eq!(state.selected[&test_source(7)].complexity, 5);
+        assert_eq!(
+            state.selected[&test_source(7)].complexity,
+            expected_complexity
+        );
         // A later unverified shortcut cannot displace an exact proven body.
         state.add_candidates([qualified_fragment(constructive_fragment(7, 1)?)])?;
-        assert_eq!(state.selected[&test_source(7)].complexity, 5);
+        assert_eq!(
+            state.selected[&test_source(7)].complexity,
+            expected_complexity
+        );
         Ok(())
     }
 
@@ -2979,16 +2990,16 @@ END-ISO-10303-21;
             Vec::<KernelRecoveryFailure>::new()
         );
         assert_eq!(report.unrecovered_solid_count, 0);
-        assert_eq!(report.boundary_feature_composites.len(), 1);
-        assert!(matches!(
-            report.boundary_feature_composites[0].fragment.source,
-            CadFragmentSource::BoundaryFeatureComposite {
-                passes: 1,
-                feature_families: 1,
-                feature_instances: 1,
-                ..
-            }
-        ));
+        // Source-boundary verified simple CAD now outranks the more expensive
+        // native boss peel; the native transaction itself has a separate
+        // dedicated test above, so don't pin the Complete IR to history.
+        let exact = recover_auto_proven_extrusion_core_union_fragment(input, 0, 16, &kernel)?
+            .ok_or_else(|| anyhow::anyhow!("square boss has no exact simple CAD"))?;
+        let chosen = selected_unique_source_fragment(&report)?;
+        assert_eq!(
+            *chosen, exact,
+            "source-proof selection changed the admitted CAD"
+        );
         Ok(())
     }
 
@@ -3009,6 +3020,8 @@ END-ISO-10303-21;
         fn summarize(&self, evaluated: &Self::Evaluated) -> crate::cad_kernel::KernelSummary {
             self.0.summarize(evaluated)
         }
+
+        fn supports_step_export(&self) -> bool { false }
 
         fn to_step(&self, _: &Self::Evaluated) -> Result<String> {
             bail!("native feature peeling must not require CAD STEP serialization")
@@ -3354,6 +3367,32 @@ END-ISO-10303-21;
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
+    fn selected_unique_source_fragment(report: &CompleteIr) -> Result<&CadFragment> {
+        let selected = [
+            report.solid_extrusions.as_slice(),
+            report.solid_lofts.as_slice(),
+            report.solid_revolutions.as_slice(),
+            report.radial_slot_revolutions.as_slice(),
+            report.solid_sweeps.as_slice(),
+            report.periodic_chains.as_slice(),
+            report.boundary_feature_composites.as_slice(),
+            report.edge_treatment_composites.as_slice(),
+            report.same_domain_normalized_solids.as_slice(),
+            report.extrusion_core_unions.as_slice(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let [chosen] = selected.as_slice() else {
+            bail!(
+                "expected exactly one selected source CAD model, got {}",
+                selected.len()
+            );
+        };
+        Ok(&chosen.fragment)
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn real_beveled_l_ruled_ends_reconstruct_complete_editable_body() -> Result<()> {
         let input = include_bytes!("../validation/fixtures/native_beveled_l_hook.step");
@@ -3370,22 +3409,7 @@ END-ISO-10303-21;
         // sweep or source-derived core union. Do not pin an inferior
         // representation simply because it happened to be reconstructed
         // first; test the *chosen* constructive model against source geometry.
-        let selected = [
-            report.solid_extrusions.as_slice(),
-            report.solid_lofts.as_slice(),
-            report.solid_revolutions.as_slice(),
-            report.radial_slot_revolutions.as_slice(),
-            report.solid_sweeps.as_slice(),
-            report.boundary_feature_composites.as_slice(),
-            report.edge_treatment_composites.as_slice(),
-            report.same_domain_normalized_solids.as_slice(),
-            report.extrusion_core_unions.as_slice(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-        assert_eq!(selected.len(), 1, "expected exactly one complete model");
-        let recovered = &selected[0].fragment;
+        let recovered = selected_unique_source_fragment(&report)?;
         recovered.model.validate()?;
         let evaluated = kernel.evaluate(&recovered.model, recovered.root)?;
         assert!(kernel.summarize(&evaluated).is_single_solid());
@@ -3531,16 +3555,21 @@ END-ISO-10303-21;
         assert_eq!(report.schema, KERNEL_COMPLETE_IR_SCHEMA);
         assert_eq!(report.semantically_recovered_solid_count, 1);
         assert_eq!(report.unrecovered_solid_count, 0);
-        assert_eq!(report.solid_extrusions, Vec::<SourceCadFragment>::new());
-        assert_eq!(report.same_domain_normalized_solids.len(), 1);
+        // The native normalization is proven independently above. Complete
+        // IR may prefer a simpler body if the *original source* independently
+        // admits that entire constructive boundary.
+        let exact =
+            recover_auto_proven_extrusion_core_union_fragment(input, 0, solid.source.id, &kernel)?
+                .ok_or_else(|| anyhow::anyhow!("normalized source has no exact simple CAD"))?;
+        let chosen = selected_unique_source_fragment(&report)?;
+        assert_eq!(
+            *chosen, exact,
+            "source-proof selection changed the admitted CAD"
+        );
         assert_eq!(
             report.kernel_recovery_failures,
             Vec::<KernelRecoveryFailure>::new()
         );
-        assert!(matches!(
-            report.same_domain_normalized_solids[0].fragment.source,
-            CadFragmentSource::SameDomainNormalized { .. }
-        ));
         Ok(())
     }
 

@@ -375,6 +375,49 @@ fn positive_region_components<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     parts
 }
 
+/// Accept the fast label-only partition only when it is closed *and* covers
+/// the two input bounds; otherwise the full coplanar partition must run.
+fn classify_complete_label_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    analysis: &PairAnalysis<C, S>,
+) -> ClassicResult<Option<[Shell<Point3, C, S>; 2]>> {
+    let tol = analysis.tolerance;
+    let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
+    for region in unknown0 {
+        for region in positive_region_components(&region, tol) {
+            match classify_relation(&analysis.poly_shell1, &region, tol, 0)? {
+                FaceRelation::Inside => and0.push(region),
+                FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
+            }
+        }
+    }
+    let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
+    for region in unknown1 {
+        for region in positive_region_components(&region, tol) {
+            match classify_relation(&analysis.poly_shell0, &region, tol, 1)? {
+                FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
+                FaceRelation::Outside => or1.push(region),
+            }
+        }
+    }
+    and0.append(&mut and1);
+    or0.append(&mut or1);
+    let label_and_shell = weld_and_convert(&and0, "and")?;
+    let label_or_shell = weld_and_convert(&or0, "or")?;
+    if !label_or_shell.is_empty()
+        && shell_is_valid(&label_and_shell)
+        && shell_is_valid(&label_or_shell)
+        && covers_both_input_bounding_boxes(
+            &label_or_shell,
+            &analysis.poly_shell0,
+            &analysis.poly_shell1,
+            BooleanTolerance::new(tol).mesh_seed,
+        )
+    {
+        return Ok(Some([label_and_shell, label_or_shell]));
+    }
+    Ok(None)
+}
+
 fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     mut analysis: PairAnalysis<C, S>,
 ) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
@@ -382,45 +425,8 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     analysis.cls0.integrate_by_component();
     analysis.cls1.integrate_by_component();
 
-    // A zero-volume AABB intersection proves there can be no positive-volume
-    // AND shell. The label-only classifier can nevertheless return two closed
-    // *subsets*, e.g. a complete annular tube mislabelled as AND and its hook
-    // mislabelled as OR. In that case the complete partition must run.
-    {
-        let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
-        for region in unknown0 {
-            for region in positive_region_components(&region, tol) {
-                match classify_relation(&analysis.poly_shell1, &region, tol, 0)? {
-                    FaceRelation::Inside => and0.push(region),
-                    FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
-                }
-            }
-        }
-        let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
-        for region in unknown1 {
-            for region in positive_region_components(&region, tol) {
-                match classify_relation(&analysis.poly_shell0, &region, tol, 1)? {
-                    FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
-                    FaceRelation::Outside => or1.push(region),
-                }
-            }
-        }
-        and0.append(&mut and1);
-        or0.append(&mut or1);
-        let label_and_shell = weld_and_convert(&and0, "and")?;
-        let label_or_shell = weld_and_convert(&or0, "or")?;
-        if !label_or_shell.is_empty()
-            && shell_is_valid(&label_and_shell)
-            && shell_is_valid(&label_or_shell)
-            && covers_both_input_bounding_boxes(
-                &label_or_shell,
-                &analysis.poly_shell0,
-                &analysis.poly_shell1,
-                BooleanTolerance::new(tol).mesh_seed,
-            )
-        {
-            return Ok([label_and_shell, label_or_shell]);
-        }
+    if let Some(shells) = classify_complete_label_shells(&analysis)? {
+        return Ok(shells);
     }
 
     // A topologically valid set of classified faces need not cover the input

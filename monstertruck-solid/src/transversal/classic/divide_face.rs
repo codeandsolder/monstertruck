@@ -469,6 +469,36 @@ fn uv_boundaries_meet(lhs: &PolylineCurve<Point2>, rhs: &PolylineCurve<Point2>) 
     })
 }
 
+/// A negative contour touching an outer boundary can still be a genuine
+/// cavity if its common opposite coedges cancel into one connected wire.
+fn adjoining_negative_contour_parent<C: Clone>(
+    pre_faces: &[Vec<WireChunk<'_, C>>],
+    chunk: &WireChunk<'_, C>,
+    witness: Point2,
+    chunk_area_abs: f64,
+) -> Option<usize> {
+    pre_faces
+        .iter()
+        .enumerate()
+        .filter(|(_, pre_face)| !pre_face.is_empty())
+        .filter(|(_, pre_face)| {
+            let outer = &pre_face[0];
+            let area_tol =
+                polyline_area_epsilon(&outer.poly).max(polyline_area_epsilon(&chunk.poly));
+            polyline_signed_area(&outer.poly).abs() > chunk_area_abs + area_tol
+                && outer.poly.include(witness)
+        })
+        .find_map(|(index, pre_face)| {
+            let mut wires = pre_face
+                .iter()
+                .map(|existing| existing.wire.deref().clone())
+                .collect::<Vec<_>>();
+            wires.push(chunk.wire.deref().clone());
+            let (normalized, cancelled) = cancel_retraced_edge_uses(&wires)?;
+            (cancelled && normalized.len() == 1).then_some(index)
+        })
+}
+
 fn divide_one_face<C, S>(
     face: &Face<Point3, C, S>,
     loops: &Loops<Point3, C>,
@@ -552,27 +582,9 @@ where
         // opposite coedges, it is still the absence of material, not a
         // separate positive island. Cancel the coedges to yield one connected
         // boundary. Merely touching at a vertex is not sufficient.
-        let adjoining = pre_faces
-            .iter()
-            .filter(|_| is_planar)
-            .enumerate()
-            .filter(|(_, pre_face)| !pre_face.is_empty())
-            .filter(|(_, pre_face)| {
-                let outer = &pre_face[0];
-                let area_tol =
-                    polyline_area_epsilon(&outer.poly).max(polyline_area_epsilon(&chunk.poly));
-                polyline_signed_area(&outer.poly).abs() > chunk_area_abs + area_tol
-                    && outer.poly.include(witness)
-            })
-            .find_map(|(index, pre_face)| {
-                let mut wires = pre_face
-                    .iter()
-                    .map(|existing| existing.wire.deref().clone())
-                    .collect::<Vec<_>>();
-                wires.push(chunk.wire.deref().clone());
-                let (normalized, cancelled) = cancel_retraced_edge_uses(&wires)?;
-                (cancelled && normalized.len() == 1).then_some(index)
-            });
+        let adjoining = is_planar
+            .then(|| adjoining_negative_contour_parent(&pre_faces, &chunk, witness, chunk_area_abs))
+            .flatten();
         if let Some(index) = adjoining {
             pre_faces[index].push(chunk);
             return Some(());
