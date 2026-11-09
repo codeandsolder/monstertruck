@@ -605,6 +605,14 @@ fn recover_verified_direct_constructive_fragment<K: CadKernel>(
     Ok(None)
 }
 
+/// Recover the full source document using native kernel ownership, then
+/// independently certify executable constructive candidates against STEP geometry
+/// when the kernel supports exporting evaluated shapes.
+///
+/// # Errors
+/// Returns an error if source STEP parsing, native inspection, candidate
+/// construction, or kernel-backed recovery cannot be initialized. Individual
+/// candidate failures remain attached to the returned recovery report.
 pub fn recover_complete_ir_with_kernel_bytes<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
