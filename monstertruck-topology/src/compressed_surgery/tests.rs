@@ -418,6 +418,31 @@ fn complete_face_boundary_replacement_reuses_edges_and_regenerates_trims() -> an
 }
 
 #[test]
+fn reversed_replacement_coedge_reports_exact_open_wire_and_rolls_back() -> anyhow::Result<()> {
+    let (mut solid, ids) = chamfered_prism();
+    let original = solid.clone();
+    let mut patch = inverse_chamfer_patch(ids);
+    let carrier = patch
+        .face_splices
+        .iter_mut()
+        .find(|splice| splice.face == ids.faces[3])
+        .ok_or_else(|| anyhow::anyhow!("missing fixture carrier splice"))?;
+    carrier.replacement[0].orientation = !carrier.replacement[0].orientation;
+
+    let error = solid
+        .apply_topology_patch(&patch)
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("reversed coedge unexpectedly produced a valid wire"))?;
+    assert!(
+        matches!(error, CompressedTopologyPatchError::NonClosedFaceWire { face, .. }
+            if face == ids.faces[3]),
+        "expected the specific open carrier face, got {error:?}"
+    );
+    assert_eq!(solid, original);
+    Ok(())
+}
+
+#[test]
 fn incomplete_inverse_patch_rolls_back_transactionally() -> anyhow::Result<()> {
     let (mut solid, ids) = chamfered_prism();
     let before = solid.clone();

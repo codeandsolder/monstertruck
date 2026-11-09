@@ -5,7 +5,7 @@
 //! backend-neutral patch addressed entirely by the kernel `StableId` journal.  Mutation belongs to
 //! [`crate::kernel_topology::SourceTopologyEditor`].
 
-use crate::brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport};
+use crate::brep::{CurveSupport, FaceLoop, OrientedEdgeUse, SurfaceSupport};
 use crate::edge_treatments::{EdgeTreatmentEvidence, EdgeTreatmentVirtualEdge};
 use crate::kernel_source_load::{KernelTopologyId, KernelTopologyProvenance};
 use crate::kernel_topology::{
@@ -227,6 +227,27 @@ impl CircleFrame {
     }
 }
 
+/// STEP's raw EDGE_LOOP traversal is not necessarily the imported kernel's
+/// face-local traversal. In particular ADVANCED_FACE(...,.F.) reverses a
+/// FACE_OUTER_BOUND(...,.T.) wire. Both line- and circle-based inverse
+/// treatment planners must use the same oriented neighbor order.
+fn native_oriented_face_edges(face: &ReducedFace, wire: &FaceLoop) -> Vec<OrientedEdgeUse> {
+    if face.surface_forward == wire.orientation {
+        return wire.edges.clone();
+    }
+    wire.edges
+        .iter()
+        .rev()
+        .map(|edge| {
+            let mut edge = edge.clone();
+            std::mem::swap(&mut edge.start_vertex, &mut edge.end_vertex);
+            std::mem::swap(&mut edge.start_mm, &mut edge.end_mm);
+            edge.parameter_forward = !edge.parameter_forward;
+            edge
+        })
+        .collect()
+}
+
 fn circle_carrier_run(
     face: &ReducedFace,
     shared: BTreeSet<u64>,
@@ -247,25 +268,7 @@ fn circle_carrier_run(
         !wire.edges.is_empty() && shared.len() <= wire.edges.len(),
         "circular carrier has invalid run"
     );
-    // The native STEP loader orients a boundary wire relative to the
-    // oriented ADVANCED_FACE. The raw EDGE_LOOP order alone is not always
-    // the traversal order used by the kernel, especially for reversed
-    // cylinders and FACE_BOUND(...,.F.) loops.
-    let oriented_edges = if face.surface_forward == wire.orientation {
-        wire.edges.clone()
-    } else {
-        wire.edges
-            .iter()
-            .rev()
-            .map(|edge| {
-                let mut edge = edge.clone();
-                std::mem::swap(&mut edge.start_vertex, &mut edge.end_vertex);
-                std::mem::swap(&mut edge.start_mm, &mut edge.end_mm);
-                edge.parameter_forward = !edge.parameter_forward;
-                edge
-            })
-            .collect::<Vec<_>>()
-    };
+    let oriented_edges = native_oriented_face_edges(face, wire);
     let count = oriented_edges.len();
     let starts = (0..count)
         .filter(|&i| {
@@ -1046,7 +1049,8 @@ fn carrier_run_neighbors(
         face.id
     );
     let loop_ = &face.loops[*loop_index];
-    let edge_count = loop_.edges.len();
+    let oriented_edges = native_oriented_face_edges(face, loop_);
+    let edge_count = oriented_edges.len();
     ensure!(
         shared.len() < edge_count.saturating_sub(1),
         "carrier face #{} leaves no retained neighbors around treatment run",
@@ -1054,8 +1058,8 @@ fn carrier_run_neighbors(
     );
     let starts = (0..edge_count)
         .filter(|&index| {
-            shared.contains(&loop_.edges[index].edge_id)
-                && !shared.contains(&loop_.edges[(index + edge_count - 1) % edge_count].edge_id)
+            shared.contains(&oriented_edges[index].edge_id)
+                && !shared.contains(&oriented_edges[(index + edge_count - 1) % edge_count].edge_id)
         })
         .collect::<Vec<_>>();
     let [run_start] = starts.as_slice() else {
@@ -1066,7 +1070,7 @@ fn carrier_run_neighbors(
     };
     let mut run_len = 0usize;
     while run_len < edge_count
-        && shared.contains(&loop_.edges[(run_start + run_len) % edge_count].edge_id)
+        && shared.contains(&oriented_edges[(run_start + run_len) % edge_count].edge_id)
     {
         run_len += 1;
     }
@@ -1076,8 +1080,8 @@ fn carrier_run_neighbors(
         face.id
     );
     Ok((
-        loop_.edges[(run_start + edge_count - 1) % edge_count].clone(),
-        loop_.edges[(run_start + run_len) % edge_count].clone(),
+        oriented_edges[(run_start + edge_count - 1) % edge_count].clone(),
+        oriented_edges[(run_start + run_len) % edge_count].clone(),
     ))
 }
 
@@ -1809,6 +1813,75 @@ mod tests {
         EdgeTreatmentCarrier, EdgeTreatmentEvidenceStrength, EdgeTreatmentKind,
     };
     use crate::kernel_source_load::{KernelFaceTopologyProvenance, KernelTopologyEntityProvenance};
+
+    /// Native STEP face reversal must be applied to the *segment* carrier
+    /// run as well as circular ones. This source has both forward and reversed
+    /// carrier faces; every individual candidate and the simultaneous patch
+    /// transaction must remain a one-shell, closed native solid.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_reversed_step_carriers_close_after_inverse_chamfer_replay() -> Result<()> {
+        use crate::cad_kernel::monstertruck::MonstertruckKernel;
+        use crate::kernel_source_load::SourceStepLoadInspector;
+        use crate::kernel_topology::{SourceTopologyEditor, plan_source_edge_treatment_patches};
+
+        let bytes =
+            include_bytes!("../validation/fixtures/native_mixed_carrier_chamfer_06d018ae.step");
+        let kernel = MonstertruckKernel::project_standard();
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange,
+        )?;
+        let inspected = kernel.inspect_source_document(&document)?;
+        let loaded = inspected
+            .solids
+            .iter()
+            .find(|solid| solid.source.id == 19)
+            .context("20-face real source absent")?;
+        let provenance = loaded
+            .topology_provenance
+            .as_ref()
+            .context("source has no stable topology provenance")?;
+        let section = &document.as_ref().data[loaded.source.data_section];
+        let index = crate::step_graph::build_index(&section.entities);
+        let evidence = crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
+            &section.entities,
+            &index,
+            &std::collections::HashSet::from([19]),
+        );
+        for face_ids in [
+            vec![85],
+            vec![172],
+            vec![182],
+            vec![382],
+            vec![402],
+            vec![452],
+            vec![172, 182],
+            vec![85, 172, 182, 382, 402, 452],
+        ] {
+            let selected = evidence
+                .iter()
+                .filter(|item| face_ids.contains(&item.treatment_face_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            ensure!(
+                selected.len() == face_ids.len(),
+                "lost real source treatments {face_ids:?}"
+            );
+            let patch = plan_source_edge_treatment_patches(
+                document.as_ref(),
+                loaded.source,
+                &selected,
+                provenance,
+            )?;
+            let edited = kernel
+                .edit_source_topology(&document, loaded.source, &[patch])
+                .with_context(|| format!("real source treatments {face_ids:?} are not closed"))?;
+            let summary = kernel.inspect_edited_source(&edited)?;
+            assert_eq!(summary.boundary_shells, 1, "{face_ids:?}");
+            assert_eq!(summary.faces, 20 - face_ids.len(), "{face_ids:?}");
+        }
+        Ok(())
+    }
 
     /// A real 81-face antenna body with three split-ring families, and a
     /// real 178-face perforated cylinder with a split fillet at each end.

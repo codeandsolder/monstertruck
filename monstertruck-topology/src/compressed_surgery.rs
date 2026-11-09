@@ -188,6 +188,20 @@ pub enum CompressedTopologyPatchError {
     /// A face splice would leave an empty wire.
     #[error("face {face} splice would leave an empty boundary wire")]
     EmptyFaceBoundary { face: StableId },
+    /// A candidate patch caused two consecutive oriented coedges on a retained
+    /// face to reference different endpoint identities. A wire must close
+    /// topologically, not merely have geometrically coincident positions.
+    #[error(
+        "face {face} wire {wire_index} is open: edge {edge} ends at vertex {end_vertex}, next edge {next_edge} starts at vertex {next_start_vertex}"
+    )]
+    NonClosedFaceWire {
+        face: StableId,
+        wire_index: usize,
+        edge: StableId,
+        next_edge: StableId,
+        end_vertex: StableId,
+        next_start_vertex: StableId,
+    },
     /// An edge promised to disappear is still used after all patch edits.
     #[error("edge {edge} is still referenced after normalized topology edits")]
     RequiredEdgeStillUsed { edge: StableId },
@@ -282,10 +296,54 @@ where
         let result = apply_resolved_patch(&mut candidate, patch, resolved)?;
         let after_ids = topology_ids(&candidate);
         cleanup_removed_attributes(&mut candidate, &before_ids, &after_ids);
+        validate_patch_wire_continuity(&candidate)?;
         let _: TrimmedSolid<P, C, S, T> = candidate.clone().try_into()?;
         *self = candidate;
         Ok(result)
     }
+}
+
+/// Check oriented endpoint *identity* before converting to runtime topology
+/// so an incomplete splice reports the exact surviving face and coedges.
+fn validate_patch_wire_continuity<P, C, S, T>(
+    solid: &CompressedTrimmedSolid<P, C, S, T>,
+) -> Result<(), CompressedTopologyPatchError> {
+    for shell in &solid.boundaries {
+        for (face_index, face) in shell.faces.iter().enumerate() {
+            for (wire_index, wire) in face.boundaries.iter().enumerate() {
+                for (index, current) in wire.iter().enumerate() {
+                    let next = &wire[(index + 1) % wire.len()];
+                    let end = if current.orientation {
+                        shell.edges[current.index].vertices.1
+                    } else {
+                        shell.edges[current.index].vertices.0
+                    };
+                    let start = if next.orientation {
+                        shell.edges[next.index].vertices.0
+                    } else {
+                        shell.edges[next.index].vertices.1
+                    };
+                    if end == start {
+                        continue;
+                    }
+                    let id = |ids: Option<&Vec<StableId>>, at| {
+                        ids.and_then(|items| items.get(at))
+                            .copied()
+                            .unwrap_or(StableId::UNASSIGNED)
+                    };
+                    return Err(CompressedTopologyPatchError::NonClosedFaceWire {
+                        face: id(shell.face_stable_ids.as_ref(), face_index),
+                        wire_index,
+                        edge: id(shell.edge_stable_ids.as_ref(), current.index),
+                        next_edge: id(shell.edge_stable_ids.as_ref(), next.index),
+                        end_vertex: id(shell.vertex_stable_ids.as_ref(), end),
+                        next_start_vertex: id(shell.vertex_stable_ids.as_ref(), start),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_compressed_references<P: Clone, C: Clone, S: Clone, T: Clone>(
