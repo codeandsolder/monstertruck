@@ -3447,6 +3447,91 @@ END-ISO-10303-21;
         Ok(&chosen.fragment)
     }
 
+    /// Three distinct real JLCPCB solids with long source profiles (including
+    /// three cylindrical side patches on one) were structurally recognized
+    /// before the generic independent candidate-proof path existed. Their
+    /// *entire* native extrusion, rather than a cheaper guess or a subset, must
+    /// be admitted only after oriented source-boundary equality succeeds.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_distinct_extrusions_are_source_boundary_proven_in_complete_ir() -> Result<()> {
+        let samples: &[(&str, &[u8], u64, [u64; 2])] = &[
+            (
+                "17-edge planar profile",
+                include_bytes!("../validation/fixtures/native_planar_extrusion_bc1b8e95.step")
+                    .as_slice(),
+                44,
+                [336, 354],
+            ),
+            (
+                "11-edge planar profile",
+                include_bytes!("../validation/fixtures/native_planar_extrusion_23c65eb0.step")
+                    .as_slice(),
+                70,
+                [136, 241],
+            ),
+            (
+                "nine-edge profile with three circular arcs",
+                include_bytes!("../validation/fixtures/native_curved_extrusion_406bfe61.step")
+                    .as_slice(),
+                205,
+                [111, 193],
+            ),
+        ];
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        for &(label, source, solid_id, expected_caps) in samples {
+            let exchange = monstertruck_io::step::load::ParsedStepSource::parse(source)?.exchange;
+            let [section] = exchange.data.as_slice() else {
+                bail!("{label}: source did not contain exactly one DATA section");
+            };
+            let report = recover_complete_ir_with_kernel_bytes(source, &kernel)?;
+            assert_eq!(report.body_count, 1, "{label}");
+            assert_eq!(
+                report.unrecovered_solid_count, 0,
+                "{label}: {:?}",
+                report.kernel_recovery_failures
+            );
+            let selected = selected_unique_source_fragment(&report)?;
+            let CadFragmentSource::SolidExtrusion {
+                solid_id: recovered_id,
+                cap_face_ids,
+                ..
+            } = &selected.source
+            else {
+                bail!(
+                    "{label}: expected an editable source extrusion, got {:?}",
+                    selected.source
+                );
+            };
+            assert_eq!(*recovered_id, solid_id, "{label}");
+            let mut caps = *cap_face_ids;
+            caps.sort_unstable();
+            assert_eq!(
+                caps, expected_caps,
+                "{label}: source cap provenance changed"
+            );
+            selected.model.validate()?;
+            let rebuilt = kernel.evaluate(&selected.model, selected.root)?;
+            assert!(kernel.summarize(&rebuilt).is_single_solid(), "{label}");
+            assert!(
+                rebuilt_kernel_boundary_matches_source(
+                    &kernel,
+                    &rebuilt,
+                    solid_id,
+                    &section.entities,
+                )?,
+                "{label}: the selected CAD failed strict source-boundary equality"
+            );
+            let source_entity = report.body_scan.solids[0].source;
+            assert!(
+                recover_verified_direct_constructive_fragment(source_entity, &exchange, &kernel)?
+                    .is_some(),
+                "{label}: the independent direct-candidate proof did not admit the source"
+            );
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn real_beveled_l_ruled_ends_reconstruct_complete_editable_body() -> Result<()> {
