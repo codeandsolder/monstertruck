@@ -90,8 +90,8 @@ pub mod monstertruck {
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
     use monstertruck_modeling::{
         BoundedCurve, BsplineCurve, Curve, Edge, EuclideanSpace, InnerSpace, KnotVector, Matrix4,
-        NurbsCurve, ParametricCurve, Point3, Rad, Shell, Solid, Vector3, Vector4, Wire, builder,
-        primitive, profile,
+        NurbsCurve, ParametricCurve, ParametricSurface3D, Point3, Rad, Shell, Solid, Surface,
+        Vector3, Vector4, Wire, builder, primitive, profile,
     };
 
     #[derive(Debug, Clone, Copy)]
@@ -175,11 +175,56 @@ pub mod monstertruck {
         }
     }
 
+    /// The loft skin inherits each section wire's traversal direction.
+    /// A reversed sketch produces inward walls even when the start/end caps
+    /// are normalized separately. Orient the *wires themselves* along the
+    /// actual section progression before building any common coedges.
+    fn orient_loft_section_wires(wires: &mut [Wire]) -> Result<()> {
+        let centroids = wires
+            .iter()
+            .map(|wire| {
+                let vertices = wire
+                    .vertex_iter()
+                    .map(|vertex| vertex.point())
+                    .collect::<Vec<_>>();
+                if vertices.is_empty() {
+                    bail!("loft section has no vertices");
+                }
+                let sum = vertices
+                    .iter()
+                    .fold(Vector3::new(0.0, 0.0, 0.0), |sum, point| {
+                        sum + point.to_vec()
+                    });
+                Ok(Point3::from_vec(
+                    sum / f64::from(u32::try_from(vertices.len())?),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for index in 0..wires.len() {
+            let before = centroids[index.saturating_sub(1)];
+            let after = centroids[(index + 1).min(centroids.len() - 1)];
+            let progression = after - before;
+            if progression.magnitude() <= 0.0 {
+                continue;
+            }
+            let face = builder::try_attach_plane::<Curve, Surface>(vec![wires[index].clone()])?;
+            let normal = face.oriented_surface().normal(0.0, 0.0);
+            let projected = normal.dot(progression);
+            // A nearly tangential section does not offer reliable winding
+            // evidence. Preserve it rather than inventing a face orientation.
+            let threshold = 1.0e-10 * normal.magnitude() * progression.magnitude();
+            if projected < -threshold {
+                wires[index].invert();
+            }
+        }
+        Ok(())
+    }
+
     fn loft_sections(sections: &[LoftSection]) -> Result<Solid> {
         if sections.len() < 2 {
             bail!("loft needs at least two sections");
         }
-        let wires = sections
+        let mut wires = sections
             .iter()
             .map(|section| {
                 let mut wires = profile_wires(&section.profile)?;
@@ -195,6 +240,7 @@ pub mod monstertruck {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
+        orient_loft_section_wires(&mut wires)?;
         let first = wires
             .first()
             .ok_or_else(|| anyhow::anyhow!("missing first loft wire"))?
@@ -938,6 +984,143 @@ pub mod monstertruck {
             });
             model.add_root(root)?;
             Ok((model, root))
+        }
+
+        /// Kernel feasibility probe for the general bored-extrusion and
+        /// paired ruled-lobe construction. Dimensions in this test are taken
+        /// from one real STEP source; production recognition must derive them
+        /// from topology rather than reuse this fixture.
+        #[test]
+        fn real_bored_extrusion_with_two_ruled_lobes() -> Result<()> {
+            use crate::cad_ir::BooleanOp;
+            use std::f64::consts::TAU;
+
+            let y_back = -3.227_218_606_110_5;
+            let y_stage = -0.677_218_606_110_5;
+            let y_front = -0.277_218_606_110_5;
+            let z_upper = 1.407_981_393_889_5;
+            let z_lower = -1.132_018_606_110_5;
+            let x_center = 71.12;
+            let xy_frame = |y| RigidTransform {
+                matrix: [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, y],
+                    [0.0, -1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            };
+            let back_profile = [
+                [70.131_985_117_132, z_lower],
+                [72.108_014_882_868, z_lower],
+                [72.29, -0.632_018_606_110_5],
+                [72.39, -0.632_018_606_110_5],
+                [72.39, 0.907_981_393_889_5],
+                [72.29, 0.907_981_393_889_5],
+                [72.108_014_882_868, z_upper],
+                [70.131_985_117_132, z_upper],
+                [69.95, 0.907_981_393_889_5],
+                [69.85, 0.907_981_393_889_5],
+                [69.85, -0.632_018_606_110_5],
+                [69.95, -0.632_018_606_110_5],
+            ];
+            let rear_polygon =
+                Profile2d::polygon(back_profile.iter().map(|[x, z]| [*x, -*z]).collect())?;
+            let mut rear_with_bore = rear_polygon;
+            rear_with_bore.loops.push(ProfileLoop {
+                curves: vec![Curve2d::CircleArc {
+                    center_mm: [x_center, -0.137_981_393_889_5],
+                    radius_mm: 0.69,
+                    start_angle_rad: 0.0,
+                    end_angle_rad: TAU,
+                }],
+            });
+
+            let mut model = CadModel::new();
+            let rear_extrude = model.add_node(CadNode::Extrude {
+                profile: rear_with_bore,
+                vector_mm: [0.0, 0.0, y_stage - y_back],
+            });
+            let rear = model.add_node(CadNode::Transform {
+                transform: xy_frame(y_back),
+                child: rear_extrude,
+            });
+            let lobes = [
+                (
+                    [70.006_201_337_707_14, 72.233_798_662_292_86],
+                    1.062_393_300_183,
+                    [70.059_191_070_279_85, 72.180_808_929_720_14],
+                    1.207_981_393_89,
+                    z_upper,
+                ),
+                (
+                    [70.006_201_337_707_14, 72.233_798_662_292_86],
+                    -0.786_430_512_404,
+                    [70.059_191_070_279_85, 72.180_808_929_720_14],
+                    -0.932_018_606_11,
+                    z_lower,
+                ),
+            ];
+            let mut components = vec![rear];
+            for (back, back_z, front, front_z, clip) in lobes {
+                let profile = |ends: [f64; 2], base_z: f64| -> Result<Profile2d> {
+                    let points = vec![
+                        [ends[0], -base_z],
+                        [ends[1], -base_z],
+                        [72.108_014_882_868, -clip],
+                        [70.131_985_117_132, -clip],
+                    ];
+                    Profile2d::polygon(points)
+                };
+                components.push(model.add_node(CadNode::Loft {
+                    sections: vec![
+                        LoftSection {
+                            profile: profile(back, back_z)?,
+                            transform: xy_frame(y_stage),
+                        },
+                        LoftSection {
+                            profile: profile(front, front_z)?,
+                            transform: xy_frame(y_front),
+                        },
+                    ],
+                }));
+            }
+            let root = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children: components.clone(),
+            });
+            model.add_root(root)?;
+            model.validate()?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            assert!(kernel.summarize(&evaluated).is_single_solid());
+            let step = kernel.to_step(&evaluated)?;
+            let exchange =
+                monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange;
+            let source_solid_ids = exchange
+                .data
+                .iter()
+                .flat_map(|section| &section.entities)
+                .filter_map(|entity| {
+                    let record = crate::step_graph::simple_record(entity)?;
+                    (record.name == "MANIFOLD_SOLID_BREP")
+                        .then(|| crate::step_graph::entity_id(entity))
+                })
+                .collect::<Vec<_>>();
+            let [rebuilt_id] = source_solid_ids.as_slice() else {
+                bail!("native three-part reconstruction must export exactly one STEP solid");
+            };
+            let comparison = crate::compare_analytic_solid_boundaries_bytes(
+                include_bytes!("../validation/fixtures/native_mixed_carrier_chamfer_06d018ae.step"),
+                19,
+                step.as_bytes(),
+                *rebuilt_id,
+            )?;
+            assert!(
+                comparison.equivalent,
+                "source-derived bored extrusion and two ruled lofts must have identical oriented analytic boundaries",
+            );
+            Ok(())
         }
 
         #[test]
