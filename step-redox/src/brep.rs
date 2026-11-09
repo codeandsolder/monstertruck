@@ -1147,7 +1147,7 @@ END-ISO-10303-21;
             anyhow::bail!("expected planar fallback");
         };
         assert!((plane.origin_mm[2] - 3.0).abs() <= 1.0e-12);
-        assert!((plane.normal[2].abs() - 1.0).abs() <= 1.0e-12);
+        assert!((plane.normal[2] - 1.0).abs() <= 1.0e-12);
         assert!(plane.max_residual_mm <= 1.0e-12);
         Ok(())
     }

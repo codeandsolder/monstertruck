@@ -330,6 +330,9 @@ struct PreparedBoundaryReduction {
 struct SelectedWholeSolid {
     fragment: CadFragment,
     complexity: u64,
+    /// This candidate passed the independent, oriented source-boundary check,
+    /// not only a source-topology pattern recognizer.
+    boundary_verified: bool,
 }
 
 #[derive(Debug)]
@@ -350,6 +353,17 @@ impl WholeSolidRecoveryState {
 
     fn add_candidates<I>(&mut self, candidates: I) -> Result<usize>
     where I: IntoIterator<Item = SourceCadFragment> {
+        self.add_candidates_with_proof(candidates, false)
+    }
+
+    fn add_candidates_with_proof<I>(
+        &mut self,
+        candidates: I,
+        boundary_verified: bool,
+    ) -> Result<usize>
+    where
+        I: IntoIterator<Item = SourceCadFragment>,
+    {
         let mut changes = 0;
         for candidate in candidates {
             let SourceCadFragment {
@@ -373,12 +387,16 @@ impl WholeSolidRecoveryState {
             }
             let complexity = fragment.model.complexity_score(fragment.root)?;
             let replace = self.selected.get(&source).is_none_or(|existing| {
-                whole_solid_candidate_is_preferred(
-                    &existing.fragment.source,
-                    existing.complexity,
-                    &fragment.source,
-                    complexity,
-                )
+                if boundary_verified != existing.boundary_verified {
+                    boundary_verified
+                } else {
+                    whole_solid_candidate_is_preferred(
+                        &existing.fragment.source,
+                        existing.complexity,
+                        &fragment.source,
+                        complexity,
+                    )
+                }
             });
             if replace {
                 self.selected.insert(
@@ -386,6 +404,7 @@ impl WholeSolidRecoveryState {
                     SelectedWholeSolid {
                         fragment,
                         complexity,
+                        boundary_verified,
                     },
                 );
                 self.revision += 1;
@@ -557,20 +576,30 @@ pub fn recover_complete_ir_with_kernel_bytes<
     let mut build =
         recover_complete_ir_build_state(document.as_ref(), ReducedBrepMutationMode::KernelOwned)?;
     let source_load = kernel.inspect_source_document(&document)?;
-    let mut failures = apply_kernel_recovery(&mut build.recovery, |source| {
-        recover_kernel_boundary_feature_fragment(source, &source_load, &document, kernel)
-    });
-    failures.extend(apply_kernel_recovery(&mut build.recovery, |source| {
-        recover_kernel_topology_normalized_fragment(&document, source, &source_load, kernel)
-    }));
-    failures.extend(apply_kernel_recovery(&mut build.recovery, |source| {
-        recover_auto_proven_extrusion_core_union_fragment(
-            input,
-            source.data_section,
-            source.id,
-            kernel,
-        )
-    }));
+    let mut failures = apply_kernel_recovery(
+        &mut build.recovery,
+        |source| recover_kernel_boundary_feature_fragment(source, &source_load, &document, kernel),
+        false,
+    );
+    failures.extend(apply_kernel_recovery(
+        &mut build.recovery,
+        |source| {
+            recover_kernel_topology_normalized_fragment(&document, source, &source_load, kernel)
+        },
+        false,
+    ));
+    failures.extend(apply_kernel_recovery(
+        &mut build.recovery,
+        |source| {
+            recover_auto_proven_extrusion_core_union_fragment(
+                input,
+                source.data_section,
+                source.id,
+                kernel,
+            )
+        },
+        true,
+    ));
     Ok(build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, Some(source_load)))
 }
 
@@ -989,18 +1018,30 @@ fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragmen
 fn apply_kernel_recovery<F>(
     recovery: &mut WholeSolidRecoveryState,
     mut recover: F,
+    boundary_verified: bool,
 ) -> Vec<KernelRecoveryFailure>
 where
     F: FnMut(SourceEntity) -> Result<Option<CadFragment>>,
 {
     let mut failures = Vec::new();
-    for source in recovery.semantically_unrecovered_sources() {
+    // Independently proven material may replace a cheaper but merely
+    // structurally inferred source candidate. Otherwise previously selected
+    // candidates would prevent the kernel-backed source proof from ever running.
+    let targets = if boundary_verified {
+        recovery.source_solids.clone()
+    } else {
+        recovery.semantically_unrecovered_sources()
+    };
+    for source in targets {
         match recover(source) {
             Ok(Some(fragment)) if source_solid_id(&fragment.source) == source.id => {
-                if let Err(error) = recovery.add_candidates([SourceCadFragment {
-                    source_solid: source,
-                    fragment,
-                }]) {
+                if let Err(error) = recovery.add_candidates_with_proof(
+                    [SourceCadFragment {
+                        source_solid: source,
+                        fragment,
+                    }],
+                    boundary_verified,
+                ) {
                     failures.push(KernelRecoveryFailure {
                         source,
                         error: error.to_string(),
@@ -2230,7 +2271,8 @@ mod tests {
     fn apply_test_kernel_recovery<F>(solid_ids: &[u64], mut recover: F) -> CompleteIr
     where F: FnMut(u64) -> Result<Option<CadFragment>> {
         let mut build = build_state_with_unrecovered(solid_ids);
-        let failures = apply_kernel_recovery(&mut build.recovery, |source| recover(source.id));
+        let failures =
+            apply_kernel_recovery(&mut build.recovery, |source| recover(source.id), false);
         build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, None)
     }
 
@@ -2652,6 +2694,21 @@ mod tests {
                 .complexity_score(state.selected_fragments()[&test_source(7)].root)?,
             1
         );
+        Ok(())
+    }
+
+    #[test]
+    fn source_boundary_verified_candidate_outranks_cheaper_structural_guess() -> Result<()> {
+        let report = report_with_unrecovered(&[7]);
+        let mut state = WholeSolidRecoveryState::new(&report.body_scan);
+        state.add_candidates([qualified_fragment(constructive_fragment(7, 1)?)])?;
+        state
+            .add_candidates_with_proof([qualified_fragment(constructive_fragment(7, 5)?)], true)?;
+        assert!(state.selected[&test_source(7)].boundary_verified);
+        assert_eq!(state.selected[&test_source(7)].complexity, 5);
+        // A later unverified shortcut cannot displace an exact proven body.
+        state.add_candidates([qualified_fragment(constructive_fragment(7, 1)?)])?;
+        assert_eq!(state.selected[&test_source(7)].complexity, 5);
         Ok(())
     }
 
@@ -3293,6 +3350,74 @@ END-ISO-10303-21;
         union.model.validate()?;
         let rebuilt = kernel.evaluate(&union.model, union.root)?;
         assert!(kernel.summarize(&rebuilt).is_single_solid());
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_beveled_l_ruled_ends_reconstruct_complete_editable_body() -> Result<()> {
+        let input = include_bytes!("../validation/fixtures/native_beveled_l_hook.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(
+            report.unrecovered_solid_count, 0,
+            "{:?}",
+            report.kernel_recovery_failures
+        );
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        // Complete IR is allowed to prefer a cheaper verified primitive,
+        // sweep or source-derived core union. Do not pin an inferior
+        // representation simply because it happened to be reconstructed
+        // first; test the *chosen* constructive model against source geometry.
+        let selected = [
+            report.solid_extrusions.as_slice(),
+            report.solid_lofts.as_slice(),
+            report.solid_revolutions.as_slice(),
+            report.radial_slot_revolutions.as_slice(),
+            report.solid_sweeps.as_slice(),
+            report.boundary_feature_composites.as_slice(),
+            report.edge_treatment_composites.as_slice(),
+            report.same_domain_normalized_solids.as_slice(),
+            report.extrusion_core_unions.as_slice(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 1, "expected exactly one complete model");
+        let recovered = &selected[0].fragment;
+        recovered.model.validate()?;
+        let evaluated = kernel.evaluate(&recovered.model, recovered.root)?;
+        assert!(kernel.summarize(&evaluated).is_single_solid());
+
+        let output = kernel.to_step(&evaluated)?;
+        let source_exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+        let rebuilt_exchange =
+            monstertruck_io::step::load::ParsedStepSource::parse(output.as_bytes())?.exchange;
+        let source_entities = &source_exchange.data[0].entities;
+        let rebuilt_entities = &rebuilt_exchange.data[0].entities;
+        let output_solid_ids = rebuilt_entities
+            .iter()
+            .filter_map(|entity| {
+                crate::step_graph::simple_record(entity)
+                    .filter(|record| record.name == "MANIFOLD_SOLID_BREP")
+                    .map(|_| crate::step_graph::entity_id(entity))
+            })
+            .collect::<Vec<_>>();
+        let [output_solid_id] = output_solid_ids.as_slice() else {
+            bail!("recovered complete IR did not export exactly one STEP solid");
+        };
+        let comparison = crate::boundary_proof::compare_analytic_boundaries(
+            84,
+            source_entities,
+            *output_solid_id,
+            rebuilt_entities,
+        );
+        assert!(
+            comparison.equivalent,
+            "Complete IR selected {:?}, but its exported boundary does not equal the source: {:?}",
+            recovered.source, comparison
+        );
         Ok(())
     }
 

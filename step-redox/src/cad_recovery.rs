@@ -221,6 +221,38 @@ fn compose_extrusion_core_union_model(
 /// # Errors
 /// Returns an error for malformed API input, a missing DATA section, STEP parsing failures,
 /// invalid CAD IR, or a backend evaluation/serialization failure.
+fn rebuilt_kernel_boundary_matches_source<K: CadKernel>(
+    kernel: &K,
+    evaluated: &K::Evaluated,
+    source_solid_id: u64,
+    source_entities: &[ruststep::ast::EntityInstance],
+) -> Result<bool> {
+    let rebuilt_step = kernel.to_step(evaluated)?;
+    let rebuilt = ParsedStepSource::parse(rebuilt_step.as_bytes())?.exchange;
+    let [data] = rebuilt.data.as_slice() else {
+        return Ok(false);
+    };
+    let rebuilt_entities = &data.entities;
+    let rebuilt_solid_ids = rebuilt_entities
+        .iter()
+        .filter_map(|entity| {
+            simple_record(entity)
+                .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
+                .then_some(entity_id(entity))
+        })
+        .collect::<Vec<_>>();
+    let [rebuilt_solid_id] = rebuilt_solid_ids.as_slice() else {
+        return Ok(false);
+    };
+    Ok(crate::boundary_proof::compare_analytic_boundaries(
+        source_solid_id,
+        source_entities,
+        *rebuilt_solid_id,
+        rebuilt_entities,
+    )
+    .equivalent)
+}
+
 pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     source_step: &[u8],
     data_section: usize,
@@ -305,31 +337,7 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     if !summary.geometrically_consistent || summary.shells != 1 {
         return Ok(None);
     }
-    let rebuilt_step = kernel.to_step(&evaluated)?;
-    let rebuilt = ParsedStepSource::parse(rebuilt_step.as_bytes())?.exchange;
-    if rebuilt.data.len() != 1 {
-        return Ok(None);
-    }
-    let rebuilt_entities = &rebuilt.data[0].entities;
-    let rebuilt_solid_ids = rebuilt_entities
-        .iter()
-        .filter_map(|entity| {
-            simple_record(entity)
-                .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
-                .then_some(entity_id(entity))
-        })
-        .collect::<Vec<_>>();
-    let [rebuilt_solid_id] = rebuilt_solid_ids.as_slice() else {
-        return Ok(None);
-    };
-
-    let comparison = crate::boundary_proof::compare_analytic_boundaries(
-        solid_id,
-        entities,
-        *rebuilt_solid_id,
-        rebuilt_entities,
-    );
-    if !comparison.equivalent {
+    if !rebuilt_kernel_boundary_matches_source(kernel, &evaluated, solid_id, entities)? {
         return Ok(None);
     }
 
@@ -349,20 +357,20 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     model.validate()?;
 
     Ok(Some(CadFragment {
-        source: if let Some(single) = admitted_single {
-            single
-        } else if tips.is_empty() {
-            CadFragmentSource::ExtrusionCoreUnion {
-                solid_id,
-                cap_face_ids: canonical_pairs,
+        source: admitted_single.unwrap_or_else(|| {
+            if tips.is_empty() {
+                CadFragmentSource::ExtrusionCoreUnion {
+                    solid_id,
+                    cap_face_ids: canonical_pairs,
+                }
+            } else {
+                CadFragmentSource::ExtrusionCoreRuledEnds {
+                    solid_id,
+                    cap_face_ids: canonical_pairs,
+                    tip_face_ids: tips,
+                }
             }
-        } else {
-            CadFragmentSource::ExtrusionCoreRuledEnds {
-                solid_id,
-                cap_face_ids: canonical_pairs,
-                tip_face_ids: tips,
-            }
-        },
+        }),
         model,
         root,
     }))
@@ -675,6 +683,16 @@ mod tests {
                 cap_face_ids: vec![[50, 245]],
                 tip_face_ids: vec![330, 355],
             }
+        );
+        assert_eq!(
+            recovered
+                .model
+                .nodes
+                .iter()
+                .filter(|node| matches!(node, CadNode::Loft { .. }))
+                .count(),
+            2,
+            "both source-derived tapered ends must remain independently editable",
         );
         Ok(())
     }

@@ -329,39 +329,28 @@ pub fn detect_sectioned_planar_loft(solid: &ReducedSolid) -> Option<CadFragment>
 /// An exact planar end treatment, whose terminal face and four ruled walls
 /// are real source topology. The shoulder section is an implied interface,
 /// never an invented source face.
-pub(crate) struct RuledEndExtension {
+pub struct RuledEndExtension {
     pub fragment: CadFragment,
     pub tip_face_id: u64,
-    pub wall_face_ids: [u64; 4],
     pub axis: [f64; 3],
 }
 
 /// Discover terminal four-sided ruled caps. Unlike the whole-solid loft
 /// recognizer, this works with a mixed analytic source: curved elbow walls
 /// remain untouched while the exact planar tip treatment is recovered.
-pub(crate) fn detect_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
+pub fn detect_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
     solid
         .faces()
         .filter_map(|cap| terminal_ruled_extension(solid, cap))
         .collect()
 }
 
-fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<RuledEndExtension> {
-    if !plane_quad(cap) {
-        return None;
-    }
-    let SurfaceSupport::Plane(plane) = &cap.surface else {
-        return None;
-    };
+fn matching_ruled_end_shoulder(
+    solid: &ReducedSolid,
+    cap: &ReducedFace,
+    cap_vertices: &BTreeMap<u64, [f64; 3]>,
+) -> Option<(BTreeMap<u64, Vertex>, [u64; 4])> {
     let cap_edges = &cap.loops[0].edges;
-    let cap_vertices = cap_edges
-        .iter()
-        .map(|e| (e.start_vertex, e.start_mm))
-        .collect::<BTreeMap<_, _>>();
-    if cap_vertices.len() != 4 {
-        return None;
-    }
-
     let mut matching_shoulder = BTreeMap::<u64, Vertex>::new();
     let mut walls = Vec::new();
     let mut shoulder_edges = BTreeSet::new();
@@ -445,6 +434,27 @@ fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<R
         return None;
     }
 
+    Some((matching_shoulder, walls.try_into().ok()?))
+}
+
+fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<RuledEndExtension> {
+    if !plane_quad(cap) {
+        return None;
+    }
+    let SurfaceSupport::Plane(plane) = &cap.surface else {
+        return None;
+    };
+    let cap_edges = &cap.loops[0].edges;
+    let cap_vertices = cap_edges
+        .iter()
+        .map(|e| (e.start_vertex, e.start_mm))
+        .collect::<BTreeMap<_, _>>();
+    if cap_vertices.len() != 4 {
+        return None;
+    }
+
+    let (matching_shoulder, wall_face_ids) =
+        matching_ruled_end_shoulder(solid, cap, &cap_vertices)?;
     let axis = normalize(plane.normal, DIR_TOL)?;
     let origin = cap_edges[0].start_mm;
     let x = normalize(sub(cap_edges[0].end_mm, origin), DIR_TOL)?;
@@ -517,7 +527,6 @@ fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<R
     let root = model.add_node(CadNode::Loft { sections });
     model.add_root(root).ok()?;
     model.validate().ok()?;
-    let wall_face_ids: [u64; 4] = walls.try_into().ok()?;
     Some(RuledEndExtension {
         fragment: CadFragment {
             source: CadFragmentSource::RuledEndExtension {
@@ -529,38 +538,8 @@ fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<R
             root,
         },
         tip_face_id: cap.id,
-        wall_face_ids,
         axis,
     })
-}
-
-#[cfg(test)]
-mod terminal_extension_tests {
-    use super::*;
-    use crate::step_graph::build_index;
-    use monstertruck_io::step::load::ParsedStepSource;
-
-    #[test]
-    fn discovers_exact_planar_beveled_ends_of_mixed_analytic_elbow() {
-        let bytes = include_bytes!("../validation/fixtures/native_beveled_l_hook.step");
-        let source = ParsedStepSource::parse(bytes)
-            .expect("source STEP")
-            .exchange;
-        let entities = &source.data[0].entities;
-        let reduced = ReducedSolid::from_step(84, entities, &build_index(entities)).expect("B-rep");
-        let mut ends = detect_ruled_end_extensions(&reduced)
-            .into_iter()
-            .map(|extension| (extension.tip_face_id, extension.wall_face_ids))
-            .collect::<Vec<_>>();
-        ends.sort_unstable_by_key(|entry| entry.0);
-        assert_eq!(
-            ends.len(),
-            2,
-            "both source end treatments must be reconstructed"
-        );
-        assert_eq!(ends[0].0, 330);
-        assert_eq!(ends[1].0, 355);
-    }
 }
 
 /// Read-only parser witness for any original STEP solid; the same immutable
@@ -580,4 +559,38 @@ pub fn detect_sectioned_planar_lofts(
             detect_sectioned_planar_loft(&reduced)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod terminal_extension_tests {
+    use super::*;
+    use crate::step_graph::build_index;
+    use monstertruck_io::step::load::ParsedStepSource;
+
+    #[test]
+    fn discovers_exact_planar_beveled_ends_of_mixed_analytic_elbow() -> anyhow::Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_beveled_l_hook.step");
+        let source = ParsedStepSource::parse(bytes)?.exchange;
+        let entities = &source.data[0].entities;
+        let reduced = ReducedSolid::from_step(84, entities, &build_index(entities))
+            .ok_or_else(|| anyhow::anyhow!("source B-rep is missing"))?;
+        let mut ends = detect_ruled_end_extensions(&reduced)
+            .into_iter()
+            .filter_map(|extension| match extension.fragment.source {
+                CadFragmentSource::RuledEndExtension { wall_face_ids, .. } => {
+                    Some((extension.tip_face_id, wall_face_ids))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        ends.sort_unstable_by_key(|entry| entry.0);
+        assert_eq!(
+            ends.len(),
+            2,
+            "both source end treatments must be reconstructed"
+        );
+        assert_eq!(ends[0].0, 330);
+        assert_eq!(ends[1].0, 355);
+        Ok(())
+    }
 }

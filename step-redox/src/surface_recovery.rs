@@ -460,6 +460,61 @@ fn detect_v_extrusion(
     })
 }
 
+/// Recover the parameter-oriented normal of a planar B-spline control net.
+///
+/// STEP's control grid is indexed [u][v]. Its surface normal is
+/// `derivative_u` × `derivative_v`, not the reverse. Finding two arbitrary
+/// noncollinear control points in flattened storage reverses that order when
+/// the first neighboring point varies in v (the common case).
+///
+/// The normal must also have consistent sense on every nondegenerate control
+/// cell; a planar but folded net does not establish a globally oriented face.
+fn oriented_planar_control_net_normal(grid: &[Vec<[f64; 3]>]) -> Option<[f64; 3]> {
+    let columns = grid.first()?.len();
+    if grid.len() < 2 || columns < 2 || grid.iter().any(|row| row.len() != columns) {
+        return None;
+    }
+
+    let mut reference = None;
+    for pair in grid.windows(2) {
+        for column in 0..columns - 1 {
+            let [p00, p01, p10, p11] = [
+                pair[0][column],
+                pair[0][column + 1],
+                pair[1][column],
+                pair[1][column + 1],
+            ];
+            // Four corner-wise directional derivatives, each with the
+            // positive u and v coordinate directions (not traversal order).
+            for (u, v) in [
+                (sub(p10, p00), sub(p01, p00)),
+                (sub(p10, p00), sub(p11, p10)),
+                (sub(p11, p01), sub(p01, p00)),
+                (sub(p11, p01), sub(p11, p10)),
+            ] {
+                let cross_uv = cross(u, v);
+                let length = norm(cross_uv);
+                let scale = norm(u) * norm(v);
+                if !length.is_finite() || !scale.is_finite() {
+                    return None;
+                }
+                if length <= 1.0e-12 * scale {
+                    continue;
+                }
+                let normal = normalize(cross_uv)?;
+                if let Some(previous) = reference {
+                    if dot(normal, previous) < 1.0 - 1.0e-8 {
+                        return None;
+                    }
+                } else {
+                    reference = Some(normal);
+                }
+            }
+        }
+    }
+    reference
+}
+
 pub fn analyze_planar_surface(
     surface_id: u64,
     entities: &[EntityInstance],
@@ -482,26 +537,20 @@ pub fn analyze_planar_surface(
         }
     }
 
-    let points = parsed
+    let grid = parsed
         .control_points
         .iter()
-        .flatten()
-        .map(|&id| cartesian_point(id, entities, index))
+        .map(|row| {
+            row.iter()
+                .map(|&id| cartesian_point(id, entities, index))
+                .collect::<Option<Vec<_>>>()
+        })
         .collect::<Option<Vec<_>>>()?;
-    let origin_mm = *points.first()?;
-    let first_direction = points
+    let origin_mm = *grid.first()?.first()?;
+    let normal = oriented_planar_control_net_normal(&grid)?;
+    let max_residual_mm = grid
         .iter()
-        .copied()
-        .map(|point| sub(point, origin_mm))
-        .find(|vector| norm(*vector) > geometry_tolerance_mm)?;
-    let normal = points
-        .iter()
-        .copied()
-        .map(|point| cross(first_direction, sub(point, origin_mm)))
-        .find(|vector| norm(*vector) > geometry_tolerance_mm)
-        .and_then(normalize)?;
-    let max_residual_mm = points
-        .iter()
+        .flatten()
         .map(|&point| dot(normal, sub(point, origin_mm)).abs())
         .fold(0.0_f64, f64::max);
     (max_residual_mm <= geometry_tolerance_mm).then_some(PlanarSurfaceEvidence {
@@ -910,7 +959,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("planar control net should prove a plane"))?;
         assert!(evidence.max_residual_mm <= 1.0e-12);
         assert!((evidence.origin_mm[2] - 3.0).abs() <= 1.0e-12);
-        assert!((evidence.normal[2].abs() - 1.0).abs() <= 1.0e-12);
+        assert!((evidence.normal[2] - 1.0).abs() <= 1.0e-12);
 
         let rational = vec![
             point(1, [0.0, 0.0, 3.0]),
@@ -931,6 +980,41 @@ mod tests {
         })?;
         assert!(evidence.max_residual_mm <= 1.0e-12);
         Ok(())
+    }
+
+    #[test]
+    fn planar_control_net_respects_parameter_order_and_refuses_folded_normals() {
+        let rectangular = vec![
+            vec![[0.0, 0.0, 3.0], [0.0, 1.0, 3.0]],
+            vec![[2.0, 0.0, 3.0], [2.0, 1.0, 3.0]],
+        ];
+        let forward = oriented_planar_control_net_normal(&rectangular);
+        assert_eq!(forward, Some([0.0, 0.0, 1.0]));
+        let reversed_u = rectangular.into_iter().rev().collect::<Vec<_>>();
+        assert_eq!(
+            oriented_planar_control_net_normal(&reversed_u),
+            Some([0.0, 0.0, -1.0])
+        );
+
+        // A tilted plane also needs the native u x v orientation; the
+        // normal is not restricted to an axis-aligned unit vector.
+        let tilted = [
+            [[1.0, 0.0, 1.0], [1.0, 1.0, 2.0]],
+            [[3.0, 0.0, 1.0], [3.0, 1.0, 2.0]],
+        ]
+        .map(Vec::from);
+        let unit = 1.0 / 2.0_f64.sqrt();
+        let oriented = oriented_planar_control_net_normal(&tilted);
+        assert_eq!(oriented, Some([0.0, -unit, unit]));
+
+        // All points lie on z=3, but u folds back on itself. It has no
+        // single globally valid oriented normal, even at zero planarity error.
+        let folded = vec![
+            vec![[0.0, 0.0, 3.0], [0.0, 1.0, 3.0]],
+            vec![[2.0, 0.0, 3.0], [2.0, 1.0, 3.0]],
+            vec![[1.0, 0.0, 3.0], [1.0, 1.0, 3.0]],
+        ];
+        assert_eq!(oriented_planar_control_net_normal(&folded), None);
     }
 
     #[test]
