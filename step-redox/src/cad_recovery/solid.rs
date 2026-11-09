@@ -5,7 +5,7 @@ use crate::cad_ir::{
 };
 use crate::math3::{add, cross, dot, mul, norm};
 use crate::profile_curves::RecoveredProfileCurve;
-use crate::solid_extrusions::RecoveredSolidExtrusion;
+use crate::solid_extrusions::{RecoveredSolidExtrusion, RecoveredSourceCapExtrusion};
 use crate::solid_revolutions::{
     MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM, REVOLUTION_SOURCE_SUPPORT_TOL_MM,
     RecoveredRadialSlotRevolution, RecoveredSolidRevolution,
@@ -15,6 +15,67 @@ use crate::solid_sweeps::{
     RecoveredRoundSweep, RecoveredSweepSegment,
 };
 use anyhow::{Result, bail};
+
+/// Build the *proposal* from one source cap and an observed axial station.
+///
+/// This is intentionally a model/root, not a complete solid fragment: a
+/// single cap cannot prove its unexposed opposite face or occupied volume.
+pub(super) fn recover_source_cap_extrusion_model(
+    cap: &RecoveredSourceCapExtrusion,
+) -> Result<(CadModel, crate::cad_ir::NodeId)> {
+    if cap.solid_id == 0
+        || cap.cap_face_id == 0
+        || !cap.height_mm.is_finite()
+        || cap.height_mm <= 0.0
+        || !cap.max_residual_mm.is_finite()
+        || cap.max_residual_mm < 0.0
+    {
+        bail!("source-cap extrusion has invalid identity, station or support residual");
+    }
+    let frame = [cap.x_axis, cap.y_axis, cap.z_axis];
+    if cap.origin_mm.iter().any(|v| !v.is_finite())
+        || frame.iter().flatten().any(|v| !v.is_finite())
+        || frame.iter().any(|axis| (norm(*axis) - 1.0).abs() > 1.0e-10)
+        || dot(cap.x_axis, cap.y_axis).abs() > 1.0e-10
+        || dot(cap.x_axis, cap.z_axis).abs() > 1.0e-10
+        || dot(cap.y_axis, cap.z_axis).abs() > 1.0e-10
+        || (dot(cross(cap.x_axis, cap.y_axis), cap.z_axis) - 1.0).abs() > 1.0e-10
+    {
+        bail!("source-cap extrusion frame is not orthonormal and right-handed");
+    }
+    for (loop_index, curves) in std::iter::once(cap.profile_curves.as_slice())
+        .chain(cap.inner_profile_loops.iter().map(Vec::as_slice))
+        .enumerate()
+    {
+        if curves.is_empty() {
+            bail!("source-cap extrusion profile loop {loop_index} is empty");
+        }
+        for curve in curves {
+            validate_recovered_profile_curve(curve)?;
+        }
+    }
+    let profile = recovered_extrusion_profile_loops(&cap.profile_curves, &cap.inner_profile_loops);
+    let mut model = CadModel::new();
+    let body = model.add_node(CadNode::Extrude {
+        profile,
+        vector_mm: [0.0, 0.0, cap.height_mm],
+    });
+    let root = model.add_node(CadNode::Transform {
+        transform: local_frame_transform(cap.origin_mm, cap.x_axis, cap.y_axis, cap.z_axis),
+        child: body,
+    });
+    model.set_provenance(
+        root,
+        Provenance {
+            source_entity_ids: vec![cap.solid_id, cap.cap_face_id],
+            proof: ProofStatus::HeuristicCandidate,
+            max_residual_mm: None,
+        },
+    )?;
+    model.add_root(root)?;
+    model.validate()?;
+    Ok((model, root))
+}
 
 /// Recover a constructive CAD fragment from a geometrically-proven solid extrusion.
 ///
@@ -1021,16 +1082,19 @@ fn validate_radial_slot_revolution(slotted: &RecoveredRadialSlotRevolution) -> R
 }
 
 fn recovered_extrusion_profile(extrusion: &RecoveredSolidExtrusion) -> Profile2d {
-    let loops = extrusion
-        .profile_loops()
-        .map(|curves| {
-            let curves = curves
-                .iter()
-                .map(recovered_profile_curve_to_ir)
-                .collect::<Vec<_>>();
-            ProfileLoop { curves }
+    recovered_extrusion_profile_loops(&extrusion.profile_curves, &extrusion.inner_profile_loops)
+}
+
+fn recovered_extrusion_profile_loops(
+    outer: &[RecoveredProfileCurve],
+    inner: &[Vec<RecoveredProfileCurve>],
+) -> Profile2d {
+    let loops = std::iter::once(outer)
+        .chain(inner.iter().map(Vec::as_slice))
+        .map(|curves| ProfileLoop {
+            curves: curves.iter().map(recovered_profile_curve_to_ir).collect(),
         })
-        .collect::<Vec<_>>();
+        .collect();
     Profile2d { loops }
 }
 

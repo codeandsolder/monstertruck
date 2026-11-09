@@ -333,6 +333,10 @@ pub struct RuledEndExtension {
     pub fragment: CadFragment,
     pub tip_face_id: u64,
     pub axis: [f64; 3],
+    /// Section plane at the connection to preceding source material.
+    pub shoulder_point_mm: [f64; 3],
+    /// A point on the actual terminal source cap plane.
+    pub tip_point_mm: [f64; 3],
 }
 
 /// Discover terminal four-sided ruled caps. Unlike the whole-solid loft
@@ -551,6 +555,8 @@ fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<R
         },
         tip_face_id: cap.id,
         axis,
+        shoulder_point_mm: crate::math3::add(origin, crate::math3::mul(axis, depth)),
+        tip_point_mm: origin,
     })
 }
 
@@ -684,6 +690,8 @@ fn terminal_extended_planar_ruled_extension(
         },
         tip_face_id: cap.id,
         axis,
+        shoulder_point_mm: shoulder_origin,
+        tip_point_mm: origin,
     })
 }
 

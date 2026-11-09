@@ -109,18 +109,25 @@ pub enum CadFragmentSource {
 /// Returns an error if fewer than two fragments are provided, an input model is invalid, or a
 /// fragment root cannot be remapped into the composed model.
 pub fn compose_union_model(fragments: &[CadFragment]) -> Result<(CadModel, NodeId)> {
-    if fragments.len() < 2 {
-        bail!("a CAD union composite needs at least two fragments");
+    let models = fragments
+        .iter()
+        .map(|fragment| (&fragment.model, fragment.root))
+        .collect::<Vec<_>>();
+    compose_union_models(&models)
+}
+
+fn compose_union_models(parts: &[(&CadModel, NodeId)]) -> Result<(CadModel, NodeId)> {
+    if parts.len() < 2 {
+        bail!("a CAD union composite needs at least two models");
     }
 
     let mut model = CadModel::new();
-    let mut children = Vec::with_capacity(fragments.len());
-    for fragment in fragments {
-        fragment.model.validate()?;
-        let offset = model.append_model(&fragment.model)?;
+    let mut children = Vec::with_capacity(parts.len());
+    for &(part, part_root) in parts {
+        part.validate()?;
+        let offset = model.append_model(part)?;
         let root = NodeId(
-            fragment
-                .root
+            part_root
                 .0
                 .checked_add(offset)
                 .ok_or_else(|| anyhow::anyhow!("CAD root id overflow while composing union"))?,
@@ -406,9 +413,27 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
             solid_id, entities, index,
         );
     for cap in cap_candidates {
+        // The source-witnessed shoulder must coincide with the extrusion's
+        // end station; the terminal cap must extend *beyond* that station.
+        // This is a topological attachment test, not arbitrary subset search.
+        const STATION_TOL_MM: f64 = 1.0e-7;
         let aligned = extensions
             .iter()
-            .filter(|ext| dot(ext.axis, cap.z_axis).abs() >= 1.0 - AXIS_GROUP_DOT_TOLERANCE)
+            .filter(|ext| {
+                if dot(ext.axis, cap.z_axis).abs() < 1.0 - AXIS_GROUP_DOT_TOLERANCE {
+                    return false;
+                }
+                let shoulder = dot(
+                    crate::math3::sub(ext.shoulder_point_mm, cap.origin_mm),
+                    cap.z_axis,
+                );
+                let tip = dot(
+                    crate::math3::sub(ext.tip_point_mm, cap.origin_mm),
+                    cap.z_axis,
+                );
+                (shoulder - cap.height_mm).abs() <= STATION_TOL_MM
+                    && tip > cap.height_mm + STATION_TOL_MM
+            })
             .collect::<Vec<_>>();
         if aligned.is_empty() {
             continue;
@@ -417,11 +442,16 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
             .iter()
             .map(|ext| ext.tip_face_id)
             .collect::<Vec<_>>();
-        let cap_face_id = cap.cap_face_ids[0];
-        let mut fragments = Vec::with_capacity(1 + aligned.len());
-        fragments.push(recover_solid_extrusion_fragment(&cap)?);
-        fragments.extend(aligned.iter().map(|ext| ext.fragment.clone()));
-        let (mut model, root) = compose_union_model(&fragments)?;
+        let cap_face_id = cap.cap_face_id;
+        let (cap_model, cap_root) = solid::recover_source_cap_extrusion_model(&cap)?;
+        let mut parts = Vec::with_capacity(1 + aligned.len());
+        parts.push((&cap_model, cap_root));
+        parts.extend(
+            aligned
+                .iter()
+                .map(|ext| (&ext.fragment.model, ext.fragment.root)),
+        );
+        let (mut model, root) = compose_union_models(&parts)?;
         let Ok(shape) = kernel.evaluate(&model, root) else {
             continue;
         };
@@ -435,6 +465,13 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
         }
         let mut source_entity_ids = vec![solid_id, cap_face_id];
         source_entity_ids.extend(&tip_face_ids);
+        for extension in aligned {
+            if let CadFragmentSource::RuledEndExtension { wall_face_ids, .. } =
+                &extension.fragment.source
+            {
+                source_entity_ids.extend(wall_face_ids);
+            }
+        }
         source_entity_ids.sort_unstable();
         source_entity_ids.dedup();
         model.set_provenance(

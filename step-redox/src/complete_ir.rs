@@ -3401,6 +3401,53 @@ END-ISO-10303-21;
         Ok(())
     }
 
+    /// The ninth real source must be discovered by the general recognizer;
+    /// a separately source-constructed fixture is insufficient for Complete IR.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_bored_cap_with_ruled_lobes_is_automatically_complete_ir() -> Result<()> {
+        let source =
+            include_bytes!("../validation/fixtures/native_mixed_carrier_chamfer_06d018ae.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(source, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(
+            report.constructively_recovered_solid_count, 1,
+            "{:?}",
+            report.kernel_recovery_failures
+        );
+        assert_eq!(report.unrecovered_solid_count, 0);
+        let chosen = selected_unique_source_fragment(&report)?;
+        assert_eq!(
+            chosen.source,
+            CadFragmentSource::CapExtrusionRuledEnds {
+                solid_id: 19,
+                cap_face_id: 400,
+                tip_face_ids: vec![301, 416],
+            }
+        );
+        assert_eq!(
+            chosen
+                .model
+                .nodes
+                .iter()
+                .filter(|node| matches!(node, CadNode::Loft { .. }))
+                .count(),
+            2,
+        );
+        chosen.model.validate()?;
+        let rebuilt = kernel.evaluate(&chosen.model, chosen.root)?;
+        assert!(kernel.summarize(&rebuilt).is_single_solid());
+        let parsed = monstertruck_io::step::load::ParsedStepSource::parse(source)?.exchange;
+        assert!(rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &rebuilt,
+            19,
+            &parsed.data[0].entities,
+        )?);
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn real_open_cap_and_hook_union_reconstructs_complete_editable_body() -> Result<()> {

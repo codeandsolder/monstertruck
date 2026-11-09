@@ -137,6 +137,24 @@ pub(crate) fn detect_extrusion_core_candidates_with_index(
     out
 }
 
+/// A single source-cap extrusion station, not a claimed two-cap solid.
+///
+/// This proposal is *not* an independently recovered body. Only a complete
+/// composition whose native output matches the source boundary can be admitted.
+#[derive(Debug, Clone)]
+pub(crate) struct RecoveredSourceCapExtrusion {
+    pub solid_id: u64,
+    pub cap_face_id: u64,
+    pub profile_curves: Vec<RecoveredProfileCurve>,
+    pub inner_profile_loops: Vec<Vec<RecoveredProfileCurve>>,
+    pub origin_mm: [f64; 3],
+    pub x_axis: [f64; 3],
+    pub y_axis: [f64; 3],
+    pub z_axis: [f64; 3],
+    pub height_mm: f64,
+    pub max_residual_mm: f64,
+}
+
 /// Recover a source cap as a *partial* extrusion, stopping at the earliest
 /// source-witnessed axial generator station. The opposite cap need not be
 /// exposed: this remains an unverified proposal until a union is independently
@@ -145,7 +163,7 @@ pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
     solid_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-) -> Vec<RecoveredSolidExtrusion> {
+) -> Vec<RecoveredSourceCapExtrusion> {
     let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
         return Vec::new();
     };
@@ -243,12 +261,9 @@ pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
         {
             continue;
         }
-        candidates.push(RecoveredSolidExtrusion {
+        candidates.push(RecoveredSourceCapExtrusion {
             solid_id,
-            // This candidate has only one source cap; its composite wrapper
-            // records the actual source provenance rather than a cap pair.
-            cap_face_ids: [cap.id, cap.id],
-            side_face_ids: Vec::new(),
+            cap_face_id: cap.id,
             profile_curves: profile.curves,
             inner_profile_loops: profile.inner_loops,
             origin_mm: profile.origin_mm,
@@ -262,7 +277,7 @@ pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
     candidates.sort_by(|a, b| {
         a.height_mm
             .total_cmp(&b.height_mm)
-            .then_with(|| a.cap_face_ids.cmp(&b.cap_face_ids))
+            .then_with(|| a.cap_face_id.cmp(&b.cap_face_id))
     });
     candidates
 }
