@@ -1361,7 +1361,6 @@ pub(super) struct InterfaceLoops<C> {
     pub(super) geom: [LoopsStore<Point3, C>; 2],
     pub(super) sampled: [Option<LoopsStore<Point3, PolylineCurve>>; 2],
     pub(super) coplanar_overlap: bool,
-    pub(super) full_interface_adjacency: Option<FullPlanarInterfaceMatch>,
 }
 
 struct CoplanarInterfaceAnalysis {
@@ -1386,7 +1385,9 @@ fn analyze_coplanar_interfaces(
     let full_interface_adjacency = if positive_aabb_overlap {
         None
     } else {
-        full_interface.clone()
+        full_interface
+            .clone()
+            .filter(|matched| !matched.lhs_faces.is_empty() && !matched.rhs_faces.is_empty())
     };
     // Partial planar interfaces can be exactly zero-volume contacts.
     // In that case a full-interface shortcut does not apply, but the
@@ -1533,7 +1534,6 @@ where
         geom: [operand0.geom, operand1.geom],
         sampled: [sampled0, sampled1],
         coplanar_overlap: coplanar.any_overlap,
-        full_interface_adjacency: coplanar.full_interface_adjacency,
     })
 }
 

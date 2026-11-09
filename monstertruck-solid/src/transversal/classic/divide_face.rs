@@ -5,9 +5,10 @@
 //! Intermediate regions remain `FaceFragment`s until compressed-topology repair and
 //! extraction establish valid [`Face`] invariants.
 
-use super::faces_classification::FacesClassification;
+use super::faces_classification::{FacesClassification, cancel_retraced_edge_uses};
 use super::loops_store::{BoundaryWire, Loops, LoopsStore, ShapesOpStatus};
 use super::tolerance::BooleanTolerance;
+use monstertruck_geometry::prelude::{AnalyticSurfaceKind, TryIntoAnalyticSurfaceKind};
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::{EdgeId, Face, Shell, Wire};
 use rustc_hash::FxHashMap as HashMap;
@@ -62,7 +63,7 @@ pub(super) fn create_parameter_boundary_on_surface<C, S>(
     tol: f64,
 ) -> Option<PolylineCurve<Point2>>
 where
-    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
+    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3> + Clone,
     S: ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
@@ -140,7 +141,7 @@ fn create_parameter_boundary<C, S>(
     tol: f64,
 ) -> Option<PolylineCurve<Point2>>
 where
-    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
+    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3> + Clone,
     S: Clone
         + ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
@@ -376,6 +377,7 @@ fn materialize_pre_face<C, S>(
     pre_face: Vec<WireChunk<'_, C>>,
 ) -> (FaceFragment<C, S>, ShapesOpStatus)
 where
+    C: Clone,
     S: Clone,
 {
     let surface = face.surface();
@@ -393,7 +395,14 @@ where
                 wire
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // Touching negative contours can share inverse coedges with a positive
+    // region. Cancel only those exact shared uses; the remaining directed
+    // edges then form the true exterior, including an opening into a cavity.
+    let wires = match cancel_retraced_edge_uses(&wires) {
+        Some((normalized, true)) => normalized,
+        _ => wires,
+    };
     (
         FaceFragment {
             wires,
@@ -467,12 +476,17 @@ fn divide_one_face<C, S>(
     tol: f64,
 ) -> Option<Vec<(FaceFragment<C, S>, ShapesOpStatus)>>
 where
-    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
+    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3> + Clone,
     S: Clone
+        + TryIntoAnalyticSurfaceKind
         + ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
+    let is_planar = matches!(
+        face.surface().try_into_analytic_surface_kind(),
+        Some(AnalyticSurfaceKind::Plane(_))
+    );
     let (mut pre_faces, mut negative_wires) = (Vec::new(), Vec::new());
     let mut map = HashMap::default();
     loops
@@ -530,6 +544,36 @@ where
             .map(|(index, _)| index);
 
         if let Some(index) = parent {
+            pre_faces[index].push(chunk);
+            return Some(());
+        }
+
+        // When a negative contour reaches the outer boundary along shared
+        // opposite coedges, it is still the absence of material, not a
+        // separate positive island. Cancel the coedges to yield one connected
+        // boundary. Merely touching at a vertex is not sufficient.
+        let adjoining = pre_faces
+            .iter()
+            .filter(|_| is_planar)
+            .enumerate()
+            .filter(|(_, pre_face)| !pre_face.is_empty())
+            .filter(|(_, pre_face)| {
+                let outer = &pre_face[0];
+                let area_tol =
+                    polyline_area_epsilon(&outer.poly).max(polyline_area_epsilon(&chunk.poly));
+                polyline_signed_area(&outer.poly).abs() > chunk_area_abs + area_tol
+                    && outer.poly.include(witness)
+            })
+            .find_map(|(index, pre_face)| {
+                let mut wires = pre_face
+                    .iter()
+                    .map(|existing| existing.wire.deref().clone())
+                    .collect::<Vec<_>>();
+                wires.push(chunk.wire.deref().clone());
+                let (normalized, cancelled) = cancel_retraced_edge_uses(&wires)?;
+                (cancelled && normalized.len() == 1).then_some(index)
+            });
+        if let Some(index) = adjoining {
             pre_faces[index].push(chunk);
             return Some(());
         }
@@ -622,8 +666,9 @@ pub(super) fn divide_faces<C, S>(
     tol: f64,
 ) -> Option<FacesClassification<Point3, C, S>>
 where
-    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
+    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3> + Clone,
     S: Clone
+        + TryIntoAnalyticSurfaceKind
         + ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
@@ -868,6 +913,83 @@ mod tests {
                 .iter()
                 .any(|(_, status)| *status == ShapesOpStatus::Or)
         );
+    }
+
+    #[test]
+    fn touching_negative_region_merges_into_one_open_cavity_contour() {
+        let points = [
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (2.0, 1.0),
+            (2.0, 0.0),
+            (4.0, 0.0),
+            (4.0, 4.0),
+            (0.0, 4.0),
+            (1.0, 3.0),
+            (3.0, 3.0),
+            (3.0, 1.0),
+        ];
+        let vertices = points.map(|(x, y)| Vertex::new(Point3::new(x, y, 0.0)));
+        let edge = |a: usize, b: usize| test_line(&vertices[a], &vertices[b]);
+        let shared = edge(2, 3);
+        let positive: Wire<_, _> = vec![
+            edge(0, 1),
+            edge(1, 2),
+            shared.clone(),
+            edge(3, 4),
+            edge(4, 5),
+            edge(5, 6),
+            edge(6, 7),
+            edge(7, 0),
+        ]
+        .into();
+        let negative: Wire<_, _> = vec![
+            shared.inverse(),
+            edge(2, 8),
+            edge(8, 9),
+            edge(9, 10),
+            edge(10, 3),
+        ]
+        .into();
+        let source = Face::new(
+            vec![Wire::from(vec![
+                edge(0, 5),
+                edge(5, 6),
+                edge(6, 7),
+                edge(7, 0),
+            ])],
+            Plane::xy(),
+        )
+        .expect("valid original face");
+        let loops: Loops<_, _> = vec![
+            BoundaryWire::new(positive, ShapesOpStatus::And),
+            BoundaryWire::new(negative, ShapesOpStatus::Or),
+        ]
+        .into_iter()
+        .collect();
+        let regions = divide_one_face(&source, &loops, None, 1.0e-8)
+            .expect("touching negative contour must partition");
+        assert_eq!(
+            regions.len(),
+            1,
+            "the negative must not become positive material"
+        );
+        let (region, _) = &regions[0];
+        assert_eq!(region.wires.len(), 1);
+        assert!(region.wires[0].is_simple());
+        let mut samples = HashMap::default();
+        let boundary = create_parameter_boundary_on_surface(
+            &source.surface(),
+            &region.wires[0],
+            None,
+            &mut samples,
+            1.0e-8,
+        )
+        .expect("combined exact contour projects");
+        assert!(boundary.include(Point2::new(0.5, 2.0)));
+        assert!(!boundary.include(Point2::new(1.5, 0.5)));
+        assert!(!boundary.include(Point2::new(2.0, 2.0)));
     }
 
     #[test]

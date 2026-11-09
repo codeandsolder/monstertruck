@@ -499,11 +499,11 @@ fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // Canonicalize their exact geometric edge identities before computing
     // occupancy; otherwise two independently encoded copies would be emitted
     // as two exterior boundaries rather than one filled face.
-    let canonical_regions = node_selected_regions(source, &[]);
+    let canonical_regions = node_selected_regions(source, &[])?;
     let initial = project_source(&canonical_regions, tol)?;
     let arrangement = if needs_exact_noding(&initial.edges, initial.span) {
         let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical_regions, &points);
+        let noded = node_selected_regions(&canonical_regions, &points)?;
         project_source(&noded, tol)?
     } else {
         initial

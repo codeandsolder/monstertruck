@@ -64,22 +64,6 @@ enum PairMode {
 type PolyShell = Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>;
 
 #[derive(Clone, Debug)]
-struct FullInterfaceAdjacency {
-    shell0: Vec<usize>,
-    shell1: Vec<usize>,
-}
-
-impl FullInterfaceAdjacency {
-    fn contains(&self, shell_index: usize, source_face: usize) -> bool {
-        match shell_index {
-            0 => self.shell0.contains(&source_face),
-            1 => self.shell1.contains(&source_face),
-            _ => false,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
 struct PairAnalysis<C, S> {
     tolerance: f64,
     poly_shell0: PolyShell,
@@ -87,7 +71,6 @@ struct PairAnalysis<C, S> {
     cls0: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
     cls1: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
     coplanar_overlap: bool,
-    full_interface_adjacency: Option<FullInterfaceAdjacency>,
 }
 
 fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -108,7 +91,6 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         geom: [loops_store0, loops_store1],
         sampled: [sampled_store0, sampled_store1],
         coplanar_overlap,
-        full_interface_adjacency,
     } = loops_store::create_loops_stores(
         &altshell0,
         &poly_shell0,
@@ -118,10 +100,6 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         mode == PairMode::AndOr,
     )
     .ok_or(ShapeOpsError::InterfaceAnalysisFailed)?;
-    let full_interface_adjacency = full_interface_adjacency.map(|matched| FullInterfaceAdjacency {
-        shell0: matched.lhs_faces,
-        shell1: matched.rhs_faces,
-    });
     let cls0 = divide_face::divide_faces(&altshell0, &loops_store0, sampled_store0.as_ref(), tol)
         .ok_or(ShapeOpsError::DivideFacesFailed { shell_index: 0 })?;
     let cls1 = divide_face::divide_faces(&altshell1, &loops_store1, sampled_store1.as_ref(), tol)
@@ -133,7 +111,6 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         cls0,
         cls1,
         coplanar_overlap,
-        full_interface_adjacency,
     })
 }
 
@@ -327,6 +304,41 @@ fn partition_evidence<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     (valid_regions, Shell::from(poly_faces), by_key)
 }
 
+/// Bounding containment is necessary (but not sufficient) for a Boolean
+/// union. In particular it rejects a closed output containing only one
+/// operand, which topological checks alone cannot identify.
+fn covers_both_input_bounding_boxes<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    candidate: &Shell<Point3, C, S>,
+    lhs: &PolyShell,
+    rhs: &PolyShell,
+    mesh_tol: f64,
+) -> bool {
+    fn bounds(shell: &PolyShell) -> Option<(Point3, Point3)> {
+        let mut points = shell
+            .iter()
+            .filter_map(Face::surface)
+            .flat_map(|polygon| polygon.positions().to_vec());
+        let first = points.next()?;
+        Some(points.fold((first, first), |(mut lo, mut hi), p| {
+            for axis in 0..3 {
+                lo[axis] = lo[axis].min(p[axis]);
+                hi[axis] = hi[axis].max(p[axis]);
+            }
+            (lo, hi)
+        }))
+    }
+    let sampled = candidate.triangulation(mesh_tol);
+    let (Some((actual_lo, actual_hi)), Some((lhs_lo, lhs_hi)), Some((rhs_lo, rhs_hi))) =
+        (bounds(&sampled), bounds(lhs), bounds(rhs))
+    else {
+        return false;
+    };
+    (0..3).all(|axis| {
+        actual_lo[axis] <= lhs_lo[axis].min(rhs_lo[axis]) + mesh_tol
+            && actual_hi[axis] >= lhs_hi[axis].max(rhs_hi[axis]) - mesh_tol
+    })
+}
+
 fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     mut analysis: PairAnalysis<C, S>,
 ) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
@@ -334,45 +346,48 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     analysis.cls0.integrate_by_component();
     analysis.cls1.integrate_by_component();
 
-    let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
-    for region in unknown0 {
-        if analysis
-            .full_interface_adjacency
-            .as_ref()
-            .is_some_and(|interface| interface.contains(0, region.source_face()))
-        {
-            continue;
-        }
-        match classify_relation(&analysis.poly_shell1, &region, tol, 0)? {
-            FaceRelation::Inside => and0.push(region),
-            FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
-        }
-    }
-    let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
-    for region in unknown1 {
-        if analysis
-            .full_interface_adjacency
-            .as_ref()
-            .is_some_and(|interface| interface.contains(1, region.source_face()))
-        {
-            continue;
-        }
-        match classify_relation(&analysis.poly_shell0, &region, tol, 1)? {
-            FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
-            FaceRelation::Outside => or1.push(region),
-        }
-    }
-    and0.append(&mut and1);
-    or0.append(&mut or1);
-    let label_and_shell = weld_and_convert(&and0, "and")?;
-    let label_or_shell = weld_and_convert(&or0, "or")?;
-    if !label_or_shell.is_empty()
-        && shell_is_valid(&label_and_shell)
-        && shell_is_valid(&label_or_shell)
+    // A zero-volume AABB intersection proves there can be no positive-volume
+    // AND shell. The label-only classifier can nevertheless return two closed
+    // *subsets*, e.g. a complete annular tube mislabelled as AND and its hook
+    // mislabelled as OR. In that case the complete partition must run.
     {
-        return Ok([label_and_shell, label_or_shell]);
+        let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
+        for region in unknown0 {
+            match classify_relation(&analysis.poly_shell1, &region, tol, 0)? {
+                FaceRelation::Inside => and0.push(region),
+                FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
+            }
+        }
+        let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
+        for region in unknown1 {
+            match classify_relation(&analysis.poly_shell0, &region, tol, 1)? {
+                FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
+                FaceRelation::Outside => or1.push(region),
+            }
+        }
+        and0.append(&mut and1);
+        or0.append(&mut or1);
+        let label_and_shell = weld_and_convert(&and0, "and")?;
+        let label_or_shell = weld_and_convert(&or0, "or")?;
+        if !label_or_shell.is_empty()
+            && shell_is_valid(&label_and_shell)
+            && shell_is_valid(&label_or_shell)
+            && covers_both_input_bounding_boxes(
+                &label_or_shell,
+                &analysis.poly_shell0,
+                &analysis.poly_shell1,
+                BooleanTolerance::new(tol).mesh_seed,
+            )
+        {
+            return Ok([label_and_shell, label_or_shell]);
+        }
     }
 
+    // A topologically valid set of classified faces need not cover the input
+    // solids. With partially contacting coplanar faces, the label-only path
+    // may form a valid closed subset (e.g. the attached hook but not the
+    // annular host), silently discarding source material. Always partition
+    // every source region and overlay the surviving coplanar cells.
     let all0 = analysis.cls0.all_regions();
     let all1 = analysis.cls1.all_regions();
     let partition_tolerance = BooleanTolerance::new(tol);

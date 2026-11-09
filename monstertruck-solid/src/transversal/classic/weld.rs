@@ -283,20 +283,35 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
         split_vertices
     }
 
-    fn rebuild_edge(&mut self, edge: &AltEdge<C, S>) -> Vec<AltEdge<C, S>> {
+    fn rebuild_edge(&mut self, edge: &AltEdge<C, S>) -> Option<Vec<AltEdge<C, S>>> {
         let front = self.canonical_vertex(edge.front().point());
         let back = self.canonical_vertex(edge.back().point());
         if front == back {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let curve = edge.oriented_curve();
         let split_vertices = self.split_vertices(&curve, &front, &back);
         let mut pieces = Vec::with_capacity(split_vertices.len() + 1);
         let mut remaining = curve;
         let mut segment_front = front;
-        for (_, parameter, split_vertex) in split_vertices {
+        for (_, _, split_vertex) in split_vertices {
+            // The parameter of a later split belongs to the *remaining* curve.
+            // A line cut resets its domain to [0, 1], while a B-spline cut
+            // retains its original knot values. Reusing parameters from the
+            // initial curve corrupts its analytic endpoints after multiple cuts.
+            let point = split_vertex.point();
+            let parameter = remaining
+                .search_parameter(point, None, 100)
+                .or_else(|| remaining.search_nearest_parameter(point, None, 100))
+                .filter(|&t| {
+                    let (start, end) = remaining.range_tuple();
+                    t > start && t < end && remaining.evaluate(t).near(&point)
+                })?;
             let later = remaining.cut(parameter);
-            remaining.snap_endpoints(segment_front.point(), split_vertex.point());
+            if !remaining.back().near(&point) || !later.front().near(&point) {
+                return None;
+            }
+            remaining.snap_endpoints(segment_front.point(), point);
             let segment = Edge::new_unchecked(&segment_front, &split_vertex, remaining);
             pieces.push(self.canonical_edge(segment));
             remaining = later;
@@ -305,7 +320,7 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
         remaining.snap_endpoints(segment_front.point(), back.point());
         let segment = Edge::new_unchecked(&segment_front, &back, remaining);
         pieces.push(self.canonical_edge(segment));
-        pieces
+        Some(pieces)
     }
 }
 
@@ -315,7 +330,7 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
 pub(super) fn node_selected_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
     nodes: &[Point3],
-) -> Vec<AltRegion<C, S>> {
+) -> Option<Vec<AltRegion<C, S>>> {
     let mut context = WeldContext::new(regions);
     context.additional_nodes = nodes.to_vec();
     regions
@@ -325,20 +340,20 @@ pub(super) fn node_selected_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 .absolute_boundaries()
                 .iter()
                 .map(|wire| {
-                    Wire::from(
-                        wire.iter()
-                            .flat_map(|edge| context.rebuild_edge(edge))
-                            .collect::<Vec<_>>(),
-                    )
+                    let pieces = wire
+                        .iter()
+                        .map(|edge| context.rebuild_edge(edge))
+                        .collect::<Option<Vec<_>>>()?;
+                    Some(Wire::from(pieces.into_iter().flatten().collect::<Vec<_>>()))
                 })
-                .collect::<Vec<_>>();
-            faces_classification::BooleanRegion::new(
+                .collect::<Option<Vec<_>>>()?;
+            Some(faces_classification::BooleanRegion::new(
                 wires,
                 region.surface(),
                 region.orientation(),
                 region.key(),
                 region.source_face(),
-            )
+            ))
         })
         .collect()
 }
@@ -346,7 +361,7 @@ pub(super) fn node_selected_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
 ) -> Option<AltCurveShell<C, S>> {
-    let rebuilt_regions = node_selected_regions(regions, &[]);
+    let rebuilt_regions = node_selected_regions(regions, &[])?;
     faces_classification::materialize_regions(&rebuilt_regions)
 }
 
@@ -374,7 +389,7 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 mod weld_tests {
     use super::*;
     use monstertruck_core::cgmath64::EuclideanSpace;
-    use monstertruck_geometry::prelude::{Line, Plane};
+    use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, Line, Plane};
     use monstertruck_modeling::{Curve, Surface};
     use monstertruck_topology::{Face, Shell};
 
@@ -464,6 +479,46 @@ mod weld_tests {
                     .any(|vertex| vertex.point().near(&expected)),
                 "materialized notch boundary must preserve geometric corner {expected:?}",
             );
+        }
+    }
+
+    #[test]
+    fn repeated_noding_preserves_curve_geometry_after_parameter_range_changes() {
+        let start = Point3::new(0.0, 0.0, 0.0);
+        let finish = Point3::new(4.0, 0.0, 0.0);
+        for curve in [
+            Alternative::FirstType(Curve::from(Line(start, finish))),
+            Alternative::FirstType(Curve::from(BsplineCurve::new_unchecked(
+                KnotVector::bezier_knot(1),
+                vec![start, finish],
+            ))),
+        ] {
+            let front = Vertex::new(start);
+            let back = Vertex::new(finish);
+            let whole = Edge::new_unchecked(&front, &back, curve);
+            let region = faces_classification::BooleanRegion::new(
+                vec![Wire::from(vec![whole.clone()])],
+                Surface::Plane(Plane::xy()),
+                true,
+                0,
+                0,
+            );
+            let mut context = WeldContext::new(&[region]);
+            context.additional_nodes = [1.0, 2.0, 3.0].map(|x| Point3::new(x, 0.0, 0.0)).to_vec();
+            let pieces = context
+                .rebuild_edge(&whole)
+                .expect("all exact cut points must be representable");
+            assert_eq!(pieces.len(), 4);
+            for (index, piece) in pieces.iter().enumerate() {
+                let a = Point3::new(index as f64, 0.0, 0.0);
+                let b = Point3::new(index as f64 + 1.0, 0.0, 0.0);
+                assert!(piece.front().point().near(&a));
+                assert!(piece.back().point().near(&b));
+                assert!(
+                    piece.is_geometric_consistent(),
+                    "noding must not stretch curves away from canonical vertices"
+                );
+            }
         }
     }
 
