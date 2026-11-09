@@ -445,8 +445,24 @@ fn planar_polygons_partially_overlap(lhs: &PolygonMesh, rhs: &PolygonMesh, tol: 
     {
         return false;
     }
-    lhs.collide_with_neighborhood_of(rhs.positions(), tol)
-        || rhs.collide_with_neighborhood_of(lhs.positions(), tol)
+    // Vertex containment misses crossing planar regions whose vertices all
+    // lie outside the other region (e.g. two perpendicular thin rectangles).
+    // Require positive triangulated overlap area so an edge-only contact
+    // does not trigger partial-face imprinting.
+    let Some((origin, normal)) = planar_polygon_plane(lhs, tol) else {
+        return false;
+    };
+    let Some(lhs_signature) = planar_polygon_signature(lhs, origin, normal) else {
+        return false;
+    };
+    let Some(rhs_signature) = planar_polygon_signature(rhs, origin, normal) else {
+        return false;
+    };
+    projected_bounds_overlap(lhs_signature.bounds, rhs_signature.bounds, tol)
+        && planar_polygon_overlap_area(lhs, rhs, origin, normal, tol).is_some_and(|area| {
+            area > planar_area_tolerance(lhs_signature, tol)
+                .max(planar_area_tolerance(rhs_signature, tol))
+        })
 }
 
 fn shell_polygon_bounds(
@@ -487,7 +503,13 @@ pub(super) fn shells_have_partial_planar_overlap(
     rhs: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     tol: f64,
 ) -> Option<bool> {
-    if !shells_have_positive_aabb_overlap(lhs, rhs, tol)? {
+    // A shared face can have positive 2D intersection area while both
+    // solids have zero 3D overlap. Reject only separated bounding boxes;
+    // coplanarity and area are checked for each actual face pair below.
+    let (lhs_min, lhs_max) = shell_polygon_bounds(lhs)?;
+    let (rhs_min, rhs_max) = shell_polygon_bounds(rhs)?;
+    if (0..3).any(|axis| lhs_min[axis] > rhs_max[axis] + tol || rhs_min[axis] > lhs_max[axis] + tol)
+    {
         return Some(false);
     }
     for left in lhs {
@@ -575,6 +597,55 @@ mod planar_region_identity_tests {
     use super::*;
     use monstertruck_meshing::prelude::{Faces, StandardAttributes};
     use monstertruck_topology::Face;
+
+    fn rectangle(x0: f64, y0: f64, x1: f64, y1: f64) -> PolygonMesh {
+        PolygonMesh::new(
+            StandardAttributes {
+                positions: vec![
+                    Point3::new(x0, y0, 0.0),
+                    Point3::new(x1, y0, 0.0),
+                    Point3::new(x1, y1, 0.0),
+                    Point3::new(x0, y1, 0.0),
+                ],
+                ..Default::default()
+            },
+            Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
+        )
+        .expect("fixture mesh is valid")
+    }
+
+    #[test]
+    fn transverse_planar_overlap_is_detected_without_vertex_containment() {
+        let horizontal = rectangle(-2.0, -0.2, 2.0, 0.2);
+        let vertical = rectangle(-0.2, -2.0, 0.2, 2.0);
+        assert!(planar_polygons_partially_overlap(
+            &horizontal,
+            &vertical,
+            1.0e-8
+        ));
+        assert!(planar_polygons_partially_overlap(
+            &vertical,
+            &horizontal,
+            1.0e-8
+        ));
+
+        let left = rectangle(0.0, 0.0, 1.0, 1.0);
+        let edge_touching = rectangle(1.0, 0.0, 2.0, 1.0);
+        assert!(!planar_polygons_partially_overlap(
+            &left,
+            &edge_touching,
+            1.0e-8
+        ));
+
+        let lhs: Shell<Point3, PolylineCurve, Option<PolygonMesh>> =
+            Shell::from(vec![Face::new_unchecked(Vec::new(), Some(horizontal))]);
+        let rhs: Shell<Point3, PolylineCurve, Option<PolygonMesh>> =
+            Shell::from(vec![Face::new_unchecked(Vec::new(), Some(vertical))]);
+        assert_eq!(
+            shells_have_partial_planar_overlap(&lhs, &rhs, 1.0e-8),
+            Some(true)
+        );
+    }
 
     fn diamond() -> PolygonMesh {
         PolygonMesh::new(

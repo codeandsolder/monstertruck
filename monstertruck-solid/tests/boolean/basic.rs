@@ -256,3 +256,31 @@ fn intersection_of_coaxial_overlapping_boxes_with_coplanar_sides() -> Result<()>
         monstertruck_solid::and(&a, &b, monstertruck_solid::GeometryPolicy::standard(1.0e-6))?;
     assert_solid("intersection of coaxial overlapping boxes", &result, 0.5)
 }
+
+/// Two volumes touch only across a partially overlapping planar interface.
+/// Neither contact-face polygon contains a vertex of the other polygon:
+/// their footprints cross. The interface must be imprinted and removed.
+#[test]
+fn union_of_orthogonal_boxes_touching_across_partial_face() -> Result<()> {
+    let base: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(2.0, 2.0, 1.0),
+    ]));
+    let cap: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(0.5, -1.0, 1.0),
+        Point3::new(1.5, 3.0, 2.0),
+    ]));
+    for (left, right) in [(&base, &cap), (&cap, &base)] {
+        let joined = monstertruck_solid::or(
+            left,
+            right,
+            monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+        )?;
+        anyhow::ensure!(
+            joined.boundaries().len() == 1,
+            "partial-face union must be connected"
+        );
+        assert_solid("partial-face planar-contact union", &joined, 8.0)?;
+    }
+    Ok(())
+}

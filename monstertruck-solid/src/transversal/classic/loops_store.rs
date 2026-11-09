@@ -1388,8 +1388,11 @@ fn analyze_coplanar_interfaces(
     } else {
         full_interface.clone()
     };
+    // Partial planar interfaces can be exactly zero-volume contacts.
+    // In that case a full-interface shortcut does not apply, but the
+    // face-local positive-area test still must be considered.
     let partial_overlap = imprint_coplanar
-        && positive_aabb_overlap
+        && full_interface_adjacency.is_none()
         && shells_have_partial_planar_overlap(poly_shell0, poly_shell1, tolerance)?;
     Some(CoplanarInterfaceAnalysis {
         partial_overlap,
