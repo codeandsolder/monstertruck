@@ -282,6 +282,31 @@ fn three_point_arc_rejects_degenerate_geometry() {
 }
 
 #[test]
+fn circle_arc_three_point_is_scale_invariant_for_small_valid_arcs() {
+    for radius in [1.0, 0.01, 0.0001] {
+        let center = Point3::new(0.5, -0.25, 0.0);
+        let start = center + Vector3::new(radius, 0.0, 0.0);
+        let end = center + Vector3::new(0.0, radius, 0.0);
+        let transit = center
+            + Vector3::new(
+                radius * std::f64::consts::FRAC_1_SQRT_2,
+                radius * std::f64::consts::FRAC_1_SQRT_2,
+                0.0,
+            );
+        let curve = circle_arc_by_three_points(start, end, transit)
+            .expect("a finite quarter circle cannot degenerate solely because it is small");
+        assert!(curve.front().distance(start) < 1.0e-9);
+        assert!(curve.back().distance(end) < 1.0e-9);
+        assert!(
+            curve
+                .evaluate(f64::midpoint(curve.range_tuple().0, curve.range_tuple().1))
+                .distance(transit)
+                < 1.0e-9
+        );
+    }
+}
+
+#[test]
 fn circle_arc_three_point_rejects_degenerate_inputs() {
     let collinear = circle_arc_by_three_points(
         Point3::new(0.0, 0.0, 0.0),

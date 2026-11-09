@@ -19,7 +19,15 @@ pub fn circle_arc_by_three_points(
 
     let (vec0, vec1) = (point0 - transit, point1 - transit);
     let axis_raw = vec1.cross(vec0);
-    if axis_raw.magnitude2().so_small() {
+    let lengths_squared = vec0.magnitude2() * vec1.magnitude2();
+    // Absolute cross-product thresholds scale as radius^4 and reject
+    // perfectly valid small circles. Bound the dimensionless sin^2 of
+    // the angle between the defining chords instead.
+    if !lengths_squared.is_finite()
+        || lengths_squared <= 0.0
+        || !axis_raw.magnitude2().is_finite()
+        || axis_raw.magnitude2() <= f64::EPSILON * lengths_squared
+    {
         return Err(Error::DegenerateCircularArcPoints);
     }
     let origin = circum_center(point0, point1, transit);
