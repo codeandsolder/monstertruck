@@ -115,6 +115,18 @@ pub(crate) fn detect_extrusion_core_candidates_with_index(
             solid_id, entities, index,
         ));
     }
+    for entity in entities {
+        let Some(record) = simple_record(entity) else {
+            continue;
+        };
+        if record.name != "MANIFOLD_SOLID_BREP" {
+            continue;
+        }
+        let solid_id = entity_id(entity);
+        out.extend(open_cap_side_extrusion_candidates(
+            solid_id, entities, index,
+        ));
+    }
     out.sort_by(|first, second| {
         first
             .solid_id
@@ -281,6 +293,307 @@ fn face_info_from_reduced(face: &ReducedFace) -> Option<FaceInfo> {
         loops: face.loops.clone(),
         loop_edges: face.loop_edges().cloned().collect(),
     })
+}
+
+/// Recover an extrusion from one complete source cap and its adjacent
+/// generator edges. The opposite source cap may be partly obscured by an
+/// attached feature, so its *support plane*, not its trimmed outline, fixes
+/// the extrusion height. An eventual union must prove the complete source
+/// boundary independently before this is admitted as CAD.
+fn open_cap_side_extrusion_candidates(
+    solid_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<RecoveredSolidExtrusion> {
+    let Some(source_face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
+        return Vec::new();
+    };
+    let Some(faces) = source_face_ids
+        .into_iter()
+        .map(|id| face_info(id, entities, index))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Vec::new();
+    };
+    let mut adjacent = HashMap::<u64, Vec<usize>>::new();
+    for (face_index, face) in faces.iter().enumerate() {
+        for edge in &face.loop_edges {
+            adjacent.entry(edge.edge_id).or_default().push(face_index);
+        }
+    }
+    (0..faces.len())
+        .filter_map(|index| open_cap_side_extrusion_candidate(solid_id, index, &faces, &adjacent))
+        .collect()
+}
+
+fn cap_side_generator_length(
+    cap: &FaceInfo,
+    side_indices: &HashSet<usize>,
+    faces: &[FaceInfo],
+    vertex: u64,
+    inward: [f64; 3],
+) -> Option<f64> {
+    let source_point = cap.loop_edges.iter().find_map(|edge| {
+        if edge.start_vertex == vertex {
+            Some(edge.start_mm)
+        } else if edge.end_vertex == vertex {
+            Some(edge.end_mm)
+        } else {
+            None
+        }
+    })?;
+    let mut connector = None;
+    for &side_index in side_indices {
+        for edge in &faces[side_index].loop_edges {
+            if !matches!(edge.support, CurveSupport::Line(_)) {
+                continue;
+            }
+            let other = if edge.start_vertex == vertex {
+                Some(edge.end_mm)
+            } else if edge.end_vertex == vertex {
+                Some(edge.start_mm)
+            } else {
+                None
+            };
+            let Some(other) = other else { continue };
+            let delta = sub(other, source_point);
+            let height = dot(delta, inward);
+            if height <= GEOM_TOL_MM || norm(sub(delta, mul(inward, height))) > GEOM_TOL_MM {
+                continue;
+            }
+            if connector.is_some_and(|old: f64| (old - height).abs() > GEOM_TOL_MM) {
+                return None;
+            }
+            connector = Some(height);
+        }
+    }
+    connector
+}
+
+fn open_cap_side_extrusion_candidate(
+    solid_id: u64,
+    cap_index: usize,
+    faces: &[FaceInfo],
+    edge_faces: &HashMap<u64, Vec<usize>>,
+) -> Option<RecoveredSolidExtrusion> {
+    let cap = &faces[cap_index];
+    let SurfaceSupport::Plane(cap_plane) = cap.surface else {
+        return None;
+    };
+    if !face_lies_on_plane(cap, cap_plane) {
+        return None;
+    }
+    let normal = normalize3(cap_plane.normal, DIR_TOL)?;
+    let inward = mul(normal, if cap.surface_forward { -1.0 } else { 1.0 });
+    let profile = canonical_profile(cap, inward, &cap_loop_roles(cap, inward)?)?;
+    let mut side_indices = HashSet::new();
+    let mut lengths = Vec::<f64>::new();
+    let mut top_vertices = HashSet::<u64>::new();
+    for edge in &cap.loop_edges {
+        top_vertices.insert(edge.start_vertex);
+        top_vertices.insert(edge.end_vertex);
+        let [first, second] = edge_faces.get(&edge.edge_id)?.as_slice() else {
+            return None;
+        };
+        let side_index = if *first == cap_index {
+            *second
+        } else if *second == cap_index {
+            *first
+        } else {
+            return None;
+        };
+        let side = &faces[side_index];
+        let SurfaceSupport::Plane(side_plane) = side.surface else {
+            return None;
+        };
+        if dot(normal, side_plane.normal).abs() > DIR_TOL
+            || !edge_lies_on_plane(edge, side_plane)
+            || !face_lies_on_plane(side, side_plane)
+        {
+            return None;
+        }
+        side_indices.insert(side_index);
+    }
+    for vertex in top_vertices {
+        lengths.push(cap_side_generator_length(
+            cap,
+            &side_indices,
+            faces,
+            vertex,
+            inward,
+        )?);
+    }
+    let first_height = *lengths.first()?;
+    if lengths
+        .iter()
+        .any(|height| (height - first_height).abs() > GEOM_TOL_MM)
+    {
+        return None;
+    }
+    let mut matching_bottom_faces = faces.iter().filter(|f| {
+        if f.id == cap.id {
+            return false;
+        }
+        let SurfaceSupport::Plane(other) = f.surface else {
+            return false;
+        };
+        if !parallel(other.normal, cap_plane.normal) {
+            return false;
+        }
+        let height = dot(sub(other.origin_mm, cap_plane.origin_mm), inward);
+        (height - first_height).abs() <= GEOM_TOL_MM && face_lies_on_plane(f, other)
+    });
+    let bottom = matching_bottom_faces.next()?;
+    if matching_bottom_faces.next().is_some() {
+        return None;
+    }
+    let mut side_face_ids = side_indices
+        .into_iter()
+        .map(|index| faces[index].id)
+        .collect::<Vec<_>>();
+    side_face_ids.sort_unstable();
+    Some(RecoveredSolidExtrusion {
+        solid_id,
+        cap_face_ids: [bottom.id, cap.id],
+        side_face_ids,
+        profile_curves: profile.curves,
+        inner_profile_loops: profile.inner_loops,
+        origin_mm: profile.origin_mm,
+        x_axis: profile.x_axis,
+        y_axis: profile.y_axis,
+        z_axis: inward,
+        height_mm: first_height,
+        max_residual_mm: cap_plane.max_residual_mm.max(
+            lengths
+                .iter()
+                .map(|length| (length - first_height).abs())
+                .fold(0.0_f64, f64::max),
+        ),
+    })
+}
+
+pub(crate) fn recover_any_extrusion_core_from_cap_faces_with_index(
+    solid_id: u64,
+    pair: [u64; 2],
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<RecoveredSolidExtrusion> {
+    recover_extrusion_core_from_cap_faces_with_index(solid_id, pair, entities, index).or_else(
+        || {
+            open_cap_side_extrusion_candidates(solid_id, entities, index)
+                .into_iter()
+                .find(|candidate| {
+                    candidate.cap_face_ids == pair || candidate.cap_face_ids == [pair[1], pair[0]]
+                })
+        },
+    )
+}
+
+/// The source B-rep boundary cannot pass through the *strict interior* of
+/// any material-only extrusion core. Such a core necessarily invents material
+/// across an original void or exterior boundary.
+///
+/// A source line is itself an exact boundary witness, so points along it do
+/// not depend on a tessellator or a face-centroid guess. The inside predicate
+/// handles arbitrary simple line profiles (including nonconvex loops and
+/// cavities); unsupported curves simply provide no pruning evidence. This is
+/// a candidate filter, *not* a source-equivalence proof: the final evaluated
+/// union must still pass the complete analytic boundary comparison.
+pub(crate) fn discard_boundary_penetrating_extrusion_cores(
+    solid_id: u64,
+    candidates: Vec<RecoveredSolidExtrusion>,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<RecoveredSolidExtrusion> {
+    let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
+        return candidates;
+    };
+    let mut seen_edges = HashSet::new();
+    let mut witness_points = Vec::<[f64; 3]>::new();
+    for face_id in face_ids {
+        let Some(face) = face_info(face_id, entities, index) else {
+            continue;
+        };
+        for edge in face.loop_edges {
+            if !seen_edges.insert(edge.edge_id) || !matches!(edge.support, CurveSupport::Line(_)) {
+                continue;
+            }
+            for fraction in [0.25, 0.5, 0.75] {
+                witness_points.push(add(
+                    edge.start_mm,
+                    mul(sub(edge.end_mm, edge.start_mm), fraction),
+                ));
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|core| {
+            !witness_points
+                .iter()
+                .any(|point| core_strictly_contains_source_boundary_point(core, *point))
+        })
+        .collect()
+}
+
+fn core_strictly_contains_source_boundary_point(
+    core: &RecoveredSolidExtrusion,
+    point: [f64; 3],
+) -> bool {
+    // Strict geometric contradiction requires separation from *all* core
+    // boundary faces, not numerical equality on a common cap or cavity wall.
+    let margin = 4.0 * GEOM_TOL_MM;
+    let relative = sub(point, core.origin_mm);
+    let depth = dot(relative, core.z_axis);
+    if depth <= margin || depth >= core.height_mm - margin {
+        return false;
+    }
+    let local = [dot(relative, core.x_axis), dot(relative, core.y_axis)];
+    if strict_line_profile_contains(&core.profile_curves, local, margin) != Some(true) {
+        return false;
+    }
+    core.inner_profile_loops
+        .iter()
+        .all(|hole| strict_line_profile_contains(hole, local, margin) == Some(false))
+}
+
+/// Evaluate a point against an arbitrary closed line-loop, refusing points
+/// within the source tolerance of its boundary and all non-line curves.
+fn strict_line_profile_contains(
+    loop_: &[RecoveredProfileCurve],
+    point: [f64; 2],
+    margin: f64,
+) -> Option<bool> {
+    if loop_.len() < 3 {
+        return None;
+    }
+    let mut inside = false;
+    for curve in loop_ {
+        let RecoveredProfileCurve::Line {
+            start_mm: a,
+            end_mm: b,
+            ..
+        } = curve
+        else {
+            return None;
+        };
+        let edge = sub2(*b, *a);
+        let length2 = dot2(edge, edge);
+        if !length2.is_finite() || length2 <= GEOM_TOL_MM * GEOM_TOL_MM {
+            return None;
+        }
+        let t = (dot2(sub2(point, *a), edge) / length2).clamp(0.0, 1.0);
+        let nearest = [t.mul_add(edge[0], a[0]), t.mul_add(edge[1], a[1])];
+        if distance2(point, nearest) <= margin {
+            return None;
+        }
+        if (a[1] > point[1]) != (b[1] > point[1])
+            && point[0] < a[0] + (point[1] - a[1]) * edge[0] / edge[1]
+        {
+            inside = !inside;
+        }
+    }
+    Some(inside)
 }
 
 pub(crate) fn recover_extrusion_core_from_cap_faces_with_index(
@@ -1953,6 +2266,87 @@ fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> { normalize3(vector, DIR_TOL)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn real_hooked_tube_proposes_top_cap_with_attached_partial_bottom() -> anyhow::Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_open_cap_hook_union.step");
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let section = &exchange.data[0];
+        let index = build_index(&section.entities);
+        let candidates = detect_extrusion_core_candidates_with_index(&section.entities, &index);
+        assert!(
+            candidates.iter().any(|c| c.solid_id == 30
+                && c.cap_face_ids.contains(&168)
+                && c.profile_curves.len() == 4
+                && c.inner_profile_loops.len() == 1
+                && (c.height_mm - 2.5).abs() < GEOM_TOL_MM),
+            "a complete annular cap and all eight ruled side generators imply one 2.5 mm extrusion"
+        );
+        assert!(
+            candidates.iter().any(|c| c.solid_id == 30
+                && c.cap_face_ids.contains(&116)
+                && c.cap_face_ids.contains(&199)),
+            "the attached hook also has two matching nonconvex end caps"
+        );
+        let admissible = discard_boundary_penetrating_extrusion_cores(
+            30,
+            candidates
+                .into_iter()
+                .filter(|core| core.solid_id == 30)
+                .collect(),
+            &section.entities,
+            &index,
+        );
+        let mut accepted = admissible
+            .iter()
+            .map(|core| {
+                let mut pair = core.cap_face_ids;
+                pair.sort_unstable();
+                pair
+            })
+            .collect::<Vec<_>>();
+        accepted.sort_unstable();
+        assert_eq!(accepted, vec![[65, 168], [116, 199]]);
+        Ok(())
+    }
+
+    #[test]
+    fn strict_core_interior_observes_nonconvex_profiles_and_holes() {
+        let rectangle = rectangle_loop(1, [0.0, 0.0], [4.0, 4.0]);
+        let hole = rectangle_loop(10, [1.0, 1.0], [3.0, 3.0]);
+        assert_eq!(
+            strict_line_profile_contains(&rectangle, [0.5, 0.5], 1.0e-6),
+            Some(true)
+        );
+        assert_eq!(
+            strict_line_profile_contains(&hole, [0.5, 0.5], 1.0e-6),
+            Some(false)
+        );
+        assert_eq!(
+            strict_line_profile_contains(&rectangle, [0.0, 1.0], 1.0e-6),
+            None
+        );
+        assert_eq!(
+            strict_line_profile_contains(&rectangle, [5.0, 1.0], 1.0e-6),
+            Some(false)
+        );
+        let concave = vec![
+            profile_line(20, [0.0, 0.0], [4.0, 0.0]),
+            profile_line(21, [4.0, 0.0], [4.0, 1.0]),
+            profile_line(22, [4.0, 1.0], [1.0, 1.0]),
+            profile_line(23, [1.0, 1.0], [1.0, 4.0]),
+            profile_line(24, [1.0, 4.0], [0.0, 4.0]),
+            profile_line(25, [0.0, 4.0], [0.0, 0.0]),
+        ];
+        assert_eq!(
+            strict_line_profile_contains(&concave, [0.5, 3.5], 1.0e-6),
+            Some(true)
+        );
+        assert_eq!(
+            strict_line_profile_contains(&concave, [3.5, 3.5], 1.0e-6),
+            Some(false)
+        );
+    }
 
     fn line_edge(
         edge_id: u64,

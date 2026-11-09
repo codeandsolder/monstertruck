@@ -252,9 +252,11 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     let mut axes = Vec::with_capacity(canonical_pairs.len());
     let mut max_residual_mm = crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM;
     for &pair in &canonical_pairs {
-        let Some(core) = crate::solid_extrusions::recover_extrusion_core_from_cap_faces_with_index(
-            solid_id, pair, entities, &index,
-        ) else {
+        let Some(core) =
+            crate::solid_extrusions::recover_any_extrusion_core_from_cap_faces_with_index(
+                solid_id, pair, entities, &index,
+            )
+        else {
             return Ok(None);
         };
         max_residual_mm = max_residual_mm.max(core.max_residual_mm);
@@ -268,7 +270,6 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     if !summary.geometrically_consistent || summary.shells != 1 {
         return Ok(None);
     }
-
     let rebuilt_step = kernel.to_step(&evaluated)?;
     let rebuilt = ParsedStepSource::parse(rebuilt_step.as_bytes())?.exchange;
     if rebuilt.data.len() != 1 {
@@ -322,103 +323,58 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     }))
 }
 
-/// Detect and admit one exact union of strict extrusion-core candidates.
+/// Detect all source-derived extrusion cores, discard those that contradict
+/// known source boundary geometry, and admit only the complete surviving union.
 ///
-/// The search is intentionally bounded. It first tries every strict source-derived
-/// core. If that does not admit and there are at most eight candidates, it tries
-/// each single-core omission. Exactly one successful omission is required; this
-/// avoids exponential subset search and arbitrary construction choices. Candidate
-/// selection is never semantic authority: every attempted set still passes through
-/// [`recover_proven_extrusion_core_union_fragment`] and its complete analytic
-/// source/rebuild boundary proof.
-///
-/// `data_section` is the zero-based DATA-section index in `source_step`.
+/// A candidate core cannot have an original source boundary *strictly inside*
+/// its volume. Source line-edge witnesses prove such contradictions without
+/// assuming that the core's cap pair explains the entire source solid.
+/// This geometric filter replaces omission enumeration; no subsets are
+/// guessed. Final admission independently compares the complete source and
+/// evaluated union's oriented analytic boundaries.
 ///
 /// # Errors
-/// Returns an error for malformed STEP input, a missing DATA section, or when the canonical
-/// full-set backend evaluation fails and no exact single-omission alternative succeeds.
-/// Failures from exploratory omission attempts do not turn an otherwise clean semantic refusal
-/// into an error.
+/// Returns an error for malformed STEP, invalid CAD IR, or a backend error
+/// evaluating the remaining source-derived construction.
 pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
     source_step: &[u8],
     data_section: usize,
     solid_id: u64,
     kernel: &K,
 ) -> Result<Option<CadFragment>> {
-    const MAX_SINGLE_OMISSION_CANDIDATES: usize = 8;
-
     let source = ParsedStepSource::parse(source_step)?.exchange;
     let Some(section) = source.data.get(data_section) else {
         bail!("automatic extrusion-core union DATA section {data_section} does not exist");
     };
     let entities = &section.entities;
     let index = build_index(entities);
-    let mut cap_pairs =
+    let proposed =
         crate::solid_extrusions::detect_extrusion_core_candidates_with_index(entities, &index)
             .into_iter()
             .filter(|candidate| candidate.solid_id == solid_id)
-            .map(|candidate| {
-                let mut pair = candidate.cap_face_ids;
-                pair.sort_unstable();
-                pair
-            })
-            .collect::<Vec<_>>();
+            .collect();
+    let filtered = crate::solid_extrusions::discard_boundary_penetrating_extrusion_cores(
+        solid_id, proposed, entities, &index,
+    );
+    let mut cap_pairs = filtered
+        .into_iter()
+        .map(|candidate| {
+            let mut pair = candidate.cap_face_ids;
+            pair.sort_unstable();
+            pair
+        })
+        .collect::<Vec<_>>();
     cap_pairs.sort_unstable();
     cap_pairs.dedup();
     if cap_pairs.len() < 2 {
         return Ok(None);
     }
-
-    let remembered_error = match recover_proven_extrusion_core_union_fragment(
+    recover_proven_extrusion_core_union_fragment(
         source_step,
         data_section,
         solid_id,
         &cap_pairs,
         kernel,
-    ) {
-        Ok(Some(fragment)) => return Ok(Some(fragment)),
-        Ok(None) => None,
-        Err(error) => Some(error),
-    };
-
-    if !(3..=MAX_SINGLE_OMISSION_CANDIDATES).contains(&cap_pairs.len()) {
-        return remembered_error.map_or(Ok(None), Err);
-    }
-
-    let mut admitted = None;
-    for omitted in 0..cap_pairs.len() {
-        let subset = cap_pairs
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != omitted)
-            .map(|(_, pair)| *pair)
-            .collect::<Vec<_>>();
-        match recover_proven_extrusion_core_union_fragment(
-            source_step,
-            data_section,
-            solid_id,
-            &subset,
-            kernel,
-        ) {
-            Ok(Some(fragment)) => {
-                if admitted.is_some() {
-                    // Multiple exact constructions are semantically valid but this
-                    // bounded selector has no source-derived reason to prefer one.
-                    return Ok(None);
-                }
-                admitted = Some(fragment);
-            }
-            Ok(None) => {}
-            Err(_error) => {
-                // Omission attempts are optional recall probes. A kernel failure
-                // here must not turn a clean full-set semantic refusal into an error.
-            }
-        }
-    }
-
-    admitted.map_or_else(
-        || remembered_error.map_or(Ok(None), Err),
-        |fragment| Ok(Some(fragment)),
     )
 }
 
@@ -615,6 +571,42 @@ mod tests {
         reason = "legacy test fixture code is allowed narrow lint exceptions; production paths remain strict"
     )]
     use super::*;
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_open_cap_hook_automatic_material_core_union() -> Result<()> {
+        let source = include_bytes!("../validation/fixtures/native_open_cap_hook_union.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let recovered = recover_auto_proven_extrusion_core_union_fragment(source, 0, 30, &kernel)?
+            .ok_or_else(|| anyhow::anyhow!("source-derived material cores must reconstruct"))?;
+        assert_eq!(
+            recovered.source,
+            CadFragmentSource::ExtrusionCoreUnion {
+                solid_id: 30,
+                cap_face_ids: vec![[65, 168], [116, 199]],
+            }
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_open_cap_hook_explicit_core_union() -> Result<()> {
+        let source = include_bytes!("../validation/fixtures/native_open_cap_hook_union.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let recovered = recover_proven_extrusion_core_union_fragment(
+            source,
+            0,
+            30,
+            &[[65, 168], [116, 199]],
+            &kernel,
+        )?;
+        anyhow::ensure!(
+            recovered.is_some(),
+            "source-derived two-core union must recover"
+        );
+        Ok(())
+    }
 
     fn primitive_fragment(solid_id: u64) -> Result<CadFragment> {
         let mut model = CadModel::new();

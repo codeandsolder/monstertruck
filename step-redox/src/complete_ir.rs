@@ -3265,6 +3265,30 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn real_open_cap_and_hook_union_reconstructs_complete_editable_body() -> Result<()> {
+        let input = include_bytes!("../validation/fixtures/native_open_cap_hook_union.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(
+            report.unrecovered_solid_count, 0,
+            "{:?}",
+            report.kernel_recovery_failures
+        );
+        assert_eq!(report.extrusion_core_unions.len(), 1);
+        let union = &report.extrusion_core_unions[0].fragment;
+        assert!(matches!(
+            union.source,
+            CadFragmentSource::ExtrusionCoreUnion { solid_id: 30, .. }
+        ));
+        union.model.validate()?;
+        let rebuilt = kernel.evaluate(&union.model, union.root)?;
+        assert!(kernel.summarize(&rebuilt).is_single_solid());
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn real_corpus_ssi_orientation_regression_122_recovers_in_source_order() -> Result<()> {
         // Monstertruck PR #57 reversed 24 out of 78 geometrically identical
         // SSI chains. The source-order four-extrusion union must be stable.
