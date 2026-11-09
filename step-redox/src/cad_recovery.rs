@@ -206,21 +206,25 @@ fn compose_extrusion_core_union_model(
     model.validate()?;
     Ok((model, root))
 }
-/// Recover and admit a union of sharp extrusion cores only when an independent
-/// analytic boundary proof establishes that the evaluated union is the source solid.
-///
-/// Cap-pair recovery is source-derived and fail-closed. The supplied CAD kernel
-/// merely proposes executable geometry: after evaluation and STEP serialization,
-/// the result must contain exactly one manifold solid and its complete oriented
-/// plane/cylinder boundary signature must equal the source signature. Unsupported
-/// carriers, unproven edge loci, disconnected kernel results, or any signature
-/// mismatch return `Ok(None)` rather than manufacturing semantic IR.
-///
-/// `data_section` is the zero-based DATA-section index in `source_step`.
-///
-/// # Errors
-/// Returns an error for malformed API input, a missing DATA section, STEP parsing failures,
-/// invalid CAD IR, or a backend evaluation/serialization failure.
+fn normalize_extrusion_cap_pairs(cap_face_ids: &[[u64; 2]]) -> Result<Vec<[u64; 2]>> {
+    let mut pairs = cap_face_ids
+        .iter()
+        .copied()
+        .map(|mut pair| {
+            pair.sort_unstable();
+            pair
+        })
+        .collect::<Vec<_>>();
+    if pairs.iter().any(|pair| pair[0] == 0 || pair[0] == pair[1]) {
+        bail!("extrusion-core union cap pairs must contain two distinct nonzero face ids");
+    }
+    pairs.sort_unstable();
+    if pairs.windows(2).any(|pair| pair[0] == pair[1]) {
+        bail!("extrusion-core union cap pairs must be unique");
+    }
+    Ok(pairs)
+}
+
 fn rebuilt_kernel_boundary_matches_source<K: CadKernel>(
     kernel: &K,
     evaluated: &K::Evaluated,
@@ -253,6 +257,21 @@ fn rebuilt_kernel_boundary_matches_source<K: CadKernel>(
     .equivalent)
 }
 
+/// Recover and admit a union of sharp extrusion cores only when an independent
+/// analytic boundary proof establishes that the evaluated union is the source solid.
+///
+/// Cap-pair recovery is source-derived and fail-closed. The supplied CAD kernel
+/// merely proposes executable geometry: after evaluation and STEP serialization,
+/// the result must contain exactly one manifold solid and its complete oriented
+/// plane/cylinder boundary signature must equal the source signature. Unsupported
+/// carriers, unproven edge loci, disconnected kernel results, or any signature
+/// mismatch return `Ok(None)` rather than manufacturing semantic IR.
+///
+/// `data_section` is the zero-based DATA-section index in `source_step`.
+///
+/// # Errors
+/// Returns an error for malformed API input, a missing DATA section, STEP parsing failures,
+/// invalid CAD IR, or a backend evaluation/serialization failure.
 pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     source_step: &[u8],
     data_section: usize,
@@ -264,24 +283,7 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
         bail!("extrusion-core construction admission needs a solid and at least one cap pair");
     }
 
-    let mut canonical_pairs = cap_face_ids
-        .iter()
-        .copied()
-        .map(|mut pair| {
-            pair.sort_unstable();
-            pair
-        })
-        .collect::<Vec<_>>();
-    if canonical_pairs
-        .iter()
-        .any(|pair| pair[0] == 0 || pair[0] == pair[1])
-    {
-        bail!("extrusion-core union cap pairs must contain two distinct nonzero face ids");
-    }
-    canonical_pairs.sort_unstable();
-    if canonical_pairs.windows(2).any(|pair| pair[0] == pair[1]) {
-        bail!("extrusion-core union cap pairs must be unique");
-    }
+    let canonical_pairs = normalize_extrusion_cap_pairs(cap_face_ids)?;
 
     let source = ParsedStepSource::parse(source_step)?.exchange;
     let Some(section) = source.data.get(data_section) else {
@@ -357,18 +359,16 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     model.validate()?;
 
     Ok(Some(CadFragment {
-        source: admitted_single.unwrap_or_else(|| {
-            if tips.is_empty() {
-                CadFragmentSource::ExtrusionCoreUnion {
-                    solid_id,
-                    cap_face_ids: canonical_pairs,
-                }
-            } else {
-                CadFragmentSource::ExtrusionCoreRuledEnds {
-                    solid_id,
-                    cap_face_ids: canonical_pairs,
-                    tip_face_ids: tips,
-                }
+        source: admitted_single.unwrap_or(if tips.is_empty() {
+            CadFragmentSource::ExtrusionCoreUnion {
+                solid_id,
+                cap_face_ids: canonical_pairs,
+            }
+        } else {
+            CadFragmentSource::ExtrusionCoreRuledEnds {
+                solid_id,
+                cap_face_ids: canonical_pairs,
+                tip_face_ids: tips,
             }
         }),
         model,
@@ -711,6 +711,56 @@ mod tests {
                 cap_face_ids: vec![[65, 168], [116, 199]],
             }
         );
+        Ok(())
+    }
+
+    /// Both source shapes were originally reconstructed using overlapping
+    /// extrusion-core unions. Complete analytic boundary proof and independent
+    /// OCCT comparisons establish that each is a *single* exact extrusion.
+    /// Keep the simpler editable representation rather than pinning history.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_curved_source_automatic_complete_extrusion_regressions() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let samples: &[(&[u8], u64, [u64; 2])] = &[
+            (
+                include_bytes!("../validation/fixtures/native_curved_extrusion_43d97bd3.step"),
+                4,
+                [89, 92],
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_curved_extrusion_b917e6ba.step"),
+                78,
+                [5, 54],
+            ),
+        ];
+        for &(source, solid_id, expected_pair) in samples {
+            let recovered =
+                recover_auto_proven_extrusion_core_union_fragment(source, 0, solid_id, &kernel)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("curved source solid #{solid_id} was not admitted")
+                    })?;
+            match &recovered.source {
+                CadFragmentSource::SolidExtrusion {
+                    solid_id: actual_id,
+                    cap_face_ids,
+                    ..
+                } if *actual_id == solid_id => {
+                    // The two source-cap IDs are a set for provenance; the
+                    // extrusion's signed axis may choose either as its start.
+                    let mut actual_pair = *cap_face_ids;
+                    actual_pair.sort_unstable();
+                    anyhow::ensure!(
+                        actual_pair == expected_pair,
+                        "unexpected source caps for solid #{solid_id}: {actual_pair:?}",
+                    );
+                }
+                other => bail!(
+                    "expected simpler exact source extrusion for #{solid_id}, found {other:?}",
+                ),
+            }
+            recovered.model.validate()?;
+        }
         Ok(())
     }
 

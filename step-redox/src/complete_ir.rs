@@ -387,15 +387,15 @@ impl WholeSolidRecoveryState {
             }
             let complexity = fragment.model.complexity_score(fragment.root)?;
             let replace = self.selected.get(&source).is_none_or(|existing| {
-                if boundary_verified != existing.boundary_verified {
-                    boundary_verified
-                } else {
+                if boundary_verified == existing.boundary_verified {
                     whole_solid_candidate_is_preferred(
                         &existing.fragment.source,
                         existing.complexity,
                         &fragment.source,
                         complexity,
                     )
+                } else {
+                    boundary_verified
                 }
             });
             if replace {
