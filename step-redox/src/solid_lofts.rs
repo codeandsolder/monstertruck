@@ -473,7 +473,18 @@ fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<R
     }
     let tip = section(0.0, &tip_vertices, origin, x, y)?;
     let shoulder = section(depth, &shoulder_vertices, origin, x, y)?;
-    let sections = [tip, shoulder]
+    // The STEP tip face's outward normal points *away* from its shoulder.
+    // Builder::try_skin_wires and its start/end cap conventions assume the
+    // sections progress in the positive local axis direction. Reversing a
+    // negative-depth pair here is essential: both solids can be closed while
+    // the loft's oriented material is inverted, so a Boolean would then keep
+    // the entire shared interface as an external face.
+    let ordered = if depth < 0.0 {
+        [shoulder, tip]
+    } else {
+        [tip, shoulder]
+    };
+    let sections = ordered
         .into_iter()
         .map(|section| LoftSection {
             profile: section.profile,
