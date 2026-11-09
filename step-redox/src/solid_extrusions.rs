@@ -155,6 +155,55 @@ pub(crate) struct RecoveredSourceCapExtrusion {
     pub max_residual_mm: f64,
 }
 
+/// The first source-witnessed station shared by independent axial generators.
+fn source_cap_generator_station(
+    cap: &FaceInfo,
+    side_indices: &HashSet<usize>,
+    faces: &[FaceInfo],
+    inward: [f64; 3],
+) -> Option<f64> {
+    let mut heights = Vec::new();
+    for edge in &cap.loop_edges {
+        for (vertex, at) in [
+            (edge.start_vertex, edge.start_mm),
+            (edge.end_vertex, edge.end_mm),
+        ] {
+            for &side_index in side_indices {
+                for wall_edge in &faces[side_index].loop_edges {
+                    if !matches!(wall_edge.support, CurveSupport::Line(_)) {
+                        continue;
+                    }
+                    let beyond = if wall_edge.start_vertex == vertex {
+                        Some(wall_edge.end_mm)
+                    } else if wall_edge.end_vertex == vertex {
+                        Some(wall_edge.start_mm)
+                    } else {
+                        None
+                    };
+                    let Some(other) = beyond else {
+                        continue;
+                    };
+                    let delta = sub(other, at);
+                    let height = dot(delta, inward);
+                    if height > GEOM_TOL_MM && norm(sub(delta, mul(inward, height))) <= GEOM_TOL_MM
+                    {
+                        heights.push(height);
+                    }
+                }
+            }
+        }
+    }
+    heights.sort_by(f64::total_cmp);
+    let &height = heights.first()?;
+    // One accidental line-edge is insufficient evidence of a material core.
+    (heights
+        .iter()
+        .filter(|value| (**value - height).abs() <= GEOM_TOL_MM)
+        .count()
+        >= 2)
+        .then_some(height)
+}
+
 /// Recover a source cap as a *partial* extrusion, stopping at the earliest
 /// source-witnessed axial generator station. The opposite cap need not be
 /// exposed: this remains an unverified proposal until a union is independently
@@ -215,52 +264,9 @@ pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
         if !all_edges_attached {
             continue;
         }
-        let mut heights = Vec::new();
-        for edge in &cap.loop_edges {
-            for (vertex, at) in [
-                (edge.start_vertex, edge.start_mm),
-                (edge.end_vertex, edge.end_mm),
-            ] {
-                for &side_index in &side_indices {
-                    for wall_edge in &faces[side_index].loop_edges {
-                        if !matches!(wall_edge.support, CurveSupport::Line(_)) {
-                            continue;
-                        }
-                        let beyond = if wall_edge.start_vertex == vertex {
-                            Some(wall_edge.end_mm)
-                        } else if wall_edge.end_vertex == vertex {
-                            Some(wall_edge.start_mm)
-                        } else {
-                            None
-                        };
-                        let Some(other) = beyond else {
-                            continue;
-                        };
-                        let delta = sub(other, at);
-                        let height = dot(delta, inward);
-                        if height > GEOM_TOL_MM
-                            && norm(sub(delta, mul(inward, height))) <= GEOM_TOL_MM
-                        {
-                            heights.push(height);
-                        }
-                    }
-                }
-            }
-        }
-        // An observed station shared by at least two independent generators
-        // avoids treating a lone wall-edge artifact as a complete material core.
-        heights.sort_by(f64::total_cmp);
-        let Some(&height) = heights.first() else {
+        let Some(height) = source_cap_generator_station(cap, &side_indices, &faces, inward) else {
             continue;
         };
-        if heights
-            .iter()
-            .filter(|value| (**value - height).abs() <= GEOM_TOL_MM)
-            .count()
-            < 2
-        {
-            continue;
-        }
         candidates.push(RecoveredSourceCapExtrusion {
             solid_id,
             cap_face_id: cap.id,

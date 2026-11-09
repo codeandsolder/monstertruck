@@ -4,7 +4,7 @@
 //! or interpolation is used: every claimed loft wall is a matching source
 //! planar quadrilateral with identical topology and geometric vertices.
 
-use crate::brep::{CurveSupport, SurfaceSupport};
+use crate::brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport};
 use crate::cad_ir::{CadModel, CadNode, LoftSection, Profile2d, RigidTransform};
 use crate::cad_recovery::{CadFragment, CadFragmentSource};
 use crate::math3::{cross, distance, dot, normalize, sub};
@@ -560,6 +560,38 @@ fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<R
     })
 }
 
+/// Nearest non-tip axial station witnessed by source vertices on actual
+/// incident wall faces, not by extrapolation of the planar carriers.
+fn source_witnessed_terminal_depth(
+    solid: &ReducedSolid,
+    cap_edges: &[OrientedEdgeUse],
+    wall_face_ids: &[u64],
+    origin: [f64; 3],
+    axis: [f64; 3],
+) -> Option<f64> {
+    let cap_vertices = cap_edges
+        .iter()
+        .map(|edge| edge.start_vertex)
+        .collect::<BTreeSet<_>>();
+    let depth = solid
+        .faces()
+        .filter(|wall| wall_face_ids.contains(&wall.id))
+        .flat_map(ReducedFace::loop_edges)
+        .flat_map(|edge| {
+            [
+                (edge.start_vertex, edge.start_mm),
+                (edge.end_vertex, edge.end_mm),
+            ]
+        })
+        .filter(|(id, _)| !cap_vertices.contains(id))
+        .filter_map(|(_, point)| {
+            let distance = dot(sub(point, origin), axis);
+            (distance.abs() > TOL_MM).then_some(distance)
+        })
+        .min_by(|a, b| a.abs().total_cmp(&b.abs()))?;
+    (depth.abs() > TOL_MM).then_some(depth)
+}
+
 // A terminal loft may share its side carriers with a preceding extrusion.
 // In that case two side faces extend past the shoulder and are not four-edge
 // quads. Their analytic planes still determine the exact bounded shoulder.
@@ -595,33 +627,7 @@ fn terminal_extended_planar_ruled_extension(
     let origin = cap_edges.first()?.start_mm;
     let x = normalize(sub(cap_edges.first()?.end_mm, origin), DIR_TOL)?;
     let y = normalize(cross(axis, x), DIR_TOL)?;
-    // A shoulder must be witnessed by actual source wall vertices. Select
-    // the first distinct station past the terminal cap, not an extrapolated
-    // intersection at a convenient synthetic distance.
-    let cap_vertices = cap_edges
-        .iter()
-        .map(|edge| edge.start_vertex)
-        .collect::<BTreeSet<_>>();
-    let depth = solid
-        .faces()
-        .filter(|wall| wall_face_ids.contains(&wall.id))
-        .flat_map(ReducedFace::loop_edges)
-        .flat_map(|edge| {
-            [
-                (edge.start_vertex, edge.start_mm),
-                (edge.end_vertex, edge.end_mm),
-            ]
-        })
-        .filter(|(id, _)| !cap_vertices.contains(id))
-        .filter_map(|(_, point)| {
-            let distance = dot(sub(point, origin), axis);
-            (distance.abs() > TOL_MM).then_some(distance)
-        })
-        .min_by(|a, b| a.abs().total_cmp(&b.abs()))?;
-    if depth.abs() <= TOL_MM {
-        return None;
-    }
-
+    let depth = source_witnessed_terminal_depth(solid, cap_edges, &wall_face_ids, origin, axis)?;
     let shoulder_origin = crate::math3::add(origin, crate::math3::mul(axis, depth));
     let mut shoulder = Vec::with_capacity(4);
     for i in 0..4 {
