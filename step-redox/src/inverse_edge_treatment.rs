@@ -227,9 +227,9 @@ impl CircleFrame {
     }
 }
 
-/// STEP's raw EDGE_LOOP traversal is not necessarily the imported kernel's
-/// face-local traversal. In particular ADVANCED_FACE(...,.F.) reverses a
-/// FACE_OUTER_BOUND(...,.T.) wire. Both line- and circle-based inverse
+/// STEP's raw `EDGE_LOOP` traversal is not necessarily the imported kernel's
+/// face-local traversal. In particular `ADVANCED_FACE(...,.F.)` reverses a
+/// `FACE_OUTER_BOUND(...,.T.)` wire. Both line- and circle-based inverse
 /// treatment planners must use the same oriented neighbor order.
 fn native_oriented_face_edges(face: &ReducedFace, wire: &FaceLoop) -> Vec<OrientedEdgeUse> {
     if face.surface_forward == wire.orientation {
