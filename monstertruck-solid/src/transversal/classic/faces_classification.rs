@@ -63,7 +63,7 @@ impl<P, C, S> BooleanRegion<P, C, S> {
     }
 }
 
-fn cancel_retraced_edge_uses<P: Clone, C: Clone>(
+pub(super) fn cancel_retraced_edge_uses<P: Clone, C: Clone>(
     boundaries: &[Wire<P, C>],
 ) -> Option<(Vec<Wire<P, C>>, bool)> {
     let uses = boundaries

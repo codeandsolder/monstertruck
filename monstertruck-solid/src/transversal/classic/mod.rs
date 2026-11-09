@@ -26,6 +26,7 @@ mod divide_face;
 mod faces_classification;
 mod intersection_curve;
 mod loops_store;
+mod planar_union;
 mod tolerance;
 mod weld;
 
@@ -63,22 +64,6 @@ enum PairMode {
 type PolyShell = Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>;
 
 #[derive(Clone, Debug)]
-struct FullInterfaceAdjacency {
-    shell0: Vec<usize>,
-    shell1: Vec<usize>,
-}
-
-impl FullInterfaceAdjacency {
-    fn contains(&self, shell_index: usize, source_face: usize) -> bool {
-        match shell_index {
-            0 => self.shell0.contains(&source_face),
-            1 => self.shell1.contains(&source_face),
-            _ => false,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
 struct PairAnalysis<C, S> {
     tolerance: f64,
     poly_shell0: PolyShell,
@@ -86,7 +71,6 @@ struct PairAnalysis<C, S> {
     cls0: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
     cls1: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
     coplanar_overlap: bool,
-    full_interface_adjacency: Option<FullInterfaceAdjacency>,
 }
 
 fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -107,7 +91,6 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         geom: [loops_store0, loops_store1],
         sampled: [sampled_store0, sampled_store1],
         coplanar_overlap,
-        full_interface_adjacency,
     } = loops_store::create_loops_stores(
         &altshell0,
         &poly_shell0,
@@ -117,10 +100,6 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         mode == PairMode::AndOr,
     )
     .ok_or(ShapeOpsError::InterfaceAnalysisFailed)?;
-    let full_interface_adjacency = full_interface_adjacency.map(|matched| FullInterfaceAdjacency {
-        shell0: matched.lhs_faces,
-        shell1: matched.rhs_faces,
-    });
     let cls0 = divide_face::divide_faces(&altshell0, &loops_store0, sampled_store0.as_ref(), tol)
         .ok_or(ShapeOpsError::DivideFacesFailed { shell_index: 0 })?;
     let cls1 = divide_face::divide_faces(&altshell1, &loops_store1, sampled_store1.as_ref(), tol)
@@ -132,7 +111,6 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         cls0,
         cls1,
         coplanar_overlap,
-        full_interface_adjacency,
     })
 }
 
@@ -326,39 +304,99 @@ fn partition_evidence<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     (valid_regions, Shell::from(poly_faces), by_key)
 }
 
-fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    mut analysis: PairAnalysis<C, S>,
-) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
-    let tol = analysis.tolerance;
-    analysis.cls0.integrate_by_component();
-    analysis.cls1.integrate_by_component();
+/// Bounding containment is necessary (but not sufficient) for a Boolean
+/// union. In particular it rejects a closed output containing only one
+/// operand, which topological checks alone cannot identify.
+fn covers_both_input_bounding_boxes<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    candidate: &Shell<Point3, C, S>,
+    lhs: &PolyShell,
+    rhs: &PolyShell,
+    mesh_tol: f64,
+) -> bool {
+    fn bounds(shell: &PolyShell) -> Option<(Point3, Point3)> {
+        let mut points = shell
+            .iter()
+            .filter_map(Face::surface)
+            .flat_map(|polygon| polygon.positions().to_vec());
+        let first = points.next()?;
+        Some(points.fold((first, first), |(mut lo, mut hi), p| {
+            for axis in 0..3 {
+                lo[axis] = lo[axis].min(p[axis]);
+                hi[axis] = hi[axis].max(p[axis]);
+            }
+            (lo, hi)
+        }))
+    }
+    let sampled = candidate.triangulation(mesh_tol);
+    let (Some((actual_lo, actual_hi)), Some((lhs_lo, lhs_hi)), Some((rhs_lo, rhs_hi))) =
+        (bounds(&sampled), bounds(lhs), bounds(rhs))
+    else {
+        return false;
+    };
+    (0..3).all(|axis| {
+        actual_lo[axis] <= lhs_lo[axis].min(rhs_lo[axis]) + mesh_tol
+            && actual_hi[axis] >= lhs_hi[axis].max(rhs_hi[axis]) - mesh_tol
+    })
+}
 
+/// A non-materializable arrangement region can contain several *positive*
+/// planar patches meeting at vertices. Classifying the entire region averages
+/// unrelated cells (e.g. one outside and one coincident), creating a tie.
+/// Split only when each boundary is independently a positive, valid face.
+/// A negative contour is a hole and must stay with its parent, not be filled.
+fn positive_region_components<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    region: &AltRegion<C, S>,
+    tol: f64,
+) -> Vec<AltRegion<C, S>> {
+    let boundaries = region.absolute_boundaries();
+    if boundaries.len() < 2 || region.try_face().is_some() {
+        return vec![region.clone()];
+    }
+    let mut parts = Vec::with_capacity(boundaries.len());
+    for wire in boundaries {
+        if Face::new(vec![wire.clone()], region.surface()).is_err()
+            || divide_face::sample_points_on_region(
+                std::slice::from_ref(wire),
+                &region.surface(),
+                tol,
+            )
+            .is_none()
+        {
+            return vec![region.clone()];
+        }
+        parts.push(AltRegion::new(
+            vec![wire.clone()],
+            region.surface(),
+            region.orientation(),
+            region.key(),
+            region.source_face(),
+        ));
+    }
+    parts
+}
+
+/// Accept the fast label-only partition only when it is closed *and* covers
+/// the two input bounds; otherwise the full coplanar partition must run.
+fn classify_complete_label_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    analysis: &PairAnalysis<C, S>,
+) -> ClassicResult<Option<[Shell<Point3, C, S>; 2]>> {
+    let tol = analysis.tolerance;
     let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
     for region in unknown0 {
-        if analysis
-            .full_interface_adjacency
-            .as_ref()
-            .is_some_and(|interface| interface.contains(0, region.source_face()))
-        {
-            continue;
-        }
-        match classify_relation(&analysis.poly_shell1, &region, tol, 0)? {
-            FaceRelation::Inside => and0.push(region),
-            FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
+        for region in positive_region_components(&region, tol) {
+            match classify_relation(&analysis.poly_shell1, &region, tol, 0)? {
+                FaceRelation::Inside => and0.push(region),
+                FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
+            }
         }
     }
     let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
     for region in unknown1 {
-        if analysis
-            .full_interface_adjacency
-            .as_ref()
-            .is_some_and(|interface| interface.contains(1, region.source_face()))
-        {
-            continue;
-        }
-        match classify_relation(&analysis.poly_shell0, &region, tol, 1)? {
-            FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
-            FaceRelation::Outside => or1.push(region),
+        for region in positive_region_components(&region, tol) {
+            match classify_relation(&analysis.poly_shell0, &region, tol, 1)? {
+                FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
+                FaceRelation::Outside => or1.push(region),
+            }
         }
     }
     and0.append(&mut and1);
@@ -368,10 +406,34 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if !label_or_shell.is_empty()
         && shell_is_valid(&label_and_shell)
         && shell_is_valid(&label_or_shell)
+        && covers_both_input_bounding_boxes(
+            &label_or_shell,
+            &analysis.poly_shell0,
+            &analysis.poly_shell1,
+            BooleanTolerance::new(tol).mesh_seed,
+        )
     {
-        return Ok([label_and_shell, label_or_shell]);
+        return Ok(Some([label_and_shell, label_or_shell]));
+    }
+    Ok(None)
+}
+
+fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    mut analysis: PairAnalysis<C, S>,
+) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
+    let tol = analysis.tolerance;
+    analysis.cls0.integrate_by_component();
+    analysis.cls1.integrate_by_component();
+
+    if let Some(shells) = classify_complete_label_shells(&analysis)? {
+        return Ok(shells);
     }
 
+    // A topologically valid set of classified faces need not cover the input
+    // solids. With partially contacting coplanar faces, the label-only path
+    // may form a valid closed subset (e.g. the attached hook but not the
+    // annular host), silently discarding source material. Always partition
+    // every source region and overlay the surviving coplanar cells.
     let all0 = analysis.cls0.all_regions();
     let all1 = analysis.cls1.all_regions();
     let partition_tolerance = BooleanTolerance::new(tol);
@@ -384,18 +446,25 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let mut and0 = Vec::new();
     let mut or0 = Vec::new();
     for region in and0_labeled.into_iter().chain(or0_labeled).chain(unknown0) {
-        let coincident = candidate0.get(&region.key()).is_some_and(|candidate| {
-            planar_partition_same_facing(&region, candidate, &valid1, &poly1, partition_geom_tol)
-                == Some(true)
-        });
-        let relation = if coincident {
-            FaceRelation::CoincidentSameFacing
-        } else {
-            classify_relation(&analysis.poly_shell1, &region, tol, 0)?
-        };
-        match relation {
-            FaceRelation::Inside => and0.push(region),
-            FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
+        for region in positive_region_components(&region, tol) {
+            let coincident = candidate0.get(&region.key()).is_some_and(|candidate| {
+                planar_partition_same_facing(
+                    &region,
+                    candidate,
+                    &valid1,
+                    &poly1,
+                    partition_geom_tol,
+                ) == Some(true)
+            });
+            let relation = if coincident {
+                FaceRelation::CoincidentSameFacing
+            } else {
+                classify_relation(&analysis.poly_shell1, &region, tol, 0)?
+            };
+            match relation {
+                FaceRelation::Inside => and0.push(region),
+                FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
+            }
         }
     }
 
@@ -403,20 +472,31 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let mut and1 = Vec::new();
     let mut or1 = Vec::new();
     for region in and1_labeled.into_iter().chain(or1_labeled).chain(unknown1) {
-        let coincident = candidate1.get(&region.key()).is_some_and(|candidate| {
-            planar_partition_same_facing(&region, candidate, &valid0, &poly0, partition_geom_tol)
-                == Some(true)
-        });
-        let relation = if coincident {
-            FaceRelation::CoincidentSameFacing
-        } else {
-            classify_relation(&analysis.poly_shell0, &region, tol, 1)?
-        };
-        match relation {
-            FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
-            FaceRelation::Outside => or1.push(region),
+        for region in positive_region_components(&region, tol) {
+            let coincident = candidate1.get(&region.key()).is_some_and(|candidate| {
+                planar_partition_same_facing(
+                    &region,
+                    candidate,
+                    &valid0,
+                    &poly0,
+                    partition_geom_tol,
+                ) == Some(true)
+            });
+            let relation = if coincident {
+                FaceRelation::CoincidentSameFacing
+            } else {
+                classify_relation(&analysis.poly_shell0, &region, tol, 1)?
+            };
+            match relation {
+                FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
+                FaceRelation::Outside => or1.push(region),
+            }
         }
     }
+    let mut and0 = planar_union::overlay_source_regions(and0, tol);
+    let mut and1 = planar_union::overlay_source_regions(and1, tol);
+    let mut or0 = planar_union::overlay_source_regions(or0, tol);
+    let mut or1 = planar_union::overlay_source_regions(or1, tol);
     and0.append(&mut and1);
     or0.append(&mut or1);
     Ok([
@@ -685,6 +765,60 @@ mod structural_classification_tests {
         let edge = builder::extrude(&vertex, Vector3::unit_x());
         let face = builder::extrude(&edge, Vector3::unit_y());
         builder::extrude(&face, Vector3::unit_z())
+    }
+
+    #[test]
+    fn classify_touching_positive_face_patches_independently_but_keep_holes() {
+        let coords = [
+            (0.0, 0.0),
+            (2.0, 0.0),
+            (2.0, 2.0),
+            (0.0, 2.0),
+            (4.0, 2.0),
+            (4.0, 4.0),
+            (2.0, 4.0),
+            (0.5, 0.5),
+            (0.5, 1.5),
+            (1.5, 1.5),
+            (1.5, 0.5),
+        ];
+        let vertices = coords.map(|(x, y)| Vertex::new(Point3::new(x, y, 0.0)));
+        let wire = |path: &[usize]| -> Wire<Point3, AltCurve<Curve, Surface>> {
+            (0..path.len())
+                .map(|index| {
+                    let front = &vertices[path[index]];
+                    let back = &vertices[path[(index + 1) % path.len()]];
+                    Edge::new_unchecked(
+                        front,
+                        back,
+                        Alternative::FirstType(Curve::from(Line(front.point(), back.point()))),
+                    )
+                })
+                .collect()
+        };
+        let left = wire(&[0, 1, 2, 3]);
+        let right = wire(&[2, 4, 5, 6]);
+        let support = Surface::Plane(Plane::xy());
+        let touching = AltRegion::new(vec![left.clone(), right], support.clone(), true, 7, 11);
+        assert!(touching.try_face().is_none());
+        let parts = positive_region_components(&touching, 1.0e-6);
+        assert_eq!(
+            parts.len(),
+            2,
+            "two additive regions must not share one classifier vote"
+        );
+        assert!(parts.iter().all(|part| part.try_face().is_some()));
+        assert!(parts.iter().all(|part| part.source_face() == 11));
+
+        let hole = wire(&[7, 8, 9, 10]);
+        let annulus = AltRegion::new(vec![left, hole], support, true, 8, 12);
+        let parts = positive_region_components(&annulus, 1.0e-6);
+        assert_eq!(
+            parts.len(),
+            1,
+            "negative hole must remain attached to its host"
+        );
+        assert_eq!(parts[0].absolute_boundaries().len(), 2);
     }
 
     #[test]

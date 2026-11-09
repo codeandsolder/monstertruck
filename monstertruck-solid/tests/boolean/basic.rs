@@ -256,3 +256,95 @@ fn intersection_of_coaxial_overlapping_boxes_with_coplanar_sides() -> Result<()>
         monstertruck_solid::and(&a, &b, monstertruck_solid::GeometryPolicy::standard(1.0e-6))?;
     assert_solid("intersection of coaxial overlapping boxes", &result, 0.5)
 }
+
+/// Two volumes touch only across a partially overlapping planar interface.
+/// Neither contact-face polygon contains a vertex of the other polygon:
+/// their footprints cross. The interface must be imprinted and removed.
+#[test]
+fn union_of_orthogonal_boxes_touching_across_partial_face() -> Result<()> {
+    let base: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(2.0, 2.0, 1.0),
+    ]));
+    let cap: Solid = primitive::cuboid(BoundingBox::from_iter([
+        Point3::new(0.5, -1.0, 1.0),
+        Point3::new(1.5, 3.0, 2.0),
+    ]));
+    for (left, right) in [(&base, &cap), (&cap, &base)] {
+        let joined = monstertruck_solid::or(
+            left,
+            right,
+            monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+        )?;
+        anyhow::ensure!(
+            joined.boundaries().len() == 1,
+            "partial-face union must be connected"
+        );
+        assert_solid("partial-face planar-contact union", &joined, 8.0)?;
+    }
+    Ok(())
+}
+
+/// A hooked prism touches the underside of a hollow rectangular extrusion
+/// through a planar strip opening into its central aperture. A label-only
+/// Boolean result can be a perfectly closed copy of *just the hook*, so
+/// topology validity alone is not evidence that the entire union survived.
+#[test]
+fn union_of_hollow_tube_and_underslung_hook_preserves_both_volumes() -> Result<()> {
+    fn polygon(points: &[Point3]) -> Wire {
+        let vertices = builder::vertices(points.iter().copied());
+        (0..vertices.len())
+            .map(|i| builder::line(&vertices[i], &vertices[(i + 1) % vertices.len()]))
+            .collect::<Vec<_>>()
+            .into()
+    }
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        polygon(&[
+            Point3::new(x0, y0, 0.0),
+            Point3::new(x1, y0, 0.0),
+            Point3::new(x1, y1, 0.0),
+            Point3::new(x0, y1, 0.0),
+        ])
+    };
+    let tube = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![rect(0.0, 0.0, 1.36, 1.36), rect(0.2, 0.2, 1.16, 1.16)],
+        Vector3::new(0.0, 0.0, 2.5),
+    )?;
+    // Cross-section in YZ, with its upper contact strip on Z=0.
+    let yz = [
+        (0.0, 0.0),
+        (0.0, -0.219_021_120_132_902),
+        (0.58, -0.439_021_120_132_9),
+        (0.58, -0.52),
+        (0.78, -0.52),
+        (0.78, -0.300_978_879_867_095),
+        (0.2, -0.080_978_879_867_097),
+        (0.2, 0.0),
+    ];
+    let hook = profile::solid_from_planar_profile::<Curve, Surface>(
+        vec![polygon(&yz.map(|(y, z)| Point3::new(0.43, y, z)))],
+        Vector3::new(0.5, 0.0, 0.0),
+    )?;
+    let section_area = yz
+        .iter()
+        .enumerate()
+        .map(|(i, &(y0, z0))| {
+            let (y1, z1) = yz[(i + 1) % yz.len()];
+            y0 * z1 - y1 * z0
+        })
+        .sum::<f64>()
+        .abs()
+        * 0.5;
+    let expected = (1.36_f64.powi(2) - 0.96_f64.powi(2)) * 2.5 + section_area * 0.5;
+    for (lhs, rhs) in [(&tube, &hook), (&hook, &tube)] {
+        let result = monstertruck_solid::or(
+            lhs,
+            rhs,
+            monstertruck_solid::GeometryPolicy::standard(STRICT_TOL),
+        )?;
+        anyhow::ensure!(result.boundaries().len() == 1);
+        anyhow::ensure!(result.is_geometric_consistent());
+        assert_solid("hollow-tube-and-hook union", &result, expected)?;
+    }
+    Ok(())
+}

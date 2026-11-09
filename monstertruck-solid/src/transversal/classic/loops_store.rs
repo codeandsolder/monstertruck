@@ -103,6 +103,30 @@ impl ShapesOpStatus {
     }
 }
 
+/// Give each regular SSI branch one geometrically defined tangent orientation.
+///
+/// Marching mesh segments are undirected. Region labels derived from the
+/// ordered carrier-surface normals must not depend on the edge order of a
+/// tessellation adjacency graph. Normalize the *same* raw and exact projected
+/// curves together, and reject degenerate intersections with no consistent
+/// oriented tangent rather than inventing a face-region label.
+fn orient_intersection_branch<S>(
+    polyline: &mut PolylineCurve,
+    intersection_curve: &mut IntersectionCurve<PolylineCurve, S, S>,
+) -> Option<ShapesOpStatus>
+where
+    S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3> + Clone,
+{
+    // Read the side once: reversing the leader flips its oriented sign.
+    // Re-solving the nonlinear carrier intersection after inversion can fail
+    // even when the original curve was valid (e.g. a nearly axial edge).
+    if ShapesOpStatus::from_is_curve(intersection_curve)? == ShapesOpStatus::And {
+        polyline.invert();
+        intersection_curve.invert();
+    }
+    Some(ShapesOpStatus::Or)
+}
+
 impl<P, C> std::ops::Deref for BoundaryWire<P, C> {
     type Target = Wire<P, C>;
     fn deref(&self) -> &Self::Target { &self.wire }
@@ -1337,7 +1361,6 @@ pub(super) struct InterfaceLoops<C> {
     pub(super) geom: [LoopsStore<Point3, C>; 2],
     pub(super) sampled: [Option<LoopsStore<Point3, PolylineCurve>>; 2],
     pub(super) coplanar_overlap: bool,
-    pub(super) full_interface_adjacency: Option<FullPlanarInterfaceMatch>,
 }
 
 struct CoplanarInterfaceAnalysis {
@@ -1362,10 +1385,15 @@ fn analyze_coplanar_interfaces(
     let full_interface_adjacency = if positive_aabb_overlap {
         None
     } else {
-        full_interface.clone()
+        full_interface
+            .clone()
+            .filter(|matched| !matched.lhs_faces.is_empty() && !matched.rhs_faces.is_empty())
     };
+    // Partial planar interfaces can be exactly zero-volume contacts.
+    // In that case a full-interface shortcut does not apply, but the
+    // face-local positive-area test still must be considered.
     let partial_overlap = imprint_coplanar
-        && positive_aabb_overlap
+        && full_interface_adjacency.is_none()
         && shells_have_partial_planar_overlap(poly_shell0, poly_shell1, tolerance)?;
     Some(CoplanarInterfaceAnalysis {
         partial_overlap,
@@ -1444,8 +1472,9 @@ where
             )?;
             curves
                 .into_iter()
-                .try_for_each(|(polyline, intersection_curve)| {
-                    let status = ShapesOpStatus::from_is_curve(&intersection_curve)?;
+                .try_for_each(|(mut polyline, mut intersection_curve)| {
+                    let status =
+                        orient_intersection_branch(&mut polyline, &mut intersection_curve)?;
                     let (status0, status1) = match (ori0, ori1) {
                         (true, true) => (status, status.not()),
                         (true, false) => (status.not(), status.not()),
@@ -1505,13 +1534,30 @@ where
         geom: [operand0.geom, operand1.geom],
         sampled: [sampled0, sampled1],
         coplanar_overlap: coplanar.any_overlap,
-        full_interface_adjacency: coplanar.full_interface_adjacency,
     })
 }
 
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+
+    #[test]
+    fn ssi_carrier_normal_orientation_is_independent_of_polyline_direction() {
+        let start = Point3::new(0.0, -1.0, 0.0);
+        let end = Point3::new(0.0, 1.0, 0.0);
+        let mut normalized = Vec::new();
+        for points in [vec![start, end], vec![end, start]] {
+            let mut polyline = PolylineCurve(points);
+            let mut curve = IntersectionCurve::new(Plane::xy(), Plane::yz(), polyline.clone());
+            assert_eq!(
+                orient_intersection_branch(&mut polyline, &mut curve),
+                Some(ShapesOpStatus::Or)
+            );
+            assert_eq!(curve.leader().0, polyline.0);
+            normalized.push(polyline.0);
+        }
+        assert_eq!(normalized[0], normalized[1]);
+    }
 
     #[test]
     fn synchronized_sampling_evidence_rejects_structural_drift() {

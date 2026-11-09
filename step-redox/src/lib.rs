@@ -1,0 +1,1803 @@
+use anyhow::{Result, bail};
+use ruststep::ast::Exchange;
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+pub mod analysis;
+pub use analysis::AnalysisSession;
+mod bezier_recovery;
+#[doc(hidden)]
+pub mod body_corpus;
+pub mod boundary_proof;
+mod brep;
+pub mod cad_ir;
+pub mod cad_kernel;
+pub mod cad_recovery;
+mod clean_pipeline;
+pub mod compatibility;
+pub mod complete_ir;
+mod curve_replicas;
+pub mod dominant_extrusions;
+pub mod edge_treatments;
+mod face_coalesce;
+pub mod formed_sheet;
+mod geometric_intern;
+mod instances;
+pub(crate) mod inverse_edge_treatment;
+pub mod kernel_source_load;
+pub mod kernel_topology;
+mod line_recovery;
+mod math2;
+mod math3;
+mod normalization;
+mod numeric;
+pub mod parameters;
+mod partition_recovery;
+pub mod patterns;
+pub mod periodic_bodies;
+pub mod periodic_chains;
+pub mod periodic_resize;
+mod planar_features;
+pub use planar_features::{PlanarFeatureDiagnostics, PlanarHostDiagnostic};
+pub mod profile_curves;
+mod reduced_brep;
+mod shape_identity;
+pub mod solid_extrusions;
+mod solid_lofts;
+pub mod solid_revolutions;
+pub mod solid_sweeps;
+mod spherical_caps;
+mod step_document;
+pub use step_document::SourceEntity;
+mod step_entities;
+mod step_graph;
+mod step_identity;
+mod step_io;
+use monstertruck_io::step::load::ParsedStepSource;
+use normalization::{dense_renumber, intern_section};
+pub use step_io::write_exchange;
+mod surface_recovery;
+mod surface_replicas;
+mod units;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputProfile {
+    Compat,
+    Compact,
+}
+
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "public cleanup options are independent feature toggles"
+)]
+#[derive(Debug, Clone)]
+pub struct Options {
+    pub intern_values: bool,
+    pub consolidate_presentation: bool,
+    pub experimental_recover_straight_bspline_lines: bool,
+    pub experimental_recover_exact_bezier_curves: bool,
+    pub experimental_recover_v_extrusions: bool,
+    pub experimental_intern_geometric_supports: bool,
+    pub experimental_recover_partitioned_bodies: bool,
+    pub coalesce_same_support_planar_faces: bool,
+    pub experimental_coalesce_same_support_faces: bool,
+    pub experimental_instance_translated_bspline_curves: bool,
+    pub experimental_instance_translated_analytic_surfaces: bool,
+    pub experimental_instance_z90: bool,
+    pub experimental_instance_z90_assembly: bool,
+    pub experimental_instance_planar_positive_features: bool,
+    pub experimental_instance_spherical_caps: bool,
+    pub minify_placeholder_names: bool,
+    pub dense_ids: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            intern_values: true,
+            consolidate_presentation: true,
+            experimental_recover_straight_bspline_lines: false,
+            experimental_recover_exact_bezier_curves: false,
+            experimental_recover_v_extrusions: false,
+            experimental_intern_geometric_supports: false,
+            experimental_recover_partitioned_bodies: false,
+            coalesce_same_support_planar_faces: false,
+            experimental_coalesce_same_support_faces: false,
+            experimental_instance_translated_bspline_curves: false,
+            experimental_instance_translated_analytic_surfaces: false,
+            experimental_instance_z90: false,
+            experimental_instance_z90_assembly: false,
+            experimental_instance_planar_positive_features: false,
+            experimental_instance_spherical_caps: false,
+            minify_placeholder_names: false,
+            dense_ids: true,
+        }
+    }
+}
+
+impl Options {
+    #[must_use]
+    pub fn for_profile(profile: OutputProfile) -> Self {
+        let mut options = Self {
+            experimental_recover_straight_bspline_lines: true,
+            experimental_recover_exact_bezier_curves: true,
+            experimental_recover_v_extrusions: true,
+            experimental_intern_geometric_supports: true,
+            experimental_recover_partitioned_bodies: true,
+            coalesce_same_support_planar_faces: true,
+            // Same-support face coalescing has a production repro where the
+            // reconstructed boundary drops occupied volume. Keep it opt-in
+            // until loop reconstruction is proven geometry-preserving.
+            experimental_coalesce_same_support_faces: false,
+            minify_placeholder_names: true,
+            ..Self::default()
+        };
+
+        if profile == OutputProfile::Compact {
+            options.experimental_instance_translated_bspline_curves = true;
+            // Z90 instancing keeps the canonical solid explicit and maps only
+            // the noncanonical occurrences. Auxiliary shape representations are
+            // retargeted to mapped occurrences so expanded duplicate B-reps do
+            // not remain reachable through exporter validation structures.
+            options.experimental_instance_z90 = true;
+            // Positive-feature and spherical-cap factoring currently closes
+            // extracted features with interface caps. That preserves occupied
+            // volume but changes a fused B-rep into touching solids, so keep
+            // both transformations explicit-only until boundary semantics are
+            // preserved by construction.
+            options.experimental_instance_planar_positive_features = false;
+            options.experimental_instance_spherical_caps = false;
+        }
+        options
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Stats {
+    pub input_encoding: String,
+    pub input_bytes: usize,
+    pub output_bytes: usize,
+    pub input_entities: usize,
+    pub output_entities: usize,
+    pub interned_entities: usize,
+    pub consolidated_entities: usize,
+    pub straight_bspline_lines_recovered: usize,
+    pub straight_bspline_direction_groups: usize,
+    pub straight_bspline_points_removed: usize,
+    pub exact_bezier_curves_recovered: usize,
+    pub v_extrusion_surfaces_recovered: usize,
+    pub v_extrusion_rational_surfaces_recovered: usize,
+    pub v_extrusion_profile_curves_created: usize,
+    pub v_extrusion_points_removed: usize,
+    pub geometric_supports_merged: usize,
+    pub geometric_support_entities_removed: usize,
+    pub geometric_planes_merged: usize,
+    pub geometric_lines_merged: usize,
+    pub geometric_cylinders_merged: usize,
+    pub partition_components_recovered: usize,
+    pub partition_solids_merged: usize,
+    pub partition_interfaces_removed: usize,
+    pub partition_styles_retargeted: usize,
+    pub partition_entities_removed: usize,
+    pub face_coalesce_groups: usize,
+    pub face_coalesce_faces_merged: usize,
+    pub face_coalesce_faces_removed: usize,
+    pub face_coalesce_internal_edges_removed: usize,
+    pub face_coalesce_styles_removed: usize,
+    pub face_coalesce_entities_removed: usize,
+    pub curve_replica_families: usize,
+    pub curve_replicas: usize,
+    pub curve_replica_direct_aliases: usize,
+    pub curve_replica_transforms: usize,
+    pub curve_replica_entities_removed: usize,
+    pub curve_replica_max_residual_mm: f64,
+    pub surface_replica_families: usize,
+    pub surface_replicas: usize,
+    pub surface_replica_planes: usize,
+    pub surface_replica_cylinders: usize,
+    pub surface_replica_transforms: usize,
+    pub surface_replica_entities_removed: usize,
+    pub surface_replica_max_transform_residual_mm: f64,
+    pub instance_groups: usize,
+    pub instanced_solids: usize,
+    pub instance_entities_removed: usize,
+    pub instance_styles_replaced: usize,
+    pub planar_feature_arrays: usize,
+    pub planar_feature_families: usize,
+    pub planar_feature_instances: usize,
+    pub planar_feature_entities_removed: usize,
+    pub planar_feature_styles_replaced: usize,
+    pub spherical_cap_arrays: usize,
+    pub spherical_cap_instances: usize,
+    pub spherical_cap_entities_removed: usize,
+    pub spherical_cap_styles_replaced: usize,
+    pub placeholder_names_minified: usize,
+    pub instance_patterns_detected: usize,
+    pub pattern_instances_detected: usize,
+    pub periodic_body_patterns_detected: usize,
+    pub periodic_body_repeat_faces: usize,
+    pub count_parameters_detected: usize,
+    pub count_parameters_with_body_grammar: usize,
+    pub byte_ratio: f64,
+    pub interned_by_type: BTreeMap<String, usize>,
+    pub consolidated_by_type: BTreeMap<String, usize>,
+}
+
+pub struct CleanOutput {
+    pub bytes: Vec<u8>,
+    pub stats: Stats,
+    /// Regular instance patterns detected in the final normalized graph.
+    /// Entity IDs refer to the emitted STEP after dense renumbering.
+    pub patterns: Vec<patterns::InstancePattern>,
+    /// Periodic planar body grammars coupled to recovered instance patterns.
+    pub periodic_bodies: Vec<periodic_bodies::PeriodicBodyPattern>,
+    /// Higher-level count controls recovered by coupling instance/body patterns.
+    pub count_parameters: Vec<parameters::RecoveredCountParameter>,
+    /// Structural compatibility audit of the emitted STEP.
+    pub compatibility: compatibility::CompatibilityAudit,
+}
+
+pub struct PatternEditOutput {
+    pub bytes: Vec<u8>,
+    pub resize: patterns::PatternResizeStats,
+    pub patterns: Vec<patterns::InstancePattern>,
+    /// Periodic planar body grammars coupled to recovered instance patterns.
+    pub periodic_bodies: Vec<periodic_bodies::PeriodicBodyPattern>,
+    /// Higher-level count controls recovered by coupling instance/body patterns.
+    pub count_parameters: Vec<parameters::RecoveredCountParameter>,
+    /// Structural compatibility audit of the emitted STEP.
+    pub compatibility: compatibility::CompatibilityAudit,
+}
+
+pub struct PeriodicBodyEditOutput {
+    pub bytes: Vec<u8>,
+    pub resize: periodic_resize::PeriodicBodyResizeStats,
+}
+
+pub struct PeriodicChainEditOutput {
+    pub bytes: Vec<u8>,
+    pub resize: periodic_resize::PeriodicChainResizeStats,
+    pub periodic_chains: Vec<periodic_chains::PeriodicChainPattern>,
+    pub compatibility: compatibility::CompatibilityAudit,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BoundaryFeaturePeelPassReport {
+    pub pass_index: usize,
+    pub diagnostics: planar_features::BoundaryFeatureDiagnostics,
+    pub stats: planar_features::BoundaryFeaturePeelStats,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BoundaryFeatureDecompositionReport {
+    pub passes: Vec<BoundaryFeaturePeelPassReport>,
+    pub total_families: usize,
+    pub total_instances: usize,
+    pub total_additive_instances: usize,
+    pub total_subtractive_instances: usize,
+    pub total_faces_removed_from_shells: usize,
+    pub total_interface_bounds_healed: usize,
+}
+
+/// Recursively peel proven additive/subtractive boundary features into a
+/// simpler analysis residual.
+///
+/// The returned STEP is deliberately an INTERNAL RESIDUAL, not a geometry-
+/// equivalent replacement for the input. Each peel heals the carrier face(s)
+/// and removes the feature boundary patch; callers reconstruct the original by
+/// replaying the recorded families in reverse order with Union/Difference.
+///
+/// # Errors
+///
+/// Returns an error when the STEP exchange cannot be parsed, a proven feature
+/// decomposition cannot be materialized safely, or `max_passes` is zero.
+pub fn peel_boundary_features_for_analysis_bytes(
+    input: &[u8],
+    max_passes: usize,
+) -> Result<(Vec<u8>, BoundaryFeatureDecompositionReport)> {
+    if max_passes == 0 {
+        bail!("boundary feature decomposition requires max_passes > 0");
+    }
+
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
+
+    let mut report = BoundaryFeatureDecompositionReport::default();
+    for pass_index in 0..max_passes {
+        let mut pass_diagnostics = planar_features::BoundaryFeatureDiagnostics::default();
+        let mut pass_stats = planar_features::BoundaryFeaturePeelStats::default();
+
+        for section in &mut exchange.data {
+            let (diagnostics, stats) =
+                planar_features::peel_boundary_features_for_analysis(&mut section.entities)?;
+            pass_diagnostics.shell_contexts += diagnostics.shell_contexts;
+            pass_diagnostics.planar_hosts += diagnostics.planar_hosts;
+            pass_diagnostics.raw_candidates += diagnostics.raw_candidates;
+            pass_diagnostics.additive_candidates += diagnostics.additive_candidates;
+            pass_diagnostics.subtractive_candidates += diagnostics.subtractive_candidates;
+            pass_diagnostics.single_host_candidates += diagnostics.single_host_candidates;
+            pass_diagnostics.multi_host_candidates += diagnostics.multi_host_candidates;
+            pass_diagnostics.families.extend(diagnostics.families);
+
+            pass_stats.families += stats.families;
+            pass_stats.instances += stats.instances;
+            pass_stats.additive_instances += stats.additive_instances;
+            pass_stats.subtractive_instances += stats.subtractive_instances;
+            pass_stats.faces_removed_from_shells += stats.faces_removed_from_shells;
+            pass_stats.interface_bounds_healed += stats.interface_bounds_healed;
+        }
+
+        pass_diagnostics.families.sort_by(|a, b| {
+            b.instances
+                .cmp(&a.instances)
+                .then_with(|| b.faces_per_instance.cmp(&a.faces_per_instance))
+                .then_with(|| a.host_face_ids.cmp(&b.host_face_ids))
+        });
+
+        if pass_stats.families == 0 {
+            break;
+        }
+
+        report.total_families += pass_stats.families;
+        report.total_instances += pass_stats.instances;
+        report.total_additive_instances += pass_stats.additive_instances;
+        report.total_subtractive_instances += pass_stats.subtractive_instances;
+        report.total_faces_removed_from_shells += pass_stats.faces_removed_from_shells;
+        report.total_interface_bounds_healed += pass_stats.interface_bounds_healed;
+        report.passes.push(BoundaryFeaturePeelPassReport {
+            pass_index,
+            diagnostics: pass_diagnostics,
+            stats: pass_stats,
+        });
+    }
+
+    let output = write_exchange(&exchange)?;
+    Ok((output.into_bytes(), report))
+}
+
+/// Detect translation-periodic open boundary paths on planar carrier faces.
+///
+/// This is read-only evidence for edge-entering slots/notches and other
+/// features whose interface is a repeated detour on a `FACE_OUTER_BOUND` rather
+/// than a complete inner `FACE_BOUND`. It does not yet heal or mutate those
+/// chains.
+///
+/// # Errors
+/// Returns an error if `input` is not valid STEP data.
+pub fn analyze_open_chain_patterns_bytes(
+    input: &[u8],
+) -> Result<planar_features::OpenChainDiagnostics> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    let mut merged = planar_features::OpenChainDiagnostics::default();
+    for section in &exchange.data {
+        let report = planar_features::diagnose_open_chain_patterns(&section.entities);
+        merged.planar_faces += report.planar_faces;
+        merged.loops_considered += report.loops_considered;
+        merged.patterned_loops += report.patterned_loops;
+        merged.runs.extend(report.runs);
+    }
+    merged.runs.sort_by(|a, b| {
+        b.covered_edges
+            .cmp(&a.covered_edges)
+            .then_with(|| b.repeats.cmp(&a.repeats))
+            .then_with(|| a.face_id.cmp(&b.face_id))
+            .then_with(|| a.bound_id.cmp(&b.bound_id))
+            .then_with(|| a.start_edge_index.cmp(&b.start_edge_index))
+    });
+    Ok(merged)
+}
+
+/// Materialize one closed canonical tool solid per recovered boundary-feature
+/// family while leaving the source solid unchanged.
+///
+/// The output STEP is an analysis artifact: generated tool solids may reuse
+/// source topology and are intentionally not inserted into product structure.
+/// Their IDs are returned explicitly for recursive recognition/rendering.
+///
+/// # Errors
+/// Returns an error for invalid STEP input, unsupported DATA-section structure,
+/// failed tool materialization, or STEP serialization failure.
+pub fn materialize_boundary_feature_tools_for_analysis_bytes(
+    input: &[u8],
+    min_instances: usize,
+) -> Result<(
+    Vec<u8>,
+    planar_features::BoundaryFeatureDiagnostics,
+    Vec<planar_features::BoundaryFeatureToolMaterialization>,
+)> {
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
+    if exchange.data.len() != 1 {
+        bail!("boundary feature tool materialization currently requires exactly one DATA section");
+    }
+
+    let (diagnostics, tools) = planar_features::materialize_boundary_feature_tools_for_analysis(
+        &mut exchange.data[0].entities,
+        min_instances,
+    )?;
+    let output = write_exchange(&exchange)?;
+    Ok((output.into_bytes(), diagnostics, tools))
+}
+
+/// Detect additive and subtractive planar boundary features without rewriting STEP.
+///
+/// This is the polarity-neutral front end for constructive decomposition:
+/// single-host leaves cover protrusions and blind recesses, while paired
+/// parallel hosts expose through-cuts/tunnels that cannot disconnect when only
+/// one host face is removed. Pattern fitting is applied to the resulting
+/// feature instances after topology/polarity proof.
+///
+/// # Errors
+/// Returns an error if `input` is not valid STEP data.
+pub fn analyze_boundary_features_bytes(
+    input: &[u8],
+) -> Result<planar_features::BoundaryFeatureDiagnostics> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    let mut merged = planar_features::BoundaryFeatureDiagnostics::default();
+    for section in &exchange.data {
+        let report = planar_features::diagnose_boundary_features(&section.entities);
+        merged.shell_contexts += report.shell_contexts;
+        merged.planar_hosts += report.planar_hosts;
+        merged.raw_candidates += report.raw_candidates;
+        merged.additive_candidates += report.additive_candidates;
+        merged.subtractive_candidates += report.subtractive_candidates;
+        merged.single_host_candidates += report.single_host_candidates;
+        merged.multi_host_candidates += report.multi_host_candidates;
+        merged.families.extend(report.families);
+    }
+    merged.families.sort_by(|a, b| {
+        b.instances
+            .cmp(&a.instances)
+            .then_with(|| b.faces_per_instance.cmp(&a.faces_per_instance))
+            .then_with(|| a.host_face_ids.cmp(&b.host_face_ids))
+    });
+    Ok(merged)
+}
+
+/// Diagnose repeated planar attached-feature candidates without rewriting STEP.
+///
+/// This reports parser blind spots (negative recesses, host orientation, topology
+/// rejection reasons) so constructive recovery can be extended deliberately.
+///
+/// # Errors
+/// Returns an error if `input` is not valid STEP data.
+pub fn analyze_planar_feature_candidates_bytes(input: &[u8]) -> Result<PlanarFeatureDiagnostics> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    let mut merged = PlanarFeatureDiagnostics::default();
+    for section in &exchange.data {
+        let report = planar_features::diagnose_planar_features(&section.entities);
+        merged.shell_contexts += report.shell_contexts;
+        merged.qualifying_host_faces += report.qualifying_host_faces;
+        merged.total_components += report.total_components;
+        merged.rejected_empty_or_large += report.rejected_empty_or_large;
+        merged.rejected_non_manifold += report.rejected_non_manifold;
+        merged.rejected_interface += report.rejected_interface;
+        merged.rejected_bound_match += report.rejected_bound_match;
+        merged.rejected_vertices += report.rejected_vertices;
+        merged.rejected_signature += report.rejected_signature;
+        merged.positive_components += report.positive_components;
+        merged.negative_components += report.negative_components;
+        merged.straddling_components += report.straddling_components;
+        merged.coplanar_components += report.coplanar_components;
+        merged.hosts.extend(report.hosts);
+    }
+    Ok(merged)
+}
+
+/// Detect read-only formed-sheet geometric evidence in a STEP exchange.
+///
+/// This is evidence only: it reports repeated constant-thickness signatures such as
+/// coaxial cylinder radius pairs and parallel-plane offsets. It does not claim that
+/// a complete editable sheet-metal construction has been recovered.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn detect_formed_sheet_evidence_bytes(
+    input: &[u8],
+) -> Result<Vec<formed_sheet::FormedSheetEvidence>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| formed_sheet::detect_formed_sheet_evidence(&section.entities))
+        .collect())
+}
+
+/// Compare two closed analytic solid boundaries after collapsing representational partitions.
+///
+/// This is fail-closed proof evidence, not Complete IR admission by itself. The
+/// comparator accepts only plane/cylinder carriers, requires every physical
+/// boundary edge to be proven on the exact intersection locus of its two
+/// carriers, collapses same-support face partitions and degree-two edge splits,
+/// then compares the resulting oriented support-adjacency chains. Rational
+/// quadratic spline-extrusion cylinders are accepted only after a whole-span
+/// homogeneous polynomial circle certificate.
+///
+/// # Errors
+/// Returns an error if either STEP exchange cannot be parsed or does not contain
+/// exactly one DATA section.
+pub fn compare_analytic_solid_boundaries_bytes(
+    first: &[u8],
+    first_solid_id: u64,
+    second: &[u8],
+    second_solid_id: u64,
+) -> Result<boundary_proof::AnalyticBoundaryComparison> {
+    let first = ParsedStepSource::parse(first)?.exchange;
+    let second = ParsedStepSource::parse(second)?.exchange;
+    if first.data.len() != 1 || second.data.len() != 1 {
+        bail!("analytic boundary comparison currently requires one DATA section per exchange");
+    }
+    Ok(boundary_proof::compare_analytic_boundaries(
+        first_solid_id,
+        &first.data[0].entities,
+        second_solid_id,
+        &second.data[0].entities,
+    ))
+}
+
+/// Report per-solid analytic surface and loop-topology signatures.
+///
+/// This is diagnostic evidence for recovery work: it does not claim that a
+/// constructive solid has been proven. It is intentionally deterministic so
+/// corpus censuses can be compared across detector revisions.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn detect_solid_surface_signatures_bytes(
+    input: &[u8],
+) -> Result<Vec<solid_revolutions::SolidSurfaceSignature>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| solid_revolutions::detect_solid_surface_signatures(&section.entities))
+        .collect())
+}
+
+/// Detect proven full-turn axisymmetric solid grammars in a STEP exchange.
+///
+/// The current pass is intentionally strict and fail-closed. It accepts proven
+/// linear-meridian lathes plus narrowly proven analytic torus and spherical-cap
+/// grammars; unsupported curved-meridian combinations remain unrecovered.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn detect_solid_revolutions_bytes(
+    input: &[u8],
+) -> Result<Vec<solid_revolutions::RecoveredSolidRevolution>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| solid_revolutions::detect_solid_revolutions(&section.entities))
+        .collect())
+}
+
+/// Detect turned solids with one proven radial rectangular slot.
+///
+/// This is intentionally separate from full-revolution recovery: the returned
+/// construction preserves the non-axisymmetric slot explicitly rather than
+/// broadening the definition of an axisymmetric solid.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn detect_radial_slot_revolutions_bytes(
+    input: &[u8],
+) -> Result<Vec<solid_revolutions::RecoveredRadialSlotRevolution>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| solid_revolutions::detect_radial_slot_revolutions(&section.entities))
+        .collect())
+}
+
+/// Detect proven whole-solid extrusion grammars in a STEP exchange.
+///
+/// Recovery is fail-closed and supports multi-loop profiles with line, circular-arc,
+/// exact Bezier, and general/rational B-spline boundaries when cap correspondence,
+/// side supports, and the common translation are all proven within tolerance.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn detect_solid_extrusions_bytes(
+    input: &[u8],
+) -> Result<Vec<solid_extrusions::RecoveredSolidExtrusion>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| solid_extrusions::detect_solid_extrusions(&section.entities))
+        .collect())
+}
+
+/// Diagnose solids that are mostly a linear extrusion but retain non-ruled treatment faces.
+///
+/// This is deliberately diagnostic rather than constructive permission: candidates are ranked
+/// from analytic surface signatures and preserve the residual face subset explicitly.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn detect_dominant_extrusion_candidates_bytes(
+    input: &[u8],
+) -> Result<Vec<dominant_extrusions::DominantExtrusionCandidate>> {
+    let signatures = detect_solid_surface_signatures_bytes(input)?;
+    Ok(dominant_extrusions::detect_dominant_extrusion_candidates(
+        &signatures,
+    ))
+}
+
+/// Detect every sharp extrusion core implied by translated planar cap pairs.
+///
+/// Candidates are diagnostic until every residual source face is explained by
+/// separately proven constructive operations.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn detect_extrusion_core_candidates_bytes(
+    input: &[u8],
+) -> Result<Vec<solid_extrusions::RecoveredSolidExtrusion>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| solid_extrusions::detect_extrusion_core_candidates(&section.entities))
+        .collect())
+}
+
+/// Recover the sharp extrusion core implied by one source solid and explicit cap pair.
+///
+/// This proves cap-loop translation directly and deliberately makes no claim about
+/// the source side faces. Callers must separately reconstruct every side treatment
+/// before treating the source body as recovered.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn recover_extrusion_core_from_cap_faces_bytes(
+    input: &[u8],
+    solid_id: u64,
+    cap_face_ids: [u64; 2],
+) -> Result<Option<solid_extrusions::RecoveredSolidExtrusion>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+    Ok(exchange.data.iter().find_map(|section| {
+        solid_extrusions::recover_extrusion_core_from_cap_faces(
+            solid_id,
+            cap_face_ids,
+            &section.entities,
+        )
+    }))
+}
+
+/// Recover a sharp extrusion host after analytically undoing unique planar
+/// chamfers that trim an explicit source cap pair.
+///
+/// The result remains diagnostic until every treatment is replayed and the
+/// rebuilt whole-solid boundary is proven equivalent to the source.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn recover_treatment_healed_extrusion_core_from_cap_faces_bytes(
+    input: &[u8],
+    solid_id: u64,
+    cap_face_ids: [u64; 2],
+) -> Result<Option<solid_extrusions::TreatmentHealedExtrusionCoreCandidate>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+    Ok(exchange.data.iter().find_map(|section| {
+        solid_extrusions::recover_treatment_healed_extrusion_core_from_cap_faces(
+            solid_id,
+            cap_face_ids,
+            &section.entities,
+        )
+    }))
+}
+
+/// Detect analytically proven edge-treatment evidence without granting recovery.
+///
+/// The diagnostic currently proves plane/plane cylindrical fillets and planar
+/// chamfers, plus axisymmetric toroidal fillets and conical chamfers whose
+/// pre-treatment carrier intersection is analytically determined.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn detect_edge_treatment_evidence_bytes(
+    input: &[u8],
+) -> Result<Vec<edge_treatments::EdgeTreatmentEvidence>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| edge_treatments::detect_edge_treatment_evidence(&section.entities))
+        .collect())
+}
+
+/// Detect closed round-profile composite sweeps such as bent wire frames.
+///
+/// The current grammar is deliberately narrow: one planar four-run/four-bend loop
+/// with a constant circular section, proven from matching cylinder and torus supports.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed.
+pub fn detect_round_sweeps_bytes(input: &[u8]) -> Result<Vec<solid_sweeps::RecoveredRoundSweep>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| {
+            let index = step_graph::build_index(&section.entities);
+            solid_sweeps::detect_round_sweeps(&section.entities, &index)
+        })
+        .collect())
+}
+
+/// Detect a turned/axisymmetric head fused to one constant-round bent tail.
+///
+/// The head is proven as an axisymmetric sub-body with one circular interface;
+/// the tail is proven from a tangent torus bend, straight cylindrical run and
+/// hemispherical terminal sharing one constant radius.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed.
+pub fn detect_revolved_round_tails_bytes(
+    input: &[u8],
+) -> Result<Vec<solid_sweeps::RecoveredRevolvedRoundTail>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| {
+            let index = step_graph::build_index(&section.entities);
+            solid_sweeps::detect_revolved_round_tails(&section.entities, &index)
+        })
+        .collect())
+}
+
+/// Detect exact one-bend rectangular-section sweeps with planar straight legs.
+///
+/// Straight-leg footprints are proven from paired planar source faces; the bend is
+/// proven from one paired cylindrical sector. This accepts terminal flange/chamfer
+/// geometry when it is part of the planar leg footprint rather than approximating it.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed.
+pub fn detect_open_rectangular_sweeps_bytes(
+    input: &[u8],
+) -> Result<Vec<solid_sweeps::RecoveredOpenRectangularSweep>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| {
+            let index = step_graph::build_index(&section.entities);
+            solid_sweeps::sheet::detect_open_rectangular_sweeps(&section.entities, &index)
+        })
+        .collect())
+}
+
+/// Detect read-only periodic chain grammars without enabling mutation.
+///
+/// This analyzer is intentionally separate from the editable `PeriodicBodyPattern`
+/// path. It can recover fused-solid site/gap/stretch/end structure even when no
+/// `MAPPED_ITEM` instance row exists, but callers must not treat that as edit
+/// permission.
+///
+/// # Errors
+/// Returns an error if the STEP bytes cannot be decoded or parsed, or if unsupported exchange sections are present.
+pub fn detect_periodic_chains_bytes(
+    input: &[u8],
+) -> Result<Vec<periodic_chains::PeriodicChainPattern>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| periodic_chains::detect_periodic_chains(&section.entities))
+        .collect())
+}
+
+/// Resize one proven periodic fused-solid chain while keeping its start fixed.
+///
+/// # Errors
+/// Returns an error if the STEP input is invalid or the selected chain cannot be resized with the requested count while preserving its proof.
+pub fn resize_periodic_chain_bytes(
+    input: &[u8],
+    chain_index: usize,
+    new_sites: usize,
+) -> Result<PeriodicChainEditOutput> {
+    resize_periodic_chain_bytes_with_anchor(input, chain_index, new_sites, CountAnchor::Start)
+}
+
+/// Resize one proven periodic fused-solid chain with explicit placement anchoring.
+///
+/// Start and End keep the corresponding physical end fixed. Center composes
+/// equal edits at both ends and therefore currently requires an even site delta.
+///
+/// # Errors
+/// Returns an error if the STEP input is invalid, the selected chain is not proven editable, or the requested anchored resize cannot be represented safely.
+pub fn resize_periodic_chain_bytes_with_anchor(
+    input: &[u8],
+    chain_index: usize,
+    new_sites: usize,
+    anchor: CountAnchor,
+) -> Result<PeriodicChainEditOutput> {
+    if anchor != CountAnchor::Center {
+        return resize_periodic_chain_bytes_one_side(input, chain_index, new_sites, anchor);
+    }
+
+    let chains = detect_periodic_chains_bytes(input)?;
+    let original = chains
+        .get(chain_index)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("periodic chain index {chain_index} not found"))?;
+    if !original.read_only_proven || !original.complete_partition {
+        bail!("periodic chain {chain_index} is not sufficiently proven for editing");
+    }
+    if new_sites == original.sites {
+        bail!("periodic-chain resize requested the existing site count {new_sites}");
+    }
+    if new_sites < 6 {
+        bail!("center-anchored periodic-chain editing currently requires at least 6 sites");
+    }
+
+    let delta = new_sites.abs_diff(original.sites);
+    if delta % 2 != 0 {
+        bail!(
+            "center-anchored periodic-chain resize currently requires an even site delta ({} -> {new_sites})",
+            original.sites
+        );
+    }
+    let half = delta / 2;
+    let mid_sites = if new_sites > original.sites {
+        original.sites + half
+    } else {
+        original.sites - half
+    };
+
+    let first =
+        resize_periodic_chain_bytes_one_side(input, chain_index, mid_sites, CountAnchor::Start)?;
+    let followup_index =
+        find_matching_periodic_chain(&first.periodic_chains, mid_sites, &original)?;
+    let mut second = resize_periodic_chain_bytes_one_side(
+        &first.bytes,
+        followup_index,
+        new_sites,
+        CountAnchor::End,
+    )?;
+
+    let mut combined = second.resize.clone();
+    combined.old_sites = original.sites;
+    combined.new_sites = new_sites;
+    combined.inserted_units = first.resize.inserted_units + second.resize.inserted_units;
+    combined.removed_units = first.resize.removed_units + second.resize.removed_units;
+    combined.seam_edge_pairs = first.resize.seam_edge_pairs + second.resize.seam_edge_pairs;
+    combined.welded_vertices = first.resize.welded_vertices + second.resize.welded_vertices;
+    combined.welded_edges = first.resize.welded_edges + second.resize.welded_edges;
+    combined.rebuilt_stretch_faces =
+        first.resize.rebuilt_stretch_faces + second.resize.rebuilt_stretch_faces;
+    combined.new_stretch_edges = first.resize.new_stretch_edges + second.resize.new_stretch_edges;
+    combined.added_entities = first.resize.added_entities + second.resize.added_entities;
+    combined.pruned_entities = first.resize.pruned_entities + second.resize.pruned_entities;
+    combined.entity_delta = first.resize.entity_delta + second.resize.entity_delta;
+    second.resize = combined;
+    Ok(second)
+}
+
+fn resize_periodic_chain_bytes_one_side(
+    input: &[u8],
+    chain_index: usize,
+    new_sites: usize,
+    anchor: CountAnchor,
+) -> Result<PeriodicChainEditOutput> {
+    debug_assert_ne!(anchor, CountAnchor::Center);
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
+    if exchange.data.len() != 1 {
+        bail!("periodic-chain editing currently requires exactly one DATA section");
+    }
+
+    let section = &mut exchange.data[0];
+    let chains = periodic_chains::detect_periodic_chains(&section.entities);
+    let chain = chains
+        .get(chain_index)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("periodic chain index {chain_index} not found"))?;
+    if !chain.read_only_proven {
+        bail!("periodic chain {chain_index} is not sufficiently proven for editing");
+    }
+    if new_sites == chain.sites {
+        bail!("periodic-chain resize requested the existing site count {new_sites}");
+    }
+
+    let directed = if anchor == CountAnchor::End {
+        reverse_periodic_chain(&chain)
+    } else {
+        chain.clone()
+    };
+
+    let source_entity_count = section.entities.len();
+    let mut resize = if new_sites > directed.sites {
+        periodic_resize::expand_periodic_chain_positive(
+            &mut section.entities,
+            &directed,
+            new_sites,
+        )?
+    } else {
+        periodic_resize::shrink_periodic_chain_positive(
+            &mut section.entities,
+            &directed,
+            new_sites,
+        )?
+    };
+
+    // Compact normalization has already interned the source support geometry,
+    // but chain mutation creates fresh translated PLANE/LINE/CYLINDER supports.
+    // Re-run the same guarded locus interning pass on the generated graph so
+    // newly created supports do not survive merely because mutation happened
+    // after the initial compact cleanup.
+    let _ = geometric_intern::intern_geometric_supports(&mut section.entities);
+    let _ = intern_section(&mut section.entities);
+    let detached_vertices = periodic_resize::prune_detached_vertex_points(&mut section.entities);
+    resize.pruned_entities += detached_vertices;
+    resize.added_entities = section.entities.len().saturating_sub(source_entity_count);
+    resize.entity_delta = section.entities.len().cast_signed() - source_entity_count.cast_signed();
+    for section in &mut exchange.data {
+        dense_renumber(&mut section.entities);
+    }
+
+    let periodic_chains = exchange
+        .data
+        .iter()
+        .flat_map(|section| periodic_chains::detect_periodic_chains(&section.entities))
+        .collect::<Vec<_>>();
+    let verified = periodic_chains.iter().any(|candidate| {
+        candidate.read_only_proven
+            && candidate.complete_partition
+            && candidate.sites == new_sites
+            && (candidate.pitch_mm - chain.pitch_mm).abs() <= 1.0e-7
+            && candidate.interior_site_face_count == chain.interior_site_face_count
+            && candidate.interior_gap_face_count == chain.interior_gap_face_count
+            && candidate.stretch_face_ids.len() == chain.stretch_face_ids.len()
+            && candidate.fixed_negative_face_ids.len() == chain.fixed_negative_face_ids.len()
+            && candidate.fixed_positive_face_ids.len() == chain.fixed_positive_face_ids.len()
+            && candidate.faces_without_geometry == 0
+            && candidate.nonmanifold_edges == 0
+            && candidate.nonlocal_cross_site_edges == 0
+            && candidate
+                .adjacent_site_edge_counts
+                .iter()
+                .all(|count| Some(count) == chain.adjacent_site_edge_counts.first())
+    });
+    if !verified {
+        bail!(
+            "post-edit periodic-chain verification failed: requested {new_sites} sites were not rediscovered with the same proven grammar"
+        );
+    }
+
+    let compatibility = audit_exchange_compatibility(&exchange);
+    let output = write_exchange(&exchange)?;
+    Ok(PeriodicChainEditOutput {
+        bytes: output.into_bytes(),
+        resize,
+        periodic_chains,
+        compatibility,
+    })
+}
+
+/// Backward-compatible growth-only wrapper around `resize_periodic_chain_bytes`.
+///
+/// # Errors
+/// Returns an error if the STEP input is invalid or the selected periodic chain cannot be expanded safely.
+pub fn expand_periodic_chain_bytes(
+    input: &[u8],
+    chain_index: usize,
+    new_sites: usize,
+) -> Result<PeriodicChainEditOutput> {
+    let chains = detect_periodic_chains_bytes(input)?;
+    let old_sites = chains
+        .get(chain_index)
+        .map(|chain| chain.sites)
+        .ok_or_else(|| anyhow::anyhow!("periodic chain index {chain_index} not found"))?;
+    if new_sites <= old_sites {
+        bail!("periodic-chain expansion requires growth ({old_sites} -> {new_sites})");
+    }
+    resize_periodic_chain_bytes(input, chain_index, new_sites)
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CountAnchor {
+    Start,
+    Center,
+    End,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CountResizeStats {
+    pub old_sites: usize,
+    pub new_sites: usize,
+    pub instances_per_site: usize,
+    pub anchor: CountAnchor,
+    pub body_resizes: Vec<periodic_resize::PeriodicBodyResizeStats>,
+    pub pattern_resizes: Vec<patterns::PatternResizeStats>,
+}
+
+pub struct CountEditOutput {
+    pub bytes: Vec<u8>,
+    pub resize: CountResizeStats,
+    pub patterns: Vec<patterns::InstancePattern>,
+    pub periodic_bodies: Vec<periodic_bodies::PeriodicBodyPattern>,
+    pub count_parameters: Vec<parameters::RecoveredCountParameter>,
+    pub compatibility: compatibility::CompatibilityAudit,
+}
+
+/// Resize one recovered count parameter atomically, keeping its negative end fixed.
+///
+/// # Errors
+/// Returns an error if the STEP input is invalid or the requested count edit cannot be proven and applied safely.
+pub fn resize_count_parameter_bytes(
+    input: &[u8],
+    parameter_index: usize,
+    new_sites: usize,
+) -> Result<CountEditOutput> {
+    resize_count_parameter_bytes_with_anchor(input, parameter_index, new_sites, CountAnchor::Start)
+}
+
+/// Resize one recovered count parameter with explicit placement anchoring.
+///
+/// Start and End keep the corresponding physical end fixed. Center keeps the
+/// geometric center fixed by performing equal edits at both ends; for now this
+/// requires an even site-count delta.
+///
+/// # Errors
+/// Returns an error if the STEP input is invalid or the requested anchored count edit cannot be proven and applied safely.
+pub fn resize_count_parameter_bytes_with_anchor(
+    input: &[u8],
+    parameter_index: usize,
+    new_sites: usize,
+    anchor: CountAnchor,
+) -> Result<CountEditOutput> {
+    if anchor != CountAnchor::Center {
+        return resize_count_parameter_bytes_one_side(input, parameter_index, new_sites, anchor);
+    }
+
+    let parameters = detect_count_parameters_bytes(input)?;
+    let original = parameters
+        .get(parameter_index)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("count parameter index {parameter_index} not found"))?;
+    if !original.body_grammar_proven || original.periodic_bodies.is_empty() {
+        bail!("count parameter {parameter_index} does not have a proven periodic body grammar");
+    }
+    if new_sites == original.sites {
+        bail!("count-parameter edit is a no-op at {new_sites} sites");
+    }
+    if new_sites < 4 {
+        bail!("count-parameter editing currently requires at least 4 sites");
+    }
+
+    let delta = new_sites.abs_diff(original.sites);
+    if delta % 2 != 0 {
+        bail!(
+            "center-anchored count resize currently requires an even site delta ({} -> {new_sites})",
+            original.sites
+        );
+    }
+    let half = delta / 2;
+    let mid_sites = if new_sites > original.sites {
+        original.sites + half
+    } else {
+        original.sites - half
+    };
+
+    let first = resize_count_parameter_bytes_one_side(
+        input,
+        parameter_index,
+        mid_sites,
+        CountAnchor::Start,
+    )?;
+    let followup_index =
+        find_matching_count_parameter(&first.count_parameters, mid_sites, &original)?;
+    let mut second = resize_count_parameter_bytes_one_side(
+        &first.bytes,
+        followup_index,
+        new_sites,
+        CountAnchor::End,
+    )?;
+
+    let mut body_resizes = first.resize.body_resizes;
+    body_resizes.extend(second.resize.body_resizes);
+    let mut pattern_resizes = first.resize.pattern_resizes;
+    pattern_resizes.extend(second.resize.pattern_resizes);
+    second.resize = CountResizeStats {
+        old_sites: original.sites,
+        new_sites,
+        instances_per_site: original.instances_per_site,
+        anchor: CountAnchor::Center,
+        body_resizes,
+        pattern_resizes,
+    };
+    Ok(second)
+}
+
+/// One-sided primitive used by all placement policies.
+#[expect(
+    clippy::too_many_lines,
+    reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"
+)]
+fn resize_count_parameter_bytes_one_side(
+    input: &[u8],
+    parameter_index: usize,
+    new_sites: usize,
+    anchor: CountAnchor,
+) -> Result<CountEditOutput> {
+    debug_assert_ne!(anchor, CountAnchor::Center);
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
+    if exchange.data.len() != 1 {
+        bail!("count-parameter editing currently requires exactly one DATA section");
+    }
+
+    let section = &mut exchange.data[0];
+    let detected_patterns = patterns::detect_instance_patterns(&section.entities, 1.0e-7, 4);
+    let detected_bodies =
+        periodic_bodies::detect_periodic_bodies(&section.entities, &detected_patterns);
+    let detected_parameters =
+        parameters::detect_count_parameters(&detected_patterns, &detected_bodies);
+    let parameter = detected_parameters
+        .get(parameter_index)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("count parameter index {parameter_index} not found"))?;
+
+    if !parameter.body_grammar_proven || parameter.periodic_bodies.is_empty() {
+        bail!("count parameter {parameter_index} does not have a proven periodic body grammar");
+    }
+    if new_sites == parameter.sites {
+        bail!("count-parameter edit is a no-op at {new_sites} sites");
+    }
+    if new_sites < 4 {
+        bail!("count-parameter editing currently requires at least 4 sites");
+    }
+
+    let body_specs = parameter
+        .periodic_bodies
+        .iter()
+        .map(|&index| {
+            detected_bodies
+                .get(index)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("periodic body index {index} disappeared"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let pattern_specs = parameter
+        .instance_patterns
+        .iter()
+        .map(|&index| {
+            detected_patterns
+                .get(index)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("instance pattern index {index} disappeared"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut body_resizes = Vec::with_capacity(body_specs.len());
+    for body in &body_specs {
+        let directed = if anchor == CountAnchor::End {
+            reverse_periodic_body(body)
+        } else {
+            body.clone()
+        };
+        let stats = if new_sites > directed.sites {
+            periodic_resize::expand_periodic_body_positive(
+                &mut section.entities,
+                &directed,
+                new_sites,
+            )?
+        } else {
+            periodic_resize::shrink_periodic_body_positive(
+                &mut section.entities,
+                &directed,
+                new_sites,
+            )?
+        };
+        body_resizes.push(stats);
+    }
+
+    let mut pattern_resizes = Vec::with_capacity(pattern_specs.len());
+    for pattern in &pattern_specs {
+        let basis = pattern
+            .basis
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("coupled pattern has no basis"))?;
+        let axis_dot = f64::mul_add(
+            basis[2],
+            parameter.axis[2],
+            f64::mul_add(basis[1], parameter.axis[1], basis[0] * parameter.axis[0]),
+        );
+        let pattern_anchor = match (anchor, axis_dot >= 0.0) {
+            (CountAnchor::Start, true) | (CountAnchor::End, false) => {
+                patterns::PatternAnchor::Start
+            }
+            (CountAnchor::Start, false) | (CountAnchor::End, true) => patterns::PatternAnchor::End,
+            (CountAnchor::Center, _) => unreachable!(),
+        };
+        pattern_resizes.push(patterns::resize_filled_linear_pattern(
+            &mut section.entities,
+            pattern,
+            new_sites,
+            pattern_anchor,
+        )?);
+    }
+
+    let _ = intern_section(&mut section.entities);
+    for section in &mut exchange.data {
+        dense_renumber(&mut section.entities);
+    }
+
+    let (patterns, periodic_bodies, count_parameters) = detect_exchange_semantics(&exchange);
+    let verified = count_parameters.iter().any(|candidate| {
+        candidate.body_grammar_proven
+            && candidate.sites == new_sites
+            && candidate.instances_per_site == parameter.instances_per_site
+            && candidate.instance_patterns.len() == parameter.instance_patterns.len()
+            && candidate.periodic_bodies.len() == parameter.periodic_bodies.len()
+    });
+    if !verified {
+        bail!(
+            "post-edit semantic verification failed: requested {new_sites} sites were not rediscovered with the same coupled body/instance grammar"
+        );
+    }
+
+    let compatibility = audit_exchange_compatibility(&exchange);
+    let output = write_exchange(&exchange)?;
+    Ok(CountEditOutput {
+        bytes: output.into_bytes(),
+        resize: CountResizeStats {
+            old_sites: parameter.sites,
+            new_sites,
+            instances_per_site: parameter.instances_per_site,
+            anchor,
+            body_resizes,
+            pattern_resizes,
+        },
+        patterns,
+        periodic_bodies,
+        count_parameters,
+        compatibility,
+    })
+}
+
+fn find_matching_periodic_chain(
+    chains: &[periodic_chains::PeriodicChainPattern],
+    sites: usize,
+    original: &periodic_chains::PeriodicChainPattern,
+) -> Result<usize> {
+    let matches = chains
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            (candidate.read_only_proven
+                && candidate.complete_partition
+                && candidate.sites == sites
+                && (candidate.pitch_mm - original.pitch_mm).abs() <= 1.0e-7
+                && candidate.interior_site_face_count == original.interior_site_face_count
+                && candidate.interior_gap_face_count == original.interior_gap_face_count
+                && candidate.stretch_face_ids.len() == original.stretch_face_ids.len()
+                && candidate.fixed_negative_face_ids.len()
+                    == original.fixed_negative_face_ids.len()
+                && candidate.fixed_middle_face_ids.len() == original.fixed_middle_face_ids.len()
+                && candidate.fixed_positive_face_ids.len()
+                    == original.fixed_positive_face_ids.len())
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [index] => Ok(*index),
+        [] => bail!("could not rediscover the intermediate {sites}-site periodic chain"),
+        _ => bail!("multiple matching intermediate {sites}-site periodic chains: {matches:?}"),
+    }
+}
+
+fn reverse_periodic_chain(
+    chain: &periodic_chains::PeriodicChainPattern,
+) -> periodic_chains::PeriodicChainPattern {
+    let mut reversed = chain.clone();
+    reversed.axis = [-chain.axis[0], -chain.axis[1], -chain.axis[2]];
+    reversed.site_centers_mm = chain
+        .site_centers_mm
+        .iter()
+        .rev()
+        .map(|center| -*center)
+        .collect();
+    reversed.site_face_counts.reverse();
+    reversed.gap_face_counts.reverse();
+    reversed.site_face_ids.reverse();
+    reversed.gap_face_ids.reverse();
+    reversed.site_adjacency_signatures.reverse();
+    reversed.gap_adjacency_signatures.reverse();
+    std::mem::swap(
+        &mut reversed.fixed_negative_face_ids,
+        &mut reversed.fixed_positive_face_ids,
+    );
+    reversed
+}
+
+fn reverse_periodic_body(
+    body: &periodic_bodies::PeriodicBodyPattern,
+) -> periodic_bodies::PeriodicBodyPattern {
+    let mut reversed = body.clone();
+    reversed.axis = [-body.axis[0], -body.axis[1], -body.axis[2]];
+    for family in &mut reversed.repeat_face_families {
+        family.face_ids.reverse();
+    }
+    reversed
+}
+
+fn detect_count_parameters_bytes(input: &[u8]) -> Result<Vec<parameters::RecoveredCountParameter>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+    if exchange.data.len() != 1 {
+        bail!("count-parameter editing currently requires exactly one DATA section");
+    }
+    let section = &exchange.data[0];
+    let patterns = patterns::detect_instance_patterns(&section.entities, 1.0e-7, 4);
+    let bodies = periodic_bodies::detect_periodic_bodies(&section.entities, &patterns);
+    Ok(parameters::detect_count_parameters(&patterns, &bodies))
+}
+
+fn find_matching_count_parameter(
+    parameters: &[parameters::RecoveredCountParameter],
+    sites: usize,
+    original: &parameters::RecoveredCountParameter,
+) -> Result<usize> {
+    let matches = parameters
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| {
+            candidate.body_grammar_proven
+                && candidate.sites == sites
+                && candidate.instances_per_site == original.instances_per_site
+                && candidate.instance_patterns.len() == original.instance_patterns.len()
+                && candidate.periodic_bodies.len() == original.periodic_bodies.len()
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [index] => Ok(*index),
+        [] => bail!("could not rediscover the intermediate {sites}-site count parameter"),
+        _ => bail!("multiple matching intermediate {sites}-site count parameters: {matches:?}"),
+    }
+}
+
+/// Backward-compatible growth-only wrapper.
+///
+/// # Errors
+/// Returns an error if the STEP input is invalid or the requested count expansion cannot be proven and applied safely.
+pub fn expand_count_parameter_bytes(
+    input: &[u8],
+    parameter_index: usize,
+    new_sites: usize,
+) -> Result<CountEditOutput> {
+    let edited = resize_count_parameter_bytes(input, parameter_index, new_sites)?;
+    if edited.resize.new_sites <= edited.resize.old_sites {
+        bail!(
+            "expand_count_parameter_bytes requires growth ({} -> {})",
+            edited.resize.old_sites,
+            edited.resize.new_sites
+        );
+    }
+    Ok(edited)
+}
+
+/// Expand one detected periodic body at its positive-axis end.
+///
+/// # Errors
+/// Returns an error if the STEP input is invalid or the selected periodic body cannot be expanded safely.
+pub fn expand_periodic_body_bytes(
+    input: &[u8],
+    body_index: usize,
+    new_sites: usize,
+) -> Result<PeriodicBodyEditOutput> {
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
+
+    let mut remaining = body_index;
+    let mut resize = None;
+    for section in &mut exchange.data {
+        let patterns = patterns::detect_instance_patterns(&section.entities, 1.0e-7, 4);
+        let bodies = periodic_bodies::detect_periodic_bodies(&section.entities, &patterns);
+        if remaining < bodies.len() {
+            resize = Some(periodic_resize::expand_periodic_body_positive(
+                &mut section.entities,
+                &bodies[remaining],
+                new_sites,
+            )?);
+            let _ = intern_section(&mut section.entities);
+            break;
+        }
+        remaining -= bodies.len();
+    }
+    let resize =
+        resize.ok_or_else(|| anyhow::anyhow!("periodic body index {body_index} not found"))?;
+
+    for section in &mut exchange.data {
+        dense_renumber(&mut section.entities);
+    }
+    let output = write_exchange(&exchange)?;
+    Ok(PeriodicBodyEditOutput {
+        bytes: output.into_bytes(),
+        resize,
+    })
+}
+
+/// Resize one fully occupied 1-D regular `MAPPED_ITEM` pattern in an already
+/// normalized STEP file.
+///
+/// This edits only the instance pattern; higher-level package/body resizing is
+/// intentionally a separate operation.
+///
+/// # Errors
+/// Returns an error if the STEP input is invalid or the selected linear pattern cannot be resized safely.
+pub fn resize_linear_pattern_bytes(
+    input: &[u8],
+    pattern_index: usize,
+    new_count: usize,
+    anchor: patterns::PatternAnchor,
+) -> Result<PatternEditOutput> {
+    let mut exchange = ParsedStepSource::parse(input)?.exchange;
+
+    let mut remaining = pattern_index;
+    let mut resize = None;
+    for section in &mut exchange.data {
+        let detected = patterns::detect_instance_patterns(&section.entities, 1.0e-7, 4);
+        if remaining < detected.len() {
+            resize = Some(patterns::resize_filled_linear_pattern(
+                &mut section.entities,
+                &detected[remaining],
+                new_count,
+                anchor,
+            )?);
+            // Normalize newly-created placements/support values immediately.
+            let _ = intern_section(&mut section.entities);
+            break;
+        }
+        remaining -= detected.len();
+    }
+    let resize =
+        resize.ok_or_else(|| anyhow::anyhow!("pattern index {pattern_index} not found"))?;
+
+    for section in &mut exchange.data {
+        dense_renumber(&mut section.entities);
+    }
+    let (patterns, periodic_bodies, count_parameters) = detect_exchange_semantics(&exchange);
+    let compatibility = audit_exchange_compatibility(&exchange);
+    let output = write_exchange(&exchange)?;
+
+    Ok(PatternEditOutput {
+        bytes: output.into_bytes(),
+        resize,
+        patterns,
+        periodic_bodies,
+        count_parameters,
+        compatibility,
+    })
+}
+
+fn detect_exchange_semantics(
+    exchange: &Exchange,
+) -> (
+    Vec<patterns::InstancePattern>,
+    Vec<periodic_bodies::PeriodicBodyPattern>,
+    Vec<parameters::RecoveredCountParameter>,
+) {
+    let mut patterns_out = Vec::new();
+    let mut bodies_out = Vec::new();
+
+    for section in &exchange.data {
+        let index = step_graph::build_index(&section.entities);
+        let local_patterns =
+            patterns::detect_instance_patterns_with_index(&section.entities, &index, 1.0e-7, 4);
+        let offset = patterns_out.len();
+        let mut local_bodies = periodic_bodies::detect_periodic_bodies_with_index(
+            &section.entities,
+            &index,
+            &local_patterns,
+        );
+        for body in &mut local_bodies {
+            for index in &mut body.coupled_instance_patterns {
+                *index += offset;
+            }
+        }
+        patterns_out.extend(local_patterns);
+        bodies_out.extend(local_bodies);
+    }
+
+    let count_parameters = parameters::detect_count_parameters(&patterns_out, &bodies_out);
+    (patterns_out, bodies_out, count_parameters)
+}
+
+fn audit_exchange_compatibility(exchange: &Exchange) -> compatibility::CompatibilityAudit {
+    let mut combined = compatibility::CompatibilityAudit::default();
+    for section in &exchange.data {
+        let audit = compatibility::audit_entities(&section.entities);
+        for (name, count) in audit.structural_risk_entities {
+            *combined.structural_risk_entities.entry(name).or_insert(0) += count;
+        }
+    }
+    combined.structural_risk_total = combined.structural_risk_entities.values().sum();
+    combined.has_mapped_items = combined
+        .structural_risk_entities
+        .get("MAPPED_ITEM")
+        .copied()
+        .unwrap_or(0)
+        > 0
+        || combined
+            .structural_risk_entities
+            .get("REPRESENTATION_MAP")
+            .copied()
+            .unwrap_or(0)
+            > 0;
+    combined.has_curve_or_surface_replicas = combined
+        .structural_risk_entities
+        .get("CURVE_REPLICA")
+        .copied()
+        .unwrap_or(0)
+        > 0
+        || combined
+            .structural_risk_entities
+            .get("SURFACE_REPLICA")
+            .copied()
+            .unwrap_or(0)
+            > 0;
+    combined.has_assembly_relationships = [
+        "NEXT_ASSEMBLY_USAGE_OCCURRENCE",
+        "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION",
+        "ITEM_DEFINED_TRANSFORMATION",
+        "REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION",
+        "SHAPE_REPRESENTATION_RELATIONSHIP",
+    ]
+    .iter()
+    .any(|name| {
+        combined
+            .structural_risk_entities
+            .get(*name)
+            .copied()
+            .unwrap_or(0)
+            > 0
+    });
+    combined.conservative_structure = combined.structural_risk_total == 0;
+    combined
+}
+
+///
+/// # Errors
+/// Returns an error if the STEP input cannot be decoded, parsed, transformed, or serialized without violating the configured safety checks.
+pub fn clean_bytes(input: &[u8], options: &Options) -> Result<CleanOutput> {
+    clean_pipeline::clean_bytes(input, options)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wrap(data: &str) -> Vec<u8> {
+        format!(
+            "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'1');\nFILE_NAME('a','b',(''),(''),'x','y','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n{data}\nENDSEC;\nEND-ISO-10303-21;\n"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn production_profiles_keep_unvalidated_boundary_rewrites_opt_in() {
+        for profile in [OutputProfile::Compat, OutputProfile::Compact] {
+            let options = Options::for_profile(profile);
+            assert!(options.coalesce_same_support_planar_faces);
+            assert!(!options.experimental_coalesce_same_support_faces);
+            assert!(!options.experimental_instance_planar_positive_features);
+            assert!(!options.experimental_instance_spherical_caps);
+        }
+
+        let compact = Options::for_profile(OutputProfile::Compact);
+        assert!(compact.experimental_instance_translated_bspline_curves);
+        assert!(compact.experimental_instance_z90);
+    }
+
+    #[test]
+    fn writer_roundtrips_basic_exchange() -> Result<()> {
+        let src = wrap(
+            "#9=CARTESIAN_POINT('NONE',(1.000000000000000000,2.500000000000000000,0.000000000000000000));\n#20=CARTESIAN_POINT('NONE',(1.0,2.5,0.0));\n#21=VERTEX_POINT('NONE',#20);",
+        );
+        let out = clean_bytes(&src, &Options::default())?;
+        assert!(out.stats.output_bytes < out.stats.input_bytes);
+        assert_eq!(out.stats.interned_entities, 1);
+        ruststep::parser::parse(std::str::from_utf8(&out.bytes)?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn equal_geometry_values_share_but_topology_identity_survives() -> Result<()> {
+        let src = wrap(
+            "#1=CARTESIAN_POINT('',(1.0,2.0,3.0));\n#2=CARTESIAN_POINT('',(1.000000000000000000,2.0,3.0));\n#3=VERTEX_POINT('',#1);\n#4=VERTEX_POINT('',#2);",
+        );
+        let out = clean_bytes(&src, &Options::default())?;
+        assert_eq!(out.stats.interned_entities, 1);
+        assert_eq!(out.stats.output_entities, 3);
+
+        let text = std::str::from_utf8(&out.bytes)?;
+        assert_eq!(text.matches("VERTEX_POINT").count(), 2);
+        assert_eq!(text.matches("CARTESIAN_POINT").count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn consolidates_only_unreferenced_presentation_roots() -> Result<()> {
+        let src = wrap(
+            "#1=CARTESIAN_POINT('',(0.0,0.0,0.0));\n\
+             #8=DIRECTION('',(1.0,0.0,0.0));\n\
+             #2=STYLED_ITEM('',(#8),#1);\n\
+             #3=STYLED_ITEM('',(#8),#1);\n\
+             #4=MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('',(#2),#1);\n\
+             #5=MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('',(#3),#1);\n\
+             #6=PRESENTATION_LAYER_ASSIGNMENT('','',(#2));\n\
+             #7=PRESENTATION_LAYER_ASSIGNMENT('','',(#3));",
+        );
+        let out = clean_bytes(&src, &Options::default())?;
+        assert_eq!(out.stats.consolidated_entities, 2);
+        let text = std::str::from_utf8(&out.bytes)?;
+        assert_eq!(
+            text.matches("MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION")
+                .count(),
+            1
+        );
+        assert_eq!(text.matches("PRESENTATION_LAYER_ASSIGNMENT").count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn referenced_presentation_records_are_not_consolidated() -> Result<()> {
+        let src = wrap(
+            "#1=CARTESIAN_POINT('',(0.0,0.0,0.0));\n\
+             #8=DIRECTION('',(1.0,0.0,0.0));\n\
+             #2=STYLED_ITEM('',(#8),#1);\n\
+             #3=STYLED_ITEM('',(#8),#1);\n\
+             #4=MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('',(#2),#1);\n\
+             #5=MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('',(#3),#1);\n\
+             #6=REPRESENTATION_RELATIONSHIP('','',#4,#5);",
+        );
+        let out = clean_bytes(&src, &Options::default())?;
+        assert_eq!(out.stats.consolidated_entities, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn legal_empty_aggregates_roundtrip_without_parser_rewrite() -> Result<()> {
+        let src = wrap("#8=SHAPE_REPRESENTATION('',(),#6);\n#6=CARTESIAN_POINT('',(0.0,0.0,0.0));");
+        let once = clean_bytes(&src, &Options::default())?;
+        let text = std::str::from_utf8(&once.bytes)?;
+        assert!(text.contains("SHAPE_REPRESENTATION('',(),#"));
+
+        let twice = clean_bytes(&once.bytes, &Options::default())?;
+        assert_eq!(once.bytes, twice.bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn empty_aggregates_do_not_confuse_strings_and_comments() -> Result<()> {
+        let src = wrap(
+            "#1=CARTESIAN_POINT('literal ()', (0.0,0.0,0.0));\n/* () */\n#2=SHAPE_REPRESENTATION('',( ),#1);",
+        );
+        let out = clean_bytes(&src, &Options::default())?;
+        let text = std::str::from_utf8(&out.bytes)?;
+        assert!(text.contains("literal ()"));
+        assert!(text.contains("SHAPE_REPRESENTATION('',(),#"));
+        Ok(())
+    }
+
+    #[test]
+    fn doubled_apostrophe_step_strings_parse_directly() -> Result<()> {
+        let src = wrap("#1=CARTESIAN_POINT('M3'' thread',(0.0,0.0,0.0));");
+        ruststep::parser::parse(std::str::from_utf8(&src)?)?;
+        let out = clean_bytes(&src, &Options::default())?;
+        assert_eq!(out.stats.input_entities, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn optional_placeholder_name_minification_only_touches_allowlisted_name_fields() -> Result<()> {
+        let src =
+            wrap("#1=CARTESIAN_POINT('NONE',(0.0,0.0,0.0));\n#2=PRODUCT('NONE','NONE','NONE',());");
+        let options = Options {
+            minify_placeholder_names: true,
+            ..Options::default()
+        };
+        let out = clean_bytes(&src, &options)?;
+        let text = std::str::from_utf8(&out.bytes)?;
+        assert!(text.contains("CARTESIAN_POINT('',"));
+        assert!(text.contains("PRODUCT('NONE','NONE','NONE',())"));
+        assert_eq!(out.stats.placeholder_names_minified, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn gbk_strings_become_standard_x2_unicode_escapes() -> Result<()> {
+        let mut src = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'1');\nFILE_NAME('a','b',(''),(''),'x','y','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n#1=CARTESIAN_POINT('".to_vec();
+        src.extend_from_slice(&[0xC8, 0xCE, 0xBA, 0xCE]); // 任何 in GBK
+        src.extend_from_slice(b"',(0.0,0.0,0.0));\nENDSEC;\nEND-ISO-10303-21;\n");
+
+        let out = clean_bytes(&src, &Options::default())?;
+        assert_eq!(out.stats.input_encoding, "gbk");
+        let text = std::str::from_utf8(&out.bytes)?;
+        assert!(text.contains("\\X2\\4EFB4F55\\X0\\"));
+        Ok(())
+    }
+
+    #[test]
+    fn cleaning_is_byte_idempotent() -> Result<()> {
+        let src = wrap(
+            "#10=DIRECTION('',(1.000000000000000000,0.0,0.0));\n#20=DIRECTION('',(1.0,0.0,0.0));\n#30=VECTOR('',#20,1000.000000000000000000);",
+        );
+        let once = clean_bytes(&src, &Options::default())?;
+        let twice = clean_bytes(&once.bytes, &Options::default())?;
+        assert_eq!(once.bytes, twice.bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn v_extrusion_generated_bezier_is_byte_idempotent() -> Result<()> {
+        let src = wrap(concat!(
+            "#1=CARTESIAN_POINT('',(0.,0.,0.));\n",
+            "#2=CARTESIAN_POINT('',(0.,2.,0.));\n",
+            "#3=CARTESIAN_POINT('',(1.,0.,0.));\n",
+            "#4=CARTESIAN_POINT('',(1.,2.,0.));\n",
+            "#5=CARTESIAN_POINT('',(2.,0.,0.));\n",
+            "#6=CARTESIAN_POINT('',(2.,2.,0.));\n",
+            "#10=B_SPLINE_SURFACE_WITH_KNOTS('',2,1,((#1,#2),(#3,#4),(#5,#6)),.UNSPECIFIED.,.F.,.F.,.F.,(3,3),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.);\n",
+            "#11=ADVANCED_FACE('',(),#10,.T.);",
+        ));
+        let options = Options {
+            experimental_recover_exact_bezier_curves: true,
+            experimental_recover_v_extrusions: true,
+            ..Options::default()
+        };
+
+        let once = clean_bytes(&src, &options)?;
+        assert_eq!(once.stats.v_extrusion_surfaces_recovered, 1);
+        assert_eq!(once.stats.v_extrusion_profile_curves_created, 1);
+        assert_eq!(once.stats.exact_bezier_curves_recovered, 1);
+        assert!(std::str::from_utf8(&once.bytes)?.contains("BEZIER_CURVE"));
+
+        let twice = clean_bytes(&once.bytes, &options)?;
+        assert_eq!(twice.stats.v_extrusion_surfaces_recovered, 0);
+        assert_eq!(twice.stats.exact_bezier_curves_recovered, 0);
+        assert_eq!(once.bytes, twice.bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn straight_bspline_recovery_is_byte_idempotent() -> Result<()> {
+        let src = wrap(
+            "#1=CARTESIAN_POINT('',(0.,0.,0.));\n\
+             #2=CARTESIAN_POINT('',(1.,0.,0.));\n\
+             #3=CARTESIAN_POINT('',(2.,0.,0.));\n\
+             #4=CARTESIAN_POINT('',(3.,0.,0.));\n\
+             #5=VERTEX_POINT('',#1);\n\
+             #6=VERTEX_POINT('',#4);\n\
+             #7=B_SPLINE_CURVE_WITH_KNOTS('',3,(#1,#2,#3,#4),.UNSPECIFIED.,.F.,.F.,(4,4),(0.,1.),.UNSPECIFIED.);\n\
+             #8=EDGE_CURVE('',#5,#6,#7,.T.);",
+        );
+        let options = Options {
+            experimental_recover_straight_bspline_lines: true,
+            ..Options::default()
+        };
+        let once = clean_bytes(&src, &options)?;
+        assert_eq!(once.stats.straight_bspline_lines_recovered, 1);
+        let twice = clean_bytes(&once.bytes, &options)?;
+        assert_eq!(twice.stats.straight_bspline_lines_recovered, 0);
+        assert_eq!(once.bytes, twice.bytes);
+        Ok(())
+    }
+}

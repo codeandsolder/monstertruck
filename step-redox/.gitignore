@@ -1,0 +1,20 @@
+/target
+/results
+*.bak.*
+
+__pycache__/
+*.pyc
+
+# validation harness generated/cache artifacts
+validation/out*/
+validation/.cache*/
+validation/*-compare.json
+validation/harness-*.stdout
+validation/harness-*.stderr
+.cache/step-redox-validation/
+web/**/target/
+tools/**/target/
+
+# standalone experiment build state
+experiments/**/target/
+experiments/**/Cargo.lock

@@ -663,6 +663,102 @@ where
         .then_some(parameter_curve)
 }
 
+/// A tilted ellipse on a true cylindrical revolution has angular parameter
+/// v(t) = +/- t + v0 and axial parameter u(t) = u0 + A cos(t) + B sin(t).
+///
+/// The axial sinusoid is not representable by a finite polynomial B-spline in
+/// the cylinder's UV space. Generate an explicit degree-one trim with a
+/// *bounded* error below numerical surface tolerance: its maximum deviation
+/// follows from the second-derivative bound of the sinusoid. The underlying
+/// 3D shared edge remains a mathematically exact conic.
+fn bounded_tilted_ellipse_trim_on_cylinder(
+    curve: &Ellipse<Point3, Matrix4>,
+    revolution: &Processor<RevolutionSurface<Line<Point3>>, Matrix4>,
+    surface: &Surface,
+) -> Option<StepParameterCurve> {
+    const MAX_TRIM_SEGMENTS: u32 = 4096;
+    // More stringent than the kernel's geometric consistency tolerance.
+    const TRIM_ERROR_MM: f64 = 1.0e-8;
+    if !matrix4_is_affine(curve.transform()) || !matrix4_is_affine(revolution.transform()) {
+        return None;
+    }
+    let inv = revolution.transform().invert()?;
+    let center = inv.transform_point(curve.transform().transform_point(Point3::origin()));
+    let cosine = inv.transform_vector(curve.transform().transform_vector(Vector3::unit_x()));
+    let sine = inv.transform_vector(curve.transform().transform_vector(Vector3::unit_y()));
+    let entity = revolution.entity();
+    let generator = entity.entity_curve();
+    let axis = entity.axis();
+    let axial_delta = (generator.1 - generator.0).dot(axis);
+    if axial_delta.abs() <= KERNEL_EPSILON || !parallel_scaled(generator.1 - generator.0, axis) {
+        return None;
+    }
+    let radial = |v: Vector3| v - axis * v.dot(axis);
+    let radial_cos = radial(cosine);
+    let radial_sin = radial(sine);
+    let axial_cos = cosine.dot(axis) / axial_delta;
+    let axial_sin = sine.dot(axis) / axial_delta;
+    let center_radial = radial(center - entity.origin());
+    let source_radius = radial(generator.0 - entity.origin()).magnitude();
+    let ellipse_radius = radial_cos.magnitude();
+    let scale = source_radius.max(1.0);
+    if center_radial.magnitude() > KERNEL_EPSILON * scale
+        || !scaled_near(ellipse_radius, source_radius, scale)
+        || !scaled_near(radial_sin.magnitude(), source_radius, scale)
+        || radial_cos.dot(radial_sin).abs() > KERNEL_EPSILON * scale * scale
+    {
+        return None;
+    }
+    let (t0, t1) = curve.range_tuple();
+    let span = (t1 - t0).abs();
+    if !t0.is_finite() || !t1.is_finite() || span <= 0.0 {
+        return None;
+    }
+    let first = inv.transform_point(curve.evaluate(t0));
+    let (u0, v0) = entity.search_parameter(first, SearchParameterHint2D::None, 30)?;
+    let radial_tangent = radial(inv.transform_vector(curve.derivative(t0)));
+    let rate = unit_angular_rate(radial_tangent, entity.derivative_v(u0, v0))?;
+    let axial_center = (center - generator.0).dot(axis) / axial_delta;
+    let uv = |t: f64| {
+        let u = axial_sin.mul_add(t.sin(), axial_cos.mul_add(t.cos(), axial_center));
+        let v = rate.mul_add(t - t0, v0);
+        processor_parameter(revolution.orientation(), u, v)
+    };
+    // The complete 3D conic must lie on this analytic cylinder, not merely
+    // appear near a few sampled UV coordinates.
+    for fraction in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let t = (t1 - t0).mul_add(fraction, t0);
+        let p = uv(t);
+        let reconstructed = revolution.evaluate(p.x, p.y);
+        if !reconstructed.near(&curve.evaluate(t)) {
+            return None;
+        }
+    }
+    // Linear interpolation of a+b*cos(t)+c*sin(t) over angular step h:
+    // maximum axial error <= hypot(b,c)*h^2/8 (Taylor remainder).
+    let second_derivative_mm = axial_cos.hypot(axial_sin) * axial_delta.abs();
+    let min_segments = (span * (second_derivative_mm / (8.0 * TRIM_ERROR_MM)).sqrt())
+        .ceil()
+        .max(2.0);
+    if !min_segments.is_finite() || min_segments > f64::from(MAX_TRIM_SEGMENTS) {
+        return None;
+    }
+    let count = (2..=MAX_TRIM_SEGMENTS).find(|&n| f64::from(n) >= min_segments)?;
+    let mut points = Vec::with_capacity(usize::try_from(count).ok()?.checked_add(1)?);
+    let mut knots = Vec::with_capacity(usize::try_from(count).ok()?.checked_add(3)?);
+    knots.push(t0);
+    for index in 0..=count {
+        let t = (t1 - t0).mul_add(f64::from(index) / f64::from(count), t0);
+        points.push(uv(t));
+        knots.push(t);
+    }
+    knots.push(t1);
+    let trim = Curve2D::BsplineCurve(BsplineCurve::new(KnotVector::from(knots), points).ok()?);
+    // The analytic curvature bound above covers the entire interval.
+    pcurve_sanity_matches_surface_curve(curve, &trim, surface)
+        .then(|| StepParameterCurve::new(Box::new(trim), Box::new(surface.clone())))
+}
+
 fn exact_ellipse_parameter_curve_on_sphere(
     curve: &Ellipse<Point3, Matrix4>,
     processor: &SphericalSurface,
@@ -907,10 +1003,12 @@ fn exact_conic_parameter_curve_on(
         }
         (
             Conic3D::Ellipse(curve),
-            Surface::Elementary(
-                ElementarySurface::CylindricalSurface(revolution)
-                | ElementarySurface::ConicalSurface(revolution),
-            ),
+            Surface::Elementary(ElementarySurface::CylindricalSurface(revolution)),
+        ) => exact_ellipse_parameter_curve_on_revolution(curve, revolution, surface)
+            .or_else(|| bounded_tilted_ellipse_trim_on_cylinder(curve, revolution, surface)),
+        (
+            Conic3D::Ellipse(curve),
+            Surface::Elementary(ElementarySurface::ConicalSurface(revolution)),
         ) => exact_ellipse_parameter_curve_on_revolution(curve, revolution, surface),
         (Conic3D::Ellipse(curve), Surface::Elementary(ElementarySurface::Sphere(sphere))) => {
             exact_ellipse_parameter_curve_on_sphere(curve, sphere, surface)

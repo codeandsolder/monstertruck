@@ -22,6 +22,7 @@ default = ["step"]
 step = [
     "derive_more",
     "step-p21",
+    "dep:encoding_rs",
     "serde",
     "monstertruck-traits",
     "monstertruck-derive",
@@ -49,6 +50,7 @@ web-time = { workspace = true }
 chrono = { workspace = true }
 derive_more = { workspace = true, optional = true }
 step-p21 = { workspace = true, optional = true }
+encoding_rs = { version = "0.8.41", optional = true }
 serde = { workspace = true, optional = true }
 monstertruck-assembly = { workspace = true }
 monstertruck-derive = { workspace = true, optional = true }
