@@ -279,12 +279,15 @@ fn standard_budget(policy: GeometryPolicy, operation: &'static str) -> ShapeOpsR
 /// estimator that can spend part of the caller's budget deliberately, so it
 /// must stay at the kernel's normal numerical resolution. Using a tighter
 /// numerical tolerance is always within a validated Standard budget.
-fn classic_boolean_tolerance(
+fn classic_boolean_tolerances(
     policy: GeometryPolicy,
     operation: &'static str,
-) -> ShapeOpsResult<f64> {
-    standard_budget(policy, operation)?;
-    Ok(KERNEL_EPSILON)
+) -> ShapeOpsResult<(f64, f64)> {
+    // Numerical predicates continue at kernel precision. Only the
+    // independently verified, geometry-changing trim-edge canonicalization
+    // may consume the explicitly validated Standard modeling budget.
+    let imprint_budget = standard_budget(policy, operation)?;
+    Ok((KERNEL_EPSILON, imprint_budget))
 }
 
 const HALF_SPACE_CLIP_OPERATION: &str = "clip_half_space_z";
@@ -325,10 +328,10 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = classic_boolean_tolerance(policy, "and")?;
+    let (tol, imprint_budget) = classic_boolean_tolerances(policy, "and")?;
     #[cfg(feature = "marching-ssi")]
     {
-        classic::and(solid0, solid1, tol)
+        classic::and(solid0, solid1, tol, imprint_budget)
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
@@ -366,13 +369,13 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = classic_boolean_tolerance(policy, "and")?;
+    let (tol, imprint_budget) = classic_boolean_tolerances(policy, "and")?;
     #[cfg(feature = "marching-ssi")]
     {
         // The classic backend does not consume orientation hints; it derives
         // shell orientation from tessellated signed volume internally.
         let _ = orientation_hints;
-        classic::and(solid0, solid1, tol)
+        classic::and(solid0, solid1, tol, imprint_budget)
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
@@ -743,10 +746,10 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = classic_boolean_tolerance(policy, "or")?;
+    let (tol, imprint_budget) = classic_boolean_tolerances(policy, "or")?;
     #[cfg(feature = "marching-ssi")]
     {
-        classic::or(solid0, solid1, tol)
+        classic::or(solid0, solid1, tol, imprint_budget)
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
@@ -777,10 +780,10 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = classic_boolean_tolerance(policy, "difference")?;
+    let (tol, imprint_budget) = classic_boolean_tolerances(policy, "difference")?;
     #[cfg(feature = "marching-ssi")]
     {
-        classic::difference(solid0, solid1, tol)
+        classic::difference(solid0, solid1, tol, imprint_budget)
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
@@ -811,10 +814,10 @@ where
         + ExactTrimBoundary2D
         + Parallelizable,
 {
-    let tol = classic_boolean_tolerance(policy, "symmetric_difference")?;
+    let (tol, imprint_budget) = classic_boolean_tolerances(policy, "symmetric_difference")?;
     #[cfg(feature = "marching-ssi")]
     {
-        classic::symmetric_difference(solid0, solid1, tol)
+        classic::symmetric_difference(solid0, solid1, tol, imprint_budget)
     }
     #[cfg(not(feature = "marching-ssi"))]
     {

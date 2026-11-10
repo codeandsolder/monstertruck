@@ -1606,6 +1606,7 @@ pub(super) fn create_loops_stores<C, S>(
     geom_shell1: &Shell<Point3, C, S>,
     poly_shell1: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     tol: f64,
+    imprint_budget: f64,
     imprint_coplanar: bool,
 ) -> Option<InterfaceLoops<C>>
 where
@@ -1749,8 +1750,20 @@ where
     if coplanar.partial_overlap || has_shared_ruled {
         let source0 = operand0.geom.clone();
         let source1 = operand1.geom.clone();
-        imprint_edges_on_faces(&source1, poly_shell0, &mut operand0.geom, tol)?;
-        imprint_edges_on_faces(&source0, poly_shell1, &mut operand1.geom, tol)?;
+        imprint_edges_on_faces(
+            &source1,
+            poly_shell0,
+            &mut operand0.geom,
+            tol,
+            imprint_budget,
+        )?;
+        imprint_edges_on_faces(
+            &source0,
+            poly_shell1,
+            &mut operand1.geom,
+            tol,
+            imprint_budget,
+        )?;
     }
 
     let sampled0 = (!(coplanar.partial_overlap || has_shared_ruled)

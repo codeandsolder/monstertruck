@@ -529,6 +529,7 @@ pub(super) fn imprint_edges_on_faces<C>(
     target_poly_shell: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
     target: &mut LoopsStore<Point3, C>,
     tol: f64,
+    imprint_budget: f64,
 ) -> Option<()>
 where
     C: ParametricCurve3D
@@ -575,9 +576,7 @@ where
                 continue;
             }
 
-            if target[face_index]
-                .reuse_imprinted_coincident_edge(edge, BooleanTolerance::new(tol).length)
-            {
+            if target[face_index].reuse_imprinted_coincident_edge(edge, imprint_budget) {
                 continue;
             }
             let mut emap = HashMap::default();

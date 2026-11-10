@@ -77,6 +77,7 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell0: &Shell<Point3, C, S>,
     shell1: &Shell<Point3, C, S>,
     tol: f64,
+    imprint_budget: f64,
     mode: PairMode,
 ) -> ClassicResult<PairAnalysis<C, S>> {
     validate_tolerance(tol)?;
@@ -97,6 +98,7 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         &altshell1,
         &poly_shell1,
         tol,
+        imprint_budget,
         mode == PairMode::AndOr,
     )
     .ok_or(ShapeOpsError::InterfaceAnalysisFailed)?;
@@ -509,9 +511,10 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell0: &Shell<Point3, C, S>,
     shell1: &Shell<Point3, C, S>,
     tol: f64,
+    imprint_budget: f64,
     mode: PairMode,
 ) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
-    let analysis = analyze_pair(shell0, shell1, tol, mode)?;
+    let analysis = analyze_pair(shell0, shell1, tol, imprint_budget, mode)?;
     match mode {
         PairMode::Difference => process_difference_analysis(analysis),
         PairMode::AndOr if analysis.coplanar_overlap => process_coplanar_analysis(analysis),
@@ -641,10 +644,11 @@ fn and_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
+    imprint_budget: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
     let operation = "and";
     let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
+        process_one_pair_of_shells(a, b, tol, imprint_budget, PairMode::AndOr)
     };
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
@@ -671,9 +675,10 @@ pub fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
+    imprint_budget: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
     validate_tolerance(tol)?;
-    and_shells(solid0, solid1, tol)
+    and_shells(solid0, solid1, tol, imprint_budget)
 }
 
 /// OR operation between two solids (classic backend).
@@ -681,11 +686,12 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
+    imprint_budget: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
     validate_tolerance(tol)?;
     let operation = "or";
     let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
+        process_one_pair_of_shells(a, b, tol, imprint_budget, PairMode::AndOr)
     };
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
@@ -712,14 +718,15 @@ pub fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
+    imprint_budget: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
     validate_tolerance(tol)?;
     let operation = "difference";
     let difference_pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::Difference)
+        process_one_pair_of_shells(a, b, tol, imprint_budget, PairMode::Difference)
     };
     let and_pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
+        process_one_pair_of_shells(a, b, tol, imprint_budget, PairMode::AndOr)
     };
 
     let mut iter0 = solid0.boundaries().iter();
@@ -748,10 +755,11 @@ pub fn symmetric_difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
+    imprint_budget: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
-    let d0 = difference(solid0, solid1, tol)?;
-    let d1 = difference(solid1, solid0, tol)?;
-    or(&d0, &d1, tol)
+    let d0 = difference(solid0, solid1, tol, imprint_budget)?;
+    let d1 = difference(solid1, solid0, tol, imprint_budget)?;
+    or(&d0, &d1, tol, imprint_budget)
 }
 
 #[cfg(test)]
@@ -827,20 +835,20 @@ mod structural_classification_tests {
         let cube = unit_cube();
         let cube_faces = cube.face_iter().count();
 
-        assert!(matches!(and(&empty, &cube, 1.0e-6), Ok(solid) if solid.is_empty()));
-        assert!(matches!(and(&cube, &empty, 1.0e-6), Ok(solid) if solid.is_empty()));
+        assert!(matches!(and(&empty, &cube, 1.0e-6, 1.0e-6), Ok(solid) if solid.is_empty()));
+        assert!(matches!(and(&cube, &empty, 1.0e-6, 1.0e-6), Ok(solid) if solid.is_empty()));
         assert!(
-            matches!(or(&empty, &cube, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
+            matches!(or(&empty, &cube, 1.0e-6, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
         );
         assert!(
-            matches!(or(&cube, &empty, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
+            matches!(or(&cube, &empty, 1.0e-6, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
         );
-        assert!(matches!(difference(&empty, &cube, 1.0e-6), Ok(solid) if solid.is_empty()));
+        assert!(matches!(difference(&empty, &cube, 1.0e-6, 1.0e-6), Ok(solid) if solid.is_empty()));
         assert!(
-            matches!(difference(&cube, &empty, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
+            matches!(difference(&cube, &empty, 1.0e-6, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
         );
         assert!(
-            matches!(symmetric_difference(&empty, &cube, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
+            matches!(symmetric_difference(&empty, &cube, 1.0e-6, 1.0e-6), Ok(solid) if solid.face_iter().count() == cube_faces)
         );
     }
 
@@ -850,15 +858,15 @@ mod structural_classification_tests {
         let cube = unit_cube();
         for tol in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert!(matches!(
-                and(&empty, &cube, tol),
+                and(&empty, &cube, tol, tol),
                 Err(ShapeOpsError::InvalidTolerance)
             ));
             assert!(matches!(
-                or(&empty, &cube, tol),
+                or(&empty, &cube, tol, tol),
                 Err(ShapeOpsError::InvalidTolerance)
             ));
             assert!(matches!(
-                difference(&cube, &empty, tol),
+                difference(&cube, &empty, tol, tol),
                 Err(ShapeOpsError::InvalidTolerance)
             ));
         }
