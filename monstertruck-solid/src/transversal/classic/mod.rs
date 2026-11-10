@@ -226,8 +226,15 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     for region in &mut difference1 {
         region.invert();
     }
+    let label_positive_len = difference0.len();
     difference0.append(&mut difference1);
-    let mut label_shell = weld_and_convert(&difference0, "difference")?;
+    let label_regions =
+        planar_union::overlay_difference_regions(difference0, label_positive_len, tol).ok_or(
+            ShapeOpsError::RegionMaterializationFailed {
+                operation: "difference_planar_overlay",
+            },
+        )?;
+    let mut label_shell = weld_and_convert(&label_regions, "difference")?;
     let _ = orient_regular_shell(&mut label_shell);
     if label_shell
         .connected_components()
@@ -245,13 +252,21 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             fallback.push(region);
         }
     }
+    let fallback_positive_len = fallback.len();
     for mut region in and1.into_iter().chain(or1).chain(unknown1) {
         if classify_unknown(&analysis.poly_shell0, &region, tol, 1)? {
             region.invert();
             fallback.push(region);
         }
     }
-    Ok([weld_and_convert(&fallback, "difference")?, Shell::default()])
+    let fallback_regions =
+        planar_union::overlay_difference_regions(fallback, fallback_positive_len, tol).ok_or(
+            ShapeOpsError::RegionMaterializationFailed {
+                operation: "difference_planar_overlay",
+            },
+        )?;
+    let fallback_shell = weld_and_convert(&fallback_regions, "difference")?;
+    Ok([fallback_shell, Shell::default()])
 }
 
 fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(

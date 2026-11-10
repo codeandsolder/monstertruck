@@ -305,8 +305,9 @@ fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 }
 
 /// Probe both sides of each exact edge, retaining only the union boundary.
-fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+fn selected_boundary_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     arrangement: &PlanarArrangement<C, S>,
+    membership: impl Fn(Point2) -> bool,
 ) -> Option<Vec<ProjectedEdge<AltCurve<C, S>>>> {
     let mut boundary = Vec::new();
     for item in &arrangement.edges {
@@ -319,19 +320,19 @@ fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
         let left = Vector2::new(-tangent.y, tangent.x) / length;
         let center = start.midpoint(end);
-        let mut membership = None;
+        let mut edge_transition = None;
         for ratio in [1.0e-8, 1.0e-7, 1.0e-6, 1.0e-5] {
             let offset = ratio * arrangement.span;
             let (left_covered, right_covered) = (
-                covered(&arrangement.polygons, center + left * offset),
-                covered(&arrangement.polygons, center - left * offset),
+                membership(center + left * offset),
+                membership(center - left * offset),
             );
             if left_covered != right_covered {
-                membership = Some((left_covered, right_covered));
+                edge_transition = Some((left_covered, right_covered));
                 break;
             }
         }
-        match membership {
+        match edge_transition {
             Some((true, false)) => boundary.push(ProjectedEdge {
                 edge: item.edge.clone(),
                 uv: item.uv.clone(),
@@ -345,7 +346,14 @@ fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             _ => {}
         }
     }
-    (!boundary.is_empty()).then_some(boundary)
+    Some(boundary)
+}
+
+fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    arrangement: &PlanarArrangement<C, S>,
+) -> Option<Vec<ProjectedEdge<AltCurve<C, S>>>> {
+    selected_boundary_with(arrangement, |point| covered(&arrangement.polygons, point))
+        .filter(|boundary| !boundary.is_empty())
 }
 
 /// Reconstruct exact-edge loops by choosing clockwise exits at junctions.
@@ -416,9 +424,10 @@ fn trace_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     Some(loops)
 }
 
-fn validates_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+fn validates_occupancy_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     arrangement: &PlanarArrangement<C, S>,
     loops: &[OverlayLoop<C, S>],
+    membership: impl Fn(Point2) -> bool,
 ) -> bool {
     let traced = |point| {
         loops
@@ -442,9 +451,18 @@ fn validates_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             let offset = arrangement.span * ratio;
             let left_probe = center + left * offset;
             let right_probe = center - left * offset;
-            covered(&arrangement.polygons, left_probe) == traced(left_probe)
-                && covered(&arrangement.polygons, right_probe) == traced(right_probe)
+            membership(left_probe) == traced(left_probe)
+                && membership(right_probe) == traced(right_probe)
         })
+    })
+}
+
+fn validates_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    arrangement: &PlanarArrangement<C, S>,
+    loops: &[OverlayLoop<C, S>],
+) -> bool {
+    validates_occupancy_with(arrangement, loops, |point| {
+        covered(&arrangement.polygons, point)
     })
 }
 
@@ -610,6 +628,112 @@ pub(super) fn overlay_source_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .collect()
 }
 
+/// Exact planar positive-minus-cutter occupancy on an already-identified
+/// same-facing support. Operands can be independently parameterized or have
+/// partial edge overlaps. Intersections become shared exact curve nodes.
+fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    positive: &[AltRegion<C, S>],
+    cutter: &[AltRegion<C, S>],
+    tol: f64,
+) -> Option<Vec<AltRegion<C, S>>> {
+    let joined = positive.iter().chain(cutter).cloned().collect::<Vec<_>>();
+    let canonical = node_selected_regions(&joined, &[])?;
+    let initial = project_source(&canonical, tol)?;
+    let arrangement = if needs_exact_noding(&initial.edges, initial.span) {
+        let points = exact_node_points(&initial, tol)?;
+        let noded = node_selected_regions(&canonical, &points)?;
+        project_source(&noded, tol)?
+    } else {
+        initial
+    };
+    let positive_count = positive.len();
+    let membership = |point| {
+        covered(&arrangement.polygons[..positive_count], point)
+            && !covered(&arrangement.polygons[positive_count..], point)
+    };
+    let boundary = selected_boundary_with(&arrangement, membership)?;
+    if needs_exact_noding(&boundary, arrangement.span) {
+        return None;
+    }
+    if boundary.is_empty() {
+        return validates_occupancy_with(&arrangement, &[], membership).then_some(Vec::new());
+    }
+    let loops = trace_boundary(boundary)?;
+    if !validates_occupancy_with(&arrangement, &loops, membership) {
+        return None;
+    }
+    assemble_regions(loops, &positive[0], &arrangement.surface)
+}
+
+/// Remove selected cutter patches that share a plane and *original outward
+/// facing* with selected positive patches. Without this overlay the two
+/// operands each own a coincident planar wall, creating triply-used edges at
+/// the neighboring curved wall. Merely removing those faces would erase the
+/// positive wall instead of carving its correctly trimmed remainder.
+///
+/// The inverted cutter regions have the opposite final orientation to their
+/// original outside-facing surfaces, so compare positive regions against
+/// the *uninverted* cutter to identify the same-facing subtraction interface.
+pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    regions: Vec<AltRegion<C, S>>,
+    positive_count: usize,
+    tol: f64,
+) -> Option<Vec<AltRegion<C, S>>> {
+    if positive_count > regions.len() {
+        return None;
+    }
+    let mut taken = vec![false; regions.len()];
+    let mut additions = HashMap::<usize, Vec<AltRegion<C, S>>>::default();
+    for first in 0..positive_count {
+        if taken[first] {
+            continue;
+        }
+        let positive_indices = (first..positive_count)
+            .filter(|&i| !taken[i] && same_oriented_support(&regions[first], &regions[i], tol))
+            .collect::<Vec<_>>();
+        let cutter_indices = (positive_count..regions.len())
+            .filter(|&i| {
+                if taken[i] {
+                    return false;
+                }
+                let mut original = regions[i].clone();
+                original.invert();
+                same_oriented_support(&regions[first], &original, tol)
+            })
+            .collect::<Vec<_>>();
+        if cutter_indices.is_empty() {
+            continue;
+        }
+        let positive = positive_indices
+            .iter()
+            .map(|&i| regions[i].clone())
+            .collect::<Vec<_>>();
+        let cutter = cutter_indices
+            .iter()
+            .map(|&i| regions[i].clone())
+            .collect::<Vec<_>>();
+        // Common same-facing source/cutter patches cancel, but a cutter
+        // patch outside this particular positive source face can still be
+        // legitimately exposed by the cut. Preserve both non-overlapping
+        // remainders with their respective original face orientations.
+        let mut remainder = overlay_planar_subtract(&positive, &cutter, tol)?;
+        remainder.extend(overlay_planar_subtract(&cutter, &positive, tol)?);
+        additions.insert(first, remainder);
+        for i in positive_indices.into_iter().chain(cutter_indices) {
+            taken[i] = true;
+        }
+    }
+    let mut result = Vec::new();
+    for (i, region) in regions.into_iter().enumerate() {
+        if let Some(mut replacement) = additions.remove(&i) {
+            result.append(&mut replacement);
+        } else if !taken[i] {
+            result.push(region);
+        }
+    }
+    Some(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::Alternative;
@@ -673,6 +797,74 @@ mod tests {
                 source_face,
             )
         }
+    }
+
+    #[test]
+    fn planar_difference_carves_partial_same_facing_wall_without_losing_remainder() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 4.0],
+            [0.0, 4.0],
+            [1.0, 3.0],
+            [3.0, 3.0],
+            [3.0, 4.0],
+            [1.0, 4.0],
+        ]);
+        let host = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 17);
+        // A same-original-facing cutter has opposite orientation after
+        // inversion to become a Boolean difference face.
+        let void_inverted = fixture.region_on(&[4, 5, 6, 7, 4], Plane::xy(), false, 3);
+        let remainder = overlay_difference_regions(vec![host, void_inverted], 1, 1.0e-6)
+            .expect("shared planar wall must support exact subtraction overlay");
+        assert_eq!(remainder.len(), 1, "partial notch leaves one host face");
+        let face = remainder[0]
+            .try_face()
+            .expect("notched wall remains a face");
+        assert_eq!(face.absolute_boundaries().len(), 1);
+        assert_eq!(face.absolute_boundaries()[0].len(), 8);
+        let mut samples = HashMap::default();
+        let projected = create_parameter_boundary_on_surface(
+            &remainder[0].surface(),
+            &remainder[0].absolute_boundaries()[0],
+            None,
+            &mut samples,
+            1.0e-6,
+        )
+        .expect("analytic boundary must project");
+        assert!((signed_area(&projected.0) - 14.0).abs() < 1.0e-7);
+    }
+
+    #[test]
+    fn planar_difference_removes_fully_covered_common_wall() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]);
+        let host = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 1);
+        let void_inverted = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), false, 2);
+        let remainder = overlay_difference_regions(vec![host, void_inverted], 1, 1.0e-6)
+            .expect("fully coincident source wall should be consumed exactly");
+        assert!(
+            remainder.is_empty(),
+            "identical same-facing contact patches cancel"
+        );
+    }
+
+    #[test]
+    fn planar_difference_does_not_remove_unrelated_or_thin_separate_wall() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 2.0],
+            [0.0, 2.0],
+            [4.0, 0.0],
+            [6.0, 0.0],
+            [6.0, 2.0],
+            [4.0, 2.0],
+        ]);
+        let host = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 1);
+        let void_inverted = fixture.region_on(&[4, 5, 6, 7, 4], Plane::xy(), false, 2);
+        let result = overlay_difference_regions(vec![host, void_inverted], 1, 1.0e-6)
+            .expect("disjoint surface footprints remain usable");
+        assert_eq!(result.len(), 2, "do not drop a disjoint cutter face");
     }
 
     #[test]
