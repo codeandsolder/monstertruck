@@ -22,7 +22,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
-          version: "0.13.6"
+          version: "0.13.7"
           enable-cache: true
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb
