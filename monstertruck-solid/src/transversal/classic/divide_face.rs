@@ -216,7 +216,12 @@ fn polyline_interior_candidates(poly: &PolylineCurve<Point2>) -> Vec<Point2> {
         let left = Vector2::new(-edge.y, edge.x) / length;
         let inward = if area > 0.0 { left } else { -left };
         let midpoint = a.midpoint(b);
-        for relative in [1.0e-8, 1.0e-6, 1.0e-4, 1.0e-2] {
+        // Prefer an interior witness with enough clearance to survive
+        // downstream mesh/ray tolerance. Very thin true regions still fall
+        // back to progressively smaller offsets.
+        for relative in [
+            0.1, 0.03, 0.01, 0.003, 1.0e-3, 1.0e-4, 1.0e-6, 1.0e-8, 1.0e-10, 1.0e-12,
+        ] {
             let distance = (scale * relative).min(length * 0.125);
             let candidate = midpoint + inward * distance;
             if domain.include(candidate) {
@@ -305,18 +310,66 @@ where
             }
         })
     };
-    let mut points = Vec::new();
-    for poly in parameter_loops
+    // The first topological edge may lie right on another solid's skin.
+    // Picking its first epsilon-inset witness is not a geometric interior
+    // classification. Rank witnesses by actual clearance to ALL projected
+    // trim segments (including holes), and distribute the strongest samples.
+    const MAX_SAMPLES: usize = 9;
+    let clearance2 = |candidate: Point2| {
+        parameter_loops
+            .iter()
+            .flat_map(|poly| poly.0.windows(2))
+            .map(|segment| {
+                let delta = segment[1] - segment[0];
+                let denom = delta.magnitude2();
+                let t = if denom > 0.0 {
+                    ((candidate - segment[0]).dot(delta) / denom).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (candidate - (segment[0] + delta * t)).magnitude2()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let mut candidates = parameter_loops
         .iter()
         .filter(|poly| polyline_signed_area(poly) > 0.0)
-    {
-        for uv in polyline_interior_candidates(poly) {
-            if winding_at(uv) > 0 {
-                points.push(surface.evaluate(uv.x, uv.y));
-                break;
-            }
-        }
+        .flat_map(polyline_interior_candidates)
+        .filter(|&uv| winding_at(uv) > 0)
+        .map(|uv| (clearance2(uv), uv))
+        .filter(|(distance, _)| distance.is_finite() && *distance > 0.0)
+        .collect::<Vec<_>>();
+    candidates.sort_by(|lhs, rhs| rhs.0.total_cmp(&lhs.0));
+    let mut chosen = Vec::<Point2>::new();
+    if let Some((_, uv)) = candidates.first() {
+        chosen.push(*uv);
     }
+    while chosen.len() < MAX_SAMPLES {
+        let next = candidates
+            .iter()
+            .filter(|(_, uv)| {
+                chosen
+                    .iter()
+                    .all(|p| (*p - *uv).magnitude2() > f64::EPSILON)
+            })
+            .max_by(|(clear0, p0), (clear1, p1)| {
+                let score = |clearance: &f64, point: &Point2| {
+                    let distance = chosen
+                        .iter()
+                        .map(|p| (*p - *point).magnitude2())
+                        .fold(f64::INFINITY, f64::min);
+                    clearance.min(distance)
+                };
+                score(clear0, p0).total_cmp(&score(clear1, p1))
+            })
+            .map(|(_, uv)| *uv);
+        let Some(next) = next else { break };
+        chosen.push(next);
+    }
+    let points = chosen
+        .into_iter()
+        .map(|uv| surface.evaluate(uv.x, uv.y))
+        .collect::<Vec<_>>();
     (!points.is_empty()).then_some(points)
 }
 
@@ -629,6 +682,44 @@ where
 #[cfg(test)]
 mod uv_area_tests {
     use super::*;
+
+    #[test]
+    fn trimmed_region_samples_spatially_separated_interior_not_boundary_epsilon() {
+        use monstertruck_geometry::prelude::{Line, Plane};
+        use monstertruck_modeling::{Curve, Surface};
+        use monstertruck_topology::{Edge, Vertex};
+        let corners = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(10.0, 2.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+        ];
+        let vertices = corners.map(Vertex::new);
+        let edges = (0..4)
+            .map(|i| {
+                let j = (i + 1) % 4;
+                Edge::new_unchecked(
+                    &vertices[i],
+                    &vertices[j],
+                    Curve::from(Line(corners[i], corners[j])),
+                )
+            })
+            .collect::<Vec<_>>();
+        let wire = Wire::from(edges);
+        let surface = Surface::Plane(Plane::xy());
+        let samples = sample_points_on_region(&[wire], &surface, 1.0e-6)
+            .expect("rectangular trimmed region should give interior witnesses");
+        assert!(
+            samples.len() > 1,
+            "multiple witnesses protect against a bad boundary ray"
+        );
+        assert!(
+            samples
+                .iter()
+                .any(|p| { p.x > 0.1 && p.x < 9.9 && p.y > 0.1 && p.y < 1.9 }),
+            "at least one witness must have macroscopic clearance, not just epsilon inset"
+        );
+    }
 
     #[test]
     fn real_thin_uv_region_is_not_degenerate() {
