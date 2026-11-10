@@ -89,13 +89,36 @@ fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64) -> bool {
         for rhs in edges.iter().skip(index + 1) {
             let lhs_uv = &lhs.uv;
             let rhs_uv = &rhs.uv;
-            for &(point, other) in &[
-                (lhs_uv[0], rhs_uv),
-                (lhs_uv[lhs_uv.len() - 1], rhs_uv),
-                (rhs_uv[0], lhs_uv),
-                (rhs_uv[rhs_uv.len() - 1], lhs_uv),
+            for (uv_endpoint, world_endpoint, other_edge, other_uv) in [
+                (lhs_uv[0], lhs.edge.front().point(), &rhs.edge, rhs_uv),
+                (
+                    lhs_uv[lhs_uv.len() - 1],
+                    lhs.edge.back().point(),
+                    &rhs.edge,
+                    rhs_uv,
+                ),
+                (rhs_uv[0], rhs.edge.front().point(), &lhs.edge, lhs_uv),
+                (
+                    rhs_uv[rhs_uv.len() - 1],
+                    rhs.edge.back().point(),
+                    &lhs.edge,
+                    lhs_uv,
+                ),
             ] {
-                if other.windows(2).any(|w| on_interior(point, w[0], w[1])) {
+                // UV projection is approximate even when the original
+                // analytic edges ALREADY share a canonical world vertex.
+                // Sub-micron inverse-map drift can put that vertex in the
+                // middle of the OTHER edge's sampled UV polyline. Such a
+                // graphical T-junction needs no new exact curve vertex.
+                if world_endpoint.near(&other_edge.front().point())
+                    || world_endpoint.near(&other_edge.back().point())
+                {
+                    continue;
+                }
+                if other_uv
+                    .windows(2)
+                    .any(|w| on_interior(uv_endpoint, w[0], w[1]))
+                {
                     return true;
                 }
             }
@@ -1009,6 +1032,51 @@ mod tests {
             0,
             source_face,
         )
+    }
+
+    #[test]
+    fn projected_uv_t_junction_at_shared_world_vertex_does_not_request_noding() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        let horizontal = fixture.edge(0, 1);
+        let vertical = fixture.edge(0, 2);
+        let shared = Point2::new(0.0, 0.62);
+        let edges = [
+            ProjectedEdge {
+                edge: horizontal,
+                uv: vec![shared, Point2::new(1.0, 0.62)],
+            },
+            ProjectedEdge {
+                edge: vertical,
+                uv: vec![
+                    Point2::new(0.0, 0.6200002),
+                    Point2::new(0.0, 0.6199998),
+                    Point2::new(0.0, 0.5),
+                ],
+            },
+        ];
+        assert!(
+            !needs_exact_noding(&edges, 1.0),
+            "inverse-mapping drift at the SAME analytic 3D endpoint is not an interior cut"
+        );
+    }
+
+    #[test]
+    fn projected_uv_t_junction_at_distinct_world_vertex_still_requests_noding() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [1.0, 0.0], [1.0, 1.0]]);
+        let edges = [
+            ProjectedEdge {
+                edge: fixture.edge(0, 1),
+                uv: vec![Point2::new(0.0, 0.0), Point2::new(2.0, 0.0)],
+            },
+            ProjectedEdge {
+                edge: fixture.edge(2, 3),
+                uv: vec![Point2::new(1.0, 0.0), Point2::new(1.0, 1.0)],
+            },
+        ];
+        assert!(
+            needs_exact_noding(&edges, 2.0),
+            "a distinct 3D edge endpoint on an exact edge interior needs an analytic split"
+        );
     }
 
     #[test]
