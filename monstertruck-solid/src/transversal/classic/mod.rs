@@ -211,6 +211,7 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     analysis.cls0.integrate_by_component();
     analysis.cls1.integrate_by_component();
     let full_positive_regions = analysis.cls0.all_regions();
+    let full_cutter_regions = analysis.cls1.all_regions();
 
     let [_inside0, mut difference0, unknown0] = analysis.cls0.and_or_unknown();
     for region in unknown0 {
@@ -233,6 +234,7 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         difference0,
         label_positive_len,
         &full_positive_regions,
+        &full_cutter_regions,
         tol,
     )
     .ok_or(ShapeOpsError::RegionMaterializationFailed {
@@ -267,6 +269,7 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         fallback,
         fallback_positive_len,
         &full_positive_regions,
+        &full_cutter_regions,
         tol,
     )
     .ok_or(ShapeOpsError::RegionMaterializationFailed {
