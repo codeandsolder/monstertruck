@@ -682,6 +682,30 @@ pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface
     if positive_count > regions.len() {
         return None;
     }
+    // The face divider may produce a non-simple planar walk, e.g. an end
+    // cap with retraced zero-area digons. Its boundary still describes a
+    // well-defined selected planar region. Canonicalize its actual material
+    // occupancy with exact analytic edges *before* comparing with other
+    // planar supports. Keep the operand-side partition through expansion.
+    let mut normalized = Vec::new();
+    let mut normalized_positive_count = 0;
+    for (index, region) in regions.into_iter().enumerate() {
+        let fragments = if region.try_face().is_none()
+            && matches!(
+                region.surface().try_into_analytic_surface_kind(),
+                Some(AnalyticSurfaceKind::Plane(_))
+            ) {
+            overlay_one_source(std::slice::from_ref(&region), tol)?
+        } else {
+            vec![region]
+        };
+        if index < positive_count {
+            normalized_positive_count += fragments.len();
+        }
+        normalized.extend(fragments);
+    }
+    let regions = normalized;
+    let positive_count = normalized_positive_count;
     let mut taken = vec![false; regions.len()];
     let mut additions = HashMap::<usize, Vec<AltRegion<C, S>>>::default();
     for first in 0..positive_count {
@@ -797,6 +821,36 @@ mod tests {
                 source_face,
             )
         }
+    }
+
+    #[test]
+    fn planar_difference_normalizes_single_selected_non_simple_cap() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]);
+        // The same exact horizontal edge is traversed twice with opposite
+        // incidence: this is an arrangement walk, not a valid B-rep face.
+        let cap = fixture.region_on(&[0, 1, 2, 3, 0, 1, 0], Plane::xy(), true, 0);
+        assert!(
+            cap.try_face().is_none(),
+            "raw retraced cap must be non-simple"
+        );
+        let pieces = overlay_difference_regions(vec![cap], 1, 1.0e-6)
+            .expect("exact planar material occupancy must normalize a cap walk");
+        assert_eq!(pieces.len(), 1);
+        let face = pieces[0]
+            .try_face()
+            .expect("normalized cap must be a valid face");
+        assert_eq!(face.absolute_boundaries().len(), 1);
+        assert_eq!(face.absolute_boundaries()[0].len(), 4);
+        let mut samples = HashMap::default();
+        let poly = create_parameter_boundary_on_surface(
+            &pieces[0].surface(),
+            &pieces[0].absolute_boundaries()[0],
+            None,
+            &mut samples,
+            1.0e-6,
+        )
+        .expect("normalized cap retained source analytic edges");
+        assert!((signed_area(&poly.0) - 12.0).abs() < 1.0e-6);
     }
 
     #[test]
