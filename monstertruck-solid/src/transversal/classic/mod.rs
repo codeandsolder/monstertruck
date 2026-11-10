@@ -210,6 +210,7 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let tol = analysis.tolerance;
     analysis.cls0.integrate_by_component();
     analysis.cls1.integrate_by_component();
+    let full_positive_regions = analysis.cls0.all_regions();
 
     let [_inside0, mut difference0, unknown0] = analysis.cls0.and_or_unknown();
     for region in unknown0 {
@@ -228,12 +229,15 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     let label_positive_len = difference0.len();
     difference0.append(&mut difference1);
-    let label_regions =
-        planar_union::overlay_difference_regions(difference0, label_positive_len, tol).ok_or(
-            ShapeOpsError::RegionMaterializationFailed {
-                operation: "difference_planar_overlay",
-            },
-        )?;
+    let label_regions = planar_union::overlay_difference_regions(
+        difference0,
+        label_positive_len,
+        &full_positive_regions,
+        tol,
+    )
+    .ok_or(ShapeOpsError::RegionMaterializationFailed {
+        operation: "difference_planar_overlay",
+    })?;
     let mut label_shell = weld_and_convert(&label_regions, "difference")?;
     let _ = orient_regular_shell(&mut label_shell);
     if label_shell
@@ -259,12 +263,15 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             fallback.push(region);
         }
     }
-    let fallback_regions =
-        planar_union::overlay_difference_regions(fallback, fallback_positive_len, tol).ok_or(
-            ShapeOpsError::RegionMaterializationFailed {
-                operation: "difference_planar_overlay",
-            },
-        )?;
+    let fallback_regions = planar_union::overlay_difference_regions(
+        fallback,
+        fallback_positive_len,
+        &full_positive_regions,
+        tol,
+    )
+    .ok_or(ShapeOpsError::RegionMaterializationFailed {
+        operation: "difference_planar_overlay",
+    })?;
     let fallback_shell = weld_and_convert(&fallback_regions, "difference")?;
     Ok([fallback_shell, Shell::default()])
 }

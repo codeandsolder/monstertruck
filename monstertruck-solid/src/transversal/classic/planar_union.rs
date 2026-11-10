@@ -677,6 +677,7 @@ fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: Vec<AltRegion<C, S>>,
     positive_count: usize,
+    original_positive: &[AltRegion<C, S>],
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
     if positive_count > regions.len() {
@@ -736,12 +737,21 @@ pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface
             .iter()
             .map(|&i| regions[i].clone())
             .collect::<Vec<_>>();
-        // Common same-facing source/cutter patches cancel, but a cutter
-        // patch outside this particular positive source face can still be
-        // legitimately exposed by the cut. Preserve both non-overlapping
-        // remainders with their respective original face orientations.
+        // The selected positive regions have ALREADY been cropped by
+        // classification. Using only those remnants as the clipping domain
+        // makes the discarded coincident piece of the source positive face
+        // look like an exposed cutter face. For cutter ownership use the
+        // complete ORIGINAL positive planar support footprint instead.
+        let complete_positive = original_positive
+            .iter()
+            .filter(|region| same_oriented_support(&regions[first], region, tol))
+            .cloned()
+            .collect::<Vec<_>>();
+        if complete_positive.is_empty() {
+            return None;
+        }
         let mut remainder = overlay_planar_subtract(&positive, &cutter, tol)?;
-        remainder.extend(overlay_planar_subtract(&cutter, &positive, tol)?);
+        remainder.extend(overlay_planar_subtract(&cutter, &complete_positive, tol)?);
         additions.insert(first, remainder);
         for i in positive_indices.into_iter().chain(cutter_indices) {
             taken[i] = true;
@@ -752,6 +762,23 @@ pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface
         if let Some(mut replacement) = additions.remove(&i) {
             result.append(&mut replacement);
         } else if !taken[i] {
+            if i >= positive_count {
+                let mut unflipped = region.clone();
+                unflipped.invert();
+                let complete_positive = original_positive
+                    .iter()
+                    .filter(|source| same_oriented_support(&unflipped, source, tol))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !complete_positive.is_empty() {
+                    result.extend(overlay_planar_subtract(
+                        std::slice::from_ref(&region),
+                        &complete_positive,
+                        tol,
+                    )?);
+                    continue;
+                }
+            }
             result.push(region);
         }
     }
@@ -833,7 +860,7 @@ mod tests {
             cap.try_face().is_none(),
             "raw retraced cap must be non-simple"
         );
-        let pieces = overlay_difference_regions(vec![cap], 1, 1.0e-6)
+        let pieces = overlay_difference_regions(vec![cap.clone()], 1, &[cap], 1.0e-6)
             .expect("exact planar material occupancy must normalize a cap walk");
         assert_eq!(pieces.len(), 1);
         let face = pieces[0]
@@ -854,6 +881,49 @@ mod tests {
     }
 
     #[test]
+    fn planar_difference_masks_cutter_by_original_positive_not_preclassified_remnant() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 3.0],
+            [0.0, 3.0],
+            [4.0, 4.0],
+            [0.0, 4.0],
+            [1.0, 3.0],
+            [3.0, 3.0],
+            [3.0, 4.0],
+            [1.0, 4.0],
+        ]);
+        let original = fixture.region_on(&[0, 1, 4, 5, 0], Plane::xy(), true, 1);
+        // The classifier already removed y=3..4 from the selected
+        // positive: comparing the cutter against this selected fragment
+        // would incorrectly resurrect the discarded shared source wall.
+        let selected = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 1);
+        let cutter = fixture.region_on(&[6, 7, 8, 9, 6], Plane::xy(), false, 2);
+        let result = overlay_difference_regions(vec![selected, cutter], 1, &[original], 1e-6)
+            .expect("complete original support is needed for cutter ownership");
+        assert_eq!(
+            result.len(),
+            1,
+            "same-facing cutter inside original must cancel"
+        );
+        let face = result[0]
+            .try_face()
+            .expect("selected positive remnant remains intact");
+        assert_eq!(face.absolute_boundaries().len(), 1);
+        let mut samples = HashMap::default();
+        let poly = create_parameter_boundary_on_surface(
+            &result[0].surface(),
+            &result[0].absolute_boundaries()[0],
+            None,
+            &mut samples,
+            1e-6,
+        )
+        .expect("remnant retains exact source boundary");
+        assert!((signed_area(&poly.0) - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn planar_difference_carves_partial_same_facing_wall_without_losing_remainder() {
         let mut fixture = PlanarFixture::new(&[
             [0.0, 0.0],
@@ -869,8 +939,9 @@ mod tests {
         // A same-original-facing cutter has opposite orientation after
         // inversion to become a Boolean difference face.
         let void_inverted = fixture.region_on(&[4, 5, 6, 7, 4], Plane::xy(), false, 3);
-        let remainder = overlay_difference_regions(vec![host, void_inverted], 1, 1.0e-6)
-            .expect("shared planar wall must support exact subtraction overlay");
+        let remainder =
+            overlay_difference_regions(vec![host.clone(), void_inverted], 1, &[host], 1.0e-6)
+                .expect("shared planar wall must support exact subtraction overlay");
         assert_eq!(remainder.len(), 1, "partial notch leaves one host face");
         let face = remainder[0]
             .try_face()
@@ -894,8 +965,9 @@ mod tests {
         let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]);
         let host = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 1);
         let void_inverted = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), false, 2);
-        let remainder = overlay_difference_regions(vec![host, void_inverted], 1, 1.0e-6)
-            .expect("fully coincident source wall should be consumed exactly");
+        let remainder =
+            overlay_difference_regions(vec![host.clone(), void_inverted], 1, &[host], 1.0e-6)
+                .expect("fully coincident source wall should be consumed exactly");
         assert!(
             remainder.is_empty(),
             "identical same-facing contact patches cancel"
@@ -916,8 +988,9 @@ mod tests {
         ]);
         let host = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 1);
         let void_inverted = fixture.region_on(&[4, 5, 6, 7, 4], Plane::xy(), false, 2);
-        let result = overlay_difference_regions(vec![host, void_inverted], 1, 1.0e-6)
-            .expect("disjoint surface footprints remain usable");
+        let result =
+            overlay_difference_regions(vec![host.clone(), void_inverted], 1, &[host], 1.0e-6)
+                .expect("disjoint surface footprints remain usable");
         assert_eq!(result.len(), 2, "do not drop a disjoint cutter face");
     }
 
