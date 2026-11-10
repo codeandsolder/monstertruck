@@ -263,6 +263,41 @@ fn exact_node_points<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     (!nodes.is_empty()).then_some(nodes)
 }
 
+/// A closed topological wire must not acquire an artificial gap merely
+/// because its first UV inverse projection had no continuation hint while
+/// the last one did. Preserve actual periodic winding: a full parameter
+/// period is a nonlocal jump, larger than the adjacent sampled UV steps.
+fn reconcile_local_wire_uv_closure<S: ParametricSurface3D>(
+    surface: &S,
+    world_vertex: Point3,
+    uv: &mut [Point2],
+) {
+    if uv.len() < 3 {
+        return;
+    }
+    let first = uv[0];
+    let last_index = uv.len() - 1;
+    let last = uv[last_index];
+    let gap = (first - last).magnitude2();
+    let first_step = (uv[1] - first).magnitude2();
+    let last_step = (uv[last_index - 1] - last).magnitude2();
+    // Reconcile only a local inverse-map discrepancy. A wire which winds
+    // around a periodic surface can legitimately start/end at parameter
+    // coordinates a whole period apart despite sharing its 3D vertex.
+    if !gap.is_finite() || gap >= first_step || gap >= last_step {
+        return;
+    }
+    let first_residual = surface.evaluate(first.x, first.y).distance2(world_vertex);
+    let last_residual = surface.evaluate(last.x, last.y).distance2(world_vertex);
+    let representative = if first_residual <= last_residual {
+        first
+    } else {
+        last
+    };
+    uv[0] = representative;
+    uv[last_index] = representative;
+}
+
 fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     source: &[AltRegion<C, S>],
     tol: f64,
@@ -297,10 +332,14 @@ fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     for region in source {
         let mut region_loops = Vec::new();
         for wire in region.absolute_boundaries() {
-            let projected =
+            let mut projected =
                 create_parameter_boundary_on_surface(&surface, wire, None, &mut samples, tol)?;
             if projected.len() < 3 {
                 return None;
+            }
+            let front = wire.front_vertex()?;
+            if front.id() == wire.back_vertex()?.id() {
+                reconcile_local_wire_uv_closure(&surface, front.point(), &mut projected.0);
             }
             for &point in &projected.0 {
                 span_min.x = span_min.x.min(point.x);
@@ -308,26 +347,37 @@ fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 span_max.x = span_max.x.max(point.x);
                 span_max.y = span_max.y.max(point.y);
             }
-            region_loops.push(projected.0);
+            // The complete wire is projected with a continuous UV hint;
+            // re-projecting its edges independently can choose different
+            // inverse-map branches, or move shared vertices slightly in UV.
+            // Slice the exact edge samples out of that same projected walk
+            // instead so occupancy polygons and edge transitions agree.
+            let mut start = 0;
             for edge in wire {
-                if edges.contains_key(&edge.id()) {
-                    continue;
-                }
-                let absolute = edge.absolute_clone();
-                let one = Wire::from(vec![absolute.clone()]);
-                let projected =
-                    create_parameter_boundary_on_surface(&surface, &one, None, &mut samples, tol)?;
-                if projected.len() < 2 {
+                let segment_count = samples.get(&edge.id())?.len().checked_sub(1)?;
+                if segment_count == 0 {
                     return None;
                 }
-                edges.insert(
-                    edge.id(),
-                    ProjectedEdge {
-                        edge: absolute,
-                        uv: projected.0,
-                    },
-                );
+                let end = start + segment_count;
+                let mut uv = projected.0.get(start..=end)?.to_vec();
+                if !edge.orientation() {
+                    uv.reverse();
+                }
+                if !edges.contains_key(&edge.id()) {
+                    edges.insert(
+                        edge.id(),
+                        ProjectedEdge {
+                            edge: edge.absolute_clone(),
+                            uv,
+                        },
+                    );
+                }
+                start = end;
             }
+            if start + 1 != projected.len() {
+                return None;
+            }
+            region_loops.push(projected.0);
         }
         polygons.push(region_loops);
     }
@@ -1077,6 +1127,68 @@ mod tests {
             needs_exact_noding(&edges, 2.0),
             "a distinct 3D edge endpoint on an exact edge interior needs an analytic split"
         );
+    }
+
+    #[test]
+    fn closed_wire_projection_reconciles_local_inverse_drift_without_erasing_winding() {
+        let surface = Plane::xy();
+        let vertex = Point3::new(0.0, 0.62, 0.0);
+        let mut locally_drifting = vec![
+            Point2::new(2.8e-7, 0.62),
+            Point2::new(0.25, 0.62),
+            Point2::new(0.25, 1.0),
+            Point2::new(0.0, 1.0),
+            Point2::new(0.0, 0.62),
+        ];
+        reconcile_local_wire_uv_closure(&surface, vertex, &mut locally_drifting);
+        assert_eq!(locally_drifting[0], locally_drifting[4]);
+        assert_eq!(locally_drifting[0], Point2::new(0.0, 0.62));
+
+        // A closed 3D wire wrapping an intrinsic periodic parameter remains
+        // open in the universal-cover UV chart by its actual winding period.
+        let mut winding = vec![
+            Point2::new(0.0, 0.62),
+            Point2::new(0.25, 0.62),
+            Point2::new(0.5, 0.62),
+            Point2::new(0.75, 0.62),
+            Point2::new(1.0, 0.62),
+        ];
+        reconcile_local_wire_uv_closure(&surface, vertex, &mut winding);
+        assert_eq!(winding[0], Point2::new(0.0, 0.62));
+        assert_eq!(winding[4], Point2::new(1.0, 0.62));
+    }
+
+    #[test]
+    fn projected_edge_charts_follow_their_parent_wire_walk() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]);
+        // Arrange that the last wire edge is inverse to its stored edge.
+        fixture.edge(0, 3);
+        let planar = fixture.region(&[0, 1, 2, 3, 0]);
+        let curved = ruled_difference_region((0.0, 2.0), true, 4);
+        for region in [planar, curved] {
+            let arrangement = project_source(std::slice::from_ref(&region), 1.0e-6, true)
+                .expect("wire and edge curves must share one UV projection");
+            let poly = &arrangement.polygons[0][0];
+            let mut start = 0;
+            for edge in &region.absolute_boundaries()[0] {
+                let item = arrangement
+                    .edges
+                    .iter()
+                    .find(|item| item.edge.id() == edge.id())
+                    .expect("projected edge retained original identity");
+                let mut uv = item.uv.clone();
+                if !edge.orientation() {
+                    uv.reverse();
+                }
+                assert_eq!(
+                    &poly[start..start + uv.len()],
+                    uv,
+                    "every projected edge must be a contiguous part of its source wire"
+                );
+                start += uv.len() - 1;
+            }
+            assert_eq!(start + 1, poly.len());
+        }
     }
 
     #[test]
