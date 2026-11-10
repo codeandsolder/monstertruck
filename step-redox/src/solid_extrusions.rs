@@ -204,6 +204,48 @@ fn source_cap_generator_station(
         .then_some(height)
 }
 
+/// Form a cap-derived extrusion proposal for an explicitly given axial station.
+///
+/// This does not assert that the positive source solid occupies the candidate.
+/// In particular, a source cap can bound an *empty* channel: such a proposal
+/// must only become a Boolean cutter after complete-source verification.
+pub(crate) fn source_cap_extrusion_proposal_at_station(
+    solid_id: u64,
+    cap_face_id: u64,
+    axis: [f64; 3],
+    height_mm: f64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<RecoveredSourceCapExtrusion> {
+    if !height_mm.is_finite() || height_mm <= GEOM_TOL_MM {
+        return None;
+    }
+    let cap = face_info(cap_face_id, entities, index)?;
+    let SurfaceSupport::Plane(plane) = cap.surface else {
+        return None;
+    };
+    let z_axis = normalize3(axis, DIR_TOL)?;
+    if dot(z_axis, normalize3(plane.normal, DIR_TOL)?).abs() < 1.0 - DIR_TOL
+        || !face_lies_on_plane(&cap, plane)
+    {
+        return None;
+    }
+    let roles = cap_loop_roles(&cap, z_axis)?;
+    let profile = canonical_profile(&cap, z_axis, &roles)?;
+    Some(RecoveredSourceCapExtrusion {
+        solid_id,
+        cap_face_id,
+        profile_curves: profile.curves,
+        inner_profile_loops: profile.inner_loops,
+        origin_mm: profile.origin_mm,
+        x_axis: profile.x_axis,
+        y_axis: profile.y_axis,
+        z_axis,
+        height_mm,
+        max_residual_mm: plane.max_residual_mm,
+    })
+}
+
 /// Recover a source cap as a *partial* extrusion, stopping at the earliest
 /// source-witnessed axial generator station. The opposite cap need not be
 /// exposed: this remains an unverified proposal until a union is independently

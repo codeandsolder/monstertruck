@@ -772,6 +772,37 @@ mod tests {
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn native_source_cap_proposals_for_mixed_treatment() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_mixed_treatment_4a6356.step");
+        let source = ParsedStepSource::parse(bytes)?.exchange;
+        let entities = &source.data[0].entities;
+        let index = build_index(entities);
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        for &(face, length, filename) in &[(620, 1.27, "base"), (391, 0.3048, "void")] {
+            let proposal = crate::solid_extrusions::source_cap_extrusion_proposal_at_station(
+                171,
+                face,
+                [1.0, 0.0, 0.0],
+                length,
+                entities,
+                &index,
+            )
+            .ok_or_else(|| anyhow::anyhow!("source cap {face} is not a valid profile"))?;
+            let (model, root) = solid::recover_source_cap_extrusion_model(&proposal)?;
+            let result = kernel.evaluate(&model, root)?;
+            assert!(kernel.summarize(&result).is_single_solid());
+            if let Ok(dir) = std::env::var("MIXED_SOURCE_PRISM_OUTPUT_DIR") {
+                std::fs::write(
+                    std::path::Path::new(&dir).join(format!("native-{filename}-prism.step")),
+                    kernel.to_step(&result)?,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn original_bored_cap_and_two_bounded_lobes_recover_automatically() -> Result<()> {
         let source =
             include_bytes!("../validation/fixtures/native_mixed_carrier_chamfer_06d018ae.step");

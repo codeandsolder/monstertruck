@@ -1830,6 +1830,110 @@ pub mod monstertruck {
             Ok(())
         }
 
+        /// The independent OCC constructive decomposition of a curved lip
+        /// combines two exact circular boundary arcs with planar tapered
+        /// side limits. Native intersection must retain both types of carrier.
+
+        #[test]
+        fn evaluates_curved_lip_intersected_with_tapered_envelope() -> Result<()> {
+            use crate::cad_ir::{BooleanOp, RigidTransform};
+
+            let x0 = 67.1195;
+            let x1 = 68.3895;
+            let y0: f64 = 5.351_872_032_35;
+            let y1 = 5.859_872_032_35;
+            let z0 = 2.022_334_121_45;
+            let z1 = 2.352_534_121_45;
+            let cy = 5.364_572_032_35;
+            let cz = 1.679_434_121_45;
+            let lower_r: f64 = 0.3429;
+            let upper_r: f64 = 0.6731;
+            let lower_at_y0 = cz + (lower_r.powi(2) - (y0 - cy).powi(2)).sqrt();
+            let upper_at_y0 = cz + (upper_r.powi(2) - (y0 - cy).powi(2)).sqrt();
+
+            let profile = Profile2d {
+                loops: vec![ProfileLoop {
+                    curves: vec![
+                        Curve2d::CircleArc {
+                            center_mm: [cy, cz],
+                            radius_mm: lower_r,
+                            start_angle_rad: (lower_at_y0 - cz).atan2(y0 - cy),
+                            end_angle_rad: (z0 - cz).atan2(0.0),
+                        },
+                        Curve2d::Line {
+                            start_mm: [cy, z0],
+                            end_mm: [y1, z0],
+                        },
+                        Curve2d::Line {
+                            start_mm: [y1, z0],
+                            end_mm: [y1, z1],
+                        },
+                        Curve2d::Line {
+                            start_mm: [y1, z1],
+                            end_mm: [cy, z1],
+                        },
+                        Curve2d::CircleArc {
+                            center_mm: [cy, cz],
+                            radius_mm: upper_r,
+                            start_angle_rad: (z1 - cz).atan2(0.0),
+                            end_angle_rad: (upper_at_y0 - cz).atan2(y0 - cy),
+                        },
+                        Curve2d::Line {
+                            start_mm: [y0, upper_at_y0],
+                            end_mm: [y0, lower_at_y0],
+                        },
+                    ],
+                }],
+            };
+
+            let mut model = CadModel::new();
+            let arc_body = model.add_node(CadNode::Extrude {
+                profile,
+                vector_mm: [0.0, 0.0, x1 - x0],
+            });
+            let arc_world = model.add_node(CadNode::Transform {
+                transform: RigidTransform {
+                    matrix: [
+                        [0.0, 0.0, 1.0, x0],
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                },
+                child: arc_body,
+            });
+            let trapezoid =
+                Profile2d::polygon(vec![[x0, y0], [x1, y0], [x1 - 0.254, y1], [x0 + 0.254, y1]])?;
+            let prism = model.add_node(CadNode::Extrude {
+                profile: trapezoid,
+                vector_mm: [0.0, 0.0, z1 - z0 + 0.1],
+            });
+            let prism_world = model.add_node(CadNode::Transform {
+                transform: RigidTransform {
+                    matrix: [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, z0 - 0.05],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                },
+                child: prism,
+            });
+            let root = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Intersection,
+                children: vec![arc_world, prism_world],
+            });
+            model.add_root(root)?;
+            model.validate()?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            assert!(kernel.summarize(&evaluated).is_single_solid());
+            if let Ok(path) = std::env::var("CURVED_LIP_STEP_OUTPUT") {
+                std::fs::write(path, kernel.to_step(&evaluated)?)?;
+            }
+            Ok(())
+        }
+
         #[test]
         fn evaluates_box_without_exposing_monstertruck_topology() -> Result<()> {
             let (model, root) = box_model()?;
