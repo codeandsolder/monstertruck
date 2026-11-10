@@ -77,12 +77,12 @@ pub enum CadFragmentSource {
         cap_face_ids: Vec<[u64; 2]>,
         tip_face_ids: Vec<u64>,
     },
-    /// A verified partial solid: one real terminal cap plus four source
-    /// planar walls; never by itself a recovered complete source body.
+    /// A source-derived partial solid: a terminal cap and one or more
+    /// witnessed planar wall rings; never a recovered complete source body.
     RuledEndExtension {
         solid_id: u64,
         tip_face_id: u64,
-        wall_face_ids: [u64; 4],
+        wall_face_ids: Vec<u64>,
     },
     BoundaryFeatureComposite {
         solid_id: u64,

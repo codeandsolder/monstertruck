@@ -326,8 +326,8 @@ pub fn detect_sectioned_planar_loft(solid: &ReducedSolid) -> Option<CadFragment>
     candidates.into_iter().next().map(|(_, fragment)| fragment)
 }
 
-/// An exact planar end treatment, whose terminal face and four ruled walls
-/// are real source topology. The shoulder section is an implied interface,
+/// An exact planar end treatment, whose terminal face and one or more
+/// four-sided ruled wall rings are real source topology. The shoulder section is an implied interface,
 /// never an invented source face.
 pub struct RuledEndExtension {
     pub fragment: CadFragment,
@@ -349,13 +349,14 @@ pub fn detect_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtensio
         .collect()
 }
 
-/// Discover exact ruled end sections even when adjacent analytic planar walls
-/// extend into an earlier material core instead of ending at their shoulder.
+/// Discover source-witnessed ruled end sections, including multi-stage
+/// planar strips and analytic walls continuing into an earlier core.
 pub fn detect_extended_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
     solid
         .faces()
         .filter_map(|cap| {
-            terminal_ruled_extension(solid, cap)
+            terminal_sectioned_ruled_extension(solid, cap)
+                .or_else(|| terminal_ruled_extension(solid, cap))
                 .or_else(|| terminal_extended_planar_ruled_extension(solid, cap))
         })
         .collect()
@@ -548,7 +549,193 @@ fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<R
             source: CadFragmentSource::RuledEndExtension {
                 solid_id: solid.solid_id(),
                 tip_face_id: cap.id,
-                wall_face_ids,
+                wall_face_ids: wall_face_ids.to_vec(),
+            },
+            model,
+            root,
+        },
+        tip_face_id: cap.id,
+        axis,
+        shoulder_point_mm: crate::math3::add(origin, crate::math3::mul(axis, depth)),
+        tip_point_mm: origin,
+    })
+}
+
+/// Follow a source four-sided planar wall ring, preserving the actual STEP
+/// vertex and edge identities instead of extrapolating an idealized shoulder.
+/// Previous walls are excluded; a cap or a non-quad continuation ends the
+/// strip rather than being interpreted as another section.
+fn next_quad_wall_ring(
+    solid: &ReducedSolid,
+    ring: &[OrientedEdgeUse],
+    consumed: &BTreeSet<u64>,
+) -> Option<(Vec<OrientedEdgeUse>, Vec<u64>)> {
+    let vertices = ring
+        .iter()
+        .flat_map(|edge| [edge.start_vertex, edge.end_vertex])
+        .collect::<BTreeSet<_>>();
+    if ring.len() != 4 || vertices.len() != 4 {
+        return None;
+    }
+    let mut next = Vec::with_capacity(4);
+    let mut walls = Vec::with_capacity(4);
+    for edge in ring {
+        let adjacent = solid
+            .faces()
+            .filter(|face| {
+                !consumed.contains(&face.id)
+                    && face.loop_edges().any(|used| used.edge_id == edge.edge_id)
+            })
+            .collect::<Vec<_>>();
+        let [wall] = adjacent.as_slice() else {
+            return None;
+        };
+        if !plane_quad(wall) || walls.contains(&wall.id) {
+            return None;
+        }
+        let opposite = wall
+            .loop_edges()
+            .filter(|used| {
+                !vertices.contains(&used.start_vertex) && !vertices.contains(&used.end_vertex)
+            })
+            .collect::<Vec<_>>();
+        let [far_edge] = opposite.as_slice() else {
+            return None;
+        };
+        walls.push(wall.id);
+        next.push((*far_edge).clone());
+    }
+    let mut degrees = BTreeMap::<u64, usize>::new();
+    for edge in &next {
+        *degrees.entry(edge.start_vertex).or_default() += 1;
+        *degrees.entry(edge.end_vertex).or_default() += 1;
+    }
+    if degrees.len() != 4
+        || degrees.values().any(|&degree| degree != 2)
+        || next
+            .iter()
+            .map(|edge| edge.edge_id)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != 4
+    {
+        return None;
+    }
+    Some((next, walls))
+}
+
+fn section_from_wall_ring(
+    ring: &[OrientedEdgeUse],
+    origin: [f64; 3],
+    axis: [f64; 3],
+    x: [f64; 3],
+    y: [f64; 3],
+) -> Option<Section> {
+    let mut seen = BTreeMap::<u64, [f64; 3]>::new();
+    for edge in ring {
+        for (id, point) in [
+            (edge.start_vertex, edge.start_mm),
+            (edge.end_vertex, edge.end_mm),
+        ] {
+            if seen
+                .insert(id, point)
+                .is_some_and(|old| distance(old, point) > TOL_MM)
+            {
+                return None;
+            }
+        }
+    }
+    let vertices = seen
+        .into_iter()
+        .map(|(id, point)| Vertex { id, point })
+        .collect::<Vec<_>>();
+    let level = dot(sub(vertices.first()?.point, origin), axis);
+    if vertices
+        .iter()
+        .any(|vertex| (dot(sub(vertex.point, origin), axis) - level).abs() > TOL_MM)
+    {
+        return None;
+    }
+    section(level, &vertices, origin, x, y)
+}
+
+/// A source terminal cap may lead into several real four-quad rings before
+/// disappearing into a larger solid. Each ring yields an *editable* loft
+/// section; no fictitious shoulder/cap is introduced into source provenance.
+fn terminal_sectioned_ruled_extension(
+    solid: &ReducedSolid,
+    cap: &ReducedFace,
+) -> Option<RuledEndExtension> {
+    if !plane_quad(cap) {
+        return None;
+    }
+    let SurfaceSupport::Plane(plane) = cap.surface else {
+        return None;
+    };
+    let origin = cap.loops.first()?.edges.first()?.start_mm;
+    let axis = normalize(plane.normal, DIR_TOL)?;
+    let first_edge = cap.loops.first()?.edges.first()?;
+    let x = normalize(sub(first_edge.end_mm, first_edge.start_mm), DIR_TOL)?;
+    if dot(x, axis).abs() > DIR_TOL {
+        return None;
+    }
+    let y = normalize(cross(axis, x), DIR_TOL)?;
+    let mut current = cap.loops.first()?.edges.clone();
+    let mut sections = vec![section_from_wall_ring(&current, origin, axis, x, y)?];
+    let mut consumed = BTreeSet::from([cap.id]);
+    let mut wall_ids = Vec::new();
+    let mut direction = 0.0_f64;
+    loop {
+        let Some((next, walls)) = next_quad_wall_ring(solid, &current, &consumed) else {
+            break;
+        };
+        let Some(stage) = section_from_wall_ring(&next, origin, axis, x, y) else {
+            break;
+        };
+        let previous = sections.last()?.level;
+        let delta = stage.level - previous;
+        if delta.abs() <= TOL_MM || (direction != 0.0 && delta.signum() != direction.signum()) {
+            break;
+        }
+        direction = delta;
+        wall_ids.extend(&walls);
+        consumed.extend(walls);
+        current = next;
+        sections.push(stage);
+    }
+    // The ordinary terminal extension already owns a single transition.
+    // This recognizer is for actual multi-stage walls only.
+    if sections.len() < 3 {
+        return None;
+    }
+    let depth = sections.last()?.level;
+    if depth < 0.0 {
+        sections.reverse();
+    }
+    let sections = sections
+        .into_iter()
+        .map(|s| LoftSection {
+            profile: s.profile,
+            transform: RigidTransform {
+                matrix: [
+                    [x[0], y[0], axis[0], axis[0].mul_add(s.level, origin[0])],
+                    [x[1], y[1], axis[1], axis[1].mul_add(s.level, origin[1])],
+                    [x[2], y[2], axis[2], axis[2].mul_add(s.level, origin[2])],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            },
+        })
+        .collect();
+    let mut model = CadModel::new();
+    let root = model.add_node(CadNode::Loft { sections });
+    model.add_root(root).ok()?;
+    model.validate().ok()?;
+    Some(RuledEndExtension {
+        fragment: CadFragment {
+            source: CadFragmentSource::RuledEndExtension {
+                solid_id: solid.solid_id(),
+                tip_face_id: cap.id,
+                wall_face_ids: wall_ids,
             },
             model,
             root,
@@ -689,7 +876,7 @@ fn terminal_extended_planar_ruled_extension(
             source: CadFragmentSource::RuledEndExtension {
                 solid_id: solid.solid_id(),
                 tip_face_id: cap.id,
-                wall_face_ids: wall_face_ids.try_into().ok()?,
+                wall_face_ids,
             },
             model,
             root,
@@ -803,6 +990,39 @@ mod terminal_extension_tests {
                 anyhow::bail!("complete IR did not select the source-exact four-section loft");
             };
             assert_eq!(chosen.fragment.source, recovered.source);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn source_4a6356_exposes_exact_multistage_terminal_loft() -> anyhow::Result<()> {
+        use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+        let bytes = include_bytes!("../validation/fixtures/native_mixed_treatment_4a6356.step");
+        let exchange = ParsedStepSource::parse(bytes)?.exchange;
+        let entities = &exchange.data[0].entities;
+        let solid = ReducedSolid::from_step(171, entities, &build_index(entities))
+            .ok_or_else(|| anyhow::anyhow!("source mixed carrier B-rep is missing"))?;
+        let candidates = detect_extended_ruled_end_extensions(&solid);
+        let end =
+            candidates
+                .iter()
+                .find(|extension| {
+                    extension.fragment.model.nodes.iter().any(
+                        |node| matches!(node, CadNode::Loft { sections } if sections.len() == 4),
+                    )
+                })
+                .ok_or_else(|| anyhow::anyhow!("failed to find source-derived 4-section lobe"))?;
+        let CadFragmentSource::RuledEndExtension { wall_face_ids, .. } = &end.fragment.source
+        else {
+            anyhow::bail!("unexpected extension provenance");
+        };
+        assert_eq!(wall_face_ids.len(), 12);
+        let kernel = MonstertruckKernel::project_standard();
+        let result = kernel.evaluate(&end.fragment.model, end.fragment.root)?;
+        assert!(kernel.summarize(&result).is_single_solid());
+        if let Ok(output) = std::env::var("STEP_PARTIAL_LOFT_OUTPUT") {
+            std::fs::write(output, kernel.to_step(&result)?)?;
         }
         Ok(())
     }
