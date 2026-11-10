@@ -2,9 +2,9 @@
 
 use super::{
     BooleanTolerance, BoundedCurve, CurveParameter, Cut, Edge, EuclideanSpace, HashMap, InnerSpace,
-    Invertible, KERNEL_EPSILON, LoopsStore, MetricSpace, Origin, ParametricCurve3D, Point2, Point3,
-    PolygonMesh, PolylineCurve, SearchNearestParameter, SearchParameter, ShapesOpStatus, Shell,
-    StandardVertex, Vector2, Vector3, WithPointCloud,
+    Invertible, KERNEL_EPSILON, LoopsStore, MetricSpace, Origin, ParameterDivision1D,
+    ParametricCurve3D, Point2, Point3, PolygonMesh, PolylineCurve, SearchNearestParameter,
+    SearchParameter, ShapesOpStatus, Shell, StandardVertex, Vector2, Vector3, WithPointCloud,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
@@ -536,6 +536,7 @@ where
         + Cut<Point = Point3, Vector = Vector3>
         + SearchParameter<CurveParameter, Point = Point3>
         + SearchNearestParameter<CurveParameter, Point = Point3>
+        + ParameterDivision1D<Point = Point3>
         + Invertible
         + Clone,
 {
@@ -574,7 +575,9 @@ where
                 continue;
             }
 
-            if target[face_index].reuse_coincident_edge(edge) {
+            if target[face_index]
+                .reuse_imprinted_coincident_edge(edge, BooleanTolerance::new(tol).length)
+            {
                 continue;
             }
             let mut emap = HashMap::default();

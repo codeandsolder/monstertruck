@@ -497,6 +497,118 @@ where
 }
 
 impl<C> Loops<Point3, C> {
+    /// Canonicalize an edge already present in this face's trim arrangement.
+    ///
+    /// Independent STEP carriers may represent the same physical edge with
+    /// slightly different parameterizations and sub-kernel geometric noise.
+    /// The imprint stage is explicitly allowed the caller's Boolean length
+    /// tolerance, unlike the kernel-global exact incidence methods. Require
+    /// matching oriented endpoints AND agreement of the whole sampled path;
+    /// otherwise a genuine thin lens sharing its endpoints must not collapse.
+    fn reuse_imprinted_coincident_edge(
+        &mut self,
+        incoming: &Edge<Point3, C>,
+        length_tol: f64,
+    ) -> bool
+    where
+        C: ParametricCurve<Point = Point3>
+            + BoundedCurve<Point = Point3>
+            + ParameterDivision1D<Point = Point3>
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Invertible
+            + Clone,
+    {
+        let length_tol = length_tol.abs().max(KERNEL_EPSILON);
+        let same_endpoints = |edge: &Edge<Point3, C>| {
+            if edge.front().point().distance(incoming.front().point()) <= length_tol
+                && edge.back().point().distance(incoming.back().point()) <= length_tol
+            {
+                Some(true)
+            } else if edge.front().point().distance(incoming.back().point()) <= length_tol
+                && edge.back().point().distance(incoming.front().point()) <= length_tol
+            {
+                Some(false)
+            } else {
+                None
+            }
+        };
+        let same_path = |edge: &Edge<Point3, C>, _same_direction: bool| {
+            // Trimmed curves can have unrelated parameterizations (especially
+            // after STEP import and independent SSI reconstruction). Equality
+            // at a normalized parameter fraction is NOT geometric equality.
+            // Require both directed paths to project back onto the other
+            // exact curve within the caller's actual length tolerance.
+            let a = edge.curve();
+            let b = incoming.curve();
+            let samples_on = |curve: &C, other: &C| {
+                let (t0, t1) = curve.range_tuple();
+                let fractions = curve
+                    .parameter_division((t0, t1), length_tol)
+                    .0
+                    .into_iter()
+                    .map(|t| (t - t0) / (t1 - t0))
+                    .chain((0..=16).map(|i| f64::from(i) / 16.0));
+                let mut previous = None;
+                fractions.into_iter().all(|fraction| {
+                    if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
+                        return false;
+                    }
+                    let point = curve.evaluate((t1 - t0).mul_add(fraction, t0));
+                    let nearest = |hint| {
+                        let parameter = other.search_nearest_parameter(point, hint, 100)?;
+                        (other.evaluate(parameter).distance(point) <= length_tol)
+                            .then_some(parameter)
+                    };
+                    let parameter = nearest(previous).or_else(|| nearest(None));
+                    if let Some(parameter) = parameter {
+                        previous = Some(parameter);
+                        true
+                    } else {
+                        false
+                    }
+                })
+            };
+            samples_on(&a, &b) && samples_on(&b, &a)
+        };
+        let matching = self.iter().flat_map(|wire| wire.iter()).find_map(|edge| {
+            let direction = same_endpoints(edge)?;
+            same_path(edge, direction)
+                .then(|| (edge.front().clone(), edge.back().clone(), direction))
+        });
+        let Some((old_front, old_back, direction)) = matching else {
+            return false;
+        };
+        let (new_front, new_back) = if direction {
+            (incoming.front().clone(), incoming.back().clone())
+        } else {
+            (incoming.back().clone(), incoming.front().clone())
+        };
+        let mut map = HashMap::default();
+        if old_front.id() != new_front.id() {
+            self.change_vertex(&old_front, &new_front, &mut map);
+        }
+        if old_back.id() != new_back.id() {
+            self.change_vertex(&old_back, &new_back, &mut map);
+        }
+
+        // Only canonicalize edges individually proven to coincide. Another
+        // contour can share both vertices without describing the same trim.
+        self.iter_mut().for_each(|wire| {
+            wire.iter_mut().for_each(|edge| {
+                if let Some(direction) = same_endpoints(edge)
+                    && same_path(edge, direction)
+                {
+                    *edge = if direction {
+                        incoming.clone()
+                    } else {
+                        incoming.inverse()
+                    };
+                }
+            });
+        });
+        true
+    }
+
     fn has_partitioned_coincident_path(&self, edge0: &Edge<Point3, C>) -> bool
     where C: Clone
             + ParametricCurve<Point = Point3>
@@ -1499,6 +1611,7 @@ pub(super) fn create_loops_stores<C, S>(
 where
     C: SearchNearestParameter<CurveParameter, Point = Point3>
         + SearchParameter<CurveParameter, Point = Point3>
+        + ParameterDivision1D<Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>
         + From<IntersectionCurve<PolylineCurve, S, S>>
         + Invertible,
@@ -2212,6 +2325,142 @@ mod projection_tests {
         assert_eq!(lower_pieces.len(), 2);
         assert!(lower_pieces.iter().any(|wire| has(wire, &a)));
         assert!(lower_pieces.iter().any(|wire| has(wire, &f)));
+    }
+
+    #[test]
+    fn imprint_reuses_wiggled_same_edge_within_explicit_boolean_tolerance() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let c = Vertex::new(Point3::new(1.0, 1.0, 0.0));
+        let d = Vertex::new(Point3::new(0.0, 1.0, 0.0));
+        let smooth = Edge::new_unchecked(
+            &a,
+            &b,
+            PolylineCurve(vec![
+                a.point(),
+                Point3::new(0.25, 0.0, 0.0),
+                Point3::new(0.5, 0.0, 0.0),
+                Point3::new(0.75, 0.0, 0.0),
+                b.point(),
+            ]),
+        );
+        let line = |front: &Vertex<Point3>, back: &Vertex<Point3>| {
+            Edge::new_unchecked(
+                front,
+                back,
+                PolylineCurve(vec![front.point(), back.point()]),
+            )
+        };
+        let mut loops = Loops(vec![BoundaryWire::new(
+            vec![smooth.clone(), line(&b, &c), line(&c, &d), line(&d, &a)].into(),
+            ShapesOpStatus::Or,
+        )]);
+        let a2 = Vertex::new(Point3::new(2.0e-7, 1.0e-7, 0.0));
+        let b2 = Vertex::new(Point3::new(1.0 + 3.0e-7, 2.0e-7, 0.0));
+        let incoming = Edge::new_unchecked(
+            &a2,
+            &b2,
+            PolylineCurve(vec![
+                a2.point(),
+                Point3::new(0.25, -4.0e-7, 0.0),
+                Point3::new(0.5, 2.0e-6, 0.0),
+                Point3::new(0.75, -5.0e-7, 0.0),
+                b2.point(),
+            ]),
+        );
+        assert!(
+            loops.reuse_imprinted_coincident_edge(&incoming, 1.0e-5),
+            "a tolerance-supported coincident source edge must be reused"
+        );
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].len(), 4);
+        assert!(
+            loops[0].iter().any(|edge| edge.id() == incoming.id()),
+            "the existing target uses must share the canonical incoming EdgeId"
+        );
+        assert!(
+            !Loops(vec![BoundaryWire::new(
+                vec![smooth, line(&b, &c), line(&c, &d), line(&d, &a)].into(),
+                ShapesOpStatus::Or,
+            )])
+            .reuse_imprinted_coincident_edge(&incoming, 1.0e-6),
+            "the same noise is distinguishable under a tighter Boolean tolerance"
+        );
+    }
+
+    #[test]
+    fn imprint_coincidence_does_not_require_matching_curve_parameters() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let existing = Edge::new_unchecked(
+            &a,
+            &b,
+            PolylineCurve(vec![
+                a.point(),
+                Point3::new(0.25, 0.0, 0.0),
+                Point3::new(0.5, 0.0, 0.0),
+                Point3::new(0.75, 0.0, 0.0),
+                b.point(),
+            ]),
+        );
+        let incoming = Edge::new_unchecked(
+            &a,
+            &b,
+            PolylineCurve(vec![
+                a.point(),
+                Point3::new(0.02, 0.0, 0.0),
+                Point3::new(0.11, 0.0, 0.0),
+                Point3::new(0.42, 0.0, 0.0),
+                Point3::new(0.93, 0.0, 0.0),
+                b.point(),
+            ]),
+        );
+        let mut loops = Loops(vec![BoundaryWire::new(
+            vec![existing].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        assert!(
+            loops.reuse_imprinted_coincident_edge(&incoming, 1.0e-6),
+            "spatially identical curves with unrelated knot parameters must share an imprint edge"
+        );
+        assert_eq!(loops[0][0].id(), incoming.id());
+    }
+
+    #[test]
+    fn imprint_keeps_real_thin_lenses_and_matching_endpoints_with_distinct_paths() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let start = Edge::new_unchecked(&a, &b, PolylineCurve(vec![a.point(), b.point()]));
+        let candidate = |offsets: &[f64]| {
+            Edge::new_unchecked(
+                &a,
+                &b,
+                PolylineCurve(
+                    offsets
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &y)| {
+                            Point3::new(index as f64 / (offsets.len() - 1) as f64, y, 0.0)
+                        })
+                        .collect(),
+                ),
+            )
+        };
+        let mut existing = Loops(vec![BoundaryWire::new(
+            vec![start].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        assert!(
+            !existing.reuse_imprinted_coincident_edge(&candidate(&[0.0, 5.0e-5, 0.0]), 1.0e-5,),
+            "a nonzero thin lens beyond requested tolerance cannot collapse"
+        );
+        assert!(
+            !existing.reuse_imprinted_coincident_edge(
+                &candidate(&[0.0, 4.0e-5, 0.0, -4.0e-5, 0.0]),
+                1.0e-5,
+            ),
+            "matching endpoints and midpoint must not hide a distinct path"
+        );
     }
 
     #[test]
