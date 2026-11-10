@@ -443,7 +443,7 @@ mod weld_tests {
         };
         let near = mk(second, top, 1);
         let exact = mk(first, right, 2);
-        for regions in [[near.clone(), exact.clone()], [exact.clone(), near.clone()]] {
+        for regions in [[near.clone(), exact.clone()], [exact, near]] {
             let mut context = WeldContext::new(&regions);
             assert_eq!(context.canonical_vertex(first).point(), first);
             assert_eq!(context.canonical_vertex(second).point(), first);
