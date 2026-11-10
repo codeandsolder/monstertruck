@@ -365,11 +365,11 @@ fn reconcile_shared_vertex_uv<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 .iter()
                 .filter(|candidate| {
                     let gap2 = (candidate.uv - point.uv).magnitude2();
-                    (gap2 == 0.0
+                    gap2 == 0.0
                         || candidate.local_step2.is_finite()
                             && point.local_step2.is_finite()
                             && gap2 < candidate.local_step2
-                            && gap2 < point.local_step2)
+                            && gap2 < point.local_step2
                 })
                 .min_by(|lhs, rhs| {
                     let residual = |occ: &Occurrence| {
