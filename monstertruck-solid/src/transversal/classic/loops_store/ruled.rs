@@ -21,7 +21,7 @@ fn project(point: Vector4) -> Option<Point3> {
 /// ruled-extrusion patches (same profile, independently trimmed sweep spans).
 /// This does not prove a boolean face relation, wire trim membership or
 /// orientation; downstream topology partition and classification still apply.
-pub(super) fn common_ruled_extrusion_strip(
+pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
     a: &BsplineSurface<Vector4>,
     b: &BsplineSurface<Vector4>,
 ) -> bool {
@@ -254,7 +254,7 @@ fn certified_circular_cylinder(
 /// of the SAME exact circular cylinder even when their knot/control nets
 /// differ. Refuse mere proximity: each curve must independently satisfy its
 /// fitted circle polynomial on every knot span.
-pub(super) fn common_circular_extrusion_cylinder(
+pub(in crate::transversal::classic) fn common_circular_extrusion_cylinder(
     a: &BsplineSurface<Vector4>,
     b: &BsplineSurface<Vector4>,
 ) -> bool {

@@ -6,6 +6,7 @@
 
 use super::divide_face::create_parameter_boundary_on_surface;
 use super::faces_classification::BooleanRegion;
+use super::loops_store::{common_circular_extrusion_cylinder, common_ruled_extrusion_strip};
 use super::weld::node_selected_regions;
 use super::{AltCurve, AltRegion, ShapeOpsCurve, ShapeOpsSurface};
 use monstertruck_geometry::prelude::*;
@@ -242,13 +243,28 @@ fn exact_node_points<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     source: &[AltRegion<C, S>],
     tol: f64,
+    certified_curved: bool,
 ) -> Option<PlanarArrangement<C, S>> {
     let surface = source.first()?.surface();
     if !matches!(
         surface.try_into_analytic_surface_kind(),
         Some(AnalyticSurfaceKind::Plane(_))
     ) {
-        return None;
+        if !certified_curved {
+            return None;
+        }
+        // Project onto one exact chart only when every complete underlying
+        // surface has an algebraic common-carrier certificate. The later
+        // noding/occupancy phases operate on the original analytic edges.
+        let chart = surface.try_into_homogeneous_bspline_surface()?;
+        for region in source {
+            let other = region.surface().try_into_homogeneous_bspline_surface()?;
+            if !common_ruled_extrusion_strip(&chart, &other)
+                && !common_circular_extrusion_cylinder(&chart, &other)
+            {
+                return None;
+            }
+        }
     }
     let mut samples = HashMap::default();
     let mut polygons = Vec::new();
@@ -518,11 +534,11 @@ fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // occupancy; otherwise two independently encoded copies would be emitted
     // as two exterior boundaries rather than one filled face.
     let canonical_regions = node_selected_regions(source, &[])?;
-    let initial = project_source(&canonical_regions, tol)?;
+    let initial = project_source(&canonical_regions, tol, false)?;
     let arrangement = if needs_exact_noding(&initial.edges, initial.span) {
         let points = exact_node_points(&initial, tol)?;
         let noded = node_selected_regions(&canonical_regions, &points)?;
-        project_source(&noded, tol)?
+        project_source(&noded, tol, false)?
     } else {
         initial
     };
@@ -597,6 +613,66 @@ fn same_oriented_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         && region_lies_on_plane(rhs, &lhs_plane, tol)
 }
 
+/// Certified common ruled carrier with the SAME original material-facing
+/// normal. The carrier identity is an algebraic rational control-net/circle
+/// certificate, while the evaluated normal is used ONLY to distinguish its
+/// two possible orientations at a shared geometric point.
+fn same_oriented_difference_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    lhs: &AltRegion<C, S>,
+    rhs: &AltRegion<C, S>,
+    tol: f64,
+) -> bool {
+    if same_oriented_support(lhs, rhs, tol) {
+        return true;
+    }
+    let (Some(a), Some(b)) = (
+        lhs.surface().try_into_homogeneous_bspline_surface(),
+        rhs.surface().try_into_homogeneous_bspline_surface(),
+    ) else {
+        return false;
+    };
+    if !common_ruled_extrusion_strip(&a, &b) && !common_circular_extrusion_cylinder(&a, &b) {
+        return false;
+    }
+    let Some(point) = rhs
+        .absolute_boundaries()
+        .first()
+        .and_then(Wire::front_vertex)
+        .map(|vertex| vertex.point())
+    else {
+        return false;
+    };
+    let mut lhs_surface = lhs.surface();
+    let mut rhs_surface = rhs.surface();
+    if !lhs.orientation() {
+        lhs_surface.invert();
+    }
+    if !rhs.orientation() {
+        rhs_surface.invert();
+    }
+    let Some(lhs_uv) = lhs_surface
+        .search_parameter(point, None, 100)
+        .or_else(|| lhs_surface.search_nearest_parameter(point, None, 100))
+    else {
+        return false;
+    };
+    let Some(rhs_uv) = rhs_surface
+        .search_parameter(point, None, 100)
+        .or_else(|| rhs_surface.search_nearest_parameter(point, None, 100))
+    else {
+        return false;
+    };
+    if lhs_surface.evaluate(lhs_uv.0, lhs_uv.1).distance(point) > tol
+        || rhs_surface.evaluate(rhs_uv.0, rhs_uv.1).distance(point) > tol
+    {
+        return false;
+    }
+    lhs_surface
+        .normal(lhs_uv.0, lhs_uv.1)
+        .dot(rhs_surface.normal(rhs_uv.0, rhs_uv.1))
+        > 1.0 - 1.0e-8
+}
+
 /// Union selected cells sharing oriented planar support, including distinct source faces.
 pub(super) fn overlay_source_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: Vec<AltRegion<C, S>>,
@@ -628,8 +704,8 @@ pub(super) fn overlay_source_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .collect()
 }
 
-/// Exact planar positive-minus-cutter occupancy on an already-identified
-/// same-facing support. Operands can be independently parameterized or have
+/// Exact positive-minus-cutter occupancy on a certified common surface
+/// chart (planar or algebraically shared rational ruled). Operands can be independently parameterized or have
 /// partial edge overlaps. Intersections become shared exact curve nodes.
 fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     positive: &[AltRegion<C, S>],
@@ -638,11 +714,11 @@ fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> Option<Vec<AltRegion<C, S>>> {
     let joined = positive.iter().chain(cutter).cloned().collect::<Vec<_>>();
     let canonical = node_selected_regions(&joined, &[])?;
-    let initial = project_source(&canonical, tol)?;
+    let initial = project_source(&canonical, tol, true)?;
     let arrangement = if needs_exact_noding(&initial.edges, initial.span) {
         let points = exact_node_points(&initial, tol)?;
         let noded = node_selected_regions(&canonical, &points)?;
-        project_source(&noded, tol)?
+        project_source(&noded, tol, true)?
     } else {
         initial
     };
@@ -714,7 +790,9 @@ pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface
             continue;
         }
         let positive_indices = (first..positive_count)
-            .filter(|&i| !taken[i] && same_oriented_support(&regions[first], &regions[i], tol))
+            .filter(|&i| {
+                !taken[i] && same_oriented_difference_support(&regions[first], &regions[i], tol)
+            })
             .collect::<Vec<_>>();
         let cutter_indices = (positive_count..regions.len())
             .filter(|&i| {
@@ -723,7 +801,7 @@ pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface
                 }
                 let mut original = regions[i].clone();
                 original.invert();
-                same_oriented_support(&regions[first], &original, tol)
+                same_oriented_difference_support(&regions[first], &original, tol)
             })
             .collect::<Vec<_>>();
         if cutter_indices.is_empty() {
@@ -744,7 +822,7 @@ pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface
         // complete ORIGINAL positive planar support footprint instead.
         let complete_positive = original_positive
             .iter()
-            .filter(|region| same_oriented_support(&regions[first], region, tol))
+            .filter(|region| same_oriented_difference_support(&regions[first], region, tol))
             .cloned()
             .collect::<Vec<_>>();
         if complete_positive.is_empty() {
@@ -767,7 +845,7 @@ pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface
                 unflipped.invert();
                 let complete_positive = original_positive
                     .iter()
-                    .filter(|source| same_oriented_support(&unflipped, source, tol))
+                    .filter(|source| same_oriented_difference_support(&unflipped, source, tol))
                     .cloned()
                     .collect::<Vec<_>>();
                 if !complete_positive.is_empty() {
@@ -848,6 +926,93 @@ mod tests {
                 source_face,
             )
         }
+    }
+
+    /// An analytic quadratic profile swept in x: every edge is an original
+    /// line or whole rational spline, not a chord sampled from a mesh.
+    fn ruled_difference_region(
+        axial: (f64, f64),
+        orientation: bool,
+        source_face: usize,
+    ) -> TestRegion {
+        use monstertruck_geometry::prelude::{
+            BsplineCurve, BsplineSurface, KnotVector, NurbsCurve, NurbsSurface,
+        };
+        let profile = [(0.0, 0.0), (0.5, 0.4), (1.0, 0.0)];
+        let net = profile
+            .into_iter()
+            .map(|(y, z)| {
+                vec![
+                    Vector4::new(axial.0, y, z, 1.0),
+                    Vector4::new(axial.1, y, z, 1.0),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let vertices = [
+            Vertex::new(Point3::new(axial.0, 0.0, 0.0)),
+            Vertex::new(Point3::new(axial.1, 0.0, 0.0)),
+            Vertex::new(Point3::new(axial.1, 1.0, 0.0)),
+            Vertex::new(Point3::new(axial.0, 1.0, 0.0)),
+        ];
+        let line = |a: usize, b: usize| {
+            Edge::new_unchecked(
+                &vertices[a],
+                &vertices[b],
+                Alternative::FirstType(Curve::from(Line(vertices[a].point(), vertices[b].point()))),
+            )
+        };
+        let profile_edge = |column: usize, a: usize, b: usize| {
+            Edge::new_unchecked(
+                &vertices[a],
+                &vertices[b],
+                Alternative::FirstType(Curve::NurbsCurve(NurbsCurve::new(
+                    BsplineCurve::new_unchecked(
+                        KnotVector::bezier_knot(2),
+                        net.iter().map(|row| row[column]).collect(),
+                    ),
+                ))),
+            )
+        };
+        let wire = Wire::from(vec![
+            line(0, 1),
+            profile_edge(1, 1, 2),
+            line(2, 3),
+            profile_edge(0, 0, 3).inverse(),
+        ]);
+        BooleanRegion::new(
+            vec![wire],
+            Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new_unchecked(
+                (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
+                net,
+            ))),
+            orientation,
+            0,
+            source_face,
+        )
+    }
+
+    #[test]
+    fn ruled_difference_masks_cutter_against_original_not_selected_remnant() {
+        let original = ruled_difference_region((0.0, 2.0), true, 10);
+        let selected = ruled_difference_region((0.0, 0.4), true, 10);
+        let inverted_cutter = ruled_difference_region((0.7, 1.2), false, 7);
+        let mut unflipped = inverted_cutter.clone();
+        unflipped.invert();
+        assert!(same_oriented_difference_support(
+            &original, &unflipped, 1.0e-6
+        ));
+        let result =
+            overlay_difference_regions(vec![selected, inverted_cutter], 1, &[original], 1.0e-6)
+                .expect("exact common ruled patch must support original ownership");
+        assert_eq!(
+            result.len(),
+            1,
+            "the cutter inside original source cannot be resurrected"
+        );
+        assert!(
+            result[0].try_face().is_some(),
+            "the remaining curved face is valid"
+        );
     }
 
     #[test]

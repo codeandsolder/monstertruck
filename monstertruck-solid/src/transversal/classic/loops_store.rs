@@ -21,6 +21,7 @@ use super::{
 };
 mod planar;
 mod ruled;
+pub(super) use ruled::{common_circular_extrusion_cylinder, common_ruled_extrusion_strip};
 
 use monstertruck_core::{
     cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point2, Point3, Vector2, Vector3},
