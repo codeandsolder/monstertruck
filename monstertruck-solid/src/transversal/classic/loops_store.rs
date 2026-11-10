@@ -20,6 +20,7 @@ use super::{
     tolerance::BooleanTolerance,
 };
 mod planar;
+mod ruled;
 
 use monstertruck_core::{
     cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point2, Point3, Vector2, Vector3},
@@ -1504,6 +1505,7 @@ where
     S: ParametricSurface3D
         + Clone
         + Invertible
+        + TryIntoHomogeneousBsplineSurface
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
@@ -1522,6 +1524,28 @@ where
     let boundary_search_tolerance = boolean_tolerance.mesh_seed;
     let coplanar =
         analyze_coplanar_interfaces(poly_shell0, poly_shell1, coplanar_tol, imprint_coplanar)?;
+    // Proof-first common-carrier discovery: identical rational profile control
+    // nets with collinear affine sweep rows describe the same ruled support.
+    // Cached once per input face; sampling never authorizes surface identity.
+    let net0 = geom_shell0
+        .iter()
+        .map(|f| f.surface().try_into_homogeneous_bspline_surface())
+        .collect::<Vec<_>>();
+    let net1 = geom_shell1
+        .iter()
+        .map(|f| f.surface().try_into_homogeneous_bspline_surface())
+        .collect::<Vec<_>>();
+    let mut shared_ruled_pairs = HashSet::default();
+    for (i, left) in net0.iter().enumerate() {
+        for (j, right) in net1.iter().enumerate() {
+            if let (Some(a), Some(b)) = (left, right)
+                && ruled::common_ruled_extrusion_strip(a, b)
+            {
+                shared_ruled_pairs.insert((i, j));
+            }
+        }
+    }
+    let has_shared_ruled = !shared_ruled_pairs.is_empty();
     (0..store0_len)
         .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
         .try_for_each(|(face_index0, face_index1)| {
@@ -1539,6 +1563,12 @@ where
             let surface1 = geom_shell1[face_index1].surface();
             let polygon0 = poly_shell0[face_index0].surface()?;
             let polygon1 = poly_shell1[face_index1].surface()?;
+            // A common ruled carrier has a two-dimensional overlap: a
+            // transverse SSI curve is undefined. Partition its real trimmed
+            // boundaries via exact edge imprinting below instead.
+            if shared_ruled_pairs.contains(&(face_index0, face_index1)) {
+                return Some(());
+            }
             // Exactly coincident trimmed planar faces are already a complete
             // interface. Running generic SSI on coincident surfaces is both
             // unnecessary and degenerate; ownership is resolved by the
@@ -1602,17 +1632,17 @@ where
     // intersections, so imprint those existing edge segments onto any face of
     // the opposite operand that contains them. This supplies the missing trim
     // lines for coplanar overlap without manufacturing approximate SSI curves.
-    if coplanar.partial_overlap {
+    if coplanar.partial_overlap || has_shared_ruled {
         let source0 = operand0.geom.clone();
         let source1 = operand1.geom.clone();
         imprint_edges_on_faces(&source1, poly_shell0, &mut operand0.geom, tol)?;
         imprint_edges_on_faces(&source0, poly_shell1, &mut operand1.geom, tol)?;
     }
 
-    let sampled0 = (!coplanar.partial_overlap
+    let sampled0 = (!(coplanar.partial_overlap || has_shared_ruled)
         && loop_stores_are_synchronized(&operand0.geom, &operand0.poly))
     .then_some(operand0.poly);
-    let sampled1 = (!coplanar.partial_overlap
+    let sampled1 = (!(coplanar.partial_overlap || has_shared_ruled)
         && loop_stores_are_synchronized(&operand1.geom, &operand1.poly))
     .then_some(operand1.poly);
     Some(InterfaceLoops {
