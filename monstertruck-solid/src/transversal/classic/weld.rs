@@ -54,6 +54,14 @@ type SourceEdgeId<C, S> = EdgeId<AltCurve<C, S>>;
 type SourceVertexId = VertexId<Point3>;
 type SourceEdgeEvidence = (SourceVertexId, SourceVertexId, Point3);
 
+// Weld representatives are geometric, not HashMap/EdgeId insertion-order
+// choices. A full ordering is necessary near tolerance-cell boundaries.
+pub(super) fn point_lex_cmp(a: &Point3, b: &Point3) -> std::cmp::Ordering {
+    a.x.total_cmp(&b.x)
+        .then_with(|| a.y.total_cmp(&b.y))
+        .then_with(|| a.z.total_cmp(&b.z))
+}
+
 fn cell_coordinate(coordinate: f64) -> i64 {
     let value = (coordinate / KERNEL_EPSILON).floor();
     value.to_i64().unwrap_or_else(|| {
@@ -118,13 +126,23 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                 .entry(absolute.id())
                 .or_insert_with(|| (front.id(), back.id(), absolute.oriented_curve()));
         }
-        let source_edges = source_edges_by_id
+        let mut source_edges = source_edges_by_id
             .into_values()
             .map(|(front, back, curve)| {
                 let (t0, t1) = curve.range_tuple();
                 (front, back, curve.evaluate(f64::midpoint(t0, t1)))
             })
-            .collect();
+            .collect::<Vec<_>>();
+        // When independently imported edges have endpoints within the weld
+        // tolerance, the first representative must not depend on randomized
+        // source IDs or the iteration order of the hash table.
+        source_edges.sort_by(|a, b| {
+            point_lex_cmp(&source_vertex_points[&a.0], &source_vertex_points[&b.0])
+                .then_with(|| {
+                    point_lex_cmp(&source_vertex_points[&a.1], &source_vertex_points[&b.1])
+                })
+                .then_with(|| point_lex_cmp(&a.2, &b.2))
+        });
         let mut context = Self {
             vertex_cells: HashMap::new(),
             edges: HashMap::new(),
@@ -132,11 +150,12 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
             source_edges,
             additional_nodes: Vec::new(),
         };
-        let source_points = context
+        let mut source_points = context
             .source_vertex_points
             .values()
             .copied()
             .collect::<Vec<_>>();
+        source_points.sort_by(point_lex_cmp);
         for point in source_points {
             context.canonical_vertex(point);
         }
@@ -266,6 +285,10 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                 }
             }
         }
+        // Canonicalize near-equal cut points in geometric order BEFORE
+        // assigning their shared vertex identity. Sorting only after this
+        // step leaves the representative to arbitrary source-edge ordering.
+        raw_splits.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| point_lex_cmp(&a.2, &b.2)));
         let mut split_vertices = Vec::new();
         for (progress, parameter, point) in raw_splits {
             let vertex = self.canonical_vertex(point);
@@ -395,6 +418,36 @@ mod weld_tests {
 
     fn alt_line(front: Point3, back: Point3) -> AltCurve<Curve, Surface> {
         Alternative::FirstType(Curve::from(Line(front, back)))
+    }
+
+    #[test]
+    fn near_coincident_weld_representatives_are_order_invariant() {
+        let first = Point3::new(0.0, 0.0, 0.0);
+        let second = Point3::new(KERNEL_EPSILON * 0.25, 0.0, 0.0);
+        let right = Point3::new(2.0, 0.0, 0.0);
+        let top = Point3::new(2.0, 1.0, 0.0);
+        let mk = |a: Point3, b: Point3, id: usize| {
+            let front = Vertex::new(a);
+            let back = Vertex::new(b);
+            faces_classification::BooleanRegion::new(
+                vec![Wire::from(vec![Edge::new_unchecked(
+                    &front,
+                    &back,
+                    alt_line(a, b),
+                )])],
+                Surface::Plane(Plane::xy()),
+                true,
+                id,
+                id,
+            )
+        };
+        let near = mk(second, top, 1);
+        let exact = mk(first, right, 2);
+        for regions in [[near.clone(), exact.clone()], [exact.clone(), near.clone()]] {
+            let mut context = WeldContext::new(&regions);
+            assert_eq!(context.canonical_vertex(first).point(), first);
+            assert_eq!(context.canonical_vertex(second).point(), first);
+        }
     }
 
     #[test]

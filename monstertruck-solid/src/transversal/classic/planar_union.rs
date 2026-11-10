@@ -7,7 +7,7 @@
 use super::divide_face::create_parameter_boundary_on_surface;
 use super::faces_classification::BooleanRegion;
 use super::loops_store::{common_circular_extrusion_cylinder, common_ruled_extrusion_strip};
-use super::weld::node_selected_regions;
+use super::weld::{node_selected_regions, point_lex_cmp};
 use super::{AltCurve, AltRegion, ShapeOpsCurve, ShapeOpsSurface};
 use monstertruck_geometry::prelude::*;
 use monstertruck_topology::{Edge, EdgeId, VertexId, Wire};
@@ -312,10 +312,30 @@ fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if !span.is_finite() || span <= 0.0 {
         return None;
     }
+    // Edge IDs are allocation-specific; use a geometric traversal order
+    // so intersection evidence never depends on hash-table iteration.
+    let mut edges = edges.into_values().collect::<Vec<_>>();
+    edges.sort_by(|a, b| {
+        let (af, ab, bf, bb) = (
+            a.edge.front().point(),
+            a.edge.back().point(),
+            b.edge.front().point(),
+            b.edge.back().point(),
+        );
+        let curve_middle = |edge: &ProjectedEdge<AltCurve<C, S>>| {
+            let curve = edge.edge.oriented_curve();
+            let (t0, t1) = curve.range_tuple();
+            curve.evaluate(f64::midpoint(t0, t1))
+        };
+        point_lex_cmp(&af, &bf)
+            .then_with(|| point_lex_cmp(&ab, &bb))
+            .then_with(|| point_lex_cmp(&curve_middle(a), &curve_middle(b)))
+            .then_with(|| a.uv.len().cmp(&b.uv.len()))
+    });
     Some(PlanarArrangement {
         surface,
         polygons,
-        edges: edges.into_values().collect(),
+        edges,
         span,
     })
 }
