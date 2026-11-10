@@ -283,23 +283,47 @@ where
             Some((q0.midpoint(q1), p0.into(), p1.into()))
         })
     };
-    let mut polyline = PolylineCurve(Vec::new());
-    for i in 0..len - 1 {
-        let parameter = i.to_f64()?;
-        let (q, _, _) = ic
-            .search_triple(parameter, 100)
-            .or_else(|| recover_triple(raw[i]))?;
+    // The original rescanning algorithm discarded the exact UV solution at
+    // every sampled SSI vertex. On NURBS supports this makes the *next* point
+    // redo two global 50x50 parameter preselections, before a 4-variable solve.
+    // Continue the same intersection branch using the previously certified UVs
+    // as Newton hints. Fall back to the existing global solver if local
+    // continuation cannot prove exact incidence near the sampled leader.
+    let mut prior = None::<((f64, f64), (f64, f64))>;
+    let mut polyline = PolylineCurve(Vec::with_capacity(len));
+    let support_tol =
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * KERNEL_EPSILON;
+    let leader_tol = DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor;
+    for index in 0..len {
+        if index == len - 1 && raw[0].near(&raw[index]) {
+            let first = polyline[0];
+            polyline.push(first);
+            break;
+        }
+        let parameter = index.to_f64()?;
+        let point = raw[index];
+        let tangent = ic.leader().derivative(parameter);
+        let continuation = prior
+            .filter(|_| tangent.magnitude2() > KERNEL_EPSILON * KERNEL_EPSILON)
+            .and_then(|(uv0, uv1)| {
+                ic.search_intersection_in_plane(point, tangent, Some(uv0), Some(uv1), 100)
+            })
+            .filter(|(candidate, uv0, uv1)| {
+                // Newton convergence alone is not a correctness certificate.
+                // Both carriers must agree on the SAME 3-D point and the
+                // candidate must remain on the mesh-identified local branch.
+                ic.surface0()
+                    .evaluate(uv0.x, uv0.y)
+                    .distance(ic.surface1().evaluate(uv1.x, uv1.y))
+                    <= support_tol
+                    && candidate.distance(point) <= leader_tol
+            });
+        let (q, uv0, uv1) = continuation
+            .or_else(|| ic.search_triple(parameter, 100))
+            .or_else(|| recover_triple(point))?;
+        prior = Some(((uv0.x, uv0.y), (uv1.x, uv1.y)));
         polyline.push(q);
     }
-    let q = if raw[0].near(&raw[len - 1]) {
-        polyline[0]
-    } else {
-        let parameter = (len - 1).to_f64()?;
-        ic.search_triple(parameter, 100)
-            .or_else(|| recover_triple(raw[len - 1]))?
-            .0
-    };
-    polyline.push(q);
     Some(IntersectionCurve::new(surface0, surface1, polyline))
 }
 
@@ -407,6 +431,26 @@ mod tests {
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
         )
         .expect("fixture mesh is valid")
+    }
+
+    #[test]
+    fn intersection_leader_continuation_certifies_dense_transverse_planes() {
+        let leader = PolylineCurve(
+            (0..=100)
+                .map(|i| {
+                    let x = -0.5 + f64::from(i) / 100.0;
+                    Point3::new(x, 0.0, 0.0)
+                })
+                .collect(),
+        );
+        let recovered = build_intersection_curve(Plane::xy(), Plane::zx(), leader)
+            .expect("transverse planes share an exact line");
+        assert_eq!(recovered.leader().len(), 101);
+        for (i, point) in recovered.leader().iter().enumerate() {
+            assert!((point.x - (-0.5 + i as f64 / 100.0)).abs() < 1.0e-6);
+            assert!(point.y.abs() < 1.0e-6);
+            assert!(point.z.abs() < 1.0e-6);
+        }
     }
 
     #[test]

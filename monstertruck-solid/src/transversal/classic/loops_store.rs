@@ -1539,7 +1539,8 @@ where
     for (i, left) in net0.iter().enumerate() {
         for (j, right) in net1.iter().enumerate() {
             if let (Some(a), Some(b)) = (left, right)
-                && ruled::common_ruled_extrusion_strip(a, b)
+                && (ruled::common_ruled_extrusion_strip(a, b)
+                    || ruled::common_circular_extrusion_cylinder(a, b))
             {
                 shared_ruled_pairs.insert((i, j));
             }
