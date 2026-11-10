@@ -924,10 +924,74 @@ impl<C> LoopsStore<Point3, C> {
             })
     }
 
+    /// Resolve a sampled SSI endpoint to an *existing* exact face vertex.
+    ///
+    /// After prior SSI splits, the polygonal wire index need no longer identify
+    /// the same exact wire/edge. Search the entire face's existing vertices,
+    /// selecting a unique nearest geometric locus within the tessellation
+    /// seed error, and independently verify that locus on the intersecting
+    /// surface before changing any topology. Distinct nearly equidistant
+    /// locations are ambiguous, even if their edge inverse solvers disagree.
+    fn supported_boundary_vertex<S>(
+        &self,
+        face_index: usize,
+        point: Point3,
+        nearest_tolerance: f64,
+        other_surface: &S,
+    ) -> Option<Vec<Vertex<Point3>>>
+    where
+        S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+    {
+        let support_tol =
+            DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * KERNEL_EPSILON;
+        let ambiguity_tol =
+            DEFAULT_NUMERICAL_TOLERANCES.boolean_boundary_search_factor * KERNEL_EPSILON;
+        let mut candidates: Vec<(Point3, f64, Vec<Vertex<Point3>>)> = Vec::new();
+        for vertex in self
+            .get(face_index)?
+            .iter()
+            .flat_map(|wire| wire.vertex_iter())
+        {
+            let location = vertex.point();
+            let distance = location.distance(point);
+            if distance > nearest_tolerance {
+                continue;
+            }
+            if let Some((_, _, vertices)) = candidates
+                .iter_mut()
+                .find(|(existing, _, _)| existing.near(&location))
+            {
+                if !vertices.iter().any(|known| known.id() == vertex.id()) {
+                    vertices.push(vertex.clone());
+                }
+                continue;
+            }
+            let Some(uv) = other_surface.search_nearest_parameter(location, None, 25) else {
+                continue;
+            };
+            if other_surface.evaluate(uv.0, uv.1).distance(location) > support_tol {
+                continue;
+            }
+            candidates.push((location, distance, vec![vertex.clone()]));
+        }
+        candidates.sort_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1));
+        let (_, closest_distance, selected) = candidates.first()?;
+        // Do not choose by index among two distinguishable but numerically
+        // indistinguishable exact vertices.
+        if candidates
+            .get(1)
+            .is_some_and(|(_, next_distance, _)| next_distance - closest_distance <= ambiguity_tol)
+        {
+            return None;
+        }
+        Some(selected.clone())
+    }
+
     fn add_geom_vertex<S>(
         &mut self,
         loops_index: usize,
         boundary_hint: Option<(usize, usize)>,
+        sampled_on_boundary_vertex: bool,
         vertex: &Vertex<Point3>,
         another_surface: &S,
         nearest_tolerance: f64,
@@ -950,9 +1014,25 @@ impl<C> LoopsStore<Point3, C> {
         let hinted = boundary_hint.and_then(|hint| {
             self.resolve_boundary_hint(loops_index, hint, vertex.point(), nearest_tolerance)
         });
-        let (wire_index, edge_index, kind, projected) = hinted.or_else(|| {
+        let resolved = hinted.or_else(|| {
             self.search_boundary_parameter(loops_index, vertex.point(), nearest_tolerance)
-        })?;
+        });
+        if resolved.is_none() && sampled_on_boundary_vertex {
+            if let Some(vertices) = self.supported_boundary_vertex(
+                loops_index,
+                vertex.point(),
+                nearest_tolerance,
+                another_surface,
+            ) {
+                let canonical = vertices[0].point();
+                vertex.set_point(canonical);
+                for old in vertices {
+                    self.change_vertex(&old, vertex, emap);
+                }
+                return Some(());
+            }
+        }
+        let (wire_index, edge_index, kind, projected) = resolved?;
         if let Some(projected) = projected {
             vertex.set_point(projected);
         }
@@ -1164,7 +1244,7 @@ impl<C> OperandLoopStores<C> {
             other_surface,
             nearest_tolerance,
         } = *endpoint;
-        let Some((wire_index, edge_index, _)) =
+        let Some((wire_index, edge_index, polygon_kind)) =
             self.poly
                 .add_polygon_vertex(face_index, poly_vertex, poly_edge_map)
         else {
@@ -1173,11 +1253,16 @@ impl<C> OperandLoopStores<C> {
         self.geom.add_geom_vertex(
             face_index,
             Some((wire_index, edge_index)),
+            matches!(polygon_kind, ParameterKind::Front | ParameterKind::Back),
             geom_vertex,
             other_surface,
             nearest_tolerance,
             geom_edge_map,
         )?;
+        // Both stores must share the same canonical endpoint coordinate.
+        // A split of an exact curve is not represented by the polygon vertex
+        // retaining its old mesh-only position.
+        poly_vertex.set_point(geom_vertex.point());
         Some(true)
     }
 
@@ -1672,6 +1757,7 @@ mod projection_tests {
         let inserted = store.add_geom_vertex(
             0,
             None,
+            false,
             &recovered,
             &Plane::xy(),
             8.0 * KERNEL_EPSILON,
@@ -1901,6 +1987,77 @@ mod projection_tests {
             store
                 .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn sampled_endpoint_selects_unique_exact_vertex_on_opposite_surface() {
+        let near = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let far = Vertex::new(Point3::new(1.0, 0.0003, 0.0));
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(2.0, 0.0003, 0.0));
+        let edge0 = Edge::new_unchecked(&a, &near, Line(a.point(), near.point()));
+        let edge1 = Edge::new_unchecked(&far, &b, Line(far.point(), b.point()));
+        let loops = Loops(vec![
+            BoundaryWire::new(vec![edge0].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![edge1].into(), ShapesOpStatus::Unknown),
+        ]);
+        let store = LoopsStore(vec![loops]);
+        let selected = store
+            .supported_boundary_vertex(0, Point3::new(1.0, 0.00002, 0.0), 0.001, &Plane::xy())
+            .expect("one supported exact vertex is decisively nearer");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id(), near.id());
+    }
+
+    #[test]
+    fn sampled_endpoint_rejects_ambiguous_or_unsupported_exact_vertices() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(0.0, 0.000012, 0.0));
+        let far0 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let far1 = Vertex::new(Point3::new(1.0, 0.000012, 0.0));
+        let loops = Loops(vec![
+            BoundaryWire::new(
+                vec![Edge::new_unchecked(
+                    &a,
+                    &far0,
+                    Line(a.point(), far0.point()),
+                )]
+                .into(),
+                ShapesOpStatus::Unknown,
+            ),
+            BoundaryWire::new(
+                vec![Edge::new_unchecked(
+                    &b,
+                    &far1,
+                    Line(b.point(), far1.point()),
+                )]
+                .into(),
+                ShapesOpStatus::Unknown,
+            ),
+        ]);
+        let store = LoopsStore(vec![loops]);
+        assert!(
+            store
+                .supported_boundary_vertex(0, Point3::new(0.0, 0.000006, 0.0), 0.001, &Plane::xy())
+                .is_none(),
+            "two similarly close distinct vertices are ambiguous"
+        );
+
+        let lifted = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![Edge::new_unchecked(
+                &Vertex::new(Point3::new(0.0, 0.0, 0.02)),
+                &Vertex::new(Point3::new(1.0, 0.0, 0.02)),
+                Line(Point3::new(0.0, 0.0, 0.02), Point3::new(1.0, 0.0, 0.02)),
+            )]
+            .into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        assert!(
+            lifted
+                .supported_boundary_vertex(0, Point3::new(0.0, 0.0, 0.02), 0.001, &Plane::xy())
+                .is_none(),
+            "vertex off opposite carrier cannot be reused"
         );
     }
 

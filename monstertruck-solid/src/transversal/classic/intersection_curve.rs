@@ -58,21 +58,51 @@ fn endpoint_and_inner(
     Some((endpoint, inner))
 }
 
-fn point_is_on_surface<S>(surface: &S, point: Point3, tolerance: f64) -> bool
-where S: ParametricSurface3D
+/// Track the exact UV branch along adjacent samples of one short SSI join.
+/// Each candidate is still independently checked on the carrier; the hint
+/// skips repeated global NURBS presearch when consecutive samples belong to
+/// the same smooth trim. Fall back to the original unhinted projection whenever
+/// local continuation cannot establish point-on-surface incidence.
+fn point_is_on_surface<S>(
+    surface: &S,
+    point: Point3,
+    tolerance: f64,
+    hint: &mut Option<(f64, f64)>,
+) -> bool
+where
+    S: ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3> {
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
     let within_tolerance = |parameter: (f64, f64)| {
         surface.evaluate(parameter.0, parameter.1).distance(point) <= tolerance
     };
-    if let Some(parameter) = surface.search_parameter(point, None, 100)
-        && within_tolerance(parameter)
-    {
-        return true;
+    let local = hint.and_then(|previous| {
+        surface
+            .search_parameter(point, Some(previous), 100)
+            .filter(|parameter| within_tolerance(*parameter))
+            .or_else(|| {
+                surface
+                    .search_nearest_parameter(point, Some(previous), 100)
+                    .filter(|parameter| within_tolerance(*parameter))
+            })
+    });
+    let parameter = local.or_else(|| {
+        surface
+            .search_parameter(point, None, 100)
+            .filter(|parameter| within_tolerance(*parameter))
+            .or_else(|| {
+                surface
+                    .search_nearest_parameter(point, None, 100)
+                    .filter(|parameter| within_tolerance(*parameter))
+            })
+    });
+    if let Some(parameter) = parameter {
+        *hint = Some(parameter);
+        true
+    } else {
+        false
     }
-    surface
-        .search_nearest_parameter(point, None, 100)
-        .is_some_and(within_tolerance)
 }
 
 fn validated_linear_fragment_join<S>(
@@ -129,25 +159,26 @@ where
         .take_while(|&index| index <= intervals)
         .map(|index| a + bridge * (index / intervals))
         .collect();
-    let surfaces_ok = samples.iter().copied().all(|point| {
-        point_is_on_surface(validation.surface0, point, validation.tolerance)
-            && point_is_on_surface(validation.surface1, point, validation.tolerance)
-    });
-    if !surfaces_ok {
-        return false;
-    }
-
-    // The carrier polygons are tessellations, not the exact surfaces above.
-    // Adjacent SSI paths already permit an 8x kernel-tolerance endpoint
-    // canonicalization; use that same envelope here for trimmed-face membership
-    // while keeping the exact surface/tangent validation at the tighter 4x bound.
+    // The carrier polygons are tessellations, not proof of exact incidence,
+    // but their trim bounds can cheaply reject impossible candidates *before*
+    // the costly global NURBS inverse search. This only reorders two required
+    // predicates, preserving the exact admission criteria.
     let polygon_tolerance = 2.0 * validation.tolerance;
-    validation
+    if !validation
         .polygon0
         .neighborhood_include(&samples, polygon_tolerance)
-        && validation
+        || !validation
             .polygon1
             .neighborhood_include(&samples, polygon_tolerance)
+    {
+        return false;
+    }
+    let mut hint0 = None;
+    let mut hint1 = None;
+    samples.iter().copied().all(|point| {
+        point_is_on_surface(validation.surface0, point, validation.tolerance, &mut hint0)
+            && point_is_on_surface(validation.surface1, point, validation.tolerance, &mut hint1)
+    })
 }
 
 fn stitch_validated_linear_intersection_fragments<S>(
