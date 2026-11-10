@@ -10,6 +10,7 @@ use super::loops_store::{common_circular_extrusion_cylinder, common_ruled_extrus
 use super::weld::{node_selected_regions, point_lex_cmp};
 use super::{AltCurve, AltRegion, ShapeOpsCurve, ShapeOpsSurface};
 use monstertruck_geometry::prelude::*;
+use monstertruck_meshing::prelude::PolylineCurve;
 use monstertruck_topology::{Edge, EdgeId, VertexId, Wire};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::BTreeSet;
@@ -298,6 +299,93 @@ fn reconcile_local_wire_uv_closure<S: ParametricSurface3D>(
     uv[last_index] = representative;
 }
 
+/// Share a surface-chart parameter for every occurrence of a welded 3D
+/// vertex, including occurrences in independently imported source faces.
+///
+/// Distinct periodic-chart lifts are retained: an occurrence is synchronized
+/// only with candidates closer than both local incident edge steps. Among
+/// equivalent inverse-map solutions, choose the smaller world-space residual.
+fn reconcile_shared_vertex_uv<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    surface: &S,
+    samples: &HashMap<EdgeId<AltCurve<C, S>>, PolylineCurve<Point3>>,
+    projected: &mut [Vec<Vec<Point2>>],
+) -> Option<()> {
+    struct Occurrence {
+        region: usize,
+        wire: usize,
+        index: usize,
+        uv: Point2,
+        local_step2: f64,
+        world: Point3,
+    }
+
+    let mut occurrences = HashMap::<VertexId<Point3>, Vec<Occurrence>>::default();
+    for (region_index, (region, loops)) in source.iter().zip(projected.iter()).enumerate() {
+        for (wire_index, (wire, poly)) in region.absolute_boundaries().iter().zip(loops).enumerate()
+        {
+            let mut current = 0;
+            for edge in wire {
+                let segment_count = samples.get(&edge.id())?.len().checked_sub(1)?;
+                if segment_count == 0 {
+                    return None;
+                }
+                let next = current + segment_count;
+                for (vertex, index) in [(edge.front(), current), (edge.back(), next)] {
+                    let uv = *poly.get(index)?;
+                    let previous_step = (index > 0).then(|| (uv - poly[index - 1]).magnitude2());
+                    let next_step = poly.get(index + 1).map(|next| (*next - uv).magnitude2());
+                    let local_step2 = previous_step
+                        .into_iter()
+                        .chain(next_step)
+                        .filter(|step| *step > 0.0 && step.is_finite())
+                        .fold(f64::INFINITY, f64::min);
+                    occurrences
+                        .entry(vertex.id())
+                        .or_default()
+                        .push(Occurrence {
+                            region: region_index,
+                            wire: wire_index,
+                            index,
+                            uv,
+                            local_step2,
+                            world: vertex.point(),
+                        });
+                }
+                current = next;
+            }
+            if current + 1 != poly.len() {
+                return None;
+            }
+        }
+    }
+    for group in occurrences.values() {
+        for point in group {
+            let representative = group
+                .iter()
+                .filter(|candidate| {
+                    let gap2 = (candidate.uv - point.uv).magnitude2();
+                    (gap2 == 0.0
+                        || candidate.local_step2.is_finite()
+                            && point.local_step2.is_finite()
+                            && gap2 < candidate.local_step2
+                            && gap2 < point.local_step2)
+                })
+                .min_by(|lhs, rhs| {
+                    let residual = |occ: &Occurrence| {
+                        surface.evaluate(occ.uv.x, occ.uv.y).distance2(occ.world)
+                    };
+                    residual(lhs)
+                        .total_cmp(&residual(rhs))
+                        .then_with(|| lhs.uv.x.total_cmp(&rhs.uv.x))
+                        .then_with(|| lhs.uv.y.total_cmp(&rhs.uv.y))
+                })?;
+            projected[point.region][point.wire][point.index] = representative.uv;
+        }
+    }
+    Some(())
+}
+
 fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     source: &[AltRegion<C, S>],
     tol: f64,
@@ -325,59 +413,56 @@ fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
     }
     let mut samples = HashMap::default();
-    let mut polygons = Vec::new();
-    let mut edges = HashMap::<EdgeId<AltCurve<C, S>>, ProjectedEdge<AltCurve<C, S>>>::default();
-    let mut span_min = Point2::new(f64::INFINITY, f64::INFINITY);
-    let mut span_max = Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let mut projected = Vec::with_capacity(source.len());
     for region in source {
         let mut region_loops = Vec::new();
         for wire in region.absolute_boundaries() {
-            let mut projected =
+            let mut loop_uv =
                 create_parameter_boundary_on_surface(&surface, wire, None, &mut samples, tol)?;
-            if projected.len() < 3 {
+            if loop_uv.len() < 3 {
                 return None;
             }
             let front = wire.front_vertex()?;
             if front.id() == wire.back_vertex()?.id() {
-                reconcile_local_wire_uv_closure(&surface, front.point(), &mut projected.0);
+                reconcile_local_wire_uv_closure(&surface, front.point(), &mut loop_uv.0);
             }
-            for &point in &projected.0 {
+            region_loops.push(loop_uv.0);
+        }
+        projected.push(region_loops);
+    }
+    reconcile_shared_vertex_uv(source, &surface, &samples, &mut projected)?;
+
+    let mut polygons = Vec::new();
+    let mut edges = HashMap::<EdgeId<AltCurve<C, S>>, ProjectedEdge<AltCurve<C, S>>>::default();
+    let mut span_min = Point2::new(f64::INFINITY, f64::INFINITY);
+    let mut span_max = Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for (region, region_loops) in source.iter().zip(projected) {
+        for (wire, poly) in region.absolute_boundaries().iter().zip(&region_loops) {
+            for &point in poly {
                 span_min.x = span_min.x.min(point.x);
                 span_min.y = span_min.y.min(point.y);
                 span_max.x = span_max.x.max(point.x);
                 span_max.y = span_max.y.max(point.y);
             }
-            // The complete wire is projected with a continuous UV hint;
-            // re-projecting its edges independently can choose different
-            // inverse-map branches, or move shared vertices slightly in UV.
-            // Slice the exact edge samples out of that same projected walk
-            // instead so occupancy polygons and edge transitions agree.
+            // Every exact edge must use its parent wire's *normalized*
+            // chart coordinates, rather than a separate inverse projection.
             let mut start = 0;
             for edge in wire {
                 let segment_count = samples.get(&edge.id())?.len().checked_sub(1)?;
-                if segment_count == 0 {
-                    return None;
-                }
                 let end = start + segment_count;
-                let mut uv = projected.0.get(start..=end)?.to_vec();
+                let mut uv = poly.get(start..=end)?.to_vec();
                 if !edge.orientation() {
                     uv.reverse();
                 }
-                if !edges.contains_key(&edge.id()) {
-                    edges.insert(
-                        edge.id(),
-                        ProjectedEdge {
-                            edge: edge.absolute_clone(),
-                            uv,
-                        },
-                    );
-                }
+                edges.entry(edge.id()).or_insert_with(|| ProjectedEdge {
+                    edge: edge.absolute_clone(),
+                    uv,
+                });
                 start = end;
             }
-            if start + 1 != projected.len() {
+            if start + 1 != poly.len() {
                 return None;
             }
-            region_loops.push(projected.0);
         }
         polygons.push(region_loops);
     }
@@ -1156,6 +1241,64 @@ mod tests {
         reconcile_local_wire_uv_closure(&surface, vertex, &mut winding);
         assert_eq!(winding[0], Point2::new(0.0, 0.62));
         assert_eq!(winding[4], Point2::new(1.0, 0.62));
+    }
+
+    #[test]
+    fn equivalent_welded_vertices_share_a_coherent_chart_across_regions() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]);
+        let a = fixture.region(&[0, 1, 2, 3, 0]);
+        let b = fixture.region(&[0, 1, 2, 3, 0]);
+        let source = [a, b];
+        let mut polylines = HashMap::default();
+        let mut projected = source
+            .iter()
+            .map(|region| {
+                region
+                    .absolute_boundaries()
+                    .iter()
+                    .map(|wire| {
+                        create_parameter_boundary_on_surface(
+                            &region.surface(),
+                            wire,
+                            None,
+                            &mut polylines,
+                            1.0e-6,
+                        )
+                        .unwrap()
+                        .0
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        // The same topological first vertex appears in both source regions,
+        // but one independent inverse mapping wandered in its UV chart.
+        projected[1][0][0].x = 2.8e-7;
+        projected[1][0][4].x = 2.8e-7;
+        reconcile_shared_vertex_uv(
+            &source,
+            &Surface::Plane(Plane::xy()),
+            &polylines,
+            &mut projected,
+        )
+        .expect("welded source vertices admit chart reconciliation");
+        assert_eq!(projected[1][0][0], projected[0][0][0]);
+        assert_eq!(projected[1][0][4], projected[0][0][4]);
+
+        // Different lifts of one periodic world vertex must not be merged
+        // merely because their welded topological ID agrees.
+        let mut winding = projected.clone();
+        for uv in &mut winding[1][0] {
+            uv.x += 2.0;
+        }
+        reconcile_shared_vertex_uv(
+            &source,
+            &Surface::Plane(Plane::xy()),
+            &polylines,
+            &mut winding,
+        )
+        .expect("separate chart lifts are retained");
+        assert_eq!(winding[1][0][0].x, projected[1][0][0].x + 2.0);
+        assert_eq!(winding[1][0][4].x, projected[1][0][4].x + 2.0);
     }
 
     #[test]
