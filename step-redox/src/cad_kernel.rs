@@ -1834,6 +1834,152 @@ pub mod monstertruck {
         /// combines two exact circular boundary arcs with planar tapered
         /// side limits. Native intersection must retain both types of carrier.
 
+        /// The residual treatment is not an opaque B-rep: both rounded
+        /// terminals are executable analytic arc extrusions and intersections.
+        #[test]
+        fn evaluates_source_rounding_caps_as_editable_cad() -> Result<()> {
+            use crate::cad_ir::{BooleanOp, RigidTransform};
+            let xc = 67.7545_f64;
+            let r = 0.1524_f64;
+            let y0 = 5.161_372_032_35_f64;
+            let cy = 5.364_572_032_35_f64;
+            let cz = 1.679_434_121_45_f64;
+            let inner_r = 0.3429_f64;
+            let outer_r = 0.6731_f64;
+            // Extend the analytical carrier beyond the intersecting feature.
+            // Its artificial face boundaries are not part of the target CAD.
+            // This also avoids a redundant coplanar interface in the CSG solver.
+            let y1 = y0 + 2.0 * r;
+            let band_y0 = y0 - 0.03;
+            let lower_z = |y: f64| cz + (inner_r.powi(2) - (y - cy).powi(2)).sqrt();
+            let upper_z = |y: f64| cz + (outer_r.powi(2) - (y - cy).powi(2)).sqrt();
+            let lower_angle = |y: f64| (lower_z(y) - cz).atan2(y - cy);
+            let upper_angle = |y: f64| (upper_z(y) - cz).atan2(y - cy);
+
+            let mut model = CadModel::new();
+            let band = model.add_node(CadNode::Extrude {
+                profile: Profile2d {
+                    loops: vec![ProfileLoop {
+                        curves: vec![
+                            Curve2d::CircleArc {
+                                center_mm: [cy, cz],
+                                radius_mm: inner_r,
+                                start_angle_rad: lower_angle(band_y0),
+                                end_angle_rad: lower_angle(y1),
+                            },
+                            Curve2d::Line {
+                                start_mm: [y1, lower_z(y1)],
+                                end_mm: [y1, upper_z(y1)],
+                            },
+                            Curve2d::CircleArc {
+                                center_mm: [cy, cz],
+                                radius_mm: outer_r,
+                                start_angle_rad: upper_angle(y1),
+                                end_angle_rad: upper_angle(band_y0),
+                            },
+                            Curve2d::Line {
+                                start_mm: [band_y0, upper_z(band_y0)],
+                                end_mm: [band_y0, lower_z(band_y0)],
+                            },
+                        ],
+                    }],
+                },
+                vector_mm: [0.0, 0.0, 2.0 * r + 0.04],
+            });
+            let band = model.add_node(CadNode::Transform {
+                transform: RigidTransform {
+                    matrix: [
+                        [0.0, 0.0, 1.0, xc - r - 0.02],
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                },
+                child: band,
+            });
+            let top_round = model.add_node(CadNode::Extrude {
+                profile: Profile2d {
+                    loops: vec![ProfileLoop {
+                        curves: vec![
+                            Curve2d::CircleArc {
+                                center_mm: [xc, y0],
+                                radius_mm: r,
+                                start_angle_rad: 0.0,
+                                end_angle_rad: std::f64::consts::PI,
+                            },
+                            Curve2d::Line {
+                                start_mm: [xc - r, y0],
+                                end_mm: [xc + r, y0],
+                            },
+                        ],
+                    }],
+                },
+                vector_mm: [0.0, 0.0, 0.8],
+            });
+            let top_round = model.add_node(CadNode::Transform {
+                transform: RigidTransform {
+                    matrix: [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, cz],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                },
+                child: top_round,
+            });
+            let upper = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Intersection,
+                children: vec![band, top_round],
+            });
+
+            let yb = 6.177_372_032_36_f64;
+            let zb = -3.057_665_878_55_f64;
+            let bottom = model.add_node(CadNode::Extrude {
+                profile: Profile2d {
+                    loops: vec![ProfileLoop {
+                        curves: vec![
+                            Curve2d::CircleArc {
+                                center_mm: [zb, xc],
+                                radius_mm: r,
+                                start_angle_rad: std::f64::consts::FRAC_PI_2,
+                                end_angle_rad: 3.0 * std::f64::consts::FRAC_PI_2,
+                            },
+                            Curve2d::Line {
+                                start_mm: [zb, xc - r],
+                                end_mm: [zb, xc + r],
+                            },
+                        ],
+                    }],
+                },
+                vector_mm: [0.0, 0.0, 0.3302],
+            });
+            let lower = model.add_node(CadNode::Transform {
+                transform: RigidTransform {
+                    matrix: [
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, yb],
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                },
+                child: bottom,
+            });
+
+            let kernel = MonstertruckKernel::project_standard();
+            model.validate()?;
+            for (name, root) in [("upper", upper), ("lower", lower)] {
+                let evaluated = kernel.evaluate(&model, root)?;
+                assert!(kernel.summarize(&evaluated).is_single_solid());
+                if let Ok(dir) = std::env::var("MIXED_ROUND_CAP_OUTPUT_DIR") {
+                    std::fs::write(
+                        std::path::Path::new(&dir).join(format!("native-rounding-{name}.step")),
+                        kernel.to_step(&evaluated)?,
+                    )?;
+                }
+            }
+            Ok(())
+        }
+
         #[test]
         fn evaluates_curved_lip_intersected_with_tapered_envelope() -> Result<()> {
             use crate::cad_ir::{BooleanOp, RigidTransform};

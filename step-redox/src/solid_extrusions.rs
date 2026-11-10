@@ -280,11 +280,6 @@ pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
             continue;
         };
         let inward = mul(normal, if cap.surface_forward { -1.0 } else { 1.0 });
-        let Some(profile) =
-            cap_loop_roles(cap, inward).and_then(|roles| canonical_profile(cap, inward, &roles))
-        else {
-            continue;
-        };
         let mut side_indices = HashSet::new();
         let mut all_edges_attached = true;
         for edge in &cap.loop_edges {
@@ -309,18 +304,11 @@ pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
         let Some(height) = source_cap_generator_station(cap, &side_indices, &faces, inward) else {
             continue;
         };
-        candidates.push(RecoveredSourceCapExtrusion {
-            solid_id,
-            cap_face_id: cap.id,
-            profile_curves: profile.curves,
-            inner_profile_loops: profile.inner_loops,
-            origin_mm: profile.origin_mm,
-            x_axis: profile.x_axis,
-            y_axis: profile.y_axis,
-            z_axis: inward,
-            height_mm: height,
-            max_residual_mm: plane.max_residual_mm,
-        });
+        if let Some(proposal) = source_cap_extrusion_proposal_at_station(
+            solid_id, cap.id, inward, height, entities, index,
+        ) {
+            candidates.push(proposal);
+        }
     }
     candidates.sort_by(|a, b| {
         a.height_mm
