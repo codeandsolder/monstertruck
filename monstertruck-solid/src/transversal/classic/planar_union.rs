@@ -6,9 +6,13 @@
 
 use super::divide_face::create_parameter_boundary_on_surface;
 use super::faces_classification::BooleanRegion;
-use super::loops_store::{common_circular_extrusion_cylinder, common_ruled_extrusion_strip};
+use super::loops_store::{
+    certified_circular_cylinder, common_circular_extrusion_cylinder, common_ruled_extrusion_strip,
+};
+use super::tolerance::BooleanTolerance;
 use super::weld::{node_selected_regions, point_lex_cmp};
 use super::{AltCurve, AltRegion, ShapeOpsCurve, ShapeOpsSurface};
+use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::PolylineCurve;
 use monstertruck_topology::{Edge, EdgeId, VertexId, Wire};
@@ -24,9 +28,149 @@ struct ProjectedEdge<C> {
 
 struct PlanarArrangement<C, S> {
     surface: S,
+    cylinder: Option<CylinderChart>,
     polygons: Vec<Vec<Vec<Point2>>>,
     edges: Vec<ProjectedEdge<AltCurve<C, S>>>,
     span: f64,
+}
+
+/// Global metric chart for a certified rational circular extrusion.
+///
+/// Two independently parameterized rational arcs may inhabit the same exact
+/// cylinder but have incompatible local NURBS parameter domains. Projecting
+/// one arc through the other's local inverse map can invent winding and
+/// intersections. The cylinder's axial coordinate + unwrapped arc length
+/// supplies a single chart for the entire certified common carrier.
+#[derive(Clone, Copy)]
+struct CylinderChart {
+    center: Point3,
+    axis: Vector3,
+    radius: f64,
+    basis_u: Vector3,
+    basis_v: Vector3,
+    handedness: f64,
+    seam: f64,
+}
+
+impl CylinderChart {
+    fn new<S: ShapeOpsSurface>(surface: &S, first_point: Point3) -> Option<Self> {
+        let rational = surface.try_into_homogeneous_bspline_surface()?;
+        let (center, axis, radius, _) = certified_circular_cylinder(&rational)?;
+        let reference = if axis.x.abs() < 0.8 {
+            Vector3::unit_x()
+        } else {
+            Vector3::unit_y()
+        };
+        let basis_u = axis.cross(reference).normalize();
+        let basis_v = axis.cross(basis_u).normalize();
+        let axial = (first_point - center).dot(axis);
+        let radial = first_point - center - axis * axial;
+        if (radial.magnitude() - radius).abs() > KERNEL_EPSILON {
+            return None;
+        }
+        let uv = surface
+            .search_parameter(first_point, None, 100)
+            .or_else(|| surface.search_nearest_parameter(first_point, None, 100))?;
+        let normal = surface.normal(uv.0, uv.1);
+        let radial_alignment = normal.dot(radial.normalize()) / normal.magnitude();
+        if !radial_alignment.is_finite() || radial_alignment.abs() < 0.9 {
+            return None;
+        }
+        // With this right-handed axis basis, (axial, increasing angle) has
+        // an inward normal. Choose chart orientation to agree with the
+        // reference surface's raw normal, preserving outer/hole winding.
+        let handedness = if radial_alignment < 0.0 { 1.0 } else { -1.0 };
+        Some(Self {
+            center,
+            axis,
+            radius,
+            basis_u,
+            basis_v,
+            handedness,
+            seam: 0.0,
+        })
+    }
+
+    fn raw_phase(&self, point: Point3) -> f64 {
+        let delta = point - self.center;
+        (self.handedness * delta.dot(self.basis_v).atan2(delta.dot(self.basis_u)))
+            .rem_euclid(std::f64::consts::TAU)
+    }
+
+    fn set_seam(&mut self, points: impl IntoIterator<Item = Point3>) -> Option<()> {
+        let mut angles = points
+            .into_iter()
+            .map(|point| self.raw_phase(point))
+            .collect::<Vec<_>>();
+        if angles.is_empty() {
+            return None;
+        }
+        angles.sort_by(f64::total_cmp);
+        let mut largest = (f64::NEG_INFINITY, 0.0);
+        for (i, &start) in angles.iter().enumerate() {
+            let end = angles
+                .get(i + 1)
+                .copied()
+                .unwrap_or(angles[0] + std::f64::consts::TAU);
+            let gap = end - start;
+            if gap > largest.0 {
+                largest = (gap, start + gap * 0.5);
+            }
+        }
+        self.seam = largest.1.rem_euclid(std::f64::consts::TAU);
+        Some(())
+    }
+
+    fn project(&self, point: Point3, previous: Option<Point2>, tol: f64) -> Option<Point2> {
+        let delta = point - self.center;
+        let axial = delta.dot(self.axis);
+        let radial = delta - self.axis * axial;
+        if !axial.is_finite() || (radial.magnitude() - self.radius).abs() > tol {
+            return None;
+        }
+        let phase = self.raw_phase(point);
+        let mut angle = (phase - self.seam).rem_euclid(std::f64::consts::TAU) + self.seam;
+        if let Some(previous) = previous {
+            angle += std::f64::consts::TAU
+                * ((previous.y / self.radius - angle) / std::f64::consts::TAU).round();
+        }
+        Some(Point2::new(axial, self.radius * angle))
+    }
+
+    fn evaluate(&self, uv: Point2) -> Point3 {
+        let angle = self.handedness * uv.y / self.radius;
+        self.center
+            + self.axis * uv.x
+            + (self.basis_u * angle.cos() + self.basis_v * angle.sin()) * self.radius
+    }
+}
+
+fn project_cylinder_wire<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    chart: &CylinderChart,
+    wire: &Wire<Point3, AltCurve<C, S>>,
+    samples: &mut HashMap<EdgeId<AltCurve<C, S>>, PolylineCurve<Point3>>,
+    tol: f64,
+) -> Option<PolylineCurve<Point2>> {
+    let mut projected = vec![chart.project(wire.front_vertex()?.point(), None, tol)?];
+    for edge in wire {
+        let poly = samples.entry(edge.id()).or_insert_with(|| {
+            let curve = edge.curve();
+            PolylineCurve(
+                curve
+                    .parameter_division(curve.range_tuple(), BooleanTolerance::new(tol).mesh_seed)
+                    .1,
+            )
+        });
+        let walk = if edge.orientation() {
+            poly.iter().skip(1).copied().collect::<Vec<_>>()
+        } else {
+            poly.iter().rev().skip(1).copied().collect::<Vec<_>>()
+        };
+        for world in walk {
+            projected.push(chart.project(world, projected.last().copied(), tol)?);
+        }
+    }
+    Some(PolylineCurve(projected))
 }
 
 fn signed_area(poly: &[Point2]) -> f64 {
@@ -246,7 +390,10 @@ fn exact_node_points<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                         continue;
                     }
                     let uv = first[0] + lhs_direction * first_fraction;
-                    let approximate = arrangement.surface.evaluate(uv.x, uv.y);
+                    let approximate = arrangement.cylinder.as_ref().map_or_else(
+                        || arrangement.surface.evaluate(uv.x, uv.y),
+                        |chart| chart.evaluate(uv),
+                    );
                     let point = exact_curve_crossing(lhs, rhs, approximate, tol)?;
                     if !nodes.iter().any(|existing| existing.distance(point) <= tol) {
                         nodes.push(point);
@@ -270,6 +417,7 @@ fn exact_node_points<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 /// period is a nonlocal jump, larger than the adjacent sampled UV steps.
 fn reconcile_local_wire_uv_closure<S: ParametricSurface3D>(
     surface: &S,
+    cylinder: Option<&CylinderChart>,
     world_vertex: Point3,
     uv: &mut [Point2],
 ) {
@@ -288,8 +436,11 @@ fn reconcile_local_wire_uv_closure<S: ParametricSurface3D>(
     if !gap.is_finite() || gap >= first_step || gap >= last_step {
         return;
     }
-    let first_residual = surface.evaluate(first.x, first.y).distance2(world_vertex);
-    let last_residual = surface.evaluate(last.x, last.y).distance2(world_vertex);
+    let evaluate = |uv: Point2| {
+        cylinder.map_or_else(|| surface.evaluate(uv.x, uv.y), |chart| chart.evaluate(uv))
+    };
+    let first_residual = evaluate(first).distance2(world_vertex);
+    let last_residual = evaluate(last).distance2(world_vertex);
     let representative = if first_residual <= last_residual {
         first
     } else {
@@ -308,6 +459,7 @@ fn reconcile_local_wire_uv_closure<S: ParametricSurface3D>(
 fn reconcile_shared_vertex_uv<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     source: &[AltRegion<C, S>],
     surface: &S,
+    cylinder: Option<&CylinderChart>,
     samples: &HashMap<EdgeId<AltCurve<C, S>>, PolylineCurve<Point3>>,
     projected: &mut [Vec<Vec<Point2>>],
 ) -> Option<()> {
@@ -373,7 +525,12 @@ fn reconcile_shared_vertex_uv<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 })
                 .min_by(|lhs, rhs| {
                     let residual = |occ: &Occurrence| {
-                        surface.evaluate(occ.uv.x, occ.uv.y).distance2(occ.world)
+                        cylinder
+                            .map_or_else(
+                                || surface.evaluate(occ.uv.x, occ.uv.y),
+                                |chart| chart.evaluate(occ.uv),
+                            )
+                            .distance2(occ.world)
                     };
                     residual(lhs)
                         .total_cmp(&residual(rhs))
@@ -413,24 +570,69 @@ fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
     }
     let mut samples = HashMap::default();
+    let first = source
+        .first()?
+        .absolute_boundaries()
+        .first()?
+        .front_vertex()?
+        .point();
+    let mut cylinder = CylinderChart::new(&surface, first);
+    if let Some(chart) = cylinder.as_mut() {
+        let mut world_samples = Vec::new();
+        for region in source {
+            for edge in region
+                .absolute_boundaries()
+                .iter()
+                .flat_map(|wire| wire.iter())
+            {
+                let poly = samples.entry(edge.id()).or_insert_with(|| {
+                    let curve = edge.curve();
+                    PolylineCurve(
+                        curve
+                            .parameter_division(
+                                curve.range_tuple(),
+                                BooleanTolerance::new(tol).mesh_seed,
+                            )
+                            .1,
+                    )
+                });
+                world_samples.extend(poly.iter().copied());
+            }
+        }
+        chart.set_seam(world_samples)?;
+    }
     let mut projected = Vec::with_capacity(source.len());
     for region in source {
         let mut region_loops = Vec::new();
         for wire in region.absolute_boundaries() {
-            let mut loop_uv =
-                create_parameter_boundary_on_surface(&surface, wire, None, &mut samples, tol)?;
+            let mut loop_uv = if let Some(chart) = cylinder.as_ref() {
+                project_cylinder_wire(chart, wire, &mut samples, tol)?
+            } else {
+                create_parameter_boundary_on_surface(&surface, wire, None, &mut samples, tol)?
+            };
             if loop_uv.len() < 3 {
                 return None;
             }
             let front = wire.front_vertex()?;
             if front.id() == wire.back_vertex()?.id() {
-                reconcile_local_wire_uv_closure(&surface, front.point(), &mut loop_uv.0);
+                reconcile_local_wire_uv_closure(
+                    &surface,
+                    cylinder.as_ref(),
+                    front.point(),
+                    &mut loop_uv.0,
+                );
             }
             region_loops.push(loop_uv.0);
         }
         projected.push(region_loops);
     }
-    reconcile_shared_vertex_uv(source, &surface, &samples, &mut projected)?;
+    reconcile_shared_vertex_uv(
+        source,
+        &surface,
+        cylinder.as_ref(),
+        &samples,
+        &mut projected,
+    )?;
 
     let mut polygons = Vec::new();
     let mut edges = HashMap::<EdgeId<AltCurve<C, S>>, ProjectedEdge<AltCurve<C, S>>>::default();
@@ -492,6 +694,7 @@ fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     });
     Some(PlanarArrangement {
         surface,
+        cylinder,
         polygons,
         edges,
         span,
@@ -809,8 +1012,24 @@ fn same_oriented_difference_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     ) else {
         return false;
     };
-    if !common_ruled_extrusion_strip(&a, &b) && !common_circular_extrusion_cylinder(&a, &b) {
+    let cylindrical = common_circular_extrusion_cylinder(&a, &b);
+    if !common_ruled_extrusion_strip(&a, &b) && !cylindrical {
         return false;
+    }
+    if cylindrical {
+        let (Some((ca, aa, _, _)), Some((cb, ab, _, _))) = (
+            certified_circular_cylinder(&a),
+            certified_circular_cylinder(&b),
+        ) else {
+            return false;
+        };
+        let Some(lhs_sign) = oriented_cylinder_radial_sign(lhs, ca, aa, tol) else {
+            return false;
+        };
+        let Some(rhs_sign) = oriented_cylinder_radial_sign(rhs, cb, ab, tol) else {
+            return false;
+        };
+        return lhs_sign * rhs_sign > 0.0;
     }
     let Some(point) = rhs
         .absolute_boundaries()
@@ -849,6 +1068,37 @@ fn same_oriented_difference_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .normal(lhs_uv.0, lhs_uv.1)
         .dot(rhs_surface.normal(rhs_uv.0, rhs_uv.1))
         > 1.0 - 1.0e-8
+}
+
+fn oriented_cylinder_radial_sign<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    region: &AltRegion<C, S>,
+    center: Point3,
+    axis: Vector3,
+    tol: f64,
+) -> Option<f64> {
+    let point = region
+        .absolute_boundaries()
+        .first()?
+        .front_vertex()?
+        .point();
+    let surface = region.surface();
+    let uv = surface
+        .search_parameter(point, None, 100)
+        .or_else(|| surface.search_nearest_parameter(point, None, 100))?;
+    if surface.evaluate(uv.0, uv.1).distance(point) > tol {
+        return None;
+    }
+    let radial = point - center - axis * (point - center).dot(axis);
+    let normal = surface.normal(uv.0, uv.1);
+    let length = normal.magnitude() * radial.magnitude();
+    if !length.is_finite() || length <= 0.0 {
+        return None;
+    }
+    let sign = normal.dot(radial) / length;
+    if sign.abs() < 0.9 {
+        return None;
+    }
+    Some(if region.orientation() { sign } else { -sign })
 }
 
 /// Union selected cells sharing oriented planar support, including distinct source faces.
@@ -1192,6 +1442,95 @@ mod tests {
         )
     }
 
+    fn circular_arc_region(
+        axial: (f64, f64),
+        angles: (f64, f64),
+        radius: f64,
+        source_face: usize,
+    ) -> TestRegion {
+        let mid = f64::midpoint(angles.0, angles.1);
+        let w = ((angles.1 - angles.0) * 0.5).cos();
+        let pts = [
+            (radius * angles.0.cos(), radius * angles.0.sin(), 1.0),
+            (radius * mid.cos() / w, radius * mid.sin() / w, w),
+            (radius * angles.1.cos(), radius * angles.1.sin(), 1.0),
+        ];
+        let net = pts
+            .into_iter()
+            .map(|(y, z, weight)| {
+                vec![
+                    Vector4::new(axial.0 * weight, y * weight, z * weight, weight),
+                    Vector4::new(axial.1 * weight, y * weight, z * weight, weight),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let point = |x: f64, angle: f64| Point3::new(x, radius * angle.cos(), radius * angle.sin());
+        let vertices = [
+            Vertex::new(point(axial.0, angles.0)),
+            Vertex::new(point(axial.1, angles.0)),
+            Vertex::new(point(axial.1, angles.1)),
+            Vertex::new(point(axial.0, angles.1)),
+        ];
+        let line = |a: usize, b: usize| {
+            Edge::new_unchecked(
+                &vertices[a],
+                &vertices[b],
+                Alternative::FirstType(Curve::from(Line(vertices[a].point(), vertices[b].point()))),
+            )
+        };
+        let arc = |column: usize, a: usize, b: usize| {
+            Edge::new_unchecked(
+                &vertices[a],
+                &vertices[b],
+                Alternative::FirstType(Curve::NurbsCurve(NurbsCurve::new(
+                    BsplineCurve::new_unchecked(
+                        KnotVector::bezier_knot(2),
+                        net.iter().map(|row| row[column]).collect(),
+                    ),
+                ))),
+            )
+        };
+        BooleanRegion::new(
+            vec![Wire::from(vec![
+                line(0, 1),
+                arc(1, 1, 2),
+                line(2, 3),
+                arc(0, 0, 3).inverse(),
+            ])],
+            Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new_unchecked(
+                (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
+                net,
+            ))),
+            true,
+            0,
+            source_face,
+        )
+    }
+
+    #[test]
+    fn rational_arcs_on_one_cylinder_use_a_shared_metric_chart() {
+        let radius = 0.6731;
+        let outer = circular_arc_region((0.0, 2.0), (0.0, std::f64::consts::FRAC_PI_2), radius, 19);
+        let inner = circular_arc_region((0.5, 1.0), (0.0, std::f64::consts::FRAC_PI_4), radius, 22);
+        assert!(same_oriented_difference_support(&outer, &inner, 1.0e-6));
+        let source = [outer.clone(), inner.clone()];
+        let chart = project_source(&source, 1.0e-6, true)
+            .expect("different rational arc charts share the exact cylinder");
+        assert!(chart.cylinder.is_some());
+        let result = overlay_planar_subtract(&[outer], &[inner], 1.0e-6)
+            .expect("circular common carrier has one exact clipped wire");
+        assert_eq!(result.len(), 1);
+        assert!(result[0].try_face().is_some());
+        assert_eq!(result[0].absolute_boundaries().len(), 1);
+        let regions = project_source(&result, 1.0e-6, true).unwrap();
+        let actual = signed_area(&regions.polygons[0][0]).abs();
+        let expected = radius * 7.0 * std::f64::consts::PI / 8.0;
+        assert!(
+            (actual - expected).abs() < 2.0e-5,
+            "actual={actual},expected={expected}"
+        );
+    }
+
     #[test]
     fn projected_uv_t_junction_at_shared_world_vertex_does_not_request_noding() {
         let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
@@ -1248,7 +1587,7 @@ mod tests {
             Point2::new(0.0, 1.0),
             Point2::new(0.0, 0.62),
         ];
-        reconcile_local_wire_uv_closure(&surface, vertex, &mut locally_drifting);
+        reconcile_local_wire_uv_closure(&surface, None, vertex, &mut locally_drifting);
         assert_eq!(locally_drifting[0], locally_drifting[4]);
         assert_eq!(locally_drifting[0], Point2::new(0.0, 0.62));
 
@@ -1261,7 +1600,7 @@ mod tests {
             Point2::new(0.75, 0.62),
             Point2::new(1.0, 0.62),
         ];
-        reconcile_local_wire_uv_closure(&surface, vertex, &mut winding);
+        reconcile_local_wire_uv_closure(&surface, None, vertex, &mut winding);
         assert_eq!(winding[0], Point2::new(0.0, 0.62));
         assert_eq!(winding[4], Point2::new(1.0, 0.62));
     }
@@ -1300,6 +1639,7 @@ mod tests {
         reconcile_shared_vertex_uv(
             &source,
             &Surface::Plane(Plane::xy()),
+            None,
             &polylines,
             &mut projected,
         )
@@ -1316,6 +1656,7 @@ mod tests {
         reconcile_shared_vertex_uv(
             &source,
             &Surface::Plane(Plane::xy()),
+            None,
             &polylines,
             &mut winding,
         )

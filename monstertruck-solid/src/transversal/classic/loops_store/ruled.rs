@@ -136,7 +136,7 @@ pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
 /// The quadratic circle equation in homogeneous coordinates then has degree
 /// four: checking all five *polynomial coefficients* proves the entire span
 /// lies on the circle, not merely finitely many sampled profile points.
-fn certified_circular_cylinder(
+pub(in crate::transversal::classic) fn certified_circular_cylinder(
     surface: &BsplineSurface<Vector4>,
 ) -> Option<(Point3, Vector3, f64, (f64, f64))> {
     use monstertruck_geometry::prelude::{BsplineCurve, Cut, ParametricCurve};
