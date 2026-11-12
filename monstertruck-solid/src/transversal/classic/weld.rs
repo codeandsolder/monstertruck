@@ -317,19 +317,26 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
         let mut pieces = Vec::with_capacity(split_vertices.len() + 1);
         let mut remaining = curve;
         let mut segment_front = front;
-        for (_, _, split_vertex) in split_vertices {
-            // The parameter of a later split belongs to the *remaining* curve.
-            // A line cut resets its domain to [0, 1], while a B-spline cut
-            // retains its original knot values. Reusing parameters from the
-            // initial curve corrupts its analytic endpoints after multiple cuts.
+        for (_, original_parameter, split_vertex) in split_vertices {
             let point = split_vertex.point();
-            let parameter = remaining
-                .search_parameter(point, None, 100)
-                .or_else(|| remaining.search_nearest_parameter(point, None, 100))
-                .filter(|&t| {
-                    let (start, end) = remaining.range_tuple();
-                    t > start && t < end && remaining.evaluate(t).near(&point)
-                })?;
+            // The discovery pass already certified this original-curve
+            // parameter. Prefer it when it is still valid in the *remaining*
+            // curve's domain. B-spline cuts often preserve knot parameters,
+            // but lines reset their domain: a later split must be recovered
+            // from the remaining curve if the initial parameter no longer
+            // evaluates to this exact vertex.
+            let on_remaining = |t: f64| {
+                let (start, end) = remaining.range_tuple();
+                t.is_finite() && t > start && t < end && remaining.evaluate(t).near(&point)
+            };
+            let parameter = if on_remaining(original_parameter) {
+                original_parameter
+            } else {
+                remaining
+                    .search_parameter(point, None, 100)
+                    .or_else(|| remaining.search_nearest_parameter(point, None, 100))
+                    .filter(|&t| on_remaining(t))?
+            };
             let later = remaining.cut(parameter);
             if !remaining.back().near(&point) || !later.front().near(&point) {
                 return None;
@@ -571,6 +578,41 @@ mod weld_tests {
                     piece.is_geometric_consistent(),
                     "noding must not stretch curves away from canonical vertices"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn weld_multi_split_reuses_only_parameters_valid_on_remaining_curve() {
+        let p0 = Point3::new(0.0, 0.0, 0.0);
+        let p1 = Point3::new(1.0, 0.0, 0.0);
+        let p2 = Point3::new(2.0, 0.0, 0.0);
+        let p3 = Point3::new(3.0, 0.0, 0.0);
+        for curve in [
+            alt_line(p0, p3),
+            Alternative::FirstType(Curve::from(BsplineCurve::new_unchecked(
+                KnotVector::bezier_knot(1),
+                vec![p0, p3],
+            ))),
+        ] {
+            let first = Vertex::new(p0);
+            let last = Vertex::new(p3);
+            let edge = Edge::new_unchecked(&first, &last, curve);
+            let mut context: WeldContext<Curve, Surface> = WeldContext::new(&[]);
+            context.additional_nodes = vec![p1, p2];
+            let fragments = context
+                .rebuild_edge(&edge)
+                .expect("two distinct exact interior nodes must both split the analytic edge");
+            assert_eq!(fragments.len(), 3);
+            assert_eq!(fragments[0].front().point(), p0);
+            assert_eq!(fragments[0].back().point(), p1);
+            assert_eq!(fragments[1].front().point(), p1);
+            assert_eq!(fragments[1].back().point(), p2);
+            assert_eq!(fragments[2].front().point(), p2);
+            assert_eq!(fragments[2].back().point(), p3);
+            for edge in fragments {
+                assert!(edge.oriented_curve().front().near(&edge.front().point()));
+                assert!(edge.oriented_curve().back().near(&edge.back().point()));
             }
         }
     }
