@@ -1189,6 +1189,63 @@ impl<V> From<NurbsSurface<V>> for BsplineSurface<V> {
 }
 
 #[test]
+fn adaptive_index_keeps_exact_generic_presearch_minimum_after_hot_cache_threshold() {
+    let knots = KnotVector::bezier_knot(1);
+    let controls = vec![
+        vec![
+            Vector4::new(2.0, 1.0, 0.0, 1.0),
+            Vector4::new(2.0, 2.0, 0.0, 1.0),
+        ],
+        vec![
+            Vector4::new(3.0, 1.0, 0.0, 1.0),
+            Vector4::new(3.0, 2.0, 0.0, 1.0),
+        ],
+    ];
+    let surface = NurbsSurface::new(BsplineSurface::new_unchecked(
+        (knots.clone(), knots),
+        controls,
+    ));
+    let range = surface.range_tuple();
+    let point = Point3::new(2.2, 1.6, 0.0);
+    for _ in 0..SPATIAL_INDEX_MIN_QUERIES + 8 {
+        assert_eq!(
+            surface.presearch_separable(point, range, PRESEARCH_DIVISION),
+            (0.2, 0.6),
+        );
+    }
+    let positions = [
+        Point3::new(2.0, 1.0, 0.0),
+        Point3::new(3.0, 2.0, 0.0),
+        Point3::new(2.51, 1.50, 0.0),
+        Point3::new(2.5 + 1.0e-11, 1.5, 0.0),
+        Point3::new(2.49999999999, 1.5, 0.0),
+        Point3::new(f64::NAN, 1.0, 0.0),
+    ];
+    for point in positions {
+        assert_eq!(
+            surface.presearch_separable(point, range, PRESEARCH_DIVISION),
+            algo::surface::presearch(&surface, point, range, PRESEARCH_DIVISION),
+            "index must reproduce the generic f64 seed and first-minimum tie order",
+        );
+    }
+    if spatial_index_enabled() {
+        PRESEARCH_GRIDS.with(|grids| {
+            let grids = grids.borrow();
+            let entry = grids
+                .iter()
+                .rev()
+                .filter_map(|value| value.downcast_ref::<CachedPresearchGrid<Vector4>>())
+                .find(|value| value.surface == surface.0 && value.range == range)
+                .expect("the same surface remains in the bounded cache");
+            assert!(
+                entry.index.borrow().is_some(),
+                "hot grid must build one reusable index"
+            );
+        });
+    }
+}
+
+#[test]
 fn reusable_presearch_grid_matches_uncached_scan_and_invalidates_on_edits() {
     let knots = KnotVector::bezier_knot(2);
     let controls = vec![
