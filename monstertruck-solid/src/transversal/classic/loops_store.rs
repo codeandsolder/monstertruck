@@ -1691,9 +1691,10 @@ where
             // interface. Running generic SSI on coincident surfaces is both
             // unnecessary and degenerate; ownership is resolved by the
             // coplanar face classifier after division.
-            if imprint_coplanar
-                && planar_polygons_same_trimmed_face(&polygon0, &polygon1, coplanar_tol)
-            {
+            if planar_polygons_same_trimmed_face(&polygon0, &polygon1, coplanar_tol) {
+                // The two complete trims already bound the same planar region.
+                // A transverse surface/surface curve is not defined on that
+                // two-dimensional coincidence, for difference as for union.
                 return Some(());
             }
             let curves = intersection_curve::intersection_curves(
