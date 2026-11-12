@@ -291,13 +291,17 @@ pub struct IntersectionCurve<C, S0, S1> {
 }
 
 /// Surface curve with exact face-local boundaries on both supporting surfaces.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct SurfaceCurve<C, S0, S1, T0, T1> {
     surface0: S0,
     surface1: S1,
     leader: C,
     boundary0: Option<T0>,
     boundary1: Option<T1>,
+    // An approximate leader's new cut endpoint may not lie on both carriers.
+    // Retain the exact corrected 3D point without changing analytic controls.
+    front_anchor: Option<Point3>,
+    back_anchor: Option<Point3>,
 }
 
 /// trimmed curve for parametric curve

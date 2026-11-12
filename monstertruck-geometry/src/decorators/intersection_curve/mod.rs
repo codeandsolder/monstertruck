@@ -16,6 +16,7 @@ use super::{
     SurfaceDerivatives, SurfaceParameter, Tolerance, Transformed, TrimmedCurve, Vector2, Vector3,
     Vector4, algo,
 };
+use monstertruck_core::Transform;
 use monstertruck_core::newton::{self, CalcOutput};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_traits::{ParametricCurve as ParametricCurveTrait, SnapCurveEndpoints};
@@ -146,6 +147,8 @@ impl<C, S0, S1, T0, T1> SurfaceCurve<C, S0, S1, T0, T1> {
             leader,
             boundary0,
             boundary1,
+            front_anchor: None,
+            back_anchor: None,
         }
     }
     /// This curve is carried by `self.surface0()` and `self.surface1()`.
@@ -178,15 +181,36 @@ impl<C, S0, S1, T0, T1> SurfaceCurve<C, S0, S1, T0, T1> {
     /// Returns the mutable exact face-local boundary on `surface1`, if available.
     #[inline]
     pub const fn boundary1_mut(&mut self) -> Option<&mut T1> { self.boundary1.as_mut() }
+    /// Certified exact topological endpoints, if the curve has been cut or snapped.
+    pub const fn endpoint_anchors(&self) -> (Option<Point3>, Option<Point3>) {
+        (self.front_anchor, self.back_anchor)
+    }
+    /// Set the world-space topological endpoint anchors of this curve.
+    pub fn set_endpoint_anchors(&mut self, front: Option<Point3>, back: Option<Point3>) {
+        self.front_anchor = front;
+        self.back_anchor = back;
+    }
     /// Destructs `self`, preserving face-local boundaries.
     #[inline]
-    pub fn destruct_with_boundaries(self) -> (S0, S1, C, Option<T0>, Option<T1>) {
+    pub fn destruct_with_boundaries(
+        self,
+    ) -> (
+        S0,
+        S1,
+        C,
+        Option<T0>,
+        Option<T1>,
+        Option<Point3>,
+        Option<Point3>,
+    ) {
         (
             self.surface0,
             self.surface1,
             self.leader,
             self.boundary0,
             self.boundary1,
+            self.front_anchor,
+            self.back_anchor,
         )
     }
 }
@@ -627,6 +651,17 @@ where
     type Point = Point3;
     type Vector = Vector3;
     fn evaluate(&self, t: f64) -> Point3 {
+        let range = self.leader.parameter_range();
+        if matches!(range.0, Bound::Included(start) if t==start) {
+            if let Some(point) = self.front_anchor {
+                return point;
+            }
+        }
+        if matches!(range.1, Bound::Included(end) if t==end) {
+            if let Some(point) = self.back_anchor {
+                return point;
+            }
+        }
         IntersectionCurve::new(
             self.surface0.clone(),
             self.surface1.clone(),
@@ -706,13 +741,35 @@ where
 {
     #[inline]
     fn cut(&mut self, t: f64) -> Self {
-        Self {
+        let (start, end) = self.leader.range_tuple();
+        // The uncut curve evaluates the exact two-surface intersection at
+        // this INTERIOR parameter. Retain that value before it becomes a
+        // leader endpoint, which otherwise bypasses analytical correction.
+        let split = (t > start && t < end).then(|| self.evaluate(t));
+        let old_front = self.front_anchor;
+        let old_back = self.back_anchor;
+        let mut later = Self {
             surface0: self.surface0.clone(),
             surface1: self.surface1.clone(),
             leader: self.leader.cut(t),
             boundary0: self.boundary0.as_mut().map(|boundary| boundary.cut(t)),
             boundary1: self.boundary1.as_mut().map(|boundary| boundary.cut(t)),
+            front_anchor: None,
+            back_anchor: old_back,
+        };
+        if let Some(point) = split {
+            self.back_anchor = Some(point);
+            later.front_anchor = Some(point);
+        } else if t <= start {
+            let front = old_front.unwrap_or_else(|| self.evaluate(start));
+            self.front_anchor = Some(front);
+            self.back_anchor = Some(front);
+            later.front_anchor = Some(front);
+        } else {
+            later.front_anchor = old_back.or_else(|| Some(self.evaluate(end)));
+            later.back_anchor = later.front_anchor;
         }
+        later
     }
 }
 
@@ -730,6 +787,7 @@ where
         if let Some(boundary) = self.boundary1_mut() {
             boundary.invert();
         }
+        std::mem::swap(&mut self.front_anchor, &mut self.back_anchor);
     }
 }
 
@@ -799,6 +857,8 @@ where
         if let Some(boundary) = self.boundary1_mut() {
             boundary.transform_by(trans);
         }
+        self.front_anchor = self.front_anchor.map(|p| trans.transform_point(p));
+        self.back_anchor = self.back_anchor.map(|p| trans.transform_point(p));
     }
 }
 

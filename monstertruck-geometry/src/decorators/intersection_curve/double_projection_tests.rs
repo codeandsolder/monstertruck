@@ -11,6 +11,69 @@ use proptest::prelude::*;
 use std::f64::consts::PI;
 type PResult = std::result::Result<(), TestCaseError>;
 
+#[test]
+fn surface_curve_cut_preserves_exact_split_without_deforming_approximate_leader() {
+    // The two orthogonal carrier planes intersect exactly on the X axis.
+    // The imported 3D leader merely approximates their intersection.
+    let plane0 = Plane::xy();
+    let plane1 = Plane::zx();
+    let leader = Line(
+        Point3::new(0.0, 0.002, 0.002),
+        Point3::new(2.0, 0.002, 0.002),
+    );
+    let mut curve = SurfaceCurve::with_boundaries(
+        plane0,
+        plane1,
+        leader,
+        None::<Line<Point3>>,
+        None::<Line<Point3>>,
+    );
+    let t = 0.43;
+    let exact = curve.evaluate(t);
+    assert!(exact.distance(Point3::new(0.86, 0.0, 0.0)) < 1e-10);
+    let original_leader = curve.leader().clone();
+    let mut later = curve.cut(t);
+    assert!(curve.back().distance(exact) < 1e-10);
+    assert!(later.front().distance(exact) < 1e-10);
+    assert!(curve.leader().back().distance(exact) > 0.001);
+    assert!(later.leader().front().distance(exact) > 0.001);
+    assert!(original_leader.evaluate(t).distance(exact) > 0.001);
+    for part in [&curve, &later] {
+        assert!(part.front().x.is_finite());
+        assert!(part.back().x.is_finite());
+    }
+    later.invert();
+    assert!(later.back().distance(exact) < 1e-10);
+    later.invert();
+    assert!(later.front().distance(exact) < 1e-10);
+    let translation = Matrix4::from_translation(Vector3::new(4.0, -3.0, 2.0));
+    later.transform_by(translation);
+    assert!(later.front().distance(translation.transform_point(exact)) < 1e-10);
+}
+
+#[test]
+fn surface_curve_multiple_cuts_keep_both_analytic_nodes() {
+    let mut curve = SurfaceCurve::with_boundaries(
+        Plane::xy(),
+        Plane::zx(),
+        Line(
+            Point3::new(0.0, 0.001, 0.002),
+            Point3::new(3.0, 0.001, 0.002),
+        ),
+        None::<Line<Point3>>,
+        None::<Line<Point3>>,
+    );
+    let first = curve.evaluate(0.25);
+    let second = curve.evaluate(0.75);
+    let mut remainder = curve.cut(0.25);
+    let tail = remainder.cut(0.5 / (1.0 - 0.25));
+    assert!(curve.back().distance(first) < 1e-10);
+    assert!(remainder.front().distance(first) < 1e-10);
+    assert!(remainder.back().distance(second) < 1e-10);
+    assert!(tail.front().distance(second) < 1e-10);
+    assert!(tail.back().distance(Point3::new(3.0, 0.001, 0.002)) < 1e-10);
+}
+
 fn unit_normal_candidate(u: [f64; 2]) -> Vector3 {
     let angle = 2.0 * PI * u[0];
     let w = f64::sqrt(u[1].mul_add(-u[1], 1.0));

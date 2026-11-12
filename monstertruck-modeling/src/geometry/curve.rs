@@ -295,14 +295,17 @@ impl
             ParameterCurve<BoundaryCurve2D, Surface>,
         >,
     ) -> Self {
-        let (surface0, surface1, leader, boundary0, boundary1) = c.destruct_with_boundaries();
-        Self::Intersection(SurfaceCurve::with_boundaries(
+        let (surface0, surface1, leader, boundary0, boundary1, front, back) =
+            c.destruct_with_boundaries();
+        let mut result = SurfaceCurve::with_boundaries(
             Box::new(surface0),
             Box::new(surface1),
             Box::new(leader.into()),
             boundary0.as_ref().map(boundary_curve_2d_to_model_curve),
             boundary1.as_ref().map(boundary_curve_2d_to_model_curve),
-        ))
+        );
+        result.set_endpoint_anchors(front, back);
+        Self::Intersection(result)
     }
 }
 
@@ -326,14 +329,17 @@ impl
             ParameterCurve<BoundaryCurve2D, Surface>,
         >,
     ) -> Self {
-        let (surface0, surface1, leader, boundary0, boundary1) = c.destruct_with_boundaries();
-        Self::Intersection(SurfaceCurve::with_boundaries(
+        let (surface0, surface1, leader, boundary0, boundary1, front, back) =
+            c.destruct_with_boundaries();
+        let mut result = SurfaceCurve::with_boundaries(
             Box::new(surface0),
             Box::new(surface1),
             Box::new(leader.into()),
             boundary0.as_ref().map(boundary_curve_2d_to_model_curve),
             boundary1.as_ref().map(boundary_curve_2d_to_model_curve),
-        ))
+        );
+        result.set_endpoint_anchors(front, back);
+        Self::Intersection(result)
     }
 }
 
@@ -462,6 +468,7 @@ impl SnapCurveEndpoints for Curve {
     fn snap_endpoints(&mut self, front: Point3, back: Point3) {
         match self {
             Self::Intersection(curve) => {
+                curve.set_endpoint_anchors(Some(front), Some(back));
                 curve.leader_mut().snap_endpoints(front, back);
                 if let Some(boundary) = curve.boundary0_mut() {
                     snap_parameter_curve_endpoints(boundary, front, back);
