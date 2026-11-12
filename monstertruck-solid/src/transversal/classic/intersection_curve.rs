@@ -453,6 +453,274 @@ where
     }
 }
 
+/// Locate a certified SSI point along the *interior* of an existing
+/// already-corrected intersection fragment. A near 3D chord is only a
+/// broad-phase candidate: the exact surface/surface/slicing-plane Newton
+/// solution must coincide with the point and remain on this local branch.
+fn locate_on_exact_fragment<S>(
+    curve: &Polyline,
+    point: Point3,
+    surface0: &S,
+    surface1: &S,
+    tolerance: f64,
+) -> Option<(usize, f64)>
+where
+    S: ParametricSurface3D
+        + Clone
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let mut best = None::<(f64, usize, f64)>;
+    let mut matched_progress = None::<f64>;
+    for (index, segment) in curve.windows(2).enumerate() {
+        let delta = segment[1] - segment[0];
+        let length2 = delta.magnitude2();
+        if length2 <= tolerance * tolerance {
+            continue;
+        }
+        let along = (point - segment[0]).dot(delta) / length2;
+        if !(-1.0e-8..=1.0 + 1.0e-8).contains(&along) {
+            continue;
+        }
+        let foot = segment[0] + delta * along.clamp(0.0, 1.0);
+        let distance = foot.distance(point);
+        if distance > DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor {
+            continue;
+        }
+        let projection = IntersectionCurve::new(
+            surface0.clone(),
+            surface1.clone(),
+            PolylineCurve(vec![segment[0], segment[1]]),
+        );
+        let hint = |surface: &S| {
+            surface
+                .search_parameter(segment[0], None, 100)
+                .or_else(|| surface.search_nearest_parameter(segment[0], None, 100))
+        };
+        let Some((q, uv0, uv1)) = projection.search_intersection_in_plane(
+            point,
+            delta,
+            hint(surface0),
+            hint(surface1),
+            100,
+        ) else {
+            continue;
+        };
+        let residual = surface0
+            .evaluate(uv0.x, uv0.y)
+            .distance(surface1.evaluate(uv1.x, uv1.y));
+        if residual > tolerance || q.distance(point) > tolerance {
+            continue;
+        }
+        let progress = index as f64 + along.clamp(0.0, 1.0);
+        // Nonadjacent repeated solutions mean self-overlap, not a unique splice.
+        if matched_progress.is_some_and(|prior| (progress - prior).abs() > 1.5) {
+            return None;
+        }
+        matched_progress = Some(progress);
+        if best.is_none_or(|(old, _, _)| distance < old) {
+            best = Some((distance, index, along.clamp(0.0, 1.0)));
+        }
+    }
+    best.map(|(_, index, along)| (index, along))
+}
+
+/// Find two fragments that trace a common local subarc in the same direction.
+/// The first fragment overruns the second's start; discard *only* that
+/// certified duplicate suffix. No new geometric surface tolerance is needed:
+/// candidates are corrected on both exact surfaces and sampled through the
+/// overlap, not guessed from a coincident endpoint.
+fn overlap_join_candidate<S>(
+    first: &Polyline,
+    second: &Polyline,
+    surface0: &S,
+    surface1: &S,
+    tolerance: f64,
+) -> Option<Vec<Point3>>
+where
+    S: ParametricSurface3D
+        + Clone
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let first_start = *first.first()?;
+    let second_start = *second.first()?;
+    let first_end = *first.last()?;
+    let second_end = *second.last()?;
+    let (cut_index, cut_fraction) =
+        locate_on_exact_fragment(first, second_start, surface0, surface1, tolerance)?;
+    let (overlap_index, overlap_fraction) =
+        locate_on_exact_fragment(second, first_end, surface0, surface1, tolerance)?;
+    if cut_index == 0 && cut_fraction <= tolerance
+        || cut_index + 1 >= first.len()
+        || overlap_index + 1 >= second.len()
+        || first_start.distance(second_start) <= tolerance
+        || first_end.distance(second_end) <= tolerance
+    {
+        return None;
+    }
+    let (Some(forward0), Some(forward1)) = (
+        first
+            .get(cut_index + 1)
+            .map(|point| point - first[cut_index]),
+        second.get(1).map(|point| point - second[0]),
+    ) else {
+        return None;
+    };
+    let n0 = forward0.magnitude();
+    let n1 = forward1.magnitude();
+    if n0 <= tolerance || n1 <= tolerance || forward0.dot(forward1) / (n0 * n1) < 0.8 {
+        return None;
+    }
+    // The discarded first suffix must progress along the retained second
+    // fragment, not cross it or return along a distinct branch.
+    let mut previous_progress = 0.0_f64;
+    let mut trace = Vec::with_capacity(first.len() - cut_index);
+    trace.push(second_start);
+    trace.extend_from_slice(&first[cut_index + 1..]);
+    let mesh_step = DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor * 0.5;
+    let mut samples = 0usize;
+    let ic = IntersectionCurve::new(
+        surface0.clone(),
+        surface1.clone(),
+        PolylineCurve(vec![second_start, first_end]),
+    );
+    for pair in trace.windows(2) {
+        let delta = pair[1] - pair[0];
+        let count = (delta.magnitude() / mesh_step).ceil().max(1.0) as usize;
+        if samples + count > 4096 {
+            return None;
+        }
+        for step in 1..=count {
+            let fraction = step as f64 / count as f64;
+            let point = if step == count {
+                pair[1]
+            } else {
+                let predictor = pair[0] + delta * fraction;
+                let seed = |surface: &S| {
+                    surface
+                        .search_parameter(pair[0], None, 100)
+                        .or_else(|| surface.search_nearest_parameter(pair[0], None, 100))
+                };
+                let (exact, u0, u1) = ic.search_intersection_in_plane(
+                    predictor,
+                    delta,
+                    seed(surface0),
+                    seed(surface1),
+                    100,
+                )?;
+                if surface0
+                    .evaluate(u0.x, u0.y)
+                    .distance(surface1.evaluate(u1.x, u1.y))
+                    > tolerance
+                    || exact.distance(predictor) > delta.magnitude() * 0.5
+                {
+                    return None;
+                }
+                exact
+            };
+            let (index, local) =
+                locate_on_exact_fragment(second, point, surface0, surface1, tolerance)?;
+            let progress = index as f64 + local;
+            if progress + 1.0e-8 < previous_progress {
+                return None;
+            }
+            previous_progress = progress;
+            samples += 1;
+        }
+    }
+    if previous_progress < overlap_index as f64 + overlap_fraction - 1.0e-5 {
+        return None;
+    }
+    let prefix = PolylineCurve(first[..=cut_index].to_vec());
+    let bridge = corrected_curved_fragment_bridge(
+        &prefix, false, second, true, surface0, surface1, tolerance,
+    )?;
+    let mut result = prefix.0;
+    result.extend_from_slice(&bridge[1..bridge.len() - 1]);
+    result.extend(second.iter().copied());
+    Some(result)
+}
+
+/// Splice only unique, same-direction exact overlap matches; an ambiguous
+/// repeated locus is left unmodified for upstream fail-closed handling.
+fn stitch_overlapping_intersection_fragments<S>(
+    mut chains: Vec<Polyline>,
+    surface0: &S,
+    surface1: &S,
+    tolerance: f64,
+) -> Vec<Polyline>
+where
+    S: ParametricSurface3D
+        + Clone
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    loop {
+        let mut matches = Vec::new();
+        for first in 0..chains.len() {
+            for second in 0..chains.len() {
+                if first == second {
+                    continue;
+                }
+                for reverse_first in [false, true] {
+                    for reverse_second in [false, true] {
+                        let mut a = chains[first].clone();
+                        let mut b = chains[second].clone();
+                        if reverse_first {
+                            a.0.reverse();
+                        }
+                        if reverse_second {
+                            b.0.reverse();
+                        }
+                        if let Some(merged) =
+                            overlap_join_candidate(&a, &b, surface0, surface1, tolerance)
+                        {
+                            // A and B can admit the same union in reversed order.
+                            // Use canonical 3D endpoint order to admit one
+                            // orientation while retaining genuine ambiguity.
+                            let front = *merged.first().unwrap();
+                            let back = *merged.last().unwrap();
+                            if front
+                                .x
+                                .total_cmp(&back.x)
+                                .then_with(|| front.y.total_cmp(&back.y))
+                                .then_with(|| front.z.total_cmp(&back.z))
+                                .is_lt()
+                            {
+                                matches.push((
+                                    first,
+                                    second,
+                                    reverse_first,
+                                    reverse_second,
+                                    merged,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if matches.len() != 1 {
+            return chains;
+        }
+        let (first, second, _, _, merged) = matches.remove(0);
+        if std::env::var_os("MT_CURVED_SSI_TRACE").is_some() {
+            eprintln!(
+                "SSI_OVERLAP_SPLICE before={} first={} second={} result_points={}",
+                chains.len(),
+                first,
+                second,
+                merged.len()
+            );
+        }
+        for index in [first.max(second), first.min(second)] {
+            chains.remove(index);
+        }
+        chains.push(PolylineCurve(merged));
+    }
+}
+
 /// Re-sample a raw interference polyline onto both surfaces, returning a
 /// cleaned polyline intersection curve. Mirrors 0.3.2
 /// `IntersectionCurveWithParameters::try_new`, keeping only the 3D leader.
@@ -600,6 +868,12 @@ where
         validation_tolerance,
     );
     let polylines = stitch_validated_curved_intersection_fragments(
+        polylines,
+        &surface0,
+        &surface1,
+        validation_tolerance,
+    );
+    let polylines = stitch_overlapping_intersection_fragments(
         polylines,
         &surface0,
         &surface1,
@@ -770,6 +1044,53 @@ mod tests {
             stitch_validated_curved_intersection_fragments(vec![a, b], &plane, &cylinder, 4.0e-6);
         assert_eq!(stitched.len(), 1);
         assert!(stitched[0].len() > 6);
+    }
+
+    #[test]
+    fn overlapping_exact_curved_fragments_splice_without_retracing() {
+        let plane = Plane::xy();
+        let cylinder = Plane::zx();
+        let left = PolylineCurve(vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.005, 0.0, 0.0),
+            Point3::new(0.009, 0.0, 0.0),
+            Point3::new(0.012, 0.0, 0.0),
+        ]);
+        let right = PolylineCurve(vec![
+            Point3::new(0.008, 0.0, 0.0),
+            Point3::new(0.011, 0.0, 0.0),
+            Point3::new(0.016, 0.0, 0.0),
+            Point3::new(0.025, 0.0, 0.0),
+        ]);
+        let result =
+            stitch_overlapping_intersection_fragments(vec![left, right], &plane, &cylinder, 4.0e-6);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].front(), Point3::new(0.0, 0.0, 0.0));
+        assert_eq!(result[0].back(), Point3::new(0.025, 0.0, 0.0));
+        assert!(result[0].windows(2).all(|s| s[1].x > s[0].x));
+    }
+
+    #[test]
+    fn overlapping_splice_refuses_transverse_crossings() {
+        let plane = Plane::xy();
+        let second = Plane::zx();
+        let left = PolylineCurve(vec![
+            Point3::new(-0.01, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.01, 0.0, 0.0),
+        ]);
+        let crossing = PolylineCurve(vec![
+            Point3::new(0.0, -0.01, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.01, 0.0),
+        ]);
+        let result = stitch_overlapping_intersection_fragments(
+            vec![left, crossing],
+            &plane,
+            &second,
+            4.0e-6,
+        );
+        assert_eq!(result.len(), 2);
     }
 
     #[test]
