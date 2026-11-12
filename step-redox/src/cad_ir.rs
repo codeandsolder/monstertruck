@@ -97,6 +97,14 @@ impl CadModel {
                     edge.validate()?;
                 }
             }
+            if let CadNode::SolverTolerance { tolerance_mm, .. } = node
+                && (!tolerance_mm.is_finite() || *tolerance_mm <= 0.0)
+            {
+                bail!(
+                    "solver tolerance at node {} must be finite and positive",
+                    id.0
+                );
+            }
             if let CadNode::PeriodicChain(chain) = node {
                 chain.validate()?;
             }
@@ -256,6 +264,15 @@ pub enum CadNode {
         transform: RigidTransform,
         child: NodeId,
     },
+    /// Numerical solver tolerance used only while evaluating this subtree.
+    ///
+    /// This is NOT a certified geometric error budget. Any approximation
+    /// introduced by a solver must still be proven against the selected
+    /// source geometry and the outer accuracy policy.
+    SolverTolerance {
+        child: NodeId,
+        tolerance_mm: f64,
+    },
     Pattern {
         pattern: PatternSpec,
         child: NodeId,
@@ -273,6 +290,7 @@ impl CadNode {
             Self::Boolean { children, .. } | Self::Assembly { children } => children.clone(),
             Self::EdgeTreatment { child, .. }
             | Self::Transform { child, .. }
+            | Self::SolverTolerance { child, .. }
             | Self::Pattern { child, .. } => vec![*child],
             _ => Vec::new(),
         }
@@ -323,6 +341,13 @@ impl CadNode {
                 transform: *transform,
                 child: shift(*child)?,
             },
+            Self::SolverTolerance {
+                child,
+                tolerance_mm,
+            } => Self::SolverTolerance {
+                child: shift(*child)?,
+                tolerance_mm: *tolerance_mm,
+            },
             Self::Pattern { pattern, child } => Self::Pattern {
                 pattern: pattern.clone(),
                 child: shift(*child)?,
@@ -355,7 +380,7 @@ impl CadNode {
                 1 + children.len() as u64
             }
             Self::EdgeTreatment { edges, .. } => 2 + edges.len() as u64,
-            Self::Transform { .. } => 2,
+            Self::Transform { .. } | Self::SolverTolerance { .. } => 2,
             Self::Pattern { pattern, .. } => 2 + pattern.complexity(),
             Self::PeriodicChain(chain) => chain.complexity(),
         }
@@ -1037,6 +1062,48 @@ fn scalar(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scoped_solver_tolerance_is_finite_positive_and_preserved_on_rebase() -> Result<()> {
+        for tolerance_mm in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+            let mut invalid = CadModel::new();
+            let solid = invalid.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [1.0, 1.0, 1.0],
+            }));
+            let child = invalid.add_node(CadNode::SolverTolerance {
+                child: solid,
+                tolerance_mm,
+            });
+            invalid.add_root(child)?;
+            assert!(invalid.validate().is_err());
+        }
+        let mut part = CadModel::new();
+        let leaf = part.add_node(CadNode::Primitive(Primitive::Box {
+            size_mm: [1.0, 1.0, 1.0],
+        }));
+        let wrapper = part.add_node(CadNode::SolverTolerance {
+            child: leaf,
+            tolerance_mm: 0.01,
+        });
+        part.add_root(wrapper)?;
+        part.validate()?;
+        let mut prefix = CadModel::new();
+        prefix.add_node(CadNode::Primitive(Primitive::Box {
+            size_mm: [2.0, 2.0, 2.0],
+        }));
+        let offset = prefix.append_model(&part)?;
+        assert_eq!(offset, 1);
+        let CadNode::SolverTolerance {
+            child,
+            tolerance_mm,
+        } = prefix.node(NodeId(2))?
+        else {
+            bail!("scoped tolerance did not survive node remapping")
+        };
+        assert_eq!(*child, NodeId(1));
+        assert_eq!(*tolerance_mm, 0.01);
+        Ok(())
+    }
 
     #[test]
     fn extrude_pattern_emits_compact_kcl_from_one_dag() -> Result<()> {

@@ -116,6 +116,60 @@ pub fn compose_union_model(fragments: &[CadFragment]) -> Result<(CadModel, NodeI
     compose_union_models(&models)
 }
 
+/// One independently editable CAD feature in a source-ordered constructive
+/// sequence. The first feature is positive material (`operation = None`);
+/// each following feature combines with the accumulated body in this exact
+/// order. Difference is intentionally not commutative.
+pub struct ConstructiveStep<'a> {
+    pub model: &'a CadModel,
+    pub root: NodeId,
+    pub operation: Option<BooleanOp>,
+}
+
+/// Compose source-derived features into one executable CAD tree, retaining
+/// each feature's provenance and preserving the exact Boolean operation order.
+///
+/// The component models, not imported STEP solids, are the owners of all
+/// sketch/profile/loft geometry. Evaluating this model starts at the leaf CAD
+/// nodes and never reloads an intermediate B-rep.
+///
+/// # Errors
+/// Refuses empty sequences, an operation on the first feature, a missing
+/// subsequent operation, invalid feature roots, cycles or invalid provenance.
+pub fn compose_constructive_sequence_model(
+    steps: &[ConstructiveStep<'_>],
+) -> Result<(CadModel, NodeId)> {
+    let Some((first, rest)) = steps.split_first() else {
+        bail!("constructive sequence must contain at least one feature");
+    };
+    if first.operation.is_some() {
+        bail!("first constructive feature must create positive material");
+    }
+    let mut model = CadModel::new();
+    let mut previous = None;
+    for step in std::iter::once(first).chain(rest) {
+        step.model.validate()?;
+        step.model.node(step.root)?;
+        let offset = model.append_model(step.model)?;
+        let owned_root = NodeId(step.root.0.checked_add(offset).ok_or_else(|| {
+            anyhow::anyhow!("constructive node id overflow while composing features")
+        })?);
+        previous = Some(match (previous, step.operation) {
+            (None, None) => owned_root,
+            (Some(body), Some(operation)) => model.add_node(CadNode::Boolean {
+                op: operation,
+                children: vec![body, owned_root],
+            }),
+            (None, Some(_)) => bail!("first constructive feature cannot be a Boolean"),
+            (Some(_), None) => bail!("subsequent constructive feature needs a Boolean operation"),
+        });
+    }
+    let root = previous.ok_or_else(|| anyhow::anyhow!("missing constructive root"))?;
+    model.add_root(root)?;
+    model.validate()?;
+    Ok((model, root))
+}
+
 fn compose_union_models(parts: &[(&CadModel, NodeId)]) -> Result<(CadModel, NodeId)> {
     if parts.len() < 2 {
         bail!("a CAD union composite needs at least two models");
@@ -763,12 +817,258 @@ fn validate_periodic_chain(chain: &PeriodicChainPattern) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "cad_recovery/mixed_fixture_models.rs"]
+pub(crate) mod mixed_fixture_models;
+
+#[cfg(test)]
 mod tests {
     #![expect(
         clippy::redundant_closure,
         reason = "legacy test fixture code is allowed narrow lint exceptions; production paths remain strict"
     )]
     use super::*;
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn mixed_source_cap_model(face: u64, height: f64) -> Result<(CadModel, NodeId)> {
+        let bytes = include_bytes!("../validation/fixtures/native_mixed_treatment_4a6356.step");
+        let parsed = ParsedStepSource::parse(bytes)?.exchange;
+        let entities = &parsed.data[0].entities;
+        let index = build_index(entities);
+        let candidate = crate::solid_extrusions::source_cap_extrusion_proposal_at_station(
+            171,
+            face,
+            [1.0, 0.0, 0.0],
+            height,
+            entities,
+            &index,
+        )
+        .ok_or_else(|| anyhow::anyhow!("face {face} is not a recoverable source sketch"))?;
+        solid::recover_source_cap_extrusion_model(&candidate)
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn mixed_four_section_lobe_model() -> Result<(CadModel, NodeId)> {
+        use crate::reduced_brep::ReducedSolid;
+        let bytes = include_bytes!("../validation/fixtures/native_mixed_treatment_4a6356.step");
+        let parsed = ParsedStepSource::parse(bytes)?.exchange;
+        let entities = &parsed.data[0].entities;
+        let index = build_index(entities);
+        let reduced = ReducedSolid::from_step(171, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("source mixed B-rep is missing"))?;
+        let extensions = crate::solid_lofts::detect_extended_ruled_end_extensions(&reduced);
+        let lobe = extensions
+            .iter()
+            .find(|entry| {
+                entry
+                    .fragment
+                    .model
+                    .nodes
+                    .iter()
+                    .any(|node| matches!(node,CadNode::Loft{sections} if sections.len()==4))
+            })
+            .ok_or_else(|| anyhow::anyhow!("source-derived four-section lobe absent"))?;
+        Ok((lobe.fragment.model.clone(), lobe.fragment.root))
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn mixed_source_cap_and_four_section_lobe_replay_from_constructive_ir() -> Result<()> {
+        use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+        let (base, base_root) = mixed_source_cap_model(620, 1.27)?;
+        let (lobe, lobe_root) = mixed_four_section_lobe_model()?;
+        let steps = [
+            ConstructiveStep {
+                model: &base,
+                root: base_root,
+                operation: None,
+            },
+            ConstructiveStep {
+                model: &lobe,
+                root: lobe_root,
+                operation: Some(BooleanOp::Union),
+            },
+        ];
+        let (model, root) = compose_constructive_sequence_model(&steps)?;
+        assert_eq!(model.roots, [root]);
+        assert!(
+            model
+                .nodes
+                .iter()
+                .any(|node| matches!(node,CadNode::Loft{sections} if sections.len()==4))
+        );
+        assert!(
+            model
+                .nodes
+                .iter()
+                .any(|node| matches!(node, CadNode::Extrude { .. }))
+        );
+        let kernel = MonstertruckKernel::standard_mm(1e-5);
+        let body = kernel.evaluate(&model, root)?;
+        assert!(kernel.summarize(&body).is_single_solid());
+        assert_eq!(kernel.summarize(&body).faces, 31);
+        if let Ok(folder) = std::env::var("MIXED_CONSTRUCTIVE_IR_OUTPUT_DIR") {
+            std::fs::write(
+                std::path::Path::new(&folder).join("mixed-cap-lobe-cad-ir.step"),
+                kernel.to_step(&body)?,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Full source-measured CAD sketches exercised as one editable six-part
+    /// constructive tree. The cap and lobe are extracted from the original
+    /// STEP; the remaining analytic fixture models still need automatic
+    /// feature detection before this can be admitted as Complete IR.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn mixed_complete_constructive_ir_replays_without_intermediate_step_import() -> Result<()> {
+        use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+        let (base, base_root) = mixed_source_cap_model(620, 1.27)?;
+        let (lobe, lobe_root) = mixed_four_section_lobe_model()?;
+        let (mut lip, lip_inner) = mixed_fixture_models::curved_lip()?;
+        let (void, void_root) = mixed_source_cap_model(391, 0.3048)?;
+        let (mut rounds, upper_inner, lower_root) = mixed_fixture_models::rounding_caps()?;
+        // These local intersections have a different numerical conditioning
+        // from the outer source-scale union/difference sequence. The scoped
+        // tolerance controls the solver, NOT admissible geometric error.
+        let lip_root = lip.add_node(CadNode::SolverTolerance {
+            child: lip_inner,
+            tolerance_mm: 0.01,
+        });
+        let upper_root = rounds.add_node(CadNode::SolverTolerance {
+            child: upper_inner,
+            tolerance_mm: 0.01,
+        });
+        let steps = [
+            ConstructiveStep {
+                model: &base,
+                root: base_root,
+                operation: None,
+            },
+            ConstructiveStep {
+                model: &lobe,
+                root: lobe_root,
+                operation: Some(BooleanOp::Union),
+            },
+            ConstructiveStep {
+                model: &lip,
+                root: lip_root,
+                operation: Some(BooleanOp::Union),
+            },
+            ConstructiveStep {
+                model: &void,
+                root: void_root,
+                operation: Some(BooleanOp::Difference),
+            },
+            ConstructiveStep {
+                model: &rounds,
+                root: upper_root,
+                operation: Some(BooleanOp::Difference),
+            },
+            ConstructiveStep {
+                model: &rounds,
+                root: lower_root,
+                operation: Some(BooleanOp::Difference),
+            },
+        ];
+        let (model, root) = compose_constructive_sequence_model(&steps)?;
+        assert_eq!(model.roots, [root]);
+        let kernel = MonstertruckKernel::standard_mm(1e-5);
+        assert!(
+            model
+                .nodes
+                .iter()
+                .any(|node| matches!(node,CadNode::Loft{sections} if sections.len()==4))
+        );
+        assert!(model.nodes.iter().any(|node| matches!(
+            node,
+            CadNode::Boolean {
+                op: BooleanOp::Intersection,
+                ..
+            }
+        )));
+        let output_folder = std::env::var("MIXED_CONSTRUCTIVE_IR_OUTPUT_DIR").ok();
+        if let Some(folder) = &output_folder {
+            for (name, component, component_root) in [
+                ("lip", &lip, lip_root),
+                ("void", &void, void_root),
+                ("upper-round", &rounds, upper_root),
+                ("lower-round", &rounds, lower_root),
+            ] {
+                let evaluated = kernel
+                    .evaluate(component, component_root)
+                    .map_err(|err| anyhow::anyhow!("standalone editable {name} failed: {err:#}"))?;
+                anyhow::ensure!(
+                    kernel.summarize(&evaluated).is_single_solid(),
+                    "standalone editable {name} is not one solid"
+                );
+                std::fs::write(
+                    std::path::Path::new(folder)
+                        .join(format!("mixed-editable-component-{name}.step")),
+                    kernel.to_step(&evaluated)?,
+                )?;
+            }
+        }
+        if let Some(folder) = &output_folder {
+            std::fs::write(
+                std::path::Path::new(folder).join("mixed-complete-editable-cad-ir.json"),
+                serde_json::to_vec_pretty(&model)?,
+            )?;
+        }
+        let stage_names = ["base", "loft", "lip", "void", "upper-round", "lower-round"];
+        let expected_faces = [17, 31, 37, 47, 47, 47];
+        let mut evaluated = None;
+        for stage in 1..=steps.len() {
+            let (partial, partial_root) = compose_constructive_sequence_model(&steps[..stage])?;
+            let result = kernel.evaluate(&partial, partial_root).map_err(|err| {
+                anyhow::anyhow!(
+                    "constructive stage {} ({}) failed: {err:#}",
+                    stage,
+                    stage_names[stage - 1]
+                )
+            })?;
+            let summary = kernel.summarize(&result);
+            anyhow::ensure!(
+                summary.is_single_solid(),
+                "constructive stage {} ({}) is not one solid: {summary:?}",
+                stage,
+                stage_names[stage - 1]
+            );
+            anyhow::ensure!(
+                summary.faces == expected_faces[stage - 1],
+                "constructive stage {} ({}) faces={} expected={}",
+                stage,
+                stage_names[stage - 1],
+                summary.faces,
+                expected_faces[stage - 1]
+            );
+            if let Some(folder) = &output_folder {
+                std::fs::write(
+                    std::path::Path::new(folder).join(format!(
+                        "mixed-editable-stage-{}.step",
+                        stage_names[stage - 1]
+                    )),
+                    kernel.to_step(&result)?,
+                )?;
+            }
+            evaluated = Some(result);
+        }
+        let evaluated = evaluated.ok_or_else(|| anyhow::anyhow!("no constructive result"))?;
+        let summary = kernel.summarize(&evaluated);
+        assert!(
+            summary.is_single_solid(),
+            "complete editable model must produce one body: {summary:?}"
+        );
+        assert_eq!(summary.faces, 47);
+        if let Ok(folder) = std::env::var("MIXED_CONSTRUCTIVE_IR_OUTPUT_DIR") {
+            let path = std::path::Path::new(&folder);
+            std::fs::write(
+                path.join("mixed-complete-editable-cad-ir.step"),
+                kernel.to_step(&evaluated)?,
+            )?;
+        }
+        Ok(())
+    }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
@@ -1000,6 +1300,75 @@ mod tests {
             model,
             root,
         })
+    }
+
+    #[test]
+    fn constructive_sequence_preserves_order_and_feature_provenance() -> Result<()> {
+        let fragments = (0..6)
+            .map(|index| -> Result<CadModel> {
+                let mut model = CadModel::new();
+                let body = model.add_node(CadNode::Primitive(crate::cad_ir::Primitive::Box {
+                    size_mm: [index as f64 + 1.0, 1.0, 1.0],
+                }));
+                model.add_root(body)?;
+                model.set_provenance(
+                    body,
+                    crate::cad_ir::Provenance {
+                        source_entity_ids: vec![index + 1],
+                        proof: crate::cad_ir::ProofStatus::WithinTolerance,
+                        max_residual_mm: Some(0.00014),
+                    },
+                )?;
+                Ok(model)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let operations = [
+            None,
+            Some(BooleanOp::Union),
+            Some(BooleanOp::Union),
+            Some(BooleanOp::Difference),
+            Some(BooleanOp::Difference),
+            Some(BooleanOp::Difference),
+        ];
+        let steps = fragments
+            .iter()
+            .zip(operations)
+            .map(|(model, operation)| ConstructiveStep {
+                model,
+                root: NodeId(0),
+                operation,
+            })
+            .collect::<Vec<_>>();
+        let (model, root) = compose_constructive_sequence_model(&steps)?;
+        assert_eq!(model.roots.as_slice(), &[root]);
+        assert_eq!(model.provenance.len(), 6);
+        let mut current = root;
+        for (index, expected) in [
+            (5, BooleanOp::Difference),
+            (4, BooleanOp::Difference),
+            (3, BooleanOp::Difference),
+            (2, BooleanOp::Union),
+            (1, BooleanOp::Union),
+        ] {
+            let CadNode::Boolean { op, children } = model.node(current)? else {
+                bail!("missing intermediate Boolean operation");
+            };
+            assert_eq!(*op, expected);
+            assert_eq!(children.len(), 2);
+            let leaf = children[1];
+            assert_eq!(model.provenance[&leaf].source_entity_ids, vec![index + 1]);
+            current = children[0];
+        }
+        assert_eq!(model.provenance[&current].source_entity_ids, vec![1]);
+        assert!(model.node(root).is_ok());
+        assert!(compose_constructive_sequence_model(&[]).is_err());
+        let mut invalid = steps;
+        invalid[0].operation = Some(BooleanOp::Union);
+        assert!(compose_constructive_sequence_model(&invalid).is_err());
+        invalid[0].operation = None;
+        invalid[2].operation = None;
+        assert!(compose_constructive_sequence_model(&invalid).is_err());
+        Ok(())
     }
 
     #[test]
