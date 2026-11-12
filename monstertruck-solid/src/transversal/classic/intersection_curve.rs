@@ -351,13 +351,44 @@ where
     let polylines =
         remove_redundant_interference_strands(construct_polylines(&interferences), KERNEL_EPSILON);
     let polylines = stitch_nearby_polylines(polylines, stitch_tolerance)?;
+    // Mesh intersections are seeds, not certified incidences. Project all
+    // fragments onto both exact surfaces before attempting cross-gap joins.
+    // Keep kernel-precision verification strict; only the mesh seed may move
+    // up to the underlying discretization error.
+    let projection_tol = DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor;
+    let support_tol =
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * KERNEL_EPSILON;
+    let exact_fragments = polylines
+        .into_iter()
+        .map(|raw| {
+            let recovered =
+                build_intersection_curve(surface0.clone(), surface1.clone(), raw.clone())?;
+            let corrected = recovered.leader().clone();
+            if corrected.len() != raw.len() {
+                return None;
+            }
+            let valid = raw.iter().zip(corrected.iter()).all(|(before, after)| {
+                if before.distance(*after) > projection_tol {
+                    return false;
+                }
+                let on = |surface: &S| {
+                    let uv = surface
+                        .search_parameter(*after, None, 100)
+                        .or_else(|| surface.search_nearest_parameter(*after, None, 100));
+                    uv.is_some_and(|(u, v)| surface.evaluate(u, v).distance(*after) <= support_tol)
+                };
+                on(&surface0) && on(&surface1)
+            });
+            valid.then_some(corrected)
+        })
+        .collect::<Option<Vec<_>>>()?;
     // This pass repairs numerical fragmentation introduced by tessellation.
     // Its admission envelope is an explicit kernel-precision bound rather than
     // a threshold derived from the user-facing modeling-error budget.
     let validation_tolerance =
         DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_validation_factor * KERNEL_EPSILON;
     let polylines = stitch_validated_linear_intersection_fragments(
-        polylines,
+        exact_fragments,
         &surface0,
         polygon0,
         &surface1,
@@ -434,6 +465,52 @@ mod tests {
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
         )
         .expect("fixture mesh is valid")
+    }
+
+    #[test]
+    fn meshed_ssi_fragments_project_to_exact_surfaces_before_bridge_validation() {
+        let surface0 = Plane::xy();
+        let surface1 = Plane::zx();
+        let raw = [
+            PolylineCurve(vec![
+                Point3::new(-0.5, 0.0, 0.0),
+                Point3::new(-0.25, 2.0e-5, -1.5e-5),
+                Point3::new(-0.0002, 2.0e-5, -1.5e-5),
+            ]),
+            PolylineCurve(vec![
+                Point3::new(0.0002, 2.0e-5, -1.5e-5),
+                Point3::new(0.25, 1.8e-5, -1.7e-5),
+                Point3::new(0.5, 0.0, 0.0),
+            ]),
+        ];
+        let projected = raw
+            .iter()
+            .map(|poly| {
+                build_intersection_curve(surface0, surface1, poly.clone())
+                    .expect("planes have an exact common line")
+                    .leader()
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        for poly in &projected {
+            assert!(
+                poly.iter()
+                    .all(|point| point.y.abs() < 4.0e-6 && point.z.abs() < 4.0e-6)
+            );
+        }
+        let stitched = stitch_validated_linear_intersection_fragments(
+            projected,
+            &surface0,
+            &xy_mesh(-1.0, 1.0),
+            &surface1,
+            &zx_mesh(-1.0, 1.0),
+            4.0e-6,
+        );
+        assert_eq!(
+            stitched.len(),
+            1,
+            "corrected samples permit exact line joining"
+        );
     }
 
     #[test]
