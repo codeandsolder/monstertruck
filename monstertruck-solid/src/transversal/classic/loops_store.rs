@@ -1622,6 +1622,7 @@ where
         + Clone
         + Invertible
         + TryIntoHomogeneousBsplineSurface
+        + TryIntoAnalyticSurfaceKind
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
@@ -1650,6 +1651,18 @@ where
     let net1 = geom_shell1
         .iter()
         .map(|f| f.surface().try_into_homogeneous_bspline_surface())
+        .collect::<Vec<_>>();
+    // Full carrier recognition/control-net certification is done once per
+    // face, not once for every O(F0*F1) candidate pair.
+    let planes0 = geom_shell0
+        .iter()
+        .zip(net0.iter())
+        .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
+        .collect::<Vec<_>>();
+    let planes1 = geom_shell1
+        .iter()
+        .zip(net1.iter())
+        .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
         .collect::<Vec<_>>();
     let mut shared_ruled_pairs = HashSet::default();
     for (i, left) in net0.iter().enumerate() {
@@ -1702,6 +1715,7 @@ where
                 surface1.clone(),
                 &polygon1,
                 tol,
+                (planes0[face_index0], planes1[face_index1]),
             )?;
             curves
                 .into_iter()
