@@ -13,6 +13,9 @@ struct Metrics {
     misses: u64,
     indexed: u64,
     kd_builds: u64,
+    gpu_queries: u64,
+    gpu_mismatches: u64,
+    gpu_time: Duration,
     seed_time: Duration,
     refined: u64,
     refinement_time: Duration,
@@ -21,7 +24,7 @@ struct Metrics {
 impl Metrics {
     fn print(&self, finished: bool) {
         eprintln!(
-            "NURBS_PRESEARCH_METRICS final={} queries={} hits={} misses={} indexed={} kd_builds={} seed_ms={:.3} refinements={} refine_ms={:.3}",
+            "NURBS_PRESEARCH_METRICS final={} queries={} hits={} misses={} indexed={} kd_builds={} seed_ms={:.3} refinements={} refine_ms={:.3} gpu_queries={} gpu_mismatches={} gpu_ms={:.3}",
             finished,
             self.queries,
             self.hits,
@@ -31,6 +34,9 @@ impl Metrics {
             self.seed_time.as_secs_f64() * 1000.0,
             self.refined,
             self.refinement_time.as_secs_f64() * 1000.0,
+            self.gpu_queries,
+            self.gpu_mismatches,
+            self.gpu_time.as_secs_f64() * 1000.0,
         );
     }
 }
@@ -77,6 +83,17 @@ pub(super) fn refine(started: Option<Instant>) {
             let mut state = state.borrow_mut();
             state.refined += 1;
             state.refinement_time += started.elapsed();
+        });
+    }
+}
+
+pub(super) fn gpu(mismatch: bool, started: Option<Instant>) {
+    if let Some(started) = started {
+        METRICS.with(|state| {
+            let mut state = state.borrow_mut();
+            state.gpu_queries += 1;
+            state.gpu_mismatches += u64::from(mismatch);
+            state.gpu_time += started.elapsed();
         });
     }
 }

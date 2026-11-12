@@ -11,6 +11,9 @@ keywords = ["truck", "graphics"]
 categories = ["graphics"]
 
 
+[features]
+cuda-presearch = []
+
 [dependencies]
 parking_lot = { workspace = true }
 serde = { workspace = true }

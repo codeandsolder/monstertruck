@@ -36,11 +36,19 @@ struct CachedPresearchGrid<V: Homogeneous<Scalar = f64>> {
     samples: Vec<(f64, f64, V::Point)>,
     seen: Cell<usize>,
     index: RefCell<Option<SeedSpatialIndex>>,
+    #[cfg(feature = "cuda-presearch")]
+    cuda: RefCell<Option<super::cuda_seed::CudaSeedGrid>>,
 }
 
 const MAX_PRESEARCH_GRIDS_PER_THREAD: usize = 8;
 /// Defer building the index until its cost is likely to be recovered by reuse.
 const SPATIAL_INDEX_MIN_QUERIES: usize = 128;
+
+#[cfg(feature = "cuda-presearch")]
+fn gpu_presearch_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("MONSTERTRUCK_PRESEARCH_CUDA").is_some())
+}
 
 fn spatial_index_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -629,6 +637,32 @@ where V::Point: MetricSpace<Metric = f64> + Bounded<Scalar = f64> + Copy + 'stat
                             .as_ref()
                             .and_then(|tree| tree.nearest(&entry.samples, point));
                         let indexed = index.is_some();
+                        #[cfg(feature = "cuda-presearch")]
+                        if gpu_presearch_enabled() {
+                            let mut cuda = entry.cuda.borrow_mut();
+                            if cuda.is_none() {
+                                *cuda = super::cuda_seed::CudaSeedGrid::new(&entry.samples);
+                            }
+                            if let Some(gpu) = cuda.as_ref() {
+                                // CUDA is experimental. Always certify its
+                                // answer against the original CPU semantics.
+                                let cuda_started = presearch_trace::begin();
+                                let gpu_winner = gpu.nearest(point);
+                                let cpu_winner = index.or_else(|| {
+                                    entry.samples.iter().enumerate().fold(
+                                        (f64::INFINITY, None),
+                                        |best, (i, (_, _, p))| {
+                                            let dist = p.distance2(point);
+                                            if dist < best.0 { (dist, Some(i)) } else { best }
+                                        },
+                                    ).1
+                                });
+                                presearch_trace::gpu(gpu_winner != cpu_winner, cuda_started);
+                                if gpu_winner != cpu_winner {
+                                    eprintln!("NURBS_CUDA_SEED_MISMATCH gpu={gpu_winner:?} cpu={cpu_winner:?}");
+                                }
+                            }
+                        }
                         let result = index.map_or_else(
                             || nearest(&entry.samples),
                             |i| (entry.samples[i].0, entry.samples[i].1),
@@ -676,6 +710,8 @@ where V::Point: MetricSpace<Metric = f64> + Bounded<Scalar = f64> + Copy + 'stat
                 samples,
                 seen: Cell::new(1),
                 index: RefCell::new(None),
+                #[cfg(feature = "cuda-presearch")]
+                cuda: RefCell::new(None),
             }));
         });
         presearch_trace::seed(false, false, false, started);
