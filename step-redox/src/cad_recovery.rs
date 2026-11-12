@@ -1109,6 +1109,50 @@ mod tests {
         Ok(())
     }
 
+    /// Evaluate the analytic rounding cutters independently of the expensive
+    /// 47-face constructive body. If a cutter cannot form a valid solid, the
+    /// outer Boolean subtraction is not the first failing operation.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn mixed_rounding_cutter_standalone(lower: bool) -> Result<()> {
+        use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+        let (mut model, upper_inner, lower_root) = mixed_fixture_models::rounding_caps()?;
+        let root = if lower {
+            lower_root
+        } else {
+            model.add_node(CadNode::SolverTolerance {
+                child: upper_inner,
+                tolerance_mm: 0.01,
+            })
+        };
+        model.add_root(root)?;
+        let kernel = MonstertruckKernel::standard_mm(1e-5);
+        let start = std::time::Instant::now();
+        let shape = kernel.evaluate(&model, root)?;
+        let summary = kernel.summarize(&shape);
+        eprintln!(
+            "standalone {} rounding cutter: {summary:?}, elapsed {:.3}s",
+            if lower { "lower" } else { "upper" },
+            start.elapsed().as_secs_f64(),
+        );
+        anyhow::ensure!(
+            summary.is_single_solid(),
+            "standalone rounding cutter is not one valid solid: {summary:?}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn mixed_upper_rounding_cutter_standalone() -> Result<()> {
+        mixed_rounding_cutter_standalone(false)
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn mixed_lower_rounding_cutter_standalone() -> Result<()> {
+        mixed_rounding_cutter_standalone(true)
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn native_source_cap_proposals_for_mixed_treatment() -> Result<()> {
