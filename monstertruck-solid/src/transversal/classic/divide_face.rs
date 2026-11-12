@@ -8,6 +8,7 @@
 use super::faces_classification::{FacesClassification, cancel_retraced_edge_uses};
 use super::loops_store::{BoundaryWire, Loops, LoopsStore, ShapesOpStatus};
 use super::tolerance::BooleanTolerance;
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::{AnalyticSurfaceKind, TryIntoAnalyticSurfaceKind};
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::{EdgeId, Face, Shell, Wire};
@@ -111,23 +112,43 @@ where
                     .1,
             )
         });
+        // The topological endpoints, not independently evaluated curve
+        // samples, are the boundary of this edge. After a Boolean split an
+        // exact curve can differ from its canonical welded endpoint by a
+        // small, already-admitted endpoint residual. Letting the last
+        // sampled curve point choose the next UV chart representative can
+        // then fail inverse projection or leave adjacent edge charts open.
+        //
+        // Anchor only the first/last sample and ONLY with the existing
+        // explicit curve-endpoint consistency budget. Interior samples
+        // remain the analytic curve's samples; larger endpoint drift is a
+        // genuine topology inconsistency and must be rejected here.
+        let (raw_front, raw_back) = if edge.orientation() {
+            (poly.first()?, poly.last()?)
+        } else {
+            (poly.last()?, poly.first()?)
+        };
+        let endpoint_tol = DEFAULT_NUMERICAL_TOLERANCES.boolean_curve_endpoint_factor * tol;
+        if raw_front.distance(edge.front().point()) > endpoint_tol
+            || raw_back.distance(edge.back().point()) > endpoint_tol
+        {
+            return None;
+        }
+        let mut world_walk = if edge.orientation() {
+            poly.iter().skip(1).copied().collect::<Vec<_>>()
+        } else {
+            poly.iter().rev().skip(1).copied().collect::<Vec<_>>()
+        };
+        *world_walk.last_mut()? = edge.back().point();
         let mut previous = vec.last().copied()?;
         let mut project = |q: &Point3| -> Option<Point2> {
             previous = project_to_parameter(surface, *q, Some(previous), tol)?;
             Some(previous)
         };
-        let mut add = if edge.orientation() {
-            poly.iter()
-                .skip(1)
-                .map(&mut project)
-                .collect::<Option<Vec<_>>>()?
-        } else {
-            poly.iter()
-                .rev()
-                .skip(1)
-                .map(&mut project)
-                .collect::<Option<Vec<_>>>()?
-        };
+        let mut add = world_walk
+            .iter()
+            .map(&mut project)
+            .collect::<Option<Vec<_>>>()?;
         vec.append(&mut add);
     }
     Some(PolylineCurve(vec))
@@ -878,6 +899,46 @@ mod tests {
                 vec![front.point(), back.point()],
             ),
         )
+    }
+
+    #[test]
+    fn parameter_wire_uses_certified_topological_endpoints_not_drifting_curve_samples() {
+        // A split curve is only approximate at its canonical endpoint.
+        // Using that curve-evaluated endpoint directly fails the plane's
+        // 1-um inverse projection; the true welded vertex is on the plane.
+        let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let make_wire = |drift: f64| {
+            let curve = BsplineCurve::new_unchecked(
+                KnotVector::bezier_knot(1),
+                vec![front.point(), Point3::new(1.0, 0.0, drift)],
+            );
+            Wire::from(vec![Edge::new_unchecked(&front, &back, curve)])
+        };
+        let mut polys = HashMap::default();
+        let recovered = create_parameter_boundary_on_surface(
+            &Plane::xy(),
+            &make_wire(1.53e-6),
+            None,
+            &mut polys,
+            1.0e-6,
+        )
+        .expect("a certified split-curve endpoint maps to the topological vertex");
+        assert_eq!(recovered.front(), Point2::new(0.0, 0.0));
+        assert_eq!(recovered.back(), Point2::new(1.0, 0.0));
+
+        let mut polys = HashMap::default();
+        assert!(
+            create_parameter_boundary_on_surface(
+                &Plane::xy(),
+                &make_wire(1.0e-3),
+                None,
+                &mut polys,
+                1.0e-6,
+            )
+            .is_none(),
+            "curve endpoints outside the explicit endpoint-consistency budget must fail"
+        );
     }
 
     #[test]
