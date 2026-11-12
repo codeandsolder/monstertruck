@@ -32,6 +32,14 @@ pub(in crate::transversal::classic) fn certified_plane<S: TryIntoAnalyticSurface
     let net = net?;
     let normal = plane.normal();
     let origin = plane.origin();
+    let scale = origin.to_vec().magnitude().max(1.0);
+    let allowed_deviation = COORD_EPS * scale;
+    // At extreme world offsets, f64 cancellation cannot establish the
+    // structural plane certificate to numerical precision. Fall back instead
+    // of widening the accepted geometric departure with the world origin.
+    if allowed_deviation > DEFAULT_NUMERICAL_TOLERANCES.parameter_projection {
+        return None;
+    }
     net.control_points()
         .iter()
         .flatten()
@@ -40,7 +48,7 @@ pub(in crate::transversal::classic) fn certified_plane<S: TryIntoAnalyticSurface
                 && point.w > 0.0
                 && (normal.dot(Vector3::new(point.x, point.y, point.z) / point.w - origin.to_vec()))
                     .abs()
-                    <= COORD_EPS * origin.to_vec().magnitude().max(1.0)
+                    <= allowed_deviation
         })
         .then_some(plane)
 }
@@ -142,6 +150,9 @@ pub(super) fn planar_intersection(
     let line_origin = plane0.origin() + axis.cross(normal0) * (delta / axis2);
     let scale = line_origin.to_vec().magnitude().max(1.0);
     let eps = COORD_EPS * scale;
+    if eps > DEFAULT_NUMERICAL_TOLERANCES.parameter_projection {
+        return None;
+    }
     let a = trimmed_line_intervals(polygon0, &plane1, line_origin, direction, eps)?;
     let b = trimmed_line_intervals(polygon1, &plane0, line_origin, direction, eps)?;
     let mut result = Vec::new();
@@ -243,6 +254,16 @@ mod tests {
     #[test]
     fn only_certainly_planar_homogeneous_nets_are_admitted() {
         use monstertruck_geometry::prelude::{BsplineSurface, KnotVector, NurbsSurface, Vector4};
+        let far_plane = Plane::new(
+            Point3::new(10_000.0, 0.0, 0.0),
+            Point3::new(10_001.0, 0.0, 0.0),
+            Point3::new(10_000.0, 1.0, 0.0),
+        );
+        let far_net = far_plane.try_into_homogeneous_bspline_surface();
+        assert!(
+            certified_plane(&far_plane, far_net.as_ref()).is_none(),
+            "large offsets need an honest precision fallback"
+        );
         let plane = Plane::xy();
         let plane_net = plane.try_into_homogeneous_bspline_surface();
         assert!(certified_plane(&plane, plane_net.as_ref()).is_some());
