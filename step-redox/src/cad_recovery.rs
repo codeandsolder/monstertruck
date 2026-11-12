@@ -139,6 +139,27 @@ pub struct ConstructiveStep<'a> {
 pub fn compose_constructive_sequence_model(
     steps: &[ConstructiveStep<'_>],
 ) -> Result<(CadModel, NodeId)> {
+    let (model, stages) = compose_constructive_sequence_model_with_stages(steps)?;
+    let root = stages
+        .last()
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("missing constructive root"))?;
+    Ok((model, root))
+}
+
+/// Compose an ordered CAD feature sequence and return every cumulative stage
+/// root, so an incremental evaluator can inspect each feature result without
+/// reconstructing or re-evaluating earlier Boolean subtrees.
+///
+/// Only the final cumulative stage is registered as the model's root. All
+/// intermediate stage IDs remain valid and can be evaluated independently.
+///
+/// # Errors
+/// Refuses empty sequences, invalid feature roots or provenance, and missing
+/// or misplaced Boolean operations.
+pub fn compose_constructive_sequence_model_with_stages(
+    steps: &[ConstructiveStep<'_>],
+) -> Result<(CadModel, Vec<NodeId>)> {
     let Some((first, rest)) = steps.split_first() else {
         bail!("constructive sequence must contain at least one feature");
     };
@@ -146,7 +167,7 @@ pub fn compose_constructive_sequence_model(
         bail!("first constructive feature must create positive material");
     }
     let mut model = CadModel::new();
-    let mut previous = None;
+    let mut stages = Vec::with_capacity(steps.len());
     for step in std::iter::once(first).chain(rest) {
         step.model.validate()?;
         step.model.node(step.root)?;
@@ -154,7 +175,7 @@ pub fn compose_constructive_sequence_model(
         let owned_root = NodeId(step.root.0.checked_add(offset).ok_or_else(|| {
             anyhow::anyhow!("constructive node id overflow while composing features")
         })?);
-        previous = Some(match (previous, step.operation) {
+        let root = match (stages.last().copied(), step.operation) {
             (None, None) => owned_root,
             (Some(body), Some(operation)) => model.add_node(CadNode::Boolean {
                 op: operation,
@@ -162,12 +183,16 @@ pub fn compose_constructive_sequence_model(
             }),
             (None, Some(_)) => bail!("first constructive feature cannot be a Boolean"),
             (Some(_), None) => bail!("subsequent constructive feature needs a Boolean operation"),
-        });
+        };
+        stages.push(root);
     }
-    let root = previous.ok_or_else(|| anyhow::anyhow!("missing constructive root"))?;
+    let root = stages
+        .last()
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("missing constructive root"))?;
     model.add_root(root)?;
     model.validate()?;
-    Ok((model, root))
+    Ok((model, stages))
 }
 
 fn compose_union_models(parts: &[(&CadModel, NodeId)]) -> Result<(CadModel, NodeId)> {
@@ -971,7 +996,10 @@ mod tests {
                 operation: Some(BooleanOp::Difference),
             },
         ];
-        let (model, root) = compose_constructive_sequence_model(&steps)?;
+        let (model, stage_roots) = compose_constructive_sequence_model_with_stages(&steps)?;
+        let root = *stage_roots
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("missing CAD stage"))?;
         assert_eq!(model.roots, [root]);
         let kernel = MonstertruckKernel::standard_mm(1e-5);
         assert!(
@@ -1018,15 +1046,26 @@ mod tests {
         let stage_names = ["base", "loft", "lip", "void", "upper-round", "lower-round"];
         let expected_faces = [17, 31, 37, 47, 47, 47];
         let mut evaluated = None;
-        for stage in 1..=steps.len() {
-            let (partial, partial_root) = compose_constructive_sequence_model(&steps[..stage])?;
-            let result = kernel.evaluate(&partial, partial_root).map_err(|err| {
+        let mut session = kernel.session(&model)?;
+        for (index, &stage_root) in stage_roots.iter().enumerate() {
+            let stage = index + 1;
+            let start = std::time::Instant::now();
+            eprintln!(
+                "editable CAD constructive stage {stage} ({}) starting",
+                stage_names[index]
+            );
+            let result = session.evaluate(stage_root).map_err(|err| {
                 anyhow::anyhow!(
                     "constructive stage {} ({}) failed: {err:#}",
                     stage,
                     stage_names[stage - 1]
                 )
             })?;
+            eprintln!(
+                "editable CAD constructive stage {stage} ({}) evaluated in {:.3} s",
+                stage_names[index],
+                start.elapsed().as_secs_f64(),
+            );
             let summary = kernel.summarize(&result);
             anyhow::ensure!(
                 summary.is_single_solid(),

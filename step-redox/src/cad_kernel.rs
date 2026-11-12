@@ -93,6 +93,7 @@ pub mod monstertruck {
         NurbsCurve, ParametricCurve, ParametricSurface3D, Point3, Rad, Shell, Solid, Surface,
         Vector3, Vector4, Wire, builder, primitive, profile,
     };
+    use std::collections::HashMap;
 
     #[derive(Debug, Clone, Copy)]
     pub struct MonstertruckKernel {
@@ -118,6 +119,62 @@ pub mod monstertruck {
     /// Opaque wrapper: Monstertruck topology does not escape the backend module.
     pub struct EvaluatedShape {
         solid: Solid,
+    }
+
+    // Evaluating a node under an override must not reuse an object evaluated
+    // at a different numerical policy.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    enum PolicyKey {
+        Equivalent,
+        Standard(u64),
+    }
+
+    impl From<GeometryPolicy> for PolicyKey {
+        fn from(policy: GeometryPolicy) -> Self {
+            match policy {
+                GeometryPolicy::Equivalent => Self::Equivalent,
+                GeometryPolicy::Standard { tolerance_mm } => Self::Standard(tolerance_mm.to_bits()),
+            }
+        }
+    }
+
+    type EvaluationCache = HashMap<(NodeId, PolicyKey), Solid>;
+
+    /// Evaluate multiple roots of the same CAD model without recomputing
+    /// shared geometry or earlier constructive stages. Cached topology and
+    /// returned shapes own separate mutable geometry; plain Solid::clone()
+    /// would share Arc<Mutex<_>> vertices/curves/surfaces across both.
+    pub struct EvaluationSession<'a> {
+        model: &'a CadModel,
+        policy: GeometryPolicy,
+        cache: EvaluationCache,
+    }
+
+    impl EvaluationSession<'_> {
+        /// Evaluate a root, memoizing successful DAG nodes by ID and policy.
+        ///
+        /// # Errors
+        /// Returns any kernel evaluation error; failed results are not cached.
+        pub fn evaluate(&mut self, root: NodeId) -> Result<EvaluatedShape> {
+            Ok(EvaluatedShape {
+                solid: evaluate_node(self.model, root, self.policy, &mut self.cache)?,
+            })
+        }
+    }
+
+    impl MonstertruckKernel {
+        /// Validate a model once and create an incremental evaluation session.
+        ///
+        /// # Errors
+        /// Returns a validation error for malformed CAD IR.
+        pub fn session<'a>(&self, model: &'a CadModel) -> Result<EvaluationSession<'a>> {
+            model.validate()?;
+            Ok(EvaluationSession {
+                model,
+                policy: self.policy,
+                cache: HashMap::new(),
+            })
+        }
     }
 
     fn profile_wires(profile: &Profile2d) -> Result<Vec<Wire>> {
@@ -631,13 +688,14 @@ pub mod monstertruck {
         op: BooleanOp,
         children: &[NodeId],
         policy: GeometryPolicy,
+        cache: &mut EvaluationCache,
     ) -> Result<Solid> {
         let Some((&first, rest)) = children.split_first() else {
             bail!("boolean node needs at least one child");
         };
-        let mut result = evaluate_node(model, first, policy)?;
+        let mut result = evaluate_node(model, first, policy, cache)?;
         for &child in rest {
-            let rhs = evaluate_node(model, child, policy)?;
+            let rhs = evaluate_node(model, child, policy, cache)?;
             let kernel_policy = monstertruck_policy(policy);
             result = match op {
                 BooleanOp::Union => monstertruck_solid::or(&result, &rhs, kernel_policy)?,
@@ -851,8 +909,9 @@ pub mod monstertruck {
         profile: EdgeTreatmentProfile,
         edges: &[EdgeTreatmentEdge],
         policy: GeometryPolicy,
+        cache: &mut EvaluationCache,
     ) -> Result<Solid> {
-        let child = evaluate_node(model, child, policy)?;
+        let child = evaluate_node(model, child, policy, cache)?;
         let mut boundaries = child.into_boundaries();
         let [shell] = boundaries.as_mut_slice() else {
             bail!("edge treatment currently requires exactly one boundary shell");
@@ -888,8 +947,17 @@ pub mod monstertruck {
         Ok(Solid::new(boundaries)?)
     }
 
-    fn evaluate_node(model: &CadModel, root: NodeId, policy: GeometryPolicy) -> Result<Solid> {
-        match model.node(root)? {
+    fn evaluate_node(
+        model: &CadModel,
+        root: NodeId,
+        policy: GeometryPolicy,
+        cache: &mut EvaluationCache,
+    ) -> Result<Solid> {
+        let key = (root, PolicyKey::from(policy));
+        if let Some(solid) = cache.get(&key) {
+            return Ok(solid.mapped(Clone::clone, Clone::clone, Clone::clone));
+        }
+        let evaluated = match model.node(root)? {
             CadNode::Primitive(primitive) => primitive_solid(primitive),
             CadNode::Extrude { profile, vector_mm } => {
                 if vector_mm[0] != 0.0 || vector_mm[1] != 0.0 {
@@ -904,16 +972,23 @@ pub mod monstertruck {
             } => revolve_profile(profile, *axis, *angle_rad),
             CadNode::Sweep { profile, path } => sweep_profile(profile, path),
             CadNode::Loft { sections } => loft_sections(sections),
-            CadNode::Boolean { op, children } => evaluate_boolean(model, *op, children, policy),
+            CadNode::Boolean { op, children } => {
+                evaluate_boolean(model, *op, children, policy, cache)
+            }
             CadNode::EdgeTreatment {
                 child,
                 profile,
                 edges,
-            } => evaluate_edge_treatment(model, *child, *profile, edges, policy),
+            } => evaluate_edge_treatment(model, *child, *profile, edges, policy, cache),
             CadNode::SolverTolerance {
                 child,
                 tolerance_mm,
-            } => evaluate_node(model, *child, GeometryPolicy::standard_mm(*tolerance_mm)),
+            } => evaluate_node(
+                model,
+                *child,
+                GeometryPolicy::standard_mm(*tolerance_mm),
+                cache,
+            ),
             CadNode::Transform { transform, child } => {
                 if let CadNode::Revolve {
                     profile,
@@ -921,25 +996,28 @@ pub mod monstertruck {
                     angle_rad,
                 } = model.node(*child)?
                 {
-                    return revolve_profile_transformed(profile, *axis, *angle_rad, transform);
+                    revolve_profile_transformed(profile, *axis, *angle_rad, transform)
+                } else {
+                    let child = evaluate_node(model, *child, policy, cache)?;
+                    Ok(builder::transformed(&child, rigid_matrix(transform)))
                 }
-                let child = evaluate_node(model, *child, policy)?;
-                Ok(builder::transformed(&child, rigid_matrix(transform)))
             }
             unsupported => {
                 bail!("Monstertruck backend does not yet evaluate node {root:?}: {unsupported:?}")
             }
-        }
+        }?;
+        cache.insert(
+            key,
+            evaluated.mapped(Clone::clone, Clone::clone, Clone::clone),
+        );
+        Ok(evaluated)
     }
 
     impl CadKernel for MonstertruckKernel {
         type Evaluated = EvaluatedShape;
 
         fn evaluate(&self, model: &CadModel, root: NodeId) -> Result<Self::Evaluated> {
-            model.validate()?;
-            Ok(EvaluatedShape {
-                solid: evaluate_node(model, root, self.policy)?,
-            })
+            self.session(model)?.evaluate(root)
         }
 
         fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary {
@@ -1326,6 +1404,81 @@ pub mod monstertruck {
                 monstertruck_policy(GeometryPolicy::project_standard()).tolerance(),
                 Some(0.01)
             );
+        }
+
+        #[test]
+        fn evaluation_session_memoizes_shared_nodes_per_numerical_policy() -> Result<()> {
+            let mut model = CadModel::new();
+            let box_node = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [2.0, 3.0, 4.0],
+            }));
+            let tight = model.add_node(CadNode::SolverTolerance {
+                child: box_node,
+                tolerance_mm: 1.0e-5,
+            });
+            let loose = model.add_node(CadNode::SolverTolerance {
+                child: box_node,
+                tolerance_mm: 0.01,
+            });
+            model.add_root(tight)?;
+            model.add_root(loose)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let mut session = kernel.session(&model)?;
+            assert_eq!(kernel.summarize(&session.evaluate(tight)?).faces, 6);
+            assert_eq!(session.cache.len(), 2);
+            assert_eq!(kernel.summarize(&session.evaluate(tight)?).faces, 6);
+            assert_eq!(session.cache.len(), 2, "repeat must reuse both nodes");
+            assert_eq!(kernel.summarize(&session.evaluate(loose)?).faces, 6);
+            assert_eq!(
+                session.cache.len(),
+                4,
+                "same child under a distinct SolverTolerance must be evaluated separately"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn evaluation_session_does_not_share_mutable_geometry_with_cached_shapes() -> Result<()> {
+            let mut model = CadModel::new();
+            let root = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [1.0, 2.0, 3.0],
+            }));
+            model.add_root(root)?;
+            let mut session = MonstertruckKernel::project_standard().session(&model)?;
+
+            let initial = session.evaluate(root)?;
+            let first_vertex = initial
+                .solid
+                .vertex_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("box must have vertices"))?;
+            let expected = first_vertex.point();
+            first_vertex.set_point(Point3::new(99.0, 98.0, 97.0));
+
+            let replay = session.evaluate(root)?;
+            let replay_vertex = replay
+                .solid
+                .vertex_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("cached box must have vertices"))?;
+            assert_eq!(
+                replay_vertex.point(),
+                expected,
+                "first evaluation may mutate its geometry without corrupting the cache"
+            );
+            replay_vertex.set_point(Point3::new(96.0, 95.0, 94.0));
+            let replay_again = session.evaluate(root)?;
+            assert_eq!(
+                replay_again
+                    .solid
+                    .vertex_iter()
+                    .next()
+                    .map(|vertex| vertex.point()),
+                Some(expected),
+                "cache hits must also own independent mutable geometry"
+            );
+            Ok(())
         }
 
         #[test]
