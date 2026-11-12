@@ -6,6 +6,9 @@
 //! parameter-space wrapper remains intentionally absent; the loops store consumes
 //! only the cleaned 3-D [`IntersectionCurve`] leader.
 
+mod analytic;
+pub(in crate::transversal::classic) use analytic::certified_plane;
+
 use monstertruck_core::{
     cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point3},
     tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON},
@@ -811,6 +814,7 @@ pub(super) fn intersection_curves<S>(
     surface1: S,
     polygon1: &PolygonMesh,
     tol: f64,
+    certified_planes: (Option<Plane>, Option<Plane>),
 ) -> Option<Vec<IntersectionTuple<S>>>
 where
     S: ParametricSurface3D
@@ -818,6 +822,26 @@ where
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
+    if let (Some(plane0), Some(plane1)) = certified_planes
+        && let Some(exact_linear_branches) =
+            analytic::planar_intersection(plane0, polygon0, plane1, polygon1)
+    {
+        // The supporting line is algebraically determined, but its finite
+        // endpoints still come from the existing trim mesh. If projecting the
+        // resulting leader onto either parametric chart fails, use the general
+        // SSI path rather than turning a fast-path miss into a Boolean failure.
+        let exact_curves = exact_linear_branches
+            .into_iter()
+            .map(|polyline| {
+                let curve =
+                    build_intersection_curve(surface0.clone(), surface1.clone(), polyline.clone())?;
+                (curve.leader().len() == polyline.len()).then_some((polyline, curve))
+            })
+            .collect::<Option<Vec<_>>>();
+        if let Some(exact_curves) = exact_curves {
+            return Some(exact_curves);
+        }
+    }
     let interferences = polygon0.extract_interference(polygon1);
     let stitch_tolerance = 4.0 * tol.max(KERNEL_EPSILON);
     let polylines =
@@ -950,6 +974,34 @@ mod tests {
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
         )
         .expect("fixture mesh is valid")
+    }
+
+    #[test]
+    fn certified_planar_dispatch_builds_an_actual_intersection_curve() {
+        let plane0 = Plane::xy();
+        let plane1 = Plane::zx();
+        let s0 = Surface::Plane(plane0);
+        let s1 = Surface::Plane(plane1);
+        let net0 = s0.try_into_homogeneous_bspline_surface();
+        let net1 = s1.try_into_homogeneous_bspline_surface();
+        let carrier0 = certified_plane(&s0, net0.as_ref());
+        let carrier1 = certified_plane(&s1, net1.as_ref());
+        let curves = intersection_curves(
+            s0,
+            &disconnected_xy_mesh(0.01),
+            s1,
+            &zx_mesh(-1.0, 1.0),
+            1.0e-5,
+            (carrier0, carrier1),
+        )
+        .expect("certified transverse planes can be intersected without mesh SSI");
+        assert_eq!(curves.len(), 2, "distinct trimmed regions stay distinct");
+        for (polyline, exact_curve) in curves {
+            assert_eq!(polyline.len(), 2);
+            for point in exact_curve.leader().iter() {
+                assert!(point.y.abs() < 1.0e-8 && point.z.abs() < 1.0e-8);
+            }
+        }
     }
 
     #[test]
