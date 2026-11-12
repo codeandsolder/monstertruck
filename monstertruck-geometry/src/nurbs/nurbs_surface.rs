@@ -17,6 +17,35 @@ use super::{
 use crate::prelude::Vector2;
 use algo::surface::{SearchNearestParameterVector, SearchParameterVector};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
+use std::{any::Any, cell::RefCell};
+
+/// Immutable surface samples that can be shared across inverse searches.
+///
+/// The complete control net and knot vectors are retained for value equality,
+/// not merely a geometry address: a surface edited in place must rebuild the
+/// grid. The lookup bounds each thread to eight entries.
+struct CachedPresearchGrid<V: Homogeneous<Scalar = f64>> {
+    surface: BsplineSurface<V>,
+    range: SurfaceParameterRange,
+    division: usize,
+    samples: Vec<(f64, f64, V::Point)>,
+}
+
+const MAX_PRESEARCH_GRIDS_PER_THREAD: usize = 8;
+thread_local! {
+    static PRESEARCH_GRIDS: RefCell<Vec<Box<dyn Any>>> = RefCell::new(Vec::new());
+}
+#[cfg(test)]
+thread_local! {
+    static PRESEARCH_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn identical_parameter_ranges(lhs: SurfaceParameterRange, rhs: SurfaceParameterRange) -> bool {
+    lhs.0.0.to_bits() == rhs.0.0.to_bits()
+        && lhs.0.1.to_bits() == rhs.0.1.to_bits()
+        && lhs.1.0.to_bits() == rhs.1.0.to_bits()
+        && lhs.1.1.to_bits() == rhs.1.1.to_bits()
+}
 
 impl<V> NurbsSurface<V> {
     /// constructor
@@ -513,8 +542,9 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Tolerance> Nur
     pub fn boundary(&self) -> Option<NurbsCurve<V>> { self.0.boundary().map(NurbsCurve::new) }
 }
 
-impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> NurbsSurface<V>
-where V::Point: MetricSpace<Metric = f64> + Copy
+impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Clone + PartialEq + 'static>
+    NurbsSurface<V>
+where V::Point: MetricSpace<Metric = f64> + Copy + 'static
 {
     /// Separable-basis presearch: bit-identical to [`algo::surface::presearch`]
     /// for this surface, but computes each grid row's `u`-direction basis window
@@ -550,8 +580,33 @@ where V::Point: MetricSpace<Metric = f64> + Copy
         // the unit would read lower purely because a surface took the fast path.
         // (The degenerate early return above delegates and is charged there.)
         algo::surface::charge_presearch_nodes(algo::surface::presearch_nodes(division));
+        // Preserve the original u-major/v-minor traversal and strict-<
+        // first-minimum rule, including ties and NaNs.
+        let nearest = |samples: &[(f64, f64, V::Point)]| {
+            let mut res = (0.0, 0.0);
+            let mut min = f64::INFINITY;
+            for &(u, v, position) in samples {
+                let dist = position.distance2(point);
+                if dist < min {
+                    min = dist;
+                    res = (u, v);
+                }
+            }
+            res
+        };
+        if let Some(result) = PRESEARCH_GRIDS.with(|grids| {
+            grids.borrow().iter().rev().find_map(|entry| {
+                let entry = entry.downcast_ref::<CachedPresearchGrid<V>>()?;
+                (entry.division == division
+                    && identical_parameter_ranges(entry.range, (urange, vrange))
+                    && entry.surface == self.0)
+                    .then(|| nearest(&entry.samples))
+            })
+        }) {
+            return result;
+        }
+
         let ((u0, u1), (v0, v1)) = (urange, vrange);
-        // Every grid column's v-basis window, computed once.
         let vbasis: Vec<BasisWindow> = (0..=division)
             .map(|j| {
                 let q = crate::usize_to_f64(j) / crate::usize_to_f64(division);
@@ -559,35 +614,42 @@ where V::Point: MetricSpace<Metric = f64> + Copy
                 knot_v.bspline_basis_functions_unchecked(degree1, 0, v)
             })
             .collect();
-        let mut res = (0.0, 0.0);
-        let mut min = f64::INFINITY;
+        let mut samples = Vec::new();
         for i in 0..=division {
             let p = crate::usize_to_f64(i) / crate::usize_to_f64(division);
             let u = f64::mul_add(u1, p, u0 * (1.0 - p));
-            // This grid row's u-basis window, computed once and reused for
-            // every column below.
             let ubasis = knot_u.bspline_basis_functions_unchecked(degree0, 0, u);
             for (j, vb) in vbasis.iter().enumerate() {
                 let q = crate::usize_to_f64(j) / crate::usize_to_f64(division);
                 let v = f64::mul_add(v1, q, v0 * (1.0 - q));
-                let dist = V::from_vec(bsp.combine_basis(&ubasis, vb))
-                    .to_point()
-                    .distance2(point);
-                if dist < min {
-                    min = dist;
-                    res = (u, v);
-                }
+                let position = V::from_vec(bsp.combine_basis(&ubasis, vb)).to_point();
+                samples.push((u, v, position));
             }
         }
-        res
+        let result = nearest(&samples);
+        #[cfg(test)]
+        PRESEARCH_BUILDS.with(|count| count.set(count.get() + 1));
+        PRESEARCH_GRIDS.with(|grids| {
+            let mut grids = grids.borrow_mut();
+            if grids.len() == MAX_PRESEARCH_GRIDS_PER_THREAD {
+                grids.remove(0);
+            }
+            grids.push(Box::new(CachedPresearchGrid::<V> {
+                surface: self.0.clone(),
+                range: (urange, vrange),
+                division,
+                samples,
+            }));
+        });
+        result
     }
 }
 
-impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>>
+impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Clone + PartialEq + 'static>
     SearchNearestParameter<SurfaceParameter> for NurbsSurface<V>
 where
     Self: ParametricSurface<Point = V::Point, Vector = <V::Point as EuclideanSpace>::Diff>,
-    V::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64>,
+    V::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + 'static,
     <V::Point as EuclideanSpace>::Diff: SearchNearestParameterVector<Point = V::Point>,
 {
     type Point = V::Point;
@@ -848,9 +910,14 @@ impl v2::ParametricSurface3D for NurbsSurface<Vector4> {}
 
 impl<V> v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for NurbsSurface<V>
 where
-    V: HasScalar<Scalar = f64> + Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>,
+    V: HasScalar<Scalar = f64>
+        + Homogeneous<Scalar = f64>
+        + ControlPoint<f64, Diff = V>
+        + Clone
+        + PartialEq
+        + 'static,
     Self: ParametricSurface<Point = V::Point, Vector = <V::Point as EuclideanSpace>::Diff>,
-    V::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64>,
+    V::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + 'static,
     <V::Point as EuclideanSpace>::Diff: SearchNearestParameterVector<Point = V::Point>,
 {
     type Point = V::Point;
@@ -867,10 +934,16 @@ where
 
 impl<V> v2::SearchParameter<v2::SurfaceParameter<f64>> for NurbsSurface<V>
 where
-    V: HasScalar<Scalar = f64> + Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>,
+    V: HasScalar<Scalar = f64>
+        + Homogeneous<Scalar = f64>
+        + ControlPoint<f64, Diff = V>
+        + Clone
+        + PartialEq
+        + 'static,
     V::Point: ControlPoint<f64, Diff = <V::Point as EuclideanSpace>::Diff>
         + MetricSpace<Metric = f64>
-        + Tolerance,
+        + Tolerance
+        + 'static,
     <V::Point as EuclideanSpace>::Diff: SearchParameterVector<Point = V::Point>,
 {
     type Point = V::Point;
@@ -1002,10 +1075,11 @@ where M: Copy + std::ops::Mul<V, Output = V>
 
 impl<V> SearchParameter<SurfaceParameter> for NurbsSurface<V>
 where
-    V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>,
+    V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Clone + PartialEq + 'static,
     V::Point: ControlPoint<f64, Diff = <V::Point as EuclideanSpace>::Diff>
         + MetricSpace<Metric = f64>
-        + Tolerance,
+        + Tolerance
+        + 'static,
     <V::Point as EuclideanSpace>::Diff: SearchParameterVector<Point = V::Point>,
 {
     type Point = V::Point;
@@ -1064,6 +1138,125 @@ impl<V: Homogeneous<Scalar = f64>> From<BsplineSurface<V::Point>> for NurbsSurfa
 impl<V> From<NurbsSurface<V>> for BsplineSurface<V> {
     #[inline]
     fn from(nurbs: NurbsSurface<V>) -> Self { nurbs.0 }
+}
+
+#[test]
+fn reusable_presearch_grid_matches_uncached_scan_and_invalidates_on_edits() {
+    let knots = KnotVector::bezier_knot(2);
+    let controls = vec![
+        vec![
+            Vector4::new(2.0, 0.0, 0.0, 1.0),
+            Vector4::new(2.0, 1.2, 0.2, 1.0),
+            Vector4::new(2.0, 2.0, -0.5, 1.0),
+        ],
+        vec![
+            Vector4::new(3.1, 0.0, 0.8, 1.0),
+            Vector4::new(3.2, 1.0, -0.4, 1.0),
+            Vector4::new(3.1, 2.0, 1.4, 1.0),
+        ],
+        vec![
+            Vector4::new(4.0, 0.0, 0.0, 1.0),
+            Vector4::new(4.0, 1.1, 1.2, 1.0),
+            Vector4::new(4.0, 2.0, 0.4, 1.0),
+        ],
+    ];
+    let surface = NurbsSurface::new(BsplineSurface::new_unchecked(
+        (knots.clone(), knots),
+        controls,
+    ));
+    let full = surface.range_tuple();
+    let first = Point3::new(3.1, 0.6, 0.3);
+    let another = Point3::new(3.7, 1.9, 0.2);
+    let builds = || PRESEARCH_BUILDS.with(std::cell::Cell::get);
+    let initial = builds();
+    let expected = algo::surface::presearch(&surface, first, full, PRESEARCH_DIVISION);
+    assert_eq!(
+        surface.presearch_separable(first, full, PRESEARCH_DIVISION),
+        expected,
+    );
+    assert_eq!(builds(), initial + 1);
+    let expected = algo::surface::presearch(&surface, another, full, PRESEARCH_DIVISION);
+    assert_eq!(
+        surface.presearch_separable(another, full, PRESEARCH_DIVISION),
+        expected,
+        "cached grid must retain the exact nearest seed for a second point",
+    );
+    assert_eq!(
+        builds(),
+        initial + 1,
+        "same surface and range must hit the cache"
+    );
+
+    let range = ((0.125, 0.875), (0.0625, 0.9375));
+    let expected = algo::surface::presearch(&surface, first, range, PRESEARCH_DIVISION);
+    assert_eq!(
+        surface.presearch_separable(first, range, PRESEARCH_DIVISION),
+        expected,
+    );
+    assert_eq!(
+        builds(),
+        initial + 2,
+        "different ranges must get different grids"
+    );
+
+    let mut changed = surface.clone();
+    changed.transform_control_points(|point| point.x += 0.1875);
+    let expected = algo::surface::presearch(&changed, first, full, PRESEARCH_DIVISION);
+    assert_eq!(
+        changed.presearch_separable(first, full, PRESEARCH_DIVISION),
+        expected,
+    );
+    assert_eq!(
+        builds(),
+        initial + 3,
+        "surface mutation must invalidate the cached grid"
+    );
+
+    let mut reparameterized = surface.clone();
+    reparameterized
+        .non_rationalized_mut()
+        .knot_vecs
+        .0
+        .transform(1.5, 0.0);
+    let reparameterized_range = reparameterized.range_tuple();
+    assert_eq!(
+        reparameterized.presearch_separable(first, reparameterized_range, PRESEARCH_DIVISION,),
+        algo::surface::presearch(
+            &reparameterized,
+            first,
+            reparameterized_range,
+            PRESEARCH_DIVISION,
+        ),
+        "changing knots must rebuild the surface seed grid",
+    );
+    assert_eq!(builds(), initial + 4);
+
+    // Repeatedly insert more distinct surfaces than the bounded cache holds.
+    // No stale geometry or unbounded growth is permitted.
+    for index in 0..=MAX_PRESEARCH_GRIDS_PER_THREAD {
+        let mut translated = surface.clone();
+        translated.transform_control_points(|point| {
+            point.x += crate::usize_to_f64(index + 1) * 0.125;
+        });
+        let expected = algo::surface::presearch(&translated, first, full, PRESEARCH_DIVISION);
+        assert_eq!(
+            translated.presearch_separable(first, full, PRESEARCH_DIVISION),
+            expected
+        );
+        PRESEARCH_GRIDS.with(|grids| {
+            assert!(grids.borrow().len() <= MAX_PRESEARCH_GRIDS_PER_THREAD);
+        });
+    }
+    let before_evicted = builds();
+    assert_eq!(
+        surface.presearch_separable(first, full, PRESEARCH_DIVISION),
+        algo::surface::presearch(&surface, first, full, PRESEARCH_DIVISION),
+    );
+    assert_eq!(
+        builds(),
+        before_evicted + 1,
+        "the oldest surface must be recomputed after cache eviction",
+    );
 }
 
 #[test]
