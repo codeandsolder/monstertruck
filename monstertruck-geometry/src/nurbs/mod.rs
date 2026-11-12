@@ -258,6 +258,8 @@ mod bspline_curve;
 mod bspline_surface;
 /// Full-boundary continuity capability inspection.
 mod continuity;
+#[cfg(feature = "cuda-presearch")]
+mod cuda_seed;
 mod knot_vector;
 mod nurbs_curve;
 mod nurbs_surface;
