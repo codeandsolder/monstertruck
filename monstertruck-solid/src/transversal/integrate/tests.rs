@@ -76,10 +76,10 @@ fn boolean_reports_invalid_standard_budget_as_policy_error() {
 fn standard_budget_does_not_widen_classic_boolean_tolerance() {
     let policy = crate::GeometryPolicy::standard(0.01);
     assert_eq!(
-        super::classic_boolean_tolerances(policy, "difference")
+        super::classic_boolean_tolerance(policy, "difference")
             .expect("valid Standard policy must admit the classic backend"),
-        (monstertruck_core::tolerance::KERNEL_EPSILON, 0.01),
-        "the numerical kernel stays precise while geometric edge reuse receives the modeling budget",
+        monstertruck_core::tolerance::KERNEL_EPSILON,
+        "a modeling budget must never widen numerical edge identity",
     );
     assert_eq!(
         super::standard_budget(policy, "difference")
