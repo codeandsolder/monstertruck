@@ -15,7 +15,8 @@ use monstertruck_meshing::prelude::*;
 use num_traits::ToPrimitive;
 
 use crate::transversal::polyline_construction::{
-    construct_polylines, enumerate_endpoint_joins, merge_endpoint_join, stitch_nearby_polylines,
+    construct_polylines, enumerate_endpoint_joins, merge_endpoint_join,
+    remove_redundant_interference_strands, stitch_nearby_polylines,
 };
 
 type Polyline = PolylineCurve<Point3>;
@@ -347,7 +348,9 @@ where
 {
     let interferences = polygon0.extract_interference(polygon1);
     let stitch_tolerance = 4.0 * tol.max(KERNEL_EPSILON);
-    let polylines = stitch_nearby_polylines(construct_polylines(&interferences), stitch_tolerance)?;
+    let polylines =
+        remove_redundant_interference_strands(construct_polylines(&interferences), KERNEL_EPSILON);
+    let polylines = stitch_nearby_polylines(polylines, stitch_tolerance)?;
     // This pass repairs numerical fragmentation introduced by tessellation.
     // Its admission envelope is an explicit kernel-precision bound rather than
     // a threshold derived from the user-facing modeling-error budget.
