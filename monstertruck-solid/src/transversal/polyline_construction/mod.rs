@@ -152,6 +152,61 @@ pub(super) fn merge_endpoint_join(
     Some(())
 }
 
+/// Merge a certified, sampled *curved* gap. Unlike an endpoint midpoint
+/// snap, this retains the exact interior SSI points supplied by the corrector.
+/// The caller must certify the entire bridge on both analytic carriers.
+pub(super) fn merge_endpoint_join_with_bridge(
+    polylines: &mut Vec<PolylineCurve<Point3>>,
+    join: ChainJoin,
+    bridge: &[Point3],
+    tolerance: f64,
+) -> Option<()> {
+    if bridge.len() < 2 || join.first.chain == join.second.chain {
+        return None;
+    }
+    let first = polylines.get(join.first.chain)?;
+    let second = polylines.get(join.second.chain)?;
+    let a = endpoint_point(first, join.first.front)?;
+    let b = endpoint_point(second, join.second.front)?;
+    if a.distance(*bridge.first()?) > tolerance || b.distance(*bridge.last()?) > tolerance {
+        return None;
+    }
+    let (low, high, low_front, high_front, reverse_bridge) = if join.first.chain < join.second.chain
+    {
+        (
+            join.first.chain,
+            join.second.chain,
+            join.first.front,
+            join.second.front,
+            false,
+        )
+    } else {
+        (
+            join.second.chain,
+            join.first.chain,
+            join.second.front,
+            join.first.front,
+            true,
+        )
+    };
+    let mut right = polylines.remove(high).0;
+    let mut left = polylines.remove(low).0;
+    if low_front {
+        left.reverse();
+    }
+    if !high_front {
+        right.reverse();
+    }
+    let mut middle = bridge[1..bridge.len() - 1].to_vec();
+    if reverse_bridge {
+        middle.reverse();
+    }
+    left.extend(middle);
+    left.extend(right);
+    polylines.push(PolylineCurve(left));
+    Some(())
+}
+
 /// Remove short duplicate strands produced when separate mesh triangles
 /// describe the same intersection path with a redundant overlapping arm.
 ///

@@ -16,7 +16,8 @@ use num_traits::ToPrimitive;
 
 use crate::transversal::polyline_construction::{
     construct_polylines, enumerate_endpoint_joins, merge_endpoint_join,
-    remove_redundant_interference_strands, stitch_nearby_polylines,
+    merge_endpoint_join_with_bridge, remove_redundant_interference_strands,
+    stitch_nearby_polylines,
 };
 
 type Polyline = PolylineCurve<Point3>;
@@ -249,6 +250,209 @@ where
     }
 }
 
+/// Correct a short curved SSI gap using transverse slicing planes.
+/// Both endpoints come from certified fragments, and intermediate predictor
+/// points are corrected by the exact two-surface/one-plane Newton problem.
+/// This never treats a straight chord as the true intersection geometry.
+fn corrected_curved_fragment_bridge<S>(
+    first: &Polyline,
+    first_front: bool,
+    second: &Polyline,
+    second_front: bool,
+    surface0: &S,
+    surface1: &S,
+    tolerance: f64,
+) -> Option<Vec<Point3>>
+where
+    S: ParametricSurface3D
+        + Clone
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let (a, a_inner) = endpoint_and_inner(first, first_front, tolerance)?;
+    let (b, b_inner) = endpoint_and_inner(second, second_front, tolerance)?;
+    let span = b - a;
+    let length = span.magnitude();
+    let mesh_scale = DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor;
+    if !length.is_finite() || length <= tolerance || length > mesh_scale * 16.0 {
+        return None;
+    }
+    let tangent_a = a - a_inner;
+    let tangent_b = b - b_inner;
+    let ta = tangent_a.magnitude();
+    let tb = tangent_b.magnitude();
+    if ta <= tolerance || tb <= tolerance {
+        return None;
+    }
+    let direction = span / length;
+    // Both samples must approach this missing interval from opposite ends;
+    // require positive transverse progress, not identical straight tangents.
+    if tangent_a.dot(direction) / ta <= 0.5 || -tangent_b.dot(direction) / tb <= 0.5 {
+        return None;
+    }
+
+    let leader = PolylineCurve(vec![a, b]);
+    let intersection = IntersectionCurve::new(surface0.clone(), surface1.clone(), leader);
+    let debug = std::env::var_os("MT_CURVED_SSI_TRACE").is_some();
+    let seed = |surface: &S, point: Point3| {
+        surface
+            .search_parameter(point, None, 100)
+            .or_else(|| surface.search_nearest_parameter(point, None, 100))
+    };
+    let mut hint0 = seed(surface0, a).or_else(|| {
+        if debug {
+            eprintln!("CURVED_BRIDGE_FAIL seed_surface0 at={a:?}");
+        }
+        None
+    })?;
+    let mut hint1 = seed(surface1, a).or_else(|| {
+        if debug {
+            eprintln!("CURVED_BRIDGE_FAIL seed_surface1 at={a:?}");
+        }
+        None
+    })?;
+    let reference_tol =
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * KERNEL_EPSILON;
+    let intervals = (length / (mesh_scale * 0.5)).ceil().clamp(2.0, 128.0) as usize;
+    let mut samples = Vec::with_capacity(intervals + 1);
+    samples.push(a);
+    for index in 1..intervals {
+        let fraction = index as f64 / intervals as f64;
+        let predictor = a + span * fraction;
+        let (q, uv0, uv1) = intersection.search_intersection_in_plane(
+            predictor,
+            direction,
+            Some(hint0),
+            Some(hint1),
+            100,
+        ).or_else(||{
+            if debug {eprintln!("CURVED_BRIDGE_FAIL plane_corrector step={index}/{intervals} a={a:?} b={b:?} predictor={predictor:?} hint0={hint0:?} hint1={hint1:?}");}
+            None
+        })?;
+        let s0 = surface0.evaluate(uv0.x, uv0.y);
+        let s1 = surface1.evaluate(uv1.x, uv1.y);
+        if debug {
+            eprintln!(
+                "CURVED_BRIDGE_SAMPLE step={index}/{intervals} q={q:?} shift={} residual={}",
+                q.distance(predictor),
+                s0.distance(s1)
+            );
+        }
+        if s0.distance(s1) > reference_tol
+            || q.distance(predictor) > length * 0.5
+            || !q.x.is_finite()
+            || !q.y.is_finite()
+            || !q.z.is_finite()
+            || (q - a).dot(direction) < 0.0
+            || (b - q).dot(direction) < 0.0
+        {
+            return None;
+        }
+        if let Some(previous) = samples.last() {
+            if (*previous - q).dot(direction) >= 0.0 {
+                return None;
+            }
+        }
+        hint0 = (uv0.x, uv0.y);
+        hint1 = (uv1.x, uv1.y);
+        samples.push(q);
+    }
+    samples.push(b);
+    // Independent endpoint tangent checks detect a solver jumping to another
+    // intersection branch near a tangency or self-crossing.
+    let start = samples[1] - a;
+    let end = b - samples[samples.len() - 2];
+    if debug {
+        eprintln!(
+            "CURVED_BRIDGE_END length={length} start_alignment={} end_alignment={}",
+            start.dot(tangent_a) / (start.magnitude() * ta),
+            -end.dot(tangent_b) / (end.magnitude() * tb)
+        );
+    }
+    if start.dot(tangent_a) / (start.magnitude() * ta) <= 0.5
+        || -end.dot(tangent_b) / (end.magnitude() * tb) <= 0.5
+    {
+        return None;
+    }
+    Some(samples)
+}
+
+/// Reconstruct short gaps on curved SSI carriers. Each accepted bridge
+/// includes its exact corrected interior samples, rather than a midpoint
+/// snap or an unsupported straight chord.
+fn stitch_validated_curved_intersection_fragments<S>(
+    mut polylines: Vec<Polyline>,
+    surface0: &S,
+    surface1: &S,
+    tolerance: f64,
+) -> Vec<Polyline>
+where
+    S: ParametricSurface3D
+        + Clone
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    loop {
+        let Some(mut joins) =
+            enumerate_endpoint_joins(&polylines, |first, first_front, second, second_front| {
+                corrected_curved_fragment_bridge(
+                    first,
+                    first_front,
+                    second,
+                    second_front,
+                    surface0,
+                    surface1,
+                    tolerance,
+                )
+                .is_some()
+            })
+        else {
+            return polylines;
+        };
+        joins.sort_by(|a, b| {
+            a.distance2
+                .total_cmp(&b.distance2)
+                .then_with(|| a.first.chain.cmp(&b.first.chain))
+                .then_with(|| a.second.chain.cmp(&b.second.chain))
+        });
+        let Some(join) = joins.first().copied() else {
+            return polylines;
+        };
+        let closest = join.distance2.sqrt();
+        if joins.iter().skip(1).any(|other| {
+            let same = [join.first, join.second];
+            (same.contains(&other.first) || same.contains(&other.second))
+                && (other.distance2.sqrt() - closest).abs() <= tolerance
+        }) {
+            return polylines;
+        }
+        let Some(bridge) = corrected_curved_fragment_bridge(
+            &polylines[join.first.chain],
+            join.first.front,
+            &polylines[join.second.chain],
+            join.second.front,
+            surface0,
+            surface1,
+            tolerance,
+        ) else {
+            return polylines;
+        };
+        if std::env::var_os("MT_CURVED_SSI_TRACE").is_some() {
+            eprintln!(
+                "CURVED_SSI_JOIN chains_before={} a={} b={} gap={} bridge_points={}",
+                polylines.len(),
+                join.first.chain,
+                join.second.chain,
+                join.distance2.sqrt(),
+                bridge.len()
+            );
+        }
+        if merge_endpoint_join_with_bridge(&mut polylines, join, &bridge, tolerance).is_none() {
+            return polylines;
+        }
+    }
+}
+
 /// Re-sample a raw interference polyline onto both surfaces, returning a
 /// cleaned polyline intersection curve. Mirrors 0.3.2
 /// `IntersectionCurveWithParameters::try_new`, keeping only the 3D leader.
@@ -395,6 +599,12 @@ where
         polygon1,
         validation_tolerance,
     );
+    let polylines = stitch_validated_curved_intersection_fragments(
+        polylines,
+        &surface0,
+        &surface1,
+        validation_tolerance,
+    );
     polylines
         .into_iter()
         // Mesh interference can contain isolated point contacts. They do not
@@ -414,6 +624,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use monstertruck_modeling::Surface;
 
     fn xy_mesh(x0: f64, x1: f64) -> PolygonMesh {
         PolygonMesh::new(
@@ -510,6 +721,74 @@ mod tests {
             stitched.len(),
             1,
             "corrected samples permit exact line joining"
+        );
+    }
+
+    #[test]
+    fn curved_intersection_bridge_retains_exact_circular_arc_samples() {
+        // A plane intersects this rational quadratic cylinder in a true
+        // circular arc: its gap MUST be filled by curved, not chordal points.
+        let half = std::f64::consts::FRAC_PI_4;
+        let weight = half.cos();
+        let controls = [
+            Vector4::new(1.0, 0.0, -1.0, 1.0),
+            Vector4::new(weight, weight, -weight, weight),
+            Vector4::new(0.0, 1.0, -1.0, 1.0),
+        ];
+        let net = controls
+            .into_iter()
+            .map(|p| vec![p, Vector4::new(p.x, p.y, -p.z, p.w)])
+            .collect::<Vec<_>>();
+        let cylinder = Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new_unchecked(
+            (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
+            net,
+        )));
+        let plane = Surface::Plane(Plane::xy());
+        for theta in [0.2_f64, 0.28, 0.288, 0.37] {
+            let p = Point3::new(theta.cos(), theta.sin(), 0.0);
+            let uv = cylinder.search_nearest_parameter(p, None, 100).unwrap();
+            assert!(
+                cylinder.evaluate(uv.0, uv.1).distance(p) < 1.0e-7,
+                "test arc samples must lie on the exact cylinder"
+            );
+        }
+        let on_circle = |theta: f64| Point3::new(theta.cos(), theta.sin(), 0.0);
+        let a = PolylineCurve(vec![on_circle(0.20), on_circle(0.24), on_circle(0.28)]);
+        let b = PolylineCurve(vec![on_circle(0.288), on_circle(0.33), on_circle(0.37)]);
+        let corrected =
+            corrected_curved_fragment_bridge(&a, false, &b, true, &plane, &cylinder, 4.0e-6)
+                .expect("two exact intersecting surfaces admit continuous curved gap");
+        assert!(corrected.len() >= 3);
+        assert_eq!(corrected[0], a.back());
+        assert_eq!(*corrected.last().unwrap(), b.front());
+        let middle = corrected[corrected.len() / 2];
+        assert!((middle.x * middle.x + middle.y * middle.y - 1.0).abs() < 1e-6);
+        // Chord midpoint would be strictly inside the circle.
+        let chord_mid = a.back().midpoint(b.front());
+        assert!(middle.distance(chord_mid) > 1e-6);
+        let stitched =
+            stitch_validated_curved_intersection_fragments(vec![a, b], &plane, &cylinder, 4.0e-6);
+        assert_eq!(stitched.len(), 1);
+        assert!(stitched[0].len() > 6);
+    }
+
+    #[test]
+    fn curved_intersection_bridge_rejects_diverging_fragments() {
+        let plane = Plane::xy();
+        let transverse = Plane::zx();
+        let a = PolylineCurve(vec![
+            Point3::new(-0.05, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+        ]);
+        // Endpoint touches the analytic intersection but the fragment
+        // diverges along a different direction: no continuation allowed.
+        let b = PolylineCurve(vec![
+            Point3::new(0.003, 0.0, 0.0),
+            Point3::new(0.004, 0.01, 0.0),
+        ]);
+        assert!(
+            corrected_curved_fragment_bridge(&a, false, &b, true, &plane, &transverse, 4.0e-6)
+                .is_none()
         );
     }
 
