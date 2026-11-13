@@ -1018,7 +1018,11 @@ mod tests {
             }
         )));
         let output_folder = std::env::var("MIXED_CONSTRUCTIVE_IR_OUTPUT_DIR").ok();
-        if let Some(folder) = &output_folder {
+        // Experiment-only diagnostic: permit stage exports even when a
+        // separately evaluated standalone cutter is already known to fail.
+        if let Some(folder) = &output_folder
+            && std::env::var_os("MT_EXPERIMENT_EXPORT_STAGES_ONLY").is_none()
+        {
             for (name, component, component_root) in [
                 ("lip", &lip, lip_root),
                 ("void", &void, void_root),

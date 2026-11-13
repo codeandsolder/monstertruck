@@ -23,13 +23,33 @@ impl BooleanTolerance {
             "Boolean length tolerance must be finite and positive"
         );
         let length = requested;
+        // EXPERIMENT ONLY: isolate mesh-discretization granularity from
+        // geometric admission tolerances and curve adaptive chord sampling.
+        static EXPERIMENT_MESH_FLOOR: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+        let mesh_floor = *EXPERIMENT_MESH_FLOOR.get_or_init(|| {
+            std::env::var("MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM")
+                .ok()
+                .map(|text| {
+                    let value: f64 = text
+                        .parse()
+                        .expect("MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM must be a number");
+                    assert!(
+                        value.is_finite() && value > 0.0,
+                        "MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM must be finite and positive"
+                    );
+                    value
+                })
+                .unwrap_or(0.0)
+        });
         Self {
             length,
             area_floor: length * length,
             angular: DEFAULT_NUMERICAL_TOLERANCES.angular,
             classifier_offset: DEFAULT_NUMERICAL_TOLERANCES.boolean_classifier_offset_factor
                 * length,
-            mesh_seed: requested.max(DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor),
+            mesh_seed: requested
+                .max(DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor)
+                .max(mesh_floor),
         }
     }
 

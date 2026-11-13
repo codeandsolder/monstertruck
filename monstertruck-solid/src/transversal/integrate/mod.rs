@@ -289,7 +289,22 @@ fn classic_boolean_tolerance(
     // as identical. Classic Boolean predicates and trim-edge reuse therefore
     // use numerical tolerance only; policy validation remains mandatory.
     standard_budget(policy, operation)?;
-    Ok(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length)
+    // EXPERIMENT ONLY: bypass the production default while measuring the
+    // actual classic Boolean numerical tolerance, independently of the
+    // caller's modeling-error budget and curve sampling density.
+    let override_length = std::env::var("MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH")
+        .ok()
+        .map(|value| {
+            let length: f64 = value
+                .parse()
+                .expect("MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH must be numeric");
+            assert!(
+                length.is_finite() && length > 0.0,
+                "MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH must be finite and positive"
+            );
+            length
+        });
+    Ok(override_length.unwrap_or(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length))
 }
 
 const HALF_SPACE_CLIP_OPERATION: &str = "clip_half_space_z";
