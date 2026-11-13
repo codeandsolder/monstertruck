@@ -395,6 +395,18 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_plane_bounds_remain_explicit_through_step_surface_enums() {
+        let plane = surface(ElementarySurface::Plane(Plane::xy()));
+        assert_eq!(
+            plane.try_range_tuple(),
+            (Some((0.0, 1.0)), Some((0.0, 1.0)))
+        );
+        assert_eq!(plane.parameter_bounds_are_intrinsic(), (false, false));
+        let cylinder = cylinder(Point3::origin(), Vector3::unit_z(), 2.0);
+        assert_eq!(cylinder.parameter_bounds_are_intrinsic(), (true, true));
+    }
+
+    #[test]
     fn sheared_elementary_surfaces_are_not_analytic_same_domain_supports() {
         let shear = Matrix4::from_cols(
             Vector4::new(1.0, 0.0, 0.0, 0.0),

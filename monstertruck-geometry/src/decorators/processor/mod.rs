@@ -312,6 +312,11 @@ where
         }
     }
     #[inline]
+    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
+        let (u, v) = self.entity.parameter_bounds_are_intrinsic();
+        if self.orientation { (u, v) } else { (v, u) }
+    }
+    #[inline]
     fn period_u(&self) -> Option<f64> {
         if self.orientation {
             self.entity.period_u()

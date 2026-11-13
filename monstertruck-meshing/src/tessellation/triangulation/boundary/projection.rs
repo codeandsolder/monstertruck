@@ -584,8 +584,19 @@ impl PolyBoundaryPiece {
         previous: Option<(f64, f64)>,
     ) -> Option<(f64, f64)> {
         let (urange, vrange) = surface.try_range_tuple();
-        let u = Self::normalize_axis(uv.0, previous.map(|(u, _)| u), surface.period_u(), urange)?;
-        let v = Self::normalize_axis(uv.1, previous.map(|(_, v)| v), surface.period_v(), vrange)?;
+        let (real_u, real_v) = surface.parameter_bounds_are_intrinsic();
+        let u = Self::normalize_axis(
+            uv.0,
+            previous.map(|(u, _)| u),
+            surface.period_u(),
+            urange.filter(|_| real_u),
+        )?;
+        let v = Self::normalize_axis(
+            uv.1,
+            previous.map(|(_, v)| v),
+            surface.period_v(),
+            vrange.filter(|_| real_v),
+        )?;
         Some((u, v))
     }
 
@@ -828,8 +839,51 @@ impl PolyBoundaryPiece {
 mod numerical_projection_tests {
     use super::*;
     use monstertruck_geometry::prelude::{
-        Invertible, Line, Matrix4, ParametricSurface, Processor, RevolutionSurface, Vector3,
+        BsplineSurface, Invertible, KnotVector, Line, Matrix4, ParametricSurface, Plane, Processor,
+        RevolutionSurface, Vector3,
     };
+
+    #[test]
+    fn projection_respects_intrinsic_bounded_vs_synthetic_plane_ranges() {
+        let plane = Plane::xy();
+        let sample = (1.0 + 5.0e-7, -5.0e-7);
+        assert_eq!(
+            plane.try_range_tuple(),
+            (Some((0.0, 1.0)), Some((0.0, 1.0)))
+        );
+        assert_eq!(plane.parameter_bounds_are_intrinsic(), (false, false));
+        assert_eq!(
+            PolyBoundaryPiece::normalize_uv(&plane, sample, None),
+            Some(sample)
+        );
+
+        let mut wrapped: Processor<_, Matrix4> = Processor::new(plane);
+        assert_eq!(wrapped.parameter_bounds_are_intrinsic(), (false, false));
+        assert_eq!(
+            PolyBoundaryPiece::normalize_uv(&wrapped, sample, None),
+            Some(sample)
+        );
+        wrapped.invert();
+        assert_eq!(wrapped.parameter_bounds_are_intrinsic(), (false, false));
+        assert_eq!(
+            PolyBoundaryPiece::normalize_uv(&wrapped, sample, None),
+            Some(sample)
+        );
+
+        let knots = KnotVector::bezier_knot(1);
+        let surface = BsplineSurface::new_unchecked(
+            (knots.clone(), knots),
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+        );
+        assert_eq!(surface.parameter_bounds_are_intrinsic(), (true, true));
+        assert_eq!(
+            PolyBoundaryPiece::normalize_uv(&surface, sample, None),
+            Some((1.0, 0.0)),
+        );
+    }
 
     #[test]
     fn projector_clamp_respects_native_uv_scale_and_rejects_invalid_periods() {

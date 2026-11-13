@@ -1020,3 +1020,52 @@ itself distinguish such artificial ranges: that requires
 explicit parameter-domain provenance in the surface interface,
 and is a separate semantic issue to resolve rather than
 heuristically assuming every reported bound is physical.
+
+## Intrinsic surface parameter bounds versus synthetic display/meshing domains (2026-11-13)
+
+A distinct semantic problem remained after the numerical native-UV
+clamp fix: core `Plane::parameter_range` deliberately reports a
+fake [0,1] by [0,1] square, despite the mathematical plane
+having no finite parameter limits. The artificial square is still
+needed by older bounded-surface consumers, so simply replacing
+`parameter_range` with unbounded values would change unrelated
+API/meshing behavior and expose existing assumptions. However,
+the numerical projector previously took `try_range_tuple` as
+authoritative and would incorrectly snap valid planar UV coordinates
+just past u=1 or below v=0.
+
+`monstertruck_traits::ParametricSurface` now explicitly reports
+axis-wise provenance with
+`parameter_bounds_are_intrinsic() -> (bool, bool)`.
+The default is (true,true) for ordinary bounded mathematical
+supports, and the core Plane overrides to (false,false).
+`&S`, `Box<S>`, `Processor<S,T>` (including swapped UV
+orientation), and `OffsetSurface<S,N>` forward the underlying
+bound truth instead of silently turning an artificial source
+range into a trusted range. Both the enum and tuple-struct
+`ParametricSurface` and `ParametricSurface3D` procedural
+derives forward the method for nested STEP surface enums and
+other wrappers. The method is a semantic contract about each
+surface's *reported bounds*, not a retroactive change to the
+values returned by `parameter_range`.
+
+The meshing boundary projector uses reported finite bounds
+**only when their corresponding intrinsic bit is true**.
+Its parameter normalization still uses the explicit native
+interval-relative plus ulp threshold for genuine knot-defined
+surfaces. For a Plane, no clamping against the fabricated
+[0,1] square occurs; sample coordinates u>1 and v<0 are retained.
+Tests exercise bare Plane, transformed Processor<Plane>,
+a genuine bilinear B-spline knot domain, and the two nested
+STEP enum layers via the same trait method, verifying that
+the metadata survives procedural derive forwarding.
+
+This corrects projection semantics without deleting the
+synthetic square still needed by bounded-surface renderers.
+It does not yet fix **other** consumers which incorrectly
+assume that every reported range is intrinsic, including the
+healing/analytic SSI sites called out in
+`monstertruck-geometry/src/specifieds/plane.rs`.
+Those should migrate to the same explicit provenance contract,
+with independent fixture tests for each operation rather than
+forcing all consumers into a global all-or-nothing range change.
