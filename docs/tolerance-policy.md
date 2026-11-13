@@ -60,6 +60,10 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `transversality_relative` | `1.0e-8` | Relative threshold for rejecting nearly parallel surface normals. |
 | `mesh_seed_floor` | `1.0e-3` | Coarsest numerical mesh seed used by algorithms that need a seed mesh. |
 | `half_space_relative_margin` | `1.0e-3` | Relative expansion used to construct finite half-space clipping bounds. |
+| `mesh_open_boundary_direction_relative` | `1.0e-6` | Native UV span-relative directional discrimination when closing an open meshing contour. |
+| `mesh_boundary_wrap_relative` | `1.0e-6` | Native UV span-relative seam offset used for bounded/periodic parameter normalization. |
+| `mesh_boundary_roundoff_ulps` | `8.0` | Absolute native-parameter ulps for representable UV boundary rounding. |
+| `mesh_open_pair_connector_score_relative` | `1.0e-6` | Dimensionless margin comparing two sums of squared UV endpoint-connector distances. |
 | `mesh_uv_closure` | `1.0e-3` | UV closure threshold for already-sampled tessellation boundaries. |
 | `mesh_singularity_distance` | `1.0e-3` | Spatial distance used by tessellation to rescue samples at analytic poles. |
 | `healing_boundary_closure_squared` | `1.0e-3` | Squared UV-distance threshold inherited by closed-face healing. |
@@ -762,3 +766,35 @@ drift, unit-domain compatibility, invalid ranges and nonfinite
 values. The historical measurement table above describes the earlier
 fixed-kernel-epsilon implementation and must not be interpreted as
 post-change metrics.
+
+
+## UV contour closure and seam normalization (2026-11-13)
+
+The tessellator's open contour closure had three unrelated
+`KERNEL_EPSILON` usages in UV-space: choosing whether an open boundary
+travels along the U or V axis; nudging a candidate parameter before
+periodic range normalization; and breaking ties between alternative
+pairing directions using a *sum of squared UV distances*. The latter
+compared a model-coordinate length epsilon with a squared UV quantity.
+
+The numeric policy now independently defines UV-domain-relative
+direction and seam-wrap slacks, absolute-parameter-magnitude ulps,
+and a dimensionless tie-break fraction for the squared-UV connector
+scores. For finite positive parameter intervals, direction and
+wrapping scale with the native U or V span, instead of silently
+treating one UV parameter unit as one model-coordinate millimetre.
+Invalid/degenerate parameter intervals cannot authorize a seam wrap
+or corner-closure axis decision.
+
+The paired-contour direction choice now compares sums of squared
+UV lengths with a dimensionless relative score margin, so a uniform
+rescaling of UV coordinates does not flip the chosen connectivity
+merely because a fixed 1e-6 was added in the wrong dimension.
+
+Focused tests check 1e-18 to 1e18 squared-UV scale invariance and
+small versus unit native-parameter spans. The full meshing library
+tests and strict all-target clippy are the verification gate. This
+changes only *sampling and triangulation/contour normalization*:
+it does not widen exact Boolean topology identity or source CAD
+modeling-error permissions. Other absolute thresholds in the
+periodic/singularity and mesh/STEP domains remain to be analyzed.

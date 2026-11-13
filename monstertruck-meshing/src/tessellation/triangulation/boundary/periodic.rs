@@ -36,10 +36,35 @@ pub(super) fn periodic_min_difference(u: f64, u0: f64, up: f64) -> f64 {
     best
 }
 
+/// Native parameter-space slack that scales with the actual finite domain.
+pub(super) fn native_boundary_slack((lo, hi): (f64, f64), relative: f64) -> Option<f64> {
+    let span = hi - lo;
+    if !lo.is_finite()
+        || !hi.is_finite()
+        || !span.is_finite()
+        || span <= 0.0
+        || !relative.is_finite()
+        || relative < 0.0
+    {
+        return None;
+    }
+    let slack = relative * span
+        + DEFAULT_NUMERICAL_TOLERANCES.mesh_boundary_roundoff_ulps
+            * f64::EPSILON
+            * lo.abs().max(hi.abs());
+    slack.is_finite().then_some(slack)
+}
+
 pub(super) fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0, u1): (f64, f64)) {
+    let Some(slack) = native_boundary_slack(
+        (u0, u1),
+        DEFAULT_NUMERICAL_TOLERANCES.mesh_boundary_wrap_relative,
+    ) else {
+        return;
+    };
     let p = curve[0];
     let q = curve[curve.len() - 1];
-    let tmp = f64::min(p[compidx], q[compidx]) + KERNEL_EPSILON;
+    let tmp = f64::min(p[compidx], q[compidx]) + slack;
     let del = f64::floor((tmp - u0) / (u1 - u0)) * (u1 - u0);
     for point in curve.iter_mut() {
         point[compidx] -= del;

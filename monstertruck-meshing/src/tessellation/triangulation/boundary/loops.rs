@@ -7,11 +7,12 @@
 
 use super::{
     Cdt, FixedVertexHandle, HashGen, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools,
-    KERNEL_EPSILON, MetricSpace, Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface,
-    SPoint2, SurfacePoint, Tolerance, Triangulation, UvKey, Vector2, align_full_period_open_pair,
+    MetricSpace, Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SPoint2,
+    SurfacePoint, Tolerance, Triangulation, UvKey, Vector2, align_full_period_open_pair,
     align_periodic_open_pair, close_open_periodic_curve_to_singular, compact_periodic_closed_loop,
-    connect_edges, mesh, normalize_range, open_periodic_closed_loop, periodic_axis_full_span,
-    periodic_open_axis_full_span, polyline_on_surface, surface_point_with_cache,
+    connect_edges, mesh, native_boundary_slack, normalize_range, open_periodic_closed_loop,
+    periodic_axis_full_span, periodic_open_axis_full_span, polyline_on_surface,
+    surface_point_with_cache,
 };
 use mesh::spade_round;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
@@ -81,6 +82,15 @@ fn open_pair_connector_score(
         q1p0.x
             .mul_add(q1p0.x, p1q0.y.mul_add(p1q0.y, p1q0.x * p1q0.x)),
     )
+}
+
+/// Connector scores are sums of squared native-UV distances. The tie
+/// threshold must scale as a squared UV quantity, not as world-space length.
+fn reversed_connector_is_shorter(direct: f64, reversed: f64) -> bool {
+    let relative = DEFAULT_NUMERICAL_TOLERANCES.mesh_open_pair_connector_score_relative;
+    direct.is_finite()
+        && reversed.is_finite()
+        && reversed + relative * direct.max(reversed) < direct
 }
 
 pub(in crate::tessellation::triangulation) fn boundary_segment_parameter(
@@ -200,7 +210,15 @@ fn close_single_open_boundary(
         return None;
     };
     let (front, back) = end_points(&curve);
-    if front.x < back.x - KERNEL_EPSILON {
+    let u_slack = native_boundary_slack(
+        (u0, u1),
+        DEFAULT_NUMERICAL_TOLERANCES.mesh_open_boundary_direction_relative,
+    )?;
+    let v_slack = native_boundary_slack(
+        (v0, v1),
+        DEFAULT_NUMERICAL_TOLERANCES.mesh_open_boundary_direction_relative,
+    )?;
+    if front.x < back.x - u_slack {
         normalize_range(&mut curve, 0, (u0, u1));
         Some(close_curve_via_corners(
             surface,
@@ -210,7 +228,7 @@ fn close_single_open_boundary(
             tolerance,
             point_cache,
         ))
-    } else if back.x < front.x - KERNEL_EPSILON {
+    } else if back.x < front.x - u_slack {
         normalize_range(&mut curve, 0, (u0, u1));
         Some(close_curve_via_corners(
             surface,
@@ -220,7 +238,7 @@ fn close_single_open_boundary(
             tolerance,
             point_cache,
         ))
-    } else if front.y < back.y - KERNEL_EPSILON {
+    } else if front.y < back.y - v_slack {
         normalize_range(&mut curve, 1, (v0, v1));
         Some(close_curve_via_corners(
             surface,
@@ -230,7 +248,7 @@ fn close_single_open_boundary(
             tolerance,
             point_cache,
         ))
-    } else if back.y < front.y - KERNEL_EPSILON {
+    } else if back.y < front.y - v_slack {
         normalize_range(&mut curve, 1, (v0, v1));
         Some(close_curve_via_corners(
             surface,
@@ -270,9 +288,10 @@ fn close_open_boundary_pair(
         }
     }
     let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
-    if open_pair_connector_score(p0, p1, q1, q0) + KERNEL_EPSILON
-        < open_pair_connector_score(p0, p1, q0, q1)
-    {
+    if reversed_connector_is_shorter(
+        open_pair_connector_score(p0, p1, q0, q1),
+        open_pair_connector_score(p0, p1, q1, q0),
+    ) {
         curve1.reverse();
     }
     let ((p0, p1), (q0, q1)) = (end_points(&curve0), end_points(&curve1));
@@ -611,5 +630,41 @@ impl PolyBoundary {
             });
         });
         (boundary_map.len(), added_constraints, skipped_constraints)
+    }
+}
+
+#[cfg(test)]
+mod numerical_domain_tests {
+    use super::*;
+
+    #[test]
+    fn uv_connector_choice_is_invariant_under_parameter_scale() {
+        for squared_scale in [1.0e-18, 1.0, 1.0e18] {
+            assert!(reversed_connector_is_shorter(
+                4.0 * squared_scale,
+                2.0 * squared_scale
+            ));
+            assert!(!reversed_connector_is_shorter(
+                2.0 * squared_scale,
+                4.0 * squared_scale
+            ));
+            assert!(!reversed_connector_is_shorter(
+                2.0 * squared_scale,
+                2.0 * squared_scale
+            ));
+        }
+    }
+
+    #[test]
+    fn open_contour_uv_direction_threshold_scales_with_native_domain() {
+        let policy = DEFAULT_NUMERICAL_TOLERANCES;
+        let tiny =
+            native_boundary_slack((0.0, 1.0e-9), policy.mesh_open_boundary_direction_relative)
+                .expect("positive parameter interval");
+        let unit = native_boundary_slack((0.0, 1.0), policy.mesh_open_boundary_direction_relative)
+            .expect("positive parameter interval");
+        assert!(tiny < 1.0e-14);
+        assert!(unit > 1.0e-7);
+        assert!(native_boundary_slack((1.0, 1.0), policy.mesh_boundary_wrap_relative).is_none());
     }
 }
