@@ -73,12 +73,24 @@ fn boolean_reports_invalid_standard_budget_as_policy_error() {
 }
 
 #[test]
+fn classic_numerical_tolerance_validation_preserves_sub_epsilon_input() {
+    assert!(super::validate_tolerance(1.0e-8).is_ok());
+    assert!(super::validate_tolerance(f64::MIN_POSITIVE).is_ok());
+    for invalid in [-1.0e-8, -0.0, 0.0, f64::NAN, f64::INFINITY] {
+        assert!(matches!(
+            super::validate_tolerance(invalid),
+            Err(crate::ShapeOpsError::InvalidTolerance)
+        ));
+    }
+}
+
+#[test]
 fn standard_budget_does_not_widen_classic_boolean_tolerance() {
     let policy = crate::GeometryPolicy::standard(0.01);
     assert_eq!(
         super::classic_boolean_tolerance(policy, "difference")
             .expect("valid Standard policy must admit the classic backend"),
-        monstertruck_core::tolerance::KERNEL_EPSILON,
+        monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length,
         "a modeling budget must never widen numerical edge identity",
     );
     assert_eq!(

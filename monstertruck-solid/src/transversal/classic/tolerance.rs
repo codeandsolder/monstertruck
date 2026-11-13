@@ -1,4 +1,4 @@
-use monstertruck_core::tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 /// Dimension-aware tolerances for the classic Boolean backend.
 ///
@@ -16,23 +16,67 @@ pub(super) struct BooleanTolerance {
 
 impl BooleanTolerance {
     pub(super) fn new(requested: f64) -> Self {
-        let length = requested.abs().max(KERNEL_EPSILON);
+        // The caller's positive length tolerance is authoritative: a larger
+        // global kernel resolution must not silently widen geometric identity.
+        assert!(
+            requested.is_finite() && requested > 0.0,
+            "Boolean length tolerance must be finite and positive"
+        );
+        let length = requested;
         Self {
             length,
             area_floor: length * length,
             angular: DEFAULT_NUMERICAL_TOLERANCES.angular,
-            classifier_offset: 8.0 * length,
-            mesh_seed: requested
-                .abs()
-                .max(DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor),
+            classifier_offset: DEFAULT_NUMERICAL_TOLERANCES.boolean_classifier_offset_factor
+                * length,
+            mesh_seed: requested.max(DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor),
         }
     }
 
+    /// Native B-spline parameter interval slack, not a geometric length.
+    /// Span-relative drift plus arithmetic roundoff at the interval's absolute parameter scale.
+    pub(super) fn iso_parameter_slack(self, (lo, hi): (f64, f64)) -> Option<f64> {
+        let span = hi - lo;
+        if !lo.is_finite() || !hi.is_finite() || !span.is_finite() || span <= 0.0 {
+            return None;
+        }
+        let policy = DEFAULT_NUMERICAL_TOLERANCES;
+        let slack = policy.boolean_iso_parameter_relative * span
+            + policy.boolean_iso_parameter_roundoff_ulps * f64::EPSILON * lo.abs().max(hi.abs());
+        (slack.is_finite() && slack > 0.0).then_some(slack)
+    }
+
+    /// Maximum allowed separation between independently corrected points on
+    /// the two exact SSI carrier surfaces, in model-coordinate length units.
+    /// Not a mesh discretization allowance.
+    pub(super) fn surface_support_residual(self) -> f64 {
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * self.length
+    }
+
+    /// Maximum endpoint/branch discrepancy allowed when validating an
+    /// intersection fragment against exact carrier geometry.
+    pub(super) fn fragment_residual(self) -> f64 {
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_validation_factor * self.length
+    }
+
+    /// Exact curve/surface endpoint admission, independent of the seed mesh.
+    pub(super) fn boundary_residual(self) -> f64 {
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_boundary_search_factor * self.length
+    }
+
+    /// Cross-face endpoint stitching radius. This is a numerical
+    /// canonicalization tolerance, never the permitted modeling-error budget.
+    pub(super) fn cross_face_stitch_residual(self) -> f64 {
+        DEFAULT_NUMERICAL_TOLERANCES.cross_face_stitch_factor * self.length
+    }
+
     pub(super) fn area_for_span(self, span: f64) -> f64 {
-        16.0f64.mul_add(
-            self.area_floor,
-            8.0 * self.length * span.abs().max(self.length),
-        )
+        DEFAULT_NUMERICAL_TOLERANCES
+            .boolean_area_floor_factor
+            .mul_add(
+                self.area_floor,
+                DEFAULT_NUMERICAL_TOLERANCES.boolean_area_span_factor * self.length * span.abs(),
+            )
     }
 }
 
@@ -41,11 +85,80 @@ mod tests {
     use super::*;
 
     #[test]
+    fn iso_parameter_slack_scales_with_domain_not_world_length() {
+        let precise = BooleanTolerance::new(1.0e-8);
+        let broad = BooleanTolerance::new(1.0e-5);
+        let tiny = precise
+            .iso_parameter_slack((0.0, 1.0e-9))
+            .expect("finite interval");
+        let unit = precise
+            .iso_parameter_slack((0.0, 1.0))
+            .expect("finite interval");
+        let shifted = precise
+            .iso_parameter_slack((1.0e9, 1.0e9 + 1.0))
+            .expect("finite shifted interval");
+        assert!(tiny < 1.0e-14);
+        assert!(unit > 1.0e-7);
+        assert!(shifted > unit);
+        assert_eq!(
+            unit,
+            broad
+                .iso_parameter_slack((0.0, 1.0))
+                .expect("finite interval")
+        );
+        assert!(precise.iso_parameter_slack((1.0, 1.0)).is_none());
+        assert!(precise.iso_parameter_slack((f64::NAN, 1.0)).is_none());
+        assert!(precise.iso_parameter_slack((f64::INFINITY, 1.0)).is_none());
+    }
+
+    #[test]
     fn semantic_tolerances_do_not_inherit_mesh_floor() {
         let tol = BooleanTolerance::new(1.0e-6);
         assert_eq!(tol.length, 1.0e-6);
         assert_eq!(tol.classifier_offset, 8.0e-6);
         assert_eq!(tol.mesh_seed, 1.0e-3);
+    }
+
+    #[test]
+    fn sub_kernel_epsilon_length_is_not_widened_to_kernel_epsilon() {
+        let requested = 1.0e-8;
+        let tolerance = BooleanTolerance::new(requested);
+        assert_eq!(tolerance.length, requested);
+        assert_eq!(tolerance.area_floor, requested * requested);
+        assert_eq!(
+            tolerance.classifier_offset,
+            DEFAULT_NUMERICAL_TOLERANCES.boolean_classifier_offset_factor * requested
+        );
+        assert_eq!(
+            tolerance.mesh_seed, DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor,
+            "only the seed mesh gets the independent, coarser sampling floor"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Boolean length tolerance must be finite and positive")]
+    fn zero_length_tolerance_is_not_silently_widened() { let _ = BooleanTolerance::new(0.0); }
+
+    #[test]
+    fn exact_ssi_residuals_scale_with_numerical_length_not_global_epsilon() {
+        let tighter = BooleanTolerance::new(1.0e-8);
+        let base = BooleanTolerance::new(1.0e-6);
+        assert_eq!(tighter.surface_support_residual(), 4.0e-8);
+        assert_eq!(tighter.fragment_residual(), 4.0e-8);
+        assert_eq!(base.surface_support_residual(), 4.0e-6);
+        assert_eq!(base.fragment_residual(), 4.0e-6);
+        assert_eq!(tighter.mesh_seed, base.mesh_seed);
+    }
+
+    #[test]
+    fn boundary_and_cross_face_precision_scales_with_operation() {
+        let precise = BooleanTolerance::new(1.0e-8);
+        assert_eq!(precise.boundary_residual(), 8.0e-8);
+        assert_eq!(precise.cross_face_stitch_residual(), 8.0e-8);
+        let base = BooleanTolerance::new(1.0e-6);
+        assert_eq!(base.boundary_residual(), 8.0e-6);
+        assert_eq!(base.cross_face_stitch_residual(), 8.0e-6);
+        assert_eq!(precise.mesh_seed, base.mesh_seed);
     }
 
     #[test]

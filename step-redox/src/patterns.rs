@@ -12,11 +12,12 @@ use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
 };
 use anyhow::{Result, bail};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-const ORIENTATION_Q: f64 = 1.0e-10;
+const ORIENTATION_Q: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_orientation;
 
 fn quantize_vec3(vector: [f64; 3], quantum: f64) -> Option<[i64; 3]> {
     Some([
@@ -49,7 +50,9 @@ pub struct InstancePattern {
     pub max_residual_mm: f64,
 }
 
-const fn default_pattern_tolerance_mm() -> f64 { 1.0e-7 }
+const fn default_pattern_tolerance_mm() -> f64 {
+    DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_geometry_mm
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -180,7 +183,10 @@ pub fn factor_point_motif_pattern(
                             && inverse_repeats < *best_inverse_repeats)
                         || (motif_size == *best_motif
                             && inverse_repeats == *best_inverse_repeats
-                            && basis_cost < *best_basis_cost - 1.0e-12) =>
+                            && basis_cost
+                                < *best_basis_cost
+                                    - DEFAULT_STEP_RECOVERY_TOLERANCES
+                                        .pattern_comparison_residual) =>
                 {
                     best = Some((motif_size, inverse_repeats, basis_cost, pattern));
                 }
@@ -192,7 +198,7 @@ pub fn factor_point_motif_pattern(
 }
 
 fn motif_candidate_vectors(points: &[[f64; 3]], tolerance_mm: f64, limit: usize) -> Vec<[f64; 3]> {
-    let quant = tolerance_mm.max(1.0e-9);
+    let quant = tolerance_mm.max(DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_quantization_floor);
     let mut counts = HashMap::<[i64; 3], ([f64; 3], usize)>::new();
     for left in 0..points.len() {
         for right in (left + 1)..points.len() {
@@ -293,12 +299,16 @@ fn project_motif_points(
     let cross_dot = dot(first_basis, second_basis);
     let second_sq = dot(second_basis, second_basis);
     let determinant = cross_dot.mul_add(-cross_dot, first_sq * second_sq);
-    if determinant <= 1.0e-18 {
+    if determinant <= DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_determinant_squared {
         return None;
     }
     let base = *points.first()?;
-    let coordinate_tol = tolerance_mm / norm(first_basis).min(norm(second_basis)).max(1.0e-12);
-    let frac_quant = coordinate_tol.max(1.0e-10);
+    let coordinate_tol = tolerance_mm
+        / norm(first_basis)
+            .min(norm(second_basis))
+            .max(DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_comparison_residual);
+    let frac_quant =
+        coordinate_tol.max(DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_fraction_quant_floor);
 
     let mut groups = BTreeMap::<[i64; 2], Vec<MotifPoint>>::new();
     let mut max_residual_mm = 0.0f64;
@@ -574,7 +584,9 @@ fn detect_implicit_identity_site(
     }
     let site_f64 = exact_usize_to_f64(site)?;
     let identity_origin = add(fit.origin, scale(fit.basis[0], site_f64));
-    if norm(identity_origin) > tolerance_mm.max(1.0e-9) {
+    if norm(identity_origin)
+        > tolerance_mm.max(DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_quantization_floor)
+    {
         return None;
     }
 
@@ -587,7 +599,8 @@ fn detect_implicit_identity_site(
     };
     let mapping_origin = entity_ref_value(map_params.first()?)?;
     let (map_origin, map_orientation) = target_frame(mapping_origin, entities, index)?;
-    if norm(map_origin) > tolerance_mm.max(1.0e-9)
+    if norm(map_origin)
+        > tolerance_mm.max(DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_quantization_floor)
         || quantize_matrix(map_orientation)? != expected_orientation
     {
         return None;
@@ -630,7 +643,9 @@ pub(crate) fn linear_pattern_sites(pattern: &InstancePattern) -> Option<usize> {
         return None;
     }
     let expected_fill = exact_usize_to_f64(expected_items)? / exact_usize_to_f64(sites)?;
-    if (pattern.fill_ratio - expected_fill).abs() > 1.0e-12 {
+    if (pattern.fill_ratio - expected_fill).abs()
+        > DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_comparison_residual
+    {
         return None;
     }
     let implicit = pattern.implicit_identity_site;
@@ -731,7 +746,8 @@ fn identity_site_for_lattice(
     tolerance_mm: f64,
 ) -> Result<usize> {
     let denom = dot(basis, basis);
-    if !denom.is_finite() || denom <= 1.0e-24 {
+    if !denom.is_finite() || denom <= DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_inverse_norm_squared
+    {
         bail!("implicit-identity pattern has a degenerate basis");
     }
     let projected = -dot(origin, basis) / denom;
@@ -744,7 +760,7 @@ fn identity_site_for_lattice(
     let site_f64 = exact_usize_to_f64(site)
         .ok_or_else(|| anyhow::anyhow!("implicit identity site exceeds exact geometry range"))?;
     let residual = norm(add(origin, scale(basis, site_f64)));
-    if residual > tolerance_mm.max(1.0e-9) {
+    if residual > tolerance_mm.max(DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_quantization_floor) {
         bail!(
             "resized lattice no longer places its implicit identity occurrence at zero translation"
         );
@@ -1202,7 +1218,7 @@ fn pair_differences(points: &[[f64; 3]]) -> Vec<([f64; 3], f64)> {
         for j in (i + 1)..points.len() {
             let d = sub(points[j], points[i]);
             let n = norm(d);
-            if n.is_finite() && n > 1.0e-12 {
+            if n.is_finite() && n > DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_comparison_residual {
                 diffs.push((d, n));
             }
         }
@@ -1212,7 +1228,7 @@ fn pair_differences(points: &[[f64; 3]]) -> Vec<([f64; 3], f64)> {
 }
 
 fn lattice_candidate_vectors(points: &[[f64; 3]], tol: f64, limit: usize) -> Vec<[f64; 3]> {
-    let quant = tol.max(1.0e-9);
+    let quant = tol.max(DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_quantization_floor);
     let mut seen = std::collections::HashSet::<[i64; 3]>::new();
     let mut out = Vec::new();
     for (mut vector, _) in pair_differences(points) {
@@ -1238,7 +1254,7 @@ fn fit_line(points: &[[f64; 3]], tol: f64) -> Option<Fit> {
 
     for basis in candidates {
         let pitch = norm(basis);
-        if pitch <= 1.0e-12 {
+        if pitch <= DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_comparison_residual {
             continue;
         }
         let unit = scale(basis, 1.0 / pitch);
@@ -1321,8 +1337,11 @@ fn fit_line(points: &[[f64; 3]], tol: f64) -> Option<Fit> {
         match &best {
             None => best = Some((score.0, score.1, fit)),
             Some((best_fill, best_pitch, _))
-                if score.0 > *best_fill + 1.0e-12
-                    || ((score.0 - *best_fill).abs() <= 1.0e-12 && score.1 > *best_pitch) =>
+                if score.0
+                    > *best_fill + DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_comparison_residual
+                    || ((score.0 - *best_fill).abs()
+                        <= DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_comparison_residual
+                        && score.1 > *best_pitch) =>
             {
                 best = Some((score.0, score.1, fit));
             }
@@ -1350,8 +1369,11 @@ fn fit_grid(points: &[[f64; 3]], tol: f64) -> Option<Fit> {
             match &best {
                 None => best = Some((fill_ratio, cell_area, fit)),
                 Some((best_fill, best_area, _))
-                    if fill_ratio > *best_fill + 1.0e-12
-                        || ((fill_ratio - *best_fill).abs() <= 1.0e-12
+                    if fill_ratio
+                        > *best_fill
+                            + DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_comparison_residual
+                        || ((fill_ratio - *best_fill).abs()
+                            <= DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_comparison_residual
                             && cell_area < *best_area) =>
                 {
                     best = Some((fill_ratio, cell_area, fit));
@@ -1375,7 +1397,7 @@ fn fit_grid_candidate(
     let cross_dot = dot(first_basis, second_basis);
     let second_sq = dot(second_basis, second_basis);
     let determinant = cross_dot.mul_add(-cross_dot, first_sq * second_sq);
-    if determinant <= 1.0e-18 {
+    if determinant <= DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_determinant_squared {
         return None;
     }
     let projection = GridProjection {
@@ -1604,7 +1626,12 @@ fn quantize_matrix(matrix: [[f64; 3]; 3]) -> Option<[i64; 9]> {
     Some(out)
 }
 
-fn normalize(v: [f64; 3]) -> Option<[f64; 3]> { normalize3(v, 1.0e-15) }
+fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
+    normalize3(
+        v,
+        DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_normalization_min,
+    )
+}
 
 #[cfg(test)]
 mod tests {

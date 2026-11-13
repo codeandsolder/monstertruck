@@ -8,6 +8,7 @@ use crate::step_entities::{
     vertex_point,
 };
 use crate::step_graph::{entity_ref_value, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -576,8 +577,10 @@ fn ellipse_arc_sweep(start: f64, end: f64, sample: f64) -> Option<f64> {
     let negative = positive - tau;
     let positive_progress = (sample - start).rem_euclid(tau);
     let negative_progress = -((start - sample).rem_euclid(tau));
-    let on_positive = positive_progress <= positive + 1.0e-8;
-    let on_negative = negative_progress >= negative - 1.0e-8;
+    let on_positive = positive_progress
+        <= positive + DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine;
+    let on_negative = negative_progress
+        >= negative - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine;
     match (on_positive, on_negative) {
         (true, false) => Some(positive),
         (false, true) => Some(negative),

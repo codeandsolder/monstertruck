@@ -240,9 +240,7 @@ fn polyline_interior_candidates(poly: &PolylineCurve<Point2>) -> Vec<Point2> {
         // Prefer an interior witness with enough clearance to survive
         // downstream mesh/ray tolerance. Very thin true regions still fall
         // back to progressively smaller offsets.
-        for relative in [
-            0.1, 0.03, 0.01, 0.003, 1.0e-3, 1.0e-4, 1.0e-6, 1.0e-8, 1.0e-10, 1.0e-12,
-        ] {
+        for relative in DEFAULT_NUMERICAL_TOLERANCES.boolean_interior_witness_insets {
             let distance = (scale * relative).min(length * 0.125);
             let candidate = midpoint + inward * distance;
             if domain.include(candidate) {
@@ -254,7 +252,7 @@ fn polyline_interior_candidates(poly: &PolylineCurve<Point2>) -> Vec<Point2> {
     candidates
 }
 
-fn strict_interior_point(poly: &PolylineCurve<Point2>, _tol: f64) -> Option<Point2> {
+fn strict_interior_point(poly: &PolylineCurve<Point2>) -> Option<Point2> {
     polyline_interior_candidates(poly).into_iter().next()
 }
 
@@ -440,7 +438,7 @@ fn polyline_area_epsilon(poly: &PolylineCurve<Point2>) -> f64 {
     let height = (max_y - min_y).abs();
     let bbox_area = width * height;
     if bbox_area.is_finite() {
-        KERNEL_EPSILON * bbox_area
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_uv_loop_area_relative * bbox_area
     } else {
         f64::INFINITY
     }
@@ -511,7 +509,7 @@ fn uv_boundaries_meet(lhs: &PolylineCurve<Point2>, rhs: &PolylineCurve<Point2>) 
     if !scale.is_finite() || scale <= 0.0 {
         return true;
     }
-    let tol2 = (KERNEL_EPSILON * scale).powi(2);
+    let tol2 = (DEFAULT_NUMERICAL_TOLERANCES.boolean_uv_boundary_contact_relative * scale).powi(2);
     let cross = |a: Vector2, b: Vector2| a.x.mul_add(b.y, -(a.y * b.x));
     let near_segment = |p: Point2, a: Point2, b: Point2| {
         let ab = b - a;
@@ -621,7 +619,7 @@ where
             Some(())
         })?;
     negative_wires.into_iter().try_for_each(|mut chunk| {
-        let witness = strict_interior_point(&chunk.poly, tol)?;
+        let witness = strict_interior_point(&chunk.poly)?;
         let chunk_area_abs = polyline_signed_area(&chunk.poly).abs();
 
         // Build the nesting relation from geometry, not Boolean status or shared
@@ -804,9 +802,21 @@ where
         .enumerate()
         .try_for_each(|(source_face, (face, loops))| {
             let sampled_loops = sampled_store.and_then(|sampled| sampled.get(source_face));
-            if loops
-                .iter()
-                .all(|wire| wire.status() == ShapesOpStatus::Unknown)
+            // Unknown is a classification state, not proof that the face
+            // has not been partitioned. Preserve the unsplit fast path
+            // only when every boundary use is still the original one.
+            let original = face.absolute_boundaries();
+            let same_geometry = loops.len() == original.len()
+                && loops.iter().zip(original).all(|(candidate, source)| {
+                    candidate.len() == source.len()
+                        && candidate.iter().zip(source).all(|(lhs, rhs)| {
+                            lhs.id() == rhs.id() && lhs.orientation() == rhs.orientation()
+                        })
+                });
+            if same_geometry
+                && loops
+                    .iter()
+                    .all(|wire| wire.status() == ShapesOpStatus::Unknown)
             {
                 res.push(face, ShapesOpStatus::Unknown, source_face);
             } else {
@@ -899,6 +909,50 @@ mod tests {
                 vec![front.point(), back.point()],
             ),
         )
+    }
+
+    #[test]
+    fn all_unknown_imprinted_loops_still_divide_the_source_face() {
+        use monstertruck_geometry::prelude::Plane;
+        let point = |x, y| Vertex::new(Point3::new(x, y, 0.0));
+        let outer = [
+            point(0.0, 0.0),
+            point(4.0, 0.0),
+            point(4.0, 4.0),
+            point(0.0, 4.0),
+        ];
+        let inner = [
+            point(1.0, 1.0),
+            point(3.0, 1.0),
+            point(3.0, 3.0),
+            point(1.0, 3.0),
+        ];
+        let perimeter = |vertices: &[Vertex<Point3>; 4]| -> Wire<Point3, BsplineCurve<Point3>> {
+            (0..4)
+                .map(|i| test_line(&vertices[i], &vertices[(i + 1) % 4]))
+                .collect()
+        };
+        let outer_wire = perimeter(&outer);
+        let inner_wire = perimeter(&inner);
+        let source = Face::new(vec![outer_wire.clone()], Plane::xy()).expect("valid source face");
+        let loops: Loops<_, _> = vec![
+            BoundaryWire::new(outer_wire, ShapesOpStatus::Unknown),
+            BoundaryWire::new(inner_wire.clone(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(inner_wire.inverse(), ShapesOpStatus::Unknown),
+        ]
+        .into_iter()
+        .collect();
+        let mut store: LoopsStore<_, _> = std::iter::once(&source).collect();
+        store[0] = loops;
+        let divided = divide_faces(&Shell::from(vec![source]), &store, None, 1.0e-6)
+            .expect("valid new Unknown contours must not be discarded");
+        let [and, or, unknown] = divided.and_or_unknown();
+        assert!(and.is_empty() && or.is_empty());
+        assert_eq!(
+            unknown.len(),
+            2,
+            "unknown classification still requires separate inner and outer geometric regions"
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use crate::math2::rotate_quarter_xy as rotate_xy;
 use crate::step_entities::{cartesian_point, closure_from, nth_entity_ref, number};
 use crate::step_graph::{entity_ref_value, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Name, Parameter, Record};
 use std::collections::{HashMap, HashSet};
 
@@ -622,7 +623,8 @@ fn line_support_signature(
         q_dir[0],
         q_dir[1],
         q_dir[2],
-        (magnitude * 1.0e9).round() as i64,
+        (magnitude * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_quantization_inv_mm).round()
+            as i64,
     ))
 }
 
@@ -663,7 +665,8 @@ pub fn circle_support_signature(
         q_axis[0],
         q_axis[1],
         q_axis[2],
-        (radius * 1.0e9).round() as i64,
+        (radius * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_quantization_inv_mm).round()
+            as i64,
     ))
 }
 
@@ -710,7 +713,8 @@ pub fn cylindrical_surface_signature(
         q_axis[0],
         q_axis[1],
         q_axis[2],
-        (radius * 1.0e9).round() as i64,
+        (radius * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_quantization_inv_mm).round()
+            as i64,
     ))
 }
 
@@ -728,7 +732,9 @@ pub fn canonical_axis_offset(
         direction[2],
         direction[1].mul_add(direction[1], direction[0] * direction[0]),
     );
-    if !norm2.is_finite() || norm2 <= 1.0e-24 {
+    if !norm2.is_finite()
+        || norm2 <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_zero_norm_squared
+    {
         return None;
     }
     let rel = [
@@ -747,9 +753,10 @@ pub fn canonical_axis_offset(
     ];
     let (x, y) = rotate_xy(perpendicular[0], perpendicular[1], quarter);
     Some([
-        (x * 1.0e5).round() as i64,
-        (y * 1.0e5).round() as i64,
-        (perpendicular[2] * 1.0e5).round() as i64,
+        (x * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_normal_quantization).round() as i64,
+        (y * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_normal_quantization).round() as i64,
+        (perpendicular[2] * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_normal_quantization)
+            .round() as i64,
     ])
 }
 
@@ -800,7 +807,7 @@ fn plane_support_signature(
     let offset = q_rel[2].mul_add(
         q_axis_f[2],
         q_rel[1].mul_add(q_axis_f[1], q_rel[0] * q_axis_f[0]),
-    ) * 1.0e5;
+    ) * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_normal_quantization;
     Some(format!(
         "PLANE(OFFSET{};DIR({},{},{}))",
         offset.round() as i64,
@@ -897,7 +904,11 @@ fn support_param_signature(
         Parameter::Ref(Name::Value(id)) => Some(format!("@{id}")),
         Parameter::Ref(Name::ConstantEntity(value)) => Some(format!("#{value}")),
         Parameter::Ref(Name::ConstantValue(value)) => Some(format!("@{value}")),
-        Parameter::Real(value) => Some(format!("R{}", (value * 1.0e9).round() as i64)),
+        Parameter::Real(value) => Some(format!(
+            "R{}",
+            (value * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_quantization_inv_mm).round()
+                as i64
+        )),
         Parameter::Integer(value) => Some(format!("I{value}")),
         Parameter::String(value) => Some(format!("S{value:?}")),
         Parameter::Enumeration(value) => Some(format!(".{value}.")),
@@ -977,9 +988,9 @@ fn transform_point(point: [f64; 3], center: [f64; 3], quarter: u8) -> [i64; 3] {
     let z = point[2] - center[2];
     let (rx, ry) = rotate_xy(x, y, quarter);
     [
-        (rx * 1.0e5).round() as i64,
-        (ry * 1.0e5).round() as i64,
-        (z * 1.0e5).round() as i64,
+        (rx * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_normal_quantization).round() as i64,
+        (ry * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_normal_quantization).round() as i64,
+        (z * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_normal_quantization).round() as i64,
     ]
 }
 
@@ -990,9 +1001,10 @@ fn transform_point(point: [f64; 3], center: [f64; 3], quarter: u8) -> [i64; 3] {
 fn transform_direction(direction: [f64; 3], quarter: u8) -> [i64; 3] {
     let (x, y) = rotate_xy(direction[0], direction[1], quarter);
     [
-        (x * 1.0e9).round() as i64,
-        (y * 1.0e9).round() as i64,
-        (direction[2] * 1.0e9).round() as i64,
+        (x * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_quantization_inv_mm).round() as i64,
+        (y * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_quantization_inv_mm).round() as i64,
+        (direction[2] * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_quantization_inv_mm)
+            .round() as i64,
     ]
 }
 
@@ -1006,7 +1018,11 @@ fn parameter_literal_signature(parameter: &Parameter) -> Option<String> {
         Parameter::Integer(value) => Some(value.to_string()),
         // Scalar geometry (radii, lengths, knot literals in geometric
         // signatures) uses the same 1e-5 mm equivalence floor as points.
-        Parameter::Real(value) => Some(format!("{}", (value * 1.0e5).round() as i64)),
+        Parameter::Real(value) => Some(format!(
+            "{}",
+            (value * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_normal_quantization).round()
+                as i64
+        )),
         Parameter::Omitted => Some("*".to_string()),
         Parameter::NotProvided => Some("$".to_string()),
         _ => None,

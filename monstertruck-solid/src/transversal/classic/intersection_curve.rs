@@ -9,9 +9,11 @@
 mod analytic;
 pub(in crate::transversal::classic) use analytic::certified_plane;
 
+use super::tolerance::BooleanTolerance;
+
 use monstertruck_core::{
     cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point3},
-    tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON},
+    tolerance::DEFAULT_NUMERICAL_TOLERANCES,
 };
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
@@ -31,6 +33,7 @@ struct FragmentValidation<'a, S> {
     surface1: &'a S,
     polygon1: &'a PolygonMesh,
     tolerance: f64,
+    surface_residual: f64,
 }
 
 fn endpoint_and_inner(
@@ -181,8 +184,17 @@ where
     let mut hint0 = None;
     let mut hint1 = None;
     samples.iter().copied().all(|point| {
-        point_is_on_surface(validation.surface0, point, validation.tolerance, &mut hint0)
-            && point_is_on_surface(validation.surface1, point, validation.tolerance, &mut hint1)
+        point_is_on_surface(
+            validation.surface0,
+            point,
+            validation.surface_residual,
+            &mut hint0,
+        ) && point_is_on_surface(
+            validation.surface1,
+            point,
+            validation.surface_residual,
+            &mut hint1,
+        )
     })
 }
 
@@ -193,6 +205,7 @@ fn stitch_validated_linear_intersection_fragments<S>(
     surface1: &S,
     polygon1: &PolygonMesh,
     tolerance: f64,
+    surface_residual: f64,
 ) -> Vec<Polyline>
 where
     S: ParametricSurface3D
@@ -205,6 +218,7 @@ where
         surface1,
         polygon1,
         tolerance,
+        surface_residual,
     };
     loop {
         let Some(mut joins) =
@@ -264,7 +278,7 @@ fn corrected_curved_fragment_bridge<S>(
     second_front: bool,
     surface0: &S,
     surface1: &S,
-    tolerance: f64,
+    tolerances: BooleanTolerance,
 ) -> Option<Vec<Point3>>
 where
     S: ParametricSurface3D
@@ -272,11 +286,13 @@ where
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
+    let tolerance = tolerances.fragment_residual();
+    let reference_tol = tolerances.surface_support_residual();
+    let mesh_scale = tolerances.mesh_seed;
     let (a, a_inner) = endpoint_and_inner(first, first_front, tolerance)?;
     let (b, b_inner) = endpoint_and_inner(second, second_front, tolerance)?;
     let span = b - a;
     let length = span.magnitude();
-    let mesh_scale = DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor;
     if !length.is_finite() || length <= tolerance || length > mesh_scale * 16.0 {
         return None;
     }
@@ -314,8 +330,6 @@ where
         }
         None
     })?;
-    let reference_tol =
-        DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * KERNEL_EPSILON;
     let intervals = (length / (mesh_scale * 0.5)).ceil().clamp(2.0, 128.0) as usize;
     let mut samples = Vec::with_capacity(intervals + 1);
     samples.push(a);
@@ -351,10 +365,10 @@ where
         {
             return None;
         }
-        if let Some(previous) = samples.last() {
-            if (*previous - q).dot(direction) >= 0.0 {
-                return None;
-            }
+        if let Some(previous) = samples.last()
+            && (*previous - q).dot(direction) >= 0.0
+        {
+            return None;
         }
         hint0 = (uv0.x, uv0.y);
         hint1 = (uv1.x, uv1.y);
@@ -387,7 +401,7 @@ fn stitch_validated_curved_intersection_fragments<S>(
     mut polylines: Vec<Polyline>,
     surface0: &S,
     surface1: &S,
-    tolerance: f64,
+    tolerances: BooleanTolerance,
 ) -> Vec<Polyline>
 where
     S: ParametricSurface3D
@@ -395,6 +409,7 @@ where
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
+    let tolerance = tolerances.fragment_residual();
     loop {
         let Some(mut joins) =
             enumerate_endpoint_joins(&polylines, |first, first_front, second, second_front| {
@@ -405,7 +420,7 @@ where
                     second_front,
                     surface0,
                     surface1,
-                    tolerance,
+                    tolerances,
                 )
                 .is_some()
             })
@@ -436,7 +451,7 @@ where
             join.second.front,
             surface0,
             surface1,
-            tolerance,
+            tolerances,
         ) else {
             return polylines;
         };
@@ -466,6 +481,8 @@ fn locate_on_exact_fragment<S>(
     surface0: &S,
     surface1: &S,
     tolerance: f64,
+    surface_residual: f64,
+    seed_tolerance: f64,
 ) -> Option<(usize, f64)>
 where
     S: ParametricSurface3D
@@ -482,12 +499,15 @@ where
             continue;
         }
         let along = (point - segment[0]).dot(delta) / length2;
-        if !(-1.0e-8..=1.0 + 1.0e-8).contains(&along) {
+        if !(-DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_parameter_slack
+            ..=1.0 + DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_parameter_slack)
+            .contains(&along)
+        {
             continue;
         }
         let foot = segment[0] + delta * along.clamp(0.0, 1.0);
         let distance = foot.distance(point);
-        if distance > DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor {
+        if distance > seed_tolerance {
             continue;
         }
         let projection = IntersectionCurve::new(
@@ -512,7 +532,7 @@ where
         let residual = surface0
             .evaluate(uv0.x, uv0.y)
             .distance(surface1.evaluate(uv1.x, uv1.y));
-        if residual > tolerance || q.distance(point) > tolerance {
+        if residual > surface_residual || q.distance(point) > tolerance {
             continue;
         }
         let progress = index as f64 + along.clamp(0.0, 1.0);
@@ -538,7 +558,7 @@ fn overlap_join_candidate<S>(
     second: &Polyline,
     surface0: &S,
     surface1: &S,
-    tolerance: f64,
+    tolerances: BooleanTolerance,
 ) -> Option<Vec<Point3>>
 where
     S: ParametricSurface3D
@@ -546,14 +566,30 @@ where
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
+    let tolerance = tolerances.fragment_residual();
+    let surface_residual = tolerances.surface_support_residual();
     let first_start = *first.first()?;
     let second_start = *second.first()?;
     let first_end = *first.last()?;
     let second_end = *second.last()?;
-    let (cut_index, cut_fraction) =
-        locate_on_exact_fragment(first, second_start, surface0, surface1, tolerance)?;
-    let (overlap_index, overlap_fraction) =
-        locate_on_exact_fragment(second, first_end, surface0, surface1, tolerance)?;
+    let (cut_index, cut_fraction) = locate_on_exact_fragment(
+        first,
+        second_start,
+        surface0,
+        surface1,
+        tolerance,
+        surface_residual,
+        tolerances.mesh_seed,
+    )?;
+    let (overlap_index, overlap_fraction) = locate_on_exact_fragment(
+        second,
+        first_end,
+        surface0,
+        surface1,
+        tolerance,
+        surface_residual,
+        tolerances.mesh_seed,
+    )?;
     if cut_index == 0 && cut_fraction <= tolerance
         || cut_index + 1 >= first.len()
         || overlap_index + 1 >= second.len()
@@ -572,7 +608,11 @@ where
     };
     let n0 = forward0.magnitude();
     let n1 = forward1.magnitude();
-    if n0 <= tolerance || n1 <= tolerance || forward0.dot(forward1) / (n0 * n1) < 0.8 {
+    if n0 <= tolerance
+        || n1 <= tolerance
+        || forward0.dot(forward1) / (n0 * n1)
+            < DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_forward_alignment_cosine
+    {
         return None;
     }
     // The discarded first suffix must progress along the retained second
@@ -581,7 +621,7 @@ where
     let mut trace = Vec::with_capacity(first.len() - cut_index);
     trace.push(second_start);
     trace.extend_from_slice(&first[cut_index + 1..]);
-    let mesh_step = DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor * 0.5;
+    let mesh_step = tolerances.mesh_seed * 0.5;
     let mut samples = 0usize;
     let ic = IntersectionCurve::new(
         surface0.clone(),
@@ -615,29 +655,41 @@ where
                 if surface0
                     .evaluate(u0.x, u0.y)
                     .distance(surface1.evaluate(u1.x, u1.y))
-                    > tolerance
+                    > surface_residual
                     || exact.distance(predictor) > delta.magnitude() * 0.5
                 {
                     return None;
                 }
                 exact
             };
-            let (index, local) =
-                locate_on_exact_fragment(second, point, surface0, surface1, tolerance)?;
+            let (index, local) = locate_on_exact_fragment(
+                second,
+                point,
+                surface0,
+                surface1,
+                tolerance,
+                surface_residual,
+                tolerances.mesh_seed,
+            )?;
             let progress = index as f64 + local;
-            if progress + 1.0e-8 < previous_progress {
+            if progress + DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_progress_slack
+                < previous_progress
+            {
                 return None;
             }
             previous_progress = progress;
             samples += 1;
         }
     }
-    if previous_progress < overlap_index as f64 + overlap_fraction - 1.0e-5 {
+    if previous_progress
+        < overlap_index as f64 + overlap_fraction
+            - DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_overlap_parameter_slack
+    {
         return None;
     }
     let prefix = PolylineCurve(first[..=cut_index].to_vec());
     let bridge = corrected_curved_fragment_bridge(
-        &prefix, false, second, true, surface0, surface1, tolerance,
+        &prefix, false, second, true, surface0, surface1, tolerances,
     )?;
     let mut result = prefix.0;
     result.extend_from_slice(&bridge[1..bridge.len() - 1]);
@@ -651,7 +703,7 @@ fn stitch_overlapping_intersection_fragments<S>(
     mut chains: Vec<Polyline>,
     surface0: &S,
     surface1: &S,
-    tolerance: f64,
+    tolerances: BooleanTolerance,
 ) -> Vec<Polyline>
 where
     S: ParametricSurface3D
@@ -677,7 +729,7 @@ where
                             b.0.reverse();
                         }
                         if let Some(merged) =
-                            overlap_join_candidate(&a, &b, surface0, surface1, tolerance)
+                            overlap_join_candidate(&a, &b, surface0, surface1, tolerances)
                         {
                             // A and B can admit the same union in reversed order.
                             // Use canonical 3D endpoint order to admit one
@@ -731,6 +783,7 @@ fn build_intersection_curve<S>(
     surface0: S,
     surface1: S,
     poly: Polyline,
+    tolerances: BooleanTolerance,
 ) -> Option<IntersectionCurve<Polyline, S, S>>
 where
     S: ParametricSurface3D
@@ -767,11 +820,10 @@ where
     // continuation cannot prove exact incidence near the sampled leader.
     let mut prior = None::<((f64, f64), (f64, f64))>;
     let mut polyline = PolylineCurve(Vec::with_capacity(len));
-    let support_tol =
-        DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * KERNEL_EPSILON;
-    let leader_tol = DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor;
+    let support_tol = tolerances.surface_support_residual();
+    let leader_tol = tolerances.mesh_seed;
     for index in 0..len {
-        if index == len - 1 && raw[0].near(&raw[index]) {
+        if index == len - 1 && raw[0].distance(raw[index]) <= tolerances.length {
             let first = polyline[0];
             polyline.push(first);
             break;
@@ -780,7 +832,7 @@ where
         let point = raw[index];
         let tangent = ic.leader().derivative(parameter);
         let continuation = prior
-            .filter(|_| tangent.magnitude2() > KERNEL_EPSILON * KERNEL_EPSILON)
+            .filter(|_| tangent.magnitude2() > tolerances.length * tolerances.length)
             .and_then(|(uv0, uv1)| {
                 ic.search_intersection_in_plane(point, tangent, Some(uv0), Some(uv1), 100)
             })
@@ -813,7 +865,7 @@ pub(super) fn intersection_curves<S>(
     polygon0: &PolygonMesh,
     surface1: S,
     polygon1: &PolygonMesh,
-    tol: f64,
+    tolerances: BooleanTolerance,
     certified_planes: (Option<Plane>, Option<Plane>),
 ) -> Option<Vec<IntersectionTuple<S>>>
 where
@@ -833,8 +885,12 @@ where
         let exact_curves = exact_linear_branches
             .into_iter()
             .map(|polyline| {
-                let curve =
-                    build_intersection_curve(surface0.clone(), surface1.clone(), polyline.clone())?;
+                let curve = build_intersection_curve(
+                    surface0.clone(),
+                    surface1.clone(),
+                    polyline.clone(),
+                    tolerances,
+                )?;
                 (curve.leader().len() == polyline.len()).then_some((polyline, curve))
             })
             .collect::<Option<Vec<_>>>();
@@ -843,22 +899,28 @@ where
         }
     }
     let interferences = polygon0.extract_interference(polygon1);
-    let stitch_tolerance = 4.0 * tol.max(KERNEL_EPSILON);
-    let polylines =
-        remove_redundant_interference_strands(construct_polylines(&interferences), KERNEL_EPSILON);
+    let stitch_tolerance =
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_stitch_scale * tolerances.length;
+    let polylines = remove_redundant_interference_strands(
+        construct_polylines(&interferences),
+        tolerances.length,
+    );
     let polylines = stitch_nearby_polylines(polylines, stitch_tolerance)?;
     // Mesh intersections are seeds, not certified incidences. Project all
     // fragments onto both exact surfaces before attempting cross-gap joins.
     // Keep kernel-precision verification strict; only the mesh seed may move
     // up to the underlying discretization error.
-    let projection_tol = DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor;
-    let support_tol =
-        DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * KERNEL_EPSILON;
+    let projection_tol = tolerances.mesh_seed;
+    let support_tol = tolerances.surface_support_residual();
     let exact_fragments = polylines
         .into_iter()
         .map(|raw| {
-            let recovered =
-                build_intersection_curve(surface0.clone(), surface1.clone(), raw.clone())?;
+            let recovered = build_intersection_curve(
+                surface0.clone(),
+                surface1.clone(),
+                raw.clone(),
+                tolerances,
+            )?;
             let corrected = recovered.leader().clone();
             if corrected.len() != raw.len() {
                 return None;
@@ -881,8 +943,7 @@ where
     // This pass repairs numerical fragmentation introduced by tessellation.
     // Its admission envelope is an explicit kernel-precision bound rather than
     // a threshold derived from the user-facing modeling-error budget.
-    let validation_tolerance =
-        DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_validation_factor * KERNEL_EPSILON;
+    let validation_tolerance = tolerances.fragment_residual();
     let polylines = stitch_validated_linear_intersection_fragments(
         exact_fragments,
         &surface0,
@@ -890,19 +951,12 @@ where
         &surface1,
         polygon1,
         validation_tolerance,
+        support_tol,
     );
-    let polylines = stitch_validated_curved_intersection_fragments(
-        polylines,
-        &surface0,
-        &surface1,
-        validation_tolerance,
-    );
-    let polylines = stitch_overlapping_intersection_fragments(
-        polylines,
-        &surface0,
-        &surface1,
-        validation_tolerance,
-    );
+    let polylines =
+        stitch_validated_curved_intersection_fragments(polylines, &surface0, &surface1, tolerances);
+    let polylines =
+        stitch_overlapping_intersection_fragments(polylines, &surface0, &surface1, tolerances);
     polylines
         .into_iter()
         // Mesh interference can contain isolated point contacts. They do not
@@ -912,8 +966,12 @@ where
         // Boolean look like an SSI failure.
         .filter(|polyline| polyline.len() >= 2)
         .map(|polyline| {
-            let curve =
-                build_intersection_curve(surface0.clone(), surface1.clone(), polyline.clone())?;
+            let curve = build_intersection_curve(
+                surface0.clone(),
+                surface1.clone(),
+                polyline.clone(),
+                tolerances,
+            )?;
             Some((polyline, curve))
         })
         .collect()
@@ -977,6 +1035,32 @@ mod tests {
     }
 
     #[test]
+    fn point_support_residual_respects_sub_epsilon_boolean_precision() {
+        let plane = Plane::xy();
+        let near_but_distinct = Point3::new(0.25, 0.5, 5.0e-7);
+        let tight = BooleanTolerance::new(1.0e-8);
+        let loose = BooleanTolerance::new(1.0e-6);
+        assert!(
+            !point_is_on_surface(
+                &plane,
+                near_but_distinct,
+                tight.surface_support_residual(),
+                &mut None
+            ),
+            "a tight operation must reject off-surface candidates"
+        );
+        assert!(
+            point_is_on_surface(
+                &plane,
+                near_but_distinct,
+                loose.surface_support_residual(),
+                &mut None
+            ),
+            "a wider operation may admit nearby candidates"
+        );
+    }
+
+    #[test]
     fn certified_planar_dispatch_builds_an_actual_intersection_curve() {
         let plane0 = Plane::xy();
         let plane1 = Plane::zx();
@@ -991,7 +1075,7 @@ mod tests {
             &disconnected_xy_mesh(0.01),
             s1,
             &zx_mesh(-1.0, 1.0),
-            1.0e-5,
+            BooleanTolerance::new(1.0e-5),
             (carrier0, carrier1),
         )
         .expect("certified transverse planes can be intersected without mesh SSI");
@@ -1023,10 +1107,15 @@ mod tests {
         let projected = raw
             .iter()
             .map(|poly| {
-                build_intersection_curve(surface0, surface1, poly.clone())
-                    .expect("planes have an exact common line")
-                    .leader()
-                    .clone()
+                build_intersection_curve(
+                    surface0,
+                    surface1,
+                    poly.clone(),
+                    BooleanTolerance::new(1.0e-6),
+                )
+                .expect("planes have an exact common line")
+                .leader()
+                .clone()
             })
             .collect::<Vec<_>>();
         for poly in &projected {
@@ -1041,6 +1130,7 @@ mod tests {
             &xy_mesh(-1.0, 1.0),
             &surface1,
             &zx_mesh(-1.0, 1.0),
+            4.0e-6,
             4.0e-6,
         );
         assert_eq!(
@@ -1081,9 +1171,16 @@ mod tests {
         let on_circle = |theta: f64| Point3::new(theta.cos(), theta.sin(), 0.0);
         let a = PolylineCurve(vec![on_circle(0.20), on_circle(0.24), on_circle(0.28)]);
         let b = PolylineCurve(vec![on_circle(0.288), on_circle(0.33), on_circle(0.37)]);
-        let corrected =
-            corrected_curved_fragment_bridge(&a, false, &b, true, &plane, &cylinder, 4.0e-6)
-                .expect("two exact intersecting surfaces admit continuous curved gap");
+        let corrected = corrected_curved_fragment_bridge(
+            &a,
+            false,
+            &b,
+            true,
+            &plane,
+            &cylinder,
+            BooleanTolerance::new(1.0e-6),
+        )
+        .expect("two exact intersecting surfaces admit continuous curved gap");
         assert!(corrected.len() >= 3);
         assert_eq!(corrected[0], a.back());
         assert_eq!(*corrected.last().unwrap(), b.front());
@@ -1092,8 +1189,12 @@ mod tests {
         // Chord midpoint would be strictly inside the circle.
         let chord_mid = a.back().midpoint(b.front());
         assert!(middle.distance(chord_mid) > 1e-6);
-        let stitched =
-            stitch_validated_curved_intersection_fragments(vec![a, b], &plane, &cylinder, 4.0e-6);
+        let stitched = stitch_validated_curved_intersection_fragments(
+            vec![a, b],
+            &plane,
+            &cylinder,
+            BooleanTolerance::new(1.0e-6),
+        );
         assert_eq!(stitched.len(), 1);
         assert!(stitched[0].len() > 6);
     }
@@ -1114,8 +1215,12 @@ mod tests {
             Point3::new(0.016, 0.0, 0.0),
             Point3::new(0.025, 0.0, 0.0),
         ]);
-        let result =
-            stitch_overlapping_intersection_fragments(vec![left, right], &plane, &cylinder, 4.0e-6);
+        let result = stitch_overlapping_intersection_fragments(
+            vec![left, right],
+            &plane,
+            &cylinder,
+            BooleanTolerance::new(1.0e-6),
+        );
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].front(), Point3::new(0.0, 0.0, 0.0));
         assert_eq!(result[0].back(), Point3::new(0.025, 0.0, 0.0));
@@ -1140,7 +1245,7 @@ mod tests {
             vec![left, crossing],
             &plane,
             &second,
-            4.0e-6,
+            BooleanTolerance::new(1.0e-6),
         );
         assert_eq!(result.len(), 2);
     }
@@ -1160,8 +1265,16 @@ mod tests {
             Point3::new(0.004, 0.01, 0.0),
         ]);
         assert!(
-            corrected_curved_fragment_bridge(&a, false, &b, true, &plane, &transverse, 4.0e-6)
-                .is_none()
+            corrected_curved_fragment_bridge(
+                &a,
+                false,
+                &b,
+                true,
+                &plane,
+                &transverse,
+                BooleanTolerance::new(1.0e-6)
+            )
+            .is_none()
         );
     }
 
@@ -1175,8 +1288,13 @@ mod tests {
                 })
                 .collect(),
         );
-        let recovered = build_intersection_curve(Plane::xy(), Plane::zx(), leader)
-            .expect("transverse planes share an exact line");
+        let recovered = build_intersection_curve(
+            Plane::xy(),
+            Plane::zx(),
+            leader,
+            BooleanTolerance::new(1.0e-6),
+        )
+        .expect("transverse planes share an exact line");
         assert_eq!(recovered.leader().len(), 101);
         for (i, point) in recovered.leader().iter().enumerate() {
             assert!((point.x - (-0.5 + i as f64 / 100.0)).abs() < 1.0e-6);
@@ -1208,6 +1326,7 @@ mod tests {
             &Plane::zx(),
             &zx_mesh(-1.0, 2.0),
             tolerance,
+            tolerance,
         );
         assert_eq!(stitched.len(), 1);
         assert_eq!(stitched[0].front(), Point3::new(-0.5, 0.0, 0.0));
@@ -1231,6 +1350,7 @@ mod tests {
             &disconnected_xy_mesh(gap),
             &Plane::zx(),
             &zx_mesh(-1.0, 2.0),
+            tolerance,
             tolerance,
         );
         assert_eq!(stitched.len(), 2);

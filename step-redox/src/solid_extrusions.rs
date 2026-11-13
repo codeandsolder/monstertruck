@@ -13,14 +13,15 @@ use crate::math3::{
 pub use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use crate::step_graph::{build_index, entity_id, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::TAU;
 
-const GEOM_TOL_MM: f64 = 1.0e-7;
-const DIR_TOL: f64 = 1.0e-10;
-const ANGLE_TOL_RAD: f64 = 1.0e-10;
+const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
+const ANGLE_TOL_RAD: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_extrusion_angle_rad;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecoveredSolidExtrusion {
@@ -1984,19 +1985,17 @@ fn bspline_control_residual(
 fn bspline_parameterization_matches(first: &BSplineSupport, second: &BSplineSupport) -> bool {
     if first.degree != second.degree
         || first.knots.len() != second.knots.len()
-        || first
-            .knots
-            .iter()
-            .zip(&second.knots)
-            .any(|(a, b)| (a - b).abs() > 1.0e-12)
+        || first.knots.iter().zip(&second.knots).any(|(a, b)| {
+            (a - b).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_knot_residual
+        })
     {
         return false;
     }
     match (&first.weights, &second.weights) {
         (None, None) => true,
-        (Some(a), Some(b)) if a.len() == b.len() => {
-            a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 1.0e-12)
-        }
+        (Some(a), Some(b)) if a.len() == b.len() => a.iter().zip(b).all(|(a, b)| {
+            (a - b).abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_knot_residual
+        }),
         _ => false,
     }
 }
@@ -2400,10 +2399,10 @@ fn is_bezier_support(spline: &BSplineSupport) -> bool {
     }
     spline.knots[..order]
         .iter()
-        .all(|knot| knot.abs() <= 1.0e-12)
-        && spline.knots[order..]
-            .iter()
-            .all(|knot| (*knot - 1.0).abs() <= 1.0e-12)
+        .all(|knot| knot.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_knot_residual)
+        && spline.knots[order..].iter().all(|knot| {
+            (*knot - 1.0).abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_knot_residual
+        })
 }
 
 fn simplify_profile_curves(mut curves: Vec<RecoveredProfileCurve>) -> Vec<RecoveredProfileCurve> {
@@ -2634,7 +2633,7 @@ fn project2(point: [f64; 3], origin: [f64; 3], x_axis: [f64; 3], y_axis: [f64; 3
     let relative = sub(point, origin);
     let mut result = [dot(relative, x_axis), dot(relative, y_axis)];
     for value in &mut result {
-        if value.abs() <= 1.0e-14 {
+        if value.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_small_weight {
             *value = 0.0;
         }
     }

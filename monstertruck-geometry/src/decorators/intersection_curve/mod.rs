@@ -80,7 +80,12 @@ where
     };
     let (x, y) = hint0.or_else(|| surface0.search_nearest_parameter(plane_point, hint0, trials))?;
     let (z, w) = hint1.or_else(|| surface1.search_nearest_parameter(plane_point, hint1, trials))?;
-    let res = newton::solve(function, Vector4 { x, y, z, w }, trials);
+    let res = newton::solve(
+        function,
+        Vector4 { x, y, z, w },
+        trials,
+        DEFAULT_NUMERICAL_TOLERANCES.newton_intersection_parameter_step,
+    );
     let Ok(Vector4 { x, y, z, w }) = res else {
         let pt0 = surface0.evaluate(x, y);
         let pt1 = surface1.evaluate(z, w);
@@ -309,8 +314,13 @@ where
         };
         let (x, y) = hint0.or_else(|| surface0.search_nearest_parameter(point, hint0, trials))?;
         let (z, w) = hint1.or_else(|| surface1.search_nearest_parameter(point, hint1, trials))?;
-        let Vector4 { x, y, z, w } =
-            newton::solve(function, Vector4 { x, y, z, w }, trials).ok()?;
+        let Vector4 { x, y, z, w } = newton::solve(
+            function,
+            Vector4 { x, y, z, w },
+            trials,
+            DEFAULT_NUMERICAL_TOLERANCES.newton_intersection_parameter_step,
+        )
+        .ok()?;
         let point = surface0.evaluate(x, y).midpoint(surface1.evaluate(z, w));
         Some((point, Point2::new(x, y), Point2::new(z, w)))
     }

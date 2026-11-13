@@ -1,3 +1,4 @@
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use newton::Jacobian;
 
 use super::{
@@ -350,7 +351,12 @@ where
     S: ParametricSurface<Point = P, Vector = P::Diff>,
 {
     let function = move |param: P::Diff| SearchNearestParameterVector::subs(surface, point, param);
-    let res = newton::solve(function, P::Diff::from_param(hint), trials);
+    let res = newton::solve(
+        function,
+        P::Diff::from_param(hint),
+        trials,
+        DEFAULT_NUMERICAL_TOLERANCES.newton_surface_parameter_step,
+    );
     res.ok().map(P::Diff::into_param)
 }
 
@@ -418,7 +424,12 @@ where
     S: ParametricSurface<Point = P, Vector = P::Diff>,
 {
     let function = move |param: Vector2| SearchParameterVector::subs(surface, point, param);
-    let res = newton::solve(function, hint.into(), trials);
+    let res = newton::solve(
+        function,
+        hint.into(),
+        trials,
+        DEFAULT_NUMERICAL_TOLERANCES.newton_surface_parameter_step,
+    );
     res.ok().and_then(|Vector2 { x: u, y: v }| {
         if surface.evaluate(u, v).near(&point) {
             Some((u, v))
@@ -449,7 +460,13 @@ where
         ),
     };
     let hint = Vector3::new(hint0.0, hint0.1, hint1);
-    let Vector3 { x, y, z } = newton::solve(function, hint, trials).ok()?;
+    let Vector3 { x, y, z } = newton::solve(
+        function,
+        hint,
+        trials,
+        DEFAULT_NUMERICAL_TOLERANCES.newton_surface_curve_parameter_step,
+    )
+    .ok()?;
     if surface.evaluate(x, y).near(&curve.evaluate(z)) {
         Some(((x, y), z))
     } else {

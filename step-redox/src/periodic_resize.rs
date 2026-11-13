@@ -2,6 +2,7 @@ use crate::math3::normalize as normalize3;
 use crate::step_entities::{entity_ref, entity_ref_list, number as numeric_value};
 use crate::step_graph::{ReferenceGraph, entity_id, simple_record, visit_entity_refs};
 use anyhow::{Result, anyhow, bail};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::{HashMap, HashSet};
 
@@ -41,7 +42,7 @@ fn insert_stretch_edge(
     Ok(())
 }
 
-const COORD_TOL_MM: f64 = 1.0e-7;
+const COORD_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.periodic_resize_mm;
 
 fn collect_style_container_parents(
     entities: &[EntityInstance],

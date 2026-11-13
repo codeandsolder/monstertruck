@@ -172,26 +172,30 @@ where
 fn convert_alt_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell: &AltCurveShell<C, S>,
     operation: &'static str,
+    tolerances: BooleanTolerance,
 ) -> ClassicResult<Shell<Point3, C, S>> {
-    altshell_to_shell(shell).ok_or(ShapeOpsError::AltShellConversionFailed { operation })
+    altshell_to_shell(shell, tolerances)
+        .ok_or(ShapeOpsError::AltShellConversionFailed { operation })
 }
 
 fn convert_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
     operation: &'static str,
+    tolerances: BooleanTolerance,
 ) -> ClassicResult<Shell<Point3, C, S>> {
     let shell = faces_classification::materialize_regions(regions)
         .ok_or(ShapeOpsError::RegionMaterializationFailed { operation })?;
-    convert_alt_shell(&shell, operation)
+    convert_alt_shell(&shell, operation, tolerances)
 }
 
 fn weld_and_convert<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
     operation: &'static str,
+    tolerances: BooleanTolerance,
 ) -> ClassicResult<Shell<Point3, C, S>> {
-    let shell = weld_coincident_regions(regions)
+    let shell = weld_coincident_regions(regions, tolerances)
         .ok_or(ShapeOpsError::RegionMaterializationFailed { operation })?;
-    convert_alt_shell(&shell, operation)
+    convert_alt_shell(&shell, operation, tolerances)
 }
 
 fn shell_is_valid<P, C, S>(shell: &Shell<P, C, S>) -> bool {
@@ -238,7 +242,8 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     .ok_or(ShapeOpsError::RegionMaterializationFailed {
         operation: "difference_planar_overlay",
     })?;
-    let mut label_shell = weld_and_convert(&label_regions, "difference")?;
+    let mut label_shell =
+        weld_and_convert(&label_regions, "difference", BooleanTolerance::new(tol))?;
     let _ = orient_regular_shell(&mut label_shell);
     if label_shell
         .connected_components()
@@ -273,7 +278,8 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     .ok_or(ShapeOpsError::RegionMaterializationFailed {
         operation: "difference_planar_overlay",
     })?;
-    let fallback_shell = weld_and_convert(&fallback_regions, "difference")?;
+    let fallback_shell =
+        weld_and_convert(&fallback_regions, "difference", BooleanTolerance::new(tol))?;
     Ok([fallback_shell, Shell::default()])
 }
 
@@ -301,7 +307,10 @@ fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     and0.append(&mut and1);
     or0.append(&mut or1);
-    Ok([convert_regions(&and0, "and")?, convert_regions(&or0, "or")?])
+    Ok([
+        convert_regions(&and0, "and", BooleanTolerance::new(tol))?,
+        convert_regions(&or0, "or", BooleanTolerance::new(tol))?,
+    ])
 }
 
 fn partition_evidence<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -426,8 +435,8 @@ fn classify_complete_label_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     and0.append(&mut and1);
     or0.append(&mut or1);
-    let label_and_shell = weld_and_convert(&and0, "and")?;
-    let label_or_shell = weld_and_convert(&or0, "or")?;
+    let label_and_shell = weld_and_convert(&and0, "and", BooleanTolerance::new(tol))?;
+    let label_or_shell = weld_and_convert(&or0, "or", BooleanTolerance::new(tol))?;
     if !label_or_shell.is_empty()
         && shell_is_valid(&label_and_shell)
         && shell_is_valid(&label_or_shell)
@@ -525,8 +534,8 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     and0.append(&mut and1);
     or0.append(&mut or1);
     Ok([
-        weld_and_convert(&and0, "and")?,
-        weld_and_convert(&or0, "or")?,
+        weld_and_convert(&and0, "and", BooleanTolerance::new(tol))?,
+        weld_and_convert(&or0, "or", BooleanTolerance::new(tol))?,
     ])
 }
 

@@ -8,12 +8,13 @@ use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
     visit_entity_refs,
 };
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-const POINT_Q: f64 = 1.0e-8;
-const NORMAL_Q: f64 = 1.0e-10;
-const OPPOSITE_DOT: f64 = -1.0 + 1.0e-8;
+const POINT_Q: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.partition_point_quant_mm;
+const NORMAL_Q: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.partition_normal_quant;
+const OPPOSITE_DOT: f64 = -1.0 + DEFAULT_STEP_RECOVERY_TOLERANCES.source_axis_direction_cosine;
 
 #[derive(Debug, Default, Clone)]
 pub struct PartitionRecoveryStats {
@@ -723,7 +724,10 @@ fn edge_key(
             let (center, axis) = axis_location_and_axis(placement, entities, index)?;
             Some(EdgeKey::Circle {
                 center: point_key(center)?,
-                axis: direction_key(canonical_unit_direction(axis, 1.0e-15)?)?,
+                axis: direction_key(canonical_unit_direction(
+                    axis,
+                    DEFAULT_STEP_RECOVERY_TOLERANCES.source_brep_direction,
+                )?)?,
                 radius: quantize(radius, POINT_Q)?,
                 ends,
             })
@@ -974,7 +978,9 @@ fn quantize(v: f64, q: f64) -> Option<i64> {
     Some(x as i64)
 }
 
-fn normalize(v: [f64; 3]) -> Option<[f64; 3]> { normalize3(v, 1.0e-15) }
+fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
+    normalize3(v, DEFAULT_STEP_RECOVERY_TOLERANCES.source_brep_direction)
+}
 
 #[cfg(test)]
 mod tests {

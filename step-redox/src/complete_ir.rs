@@ -27,6 +27,7 @@ use crate::planar_features::{
 };
 use crate::solid_revolutions::SolidSurfaceSignature;
 use anyhow::{Context, Result, bail};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Exchange};
 use serde::Serialize;
 use std::borrow::Cow;
@@ -1183,7 +1184,7 @@ fn recover_complete_ir_build_state(
             crate::patterns::detect_instance_patterns_with_index(
                 recovery_section.entities,
                 &recovery_section.index,
-                1.0e-7,
+                DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_geometry_mm,
                 4,
             )
             .into_iter()
@@ -1888,7 +1889,9 @@ fn regularize_boundary_tool_for_boolean(
             z_axis[1].mul_add(z_axis[1], z_axis[0] * z_axis[0]),
         )
         .sqrt();
-    if !z_norm.is_finite() || (z_norm - 1.0).abs() > 1.0e-9 {
+    if !z_norm.is_finite()
+        || (z_norm - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_axis_unit
+    {
         bail!("boundary-feature extrusion tool axis is not unit length");
     }
 
@@ -1898,7 +1901,8 @@ fn regularize_boundary_tool_for_boolean(
         .values()
         .filter_map(|provenance| provenance.max_residual_mm)
         .fold(0.0_f64, f64::max);
-    let margin_mm = (10.0 * max_residual).max(1.0e-5);
+    let margin_mm =
+        (10.0 * max_residual).max(DEFAULT_STEP_RECOVERY_TOLERANCES.periodic_geometry_mm);
     let mut extend_negative = false;
     let mut extend_positive = false;
     for outward in host_outwards {
@@ -1915,7 +1919,9 @@ fn regularize_boundary_tool_for_boolean(
             z_axis[2],
             outward[1].mul_add(z_axis[1], outward[0] * z_axis[0]),
         ) / outward_norm;
-        if (alignment.abs() - 1.0).abs() > 1.0e-8 {
+        if (alignment.abs() - 1.0).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_axis_direction_cosine
+        {
             bail!("boundary-feature interface is not an extrusion end cap");
         }
         match (polarity, alignment > 0.0) {
@@ -1939,8 +1945,8 @@ fn regularize_boundary_tool_for_boolean(
     let CadNode::Extrude { vector_mm, .. } = &mut tool.model.nodes[body_index] else {
         bail!("boundary-feature tool transform does not wrap an extrusion");
     };
-    if vector_mm[0].abs() > 1.0e-12
-        || vector_mm[1].abs() > 1.0e-12
+    if vector_mm[0].abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_transform
+        || vector_mm[1].abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_transform
         || !vector_mm[2].is_finite()
         || vector_mm[2] <= 0.0
     {
@@ -1998,7 +2004,10 @@ fn compose_boundary_feature_fragment(
                 member.center_mm,
                 quarter,
             );
-            let root = if quarter == 0 && translation.iter().all(|value| value.abs() <= 1.0e-12) {
+            let root = if quarter == 0
+                && translation.iter().all(|value| {
+                    value.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_transform
+                }) {
                 tool_root
             } else {
                 let transform = model.add_node(CadNode::Transform {

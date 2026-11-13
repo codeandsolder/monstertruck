@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -655,7 +656,9 @@ impl EdgeSelector {
                     .zip(end_mm)
                     .map(|(start, end)| (end - start) * (end - start))
                     .sum::<f64>();
-                if squared_length <= 1.0e-24 {
+                if squared_length
+                    <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_zero_norm_squared
+                {
                     bail!("edge selector segment must have nonzero length");
                 }
             }
@@ -676,7 +679,9 @@ impl EdgeSelector {
                     bail!("edge selector circle radius must be positive");
                 }
                 let squared_normal = normal.iter().map(|value| value * value).sum::<f64>();
-                if squared_normal <= 1.0e-24 {
+                if squared_normal
+                    <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_zero_norm_squared
+                {
                     bail!("edge selector circle normal must be nonzero");
                 }
             }
@@ -806,7 +811,7 @@ impl FusedPeriodicChain {
                 self.axis[1].mul_add(self.axis[1], self.axis[0] * self.axis[0]),
             )
             .sqrt();
-        if (axis_norm - 1.0).abs() > 1.0e-9 {
+        if (axis_norm - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_axis_unit {
             bail!("periodic-chain axis must be unit length");
         }
         if self.interior_site_face_count == 0 {
