@@ -78,6 +78,8 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `mesh_singularity_distance` | `1.0e-3` | Spatial distance used by tessellation to rescue samples at analytic poles. |
 | `healing_polygon_normalized_geometric` | `1.0e-6` | Geometric area, cross, and point-to-segment predicates only after independently normalizing U/V chart spans to a unit square. |
 | `healing_polygon_intersection_parameter` | `1.0e-6` | Dimensionless strict-intersection endpoint exclusion in normalized polygon line fraction coordinates. |
+| `healing_seam_axis_relative` | `1.0e-6` | Native parameter span-relative nonperiodic-axis constancy before selecting a healing seam divisor. |
+| `healing_seam_axis_roundoff_ulps` | `8.0` | Representational coordinate ulps for that nonperiodic seam-axis comparison. |
 | `healing_boundary_uv_relative` | `1.0e-6` | Per-native-axis span-relative closed-loop endpoint discrepancy in healing's 2D chart. |
 | `healing_boundary_uv_roundoff_ulps` | `8.0` | Representable-coordinate ulps for UV loop endpoint closure, independent of 3D distance. |
 | `normal_probe_step` | `1.0e-4` | Parameter-space probe step used to recover a normal at a singular NURBS point. |
@@ -1356,3 +1358,85 @@ The remaining `split_closed_faces` sites using
 `p.x.near(q.x)` or `line.distance_to_point_as_segment(...).so_small()`
 still conflate native UV values with spatial
 `KERNEL_EPSILON`, outside this polygon-specific pass.
+
+
+## Open-wire seam detection: native-axis scale, physical corroboration and unrestricted period unwrap (2026-11-13)
+
+The `non_closed_wires_in_param_divisor` stage
+previously tested endpoints with
+`p.x.near(&q.x)` or `p.y.near(&q.y)`.
+Those tests use the global 1e-6 **world-distance**
+tolerance on arbitrary native UV parameters,
+so charts with U span 1e-9 seemed permanently
+constant while charts with U span 1e9
+looked unrelated despite identical physical geometry.
+
+`same_nonperiodic_section(surface, poly_wire, first, last, axis, tol)`
+now checks both **native axis constancy** and
+**model-space corroboration**:
+- The whole sampled wire provides the finite
+  min/max of the candidate nonperiodic UV
+  axis; its endpoint difference must not
+  exceed `span * healing_seam_axis_relative
+  + healing_seam_axis_roundoff_ulps *
+  EPSILON * max(|min|,|max|)`. This is a
+  native-UV comparison that changes with
+  reparameterization and has its own
+  central policy fields.
+- The surface is evaluated at the first
+  point and a synthetic second point that
+  keeps the periodic coordinate fixed
+  while taking the other endpoint's
+  nonperiodic coordinate. Their finite
+  squared **3D distance** must be at most
+  the operation's requested `tol²`.
+  This independently refuses apparent
+  UV closeness on a carrier whose
+  physical length-scale is enormous.
+
+The method supports either nonperiodic U /
+periodic V or nonperiodic V / periodic U.
+Invalid axis indexes, nonfinite coordinates,
+invalid spatial tolerance or missing
+sampled wire ranges fail as an unavailable
+seam, without indexing an empty polyline.
+
+The same code previously searched
+`-2..=2` native periods to find an
+endpoint's nearest periodic representative.
+`poly_project_to_uv` used the same
+five-option restriction for continuity.
+`get_mindiff(value, previous, period)` now
+solves the nearest integer period shift
+directly as `turns =
+round((previous-value)/positive_period)`
+and returns `turns*period + value` using
+fused multiply-add (in native parameter
+units); nonfinite/zero/negative periods
+refuse. This preserves arbitrary turn
+counts and avoids returning an unrelated
+branch when a projection differs by more
+than two revolutions. The nearest-to-seam
+callers now propagate failure as
+`Option` instead of inventing an
+infinite distance for an invalid input.
+
+Regressions cover U=1e-9/V=1e9,
+the reverse 1e9/1e-9 and 1/1 charts
+with physically identical 3D planar
+surfaces, near-constant U and V, a
+near-UV-but-far-in-3D carrier stretched
+to 1e9 world units, invalid/missing
+samples, and nearest period matching
+from ±10001.25 turns on native periods
+1e-9, 1 and 1e9.
+
+This patch does **not** change
+`periodic_iterator` still enumerating
+fixed ±2 copies when locating arbitrary
+vertices on a divisor, nor the separate
+`boundary_into_domain` singular
+endpoint closure check. They require
+independent tests and actual topology
+constraints; do not infer they have
+been fixed.
