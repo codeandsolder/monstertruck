@@ -170,6 +170,8 @@ pub struct NumericalTolerances {
     pub meshing_debug_uv_edge_tolerance: f64,
     /// Domain-relative STEP knot-boundary clamping tolerance in native UV coordinates.
     pub step_trim_knot_parameter_relative: f64,
+    /// Dimensionless floating-point ulps allowed for STEP torus asin domain rounding.
+    pub step_torus_inverse_sine_roundoff_ulps: f64,
     /// Native STEP knot-boundary roundoff slack in ulps of the parameter magnitude.
     pub step_trim_knot_parameter_roundoff_ulps: f64,
     /// Native UV-coordinate threshold for STEP trim seam probe.
@@ -287,6 +289,7 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     boolean_planar_tangent_cosine_slack: 1.0e-8,
     meshing_debug_uv_edge_tolerance: 1.0e-9,
     step_trim_knot_parameter_relative: 1.0e-6,
+    step_torus_inverse_sine_roundoff_ulps: 128.0,
     step_trim_knot_parameter_roundoff_ulps: 8.0,
     step_uv_clamp_probe: 1.0e-3,
     step_trim_residual_mm: 1.0e-8,
