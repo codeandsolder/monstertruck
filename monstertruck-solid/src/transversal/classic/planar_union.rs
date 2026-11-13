@@ -921,11 +921,11 @@ fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // Canonicalize their exact geometric edge identities before computing
     // occupancy; otherwise two independently encoded copies would be emitted
     // as two exterior boundaries rather than one filled face.
-    let canonical_regions = node_selected_regions(source, &[])?;
+    let canonical_regions = node_selected_regions(source, &[], BooleanTolerance::new(tol))?;
     let initial = project_source(&canonical_regions, tol, false)?;
     let arrangement = if needs_exact_noding(&initial.edges, initial.span) {
         let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical_regions, &points)?;
+        let noded = node_selected_regions(&canonical_regions, &points, BooleanTolerance::new(tol))?;
         project_source(&noded, tol, false)?
     } else {
         initial
@@ -1149,11 +1149,11 @@ fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
     let joined = positive.iter().chain(cutter).cloned().collect::<Vec<_>>();
-    let canonical = node_selected_regions(&joined, &[])?;
+    let canonical = node_selected_regions(&joined, &[], BooleanTolerance::new(tol))?;
     let initial = project_source(&canonical, tol, true)?;
     let arrangement = if needs_exact_noding(&initial.edges, initial.span) {
         let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical, &points)?;
+        let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol))?;
         project_source(&noded, tol, true)?
     } else {
         initial

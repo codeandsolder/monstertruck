@@ -365,10 +365,10 @@ where
         {
             return None;
         }
-        if let Some(previous) = samples.last() {
-            if (*previous - q).dot(direction) >= 0.0 {
-                return None;
-            }
+        if let Some(previous) = samples.last()
+            && (*previous - q).dot(direction) >= 0.0
+        {
+            return None;
         }
         hint0 = (uv0.x, uv0.y);
         hint1 = (uv1.x, uv1.y);

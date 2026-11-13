@@ -210,7 +210,7 @@ impl ParameterKind {
         C: BoundedCurve,
         C::Point: MetricSpace<Metric = f64> + Clone, {
         let (t0, t1) = curve.range_tuple();
-        if !t.is_finite() || !t0.is_finite() || !t1.is_finite() || !(t0 < t1) {
+        if !t.is_finite() || !t0.is_finite() || !t1.is_finite() || t0 >= t1 {
             return None;
         }
         // An inverse solver can return a parameter just outside an endpoint.
@@ -1240,11 +1240,9 @@ impl<C> LoopsStore<Point3, C> {
     fn add_geom_vertex<S>(
         &mut self,
         loops_index: usize,
-        boundary_hint: Option<(usize, usize)>,
-        sampled_on_boundary_vertex: bool,
+        request: BoundarySearchRequest,
         vertex: &Vertex<Point3>,
         another_surface: &S,
-        nearest_tolerance: f64,
         tolerances: BooleanTolerance,
         emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
     ) -> Option<()>
@@ -1257,6 +1255,11 @@ impl<C> LoopsStore<Point3, C> {
             + SearchParameter<SurfaceParameter, Point = Point3>
             + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     {
+        let BoundarySearchRequest {
+            hint: boundary_hint,
+            sampled_on_boundary_vertex,
+            nearest_tolerance,
+        } = request;
         // Polygon and exact loop stores can diverge after earlier endpoint
         // canonicalization. A polygon boundary index is therefore only a
         // candidate hint: accept it when the corresponding exact edge still
@@ -1279,21 +1282,22 @@ impl<C> LoopsStore<Point3, C> {
                 tolerances,
             )
         });
-        if resolved.is_none() && sampled_on_boundary_vertex {
-            if let Some(vertices) = self.supported_boundary_vertex(
+        if resolved.is_none()
+            && sampled_on_boundary_vertex
+            && let Some(vertices) = self.supported_boundary_vertex(
                 loops_index,
                 vertex.point(),
                 nearest_tolerance,
                 tolerances,
                 another_surface,
-            ) {
-                let canonical = vertices[0].point();
-                vertex.set_point(canonical);
-                for old in vertices {
-                    self.change_vertex(&old, vertex, emap);
-                }
-                return Some(());
+            )
+        {
+            let canonical = vertices[0].point();
+            vertex.set_point(canonical);
+            for old in vertices {
+                self.change_vertex(&old, vertex, emap);
             }
+            return Some(());
         }
         let (wire_index, edge_index, kind, projected) = resolved?;
         // Nearest-curve search is only discovery. Before coalescing an
@@ -1490,6 +1494,14 @@ struct BranchContext<'a, C, S> {
     reuse_coincident: bool,
 }
 
+/// Candidate boundary-search evidence and its independent mesh radius.
+#[derive(Clone, Copy)]
+struct BoundarySearchRequest {
+    hint: Option<(usize, usize)>,
+    sampled_on_boundary_vertex: bool,
+    nearest_tolerance: f64,
+}
+
 #[derive(Clone, Copy)]
 struct BoundaryEndpoint<'a, S> {
     face_index: usize,
@@ -1533,11 +1545,16 @@ impl<C> OperandLoopStores<C> {
         };
         self.geom.add_geom_vertex(
             face_index,
-            Some((wire_index, edge_index)),
-            matches!(polygon_kind, ParameterKind::Front | ParameterKind::Back),
+            BoundarySearchRequest {
+                hint: Some((wire_index, edge_index)),
+                sampled_on_boundary_vertex: matches!(
+                    polygon_kind,
+                    ParameterKind::Front | ParameterKind::Back
+                ),
+                nearest_tolerance,
+            },
             geom_vertex,
             other_surface,
-            nearest_tolerance,
             tolerances,
             geom_edge_map,
         )?;
@@ -2242,11 +2259,13 @@ mod projection_tests {
                 store
                     .add_geom_vertex(
                         0,
-                        hint,
-                        false,
+                        BoundarySearchRequest {
+                            hint,
+                            sampled_on_boundary_vertex: false,
+                            nearest_tolerance: 1.0e-3,
+                        },
                         &seed,
                         &Plane::xy(),
-                        1.0e-3,
                         BooleanTolerance::new(1.0e-8),
                         &mut edge_map,
                     )
@@ -2282,11 +2301,13 @@ mod projection_tests {
             store
                 .add_geom_vertex(
                     0,
-                    Some((0, 0)),
-                    false,
+                    BoundarySearchRequest {
+                        hint: Some((0, 0)),
+                        sampled_on_boundary_vertex: false,
+                        nearest_tolerance: 1.0e-3,
+                    },
                     &seed,
                     &Plane::xy(),
-                    1.0e-3,
                     BooleanTolerance::new(1.0e-8),
                     &mut edge_map,
                 )
@@ -2312,11 +2333,13 @@ mod projection_tests {
 
         let inserted = store.add_geom_vertex(
             0,
-            None,
-            false,
+            BoundarySearchRequest {
+                hint: None,
+                sampled_on_boundary_vertex: false,
+                nearest_tolerance: 8.0 * KERNEL_EPSILON,
+            },
             &recovered,
             &Plane::xy(),
-            8.0 * KERNEL_EPSILON,
             BooleanTolerance::new(KERNEL_EPSILON),
             &mut emap,
         );

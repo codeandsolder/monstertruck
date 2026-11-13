@@ -502,3 +502,45 @@ ambiguous repeated positions; a proximity-only rule must not pick one side.
 Validation should include long and short line parameterizations, ambiguous
 sub-feature edges, out-of-domain inverse roots, sub-epsilon coincident trim
 proof, full Boolean regression, and actual source-derived STEP reconstruction.
+
+## Spatial index and operation-local Boolean weld (2026-11-13)
+
+The previous classic Boolean weld used global 1e-6 kernel epsilon as
+both its three-dimensional hash cell size and the actual coincidence
+test. It divided world coordinates by this epsilon, then converted the
+result to signed 64-bit cell indices. Values outside the integer range
+silently saturated, and nonfinite values were assigned an arbitrary cell
+instead of signaling malformed input. This was not a sound spatial index.
+
+The new weld context is constructed with the same explicit
+BooleanTolerance as the Boolean operation. Vertex lookup uses a
+deterministically ordered BTreeMap of original floating-point X
+coordinates for candidate search. It then checks full three-dimensional
+Euclidean distance against exactly the requested length; the search
+structure itself does not define geometric equality and does not
+quantize or saturate any coordinate. Nonfinite points reject the weld
+explicitly. This supports arbitrarily large finite model coordinates.
+
+Both source planar noding and final Boolean region welding now receive
+the same operation tolerance, threaded through their actual callers.
+Exact/nearest projection candidates, curve identity checks, split point
+acceptance, and consistency of split analytic curve endpoints likewise
+use operation numerical length instead of unrelated global epsilon.
+The explicitly named boolean_weld_projection_factor, currently 2,
+pads only the spatial candidate bounding box and is not an identity
+or model-edit allowance. The old parameter-span cutoff at f64::EPSILON
+is replaced by finite ascending-domain validation, because raw
+curve-parameter deltas have no fixed spatial meaning.
+
+Tests check preserving separate vertices 5e-7 apart at a requested
+1e-8 while allowing merge at an explicit 1e-6, near-coincidence at
+5e-9, curve coincidence at distinct requests, finite X coordinates
+whose prior hash indices would saturate i64, and explicit rejection of
+nonfinite coordinates. Previous regression coverage of exact line
+splits and planar union is preserved.
+
+Performance: BTreeMap candidate lookup is logarithmic in distinct X
+coordinates plus the number of candidates in the requested spatial
+interval. There is no extra fixed numerical grid tolerance to tune.
+Any large-source performance effect must be measured before claiming
+an improvement or regression.
