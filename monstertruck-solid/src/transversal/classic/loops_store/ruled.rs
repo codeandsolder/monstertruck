@@ -10,11 +10,40 @@ use monstertruck_core::{
     cgmath64::{EuclideanSpace, InnerSpace, Point3, Vector3},
     tolerance::DEFAULT_NUMERICAL_TOLERANCES,
 };
-use monstertruck_geometry::prelude::{BsplineSurface, Vector4};
+use monstertruck_geometry::prelude::{BsplineSurface, KnotVector, Vector4};
 
 fn project(point: Vector4) -> Option<Point3> {
-    (point.w.is_finite() && point.w > 0.0)
-        .then(|| Point3::new(point.x / point.w, point.y / point.w, point.z / point.w))
+    if !point.w.is_finite() || point.w <= 0.0 {
+        return None;
+    }
+    let projected = Point3::new(point.x / point.w, point.y / point.w, point.z / point.w);
+    (projected.x.is_finite() && projected.y.is_finite() && projected.z.is_finite())
+        .then_some(projected)
+}
+
+/// Compare the native knot positions in their respective affine parameter
+/// domains. Equal normalized profiles describe the same spline even when a
+/// STEP producer uses different scale and origin for its U/V parameters.
+fn normalized_ruled_knots_match(a: &KnotVector, b: &KnotVector, relative: f64) -> bool {
+    let (Some(&a0), Some(&a1), Some(&b0), Some(&b1)) = (a.first(), a.last(), b.first(), b.last())
+    else {
+        return false;
+    };
+    let span_a = a1 - a0;
+    let span_b = b1 - b0;
+    if a.len() != b.len()
+        || !span_a.is_finite()
+        || !span_b.is_finite()
+        || span_a <= 0.0
+        || span_b <= 0.0
+    {
+        return false;
+    }
+    a.iter().zip(b.iter()).all(|(&ka, &kb)| {
+        let na = (ka - a0) / span_a;
+        let nb = (kb - b0) / span_b;
+        na.is_finite() && nb.is_finite() && (na - nb).abs() <= relative
+    })
 }
 
 /// Certify a positive-area shared carrier between two complete rational
@@ -25,7 +54,11 @@ pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
     a: &BsplineSurface<Vector4>,
     b: &BsplineSurface<Vector4>,
 ) -> bool {
-    let epsilon = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity;
+    let policy = DEFAULT_NUMERICAL_TOLERANCES;
+    let spatial_tol = policy.boolean_ruled_structural_length;
+    let direction_tol = policy.boolean_ruled_direction;
+    let weight_tol = policy.boolean_ruled_weight_relative;
+    let knot_tol = policy.boolean_ruled_knot_relative;
     let (u_degree_a, v_degree_a) = a.degrees();
     let (u_degree_b, v_degree_b) = b.degrees();
     if u_degree_a != u_degree_b || v_degree_a != 1 || v_degree_b != 1 {
@@ -42,17 +75,14 @@ pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
     }
     let (u_a, v_a) = a.knot_vectors();
     let (u_b, v_b) = b.knot_vectors();
-    if u_a.len() != u_b.len()
+    if !normalized_ruled_knots_match(u_a, u_b, knot_tol)
         || v_a.len() != 4
         || v_b.len() != 4
-        || u_a
-            .iter()
-            .zip(u_b.iter())
-            .any(|(a, b)| (a - b).abs() > epsilon)
-        || (v_a[0] - v_a[1]).abs() > epsilon
-        || (v_a[2] - v_a[3]).abs() > epsilon
-        || (v_b[0] - v_b[1]).abs() > epsilon
-        || (v_b[2] - v_b[3]).abs() > epsilon
+        || !normalized_ruled_knots_match(v_a, v_b, knot_tol)
+        || !((v_a[0] - v_a[1]).abs() / v_a.range_length() <= knot_tol
+            && (v_a[2] - v_a[3]).abs() / v_a.range_length() <= knot_tol
+            && (v_b[0] - v_b[1]).abs() / v_b.range_length() <= knot_tol
+            && (v_b[2] - v_b[3]).abs() / v_b.range_length() <= knot_tol)
     {
         return false;
     }
@@ -71,12 +101,22 @@ pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
     };
     let sweep_a = end_a - origin_a;
     let sweep_b = end_b - origin_b;
-    if sweep_a.magnitude() <= epsilon || sweep_b.magnitude() <= epsilon {
+    let length_a = sweep_a.magnitude();
+    let length_b = sweep_b.magnitude();
+    if !length_a.is_finite()
+        || !length_b.is_finite()
+        || length_a <= spatial_tol
+        || length_b <= spatial_tol
+    {
         return false;
     }
     let axis = sweep_a.normalize();
-    if sweep_a.cross(sweep_b).magnitude() > epsilon
-        || (origin_b - origin_a).cross(axis).magnitude() > epsilon
+    // Both the angle and its model-space displacement along the complete
+    // sweep must agree. A tiny angle over a long sweep can still separate
+    // supporting carriers by much more than the permitted spatial residual.
+    if axis.cross(sweep_b / length_b).magnitude() > direction_tol
+        || axis.cross(sweep_b).magnitude() > spatial_tol
+        || (origin_b - origin_a).cross(axis).magnitude() > spatial_tol
     {
         return false;
     }
@@ -84,6 +124,9 @@ pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
     let mut profile_is_nondegenerate = false;
     let weight_a0 = net_a[0][0].w;
     let weight_b0 = net_b[0][0].w;
+    if !weight_a0.is_finite() || !weight_b0.is_finite() || weight_a0 <= 0.0 || weight_b0 <= 0.0 {
+        return false;
+    }
     for (row_a, row_b) in net_a.iter().zip(net_b) {
         let Some(aa) = project(row_a[0]) else {
             return false;
@@ -97,23 +140,23 @@ pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
         let Some(bb) = project(row_b[1]) else {
             return false;
         };
-        if (ab - aa - sweep_a).magnitude() > epsilon
-            || (bb - ba - sweep_b).magnitude() > epsilon
-            || (ba - aa - offset).magnitude() > epsilon
+        if (ab - aa - sweep_a).magnitude() > spatial_tol
+            || (bb - ba - sweep_b).magnitude() > spatial_tol
+            || (ba - aa - offset).magnitude() > spatial_tol
         {
             return false;
         }
         for (p, q) in row_a.iter().zip(row_b.iter()) {
-            if (p.w / weight_a0 - q.w / weight_b0).abs() > epsilon {
+            if (p.w / weight_a0 - q.w / weight_b0).abs() > weight_tol {
                 return false;
             }
         }
-        if (row_a[0].w - row_a[1].w).abs() > epsilon * weight_a0
-            || (row_b[0].w - row_b[1].w).abs() > epsilon * weight_b0
+        if (row_a[0].w - row_a[1].w).abs() > weight_tol * row_a[0].w
+            || (row_b[0].w - row_b[1].w).abs() > weight_tol * row_b[0].w
         {
             return false;
         }
-        profile_is_nondegenerate |= (aa - origin_a).cross(axis).magnitude() > epsilon;
+        profile_is_nondegenerate |= (aa - origin_a).cross(axis).magnitude() > spatial_tol;
     }
     if !profile_is_nondegenerate {
         return false;
@@ -126,7 +169,7 @@ pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
         offset_on_axis.min(offset_on_axis + sweep_b_on_axis),
         offset_on_axis.max(offset_on_axis + sweep_b_on_axis),
     );
-    0.0f64.min(sweep_a.magnitude()).max(b0) + epsilon < sweep_a.magnitude().max(0.0).min(b1)
+    0.0f64.max(b0) + spatial_tol < length_a.min(b1)
 }
 
 /// Algebraically certify a circular-cylinder carrier represented by a
@@ -492,6 +535,56 @@ mod tests {
             &extruded((1.0, 0.5), 0.0, false, false)
         ));
     }
+    #[test]
+    fn ruled_carrier_preserves_identity_across_affine_knot_domains() {
+        let original = extruded((0.0, 2.0), 0.0, false, false);
+        let mut u = original.knot_vector_u().clone();
+        let mut v = original.knot_vector_v().clone();
+        u.transform(1.0e-7, 1.0e-4);
+        v.transform(300.0, -10.0);
+        let reparameterized =
+            BsplineSurface::new_unchecked((u, v), original.control_points().to_vec());
+        assert!(common_ruled_extrusion_strip(&original, &reparameterized));
+        assert!(common_ruled_extrusion_strip(&reparameterized, &original));
+        let shared = extruded((0.5, 1.0), 0.0, false, false);
+        assert!(common_ruled_extrusion_strip(&shared, &reparameterized));
+    }
+
+    #[test]
+    fn ruled_carrier_rejects_small_angle_if_long_sweep_separates_in_3d() {
+        let source = extruded((0.0, 10_000.0), 0.0, false, false);
+        let tilted = |offset: f64| {
+            let mut net = source.control_points().to_vec();
+            for row in &mut net {
+                row[1].y += offset * row[1].w;
+            }
+            BsplineSurface::new_unchecked(
+                (
+                    source.knot_vector_u().clone(),
+                    source.knot_vector_v().clone(),
+                ),
+                net,
+            )
+        };
+        // Large sweep times small angle must still obey world-space agreement.
+        assert!(common_ruled_extrusion_strip(&source, &tilted(5.0e-11)));
+        assert!(!common_ruled_extrusion_strip(&source, &tilted(5.0e-8)));
+    }
+
+    #[test]
+    fn ruled_profile_knot_comparison_rejects_non_affine_distortion() {
+        let a = KnotVector::from(vec![0.0, 0.0, 0.0, 0.4, 1.0, 1.0, 1.0]);
+        let b = KnotVector::from(vec![4.0, 4.0, 4.0, 4.48, 5.2, 5.2, 5.2]);
+        assert!(normalized_ruled_knots_match(&a, &b, 1.0e-10));
+        let changed = KnotVector::from(vec![4.0, 4.0, 4.0, 4.481, 5.2, 5.2, 5.2]);
+        assert!(!normalized_ruled_knots_match(&a, &changed, 1.0e-10));
+        assert!(!normalized_ruled_knots_match(
+            &KnotVector::from(vec![0.0, 0.0]),
+            &KnotVector::from(vec![1.0, 1.0]),
+            1.0e-10,
+        ));
+    }
+
     #[test]
     fn ruled_carrier_refuses_different_profiles_twist_or_disjoint_spans() {
         let outer = extruded((0.0, 2.0), 0.0, false, false);

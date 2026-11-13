@@ -92,6 +92,10 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `boolean_inverse_search_trials` | `100` | Newton iteration budget in Boolean conversion inverse surface parameter search. |
 | `boolean_uv_loop_area_relative` | `1.0e-6` | Signed polygon area relative to its UV bounding-box area; dimensionless, not a world-space length. |
 | `boolean_uv_boundary_contact_relative` | `1.0e-6` | UV contact distance relative to combined UV bounding extent; dimensionless, not a world-space length. |
+| `boolean_ruled_structural_length` | `1.0e-10` | Model-coordinate structural residual for matched rational ruled extrusions; not a topology-weld allowance. |
+| `boolean_ruled_direction` | `1.0e-10` | Dimensionless maximum sine between ruled sweep axes; also constrained by world-space deviation over complete sweep. |
+| `boolean_ruled_weight_relative` | `1.0e-10` | Relative homogeneous profile control weights and within-row sweep-weight agreement. |
+| `boolean_ruled_knot_relative` | `1.0e-10` | Normalized profile/sweep knot-position agreement under positive affine reparameterization. |
 | `boolean_cylinder_structural_length` | `2.0e-9` | Model-coordinate length for structural rational-cylinder recognition; not Boolean welding tolerance. |
 | `boolean_cylinder_axis_direction` | `2.0e-9` | Dimensionless cross-axis alignment for certified circular-cylinder carriers. |
 | `boolean_cylinder_homogeneous_weight` | `2.0e-9` | Absolute homogeneous weight agreement for linear rational-cylinder sweep rows. |
@@ -689,3 +693,40 @@ editing allowance. All existing near-cylinder refusal regressions
 stay enabled, plus a native-knot-reparameterization regression. As a
 separate check, the source 47-face constructive stage4 replay must
 remain valid, without assuming any stage5 fix.
+
+## Rational common ruled-extrusion identity (2026-11-13)
+
+`classic/loops_store/ruled.rs::common_ruled_extrusion_strip` used one
+`same_domain_similarity` scalar for unrelated measurements: native U/V
+knot distances, world-coordinate sweep and offset lengths, direction
+cross products (including a cross product of **two unnormalized sweep
+vectors**, whose units are model-length squared), dimensionless
+homogeneous weight ratios, and overlap length.
+
+The four separate policy entries above specify their respective
+physical dimensions. Profile and sweep-domain knot vectors are compared
+as `(knot - first)/(last - first)` in their own **positive native
+parameter spans**, rather than testing absolute knot values: equal
+control nets and affine-reparameterized knots describe the same
+B-spline support. A malformed/zero-range/nonfinite knot vector
+cannot certify identity. Linear swept V knots must still have clamped
+end multiplicities, judged relative to the V domain.
+
+Normalized sweep-axis cross products enforce the dimensionless angular
+limit, but a very small angular mismatch over a very long sweep can
+become geometrically large. A separate perpendicular displacement
+bound of `boolean_ruled_structural_length` is therefore checked over
+the entire sweep length, along with origin offsets, row vectors,
+profile control positions, and strictly positive axial overlap.
+Rational weights are positive, finite and compared as dimensionless
+ratios to their respective first control weights; a nonfinite
+Cartesian projected control point is rejected.
+
+New focused tests verify same-support equality despite affine
+rescaling/translation of both U and V native knot domains; reject
+non-affine changes to internal knots; and reject a tiny angle whose
+long-sweep lateral deviation exceeds the structural spatial bound.
+These are algebraic carrier-recognition tolerances, never the
+user's Boolean topological coincidence length or permitted source
+modeling change. Experimental sampling floors and numeric overrides
+remain restricted to the separate benchmark worktree.

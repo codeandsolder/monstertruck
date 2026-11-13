@@ -122,6 +122,14 @@ pub struct NumericalTolerances {
     pub boolean_uv_loop_area_relative: f64,
     /// UV-boundary contact distance relative to the combined UV extent.
     pub boolean_uv_boundary_contact_relative: f64,
+    /// Model-coordinate length for a rational common ruled-extrusion support proof.
+    pub boolean_ruled_structural_length: f64,
+    /// Dimensionless alignment of two ruled-extrusion sweep directions.
+    pub boolean_ruled_direction: f64,
+    /// Relative homogeneous profile and sweep-weight identity for ruled surfaces.
+    pub boolean_ruled_weight_relative: f64,
+    /// Normalized profile/sweep knot-coordinate agreement for affine reparameterizations.
+    pub boolean_ruled_knot_relative: f64,
     /// Structural world-coordinate residual for exact circular-cylinder carrier recognition.
     pub boolean_cylinder_structural_length: f64,
     /// Dimensionless axis direction residual for certified circular-cylinder carriers.
@@ -237,6 +245,10 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     boolean_inverse_search_trials: 100,
     boolean_uv_loop_area_relative: 1.0e-6,
     boolean_uv_boundary_contact_relative: 1.0e-6,
+    boolean_ruled_structural_length: 1.0e-10,
+    boolean_ruled_direction: 1.0e-10,
+    boolean_ruled_weight_relative: 1.0e-10,
+    boolean_ruled_knot_relative: 1.0e-10,
     boolean_cylinder_structural_length: 2.0e-9,
     boolean_cylinder_axis_direction: 2.0e-9,
     boolean_cylinder_homogeneous_weight: 2.0e-9,
