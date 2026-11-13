@@ -66,6 +66,12 @@ pub struct NumericalTolerances {
     pub mesh_boundary_roundoff_ulps: f64,
     /// Dimensionless tie margin comparing squared-UV-distance connector scores.
     pub mesh_open_pair_connector_score_relative: f64,
+    /// Relative native periodic-parameter span comparison for meshing loops.
+    pub mesh_periodic_span_relative: f64,
+    /// Relative native periodic-parameter endpoint exclusion on constructed seams.
+    pub mesh_periodic_seam_endpoint_relative: f64,
+    /// Relative period compatibility between two meshing boundary loops.
+    pub mesh_periodic_period_match_relative: f64,
     /// UV closure threshold for already-sampled tessellation boundaries.
     pub mesh_uv_closure: f64,
     /// Spatial distance used by tessellation to rescue samples at analytic poles.
@@ -229,6 +235,9 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     mesh_boundary_wrap_relative: 1.0e-6,
     mesh_boundary_roundoff_ulps: 8.0,
     mesh_open_pair_connector_score_relative: 1.0e-6,
+    mesh_periodic_span_relative: 1.0e-6,
+    mesh_periodic_seam_endpoint_relative: 1.0e-6,
+    mesh_periodic_period_match_relative: 1.0e-6,
     mesh_uv_closure: 1.0e-3,
     mesh_singularity_distance: 1.0e-3,
     healing_boundary_closure_squared: 1.0e-3,

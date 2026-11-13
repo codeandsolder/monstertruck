@@ -55,6 +55,27 @@ pub(super) fn native_boundary_slack((lo, hi): (f64, f64), relative: f64) -> Opti
     slack.is_finite().then_some(slack)
 }
 
+/// Period-relative parameter slack plus the representational ulps of its
+/// native coordinates. Period and UV values are never world-space lengths.
+fn periodic_parameter_slack(period: f64, coordinates: &[f64], relative: f64) -> Option<f64> {
+    if !period.is_finite()
+        || period <= 0.0
+        || !relative.is_finite()
+        || relative < 0.0
+        || coordinates.iter().any(|coordinate| !coordinate.is_finite())
+    {
+        return None;
+    }
+    let coordinate_scale = coordinates
+        .iter()
+        .fold(period, |maximum, coordinate| maximum.max(coordinate.abs()));
+    let slack = relative * period
+        + DEFAULT_NUMERICAL_TOLERANCES.mesh_boundary_roundoff_ulps
+            * f64::EPSILON
+            * coordinate_scale;
+    slack.is_finite().then_some(slack)
+}
+
 pub(super) fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0, u1): (f64, f64)) {
     let Some(slack) = native_boundary_slack(
         (u0, u1),
@@ -108,10 +129,15 @@ pub(super) fn periodic_axis_full_span(
                     curve_axis_span(curve, *axis),
                     curve_axis_span(curve, other_axis),
                 ) {
-                    (Some((min, max)), Some((other_min, other_max))) => {
-                        max - min + KERNEL_EPSILON >= period * 0.75
+                    (Some((min, max)), Some((other_min, other_max))) => periodic_parameter_slack(
+                        *period,
+                        &[min, max],
+                        DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_span_relative,
+                    )
+                    .is_some_and(|slack| {
+                        max - min + slack >= period * 0.75
                             && other_max - other_min <= PERIODIC_LOOP_OTHER_AXIS_TOLERANCE
-                    }
+                    }),
                     _ => false,
                 }
             })
@@ -194,7 +220,14 @@ pub(super) fn compact_periodic_closed_loop(
         let has_periodic_jump = curve
             .windows(2)
             .any(|points| (points[1][axis] - points[0][axis]).abs() > period * 0.5);
-        if max - min <= period + KERNEL_EPSILON && !has_periodic_jump {
+        let Some(slack) = periodic_parameter_slack(
+            period,
+            &[min, max],
+            DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_span_relative,
+        ) else {
+            continue;
+        };
+        if max - min <= period + slack && !has_periodic_jump {
             continue;
         }
         let closed_len = curve.len() - 1;
@@ -206,7 +239,7 @@ pub(super) fn compact_periodic_closed_loop(
             })
             .min_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0));
         if let Some((span, mut candidate)) = best
-            && span <= period + KERNEL_EPSILON
+            && span <= period + slack
         {
             candidate.push(candidate[0]);
             *curve = candidate;
@@ -280,7 +313,14 @@ fn periodic_seam_bounds(
     }
     let origin = range.map_or(0.0, |(min, _)| min);
     let mut seam_lower = ((lower - origin) / period).floor().mul_add(period, origin);
-    let excess = upper - (seam_lower + period + KERNEL_EPSILON);
+    let Some(slack) = periodic_parameter_slack(
+        period,
+        &[lower, upper, seam_lower],
+        DEFAULT_NUMERICAL_TOLERANCES.mesh_boundary_wrap_relative,
+    ) else {
+        return (lower, upper);
+    };
+    let excess = upper - (seam_lower + period + slack);
     if excess > 0.0 {
         seam_lower = (excess / period).ceil().mul_add(period, seam_lower);
     }
@@ -343,7 +383,13 @@ pub(super) fn open_periodic_closed_loop(
         unwrap_periodic_open_curve(&mut curve, axis, period);
         if let (Some(front), Some(back)) = (curve.first().copied(), curve.last().copied()) {
             let delta = back[axis] - front[axis];
-            if delta.abs() + KERNEL_EPSILON < period {
+            if periodic_parameter_slack(
+                period,
+                &[front[axis], back[axis]],
+                DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_span_relative,
+            )
+            .is_some_and(|slack| delta.abs() + slack < period)
+            {
                 let mut seam = front;
                 seam[axis] += if delta < 0.0 { -period } else { period };
                 seam.point = surface.evaluate(seam.x, seam.y);
@@ -370,10 +416,15 @@ pub(super) fn periodic_open_axis_full_span(
                     curve_axis_span(curve, *axis),
                     curve_axis_span(curve, other_axis),
                 ) {
-                    (Some((min, max)), Some((other_min, other_max))) => {
-                        max - min + KERNEL_EPSILON >= period * 0.75
+                    (Some((min, max)), Some((other_min, other_max))) => periodic_parameter_slack(
+                        *period,
+                        &[min, max],
+                        DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_span_relative,
+                    )
+                    .is_some_and(|slack| {
+                        max - min + slack >= period * 0.75
                             && other_max - other_min <= PERIODIC_LOOP_OTHER_AXIS_TOLERANCE
-                    }
+                    }),
                     _ => false,
                 }
             })
@@ -446,11 +497,18 @@ fn align_full_period_curve_to_axis(
         });
         let mut with_seams = Vec::with_capacity(aligned.len() + 2);
         with_seams.push(periodic_seam_point(surface, template, axis, target_start));
+        let Some(slack) = periodic_parameter_slack(
+            period,
+            &[target_start, target_end],
+            DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_seam_endpoint_relative,
+        ) else {
+            return false;
+        };
         aligned
             .into_iter()
             .filter(|point| {
-                (point[axis] - target_start).abs() > KERNEL_EPSILON
-                    && (point[axis] - target_end).abs() > KERNEL_EPSILON
+                (point[axis] - target_start).abs() > slack
+                    && (point[axis] - target_end).abs() > slack
             })
             .for_each(|point| with_seams.push(point));
         with_seams.push(periodic_seam_point(surface, template, axis, target_end));
@@ -470,7 +528,13 @@ pub(super) fn align_full_period_open_pair(
     let Some((axis1, period1)) = periodic_open_axis_full_span(curve1, surface) else {
         return false;
     };
-    if axis0 != axis1 || (period0 - period1).abs() > KERNEL_EPSILON {
+    let matching_period = periodic_parameter_slack(
+        period0.max(period1),
+        &[period0, period1],
+        DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_period_match_relative,
+    )
+    .is_some_and(|slack| (period0 - period1).abs() <= slack);
+    if axis0 != axis1 || !matching_period {
         false
     } else {
         let Some(direction) = full_period_curve_direction(curve0, axis0) else {
@@ -582,4 +646,61 @@ pub(super) fn close_open_periodic_curve_to_singular(
     let vec1 = polyline_on_surface(surface, singular_q, singular_p, tolerance, point_cache);
     let vec2 = polyline_on_surface(surface, singular_p, p, tolerance, point_cache);
     Some(connect_edges([curve, vec0, vec1, vec2]))
+}
+
+#[cfg(test)]
+mod numerical_period_tests {
+    use super::*;
+
+    #[test]
+    fn period_relative_slack_is_independent_of_native_parameter_scale() {
+        let policy = DEFAULT_NUMERICAL_TOLERANCES;
+        for scale in [1.0e-9, 1.0, 1.0e9] {
+            let slack =
+                periodic_parameter_slack(scale, &[0.0, scale], policy.mesh_periodic_span_relative)
+                    .expect("finite positive period");
+            assert!(slack >= scale * policy.mesh_periodic_span_relative);
+            assert!(slack < scale * (policy.mesh_periodic_span_relative * 1.000001));
+            assert!((scale * 0.75 - 0.5 * slack) + slack >= scale * 0.75);
+            assert!((scale * 0.75 - 2.0 * slack) + slack < scale * 0.75);
+        }
+        assert!(
+            periodic_parameter_slack(0.0, &[0.0], policy.mesh_periodic_span_relative).is_none()
+        );
+        assert!(
+            periodic_parameter_slack(f64::INFINITY, &[0.0], policy.mesh_periodic_span_relative)
+                .is_none()
+        );
+        assert!(
+            periodic_parameter_slack(1.0, &[f64::NAN], policy.mesh_periodic_span_relative)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn small_period_seam_shift_is_not_swallowed_by_global_spatial_epsilon() {
+        let tiny_period = 1.0e-9;
+        let (lo, hi) = periodic_seam_bounds(
+            0.4 * tiny_period,
+            1.75 * tiny_period,
+            tiny_period,
+            Some((0.0, tiny_period)),
+        );
+        assert!((lo - tiny_period).abs() < tiny_period * 1.0e-9);
+        assert!((hi - 2.0 * tiny_period).abs() < tiny_period * 1.0e-9);
+    }
+
+    #[test]
+    fn large_native_offset_includes_representation_roundoff() {
+        let policy = DEFAULT_NUMERICAL_TOLERANCES;
+        let shifted = periodic_parameter_slack(
+            1.0,
+            &[1.0e9, 1.0e9 + 1.0],
+            policy.mesh_periodic_span_relative,
+        )
+        .expect("finite shifted coordinates");
+        let origin = periodic_parameter_slack(1.0, &[0.0, 1.0], policy.mesh_periodic_span_relative)
+            .expect("finite origin coordinates");
+        assert!(shifted > origin);
+    }
 }
