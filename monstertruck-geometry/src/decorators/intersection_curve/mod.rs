@@ -7,6 +7,7 @@
     reason = "paired surface-0/1 and U/V derivative names mirror the intersection equations"
 )]
 
+use super::intersection_trace;
 use super::{
     BoundedCurve, BsplineCurve, CurveDerivatives, CurveParameter, Cut, Debug, EuclideanSpace,
     InnerSpace, IntersectionCurve, Invertible, KERNEL_EPSILON, Line, Matrix, Matrix3, Matrix4,
@@ -20,7 +21,25 @@ use monstertruck_core::Transform;
 use monstertruck_core::newton::{self, CalcOutput};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_traits::{ParametricCurve as ParametricCurveTrait, SnapCurveEndpoints};
-use std::ops::Bound;
+use std::{ops::Bound, sync::OnceLock};
+
+// Experiment only: isolate the *exact SSI representation's* adaptive curve
+// division from both modeling-curve division and topological admission.
+fn experimental_ssi_curve_sample_floor() -> Option<f64> {
+    static FLOOR: OnceLock<Option<f64>> = OnceLock::new();
+    *FLOOR.get_or_init(|| {
+        std::env::var("MT_EXPERIMENT_SSI_CURVE_SAMPLE_FLOOR_MM")
+            .ok()
+            .map(|value| {
+                let floor: f64 = value.parse().expect("SSI sampling floor must be a number");
+                assert!(
+                    floor.is_finite() && floor > 0.0,
+                    "SSI sampling floor must be positive"
+                );
+                floor
+            })
+    })
+}
 
 impl<P> SnapCurveEndpoints for Line<P> {}
 
@@ -61,6 +80,7 @@ where
     S0: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     S1: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
+    intersection_trace::mark(3);
     let function = move |Vector4 { x, y, z, w }| {
         // The 4-variable surface/surface Newton solve needs two first-order
         // surface jets. Asking for six independent derivative_mn evaluations
@@ -234,6 +254,7 @@ where
     /// - the uv coordinate on `self.surface1()`
     #[inline]
     pub fn search_triple(&self, t: f64, trials: usize) -> Option<(Point3, Point2, Point2)> {
+        intersection_trace::mark(1);
         let point = self.leader.evaluate(t);
         double_projection(
             self.surface0(),
@@ -288,6 +309,7 @@ where
         hint1: Option<(f64, f64)>,
         trials: usize,
     ) -> Option<(Point3, Point2, Point2)> {
+        intersection_trace::mark(2);
         let (surface0, surface1) = (self.surface0(), self.surface1());
         let function = |Vector4 { x, y, z, w }| {
             let (pt0, uder0, vder0, uuder0, uvder0, vvder0) =
@@ -338,6 +360,7 @@ where
     /// - the uv coordinate on `self.surface1()`
     #[inline]
     pub fn search_triple(&self, t: f64, trials: usize) -> Option<(Point3, Point2, Point2)> {
+        intersection_trace::mark(1);
         let point = self.leader.evaluate(t);
         double_projection(
             self.surface0(),
@@ -443,6 +466,7 @@ where
     type Point = Point3;
     type Vector = Vector3;
     fn evaluate(&self, t: f64) -> Point3 {
+        intersection_trace::mark(0);
         if let (Bound::Included(t0), Bound::Included(_)) = self.leader.parameter_range()
             && t.near(&t0)
         {
@@ -542,7 +566,11 @@ where
     type Point = Point3;
     #[inline]
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Point3>) {
-        algo::curve::parameter_division(self, range, tol)
+        let sampling_tol =
+            experimental_ssi_curve_sample_floor().map_or(tol, |floor| tol.max(floor));
+        let result = algo::curve::parameter_division(self, range, sampling_tol);
+        intersection_trace::division(0, result.0.len(), sampling_tol);
+        result
     }
 }
 
@@ -697,7 +725,11 @@ where
     type Point = Point3;
     #[inline]
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Point3>) {
-        algo::curve::parameter_division(self, range, tol)
+        let sampling_tol =
+            experimental_ssi_curve_sample_floor().map_or(tol, |floor| tol.max(floor));
+        let result = algo::curve::parameter_division(self, range, sampling_tol);
+        intersection_trace::division(0, result.0.len(), sampling_tol);
+        result
     }
 }
 

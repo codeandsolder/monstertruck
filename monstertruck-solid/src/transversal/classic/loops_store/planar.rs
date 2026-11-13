@@ -550,10 +550,11 @@ where
             }
         });
 
-    let proximity = 2.0 * BooleanTolerance::new(tol).length;
-    for face_index in 0..target.len() {
-        let polygon = target_poly_shell[face_index].surface()?;
-        for edge in &unique {
+    // The same source edge is tested against many target faces. Evaluate its
+    // expensive exact SSI midpoint once, not once for every candidate face.
+    let candidates = unique
+        .into_iter()
+        .map(|edge| {
             let curve = edge.oriented_curve();
             let (t0, t1) = curve.range_tuple();
             let samples = [
@@ -561,7 +562,14 @@ where
                 curve.evaluate(f64::midpoint(t0, t1)),
                 edge.back().point(),
             ];
-            if !polygon.neighborhood_include(&samples, proximity) {
+            (edge, samples)
+        })
+        .collect::<Vec<_>>();
+    let proximity = 2.0 * BooleanTolerance::new(tol).length;
+    for face_index in 0..target.len() {
+        let polygon = target_poly_shell[face_index].surface()?;
+        for (edge, samples) in &candidates {
+            if !polygon.neighborhood_include(samples, proximity) {
                 continue;
             }
             if target[face_index]
