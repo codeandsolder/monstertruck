@@ -64,6 +64,7 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `mesh_boundary_wrap_relative` | `1.0e-6` | Native UV span-relative seam offset used for bounded/periodic parameter normalization. |
 | `mesh_boundary_roundoff_ulps` | `8.0` | Absolute native-parameter ulps for representable UV boundary rounding. |
 | `mesh_open_pair_connector_score_relative` | `1.0e-6` | Dimensionless margin comparing two sums of squared UV endpoint-connector distances. |
+| `mesh_periodic_section_spatial_residual` | `1.0e-6` | World-space residual when testing whether a sampled periodic loop lies on one fixed geometric section. |
 | `mesh_periodic_span_relative` | `1.0e-6` | Relative native-period threshold when qualifying full-turn spans and compacting wrapped loops. |
 | `mesh_periodic_seam_endpoint_relative` | `1.0e-6` | Relative native-period endpoint exclusion when constructing meshing seam loops. |
 | `mesh_periodic_period_match_relative` | `1.0e-6` | Dimensionless relative compatibility threshold between paired meshing periods. |
@@ -872,3 +873,39 @@ ratios and a native parameter period 1e-9. The full STEP IO lib
 suite passed 84 tests (9 ignored), and strict all-target IO Clippy
 also passed. Other same-domain matching/world-space acceptance
 tolerances remain independent of this fix.
+
+
+## Periodic closed-section evidence in model space (2026-11-13)
+
+The periodic ring detector in
+`monstertruck-meshing/src/tessellation/triangulation/boundary/periodic.rs`
+previously declared a loop to be at a constant nonperiodic coordinate
+when `other_max - other_min <= periodic_relative (=1e-6)`.
+That applied an unrelated fixed UV difference to a potentially
+world-length axial parameter or an angular parameter and was **not**
+invariant under surface reparameterization or model scale.
+
+`sampled_constant_periodic_section` now holds the periodic coordinate
+at the first sampled value, evaluates the source surface at each
+sample's nonperiodic coordinate, and tests the resulting **world-space
+distance** to a fixed-section reference under the separately named
+`mesh_periodic_section_spatial_residual = 1e-6`. This tests
+only the *sampled contour* (appropriate for a meshing decision), not
+an algebraic certificate that the entire carrier is a constant
+section. It is not reused for topology welding or exact geometric
+admission.
+
+Tests use physically equivalent revolutionary cylinder profiles with
+0.01, 1 and 1000 model-unit axial sweeps: a 0.25e-6 model-unit
+cross-section drift is accepted, whereas a 4e-6 model-unit drift is
+rejected for each scale regardless of the completely different
+native UV parameter offsets. The preexisting cone/ring meshing
+regressions are preserved and the full meshing library and strict
+Clippy pass. The real source 47-face stage4 replay is separately
+required before production cherry-pick to identify any unexpected
+meshing/topology effects.
+
+The still-open singularity inverse
+`singular_periodic_other_parameter` contains a distinct model
+derivative/parameter slope vs spatial precision decision and is
+not modified by this patch.

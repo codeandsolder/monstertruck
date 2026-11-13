@@ -66,6 +66,8 @@ pub struct NumericalTolerances {
     pub mesh_boundary_roundoff_ulps: f64,
     /// Dimensionless tie margin comparing squared-UV-distance connector scores.
     pub mesh_open_pair_connector_score_relative: f64,
+    /// Model-coordinate residual of a sampled periodic contour's constant section.
+    pub mesh_periodic_section_spatial_residual: f64,
     /// Relative native periodic-parameter span comparison for meshing loops.
     pub mesh_periodic_span_relative: f64,
     /// Relative native periodic-parameter endpoint exclusion on constructed seams.
@@ -237,6 +239,7 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     mesh_boundary_wrap_relative: 1.0e-6,
     mesh_boundary_roundoff_ulps: 8.0,
     mesh_open_pair_connector_score_relative: 1.0e-6,
+    mesh_periodic_section_spatial_residual: 1.0e-6,
     mesh_periodic_span_relative: 1.0e-6,
     mesh_periodic_seam_endpoint_relative: 1.0e-6,
     mesh_periodic_period_match_relative: 1.0e-6,

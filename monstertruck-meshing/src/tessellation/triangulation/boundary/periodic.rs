@@ -11,12 +11,11 @@
 //! is unchanged.
 
 use super::{
-    HashMap, InnerSpace, KERNEL_EPSILON, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface,
-    SurfacePoint, Tolerance, UvKey, connect_edges, polyline_on_surface,
+    HashMap, InnerSpace, KERNEL_EPSILON, MetricSpace, Point2, Point3, PolyBoundaryPiece,
+    PreMeshableSurface, SurfacePoint, Tolerance, UvKey, connect_edges, polyline_on_surface,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
-const PERIODIC_LOOP_OTHER_AXIS_TOLERANCE: f64 = DEFAULT_NUMERICAL_TOLERANCES.periodic_relative;
 const SINGULAR_RADIUS_RELATIVE_TOLERANCE: f64 = DEFAULT_NUMERICAL_TOLERANCES.periodic_relative;
 const DEFAULT_SINGULAR_PARAMETER_PROBE: f64 = 1.0;
 
@@ -109,6 +108,26 @@ pub(super) fn normalize_range(curve: &mut Vec<SurfacePoint>, compidx: usize, (u0
     *curve = curve1;
 }
 
+/// Determine whether the sampled contour lies on one geometric section,
+/// using world-coordinate evidence rather than assuming the nonperiodic UV
+/// coordinate has the same units as model length.
+fn sampled_constant_periodic_section(
+    curve: &[SurfacePoint],
+    surface: &impl PreMeshableSurface,
+    periodic_axis: usize,
+) -> bool {
+    let Some(reference) = curve.first().map(|point| point.uv) else {
+        return false;
+    };
+    let expected = surface.evaluate(reference.x, reference.y);
+    curve.iter().all(|point| {
+        let mut section_uv = reference;
+        section_uv[1 - periodic_axis] = point[1 - periodic_axis];
+        expected.distance(surface.evaluate(section_uv.x, section_uv.y))
+            <= DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_section_spatial_residual
+    })
+}
+
 pub(super) fn periodic_axis_full_span(
     curve: &[SurfacePoint],
     surface: &impl PreMeshableSurface,
@@ -123,23 +142,17 @@ pub(super) fn periodic_axis_full_span(
         [(0usize, surface.period_u()), (1usize, surface.period_v())]
             .into_iter()
             .filter_map(|(axis, period)| Some((axis, period?)))
-            .find(|(axis, period)| {
-                let other_axis = 1 - *axis;
-                match (
-                    curve_axis_span(curve, *axis),
-                    curve_axis_span(curve, other_axis),
-                ) {
-                    (Some((min, max)), Some((other_min, other_max))) => periodic_parameter_slack(
-                        *period,
-                        &[min, max],
-                        DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_span_relative,
-                    )
-                    .is_some_and(|slack| {
-                        max - min + slack >= period * 0.75
-                            && other_max - other_min <= PERIODIC_LOOP_OTHER_AXIS_TOLERANCE
-                    }),
-                    _ => false,
-                }
+            .find(|(axis, period)| match curve_axis_span(curve, *axis) {
+                Some((min, max)) => periodic_parameter_slack(
+                    *period,
+                    &[min, max],
+                    DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_span_relative,
+                )
+                .is_some_and(|slack| {
+                    max - min + slack >= period * 0.75
+                        && sampled_constant_periodic_section(curve, surface, *axis)
+                }),
+                None => false,
             })
     }
 }
@@ -410,23 +423,17 @@ pub(super) fn periodic_open_axis_full_span(
         [(0usize, surface.period_u()), (1usize, surface.period_v())]
             .into_iter()
             .filter_map(|(axis, period)| Some((axis, period?)))
-            .find(|(axis, period)| {
-                let other_axis = 1 - *axis;
-                match (
-                    curve_axis_span(curve, *axis),
-                    curve_axis_span(curve, other_axis),
-                ) {
-                    (Some((min, max)), Some((other_min, other_max))) => periodic_parameter_slack(
-                        *period,
-                        &[min, max],
-                        DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_span_relative,
-                    )
-                    .is_some_and(|slack| {
-                        max - min + slack >= period * 0.75
-                            && other_max - other_min <= PERIODIC_LOOP_OTHER_AXIS_TOLERANCE
-                    }),
-                    _ => false,
-                }
+            .find(|(axis, period)| match curve_axis_span(curve, *axis) {
+                Some((min, max)) => periodic_parameter_slack(
+                    *period,
+                    &[min, max],
+                    DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_span_relative,
+                )
+                .is_some_and(|slack| {
+                    max - min + slack >= period * 0.75
+                        && sampled_constant_periodic_section(curve, surface, *axis)
+                }),
+                None => false,
             })
     }
 }
@@ -651,6 +658,43 @@ pub(super) fn close_open_periodic_curve_to_singular(
 #[cfg(test)]
 mod numerical_period_tests {
     use super::*;
+
+    #[test]
+    fn constant_section_test_rejects_world_deviation_independent_of_axial_parameter_scale() {
+        use monstertruck_geometry::prelude::{
+            Invertible, Line, Matrix4, ParametricSurface, Processor, RevolutionSurface, Vector3,
+        };
+        use std::f64::consts::TAU;
+
+        for length in [0.01, 1.0, 1_000.0] {
+            let profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, length));
+            let mut surface: Processor<_, Matrix4> =
+                Processor::new(RevolutionSurface::by_revolution(
+                    profile,
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vector3::unit_z(),
+                ));
+            surface.invert();
+            let ring = |world_delta: f64| {
+                (0..=16)
+                    .map(|i| {
+                        let u = TAU * f64::from(i) / 16.0;
+                        let v = if i == 8 { world_delta / length } else { 0.0 };
+                        let uv = Point2::new(u, v);
+                        SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y)))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert!(
+                periodic_open_axis_full_span(&ring(0.25e-6), &surface).is_some(),
+                "world-close ring must qualify irrespective of axial parameter scale {length}",
+            );
+            assert!(
+                periodic_open_axis_full_span(&ring(4.0e-6), &surface).is_none(),
+                "world-separated ring must not qualify irrespective of scale {length}",
+            );
+        }
+    }
 
     #[test]
     fn period_relative_slack_is_independent_of_native_parameter_scale() {
