@@ -598,12 +598,15 @@ fn periodic_tangent_length_per_radian(
 /// derivative at one parameter alone does not prove that an entire ring
 /// collapses to a point (a periodic chart can have an isolated stationary
 /// parameter without a singular point).
-fn sampled_periodic_collapse(
+pub(super) fn sampled_periodic_collapse(
     surface: &impl PreMeshableSurface,
     axis: usize,
     uv: Point2,
     period: f64,
 ) -> bool {
+    if !period.is_finite() || period <= 0.0 || !uv.x.is_finite() || !uv.y.is_finite() {
+        return false;
+    }
     let origin = surface.evaluate(uv.x, uv.y);
     [0.25_f64, 0.5, 0.75, 1.0].into_iter().all(|fraction| {
         let mut sample = uv;

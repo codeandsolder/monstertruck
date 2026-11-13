@@ -60,6 +60,8 @@ pub struct NumericalTolerances {
     pub half_space_relative_margin: f64,
     /// Native-UV-domain-relative direction discrimination for open meshing contours.
     pub mesh_open_boundary_direction_relative: f64,
+    /// Native UV span-relative numeric overshoot corrected by boundary projection.
+    pub mesh_projection_parameter_relative: f64,
     /// Domain-relative seam wrapping offset for bounded tessellation parameters.
     pub mesh_boundary_wrap_relative: f64,
     /// Parameter-magnitude ulps included in bounded-UV rounding.
@@ -240,6 +242,7 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     mesh_seed_floor: 1.0e-3,
     half_space_relative_margin: 1.0e-3,
     mesh_open_boundary_direction_relative: 1.0e-6,
+    mesh_projection_parameter_relative: 1.0e-6,
     mesh_boundary_wrap_relative: 1.0e-6,
     mesh_boundary_roundoff_ulps: 8.0,
     mesh_open_pair_connector_score_relative: 1.0e-6,
