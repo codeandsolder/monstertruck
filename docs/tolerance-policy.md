@@ -47,6 +47,9 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `structural` | `1.0e-12` | Threshold for structural/algebraic zero tests that must be much tighter than ordinary geometric coincidence. |
 | `angular` | `1.0e-6` | Dimensionless angular/direction threshold. |
 | `trim_parameter_relative` | `1.0e-6` | Relative parameter-space endpoint tolerance used while preserving trims. |
+| `trim_parameter_roundoff_ulps` | `8.0` | Native trim cut boundary ulps, independent of the world-space kernel distance. |
+| `healing_projection_parameter_relative` | `1.0e-6` | Native UV span-relative projection overshoot accepted during healed trim reconstruction. |
+| `healing_projection_parameter_roundoff_ulps` | `8.0` | Absolute-parameter-magnitude floating-point ulps during healed trim UV normalization. |
 | `split_parameter_relative` | `1.0e-8` | Relative parameter-space tolerance used while splitting curves. |
 | `split_parameter_absolute` | `1.0e-10` | Absolute floor paired with `split_parameter_relative`. |
 | `parameter_projection` | `1.0e-9` | Tight parameter-space projection threshold. |
@@ -1069,3 +1072,86 @@ healing/analytic SSI sites called out in
 Those should migrate to the same explicit provenance contract,
 with independent fixture tests for each operation rather than
 forcing all consumers into a global all-or-nothing range change.
+
+
+## Healing trim reconstruction: intrinsic domain provenance and native parameter precision (2026-11-13)
+
+`monstertruck-healing/src/lib.rs` previously duplicated a
+`normalize_uv` closure in the sampled-trim and linear-trim
+regeneration routes. Both used `try_range_tuple()` as
+unconditionally intrinsic, turning an unbounded Plane's
+synthetic [0,1] × [0,1] meshing rectangle into a **hard-clamped
+geometric domain**. Both also called
+`normalize_parameter_axis`, which judged native periodic
+intervals via spatial `span.so_small()` and collapsed every
+positive parameter span smaller than the 1e-6 model-space
+kernel epsilon.
+
+Now both recovery routes share
+`normalize_surface_parameter(surface, uv, previous)`.
+It checks `surface.parameter_bounds_are_intrinsic()`
+separately for U and V, retains unbounded/synthetic-plane UV
+values exactly, and uses separate finite native parameter
+range-relative plus absolute-magnitude ulp thresholds from
+`healing_projection_parameter_relative` and
+`healing_projection_parameter_roundoff_ulps` on real
+bounded axes only. Unlike the old hard `value.clamp`, values
+substantially outside an actual finite support **fail
+normalization** rather than silently teleporting a trim onto a
+different 3D position. True zero-width ranges are treated as
+degenerate, not any interval less than world-space epsilon.
+Invalid periods/nonfinite hints are rejected; periodic
+unwrap under a hint uses the nearest integer multiple of
+the actual native period, without the previous arbitrary
+five-turn search limit.
+
+The separate `oriented_trim_segment` also had four
+mixed-unit sites: checking a native trim interval with
+`trim_len.so_small()`, then defining its trim split
+tolerances as `max(trim_len*trim_parameter_relative,
+KERNEL_EPSILON)`, including each subsequent cut and
+inner segment. These world-distance floors swallowed
+entire tiny but valid native trim intervals. The
+`trim_parameter_slack((t0,t1))` helper now computes
+`native_positive_span * trim_parameter_relative
+ + trim_parameter_roundoff_ulps * EPSILON *
+ max(|t0|,|t1|)`, checking positive finite spans.
+Before cutting, source fractions must be finite and
+inside the original trim range to within that same
+native parameter slack; out-of-range cut values are
+not silently clamped. The ***geometric*** distance
+verification between the preserved 3D trim and segment
+still uses the caller's world-space `tol`, separately.
+Topology identity and source modeling tolerances were
+not enlarged.
+
+Regressions cover:
+- A Plane with actual UV (3.9,-2.1) and an inverted
+  Processor<Plane>, both surviving normalization despite
+  synthetic [0,1] reported ranges;
+- A true two-direction bounded B-spline surface,
+  snapping a 5e-7 native overshoot but refusing a
+  0.02-unit arbitrary projection displacement;
+- Tiny native periodic span 1e-9; unwrapping more than
+  two turns; valid degenerate/nondegenerate intervals,
+  invalid finite/nonfinite parameters;
+- Scale-invariant native trim cut/slack behavior from
+  1e-10 to 1e8; and an actual 3D line backed by
+  a knot-bounded B-spline curve with **1e-9 native
+  trim span** but **1.0 world-unit physical length**:
+  cutting out the middle quarter-to-three-quarter
+  segment must preserve the legitimate 3D geometry.
+
+Validation: `monstertruck-healing --lib` 27 passed, 1
+ignored; strict `monstertruck-healing --all-targets`
+Clippy passed on Rust 1.99.1 with sccache. Existing
+experimental source constructive replay still reaches
+the expected valid 47-face stage4, and stage5 retains
+the known shell1 unknown-face classification issue.
+
+**Remaining:** `same_surface` in the healing path
+still samples synthetic parameter rectangle corners
+as a heuristic, which is not a support-equality proof.
+Other analytic SSI domain/clip logic may live outside
+the published monstertruck crates; inspect its actual
+code and data before changing another consumer.

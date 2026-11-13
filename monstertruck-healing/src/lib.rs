@@ -159,57 +159,92 @@ fn remove_geometric_trimmed_slit_boundaries<C, S, T>(
 trait SP<S>: Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> {}
 impl<S, F> SP<S> for F where F: Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> {}
 
-#[expect(
-    clippy::suboptimal_flops,
-    reason = "periodic parameter normalization intentionally preserves separate multiply/add rounding"
-)]
-#[expect(
-    clippy::option_if_let_else,
-    reason = "the periodic/range cases are clearer as explicit normalization branches"
-)]
+/// Numeric UV snap for a genuine finite domain, not a geometric relocation.
+/// Values far outside the finite chart are refused; clamping them would
+/// silently change the 3D trim curve and conceal an invalid projection.
+fn normalize_intrinsic_parameter(value: f64, (min, max): (f64, f64)) -> Option<f64> {
+    let span = max - min;
+    if !value.is_finite() || !min.is_finite() || !max.is_finite() || !span.is_finite() || span < 0.0
+    {
+        return None;
+    }
+    let policy = DEFAULT_NUMERICAL_TOLERANCES;
+    let slack = policy.healing_projection_parameter_relative * span
+        + policy.healing_projection_parameter_roundoff_ulps
+            * f64::EPSILON
+            * min.abs().max(max.abs());
+    if value < min {
+        (min - value <= slack).then_some(min)
+    } else if value > max {
+        (value - max <= slack).then_some(max)
+    } else {
+        Some(value)
+    }
+}
+
+/// Normalize along a native UV axis. Periods are expressed in native
+/// parameter units; there is no relationship to model-space KERNEL_EPSILON.
 fn normalize_parameter_axis(
     value: f64,
     previous: Option<f64>,
     period: Option<f64>,
     range: Option<(f64, f64)>,
 ) -> Option<f64> {
-    if !value.is_finite() {
-        None
-    } else if let Some(previous) = previous {
-        if let Some(period) = period {
-            (-2..=2)
-                .map(|index| value + f64::from(index) * period)
-                .min_by(|lhs, rhs| {
-                    let lhs_distance = f64::abs(*lhs - previous);
-                    let rhs_distance = f64::abs(*rhs - previous);
-                    lhs_distance.total_cmp(&rhs_distance)
-                })
-        } else if let Some((min, max)) = range {
-            Some(value.clamp(min, max))
-        } else {
-            Some(value)
-        }
-    } else if let Some((min, max)) = range {
-        if let Some(period) = period {
-            let span = max - min;
-            if span.so_small() {
-                Some(min)
-            } else {
-                let mut normalized = value - f64::floor((value - min) / period) * period;
-                if normalized < min {
-                    normalized += period;
-                }
-                if normalized > max {
-                    normalized -= period;
-                }
-                Some(normalized.clamp(min, max))
-            }
-        } else {
-            Some(value.clamp(min, max))
-        }
-    } else {
-        Some(value)
+    if !value.is_finite()
+        || previous.is_some_and(|previous| !previous.is_finite())
+        || period.is_some_and(|period| !period.is_finite() || period <= 0.0)
+    {
+        return None;
     }
+    if let Some(previous) = previous {
+        return match period {
+            Some(period) => {
+                let turns = ((previous - value) / period).round();
+                let shifted = turns.mul_add(period, value);
+                shifted.is_finite().then_some(shifted)
+            }
+            None => range.map_or(Some(value), |range| {
+                normalize_intrinsic_parameter(value, range)
+            }),
+        };
+    }
+    match (period, range) {
+        (Some(period), Some((min, max))) => {
+            let span = max - min;
+            if !min.is_finite() || !max.is_finite() || !span.is_finite() || span < 0.0 {
+                return None;
+            }
+            let wrapped = min + (value - min).rem_euclid(period);
+            normalize_intrinsic_parameter(wrapped, (min, max))
+        }
+        (Some(_), None) | (None, None) => Some(value),
+        (None, Some(range)) => normalize_intrinsic_parameter(value, range),
+    }
+}
+
+/// Use one explicit intrinsic-bound policy for both sampled trim recovery
+/// and analytically reconstructed linear trim segments.
+fn normalize_surface_parameter<S: ParametricSurface>(
+    surface: &S,
+    uv: Point2,
+    previous: Option<Point2>,
+) -> Option<Point2> {
+    let (u_range, v_range) = surface.try_range_tuple();
+    let (intrinsic_u, intrinsic_v) = surface.parameter_bounds_are_intrinsic();
+    Some(Point2::new(
+        normalize_parameter_axis(
+            uv.x,
+            previous.map(|uv| uv.x),
+            surface.period_u(),
+            u_range.filter(|_| intrinsic_u),
+        )?,
+        normalize_parameter_axis(
+            uv.y,
+            previous.map(|uv| uv.y),
+            surface.period_v(),
+            v_range.filter(|_| intrinsic_v),
+        )?,
+    ))
 }
 
 fn search_surface_parameter<S>(
@@ -292,6 +327,18 @@ where
         })
 }
 
+/// Native curve-parameter slack for trim preservation and cutting.
+fn trim_parameter_slack((first, last): (f64, f64)) -> Option<f64> {
+    let span = last - first;
+    if !first.is_finite() || !last.is_finite() || !span.is_finite() || span <= 0.0 {
+        return None;
+    }
+    let policy = DEFAULT_NUMERICAL_TOLERANCES;
+    let slack = span * policy.trim_parameter_relative
+        + policy.trim_parameter_roundoff_ulps * f64::EPSILON * first.abs().max(last.abs());
+    slack.is_finite().then_some(slack)
+}
+
 fn oriented_trim_segment<C, T>(
     edge_use: &CompressedEdgeUse<T>,
     segment_orientation: bool,
@@ -324,9 +371,7 @@ where
     }
     let (trim_t0, trim_t1) = trim_curve.range_tuple();
     let trim_len = trim_t1 - trim_t0;
-    if trim_len.so_small() {
-        return None;
-    }
+    let param_tol = trim_parameter_slack((trim_t0, trim_t1))?;
     let map_alpha = |t| {
         let alpha = (t - trim_t0) / trim_len;
         if segment_orientation {
@@ -338,31 +383,33 @@ where
     let mut endpoint_fractions = [map_alpha(t_front), map_alpha(t_back)];
     endpoint_fractions.sort_by(f64::total_cmp);
     let [alpha0, alpha1] = endpoint_fractions;
-    if alpha0.so_small() && (1.0 - alpha1).so_small() {
+    let relative_slack = param_tol / trim_len;
+    if !alpha0.is_finite()
+        || !alpha1.is_finite()
+        || alpha0 < -relative_slack
+        || alpha1 > 1.0 + relative_slack
+    {
+        return None;
+    }
+    if alpha0 <= relative_slack && 1.0 - alpha1 <= relative_slack {
         return Some(trim_curve);
     }
     let trim_start = f64::mul_add(trim_len, alpha0, trim_t0);
     let trim_end = f64::mul_add(trim_len, alpha1, trim_t0);
-    let param_tol =
-        (trim_len.abs() * DEFAULT_NUMERICAL_TOLERANCES.trim_parameter_relative).max(KERNEL_EPSILON);
     if !trim_start.is_finite() || !trim_end.is_finite() || trim_end <= trim_start + param_tol {
         return None;
     }
     let cut_if_interior = |curve: &mut T, t: f64| {
         let (range_start, range_end) = curve.range_tuple();
-        let range_len = range_end - range_start;
-        if range_len.so_small() {
+        let param_tol = trim_parameter_slack((range_start, range_end))?;
+        if !t.is_finite() || t < range_start - param_tol || t > range_end + param_tol {
+            return None;
+        }
+        let t = t.clamp(range_start, range_end);
+        if t <= range_start + param_tol || range_end <= t + param_tol {
             None
         } else {
-            let param_tol = (range_len.abs()
-                * DEFAULT_NUMERICAL_TOLERANCES.trim_parameter_relative)
-                .max(KERNEL_EPSILON);
-            let t = t.clamp(range_start, range_end);
-            if t <= range_start + param_tol || range_end <= t + param_tol {
-                None
-            } else {
-                Some(curve.cut(t))
-            }
+            Some(curve.cut(t))
         }
     };
     if trim_start <= trim_t0 + param_tol {
@@ -373,9 +420,7 @@ where
     } else {
         let mut middle = cut_if_interior(&mut trim_curve, trim_start)?;
         let (middle_t0, middle_t1) = middle.range_tuple();
-        let middle_tol = ((middle_t1 - middle_t0).abs()
-            * DEFAULT_NUMERICAL_TOLERANCES.trim_parameter_relative)
-            .max(KERNEL_EPSILON);
+        let middle_tol = trim_parameter_slack((middle_t0, middle_t1))?;
         if trim_end <= middle_t0 + middle_tol {
             return None;
         }
@@ -610,23 +655,6 @@ where
             + SearchParameter<SurfaceParameter, Point = Point3>
             + SearchNearestParameter<SurfaceParameter, Point = Point3>,
         T: BoundaryCurveFromSamples<S>, {
-        let normalize_uv = |uv: Point2, previous: Option<Point2>| {
-            let (u_range, v_range) = surface.try_range_tuple();
-            Some(Point2::new(
-                normalize_parameter_axis(
-                    uv.x,
-                    previous.map(|uv| uv.x),
-                    surface.period_u(),
-                    u_range,
-                )?,
-                normalize_parameter_axis(
-                    uv.y,
-                    previous.map(|uv| uv.y),
-                    surface.period_v(),
-                    v_range,
-                )?,
-            ))
-        };
         let project = |point: Point3, hint: Option<(f64, f64)>| {
             surface
                 .search_parameter(point, hint, 100)
@@ -634,7 +662,7 @@ where
                 .or_else(|| surface.search_nearest_parameter(point, hint, 100))
                 .or_else(|| surface.search_nearest_parameter(point, None, 100))
                 .map(Point2::from)
-                .and_then(|uv| normalize_uv(uv, hint.map(Point2::from)))
+                .and_then(|uv| normalize_surface_parameter(surface, uv, hint.map(Point2::from)))
         };
         let points = edge
             .curve
@@ -690,13 +718,6 @@ where
         + Clone,
     T: BoundedCurve + Cut + Clone + Invertible,
 {
-    let normalize_uv = |uv: Point2, previous: Option<Point2>| {
-        let (u_range, v_range) = surface.try_range_tuple();
-        Some(Point2::new(
-            normalize_parameter_axis(uv.x, previous.map(|uv| uv.x), surface.period_u(), u_range)?,
-            normalize_parameter_axis(uv.y, previous.map(|uv| uv.y), surface.period_v(), v_range)?,
-        ))
-    };
     let point_to_uv = |point, hint: Option<(f64, f64)>| {
         surface
             .search_parameter(point, hint, 100)
@@ -704,7 +725,7 @@ where
             .or_else(|| surface.search_nearest_parameter(point, hint, 100))
             .or_else(|| surface.search_nearest_parameter(point, None, 100))
             .map(Point2::from)
-            .and_then(|uv| normalize_uv(uv, hint.map(Point2::from)))
+            .and_then(|uv| normalize_surface_parameter(surface, uv, hint.map(Point2::from)))
     };
     let Some(uv0) = point_to_uv(edge.curve.front(), None) else {
         if debug_reattach {
