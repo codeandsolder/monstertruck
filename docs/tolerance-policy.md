@@ -78,6 +78,7 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `mesh_singularity_distance` | `1.0e-3` | Spatial distance used by tessellation to rescue samples at analytic poles. |
 | `healing_polygon_normalized_geometric` | `1.0e-6` | Geometric area, cross, and point-to-segment predicates only after independently normalizing U/V chart spans to a unit square. |
 | `healing_polygon_intersection_parameter` | `1.0e-6` | Dimensionless strict-intersection endpoint exclusion in normalized polygon line fraction coordinates. |
+| `healing_divisor_parameter_relative` | `1.0e-6` | Normalized dimensionless UV line-to-point residual when selecting a vertex lying on a face divisor. |
 | `healing_seam_axis_relative` | `1.0e-6` | Native parameter span-relative nonperiodic-axis constancy before selecting a healing seam divisor. |
 | `healing_seam_axis_roundoff_ulps` | `8.0` | Representational coordinate ulps for that nonperiodic seam-axis comparison. |
 | `healing_boundary_uv_relative` | `1.0e-6` | Per-native-axis span-relative closed-loop endpoint discrepancy in healing's 2D chart. |
@@ -1440,3 +1441,173 @@ endpoint closure check. They require
 independent tests and actual topology
 constraints; do not infer they have
 been fixed.
+
+
+## Closed-face fallback boundary: singularity evidence and true periodic chart (2026-11-13)
+
+The sampled fallback in
+`split_closed_faces::boundary_to_param_polys`
+passes its projected boundary through
+`boundary_into_domain`. Previously this
+mutated the unwrapped UV sequence using its
+centroid against a nominal periodic domain,
+then conditionally appended the **first UV
+point** when first/last were not approximately
+equal in *raw* UV with global
+`KERNEL_EPSILON` and **either**
+`|dS/du|` or `|dS/dv|` happened to
+be `.so_small()` at the final point.
+Surface derivatives have dimension **world
+length per native UV**, so merely small
+numeric derivatives can result from arbitrary
+reparameterization, without a physical
+pole or even physically coincident
+boundary endpoints. The original
+implementation also indexed an empty
+polyline unconditionally.
+
+The boundary now:
+- Rejects empty/nonfinite projected
+  polylines and invalid spatial tolerance,
+  and returns `Option` explicitly.
+- Translates periodic coordinates using
+  only finite positive native periods,
+  finite centroid relative to the first
+  sample, and **actual intrinsic chart
+  bounds**. The plane's synthetic unit
+  square remains ineligible as a
+  geometric bound. Failed or
+  unrepresentable translations refuse
+  rather than writing NaNs.
+- Checks native U and V seam differences
+  **independently** using the preexisting
+  native-span-relative healing boundary
+  policy and coordinate ulps, not a
+  world-space epsilon.
+- For an actually open native-UV boundary,
+  permits an appended closing parameter
+  only if the first and last surface
+  points agree in **3D** within the
+  caller's actual world-space tolerance,
+  AND the final point's cross-section
+  collapses throughout a sampled
+  quarter/half/three-quarter/full **native
+  period** for at least one periodic
+  axis. A small derivative at a single
+  parameter is no longer evidence.
+  This remains a sampled meshing/healing
+  witness rather than an analytic
+  support-identity proof.
+
+Regression fixtures: a real conical
+revolution pole at shifted periodic
+coordinates (including >1000 turns),
+a **non-polar cylinder** with identical
+3D seam endpoints which must **not**
+receive an artificial point, a cone
+with genuinely separate 3D endpoints,
+the U/V swapped version of the cone,
+empty and nonfinite polylines, and
+invalid period/tolerance/axis inputs.
+The fallback caller refuses an empty
+sample rather than indexing it.
+
+## Finite divisor vertex identification: dimensionally consistent search and unlimited turns (2026-11-13)
+
+The formerly uncorrected companion
+paths in `split_closed_faces` used
+`periodic_iterator`, which enumerated
+only the **25 possible combinations**
+of -2, -1, 0, +1, +2 native-period
+offsets across U/V, to choose an
+endpoint and find vertices on a
+divisor. This failed for valid
+already-unwrapped UV coordinates
+thousands of turns away. Worse,
+`enumerate_vertices_on_divisor`
+tested `Line<Point2>::distance_to_point_as_segment(...).so_small()`
+against the same world-space kernel
+epsilon even though the value is a
+raw UV length; it also deduplicated
+distinct topological vertices merely
+because native UV coordinates happened
+to be numerically close.
+
+All nearest-period selection paths,
+including exact STEP trim sampling
+and divisor/edge intersection
+construction, now use the existing
+closed-form nearest shift for each
+positive finite native period. The
+finite divisor segment has endpoints
+unwrapped to the **closest native
+representatives**: its span along
+either periodic axis is therefore at
+most half a period. For each candidate
+vertex, its nearest period shift to
+the **divisor midpoint**, with the
+immediately adjacent ±1 copies,
+exhausts the nearby finite-segment
+representatives independent of
+original turn count. There is no
+fixed search window around zero.
+
+A 2D point qualifies as on the
+finite segment only if the
+projection parameter is within
+[0,1] (with separately named
+dimensionless normalized
+`healing_divisor_parameter_relative`
+boundary slack), its distance
+from that segment in an
+**independently scaled native U/V
+chart** is below the same named
+normalized parameter residual,
+and the corresponding actual
+3D evaluated surface point
+lies within the caller's
+**world-space tol** of the
+surface point at the matched
+segment parameter. Each
+periodic axis uses its true
+native period as scale; an
+aperiodic axis uses the observed
+finite vertex bounds. Both
+chart-space and physical-space
+conditions are required.
+Invalid and nonfinite inputs
+fail rather than producing
+implicit infinity or NaN
+matches. Projected candidate
+ordering is stable by
+segment parameter then vertex
+ID. **Distinct topological
+vertex IDs are not deduplicated**
+solely because their UV
+positions coincide: preserving
+the original vertex incidence
+is more important than masking
+degenerate source topology.
+
+Tests cover the same bilinear
+unit-square geometry in native
+chart scales 1e-9/1e9,
+1e9/1e-9 and 1/1, a surface
+with 1e9 model units along
+the U axis (rejecting
+UV-near but physically distant
+points), a genuine cylindrical
+periodic carrier with
+±10001-turn vertex offsets
+and correct ordered vertex
+IDs, degenerate/invalid
+period tests, and distinct
+source vertex IDs at one
+numerical UV location.
+
+No experimental numerical
+sample resolution, 3D Boolean
+admission tolerance, source
+geometric surface, or physical
+healing operation budget
+was widened in either change.

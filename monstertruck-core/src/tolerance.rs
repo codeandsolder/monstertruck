@@ -94,6 +94,8 @@ pub struct NumericalTolerances {
     pub healing_polygon_normalized_geometric: f64,
     /// Dimensionless strict edge-intersection fractional endpoint exclusion.
     pub healing_polygon_intersection_parameter: f64,
+    /// Dimensionless normalized UV residual for point-on-divisor candidates.
+    pub healing_divisor_parameter_relative: f64,
     /// Relative native nonperiodic UV axis agreement when choosing a healing seam divisor.
     pub healing_seam_axis_relative: f64,
     /// Native-coordinate roundoff ulps in a seam's nonperiodic axis.
@@ -275,6 +277,7 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     mesh_singularity_distance: 1.0e-3,
     healing_polygon_normalized_geometric: 1.0e-6,
     healing_polygon_intersection_parameter: 1.0e-6,
+    healing_divisor_parameter_relative: 1.0e-6,
     healing_seam_axis_relative: 1.0e-6,
     healing_seam_axis_roundoff_ulps: 8.0,
     healing_boundary_uv_relative: 1.0e-6,

@@ -539,3 +539,225 @@ fn closest_native_period_representation_has_no_arbitrary_turn_limit() {
     assert_eq!(get_mindiff(f64::INFINITY, 0.0, 1.0), None);
     assert_eq!(get_mindiff(0.5, f64::NAN, 1.0), None);
 }
+
+#[test]
+fn boundary_domain_only_synthesizes_real_singular_closure() {
+    use super::{boundary_into_domain, collapsed_periodic_section};
+    use monstertruck_geometry::prelude::{ParametricSurface, RevolutionSurface};
+
+    let cone = RevolutionSurface::by_revolution(
+        Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)),
+        Point3::new(0.0, 0.0, 0.0),
+        Vector3::unit_z(),
+    );
+    let period = cone.period_v().unwrap();
+    let first = Point2::new(0.0, 0.0);
+    let mut pole = vec![
+        first,
+        Point2::new(0.0, 0.75 * period),
+        Point2::new(0.0, 1000.5 * period),
+    ];
+    assert!(collapsed_periodic_section(&cone, first, 1, period, 1e-8));
+    assert!(boundary_into_domain(&mut pole, &cone, 1e-8).is_some());
+    assert_eq!(pole.len(), 4, "a genuine pole may close its UV seam");
+    assert_eq!(pole[0], pole[3]);
+
+    let cylinder = RevolutionSurface::by_revolution(
+        Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)),
+        Point3::new(0.0, 0.0, 0.0),
+        Vector3::unit_z(),
+    );
+    let mut ring = vec![
+        first,
+        Point2::new(0.0, 0.75 * period),
+        Point2::new(0.0, 1000.0 * period),
+    ];
+    assert!(!collapsed_periodic_section(
+        &cylinder, first, 1, period, 1e-8
+    ));
+    assert!(boundary_into_domain(&mut ring, &cylinder, 1e-8).is_some());
+    assert_eq!(
+        ring.len(),
+        3,
+        "a nonsingular seam must not acquire an extra edge"
+    );
+
+    let mut not_same_physical_point = vec![
+        first,
+        Point2::new(0.5, 0.75 * period),
+        Point2::new(1.0, 1000.5 * period),
+    ];
+    assert!(boundary_into_domain(&mut not_same_physical_point, &cone, 1e-8).is_some());
+    assert_eq!(
+        not_same_physical_point.len(),
+        3,
+        "a singular check must not connect physically distinct endpoints"
+    );
+}
+
+#[test]
+fn swapped_periodic_uv_pole_and_invalid_ranges_are_handled() {
+    use super::{boundary_into_domain, collapsed_periodic_section};
+    use monstertruck_geometry::prelude::{Invertible, Matrix4, Processor, RevolutionSurface};
+
+    let base = RevolutionSurface::by_revolution(
+        Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)),
+        Point3::new(0.0, 0.0, 0.0),
+        Vector3::unit_z(),
+    );
+    let mut swapped: Processor<_, Matrix4> = Processor::new(base);
+    swapped.invert();
+    let period = std::f64::consts::TAU;
+    let first = Point2::new(0.0, 0.0);
+    let mut points = vec![
+        first,
+        Point2::new(period * 0.5, 0.0),
+        Point2::new(period * 3000.25, 0.0),
+    ];
+    assert!(collapsed_periodic_section(&swapped, first, 0, period, 1e-8));
+    assert!(boundary_into_domain(&mut points, &swapped, 1e-8).is_some());
+    assert_eq!(points.len(), 4);
+    assert_eq!(points[0], points[3]);
+
+    let mut empty = Vec::new();
+    assert!(boundary_into_domain(&mut empty, &swapped, 1e-8).is_none());
+    let mut invalid = vec![Point2::new(0.0, 0.0), Point2::new(f64::NAN, 1.0)];
+    assert!(boundary_into_domain(&mut invalid, &swapped, 1e-8).is_none());
+    let mut ordinary = vec![first, Point2::new(0.0, 1.0)];
+    assert!(boundary_into_domain(&mut ordinary, &swapped, -1.0).is_none());
+    assert!(!collapsed_periodic_section(
+        &swapped,
+        first,
+        0,
+        f64::NAN,
+        1e-8
+    ));
+    assert!(!collapsed_periodic_section(
+        &swapped, first, 2, period, 1e-8
+    ));
+}
+
+#[test]
+fn healing_divisor_vertex_detection_is_parameterization_invariant() {
+    use super::HashMap;
+    use super::{enumerate_vertices_on_divisor, nearest_periodic_parameter};
+    use monstertruck_geometry::prelude::{BsplineSurface, KnotVector};
+
+    for (us, vs) in [(1.0e-9, 1.0e9), (1.0e9, 1.0e-9), (1.0, 1.0)] {
+        let surface = BsplineSurface::new_unchecked(
+            (
+                KnotVector::from(vec![0.0, 0.0, us, us]),
+                KnotVector::from(vec![0.0, 0.0, vs, vs]),
+            ),
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+        );
+        let mut vertices = HashMap::default();
+        vertices.insert(0, Point2::new(0.0, 0.0));
+        vertices.insert(1, Point2::new(us, vs));
+        vertices.insert(2, Point2::new(0.25 * us, 0.25 * vs));
+        vertices.insert(3, Point2::new(0.75 * us, 0.75 * vs));
+        vertices.insert(4, Point2::new(us, 0.0));
+        let selected = enumerate_vertices_on_divisor((0, 1), &vertices, &surface, 1e-5)
+            .expect("four geometric vertices intersect the divisor");
+        assert_eq!(
+            selected.iter().map(|item| item.1.0).collect::<Vec<_>>(),
+            vec![0, 2, 3, 1],
+            "same physical segment, native {us:e}/{vs:e}"
+        );
+        for (index, expected) in [0.0, 0.25, 0.75, 1.0].into_iter().enumerate() {
+            assert!((selected[index].0 - expected).abs() < 1e-9);
+        }
+
+        assert_eq!(
+            nearest_periodic_parameter(Point2::new(us, vs), Point2::new(0.0, 0.0), (None, None)),
+            Some(Point2::new(us, vs))
+        );
+    }
+
+    // Native UV residual is small enough; physical separation is not.
+    let surface = BsplineSurface::new_unchecked(
+        (
+            KnotVector::from(vec![0.0, 0.0, 1.0, 1.0]),
+            KnotVector::from(vec![0.0, 0.0, 1.0, 1.0]),
+        ),
+        vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+            vec![Point3::new(1e9, 0.0, 0.0), Point3::new(1e9, 1.0, 0.0)],
+        ],
+    );
+    let mut vertices = HashMap::default();
+    vertices.insert(0, Point2::new(0.0, 0.0));
+    vertices.insert(1, Point2::new(1.0, 1.0));
+    vertices.insert(2, Point2::new(0.5, 0.5));
+    vertices.insert(3, Point2::new(0.75, 0.75));
+    vertices.insert(4, Point2::new(0.25 + 0.25e-6, 0.25));
+    let selected = enumerate_vertices_on_divisor((0, 1), &vertices, &surface, 1e-4)
+        .expect("the four exact vertices remain on the divisor");
+    assert_eq!(
+        selected.iter().map(|v| v.1.0).collect::<Vec<_>>(),
+        vec![0, 2, 3, 1]
+    );
+}
+
+#[test]
+fn healing_divisor_periodic_offsets_exceeding_ten_thousand_turns() {
+    use super::HashMap;
+    use super::{
+        enumerate_vertices_on_divisor, nearest_periodic_parameter, periodic_candidates_near_segment,
+    };
+    use monstertruck_geometry::prelude::RevolutionSurface;
+
+    let surface = RevolutionSurface::by_revolution(
+        Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)),
+        Point3::new(0.0, 0.0, 0.0),
+        Vector3::unit_z(),
+    );
+    let period = std::f64::consts::TAU;
+    let mut vertices = HashMap::default();
+    vertices.insert(0, Point2::new(0.0, 0.0));
+    vertices.insert(1, Point2::new(1.0, 0.4 * period + 10001.0 * period));
+    vertices.insert(2, Point2::new(0.25, 0.1 * period + 10001.0 * period));
+    vertices.insert(3, Point2::new(0.75, 0.3 * period - 10001.0 * period));
+    vertices.insert(4, Point2::new(0.5, -0.5 * period + 10001.0 * period));
+
+    let q = nearest_periodic_parameter(vertices[&1], vertices[&0], (None, Some(period))).unwrap();
+    assert!((q.y - 0.4 * period).abs() < 1e-8);
+    let copies = periodic_candidates_near_segment(
+        vertices[&2],
+        Point2::new(0.5, 0.2 * period),
+        (None, Some(period)),
+    )
+    .unwrap();
+    assert!(copies.iter().any(|p| (p.y - 0.1 * period).abs() < 1e-8));
+    let selected = enumerate_vertices_on_divisor((0, 1), &vertices, &surface, 1e-6)
+        .expect("four vertices on divisor despite >10000-turn offsets");
+    assert_eq!(
+        selected.iter().map(|v| v.1.0).collect::<Vec<_>>(),
+        vec![0, 2, 3, 1]
+    );
+
+    assert!(nearest_periodic_parameter(vertices[&1], vertices[&0], (None, Some(0.0))).is_none());
+    assert!(enumerate_vertices_on_divisor((0, 1), &vertices, &surface, f64::NAN).is_none());
+}
+
+#[test]
+fn healing_divisor_distinct_topological_vertices_are_never_deduplicated_by_uv() {
+    use super::HashMap;
+    use super::enumerate_vertices_on_divisor;
+    use monstertruck_geometry::prelude::Plane;
+    let mut vertices = HashMap::default();
+    vertices.insert(0, Point2::new(0.0, 0.0));
+    vertices.insert(1, Point2::new(1.0, 1.0));
+    vertices.insert(2, Point2::new(0.5, 0.5));
+    vertices.insert(3, Point2::new(0.5, 0.5));
+    let selected = enumerate_vertices_on_divisor((0, 1), &vertices, &Plane::xy(), 1e-6)
+        .expect("four distinct topological vertices remain present");
+    assert_eq!(selected.len(), 4);
+    assert_eq!(
+        selected.iter().map(|v| v.1.0).collect::<Vec<_>>(),
+        vec![0, 2, 3, 1]
+    );
+}

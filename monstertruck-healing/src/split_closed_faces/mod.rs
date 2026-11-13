@@ -1,12 +1,11 @@
 use super::{
     BoundedCurve, CurveParameter, Cut, Edge, EdgeIndex, EuclideanSpace, Face, HashMap, HashSet,
     InnerSpace, Instant, Invertible, Line, MetricSpace, Origin, ParameterBoundary2D,
-    ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface,
-    ParametricSurface3D, Point2, Point3, PolylineCurve, SP, SearchNearestParameter, Shell,
-    Tolerance, Vector2, Wire, append_unassigned_stable_ids,
+    ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface3D,
+    Point2, Point3, PolylineCurve, SP, SearchNearestParameter, Shell, Tolerance, Wire,
+    append_unassigned_stable_ids,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
-use num_traits::ToPrimitive;
 use std::env;
 use std::ops::Range;
 
@@ -766,8 +765,7 @@ where
     let q = zip_boundaries(boundaries, &param_boundaries)
         .find_map(closure_find_vertex_parameter(v1, edges))?;
     let periods = (surface.period_u(), surface.period_v());
-    let q =
-        periodic_iterator(q, periods).min_by(|q, r| p.distance2(*q).total_cmp(&p.distance2(*r)))?;
+    let q = nearest_periodic_parameter(q, p, periods)?;
     let pcurve = ParameterCurve::new(Line(p, q), surface.clone());
     let cut_edge = |(edge_index, param_edge): ZippedEdge<'_>| {
         let index = edge_index.index;
@@ -1014,7 +1012,8 @@ where
     )?;
     let param_vertices = create_param_vertices(boundaries, &param_boundaries, edges)?;
     let mut duplicated_edges = duplicated_edges(boundaries.iter().flatten().map(|ei| ei.index));
-    let vertices_on_divisor = enumerate_vertices_on_divisor(divisor, &param_vertices, surface)?;
+    let vertices_on_divisor =
+        enumerate_vertices_on_divisor(divisor, &param_vertices, surface, tol)?;
     let new_edges = create_new_edges(&vertices_on_divisor, poly_edges, surface, tol)?;
     let (new_edge_range, new_edge_indices) = signup_new_edges(edges, new_edges);
     duplicated_edges.extend(new_edge_range);
@@ -1025,31 +1024,28 @@ where
 
 // --- create_param_boundaries ---
 
+/// Choose the nearest representative of each periodic parameter axis,
+/// independent of how many turns the input point is from its reference.
 fn nearest_periodic_parameter(
     point: Point2,
     reference: Point2,
     periods: (Option<f64>, Option<f64>),
-) -> Point2 {
-    let (period_u, period_v) = periods;
-    let us = period_u.map_or_else(
-        || vec![0.0],
-        |period| vec![-2.0 * period, -period, 0.0, period, 2.0 * period],
-    );
-    let vs = period_v.map_or_else(
-        || vec![0.0],
-        |period| vec![-2.0 * period, -period, 0.0, period, 2.0 * period],
-    );
-    us.into_iter()
-        .flat_map(|du| {
-            vs.iter()
-                .copied()
-                .map(move |dv| point + Vector2::new(du, dv))
-        })
-        .min_by(|lhs, rhs| {
-            lhs.distance2(reference)
-                .total_cmp(&rhs.distance2(reference))
-        })
-        .unwrap_or(point)
+) -> Option<Point2> {
+    if !point.x.is_finite()
+        || !point.y.is_finite()
+        || !reference.x.is_finite()
+        || !reference.y.is_finite()
+    {
+        return None;
+    }
+    Some(Point2::new(
+        periods
+            .0
+            .map_or(Some(point.x), |p| get_mindiff(point.x, reference.x, p))?,
+        periods
+            .1
+            .map_or(Some(point.y), |p| get_mindiff(point.y, reference.y, p))?,
+    ))
 }
 
 fn boundary_to_exact_param_polys<C, S>(
@@ -1088,13 +1084,15 @@ where
                     let normalized = poly
                         .into_iter()
                         .map(|point| {
-                            let adjusted = previous.map_or(point, |reference| {
-                                nearest_periodic_parameter(point, reference, periods)
-                            });
+                            let adjusted = if let Some(reference) = previous {
+                                nearest_periodic_parameter(point, reference, periods)?
+                            } else {
+                                point
+                            };
                             previous = Some(adjusted);
-                            adjusted
+                            Some(adjusted)
                         })
-                        .collect::<Vec<_>>();
+                        .collect::<Option<Vec<_>>>()?;
                     Some(PolylineCurve(normalized))
                 })
                 .collect()
@@ -1123,7 +1121,7 @@ where
     )
     .or_else(|| {
         let closure = |boundary: &Wire| {
-            boundary_to_param_polys(boundary, surface, input.poly_edges, &input.sp)
+            boundary_to_param_polys(boundary, surface, input.poly_edges, &input.sp, input.tol)
         };
         boundaries.iter().map(closure).collect()
     })
@@ -1134,13 +1132,17 @@ fn boundary_to_param_polys<S: ParametricSurface3D>(
     surface: &S,
     poly_edges: &[PolylineCurve<Point3>],
     sp: impl SP<S>,
+    tol: f64,
 ) -> Option<Vec<PolylineCurve<Point2>>> {
     let get_poly = closure_get_poly(poly_edges);
     let poly_boundary: Vec<_> = boundary.iter().copied().map(get_poly).collect();
     let poly_wire_iter = PolyWireIter::try_new(&poly_boundary)?;
     let closure = poly_project_to_uv(surface, sp);
     let mut long_poly = poly_wire_iter.map(closure).collect::<Option<Vec<_>>>()?;
-    boundary_into_domain(&mut long_poly, surface);
+    boundary_into_domain(&mut long_poly, surface, tol)?;
+    if long_poly.is_empty() {
+        return None;
+    }
     let mut vec = vec![long_poly.remove(0)];
     let split_into_2dpoly = move |poly: &PolylineCurve<_>| {
         let latter = long_poly.split_off(poly.len() - 1);
@@ -1215,33 +1217,128 @@ fn get_mindiff(value: f64, previous: f64, period: f64) -> Option<f64> {
     corrected.is_finite().then_some(corrected)
 }
 
-fn boundary_into_domain<S: ParametricSurface3D>(vec: &mut Vec<Point2>, surface: &S) {
+/// A periodic cross-section is singular only when sampling its entire
+/// native period stays at the same physical point, not because the raw
+/// derivative measured in model-length/native-UV happens to be small.
+fn collapsed_periodic_section<S: ParametricSurface3D>(
+    surface: &S,
+    uv: Point2,
+    periodic_axis: usize,
+    period: f64,
+    spatial_tolerance: f64,
+) -> bool {
+    if periodic_axis > 1
+        || !period.is_finite()
+        || period <= 0.0
+        || !uv.x.is_finite()
+        || !uv.y.is_finite()
+        || !spatial_tolerance.is_finite()
+        || spatial_tolerance < 0.0
+    {
+        return false;
+    }
+    let point = surface.evaluate(uv.x, uv.y);
+    [0.25_f64, 0.5, 0.75, 1.0].into_iter().all(|fraction| {
+        let mut sample = uv;
+        sample[periodic_axis] = fraction.mul_add(period, uv[periodic_axis]);
+        let other = surface.evaluate(sample.x, sample.y);
+        let distance2 = point.distance2(other);
+        distance2.is_finite() && distance2 <= spatial_tolerance * spatial_tolerance
+    })
+}
+
+/// Check native UV seam residual independently on each axis, not via a
+/// world-distance approximate-equality predicate.
+fn sequence_uv_closed(points: &[Point2]) -> bool {
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+        return false;
+    };
+    (0..2).all(|axis| {
+        let (min, max) = points
+            .iter()
+            .map(|p| p[axis])
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), x| {
+                (min.min(x), max.max(x))
+            });
+        let span = max - min;
+        if !span.is_finite() || span < 0.0 {
+            return false;
+        }
+        let policy = DEFAULT_NUMERICAL_TOLERANCES;
+        let slack = span * policy.healing_boundary_uv_relative
+            + policy.healing_boundary_uv_roundoff_ulps * f64::EPSILON * min.abs().max(max.abs());
+        (first[axis] - last[axis]).abs() <= slack
+    })
+}
+
+/// Translate an unwrapped boundary to its native periodic chart and close
+/// a seam only when a real singular physical endpoint is established.
+fn boundary_into_domain<S: ParametricSurface3D>(
+    vec: &mut Vec<Point2>,
+    surface: &S,
+    spatial_tolerance: f64,
+) -> Option<()> {
+    if vec.is_empty()
+        || !spatial_tolerance.is_finite()
+        || spatial_tolerance < 0.0
+        || !vec.iter().all(|p| p.x.is_finite() && p.y.is_finite())
+    {
+        return None;
+    }
     let (up, vp) = (surface.period_u(), surface.period_v());
     let (u_range, v_range) = surface.try_range_tuple();
-    let Some(point_count) = vec.len().to_f64() else {
-        return;
-    };
-    let grav = vec.iter().fold(Point2::origin(), |g, p| g + p.to_vec()) / point_count;
-    if let (Some(up), Some((u0, _))) = (up, u_range) {
-        let quot = f64::floor((grav.x - u0) / up);
-        for point in vec.iter_mut() {
-            point.x = quot.mul_add(-up, point.x);
+    let intrinsic = surface.parameter_bounds_are_intrinsic();
+    let count = vec.len() as f64;
+    let origin = vec[0];
+    let mean = vec.iter().fold((0.0, 0.0), |(u, v), p| {
+        (u + (p.x - origin.x) / count, v + (p.y - origin.y) / count)
+    });
+    let mean = Point2::new(origin.x + mean.0, origin.y + mean.1);
+    for (axis, period, range, bounded) in [
+        (0usize, up, u_range, intrinsic.0),
+        (1usize, vp, v_range, intrinsic.1),
+    ] {
+        if let Some(period) = period {
+            if !period.is_finite() || period <= 0.0 {
+                return None;
+            }
+            if bounded && let Some((min, _)) = range {
+                if !min.is_finite() || !mean[axis].is_finite() {
+                    return None;
+                }
+                let turns = ((mean[axis] - min) / period).floor();
+                if !turns.is_finite() {
+                    return None;
+                }
+                for point in vec.iter_mut() {
+                    point[axis] = (-turns).mul_add(period, point[axis]);
+                }
+            }
         }
     }
-    if let (Some(vp), Some((v0, _))) = (vp, v_range) {
-        let quot = f64::floor((grav.y - v0) / vp);
-        for point in vec.iter_mut() {
-            point.y = quot.mul_add(-vp, point.y);
+    if !vec.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        return None;
+    }
+    let first = *vec.first()?;
+    let last = *vec.last()?;
+    if !sequence_uv_closed(vec) {
+        let first_position = surface.evaluate(first.x, first.y);
+        let last_position = surface.evaluate(last.x, last.y);
+        let separation2 = first_position.distance2(last_position);
+        if separation2.is_finite()
+            && separation2 <= spatial_tolerance * spatial_tolerance
+            && [(0usize, up), (1usize, vp)]
+                .into_iter()
+                .any(|(axis, period)| {
+                    period.is_some_and(|p| {
+                        collapsed_periodic_section(surface, last, axis, p, spatial_tolerance)
+                    })
+                })
+        {
+            vec.push(first);
         }
     }
-    if let Some(last) = vec.last().copied()
-        && !vec[0].near(&last)
-    {
-        let Point2 { x: u0, y: v0 } = last;
-        if surface.derivative_u(u0, v0).so_small() || surface.derivative_v(u0, v0).so_small() {
-            vec.push(vec[0]);
-        }
-    }
+    Some(())
 }
 
 // --- create_param_vertices ---
@@ -1266,31 +1363,138 @@ fn duplicated_edges(edges: impl Iterator<Item = usize>) -> HashSet<usize> {
 
 // --- enumerate_vertices_on_divisor ---
 
-fn enumerate_vertices_on_divisor<S: ParametricSurface>(
+/// The divisor endpoints are nearest periodic representatives, hence
+/// the segment spans at most half a period along each periodic axis. After
+/// centering on its midpoint, the candidate at that shift and ±1 neighbors
+/// exhaust all representatives which can be close to the finite segment.
+fn periodic_candidates_near_segment(
+    point: Point2,
+    midpoint: Point2,
+    (up, vp): (Option<f64>, Option<f64>),
+) -> Option<Vec<Point2>> {
+    let axis = |value, reference, period: Option<f64>| -> Option<Vec<f64>> {
+        if let Some(period) = period {
+            let center = get_mindiff(value, reference, period)?;
+            Some(
+                [-1.0_f64, 0.0, 1.0]
+                    .into_iter()
+                    .filter_map(|delta| {
+                        let coordinate = delta.mul_add(period, center);
+                        coordinate.is_finite().then_some(coordinate)
+                    })
+                    .collect(),
+            )
+        } else {
+            value.is_finite().then_some(vec![value])
+        }
+    };
+    let us = axis(point.x, midpoint.x, up)?;
+    let vs = axis(point.y, midpoint.y, vp)?;
+    Some(
+        itertools::iproduct!(us, vs)
+            .map(|(u, v)| Point2::new(u, v))
+            .collect(),
+    )
+}
+
+fn enumerate_vertices_on_divisor<S: ParametricSurface3D>(
     divisor: (usize, usize),
     param_vertices: &HashMap<usize, Point2>,
     surface: &S,
+    spatial_tolerance: f64,
 ) -> Option<Vec<(f64, (usize, Point2))>> {
-    let (v0, v1) = divisor;
-    let (p, q) = (*param_vertices.get(&v0)?, *param_vertices.get(&v1)?);
-    let periods = (surface.period_u(), surface.period_v());
-    let q =
-        periodic_iterator(q, periods).min_by(|q, r| p.distance2(*q).total_cmp(&p.distance2(*r)))?;
-    let line = Line(p, q);
-    let iter = param_vertices.iter().filter_map(move |(v, uv)| {
-        periodic_iterator(*uv, periods)
-            .find(move |uv| line.distance_to_point_as_segment(*uv).so_small())
-            .map(move |uv| Some((line.search_nearest_parameter(uv, None, 1)?, (*v, uv))))
-    });
-    let mut vertices_on_divisor = iter.collect::<Option<Vec<_>>>()?;
-    vertices_on_divisor.sort_by(|(s, _), (t, _)| s.total_cmp(t));
-    vertices_on_divisor.dedup_by(|(_, (lhs_vertex, lhs_uv)), (_, (rhs_vertex, rhs_uv))| {
-        lhs_vertex == rhs_vertex || (*lhs_uv).near(&*rhs_uv)
-    });
-    if vertices_on_divisor.len() % 2 != 0 {
+    if !spatial_tolerance.is_finite() || spatial_tolerance < 0.0 {
         return None;
     }
-    Some(vertices_on_divisor)
+    let (v0, v1) = divisor;
+    let (p, original_q) = (*param_vertices.get(&v0)?, *param_vertices.get(&v1)?);
+    let periods = (surface.period_u(), surface.period_v());
+    let q = nearest_periodic_parameter(original_q, p, periods)?;
+    let (min, max) = param_vertices.values().chain([&p, &q]).try_fold(
+        (
+            Point2::new(f64::INFINITY, f64::INFINITY),
+            Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        ),
+        |(min, max), point| {
+            (point.x.is_finite() && point.y.is_finite()).then(|| {
+                (
+                    Point2::new(min.x.min(point.x), min.y.min(point.y)),
+                    Point2::new(max.x.max(point.x), max.y.max(point.y)),
+                )
+            })
+        },
+    )?;
+    let spans = max - min;
+    let scales = [periods.0.unwrap_or(spans.x), periods.1.unwrap_or(spans.y)];
+    if !scales
+        .iter()
+        .all(|scale| scale.is_finite() && *scale >= 0.0)
+    {
+        return None;
+    }
+    let normalized_difference = |a: Point2, b: Point2| -> Point2 {
+        Point2::new(
+            if scales[0] > 0.0 {
+                (a.x - b.x) / scales[0]
+            } else {
+                0.0
+            },
+            if scales[1] > 0.0 {
+                (a.y - b.y) / scales[1]
+            } else {
+                0.0
+            },
+        )
+    };
+    let direction = normalized_difference(q, p);
+    let direction2 = direction.x.mul_add(direction.x, direction.y * direction.y);
+    if !direction2.is_finite() || direction2 <= 0.0 {
+        return None;
+    }
+    let midpoint = Point2::new(
+        0.5_f64.mul_add(q.x - p.x, p.x),
+        0.5_f64.mul_add(q.y - p.y, p.y),
+    );
+    let epsilon = DEFAULT_NUMERICAL_TOLERANCES.healing_divisor_parameter_relative;
+    let max_distance2 = spatial_tolerance * spatial_tolerance;
+    let mut found = param_vertices
+        .iter()
+        .filter_map(|(vertex, original_uv)| {
+            let candidates = periodic_candidates_near_segment(*original_uv, midpoint, periods)?;
+            candidates
+                .into_iter()
+                .filter_map(|uv| {
+                    let relative = normalized_difference(uv, p);
+                    let parameter =
+                        relative.x.mul_add(direction.x, relative.y * direction.y) / direction2;
+                    if !parameter.is_finite() || parameter < -epsilon || parameter > 1.0 + epsilon {
+                        return None;
+                    }
+                    let parameter = parameter.clamp(0.0, 1.0);
+                    let error_u = parameter.mul_add(-direction.x, relative.x);
+                    let error_v = parameter.mul_add(-direction.y, relative.y);
+                    let residual2 = error_u.mul_add(error_u, error_v * error_v);
+                    if !residual2.is_finite() || residual2 > epsilon * epsilon {
+                        return None;
+                    }
+                    let on_divisor = Point2::new(
+                        parameter.mul_add(q.x - p.x, p.x),
+                        parameter.mul_add(q.y - p.y, p.y),
+                    );
+                    let lhs = surface.evaluate(uv.x, uv.y);
+                    let rhs = surface.evaluate(on_divisor.x, on_divisor.y);
+                    let distance2 = lhs.distance2(rhs);
+                    (distance2.is_finite() && distance2 <= max_distance2)
+                        .then_some((parameter, (*vertex, uv)))
+                })
+                .min_by(|left, right| left.0.total_cmp(&right.0).then(left.1.0.cmp(&right.1.0)))
+        })
+        .collect::<Vec<_>>();
+    found.sort_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0).then(lhs.1.0.cmp(&rhs.1.0)));
+    // Different topological vertices must remain distinct even if their
+    // projected UV coordinates coincide, or the wire parity changes.
+    found.dedup_by(|lhs, rhs| lhs.1.0 == rhs.1.0);
+    (found.len() % 2 == 0).then_some(found)
 }
 
 // --- create_new_edges ---
@@ -1650,21 +1854,6 @@ fn boundary_type<S: ParametricSurface3D>(
     } else {
         BoundaryType::Negative
     }
-}
-
-fn periodic_iterator(
-    p: Point2,
-    (up, vp): (Option<f64>, Option<f64>),
-) -> impl Iterator<Item = Point2> {
-    let u_offsets = up.map_or_else(
-        || vec![0.0],
-        |period| vec![-2.0 * period, -period, 0.0, period, 2.0 * period],
-    );
-    let v_offsets = vp.map_or_else(
-        || vec![0.0],
-        |period| vec![-2.0 * period, -period, 0.0, period, 2.0 * period],
-    );
-    itertools::iproduct!(u_offsets, v_offsets).map(move |(dx, dy)| p + Vector2::new(dx, dy))
 }
 
 fn nearest_correction(
