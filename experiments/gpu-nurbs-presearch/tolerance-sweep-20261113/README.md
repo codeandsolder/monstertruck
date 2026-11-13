@@ -25,13 +25,35 @@ normally has a nonzero exit code; evaluate whether the stage-4 47-face
 solid was produced and the reported numerical work. Face count and
 manifold status alone do not prove geometric equivalence.
 
-Original optimized branch (`perf/ssi-reuse-division-samples-20261113`):
-stage4 ~70.921s, 951,774 NURBS seeds, 949,338 3D Newton, 1,005,172
-4D Newton. With a 0.001mm sampling floor: stage4 ~62.966s, 854,934
-NURBS seeds, 852,498 3D Newton, 908,332 4D Newton, same 47-face
-stage4 and same stage5 failure. Wall times fluctuate with host load.
+## Complete sampling-only sweep (Asus, same source fixture)
 
-All commands use Rust 1.99.1 and the system's normal sccache-integrated
-Cargo wrapper. Do not treat microbench timings as production-optimized
-performance. Do not merge experimental environment knobs as permanent
-public API; the eventual solution needs a coherent error-budget policy.
+| Curve sampling floor | Stage4 wall | NURBS searches | 3D Newton calls | 4D Newton calls | Stage4 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| No override | 70.921s | 951,774 | 949,338 | 1,005,172 | 47-face PASS |
+| 0.001mm (1µm) | 62.966s | 854,934 | 852,498 | 908,332 | 47-face PASS |
+| 0.01mm (10µm) | 39.556s | 440,053 | 437,974 | 492,369 | 47-face PASS |
+| 0.1mm (100µm) | 38.349s | 439,358 | pending count parse | pending count parse | 47-face PASS |
+
+The original stage5 invalid oriented shell still blocks the remainder of
+the replay; face count and manifoldness do NOT establish geometric fidelity.
+
+The 0.01mm -> 0.1mm result has essentially **no further effect** on the
+NURBS workload: only 695 searches saved by a further 10x coarsening.
+The modeled-curve division trace reported 2,498 divisions producing
+6,655 points at 0.1mm, versus roughly 439,000 NURBS searches. This is
+not a simple over-tessellation problem. The remaining workload is driven by
+repeated nonlinear SSI reprojection of curves elsewhere in the Boolean
+pipeline, plus other topology operations.
+
+## Modeling-tolerance axis
+
+On Acer (do not cross-compare wall times with Asus), raising the requested
+modeling tolerance from 1e-5mm to 0.001mm (100x) left the total Newton
+counts **identical** (949,338 3D and 1,005,172 4D; 951,774 seeds).
+The model's outward-facing tolerance is not driving most of those repeated
+internal calculations. Test for 0.01mm modeling tolerance is in progress.
+
+All these measurements use the unoptimized Rust test profile and substantial
+host-load variation. Compare solver counts to distinguish actual work removal
+from timing noise. Do not infer that any coarse sampling option is ready for
+production without a geometric-error comparison.
