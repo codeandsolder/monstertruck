@@ -46,6 +46,17 @@ impl BooleanTolerance {
         DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_validation_factor * self.length
     }
 
+    /// Exact curve/surface endpoint admission, independent of the seed mesh.
+    pub(super) fn boundary_residual(self) -> f64 {
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_boundary_search_factor * self.length
+    }
+
+    /// Cross-face endpoint stitching radius. This is a numerical
+    /// canonicalization tolerance, never the permitted modeling-error budget.
+    pub(super) fn cross_face_stitch_residual(self) -> f64 {
+        DEFAULT_NUMERICAL_TOLERANCES.cross_face_stitch_factor * self.length
+    }
+
     pub(super) fn area_for_span(self, span: f64) -> f64 {
         DEFAULT_NUMERICAL_TOLERANCES
             .boolean_area_floor_factor
@@ -97,6 +108,17 @@ mod tests {
         assert_eq!(base.surface_support_residual(), 4.0e-6);
         assert_eq!(base.fragment_residual(), 4.0e-6);
         assert_eq!(tighter.mesh_seed, base.mesh_seed);
+    }
+
+    #[test]
+    fn boundary_and_cross_face_precision_scales_with_operation() {
+        let precise = BooleanTolerance::new(1.0e-8);
+        assert_eq!(precise.boundary_residual(), 8.0e-8);
+        assert_eq!(precise.cross_face_stitch_residual(), 8.0e-8);
+        let base = BooleanTolerance::new(1.0e-6);
+        assert_eq!(base.boundary_residual(), 8.0e-6);
+        assert_eq!(base.cross_face_stitch_residual(), 8.0e-6);
+        assert_eq!(precise.mesh_seed, base.mesh_seed);
     }
 
     #[test]

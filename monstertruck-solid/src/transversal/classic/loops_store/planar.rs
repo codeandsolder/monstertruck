@@ -2,11 +2,10 @@
 
 use super::{
     BooleanTolerance, BoundedCurve, CurveParameter, Cut, Edge, EuclideanSpace, HashMap, InnerSpace,
-    Invertible, KERNEL_EPSILON, LoopsStore, MetricSpace, Origin, ParameterDivision1D,
-    ParametricCurve3D, Point2, Point3, PolygonMesh, PolylineCurve, SearchNearestParameter,
-    SearchParameter, ShapesOpStatus, Shell, StandardVertex, Vector2, Vector3, WithPointCloud,
+    Invertible, LoopsStore, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point2,
+    Point3, PolygonMesh, PolylineCurve, SearchNearestParameter, SearchParameter, ShapesOpStatus,
+    Shell, StandardVertex, Vector2, Vector3, WithPointCloud,
 };
-use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vector3)> {
     let tolerance = BooleanTolerance::new(tol);
@@ -581,8 +580,18 @@ where
                 continue;
             }
             let mut emap = HashMap::default();
-            target.add_imprint_vertex(face_index, edge.front(), &mut emap)?;
-            target.add_imprint_vertex(face_index, edge.back(), &mut emap)?;
+            target.add_imprint_vertex(
+                face_index,
+                edge.front(),
+                BooleanTolerance::new(tol),
+                &mut emap,
+            )?;
+            target.add_imprint_vertex(
+                face_index,
+                edge.back(),
+                BooleanTolerance::new(tol),
+                &mut emap,
+            )?;
             if target[face_index].has_partitioned_coincident_path(edge) {
                 continue;
             }
@@ -591,9 +600,6 @@ where
     }
     Some(())
 }
-
-pub(super) const CROSS_FACE_STITCH_TOLERANCE: f64 =
-    DEFAULT_NUMERICAL_TOLERANCES.cross_face_stitch_factor * KERNEL_EPSILON;
 
 #[cfg(test)]
 mod planar_region_identity_tests {

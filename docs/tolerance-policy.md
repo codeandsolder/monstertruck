@@ -373,3 +373,36 @@ including distinct UV/parameter search and world-coordinate acceptance,
 before numerical tuning can be considered end-to-end. Do not conflate
 `GeometryPolicy::Standard` (maximum error permitted) with the actual
 numerical tolerance spent by topology classification.
+
+## Classic Boolean boundary and cross-face tolerance propagation (2026-11-13)
+
+The LoopsStore now receives the operation's typed BooleanTolerance through
+BranchContext and BoundaryEndpoint. The previous CROSS_FACE_STITCH_TOLERANCE
+constant, evaluated once from global epsilon, has been removed.
+
+- Polygon boundary insertion uses BooleanTolerance.boundary_residual()
+  rather than a fixed global 8 * KERNEL_EPSILON.
+- Exact boundary supported-vertex candidates keep the mesh-seed broad-phase
+  search radius separate from the exact carrier-support residual
+  (BooleanTolerance.surface_support_residual()) and candidate ambiguity
+  (BooleanTolerance.boundary_residual()).
+- Curve/surface tangent endpoint correction requires independently projected
+  exact carriers to agree within BooleanTolerance.length; predictor
+  displacement may extend to BooleanTolerance.boundary_residual().
+- Cross-face endpoint canonicalization uses
+  BooleanTolerance.cross_face_stitch_residual() for unique candidate search;
+  collapse of short SSI edges and deduplication of candidate vertices uses
+  BooleanTolerance.length, never mesh seed.
+- Coplanar-imprint endpoint insertion now passes its explicit operation-local
+  length through to the polygon insertion path.
+
+Existing default 1e-6 operations retain 4e-6 carrier-support, 8e-6 boundary,
+and 8e-6 cross-face stitch thresholds. New geometric regressions exercise a
+real 5e-7 separation and verify that a 1e-8 numerical request rejects both
+cross-face stitching and an off-carrier tangent projection.
+
+Still to fix: the general search_boundary_parameter inverse search calls
+SearchParameter (which has its own numerical precision) and may accept its
+result as exact without independently checking the returned spatial residual.
+Its coarse nearest-search allowance must stay distinct from exact admission
+and from parameter-space endpoint classification.
