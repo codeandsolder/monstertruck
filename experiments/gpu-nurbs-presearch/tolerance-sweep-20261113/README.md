@@ -32,7 +32,7 @@ manifold status alone do not prove geometric equivalence.
 | No override | 70.921s | 951,774 | 949,338 | 1,005,172 | 47-face PASS |
 | 0.001mm (1µm) | 62.966s | 854,934 | 852,498 | 908,332 | 47-face PASS |
 | 0.01mm (10µm) | 39.556s | 440,053 | 437,974 | 492,369 | 47-face PASS |
-| 0.1mm (100µm) | 38.349s | 439,358 | pending count parse | pending count parse | 47-face PASS |
+| 0.1mm (100µm) | 38.349s | 439,358 | 437,302 | 491,560 | 47-face PASS |
 
 The original stage5 invalid oriented shell still blocks the remainder of
 the replay; face count and manifoldness do NOT establish geometric fidelity.
@@ -51,7 +51,11 @@ On Acer (do not cross-compare wall times with Asus), raising the requested
 modeling tolerance from 1e-5mm to 0.001mm (100x) left the total Newton
 counts **identical** (949,338 3D and 1,005,172 4D; 951,774 seeds).
 The model's outward-facing tolerance is not driving most of those repeated
-internal calculations. Test for 0.01mm modeling tolerance is in progress.
+internal calculations. Increasing the requested modeling tolerance again to **0.01mm (1000x baseline)**
+on the same Acer host also left the entire call counts **identical**,
+with the expected 47-face stage4 solid and the unchanged stage5 error.
+At 0.001mm modeling tolerance stage4 was 78.352s; at 0.01mm
+it was 75.680s, variation without an actual reduction in work.
 
 All these measurements use the unoptimized Rust test profile and substantial
 host-load variation. Compare solver counts to distinguish actual work removal
