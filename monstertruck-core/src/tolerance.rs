@@ -90,8 +90,10 @@ pub struct NumericalTolerances {
     pub mesh_uv_closure: f64,
     /// Spatial distance used by tessellation to rescue samples at analytic poles.
     pub mesh_singularity_distance: f64,
-    /// Squared UV-distance threshold inherited by closed-face healing.
-    pub healing_boundary_closure_squared: f64,
+    /// Relative per-axis native UV span discrepancy allowed for healing wire closure.
+    pub healing_boundary_uv_relative: f64,
+    /// Native UV coordinate ulps included in healing wire closure.
+    pub healing_boundary_uv_roundoff_ulps: f64,
     /// Parameter-space probe step used to recover a normal at a singular NURBS point.
     pub normal_probe_step: f64,
     /// Residual accepted by derivative consistency assertions.
@@ -263,7 +265,8 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     mesh_periodic_period_match_relative: 1.0e-6,
     mesh_uv_closure: 1.0e-3,
     mesh_singularity_distance: 1.0e-3,
-    healing_boundary_closure_squared: 1.0e-3,
+    healing_boundary_uv_relative: 1.0e-6,
+    healing_boundary_uv_roundoff_ulps: 8.0,
     normal_probe_step: 1.0e-4,
     derivative_residual: 1.0e-4,
     surface_span_factor: 8.0,

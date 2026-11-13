@@ -207,3 +207,131 @@ fn split_closed_faces_reports_change_only_on_first_normalizing_pass() {
     assert_eq!(shell.edges.len(), stabilized.edges.len());
     assert_eq!(shell.faces.len(), stabilized.faces.len());
 }
+
+#[test]
+fn healing_boundary_closure_uses_each_axis_native_scale_and_3d_evidence() {
+    use super::{BoundaryType, PolylineCurve, boundary_type};
+    use monstertruck_geometry::prelude::{BsplineSurface, KnotVector};
+
+    let square_surface = |u_span: f64, v_span: f64, physical_u_span: f64| {
+        BsplineSurface::new_unchecked(
+            (
+                KnotVector::from(vec![0.0, 0.0, u_span, u_span]),
+                KnotVector::from(vec![0.0, 0.0, v_span, v_span]),
+            ),
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![
+                    Point3::new(physical_u_span, 0.0, 0.0),
+                    Point3::new(physical_u_span, 1.0, 0.0),
+                ],
+            ],
+        )
+    };
+    for (u_span, v_span) in [(1e-9, 1e9), (1e9, 1e-9), (1.0, 1.0)] {
+        let surface = square_surface(u_span, v_span, 1.0);
+        let close = Point2::new(0.5e-6 * u_span, 0.5e-6 * v_span);
+        let poly = PolylineCurve(vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(u_span, 0.0),
+            Point2::new(u_span, v_span),
+            Point2::new(0.0, v_span),
+            close,
+        ]);
+        assert!(
+            matches!(boundary_type(&poly, &surface, 1e-4), BoundaryType::Positive),
+            "physical unit-square should close regardless of native U/V scale {u_span:e}/{v_span:e}"
+        );
+        let reversed = PolylineCurve(vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(0.0, v_span),
+            Point2::new(u_span, v_span),
+            Point2::new(u_span, 0.0),
+            close,
+        ]);
+        assert!(matches!(
+            boundary_type(&reversed, &surface, 1e-4),
+            BoundaryType::Negative
+        ));
+        let interrupted = PolylineCurve(vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(u_span, 0.0),
+            Point2::new(u_span, v_span),
+            Point2::new(0.0, v_span),
+            Point2::new(1e-4 * u_span, 0.0),
+        ]);
+        assert!(
+            matches!(
+                boundary_type(&interrupted, &surface, 1e-4),
+                BoundaryType::NotClosed
+            ),
+            "a 0.01% native UV gap should never be closed by an absolute 1e-3 squared-UV cutoff"
+        );
+    }
+    let large_physical = square_surface(1.0, 1.0, 1.0e9);
+    let uv_small_but_physically_open = PolylineCurve(vec![
+        Point2::new(0.0, 0.0),
+        Point2::new(1.0, 0.0),
+        Point2::new(1.0, 1.0),
+        Point2::new(0.0, 1.0),
+        Point2::new(0.5e-6, 0.0),
+    ]);
+    assert!(
+        matches!(
+            boundary_type(&uv_small_but_physically_open, &large_physical, 1e-4),
+            BoundaryType::NotClosed
+        ),
+        "small normalized UV residual alone is not a physically closed wire"
+    );
+}
+
+#[test]
+fn healing_boundary_closure_rejects_nonfinite_and_short_contours() {
+    use super::{BoundaryType, PolylineCurve, boundary_type};
+    use monstertruck_geometry::prelude::Plane;
+
+    let plane = Plane::xy();
+    let short = PolylineCurve(vec![
+        Point2::new(0.0, 0.0),
+        Point2::new(1.0, 0.0),
+        Point2::new(0.0, 0.0),
+    ]);
+    assert!(matches!(
+        boundary_type(&short, &plane, 1e-6),
+        BoundaryType::NotClosed
+    ));
+    let invalid = PolylineCurve(vec![
+        Point2::new(0.0, 0.0),
+        Point2::new(1.0, 0.0),
+        Point2::new(1.0, f64::NAN),
+        Point2::new(0.0, 0.0),
+    ]);
+    assert!(matches!(
+        boundary_type(&invalid, &plane, 1e-6),
+        BoundaryType::NotClosed
+    ));
+    let valid = PolylineCurve(vec![
+        Point2::new(0.0, 0.0),
+        Point2::new(1.0, 0.0),
+        Point2::new(0.0, 1.0),
+        Point2::new(0.0, 0.0),
+    ]);
+    assert!(matches!(
+        boundary_type(&valid, &plane, f64::INFINITY),
+        BoundaryType::NotClosed
+    ));
+    assert!(matches!(
+        boundary_type(&valid, &plane, -1.0),
+        BoundaryType::NotClosed
+    ));
+    let degenerate = PolylineCurve(vec![
+        Point2::new(0.0, 0.0),
+        Point2::new(1.0, 0.0),
+        Point2::new(2.0, 0.0),
+        Point2::new(0.0, 0.0),
+    ]);
+    assert!(matches!(
+        boundary_type(&degenerate, &plane, 1.0e-6),
+        BoundaryType::NotClosed
+    ));
+}

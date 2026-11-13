@@ -76,7 +76,8 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `mesh_periodic_period_match_relative` | `1.0e-6` | Dimensionless relative compatibility threshold between paired meshing periods. |
 | `mesh_uv_closure` | `1.0e-3` | UV closure threshold for already-sampled tessellation boundaries. |
 | `mesh_singularity_distance` | `1.0e-3` | Spatial distance used by tessellation to rescue samples at analytic poles. |
-| `healing_boundary_closure_squared` | `1.0e-3` | Squared UV-distance threshold inherited by closed-face healing. |
+| `healing_boundary_uv_relative` | `1.0e-6` | Per-native-axis span-relative closed-loop endpoint discrepancy in healing's 2D chart. |
+| `healing_boundary_uv_roundoff_ulps` | `8.0` | Representable-coordinate ulps for UV loop endpoint closure, independent of 3D distance. |
 | `normal_probe_step` | `1.0e-4` | Parameter-space probe step used to recover a normal at a singular NURBS point. |
 | `derivative_residual` | `1.0e-4` | Residual accepted by derivative consistency assertions. |
 | `surface_span_factor` | `8.0` | Multiplier from requested tessellation tolerance to surface-span segment length. |
@@ -1216,3 +1217,61 @@ failing-before/passing-after reproduction and a
 topology-cardinality assertion; separate upstream
 issue tracking is maintained in the project Notion
 hardening bug catalog.
+
+
+## Closed face loop classification: UV parameter evidence **and** spatial evidence (2026-11-13)
+
+`monstertruck-healing/src/split_closed_faces/mod.rs::boundary_type`
+previously tested `first.distance2(last) <
+healing_boundary_closure_squared` with one fixed
+`1e-3` applied to **UV distance squared**, despite the
+native chart dimensions being arbitrary. This
+threshold could falsely mark a physically open wire
+as closed when the UV gap was small in absolute
+numeric coordinates (e.g. 0.02 in a unit chart),
+or reject a physically closed wire represented in a
+chart with 1e9 native units despite equal real 3D
+geometry. It also treated zero-area contours as
+`Negative`, potentially causing a degenerate loop
+to enter hole-handling logic.
+
+The two existing callers, `non_closed_wires_in_param_divisor`
+and `assort_boundary`, already have both the actual
+`ParametricSurface3D` and the operation's world-space
+`tol`; they now pass both to `boundary_type`.
+The corrected algorithm checks closure **separately on U
+and V**, each against `native_axis_span *
+healing_boundary_uv_relative + representation-ulps *
+max(abs(min), abs(max))` (the two new central policy
+fields). It also evaluates the actual 3D surface at
+both endpoints and demands finite squared distance
+`<= tol*tol`. This prevents a tiny UV ratio from
+masking a physically large gap on an ill-scaled
+surface, without conflating parameter and spatial
+units. Invalid/nonfinite inputs, insufficient
+vertices and zero/nonfinite oriented area classify
+as `NotClosed` rather than a genuine
+Positive/Negative loop. A genuine negative-oriented
+finite-area wire remains Negative.
+
+Regressions use bilinear B-spline surfaces with
+**identical physical unit-square geometry** in
+native U/V charts parametrized independently as
+1e-9/1e9, 1e9/1e-9, and 1/1. Physically nearly
+closed contours with 0.5e-6 fractional UV endpoint
+drift are consistently recognized as Positive or
+Negative according to orientation, while 1e-4
+fractional open gaps are refused. A second
+B-spline has 1e9 world-length scale along one axis
+but ordinary [0,1] UV; even a 0.5e-6 fractional UV
+gap is refused because its **world-space gap**
+is huge. Degenerate and invalid sample loops,
+negative/NaN/infinite tolerances, and the canonical
+STEP healing fixtures are tested separately.
+
+The original source face topology and native
+periodicity are not inferred from coincident 3D
+points alone. A contour must close in the
+**unwrapped UV chart** *as well as* spatially,
+so a periodic full-turn seam is not silently
+mistaken for an oriented planar UV loop.
