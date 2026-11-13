@@ -432,3 +432,45 @@ Follow-up: topological endpoint coalescing needs independent second-carrier
 validation even for a candidate discovered by a wide mesh seed. The
 operation-local accuracy budget must be used to certify the actual locus,
 not merely to find the candidate.
+
+## Opposite-carrier incidence and operation-local curve equivalence (2026-11-13)
+
+A boundary vertex discovered within the coarse mesh search radius is **not**
+necessarily on the other Boolean carrier. `add_geom_vertex` now checks the
+actual canonical exact endpoint through the other surface's nearest-parameter
+search followed by an independent forward-evaluated spatial residual. It must
+fit `BooleanTolerance.surface_support_residual()` **before** `set_point` or
+`change_vertex` mutates topology. The same admission function is used in
+`supported_boundary_vertex`, and that check now precedes candidate grouping;
+an unsupported neighboring vertex cannot inherit the group's valid status.
+
+Tests cover (a) rejecting a unique nearby boundary that lies 5e-7 off the
+opposite planar carrier with a requested 1e-8 numerical length, for both
+hinted and unhinted searches, and verifying the original edge and vertex are
+unchanged; and (b) accepting an approximate seed when its *exact* canonical
+endpoint really does lie on both carriers.
+
+Coplanar imprinting separately validates the forward residual of every
+`SearchParameter` result against the operation length before counting its edge
+as incident. This prevents a global `Point::near` result from splitting a
+parallel, genuinely distinct edge 5e-7 away at requested 1e-8 tolerance.
+
+Curve-equivalence evidence is also now parameterized by the explicit typed
+`BooleanTolerance`. The bounded sample/projection tests for whole-curve
+coincidence, trimmed-subedge containment and endpoint-aligned matching use
+spatial distances against **operation.length**, not their own implicit global
+`near()` thresholds. The operation policy is threaded through LoopStore
+boundary candidate ambiguity, repeated-edge reuse, coplanar imprinting, and
+edge insertion. The final region-weld helper explicitly selects the current
+Boolean numerical default, rather than receiving a hidden tolerance from
+these generic validators. It still needs a fully operation-local policy at
+its upstream interface in a later pass.
+
+A red-then-green regression independently demonstrated the preexisting bug:
+two parallel edges 5e-7 apart were incorrectly treated as **one** nearest
+boundary candidate with operation length 1e-8. With explicit local coincidence
+tolerance the two candidates remain ambiguous, and a separate curve-sampling
+regression confirms the same precision distinction. The changed helpers are
+validation evidence, not mathematical proof that arbitrary oscillating curves
+cannot diverge between samples; structural/provenance-based equality remains
+the longer-term target.

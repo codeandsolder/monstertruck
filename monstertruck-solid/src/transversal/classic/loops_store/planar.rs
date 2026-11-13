@@ -595,7 +595,12 @@ where
             if target[face_index].has_partitioned_coincident_path(edge) {
                 continue;
             }
-            target[face_index].add_edge(edge.clone(), ShapesOpStatus::And, true);
+            target[face_index].add_edge(
+                edge.clone(),
+                ShapesOpStatus::And,
+                true,
+                BooleanTolerance::new(tol),
+            );
         }
     }
     Some(())

@@ -1,4 +1,5 @@
-use monstertruck_core::tolerance::{DEFAULT_NUMERICAL_TOLERANCES, Tolerance};
+use super::tolerance::BooleanTolerance;
+use monstertruck_core::{cgmath64::MetricSpace, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
 use monstertruck_traits::{BoundedCurve, CurveParameter, ParametricCurve, SearchNearestParameter};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -10,12 +11,17 @@ pub(super) enum CurveCoincidence {
     SampledValidation,
 }
 
-pub(super) fn validate_sampled_coincidence<P, C>(lhs: &C, rhs: &C) -> CurveCoincidence
+pub(super) fn validate_sampled_coincidence<P, C>(
+    lhs: &C,
+    rhs: &C,
+    tolerances: BooleanTolerance,
+) -> CurveCoincidence
 where
-    P: Tolerance + Clone,
+    P: MetricSpace<Metric = f64> + Clone,
     C: ParametricCurve<Point = P>
         + BoundedCurve<Point = P>
-        + SearchNearestParameter<CurveParameter, Point = P>, {
+        + SearchNearestParameter<CurveParameter, Point = P>,
+{
     let samples_on = |curve: &C, other: &C| {
         let (t0, t1) = curve.range_tuple();
         DEFAULT_NUMERICAL_TOLERANCES
@@ -25,7 +31,9 @@ where
                 let point = curve.evaluate(f64::mul_add(t1 - t0, fraction, t0));
                 other
                     .search_nearest_parameter(point.clone(), None, 100)
-                    .is_some_and(|parameter| other.evaluate(parameter).near(&point))
+                    .is_some_and(|parameter| {
+                        other.evaluate(parameter).distance(point.clone()) <= tolerances.length
+                    })
             })
     };
     if samples_on(lhs, rhs) && samples_on(rhs, lhs) {
@@ -41,12 +49,17 @@ where
 /// the same geometric carrier. It is used only where topology has already shown
 /// that both curves contain the same imprint point; distinct crossings therefore
 /// remain fail-closed.
-pub(super) fn validate_sampled_containment<P, C>(container: &C, candidate: &C) -> CurveCoincidence
+pub(super) fn validate_sampled_containment<P, C>(
+    container: &C,
+    candidate: &C,
+    tolerances: BooleanTolerance,
+) -> CurveCoincidence
 where
-    P: Tolerance + Clone,
+    P: MetricSpace<Metric = f64> + Clone,
     C: ParametricCurve<Point = P>
         + BoundedCurve<Point = P>
-        + SearchNearestParameter<CurveParameter, Point = P>, {
+        + SearchNearestParameter<CurveParameter, Point = P>,
+{
     let (t0, t1) = candidate.range_tuple();
     let all_samples_contained = DEFAULT_NUMERICAL_TOLERANCES
         .boolean_containment_fractions
@@ -55,7 +68,9 @@ where
             let point = candidate.evaluate(f64::mul_add(t1 - t0, fraction, t0));
             container
                 .search_nearest_parameter(point.clone(), None, 100)
-                .is_some_and(|parameter| container.evaluate(parameter).near(&point))
+                .is_some_and(|parameter| {
+                    container.evaluate(parameter).distance(point.clone()) <= tolerances.length
+                })
         });
     if all_samples_contained {
         CurveCoincidence::SampledValidation
@@ -71,20 +86,27 @@ where
 /// (notably SSI curves) whose inverse/nearest-parameter solver can fail even
 /// when their forward evaluations agree. It is sampled validation, not analytic
 /// equality.
-pub(super) fn validate_endpoint_aligned_coincidence<P, C>(lhs: &C, rhs: &C) -> CurveCoincidence
+pub(super) fn validate_endpoint_aligned_coincidence<P, C>(
+    lhs: &C,
+    rhs: &C,
+    tolerances: BooleanTolerance,
+) -> CurveCoincidence
 where
-    P: Tolerance,
-    C: ParametricCurve<Point = P> + BoundedCurve<Point = P>, {
+    P: MetricSpace<Metric = f64>,
+    C: ParametricCurve<Point = P> + BoundedCurve<Point = P>,
+{
     let (l0, l1) = lhs.range_tuple();
     let (r0, r1) = rhs.range_tuple();
     let fractions = DEFAULT_NUMERICAL_TOLERANCES.boolean_containment_fractions;
     let aligned = fractions.into_iter().all(|fraction| {
         lhs.evaluate(f64::mul_add(l1 - l0, fraction, l0))
-            .near(&rhs.evaluate(f64::mul_add(r1 - r0, fraction, r0)))
+            .distance(rhs.evaluate(f64::mul_add(r1 - r0, fraction, r0)))
+            <= tolerances.length
     });
     let reversed = fractions.into_iter().all(|fraction| {
         lhs.evaluate(f64::mul_add(l1 - l0, fraction, l0))
-            .near(&rhs.evaluate(f64::mul_add(r1 - r0, -fraction, r1)))
+            .distance(rhs.evaluate(f64::mul_add(r1 - r0, -fraction, r1)))
+            <= tolerances.length
     });
     if aligned || reversed {
         CurveCoincidence::SampledValidation
@@ -117,11 +139,19 @@ mod tests {
         ]);
 
         assert_eq!(
-            validate_sampled_coincidence::<Point3, _>(&lhs, &rhs),
+            validate_sampled_coincidence::<Point3, _>(
+                &lhs,
+                &rhs,
+                BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length)
+            ),
             CurveCoincidence::Distinct
         );
         assert_eq!(
-            validate_endpoint_aligned_coincidence::<Point3, _>(&lhs, &rhs),
+            validate_endpoint_aligned_coincidence::<Point3, _>(
+                &lhs,
+                &rhs,
+                BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length)
+            ),
             CurveCoincidence::Distinct
         );
     }
@@ -144,16 +174,43 @@ mod tests {
         ]);
 
         assert_eq!(
-            validate_sampled_containment::<Point3, _>(&full, &sub),
+            validate_sampled_containment::<Point3, _>(
+                &full,
+                &sub,
+                BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length)
+            ),
             CurveCoincidence::SampledValidation
         );
         assert_eq!(
-            validate_sampled_containment::<Point3, _>(&sub, &full),
+            validate_sampled_containment::<Point3, _>(
+                &sub,
+                &full,
+                BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length)
+            ),
             CurveCoincidence::Distinct
         );
         assert_eq!(
-            validate_sampled_containment::<Point3, _>(&full, &crossing),
+            validate_sampled_containment::<Point3, _>(
+                &full,
+                &crossing,
+                BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length)
+            ),
             CurveCoincidence::Distinct
+        );
+    }
+
+    #[test]
+    fn sampled_coincidence_distinguishes_sub_epsilon_offset_curves() {
+        let gap = 5.0e-7;
+        let lhs = PolylineCurve(vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+        let rhs = PolylineCurve(vec![Point3::new(0.0, 0.0, gap), Point3::new(1.0, 0.0, gap)]);
+        assert_eq!(
+            validate_sampled_coincidence::<Point3, _>(&lhs, &rhs, BooleanTolerance::new(1.0e-8)),
+            CurveCoincidence::Distinct,
+        );
+        assert_eq!(
+            validate_sampled_coincidence::<Point3, _>(&lhs, &rhs, BooleanTolerance::new(1.0e-6)),
+            CurveCoincidence::SampledValidation,
         );
     }
 
@@ -167,7 +224,11 @@ mod tests {
         let rhs = PolylineCurve(lhs.iter().rev().copied().collect());
 
         assert_eq!(
-            validate_endpoint_aligned_coincidence::<Point3, _>(&lhs, &rhs),
+            validate_endpoint_aligned_coincidence::<Point3, _>(
+                &lhs,
+                &rhs,
+                BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length)
+            ),
             CurveCoincidence::SampledValidation
         );
     }

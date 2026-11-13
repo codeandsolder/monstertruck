@@ -3,6 +3,7 @@
 use super::curve_equivalence::{
     CurveCoincidence, validate_endpoint_aligned_coincidence, validate_sampled_coincidence,
 };
+use super::tolerance::BooleanTolerance;
 use super::{
     AltCurve, AltCurveShell, AltRegion, Alternative, BoundedCurve, BoundingBox, Cut, Edge, EdgeId,
     HashMap, KERNEL_EPSILON, NurbsCurve, ParametricCurve, Point3, SearchNearestParameter,
@@ -89,10 +90,16 @@ fn curves_sampled_coincident<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> bool {
     let lhs = lhs.oriented_curve();
     let rhs = rhs.oriented_curve();
-    validate_endpoint_aligned_coincidence::<Point3, _>(&lhs, &rhs)
-        == CurveCoincidence::SampledValidation
-        || validate_sampled_coincidence::<Point3, _>(&lhs, &rhs)
-            == CurveCoincidence::SampledValidation
+    validate_endpoint_aligned_coincidence::<Point3, _>(
+        &lhs,
+        &rhs,
+        BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length),
+    ) == CurveCoincidence::SampledValidation
+        || validate_sampled_coincidence::<Point3, _>(
+            &lhs,
+            &rhs,
+            BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length),
+        ) == CurveCoincidence::SampledValidation
 }
 
 struct WeldContext<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> {

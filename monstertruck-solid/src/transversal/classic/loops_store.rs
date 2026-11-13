@@ -299,22 +299,27 @@ impl<P: Copy, C: Clone> Loops<P, C> {
         self.push(r#loop);
     }
 
-    fn reuse_coincident_edge(&mut self, edge0: &Edge<P, C>) -> bool
+    fn reuse_coincident_edge(&mut self, edge0: &Edge<P, C>, tolerances: BooleanTolerance) -> bool
     where
-        P: Tolerance,
+        P: Tolerance + MetricSpace<Metric = f64>,
         C: ParametricCurve<Point = P>
             + BoundedCurve<Point = P>
             + SearchNearestParameter<CurveParameter, Point = P>
             + Invertible, {
         let curves_sampled_match = |edge: &Edge<P, C>| {
-            validate_sampled_coincidence::<P, _>(&edge.oriented_curve(), &edge0.oriented_curve())
-                == CurveCoincidence::SampledValidation
+            validate_sampled_coincidence::<P, _>(
+                &edge.oriented_curve(),
+                &edge0.oriented_curve(),
+                tolerances,
+            ) == CurveCoincidence::SampledValidation
         };
         let coincident = self.iter().flat_map(|wire| wire.iter()).find_map(|edge| {
-            let same_direction = edge.front().point().near(&edge0.front().point())
-                && edge.back().point().near(&edge0.back().point());
-            let opposite_direction = edge.front().point().near(&edge0.back().point())
-                && edge.back().point().near(&edge0.front().point());
+            let same_direction = edge.front().point().distance(edge0.front().point())
+                <= tolerances.length
+                && edge.back().point().distance(edge0.back().point()) <= tolerances.length;
+            let opposite_direction = edge.front().point().distance(edge0.back().point())
+                <= tolerances.length
+                && edge.back().point().distance(edge0.front().point()) <= tolerances.length;
             (same_direction || opposite_direction)
                 .then(|| curves_sampled_match(edge))
                 .filter(|matched| *matched)
@@ -337,10 +342,12 @@ impl<P: Copy, C: Clone> Loops<P, C> {
         }
         self.iter_mut().for_each(|wire| {
             wire.iter_mut().for_each(|edge| {
-                let same_direction = edge.front().point().near(&edge0.front().point())
-                    && edge.back().point().near(&edge0.back().point());
-                let opposite_direction = edge.front().point().near(&edge0.back().point())
-                    && edge.back().point().near(&edge0.front().point());
+                let same_direction = edge.front().point().distance(edge0.front().point())
+                    <= tolerances.length
+                    && edge.back().point().distance(edge0.back().point()) <= tolerances.length;
+                let opposite_direction = edge.front().point().distance(edge0.back().point())
+                    <= tolerances.length
+                    && edge.back().point().distance(edge0.front().point()) <= tolerances.length;
                 if same_direction {
                     *edge = edge0.clone();
                 } else if opposite_direction {
@@ -356,15 +363,16 @@ impl<P: Copy, C: Clone> Loops<P, C> {
         edge0: Edge<P, C>,
         status: ShapesOpStatus,
         reuse_coincident: bool,
+        tolerances: BooleanTolerance,
     ) -> [Option<(usize, usize)>; 2]
     where
-        P: Tolerance,
+        P: Tolerance + MetricSpace<Metric = f64>,
         C: ParametricCurve<Point = P>
             + BoundedCurve<Point = P>
             + SearchNearestParameter<CurveParameter, Point = P>
             + Invertible,
     {
-        if reuse_coincident && self.reuse_coincident_edge(&edge0) {
+        if reuse_coincident && self.reuse_coincident_edge(&edge0, tolerances) {
             return [None, None];
         }
 
@@ -467,6 +475,7 @@ fn same_boundary_candidate<C>(
     existing_endpoint: Option<VertexId<Point3>>,
     edge: &Edge<Point3, C>,
     endpoint: Option<VertexId<Point3>>,
+    tolerances: BooleanTolerance,
 ) -> bool
 where
     C: Clone
@@ -479,24 +488,31 @@ where
     let same_endpoints = (existing
         .absolute_front()
         .point()
-        .near(&edge.absolute_front().point())
+        .distance(edge.absolute_front().point())
+        <= tolerances.length
         && existing
             .absolute_back()
             .point()
-            .near(&edge.absolute_back().point()))
+            .distance(edge.absolute_back().point())
+            <= tolerances.length)
         || (existing
             .absolute_front()
             .point()
-            .near(&edge.absolute_back().point())
+            .distance(edge.absolute_back().point())
+            <= tolerances.length
             && existing
                 .absolute_back()
                 .point()
-                .near(&edge.absolute_front().point()));
+                .distance(edge.absolute_front().point())
+                <= tolerances.length);
     same_endpoints
-        && (validate_sampled_coincidence::<Point3, _>(&existing.curve(), &edge.curve())
+        && (validate_sampled_coincidence::<Point3, _>(&existing.curve(), &edge.curve(), tolerances)
             == CurveCoincidence::SampledValidation
-            || validate_endpoint_aligned_coincidence::<Point3, _>(&existing.curve(), &edge.curve())
-                == CurveCoincidence::SampledValidation)
+            || validate_endpoint_aligned_coincidence::<Point3, _>(
+                &existing.curve(),
+                &edge.curve(),
+                tolerances,
+            ) == CurveCoincidence::SampledValidation)
 }
 
 impl<C> Loops<Point3, C> {
@@ -767,6 +783,20 @@ impl<P: Copy + Tolerance, C: Clone> LoopsStore<P, C> {
     }
 }
 
+/// Prove that a candidate canonical boundary point lies on the other exact
+/// Boolean carrier, not merely within the coarse tessellation search radius.
+///
+/// Inverse search may find an approximate UV for an off-surface point. Only its
+/// forward-evaluated spatial residual is evidence of incidence.
+fn on_other_carrier<S>(point: Point3, other_surface: &S, tolerances: BooleanTolerance) -> bool
+where S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3> {
+    other_surface
+        .search_nearest_parameter(point, None, 25)
+        .is_some_and(|(u, v)| {
+            other_surface.evaluate(u, v).distance(point) <= tolerances.surface_support_residual()
+        })
+}
+
 impl<C> LoopsStore<Point3, C> {
     fn search_boundary_parameter(
         &self,
@@ -797,7 +827,13 @@ impl<C> LoopsStore<Point3, C> {
                 ParameterKind::Inner(_) => None,
             };
             if let Some(existing) = candidate_edge.as_ref() {
-                return same_boundary_candidate(existing, candidate_endpoint, edge, endpoint);
+                return same_boundary_candidate(
+                    existing,
+                    candidate_endpoint,
+                    edge,
+                    endpoint,
+                    tolerances,
+                );
             }
 
             let canonical_point = match kind {
@@ -899,6 +935,13 @@ impl<C> LoopsStore<Point3, C> {
                 let Some(parameter) = curve.search_parameter(point, None, 1) else {
                     continue;
                 };
+                // As with exact boundary inverse search, the curve's own
+                // SearchParameter tolerance is not authoritative. Two trims
+                // separated by less than the global epsilon must not be
+                // imprinted onto each other at a tighter operation tolerance.
+                if curve.evaluate(parameter).distance(point) > tolerances.length {
+                    continue;
+                }
                 let Some(kind) = ParameterKind::try_new(parameter, curve.range_tuple()) else {
                     continue;
                 };
@@ -929,37 +972,45 @@ impl<C> LoopsStore<Point3, C> {
                             let same_endpoints = (reference
                                 .absolute_front()
                                 .point()
-                                .near(&edge.absolute_front().point())
+                                .distance(edge.absolute_front().point())
+                                <= tolerances.length
                                 && reference
                                     .absolute_back()
                                     .point()
-                                    .near(&edge.absolute_back().point()))
+                                    .distance(edge.absolute_back().point())
+                                    <= tolerances.length)
                                 || (reference
                                     .absolute_front()
                                     .point()
-                                    .near(&edge.absolute_back().point())
+                                    .distance(edge.absolute_back().point())
+                                    <= tolerances.length
                                     && reference
                                         .absolute_back()
                                         .point()
-                                        .near(&edge.absolute_front().point()));
+                                        .distance(edge.absolute_front().point())
+                                        <= tolerances.length);
                             let reference_curve = reference.curve();
                             let edge_curve = edge.curve();
                             let same_curve = validate_sampled_coincidence::<Point3, _>(
                                 &reference_curve,
                                 &edge_curve,
+                                tolerances,
                             ) == CurveCoincidence::SampledValidation
                                 || validate_sampled_containment::<Point3, _>(
                                     &reference_curve,
                                     &edge_curve,
+                                    tolerances,
                                 ) == CurveCoincidence::SampledValidation
                                 || validate_sampled_containment::<Point3, _>(
                                     &edge_curve,
                                     &reference_curve,
+                                    tolerances,
                                 ) == CurveCoincidence::SampledValidation
                                 || (same_endpoints
                                     && validate_endpoint_aligned_coincidence::<Point3, _>(
                                         &reference_curve,
                                         &edge_curve,
+                                        tolerances,
                                     ) == CurveCoincidence::SampledValidation);
                             if !same_curve {
                                 return None;
@@ -1099,7 +1150,6 @@ impl<C> LoopsStore<Point3, C> {
     where
         S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     {
-        let support_tol = tolerances.surface_support_residual();
         let ambiguity_tol = tolerances.boundary_residual();
         let mut candidates: Vec<(Point3, f64, Vec<Vertex<Point3>>)> = Vec::new();
         for vertex in self
@@ -1112,6 +1162,9 @@ impl<C> LoopsStore<Point3, C> {
             if distance > nearest_tolerance {
                 continue;
             }
+            if !on_other_carrier(location, other_surface, tolerances) {
+                continue;
+            }
             if let Some((_, _, vertices)) = candidates
                 .iter_mut()
                 .find(|(existing, _, _)| existing.distance(location) <= tolerances.length)
@@ -1119,12 +1172,6 @@ impl<C> LoopsStore<Point3, C> {
                 if !vertices.iter().any(|known| known.id() == vertex.id()) {
                     vertices.push(vertex.clone());
                 }
-                continue;
-            }
-            let Some(uv) = other_surface.search_nearest_parameter(location, None, 25) else {
-                continue;
-            };
-            if other_surface.evaluate(uv.0, uv.1).distance(location) > support_tol {
                 continue;
             }
             candidates.push((location, distance, vec![vertex.clone()]));
@@ -1201,6 +1248,19 @@ impl<C> LoopsStore<Point3, C> {
             }
         }
         let (wire_index, edge_index, kind, projected) = resolved?;
+        // Nearest-curve search is only discovery. Before coalescing an
+        // *existing* exact endpoint, certify its location against the
+        // intersecting exact surface, independently of the mesh error budget.
+        // Perform this before set_point/change_vertex mutates either store.
+        let wire_edge = &self[loops_index][wire_index][edge_index];
+        let endpoint = match kind {
+            ParameterKind::Front => Some(wire_edge.absolute_front().point()),
+            ParameterKind::Back => Some(wire_edge.absolute_back().point()),
+            ParameterKind::Inner(_) => None,
+        };
+        if endpoint.is_some_and(|point| !on_other_carrier(point, another_surface, tolerances)) {
+            return None;
+        }
         if let Some(projected) = projected {
             vertex.set_point(projected);
         }
@@ -1447,6 +1507,7 @@ impl<C> OperandLoopStores<C> {
         geom_edge: Edge<Point3, C>,
         status: ShapesOpStatus,
         reuse_coincident: bool,
+        tolerances: BooleanTolerance,
     ) where
         C: ParametricCurve<Point = Point3>
             + BoundedCurve<Point = Point3>
@@ -1454,8 +1515,8 @@ impl<C> OperandLoopStores<C> {
             + Invertible
             + Clone,
     {
-        self.poly[face_index].add_edge(poly_edge, status, reuse_coincident);
-        self.geom[face_index].add_edge(geom_edge, status, reuse_coincident);
+        self.poly[face_index].add_edge(poly_edge, status, reuse_coincident, tolerances);
+        self.geom[face_index].add_edge(geom_edge, status, reuse_coincident, tolerances);
     }
 }
 
@@ -1579,6 +1640,7 @@ where
         gedge.clone(),
         statuses[0],
         context.reuse_coincident,
+        context.tolerances,
     );
     context.operand1.add_intersection_edge(
         context.face_indices[1],
@@ -1586,6 +1648,7 @@ where
         gedge,
         statuses[1],
         context.reuse_coincident,
+        context.tolerances,
     );
     Some(())
 }
@@ -2000,6 +2063,85 @@ mod projection_tests {
     }
 
     #[test]
+    fn coarse_endpoint_candidates_must_belong_to_other_exact_carrier() {
+        // The input SSI seed lies on z=0 but the unique nearby boundary edge
+        // is actually on z=5e-7. Global Point::near and mesh search would
+        // have incorrectly welded that boundary into the plane.
+        let gap = 5.0e-7;
+        for hint in [None, Some((0, 0))] {
+            let old_front = Vertex::new(Point3::new(0.0, 0.0, gap));
+            let old_back = Vertex::new(Point3::new(1.0, 0.0, gap));
+            let edge = Edge::new_unchecked(
+                &old_front,
+                &old_back,
+                Line(old_front.point(), old_back.point()),
+            );
+            let mut store = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+                vec![edge].into(),
+                ShapesOpStatus::Unknown,
+            )])]);
+            let seed = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+            let mut edge_map = HashMap::default();
+            assert!(
+                store
+                    .add_geom_vertex(
+                        0,
+                        hint,
+                        false,
+                        &seed,
+                        &Plane::xy(),
+                        1.0e-3,
+                        BooleanTolerance::new(1.0e-8),
+                        &mut edge_map,
+                    )
+                    .is_none(),
+                "neither a hinted nor a global coarse candidate proves opposite-carrier incidence"
+            );
+            assert_eq!(store[0][0].len(), 1);
+            assert_eq!(store[0][0][0].absolute_front().id(), old_front.id());
+            assert_eq!(old_front.point(), Point3::new(0.0, 0.0, gap));
+            assert_eq!(seed.point(), Point3::new(0.0, 0.0, 0.0));
+            assert!(edge_map.is_empty());
+        }
+    }
+
+    #[test]
+    fn coarse_endpoint_search_may_snap_to_proven_exact_carrier() {
+        // A mesh seed may be off the carrier. Its exact boundary candidate,
+        // however, lies on the other surface and is safe to canonicalize.
+        let old_front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let old_back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new_unchecked(
+            &old_front,
+            &old_back,
+            Line(old_front.point(), old_back.point()),
+        );
+        let mut store = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        let seed = Vertex::new(Point3::new(0.0, 0.0, 5.0e-7));
+        let mut edge_map = HashMap::default();
+        assert!(
+            store
+                .add_geom_vertex(
+                    0,
+                    Some((0, 0)),
+                    false,
+                    &seed,
+                    &Plane::xy(),
+                    1.0e-3,
+                    BooleanTolerance::new(1.0e-8),
+                    &mut edge_map,
+                )
+                .is_some()
+        );
+        assert_eq!(seed.point(), old_front.point());
+        assert_eq!(store[0][0][0].absolute_front().id(), seed.id());
+        assert_eq!(store[0][0].len(), 1);
+    }
+
+    #[test]
     fn exact_geometry_resolves_boundary_endpoint_independently() {
         let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let old_back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
@@ -2194,6 +2336,38 @@ mod projection_tests {
     }
 
     #[test]
+    fn imprint_does_not_split_nearby_distinct_edges_with_sub_epsilon_tolerance() {
+        let gap = 5.0e-7;
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let c = Vertex::new(Point3::new(0.0, 0.0, gap));
+        let d = Vertex::new(Point3::new(1.0, 0.0, gap));
+        let edge0 = Edge::new_unchecked(&a, &b, Line(a.point(), b.point()));
+        let edge1 = Edge::new_unchecked(&c, &d, Line(c.point(), d.point()));
+        let loops = Loops(vec![
+            BoundaryWire::new(vec![edge0].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![edge1].into(), ShapesOpStatus::Unknown),
+        ]);
+        let mut store = LoopsStore(vec![loops]);
+        let split = Vertex::new(Point3::new(0.5, 0.0, 0.0));
+        let mut edge_map = HashMap::default();
+
+        assert!(
+            store
+                .add_imprint_vertex(0, &split, BooleanTolerance::new(1.0e-8), &mut edge_map)
+                .is_some()
+        );
+        assert_eq!(store[0][0].len(), 2);
+        assert_eq!(
+            store[0][1].len(),
+            1,
+            "the parallel edge 5e-7 away must not be split or welded"
+        );
+        assert_eq!(store[0][1][0].absolute_front().id(), c.id());
+        assert_eq!(store[0][1][0].absolute_back().id(), d.id());
+    }
+
+    #[test]
     fn imprint_rejects_distinct_crossing_boundary_edges() {
         let h0 = Vertex::new(Point3::new(-1.0, 0.0, 0.0));
         let h1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
@@ -2293,6 +2467,31 @@ mod projection_tests {
                     BooleanTolerance::new(KERNEL_EPSILON)
                 )
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn nearby_distinct_boundary_edges_cannot_pass_global_coincidence_epsilon() {
+        let gap = 5.0e-7;
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let c = Vertex::new(Point3::new(0.0, 0.0, gap));
+        let d = Vertex::new(Point3::new(1.0, 0.0, gap));
+        let edge0 = Edge::new_unchecked(&a, &b, Line(a.point(), b.point()));
+        let edge1 = Edge::new_unchecked(&c, &d, Line(c.point(), d.point()));
+        let store = LoopsStore(vec![Loops(vec![
+            BoundaryWire::new(vec![edge0].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![edge1].into(), ShapesOpStatus::Unknown),
+        ])]);
+        let query = Point3::new(0.5, 0.0, gap / 2.0);
+        let tolerances = BooleanTolerance::new(1.0e-8);
+        // Both are plausible nearest-search candidates. Neither is exact,
+        // and they do not constitute one topological locus at 1e-8.
+        assert!(
+            store
+                .search_boundary_parameter(0, query, 1.0e-3, tolerances)
+                .is_none(),
+            "two globally-near but operation-distinct trim edges are ambiguous"
         );
     }
 
@@ -2504,7 +2703,12 @@ mod projection_tests {
         let mut loops = Loops(vec![upper, lower]);
         let incoming = line(&b, &c);
 
-        let _ = loops.add_edge(incoming, ShapesOpStatus::And, false);
+        let _ = loops.add_edge(
+            incoming,
+            ShapesOpStatus::And,
+            false,
+            BooleanTolerance::new(KERNEL_EPSILON),
+        );
 
         // The operation must split the lower sibling into the two triangles
         // A-B-C and B-F-C without merging the upper A-C-D-E region.
