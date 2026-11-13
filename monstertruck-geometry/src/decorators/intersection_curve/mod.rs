@@ -62,10 +62,12 @@ where
     S1: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     let function = move |Vector4 { x, y, z, w }| {
-        let ders0 = surface0.derivatives(1, x, y);
-        let (pt0, uder0, vder0) = (ders0[0][0], ders0[1][0], ders0[0][1]);
-        let ders1 = surface1.derivatives(1, z, w);
-        let (pt1, uder1, vder1) = (ders1[0][0], ders1[1][0], ders1[0][1]);
+        // The 4-variable surface/surface Newton solve needs two first-order
+        // surface jets. Asking for six independent derivative_mn evaluations
+        // at every iteration duplicates NURBS rational basis work.
+        let (pt0, uder0, vder0) = surface0.evaluate_with_first_derivatives(x, y);
+        let (pt1, uder1, vder1) = surface1.evaluate_with_first_derivatives(z, w);
+        let (pt0, pt1) = (pt0.to_vec(), pt1.to_vec());
         CalcOutput {
             value: (pt0 - pt1).extend(plane_normal.dot((pt0 + pt1) / 2.0 - plane_point.to_vec())),
             derivation: Matrix4::from_cols(
@@ -283,24 +285,11 @@ where
     ) -> Option<(Point3, Point2, Point2)> {
         let (surface0, surface1) = (self.surface0(), self.surface1());
         let function = |Vector4 { x, y, z, w }| {
-            let ders0 = surface0.derivatives(2, x, y);
-            let (pt0, uder0, vder0, uuder0, uvder0, vvder0) = (
-                ders0[0][0],
-                ders0[1][0],
-                ders0[0][1],
-                ders0[2][0],
-                ders0[1][1],
-                ders0[0][2],
-            );
-            let ders1 = surface1.derivatives(2, z, w);
-            let (pt1, uder1, vder1, uuder1, uvder1, vvder1) = (
-                ders1[0][0],
-                ders1[1][0],
-                ders1[0][1],
-                ders1[2][0],
-                ders1[1][1],
-                ders1[0][2],
-            );
+            let (pt0, uder0, vder0, uuder0, uvder0, vvder0) =
+                surface0.evaluate_with_second_derivatives(x, y);
+            let (pt1, uder1, vder1, uuder1, uvder1, vvder1) =
+                surface1.evaluate_with_second_derivatives(z, w);
+            let (pt0, pt1) = (pt0.to_vec(), pt1.to_vec());
             let diff = (pt0 + pt1) / 2.0 - point.to_vec();
             let (n0, n1) = (uder0.cross(vder0), uder1.cross(vder1));
             let n = n0.cross(n1);
