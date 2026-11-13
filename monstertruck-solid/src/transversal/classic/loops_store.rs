@@ -773,6 +773,7 @@ impl<C> LoopsStore<Point3, C> {
         loops_index: usize,
         point: Point3,
         nearest_tolerance: f64,
+        tolerances: BooleanTolerance,
     ) -> Option<(usize, usize, ParameterKind, Option<Point3>)>
     where
         C: Clone
@@ -824,6 +825,12 @@ impl<C> LoopsStore<Point3, C> {
                 let Some(parameter) = curve.search_parameter(point, None, 1) else {
                     continue;
                 };
+                // SearchParameter can use its own kernel epsilon. A returned
+                // parameter is only exact at the operation's requested spatial
+                // precision if its forward evaluation agrees independently.
+                if curve.evaluate(parameter).distance(point) > tolerances.length {
+                    continue;
+                }
                 let Some(kind) = ParameterKind::try_new(parameter, curve.range_tuple()) else {
                     continue;
                 };
@@ -1005,6 +1012,7 @@ impl<C> LoopsStore<Point3, C> {
             loops_index,
             vertex.point(),
             tolerances.boundary_residual(),
+            tolerances,
         )?;
         if let Some(projected) = projected {
             vertex.set_point(projected);
@@ -1039,6 +1047,7 @@ impl<C> LoopsStore<Point3, C> {
         (wire_index, edge_index): (usize, usize),
         point: Point3,
         nearest_tolerance: f64,
+        tolerances: BooleanTolerance,
     ) -> Option<(usize, usize, ParameterKind, Option<Point3>)>
     where
         C: BoundedCurve<Point = Point3>
@@ -1047,9 +1056,9 @@ impl<C> LoopsStore<Point3, C> {
     {
         let edge = self.get(loops_index)?.get(wire_index)?.get(edge_index)?;
         let curve = edge.curve();
-        let classify = |parameter: f64| {
+        let classify = |parameter: f64, residual_limit: f64| {
             let projected = curve.evaluate(parameter);
-            if projected.distance(point) > nearest_tolerance {
+            if projected.distance(point) > residual_limit {
                 return None;
             }
             let kind = ParameterKind::try_new(parameter, curve.range_tuple())?;
@@ -1063,11 +1072,11 @@ impl<C> LoopsStore<Point3, C> {
 
         curve
             .search_parameter(point, None, 1)
-            .and_then(classify)
+            .and_then(|t| classify(t, tolerances.length))
             .or_else(|| {
                 curve
                     .search_nearest_parameter(point, None, 10)
-                    .and_then(classify)
+                    .and_then(|t| classify(t, nearest_tolerance))
             })
     }
 
@@ -1159,10 +1168,21 @@ impl<C> LoopsStore<Point3, C> {
         // resolves the endpoint within the tessellation budget, otherwise fall
         // back to the global ambiguity-safe exact-boundary search.
         let hinted = boundary_hint.and_then(|hint| {
-            self.resolve_boundary_hint(loops_index, hint, vertex.point(), nearest_tolerance)
+            self.resolve_boundary_hint(
+                loops_index,
+                hint,
+                vertex.point(),
+                nearest_tolerance,
+                tolerances,
+            )
         });
         let resolved = hinted.or_else(|| {
-            self.search_boundary_parameter(loops_index, vertex.point(), nearest_tolerance)
+            self.search_boundary_parameter(
+                loops_index,
+                vertex.point(),
+                nearest_tolerance,
+                tolerances,
+            )
         });
         if resolved.is_none() && sampled_on_boundary_vertex {
             if let Some(vertices) = self.supported_boundary_vertex(
@@ -1917,9 +1937,42 @@ mod projection_tests {
         let point = Point3::new(0.5, 1.125 * KERNEL_EPSILON, 0.0);
 
         let (_, _, kind, projected) = store
-            .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
+            .search_boundary_parameter(
+                0,
+                point,
+                8.0 * KERNEL_EPSILON,
+                BooleanTolerance::new(KERNEL_EPSILON),
+            )
             .expect("unique bounded nearest projection should recover the boundary parameter");
 
+        assert!(matches!(kind, ParameterKind::Inner(_)));
+        assert_eq!(projected, Some(Point3::new(0.5, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn boundary_exact_inverse_requires_requested_spatial_precision() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let z = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new_unchecked(&a, &z, Line(a.point(), z.point()));
+        let store = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        let query = Point3::new(0.5, 5.0e-7, 0.0);
+        let precision = BooleanTolerance::new(1.0e-8);
+        // The line inverse itself uses the generic kernel epsilon and
+        // regards this point as on the line. The Boolean MUST reject that
+        // classification at the tighter operation-specific tolerance.
+        assert!(
+            store
+                .search_boundary_parameter(0, query, precision.boundary_residual(), precision)
+                .is_none()
+        );
+        // A separate mesh candidate search is allowed to find the line:
+        // candidate proximity is not an exact-incidence certificate.
+        let (_, _, kind, projected) = store
+            .search_boundary_parameter(0, query, 1.0e-3, precision)
+            .expect("coarse candidate search should return the exact projection");
         assert!(matches!(kind, ParameterKind::Inner(_)));
         assert_eq!(projected, Some(Point3::new(0.5, 0.0, 0.0)));
     }
@@ -1993,10 +2046,20 @@ mod projection_tests {
 
         assert!(
             store
-                .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
+                .search_boundary_parameter(
+                    0,
+                    point,
+                    8.0 * KERNEL_EPSILON,
+                    BooleanTolerance::new(KERNEL_EPSILON)
+                )
                 .is_none()
         );
-        let recovered = store.search_boundary_parameter(0, point, 1.0e-3);
+        let recovered = store.search_boundary_parameter(
+            0,
+            point,
+            1.0e-3,
+            BooleanTolerance::new(KERNEL_EPSILON),
+        );
         assert!(
             recovered.is_some(),
             "mesh-error budget may discover a unique exact boundary candidate"
@@ -2021,7 +2084,12 @@ mod projection_tests {
         let store = LoopsStore(vec![loops]);
         let point = Point3::new(0.0, 3.0e-4, 0.0);
 
-        let recovered = store.search_boundary_parameter(0, point, 1.0e-3);
+        let recovered = store.search_boundary_parameter(
+            0,
+            point,
+            1.0e-3,
+            BooleanTolerance::new(KERNEL_EPSILON),
+        );
         assert!(
             recovered.is_some(),
             "coincident endpoint copies are one geometric boundary locus"
@@ -2055,7 +2123,12 @@ mod projection_tests {
 
         assert!(
             store
-                .search_boundary_parameter(0, Point3::new(0.0, 0.0, 0.0), 1.0e-3)
+                .search_boundary_parameter(
+                    0,
+                    Point3::new(0.0, 0.0, 0.0),
+                    1.0e-3,
+                    BooleanTolerance::new(KERNEL_EPSILON)
+                )
                 .is_none()
         );
     }
@@ -2159,7 +2232,12 @@ mod projection_tests {
 
         assert!(
             store
-                .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
+                .search_boundary_parameter(
+                    0,
+                    point,
+                    8.0 * KERNEL_EPSILON,
+                    BooleanTolerance::new(KERNEL_EPSILON)
+                )
                 .is_some()
         );
     }
@@ -2179,7 +2257,12 @@ mod projection_tests {
         let point = Point3::new(1.0, 1.125 * KERNEL_EPSILON, 0.0);
 
         let (_, _, kind, projected) = store
-            .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
+            .search_boundary_parameter(
+                0,
+                point,
+                8.0 * KERNEL_EPSILON,
+                BooleanTolerance::new(KERNEL_EPSILON),
+            )
             .expect("incident edges sharing one vertex are one boundary locus");
 
         assert!(matches!(kind, ParameterKind::Front | ParameterKind::Back));
@@ -2203,7 +2286,12 @@ mod projection_tests {
 
         assert!(
             store
-                .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
+                .search_boundary_parameter(
+                    0,
+                    point,
+                    8.0 * KERNEL_EPSILON,
+                    BooleanTolerance::new(KERNEL_EPSILON)
+                )
                 .is_none()
         );
     }

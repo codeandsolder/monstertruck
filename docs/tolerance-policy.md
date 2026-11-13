@@ -406,3 +406,29 @@ SearchParameter (which has its own numerical precision) and may accept its
 result as exact without independently checking the returned spatial residual.
 Its coarse nearest-search allowance must stay distinct from exact admission
 and from parameter-space endpoint classification.
+
+## Exact boundary inverse search must certify spatial error
+
+The legacy Line::search_parameter (and other curve implementations) may use
+kernel-global Point::near to report a nominally exact inverse. LoopsStore's
+search_boundary_parameter used to accept any such answer without checking the
+actual distance between curve.evaluate(parameter) and the query point.
+Consequently, an operation requesting 1e-8 precision could accept a 5e-7
+lateral discrepancy as exact solely because the curve's own inverse search
+uses 1e-6. The outer Boolean policy was not reaching this admission decision.
+
+The exact-incidence path now checks Euclidean evaluation residual against the
+operation's own BooleanTolerance.length, independent of whether the inverse
+solver said the parameter was exact. A separate nearest-search pass retains
+its explicit mesh discovery radius and returns the curve-projected coordinate;
+that broad-phase allowance is not labeled proof of exact incidence. The
+hinted exact-search path performs the same independent residual check before
+considering the separately budgeted nearest candidate. A regression queries
+a line at 5e-7 lateral offset: no exact hit at a 1e-8 request, yet its nearest
+projection remains discoverable when explicitly supplying a coarse search
+radius. Source values are unchanged for default operations.
+
+Follow-up: topological endpoint coalescing needs independent second-carrier
+validation even for a candidate discovered by a wide mesh seed. The
+operation-local accuracy budget must be used to certify the actual locus,
+not merely to find the candidate.
