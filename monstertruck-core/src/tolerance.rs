@@ -66,6 +66,10 @@ pub struct NumericalTolerances {
     pub mesh_boundary_roundoff_ulps: f64,
     /// Dimensionless tie margin comparing squared-UV-distance connector scores.
     pub mesh_open_pair_connector_score_relative: f64,
+    /// Model-space periodic-tangent length-per-radian threshold for sampled singularity recovery.
+    pub mesh_periodic_singularity_tangent_length: f64,
+    /// Relative tangent-magnitude recovery threshold, independent of native U/V parameter units.
+    pub mesh_periodic_singularity_tangent_relative: f64,
     /// Model-coordinate residual of a sampled periodic contour's constant section.
     pub mesh_periodic_section_spatial_residual: f64,
     /// Relative native periodic-parameter span comparison for meshing loops.
@@ -239,6 +243,8 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     mesh_boundary_wrap_relative: 1.0e-6,
     mesh_boundary_roundoff_ulps: 8.0,
     mesh_open_pair_connector_score_relative: 1.0e-6,
+    mesh_periodic_singularity_tangent_length: 1.0e-6,
+    mesh_periodic_singularity_tangent_relative: 1.0e-6,
     mesh_periodic_section_spatial_residual: 1.0e-6,
     mesh_periodic_span_relative: 1.0e-6,
     mesh_periodic_seam_endpoint_relative: 1.0e-6,

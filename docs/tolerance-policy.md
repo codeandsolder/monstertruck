@@ -64,6 +64,8 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `mesh_boundary_wrap_relative` | `1.0e-6` | Native UV span-relative seam offset used for bounded/periodic parameter normalization. |
 | `mesh_boundary_roundoff_ulps` | `8.0` | Absolute native-parameter ulps for representable UV boundary rounding. |
 | `mesh_open_pair_connector_score_relative` | `1.0e-6` | Dimensionless margin comparing two sums of squared UV endpoint-connector distances. |
+| `mesh_periodic_singularity_tangent_length` | `1.0e-6` | World-length equivalent of per-radian periodic tangent magnitude when detecting mesh poles and validating transverse probe changes. |
+| `mesh_periodic_singularity_tangent_relative` | `1.0e-6` | Dimensionless relative reduction of periodic tangent magnitude required at a recovered singularity candidate. |
 | `mesh_periodic_section_spatial_residual` | `1.0e-6` | World-space residual when testing whether a sampled periodic loop lies on one fixed geometric section. |
 | `mesh_periodic_span_relative` | `1.0e-6` | Relative native-period threshold when qualifying full-turn spans and compacting wrapped loops. |
 | `mesh_periodic_seam_endpoint_relative` | `1.0e-6` | Relative native-period endpoint exclusion when constructing meshing seam loops. |
@@ -909,3 +911,62 @@ The still-open singularity inverse
 `singular_periodic_other_parameter` contains a distinct model
 derivative/parameter slope vs spatial precision decision and is
 not modified by this patch.
+
+
+## Periodic singularity recovery — separate native UV, first derivatives and model length (2026-11-13)
+
+The previous `singular_periodic_other_parameter` algorithm
+computed `|dS/dperiodic_parameter|`, a quantity with units
+**model length / periodic UV**, called it `radius` and compared it
+directly to world-distance `KERNEL_EPSILON`. Its finite difference
+`(|sample_derivative|-|origin_derivative|) / delta_other` has
+units **model length / (periodic UV × other UV)** and was tested
+against that same world distance. The candidate's derivative residual
+used a third implicit allowance inherited from generic
+`periodic_relative`. Its probe step dropped any native range narrower
+than `KERNEL_EPSILON`, falling back to a completely arbitrary `1 UV`
+regardless of model size or nonperiodic parameter scaling.
+
+The recovery path now explicitly obtains the finite, positive
+native periodic-axis period and converts the derivative magnitude
+to a **characteristic physical periodic tangent length per radian**
+with `|dS/dparameter| × native_period / TAU`. For circular
+revolutions it equals the actual circle radius; for a generic periodic
+surface it is a local tangent-scale proxy, **not** an algebraic radius
+or singularity certificate. Two distinct entries in the central
+numerical policy control world-scale tangent smallness
+(`mesh_periodic_singularity_tangent_length`) and dimensionless
+relative reduction at a candidate
+(`mesh_periodic_singularity_tangent_relative`).
+
+Transverse parameter probes use either a finite positive native
+domain span or an inferred **UV step corresponding to one periodic
+tangent-length of physical travel**, from the ratio to the
+nonperiodic surface derivative. Both probe distances remain in
+native *other-axis* UV units. No absolute 1-UV fallback is needed.
+The finite difference rejects insufficient *physical tangent-length
+change*, rather than comparing a derivative slope to a model
+distance. Candidate parameterization is computed from that ratio
+with the proper UV dimension; nonfinite or invalid values refuse.
+
+Finally, a derivative vanishing at **one** periodic coordinate
+isn't enough evidence that a ring collapses. Both near-zero
+direct and extrapolated pole candidates now require sampled
+3D agreement of the source surface at quarter-turn, half-turn,
+three-quarter-turn and full-turn positions, measured against the
+existing independently named
+`mesh_periodic_section_spatial_residual` world-length
+criterion. This is a **sampling check appropriate to meshing**, not a
+continuous proof of the entire surface. Empty curves and invalid
+periodic-axis indices return `None` rather than indexing blindly.
+No source CAD geometry or Boolean admissibility criterion changes.
+
+Focused regressions exercise geometrically identical infinite
+conical support with native axial parameter scales
+`1e-9, 1e-4, 1 and 1e3`, recovering the identical 3D apex
+for each, as well as a nondegenerate constant-radius cylinder
+that cannot have an apex and invalid/empty inputs. The existing
+full-period cone-cap/ring tests remain enabled. The source CAD
+constructive replay's stage4 was again valid at 47 faces with the
+**separately experimental** faster sampling settings; stage5 is
+still the pre-existing unknown-face classifier failure.

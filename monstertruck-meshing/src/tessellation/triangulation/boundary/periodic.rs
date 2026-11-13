@@ -11,13 +11,10 @@
 //! is unchanged.
 
 use super::{
-    HashMap, InnerSpace, KERNEL_EPSILON, MetricSpace, Point2, Point3, PolyBoundaryPiece,
-    PreMeshableSurface, SurfacePoint, Tolerance, UvKey, connect_edges, polyline_on_surface,
+    HashMap, InnerSpace, MetricSpace, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface,
+    SurfacePoint, Tolerance, UvKey, connect_edges, polyline_on_surface,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
-
-const SINGULAR_RADIUS_RELATIVE_TOLERANCE: f64 = DEFAULT_NUMERICAL_TOLERANCES.periodic_relative;
-const DEFAULT_SINGULAR_PARAMETER_PROBE: f64 = 1.0;
 
 fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> std::cmp::Ordering {
     let f = move |x: &f64| f64::abs(x - previous);
@@ -581,49 +578,105 @@ fn uv_with_axis_values(
     uv
 }
 
+/// The norm of a periodic derivative has units of world-length/native-UV.
+/// Convert it to world-length/radian using the full native parameter period;
+/// this is invariant under a positive affine reparameterization of the turn.
+fn periodic_tangent_length_per_radian(
+    surface: &impl PreMeshableSurface,
+    axis: usize,
+    uv: Point2,
+    period: f64,
+) -> Option<f64> {
+    if !period.is_finite() || period <= 0.0 {
+        return None;
+    }
+    let tangent = axis_derivative_norm(surface, axis, uv)? * (period / std::f64::consts::TAU);
+    (tangent.is_finite() && tangent >= 0.0).then_some(tangent)
+}
+
+/// Check physical collapse of a sampled periodic cross-section. A vanishing
+/// derivative at one parameter alone does not prove that an entire ring
+/// collapses to a point (a periodic chart can have an isolated stationary
+/// parameter without a singular point).
+fn sampled_periodic_collapse(
+    surface: &impl PreMeshableSurface,
+    axis: usize,
+    uv: Point2,
+    period: f64,
+) -> bool {
+    let origin = surface.evaluate(uv.x, uv.y);
+    [0.25_f64, 0.5, 0.75, 1.0].into_iter().all(|fraction| {
+        let mut sample = uv;
+        sample[axis] = fraction.mul_add(period, uv[axis]);
+        let point = surface.evaluate(sample.x, sample.y);
+        origin.distance(point)
+            <= DEFAULT_NUMERICAL_TOLERANCES.mesh_periodic_section_spatial_residual
+    })
+}
+
 fn singular_periodic_other_parameter(
     curve: &[SurfacePoint],
     surface: &impl PreMeshableSurface,
     periodic_axis: usize,
 ) -> Option<f64> {
-    let other_axis = 1 - periodic_axis;
+    let (other_axis, period) = match periodic_axis {
+        0 => (1, surface.period_u()?),
+        1 => (0, surface.period_v()?),
+        _ => return None,
+    };
+    let reference = *curve.first()?;
     let other =
         curve.iter().map(|point| point[other_axis]).sum::<f64>() / crate::count_as_f64(curve.len());
-    let periodic = curve[0][periodic_axis];
-    let uv = uv_with_axis_values(curve[0], periodic_axis, periodic, other);
-    let radius = axis_derivative_norm(surface, periodic_axis, uv)?;
-    if radius <= KERNEL_EPSILON {
-        Some(other)
-    } else {
-        let (_, range) = surface_axis_range(surface, other_axis);
-        let step = range
-            .map(|(min, max)| (max - min).abs())
-            .filter(|span| span.is_finite() && *span > KERNEL_EPSILON)
-            .unwrap_or(DEFAULT_SINGULAR_PARAMETER_PROBE);
-        [-step, step]
-            .into_iter()
-            .filter_map(|delta| {
-                let sample_uv =
-                    uv_with_axis_values(curve[0], periodic_axis, periodic, other + delta);
-                let sample_radius = axis_derivative_norm(surface, periodic_axis, sample_uv)?;
-                let slope = (sample_radius - radius) / delta;
-                if slope.abs() <= KERNEL_EPSILON {
-                    None
-                } else {
-                    let candidate = other - radius / slope;
-                    let candidate_uv =
-                        uv_with_axis_values(curve[0], periodic_axis, periodic, candidate);
-                    let candidate_radius =
-                        axis_derivative_norm(surface, periodic_axis, candidate_uv)?;
-                    (candidate.is_finite()
-                        && candidate_radius
-                            <= KERNEL_EPSILON.max(radius * SINGULAR_RADIUS_RELATIVE_TOLERANCE))
-                    .then_some((candidate_radius, (candidate - other).abs(), candidate))
-                }
-            })
-            .min_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0).then(lhs.1.total_cmp(&rhs.1)))
-            .map(|(_, _, candidate)| candidate)
+    let periodic = reference[periodic_axis];
+    let uv = uv_with_axis_values(reference, periodic_axis, periodic, other);
+    let tangent = periodic_tangent_length_per_radian(surface, periodic_axis, uv, period)?;
+    let policy = DEFAULT_NUMERICAL_TOLERANCES;
+    let length_tol = policy.mesh_periodic_singularity_tangent_length;
+    if tangent <= length_tol && sampled_periodic_collapse(surface, periodic_axis, uv, period) {
+        return Some(other);
     }
+
+    // A parameter interval is meaningful in native UV units, irrespective
+    // of its size in millimetres. An additional physical probe travels a
+    // tangent-length world-distance along the transverse tangent, avoiding an
+    // arbitrary "1 UV unit" fallback on unbounded/placeholder ranges.
+    let (_, range) = surface_axis_range(surface, other_axis);
+    let domain_step = range
+        .map(|(min, max)| max - min)
+        .filter(|step| step.is_finite() && *step > 0.0);
+    let transverse_speed = axis_derivative_norm(surface, other_axis, uv)?;
+    let physical_step = tangent / transverse_speed;
+    let physical_step = (physical_step.is_finite() && physical_step > 0.0).then_some(physical_step);
+
+    [domain_step, physical_step]
+        .into_iter()
+        .flatten()
+        .flat_map(|step| [-step, step])
+        .filter_map(|delta| {
+            let sample_uv = uv_with_axis_values(reference, periodic_axis, periodic, other + delta);
+            let sample_tangent =
+                periodic_tangent_length_per_radian(surface, periodic_axis, sample_uv, period)?;
+            let tangent_change = sample_tangent - tangent;
+            // Compare model-space tangent change to a model-space threshold.
+            // The former slope threshold (length/UV² vs length) depended on
+            // arbitrary native chart scaling.
+            if !tangent_change.is_finite() || tangent_change.abs() <= length_tol {
+                return None;
+            }
+            let candidate = other - tangent * delta / tangent_change;
+            if !candidate.is_finite() {
+                return None;
+            }
+            let candidate_uv = uv_with_axis_values(reference, periodic_axis, periodic, candidate);
+            let candidate_tangent =
+                periodic_tangent_length_per_radian(surface, periodic_axis, candidate_uv, period)?;
+            (candidate_tangent
+                <= length_tol.max(tangent * policy.mesh_periodic_singularity_tangent_relative)
+                && sampled_periodic_collapse(surface, periodic_axis, candidate_uv, period))
+            .then_some((candidate_tangent, (candidate - other).abs(), candidate))
+        })
+        .min_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0).then(lhs.1.total_cmp(&rhs.1)))
+        .map(|(_, _, candidate)| candidate)
 }
 
 fn singular_surface_point(
@@ -658,6 +711,74 @@ pub(super) fn close_open_periodic_curve_to_singular(
 #[cfg(test)]
 mod numerical_period_tests {
     use super::*;
+
+    #[test]
+    fn singular_cone_root_recovers_same_world_apex_under_axial_reparameterization() {
+        use monstertruck_geometry::prelude::{
+            Invertible, Line, Matrix4, ParametricSurface, Processor, RevolutionSurface, Vector3,
+        };
+        use std::f64::consts::TAU;
+
+        // The unbounded analytic support is always radius = 2.5 + z;
+        // changing the native profile step only rescales the other UV axis.
+        for parameter_scale in [1.0e-9, 1.0e-4, 1.0, 1.0e3] {
+            let profile = Line(
+                Point3::new(2.5, 0.0, 0.0),
+                Point3::new(2.5 + parameter_scale, 0.0, parameter_scale),
+            );
+            let mut surface: Processor<_, Matrix4> =
+                Processor::new(RevolutionSurface::by_revolution(
+                    profile,
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vector3::unit_z(),
+                ));
+            surface.invert();
+            let ring = (0..=16)
+                .map(|index| {
+                    let uv = Point2::new(TAU * f64::from(index) / 16.0, 0.0);
+                    SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y)))
+                })
+                .collect::<Vec<_>>();
+            let candidate = singular_periodic_other_parameter(&ring, &surface, 0)
+                .unwrap_or_else(|| panic!("must recover cone apex at scale {parameter_scale}"));
+            let at_apex = surface.evaluate(0.0, candidate);
+            let opposite = surface.evaluate(std::f64::consts::PI, candidate);
+            assert!(
+                (at_apex.z + 2.5).abs() <= 1.0e-6,
+                "native scale {parameter_scale} found wrong apex height: {at_apex:?}",
+            );
+            assert!(
+                at_apex.distance(opposite) <= 1.0e-6,
+                "native scale {parameter_scale} did not collapse in 3D",
+            );
+        }
+    }
+
+    #[test]
+    fn constant_radius_cylinder_does_not_invent_a_singular_pole() {
+        use monstertruck_geometry::prelude::{
+            Invertible, Line, Matrix4, ParametricSurface, Processor, RevolutionSurface, Vector3,
+        };
+        use std::f64::consts::TAU;
+
+        let profile = Line(Point3::new(2.5, 0.0, 0.0), Point3::new(2.5, 0.0, 1.0));
+        let mut surface: Processor<_, Matrix4> = Processor::new(RevolutionSurface::by_revolution(
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+        ));
+        surface.invert();
+        let ring = (0..=16)
+            .map(|index| {
+                let uv = Point2::new(TAU * f64::from(index) / 16.0, 0.0);
+                SurfacePoint::from((uv, surface.evaluate(uv.x, uv.y)))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(singular_periodic_other_parameter(&ring, &surface, 0), None);
+        assert!(!sampled_periodic_collapse(&surface, 0, ring[0].uv, TAU));
+        assert_eq!(singular_periodic_other_parameter(&[], &surface, 0), None);
+        assert_eq!(singular_periodic_other_parameter(&ring, &surface, 2), None);
+    }
 
     #[test]
     fn constant_section_test_rejects_world_deviation_independent_of_axial_parameter_scale() {
