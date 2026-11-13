@@ -108,6 +108,8 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `boolean_planar_normal_cosine_slack` | `1.0e-10` | Dimensionless allowed deviation of aligned planar carrier normals. |
 | `boolean_planar_tangent_cosine_slack` | `1.0e-8` | Dimensionless allowed deviation of planar trim tangent alignment. |
 | `meshing_debug_uv_edge_tolerance` | `1.0e-9` | Native UV-coordinate tolerance used for tessellation projection diagnostics. |
+| `step_trim_knot_parameter_relative` | `1.0e-6` | Maximum native STEP knot-domain-relative overshoot admitted for numeric endpoint clamping. |
+| `step_trim_knot_parameter_roundoff_ulps` | `8.0` | Absolute-parameter-magnitude roundoff added to the STEP native-domain clamp. |
 | `step_uv_clamp_probe` | `1.0e-3` | Native UV-coordinate threshold for STEP trim seam probe. |
 | `step_trim_residual_mm` | `1.0e-8` | Millimetre residual for STEP trim curve reconstruction. |
 | `step_output_distance_accuracy` | `1.0e-6` | STEP file uncertainty metadata (current model units). |
@@ -730,3 +732,33 @@ These are algebraic carrier-recognition tolerances, never the
 user's Boolean topological coincidence length or permitted source
 modeling change. Experimental sampling floors and numeric overrides
 remain restricted to the separate benchmark worktree.
+
+
+## Real STEP knot-domain clamp vs placeholder-axis handling (2026-11-13)
+
+`monstertruck-io/src/step/load/step_geometry/geom_impls/parameter_trims.rs`
+previously snapped any STEP UV parameter sitting within an absolute
+`1e-6` of the limits of a *genuine knot-bounded axis*, regardless of
+the knot span. That wrongly equated the global spatial kernel epsilon
+with a native parameter distance. The already documented "placeholder
+axis is not a bounded domain" distinction is retained unchanged.
+
+`clamp_near_range` now admits only a finite positive native knot
+interval and computes a separately named relative limit proportional
+to that actual interval, plus roundoff measured in machine ulps of
+the absolute parameter magnitude. All other values remain unchanged,
+including excursions too far beyond the real domain and invalid ranges.
+For the common [0,1] parameter domain, the prior 1e-6 behavior is
+retained; for a 1e-9 knot interval, an overshoot of 1e-11 no longer
+gets silently snapped to the boundary. This is a **numerical UV
+roundoff rule**, not a maximum geometric displacement or source-feature
+healing tolerance. No source STEP model geometry is intentionally
+changed by this update.
+
+Existing fixture tests distinguish genuine knot boundaries from
+unbounded analytic placeholder axes. Additional direct regressions
+check tiny finite knot domains, legitimate representable endpoint
+drift, unit-domain compatibility, invalid ranges and nonfinite
+values. The historical measurement table above describes the earlier
+fixed-kernel-epsilon implementation and must not be interpreted as
+post-change metrics.
