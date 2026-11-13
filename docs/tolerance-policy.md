@@ -544,3 +544,42 @@ coordinates plus the number of candidates in the requested spatial
 interval. There is no extra fixed numerical grid tolerance to tune.
 Any large-source performance effect must be measured before claiming
 an improvement or regression.
+
+## Operation-local planar-chart admission (2026-11-13)
+
+The Boolean planar overlay has two separate tasks: decide whether a projected
+chart crossing represents a new **exact** edge node, and choose a convenient
+chart for a known analytic carrier. Neither may silently widen a caller's
+numeric coincidence tolerance to the global `KERNEL_EPSILON`.
+
+- `needs_exact_noding` now receives the operation's numerical length and
+  ignores an apparent UV T-junction only when its original world-space
+  endpoints actually agree within that length. Its scale-relative UV
+  crossing tests retain their separately named chart-space threshold; the
+  UV ratio is not a spatial modeling error allowance.
+- `CylinderChart::new` qualifies the first world-space vertex of a certified
+  circular carrier using the same requested length. The rational-cylinder
+  certificate itself remains independent of that qualification.
+- `classification::sample_points_on_face` rejects degenerate tessellation
+  triangles against the operation-local `BooleanTolerance.area_floor` in
+  squared world-coordinate units, not the square of the fixed kernel
+  epsilon. A rejected mesh still takes the preexisting trimmed-region
+  interior-sampling path.
+
+Focused regressions distinguish 500 nm-separated endpoints and cylinder
+radial discrepancies at requested 10 nm and 1 um numerical lengths. These
+tests check numerical identity only, not permission to modify the model by
+that amount. Remaining `divide_face` UV-area and UV boundary-contact
+thresholds need separate Jacobian/conditioning analysis: their parameter
+units cannot be replaced by a raw world-space tolerance.
+
+
+Verification on the Rust 1.99.1 Asus worktree: 158/158 `monstertruck-solid`
+unit tests pass and all-target strict Clippy passes. The original STEP
+`mixed_complete_constructive_ir_replays_without_intermediate_step_import`
+replay completed stage 4 (void) in 95.434 s, producing the asserted valid
+47-face solid. Stage 5 still fails at the previously known three-face oriented
+open shell. Solver totals are unchanged from previous verified branch tip:
+948,784 3D Newton calls, 1,004,854 4D Newton calls, and 951,220 NURBS
+presearch queries. This change does not claim a measured speedup; the
+95.434 s wall time is confounded by host load.

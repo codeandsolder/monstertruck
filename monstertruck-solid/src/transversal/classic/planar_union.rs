@@ -13,7 +13,6 @@ use super::tolerance::BooleanTolerance;
 use super::weld::{node_selected_regions, point_lex_cmp};
 use super::{AltCurve, AltRegion, ShapeOpsCurve, ShapeOpsSurface};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
-use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::PolylineCurve;
 use monstertruck_topology::{Edge, EdgeId, VertexId, Wire};
@@ -54,7 +53,7 @@ struct CylinderChart {
 }
 
 impl CylinderChart {
-    fn new<S: ShapeOpsSurface>(surface: &S, first_point: Point3) -> Option<Self> {
+    fn new<S: ShapeOpsSurface>(surface: &S, first_point: Point3, tol: f64) -> Option<Self> {
         let rational = surface.try_into_homogeneous_bspline_surface()?;
         let (center, axis, radius, _) = certified_circular_cylinder(&rational)?;
         let reference = if axis.x.abs() < 0.8 {
@@ -66,7 +65,7 @@ impl CylinderChart {
         let basis_v = axis.cross(basis_u).normalize();
         let axial = (first_point - center).dot(axis);
         let radial = first_point - center - axis * axial;
-        if (radial.magnitude() - radius).abs() > KERNEL_EPSILON {
+        if (radial.magnitude() - radius).abs() > tol {
             return None;
         }
         let uv = surface
@@ -215,7 +214,7 @@ fn covered(polygons: &[Vec<Vec<Point2>>], point: Point2) -> bool {
 
 /// Return true when existing exact edge identities are insufficient to form
 /// an already-noded arrangement. Such crossings must be split, not guessed.
-fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64) -> bool {
+fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64, tol: f64) -> bool {
     let epsilon = span * DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_relative_span;
     let cross = |start: Point2, end: Point2, point: Point2| {
         let direction = end - start;
@@ -254,13 +253,12 @@ fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64) -> bool {
                     lhs_uv,
                 ),
             ] {
-                // UV projection is approximate even when the original
-                // analytic edges ALREADY share a canonical world vertex.
-                // Sub-micron inverse-map drift can put that vertex in the
-                // middle of the OTHER edge's sampled UV polyline. Such a
-                // graphical T-junction needs no new exact curve vertex.
-                if world_endpoint.near(&other_edge.front().point())
-                    || world_endpoint.near(&other_edge.back().point())
+                // UV projection is approximate even when analytic edges
+                // share a world endpoint. Ignore chart drift only when
+                // spatial agreement meets this operation's requested
+                // numerical length, not the global kernel epsilon.
+                if world_endpoint.distance(other_edge.front().point()) <= tol
+                    || world_endpoint.distance(other_edge.back().point()) <= tol
                 {
                     continue;
                 }
@@ -580,7 +578,7 @@ fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .first()?
         .front_vertex()?
         .point();
-    let mut cylinder = CylinderChart::new(&surface, first);
+    let mut cylinder = CylinderChart::new(&surface, first, tol);
     if let Some(chart) = cylinder.as_mut() {
         let mut world_samples = Vec::new();
         for region in source {
@@ -923,7 +921,7 @@ fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // as two exterior boundaries rather than one filled face.
     let canonical_regions = node_selected_regions(source, &[], BooleanTolerance::new(tol))?;
     let initial = project_source(&canonical_regions, tol, false)?;
-    let arrangement = if needs_exact_noding(&initial.edges, initial.span) {
+    let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
         let points = exact_node_points(&initial, tol)?;
         let noded = node_selected_regions(&canonical_regions, &points, BooleanTolerance::new(tol))?;
         project_source(&noded, tol, false)?
@@ -933,7 +931,7 @@ fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let boundary = selected_boundary(&arrangement)?;
     // Crossings between edges entirely inside the union do not affect the
     // extracted boundary. Reject only unresolved noding on surviving edges.
-    if needs_exact_noding(&boundary, arrangement.span) {
+    if needs_exact_noding(&boundary, arrangement.span, tol) {
         return None;
     }
     let loops = trace_boundary(boundary)?;
@@ -1151,7 +1149,7 @@ fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let joined = positive.iter().chain(cutter).cloned().collect::<Vec<_>>();
     let canonical = node_selected_regions(&joined, &[], BooleanTolerance::new(tol))?;
     let initial = project_source(&canonical, tol, true)?;
-    let arrangement = if needs_exact_noding(&initial.edges, initial.span) {
+    let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
         let points = exact_node_points(&initial, tol)?;
         let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol))?;
         project_source(&noded, tol, true)?
@@ -1164,7 +1162,7 @@ fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             && !covered(&arrangement.polygons[positive_count..], point)
     };
     let boundary = selected_boundary_with(&arrangement, membership)?;
-    if needs_exact_noding(&boundary, arrangement.span) {
+    if needs_exact_noding(&boundary, arrangement.span, tol) {
         return None;
     }
     if boundary.is_empty() {
@@ -1585,7 +1583,7 @@ mod tests {
             },
         ];
         assert!(
-            !needs_exact_noding(&edges, 1.0),
+            !needs_exact_noding(&edges, 1.0, 1.0e-6),
             "inverse-mapping drift at the SAME analytic 3D endpoint is not an interior cut"
         );
     }
@@ -1604,8 +1602,57 @@ mod tests {
             },
         ];
         assert!(
-            needs_exact_noding(&edges, 2.0),
+            needs_exact_noding(&edges, 2.0, 1.0e-6),
             "a distinct 3D edge endpoint on an exact edge interior needs an analytic split"
+        );
+    }
+
+    #[test]
+    fn cylinder_chart_radial_validation_respects_operation_precision() {
+        let region =
+            circular_arc_region((0.0, 1.0), (0.0, std::f64::consts::FRAC_PI_2), 0.6731, 101);
+        let surface = region.surface();
+        let point = region
+            .absolute_boundaries()
+            .first()
+            .and_then(Wire::front_vertex)
+            .expect("source cylinder must have an initial vertex")
+            .point();
+        let displaced = point + Vector3::new(0.0, 5.0e-7, 0.0);
+        assert!(
+            CylinderChart::new(&surface, displaced, 1.0e-8).is_none(),
+            "a 500 nm radial error is not a 10 nm certified chart point"
+        );
+        assert!(
+            CylinderChart::new(&surface, displaced, 1.0e-6).is_some(),
+            "an explicitly coarser tolerance may qualify the same chart point"
+        );
+    }
+
+    #[test]
+    fn projected_uv_endpoint_drift_requires_operation_local_world_agreement() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [1.0, 0.0], [5.0e-7, 0.0], [0.0, 1.0]]);
+        let edges = [
+            ProjectedEdge {
+                edge: fixture.edge(0, 1),
+                uv: vec![Point2::new(0.0, 0.62), Point2::new(1.0, 0.62)],
+            },
+            ProjectedEdge {
+                edge: fixture.edge(2, 3),
+                uv: vec![
+                    Point2::new(0.0, 0.6200002),
+                    Point2::new(0.0, 0.6199998),
+                    Point2::new(0.0, 0.5),
+                ],
+            },
+        ];
+        assert!(
+            !needs_exact_noding(&edges, 1.0, 1.0e-6),
+            "a coarsely admitted shared endpoint does not need a second node"
+        );
+        assert!(
+            needs_exact_noding(&edges, 1.0, 1.0e-8),
+            "two endpoints 500 nm apart cannot share identity at 10 nm precision"
         );
     }
 
