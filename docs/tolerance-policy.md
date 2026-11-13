@@ -86,6 +86,9 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `boolean_leader_progress_slack` | `1.0e-8` | Dimensionless progress monotonicity guard along a leader polyline. |
 | `boolean_fragment_overlap_parameter_slack` | `1.0e-5` | Dimensionless overlap-parameter comparison between SSI fragments. |
 | `boolean_planar_relative_span` | `1.0e-10` | Relative span padding for planar polygon overlap. |
+| `boolean_uv_loop_area_relative` | `1.0e-6` | Signed polygon area relative to its UV bounding-box area; dimensionless, not a world-space length. |
+| `boolean_uv_boundary_contact_relative` | `1.0e-6` | UV contact distance relative to combined UV bounding extent; dimensionless, not a world-space length. |
+| `boolean_cylinder_reference_axis_component_limit` | `0.8` | Unitless switch for selecting a transverse cylinder-chart reference axis with a well-conditioned cross product. |
 | `boolean_planar_end_fraction` | `1.0e-6` | Fractional endpoint exclusion used by planar overlap sampling. |
 | `boolean_planar_primary_probe_ratios` | `[1.0e-8, 1.0e-7, 1.0e-6, 1.0e-5]` | Dimensionless ordered probe ratios for planar overlap disambiguation. |
 | `boolean_planar_secondary_probe_ratios` | `[1.0e-7, 1.0e-6]` | Dimensionless ordered refinement ratios for planar overlap disambiguation. |
@@ -583,3 +586,28 @@ open shell. Solver totals are unchanged from previous verified branch tip:
 948,784 3D Newton calls, 1,004,854 4D Newton calls, and 951,220 NURBS
 presearch queries. This change does not claim a measured speedup; the
 95.434 s wall time is confounded by host load.
+
+## UV degeneracy and chart-basis thresholds (2026-11-13)
+
+Two previously unrelated uses of `KERNEL_EPSILON` in
+`classic/divide_face.rs` are now explicitly named in the shared numerical
+policy. The unsigned/signed UV polygon-area degeneracy gate is controlled
+by `boolean_uv_loop_area_relative` multiplied by the loop's UV bounding-box
+area. The disjoint-hole boundary-contact gate is controlled separately by
+`boolean_uv_boundary_contact_relative` multiplied by the combined UV
+extent, and squared before comparing with squared point-to-segment distance.
+Both quantities are **parameterization-relative**, not lengths in mm;
+neither is derived from the Boolean operation's world-space length.
+Likewise the cylinder chart's transverse basis switch uses the dimensionless
+`boolean_cylinder_reference_axis_component_limit`, separate from its
+operation-local geometric radial admission.
+
+The initial values `1e-6`, `1e-6` and `0.8` respectively preserve the
+existing exact numerical thresholds; this pass makes their independent
+roles inspectable, not experimentally validated or automatically suitable
+for every possible UV mapping. The existing scale-invariance,
+touching-boundary, and nondegenerate UV loop regression tests remain
+unchanged. Future parameterization-conditioning experiments must consider
+nonuniform scaling/shearing, not confuse source-space tolerance with UV
+contact. The full 158-test solid suite and strict all-target solid Clippy
+remain green after this source-equivalent extraction.

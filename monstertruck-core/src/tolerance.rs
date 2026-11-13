@@ -110,6 +110,12 @@ pub struct NumericalTolerances {
     pub boolean_fragment_overlap_parameter_slack: f64,
     /// Relative span padding for planar polygon overlap.
     pub boolean_planar_relative_span: f64,
+    /// Dimensionless UV-loop area threshold relative to the loop's UV bounding box.
+    pub boolean_uv_loop_area_relative: f64,
+    /// UV-boundary contact distance relative to the combined UV extent.
+    pub boolean_uv_boundary_contact_relative: f64,
+    /// Axis-component cutoff for choosing a well-conditioned cylinder chart basis.
+    pub boolean_cylinder_reference_axis_component_limit: f64,
     /// Fractional endpoint exclusion used by planar overlap sampling.
     pub boolean_planar_end_fraction: f64,
     /// Dimensionless ordered probe ratios for planar overlap disambiguation.
@@ -207,6 +213,9 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     boolean_leader_progress_slack: 1.0e-8,
     boolean_fragment_overlap_parameter_slack: 1.0e-5,
     boolean_planar_relative_span: 1.0e-10,
+    boolean_uv_loop_area_relative: 1.0e-6,
+    boolean_uv_boundary_contact_relative: 1.0e-6,
+    boolean_cylinder_reference_axis_component_limit: 0.8,
     boolean_planar_end_fraction: 1.0e-6,
     boolean_planar_primary_probe_ratios: [1.0e-8, 1.0e-7, 1.0e-6, 1.0e-5],
     boolean_planar_secondary_probe_ratios: [1.0e-7, 1.0e-6],

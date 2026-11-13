@@ -438,7 +438,7 @@ fn polyline_area_epsilon(poly: &PolylineCurve<Point2>) -> f64 {
     let height = (max_y - min_y).abs();
     let bbox_area = width * height;
     if bbox_area.is_finite() {
-        KERNEL_EPSILON * bbox_area
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_uv_loop_area_relative * bbox_area
     } else {
         f64::INFINITY
     }
@@ -509,7 +509,7 @@ fn uv_boundaries_meet(lhs: &PolylineCurve<Point2>, rhs: &PolylineCurve<Point2>) 
     if !scale.is_finite() || scale <= 0.0 {
         return true;
     }
-    let tol2 = (KERNEL_EPSILON * scale).powi(2);
+    let tol2 = (DEFAULT_NUMERICAL_TOLERANCES.boolean_uv_boundary_contact_relative * scale).powi(2);
     let cross = |a: Vector2, b: Vector2| a.x.mul_add(b.y, -(a.y * b.x));
     let near_segment = |p: Point2, a: Point2, b: Point2| {
         let ab = b - a;

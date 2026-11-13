@@ -56,7 +56,9 @@ impl CylinderChart {
     fn new<S: ShapeOpsSurface>(surface: &S, first_point: Point3, tol: f64) -> Option<Self> {
         let rational = surface.try_into_homogeneous_bspline_surface()?;
         let (center, axis, radius, _) = certified_circular_cylinder(&rational)?;
-        let reference = if axis.x.abs() < 0.8 {
+        let reference = if axis.x.abs()
+            < DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_reference_axis_component_limit
+        {
             Vector3::unit_x()
         } else {
             Vector3::unit_y()
