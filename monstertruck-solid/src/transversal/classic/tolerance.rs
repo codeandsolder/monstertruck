@@ -16,13 +16,7 @@ pub(super) struct BooleanTolerance {
 
 impl BooleanTolerance {
     pub(super) fn new(requested: f64) -> Self {
-        // The Boolean entry point validates the numerical tolerance. Do not
-        // silently reinterpret negative or sub-resolution inputs as valid.
-        assert!(
-            requested.is_finite() && requested >= KERNEL_EPSILON,
-            "Boolean numerical tolerance must be finite and >= kernel resolution"
-        );
-        let length = requested;
+        let length = DEFAULT_NUMERICAL_TOLERANCES.boolean_numeric_length(requested);
         Self {
             length,
             area_floor: length * length,

@@ -88,6 +88,7 @@ pub mod monstertruck {
         SweepPath3d, SweepSegment3d,
     };
     use anyhow::{Result, bail};
+    use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
     use monstertruck_fillet::{FilletOptions, FilletProfile, RadiusSpec, fillet_edges_generic};
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
     use monstertruck_modeling::{

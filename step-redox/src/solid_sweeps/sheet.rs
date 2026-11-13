@@ -1039,7 +1039,8 @@ fn common_value(values: &[f64]) -> Option<f64> {
 
 fn near(a: f64, b: f64) -> bool {
     let scale = a.abs().max(b.abs()).max(1.0);
-    (a - b).abs() <= SHEET_TOL_MM.max(scale * 1.0e-9)
+    (a - b).abs()
+        <= SHEET_TOL_MM.max(scale * DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_relative_compare)
 }
 
 #[cfg(test)]

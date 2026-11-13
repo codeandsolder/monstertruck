@@ -86,8 +86,8 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `boolean_fragment_overlap_parameter_slack` | `1.0e-5` | Dimensionless overlap-parameter comparison between SSI fragments. |
 | `boolean_planar_relative_span` | `1.0e-10` | Relative span padding for planar polygon overlap. |
 | `boolean_planar_end_fraction` | `1.0e-6` | Fractional endpoint exclusion used by planar overlap sampling. |
-| `boolean_planar_primary_probe_ratios` | `[1.0e-8` | Dimensionless ordered probe ratios for planar overlap disambiguation. |
-| `boolean_planar_secondary_probe_ratios` | `[1.0e-7` | Dimensionless ordered refinement ratios for planar overlap disambiguation. |
+| `boolean_planar_primary_probe_ratios` | `[1.0e-8, 1.0e-7, 1.0e-6, 1.0e-5]` | Dimensionless ordered probe ratios for planar overlap disambiguation. |
+| `boolean_planar_secondary_probe_ratios` | `[1.0e-7, 1.0e-6]` | Dimensionless ordered refinement ratios for planar overlap disambiguation. |
 | `boolean_planar_normal_cosine_slack` | `1.0e-10` | Dimensionless allowed deviation of aligned planar carrier normals. |
 | `boolean_planar_tangent_cosine_slack` | `1.0e-8` | Dimensionless allowed deviation of planar trim tangent alignment. |
 | `meshing_debug_uv_edge_tolerance` | `1.0e-9` | Native UV-coordinate tolerance used for tessellation projection diagnostics. |
@@ -99,7 +99,6 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `boolean_coplanar_scale` | `2.0` | Scale multiplying Boolean numerical tolerance in coplanar matching. |
 | `stl_quantization_offset_factor` | `0.25` | Offset multiplier for STL coordinate quantization. |
 | `stl_quantization_step_factor` | `0.5` | Step multiplier for STL coordinate quantization. |
-
 
 ## STEP reconstruction inventory: current active defaults
 
@@ -162,7 +161,57 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `source_sweep_frame` | `1.0e-8` | Orthonormality for reconstructed source sweep profiles. Unit: dimensionless. |
 | `source_sweep_strict_residual_mm` | `1.0e-6` | Strict original sweep support fitting error. Unit: mm. |
 | `source_sweep_loose_residual_mm` | `1.0e-5` | Larger source sweep support fitting error. Unit: mm. |
-
+| `pattern_basis_cost_delta` | `1.0e-12` | Tie breaker between alternative pattern basis fits. Unit: dimensionless cost. |
+| `pattern_quantization_floor` | `1.0e-9` | Minimum position quantization for feature pattern candidates. Unit: mm. |
+| `pattern_determinant_squared` | `1.0e-18` | Reject nearly degenerate two-dimensional pattern bases. Unit: mm⁴. |
+| `pattern_lattice_normal_floor` | `1.0e-12` | Denominator floor for pattern coordinates. Unit: dimensionless. |
+| `pattern_fraction_quant_floor` | `1.0e-10` | Lattice fractional-coordinate quantization floor. Unit: dimensionless. |
+| `pattern_origin_floor_mm` | `1.0e-9` | Minimum origin matching scale for pattern transforms. Unit: mm. |
+| `pattern_comparison_residual` | `1.0e-12` | Tolerance for pattern filling-ratio ranking ties. Unit: dimensionless. |
+| `pattern_normalization_min` | `1.0e-15` | Minimum vector norm accepted for pattern direction normalization. Unit: dimensionless. |
+| `source_straightness_length_mm` | `1.0e-12` | Near-zero geometric chord threshold for source support extraction. Unit: mm. |
+| `source_axis_unit_cosine` | `1.0e-9` | Acceptable axis norm deviation in source feature frames. Unit: dimensionless. |
+| `source_axis_direction_cosine` | `1.0e-8` | Axis-normal agreement for source features. Unit: dimensionless. |
+| `source_sweep_angle_rad` | `1.0e-8` | Minimal accepted bend angle and supplement for source sweeps. Unit: radians. |
+| `source_sweep_tangent_cosine` | `1.0e-7` | Tangent and profile orientation consistency in source sweep recovery. Unit: dimensionless. |
+| `source_sweep_parameter_slack` | `1.0e-7` | Progress and joined segment angular residual in sweep recovery. Unit: radians. |
+| `source_sweep_curve_parameter` | `1.0e-10` | Parameter-comparison slack during source sweep recovery. Unit: native curve parameter. |
+| `source_sweep_knot_residual` | `1.0e-12` | Knot equality and source support weight matching. Unit: native knot/weight parameter. |
+| `source_sweep_small_weight` | `1.0e-14` | Reject near-zero B-spline homogeneous support weight. Unit: native homogeneous weight. |
+| `source_sheet_angle_rad` | `1.0e-8` | Minimal valid sheet bend angle. Unit: radians. |
+| `source_sheet_normal_cosine` | `1.0e-7` | Sheet face normal alignment and near-parallel classification. Unit: dimensionless. |
+| `source_sheet_tangent_cosine` | `1.0e-8` | Sheet seam and tangent alignment. Unit: dimensionless. |
+| `source_sheet_bend_angle_rad` | `1.0e-7` | Sheet bend target-angle fitting. Unit: radians. |
+| `source_identity_zero_norm_squared` | `1.0e-24` | Squared size below which source direction/area evidence is degenerate. Unit: mm². |
+| `source_identity_axis_unit` | `1.0e-9` | Source coordinate frame orthonormality threshold. Unit: dimensionless. |
+| `source_identity_transform` | `1.0e-12` | Zero-motion matching in source rigid transformations. Unit: mm. |
+| `source_identity_quantization_inv_mm` | `1.0e9` | Reciprocal position quantization step for source identity keys. Unit: mm^-1. |
+| `source_identity_normal_quantization` | `1.0e5` | Inverse normal quantization step for source identity keys. Unit: dimensionless. |
+| `source_feature_incidence_mm` | `1.0e-7` | Point-on-original-source support recovery check. Unit: mm. |
+| `source_analytic_fit_mm` | `1.0e-7` | Analytic surface candidate fitting in boundary proof. Unit: mm. |
+| `source_boundary_tangent_fraction` | `1.0e-5` | Finite parameter sampling fraction for boundary tangent proof. Unit: dimensionless. |
+| `source_revolution_angle_floor_rad` | `1.0e-12` | Minimum valid source meridian-angle comparison. Unit: radians. |
+| `source_revolution_param_floor` | `1.0e-12` | Lower bound for parameter-space arc geometry slop. Unit: native curve parameter. |
+| `source_cad_frame_orthogonality` | `1.0e-10` | Orthonormality of source CAD frames and transformed vectors. Unit: dimensionless. |
+| `source_rounding_arc_residual_rad` | `1.0e-6` | Allowed angular mismatch in reverse fillet arc recovery. Unit: radians. |
+| `source_rounding_arc_max_slack_rad` | `1.0e-7` | Allowed angular excess beyond a full rounding sweep. Unit: radians. |
+| `source_rounding_parameter_slack` | `1.0e-9` | Bound on source rounding parameter interval comparisons. Unit: native curve parameter. |
+| `source_rounding_quarter_turn_slack_rad` | `1.0e-10` | Allowed slack when decomposing corner arcs into quarter turns. Unit: radians. |
+| `source_line_residual_mm` | `1.0e-7` | Straight source curve fit against expected 3D locus. Unit: mm. |
+| `source_cap_point_match_mm` | `1.0e-8` | Point matching while reconstructing source cap boundary. Unit: mm. |
+| `source_cap_direction_cosine` | `1.0e-8` | Direction agreement in source cap and circle sweep frames. Unit: dimensionless. |
+| `source_cap_rounding_residual_mm` | `1.0e-12` | Source cap and sphere common-support matching. Unit: mm. |
+| `source_intern_radius_scale_relative` | `1.0e-10` | Relative radius offset bound in source support interning. Unit: dimensionless. |
+| `source_periodic_direction_quant` | `1.0e-10` | Direction quantization for periodic source feature chains. Unit: dimensionless. |
+| `pattern_inverse_norm_squared` | `1.0e-24` | Reject near-degenerate pattern-recovery support vectors. Unit: mm². |
+| `source_sweep_absolute_residual_mm` | `1.0e-5` | Maximum acceptable fitted sweep support residual. Unit: mm. |
+| `source_sweep_relative_compare` | `1.0e-9` | Scale-dependent sweep support comparison. Unit: dimensionless. |
+| `source_sheet_relative_compare` | `1.0e-9` | Scale-dependent sheet geometry comparison. Unit: dimensionless. |
+| `source_periodic_weld_quantization_inv` | `1.0e12` | Inverse coordinate quantization for periodic graph weld keys. Unit: model-coordinate^-1. |
+| `source_periodic_area_min` | `1.0e-12` | Minimum nondegenerate reference area for periodic graph editing. Unit: mm². |
+| `source_sweep_tolerance_slack_mm` | `1.0e-15` | Tiny allowed source-fitted sweep tolerance budget overrun. Unit: mm. |
+| `source_slot_boundary_mm` | `1.0e-7` | Position check for cap-slot boundary recovery. Unit: mm. |
+| `source_cad_arc_angle_slack_rad` | `1.0e-9` | Arc sweep endpoint slop in CAD feature reconstruction. Unit: radians. |
 
 ## Candidate ranges for our source-STEP reconstruction target
 
@@ -198,6 +247,14 @@ budget. This is a concrete gap in the future accuracy-budget propagation
 architecture, not an unnoticed constant: there is a dedicated regression test
 for this policy choice. Do not silently reinterpret a maximum modeling-error
 budget as unconditional permission to weld unrelated edges.
+
+An explicit `NumericalTolerances::boolean_numeric_length(requested)`
+resolves a *nonnegative*, finite Boolean numerical request to the kernel's
+current smallest representable acceptance distance. This retains existing
+behavior for already-valid calls but does not silently take an absolute value
+of negative input. In the next API-breaking step, the caller should choose a
+validated numerical scale explicitly, with the resolution floor represented
+as a deliberate typed policy choice rather than an implicit default.
 
 The classic Boolean path then uses `BooleanTolerance::new` to derive
 `length`, `classifier_offset`, and `mesh_seed` from its numerical

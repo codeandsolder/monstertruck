@@ -1235,9 +1235,9 @@ fn extended_line_circle_endpoint(
         .filter(|t| {
             t.is_finite()
                 && if previous {
-                    *t >= at - 1.0e-9
+                    *t >= at - DEFAULT_STEP_RECOVERY_TOLERANCES.source_rounding_parameter_slack
                 } else {
-                    *t <= at + 1.0e-9
+                    *t <= at + DEFAULT_STEP_RECOVERY_TOLERANCES.source_rounding_parameter_slack
                 }
         })
         .min_by(|a, b| (a - at).abs().total_cmp(&(b - at).abs()))

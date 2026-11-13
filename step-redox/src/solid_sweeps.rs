@@ -760,7 +760,9 @@ fn detect_one_revolved_round_tail(
                                 outgoing.direction,
                             )),
                     );
-                    if max_residual_mm > 1.0e-5 {
+                    if max_residual_mm
+                        > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_absolute_residual_mm
+                    {
                         continue;
                     }
                     return Some(RecoveredRevolvedRoundTail {
@@ -1346,7 +1348,8 @@ fn common_value(values: &[f64]) -> Option<f64> {
 
 fn near(a: f64, b: f64) -> bool {
     let scale = a.abs().max(b.abs()).max(1.0);
-    (a - b).abs() <= GEOM_TOL_MM.max(scale * 1.0e-9)
+    (a - b).abs()
+        <= GEOM_TOL_MM.max(scale * DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_relative_compare)
 }
 
 fn lex_point(a: [f64; 3], b: [f64; 3]) -> std::cmp::Ordering {

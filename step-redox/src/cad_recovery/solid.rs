@@ -1093,7 +1093,9 @@ fn validate_radial_slot_revolution(slotted: &RecoveredRadialSlotRevolution) -> R
     }
     if !slotted.slot_max_residual_mm.is_finite()
         || slotted.slot_max_residual_mm < 0.0
-        || slotted.slot_max_residual_mm > slotted.base.source_tolerance_mm + 1.0e-15
+        || slotted.slot_max_residual_mm
+            > slotted.base.source_tolerance_mm
+                + DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tolerance_slack_mm
     {
         bail!("radial-slot proof residual exceeds the source tolerance");
     }
@@ -1167,7 +1169,9 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
             RecoveredProfileCurve::Line {
                 start_mm, end_mm, ..
             } => {
-                if start_mm[0] < -1.0e-7 || end_mm[0] < -1.0e-7 {
+                if start_mm[0] < -DEFAULT_STEP_RECOVERY_TOLERANCES.source_slot_boundary_mm
+                    || end_mm[0] < -DEFAULT_STEP_RECOVERY_TOLERANCES.source_slot_boundary_mm
+                {
                     bail!("solid revolution profile contains a negative radius");
                 }
             }
@@ -1180,12 +1184,14 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
             } => {
                 let sweep = end_angle_rad - start_angle_rad;
                 if sweep.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
-                    || sweep.abs() > std::f64::consts::TAU + 1.0e-9
+                    || sweep.abs()
+                        > std::f64::consts::TAU
+                            + DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_arc_angle_slack_rad
                 {
                     bail!("solid revolution circular meridian has invalid sweep");
                 }
                 if circle_arc_min_radius(center_mm[0], *radius_mm, *start_angle_rad, *end_angle_rad)
-                    < -1.0e-7
+                    < -DEFAULT_STEP_RECOVERY_TOLERANCES.source_slot_boundary_mm
                 {
                     bail!("solid revolution circular meridian crosses negative radius");
                 }
@@ -1204,7 +1210,9 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
         let Some(start) = next.start_point() else {
             bail!("solid revolution profile curve has no start point");
         };
-        if (end[0] - start[0]).hypot(end[1] - start[1]) > 1.0e-7 {
+        if (end[0] - start[0]).hypot(end[1] - start[1])
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_slot_boundary_mm
+        {
             bail!("solid revolution profile curves are not topologically continuous");
         }
     }
@@ -1246,7 +1254,9 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
     }
     if !revolution.max_residual_mm.is_finite()
         || revolution.max_residual_mm < 0.0
-        || revolution.max_residual_mm > revolution.source_tolerance_mm + 1.0e-15
+        || revolution.max_residual_mm
+            > revolution.source_tolerance_mm
+                + DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tolerance_slack_mm
     {
         bail!("solid revolution has invalid proof residual");
     }
@@ -1270,7 +1280,9 @@ fn validate_solid_extrusion(extrusion: &RecoveredSolidExtrusion) -> Result<()> {
     }
     if !extrusion.max_residual_mm.is_finite()
         || extrusion.max_residual_mm < 0.0
-        || extrusion.max_residual_mm > 1.0e-7 + 1.0e-15
+        || extrusion.max_residual_mm
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_slot_boundary_mm
+                + DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tolerance_slack_mm
     {
         bail!("solid extrusion has invalid proof residual");
     }

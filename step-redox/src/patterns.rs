@@ -746,7 +746,8 @@ fn identity_site_for_lattice(
     tolerance_mm: f64,
 ) -> Result<usize> {
     let denom = dot(basis, basis);
-    if !denom.is_finite() || denom <= 1.0e-24 {
+    if !denom.is_finite() || denom <= DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_inverse_norm_squared
+    {
         bail!("implicit-identity pattern has a degenerate basis");
     }
     let projected = -dot(origin, basis) / denom;

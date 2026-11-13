@@ -136,6 +136,24 @@ pub struct NumericalTolerances {
     pub stl_quantization_step_factor: f64,
 }
 
+impl NumericalTolerances {
+    /// Converts an explicit nonnegative Boolean numerical request to the
+    /// existing resolvable numeric length. This policy operation is separate
+    /// from `GeometryPolicy::Standard`, which is a maximum modeling-error
+    /// budget and does not imply that unrelated trimmed edges are equal.
+    ///
+    /// # Panics
+    /// Panics if `requested` is non-finite or negative.
+    #[must_use]
+    pub fn boolean_numeric_length(self, requested: f64) -> f64 {
+        assert!(
+            requested.is_finite() && requested >= 0.0,
+            "Boolean numerical tolerance must be nonnegative and finite"
+        );
+        requested.max(self.kernel_f64)
+    }
+}
+
 /// Default numerical policy for the current kernel implementation.
 pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerances {
     kernel_f64: 1.0e-6,
@@ -511,6 +529,33 @@ pub struct StepRecoveryTolerances {
     /// Direction quantization for periodic source feature chains.
     /// Unit: dimensionless.
     pub source_periodic_direction_quant: f64,
+    /// Reject near-degenerate pattern-recovery support vectors.
+    /// Unit: mm².
+    pub pattern_inverse_norm_squared: f64,
+    /// Maximum acceptable fitted sweep support residual.
+    /// Unit: mm.
+    pub source_sweep_absolute_residual_mm: f64,
+    /// Scale-dependent sweep support comparison.
+    /// Unit: dimensionless.
+    pub source_sweep_relative_compare: f64,
+    /// Scale-dependent sheet geometry comparison.
+    /// Unit: dimensionless.
+    pub source_sheet_relative_compare: f64,
+    /// Inverse coordinate quantization for periodic graph weld keys.
+    /// Unit: model-coordinate^-1.
+    pub source_periodic_weld_quantization_inv: f64,
+    /// Minimum nondegenerate reference area for periodic graph editing.
+    /// Unit: mm².
+    pub source_periodic_area_min: f64,
+    /// Tiny allowed source-fitted sweep tolerance budget overrun.
+    /// Unit: mm.
+    pub source_sweep_tolerance_slack_mm: f64,
+    /// Position check for cap-slot boundary recovery.
+    /// Unit: mm.
+    pub source_slot_boundary_mm: f64,
+    /// Arc sweep endpoint slop in CAD feature reconstruction.
+    /// Unit: radians.
+    pub source_cad_arc_angle_slack_rad: f64,
 }
 
 /// Current STEP reconstruction tolerances; every field has one owning definition.
@@ -614,6 +659,15 @@ pub const DEFAULT_STEP_RECOVERY_TOLERANCES: StepRecoveryTolerances = StepRecover
     source_cap_rounding_residual_mm: 1.0e-12,
     source_intern_radius_scale_relative: 1.0e-10,
     source_periodic_direction_quant: 1.0e-10,
+    pattern_inverse_norm_squared: 1.0e-24,
+    source_sweep_absolute_residual_mm: 1.0e-5,
+    source_sweep_relative_compare: 1.0e-9,
+    source_sheet_relative_compare: 1.0e-9,
+    source_periodic_weld_quantization_inv: 1.0e12,
+    source_periodic_area_min: 1.0e-12,
+    source_sweep_tolerance_slack_mm: 1.0e-15,
+    source_slot_boundary_mm: 1.0e-7,
+    source_cad_arc_angle_slack_rad: 1.0e-9,
 };
 
 /// Numerical epsilon for ordinary `f64` kernel predicates.
