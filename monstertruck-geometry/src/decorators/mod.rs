@@ -498,6 +498,7 @@ mod edge_blend;
 mod extruded_curve;
 mod homotopy;
 mod intersection_curve;
+mod intersection_trace;
 mod offset;
 mod pcurve;
 mod processor;
