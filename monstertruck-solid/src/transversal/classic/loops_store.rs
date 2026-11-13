@@ -213,18 +213,10 @@ impl ParameterKind {
         if !t.is_finite() || !t0.is_finite() || !t1.is_finite() || !(t0 < t1) {
             return None;
         }
-        // An inverse result outside a trim is not an endpoint of that trim.
-        // Any extrapolation/snap must be performed explicitly by its caller,
-        // with independent geometric evidence, rather than a parameter epsilon.
-        if !(t0..=t1).contains(&t) {
-            return None;
-        }
-        if t == t0 {
-            return Some(Self::Front);
-        }
-        if t == t1 {
-            return Some(Self::Back);
-        }
+        // An inverse solver can return a parameter just outside an endpoint.
+        // Allow an endpoint ONLY if the extrapolated *model-space point* is
+        // within the requested numerical length of that endpoint. A parameter
+        // epsilon would be meaningless on curves with arbitrary domains.
         let point = curve.evaluate(t);
         let front_distance = point.clone().distance(curve.evaluate(t0));
         let back_distance = point.distance(curve.evaluate(t1));
@@ -233,6 +225,18 @@ impl ParameterKind {
         }
         let at_front = front_distance <= tolerances.length;
         let at_back = back_distance <= tolerances.length;
+        if t < t0 {
+            return (at_front && !at_back).then_some(Self::Front);
+        }
+        if t > t1 {
+            return (at_back && !at_front).then_some(Self::Back);
+        }
+        if t == t0 {
+            return Some(Self::Front);
+        }
+        if t == t1 {
+            return Some(Self::Back);
+        }
         match (at_front, at_back) {
             (true, false) => Some(Self::Front),
             (false, true) => Some(Self::Back),
@@ -2115,9 +2119,26 @@ mod projection_tests {
             ParameterKind::try_new(1.0, &tiny, tolerance),
             Some(ParameterKind::Back)
         );
-        for t in [-1.0e-8, 1.0 + 1.0e-8, f64::INFINITY, f64::NAN] {
+        for t in [f64::INFINITY, f64::NAN] {
             assert_eq!(ParameterKind::try_new(t, &tiny, tolerance), None);
         }
+        // A tiny edge shorter than the tolerance has *both* endpoints
+        // nearby and remains ambiguous. An edge longer than the tolerance
+        // can safely identify the extrapolated root's unique endpoint.
+        assert_eq!(ParameterKind::try_new(-1.0e-8, &tiny, tolerance), None);
+        let short = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0e-6, 0.0, 0.0));
+        assert_eq!(
+            ParameterKind::try_new(-1.0e-8, &short, tolerance),
+            Some(ParameterKind::Front),
+            "numerically extrapolated roots require unique spatial endpoint evidence"
+        );
+        assert_eq!(
+            ParameterKind::try_new(1.0 + 1.0e-8, &short, tolerance),
+            Some(ParameterKind::Back)
+        );
+        let long = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(100_000.0, 0.0, 0.0));
+        assert_eq!(ParameterKind::try_new(-1.0e-8, &long, tolerance), None);
+        assert_eq!(ParameterKind::try_new(1.0 + 1.0e-8, &long, tolerance), None);
         let invalid = Line(Point3::new(f64::NAN, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
         assert_eq!(ParameterKind::try_new(0.5, &invalid, tolerance), None);
     }

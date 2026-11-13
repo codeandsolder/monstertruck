@@ -491,7 +491,7 @@ interior parameter, evaluate the point and compare its **3D distances to both
 trim endpoints** against the operation's spatial numerical length. If within
 budget of precisely one endpoint, canonicalize to it; if within neither,
 retain the interior parameter; if within both, return ambiguity rather than
-inventing precedence. Slightly extrapolated parameters do not silently snap.
+inventing precedence. An extrapolated inverse root may classify as the corresponding endpoint only when its forward-evaluated model-space location lies within the operation length tolerance of that endpoint and not the other endpoint. There is no raw-parameter epsilon.
 The exact-trim search invoked by coplanar imprint additionally independently
 verifies `curve.evaluate(parameter).distance(query)` against the same length.
 
