@@ -523,7 +523,7 @@ impl<C> Loops<Point3, C> {
     {
         // Reject an invalid tolerance; silently clamping it would change
         // which distinct trimmed edges can be welded into one identity.
-        if !length_tol.is_finite() || length_tol < KERNEL_EPSILON {
+        if !length_tol.is_finite() || length_tol <= 0.0 {
             return false;
         }
         let same_endpoints = |edge: &Edge<Point3, C>| {

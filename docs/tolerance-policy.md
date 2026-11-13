@@ -248,13 +248,22 @@ architecture, not an unnoticed constant: there is a dedicated regression test
 for this policy choice. Do not silently reinterpret a maximum modeling-error
 budget as unconditional permission to weld unrelated edges.
 
-An explicit `NumericalTolerances::boolean_numeric_length(requested)`
-resolves a *nonnegative*, finite Boolean numerical request to the kernel's
-current smallest representable acceptance distance. This retains existing
-behavior for already-valid calls but does not silently take an absolute value
-of negative input. In the next API-breaking step, the caller should choose a
-validated numerical scale explicitly, with the resolution floor represented
-as a deliberate typed policy choice rather than an implicit default.
+**Correction after direct test validation:** the old
+`BooleanTolerance::new(requested)` conversion `requested.abs().max(KERNEL_EPSILON)`
+was **not needed** to satisfy the ten existing planar tests at 1e-8 and 1e-7.
+Those tests failed only because a previous assert incorrectly rejected
+legitimate sub-epsilon requests. Removing the clamp outright and preserving
+the positive finite caller-supplied length yielded **136/136 passing
+`monstertruck-solid` tests**, including all ten. The math/topology tests are
+valid for their exact geometry fixtures; there is no evidence that imposing
+a 1e-6 lower bound is required for the algorithms.
+
+The constructor now requires a finite *positive* numeric tolerance, retains
+its exact value, and separately computes the **coarser seed mesh tolerance**
+using the named `mesh_seed_floor` (which is intentionally only a sampling
+choice). Coincident-edge reuse similarly accepts any valid positive tolerance
+instead of refusing all values smaller than `KERNEL_EPSILON`. This is
+distinct from the `GeometryPolicy::Standard` maximum modeling-change budget.
 
 The classic Boolean path then uses `BooleanTolerance::new` to derive
 `length`, `classifier_offset`, and `mesh_seed` from its numerical

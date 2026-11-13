@@ -136,24 +136,6 @@ pub struct NumericalTolerances {
     pub stl_quantization_step_factor: f64,
 }
 
-impl NumericalTolerances {
-    /// Converts an explicit nonnegative Boolean numerical request to the
-    /// existing resolvable numeric length. This policy operation is separate
-    /// from `GeometryPolicy::Standard`, which is a maximum modeling-error
-    /// budget and does not imply that unrelated trimmed edges are equal.
-    ///
-    /// # Panics
-    /// Panics if `requested` is non-finite or negative.
-    #[must_use]
-    pub fn boolean_numeric_length(self, requested: f64) -> f64 {
-        assert!(
-            requested.is_finite() && requested >= 0.0,
-            "Boolean numerical tolerance must be nonnegative and finite"
-        );
-        requested.max(self.kernel_f64)
-    }
-}
-
 /// Default numerical policy for the current kernel implementation.
 pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerances {
     kernel_f64: 1.0e-6,
