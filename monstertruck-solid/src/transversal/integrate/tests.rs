@@ -90,7 +90,7 @@ fn standard_budget_does_not_widen_classic_boolean_tolerance() {
     assert_eq!(
         super::classic_boolean_tolerance(policy, "difference")
             .expect("valid Standard policy must admit the classic backend"),
-        monstertruck_core::tolerance::KERNEL_EPSILON,
+        monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length,
         "a modeling budget must never widen numerical edge identity",
     );
     assert_eq!(

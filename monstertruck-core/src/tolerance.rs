@@ -11,6 +11,10 @@ use std::fmt::Debug;
 pub struct NumericalTolerances {
     /// Scalar epsilon for the established `f64` kernel.
     pub kernel_f64: f64,
+    /// Default numerical length supplied to classic Boolean operations.
+    /// Independent of the generic kernel zero threshold and of the maximum
+    /// geometric-change budget selected by a caller.
+    pub boolean_default_numeric_length: f64,
     /// Absolute convergence step in native curve parameter coordinates; not a spatial error budget.
     pub newton_curve_parameter_step: f64,
     /// Absolute convergence step in native surface UV coordinates; not a millimetre distance.
@@ -155,6 +159,7 @@ pub struct NumericalTolerances {
 /// Default numerical policy for the current kernel implementation.
 pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerances {
     kernel_f64: 1.0e-6,
+    boolean_default_numeric_length: 1.0e-6,
     newton_curve_parameter_step: 1.0e-6,
     newton_surface_parameter_step: 1.0e-6,
     newton_surface_curve_parameter_step: 1.0e-6,

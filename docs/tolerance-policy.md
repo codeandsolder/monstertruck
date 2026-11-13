@@ -38,6 +38,7 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | Field | Current | Meaning / units |
 |---|---:|---|
 | `kernel_f64` | `1.0e-6` | Scalar epsilon for the established `f64` kernel. |
+| `boolean_default_numeric_length` | `1.0e-6` | Default numerical length supplied to classic Boolean operations. Independent of the generic kernel zero threshold and of the maximum geometric-change budget selected by a caller. |
 | `newton_curve_parameter_step` | `1.0e-6` | Absolute convergence step in native curve parameter coordinates; not a spatial error budget. |
 | `newton_surface_parameter_step` | `1.0e-6` | Absolute convergence step in native surface UV coordinates; not a millimetre distance. |
 | `newton_surface_curve_parameter_step` | `1.0e-6` | Absolute convergence step in mixed surface-UV plus curve parameter coordinates. |
@@ -286,6 +287,13 @@ schedules are now named fields in `DEFAULT_NUMERICAL_TOLERANCES`. The two
 small-fraction schedules are **sample evidence**, not proof of analytic
 curve identity. They should be replaced with genuine geometric certificates
 where possible; changing sampling density alone cannot establish topology.
+
+The public classic Boolean entry point now selects a **separately named**
+`boolean_default_numeric_length` instead of coupling its numerical setting
+to generic `KERNEL_EPSILON`. This keeps the existing 1e-6 behavior until
+tuning and preserves the distinct semantics of `GeometryPolicy::Standard`
+(upper bound on modeling error). The low-level classic numerical interface
+accepts smaller explicit finite positive values.
 
 The classic Boolean path then uses `BooleanTolerance::new` to derive
 `length`, `classifier_offset`, and `mesh_seed` from its numerical

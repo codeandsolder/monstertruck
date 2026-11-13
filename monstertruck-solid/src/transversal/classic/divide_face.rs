@@ -252,7 +252,7 @@ fn polyline_interior_candidates(poly: &PolylineCurve<Point2>) -> Vec<Point2> {
     candidates
 }
 
-fn strict_interior_point(poly: &PolylineCurve<Point2>, _tol: f64) -> Option<Point2> {
+fn strict_interior_point(poly: &PolylineCurve<Point2>) -> Option<Point2> {
     polyline_interior_candidates(poly).into_iter().next()
 }
 
@@ -619,7 +619,7 @@ where
             Some(())
         })?;
     negative_wires.into_iter().try_for_each(|mut chunk| {
-        let witness = strict_interior_point(&chunk.poly, tol)?;
+        let witness = strict_interior_point(&chunk.poly)?;
         let chunk_area_abs = polyline_signed_area(&chunk.poly).abs();
 
         // Build the nesting relation from geometry, not Boolean status or shared
