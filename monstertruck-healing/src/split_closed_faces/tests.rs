@@ -335,3 +335,117 @@ fn healing_boundary_closure_rejects_nonfinite_and_short_contours() {
         BoundaryType::NotClosed
     ));
 }
+
+#[test]
+fn normalized_concave_divisor_is_invariant_to_independent_uv_affine_scales() {
+    use super::{concave_wire_divisor, normalized_polygon, polygon_contains_point};
+    let vertices = [
+        (0.0, 0.0),
+        (4.0, 0.0),
+        (4.0, 1.0),
+        (2.0, 1.0),
+        (2.0, 3.0),
+        (0.0, 3.0),
+    ];
+    let mut expected_diagonal = None;
+    for (u_span, v_span) in [
+        (1.0e-9, 1.0e9),
+        (1.0e9, 1.0e-9),
+        (1.0e-6, 1.0e-6),
+        (1.0, 1.0),
+        (1.0e9, 1.0e9),
+    ] {
+        let polygon = vertices
+            .into_iter()
+            .map(|(u, v)| Point2::new(u / 4.0 * u_span, v / 3.0 * v_span))
+            .collect::<Vec<_>>();
+        let indexed = polygon
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(i, point)| (i + 10, point))
+            .collect::<Vec<_>>();
+        let result = concave_wire_divisor(&indexed);
+        assert!(
+            result.is_some(),
+            "lost concavity at native U/V {u_span:e}/{v_span:e}"
+        );
+        if let Some(expected) = expected_diagonal {
+            assert_eq!(
+                result,
+                Some(expected),
+                "different divisor for identical polygon"
+            );
+        } else {
+            expected_diagonal = result;
+        }
+
+        let normalized = normalized_polygon(&polygon).expect("positive finite chart");
+        assert!(polygon_contains_point(
+            &normalized,
+            Point2::new(0.125, 0.75)
+        ));
+        assert!(!polygon_contains_point(
+            &normalized,
+            Point2::new(0.75, 0.75)
+        ));
+        assert!(polygon_contains_point(
+            &normalized,
+            Point2::new(0.5, 1.0 / 3.0)
+        ));
+    }
+}
+
+#[test]
+fn repeated_zero_length_segment_cannot_make_arbitrary_outside_point_inside() {
+    use super::{polygon_contains_point, segment_contains_point};
+    let vertex = Point2::new(0.0, 0.0);
+    assert!(segment_contains_point(vertex, vertex, vertex));
+    assert!(!segment_contains_point(
+        vertex,
+        vertex,
+        Point2::new(0.75, 0.75)
+    ));
+    let polygon = vec![
+        vertex,
+        vertex,
+        Point2::new(1.0, 0.0),
+        Point2::new(1.0, 1.0),
+        Point2::new(0.0, 1.0),
+    ];
+    assert!(!polygon_contains_point(&polygon, Point2::new(2.0, 2.0)));
+    assert!(polygon_contains_point(&polygon, vertex));
+    assert!(polygon_contains_point(&polygon, Point2::new(0.5, 0.5)));
+}
+
+#[test]
+fn normalized_polygon_rejects_nonfinite_or_degenerate_charts() {
+    use super::normalized_polygon;
+    assert!(normalized_polygon(&[]).is_none());
+    assert!(normalized_polygon(&[Point2::new(0.0, 0.0)]).is_none());
+    assert!(normalized_polygon(&[Point2::new(0.0, 0.0), Point2::new(0.0, 2.0),]).is_none());
+    assert!(normalized_polygon(&[Point2::new(0.0, 0.0), Point2::new(f64::NAN, 1.0),]).is_none());
+    assert!(
+        normalized_polygon(&[Point2::new(0.0, 0.0), Point2::new(f64::INFINITY, 1.0),]).is_none()
+    );
+}
+
+#[test]
+fn diagonal_strict_intersection_is_not_an_endpoint_touch() {
+    use super::segments_intersect_strict;
+    let a = Point2::new(0.0, 0.0);
+    let b = Point2::new(1.0, 1.0);
+    assert!(segments_intersect_strict(
+        a,
+        b,
+        Point2::new(0.0, 1.0),
+        Point2::new(1.0, 0.0)
+    ));
+    assert!(!segments_intersect_strict(a, b, b, Point2::new(1.0, 0.0)));
+    assert!(!segments_intersect_strict(
+        a,
+        b,
+        Point2::new(0.0, 0.0),
+        Point2::new(0.0, 1.0)
+    ));
+}
