@@ -43,10 +43,13 @@ fn points_are_linear_2d(
     end: Point2,
     tolerance: f64,
 ) -> bool {
-    let tolerance2 = tolerance.max(KERNEL_EPSILON).powi(2);
-    points
-        .into_iter()
-        .all(|point| point_segment_distance2_2d(point, start, end) <= tolerance2)
+    // An invalid tolerance cannot prove linearity; never widen a requested
+    // threshold silently to the default kernel epsilon.
+    tolerance.is_finite()
+        && tolerance >= 0.0
+        && points
+            .into_iter()
+            .all(|point| point_segment_distance2_2d(point, start, end) <= tolerance.powi(2))
 }
 
 fn homogeneous_point2(control: Vector3) -> Option<Point2> {

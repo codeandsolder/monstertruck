@@ -9,11 +9,12 @@ use crate::cad_ir::{CadModel, CadNode, LoftSection, Profile2d, RigidTransform};
 use crate::cad_recovery::{CadFragment, CadFragmentSource};
 use crate::math3::{cross, distance, dot, normalize, sub};
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::EntityInstance;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-const TOL_MM: f64 = 1.0e-7;
-const DIR_TOL: f64 = 1.0e-10;
+const TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.loft_direction;
 
 #[derive(Clone, Copy)]
 struct Vertex {

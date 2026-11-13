@@ -1,10 +1,11 @@
 use crate::step_entities::{cartesian_point, number as numeric_value};
 use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-const GEOM_TOL_MM: f64 = 1.0e-5;
+const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.periodic_geometry_mm;
 const MIN_FAMILY_INSTANCES: usize = 4;
 const MIN_LATTICE_FAMILY_VOTES: usize = 4;
 
@@ -1069,7 +1070,9 @@ fn quantize_mm(value: f64) -> i64 { (value / GEOM_TOL_MM).round() as i64 }
     clippy::cast_possible_truncation,
     reason = "finite geometric values are intentionally quantized into stable integer identity keys"
 )]
-fn quantize_dir(value: f64) -> i64 { (value / 1.0e-10).round() as i64 }
+fn quantize_dir(value: f64) -> i64 {
+    (value / DEFAULT_STEP_RECOVERY_TOLERANCES.source_periodic_direction_quant).round() as i64
+}
 
 fn solid_faces(
     solid: u64,

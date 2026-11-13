@@ -136,7 +136,7 @@ mod profiling {
 ///     value: x * x - 2.0,
 ///     derivation: 2.0 * x,
 /// };
-/// let sqrt2 = solve(function, 1.0, 10).map_err(|e| anyhow::anyhow!("{e}"))?;
+/// let sqrt2 = solve(function, 1.0, 10, 1.0e-6).map_err(|e| anyhow::anyhow!("{e}"))?;
 /// assert_near2!(sqrt2, f64::sqrt(2.0));
 /// # Ok(())
 /// # }
@@ -145,11 +145,16 @@ pub fn solve<V, M>(
     function: impl Fn(V) -> CalcOutput<V, M>,
     mut hint: V,
     trials: usize,
+    convergence_step: f64,
 ) -> Result<V, NewtonLog<V>>
 where
     V: Sub<Output = V> + Copy + Tolerance,
     M: Jacobian<V>,
 {
+    assert!(
+        convergence_step.is_finite() && convergence_step > 0.0,
+        "Newton convergence threshold must be finite and strictly positive"
+    );
     let mut log = NewtonLog::new(cfg!(debug_assertions), trials);
     for step in 0..=trials {
         log.push(hint);
@@ -160,7 +165,7 @@ where
             return Err(log);
         };
         let next = hint - inv * value;
-        if next.near(&hint) {
+        if next.abs_diff_eq(&hint, convergence_step) {
             profiling::record::<V>(step + 1, 0);
             return Ok(next);
         }
@@ -182,6 +187,7 @@ pub fn solve_v2<V, M>(
     function: impl Fn(V) -> CalcOutput<V, M>,
     mut hint: V,
     trials: usize,
+    convergence_step: V::Epsilon,
 ) -> Result<V, NewtonLog<V>>
 where
     V: Sub<Output = V> + Copy + crate::scalar::ToleranceV2,
@@ -198,7 +204,7 @@ where
             return Err(log);
         };
         let next = hint - inv * value;
-        if next.near_v2(&hint) {
+        if next.abs_diff_eq(&hint, convergence_step) {
             profiling::record::<V>(step + 1, 0);
             return Ok(next);
         }

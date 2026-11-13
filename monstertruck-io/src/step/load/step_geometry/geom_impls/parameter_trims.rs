@@ -678,7 +678,7 @@ fn bounded_tilted_ellipse_trim_on_cylinder(
 ) -> Option<StepParameterCurve> {
     const MAX_TRIM_SEGMENTS: u32 = 4096;
     // More stringent than the kernel's geometric consistency tolerance.
-    const TRIM_ERROR_MM: f64 = 1.0e-8;
+    const TRIM_ERROR_MM: f64 = DEFAULT_NUMERICAL_TOLERANCES.step_trim_residual_mm;
     if !matrix4_is_affine(curve.transform()) || !matrix4_is_affine(revolution.transform()) {
         return None;
     }

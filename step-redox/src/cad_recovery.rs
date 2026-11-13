@@ -6,6 +6,7 @@ use crate::math3::dot;
 use crate::periodic_chains::PeriodicChainPattern;
 use crate::step_graph::{build_index, entity_id, simple_record};
 use anyhow::{Result, bail};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use monstertruck_io::step::load::ParsedStepSource;
 use serde::Serialize;
 
@@ -222,7 +223,7 @@ fn compose_union_models(parts: &[(&CadModel, NodeId)]) -> Result<(CadModel, Node
 }
 
 const MAX_FLAT_UNION_CHILDREN: usize = 16;
-const AXIS_GROUP_DOT_TOLERANCE: f64 = 1.0e-10;
+const AXIS_GROUP_DOT_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.axis_group_dot;
 
 fn add_bounded_union_tree(model: &mut CadModel, children: Vec<NodeId>) -> NodeId {
     if children.len() == 1 {
@@ -495,7 +496,7 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
         // The source-witnessed shoulder must coincide with the extrusion's
         // end station; the terminal cap must extend *beyond* that station.
         // This is a topological attachment test, not arbitrary subset search.
-        const STATION_TOL_MM: f64 = 1.0e-7;
+        const STATION_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.station_position_mm;
         let aligned = extensions
             .iter()
             .filter(|ext| {
@@ -772,13 +773,14 @@ fn validate_periodic_chain(chain: &PeriodicChainPattern) -> Result<()> {
             chain.axis[1].mul_add(chain.axis[1], chain.axis[0] * chain.axis[0]),
         )
         .sqrt();
-    if (axis_norm - 1.0).abs() > 1.0e-9 {
+    if (axis_norm - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_axis_unit {
         bail!("periodic-chain source axis is not unit length");
     }
     if chain.site_centers_mm.iter().any(|value| !value.is_finite()) {
         bail!("periodic-chain source site centers are non-finite");
     }
-    let pitch_tolerance = 1.0e-5_f64.max(chain.pitch_mm.abs() * 1.0e-9);
+    let pitch_tolerance = 1.0e-5_f64
+        .max(chain.pitch_mm.abs() * DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_axis_unit);
     if chain
         .site_centers_mm
         .windows(2)

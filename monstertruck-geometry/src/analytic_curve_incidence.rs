@@ -6,6 +6,7 @@
 use crate::analytic_bezier_partition::proof_bezier_spans;
 use crate::analytic_carrier::AnalyticSupport;
 use crate::prelude::*;
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,7 +153,8 @@ pub(crate) fn valid(curve: &BsplineCurve<Vector4>) -> bool {
 }
 
 fn valid_axis(axis: Vector3) -> bool {
-    axis.magnitude2().is_finite() && (axis.magnitude2() - 1.0).abs() <= 1.0e-8
+    axis.magnitude2().is_finite()
+        && (axis.magnitude2() - 1.0).abs() <= DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
 }
 fn finite_point(p: Point3) -> bool { [p.x, p.y, p.z].iter().all(|x| x.is_finite()) }
 

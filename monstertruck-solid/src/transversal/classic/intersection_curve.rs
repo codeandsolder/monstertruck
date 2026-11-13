@@ -482,7 +482,10 @@ where
             continue;
         }
         let along = (point - segment[0]).dot(delta) / length2;
-        if !(-1.0e-8..=1.0 + 1.0e-8).contains(&along) {
+        if !(-DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_parameter_slack
+            ..=1.0 + DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_parameter_slack)
+            .contains(&along)
+        {
             continue;
         }
         let foot = segment[0] + delta * along.clamp(0.0, 1.0);
@@ -625,14 +628,19 @@ where
             let (index, local) =
                 locate_on_exact_fragment(second, point, surface0, surface1, tolerance)?;
             let progress = index as f64 + local;
-            if progress + 1.0e-8 < previous_progress {
+            if progress + DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_progress_slack
+                < previous_progress
+            {
                 return None;
             }
             previous_progress = progress;
             samples += 1;
         }
     }
-    if previous_progress < overlap_index as f64 + overlap_fraction - 1.0e-5 {
+    if previous_progress
+        < overlap_index as f64 + overlap_fraction
+            - DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_overlap_parameter_slack
+    {
         return None;
     }
     let prefix = PolylineCurve(first[..=cut_index].to_vec());
@@ -843,7 +851,7 @@ where
         }
     }
     let interferences = polygon0.extract_interference(polygon1);
-    let stitch_tolerance = 4.0 * tol.max(KERNEL_EPSILON);
+    let stitch_tolerance = DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_stitch_scale * tol;
     let polylines =
         remove_redundant_interference_strands(construct_polylines(&interferences), KERNEL_EPSILON);
     let polylines = stitch_nearby_polylines(polylines, stitch_tolerance)?;

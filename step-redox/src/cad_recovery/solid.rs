@@ -15,6 +15,7 @@ use crate::solid_sweeps::{
     RecoveredRoundSweep, RecoveredSweepSegment,
 };
 use anyhow::{Result, bail};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 
 /// Build the *proposal* from one source cap and an observed axial station.
 ///
@@ -35,11 +36,14 @@ pub(super) fn recover_source_cap_extrusion_model(
     let frame = [cap.x_axis, cap.y_axis, cap.z_axis];
     if cap.origin_mm.iter().any(|v| !v.is_finite())
         || frame.iter().flatten().any(|v| !v.is_finite())
-        || frame.iter().any(|axis| (norm(*axis) - 1.0).abs() > 1.0e-10)
-        || dot(cap.x_axis, cap.y_axis).abs() > 1.0e-10
-        || dot(cap.x_axis, cap.z_axis).abs() > 1.0e-10
-        || dot(cap.y_axis, cap.z_axis).abs() > 1.0e-10
-        || (dot(cross(cap.x_axis, cap.y_axis), cap.z_axis) - 1.0).abs() > 1.0e-10
+        || frame.iter().any(|axis| {
+            (norm(*axis) - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
+        })
+        || dot(cap.x_axis, cap.y_axis).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
+        || dot(cap.x_axis, cap.z_axis).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
+        || dot(cap.y_axis, cap.z_axis).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
+        || (dot(cross(cap.x_axis, cap.y_axis), cap.z_axis) - 1.0).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
     {
         bail!("source-cap extrusion frame is not orthonormal and right-handed");
     }
@@ -171,7 +175,7 @@ pub fn recover_round_sweep_fragment(sweep: &RecoveredRoundSweep) -> Result<CadFr
         || !sweep.profile_radius_mm.is_finite()
         || sweep.profile_radius_mm <= 0.0
         || !sweep.max_residual_mm.is_finite()
-        || sweep.max_residual_mm > 1.0e-6
+        || sweep.max_residual_mm > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_strict_residual_mm
         || sweep.segments.is_empty()
     {
         bail!("round sweep proof is invalid");
@@ -181,13 +185,16 @@ pub fn recover_round_sweep_fragment(sweep: &RecoveredRoundSweep) -> Result<CadFr
         sweep.profile_y_axis,
         sweep.path_tangent,
     ] {
-        if (norm(axis) - 1.0).abs() > 1.0e-8 {
+        if (norm(axis) - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame {
             bail!("closed round sweep frame is not orthonormal");
         }
     }
-    if dot(sweep.profile_x_axis, sweep.profile_y_axis).abs() > 1.0e-8
-        || dot(sweep.profile_x_axis, sweep.path_tangent).abs() > 1.0e-8
-        || dot(sweep.profile_y_axis, sweep.path_tangent).abs() > 1.0e-8
+    if dot(sweep.profile_x_axis, sweep.profile_y_axis).abs()
+        > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
+        || dot(sweep.profile_x_axis, sweep.path_tangent).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
+        || dot(sweep.profile_y_axis, sweep.path_tangent).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
     {
         bail!("closed round sweep frame axes are not perpendicular");
     }
@@ -301,7 +308,8 @@ pub fn recover_revolved_round_tail_fragment(
         || !recovered.profile_radius_mm.is_finite()
         || recovered.profile_radius_mm <= 0.0
         || !recovered.max_residual_mm.is_finite()
-        || recovered.max_residual_mm > 1.0e-5
+        || recovered.max_residual_mm
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_loose_residual_mm
         || recovered.segments.len() != 2
     {
         bail!("revolved round-tail proof is invalid");
@@ -311,17 +319,20 @@ pub fn recover_revolved_round_tail_fragment(
         recovered.profile_y_axis,
         recovered.path_tangent,
     ] {
-        if (norm(axis) - 1.0).abs() > 1.0e-8 {
+        if (norm(axis) - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame {
             bail!("revolved round-tail frame is not orthonormal");
         }
     }
-    if dot(recovered.profile_x_axis, recovered.profile_y_axis).abs() > 1.0e-8
-        || dot(recovered.profile_x_axis, recovered.path_tangent).abs() > 1.0e-8
-        || dot(recovered.profile_y_axis, recovered.path_tangent).abs() > 1.0e-8
+    if dot(recovered.profile_x_axis, recovered.profile_y_axis).abs()
+        > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
+        || dot(recovered.profile_x_axis, recovered.path_tangent).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
+        || dot(recovered.profile_y_axis, recovered.path_tangent).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
         || dot(
             cross(recovered.profile_x_axis, recovered.profile_y_axis),
             recovered.path_tangent,
-        ) < 1.0 - 1.0e-8
+        ) < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
     {
         bail!("revolved round-tail frame axes are inconsistent");
     }
@@ -409,12 +420,13 @@ pub fn recover_revolved_round_tail_fragment(
         bail!("revolved round-tail proof must end in a straight segment");
     };
     let end_length = norm(end_vector);
-    if !end_length.is_finite() || end_length <= 1.0e-8 {
+    if !end_length.is_finite() || end_length <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
+    {
         bail!("revolved round-tail terminal segment is degenerate");
     }
     let end_direction = mul(end_vector, 1.0 / end_length);
     let hemisphere_z = cross(recovered.profile_x_axis, end_direction);
-    if (norm(hemisphere_z) - 1.0).abs() > 1.0e-8 {
+    if (norm(hemisphere_z) - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame {
         bail!("revolved round-tail hemisphere frame is invalid");
     }
     let hemisphere_profile = Profile2d {
@@ -532,7 +544,7 @@ pub fn recover_open_rectangular_sweep_fragment(
         || !sweep.profile_thickness_mm.is_finite()
         || sweep.profile_thickness_mm <= 0.0
         || !sweep.max_residual_mm.is_finite()
-        || sweep.max_residual_mm > 1.0e-5
+        || sweep.max_residual_mm > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_loose_residual_mm
     {
         bail!("open rectangular sweep proof is invalid");
     }
@@ -541,17 +553,20 @@ pub fn recover_open_rectangular_sweep_fragment(
         sweep.bend_profile_y_axis,
         sweep.bend_path_tangent,
     ] {
-        if (norm(axis) - 1.0).abs() > 1.0e-8 {
+        if (norm(axis) - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame {
             bail!("open rectangular sweep frame is not orthonormal");
         }
     }
-    if dot(sweep.bend_profile_x_axis, sweep.bend_profile_y_axis).abs() > 1.0e-8
-        || dot(sweep.bend_profile_x_axis, sweep.bend_path_tangent).abs() > 1.0e-8
-        || dot(sweep.bend_profile_y_axis, sweep.bend_path_tangent).abs() > 1.0e-8
+    if dot(sweep.bend_profile_x_axis, sweep.bend_profile_y_axis).abs()
+        > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
+        || dot(sweep.bend_profile_x_axis, sweep.bend_path_tangent).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
+        || dot(sweep.bend_profile_y_axis, sweep.bend_path_tangent).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
         || dot(
             cross(sweep.bend_profile_x_axis, sweep.bend_profile_y_axis),
             sweep.bend_path_tangent,
-        ) < 1.0 - 1.0e-8
+        ) < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame
     {
         bail!("open rectangular sweep frame axes are inconsistent");
     }
@@ -677,7 +692,7 @@ fn rectangular_profile_bounds(points: &[[f64; 2]]) -> Option<([f64; 2], [f64; 2]
             .map(|p| p[1])
             .fold(f64::NEG_INFINITY, f64::max),
     ];
-    let tolerance = 1.0e-8;
+    let tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame;
     let corners = [
         [min[0], min[1]],
         [max[0], min[1]],
@@ -746,7 +761,7 @@ fn add_planar_sweep_leg(
 
     let (profile_min, profile_max) = rectangular_profile_bounds(&leg.profile_points_mm)
         .ok_or_else(|| anyhow::anyhow!("tapered sweep leg base is not rectangular"))?;
-    let tolerance = 1.0e-8;
+    let tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_frame;
     let base_is_min = (tip.base_y_mm - profile_min[1]).abs() <= tolerance;
     let base_is_max = (tip.base_y_mm - profile_max[1]).abs() <= tolerance;
     if base_is_min == base_is_max
@@ -922,7 +937,8 @@ pub fn recover_radial_slot_revolution_fragment(
     });
 
     let max_radius_mm = maximum_revolution_radius(base)?;
-    let cutter_margin_mm = (10.0 * base.source_tolerance_mm).max(1.0e-5);
+    let cutter_margin_mm = (10.0 * base.source_tolerance_mm)
+        .max(DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_loose_residual_mm);
     let cutter_depth_mm = max_radius_mm + cutter_margin_mm;
     // The detector proves that the open end coincides with exactly one global
     // axial extreme of the host. Extend the cutter only through that already-open
@@ -1061,14 +1077,17 @@ fn validate_radial_slot_revolution(slotted: &RecoveredRadialSlotRevolution) -> R
     }
     for direction in [slotted.slot_outward_direction, slotted.slot_side_direction] {
         if direction.iter().any(|component| !component.is_finite())
-            || (norm(direction) - 1.0).abs() > 1.0e-10
+            || (norm(direction) - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
         {
             bail!("radial-slot direction must be a finite unit vector");
         }
     }
-    if dot(slotted.slot_outward_direction, slotted.base.axis_direction).abs() > 1.0e-10
-        || dot(slotted.slot_side_direction, slotted.base.axis_direction).abs() > 1.0e-10
-        || dot(slotted.slot_outward_direction, slotted.slot_side_direction).abs() > 1.0e-10
+    if dot(slotted.slot_outward_direction, slotted.base.axis_direction).abs()
+        > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
+        || dot(slotted.slot_side_direction, slotted.base.axis_direction).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
+        || dot(slotted.slot_outward_direction, slotted.slot_side_direction).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
     {
         bail!("radial-slot frame must be orthogonal to the revolution axis");
     }
@@ -1160,7 +1179,9 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
                 ..
             } => {
                 let sweep = end_angle_rad - start_angle_rad;
-                if sweep.abs() <= 1.0e-12 || sweep.abs() > std::f64::consts::TAU + 1.0e-9 {
+                if sweep.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
+                    || sweep.abs() > std::f64::consts::TAU + 1.0e-9
+                {
                     bail!("solid revolution circular meridian has invalid sweep");
                 }
                 if circle_arc_min_radius(center_mm[0], *radius_mm, *start_angle_rad, *end_angle_rad)
@@ -1203,14 +1224,17 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
     {
         bail!("solid revolution frame contains non-finite values");
     }
-    if (norm(revolution.axis_direction) - 1.0).abs() > 1.0e-10
-        || (norm(revolution.radial_direction) - 1.0).abs() > 1.0e-10
-        || dot(revolution.axis_direction, revolution.radial_direction).abs() > 1.0e-10
+    if (norm(revolution.axis_direction) - 1.0).abs()
+        > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
+        || (norm(revolution.radial_direction) - 1.0).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
+        || dot(revolution.axis_direction, revolution.radial_direction).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
     {
         bail!("solid revolution axis/radial basis is not orthonormal");
     }
     let z_axis = cross(revolution.radial_direction, revolution.axis_direction);
-    if (norm(z_axis) - 1.0).abs() > 1.0e-10 {
+    if (norm(z_axis) - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame {
         bail!("solid revolution frame does not define a unit profile normal");
     }
 
@@ -1261,18 +1285,21 @@ fn validate_solid_extrusion(extrusion: &RecoveredSolidExtrusion) -> Result<()> {
         }
     }
     for axis in [extrusion.x_axis, extrusion.y_axis, extrusion.z_axis] {
-        if (norm(axis) - 1.0).abs() > 1.0e-10 {
+        if (norm(axis) - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame {
             bail!("solid extrusion frame axis is not unit length");
         }
     }
-    if dot(extrusion.x_axis, extrusion.y_axis).abs() > 1.0e-10
-        || dot(extrusion.x_axis, extrusion.z_axis).abs() > 1.0e-10
-        || dot(extrusion.y_axis, extrusion.z_axis).abs() > 1.0e-10
+    if dot(extrusion.x_axis, extrusion.y_axis).abs()
+        > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
+        || dot(extrusion.x_axis, extrusion.z_axis).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
+        || dot(extrusion.y_axis, extrusion.z_axis).abs()
+            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame
     {
         bail!("solid extrusion frame is not orthogonal");
     }
     let handedness = dot(cross(extrusion.x_axis, extrusion.y_axis), extrusion.z_axis);
-    if (handedness - 1.0).abs() > 1.0e-10 {
+    if (handedness - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_frame {
         bail!("solid extrusion frame is not right-handed");
     }
     Ok(())
@@ -1387,9 +1414,11 @@ fn circle_arc_min_radius(center_radius: f64, radius: f64, start_angle: f64, end_
 fn angle_on_sweep(angle: f64, start: f64, end: f64) -> bool {
     let sweep = end - start;
     if sweep >= 0.0 {
-        (angle - start).rem_euclid(std::f64::consts::TAU) <= sweep + 1.0e-12
+        (angle - start).rem_euclid(std::f64::consts::TAU)
+            <= sweep + DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
     } else {
-        (start - angle).rem_euclid(std::f64::consts::TAU) <= -sweep + 1.0e-12
+        (start - angle).rem_euclid(std::f64::consts::TAU)
+            <= -sweep + DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
     }
 }
 
@@ -1411,7 +1440,9 @@ const fn local_frame_transform(
 
 fn normalize3(vector: [f64; 3]) -> Result<[f64; 3]> {
     let length = norm(vector);
-    if !length.is_finite() || length <= 1.0e-12 {
+    if !length.is_finite()
+        || length <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
+    {
         bail!("cannot normalize zero or non-finite CAD frame vector");
     }
     Ok([vector[0] / length, vector[1] / length, vector[2] / length])

@@ -8,6 +8,7 @@
 //! why is the banner below.
 
 use super::{EuclideanSpace, InnerSpace, MetricSpace, Point3, PreMeshableSurface, algo, env};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 // ---------------------------------------------------------------------------
 // Boundary-projection failure lens (`MT_DEBUG_BOUNDARY_PROJECTION=1`)
@@ -181,8 +182,12 @@ pub(super) fn report_projection_failure<S: PreMeshableSurface>(
     let nearest = match (urange, vrange) {
         (Some(ur), Some(vr)) => {
             let ((u, v), d) = sampled_nearest(surface, point, ur, vr);
-            let at_u_edge = (u - ur.0).abs() < 1.0e-9 || (u - ur.1).abs() < 1.0e-9;
-            let at_v_edge = (v - vr.0).abs() < 1.0e-9 || (v - vr.1).abs() < 1.0e-9;
+            let at_u_edge = (u - ur.0).abs()
+                < DEFAULT_NUMERICAL_TOLERANCES.meshing_debug_uv_edge_tolerance
+                || (u - ur.1).abs() < DEFAULT_NUMERICAL_TOLERANCES.meshing_debug_uv_edge_tolerance;
+            let at_v_edge = (v - vr.0).abs()
+                < DEFAULT_NUMERICAL_TOLERANCES.meshing_debug_uv_edge_tolerance
+                || (v - vr.1).abs() < DEFAULT_NUMERICAL_TOLERANCES.meshing_debug_uv_edge_tolerance;
             let wide_u = (ur.0 - (ur.1 - ur.0), ur.1 + (ur.1 - ur.0));
             let wide_v = (vr.0 - (vr.1 - vr.0), vr.1 + (vr.1 - vr.0));
             let ((wu, wv), wd) = sampled_nearest(surface, point, wide_u, wide_v);

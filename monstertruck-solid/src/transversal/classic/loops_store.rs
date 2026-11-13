@@ -521,7 +521,11 @@ impl<C> Loops<Point3, C> {
             + Invertible
             + Clone,
     {
-        let length_tol = length_tol.abs().max(KERNEL_EPSILON);
+        // Reject an invalid tolerance; silently clamping it would change
+        // which distinct trimmed edges can be welded into one identity.
+        if !length_tol.is_finite() || length_tol < KERNEL_EPSILON {
+            return false;
+        }
         let same_endpoints = |edge: &Edge<Point3, C>| {
             if edge.front().point().distance(incoming.front().point()) <= length_tol
                 && edge.back().point().distance(incoming.back().point()) <= length_tol
@@ -1662,7 +1666,8 @@ where
     let store0_len = operand0.geom.len();
     let store1_len = operand1.geom.len();
     let boolean_tolerance = BooleanTolerance::new(tol);
-    let coplanar_tol = 2.0 * boolean_tolerance.length;
+    let coplanar_tol =
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_coplanar_scale * boolean_tolerance.length;
     let boundary_search_tolerance = boolean_tolerance.mesh_seed;
     let coplanar =
         analyze_coplanar_interfaces(poly_shell0, poly_shell1, coplanar_tol, imprint_coplanar)?;

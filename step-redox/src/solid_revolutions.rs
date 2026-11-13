@@ -8,6 +8,7 @@ use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::ReducedSolid;
 use crate::step_entities::{parameter_number, representation_items_and_context};
 use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -21,14 +22,15 @@ use profile_graph::{
 mod meridian;
 use meridian::{MeridianArc, MeridianCurve, MeridianLine, MeridianProfile};
 
-const GEOM_TOL_MM: f64 = 1.0e-7;
+const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
 /// Default source-evidence tolerance when STEP provides no trusted uncertainty context.
 pub(crate) const REVOLUTION_SOURCE_SUPPORT_TOL_MM: f64 = GEOM_TOL_MM;
 /// Hard ceiling for source-declared length uncertainty used by revolution recovery.
 /// This is 10 nm / 100x the strict default: enough for known exporter roundoff,
 /// still far below any dimension we want to approximate semantically.
-pub(crate) const MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM: f64 = 1.0e-5;
-const DIR_TOL: f64 = 1.0e-9;
+pub(crate) const MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM: f64 =
+    DEFAULT_STEP_RECOVERY_TOLERANCES.revolution_max_source_uncertainty_mm;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.revolution_direction;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecoveredSolidRevolution {

@@ -17,10 +17,11 @@ use crate::math3::{
 };
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use anyhow::{Context, Result, bail, ensure};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use std::collections::{BTreeMap, BTreeSet};
 
 const GEOM_TOL_MM: f64 = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM;
-const DIR_TOL: f64 = 1.0e-10;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.inverse_edge_treatment_direction;
 
 mod curved_segment;
 
@@ -310,7 +311,8 @@ fn circle_carrier_run(
         (start_angle - end_angle).rem_euclid(std::f64::consts::TAU)
     };
     ensure!(
-        (expected - sweep.abs()).abs() <= 1.0e-6,
+        (expected - sweep.abs()).abs()
+            <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_rounding_arc_residual_rad,
         "circular carrier interface angles do not match its exact curve traversal"
     );
     let previous = (!full).then(|| oriented_edges[(start + count - 1) % count].clone());
@@ -366,7 +368,9 @@ fn circle_interface_sweep(
         sweep += span;
     }
     ensure!(
-        sweep.abs() <= std::f64::consts::TAU + 1.0e-7,
+        sweep.abs()
+            <= std::f64::consts::TAU
+                + DEFAULT_STEP_RECOVERY_TOLERANCES.source_rounding_arc_max_slack_rad,
         "circular carrier interface covers more than one turn"
     );
     Ok(sweep)
@@ -426,7 +430,12 @@ fn inverse_circle_angles(frame: CircleFrame, runs: &[CircleCarrierRun]) -> Resul
             .unwrap_or(breaks[0] + std::f64::consts::TAU);
         let span = end - start;
         let pieces = (1_u32..=4)
-            .find(|&count| span <= f64::from(count).mul_add(std::f64::consts::FRAC_PI_2, 1.0e-10))
+            .find(|&count| {
+                span <= f64::from(count).mul_add(
+                    std::f64::consts::FRAC_PI_2,
+                    DEFAULT_STEP_RECOVERY_TOLERANCES.source_rounding_quarter_turn_slack_rad,
+                )
+            })
             .context("inverse circle has an invalid angular partition")?;
         for j in 0..pieces {
             bounded.push(
@@ -539,7 +548,8 @@ fn circle_run_replacement(
         })
         .sum::<f64>();
     ensure!(
-        (span - run.sweep.abs()).abs() <= 1.0e-6,
+        (span - run.sweep.abs()).abs()
+            <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_rounding_arc_residual_rad,
         "reconstructed circular run has wrong total angular span"
     );
     Ok(result)
@@ -1260,7 +1270,12 @@ fn open_inverse_circle_arc(
         "partial inverse circle must span a proper open arc"
     );
     let pieces = (1_u32..=4)
-        .find(|&n| span <= f64::from(n).mul_add(std::f64::consts::FRAC_PI_2, 1.0e-10))
+        .find(|&n| {
+            span <= f64::from(n).mul_add(
+                std::f64::consts::FRAC_PI_2,
+                DEFAULT_STEP_RECOVERY_TOLERANCES.source_rounding_quarter_turn_slack_rad,
+            )
+        })
         .context("partial inverse circle has an invalid arc")?;
     let angles = (0..=pieces)
         .map(|i| f64::from(i).mul_add(span / f64::from(pieces), start))

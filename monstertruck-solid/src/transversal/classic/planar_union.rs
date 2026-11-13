@@ -12,6 +12,7 @@ use super::loops_store::{
 use super::tolerance::BooleanTolerance;
 use super::weld::{node_selected_regions, point_lex_cmp};
 use super::{AltCurve, AltRegion, ShapeOpsCurve, ShapeOpsSurface};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::PolylineCurve;
@@ -212,7 +213,7 @@ fn covered(polygons: &[Vec<Vec<Point2>>], point: Point2) -> bool {
 /// Return true when existing exact edge identities are insufficient to form
 /// an already-noded arrangement. Such crossings must be split, not guessed.
 fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64) -> bool {
-    let epsilon = span * 1.0e-10;
+    let epsilon = span * DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_relative_span;
     let cross = |start: Point2, end: Point2, point: Point2| {
         let direction = end - start;
         direction
@@ -226,8 +227,8 @@ fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64) -> bool {
             return false;
         }
         let position = (point - start).dot(direction) / length2;
-        position > 1.0e-6
-            && position < 1.0 - 1.0e-6
+        position > DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_end_fraction
+            && position < 1.0 - DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_end_fraction
             && (point - (start + direction * position)).magnitude2() < epsilon * epsilon
     };
     for (index, lhs) in edges.iter().enumerate() {
@@ -718,7 +719,7 @@ fn selected_boundary_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let left = Vector2::new(-tangent.y, tangent.x) / length;
         let center = start.midpoint(end);
         let mut edge_transition = None;
-        for ratio in [1.0e-8, 1.0e-7, 1.0e-6, 1.0e-5] {
+        for ratio in DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_primary_probe_ratios {
             let offset = ratio * arrangement.span;
             let (left_covered, right_covered) = (
                 membership(center + left * offset),
@@ -844,13 +845,16 @@ fn validates_occupancy_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
         let left = Vector2::new(-tangent.y, tangent.x) / length;
         let center = start.midpoint(end);
-        [1.0e-7, 1.0e-6].into_iter().all(|ratio| {
-            let offset = arrangement.span * ratio;
-            let left_probe = center + left * offset;
-            let right_probe = center - left * offset;
-            membership(left_probe) == traced(left_probe)
-                && membership(right_probe) == traced(right_probe)
-        })
+        DEFAULT_NUMERICAL_TOLERANCES
+            .boolean_planar_secondary_probe_ratios
+            .into_iter()
+            .all(|ratio| {
+                let offset = arrangement.span * ratio;
+                let left_probe = center + left * offset;
+                let right_probe = center - left * offset;
+                membership(left_probe) == traced(left_probe)
+                    && membership(right_probe) == traced(right_probe)
+            })
     })
 }
 
@@ -989,7 +993,8 @@ fn same_oriented_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     } else {
         -rhs_plane.normal()
     };
-    lhs_normal.dot(rhs_normal) >= 1.0 - 1.0e-10
+    lhs_normal.dot(rhs_normal)
+        >= 1.0 - DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_normal_cosine_slack
         && region_lies_on_plane(lhs, &rhs_plane, tol)
         && region_lies_on_plane(rhs, &lhs_plane, tol)
 }
@@ -1067,7 +1072,7 @@ fn same_oriented_difference_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     lhs_surface
         .normal(lhs_uv.0, lhs_uv.1)
         .dot(rhs_surface.normal(rhs_uv.0, rhs_uv.1))
-        > 1.0 - 1.0e-8
+        > 1.0 - DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_tangent_cosine_slack
 }
 
 fn oriented_cylinder_radial_sign<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(

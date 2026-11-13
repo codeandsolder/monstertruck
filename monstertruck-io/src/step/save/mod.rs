@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display, Formatter, Result};
 
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_topology::compress::{
     CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell, CompressedSolid,
     CompressedTrimmedShell, CompressedTrimmedSolid,
@@ -32,7 +33,9 @@ pub struct FloatDisplay(pub f64);
 impl Display for FloatDisplay {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let Self(x) = *self;
-        if f64::abs(x) < 1.0e-2 && x != 0.0 {
+        if f64::abs(x) < DEFAULT_NUMERICAL_TOLERANCES.step_output_scientific_notation_threshold
+            && x != 0.0
+        {
             f.write_fmt(format_args!("{x:.10E}"))
         } else {
             f.write_fmt(format_args!("{x:?}"))
@@ -422,7 +425,7 @@ impl Default for StepMeasurementContext {
     fn default() -> Self {
         Self {
             length_prefix: SiPrefix::Milli,
-            distance_accuracy_value: 1.0e-6,
+            distance_accuracy_value: DEFAULT_NUMERICAL_TOLERANCES.step_output_distance_accuracy,
         }
     }
 }

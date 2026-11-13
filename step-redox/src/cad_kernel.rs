@@ -1,5 +1,6 @@
 use crate::cad_ir::{CadModel, NodeId};
 use anyhow::Result;
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 
 /// User-facing geometry accuracy contract at the unit-aware Step Redox boundary.
 ///
@@ -16,7 +17,8 @@ pub enum GeometryPolicy {
 
 impl GeometryPolicy {
     /// Project-wide Standard preset: 0.01 mm.
-    pub const PROJECT_STANDARD_TOLERANCE_MM: f64 = 0.01;
+    pub const PROJECT_STANDARD_TOLERANCE_MM: f64 =
+        DEFAULT_STEP_RECOVERY_TOLERANCES.cad_project_standard_mm;
 
     #[must_use]
     pub const fn standard_mm(tolerance_mm: f64) -> Self { Self::Standard { tolerance_mm } }
@@ -269,7 +271,9 @@ pub mod monstertruck {
             let projected = normal.dot(progression);
             // A nearly tangential section does not offer reliable winding
             // evidence. Preserve it rather than inventing a face orientation.
-            let threshold = 1.0e-10 * normal.magnitude() * progression.magnitude();
+            let threshold = DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_frame_orthogonality
+                * normal.magnitude()
+                * progression.magnitude();
             if projected < -threshold {
                 wires[index].invert();
             }
@@ -349,7 +353,10 @@ pub mod monstertruck {
         if !angle_rad.is_finite() || angle_rad == 0.0 {
             bail!("revolution angle must be finite and nonzero");
         }
-        if angle_rad.abs() > std::f64::consts::TAU + 1.0e-10 {
+        if angle_rad.abs()
+            > std::f64::consts::TAU
+                + DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_frame_orthogonality
+        {
             bail!("revolution angle must not exceed one full turn");
         }
         if axis.origin_mm.iter().any(|value| !value.is_finite())
@@ -360,12 +367,13 @@ pub mod monstertruck {
 
         let direction = Vector3::new(axis.direction[0], axis.direction[1], axis.direction[2]);
         let magnitude = direction.magnitude();
-        if !magnitude.is_finite() || magnitude <= 1.0e-12 {
+        if !magnitude.is_finite() || magnitude <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit {
             bail!("revolution axis direction must be nonzero");
         }
         let direction = direction / magnitude;
         let origin = Point3::new(axis.origin_mm[0], axis.origin_mm[1], axis.origin_mm[2]);
-        let closed = (angle_rad.abs() - std::f64::consts::TAU).abs() <= 1.0e-10;
+        let closed = (angle_rad.abs() - std::f64::consts::TAU).abs()
+            <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_frame_orthogonality;
         let sweep = if closed {
             builder::SweepAngle::Closed
         } else {
@@ -373,8 +381,10 @@ pub mod monstertruck {
         };
 
         let touches_axis = wires.iter().any(|wire| {
-            wire.vertex_iter()
-                .any(|vertex| point_axis_distance(vertex.point(), origin, direction) <= 1.0e-9)
+            wire.vertex_iter().any(|vertex| {
+                point_axis_distance(vertex.point(), origin, direction)
+                    <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+            })
         });
 
         if touches_axis {
@@ -395,9 +405,12 @@ pub mod monstertruck {
                     let curve = edge.oriented_curve();
                     let (start, end) = curve.range_tuple();
                     let midpoint = curve.evaluate(f64::midpoint(start, end));
-                    (point_axis_distance(edge.front().point(), origin, direction) <= 1.0e-9
-                        && point_axis_distance(edge.back().point(), origin, direction) <= 1.0e-9
-                        && point_axis_distance(midpoint, origin, direction) <= 1.0e-9)
+                    (point_axis_distance(edge.front().point(), origin, direction)
+                        <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+                        && point_axis_distance(edge.back().point(), origin, direction)
+                            <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+                        && point_axis_distance(midpoint, origin, direction)
+                            <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm)
                         .then_some(index)
                 })
                 .collect::<Vec<_>>();
@@ -414,8 +427,10 @@ pub mod monstertruck {
             let Some(back) = wire.back_vertex() else {
                 bail!("axis-touching revolution has no generatrix");
             };
-            if point_axis_distance(front.point(), origin, direction) > 1.0e-9
-                || point_axis_distance(back.point(), origin, direction) > 1.0e-9
+            if point_axis_distance(front.point(), origin, direction)
+                > DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+                || point_axis_distance(back.point(), origin, direction)
+                    > DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
             {
                 bail!("revolution generatrix endpoints must lie on the axis");
             }
@@ -478,7 +493,8 @@ pub mod monstertruck {
                 start_angle_rad,
                 end_angle_rad,
             } = &curves[0]
-            && ((end_angle_rad - start_angle_rad).abs() - std::f64::consts::TAU).abs() <= 1.0e-9
+            && ((end_angle_rad - start_angle_rad).abs() - std::f64::consts::TAU).abs()
+                <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
         {
             let start = Point3::new(
                 center_mm[0] + radius_mm * start_angle_rad.cos(),
@@ -513,7 +529,9 @@ pub mod monstertruck {
         for (index, curve) in curves.iter().enumerate() {
             let next = (index + 1) % curves.len();
             let expected_end = curve_end_point(curve)?;
-            if point2_distance(expected_end, starts[next]) > 1.0e-8 {
+            if point2_distance(expected_end, starts[next])
+                > DEFAULT_STEP_RECOVERY_TOLERANCES.cad_profile_join_mm
+            {
                 bail!("profile curve endpoints are not topologically continuous");
             }
             match curve {
@@ -527,10 +545,15 @@ pub mod monstertruck {
                     end_angle_rad,
                 } => {
                     let sweep = end_angle_rad - start_angle_rad;
-                    if !sweep.is_finite() || sweep.abs() <= 1.0e-12 {
+                    if !sweep.is_finite()
+                        || sweep.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit
+                    {
                         bail!("circle arc sweep must be finite and nonzero");
                     }
-                    if sweep.abs() >= std::f64::consts::TAU - 1.0e-9 {
+                    if sweep.abs()
+                        >= std::f64::consts::TAU
+                            - DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+                    {
                         bail!("full circles must be represented by one profile curve");
                     }
                     let midpoint = f64::midpoint(*start_angle_rad, *end_angle_rad);
@@ -751,7 +774,7 @@ pub mod monstertruck {
         }
     }
 
-    const EDGE_SELECTOR_TOLERANCE_MM: f64 = 1.0e-7;
+    const EDGE_SELECTOR_TOLERANCE_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.cad_edge_selector_mm;
 
     const fn segment_point(point_mm: [f64; 3]) -> Point3 {
         Point3::new(point_mm[0], point_mm[1], point_mm[2])
@@ -877,7 +900,9 @@ pub mod monstertruck {
                 let center = segment_point(*center_mm);
                 let normal = Vector3::new(normal[0], normal[1], normal[2]);
                 let normal_magnitude = normal.magnitude();
-                if !normal_magnitude.is_finite() || normal_magnitude <= 1.0e-12 {
+                if !normal_magnitude.is_finite()
+                    || normal_magnitude <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit
+                {
                     bail!("edge-treatment circle selector has invalid normal");
                 }
                 let normal = normal / normal_magnitude;
