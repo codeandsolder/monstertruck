@@ -525,7 +525,7 @@ where
         .zip(param_boundaries)
         .for_each(|(boundary, param_boundary)| {
             let poly = PolylineCurve(param_boundary.iter().flatten().copied().collect());
-            match boundary_type(&poly) {
+            match boundary_type(&poly, surface, tol) {
                 BoundaryType::NotClosed => open.push((boundary, param_boundary)),
                 _ => closed.push((boundary, param_boundary)),
             }
@@ -1366,7 +1366,7 @@ where
         .zip(param_boundaries)
         .try_for_each(|(boundary, param_boundary)| {
             let poly_boundary = PolylineCurve(param_boundary.into_iter().flatten().collect());
-            match boundary_type(&poly_boundary) {
+            match boundary_type(&poly_boundary, surface, tol) {
                 BoundaryType::Positive => positives.push((boundary, poly_boundary)),
                 BoundaryType::Negative => negatives.push((boundary, poly_boundary)),
                 BoundaryType::NotClosed => return None,
@@ -1522,18 +1522,61 @@ enum BoundaryType {
     NotClosed,
 }
 
-fn boundary_type(poly: &PolylineCurve<Point2>) -> BoundaryType {
+/// A UV closed loop must close within the *native parameter span* on
+/// both axes AND within the operation's physical 3D spatial tolerance.
+/// No universal squared-UV or world-distance constant is meaningful for
+/// arbitrarily reparameterized surfaces.
+fn boundary_type<S: ParametricSurface3D>(
+    poly: &PolylineCurve<Point2>,
+    surface: &S,
+    spatial_tolerance: f64,
+) -> BoundaryType {
+    if !spatial_tolerance.is_finite() || spatial_tolerance < 0.0 || poly.len() < 4 {
+        return BoundaryType::NotClosed;
+    }
     let (Some(first), Some(last)) = (poly.first(), poly.last()) else {
         return BoundaryType::NotClosed;
     };
-    if first.distance2(*last) < DEFAULT_NUMERICAL_TOLERANCES.healing_boundary_closure_squared {
-        if poly.area() > 0.0 {
-            BoundaryType::Positive
-        } else {
-            BoundaryType::Negative
+    if !poly
+        .iter()
+        .all(|point| point.x.is_finite() && point.y.is_finite())
+    {
+        return BoundaryType::NotClosed;
+    }
+    let uv_closed = (0..2).all(|axis| {
+        let (min, max) = poly
+            .iter()
+            .map(|point| point[axis])
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
+                (min.min(value), max.max(value))
+            });
+        let span = max - min;
+        if !span.is_finite() || span < 0.0 {
+            return false;
         }
-    } else {
+        let policy = DEFAULT_NUMERICAL_TOLERANCES;
+        let slack = policy.healing_boundary_uv_relative * span
+            + policy.healing_boundary_uv_roundoff_ulps * f64::EPSILON * min.abs().max(max.abs());
+        ((*first)[axis] - (*last)[axis]).abs() <= slack
+    });
+    if !uv_closed {
+        return BoundaryType::NotClosed;
+    }
+    let source = surface.evaluate(first.x, first.y);
+    let end = surface.evaluate(last.x, last.y);
+    let spatial_gap_squared = source.distance2(end);
+    if !spatial_gap_squared.is_finite()
+        || spatial_gap_squared > spatial_tolerance * spatial_tolerance
+    {
+        return BoundaryType::NotClosed;
+    }
+    let area = poly.area();
+    if !area.is_finite() || area == 0.0 {
         BoundaryType::NotClosed
+    } else if area > 0.0 {
+        BoundaryType::Positive
+    } else {
+        BoundaryType::Negative
     }
 }
 
