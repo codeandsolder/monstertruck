@@ -51,7 +51,7 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `healing_projection_parameter_relative` | `1.0e-6` | Native UV span-relative projection overshoot accepted during healed trim reconstruction. |
 | `healing_projection_parameter_roundoff_ulps` | `8.0` | Absolute-parameter-magnitude floating-point ulps during healed trim UV normalization. |
 | `split_parameter_relative` | `1.0e-8` | Relative parameter-space tolerance used while splitting curves. |
-| `split_parameter_absolute` | `1.0e-10` | Absolute floor paired with `split_parameter_relative`. |
+| `split_parameter_roundoff_ulps` | `8.0` | Float-representation roundoff measured in each native edge/trim parameter domain; no unrelated fixed floor. |
 | `parameter_projection` | `1.0e-9` | Tight parameter-space projection threshold. |
 | `parameter_range_relative` | `1.0e-9` | Relative padding for finite parameter ranges derived from external data. |
 | `periodic_relative` | `1.0e-6` | Relative tolerance for periodic-parameter branch comparisons. |
@@ -1155,3 +1155,64 @@ as a heuristic, which is not a support-equality proof.
 Other analytic SSI domain/clip logic may live outside
 the published monstertruck crates; inspect its actual
 code and data before changing another consumer.
+
+
+## Pass-through edge and trim split units; preserve full wire topology (2026-11-13)
+
+`monstertruck-healing/src/split_pass_through_edges.rs`
+previously applied `split_parameter_absolute=1e-10` as a
+fixed floor to both native edge and trim parameter spaces. It
+used `.so_small()` (a model-space world-distance epsilon)
+on `edge_len` and `trim_scale`. A valid 1e-12 native
+edge-parameter span was assigned an arbitrary half-way split
+`alpha=0.5` even when the actual fractional position was
+0.2; positive 1e-9 trim spans were discarded. Moreover
+`split_trim_curve` deduplicated the resulting *trim-native*
+coordinates against the **edge-native** `param_eps`, even
+though the two parameter scales can be arbitrarily different.
+
+The new `split_parameter_slack((first,last))` takes the
+actual positive finite native interval and computes
+`span * split_parameter_relative
+ + split_parameter_roundoff_ulps * EPSILON *
+ max(|first|, |last|)`. The central policy removes
+`split_parameter_absolute`, replacing it with the ulp-based
+roundoff factor. `split_parameters` computes edge-native
+slack; `split_trim_curve` computes **distinct** edge-domain
+and trim-domain slacks for determining valid interior splits
+and deduplicating mapped trims. It never invents a 0.5
+fraction when the native edge interval is small.
+
+The separate *topological cardinality* invariant is now
+explicit: if one source 3D edge is split into N new edge
+uses, there must be exactly N valid, individually split
+UV trim curves before preserving their geometry. The old
+`zip(edge_indices, trim_segments)` silently discarded
+edge uses if the trim side returned too few segments,
+leaving the face wire shorter and potentially invalid.
+`split_trim_curve` now returns `Option<Vec<T>>` and
+refuses invalid/nonfinite/out-of-range/merged cuts.
+`replace_trimmed_edge_uses` retains **all** N edge uses
+when the trim mapping fails, setting each
+`trim_curve=None` so subsequent trim regeneration may
+recover their geometry, rather than quietly removing the
+topological edges. A cardinality check precedes any zip.
+
+Regression coverage: genuine 1e-9-native-span B-spline
+trim mapped from a [0,1] edge domain splits exactly at
+one-quarter/three-quarter; edge-native span 1e-12
+maps the actual 0.2 fraction into a [0,1] trim,
+not midpoint 0.5; an unrepresentable zero-width trim
+mapping preserves three edge indices with missing trims;
+and native slacks vary by correct parameter scale for
+spans 1e-12 through 1e8, distinguishing coordinate
+representation ulps from geometric acceptance.
+
+No world-space modeling tolerance, SSI threshold, or
+experimental mesh refinement setting is changed by
+this patch. This behavior should be submitted as an
+independent upstream correctness fix with a compact
+failing-before/passing-after reproduction and a
+topology-cardinality assertion; separate upstream
+issue tracking is maintained in the project Notion
+hardening bug catalog.

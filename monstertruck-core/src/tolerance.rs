@@ -40,8 +40,8 @@ pub struct NumericalTolerances {
     pub healing_projection_parameter_roundoff_ulps: f64,
     /// Relative parameter-space tolerance used while splitting curves.
     pub split_parameter_relative: f64,
-    /// Absolute floor paired with `split_parameter_relative`.
-    pub split_parameter_absolute: f64,
+    /// Native curve-coordinate roundoff in ulps for pass-through edge/trim splitting.
+    pub split_parameter_roundoff_ulps: f64,
     /// Tight parameter-space projection threshold.
     pub parameter_projection: f64,
     /// Relative padding for finite parameter ranges derived from external data.
@@ -238,7 +238,7 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     healing_projection_parameter_relative: 1.0e-6,
     healing_projection_parameter_roundoff_ulps: 8.0,
     split_parameter_relative: 1.0e-8,
-    split_parameter_absolute: 1.0e-10,
+    split_parameter_roundoff_ulps: 8.0,
     parameter_projection: 1.0e-9,
     parameter_range_relative: 1.0e-9,
     periodic_relative: 1.0e-6,
