@@ -64,6 +64,9 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `mesh_boundary_wrap_relative` | `1.0e-6` | Native UV span-relative seam offset used for bounded/periodic parameter normalization. |
 | `mesh_boundary_roundoff_ulps` | `8.0` | Absolute native-parameter ulps for representable UV boundary rounding. |
 | `mesh_open_pair_connector_score_relative` | `1.0e-6` | Dimensionless margin comparing two sums of squared UV endpoint-connector distances. |
+| `mesh_periodic_span_relative` | `1.0e-6` | Relative native-period threshold when qualifying full-turn spans and compacting wrapped loops. |
+| `mesh_periodic_seam_endpoint_relative` | `1.0e-6` | Relative native-period endpoint exclusion when constructing meshing seam loops. |
+| `mesh_periodic_period_match_relative` | `1.0e-6` | Dimensionless relative compatibility threshold between paired meshing periods. |
 | `mesh_uv_closure` | `1.0e-3` | UV closure threshold for already-sampled tessellation boundaries. |
 | `mesh_singularity_distance` | `1.0e-3` | Spatial distance used by tessellation to rescue samples at analytic poles. |
 | `healing_boundary_closure_squared` | `1.0e-3` | Squared UV-distance threshold inherited by closed-face healing. |
@@ -798,3 +801,43 @@ changes only *sampling and triangulation/contour normalization*:
 it does not widen exact Boolean topology identity or source CAD
 modeling-error permissions. Other absolute thresholds in the
 periodic/singularity and mesh/STEP domains remain to be analyzed.
+
+
+## Meshing native-period comparisons (2026-11-13)
+
+The second periodic-meshing pass removed global `KERNEL_EPSILON`
+from full-period loop classification, periodic jump compaction,
+seam-window selection, first/last point exclusion on manufactured
+seams, and period equality when pairing loops. The original
+`1e-6` allowance was an *absolute world-coordinate* length
+silently added to native UV angles or periodic parameters.
+
+These decisions now use named relative values in
+`DEFAULT_NUMERICAL_TOLERANCES`: span qualification
+(`mesh_periodic_span_relative`), manufactured seam endpoint
+exclusion (`mesh_periodic_seam_endpoint_relative`), and
+paired-period agreement (`mesh_periodic_period_match_relative`).
+The earlier `mesh_boundary_wrap_relative` governs seam-window
+placement separately. The shared helper
+`periodic_parameter_slack(period, native_coordinates, relative)`
+returns `period * relative + ulps * EPSILON * max(period, |coordinates|)`,
+rejecting nonfinite/invalid periodic inputs rather than comparing
+invalid values as valid periods. As a result, a model with a 1e-9
+native periodic parameter range cannot accept a 1e-6 *parameter*
+drift merely because 1e-6 is the kernel's world-distance epsilon.
+
+Three focused regressions verify period scaling from 1e-9 to 1e9,
+seam-window selection at a tiny period, representational ulps at
+a large coordinate offset, and refusal of invalid inputs.
+Validation: `monstertruck-meshing --lib` 43 passed, 1 ignored;
+strict all-target Clippy PASS. The experiment-only accelerated
+source CAD stage4 still reaches the expected valid 47-face solid
+in 3.067 seconds; stage5 retains the unrelated unknown-face
+classifier failure. No default sampling floor or requested Boolean
+numerical length was changed.
+
+Explicitly out of scope in this commit: the distinct
+`singular_periodic_other_parameter` derivative/radius
+conditioning, the other-axis criterion previously derived from
+`periodic_relative`, and STEP same-domain parameterization.
+Those have separate dimensions and need separate tests.
