@@ -184,6 +184,8 @@ impl ParametricSurface for Plane {
         let range = (Bound::Included(0.0), Bound::Included(1.0));
         (range, range)
     }
+    #[inline]
+    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) { (false, false) }
 }
 
 impl ParametricSurface3D for Plane {

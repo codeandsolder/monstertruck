@@ -697,6 +697,7 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
                 fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector,
                 fn derivatives(&self, max_order: usize, u: f64, v: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector>,
                 fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange),
+                fn parameter_bounds_are_intrinsic(&self,) -> (bool, bool),
                 fn period_u(&self,) -> Option<f64>,
                 fn period_v(&self,) -> Option<f64>,
             );
@@ -754,6 +755,10 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
                         self.0.parameter_range()
                     }
                     #[inline(always)]
+                    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
+                        self.0.parameter_bounds_are_intrinsic()
+                    }
+                    #[inline(always)]
                     fn period_u(&self) -> Option<f64> { self.0.period_u() }
                     #[inline(always)]
                     fn period_v(&self) -> Option<f64> { self.0.period_v() }
@@ -794,6 +799,7 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                 fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector,
                 fn derivatives(&self, max_order: usize, u: f64, v: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector>,
                 fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange),
+                fn parameter_bounds_are_intrinsic(&self,) -> (bool, bool),
                 fn period_u(&self,) -> Option<f64>,
                 fn period_v(&self,) -> Option<f64>,
             );
@@ -846,6 +852,9 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                     }
                     fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange) {
                         self.0.parameter_range()
+                    }
+                    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
+                        self.0.parameter_bounds_are_intrinsic()
                     }
                     fn period_u(&self) -> Option<f64> { self.0.period_u() }
                     fn period_v(&self) -> Option<f64> { self.0.period_v() }

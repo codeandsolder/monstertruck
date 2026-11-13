@@ -86,6 +86,10 @@ pub trait ParametricSurface: Clone {
         use Bound::Unbounded as X;
         ((X, X), (X, X))
     }
+    /// Indicates which reported axis bounds constrain the intrinsic surface.
+    /// False marks a synthetic meshing range that must not clamp projected UV.
+    #[inline]
+    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) { (true, true) }
     /// Return the ends of `parameter_range` by tuple.
     /// If the range is unbounded, return `None`.
     #[inline]
@@ -153,6 +157,10 @@ impl<S: ParametricSurface> ParametricSurface for &S {
     #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) { (*self).parameter_range() }
     #[inline]
+    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
+        (*self).parameter_bounds_are_intrinsic()
+    }
+    #[inline]
     fn period_u(&self) -> Option<f64> { (*self).period_u() }
     #[inline]
     fn period_v(&self) -> Option<f64> { (*self).period_v() }
@@ -206,6 +214,10 @@ impl<S: ParametricSurface> ParametricSurface for Box<S> {
     }
     #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) { (**self).parameter_range() }
+    #[inline]
+    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
+        (**self).parameter_bounds_are_intrinsic()
+    }
     #[inline]
     fn period_u(&self) -> Option<f64> { (**self).period_u() }
     #[inline]
