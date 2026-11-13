@@ -545,18 +545,16 @@ impl<C> Loops<Point3, C> {
             let b = incoming.curve();
             let samples_on = |curve: &C, other: &C| {
                 let (t0, t1) = curve.range_tuple();
-                let fractions = curve
-                    .parameter_division((t0, t1), length_tol)
-                    .0
-                    .into_iter()
-                    .map(|t| (t - t0) / (t1 - t0))
-                    .chain((0..=16).map(|i| f64::from(i) / 16.0));
+                // The adaptive division has *already evaluated* every
+                // returned point on the exact curve. Do not throw those
+                // results away and redo millions of expensive 4D SSI solves
+                // merely to re-check their exact same parameter.
+                let (parameters, points) = curve.parameter_division((t0, t1), length_tol);
+                if parameters.len() != points.len() {
+                    return false;
+                }
                 let mut previous = None;
-                fractions.into_iter().all(|fraction| {
-                    if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
-                        return false;
-                    }
-                    let point = curve.evaluate((t1 - t0).mul_add(fraction, t0));
+                let mut verify = |point: Point3| {
                     let nearest = |hint| {
                         let parameter = other.search_nearest_parameter(point, hint, 100)?;
                         (other.evaluate(parameter).distance(point) <= length_tol)
@@ -569,6 +567,33 @@ impl<C> Loops<Point3, C> {
                     } else {
                         false
                     }
+                };
+                let dense = parameters
+                    .into_iter()
+                    .zip(points)
+                    .map(|(parameter, point)| {
+                        let fraction = (parameter - t0) / (t1 - t0);
+                        // Original validation normalized and reconstructed every
+                        // parameter. Reuse the stored exact evaluation when those
+                        // floating-point operations return exactly the same bits.
+                        // Otherwise retain the original re-evaluation to preserve
+                        // all existing strict acceptance behavior, even at seams.
+                        let mapped = (t1 - t0).mul_add(fraction, t0);
+                        (
+                            fraction,
+                            if mapped.to_bits() == parameter.to_bits() {
+                                point
+                            } else {
+                                curve.evaluate(mapped)
+                            },
+                        )
+                    });
+                let coarse = (0..=16).map(|i| {
+                    let fraction = f64::from(i) / 16.0;
+                    (fraction, curve.evaluate((t1 - t0).mul_add(fraction, t0)))
+                });
+                dense.chain(coarse).all(|(fraction, point)| {
+                    fraction.is_finite() && (0.0..=1.0).contains(&fraction) && verify(point)
                 })
             };
             samples_on(&a, &b) && samples_on(&b, &a)
