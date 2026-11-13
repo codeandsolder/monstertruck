@@ -1,6 +1,6 @@
 use super::{
     BoundedCurve, CompressedEdgeUse, CompressedTrimmedShell, CurveParameter, Cut, Edge, EdgeIndex,
-    HashMap, KERNEL_EPSILON, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point3,
+    HashMap, KERNEL_EPSILON, MetricSpace, ParameterDivision1D, ParametricCurve3D, Point3,
     SearchNearestParameter, Shell, SnapCurveEndpoints, Wire, append_unassigned_stable_ids,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
@@ -78,6 +78,19 @@ where C: ParametricCurve3D<Point = Point3>
     )
 }
 
+/// Compare native curve parameters to the curve's own positive parameter span.
+/// A fixed floor in world units is meaningless for these values.
+fn split_parameter_slack((start, end): (f64, f64)) -> Option<f64> {
+    let span = end - start;
+    if !start.is_finite() || !end.is_finite() || !span.is_finite() || span <= 0.0 {
+        return None;
+    }
+    let policy = DEFAULT_NUMERICAL_TOLERANCES;
+    let slack = span * policy.split_parameter_relative
+        + policy.split_parameter_roundoff_ulps * f64::EPSILON * start.abs().max(end.abs());
+    slack.is_finite().then_some(slack)
+}
+
 fn split_parameters<C>(edge: &Edge<C>, vertices: &[Point3], tol: f64) -> Vec<(f64, usize)>
 where C: ParametricCurve3D<Point = Point3>
         + BoundedCurve<Point = Point3>
@@ -86,11 +99,9 @@ where C: ParametricCurve3D<Point = Point3>
     let debug_focus = debug_translated_focus_edge(edge);
     let tol2 = tol * tol;
     let (t0, t1) = edge.curve.range_tuple();
-    let param_eps = f64::mul_add(
-        (t1 - t0).abs(),
-        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_relative,
-        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_absolute,
-    );
+    let Some(param_eps) = split_parameter_slack((t0, t1)) else {
+        return Vec::new();
+    };
     let (min, max) = sampled_curve_aabb(edge, tol);
     let candidates: Vec<_> = vertices
         .iter()
@@ -224,58 +235,59 @@ fn split_trim_curve<T>(
     edge_range: (f64, f64),
     orientation: bool,
     splits: &[(f64, usize)],
-) -> Vec<T>
+) -> Option<Vec<T>>
 where
     T: BoundedCurve + Cut + Clone,
 {
     let (edge_t0, edge_t1) = edge_range;
+    let edge_eps = split_parameter_slack(edge_range)?;
     let edge_len = edge_t1 - edge_t0;
     let (trim_t0, trim_t1) = trim_curve.range_tuple();
     let trim_scale = trim_t1 - trim_t0;
-    if trim_scale.so_small() {
-        return vec![trim_curve];
-    }
-    let param_eps = f64::mul_add(
-        edge_len.abs(),
-        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_relative,
-        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_absolute,
-    );
-    let trim_eps = f64::mul_add(
-        trim_scale.abs(),
-        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_relative,
-        DEFAULT_NUMERICAL_TOLERANCES.split_parameter_absolute,
-    );
+    let trim_eps = split_parameter_slack((trim_t0, trim_t1))?;
     let mut local_splits: Vec<_> = splits
         .iter()
         .map(|(t, vertex)| {
-            let alpha = if edge_len.so_small() {
-                0.5
-            } else {
-                (*t - edge_t0) / edge_len
-            };
+            let alpha = (*t - edge_t0) / edge_len;
             let local_alpha = if orientation { alpha } else { 1.0 - alpha };
             (f64::mul_add(trim_scale, local_alpha, trim_t0), *vertex)
         })
-        .filter(|(t, _)| *t > trim_t0 + trim_eps && *t < trim_t1 - trim_eps)
+        .filter(|(t, _)| t.is_finite())
         .collect();
+    // Every new 3D edge use must receive one corresponding trim segment.
+    // An invalid native-domain mapping must not remove edges from the wire.
+    if splits
+        .iter()
+        .any(|(t, _)| !t.is_finite() || *t <= edge_t0 + edge_eps || *t >= edge_t1 - edge_eps)
+        || local_splits
+            .iter()
+            .any(|(t, _)| *t <= trim_t0 + trim_eps || *t >= trim_t1 - trim_eps)
+        || local_splits.len() != splits.len()
+    {
+        return None;
+    }
     local_splits.sort_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0));
     local_splits.dedup_by(|lhs, rhs| {
-        let same_param = (lhs.0 - rhs.0).abs() <= param_eps;
+        let same_param = (lhs.0 - rhs.0).abs() <= trim_eps;
         let same_vertex = lhs.1 == rhs.1;
         same_param || same_vertex
     });
+    if local_splits.len() != splits.len() {
+        return None;
+    }
     let mut head = trim_curve;
     let mut segments = Vec::with_capacity(local_splits.len() + 1);
     for (t, _) in local_splits {
         let (head_t0, head_t1) = head.range_tuple();
-        if t > head_t0 + trim_eps && t < head_t1 - trim_eps {
-            let tail = head.cut(t);
-            segments.push(head.clone());
-            head = tail;
+        if t <= head_t0 + trim_eps || t >= head_t1 - trim_eps {
+            return None;
         }
+        let tail = head.cut(t);
+        segments.push(head.clone());
+        head = tail;
     }
     segments.push(head);
-    segments
+    Some(segments)
 }
 
 fn replace_trimmed_edge_uses<T, C>(
@@ -293,7 +305,7 @@ fn replace_trimmed_edge_uses<T, C>(
             replacements.get(&edge_use.index).map_or_else(
                 || vec![edge_use.clone()],
                 |split_info| {
-                    let trim_segments = edge_use.trim_curve.clone().map(|trim_curve| {
+                    let trim_segments = edge_use.trim_curve.clone().and_then(|trim_curve| {
                         split_trim_curve(
                             trim_curve,
                             edges[edge_use.index].curve.range_tuple(),
@@ -306,10 +318,12 @@ fn replace_trimmed_edge_uses<T, C>(
                     } else {
                         split_info.indices.iter().rev().copied().collect()
                     };
-                    let trim_values: Vec<_> = trim_segments.map_or_else(
-                        || vec![None; indices.len()],
-                        |segments| segments.into_iter().map(Some).collect(),
-                    );
+                    let trim_values: Vec<_> = trim_segments
+                        .filter(|segments| segments.len() == indices.len())
+                        .map_or_else(
+                            || vec![None; indices.len()],
+                            |segments| segments.into_iter().map(Some).collect(),
+                        );
                     indices
                         .into_iter()
                         .zip(trim_values)
@@ -592,5 +606,154 @@ mod tests {
             Some(vec![StableId::new(21), StableId::UNASSIGNED])
         );
         assert_eq!(shell.face_stable_ids, Some(vec![StableId::new(31)]));
+    }
+}
+
+#[cfg(test)]
+mod numerical_split_tests {
+    use super::*;
+    use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, Line};
+
+    fn spline_with_range((start, end): (f64, f64)) -> BsplineCurve<Point3> {
+        BsplineCurve::new_unchecked(
+            KnotVector::from(vec![start, start, end, end]),
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+        )
+    }
+
+    #[test]
+    fn pass_through_trim_splitting_uses_native_trim_domain_even_if_tiny() {
+        let width = 1.0e-9;
+        let segments = split_trim_curve(
+            spline_with_range((0.0, width)),
+            (0.0, 1.0),
+            true,
+            &[(0.25, 2), (0.75, 3)],
+        )
+        .expect("exactly three B-spline slices");
+        assert_eq!(segments.len(), 3);
+        for (segment, expected) in segments.iter().zip([
+            (0.0, 0.25 * width),
+            (0.25 * width, 0.75 * width),
+            (0.75 * width, width),
+        ]) {
+            let (lo, hi) = segment.range_tuple();
+            assert!((lo - expected.0).abs() <= width * 1.0e-10);
+            assert!((hi - expected.1).abs() <= width * 1.0e-10);
+        }
+    }
+
+    #[test]
+    fn tiny_edge_native_parameter_is_not_forced_to_midpoint_trim_fraction() {
+        let edge_length = 1.0e-12;
+        let split = split_trim_curve(
+            spline_with_range((0.0, 1.0)),
+            (0.0, edge_length),
+            true,
+            &[(0.2 * edge_length, 2)],
+        )
+        .expect("valid nonzero native edge parameter span");
+        assert_eq!(split.len(), 2);
+        assert!((split[0].range_tuple().1 - 0.2).abs() <= 1.0e-12);
+        assert!((split[1].range_tuple().0 - 0.2).abs() <= 1.0e-12);
+    }
+
+    #[test]
+    fn reversed_edge_use_maps_trim_sections_to_opposite_edge_order() {
+        let width = 1.0e-9;
+        let p0 = Point3::new(0.0, 0.0, 0.0);
+        let p1 = Point3::new(1.0, 0.0, 0.0);
+        let edges = (0..3)
+            .map(|_| Edge {
+                vertices: (0, 1),
+                curve: Line(p0, p1),
+            })
+            .collect::<Vec<_>>();
+        let mut wire = vec![CompressedEdgeUse {
+            index: 0,
+            orientation: false,
+            trim_curve: Some(spline_with_range((0.0, width))),
+        }];
+        let mut replacements = HashMap::default();
+        replacements.insert(
+            0,
+            EdgeSplitInfo {
+                splits: vec![(0.25, 2), (0.75, 3)],
+                indices: vec![0, 1, 2],
+            },
+        );
+        replace_trimmed_edge_uses(&mut wire, &edges, &replacements);
+        assert_eq!(wire.len(), 3);
+        assert_eq!(
+            wire.iter().map(|use_| use_.index).collect::<Vec<_>>(),
+            vec![2, 1, 0],
+        );
+        let expected = [
+            (0.0, 0.25 * width),
+            (0.25 * width, 0.75 * width),
+            (0.75 * width, width),
+        ];
+        for (use_, (lo, hi)) in wire.iter().zip(expected) {
+            assert!(!use_.orientation);
+            let (start, end) = use_.trim_curve.as_ref().unwrap().range_tuple();
+            assert!((start - lo).abs() <= width * 1.0e-10);
+            assert!((end - hi).abs() <= width * 1.0e-10);
+        }
+    }
+
+    #[test]
+    fn failing_uv_trim_remapping_never_drops_corresponding_topology_uses() {
+        let p0 = Point3::new(0.0, 0.0, 0.0);
+        let p1 = Point3::new(1.0, 0.0, 0.0);
+        let edges = vec![
+            Edge {
+                vertices: (0, 1),
+                curve: Line(p0, p1),
+            },
+            Edge {
+                vertices: (0, 1),
+                curve: Line(p0, p1),
+            },
+            Edge {
+                vertices: (0, 1),
+                curve: Line(p0, p1),
+            },
+        ];
+        let mut wire = vec![CompressedEdgeUse {
+            index: 0,
+            orientation: true,
+            trim_curve: Some(spline_with_range((0.0, 0.0))),
+        }];
+        let mut replacements = HashMap::default();
+        replacements.insert(
+            0,
+            EdgeSplitInfo {
+                splits: vec![(0.25, 2), (0.75, 3)],
+                indices: vec![0, 1, 2],
+            },
+        );
+        replace_trimmed_edge_uses(&mut wire, &edges, &replacements);
+        assert_eq!(wire.len(), 3, "a failed trim remap must not erase topology");
+        assert_eq!(
+            wire.iter().map(|use_| use_.index).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert!(wire.iter().all(|use_| use_.trim_curve.is_none()));
+    }
+
+    #[test]
+    fn split_slack_scales_with_native_edge_or_trim_parameter_range() {
+        let policy = DEFAULT_NUMERICAL_TOLERANCES;
+        for width in [1.0e-12, 1.0e-8, 1.0, 1.0e8] {
+            let slack = split_parameter_slack((0.0, width)).unwrap();
+            assert!(slack >= width * policy.split_parameter_relative);
+            assert!(slack < width * policy.split_parameter_relative * 1.000001);
+        }
+        let high_origin = split_parameter_slack((1.0e9, 1.0e9 + 1.0)).unwrap();
+        let zero_origin = split_parameter_slack((0.0, 1.0)).unwrap();
+        assert!(high_origin > zero_origin);
+        assert!(split_parameter_slack((1.0, 1.0)).is_none());
+        assert!(split_parameter_slack((1.0, 0.0)).is_none());
+        assert!(split_parameter_slack((0.0, f64::INFINITY)).is_none());
     }
 }
