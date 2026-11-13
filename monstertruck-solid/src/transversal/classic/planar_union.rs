@@ -74,7 +74,10 @@ impl CylinderChart {
             .or_else(|| surface.search_nearest_parameter(first_point, None, 100))?;
         let normal = surface.normal(uv.0, uv.1);
         let radial_alignment = normal.dot(radial.normalize()) / normal.magnitude();
-        if !radial_alignment.is_finite() || radial_alignment.abs() < 0.9 {
+        if !radial_alignment.is_finite()
+            || radial_alignment.abs()
+                < DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_normal_alignment_cosine
+        {
             return None;
         }
         // With this right-handed axis basis, (axial, increasing angle) has
@@ -1100,7 +1103,7 @@ fn oriented_cylinder_radial_sign<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         return None;
     }
     let sign = normal.dot(radial) / length;
-    if sign.abs() < 0.9 {
+    if sign.abs() < DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_normal_alignment_cosine {
         return None;
     }
     Some(if region.orientation() { sign } else { -sign })

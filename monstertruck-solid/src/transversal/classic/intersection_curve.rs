@@ -575,7 +575,11 @@ where
     };
     let n0 = forward0.magnitude();
     let n1 = forward1.magnitude();
-    if n0 <= tolerance || n1 <= tolerance || forward0.dot(forward1) / (n0 * n1) < 0.8 {
+    if n0 <= tolerance
+        || n1 <= tolerance
+        || forward0.dot(forward1) / (n0 * n1)
+            < DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_forward_alignment_cosine
+    {
         return None;
     }
     // The discarded first suffix must progress along the retained second

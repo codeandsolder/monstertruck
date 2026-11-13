@@ -257,7 +257,7 @@ pub struct InvalidOutputShellConditionData {
 type ShapeOpsResult<T> = std::result::Result<T, ShapeOpsError>;
 
 pub(super) fn validate_tolerance(tol: f64) -> std::result::Result<(), ShapeOpsError> {
-    if !tol.is_finite() || tol < KERNEL_EPSILON {
+    if !tol.is_finite() || tol <= 0.0 {
         Err(ShapeOpsError::InvalidTolerance)
     } else {
         Ok(())

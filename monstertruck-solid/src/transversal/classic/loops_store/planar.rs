@@ -618,6 +618,31 @@ mod planar_region_identity_tests {
     }
 
     #[test]
+    fn parallel_faces_inside_global_epsilon_are_distinct_at_requested_tolerance() {
+        // A global 1e-6 floor would silently conflate these distinct planes.
+        // The caller is explicitly requesting one hundredth of that distance.
+        let base = rectangle(0.0, 0.0, 1.0, 1.0);
+        let lifted = PolygonMesh::new(
+            StandardAttributes {
+                positions: vec![
+                    Point3::new(0.0, 0.0, 5.0e-7),
+                    Point3::new(1.0, 0.0, 5.0e-7),
+                    Point3::new(1.0, 1.0, 5.0e-7),
+                    Point3::new(0.0, 1.0, 5.0e-7),
+                ],
+                ..Default::default()
+            },
+            Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
+        )
+        .expect("fixture mesh is valid");
+        assert!(!planar_polygons_coplanar(&base, &lifted, 1.0e-8));
+        assert!(!planar_polygons_same_trimmed_face(&base, &lifted, 1.0e-8));
+        // The same planar offset may be accepted at an explicitly wider
+        // tolerance; *only* the caller decides whether to spend that budget.
+        assert!(planar_polygons_coplanar(&base, &lifted, 1.0e-6));
+    }
+
+    #[test]
     fn transverse_planar_overlap_is_detected_without_vertex_containment() {
         let horizontal = rectangle(-2.0, -0.2, 2.0, 0.2);
         let vertical = rectangle(-0.2, -2.0, 0.2, 2.0);

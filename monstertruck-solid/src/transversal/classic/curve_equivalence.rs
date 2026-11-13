@@ -1,4 +1,4 @@
-use monstertruck_core::tolerance::Tolerance;
+use monstertruck_core::tolerance::{DEFAULT_NUMERICAL_TOLERANCES, Tolerance};
 use monstertruck_traits::{BoundedCurve, CurveParameter, ParametricCurve, SearchNearestParameter};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,12 +18,15 @@ where
         + SearchNearestParameter<CurveParameter, Point = P>, {
     let samples_on = |curve: &C, other: &C| {
         let (t0, t1) = curve.range_tuple();
-        [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().all(|fraction| {
-            let point = curve.evaluate(f64::mul_add(t1 - t0, fraction, t0));
-            other
-                .search_nearest_parameter(point.clone(), None, 100)
-                .is_some_and(|parameter| other.evaluate(parameter).near(&point))
-        })
+        DEFAULT_NUMERICAL_TOLERANCES
+            .boolean_coincidence_fractions
+            .into_iter()
+            .all(|fraction| {
+                let point = curve.evaluate(f64::mul_add(t1 - t0, fraction, t0));
+                other
+                    .search_nearest_parameter(point.clone(), None, 100)
+                    .is_some_and(|parameter| other.evaluate(parameter).near(&point))
+            })
     };
     if samples_on(lhs, rhs) && samples_on(rhs, lhs) {
         CurveCoincidence::SampledValidation
@@ -45,7 +48,8 @@ where
         + BoundedCurve<Point = P>
         + SearchNearestParameter<CurveParameter, Point = P>, {
     let (t0, t1) = candidate.range_tuple();
-    let all_samples_contained = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]
+    let all_samples_contained = DEFAULT_NUMERICAL_TOLERANCES
+        .boolean_containment_fractions
         .into_iter()
         .all(|fraction| {
             let point = candidate.evaluate(f64::mul_add(t1 - t0, fraction, t0));
@@ -73,7 +77,7 @@ where
     C: ParametricCurve<Point = P> + BoundedCurve<Point = P>, {
     let (l0, l1) = lhs.range_tuple();
     let (r0, r1) = rhs.range_tuple();
-    let fractions = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
+    let fractions = DEFAULT_NUMERICAL_TOLERANCES.boolean_containment_fractions;
     let aligned = fractions.into_iter().all(|fraction| {
         lhs.evaluate(f64::mul_add(l1 - l0, fraction, l0))
             .near(&rhs.evaluate(f64::mul_add(r1 - r0, fraction, r0)))

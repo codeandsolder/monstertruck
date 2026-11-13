@@ -240,9 +240,7 @@ fn polyline_interior_candidates(poly: &PolylineCurve<Point2>) -> Vec<Point2> {
         // Prefer an interior witness with enough clearance to survive
         // downstream mesh/ray tolerance. Very thin true regions still fall
         // back to progressively smaller offsets.
-        for relative in [
-            0.1, 0.03, 0.01, 0.003, 1.0e-3, 1.0e-4, 1.0e-6, 1.0e-8, 1.0e-10, 1.0e-12,
-        ] {
+        for relative in DEFAULT_NUMERICAL_TOLERANCES.boolean_interior_witness_insets {
             let distance = (scale * relative).min(length * 0.125);
             let candidate = midpoint + inward * distance;
             if domain.include(candidate) {

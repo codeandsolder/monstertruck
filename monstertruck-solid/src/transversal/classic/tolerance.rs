@@ -27,16 +27,19 @@ impl BooleanTolerance {
             length,
             area_floor: length * length,
             angular: DEFAULT_NUMERICAL_TOLERANCES.angular,
-            classifier_offset: 8.0 * length,
+            classifier_offset: DEFAULT_NUMERICAL_TOLERANCES.boolean_classifier_offset_factor
+                * length,
             mesh_seed: requested.max(DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor),
         }
     }
 
     pub(super) fn area_for_span(self, span: f64) -> f64 {
-        16.0f64.mul_add(
-            self.area_floor,
-            8.0 * self.length * span.abs().max(self.length),
-        )
+        DEFAULT_NUMERICAL_TOLERANCES
+            .boolean_area_floor_factor
+            .mul_add(
+                self.area_floor,
+                DEFAULT_NUMERICAL_TOLERANCES.boolean_area_span_factor * self.length * span.abs(),
+            )
     }
 }
 
@@ -51,6 +54,26 @@ mod tests {
         assert_eq!(tol.classifier_offset, 8.0e-6);
         assert_eq!(tol.mesh_seed, 1.0e-3);
     }
+
+    #[test]
+    fn sub_kernel_epsilon_length_is_not_widened_to_kernel_epsilon() {
+        let requested = 1.0e-8;
+        let tolerance = BooleanTolerance::new(requested);
+        assert_eq!(tolerance.length, requested);
+        assert_eq!(tolerance.area_floor, requested * requested);
+        assert_eq!(
+            tolerance.classifier_offset,
+            DEFAULT_NUMERICAL_TOLERANCES.boolean_classifier_offset_factor * requested
+        );
+        assert_eq!(
+            tolerance.mesh_seed, DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor,
+            "only the seed mesh gets the independent, coarser sampling floor"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Boolean length tolerance must be finite and positive")]
+    fn zero_length_tolerance_is_not_silently_widened() { let _ = BooleanTolerance::new(0.0); }
 
     #[test]
     fn area_tolerance_has_area_units_and_scales_with_extent() {

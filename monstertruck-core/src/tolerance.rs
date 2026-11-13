@@ -130,6 +130,22 @@ pub struct NumericalTolerances {
     pub boolean_fragment_stitch_scale: f64,
     /// Scale multiplying Boolean numerical tolerance in coplanar matching.
     pub boolean_coplanar_scale: f64,
+    /// Classifier witness offset relative to explicit Boolean length tolerance.
+    pub boolean_classifier_offset_factor: f64,
+    /// Area comparison's absolute squared-length coefficient.
+    pub boolean_area_floor_factor: f64,
+    /// Area comparison's length-times-span coefficient.
+    pub boolean_area_span_factor: f64,
+    /// Minimum cosine between adjacent SSI fragment tangents before joining.
+    pub boolean_fragment_forward_alignment_cosine: f64,
+    /// Minimum absolute cosine between recovered cylinder normal and radial direction.
+    pub boolean_cylinder_normal_alignment_cosine: f64,
+    /// Ordered dimensionless inset fractions for finding a strict interior witness in thin planar regions.
+    pub boolean_interior_witness_insets: [f64; 10],
+    /// Bounded sample fractions for bidirectional whole-curve coincidence evidence.
+    pub boolean_coincidence_fractions: [f64; 5],
+    /// Bounded sample fractions for trimmed subedge containment and same-endpoint correspondence evidence.
+    pub boolean_containment_fractions: [f64; 9],
     /// Offset multiplier for STL coordinate quantization.
     pub stl_quantization_offset_factor: f64,
     /// Step multiplier for STL coordinate quantization.
@@ -198,6 +214,16 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     step_output_scientific_notation_threshold: 1.0e-2,
     boolean_fragment_stitch_scale: 4.0,
     boolean_coplanar_scale: 2.0,
+    boolean_classifier_offset_factor: 8.0,
+    boolean_area_floor_factor: 16.0,
+    boolean_area_span_factor: 8.0,
+    boolean_fragment_forward_alignment_cosine: 0.8,
+    boolean_cylinder_normal_alignment_cosine: 0.9,
+    boolean_interior_witness_insets: [
+        0.1, 0.03, 0.01, 0.003, 1.0e-3, 1.0e-4, 1.0e-6, 1.0e-8, 1.0e-10, 1.0e-12,
+    ],
+    boolean_coincidence_fractions: [0.0, 0.25, 0.5, 0.75, 1.0],
+    boolean_containment_fractions: [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0],
     stl_quantization_offset_factor: 0.25,
     stl_quantization_step_factor: 0.5,
 };

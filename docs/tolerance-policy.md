@@ -97,6 +97,14 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `step_output_scientific_notation_threshold` | `1.0e-2` | Non-geometric STEP number formatting threshold, dimensionless. |
 | `boolean_fragment_stitch_scale` | `4.0` | Scale multiplying Boolean numeric tolerance when joining near-fragments. |
 | `boolean_coplanar_scale` | `2.0` | Scale multiplying Boolean numerical tolerance in coplanar matching. |
+| `boolean_classifier_offset_factor` | `8.0` | Classifier witness offset relative to explicit Boolean length tolerance. |
+| `boolean_area_floor_factor` | `16.0` | Area comparison's absolute squared-length coefficient. |
+| `boolean_area_span_factor` | `8.0` | Area comparison's length-times-span coefficient. |
+| `boolean_fragment_forward_alignment_cosine` | `0.8` | Minimum cosine between adjacent SSI fragment tangents before joining. |
+| `boolean_cylinder_normal_alignment_cosine` | `0.9` | Minimum absolute cosine between recovered cylinder normal and radial direction. |
+| `boolean_interior_witness_insets` | `[ 0.1, 0.03, 0.01, 0.003, 1.0e-3, 1.0e-4, 1.0e-6, 1.0e-8, 1.0e-10, 1.0e-12, ]` | Ordered dimensionless inset fractions for finding a strict interior witness in thin planar regions. |
+| `boolean_coincidence_fractions` | `[0.0, 0.25, 0.5, 0.75, 1.0]` | Bounded sample fractions for bidirectional whole-curve coincidence evidence. |
+| `boolean_containment_fractions` | `[0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0]` | Bounded sample fractions for trimmed subedge containment and same-endpoint correspondence evidence. |
 | `stl_quantization_offset_factor` | `0.25` | Offset multiplier for STL coordinate quantization. |
 | `stl_quantization_step_factor` | `0.5` | Step multiplier for STL coordinate quantization. |
 
@@ -264,6 +272,20 @@ using the named `mesh_seed_floor` (which is intentionally only a sampling
 choice). Coincident-edge reuse similarly accepts any valid positive tolerance
 instead of refusing all values smaller than `KERNEL_EPSILON`. This is
 distinct from the `GeometryPolicy::Standard` maximum modeling-change budget.
+
+The public low-level classic numerical validator **also** previously rejected
+positive requests below `KERNEL_EPSILON`. Following the successful no-clamp
+tests, this validator now accepts any finite positive request as well.
+There is no numerical-resolution floor on geometric coincidence or topology
+admission. Separate finite positive validation remains mandatory, while the
+coarser mesh seeding tolerance is explicitly marked as sampling-only.
+
+The Boolean-specific parameters for classifier offsets, area comparison,
+fragment continuity, cylinder normal alignment, and witness/curve sampling
+schedules are now named fields in `DEFAULT_NUMERICAL_TOLERANCES`. The two
+small-fraction schedules are **sample evidence**, not proof of analytic
+curve identity. They should be replaced with genuine geometric certificates
+where possible; changing sampling density alone cannot establish topology.
 
 The classic Boolean path then uses `BooleanTolerance::new` to derive
 `length`, `classifier_offset`, and `mesh_seed` from its numerical
