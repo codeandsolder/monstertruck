@@ -18,6 +18,29 @@ use super::{
     UnitHyperbola, UnitParabola, Vector3, Vector4, bounding, env, iter,
 };
 
+/// EXPERIMENT ONLY: decouple how densely we sample geometry from the
+/// caller's acceptance tolerance. The value is a length in model units (mm
+/// for the current CAD fixtures), not a new geometric equivalence criterion.
+/// It applies to the modeling-curve sampling API; the original caller's
+/// precise acceptance tests are unchanged.
+fn experimental_curve_sample_floor() -> Option<f64> {
+    static FLOOR: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    *FLOOR.get_or_init(|| {
+        std::env::var("MT_EXPERIMENT_CURVE_SAMPLE_FLOOR_MM")
+            .ok()
+            .map(|value| {
+                let requested = value
+                    .parse::<f64>()
+                    .expect("MT_EXPERIMENT_CURVE_SAMPLE_FLOOR_MM must be a finite positive f64");
+                assert!(
+                    requested.is_finite() && requested >= 1.0e-6,
+                    "MT_EXPERIMENT_CURVE_SAMPLE_FLOOR_MM must be finite and >= 1e-6"
+                );
+                requested
+            })
+    })
+}
+
 type ModelSurfaceCurve = SurfaceCurve<
     Box<Curve>,
     Box<Surface>,
@@ -215,6 +238,8 @@ impl ParameterDivision1D for Curve {
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Self::Point>) {
         let debug_profile = env::var("MT_PROFILE_CURVE_DIVISION").is_ok();
         let started = Instant::now();
+        let requested_tol = tol;
+        let tol = experimental_curve_sample_floor().map_or(tol, |floor| tol.max(floor));
         let result = match self {
             Self::Line(curve) => curve.parameter_division(range, tol),
             Self::BsplineCurve(curve) => linear_bspline_division(curve, range)
@@ -240,7 +265,7 @@ impl ParameterDivision1D for Curve {
             let points = result.1.len();
             let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
             eprintln!(
-                "trace bool model_curve_division kind={kind} points={points} tol={tol} elapsed_ms={elapsed_ms:.3}"
+                "trace bool model_curve_division kind={kind} points={points} tol={tol} requested_tol={requested_tol} elapsed_ms={elapsed_ms:.3}"
             );
         }
         result

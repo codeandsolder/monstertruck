@@ -1001,7 +1001,26 @@ mod tests {
             .last()
             .ok_or_else(|| anyhow::anyhow!("missing CAD stage"))?;
         assert_eq!(model.roots, [root]);
-        let kernel = MonstertruckKernel::standard_mm(1e-5);
+        // Dedicated tolerance experiment: vary the *model operation* tolerance
+        // independently of sampling resolution and the kernel's fixed epsilon.
+        let modeling_tolerance_mm = std::env::var("MT_EXPERIMENT_BOOLEAN_TOL_MM")
+            .ok()
+            .map(|raw| {
+                let value = raw
+                    .parse::<f64>()
+                    .expect("MT_EXPERIMENT_BOOLEAN_TOL_MM must be a positive finite f64");
+                assert!(
+                    value.is_finite() && value > 0.0,
+                    "MT_EXPERIMENT_BOOLEAN_TOL_MM must be positive and finite"
+                );
+                value
+            })
+            .unwrap_or(1.0e-5);
+        eprintln!(
+            "MT_EXPERIMENT_PROFILE modeling_tol_mm={modeling_tolerance_mm} sampling_floor_mm={:?}",
+            std::env::var("MT_EXPERIMENT_CURVE_SAMPLE_FLOOR_MM").ok()
+        );
+        let kernel = MonstertruckKernel::standard_mm(modeling_tolerance_mm);
         assert!(
             model
                 .nodes
