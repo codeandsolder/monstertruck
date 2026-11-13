@@ -510,6 +510,51 @@ fn find_loop() -> impl FnMut((usize, &EdgeIndex)) -> Option<(usize, usize)> {
     move |(i, edge)| map.insert(edge.index, i).map(move |j| (j, i))
 }
 
+/// A seam with periodic V must have one genuinely constant nonperiodic U
+/// (and vice versa). Compare the *native* interval proportion first, then
+/// independently verify that moving only on this axis is spatially small.
+fn same_nonperiodic_section<S: ParametricSurface3D>(
+    surface: &S,
+    poly_wire: &[PolylineCurve<Point2>],
+    first: Point2,
+    last: Point2,
+    axis: usize,
+    spatial_tolerance: f64,
+) -> bool {
+    if axis > 1
+        || !spatial_tolerance.is_finite()
+        || spatial_tolerance < 0.0
+        || !first.x.is_finite()
+        || !first.y.is_finite()
+        || !last.x.is_finite()
+        || !last.y.is_finite()
+    {
+        return false;
+    }
+    let (min, max) = poly_wire
+        .iter()
+        .flat_map(|edge| edge.iter().map(|point| point[axis]))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
+            (min.min(value), max.max(value))
+        });
+    let span = max - min;
+    if !span.is_finite() || span < 0.0 {
+        return false;
+    }
+    let policy = DEFAULT_NUMERICAL_TOLERANCES;
+    let slack = span * policy.healing_seam_axis_relative
+        + policy.healing_seam_axis_roundoff_ulps * f64::EPSILON * min.abs().max(max.abs());
+    if (first[axis] - last[axis]).abs() > slack {
+        return false;
+    }
+    let mut isolated = first;
+    isolated[axis] = last[axis];
+    let start = surface.evaluate(first.x, first.y);
+    let end = surface.evaluate(isolated.x, isolated.y);
+    let distance2 = start.distance2(end);
+    distance2.is_finite() && distance2 <= spatial_tolerance * spatial_tolerance
+}
+
 // --- find_non_closed_wires_in_param_divisor ---
 
 type FindNonClosedWiresInParamDivisorResult = Option<((usize, usize), Vec<Wire>, Vec<Wire>)>;
@@ -567,40 +612,34 @@ where
     let take_front = &closure_take_front(edges);
     let find_nearest_to_ends = move |i: usize, u0: f64, up: f64| {
         move |(edge_index, poly): ZippedEdge<'_>| {
-            let u = poly[0][i];
-            let closure = move |i| {
-                let shifted_u = f64::from(i).mul_add(up, u);
-                f64::abs(shifted_u - u0)
-            };
-            let dist = (-2..=2)
-                .map(closure)
-                .min_by(f64::total_cmp)
-                .unwrap_or(f64::INFINITY);
-            (take_front(*edge_index), dist)
+            let u = poly.first()?[i];
+            let shifted = get_mindiff(u, u0, up)?;
+            Some((take_front(*edge_index), (shifted - u0).abs()))
         }
     };
     let create_pre_divisor = move |(wire, poly_wire): ZippedWire<'_>| {
         let (u_range, v_range) = surface.try_range_tuple();
         let (up, vp) = (surface.period_u(), surface.period_v());
-        let p = poly_wire[0][0];
+        let p = *poly_wire.first()?.first()?;
         let q = *poly_wire.last()?.last()?;
-        let vertices: Vec<(usize, f64)> = if p.x.near(&q.x) {
-            if let (Some(vp), Some((v0, _))) = (vp, v_range) {
-                let closure = find_nearest_to_ends(1, v0, vp);
-                Some(wire.iter().zip(poly_wire).map(closure).collect())
+        let vertices: Vec<(usize, f64)> =
+            if same_nonperiodic_section(surface, poly_wire, p, q, 0, tol) {
+                if let (Some(vp), Some((v0, _))) = (vp, v_range) {
+                    let closure = find_nearest_to_ends(1, v0, vp);
+                    wire.iter().zip(poly_wire).map(closure).collect()
+                } else {
+                    None
+                }
+            } else if same_nonperiodic_section(surface, poly_wire, p, q, 1, tol) {
+                if let (Some(up), Some((u0, _))) = (up, u_range) {
+                    let closure = find_nearest_to_ends(0, u0, up);
+                    wire.iter().zip(poly_wire).map(closure).collect()
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else if p.y.near(&q.y) {
-            if let (Some(up), Some((u0, _))) = (up, u_range) {
-                let closure = find_nearest_to_ends(0, u0, up);
-                Some(wire.iter().zip(poly_wire).map(closure).collect())
-            } else {
-                None
-            }
-        } else {
-            None
-        }?;
+            }?;
         vertices
             .into_iter()
             .min_by(|(_, x), (_, y)| x.total_cmp(y))
@@ -1155,23 +1194,25 @@ fn poly_project_to_uv<'a, S: ParametricSurface3D>(
     move |pt| {
         let (mut u, mut v) = sp(surface, pt, previous)?;
         if let (Some(up), Some((u0, _))) = (up, previous) {
-            u = get_mindiff(u, u0, up);
+            u = get_mindiff(u, u0, up)?;
         }
         if let (Some(vp), Some((_, v0))) = (vp, previous) {
-            v = get_mindiff(v, v0, vp);
+            v = get_mindiff(v, v0, vp)?;
         }
         previous = Some((u, v));
         Some(Point2::new(u, v))
     }
 }
 
-fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> std::cmp::Ordering {
-    let f = move |x: &f64| f64::abs(x - previous);
-    move |x: &f64, y: &f64| f(x).total_cmp(&f(y))
-}
-fn get_mindiff(u: f64, u0: f64, up: f64) -> f64 {
-    let closure = |i| f64::from(i).mul_add(up, u);
-    (-2..=2).map(closure).min_by(abs_diff(u0)).unwrap_or(u)
+/// The unique nearest native-period representative (apart from exact half
+/// period ties), without a fixed number-of-turns search window.
+fn get_mindiff(value: f64, previous: f64, period: f64) -> Option<f64> {
+    if !value.is_finite() || !previous.is_finite() || !period.is_finite() || period <= 0.0 {
+        return None;
+    }
+    let turns = ((previous - value) / period).round();
+    let corrected = turns.mul_add(period, value);
+    corrected.is_finite().then_some(corrected)
 }
 
 fn boundary_into_domain<S: ParametricSurface3D>(vec: &mut Vec<Point2>, surface: &S) {

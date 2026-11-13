@@ -449,3 +449,93 @@ fn diagonal_strict_intersection_is_not_an_endpoint_touch() {
         Point2::new(0.0, 1.0)
     ));
 }
+
+#[test]
+fn seam_section_is_parameter_and_physical_scale_aware() {
+    use super::{PolylineCurve, same_nonperiodic_section};
+    use monstertruck_geometry::prelude::{BsplineSurface, KnotVector};
+
+    let plane = |u_span: f64, v_span: f64, world_u_span: f64| {
+        BsplineSurface::new_unchecked(
+            (
+                KnotVector::from(vec![0.0, 0.0, u_span, u_span]),
+                KnotVector::from(vec![0.0, 0.0, v_span, v_span]),
+            ),
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![
+                    Point3::new(world_u_span, 0.0, 0.0),
+                    Point3::new(world_u_span, 1.0, 0.0),
+                ],
+            ],
+        )
+    };
+    for (u_span, v_span) in [(1e-9, 1e9), (1e9, 1e-9), (1.0, 1.0)] {
+        let surface = plane(u_span, v_span, 1.0);
+        let p = Point2::new(0.0, 0.0);
+        let q = Point2::new(u_span * 0.5e-6, v_span);
+        let wire = vec![PolylineCurve(vec![p, Point2::new(u_span, v_span / 2.0), q])];
+        assert!(
+            same_nonperiodic_section(&surface, &wire, p, q, 0, 1e-4),
+            "native U near-constant section failed with spans {u_span:e}/{v_span:e}"
+        );
+        assert!(!same_nonperiodic_section(&surface, &wire, p, q, 1, 1e-4));
+        let far_q = Point2::new(u_span * 0.01, v_span);
+        assert!(!same_nonperiodic_section(
+            &surface, &wire, p, far_q, 0, 1e-4
+        ));
+
+        let v_small = Point2::new(u_span, v_span * 0.5e-6);
+        assert!(same_nonperiodic_section(
+            &surface,
+            &[PolylineCurve(vec![
+                p,
+                Point2::new(u_span / 2.0, v_span),
+                v_small
+            ])],
+            p,
+            v_small,
+            1,
+            1e-4,
+        ));
+    }
+    let huge_world = plane(1.0, 1.0, 1e9);
+    let p = Point2::new(0.0, 0.0);
+    let q = Point2::new(0.5e-6, 1.0);
+    let wire = vec![PolylineCurve(vec![p, Point2::new(1.0, 0.5), q])];
+    assert!(
+        !same_nonperiodic_section(&huge_world, &wire, p, q, 0, 1e-4),
+        "near in UV is not near in 3D on a huge surface"
+    );
+    assert!(!same_nonperiodic_section(&huge_world, &wire, p, q, 2, 1e-4));
+    assert!(!same_nonperiodic_section(&huge_world, &[], p, q, 0, 1e-4));
+    assert!(!same_nonperiodic_section(
+        &huge_world,
+        &wire,
+        p,
+        q,
+        0,
+        f64::NAN
+    ));
+}
+
+#[test]
+fn closest_native_period_representation_has_no_arbitrary_turn_limit() {
+    use super::get_mindiff;
+    for period in [1.0e-9, 1.0, 1.0e9] {
+        let displaced = 10_001.25 * period;
+        let matched = get_mindiff(displaced, 0.0, period).expect("valid positive period");
+        assert!((matched - 0.25 * period).abs() <= 1.0e-8 * period);
+        let opposite =
+            get_mindiff(-10_001.25 * period, 0.0, period).expect("valid positive period");
+        assert!((opposite + 0.25 * period).abs() <= 1.0e-8 * period);
+        assert_eq!(
+            get_mindiff(0.25 * period, 0.25 * period, period),
+            Some(0.25 * period)
+        );
+    }
+    assert_eq!(get_mindiff(0.5, 0.0, 0.0), None);
+    assert_eq!(get_mindiff(0.5, 0.0, f64::NAN), None);
+    assert_eq!(get_mindiff(f64::INFINITY, 0.0, 1.0), None);
+    assert_eq!(get_mindiff(0.5, f64::NAN, 1.0), None);
+}
