@@ -338,3 +338,38 @@ unit-conversion exponents, scalar precision constants (`f64::EPSILON`),
 or formula-derived subdivisions into this registry merely to eliminate
 digits from source. They are definitions of mathematics or the file format,
 not tunable acceptance thresholds.
+
+## SSI precision propagation (2026-11-13)
+
+The marching surface/surface intersection lane now receives the complete
+operation's `BooleanTolerance` from `create_loops_stores` through
+`intersection_curves`, `build_intersection_curve`, curved fragment correction,
+and overlapping-fragment validation. Previously, these methods independently
+multiplied global `KERNEL_EPSILON`, which meant sub-epsilon operation requests
+were effectively ignored by critical proof predicates.
+
+- **Exact carrier-support residual:**
+  `boolean_surface_projection_factor * BooleanTolerance.length`.
+- **Validated fragment residual:**
+  `boolean_fragment_validation_factor * BooleanTolerance.length`.
+- **Candidate displacement / broad-phase seed:** `BooleanTolerance.mesh_seed`
+  (explicitly a coarser sampling budget; never a coincidence proof).
+- **Redundant-strand removal, closure, and local continuation checks:**
+  the operation's `BooleanTolerance.length`, rather than global epsilon.
+- **Linear fragment validation:** has separate support-surface and fragment
+  thresholds even though their present default multipliers both happen to be 4.
+
+The numerical values remain unchanged for the existing default `1e-6`
+Boolean operation. A regression checks that a point `5e-7` away from an
+exact planar carrier is *rejected* at a `1e-8` request but can be accepted
+at `1e-6`; passing a policy value now changes actual SSI proof behavior.
+`cargo +1.99.1 test -p monstertruck-solid --lib` reports 142 passing tests,
+with strict Clippy and formatting passing.
+
+**Outstanding:** LoopStore's trim-boundary lookup, endpoint canonicalization,
+`curve_surface_projection`, and cross-face stitching still use independent
+global tolerances. Those functions need the same operation-local policy,
+including distinct UV/parameter search and world-coordinate acceptance,
+before numerical tuning can be considered end-to-end. Do not conflate
+`GeometryPolicy::Standard` (maximum error permitted) with the actual
+numerical tolerance spent by topology classification.

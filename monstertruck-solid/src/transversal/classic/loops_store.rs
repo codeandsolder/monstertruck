@@ -1744,7 +1744,7 @@ where
                 &polygon0,
                 surface1.clone(),
                 &polygon1,
-                tol,
+                boolean_tolerance,
                 (planes0[face_index0], planes1[face_index1]),
             )?;
             curves

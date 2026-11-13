@@ -33,6 +33,19 @@ impl BooleanTolerance {
         }
     }
 
+    /// Maximum allowed separation between independently corrected points on
+    /// the two exact SSI carrier surfaces, in model-coordinate length units.
+    /// Not a mesh discretization allowance.
+    pub(super) fn surface_support_residual(self) -> f64 {
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_surface_projection_factor * self.length
+    }
+
+    /// Maximum endpoint/branch discrepancy allowed when validating an
+    /// intersection fragment against exact carrier geometry.
+    pub(super) fn fragment_residual(self) -> f64 {
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_validation_factor * self.length
+    }
+
     pub(super) fn area_for_span(self, span: f64) -> f64 {
         DEFAULT_NUMERICAL_TOLERANCES
             .boolean_area_floor_factor
@@ -74,6 +87,17 @@ mod tests {
     #[test]
     #[should_panic(expected = "Boolean length tolerance must be finite and positive")]
     fn zero_length_tolerance_is_not_silently_widened() { let _ = BooleanTolerance::new(0.0); }
+
+    #[test]
+    fn exact_ssi_residuals_scale_with_numerical_length_not_global_epsilon() {
+        let tighter = BooleanTolerance::new(1.0e-8);
+        let base = BooleanTolerance::new(1.0e-6);
+        assert_eq!(tighter.surface_support_residual(), 4.0e-8);
+        assert_eq!(tighter.fragment_residual(), 4.0e-8);
+        assert_eq!(base.surface_support_residual(), 4.0e-6);
+        assert_eq!(base.fragment_residual(), 4.0e-6);
+        assert_eq!(tighter.mesh_seed, base.mesh_seed);
+    }
 
     #[test]
     fn area_tolerance_has_area_units_and_scales_with_extent() {
