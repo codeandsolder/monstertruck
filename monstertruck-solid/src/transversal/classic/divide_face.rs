@@ -802,9 +802,21 @@ where
         .enumerate()
         .try_for_each(|(source_face, (face, loops))| {
             let sampled_loops = sampled_store.and_then(|sampled| sampled.get(source_face));
-            if loops
-                .iter()
-                .all(|wire| wire.status() == ShapesOpStatus::Unknown)
+            // Unknown is a classification state, not proof that the face
+            // has not been partitioned. Preserve the unsplit fast path
+            // only when every boundary use is still the original one.
+            let original = face.absolute_boundaries();
+            let same_geometry = loops.len() == original.len()
+                && loops.iter().zip(original).all(|(candidate, source)| {
+                    candidate.len() == source.len()
+                        && candidate.iter().zip(source).all(|(lhs, rhs)| {
+                            lhs.id() == rhs.id() && lhs.orientation() == rhs.orientation()
+                        })
+                });
+            if same_geometry
+                && loops
+                    .iter()
+                    .all(|wire| wire.status() == ShapesOpStatus::Unknown)
             {
                 res.push(face, ShapesOpStatus::Unknown, source_face);
             } else {
@@ -897,6 +909,50 @@ mod tests {
                 vec![front.point(), back.point()],
             ),
         )
+    }
+
+    #[test]
+    fn all_unknown_imprinted_loops_still_divide_the_source_face() {
+        use monstertruck_geometry::prelude::Plane;
+        let point = |x, y| Vertex::new(Point3::new(x, y, 0.0));
+        let outer = [
+            point(0.0, 0.0),
+            point(4.0, 0.0),
+            point(4.0, 4.0),
+            point(0.0, 4.0),
+        ];
+        let inner = [
+            point(1.0, 1.0),
+            point(3.0, 1.0),
+            point(3.0, 3.0),
+            point(1.0, 3.0),
+        ];
+        let perimeter = |vertices: &[Vertex<Point3>; 4]| -> Wire<Point3, BsplineCurve<Point3>> {
+            (0..4)
+                .map(|i| test_line(&vertices[i], &vertices[(i + 1) % 4]))
+                .collect()
+        };
+        let outer_wire = perimeter(&outer);
+        let inner_wire = perimeter(&inner);
+        let source = Face::new(vec![outer_wire.clone()], Plane::xy()).expect("valid source face");
+        let loops: Loops<_, _> = vec![
+            BoundaryWire::new(outer_wire, ShapesOpStatus::Unknown),
+            BoundaryWire::new(inner_wire.clone(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(inner_wire.inverse(), ShapesOpStatus::Unknown),
+        ]
+        .into_iter()
+        .collect();
+        let mut store: LoopsStore<_, _> = std::iter::once(&source).collect();
+        store[0] = loops;
+        let divided = divide_faces(&Shell::from(vec![source]), &store, None, 1.0e-6)
+            .expect("valid new Unknown contours must not be discarded");
+        let [and, or, unknown] = divided.and_or_unknown();
+        assert!(and.is_empty() && or.is_empty());
+        assert_eq!(
+            unknown.len(),
+            2,
+            "unknown classification still requires separate inner and outer geometric regions"
+        );
     }
 
     #[test]
