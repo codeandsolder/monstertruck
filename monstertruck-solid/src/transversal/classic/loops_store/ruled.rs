@@ -140,7 +140,10 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
     surface: &BsplineSurface<Vector4>,
 ) -> Option<(Point3, Vector3, f64, (f64, f64))> {
     use monstertruck_geometry::prelude::{BsplineCurve, Cut, ParametricCurve};
-    let eps = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity * 20.0;
+    let policy = DEFAULT_NUMERICAL_TOLERANCES;
+    let spatial_eps = policy.boolean_cylinder_structural_length;
+    let weight_eps = policy.boolean_cylinder_homogeneous_weight;
+    let coefficient_eps = policy.boolean_cylinder_polynomial_relative;
     let (degree_u, degree_v) = surface.degrees();
     let net = surface.control_points();
     if degree_u != 2 || degree_v != 1 || net.len() < 3 || net.iter().any(|row| row.len() != 2) {
@@ -149,19 +152,21 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
     let origin = project(net[0][0])?;
     let end = project(net[0][1])?;
     let sweep = end - origin;
-    if sweep.magnitude() <= eps {
+    if sweep.magnitude() <= spatial_eps {
         return None;
     }
     let axis = sweep.normalize();
     for row in net {
         let start = project(row[0])?;
         let finish = project(row[1])?;
-        if (finish - start - sweep).magnitude() > eps || (row[0].w - row[1].w).abs() > eps {
+        if (finish - start - sweep).magnitude() > spatial_eps
+            || (row[0].w - row[1].w).abs() > weight_eps
+        {
             return None;
         }
     }
 
-    let reference = if axis.x.abs() < 0.8 {
+    let reference = if axis.x.abs() < policy.boolean_cylinder_reference_axis_component_limit {
         Vector3::unit_x()
     } else {
         Vector3::unit_y()
@@ -184,7 +189,7 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
     let p1 = xy(profile.evaluate(f64::midpoint(lo, hi)))?;
     let p2 = xy(profile.evaluate(hi))?;
     let twice_det = 2.0 * ((p1.0 - p0.0) * (p2.1 - p0.1) - (p2.0 - p0.0) * (p1.1 - p0.1));
-    if twice_det.abs() <= eps * eps {
+    if twice_det.abs() <= spatial_eps * spatial_eps {
         return None;
     }
     let d1 = p1.0.mul_add(p1.0, p1.1 * p1.1) - p0.0.mul_add(p0.0, p0.1 * p0.1);
@@ -192,7 +197,7 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
     let cx = (d1 * (p2.1 - p0.1) - d2 * (p1.1 - p0.1)) / twice_det;
     let cy = ((p1.0 - p0.0) * d2 - (p2.0 - p0.0) * d1) / twice_det;
     let radius2 = (p0.0 - cx).mul_add(p0.0 - cx, (p0.1 - cy).powi(2));
-    if !radius2.is_finite() || radius2 <= eps * eps {
+    if !radius2.is_finite() || radius2 <= spatial_eps * spatial_eps {
         return None;
     }
 
@@ -222,23 +227,37 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
         let y = power(y);
         let w = power(w);
         let mut residual = [0.0f64; 5];
+        let mut coefficient_scale = [0.0f64; 5];
         for i in 0..3 {
             for j in 0..3 {
-                residual[i + j] += x[i] * x[j] + y[i] * y[j] - radius2 * w[i] * w[j];
+                let xx = x[i] * x[j];
+                let yy = y[i] * y[j];
+                let rr = radius2 * w[i] * w[j];
+                residual[i + j] += xx + yy - rr;
+                coefficient_scale[i + j] += xx.abs() + yy.abs() + rr.abs();
             }
         }
-        let weight_scale = cp.iter().map(|h| h.w.abs()).fold(0.0, f64::max);
-        let bound = eps * (1.0 + radius2) * weight_scale * weight_scale;
-        residual.iter().all(|c| c.abs() <= bound).then_some(())
+        // All five coefficients come from the same polynomial identity.
+        // Zero or near-zero coefficients still accumulate roundoff from
+        // the entire rational circle fit, not just their own cancellation.
+        // Normalize by the maximum *actual squared-length* coefficient
+        // contribution, keeping one dimensionally consistent scale.
+        let scale = coefficient_scale.into_iter().fold(0.0_f64, f64::max);
+        residual
+            .iter()
+            .all(|value| value.abs() <= coefficient_eps * scale)
+            .then_some(())
     };
 
     let mut remaining = profile;
+    let knot_slack = policy.boolean_cylinder_knot_relative * (hi - lo).abs()
+        + policy.boolean_iso_parameter_roundoff_ulps * f64::EPSILON * lo.abs().max(hi.abs());
     let mut interior = knots
         .iter()
         .copied()
-        .filter(|&k| k > lo + eps && k < hi - eps)
+        .filter(|&k| k > lo + knot_slack && k < hi - knot_slack)
         .collect::<Vec<_>>();
-    interior.dedup_by(|a, b| (*a - *b).abs() <= eps);
+    interior.dedup_by(|a, b| (*a - *b).abs() <= knot_slack);
     for knot in interior {
         let next = remaining.cut(knot);
         certify(&remaining)?;
@@ -264,10 +283,11 @@ pub(in crate::transversal::classic) fn common_circular_extrusion_cylinder(
     ) else {
         return false;
     };
-    let eps = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity * 20.0;
-    if axis_a.cross(axis_b).magnitude() > eps
-        || (cb - ca).cross(axis_a).magnitude() > eps
-        || (ra - rb).abs() > eps
+    let spatial_eps = DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_structural_length;
+    let axis_eps = DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_axis_direction;
+    if axis_a.cross(axis_b).magnitude() > axis_eps
+        || (cb - ca).cross(axis_a).magnitude() > spatial_eps
+        || (ra - rb).abs() > spatial_eps
     {
         return false;
     }
@@ -278,7 +298,7 @@ pub(in crate::transversal::classic) fn common_circular_extrusion_cylinder(
     let bx0 = sign * span_b.0;
     let bx1 = sign * span_b.1;
     let b = (bx0.min(bx1), bx0.max(bx1));
-    a.0.max(b.0) + eps < a.1.min(b.1)
+    a.0.max(b.0) + spatial_eps < a.1.min(b.1)
 }
 
 #[cfg(test)]
@@ -347,6 +367,29 @@ mod tests {
             (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
             control,
         )
+    }
+
+    #[test]
+    fn rational_circular_carrier_is_invariant_to_native_knot_reparameterization() {
+        let original = rational_circular_arc(
+            (0.0, 2.0),
+            (0.0, std::f64::consts::FRAC_PI_2),
+            0.6731,
+            5.364572,
+            0.0,
+        );
+        let mut u_knots = original.knot_vector_u().clone();
+        u_knots.transform(1.0e-6, 1.0e-3);
+        let reparameterized = BsplineSurface::new_unchecked(
+            (u_knots, original.knot_vector_v().clone()),
+            original.control_points().to_vec(),
+        );
+        assert!(certified_circular_cylinder(&original).is_some());
+        assert!(certified_circular_cylinder(&reparameterized).is_some());
+        assert!(common_circular_extrusion_cylinder(
+            &original,
+            &reparameterized
+        ));
     }
 
     #[test]

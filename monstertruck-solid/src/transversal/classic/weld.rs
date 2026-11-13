@@ -31,13 +31,17 @@ fn certified_homogeneous_curve_box(curve: &NurbsCurve<Vector4>) -> Option<Boundi
     any.then_some(bounds)
 }
 
-fn certified_alt_curve_box<C, S>(curve: &AltCurve<C, S>) -> Option<BoundingBox<Point3>>
+fn certified_alt_curve_box<C, S>(
+    curve: &AltCurve<C, S>,
+    tolerances: BooleanTolerance,
+) -> Option<BoundingBox<Point3>>
 where
     C: BoundedCurve<Point = Point3>,
-    S: ShapeOpsSurface, {
+    S: ShapeOpsSurface,
+{
     match curve {
         Alternative::FirstType(curve) => curve.certified_spatial_bounds(),
-        Alternative::SecondType(curve) => conversion::exact_iso_leader(curve)
+        Alternative::SecondType(curve) => conversion::exact_iso_leader(curve, tolerances)
             .and_then(|exact| certified_homogeneous_curve_box(&exact)),
     }
 }
@@ -216,7 +220,7 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
         front: &Vertex<Point3>,
         back: &Vertex<Point3>,
     ) -> Option<Vec<(f64, f64, Vertex<Point3>)>> {
-        let curve_bounds = certified_alt_curve_box(curve);
+        let curve_bounds = certified_alt_curve_box(curve, self.tolerances);
         let (t0, t1) = curve.range_tuple();
         let span = t1 - t0;
         if !t0.is_finite() || !t1.is_finite() || t1 <= t0 {

@@ -86,8 +86,17 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `boolean_leader_progress_slack` | `1.0e-8` | Dimensionless progress monotonicity guard along a leader polyline. |
 | `boolean_fragment_overlap_parameter_slack` | `1.0e-5` | Dimensionless overlap-parameter comparison between SSI fragments. |
 | `boolean_planar_relative_span` | `1.0e-10` | Relative span padding for planar polygon overlap. |
+| `boolean_iso_parameter_relative` | `1.0e-6` | Native spline/iso parameter domain-relative interval slack; not a spatial length. |
+| `boolean_iso_parameter_roundoff_ulps` | `8.0` | Machine ulps at absolute parameter magnitude added to relative slack. |
+| `boolean_iso_validation_segments` | `32` | Subinterval count for independent iso candidate surface-incidence sampling. |
+| `boolean_inverse_search_trials` | `100` | Newton iteration budget in Boolean conversion inverse surface parameter search. |
 | `boolean_uv_loop_area_relative` | `1.0e-6` | Signed polygon area relative to its UV bounding-box area; dimensionless, not a world-space length. |
 | `boolean_uv_boundary_contact_relative` | `1.0e-6` | UV contact distance relative to combined UV bounding extent; dimensionless, not a world-space length. |
+| `boolean_cylinder_structural_length` | `2.0e-9` | Model-coordinate length for structural rational-cylinder recognition; not Boolean welding tolerance. |
+| `boolean_cylinder_axis_direction` | `2.0e-9` | Dimensionless cross-axis alignment for certified circular-cylinder carriers. |
+| `boolean_cylinder_homogeneous_weight` | `2.0e-9` | Absolute homogeneous weight agreement for linear rational-cylinder sweep rows. |
+| `boolean_cylinder_knot_relative` | `2.0e-9` | Native circular-cylinder profile knot span-relative interior split/dedup slack. |
+| `boolean_cylinder_polynomial_relative` | `2.0e-9` | Relative residual of each homogeneous quadratic circle polynomial coefficient against its contributing-term magnitude. |
 | `boolean_cylinder_reference_axis_component_limit` | `0.8` | Unitless switch for selecting a transverse cylinder-chart reference axis with a well-conditioned cross product. |
 | `boolean_planar_end_fraction` | `1.0e-6` | Fractional endpoint exclusion used by planar overlap sampling. |
 | `boolean_planar_primary_probe_ratios` | `[1.0e-8, 1.0e-7, 1.0e-6, 1.0e-5]` | Dimensionless ordered probe ratios for planar overlap disambiguation. |
@@ -611,3 +620,72 @@ unchanged. Future parameterization-conditioning experiments must consider
 nonuniform scaling/shearing, not confuse source-space tolerance with UV
 contact. The full 158-test solid suite and strict all-target solid Clippy
 remain green after this source-equivalent extraction.
+## Exact Boolean iso-section conversion (2026-11-13)
+
+The classic Boolean's conversion of a marching SSI curve to an analytically
+certified iso-parameter NURBS previously used the kernel-global `1e-6` as
+**both** a 3D spatial length and an absolute UV/knot parameter interval.
+Even with an explicit Boolean numerical length of `1e-8`, a recovered
+candidate could pass checks permitting `4e-6` surface residual and `8e-6`
+endpoint residual. No requested modeling-change budget authorized this.
+
+Now the `BooleanTolerance` received by the Boolean operation travels
+through `convert_regions`, `convert_alt_shell`, `altshell_to_shell`,
+`exact_iso_leader` and all exact iso candidate, surface, and endpoint
+proof helpers. The weld's `certified_alt_curve_box` also uses the same
+operation length when recognizing an exact iso carrier.
+
+**Spatial evidence:** `surface_support_residual()` (4× caller's Boolean
+numeric length) checks candidate/world carrier incidence. Endpoint
+agreement uses `boundary_residual()` (8× caller's numeric length).
+Both are world-coordinate numerical admission, **not permission to
+alter original source geometry**.
+
+**Parameter evidence:** Exact NURBS trimming and the U/V iso-coordinate
+classification use `iso_parameter_slack((lo,hi))` -- the *relative native
+spline parameter interval* (current policy 1e-6 of span) plus eight
+machine ulps at the absolute parameter magnitude. Finite parameters
+marginally beyond a domain are clamped before exact spline cutting;
+nonfinite values, degenerate intervals and actual excursions are
+rejected. This avoids dropping a valid 1e-9-wide knot domain simply
+because a global 1e-6 length threshold was confused with its parameter
+units. The fixed 32-interval candidate validation and 100 Newton
+inverse-parameter iterations now have separately named policies.
+
+Additional local tests prove scale-relative native-knot trimming and
+operation-length independence. With the previous experiment-only
+curve sampling controls, the real 47-face stage4 CAD subtraction passed
+in 3.166s; stage5 still has its independent unknown-face classifier
+failure. The ordinary production-default precision and independently
+measured source-to-result geometry remain separate validation gates.
+
+## Structural rational-cylinder certification threshold separation (2026-11-13)
+
+The circular-cylinder structural certificate previously obtained one
+`same_domain_similarity * 20.0` scalar and used it simultaneously for
+**coordinate length**, **unit-vector alignment**, **homogeneous weights**,
+**native profile knot locations**, and **squared-length polynomial
+coefficients**. A cylinder-chart basis also used a raw `0.8` axis
+component. Those are not interchangeable tolerances.
+
+The structural recognition thresholds now live in separate named numerical
+policy entries (table above). The cylinder-chart basis switch shares the
+existing named `boolean_cylinder_reference_axis_component_limit`, since
+it is the same angular-conditioning decision. The profile knot interval
+slack is scaled to its native parameter range and includes named ulps
+for representability at large offsets; it is not a world-space length.
+The rational-circle polynomial identity is tested coefficient-by-coefficient
+with a dimensionless residual relative to the maximum total absolute
+coefficient contribution in the polynomial (squared length times squared
+homogeneous weight). One consistent scale accounts for cancellation
+and floating-point error in coefficients that vanish analytically. This removes the arbitrary `1.0 + radius2`
+scale and avoids giving tiny circles a much larger certificate
+tolerance merely because someone assumed 1-unit circles.
+
+The default recognition values equal the previous implicit 2e-9
+where meaningful. This is structural algebraic certificate precision,
+not the requested Boolean numerical length and not a source-model
+editing allowance. All existing near-cylinder refusal regressions
+stay enabled, plus a native-knot-reparameterization regression. As a
+separate check, the source 47-face constructive stage4 replay must
+remain valid, without assuming any stage5 fix.
