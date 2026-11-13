@@ -195,5 +195,63 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
     fn derivative_vv(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(0, 2, u, v) }
 
     #[inline]
+    fn evaluate_with_first_derivatives(&self, u: f64, v: f64) -> (P, P::Diff, P::Diff) {
+        let (degree_u, degree_v) = self.degrees();
+        let (ku, kv) = &self.knot_vecs;
+        if ku.range_length().is_zero() || kv.range_length().is_zero() {
+            return (
+                self.evaluate(u, v),
+                self.derivative_u(u, v),
+                self.derivative_v(u, v),
+            );
+        }
+        let u0 = ku.bspline_basis_functions_unchecked(degree_u, 0, u);
+        let u1 = ku.bspline_basis_functions_unchecked(degree_u, 1, u);
+        let v0 = kv.bspline_basis_functions_unchecked(degree_v, 0, v);
+        let v1 = kv.bspline_basis_functions_unchecked(degree_v, 1, v);
+        (
+            P::from_vec(self.combine_basis(&u0, &v0)),
+            self.combine_basis(&u1, &v0),
+            self.combine_basis(&u0, &v1),
+        )
+    }
+
+    #[inline]
+    fn evaluate_with_second_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (P, P::Diff, P::Diff, P::Diff, P::Diff, P::Diff) {
+        let (degree_u, degree_v) = self.degrees();
+        let (ku, kv) = &self.knot_vecs;
+        if ku.range_length().is_zero() || kv.range_length().is_zero() {
+            return (
+                self.evaluate(u, v),
+                self.derivative_u(u, v),
+                self.derivative_v(u, v),
+                self.derivative_uu(u, v),
+                self.derivative_uv(u, v),
+                self.derivative_vv(u, v),
+            );
+        }
+        // Every U/V derivative window is evaluated once per Newton iteration.
+        // Each tensor-product contraction retains the original summation order
+        // and is exactly equal to the individual derivative_mn call.
+        let u0 = ku.bspline_basis_functions_unchecked(degree_u, 0, u);
+        let u1 = ku.bspline_basis_functions_unchecked(degree_u, 1, u);
+        let u2 = ku.bspline_basis_functions_unchecked(degree_u, 2, u);
+        let v0 = kv.bspline_basis_functions_unchecked(degree_v, 0, v);
+        let v1 = kv.bspline_basis_functions_unchecked(degree_v, 1, v);
+        let v2 = kv.bspline_basis_functions_unchecked(degree_v, 2, v);
+        (
+            P::from_vec(self.combine_basis(&u0, &v0)),
+            self.combine_basis(&u1, &v0),
+            self.combine_basis(&u0, &v1),
+            self.combine_basis(&u2, &v0),
+            self.combine_basis(&u1, &v1),
+            self.combine_basis(&u0, &v2),
+        )
+    }
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) { self.parameter_range() }
 }

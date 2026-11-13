@@ -823,9 +823,7 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricSurfa
         u: f64,
         v: f64,
     ) -> (Self::Point, Self::Vector, Self::Vector) {
-        let value = self.0.evaluate(u, v);
-        let du = self.0.derivative_u(u, v);
-        let dv = self.0.derivative_v(u, v);
+        let (value, du, dv) = self.0.evaluate_with_first_derivatives(u, v);
         (
             value.to_point(),
             rational_derivative(&[value, du]),
@@ -849,12 +847,7 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricSurfa
         // evaluate + five separate rational-derivative calls. The identical
         // original rational-derivative formulas preserve floating-point
         // grouping and exact Newton convergence/failure behavior.
-        let value = self.0.evaluate(u, v);
-        let du = self.0.derivative_u(u, v);
-        let dv = self.0.derivative_v(u, v);
-        let duu = self.0.derivative_uu(u, v);
-        let duv = self.0.derivative_uv(u, v);
-        let dvv = self.0.derivative_vv(u, v);
+        let (value, du, dv, duu, duv, dvv) = self.0.evaluate_with_second_derivatives(u, v);
         (
             value.to_point(),
             rational_derivative(&[value, du]),
