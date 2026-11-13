@@ -110,10 +110,28 @@ pub struct NumericalTolerances {
     pub boolean_fragment_overlap_parameter_slack: f64,
     /// Relative span padding for planar polygon overlap.
     pub boolean_planar_relative_span: f64,
+    /// Relative native iso-parameter span admitted as end-of-domain rounding drift.
+    pub boolean_iso_parameter_relative: f64,
+    /// Floating-point ulps of the absolute parameter scale admitted at an iso endpoint.
+    pub boolean_iso_parameter_roundoff_ulps: f64,
+    /// Number of validation segments when proving an exact iso-curve replacement.
+    pub boolean_iso_validation_segments: u32,
+    /// Newton iterations allowed for inverse Boolean surface parameter searches.
+    pub boolean_inverse_search_trials: usize,
     /// Dimensionless UV-loop area threshold relative to the loop's UV bounding box.
     pub boolean_uv_loop_area_relative: f64,
     /// UV-boundary contact distance relative to the combined UV extent.
     pub boolean_uv_boundary_contact_relative: f64,
+    /// Structural world-coordinate residual for exact circular-cylinder carrier recognition.
+    pub boolean_cylinder_structural_length: f64,
+    /// Dimensionless axis direction residual for certified circular-cylinder carriers.
+    pub boolean_cylinder_axis_direction: f64,
+    /// Absolute homogeneous weight residual for certified rational cylinders.
+    pub boolean_cylinder_homogeneous_weight: f64,
+    /// Native profile-knot interval-relative slack in certified circular cylinders.
+    pub boolean_cylinder_knot_relative: f64,
+    /// Relative polynomial coefficient residual in rational circle identity proof.
+    pub boolean_cylinder_polynomial_relative: f64,
     /// Axis-component cutoff for choosing a well-conditioned cylinder chart basis.
     pub boolean_cylinder_reference_axis_component_limit: f64,
     /// Fractional endpoint exclusion used by planar overlap sampling.
@@ -213,8 +231,17 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     boolean_leader_progress_slack: 1.0e-8,
     boolean_fragment_overlap_parameter_slack: 1.0e-5,
     boolean_planar_relative_span: 1.0e-10,
+    boolean_iso_parameter_relative: 1.0e-6,
+    boolean_iso_parameter_roundoff_ulps: 8.0,
+    boolean_iso_validation_segments: 32,
+    boolean_inverse_search_trials: 100,
     boolean_uv_loop_area_relative: 1.0e-6,
     boolean_uv_boundary_contact_relative: 1.0e-6,
+    boolean_cylinder_structural_length: 2.0e-9,
+    boolean_cylinder_axis_direction: 2.0e-9,
+    boolean_cylinder_homogeneous_weight: 2.0e-9,
+    boolean_cylinder_knot_relative: 2.0e-9,
+    boolean_cylinder_polynomial_relative: 2.0e-9,
     boolean_cylinder_reference_axis_component_limit: 0.8,
     boolean_planar_end_fraction: 1.0e-6,
     boolean_planar_primary_probe_ratios: [1.0e-8, 1.0e-7, 1.0e-6, 1.0e-5],

@@ -33,6 +33,19 @@ impl BooleanTolerance {
         }
     }
 
+    /// Native B-spline parameter interval slack, not a geometric length.
+    /// Span-relative drift plus arithmetic roundoff at the interval's absolute parameter scale.
+    pub(super) fn iso_parameter_slack(self, (lo, hi): (f64, f64)) -> Option<f64> {
+        let span = hi - lo;
+        if !lo.is_finite() || !hi.is_finite() || !span.is_finite() || span <= 0.0 {
+            return None;
+        }
+        let policy = DEFAULT_NUMERICAL_TOLERANCES;
+        let slack = policy.boolean_iso_parameter_relative * span
+            + policy.boolean_iso_parameter_roundoff_ulps * f64::EPSILON * lo.abs().max(hi.abs());
+        (slack.is_finite() && slack > 0.0).then_some(slack)
+    }
+
     /// Maximum allowed separation between independently corrected points on
     /// the two exact SSI carrier surfaces, in model-coordinate length units.
     /// Not a mesh discretization allowance.
@@ -70,6 +83,33 @@ impl BooleanTolerance {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iso_parameter_slack_scales_with_domain_not_world_length() {
+        let precise = BooleanTolerance::new(1.0e-8);
+        let broad = BooleanTolerance::new(1.0e-5);
+        let tiny = precise
+            .iso_parameter_slack((0.0, 1.0e-9))
+            .expect("finite interval");
+        let unit = precise
+            .iso_parameter_slack((0.0, 1.0))
+            .expect("finite interval");
+        let shifted = precise
+            .iso_parameter_slack((1.0e9, 1.0e9 + 1.0))
+            .expect("finite shifted interval");
+        assert!(tiny < 1.0e-14);
+        assert!(unit > 1.0e-7);
+        assert!(shifted > unit);
+        assert_eq!(
+            unit,
+            broad
+                .iso_parameter_slack((0.0, 1.0))
+                .expect("finite interval")
+        );
+        assert!(precise.iso_parameter_slack((1.0, 1.0)).is_none());
+        assert!(precise.iso_parameter_slack((f64::NAN, 1.0)).is_none());
+        assert!(precise.iso_parameter_slack((f64::INFINITY, 1.0)).is_none());
+    }
 
     #[test]
     fn semantic_tolerances_do_not_inherit_mesh_floor() {
