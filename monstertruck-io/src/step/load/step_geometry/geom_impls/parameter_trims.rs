@@ -133,15 +133,29 @@ fn normalize_axis(
 }
 
 fn clamp_near_range(value: f64, (min, max): (f64, f64)) -> f64 {
-    if value < min && min - value < KERNEL_EPSILON {
+    let span = max - min;
+    if !value.is_finite()
+        || !min.is_finite()
+        || !max.is_finite()
+        || !span.is_finite()
+        || span <= 0.0
+    {
+        return value;
+    }
+    let policy = DEFAULT_NUMERICAL_TOLERANCES;
+    let slack = policy.step_trim_knot_parameter_relative * span
+        + policy.step_trim_knot_parameter_roundoff_ulps * f64::EPSILON * min.abs().max(max.abs());
+    if value < min && min - value <= slack {
         min
-    } else if value > max && value - max < KERNEL_EPSILON {
+    } else if value > max && value - max <= slack {
         max
     } else {
         value
     }
 }
 
+// Domain-relative numeric rounding is used only for real knot ranges.
+// The normalizer must still not manufacture bounds on placeholder axes.
 // THE CLAMP IS NOT ASKED ABOUT AN AXIS THAT REPORTS A PLACEHOLDER.
 //
 // `clamp_near_range` snaps a value that overshoots the reported range by
@@ -1532,6 +1546,22 @@ fn a_planar_trim_sample_past_the_fictional_unit_square_is_not_snapped_to_it() {
 /// This bilinear patch spans world `[0, 1]^2` in the `z = 0` plane, so a sample
 /// at world `x = 1 + 5e-7` extrapolates to `u = 1 + 5e-7` -- and must come back
 /// to exactly `1.0`.
+#[test]
+fn step_knot_clamp_respects_native_domain_span_not_kernel_spatial_epsilon() {
+    // A 1e-9-wide knot interval must not swallow a 1e-11 excursion.
+    assert_eq!(
+        clamp_near_range(1.0e-9 + 1.0e-11, (0.0, 1.0e-9)),
+        1.0e-9 + 1.0e-11
+    );
+    // Representable near-boundary drift is still snapped back to the real knot.
+    assert_eq!(clamp_near_range(1.0e-9 + 4.0e-16, (0.0, 1.0e-9)), 1.0e-9);
+    assert_eq!(clamp_near_range(-4.0e-16, (0.0, 1.0e-9)), 0.0);
+    assert_eq!(clamp_near_range(1.0 + 5.0e-7, (0.0, 1.0)), 1.0);
+    assert_eq!(clamp_near_range(1.0 + 5.0e-5, (0.0, 1.0)), 1.0 + 5.0e-5);
+    assert!(clamp_near_range(f64::NAN, (0.0, 1.0)).is_nan());
+    assert_eq!(clamp_near_range(2.0, (1.0, 1.0)), 2.0);
+}
+
 #[test]
 fn a_knot_bounded_surface_still_snaps_a_sample_that_overshoots_its_knots() {
     let knots = KnotVector::bezier_knot(1);
