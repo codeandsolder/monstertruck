@@ -474,3 +474,31 @@ regression confirms the same precision distinction. The changed helpers are
 validation evidence, not mathematical proof that arbitrary oscillating curves
 cannot diverge between samples; structural/provenance-based equality remains
 the longer-term target.
+
+## Endpoint classification must use geometry, not parameter epsilons
+
+The old `ParameterKind::try_new(parameter, (front, back))` used the generic
+`f64::near` epsilon to decide `Front`, `Back` or `Inner`. That is dimensionally
+wrong: curve parameters are native (often normalized, angles, knots or arbitrary
+scales) and their delta has no fixed relationship to model-coordinate length.
+For a 100000-unit line, parameter delta 1e-8 is 0.001 model units; for a
+1e-6-unit line, parameter delta 0.01 is only 1e-8 model units.
+
+The new classification explicitly receives the bounded curve and the active
+`BooleanTolerance`. It requires finite ordered parameter bounds and an in-range
+parameter; exact endpoint parameters map to their explicit ends. For an
+interior parameter, evaluate the point and compare its **3D distances to both
+trim endpoints** against the operation's spatial numerical length. If within
+budget of precisely one endpoint, canonicalize to it; if within neither,
+retain the interior parameter; if within both, return ambiguity rather than
+inventing precedence. Slightly extrapolated parameters do not silently snap.
+The exact-trim search invoked by coplanar imprint additionally independently
+verifies `curve.evaluate(parameter).distance(query)` against the same length.
+
+This is an endpoint *classification*, not a proof that the source curve and
+the sampled SSI leader coincide between samples. For self-intersections and
+closed periodic curves, topology/provenance may still be necessary to resolve
+ambiguous repeated positions; a proximity-only rule must not pick one side.
+Validation should include long and short line parameterizations, ambiguous
+sub-feature edges, out-of-domain inverse roots, sub-epsilon coincident trim
+proof, full Boolean regression, and actual source-derived STEP reconstruction.

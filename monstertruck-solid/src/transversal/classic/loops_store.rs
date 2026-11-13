@@ -226,8 +226,13 @@ impl ParameterKind {
             return Some(Self::Back);
         }
         let point = curve.evaluate(t);
-        let at_front = point.clone().distance(curve.evaluate(t0)) <= tolerances.length;
-        let at_back = point.distance(curve.evaluate(t1)) <= tolerances.length;
+        let front_distance = point.clone().distance(curve.evaluate(t0));
+        let back_distance = point.distance(curve.evaluate(t1));
+        if !front_distance.is_finite() || !back_distance.is_finite() {
+            return None;
+        }
+        let at_front = front_distance <= tolerances.length;
+        let at_back = back_distance <= tolerances.length;
         match (at_front, at_back) {
             (true, false) => Some(Self::Front),
             (false, true) => Some(Self::Back),
@@ -238,6 +243,30 @@ impl ParameterKind {
 }
 
 impl<P: Copy, C: Clone> Loops<P, C> {
+    /// An exact trim hit must satisfy the caller's *spatial* budget even when
+    /// the individual inverse solver uses a looser global search epsilon.
+    fn search_parameter(
+        &self,
+        point: P,
+        tolerances: BooleanTolerance,
+    ) -> Option<(usize, usize, ParameterKind)>
+    where
+        P: MetricSpace<Metric = f64>,
+        C: BoundedCurve<Point = P> + SearchParameter<CurveParameter, Point = P>,
+    {
+        self.iter()
+            .enumerate()
+            .flat_map(|(i, wire)| wire.iter().enumerate().map(move |(j, edge)| (i, j, edge)))
+            .find_map(|(i, j, edge)| {
+                let curve = edge.curve();
+                let t = curve.search_parameter(point, None, 1)?;
+                if curve.evaluate(t).distance(point) > tolerances.length {
+                    return None;
+                }
+                Some((i, j, ParameterKind::try_new(t, &curve, tolerances)?))
+            })
+    }
+
     fn change_vertex(
         &mut self,
         old_vertex: &Vertex<P>,
@@ -1671,6 +1700,7 @@ where
 fn loop_stores_are_synchronized<C>(
     geom: &LoopsStore<Point3, C>,
     poly: &LoopsStore<Point3, PolylineCurve>,
+    tolerances: BooleanTolerance,
 ) -> bool {
     geom.len() == poly.len()
         && geom
@@ -1685,11 +1715,16 @@ fn loop_stores_are_synchronized<C>(
                             geom_wire.len() == poly_wire.len()
                                 && geom_wire.iter().zip(poly_wire.iter()).all(
                                     |(geom_edge, poly_edge)| {
-                                        geom_edge.front().point().near(&poly_edge.front().point())
+                                        geom_edge
+                                            .front()
+                                            .point()
+                                            .distance(poly_edge.front().point())
+                                            <= tolerances.length
                                             && geom_edge
                                                 .back()
                                                 .point()
-                                                .near(&poly_edge.back().point())
+                                                .distance(poly_edge.back().point())
+                                                <= tolerances.length
                                     },
                                 )
                         })
@@ -1912,10 +1947,10 @@ where
     }
 
     let sampled0 = (!(coplanar.partial_overlap || has_shared_ruled)
-        && loop_stores_are_synchronized(&operand0.geom, &operand0.poly))
+        && loop_stores_are_synchronized(&operand0.geom, &operand0.poly, boolean_tolerance))
     .then_some(operand0.poly);
     let sampled1 = (!(coplanar.partial_overlap || has_shared_ruled)
-        && loop_stores_are_synchronized(&operand1.geom, &operand1.poly))
+        && loop_stores_are_synchronized(&operand1.geom, &operand1.poly, boolean_tolerance))
     .then_some(operand1.poly);
     Some(InterfaceLoops {
         geom: [operand0.geom, operand1.geom],
@@ -1948,6 +1983,36 @@ mod projection_tests {
     }
 
     #[test]
+    fn sampled_exact_loop_synchronization_respects_requested_spatial_length() {
+        let gap = 5.0e-7;
+        let g0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let g1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let exact_edge = Edge::new_unchecked(&g0, &g1, Line(g0.point(), g1.point()));
+        let geom = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![exact_edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        let p0 = Vertex::new(g0.point());
+        let p1 = Vertex::new(Point3::new(1.0, gap, 0.0));
+        let sampled_edge =
+            Edge::new_unchecked(&p0, &p1, PolylineCurve(vec![p0.point(), p1.point()]));
+        let sampled = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![sampled_edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        assert!(!loop_stores_are_synchronized(
+            &geom,
+            &sampled,
+            BooleanTolerance::new(1.0e-8)
+        ));
+        assert!(loop_stores_are_synchronized(
+            &geom,
+            &sampled,
+            BooleanTolerance::new(1.0e-6)
+        ));
+    }
+
+    #[test]
     fn synchronized_sampling_evidence_rejects_structural_drift() {
         let g0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let g1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
@@ -1968,7 +2033,11 @@ mod projection_tests {
             vec![poly_edge].into(),
             ShapesOpStatus::Unknown,
         )])]);
-        assert!(loop_stores_are_synchronized(&geom, &poly));
+        assert!(loop_stores_are_synchronized(
+            &geom,
+            &poly,
+            BooleanTolerance::new(KERNEL_EPSILON)
+        ));
 
         let stale_back = Vertex::new(Point3::new(1.0, 0.01, 0.0));
         let stale_edge = Edge::new_unchecked(
@@ -1980,7 +2049,11 @@ mod projection_tests {
             vec![stale_edge].into(),
             ShapesOpStatus::Unknown,
         )])]);
-        assert!(!loop_stores_are_synchronized(&geom, &stale));
+        assert!(!loop_stores_are_synchronized(
+            &geom,
+            &stale,
+            BooleanTolerance::new(KERNEL_EPSILON)
+        ));
     }
 
     #[test]
@@ -2045,6 +2118,8 @@ mod projection_tests {
         for t in [-1.0e-8, 1.0 + 1.0e-8, f64::INFINITY, f64::NAN] {
             assert_eq!(ParameterKind::try_new(t, &tiny, tolerance), None);
         }
+        let invalid = Line(Point3::new(f64::NAN, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+        assert_eq!(ParameterKind::try_new(0.5, &invalid, tolerance), None);
     }
 
     #[test]

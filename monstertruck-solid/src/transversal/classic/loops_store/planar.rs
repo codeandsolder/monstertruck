@@ -565,10 +565,10 @@ where
                 continue;
             }
             if target[face_index]
-                .search_parameter(edge.front().point())
+                .search_parameter(edge.front().point(), BooleanTolerance::new(tol))
                 .is_none()
                 || target[face_index]
-                    .search_parameter(edge.back().point())
+                    .search_parameter(edge.back().point(), BooleanTolerance::new(tol))
                     .is_none()
             {
                 continue;
@@ -592,7 +592,8 @@ where
                 BooleanTolerance::new(tol),
                 &mut emap,
             )?;
-            if target[face_index].has_partitioned_coincident_path(edge) {
+            if target[face_index].has_partitioned_coincident_path(edge, BooleanTolerance::new(tol))
+            {
                 continue;
             }
             target[face_index].add_edge(
