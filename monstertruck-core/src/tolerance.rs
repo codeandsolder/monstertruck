@@ -32,6 +32,12 @@ pub struct NumericalTolerances {
     pub angular: f64,
     /// Relative parameter-space endpoint tolerance used while preserving trims.
     pub trim_parameter_relative: f64,
+    /// Absolute floating-point ulps used only in native trimmed-curve parameter comparisons.
+    pub trim_parameter_roundoff_ulps: f64,
+    /// Relative native parameter-span overshoot allowed when regenerating healing trims.
+    pub healing_projection_parameter_relative: f64,
+    /// Floating-point ulps of the native coordinate magnitude for healed trim endpoints.
+    pub healing_projection_parameter_roundoff_ulps: f64,
     /// Relative parameter-space tolerance used while splitting curves.
     pub split_parameter_relative: f64,
     /// Absolute floor paired with `split_parameter_relative`.
@@ -228,6 +234,9 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     structural: 1.0e-12,
     angular: 1.0e-6,
     trim_parameter_relative: 1.0e-6,
+    trim_parameter_roundoff_ulps: 8.0,
+    healing_projection_parameter_relative: 1.0e-6,
+    healing_projection_parameter_roundoff_ulps: 8.0,
     split_parameter_relative: 1.0e-8,
     split_parameter_absolute: 1.0e-10,
     parameter_projection: 1.0e-9,
