@@ -1,9 +1,9 @@
 use super::{
     BoundedCurve, CurveParameter, Cut, Edge, EdgeIndex, EuclideanSpace, Face, HashMap, HashSet,
-    InnerSpace, Instant, Invertible, KERNEL_EPSILON, Line, MetricSpace, Origin,
-    ParameterBoundary2D, ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D,
-    ParametricSurface, ParametricSurface3D, Point2, Point3, PolylineCurve, SP,
-    SearchNearestParameter, Shell, Tolerance, Vector2, Wire, append_unassigned_stable_ids,
+    InnerSpace, Instant, Invertible, Line, MetricSpace, Origin, ParameterBoundary2D,
+    ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface,
+    ParametricSurface3D, Point2, Point3, PolylineCurve, SP, SearchNearestParameter, Shell,
+    Tolerance, Vector2, Wire, append_unassigned_stable_ids,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;
@@ -357,13 +357,47 @@ fn non_simple_wire_divisor<C>(
     )
 }
 
+/// Topological 2D decisions are invariant under *independent positive affine*
+/// reparameterizations of U and V. Work on a unit-square-normalized chart,
+/// rather than applying physical/model-length epsilon to raw parameter units.
+fn normalized_polygon(points: &[Point2]) -> Option<Vec<Point2>> {
+    let (min, max) = points.iter().try_fold(
+        (
+            Point2::new(f64::INFINITY, f64::INFINITY),
+            Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        ),
+        |(min, max), point| {
+            (point.x.is_finite() && point.y.is_finite()).then(|| {
+                (
+                    Point2::new(min.x.min(point.x), min.y.min(point.y)),
+                    Point2::new(max.x.max(point.x), max.y.max(point.y)),
+                )
+            })
+        },
+    )?;
+    let span = max - min;
+    if !span.x.is_finite() || !span.y.is_finite() || span.x <= 0.0 || span.y <= 0.0 {
+        return None;
+    }
+    points
+        .iter()
+        .map(|point| {
+            let x = (point.x - min.x) / span.x;
+            let y = (point.y - min.y) / span.y;
+            (x.is_finite() && y.is_finite()).then_some(Point2::new(x, y))
+        })
+        .collect()
+}
+
 fn concave_wire_divisor(vertices: &[(usize, Point2)]) -> Option<(usize, usize)> {
     if vertices.len() < 4 {
         return None;
     }
-    let polygon: Vec<_> = vertices.iter().map(|(_, point)| *point).collect();
-    let area = polygon_area(&polygon);
-    if area.so_small() {
+    let raw_polygon: Vec<_> = vertices.iter().map(|(_, point)| *point).collect();
+    let polygon = normalized_polygon(&raw_polygon)?;
+    let area = PolylineCurve(polygon.clone()).area();
+    let epsilon = DEFAULT_NUMERICAL_TOLERANCES.healing_polygon_normalized_geometric;
+    if !area.is_finite() || area.abs() <= epsilon {
         return None;
     }
     let orientation = area.signum();
@@ -377,19 +411,6 @@ fn concave_wire_divisor(vertices: &[(usize, Point2)]) -> Option<(usize, usize)> 
     })
 }
 
-fn polygon_area(points: &[Point2]) -> f64 { polygon_loop(points).area() }
-
-fn polygon_loop(points: &[Point2]) -> PolylineCurve<Point2> {
-    let mut loop_points = points.to_vec();
-    if loop_points
-        .last()
-        .is_none_or(|last| loop_points[0].distance2(*last) > KERNEL_EPSILON * KERNEL_EPSILON)
-    {
-        loop_points.push(loop_points[0]);
-    }
-    PolylineCurve(loop_points)
-}
-
 fn reflex_vertex_index(points: &[Point2], orientation: f64, index: usize) -> Option<usize> {
     let len = points.len();
     let prev = points[(index + len - 1) % len];
@@ -397,7 +418,8 @@ fn reflex_vertex_index(points: &[Point2], orientation: f64, index: usize) -> Opt
     let next = points[(index + 1) % len];
     let cross =
         (curr.y - prev.y).mul_add(-(next.x - curr.x), (curr.x - prev.x) * (next.y - curr.y));
-    (orientation * cross < -KERNEL_EPSILON).then_some(index)
+    (orientation * cross < -DEFAULT_NUMERICAL_TOLERANCES.healing_polygon_normalized_geometric)
+        .then_some(index)
 }
 
 const fn diagonal_candidate_indices(i: usize, j: usize, len: usize) -> bool {
@@ -426,52 +448,61 @@ fn segments_intersect_strict(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> 
     Line(a0, a1)
         .intersection(Line(b0, b1))
         .is_some_and(|(s, t, _)| {
-            let unit = KERNEL_EPSILON..(1.0 - KERNEL_EPSILON);
+            let eps = DEFAULT_NUMERICAL_TOLERANCES.healing_polygon_intersection_parameter;
+            let unit = eps..(1.0 - eps);
             unit.contains(&s) && unit.contains(&t)
         })
 }
 
+/// Winding test in a normalized UV chart. A point on any actual edge
+/// belongs to the domain; duplicated (zero-length) edges must not
+/// accidentally declare the entire plane to be inside.
 fn polygon_contains_point(polygon: &[Point2], point: Point2) -> bool {
-    let winding = polygon
+    if !point.x.is_finite() || !point.y.is_finite() || polygon.is_empty() {
+        return false;
+    }
+    let epsilon = DEFAULT_NUMERICAL_TOLERANCES.healing_polygon_normalized_geometric;
+    let mut winding = 0isize;
+    for (start, end) in polygon
         .iter()
         .copied()
         .zip(polygon.iter().copied().cycle().skip(1).take(polygon.len()))
-        .fold(0isize, |acc, (start, end)| {
-            if segment_contains_point(start, end, point) {
-                return 1;
+    {
+        if segment_contains_point(start, end, point) {
+            return true;
+        }
+        let upward = start.y <= point.y && end.y > point.y;
+        let downward = start.y > point.y && end.y <= point.y;
+        if upward || downward {
+            let cross = (end.y - start.y).mul_add(
+                -(point.x - start.x),
+                (end.x - start.x) * (point.y - start.y),
+            );
+            if upward && cross > epsilon {
+                winding += 1;
+            } else if downward && cross < -epsilon {
+                winding -= 1;
             }
-            let upward = start.y <= point.y && end.y > point.y;
-            let downward = start.y > point.y && end.y <= point.y;
-            if upward || downward {
-                let cross = (end.y - start.y).mul_add(
-                    -(point.x - start.x),
-                    (end.x - start.x) * (point.y - start.y),
-                );
-                if upward && cross > KERNEL_EPSILON {
-                    acc + 1
-                } else if downward && cross < -KERNEL_EPSILON {
-                    acc - 1
-                } else {
-                    acc
-                }
-            } else {
-                acc
-            }
-        });
+        }
+    }
     winding != 0
 }
 
 fn segment_contains_point(start: Point2, end: Point2, point: Point2) -> bool {
     let edge = end - start;
     let rel = point - start;
-    let cross = edge.y.mul_add(-rel.x, edge.x * rel.y);
-    if cross.abs() > KERNEL_EPSILON {
-        false
-    } else {
-        let dot = rel.dot(edge);
-        let len2 = edge.magnitude2();
-        dot >= -KERNEL_EPSILON && dot <= len2 + KERNEL_EPSILON
+    let length_squared = edge.magnitude2();
+    if !length_squared.is_finite() || !rel.x.is_finite() || !rel.y.is_finite() {
+        return false;
     }
+    let epsilon = DEFAULT_NUMERICAL_TOLERANCES.healing_polygon_normalized_geometric;
+    let nearest_fraction = if length_squared == 0.0 {
+        0.0
+    } else {
+        (rel.dot(edge) / length_squared).clamp(0.0, 1.0)
+    };
+    let nearest = start + edge * nearest_fraction;
+    point.distance2(nearest) <= epsilon * epsilon
 }
 
 fn find_loop() -> impl FnMut((usize, &EdgeIndex)) -> Option<(usize, usize)> {

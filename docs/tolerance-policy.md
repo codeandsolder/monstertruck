@@ -76,6 +76,8 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `mesh_periodic_period_match_relative` | `1.0e-6` | Dimensionless relative compatibility threshold between paired meshing periods. |
 | `mesh_uv_closure` | `1.0e-3` | UV closure threshold for already-sampled tessellation boundaries. |
 | `mesh_singularity_distance` | `1.0e-3` | Spatial distance used by tessellation to rescue samples at analytic poles. |
+| `healing_polygon_normalized_geometric` | `1.0e-6` | Geometric area, cross, and point-to-segment predicates only after independently normalizing U/V chart spans to a unit square. |
+| `healing_polygon_intersection_parameter` | `1.0e-6` | Dimensionless strict-intersection endpoint exclusion in normalized polygon line fraction coordinates. |
 | `healing_boundary_uv_relative` | `1.0e-6` | Per-native-axis span-relative closed-loop endpoint discrepancy in healing's 2D chart. |
 | `healing_boundary_uv_roundoff_ulps` | `8.0` | Representable-coordinate ulps for UV loop endpoint closure, independent of 3D distance. |
 | `normal_probe_step` | `1.0e-4` | Parameter-space probe step used to recover a normal at a singular NURBS point. |
@@ -1275,3 +1277,82 @@ points alone. A contour must close in the
 **unwrapped UV chart** *as well as* spatially,
 so a periodic full-turn seam is not silently
 mistaken for an oriented planar UV loop.
+
+
+## Concave-wire polygon analysis: independent U/V affine invariance (2026-11-13)
+
+`monstertruck-healing/src/split_closed_faces/mod.rs` selected
+diagonal divisors using the *native* unscaled UV coordinates for
+`concave_wire_divisor`, its signed polygon area, reflex-vertex
+cross product, winding number, strict segment intersections, and
+point-on-segment tests. The old code compared raw **UV area**
+(length in U × length in V), raw cross/dot products
+(U×V or U²+V²), and dimensionless 0..1 segment intersection
+fractions to **KERNEL_EPSILON**, a world-coordinate distance.
+Physical features on the same surface could be accepted or
+refused simply by changing U/V parameter units, especially
+for an anisotropic chart such as U=1e-9 and V=1e9.
+
+The polygon-specific topology pass now first maps each
+finite, strictly positive-span native axis independently to
+`[0,1]` using the bounding box of that polygon. This
+positive affine map preserves orientation, straight lines,
+intersections and point inclusion, but **not physical
+distances**; that is intentional because this stage only
+chooses a topological diagonal in a 2D chart. Degenerate,
+nonfinite or unrepresentable chart spans refuse that pass
+rather than guessing a divisor. The normalized geometry
+predicates use separately named dimensionless policy fields:
+`healing_polygon_normalized_geometric` for normalized
+signed area / cross/segment distance and
+`healing_polygon_intersection_parameter` for
+intersection fractions in [0,1]. Neither value is
+implicitly a millimetre or a source-modeling tolerance.
+Unlike the earlier arbitrary spatial comparisons, native
+chart scale no longer changes those topology decisions.
+The selected diagonal indices always refer to the original
+vertices, never to any synthetic normalized mesh.
+
+The polygon closure area needs no ad-hoc repeated endpoint:
+`PolylineCurve<Point2>::area()` already uses circular
+edge iteration. The old `polygon_loop` appended the first
+point unless the native **squared UV** endpoint separation
+was below a fixed spatial epsilon, mixing yet another
+dimension and introducing an unrelated conditional.
+The new path directly computes circular signed area on
+the normalized polygon.
+
+A separate actual behavioral bug was found in
+`segment_contains_point`: for a zero-length edge,
+`edge == 0` makes both cross and dot identically 0,
+so **every point in the entire parameter plane** passed
+as lying on that degenerate segment. The replacement
+computes closest-point position on each normalized
+segment, clamps fractional position to [0,1], compares
+**normalized squared distance to normalized epsilon²**,
+and handles a zero-length segment as only the start
+point. In `polygon_contains_point`, a genuinely on-edge
+point now returns immediately; the former winding
+fold could overwrite an initial on-edge result with
+later wind updates.
+
+Tests in `split_closed_faces/tests.rs`:
+- A physically identical L-shaped concave polygon with
+  chart U/V scales (1e-9,1e9), (1e9,1e-9), (1e-6,1e-6),
+  (1,1), (1e9,1e9) produces the same nontrivial
+  diagonal indices;
+- Point-in-polygon inclusion/exclusion and a reflex
+  boundary vertex are stable in the normalized chart;
+- Repeated duplicate vertices do **not** make arbitrary
+  exterior points appear to be on the boundary;
+- Empty, constant-axis, NaN and infinity charts
+  reject normalization; crossing diagonals do intersect
+  strictly while mere endpoint touches do not.
+
+The global Boolean/geometry tolerances, actual surface
+spatial closure proof, periodic seam logic and
+experiment-only sampling floors are not modified.
+The remaining `split_closed_faces` sites using
+`p.x.near(q.x)` or `line.distance_to_point_as_segment(...).so_small()`
+still conflate native UV values with spatial
+`KERNEL_EPSILON`, outside this polygon-specific pass.
