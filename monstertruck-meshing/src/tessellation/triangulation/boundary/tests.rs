@@ -4,6 +4,7 @@
 //! path is unchanged.
 
 use super::*;
+use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::{
     Invertible, Line, Matrix4, ParameterCurve, ParametricSurface, Plane, Point2, Point3, Processor,
     RevolutionSurface, Vector3,

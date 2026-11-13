@@ -61,6 +61,7 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `mesh_seed_floor` | `1.0e-3` | Coarsest numerical mesh seed used by algorithms that need a seed mesh. |
 | `half_space_relative_margin` | `1.0e-3` | Relative expansion used to construct finite half-space clipping bounds. |
 | `mesh_open_boundary_direction_relative` | `1.0e-6` | Native UV span-relative directional discrimination when closing an open meshing contour. |
+| `mesh_projection_parameter_relative` | `1.0e-6` | Native parameter interval relative rounding allowance for numerical boundary projection. |
 | `mesh_boundary_wrap_relative` | `1.0e-6` | Native UV span-relative seam offset used for bounded/periodic parameter normalization. |
 | `mesh_boundary_roundoff_ulps` | `8.0` | Absolute native-parameter ulps for representable UV boundary rounding. |
 | `mesh_open_pair_connector_score_relative` | `1.0e-6` | Dimensionless margin comparing two sums of squared UV endpoint-connector distances. |
@@ -970,3 +971,52 @@ full-period cone-cap/ring tests remain enabled. The source CAD
 constructive replay's stage4 was again valid at 47 faces with the
 **separately experimental** faster sampling settings; stage5 is
 still the pre-existing unknown-face classifier failure.
+
+
+## Mesh-boundary projection parameter normalization and pole recovery (2026-11-13)
+
+In `monstertruck-meshing/src/tessellation/triangulation/boundary/projection.rs`,
+native U/V parameter boundary snapping used a fixed *model-distance*
+`KERNEL_EPSILON` irrespective of the span of the interval being
+normalized. The period branch also judged a native UV span
+`span.so_small()` using that spatial epsilon, collapsing every
+valid periodic parameter domain narrower than 1e-6 down to its
+lower endpoint. A purported 3D pole check evaluated the surface
+one unit above the previous V parameter, regardless of its actual
+period, and only supported bounded-U/periodic-V charts.
+
+The projector now shares `periodic.rs::native_boundary_slack`,
+with a separate `mesh_projection_parameter_relative` policy
+and the existing absolute-UV-magnitude floating-point ulp policy.
+Finite positive native ranges receive relative/ulp endpoint rounding;
+a small but positive UV period is never confused with a degenerate
+zero-width domain. Invalid/nonpositive/nonfinite periodic values
+are rejected before computing normalized coordinates.
+
+`PolyBoundaryPiece::recover_periodic_pole` now handles either
+UV orientation, requiring an actual positive finite period on
+the other axis and a finite bounded-axis endpoint whose 3D
+surface position lies within the dedicated
+`mesh_singularity_distance` model-space mesh rescue threshold.
+It checks that **the whole periodic orbit collapses** using
+`sampled_periodic_collapse` at 1/4, 1/2, 3/4 and one complete
+native turn, rather than testing only a guessed +1 UV displacement.
+This is a meshing rescue, not an exact support identity proof.
+The periodic collapse helper explicitly rejects invalid periods
+and nonfinite seed parameters before evaluation.
+
+New tests cover native UV intervals of 1e-9, the original
+unit-interval rounding behavior, invalid periodic values,
+both bounded-U/periodic-V and bounded-V/periodic-U cone poles,
+a non-polar cylinder, far-away points, and invalid sampled periods.
+Existing meshing tests and the accelerated source CAD replay
+remain required prior to promotion.
+
+The reported [0,1] plane ranges in the core
+`Plane::parameter_range` are synthetic, not intrinsic
+geometric boundaries (see that implementation's existing
+documentation). Simply scaling the numeric clamp does not by
+itself distinguish such artificial ranges: that requires
+explicit parameter-domain provenance in the surface interface,
+and is a separate semantic issue to resolve rather than
+heuristically assuming every reported bound is physical.
