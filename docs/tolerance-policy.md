@@ -115,6 +115,7 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `boolean_planar_normal_cosine_slack` | `1.0e-10` | Dimensionless allowed deviation of aligned planar carrier normals. |
 | `boolean_planar_tangent_cosine_slack` | `1.0e-8` | Dimensionless allowed deviation of planar trim tangent alignment. |
 | `meshing_debug_uv_edge_tolerance` | `1.0e-9` | Native UV-coordinate tolerance used for tessellation projection diagnostics. |
+| `step_torus_inverse_sine_roundoff_ulps` | `128.0` | Unitless ulps for STEP torus polar inverse asin argument clamping; no world-size multiplier. |
 | `step_trim_knot_parameter_relative` | `1.0e-6` | Maximum native STEP knot-domain-relative overshoot admitted for numeric endpoint clamping. |
 | `step_trim_knot_parameter_roundoff_ulps` | `8.0` | Absolute-parameter-magnitude roundoff added to the STEP native-domain clamp. |
 | `step_uv_clamp_probe` | `1.0e-3` | Native UV-coordinate threshold for STEP trim seam probe. |
@@ -841,3 +842,33 @@ Explicitly out of scope in this commit: the distinct
 conditioning, the other-axis criterion previously derived from
 `periodic_relative`, and STEP same-domain parameterization.
 Those have separate dimensions and need separate tests.
+
+
+## STEP same-domain inverse torus parameterization (2026-11-13)
+
+The STEP torus analytic inverse constructed
+`sine = relative.z / torus.small_radius()`. This is a
+dimensionless ratio whose admissible inverse-trigonometric interval
+is exactly [-1,1], with a *dimensionless numerical roundoff* envelope.
+The previous code multiplied a fixed `128 * EPSILON` by a
+world-coordinate scale (large torus radius, small radius, or point
+magnitude), arbitrarily widening the sine domain for large models.
+The outer geometric support proof is distinct from this inverse
+trig-domain gate and must not govern its admissibility.
+
+`torus_sine_with_roundoff` now validates finite ratios against
+`1 + step_torus_inverse_sine_roundoff_ulps * EPSILON * max(1, |sine|)`
+and clamps only representable overrun, independent of the torus's
+world size. The small radius must be finite and positive before
+division. Subsequent radial support and evaluated world-space
+carrier checks retain their existing spatial predicates.
+
+The STEP same-domain periodic unwrap previously refused valid
+periods smaller than the *world-coordinate* `KERNEL_EPSILON`;
+a period is now considered valid if finite and positive. New
+focused tests cover torus radii 1e-6 through 1e9, near-±1
+roundoff admission and genuine out-of-domain rejection, nonfinite
+ratios and a native parameter period 1e-9. The full STEP IO lib
+suite passed 84 tests (9 ignored), and strict all-target IO Clippy
+also passed. Other same-domain matching/world-space acceptance
+tolerances remain independent of this fix.
