@@ -198,34 +198,46 @@ enum ParameterKind {
 }
 
 impl ParameterKind {
-    fn try_new(t: f64, (t0, t1): (f64, f64)) -> Option<Self> {
-        if t0.near(&t) {
-            Some(Self::Front)
-        } else if t1.near(&t) {
-            Some(Self::Back)
-        } else if t0 < t && t < t1 {
-            Some(Self::Inner(t))
-        } else {
-            None
+    /// Classify an evaluated point against the actual trimmed curve endpoints.
+    ///
+    /// Parameter values have arbitrary units and scale: being near an endpoint
+    /// parameter does not mean being near the endpoint in model coordinates.
+    /// An interior root within the operation's spatial length tolerance of
+    /// exactly one endpoint belongs to that endpoint. A root close to both
+    /// endpoints is ambiguous, never an arbitrary Front/Back preference.
+    fn try_new<C>(t: f64, curve: &C, tolerances: BooleanTolerance) -> Option<Self>
+    where
+        C: BoundedCurve,
+        C::Point: MetricSpace<Metric = f64> + Clone, {
+        let (t0, t1) = curve.range_tuple();
+        if !t.is_finite() || !t0.is_finite() || !t1.is_finite() || !(t0 < t1) {
+            return None;
+        }
+        // An inverse result outside a trim is not an endpoint of that trim.
+        // Any extrapolation/snap must be performed explicitly by its caller,
+        // with independent geometric evidence, rather than a parameter epsilon.
+        if !(t0..=t1).contains(&t) {
+            return None;
+        }
+        if t == t0 {
+            return Some(Self::Front);
+        }
+        if t == t1 {
+            return Some(Self::Back);
+        }
+        let point = curve.evaluate(t);
+        let at_front = point.clone().distance(curve.evaluate(t0)) <= tolerances.length;
+        let at_back = point.distance(curve.evaluate(t1)) <= tolerances.length;
+        match (at_front, at_back) {
+            (true, false) => Some(Self::Front),
+            (false, true) => Some(Self::Back),
+            (false, false) => Some(Self::Inner(t)),
+            (true, true) => None,
         }
     }
 }
 
 impl<P: Copy, C: Clone> Loops<P, C> {
-    fn search_parameter(&self, pt: P) -> Option<(usize, usize, ParameterKind)>
-    where C: BoundedCurve<Point = P> + SearchParameter<CurveParameter, Point = P> {
-        self.iter()
-            .enumerate()
-            .flat_map(move |(i, wire)| wire.iter().enumerate().map(move |(j, edge)| (i, j, edge)))
-            .find_map(|(i, j, edge)| {
-                let curve = edge.curve();
-                curve.search_parameter(pt, None, 1).and_then(|t| {
-                    let kind = ParameterKind::try_new(t, curve.range_tuple())?;
-                    Some((i, j, kind))
-                })
-            })
-    }
-
     fn change_vertex(
         &mut self,
         old_vertex: &Vertex<P>,
@@ -657,13 +669,18 @@ impl<C> Loops<Point3, C> {
         true
     }
 
-    fn has_partitioned_coincident_path(&self, edge0: &Edge<Point3, C>) -> bool
-    where C: Clone
+    fn has_partitioned_coincident_path(
+        &self,
+        edge0: &Edge<Point3, C>,
+        tolerances: BooleanTolerance,
+    ) -> bool
+    where
+        C: Clone
             + ParametricCurve<Point = Point3>
             + BoundedCurve<Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3> {
+            + SearchNearestParameter<CurveParameter, Point = Point3>,
+    {
         let reference = edge0.curve();
-        let reference_range = reference.range_tuple();
         let start = edge0.front().id();
         let goal = edge0.back().id();
 
@@ -736,10 +753,8 @@ impl<C> Loops<Point3, C> {
                         let validated_parameter = |search_hint| {
                             let parameter =
                                 reference.search_nearest_parameter(point, search_hint, 100)?;
-                            ParameterKind::try_new(parameter, reference_range)?;
-                            reference
-                                .evaluate(parameter)
-                                .near(&point)
+                            ParameterKind::try_new(parameter, &reference, tolerances)?;
+                            (reference.evaluate(parameter).distance(point) <= tolerances.length)
                                 .then_some(parameter)
                         };
                         let parameter = validated_parameter(hint)
@@ -867,7 +882,7 @@ impl<C> LoopsStore<Point3, C> {
                 if curve.evaluate(parameter).distance(point) > tolerances.length {
                     continue;
                 }
-                let Some(kind) = ParameterKind::try_new(parameter, curve.range_tuple()) else {
+                let Some(kind) = ParameterKind::try_new(parameter, &curve, tolerances) else {
                     continue;
                 };
                 found_exact = true;
@@ -896,7 +911,7 @@ impl<C> LoopsStore<Point3, C> {
                 if projected.distance(point) > nearest_tolerance {
                     continue;
                 }
-                let Some(kind) = ParameterKind::try_new(parameter, curve.range_tuple()) else {
+                let Some(kind) = ParameterKind::try_new(parameter, &curve, tolerances) else {
                     continue;
                 };
                 let canonical_point = match kind {
@@ -942,7 +957,7 @@ impl<C> LoopsStore<Point3, C> {
                 if curve.evaluate(parameter).distance(point) > tolerances.length {
                     continue;
                 }
-                let Some(kind) = ParameterKind::try_new(parameter, curve.range_tuple()) else {
+                let Some(kind) = ParameterKind::try_new(parameter, &curve, tolerances) else {
                     continue;
                 };
                 match kind {
@@ -1112,7 +1127,7 @@ impl<C> LoopsStore<Point3, C> {
             if projected.distance(point) > residual_limit {
                 return None;
             }
-            let kind = ParameterKind::try_new(parameter, curve.range_tuple())?;
+            let kind = ParameterKind::try_new(parameter, &curve, tolerances)?;
             let canonical_point = match kind {
                 ParameterKind::Front => edge.absolute_front().point(),
                 ParameterKind::Back => edge.absolute_back().point(),
@@ -1295,7 +1310,7 @@ impl<C> LoopsStore<Point3, C> {
                     tolerances,
                     100,
                 )?;
-                match ParameterKind::try_new(parameter, curve.range_tuple())? {
+                match ParameterKind::try_new(parameter, &curve, tolerances)? {
                     ParameterKind::Front => {
                         let old_vertex = self[loops_index][wire_index][edge_index]
                             .absolute_front()
@@ -1985,6 +2000,51 @@ mod projection_tests {
         assert_eq!(loops[0].len(), 2);
         assert!(loops[0].iter().all(|edge| edge.front() != edge.back()));
         assert!(loops[0].vertex_iter().all(|vertex| vertex != v1));
+    }
+
+    #[test]
+    fn parameter_endpoint_classification_obeys_spatial_not_parameter_scale() {
+        let tolerance = BooleanTolerance::new(1.0e-7);
+        // The same 1e-8 normalized parameter shift is 1 mm on this line:
+        // old global f64::near misclassified it as the front endpoint.
+        let long = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(100_000.0, 0.0, 0.0));
+        assert_eq!(
+            ParameterKind::try_new(1.0e-8, &long, tolerance),
+            Some(ParameterKind::Inner(1.0e-8))
+        );
+        // Conversely, a 1e-2 parameter shift on a tiny line is only
+        // 1e-8 model units: it should canonicalize to the true endpoint.
+        let short = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0e-6, 0.0, 0.0));
+        assert_eq!(
+            ParameterKind::try_new(0.01, &short, tolerance),
+            Some(ParameterKind::Front)
+        );
+        assert_eq!(
+            ParameterKind::try_new(0.99, &short, tolerance),
+            Some(ParameterKind::Back)
+        );
+        assert_eq!(
+            ParameterKind::try_new(0.5, &long, tolerance),
+            Some(ParameterKind::Inner(0.5))
+        );
+    }
+
+    #[test]
+    fn parameter_endpoint_classification_rejects_ambiguous_or_outside_trim() {
+        let tolerance = BooleanTolerance::new(1.0e-7);
+        let tiny = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0e-9, 0.0, 0.0));
+        assert_eq!(ParameterKind::try_new(0.5, &tiny, tolerance), None);
+        assert_eq!(
+            ParameterKind::try_new(0.0, &tiny, tolerance),
+            Some(ParameterKind::Front)
+        );
+        assert_eq!(
+            ParameterKind::try_new(1.0, &tiny, tolerance),
+            Some(ParameterKind::Back)
+        );
+        for t in [-1.0e-8, 1.0 + 1.0e-8, f64::INFINITY, f64::NAN] {
+            assert_eq!(ParameterKind::try_new(t, &tiny, tolerance), None);
+        }
     }
 
     #[test]
@@ -2898,7 +2958,10 @@ mod projection_tests {
         let loops = Loops(vec![wire]);
         let incoming = Edge::new_unchecked(&a, &d, Line(a.point(), d.point()));
 
-        assert!(loops.has_partitioned_coincident_path(&incoming));
+        assert!(loops.has_partitioned_coincident_path(
+            &incoming,
+            BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length),
+        ));
     }
 
     #[test]
@@ -2920,7 +2983,10 @@ mod projection_tests {
         let loops = Loops(vec![wire]);
         let incoming = Edge::new_unchecked(&a, &d, Line(a.point(), d.point()));
 
-        assert!(!loops.has_partitioned_coincident_path(&incoming));
+        assert!(!loops.has_partitioned_coincident_path(
+            &incoming,
+            BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length),
+        ));
     }
 
     #[test]
