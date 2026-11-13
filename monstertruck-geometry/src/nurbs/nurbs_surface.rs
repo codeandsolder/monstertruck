@@ -818,6 +818,54 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricSurfa
         ])
     }
     #[inline]
+    fn evaluate_with_first_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (Self::Point, Self::Vector, Self::Vector) {
+        let value = self.0.evaluate(u, v);
+        let du = self.0.derivative_u(u, v);
+        let dv = self.0.derivative_v(u, v);
+        (
+            value.to_point(),
+            rational_derivative(&[value, du]),
+            rational_derivative(&[value, dv]),
+        )
+    }
+    #[inline]
+    fn evaluate_with_second_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (
+        Self::Point,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+    ) {
+        // Six homogeneous evaluations instead of fifteen in the original
+        // evaluate + five separate rational-derivative calls. The identical
+        // original rational-derivative formulas preserve floating-point
+        // grouping and exact Newton convergence/failure behavior.
+        let value = self.0.evaluate(u, v);
+        let du = self.0.derivative_u(u, v);
+        let dv = self.0.derivative_v(u, v);
+        let duu = self.0.derivative_uu(u, v);
+        let duv = self.0.derivative_uv(u, v);
+        let dvv = self.0.derivative_vv(u, v);
+        (
+            value.to_point(),
+            rational_derivative(&[value, du]),
+            rational_derivative(&[value, dv]),
+            rational_derivative(&[value, du, duu]),
+            multi_rational_derivative(&[[value, dv], [du, duv]])
+                .unwrap_or_else(|_| Self::Vector::zero() * f64::NAN),
+            rational_derivative(&[value, dv, dvv]),
+        )
+    }
+    #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) { self.parameter_range() }
 }
 
@@ -1186,6 +1234,43 @@ impl<V: Homogeneous<Scalar = f64>> From<BsplineSurface<V::Point>> for NurbsSurfa
 impl<V> From<NurbsSurface<V>> for BsplineSurface<V> {
     #[inline]
     fn from(nurbs: NurbsSurface<V>) -> Self { nurbs.0 }
+}
+
+#[test]
+fn fused_nurbs_projection_derivatives_match_original_component_calls_exactly() {
+    let knots = KnotVector::bezier_knot(2);
+    let net = (0..3)
+        .map(|u| {
+            (0..3)
+                .map(|v| {
+                    let u = f64::from(u);
+                    let v = f64::from(v);
+                    let w = 1.0 + 0.25 * u + 0.13 * v;
+                    Vector4::new(w * (3.0 + u), w * (5.0 + v), w * (u * v + u * u), w)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let s = NurbsSurface::new(BsplineSurface::new_unchecked((knots.clone(), knots), net));
+    for (u, v) in [
+        (0.0, 0.0),
+        (0.1, 0.6),
+        (0.499, 0.501),
+        (0.9, 0.2),
+        (1.0, 1.0),
+    ] {
+        let (p, du, dv) = s.evaluate_with_first_derivatives(u, v);
+        assert_eq!(p, s.evaluate(u, v));
+        assert_eq!(du, s.derivative_u(u, v));
+        assert_eq!(dv, s.derivative_v(u, v));
+        let (p, du, dv, duu, duv, dvv) = s.evaluate_with_second_derivatives(u, v);
+        assert_eq!(p, s.evaluate(u, v));
+        assert_eq!(du, s.derivative_u(u, v));
+        assert_eq!(dv, s.derivative_v(u, v));
+        assert_eq!(duu, s.derivative_uu(u, v));
+        assert_eq!(duv, s.derivative_uv(u, v));
+        assert_eq!(dvv, s.derivative_vv(u, v));
+    }
 }
 
 #[test]

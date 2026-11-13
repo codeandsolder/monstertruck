@@ -26,6 +26,50 @@ pub trait ParametricSurface: Clone {
     fn derivative_uv(&self, u: f64, v: f64) -> Self::Vector;
     /// Returns `∂²S/∂v²` at `(u, v)`.
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector;
+    /// Evaluate the point and its first derivatives at the same parameter.
+    ///
+    /// Implementors with a shared basis/evaluation kernel can override this
+    /// without changing inverse-search semantics. The default preserves the
+    /// previous, individually evaluated derivatives exactly.
+    #[inline]
+    fn evaluate_with_first_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (Self::Point, Self::Vector, Self::Vector) {
+        (
+            self.evaluate(u, v),
+            self.derivative_u(u, v),
+            self.derivative_v(u, v),
+        )
+    }
+    /// Evaluate the point, gradient and Hessian of the surface at once.
+    ///
+    /// This is the hot-path "jet" for 3D nearest-point Newton projection.
+    /// Grouping the calls lets rational B-splines reuse homogeneous
+    /// evaluations that would otherwise repeat 2--4 times.
+    #[inline]
+    fn evaluate_with_second_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (
+        Self::Point,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+    ) {
+        (
+            self.evaluate(u, v),
+            self.derivative_u(u, v),
+            self.derivative_v(u, v),
+            self.derivative_uu(u, v),
+            self.derivative_uv(u, v),
+            self.derivative_vv(u, v),
+        )
+    }
     /// Returns the mixed partial `∂^(m+n)S / ∂u^m ∂v^n` at `(u, v)`.
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector;
     /// Returns all derivatives at `(u, v)` up to order `max_order`.
@@ -76,6 +120,29 @@ impl<S: ParametricSurface> ParametricSurface for &S {
     #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector { (*self).derivative_vv(u, v) }
     #[inline]
+    fn evaluate_with_first_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (Self::Point, Self::Vector, Self::Vector) {
+        (*self).evaluate_with_first_derivatives(u, v)
+    }
+    #[inline]
+    fn evaluate_with_second_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (
+        Self::Point,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+    ) {
+        (*self).evaluate_with_second_derivatives(u, v)
+    }
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         (*self).derivative_mn(m, n, u, v)
     }
@@ -106,6 +173,29 @@ impl<S: ParametricSurface> ParametricSurface for Box<S> {
     fn derivative_uv(&self, u: f64, v: f64) -> Self::Vector { (**self).derivative_uv(u, v) }
     #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector { (**self).derivative_vv(u, v) }
+    #[inline]
+    fn evaluate_with_first_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (Self::Point, Self::Vector, Self::Vector) {
+        (**self).evaluate_with_first_derivatives(u, v)
+    }
+    #[inline]
+    fn evaluate_with_second_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (
+        Self::Point,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+    ) {
+        (**self).evaluate_with_second_derivatives(u, v)
+    }
     #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         (**self).derivative_mn(m, n, u, v)
