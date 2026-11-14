@@ -54,14 +54,14 @@ jobs:
         with:
           components: clippy
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
         with:
           rust-toolchain: "1.99.1"
           rustflags: "-D warnings"
       - run: cargo clippy --all-targets -- -D warnings
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
 
 
   test:
@@ -78,7 +78,7 @@ jobs:
       - run: git submodule update --init resources
       - uses: dtolnay/rust-toolchain@1.99.1
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
         with:
           rust-toolchain: "1.99.1"
           rustflags: "-D warnings"
@@ -96,7 +96,7 @@ jobs:
       - run: just test-doc
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
 
 
   shared-sccache:
@@ -105,7 +105,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@23b86d2eeed31f7893c34e942c32cf6555299dbb # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
     with:
       command: |
         git submodule update --init resources
@@ -127,7 +127,7 @@ jobs:
       - run: git submodule update --init resources
       - uses: dtolnay/rust-toolchain@1.99.1
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
         with:
           rust-toolchain: "1.99.1"
           rustflags: "-D warnings"
@@ -135,7 +135,7 @@ jobs:
       - run: just meshing-features
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
 
 
   wasm-build:
@@ -154,7 +154,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
         with:
           rust-toolchain: "1.99.1"
           rustflags: "-D warnings"
@@ -162,4 +162,4 @@ jobs:
       - run: just wasm-build
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@835efeff3a1e617d8ecd40ed70b402a298d2481f # main
