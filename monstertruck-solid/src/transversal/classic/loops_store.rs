@@ -1492,6 +1492,9 @@ struct BranchContext<'a, C, S> {
     nearest_tolerance: f64,
     tolerances: BooleanTolerance,
     reuse_coincident: bool,
+    // Every SSI endpoint in one pair analysis is a single topological vertex
+    // even when independently recovered branches use different face pairs.
+    endpoint_registry: &'a mut Vec<(Vertex<Point3>, Vertex<Point3>)>,
 }
 
 /// Candidate boundary-search evidence and its independent mesh radius.
@@ -1537,11 +1540,82 @@ impl<C> OperandLoopStores<C> {
             nearest_tolerance,
             tolerances,
         } = *endpoint;
-        let Some((wire_index, edge_index, polygon_kind)) =
+        let sampled_attachment =
             self.poly
-                .add_polygon_vertex(face_index, poly_vertex, tolerances, poly_edge_map)
-        else {
-            return Some(false);
+                .add_polygon_vertex(face_index, poly_vertex, tolerances, poly_edge_map);
+        let Some((wire_index, edge_index, polygon_kind)) = sampled_attachment else {
+            // A sampled SSI endpoint can overrun the exact trim. Use the mesh seed
+            // only to discover a candidate; certify its incidence on the
+            // opposite exact carrier before changing shared topology.
+            let Some((wi, ei, kind, _)) = self.geom.search_boundary_parameter(
+                face_index,
+                geom_vertex.point(),
+                nearest_tolerance,
+                tolerances,
+            ) else {
+                return Some(false);
+            };
+            let boundary_edge = &self.geom[face_index][wi][ei];
+            let certified = match kind {
+                ParameterKind::Front => {
+                    let pt = boundary_edge.absolute_front().point();
+                    on_other_carrier(pt, other_surface, tolerances).then_some(pt)
+                }
+                ParameterKind::Back => {
+                    let pt = boundary_edge.absolute_back().point();
+                    on_other_carrier(pt, other_surface, tolerances).then_some(pt)
+                }
+                ParameterKind::Inner(t) => {
+                    let curve = boundary_edge.curve();
+                    curve_surface_projection(
+                        &curve,
+                        Some(t),
+                        other_surface,
+                        None,
+                        curve.evaluate(t),
+                        tolerances,
+                        100,
+                    )
+                    .map(|(point, _, _)| point)
+                }
+            };
+            let Some(point) = certified else {
+                return Some(false);
+            };
+            if geom_vertex.point().distance(point) > nearest_tolerance
+                || self
+                    .poly
+                    .search_boundary_parameter(
+                        face_index,
+                        point,
+                        tolerances.boundary_residual(),
+                        tolerances,
+                    )
+                    .is_none()
+            {
+                return Some(false);
+            }
+            geom_vertex.set_point(point);
+            poly_vertex.set_point(point);
+            let (wi, ei, kind) =
+                self.poly
+                    .add_polygon_vertex(face_index, poly_vertex, tolerances, poly_edge_map)?;
+            self.geom.add_geom_vertex(
+                face_index,
+                BoundarySearchRequest {
+                    hint: Some((wi, ei)),
+                    sampled_on_boundary_vertex: matches!(
+                        kind,
+                        ParameterKind::Front | ParameterKind::Back
+                    ),
+                    nearest_tolerance,
+                },
+                geom_vertex,
+                other_surface,
+                tolerances,
+                geom_edge_map,
+            )?;
+            return Some(true);
         };
         self.geom.add_geom_vertex(
             face_index,
@@ -1648,6 +1722,63 @@ where
     Some((pv0, pv1, gv0, gv1))
 }
 
+/// Join independently discovered SSI branches at an already certified
+/// common endpoint. Both the polygonal and exact stores must share vertex
+/// identities, otherwise two curves that geometrically close a contour
+/// remain separate zero-area retraced walks.
+fn share_intersection_endpoint<C, S>(
+    context: &mut BranchContext<'_, C, S>,
+    polygon: &mut Vertex<Point3>,
+    exact: &mut Vertex<Point3>,
+) -> Option<()>
+where
+    C: Clone,
+    S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let precision = context.tolerances;
+    let new_point = exact.point();
+    let compatible = context
+        .endpoint_registry
+        .iter()
+        .filter(|(_, known)| known.point().distance(new_point) <= precision.length)
+        .filter(|(_, known)| {
+            let point = known.point();
+            on_other_carrier(point, context.surfaces[0], precision)
+                && on_other_carrier(point, context.surfaces[1], precision)
+        })
+        .collect::<Vec<_>>();
+    let matching = match compatible.as_slice() {
+        [] => None,
+        [one] => Some((one.0.clone(), one.1.clone())),
+        _ => return None, // distinct existing vertex identities are ambiguous
+    };
+    let Some((old_poly, old_geom)) = matching else {
+        context
+            .endpoint_registry
+            .push((polygon.clone(), exact.clone()));
+        return Some(());
+    };
+    if old_geom.id() == exact.id() {
+        *polygon = old_poly;
+        return Some(());
+    }
+    // The same SSI edge occurs in both Boolean operands. Reconstruct its
+    // identity once, then reuse the replacement in both stores.
+    let mut exact_replacements = HashMap::default();
+    let mut sampled_replacements = HashMap::default();
+    for operand in [&mut *context.operand0, &mut *context.operand1] {
+        operand
+            .geom
+            .change_vertex(exact, &old_geom, &mut exact_replacements);
+        operand
+            .poly
+            .change_vertex(polygon, &old_poly, &mut sampled_replacements);
+    }
+    *polygon = old_poly;
+    *exact = old_geom;
+    Some(())
+}
+
 fn add_open_intersection_branch<C, S>(
     context: &mut BranchContext<'_, C, S>,
     mut polyline: PolylineCurve,
@@ -1693,7 +1824,9 @@ where
     *intersection_curve.leader_mut().first_mut()? = front;
     *intersection_curve.leader_mut().last_mut()? = back;
 
-    let (pv0, pv1, gv0, gv1) = add_branch_boundary_vertices(context, front, back)?;
+    let (mut pv0, mut pv1, mut gv0, mut gv1) = add_branch_boundary_vertices(context, front, back)?;
+    share_intersection_endpoint(context, &mut pv0, &mut gv0)?;
+    share_intersection_endpoint(context, &mut pv1, &mut gv1)?;
     *intersection_curve.leader_mut().first_mut()? = gv0.point();
     *intersection_curve.leader_mut().last_mut()? = gv1.point();
 
@@ -1859,6 +1992,7 @@ where
         .zip(net1.iter())
         .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
         .collect::<Vec<_>>();
+    let mut endpoint_registry = Vec::<(Vertex<Point3>, Vertex<Point3>)>::new();
     let mut shared_ruled_pairs = HashSet::default();
     for (i, left) in net0.iter().enumerate() {
         for (j, right) in net1.iter().enumerate() {
@@ -1943,6 +2077,7 @@ where
                             nearest_tolerance: boundary_search_tolerance,
                             tolerances: boolean_tolerance,
                             reuse_coincident: coplanar.partial_overlap,
+                            endpoint_registry: &mut endpoint_registry,
                         };
                         add_open_intersection_branch(
                             &mut context,

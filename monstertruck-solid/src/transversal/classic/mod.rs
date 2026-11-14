@@ -178,16 +178,6 @@ fn convert_alt_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .ok_or(ShapeOpsError::AltShellConversionFailed { operation })
 }
 
-fn convert_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    regions: &[AltRegion<C, S>],
-    operation: &'static str,
-    tolerances: BooleanTolerance,
-) -> ClassicResult<Shell<Point3, C, S>> {
-    let shell = faces_classification::materialize_regions(regions)
-        .ok_or(ShapeOpsError::RegionMaterializationFailed { operation })?;
-    convert_alt_shell(&shell, operation, tolerances)
-}
-
 fn weld_and_convert<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
     operation: &'static str,
@@ -308,8 +298,8 @@ fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     and0.append(&mut and1);
     or0.append(&mut or1);
     Ok([
-        convert_regions(&and0, "and", BooleanTolerance::new(tol))?,
-        convert_regions(&or0, "or", BooleanTolerance::new(tol))?,
+        weld_and_convert(&and0, "and", BooleanTolerance::new(tol))?,
+        weld_and_convert(&or0, "or", BooleanTolerance::new(tol))?,
     ])
 }
 
