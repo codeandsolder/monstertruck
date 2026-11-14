@@ -1611,3 +1611,57 @@ admission tolerance, source
 geometric surface, or physical
 healing operation budget
 was widened in either change.
+
+## Intersection-curve support inclusion must test the evaluated intersection (2026-11-14)
+
+When two exact carriers intersect, the marching
+leader of an `IntersectionCurve` is a numerical
+**seed/guide**, not the actual evaluated curve.
+`Surface::include` previously accepted an
+intersection against a face's surface when
+either stored carrier had the **same serialized
+parameterization**; otherwise it sampled
+`curve.leader()` and inverted those *approximate
+guide points* onto the face support. That
+rejected a correctly evaluated SSI when its
+marching leader followed a chord away from a
+curved carrier, especially after Boolean face
+division produced a new surface representation.
+
+The non-identical-surface case now uses
+`sampled_curve_lies_on_surface(curve, surface)`
+on the **actual `IntersectionCurve` evaluation**,
+which corrects interior samples using both stored
+exact carriers. It retains the same per-point
+3D support-inclusion test, sampling schedule
+(16 subdivisions) and numerical `near`
+contract; **it neither widens any geometric
+tolerance nor treats proximity of guides as proof**.
+The exact serialized parameterization fast path
+remains unchanged.
+
+Focused unit regression
+`intersection_containment_uses_corrected_curve_not_off_surface_leader`
+builds two transverse exact planes and a
+degree-2 marching leader with *exact endpoints*
+but a 0.005-model-unit interior deflection off
+one plane. The target is a differently
+parameterized copy of that support, so serialized
+identity cannot short-circuit the test. The
+unprojected guide is excluded, the evaluated
+intersection is included, and a truly displaced
+parallel plane remains excluded. Corrected SSI
+endpoints still must lie on the support; this
+change does not excuse inaccurate end vertices.
+
+The accelerated source-derived six-stage
+constructive CAD replay advances through stage5:
+the 47-face upper-rounded result now passes
+`is_geometric_consistent`, whereas previously
+its two curved SSI edges on face4 failed
+`face.surface().include(edge.curve())`. Stage6
+then fails independently at
+`UnknownClassificationFailed { shell_index: 0 }`;
+this commit does not assert full six-stage success.
+The accelerated curve/SSI sampling knobs remain
+exclusive to the experimental branch.
