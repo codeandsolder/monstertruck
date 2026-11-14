@@ -509,6 +509,63 @@ mod surface_identity_tests {
         assert!((last.y + 0.25).abs() < KERNEL_EPSILON);
     }
     #[test]
+    fn intersection_containment_uses_corrected_curve_not_off_surface_leader() {
+        // Two distinct planes intersect along the X axis. The marching
+        // leader bows 0.005 model units off the first plane between exact endpoints;
+        // Newton's evaluated intersection is nevertheless on both carriers.
+        // A different parameterization of the same plane cannot use the
+        // shortcut that compares serialized surface identities.
+        let plane0 = Surface::Plane(Plane::xy());
+        let plane1 = Surface::Plane(Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+        ));
+        let target = Surface::Plane(Plane::new(
+            Point3::new(4.0, 5.0, 0.0),
+            Point3::new(6.0, 5.0, 0.0),
+            Point3::new(4.0, 7.0, 0.0),
+        ));
+        let leader = Curve::BsplineCurve(BsplineCurve::new_unchecked(
+            KnotVector::uniform_knot(2, 1),
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.5, 0.0, 0.01),
+                Point3::new(1.0, 0.0, 0.0),
+            ],
+        ));
+        assert!(!target.include(&leader), "guide is not on target");
+        assert!(!same_surface_parameterization(&plane0, &target));
+        let corrected = Curve::Intersection(SurfaceCurve::with_boundaries(
+            Box::new(plane0),
+            Box::new(plane1),
+            Box::new(leader),
+            None,
+            None,
+        ));
+        let (a, b) = corrected.range_tuple();
+        let middle = corrected.evaluate(f64::midpoint(a, b));
+        assert!(
+            middle.z.abs() < 1.0e-8,
+            "intersection solver must correct the guide: {middle:?}"
+        );
+        assert!(
+            target.include(&corrected),
+            "only the evaluated intersection is the true boundary"
+        );
+
+        let displaced = Surface::Plane(Plane::new(
+            Point3::new(0.0, 0.0, 0.1),
+            Point3::new(1.0, 0.0, 0.1),
+            Point3::new(0.0, 1.0, 0.1),
+        ));
+        assert!(
+            !displaced.include(&corrected),
+            "unrelated support must not be admitted"
+        );
+    }
+
+    #[test]
     fn intersection_curve_on_coincident_support_validates_without_reusing_foreign_uv() {
         let source_surface = Surface::Plane(Plane::xy());
         let target_surface = Surface::Plane(Plane::new(
