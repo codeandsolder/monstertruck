@@ -1,4 +1,4 @@
-# ruff: file-ignore[missing-type-function-argument, missing-return-type-undocumented-public-function]
+# ruff: file-ignore[missing-type-function-argument, missing-return-type-public-function]
 # Dynamic CAD/prototype boundary: ty still checks soundness; exhaustive annotations would be mostly opaque external types.
 import argparse
 import json
@@ -150,7 +150,7 @@ def adaptive_volume_agreement(a, b):
         estimate_b, estimate_b * abs(volume_b)
     )
     tolerance = volume_tolerance(volume_a, volume_b) + error_allowance
-    report = {
+    return {
         "a": {"volume": volume_a, "estimated_error": estimate_a},
         "b": {"volume": volume_b, "estimated_error": estimate_b},
         "delta": delta,
@@ -165,7 +165,6 @@ def adaptive_volume_agreement(a, b):
             and delta <= tolerance
         ),
     }
-    return report
 
 
 def cut_volume(a, b):
