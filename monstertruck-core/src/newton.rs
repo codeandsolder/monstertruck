@@ -122,7 +122,7 @@ mod profiling {
 /// Returns a [`NewtonLog`] when the Jacobian becomes singular or convergence is not reached within `trials`.
 ///
 /// # Panics
-/// Panics if `convergence_step` is non-finite or non-positive.
+/// Panics if `convergence_step` is not finite and strictly positive.
 ///
 /// # Examples
 /// ```
