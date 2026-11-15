@@ -54,7 +54,7 @@ impl_jacobian!(Matrix4, Vector4);
 /// Opt-in iteration histogram for diagnosing expensive CAD projections.
 ///
 /// The solver's success/failure and precision are not changed by collecting
-/// the histogram. Set MT_NEWTON_PROFILE=1 when replaying a real CAD operation.
+/// the histogram. Set `MT_NEWTON_PROFILE=1` when replaying a real CAD operation.
 mod profiling {
     use std::{any::type_name, cell::RefCell, collections::BTreeMap, sync::OnceLock};
 
@@ -76,14 +76,8 @@ mod profiling {
             if enabled() {
                 for (dimension, s) in &self.0 {
                     eprintln!(
-                        "NEWTON_PROFILE vector={} calls={} success={} singular={} cap={} iterations={} bins_1_2_4_8_16_32_64_more={:?}",
-                        dimension,
-                        s.calls,
-                        s.converged,
-                        s.singular,
-                        s.capped,
-                        s.iterations,
-                        s.histogram
+                        "NEWTON_PROFILE vector={dimension} calls={} success={} singular={} cap={} iterations={} bins_1_2_4_8_16_32_64_more={:?}",
+                        s.calls, s.converged, s.singular, s.capped, s.iterations, s.histogram
                     );
                 }
             }
@@ -126,6 +120,9 @@ mod profiling {
 /// Solve equation by Newton's method
 /// # Errors
 /// Returns a [`NewtonLog`] when the Jacobian becomes singular or convergence is not reached within `trials`.
+///
+/// # Panics
+/// Panics if `convergence_step` is not finite and strictly positive.
 ///
 /// # Examples
 /// ```
