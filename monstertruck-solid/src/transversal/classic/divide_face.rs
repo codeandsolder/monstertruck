@@ -8,6 +8,7 @@
 use super::faces_classification::{FacesClassification, cancel_retraced_edge_uses};
 use super::loops_store::{BoundaryWire, Loops, LoopsStore, ShapesOpStatus};
 use super::tolerance::BooleanTolerance;
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::{AnalyticSurfaceKind, TryIntoAnalyticSurfaceKind};
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::{EdgeId, Face, Shell, Wire};
@@ -111,23 +112,43 @@ where
                     .1,
             )
         });
+        // The topological endpoints, not independently evaluated curve
+        // samples, are the boundary of this edge. After a Boolean split an
+        // exact curve can differ from its canonical welded endpoint by a
+        // small, already-admitted endpoint residual. Letting the last
+        // sampled curve point choose the next UV chart representative can
+        // then fail inverse projection or leave adjacent edge charts open.
+        //
+        // Anchor only the first/last sample and ONLY with the existing
+        // explicit curve-endpoint consistency budget. Interior samples
+        // remain the analytic curve's samples; larger endpoint drift is a
+        // genuine topology inconsistency and must be rejected here.
+        let (raw_front, raw_back) = if edge.orientation() {
+            (poly.first()?, poly.last()?)
+        } else {
+            (poly.last()?, poly.first()?)
+        };
+        let endpoint_tol = DEFAULT_NUMERICAL_TOLERANCES.boolean_curve_endpoint_factor * tol;
+        if raw_front.distance(edge.front().point()) > endpoint_tol
+            || raw_back.distance(edge.back().point()) > endpoint_tol
+        {
+            return None;
+        }
+        let mut world_walk = if edge.orientation() {
+            poly.iter().skip(1).copied().collect::<Vec<_>>()
+        } else {
+            poly.iter().rev().skip(1).copied().collect::<Vec<_>>()
+        };
+        *world_walk.last_mut()? = edge.back().point();
         let mut previous = vec.last().copied()?;
         let mut project = |q: &Point3| -> Option<Point2> {
             previous = project_to_parameter(surface, *q, Some(previous), tol)?;
             Some(previous)
         };
-        let mut add = if edge.orientation() {
-            poly.iter()
-                .skip(1)
-                .map(&mut project)
-                .collect::<Option<Vec<_>>>()?
-        } else {
-            poly.iter()
-                .rev()
-                .skip(1)
-                .map(&mut project)
-                .collect::<Option<Vec<_>>>()?
-        };
+        let mut add = world_walk
+            .iter()
+            .map(&mut project)
+            .collect::<Option<Vec<_>>>()?;
         vec.append(&mut add);
     }
     Some(PolylineCurve(vec))
@@ -216,7 +237,10 @@ fn polyline_interior_candidates(poly: &PolylineCurve<Point2>) -> Vec<Point2> {
         let left = Vector2::new(-edge.y, edge.x) / length;
         let inward = if area > 0.0 { left } else { -left };
         let midpoint = a.midpoint(b);
-        for relative in [1.0e-8, 1.0e-6, 1.0e-4, 1.0e-2] {
+        // Prefer an interior witness with enough clearance to survive
+        // downstream mesh/ray tolerance. Very thin true regions still fall
+        // back to progressively smaller offsets.
+        for relative in DEFAULT_NUMERICAL_TOLERANCES.boolean_interior_witness_insets {
             let distance = (scale * relative).min(length * 0.125);
             let candidate = midpoint + inward * distance;
             if domain.include(candidate) {
@@ -228,7 +252,7 @@ fn polyline_interior_candidates(poly: &PolylineCurve<Point2>) -> Vec<Point2> {
     candidates
 }
 
-fn strict_interior_point(poly: &PolylineCurve<Point2>, _tol: f64) -> Option<Point2> {
+fn strict_interior_point(poly: &PolylineCurve<Point2>) -> Option<Point2> {
     polyline_interior_candidates(poly).into_iter().next()
 }
 
@@ -268,6 +292,10 @@ fn split_non_simple_wire<P: Clone, C: Clone>(wire: &Wire<P, C>) -> Vec<Wire<P, C
     simple
 }
 
+// Keep the classifier's strongest independent witnesses, not a large
+// collection of nearby points with correlated numerical error.
+const MAX_REGION_WITNESSES: usize = 9;
+
 pub(super) fn sample_points_on_region<C, S>(
     boundaries: &[Wire<Point3, C>],
     surface: &S,
@@ -305,18 +333,65 @@ where
             }
         })
     };
-    let mut points = Vec::new();
-    for poly in parameter_loops
+    // The first topological edge may lie right on another solid's skin.
+    // Picking its first epsilon-inset witness is not a geometric interior
+    // classification. Rank witnesses by actual clearance to ALL projected
+    // trim segments (including holes), and distribute the strongest samples.
+    let clearance2 = |candidate: Point2| {
+        parameter_loops
+            .iter()
+            .flat_map(|poly| poly.0.windows(2))
+            .map(|segment| {
+                let delta = segment[1] - segment[0];
+                let denom = delta.magnitude2();
+                let t = if denom > 0.0 {
+                    ((candidate - segment[0]).dot(delta) / denom).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (candidate - (segment[0] + delta * t)).magnitude2()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let mut candidates = parameter_loops
         .iter()
         .filter(|poly| polyline_signed_area(poly) > 0.0)
-    {
-        for uv in polyline_interior_candidates(poly) {
-            if winding_at(uv) > 0 {
-                points.push(surface.evaluate(uv.x, uv.y));
-                break;
-            }
-        }
+        .flat_map(polyline_interior_candidates)
+        .filter(|&uv| winding_at(uv) > 0)
+        .map(|uv| (clearance2(uv), uv))
+        .filter(|(distance, _)| distance.is_finite() && *distance > 0.0)
+        .collect::<Vec<_>>();
+    candidates.sort_by(|lhs, rhs| rhs.0.total_cmp(&lhs.0));
+    let mut chosen = Vec::<Point2>::new();
+    if let Some((_, uv)) = candidates.first() {
+        chosen.push(*uv);
     }
+    while chosen.len() < MAX_REGION_WITNESSES {
+        let next = candidates
+            .iter()
+            .filter(|(_, uv)| {
+                chosen
+                    .iter()
+                    .all(|p| (*p - *uv).magnitude2() > f64::EPSILON)
+            })
+            .max_by(|(clear0, p0), (clear1, p1)| {
+                let score = |clearance: &f64, point: &Point2| {
+                    let distance = chosen
+                        .iter()
+                        .map(|p| (*p - *point).magnitude2())
+                        .fold(f64::INFINITY, f64::min);
+                    clearance.min(distance)
+                };
+                score(clear0, p0).total_cmp(&score(clear1, p1))
+            })
+            .map(|(_, uv)| *uv);
+        let Some(next) = next else { break };
+        chosen.push(next);
+    }
+    let points = chosen
+        .into_iter()
+        .map(|uv| surface.evaluate(uv.x, uv.y))
+        .collect::<Vec<_>>();
     (!points.is_empty()).then_some(points)
 }
 
@@ -366,7 +441,7 @@ fn polyline_area_epsilon(poly: &PolylineCurve<Point2>) -> f64 {
     let height = (max_y - min_y).abs();
     let bbox_area = width * height;
     if bbox_area.is_finite() {
-        KERNEL_EPSILON * bbox_area
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_uv_loop_area_relative * bbox_area
     } else {
         f64::INFINITY
     }
@@ -437,7 +512,7 @@ fn uv_boundaries_meet(lhs: &PolylineCurve<Point2>, rhs: &PolylineCurve<Point2>) 
     if !scale.is_finite() || scale <= 0.0 {
         return true;
     }
-    let tol2 = (KERNEL_EPSILON * scale).powi(2);
+    let tol2 = (DEFAULT_NUMERICAL_TOLERANCES.boolean_uv_boundary_contact_relative * scale).powi(2);
     let cross = |a: Vector2, b: Vector2| a.x.mul_add(b.y, -(a.y * b.x));
     let near_segment = |p: Point2, a: Point2, b: Point2| {
         let ab = b - a;
@@ -547,7 +622,7 @@ where
             Some(())
         })?;
     negative_wires.into_iter().try_for_each(|mut chunk| {
-        let witness = strict_interior_point(&chunk.poly, tol)?;
+        let witness = strict_interior_point(&chunk.poly)?;
         let chunk_area_abs = polyline_signed_area(&chunk.poly).abs();
 
         // Build the nesting relation from geometry, not Boolean status or shared
@@ -631,6 +706,44 @@ mod uv_area_tests {
     use super::*;
 
     #[test]
+    fn trimmed_region_samples_spatially_separated_interior_not_boundary_epsilon() {
+        use monstertruck_geometry::prelude::{Line, Plane};
+        use monstertruck_modeling::{Curve, Surface};
+        use monstertruck_topology::{Edge, Vertex};
+        let corners = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(10.0, 2.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+        ];
+        let vertices = corners.map(Vertex::new);
+        let edges = (0..4)
+            .map(|i| {
+                let j = (i + 1) % 4;
+                Edge::new_unchecked(
+                    &vertices[i],
+                    &vertices[j],
+                    Curve::from(Line(corners[i], corners[j])),
+                )
+            })
+            .collect::<Vec<_>>();
+        let wire = Wire::from(edges);
+        let surface = Surface::Plane(Plane::xy());
+        let samples = sample_points_on_region(&[wire], &surface, 1.0e-6)
+            .expect("rectangular trimmed region should give interior witnesses");
+        assert!(
+            samples.len() > 1,
+            "multiple witnesses protect against a bad boundary ray"
+        );
+        assert!(
+            samples
+                .iter()
+                .any(|p| { p.x > 0.1 && p.x < 9.9 && p.y > 0.1 && p.y < 1.9 }),
+            "at least one witness must have macroscopic clearance, not just epsilon inset"
+        );
+    }
+
+    #[test]
     fn real_thin_uv_region_is_not_degenerate() {
         let poly = PolylineCurve(vec![
             Point2::new(0.0, 0.0),
@@ -692,9 +805,21 @@ where
         .enumerate()
         .try_for_each(|(source_face, (face, loops))| {
             let sampled_loops = sampled_store.and_then(|sampled| sampled.get(source_face));
-            if loops
-                .iter()
-                .all(|wire| wire.status() == ShapesOpStatus::Unknown)
+            // Unknown is a classification state, not proof that the face
+            // has not been partitioned. Preserve the unsplit fast path
+            // only when every boundary use is still the original one.
+            let original = face.absolute_boundaries();
+            let same_geometry = loops.len() == original.len()
+                && loops.iter().zip(original).all(|(candidate, source)| {
+                    candidate.len() == source.len()
+                        && candidate.iter().zip(source).all(|(lhs, rhs)| {
+                            lhs.id() == rhs.id() && lhs.orientation() == rhs.orientation()
+                        })
+                });
+            if same_geometry
+                && loops
+                    .iter()
+                    .all(|wire| wire.status() == ShapesOpStatus::Unknown)
             {
                 res.push(face, ShapesOpStatus::Unknown, source_face);
             } else {
@@ -787,6 +912,90 @@ mod tests {
                 vec![front.point(), back.point()],
             ),
         )
+    }
+
+    #[test]
+    fn all_unknown_imprinted_loops_still_divide_the_source_face() {
+        use monstertruck_geometry::prelude::Plane;
+        let point = |x, y| Vertex::new(Point3::new(x, y, 0.0));
+        let outer = [
+            point(0.0, 0.0),
+            point(4.0, 0.0),
+            point(4.0, 4.0),
+            point(0.0, 4.0),
+        ];
+        let inner = [
+            point(1.0, 1.0),
+            point(3.0, 1.0),
+            point(3.0, 3.0),
+            point(1.0, 3.0),
+        ];
+        let perimeter = |vertices: &[Vertex<Point3>; 4]| -> Wire<Point3, BsplineCurve<Point3>> {
+            (0..4)
+                .map(|i| test_line(&vertices[i], &vertices[(i + 1) % 4]))
+                .collect()
+        };
+        let outer_wire = perimeter(&outer);
+        let inner_wire = perimeter(&inner);
+        let source = Face::new(vec![outer_wire.clone()], Plane::xy()).expect("valid source face");
+        let loops: Loops<_, _> = vec![
+            BoundaryWire::new(outer_wire, ShapesOpStatus::Unknown),
+            BoundaryWire::new(inner_wire.clone(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(inner_wire.inverse(), ShapesOpStatus::Unknown),
+        ]
+        .into_iter()
+        .collect();
+        let mut store: LoopsStore<_, _> = std::iter::once(&source).collect();
+        store[0] = loops;
+        let divided = divide_faces(&Shell::from(vec![source]), &store, None, 1.0e-6)
+            .expect("valid new Unknown contours must not be discarded");
+        let [and, or, unknown] = divided.and_or_unknown();
+        assert!(and.is_empty() && or.is_empty());
+        assert_eq!(
+            unknown.len(),
+            2,
+            "unknown classification still requires separate inner and outer geometric regions"
+        );
+    }
+
+    #[test]
+    fn parameter_wire_uses_certified_topological_endpoints_not_drifting_curve_samples() {
+        // A split curve is only approximate at its canonical endpoint.
+        // Using that curve-evaluated endpoint directly fails the plane's
+        // 1-um inverse projection; the true welded vertex is on the plane.
+        let front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let make_wire = |drift: f64| {
+            let curve = BsplineCurve::new_unchecked(
+                KnotVector::bezier_knot(1),
+                vec![front.point(), Point3::new(1.0, 0.0, drift)],
+            );
+            Wire::from(vec![Edge::new_unchecked(&front, &back, curve)])
+        };
+        let mut polys = HashMap::default();
+        let recovered = create_parameter_boundary_on_surface(
+            &Plane::xy(),
+            &make_wire(1.53e-6),
+            None,
+            &mut polys,
+            1.0e-6,
+        )
+        .expect("a certified split-curve endpoint maps to the topological vertex");
+        assert_eq!(recovered.front(), Point2::new(0.0, 0.0));
+        assert_eq!(recovered.back(), Point2::new(1.0, 0.0));
+
+        let mut polys = HashMap::default();
+        assert!(
+            create_parameter_boundary_on_surface(
+                &Plane::xy(),
+                &make_wire(1.0e-3),
+                None,
+                &mut polys,
+                1.0e-6,
+            )
+            .is_none(),
+            "curve endpoints outside the explicit endpoint-consistency budget must fail"
+        );
     }
 
     #[test]

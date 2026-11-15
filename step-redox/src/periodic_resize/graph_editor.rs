@@ -6,6 +6,7 @@ use crate::step_graph::{
     visit_entity_refs,
 };
 use anyhow::{Result, anyhow, bail};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Name, Parameter, Record};
 use std::collections::{HashMap, HashSet};
 
@@ -670,7 +671,7 @@ impl<'a> GraphEditor<'a> {
             .find(|loop_| loop_.outer)
             .ok_or_else(|| anyhow!("face #{face} has no source outer loop"))?;
         let ref_area = self.area_vector(&source_outer.traversal)?;
-        if norm(ref_area) <= 1.0e-12 {
+        if norm(ref_area) <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_periodic_area_min {
             bail!("face #{face} source outer loop has zero area");
         }
         let hole_sign = if let Some(hole) = source_loops.iter().find(|loop_| !loop_.outer) {

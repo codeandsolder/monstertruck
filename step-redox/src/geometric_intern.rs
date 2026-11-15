@@ -3,14 +3,15 @@ use crate::step_entities::{cartesian_point, direction_components as direction, n
 use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, rewrite_entity_refs, simple_record,
 };
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter};
 use std::collections::{HashMap, HashSet};
 
-const POS_TOL_MM: f64 = 1.0e-5;
-const SCALAR_TOL_MM: f64 = 1.0e-5;
+const POS_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.geometric_intern_position_mm;
+const SCALAR_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.geometric_intern_scalar_mm;
 // Direction is dimensionless. Keep this much tighter than position: an angular
 // error can accumulate over a long surface even when its origin matches.
-const DIR_TOL: f64 = 1.0e-10;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.geometric_intern_direction;
 // Reusing the same infinite line with a very distant exporter-local origin can
 // make tolerant STEP importers retrim otherwise unchanged EDGE_CURVEs
 // differently. Keep the canonical origin reasonably local to every edge.

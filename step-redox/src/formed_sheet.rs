@@ -6,6 +6,7 @@ use crate::step_entities::{
     cartesian_point, direction_components as direction, number as numeric_value,
 };
 use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -20,8 +21,8 @@ pub use reference_skin::{
 #[cfg(test)]
 use reference_skin::{closest_axis_intersection, rational_bezier_point};
 
-const GEOM_TOL_MM: f64 = 1.0e-5;
-const DIR_TOL: f64 = 1.0e-10;
+const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.sheet_geometry_mm;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.formed_sheet_direction;
 const MIN_COAXIAL_PAIRS: usize = 3;
 const MIN_PARALLEL_PLANE_PAIRS: usize = 2;
 const MIN_PROJECTED_OVERLAP_RATIO: f64 = 0.5;

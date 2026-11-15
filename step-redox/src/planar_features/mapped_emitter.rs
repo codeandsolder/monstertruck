@@ -7,6 +7,7 @@ use super::{
     representation_items_and_context, rigid_translation, simple_record, simple_record_mut,
     toggle_tf,
 };
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum StyleKey {
@@ -334,23 +335,25 @@ fn apply_mapped_feature_plan(
                     % 4;
                 let translation =
                     rigid_translation(canonical.candidate.center, member.candidate.center, quarter);
-                let target_axis =
-                    if quarter == 0 && translation.iter().all(|value| value.abs() <= 1.0e-12) {
-                        origin_axis
-                    } else {
-                        let point = push_point(entities, &mut next_id, translation);
-                        push_simple(
-                            entities,
-                            &mut next_id,
-                            "AXIS2_PLACEMENT_3D",
-                            vec![
-                                Parameter::String(String::new()),
-                                entity_ref(point),
-                                entity_ref(z_dir),
-                                entity_ref(x_dirs[quarter as usize]),
-                            ],
-                        )
-                    };
+                let target_axis = if quarter == 0
+                    && translation.iter().all(|value| {
+                        value.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_transform
+                    }) {
+                    origin_axis
+                } else {
+                    let point = push_point(entities, &mut next_id, translation);
+                    push_simple(
+                        entities,
+                        &mut next_id,
+                        "AXIS2_PLACEMENT_3D",
+                        vec![
+                            Parameter::String(String::new()),
+                            entity_ref(point),
+                            entity_ref(z_dir),
+                            entity_ref(x_dirs[quarter as usize]),
+                        ],
+                    )
+                };
                 let mapped = push_simple(
                     entities,
                     &mut next_id,

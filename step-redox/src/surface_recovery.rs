@@ -6,15 +6,16 @@ use crate::step_entities::{
 use crate::step_graph::{
     build_index, entity_id, entity_ref_value, simple_record, visit_entity_refs,
 };
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 use std::collections::{HashMap, HashSet};
 
 // Geometry below 10 nm is exporter noise for the ECAD/display corpus.  Do not
 // let sub-1e-5 mm differences prevent semantic recovery; parameter/weight
 // checks remain stricter where they affect the actual STEP parameterization.
-const GEOMETRY_TOLERANCE: f64 = 1.0e-5;
-const WEIGHT_TOLERANCE: f64 = 1.0e-12;
-const PARAMETER_TOLERANCE: f64 = 1.0e-12;
+const GEOMETRY_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.surface_geometry_mm;
+const WEIGHT_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.surface_weight_relative;
+const PARAMETER_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.surface_parameter;
 
 #[derive(Debug, Default, Clone)]
 pub struct VExtrusionStats {
@@ -498,12 +499,15 @@ fn oriented_planar_control_net_normal(grid: &[Vec<[f64; 3]>]) -> Option<[f64; 3]
                 if !length.is_finite() || !scale.is_finite() {
                     return None;
                 }
-                if length <= 1.0e-12 * scale {
+                if length <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_straightness_length_mm * scale
+                {
                     continue;
                 }
                 let normal = normalize(cross_uv)?;
                 if let Some(previous) = reference {
-                    if dot(normal, previous) < 1.0 - 1.0e-8 {
+                    if dot(normal, previous)
+                        < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_axis_direction_cosine
+                    {
                         return None;
                     }
                 } else {

@@ -3,6 +3,7 @@ use super::{
     ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
     SurfaceParameterRange, Tolerance, VectorSpace, Zero, newton, scalar_from_usize, surface,
 };
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use surface::{SearchNearestParameterVector, SearchParameterVector};
 
 /// Divides the domain into equal parts, examines all the values, and returns `t` such that `curve.evaluate(t)` is closest to `point`.
@@ -51,7 +52,13 @@ where
             derivation: der2.dot(diff) + der.magnitude2(),
         }
     };
-    newton::solve(function, hint, trials).ok()
+    newton::solve(
+        function,
+        hint,
+        trials,
+        DEFAULT_NUMERICAL_TOLERANCES.newton_curve_parameter_step,
+    )
+    .ok()
 }
 
 /// Searches the parameter by Newton's method.
@@ -68,9 +75,14 @@ where
             derivation: der.magnitude2(),
         }
     };
-    newton::solve(function, hint, trials)
-        .ok()
-        .filter(|&t| curve.evaluate(t).to_vec().near(&point.to_vec()))
+    newton::solve(
+        function,
+        hint,
+        trials,
+        DEFAULT_NUMERICAL_TOLERANCES.newton_curve_parameter_step,
+    )
+    .ok()
+    .filter(|&t| curve.evaluate(t).to_vec().near(&point.to_vec()))
 }
 
 /// Creates the curve division

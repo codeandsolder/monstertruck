@@ -1,3 +1,4 @@
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use num_traits::ToPrimitive;
 
 /// Internal numerical consistency bound, measured in millimetres.
@@ -5,7 +6,7 @@ use num_traits::ToPrimitive;
 /// This is for evaluating geometry the kernel has *already* constructed and
 /// for proving exact geometric identities. It is not a supplier-model
 /// feature-healing threshold.
-pub const NUMERICAL_GEOMETRY_TOL_MM: f64 = 1.0e-7;
+pub const NUMERICAL_GEOMETRY_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm;
 
 /// Default absolute deviation budget for recognizing an *intended* common
 /// feature in imported supplier CAD, measured in millimetres (10 micrometres).
@@ -14,7 +15,7 @@ pub const NUMERICAL_GEOMETRY_TOL_MM: f64 = 1.0e-7;
 /// bodies, collapse genuine small features, or accept a non-manifold result.
 /// A healing operation must still build a coherent common curve/surface and
 /// validate its output topology. Keep numerical consistency tests separate.
-pub const DEFAULT_FEATURE_HEAL_TOL_MM: f64 = 0.01;
+pub const DEFAULT_FEATURE_HEAL_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.feature_heal_mm;
 
 /// Can two measurements be treated as the same *intended* feature?
 ///

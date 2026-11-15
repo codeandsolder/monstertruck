@@ -3,6 +3,7 @@ use super::{entity_ref, entity_ref_list, list_params, numeric_value, quantize_co
 use crate::periodic_chains::PeriodicChainPattern;
 use crate::step_graph::entity_ref_value;
 use anyhow::{Result, anyhow, bail};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::{HashMap, HashSet};
 
@@ -456,7 +457,10 @@ fn chain_rational_single_span_key(
                 let value = numeric_value(item)
                     .filter(|value| value.is_finite() && *value > 0.0)
                     .ok_or_else(|| anyhow!("complex seam curve #{curve} has invalid weight"))?;
-                Ok((value * 1.0e12).round() as i64)
+                Ok(
+                    (value * DEFAULT_STEP_RECOVERY_TOLERANCES.source_periodic_weld_quantization_inv)
+                        .round() as i64,
+                )
             })
             .collect::<Result<Vec<_>>>()?,
         _ => bail!("complex seam curve #{curve} has invalid rational weights"),

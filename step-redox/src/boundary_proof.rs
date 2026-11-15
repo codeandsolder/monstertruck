@@ -1,14 +1,15 @@
 use crate::brep::{self, BSplineSupport, CurveSupport, SplineExtrusionSupport, SurfaceSupport};
 use crate::math3::{add, canonical_direction, cross, distance, dot, mul, norm, normalize, sub};
 use crate::step_graph::{build_index, entity_ref_value, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use num_traits::ToPrimitive;
 use ruststep::ast::{EntityInstance, Parameter};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-const POINT_Q_MM: f64 = 1.0e-7;
-const DIRECTION_Q: f64 = 1.0e-10;
-const SCALAR_Q_MM: f64 = 1.0e-7;
+const POINT_Q_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_point_quant_mm;
+const DIRECTION_Q: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_direction_quant;
+const SCALAR_Q_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_scalar_quant_mm;
 const BINOMIAL_2: [f64; 3] = [1.0, 2.0, 1.0];
 const BINOMIAL_4: [f64; 5] = [1.0, 4.0, 6.0, 4.0, 1.0];
 pub(crate) const ANALYTIC_BOUNDARY_PROOF_TOL_MM: f64 = 4.0 * SCALAR_Q_MM;
@@ -942,8 +943,12 @@ fn boundary_surface_support(
 ) -> SurfaceSupport {
     let constructive = brep::surface_support(surface_id, entities, index);
     if matches!(constructive, SurfaceSupport::SplineExtrusion(_))
-        && let Some(plane) =
-            crate::surface_recovery::analyze_planar_surface(surface_id, entities, index, 1.0e-7)
+        && let Some(plane) = crate::surface_recovery::analyze_planar_surface(
+            surface_id,
+            entities,
+            index,
+            DEFAULT_STEP_RECOVERY_TOLERANCES.source_analytic_fit_mm,
+        )
     {
         return SurfaceSupport::Plane(brep::PlaneSupport {
             origin_mm: plane.origin_mm,
@@ -1013,7 +1018,7 @@ fn spline_extrusion_cylinder_key(
     surface: &SplineExtrusionSupport,
     forward: bool,
 ) -> Option<OrientedSupportKey> {
-    const FIT_TOL_MM: f64 = 1.0e-7;
+    const FIT_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.source_analytic_fit_mm;
 
     if surface.max_residual_mm > FIT_TOL_MM {
         return None;
@@ -1051,7 +1056,7 @@ fn spline_extrusion_cylinder_key(
         return None;
     }
 
-    let delta_t = (t1 - t0) * 1.0e-5;
+    let delta_t = (t1 - t0) * DEFAULT_STEP_RECOVERY_TOLERANCES.source_boundary_tangent_fraction;
     if !delta_t.is_finite() || delta_t.abs() <= f64::EPSILON {
         return None;
     }

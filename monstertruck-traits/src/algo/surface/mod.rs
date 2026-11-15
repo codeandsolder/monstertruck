@@ -1,3 +1,4 @@
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use newton::Jacobian;
 
 use super::{
@@ -298,9 +299,10 @@ impl SearchNearestParameterVector for Vector2 {
     where
         S: ParametricSurface<Point = Point2, Vector = Self>,
     {
+        let (sample, du, dv) = surface.evaluate_with_first_derivatives(u, v);
         CalcOutput {
-            value: surface.evaluate(u, v) - point,
-            derivation: Matrix2::from_cols(surface.derivative_u(u, v), surface.derivative_v(u, v)),
+            value: sample - point,
+            derivation: Matrix2::from_cols(du, dv),
         }
     }
     fn into_param(self) -> (f64, f64) { self.into() }
@@ -318,12 +320,9 @@ impl SearchNearestParameterVector for Vector3 {
     where
         S: ParametricSurface<Point = Self::Point, Vector = Self>,
     {
-        let diff = surface.evaluate(u, v) - point;
-        let uder = surface.derivative_u(u, v);
-        let vder = surface.derivative_v(u, v);
-        let uuder = surface.derivative_uu(u, v);
-        let uvder = surface.derivative_uv(u, v);
-        let vvder = surface.derivative_vv(u, v);
+        let (sample, uder, vder, uuder, uvder, vvder) =
+            surface.evaluate_with_second_derivatives(u, v);
+        let diff = sample - point;
         let uv_cross = uder.cross(vder);
         CalcOutput {
             value: diff + uv_cross * w,
@@ -352,7 +351,12 @@ where
     S: ParametricSurface<Point = P, Vector = P::Diff>,
 {
     let function = move |param: P::Diff| SearchNearestParameterVector::subs(surface, point, param);
-    let res = newton::solve(function, P::Diff::from_param(hint), trials);
+    let res = newton::solve(
+        function,
+        P::Diff::from_param(hint),
+        trials,
+        DEFAULT_NUMERICAL_TOLERANCES.newton_surface_parameter_step,
+    );
     res.ok().map(P::Diff::into_param)
 }
 
@@ -392,9 +396,8 @@ impl SearchParameterVector for Vector3 {
     where
         S: ParametricSurface<Point = Self::Point, Vector = Self>,
     {
-        let diff = surface.evaluate(u, v) - point;
-        let uder = surface.derivative_u(u, v);
-        let vder = surface.derivative_v(u, v);
+        let (sample, uder, vder) = surface.evaluate_with_first_derivatives(u, v);
+        let diff = sample - point;
         CalcOutput {
             value: Vector2::new(uder.dot(diff), vder.dot(diff)),
             derivation: Matrix2::new(
@@ -421,7 +424,12 @@ where
     S: ParametricSurface<Point = P, Vector = P::Diff>,
 {
     let function = move |param: Vector2| SearchParameterVector::subs(surface, point, param);
-    let res = newton::solve(function, hint.into(), trials);
+    let res = newton::solve(
+        function,
+        hint.into(),
+        trials,
+        DEFAULT_NUMERICAL_TOLERANCES.newton_surface_parameter_step,
+    );
     res.ok().and_then(|Vector2 { x: u, y: v }| {
         if surface.evaluate(u, v).near(&point) {
             Some((u, v))
@@ -452,7 +460,13 @@ where
         ),
     };
     let hint = Vector3::new(hint0.0, hint0.1, hint1);
-    let Vector3 { x, y, z } = newton::solve(function, hint, trials).ok()?;
+    let Vector3 { x, y, z } = newton::solve(
+        function,
+        hint,
+        trials,
+        DEFAULT_NUMERICAL_TOLERANCES.newton_surface_curve_parameter_step,
+    )
+    .ok()?;
     if surface.evaluate(x, y).near(&curve.evaluate(z)) {
         Some(((x, y), z))
     } else {

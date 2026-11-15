@@ -17,6 +17,7 @@ use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
 };
 use anyhow::{Result, bail};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -29,7 +30,7 @@ const MAX_FEATURE_FACES: usize = 128;
 const MAX_BOUNDARY_FEATURE_FACES: usize = 4096;
 const MIN_BOUNDARY_HOST_BOUNDS: usize = 2;
 const MIN_BOUNDARY_HOST_EDGES: usize = 6;
-const SIDE_TOLERANCE: f64 = 1.0e-8;
+const SIDE_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.planar_feature_side;
 
 #[derive(Debug, Default, Clone)]
 pub struct PlanarFeatureStats {
@@ -313,7 +314,7 @@ pub fn diagnose_open_chain_patterns(entities: &[EntityInstance]) -> OpenChainDia
     const MIN_LOOP_EDGES: usize = 16;
     const MAX_MOTIF_EDGES: usize = 32;
     const MIN_REPEATS: usize = 4;
-    const TOL: f64 = 1.0e-7;
+    const TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.planar_feature_fit_mm;
 
     let mut report = OpenChainDiagnostics::default();
     if entities.is_empty() {
@@ -1247,8 +1248,14 @@ fn diagnose_boundary_features_with_index_filtered(
                 .iter()
                 .map(|member| member.center)
                 .collect::<Vec<_>>();
-            let lattice = fit_point_lattice(&centers, 1.0e-7);
-            let motif_pattern = factor_point_motif_pattern(&centers, 1.0e-7);
+            let lattice = fit_point_lattice(
+                &centers,
+                DEFAULT_STEP_RECOVERY_TOLERANCES.planar_feature_fit_mm,
+            );
+            let motif_pattern = factor_point_motif_pattern(
+                &centers,
+                DEFAULT_STEP_RECOVERY_TOLERANCES.planar_feature_fit_mm,
+            );
             BoundaryFeatureFamilyEvidence {
                 shell_id,
                 polarity,

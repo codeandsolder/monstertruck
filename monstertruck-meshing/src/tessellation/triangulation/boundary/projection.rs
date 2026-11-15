@@ -12,11 +12,11 @@
 
 use super::{
     BoundedCurve, EuclideanSpace, ExactParameterBoundary2D, ExactTrimBoundary2D, HashMap,
-    InnerSpace, KERNEL_EPSILON, MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D,
-    ParametricSurface3D, Point2, Point3, PolylineCurve, PreMeshableSurface, SP, SurfacePoint,
-    Tolerance, algo, env, mesh, periodic_min_difference, projection_debug_enabled,
+    InnerSpace, MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D,
+    Point2, Point3, PolylineCurve, PreMeshableSurface, SP, SurfacePoint, Tolerance, algo, env,
+    mesh, native_boundary_slack, periodic_min_difference, projection_debug_enabled,
     projection_debug_face, report_projection_failure, report_projection_outcome, resample_boundary,
-    simplify_parameter_boundary,
+    sampled_periodic_collapse, simplify_parameter_boundary,
 };
 use mesh::spade_round;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
@@ -180,10 +180,17 @@ impl PolyBoundaryPiece {
         })
     }
 
-    fn clamp_near_range(value: f64, (min, max): (f64, f64)) -> f64 {
-        if value < min && min - value < KERNEL_EPSILON {
+    fn clamp_near_range(value: f64, range: (f64, f64)) -> f64 {
+        let Some(slack) = native_boundary_slack(
+            range,
+            DEFAULT_NUMERICAL_TOLERANCES.mesh_projection_parameter_relative,
+        ) else {
+            return value;
+        };
+        let (min, max) = range;
+        if value < min && min - value <= slack {
             min
-        } else if value > max && value - max < KERNEL_EPSILON {
+        } else if value > max && value - max <= slack {
             max
         } else {
             value
@@ -529,9 +536,13 @@ impl PolyBoundaryPiece {
         period: Option<f64>,
         range: Option<(f64, f64)>,
     ) -> Option<f64> {
-        if !value.is_finite() {
-            None
-        } else if let Some(previous) = previous {
+        if !value.is_finite()
+            || previous.is_some_and(|previous| !previous.is_finite())
+            || period.is_some_and(|period| !period.is_finite() || period <= 0.0)
+        {
+            return None;
+        }
+        if let Some(previous) = previous {
             if let Some(period) = period {
                 Some(periodic_min_difference(value, previous, period))
             } else if let Some(range) = range {
@@ -541,8 +552,13 @@ impl PolyBoundaryPiece {
             }
         } else if let Some((min, max)) = range {
             if let Some(period) = period {
+                // A small *native* parameter interval is not degenerate
+                // merely because its numerical width is below the global
+                // world-distance epsilon.
                 let span = max - min;
-                if span.so_small() {
+                if !span.is_finite() || span < 0.0 {
+                    None
+                } else if span == 0.0 {
                     Some(min)
                 } else {
                     let mut normalized = f64::floor((value - min) / period).mul_add(-period, value);
@@ -568,8 +584,19 @@ impl PolyBoundaryPiece {
         previous: Option<(f64, f64)>,
     ) -> Option<(f64, f64)> {
         let (urange, vrange) = surface.try_range_tuple();
-        let u = Self::normalize_axis(uv.0, previous.map(|(u, _)| u), surface.period_u(), urange)?;
-        let v = Self::normalize_axis(uv.1, previous.map(|(_, v)| v), surface.period_v(), vrange)?;
+        let (real_u, real_v) = surface.parameter_bounds_are_intrinsic();
+        let u = Self::normalize_axis(
+            uv.0,
+            previous.map(|(u, _)| u),
+            surface.period_u(),
+            urange.filter(|_| real_u),
+        )?;
+        let v = Self::normalize_axis(
+            uv.1,
+            previous.map(|(_, v)| v),
+            surface.period_v(),
+            vrange.filter(|_| real_v),
+        )?;
         Some((u, v))
     }
 
@@ -579,10 +606,50 @@ impl PolyBoundaryPiece {
         uder.dot(uder) + vder.dot(vder)
     }
 
-    #[expect(
-        clippy::tuple_array_conversions,
-        reason = "the two parameter-range endpoints are intentionally materialized as a fixed array for iteration"
-    )]
+    /// Recover a genuine periodic pole at either bounded parameter endpoint.
+    ///
+    /// A local +1-parameter check is not proof of periodic collapse. The
+    /// periodic axis may be U or V and its native period is not necessarily
+    /// one; sample a complete turn in physical 3D instead.
+    fn recover_periodic_pole<S: PreMeshableSurface>(
+        surface: &S,
+        point: Point3,
+        previous: (f64, f64),
+    ) -> Option<(f64, f64)> {
+        let (u_range, v_range) = surface.try_range_tuple();
+        [
+            (0usize, u_range, surface.period_v()),
+            (1usize, v_range, surface.period_u()),
+        ]
+        .into_iter()
+        .filter_map(|(bounded_axis, range, period)| {
+            let (lower, upper) = range?;
+            let period = period?;
+            (lower.is_finite()
+                && upper.is_finite()
+                && lower <= upper
+                && period.is_finite()
+                && period > 0.0)
+                .then_some((bounded_axis, [lower, upper], period))
+        })
+        .flat_map(|(bounded_axis, bounds, period)| {
+            bounds
+                .into_iter()
+                .map(move |boundary| (bounded_axis, boundary, period))
+        })
+        .find_map(|(bounded_axis, boundary, period)| {
+            let mut uv = Point2::new(previous.0, previous.1);
+            uv[bounded_axis] = boundary;
+            let pole = surface.evaluate(uv.x, uv.y);
+            let at_pole = pole.distance2(point)
+                <= DEFAULT_NUMERICAL_TOLERANCES
+                    .mesh_singularity_distance
+                    .powi(2);
+            (at_pole && sampled_periodic_collapse(surface, 1 - bounded_axis, uv, period))
+                .then_some((uv.x, uv.y))
+        })
+    }
+
     fn project_loop<S: PreMeshableSurface>(
         surface: &S,
         boundary: &[Point3],
@@ -607,32 +674,10 @@ impl PolyBoundaryPiece {
                     .take()
                     .or_else(|| sp(surface, pt, *previous))
                     .or_else(|| {
-                        // Revolve-pole fallback. At the revolution axis the surface
-                        // is singular -- every v maps to the same 3D point -- so the
-                        // parameter search (both exact and nearest) can fail to
-                        // converge there and return `None`. The pole nonetheless
-                        // coincides with a u-endpoint for EVERY v, so reuse the
-                        // adjacent vertex's v and let the singular-bridge below
-                        // carry the loop across the pole, instead of dropping the
-                        // entire face's mesh (the corner-100 in-cube polar cap).
-                        //
-                        // Gate on v-invariance of the u-endpoint (the exact,
-                        // scale-free signature of a revolution pole) so this fires
-                        // only at a genuine axis point, never masking a real
-                        // projection failure; the vertex only has to sit within a
-                        // coarse mesh chord of that pole (a boundary polyline sample
-                        // near the pole is a fraction off the exact axis point).
-                        let (_, v_prev) = (*previous)?;
-                        let (u0, u1) = surface.try_range_tuple().0?;
-                        [u0, u1].into_iter().find_map(|u_end| {
-                            let pole = surface.evaluate(u_end, v_prev);
-                            let is_pole = pole.near(&surface.evaluate(u_end, v_prev + 1.0));
-                            let at_pole = (pole - pt).magnitude2()
-                                < DEFAULT_NUMERICAL_TOLERANCES
-                                    .mesh_singularity_distance
-                                    .powi(2);
-                            (is_pole && at_pole).then_some((u_end, v_prev))
-                        })
+                        // A numerical inverse is undefined at a periodic pole.
+                        // Recover a bounded endpoint only after checking that
+                        // its entire native periodic orbit collapses in 3D.
+                        Self::recover_periodic_pole(surface, pt, (*previous)?)
                     })
                     .or_else(|| {
                         let uv = verified_footpoint(surface, pt, (*previous)?, tolerance)?;
@@ -787,5 +832,150 @@ impl PolyBoundaryPiece {
             }
         }
         Some(Self(vec))
+    }
+}
+
+#[cfg(test)]
+mod numerical_projection_tests {
+    use super::*;
+    use monstertruck_geometry::prelude::{
+        BsplineSurface, Invertible, KnotVector, Line, Matrix4, ParametricSurface, Plane, Processor,
+        RevolutionSurface, Vector3,
+    };
+
+    #[test]
+    fn projection_respects_intrinsic_bounded_vs_synthetic_plane_ranges() {
+        let plane = Plane::xy();
+        let sample = (1.0 + 5.0e-7, -5.0e-7);
+        assert_eq!(
+            plane.try_range_tuple(),
+            (Some((0.0, 1.0)), Some((0.0, 1.0)))
+        );
+        assert_eq!(plane.parameter_bounds_are_intrinsic(), (false, false));
+        assert_eq!(
+            PolyBoundaryPiece::normalize_uv(&plane, sample, None),
+            Some(sample)
+        );
+
+        let mut wrapped: Processor<_, Matrix4> = Processor::new(plane);
+        assert_eq!(wrapped.parameter_bounds_are_intrinsic(), (false, false));
+        assert_eq!(
+            PolyBoundaryPiece::normalize_uv(&wrapped, sample, None),
+            Some(sample)
+        );
+        wrapped.invert();
+        assert_eq!(wrapped.parameter_bounds_are_intrinsic(), (false, false));
+        assert_eq!(
+            PolyBoundaryPiece::normalize_uv(&wrapped, sample, None),
+            Some(sample)
+        );
+
+        let knots = KnotVector::bezier_knot(1);
+        let surface = BsplineSurface::new_unchecked(
+            (knots.clone(), knots),
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+        );
+        assert_eq!(surface.parameter_bounds_are_intrinsic(), (true, true));
+        assert_eq!(
+            PolyBoundaryPiece::normalize_uv(&surface, sample, None),
+            Some((1.0, 0.0)),
+        );
+    }
+
+    #[test]
+    fn projector_clamp_respects_native_uv_scale_and_rejects_invalid_periods() {
+        let projection = PolyBoundaryPiece::normalize_axis;
+        assert_eq!(
+            projection(1.0 + 5.0e-7, None, None, Some((0.0, 1.0))),
+            Some(1.0)
+        );
+        assert_eq!(
+            projection(1.0e-9 + 1.0e-11, None, None, Some((0.0, 1.0e-9))),
+            Some(1.0e-9 + 1.0e-11)
+        );
+        assert_eq!(
+            projection(1.0e-9 + 4.0e-16, None, None, Some((0.0, 1.0e-9))),
+            Some(1.0e-9)
+        );
+        assert_eq!(
+            projection(-4.0e-16, None, None, Some((0.0, 1.0e-9))),
+            Some(0.0)
+        );
+
+        // Previously the span was called spatially "small" (< 1e-6)
+        // and every point snapped to its lower endpoint.
+        let wrapped = projection(1.5e-9, None, Some(1.0e-9), Some((0.0, 1.0e-9)))
+            .expect("valid finite native period");
+        assert!((wrapped - 0.5e-9).abs() <= 2.0 * f64::EPSILON * 1.0e-9);
+        assert_eq!(
+            projection(0.5e-9, None, Some(1.0e-9), Some((0.0, 1.0e-9))),
+            Some(0.5e-9)
+        );
+        assert_eq!(
+            projection(0.5e-9, Some(0.4e-9), Some(1.0e-9), Some((0.0, 1.0e-9))),
+            Some(0.5e-9)
+        );
+        assert_eq!(projection(0.5, None, Some(0.0), Some((0.0, 1.0))), None);
+        assert_eq!(
+            projection(0.5, None, Some(f64::NAN), Some((0.0, 1.0))),
+            None
+        );
+        assert_eq!(
+            projection(0.5, Some(f64::NAN), None, Some((0.0, 1.0))),
+            None
+        );
+        assert_eq!(
+            projection(f64::INFINITY, None, None, Some((0.0, 1.0))),
+            None
+        );
+    }
+
+    #[test]
+    fn real_periodic_cone_pole_recovery_handles_both_uv_axis_orientations() {
+        let profile = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(2.5, 0.0, 2.5));
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let base = RevolutionSurface::by_revolution(profile, origin, Vector3::unit_z());
+        let surface: Processor<_, Matrix4> = Processor::new(base);
+        let pt = surface.evaluate(0.0, 0.7);
+        let recovered = PolyBoundaryPiece::recover_periodic_pole(&surface, pt, (0.5, 0.7))
+            .expect("genuine cone endpoint must be recoverable");
+        assert_eq!(recovered, (0.0, 0.7));
+        assert!(
+            PolyBoundaryPiece::recover_periodic_pole(
+                &surface,
+                Point3::new(0.005, 0.0, 0.0),
+                (0.5, 0.7)
+            )
+            .is_none()
+        );
+
+        let mut swapped = surface;
+        swapped.invert();
+        let swapped_pole = swapped.evaluate(0.7, 0.0);
+        let recovered =
+            PolyBoundaryPiece::recover_periodic_pole(&swapped, swapped_pole, (0.7, 0.5))
+                .expect("periodic U and bounded V must recover same pole");
+        assert_eq!(recovered, (0.7, 0.0));
+    }
+
+    #[test]
+    fn noncollapsing_periodic_cylinder_does_not_forge_a_pole() {
+        let profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
+        let surface = RevolutionSurface::by_revolution(
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+        );
+        let point = surface.evaluate(0.0, 0.7);
+        assert!(PolyBoundaryPiece::recover_periodic_pole(&surface, point, (0.5, 0.7)).is_none());
+        assert!(!sampled_periodic_collapse(
+            &surface,
+            1,
+            Point2::new(0.0, 0.7),
+            f64::NAN
+        ));
     }
 }

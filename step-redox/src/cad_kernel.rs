@@ -1,5 +1,6 @@
 use crate::cad_ir::{CadModel, NodeId};
 use anyhow::Result;
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 
 /// User-facing geometry accuracy contract at the unit-aware Step Redox boundary.
 ///
@@ -16,7 +17,8 @@ pub enum GeometryPolicy {
 
 impl GeometryPolicy {
     /// Project-wide Standard preset: 0.01 mm.
-    pub const PROJECT_STANDARD_TOLERANCE_MM: f64 = 0.01;
+    pub const PROJECT_STANDARD_TOLERANCE_MM: f64 =
+        DEFAULT_STEP_RECOVERY_TOLERANCES.cad_project_standard_mm;
 
     #[must_use]
     pub const fn standard_mm(tolerance_mm: f64) -> Self { Self::Standard { tolerance_mm } }
@@ -86,6 +88,7 @@ pub mod monstertruck {
         SweepPath3d, SweepSegment3d,
     };
     use anyhow::{Result, bail};
+    use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
     use monstertruck_fillet::{FilletOptions, FilletProfile, RadiusSpec, fillet_edges_generic};
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
     use monstertruck_modeling::{
@@ -93,6 +96,7 @@ pub mod monstertruck {
         NurbsCurve, ParametricCurve, ParametricSurface3D, Point3, Rad, Shell, Solid, Surface,
         Vector3, Vector4, Wire, builder, primitive, profile,
     };
+    use std::collections::HashMap;
 
     #[derive(Debug, Clone, Copy)]
     pub struct MonstertruckKernel {
@@ -118,6 +122,63 @@ pub mod monstertruck {
     /// Opaque wrapper: Monstertruck topology does not escape the backend module.
     pub struct EvaluatedShape {
         solid: Solid,
+    }
+
+    // Evaluating a node under an override must not reuse an object evaluated
+    // at a different numerical policy.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    enum PolicyKey {
+        Equivalent,
+        Standard(u64),
+    }
+
+    impl From<GeometryPolicy> for PolicyKey {
+        fn from(policy: GeometryPolicy) -> Self {
+            match policy {
+                GeometryPolicy::Equivalent => Self::Equivalent,
+                GeometryPolicy::Standard { tolerance_mm } => Self::Standard(tolerance_mm.to_bits()),
+            }
+        }
+    }
+
+    type EvaluationCache = HashMap<(NodeId, PolicyKey), Solid>;
+
+    /// Evaluate several CAD roots without recomputing common geometry.
+    ///
+    /// Cached topology and returned shapes own independent mutable geometry;
+    /// a plain `Solid::clone()` would share the underlying
+    /// `Arc<Mutex<_>>` vertices, curves, and surfaces across evaluations.
+    pub struct EvaluationSession<'a> {
+        model: &'a CadModel,
+        policy: GeometryPolicy,
+        cache: EvaluationCache,
+    }
+
+    impl EvaluationSession<'_> {
+        /// Evaluate a root, memoizing successful DAG nodes by ID and policy.
+        ///
+        /// # Errors
+        /// Returns any kernel evaluation error; failed results are not cached.
+        pub fn evaluate(&mut self, root: NodeId) -> Result<EvaluatedShape> {
+            Ok(EvaluatedShape {
+                solid: evaluate_node(self.model, root, self.policy, &mut self.cache)?,
+            })
+        }
+    }
+
+    impl MonstertruckKernel {
+        /// Validate a model once and create an incremental evaluation session.
+        ///
+        /// # Errors
+        /// Returns a validation error for malformed CAD IR.
+        pub fn session<'a>(&self, model: &'a CadModel) -> Result<EvaluationSession<'a>> {
+            model.validate()?;
+            Ok(EvaluationSession {
+                model,
+                policy: self.policy,
+                cache: HashMap::new(),
+            })
+        }
     }
 
     fn profile_wires(profile: &Profile2d) -> Result<Vec<Wire>> {
@@ -212,7 +273,9 @@ pub mod monstertruck {
             let projected = normal.dot(progression);
             // A nearly tangential section does not offer reliable winding
             // evidence. Preserve it rather than inventing a face orientation.
-            let threshold = 1.0e-10 * normal.magnitude() * progression.magnitude();
+            let threshold = DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_frame_orthogonality
+                * normal.magnitude()
+                * progression.magnitude();
             if projected < -threshold {
                 wires[index].invert();
             }
@@ -292,7 +355,10 @@ pub mod monstertruck {
         if !angle_rad.is_finite() || angle_rad == 0.0 {
             bail!("revolution angle must be finite and nonzero");
         }
-        if angle_rad.abs() > std::f64::consts::TAU + 1.0e-10 {
+        if angle_rad.abs()
+            > std::f64::consts::TAU
+                + DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_frame_orthogonality
+        {
             bail!("revolution angle must not exceed one full turn");
         }
         if axis.origin_mm.iter().any(|value| !value.is_finite())
@@ -303,12 +369,13 @@ pub mod monstertruck {
 
         let direction = Vector3::new(axis.direction[0], axis.direction[1], axis.direction[2]);
         let magnitude = direction.magnitude();
-        if !magnitude.is_finite() || magnitude <= 1.0e-12 {
+        if !magnitude.is_finite() || magnitude <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit {
             bail!("revolution axis direction must be nonzero");
         }
         let direction = direction / magnitude;
         let origin = Point3::new(axis.origin_mm[0], axis.origin_mm[1], axis.origin_mm[2]);
-        let closed = (angle_rad.abs() - std::f64::consts::TAU).abs() <= 1.0e-10;
+        let closed = (angle_rad.abs() - std::f64::consts::TAU).abs()
+            <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_frame_orthogonality;
         let sweep = if closed {
             builder::SweepAngle::Closed
         } else {
@@ -316,8 +383,10 @@ pub mod monstertruck {
         };
 
         let touches_axis = wires.iter().any(|wire| {
-            wire.vertex_iter()
-                .any(|vertex| point_axis_distance(vertex.point(), origin, direction) <= 1.0e-9)
+            wire.vertex_iter().any(|vertex| {
+                point_axis_distance(vertex.point(), origin, direction)
+                    <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+            })
         });
 
         if touches_axis {
@@ -338,9 +407,12 @@ pub mod monstertruck {
                     let curve = edge.oriented_curve();
                     let (start, end) = curve.range_tuple();
                     let midpoint = curve.evaluate(f64::midpoint(start, end));
-                    (point_axis_distance(edge.front().point(), origin, direction) <= 1.0e-9
-                        && point_axis_distance(edge.back().point(), origin, direction) <= 1.0e-9
-                        && point_axis_distance(midpoint, origin, direction) <= 1.0e-9)
+                    (point_axis_distance(edge.front().point(), origin, direction)
+                        <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+                        && point_axis_distance(edge.back().point(), origin, direction)
+                            <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+                        && point_axis_distance(midpoint, origin, direction)
+                            <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm)
                         .then_some(index)
                 })
                 .collect::<Vec<_>>();
@@ -357,8 +429,10 @@ pub mod monstertruck {
             let Some(back) = wire.back_vertex() else {
                 bail!("axis-touching revolution has no generatrix");
             };
-            if point_axis_distance(front.point(), origin, direction) > 1.0e-9
-                || point_axis_distance(back.point(), origin, direction) > 1.0e-9
+            if point_axis_distance(front.point(), origin, direction)
+                > DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+                || point_axis_distance(back.point(), origin, direction)
+                    > DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
             {
                 bail!("revolution generatrix endpoints must lie on the axis");
             }
@@ -421,7 +495,8 @@ pub mod monstertruck {
                 start_angle_rad,
                 end_angle_rad,
             } = &curves[0]
-            && ((end_angle_rad - start_angle_rad).abs() - std::f64::consts::TAU).abs() <= 1.0e-9
+            && ((end_angle_rad - start_angle_rad).abs() - std::f64::consts::TAU).abs()
+                <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
         {
             let start = Point3::new(
                 center_mm[0] + radius_mm * start_angle_rad.cos(),
@@ -456,7 +531,9 @@ pub mod monstertruck {
         for (index, curve) in curves.iter().enumerate() {
             let next = (index + 1) % curves.len();
             let expected_end = curve_end_point(curve)?;
-            if point2_distance(expected_end, starts[next]) > 1.0e-8 {
+            if point2_distance(expected_end, starts[next])
+                > DEFAULT_STEP_RECOVERY_TOLERANCES.cad_profile_join_mm
+            {
                 bail!("profile curve endpoints are not topologically continuous");
             }
             match curve {
@@ -470,10 +547,15 @@ pub mod monstertruck {
                     end_angle_rad,
                 } => {
                     let sweep = end_angle_rad - start_angle_rad;
-                    if !sweep.is_finite() || sweep.abs() <= 1.0e-12 {
+                    if !sweep.is_finite()
+                        || sweep.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit
+                    {
                         bail!("circle arc sweep must be finite and nonzero");
                     }
-                    if sweep.abs() >= std::f64::consts::TAU - 1.0e-9 {
+                    if sweep.abs()
+                        >= std::f64::consts::TAU
+                            - DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+                    {
                         bail!("full circles must be represented by one profile curve");
                     }
                     let midpoint = f64::midpoint(*start_angle_rad, *end_angle_rad);
@@ -631,13 +713,14 @@ pub mod monstertruck {
         op: BooleanOp,
         children: &[NodeId],
         policy: GeometryPolicy,
+        cache: &mut EvaluationCache,
     ) -> Result<Solid> {
         let Some((&first, rest)) = children.split_first() else {
             bail!("boolean node needs at least one child");
         };
-        let mut result = evaluate_node(model, first, policy)?;
+        let mut result = evaluate_node(model, first, policy, cache)?;
         for &child in rest {
-            let rhs = evaluate_node(model, child, policy)?;
+            let rhs = evaluate_node(model, child, policy, cache)?;
             let kernel_policy = monstertruck_policy(policy);
             result = match op {
                 BooleanOp::Union => monstertruck_solid::or(&result, &rhs, kernel_policy)?,
@@ -693,7 +776,7 @@ pub mod monstertruck {
         }
     }
 
-    const EDGE_SELECTOR_TOLERANCE_MM: f64 = 1.0e-7;
+    const EDGE_SELECTOR_TOLERANCE_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.cad_edge_selector_mm;
 
     const fn segment_point(point_mm: [f64; 3]) -> Point3 {
         Point3::new(point_mm[0], point_mm[1], point_mm[2])
@@ -819,7 +902,9 @@ pub mod monstertruck {
                 let center = segment_point(*center_mm);
                 let normal = Vector3::new(normal[0], normal[1], normal[2]);
                 let normal_magnitude = normal.magnitude();
-                if !normal_magnitude.is_finite() || normal_magnitude <= 1.0e-12 {
+                if !normal_magnitude.is_finite()
+                    || normal_magnitude <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit
+                {
                     bail!("edge-treatment circle selector has invalid normal");
                 }
                 let normal = normal / normal_magnitude;
@@ -851,8 +936,9 @@ pub mod monstertruck {
         profile: EdgeTreatmentProfile,
         edges: &[EdgeTreatmentEdge],
         policy: GeometryPolicy,
+        cache: &mut EvaluationCache,
     ) -> Result<Solid> {
-        let child = evaluate_node(model, child, policy)?;
+        let child = evaluate_node(model, child, policy, cache)?;
         let mut boundaries = child.into_boundaries();
         let [shell] = boundaries.as_mut_slice() else {
             bail!("edge treatment currently requires exactly one boundary shell");
@@ -888,8 +974,17 @@ pub mod monstertruck {
         Ok(Solid::new(boundaries)?)
     }
 
-    fn evaluate_node(model: &CadModel, root: NodeId, policy: GeometryPolicy) -> Result<Solid> {
-        match model.node(root)? {
+    fn evaluate_node(
+        model: &CadModel,
+        root: NodeId,
+        policy: GeometryPolicy,
+        cache: &mut EvaluationCache,
+    ) -> Result<Solid> {
+        let key = (root, PolicyKey::from(policy));
+        if let Some(solid) = cache.get(&key) {
+            return Ok(solid.mapped(Clone::clone, Clone::clone, Clone::clone));
+        }
+        let evaluated = match model.node(root)? {
             CadNode::Primitive(primitive) => primitive_solid(primitive),
             CadNode::Extrude { profile, vector_mm } => {
                 if vector_mm[0] != 0.0 || vector_mm[1] != 0.0 {
@@ -904,12 +999,23 @@ pub mod monstertruck {
             } => revolve_profile(profile, *axis, *angle_rad),
             CadNode::Sweep { profile, path } => sweep_profile(profile, path),
             CadNode::Loft { sections } => loft_sections(sections),
-            CadNode::Boolean { op, children } => evaluate_boolean(model, *op, children, policy),
+            CadNode::Boolean { op, children } => {
+                evaluate_boolean(model, *op, children, policy, cache)
+            }
             CadNode::EdgeTreatment {
                 child,
                 profile,
                 edges,
-            } => evaluate_edge_treatment(model, *child, *profile, edges, policy),
+            } => evaluate_edge_treatment(model, *child, *profile, edges, policy, cache),
+            CadNode::SolverTolerance {
+                child,
+                tolerance_mm,
+            } => evaluate_node(
+                model,
+                *child,
+                GeometryPolicy::standard_mm(*tolerance_mm),
+                cache,
+            ),
             CadNode::Transform { transform, child } => {
                 if let CadNode::Revolve {
                     profile,
@@ -917,25 +1023,28 @@ pub mod monstertruck {
                     angle_rad,
                 } = model.node(*child)?
                 {
-                    return revolve_profile_transformed(profile, *axis, *angle_rad, transform);
+                    revolve_profile_transformed(profile, *axis, *angle_rad, transform)
+                } else {
+                    let child = evaluate_node(model, *child, policy, cache)?;
+                    Ok(builder::transformed(&child, rigid_matrix(transform)))
                 }
-                let child = evaluate_node(model, *child, policy)?;
-                Ok(builder::transformed(&child, rigid_matrix(transform)))
             }
             unsupported => {
                 bail!("Monstertruck backend does not yet evaluate node {root:?}: {unsupported:?}")
             }
-        }
+        }?;
+        cache.insert(
+            key,
+            evaluated.mapped(Clone::clone, Clone::clone, Clone::clone),
+        );
+        Ok(evaluated)
     }
 
     impl CadKernel for MonstertruckKernel {
         type Evaluated = EvaluatedShape;
 
         fn evaluate(&self, model: &CadModel, root: NodeId) -> Result<Self::Evaluated> {
-            model.validate()?;
-            Ok(EvaluatedShape {
-                solid: evaluate_node(model, root, self.policy)?,
-            })
+            self.session(model)?.evaluate(root)
         }
 
         fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary {
@@ -1322,6 +1431,81 @@ pub mod monstertruck {
                 monstertruck_policy(GeometryPolicy::project_standard()).tolerance(),
                 Some(0.01)
             );
+        }
+
+        #[test]
+        fn evaluation_session_memoizes_shared_nodes_per_numerical_policy() -> Result<()> {
+            let mut model = CadModel::new();
+            let box_node = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [2.0, 3.0, 4.0],
+            }));
+            let tight = model.add_node(CadNode::SolverTolerance {
+                child: box_node,
+                tolerance_mm: 1.0e-5,
+            });
+            let loose = model.add_node(CadNode::SolverTolerance {
+                child: box_node,
+                tolerance_mm: 0.01,
+            });
+            model.add_root(tight)?;
+            model.add_root(loose)?;
+
+            let kernel = MonstertruckKernel::project_standard();
+            let mut session = kernel.session(&model)?;
+            assert_eq!(kernel.summarize(&session.evaluate(tight)?).faces, 6);
+            assert_eq!(session.cache.len(), 2);
+            assert_eq!(kernel.summarize(&session.evaluate(tight)?).faces, 6);
+            assert_eq!(session.cache.len(), 2, "repeat must reuse both nodes");
+            assert_eq!(kernel.summarize(&session.evaluate(loose)?).faces, 6);
+            assert_eq!(
+                session.cache.len(),
+                4,
+                "same child under a distinct SolverTolerance must be evaluated separately"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn evaluation_session_does_not_share_mutable_geometry_with_cached_shapes() -> Result<()> {
+            let mut model = CadModel::new();
+            let root = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [1.0, 2.0, 3.0],
+            }));
+            model.add_root(root)?;
+            let mut session = MonstertruckKernel::project_standard().session(&model)?;
+
+            let initial = session.evaluate(root)?;
+            let first_vertex = initial
+                .solid
+                .vertex_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("box must have vertices"))?;
+            let expected = first_vertex.point();
+            first_vertex.set_point(Point3::new(99.0, 98.0, 97.0));
+
+            let replay = session.evaluate(root)?;
+            let replay_vertex = replay
+                .solid
+                .vertex_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("cached box must have vertices"))?;
+            assert_eq!(
+                replay_vertex.point(),
+                expected,
+                "first evaluation may mutate its geometry without corrupting the cache"
+            );
+            replay_vertex.set_point(Point3::new(96.0, 95.0, 94.0));
+            let replay_again = session.evaluate(root)?;
+            assert_eq!(
+                replay_again
+                    .solid
+                    .vertex_iter()
+                    .next()
+                    .map(|vertex| vertex.point()),
+                Some(expected),
+                "cache hits must also own independent mutable geometry"
+            );
+            Ok(())
         }
 
         #[test]
@@ -1827,6 +2011,42 @@ pub mod monstertruck {
                 Err(error) => error,
             };
             assert!(error.to_string().contains("does not yet evaluate"));
+            Ok(())
+        }
+
+        /// The independent OCC constructive decomposition of a curved lip
+        /// combines two exact circular boundary arcs with planar tapered
+        /// side limits. Native intersection must retain both types of carrier.
+        ///
+        /// The residual treatment is not an opaque B-rep: both rounded
+        /// terminals are executable analytic arc extrusions and intersections.
+        #[test]
+        fn evaluates_source_rounding_caps_as_editable_cad() -> Result<()> {
+            let (model, upper, lower) = crate::cad_recovery::mixed_fixture_models::rounding_caps()?;
+            let kernel = MonstertruckKernel::project_standard();
+            model.validate()?;
+            for (name, root) in [("upper", upper), ("lower", lower)] {
+                let evaluated = kernel.evaluate(&model, root)?;
+                assert!(kernel.summarize(&evaluated).is_single_solid());
+                if let Ok(dir) = std::env::var("MIXED_ROUND_CAP_OUTPUT_DIR") {
+                    std::fs::write(
+                        std::path::Path::new(&dir).join(format!("native-rounding-{name}.step")),
+                        kernel.to_step(&evaluated)?,
+                    )?;
+                }
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_curved_lip_intersected_with_tapered_envelope() -> Result<()> {
+            let (model, root) = crate::cad_recovery::mixed_fixture_models::curved_lip()?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            assert!(kernel.summarize(&evaluated).is_single_solid());
+            if let Ok(path) = std::env::var("CURVED_LIP_STEP_OUTPUT") {
+                std::fs::write(path, kernel.to_step(&evaluated)?)?;
+            }
             Ok(())
         }
 

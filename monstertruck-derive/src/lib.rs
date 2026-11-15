@@ -692,9 +692,12 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
                 fn derivative_uu(&self, s: f64, t: f64) -> Self::Vector,
                 fn derivative_uv(&self, s: f64, t: f64) -> Self::Vector,
                 fn derivative_vv(&self, s: f64, t: f64) -> Self::Vector,
+                fn evaluate_with_first_derivatives(&self, s: f64, t: f64) -> (Self::Point, Self::Vector, Self::Vector),
+                fn evaluate_with_second_derivatives(&self, s: f64, t: f64) -> (Self::Point, Self::Vector, Self::Vector, Self::Vector, Self::Vector, Self::Vector),
                 fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector,
                 fn derivatives(&self, max_order: usize, u: f64, v: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector>,
                 fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange),
+                fn parameter_bounds_are_intrinsic(&self,) -> (bool, bool),
                 fn period_u(&self,) -> Option<f64>,
                 fn period_v(&self,) -> Option<f64>,
             );
@@ -734,6 +737,14 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
                     #[inline(always)]
                     fn derivative_vv(&self, s: f64, t: f64) -> Self::Vector { self.0.derivative_vv(s, t) }
                     #[inline(always)]
+                    fn evaluate_with_first_derivatives(&self, s: f64, t: f64) -> (Self::Point, Self::Vector, Self::Vector) {
+                        self.0.evaluate_with_first_derivatives(s, t)
+                    }
+                    #[inline(always)]
+                    fn evaluate_with_second_derivatives(&self, s: f64, t: f64) -> (Self::Point, Self::Vector, Self::Vector, Self::Vector, Self::Vector, Self::Vector) {
+                        self.0.evaluate_with_second_derivatives(s, t)
+                    }
+                    #[inline(always)]
                     fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector { self.0.derivative_mn(m, n, s, t) }
                     #[inline(always)]
                     fn derivatives(&self, max_order: usize, s: f64, t: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector> {
@@ -742,6 +753,10 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
                     #[inline(always)]
                     fn parameter_range(&self,) -> ((std::ops::Bound<f64>, std::ops::Bound<f64>), (std::ops::Bound<f64>, std::ops::Bound<f64>)) {
                         self.0.parameter_range()
+                    }
+                    #[inline(always)]
+                    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
+                        self.0.parameter_bounds_are_intrinsic()
                     }
                     #[inline(always)]
                     fn period_u(&self) -> Option<f64> { self.0.period_u() }
@@ -784,6 +799,7 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                 fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector,
                 fn derivatives(&self, max_order: usize, u: f64, v: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector>,
                 fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange),
+                fn parameter_bounds_are_intrinsic(&self,) -> (bool, bool),
                 fn period_u(&self,) -> Option<f64>,
                 fn period_v(&self,) -> Option<f64>,
             );
@@ -836,6 +852,9 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                     }
                     fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange) {
                         self.0.parameter_range()
+                    }
+                    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
+                        self.0.parameter_bounds_are_intrinsic()
                     }
                     fn period_u(&self) -> Option<f64> { self.0.period_u() }
                     fn period_v(&self) -> Option<f64> { self.0.period_v() }

@@ -7,11 +7,12 @@ use crate::step_entities::{
 };
 use crate::step_graph::{entity_ref_value, simple_record, simple_record_mut};
 use crate::surface_recovery;
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
-const DIRECTION_TOLERANCE: f64 = 1.0e-15;
+const DIRECTION_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.source_brep_direction;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlaneSupport {
@@ -386,9 +387,12 @@ pub fn surface_support(
         }
     }
 
-    if let Some(evidence) =
-        surface_recovery::analyze_v_extrusion_surface(surface_id, entities, index, 1.0e-7)
-    {
+    if let Some(evidence) = surface_recovery::analyze_v_extrusion_surface(
+        surface_id,
+        entities,
+        index,
+        DEFAULT_STEP_RECOVERY_TOLERANCES.source_feature_incidence_mm,
+    ) {
         return SurfaceSupport::SplineExtrusion(SplineExtrusionSupport {
             profile: BSplineSupport {
                 degree: evidence.degree,
@@ -400,9 +404,12 @@ pub fn surface_support(
             max_residual_mm: evidence.max_residual_mm,
         });
     }
-    if let Some(evidence) =
-        surface_recovery::analyze_planar_surface(surface_id, entities, index, 1.0e-7)
-    {
+    if let Some(evidence) = surface_recovery::analyze_planar_surface(
+        surface_id,
+        entities,
+        index,
+        DEFAULT_STEP_RECOVERY_TOLERANCES.source_feature_incidence_mm,
+    ) {
         return SurfaceSupport::Plane(PlaneSupport {
             origin_mm: evidence.origin_mm,
             normal: evidence.normal,

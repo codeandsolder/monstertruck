@@ -9,9 +9,9 @@
 use super::{
     BoundedCurve, Cdt, EuclideanSpace, ExactParameterBoundary2D, ExactTrimBoundary2D,
     FixedVertexHandle, HashGen, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools,
-    KERNEL_EPSILON, MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D,
-    ParametricSurface3D, Point2, Point3, PolylineCurve, PreMeshableSurface, SP, SPoint2, Tolerance,
-    Triangulation, Vector2, algo, env, mesh, resample_boundary, simplify_parameter_boundary,
+    MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D, Point2,
+    Point3, PolylineCurve, PreMeshableSurface, SP, SPoint2, Tolerance, Triangulation, Vector2,
+    algo, env, mesh, resample_boundary, simplify_parameter_boundary,
 };
 
 mod loops;
@@ -22,8 +22,9 @@ mod projection_debug;
 // `periodic` is used only within `boundary`, so its glob stays module-private.
 use periodic::{
     align_full_period_open_pair, align_periodic_open_pair, close_open_periodic_curve_to_singular,
-    compact_periodic_closed_loop, normalize_range, open_periodic_closed_loop,
-    periodic_axis_full_span, periodic_min_difference, periodic_open_axis_full_span,
+    compact_periodic_closed_loop, native_boundary_slack, normalize_range,
+    open_periodic_closed_loop, periodic_axis_full_span, periodic_min_difference,
+    periodic_open_axis_full_span, sampled_periodic_collapse,
 };
 
 pub(super) use loops::*;

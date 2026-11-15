@@ -2,8 +2,8 @@
 
 use super::{
     AltRegion, BooleanTolerance, EuclideanSpace, Face, IncludingPointInDomain, InnerSpace,
-    Invertible, KERNEL_EPSILON, MeshableShape, MeshableSurface, MetricSpace, ParametricSurface3D,
-    Point3, PolyShell, PolygonMesh, PolylineCurve, PolylineableCurve, SearchNearestParameter,
+    Invertible, MeshableShape, MeshableSurface, MetricSpace, ParametricSurface3D, Point3,
+    PolyShell, PolygonMesh, PolylineCurve, PolylineableCurve, SearchNearestParameter,
     SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SurfaceParameter, Vector3, divide_face,
     hash, loops_store,
 };
@@ -65,6 +65,7 @@ where
     let triangulated = shell.triangulation(BooleanTolerance::new(tol).mesh_seed);
     let polygon = triangulated.first()?.surface()?;
     let positions = polygon.positions();
+    let minimum_triangle_area = BooleanTolerance::new(tol).area_floor;
     let mut candidates = polygon
         .faces()
         .triangle_iter()
@@ -73,7 +74,7 @@ where
             let b = positions[triangle[1].pos];
             let c = positions[triangle[2].pos];
             let area2 = (b - a).cross(c - a).magnitude();
-            (area2.is_finite() && area2 > KERNEL_EPSILON * KERNEL_EPSILON).then_some((
+            (area2.is_finite() && area2 > minimum_triangle_area).then_some((
                 area2,
                 Point3::from_vec((a.to_vec() + b.to_vec() + c.to_vec()) / 3.0),
             ))

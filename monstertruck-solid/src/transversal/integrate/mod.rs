@@ -257,7 +257,7 @@ pub struct InvalidOutputShellConditionData {
 type ShapeOpsResult<T> = std::result::Result<T, ShapeOpsError>;
 
 pub(super) fn validate_tolerance(tol: f64) -> std::result::Result<(), ShapeOpsError> {
-    if !tol.is_finite() || tol < KERNEL_EPSILON {
+    if !tol.is_finite() || tol <= 0.0 {
         Err(ShapeOpsError::InvalidTolerance)
     } else {
         Ok(())
@@ -277,14 +277,35 @@ fn standard_budget(policy: GeometryPolicy, operation: &'static str) -> ShapeOpsR
 /// to make kernel predicates, projection, welding, or topology classification
 /// that coarse. The classic backend currently has no operation-specific error
 /// estimator that can spend part of the caller's budget deliberately, so it
-/// must stay at the kernel's normal numerical resolution. Using a tighter
-/// numerical tolerance is always within a validated Standard budget.
+/// therefore uses an explicit independently configurable default numerical
+/// length from the central policy. A tighter numerical tolerance remains
+/// within a validated Standard budget, but its surface/solver consumers must
+/// still be checked before changing the value.
 fn classic_boolean_tolerance(
     policy: GeometryPolicy,
     operation: &'static str,
 ) -> ShapeOpsResult<f64> {
+    // A modeling-error budget cannot certify two topologically distinct edges
+    // as identical. Classic Boolean predicates and trim-edge reuse therefore
+    // use numerical tolerance only; policy validation remains mandatory.
     standard_budget(policy, operation)?;
-    Ok(KERNEL_EPSILON)
+    // EXPERIMENT ONLY: bypass the production default while measuring the
+    // actual classic Boolean numerical tolerance, independently of the
+    // caller's modeling-error budget and curve sampling density.
+    let override_length = std::env::var("MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH")
+        .ok()
+        .map(|value| {
+            let length: f64 = value.parse().unwrap_or_else(|error| {
+                eprintln!("invalid MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH={value:?}: {error}");
+                std::process::exit(2);
+            });
+            assert!(
+                length.is_finite() && length > 0.0,
+                "MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH must be finite and positive"
+            );
+            length
+        });
+    Ok(override_length.unwrap_or(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length))
 }
 
 const HALF_SPACE_CLIP_OPERATION: &str = "clip_half_space_z";

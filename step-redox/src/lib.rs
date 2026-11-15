@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::Exchange;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -960,7 +961,8 @@ fn resize_periodic_chain_bytes_one_side(
         candidate.read_only_proven
             && candidate.complete_partition
             && candidate.sites == new_sites
-            && (candidate.pitch_mm - chain.pitch_mm).abs() <= 1.0e-7
+            && (candidate.pitch_mm - chain.pitch_mm).abs()
+                <= DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_geometry_mm
             && candidate.interior_site_face_count == chain.interior_site_face_count
             && candidate.interior_gap_face_count == chain.interior_gap_face_count
             && candidate.stretch_face_ids.len() == chain.stretch_face_ids.len()
@@ -1144,7 +1146,11 @@ fn resize_count_parameter_bytes_one_side(
     }
 
     let section = &mut exchange.data[0];
-    let detected_patterns = patterns::detect_instance_patterns(&section.entities, 1.0e-7, 4);
+    let detected_patterns = patterns::detect_instance_patterns(
+        &section.entities,
+        DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_geometry_mm,
+        4,
+    );
     let detected_bodies =
         periodic_bodies::detect_periodic_bodies(&section.entities, &detected_patterns);
     let detected_parameters =
@@ -1285,7 +1291,8 @@ fn find_matching_periodic_chain(
             (candidate.read_only_proven
                 && candidate.complete_partition
                 && candidate.sites == sites
-                && (candidate.pitch_mm - original.pitch_mm).abs() <= 1.0e-7
+                && (candidate.pitch_mm - original.pitch_mm).abs()
+                    <= DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_geometry_mm
                 && candidate.interior_site_face_count == original.interior_site_face_count
                 && candidate.interior_gap_face_count == original.interior_gap_face_count
                 && candidate.stretch_face_ids.len() == original.stretch_face_ids.len()
@@ -1345,7 +1352,11 @@ fn detect_count_parameters_bytes(input: &[u8]) -> Result<Vec<parameters::Recover
         bail!("count-parameter editing currently requires exactly one DATA section");
     }
     let section = &exchange.data[0];
-    let patterns = patterns::detect_instance_patterns(&section.entities, 1.0e-7, 4);
+    let patterns = patterns::detect_instance_patterns(
+        &section.entities,
+        DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_geometry_mm,
+        4,
+    );
     let bodies = periodic_bodies::detect_periodic_bodies(&section.entities, &patterns);
     Ok(parameters::detect_count_parameters(&patterns, &bodies))
 }
@@ -1408,7 +1419,11 @@ pub fn expand_periodic_body_bytes(
     let mut remaining = body_index;
     let mut resize = None;
     for section in &mut exchange.data {
-        let patterns = patterns::detect_instance_patterns(&section.entities, 1.0e-7, 4);
+        let patterns = patterns::detect_instance_patterns(
+            &section.entities,
+            DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_geometry_mm,
+            4,
+        );
         let bodies = periodic_bodies::detect_periodic_bodies(&section.entities, &patterns);
         if remaining < bodies.len() {
             resize = Some(periodic_resize::expand_periodic_body_positive(
@@ -1453,7 +1468,11 @@ pub fn resize_linear_pattern_bytes(
     let mut remaining = pattern_index;
     let mut resize = None;
     for section in &mut exchange.data {
-        let detected = patterns::detect_instance_patterns(&section.entities, 1.0e-7, 4);
+        let detected = patterns::detect_instance_patterns(
+            &section.entities,
+            DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_geometry_mm,
+            4,
+        );
         if remaining < detected.len() {
             resize = Some(patterns::resize_filled_linear_pattern(
                 &mut section.entities,
@@ -1499,8 +1518,12 @@ fn detect_exchange_semantics(
 
     for section in &exchange.data {
         let index = step_graph::build_index(&section.entities);
-        let local_patterns =
-            patterns::detect_instance_patterns_with_index(&section.entities, &index, 1.0e-7, 4);
+        let local_patterns = patterns::detect_instance_patterns_with_index(
+            &section.entities,
+            &index,
+            DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_geometry_mm,
+            4,
+        );
         let offset = patterns_out.len();
         let mut local_bodies = periodic_bodies::detect_periodic_bodies_with_index(
             &section.entities,
