@@ -1971,6 +1971,25 @@ where
     }
 }
 
+impl FacePairSupports {
+    /// Transverse SSI is undefined on a common certified planar carrier,
+    /// regardless of whether its two trims cover equal or partial regions.
+    fn has_common_planar_support(
+        &self,
+        face0: usize,
+        face1: usize,
+        polygon0: &PolygonMesh,
+        polygon1: &PolygonMesh,
+    ) -> bool {
+        match (self.planes[0][face0], self.planes[1][face1]) {
+            (Some(plane0), Some(plane1)) => {
+                intersection_curve::common_planar_support(plane0, polygon0, plane1, polygon1)
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Complete the exact face-pair interface after all SSI branches are split.
 /// Coplanar edge imprint precedes sampled/analytic wire synchronization.
 fn materialize_interface_loops<C>(
@@ -2092,11 +2111,7 @@ where
             // Certified common planar support has no transverse intersection
             // curve even when its two trims cover different regions. Existing
             // exact edge imprinting owns the face-local split instead.
-            if let (Some(plane0), Some(plane1)) = (
-                supports.planes[0][face_index0],
-                supports.planes[1][face_index1],
-            ) && intersection_curve::common_planar_support(plane0, &polygon0, plane1, &polygon1)
-            {
+            if supports.has_common_planar_support(face_index0, face_index1, &polygon0, &polygon1) {
                 return Some(());
             }
             // Exactly coincident trimmed planar faces are already a complete
