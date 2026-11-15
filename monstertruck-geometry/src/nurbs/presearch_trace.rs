@@ -21,8 +21,7 @@ struct Metrics {
 impl Metrics {
     fn print(&self, finished: bool) {
         eprintln!(
-            "NURBS_PRESEARCH_METRICS final={} queries={} hits={} misses={} indexed={} kd_builds={} seed_ms={:.3} refinements={} refine_ms={:.3}",
-            finished,
+            "NURBS_PRESEARCH_METRICS final={finished} queries={} hits={} misses={} indexed={} kd_builds={} seed_ms={:.3} refinements={} refine_ms={:.3}",
             self.queries,
             self.hits,
             self.misses,
