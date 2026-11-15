@@ -55,13 +55,14 @@ use wgpu::{
     BufferAsyncError, BufferBinding, BufferBindingType, BufferDescriptor, BufferUsages, Color,
     CommandEncoder, CommandEncoderDescriptor, CompositeAlphaMode, CreateSurfaceError,
     CurrentSurfaceTexture, Device, DeviceDescriptor, ExperimentalFeatures, Extent3d, IndexFormat,
-    Instance, InstanceDescriptor, Limits, LoadOp, MapMode, MemoryHints, Operations, Origin3d,
-    PipelineLayout, PipelineLayoutDescriptor, PollError, PollType, PowerPreference, PresentMode,
-    Queue, RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
-    RenderPipeline, RequestAdapterError, RequestAdapterOptions, RequestDeviceError, ShaderStages,
-    StoreOp, Surface, SurfaceConfiguration, TexelCopyBufferInfo, TexelCopyBufferLayout,
-    TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
+    Instance, InstanceDescriptor, Limits, LoadOp, MapMode, MapRangeError, MemoryHints, Operations,
+    Origin3d, PipelineLayout, PipelineLayoutDescriptor, PollError, PollType, PowerPreference,
+    PresentMode, Queue, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
+    RenderPassDescriptor, RenderPipeline, RequestAdapterError, RequestAdapterOptions,
+    RequestDeviceError, ShaderStages, StoreOp, Surface, SurfaceColorSpace, SurfaceConfiguration,
+    TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect,
+    TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -136,6 +137,9 @@ pub enum GpuError {
     /// Mapping a GPU buffer for CPU readback failed.
     #[error("GPU buffer mapping failed: {0}")]
     BufferMap(#[from] BufferAsyncError),
+    /// Obtaining the byte view after a successful GPU buffer mapping failed.
+    #[error("GPU buffer mapped-range access failed: {0}")]
+    BufferMapRange(#[from] MapRangeError),
     /// The asynchronous map callback disappeared before delivering a result.
     #[error("GPU buffer mapping callback was dropped")]
     BufferMapChannelClosed,
