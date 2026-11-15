@@ -86,8 +86,10 @@ fn split_parameter_slack((start, end): (f64, f64)) -> Option<f64> {
         return None;
     }
     let policy = DEFAULT_NUMERICAL_TOLERANCES;
-    let slack = span * policy.split_parameter_relative
-        + policy.split_parameter_roundoff_ulps * f64::EPSILON * start.abs().max(end.abs());
+    let slack = (policy.split_parameter_roundoff_ulps * f64::EPSILON).mul_add(
+        start.abs().max(end.abs()),
+        span * policy.split_parameter_relative,
+    );
     slack.is_finite().then_some(slack)
 }
 

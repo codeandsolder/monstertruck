@@ -541,8 +541,10 @@ fn same_nonperiodic_section<S: ParametricSurface3D>(
         return false;
     }
     let policy = DEFAULT_NUMERICAL_TOLERANCES;
-    let slack = span * policy.healing_seam_axis_relative
-        + policy.healing_seam_axis_roundoff_ulps * f64::EPSILON * min.abs().max(max.abs());
+    let slack = (policy.healing_seam_axis_roundoff_ulps * f64::EPSILON).mul_add(
+        min.abs().max(max.abs()),
+        span * policy.healing_seam_axis_relative,
+    );
     if (first[axis] - last[axis]).abs() > slack {
         return false;
     }
@@ -1265,8 +1267,10 @@ fn sequence_uv_closed(points: &[Point2]) -> bool {
             return false;
         }
         let policy = DEFAULT_NUMERICAL_TOLERANCES;
-        let slack = span * policy.healing_boundary_uv_relative
-            + policy.healing_boundary_uv_roundoff_ulps * f64::EPSILON * min.abs().max(max.abs());
+        let slack = (policy.healing_boundary_uv_roundoff_ulps * f64::EPSILON).mul_add(
+            min.abs().max(max.abs()),
+            span * policy.healing_boundary_uv_relative,
+        );
         (first[axis] - last[axis]).abs() <= slack
     })
 }
@@ -1288,7 +1292,11 @@ fn boundary_into_domain<S: ParametricSurface3D>(
     let (up, vp) = (surface.period_u(), surface.period_v());
     let (u_range, v_range) = surface.try_range_tuple();
     let intrinsic = surface.parameter_bounds_are_intrinsic();
-    let count = vec.len() as f64;
+    let count = num_traits::ToPrimitive::to_f64(&vec.len())?;
+    // A rounded large integer would bias periodic-centroid projection.
+    if num_traits::ToPrimitive::to_usize(&count)? != vec.len() {
+        return None;
+    }
     let origin = vec[0];
     let mean = vec.iter().fold((0.0, 0.0), |(u, v), p| {
         (u + (p.x - origin.x) / count, v + (p.y - origin.y) / count)
@@ -1831,8 +1839,10 @@ fn boundary_type<S: ParametricSurface3D>(
             return false;
         }
         let policy = DEFAULT_NUMERICAL_TOLERANCES;
-        let slack = policy.healing_boundary_uv_relative * span
-            + policy.healing_boundary_uv_roundoff_ulps * f64::EPSILON * min.abs().max(max.abs());
+        let slack = (policy.healing_boundary_uv_roundoff_ulps * f64::EPSILON).mul_add(
+            min.abs().max(max.abs()),
+            policy.healing_boundary_uv_relative * span,
+        );
         ((*first)[axis] - (*last)[axis]).abs() <= slack
     });
     if !uv_closed {
