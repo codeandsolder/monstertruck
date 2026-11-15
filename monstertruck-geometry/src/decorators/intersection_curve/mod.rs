@@ -25,6 +25,12 @@ use std::{ops::Bound, sync::OnceLock};
 
 // Experiment only: isolate the *exact SSI representation's* adaptive curve
 // division from both modeling-curve division and topological admission.
+// An explicitly supplied experimental configuration must be valid: falling
+// back to the default sampling silently changes which Boolean we evaluate.
+#[expect(
+    clippy::expect_used,
+    reason = "invalid explicit experimental sampling configuration must fail fast"
+)]
 fn experimental_ssi_curve_sample_floor() -> Option<f64> {
     static FLOOR: OnceLock<Option<f64>> = OnceLock::new();
     *FLOOR.get_or_init(|| {
@@ -158,6 +164,18 @@ impl<C, S0, S1> IntersectionCurve<C, S0, S1> {
     pub fn destruct(self) -> (S0, S1, C) { (self.surface0, self.surface1, self.leader) }
 }
 
+/// Owned components of an exact surface intersection, including boundary
+/// charts and optional topological endpoint anchors.
+type SurfaceCurveParts<C, S0, S1, T0, T1> = (
+    S0,
+    S1,
+    C,
+    Option<T0>,
+    Option<T1>,
+    Option<Point3>,
+    Option<Point3>,
+);
+
 impl<C, S0, S1, T0, T1> SurfaceCurve<C, S0, S1, T0, T1> {
     /// Constructor with face-local boundary curves.
     #[inline]
@@ -213,23 +231,13 @@ impl<C, S0, S1, T0, T1> SurfaceCurve<C, S0, S1, T0, T1> {
         (self.front_anchor, self.back_anchor)
     }
     /// Set the world-space topological endpoint anchors of this curve.
-    pub fn set_endpoint_anchors(&mut self, front: Option<Point3>, back: Option<Point3>) {
+    pub const fn set_endpoint_anchors(&mut self, front: Option<Point3>, back: Option<Point3>) {
         self.front_anchor = front;
         self.back_anchor = back;
     }
     /// Destructs `self`, preserving face-local boundaries.
     #[inline]
-    pub fn destruct_with_boundaries(
-        self,
-    ) -> (
-        S0,
-        S1,
-        C,
-        Option<T0>,
-        Option<T1>,
-        Option<Point3>,
-        Option<Point3>,
-    ) {
+    pub fn destruct_with_boundaries(self) -> SurfaceCurveParts<C, S0, S1, T0, T1> {
         (
             self.surface0,
             self.surface1,
@@ -673,17 +681,21 @@ where
 {
     type Point = Point3;
     type Vector = Vector3;
+    #[expect(
+        clippy::float_cmp,
+        reason = "topological endpoint anchor applies only to the exact native knot, not nearby parameters"
+    )]
     fn evaluate(&self, t: f64) -> Point3 {
         let range = self.leader.parameter_range();
-        if matches!(range.0, Bound::Included(start) if t==start) {
-            if let Some(point) = self.front_anchor {
-                return point;
-            }
+        if matches!(range.0, Bound::Included(start) if t == start)
+            && let Some(point) = self.front_anchor
+        {
+            return point;
         }
-        if matches!(range.1, Bound::Included(end) if t==end) {
-            if let Some(point) = self.back_anchor {
-                return point;
-            }
+        if matches!(range.1, Bound::Included(end) if t == end)
+            && let Some(point) = self.back_anchor
+        {
+            return point;
         }
         IntersectionCurve::new(&self.surface0, &self.surface1, &self.leader).evaluate(t)
     }

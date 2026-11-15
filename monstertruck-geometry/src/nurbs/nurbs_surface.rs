@@ -55,7 +55,10 @@ thread_local! {
     static PRESEARCH_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn identical_parameter_ranges(lhs: SurfaceParameterRange, rhs: SurfaceParameterRange) -> bool {
+const fn identical_parameter_ranges(
+    lhs: SurfaceParameterRange,
+    rhs: SurfaceParameterRange,
+) -> bool {
     lhs.0.0.to_bits() == rhs.0.0.to_bits()
         && lhs.0.1.to_bits() == rhs.0.1.to_bits()
         && lhs.1.0.to_bits() == rhs.1.0.to_bits()

@@ -113,8 +113,15 @@ impl SeedSpatialIndex {
     {
         let node = &self.nodes[index];
         let distance = samples[node.sample].2.distance2(target);
-        if distance < best.0 || (distance == best.0 && best.1.is_some_and(|i| node.sample < i)) {
-            *best = (distance, Some(node.sample));
+        // Exact ties intentionally select the original first grid sample.
+        // Partial comparison preserves IEEE equality (including signed zero)
+        // and never promotes a NaN distance into the best seed.
+        match distance.partial_cmp(&best.0) {
+            Some(std::cmp::Ordering::Less) => *best = (distance, Some(node.sample)),
+            Some(std::cmp::Ordering::Equal) if best.1.is_some_and(|i| node.sample < i) => {
+                *best = (distance, Some(node.sample));
+            }
+            _ => {}
         }
         let go_left_first = target[node.axis] < samples[node.sample].2[node.axis];
         let near = if go_left_first { node.left } else { node.right };
@@ -138,7 +145,7 @@ impl SeedSpatialIndex {
                 } else {
                     0.0
                 };
-                lower += gap * gap;
+                lower = gap.mul_add(gap, lower);
                 scale = scale
                     .max(q.abs())
                     .max(bounds.min[axis].abs())
