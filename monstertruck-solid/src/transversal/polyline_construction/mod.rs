@@ -207,6 +207,31 @@ pub(super) fn merge_endpoint_join_with_bridge(
     Some(())
 }
 
+/// Closest squared offset and accumulated arclength along a polygonal
+/// interference strand. Degenerate segments are excluded.
+fn closest_progress_on_polyline(poly: &PolylineCurve<Point3>, point: Point3) -> Option<(f64, f64)> {
+    let mut cumulative = 0.0;
+    let mut closest = None::<(f64, f64)>;
+    for segment in poly.windows(2) {
+        let direction = segment[1] - segment[0];
+        let squared = direction.magnitude2();
+        if squared <= 0.0 || !squared.is_finite() {
+            continue;
+        }
+        let length = squared.sqrt();
+        let fraction = (point - segment[0]).dot(direction) / squared;
+        let fraction = fraction.clamp(0.0, 1.0);
+        let foot = segment[0] + direction * fraction;
+        let distance2 = foot.distance2(point);
+        let progress = length.mul_add(fraction, cumulative);
+        if closest.is_none_or(|(best, _)| distance2 < best) {
+            closest = Some((distance2, progress));
+        }
+        cumulative += length;
+    }
+    closest
+}
+
 /// Remove short duplicate strands produced when separate mesh triangles
 /// describe the same intersection path with a redundant overlapping arm.
 ///
@@ -231,28 +256,6 @@ pub(super) fn remove_redundant_interference_strands(
         })
         .collect::<Vec<_>>();
 
-    let project = |poly: &PolylineCurve<Point3>, point: Point3| {
-        let mut cumulative = 0.0;
-        let mut closest = None::<(f64, f64)>;
-        for segment in poly.windows(2) {
-            let direction = segment[1] - segment[0];
-            let squared = direction.magnitude2();
-            if squared <= 0.0 || !squared.is_finite() {
-                continue;
-            }
-            let length = squared.sqrt();
-            let fraction = (point - segment[0]).dot(direction) / squared;
-            let fraction = fraction.clamp(0.0, 1.0);
-            let foot = segment[0] + direction * fraction;
-            let distance2 = foot.distance2(point);
-            let progress = length.mul_add(fraction, cumulative);
-            if closest.is_none_or(|(best, _)| distance2 < best) {
-                closest = Some((distance2, progress));
-            }
-            cumulative += length;
-        }
-        closest
-    };
     let contained = |candidate: &PolylineCurve<Point3>, container: &PolylineCurve<Point3>| {
         let Some(start) = candidate.first().copied() else {
             return false;
@@ -283,7 +286,7 @@ pub(super) fn remove_redundant_interference_strands(
         }
         let Some(progress) = steps
             .into_iter()
-            .map(|point| project(container, point))
+            .map(|point| closest_progress_on_polyline(container, point))
             .collect::<Option<Vec<_>>>()
         else {
             return false;

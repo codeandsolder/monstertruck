@@ -191,8 +191,9 @@ pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
 /// Certify a full quadratic rational Bezier span algebraically, not from
 /// sampled points. Every coefficient of the degree-four circle polynomial
 /// must vanish within its accumulated homogeneous roundoff budget.
-fn certify_circular_span(
-    segment: &monstertruck_geometry::prelude::BsplineCurve<Vector4>,
+/// The single homogeneous circle identity shared by all Bezier knot spans.
+#[derive(Clone, Copy)]
+struct CircleEvidence {
     origin: Point3,
     basis_u: Vector3,
     basis_v: Vector3,
@@ -200,54 +201,70 @@ fn certify_circular_span(
     cy: f64,
     radius2: f64,
     coefficient_eps: f64,
-) -> Option<()> {
-    let cp = segment.control_points();
-    if cp.len() != 3 {
-        return None;
-    }
-    let mut x = [0.0; 3];
-    let mut y = [0.0; 3];
-    let mut w = [0.0; 3];
-    for (i, h) in cp.iter().copied().enumerate() {
-        if !h.w.is_finite() || h.w <= 0.0 {
+}
+
+impl CircleEvidence {
+    fn certify_span(
+        &self,
+        segment: &monstertruck_geometry::prelude::BsplineCurve<Vector4>,
+    ) -> Option<()> {
+        let Self {
+            origin,
+            basis_u,
+            basis_v,
+            cx,
+            cy,
+            radius2,
+            coefficient_eps,
+        } = *self;
+        let cp = segment.control_points();
+        if cp.len() != 3 {
             return None;
         }
-        let relative = Vector3::new(h.x, h.y, h.z) - origin.to_vec() * h.w;
-        x[i] = cx.mul_add(-h.w, relative.dot(basis_u));
-        y[i] = cy.mul_add(-h.w, relative.dot(basis_v));
-        w[i] = h.w;
-    }
-    let power = |c: [f64; 3]| {
-        [
-            c[0],
-            2.0 * (c[1] - c[0]),
-            (-2.0_f64).mul_add(c[1], c[0] + c[2]),
-        ]
-    };
-    let x = power(x);
-    let y = power(y);
-    let w = power(w);
-    let mut residual = [0.0f64; 5];
-    let mut coefficient_scale = [0.0f64; 5];
-    for i in 0..3 {
-        for j in 0..3 {
-            let xx = x[i] * x[j];
-            let yy = y[i] * y[j];
-            let rr = radius2 * w[i] * w[j];
-            residual[i + j] += xx + yy - rr;
-            coefficient_scale[i + j] += xx.abs() + yy.abs() + rr.abs();
+        let mut x = [0.0; 3];
+        let mut y = [0.0; 3];
+        let mut w = [0.0; 3];
+        for (i, h) in cp.iter().copied().enumerate() {
+            if !h.w.is_finite() || h.w <= 0.0 {
+                return None;
+            }
+            let relative = Vector3::new(h.x, h.y, h.z) - origin.to_vec() * h.w;
+            x[i] = cx.mul_add(-h.w, relative.dot(basis_u));
+            y[i] = cy.mul_add(-h.w, relative.dot(basis_v));
+            w[i] = h.w;
         }
+        let power = |c: [f64; 3]| {
+            [
+                c[0],
+                2.0 * (c[1] - c[0]),
+                (-2.0_f64).mul_add(c[1], c[0] + c[2]),
+            ]
+        };
+        let x = power(x);
+        let y = power(y);
+        let w = power(w);
+        let mut residual = [0.0f64; 5];
+        let mut coefficient_scale = [0.0f64; 5];
+        for i in 0..3 {
+            for j in 0..3 {
+                let xx = x[i] * x[j];
+                let yy = y[i] * y[j];
+                let rr = radius2 * w[i] * w[j];
+                residual[i + j] += xx + yy - rr;
+                coefficient_scale[i + j] += xx.abs() + yy.abs() + rr.abs();
+            }
+        }
+        // All five coefficients come from the same polynomial identity.
+        // Zero or near-zero coefficients still accumulate roundoff from
+        // the entire rational circle fit, not just their own cancellation.
+        // Normalize by the maximum *actual squared-length* coefficient
+        // contribution, keeping one dimensionally consistent scale.
+        let scale = coefficient_scale.into_iter().fold(0.0_f64, f64::max);
+        residual
+            .iter()
+            .all(|value| value.abs() <= coefficient_eps * scale)
+            .then_some(())
     }
-    // All five coefficients come from the same polynomial identity.
-    // Zero or near-zero coefficients still accumulate roundoff from
-    // the entire rational circle fit, not just their own cancellation.
-    // Normalize by the maximum *actual squared-length* coefficient
-    // contribution, keeping one dimensionally consistent scale.
-    let scale = coefficient_scale.into_iter().fold(0.0_f64, f64::max);
-    residual
-        .iter()
-        .all(|value| value.abs() <= coefficient_eps * scale)
-        .then_some(())
 }
 
 /// Algebraically certify a circular-cylinder carrier represented by a
@@ -327,6 +344,15 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
     // Convert this product to power-basis coefficients, not to a collection of
     // point samples. Nonzero knot intervals are split by exact knot insertion.
 
+    let evidence = CircleEvidence {
+        origin,
+        basis_u,
+        basis_v,
+        cx,
+        cy,
+        radius2,
+        coefficient_eps,
+    };
     let mut remaining = profile;
     let knot_slack = (policy.boolean_iso_parameter_roundoff_ulps * f64::EPSILON).mul_add(
         lo.abs().max(hi.abs()),
@@ -340,28 +366,10 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
     interior.dedup_by(|a, b| (*a - *b).abs() <= knot_slack);
     for knot in interior {
         let tail_segment = remaining.cut(knot);
-        certify_circular_span(
-            &remaining,
-            origin,
-            basis_u,
-            basis_v,
-            cx,
-            cy,
-            radius2,
-            coefficient_eps,
-        )?;
+        evidence.certify_span(&remaining)?;
         remaining = tail_segment;
     }
-    certify_circular_span(
-        &remaining,
-        origin,
-        basis_u,
-        basis_v,
-        cx,
-        cy,
-        radius2,
-        coefficient_eps,
-    )?;
+    evidence.certify_span(&remaining)?;
     let center = origin + basis_u * cx + basis_v * cy;
     let axial = (origin.to_vec().dot(axis), end.to_vec().dot(axis));
     Some((center, axis, radius2.sqrt(), axial))
