@@ -167,10 +167,13 @@ fn cube_minus_enclosed_cube_preserves_inward_cavity_orientation() -> Result<()> 
 
 /// Regression for a radial slot cut from a solid of revolution.
 ///
-/// The cutter reaches the revolution axis and exits through the top end. This
-/// is the minimal form of the failure reported by downstream STEP recovery:
-/// the classic boolean pipeline used to classify every divided face out of the
-/// AND result and return `EmptyOutputShell`.
+/// The cutter reaches the revolution axis and exits through the top end.
+/// A source profile traversed in the opposite direction produces a perfectly
+/// closed but *inward*-oriented shell. `Solid::new` checks topology, not the
+/// geometry's signed material orientation; feeding such a complemented shell
+/// to a material Boolean makes the signed interior classifier reject it.
+/// Use the outward-oriented generating profile, then verify the removed
+/// analytic material volume as well as manifold closure.
 #[test]
 fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
     let vertices = builder::vertices([
@@ -188,8 +191,13 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
         builder::line(&vertices[2], &vertices[3]),
     ]
     .into();
+    // A wire's traversal direction controls the solid's material-facing
+    // orientation. The original profile generated an inward (negative
+    // winding) shell despite being a closed manifold; CSG accepts outward
+    // material boundaries, not complemented solids.
+    let outward_profile = profile.inverse();
     let shell: Shell = builder::revolve_wire(
-        &profile,
+        &outward_profile,
         Point3::origin(),
         Vector3::unit_z(),
         builder::SweepAngle::Closed,
@@ -218,6 +226,26 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
     anyhow::ensure!(
         result.is_geometric_consistent(),
         "radial-slot difference returned inconsistent topology"
+    );
+
+    // The planar slot removes a circular disk segment on each Z slice from
+    // z=1 to 2. Compare the *removed* volume against the exact section
+    // integral, so meshing bias in the unchanged cylinder cancels.
+    let half_slot_width: f64 = 0.25;
+    let cylinder_radius: f64 = 2.0;
+    let expected_removed = half_slot_width
+        * (cylinder_radius.powi(2) - half_slot_width.powi(2)).sqrt()
+        + cylinder_radius.powi(2) * (half_slot_width / cylinder_radius).asin();
+    let host_volume = host.triangulation(0.01).to_polygon().volume();
+    let result_volume = result.triangulation(0.01).to_polygon().volume();
+    let removed_volume = host_volume - result_volume;
+    anyhow::ensure!(
+        host_volume > result_volume && result_volume > 0.0,
+        "radial-slot subtraction must preserve positively oriented material: host={host_volume}, result={result_volume}"
+    );
+    anyhow::ensure!(
+        (removed_volume - expected_removed).abs() < 0.025,
+        "radial-slot subtraction removed {removed_volume:.6} cubic units instead of {expected_removed:.6}"
     );
     Ok(())
 }
