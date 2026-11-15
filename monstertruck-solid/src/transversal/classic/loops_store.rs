@@ -1977,7 +1977,7 @@ fn materialize_interface_loops<C>(
     [mut operand0, mut operand1]: [OperandLoopStores<C>; 2],
     [poly_shell0, poly_shell1]: [&Shell<Point3, PolylineCurve, Option<PolygonMesh>>; 2],
     tolerances: BooleanTolerance,
-    coplanar: CoplanarInterfaceAnalysis,
+    coplanar: &CoplanarInterfaceAnalysis,
     has_shared_ruled: bool,
 ) -> Option<InterfaceLoops<C>>
 where
@@ -2015,6 +2015,18 @@ where
     })
 }
 
+/// Initialize exact and tessellated loops for one input shell without
+/// conflating their independently owned topology.
+fn operand_loops_from_shells<C, S>(
+    geom_shell: &Shell<Point3, C, S>,
+    poly_shell: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+) -> OperandLoopStores<C> {
+    OperandLoopStores {
+        geom: geom_shell.face_iter().collect(),
+        poly: poly_shell.face_iter().collect(),
+    }
+}
+
 pub(super) fn create_loops_stores<C, S>(
     geom_shell0: &Shell<Point3, C, S>,
     poly_shell0: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
@@ -2038,14 +2050,8 @@ where
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    let mut operand0 = OperandLoopStores {
-        geom: geom_shell0.face_iter().collect(),
-        poly: poly_shell0.face_iter().collect(),
-    };
-    let mut operand1 = OperandLoopStores {
-        geom: geom_shell1.face_iter().collect(),
-        poly: poly_shell1.face_iter().collect(),
-    };
+    let mut operand0 = operand_loops_from_shells(geom_shell0, poly_shell0);
+    let mut operand1 = operand_loops_from_shells(geom_shell1, poly_shell1);
     let store0_len = operand0.geom.len();
     let store1_len = operand1.geom.len();
     let boolean_tolerance = BooleanTolerance::new(tol);
@@ -2152,7 +2158,7 @@ where
         [operand0, operand1],
         [poly_shell0, poly_shell1],
         boolean_tolerance,
-        coplanar,
+        &coplanar,
         has_shared_ruled,
     )
 }
