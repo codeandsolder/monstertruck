@@ -197,17 +197,18 @@ fn normalize_parameter_axis(
         return None;
     }
     if let Some(previous) = previous {
-        return match period {
-            Some(period) => {
+        return period.map_or_else(
+            || {
+                range.map_or(Some(value), |range| {
+                    normalize_intrinsic_parameter(value, range)
+                })
+            },
+            |period| {
                 let turns = ((previous - value) / period).round();
                 let shifted = turns.mul_add(period, value);
                 shifted.is_finite().then_some(shifted)
-            }
-            None => range.map_or_else(
-                || Some(value),
-                |range| normalize_intrinsic_parameter(value, range),
-            ),
-        };
+            },
+        );
     }
     match (period, range) {
         (Some(period), Some((min, max))) => {
