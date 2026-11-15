@@ -8,7 +8,7 @@ use crate::{
     PreBindGroupLayoutEntry, PresentMode, Queue, RenderId, RenderPassColorAttachment,
     RenderPassDepthStencilAttachment, RenderPassDescriptor, RenderTextureConfig, Rendered,
     RequestAdapterOptions, Scene, SceneDescriptor, SceneInfo, ShaderStages, StoreOp, StudioConfig,
-    Surface, SurfaceConfiguration, TexelCopyBufferInfo, TexelCopyBufferLayout,
+    Surface, SurfaceColorSpace, SurfaceConfiguration, TexelCopyBufferInfo, TexelCopyBufferLayout,
     TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor, TextureDimension,
     TextureFormat, TextureUsages, TextureView, TextureViewDescriptor, TimeInstant, WindowHandler,
     WindowScene, WindowSceneDescriptor, Zeroable, bind_group_util, narrow_f64_to_f32,
@@ -49,6 +49,7 @@ async fn init_default_device(
             power_preference: PowerPreference::LowPower,
             compatible_surface: surface.as_ref(),
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await?;
 
@@ -149,6 +150,7 @@ impl RenderTextureConfig {
         SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format: self.format,
+            color_space: SurfaceColorSpace::Auto,
             width: self.canvas_size.0,
             height: self.canvas_size.1,
             alpha_mode: CompositeAlphaMode::Auto,
@@ -912,7 +914,7 @@ impl Scene {
         device.poll(poll_type)?;
         match receiver.receive().await {
             Some(Ok(())) => {
-                let mapped = buffer_slice.get_mapped_range();
+                let mapped = buffer_slice.get_mapped_range()?;
                 if layout.padded_bytes_per_row == layout.unpadded_bytes_per_row {
                     return Ok(mapped.iter().copied().collect());
                 }
@@ -1030,7 +1032,7 @@ impl WindowScene {
             .texture
             .create_view(&TextureViewDescriptor::default());
         self.render(&view)?;
-        surface_texture.present();
+        self.scene.queue().present(surface_texture);
         Ok(())
     }
 }

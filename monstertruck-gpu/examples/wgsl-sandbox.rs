@@ -194,7 +194,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                         vertex: VertexState {
                             module: &self.module,
                             entry_point: Some("vs_main"),
-                            buffers: &[VertexBufferLayout {
+                            buffers: &[Some(VertexBufferLayout {
                                 array_stride: 4,
                                 step_mode: VertexStepMode::Vertex,
                                 attributes: &[VertexAttribute {
@@ -202,7 +202,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                                     offset: 0,
                                     shader_location: 0,
                                 }],
-                            }],
+                            })],
                             compilation_options: PipelineCompilationOptions::default(),
                         },
                         fragment: Some(FragmentState {
