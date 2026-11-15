@@ -169,10 +169,10 @@ fn normalize_intrinsic_parameter(value: f64, (min, max): (f64, f64)) -> Option<f
         return None;
     }
     let policy = DEFAULT_NUMERICAL_TOLERANCES;
-    let slack = policy.healing_projection_parameter_relative * span
-        + policy.healing_projection_parameter_roundoff_ulps
-            * f64::EPSILON
-            * min.abs().max(max.abs());
+    let slack = (policy.healing_projection_parameter_roundoff_ulps * f64::EPSILON).mul_add(
+        min.abs().max(max.abs()),
+        policy.healing_projection_parameter_relative * span,
+    );
     if value < min {
         (min - value <= slack).then_some(min)
     } else if value > max {
@@ -183,7 +183,7 @@ fn normalize_intrinsic_parameter(value: f64, (min, max): (f64, f64)) -> Option<f
 }
 
 /// Normalize along a native UV axis. Periods are expressed in native
-/// parameter units; there is no relationship to model-space KERNEL_EPSILON.
+/// parameter units; there is no relationship to model-space `KERNEL_EPSILON`.
 fn normalize_parameter_axis(
     value: f64,
     previous: Option<f64>,
@@ -203,9 +203,10 @@ fn normalize_parameter_axis(
                 let shifted = turns.mul_add(period, value);
                 shifted.is_finite().then_some(shifted)
             }
-            None => range.map_or(Some(value), |range| {
-                normalize_intrinsic_parameter(value, range)
-            }),
+            None => range.map_or_else(
+                || Some(value),
+                |range| normalize_intrinsic_parameter(value, range),
+            ),
         };
     }
     match (period, range) {
@@ -217,7 +218,7 @@ fn normalize_parameter_axis(
             let wrapped = min + (value - min).rem_euclid(period);
             normalize_intrinsic_parameter(wrapped, (min, max))
         }
-        (Some(_), None) | (None, None) => Some(value),
+        (Some(_) | None, None) => Some(value),
         (None, Some(range)) => normalize_intrinsic_parameter(value, range),
     }
 }
@@ -334,8 +335,10 @@ fn trim_parameter_slack((first, last): (f64, f64)) -> Option<f64> {
         return None;
     }
     let policy = DEFAULT_NUMERICAL_TOLERANCES;
-    let slack = span * policy.trim_parameter_relative
-        + policy.trim_parameter_roundoff_ulps * f64::EPSILON * first.abs().max(last.abs());
+    let slack = (policy.trim_parameter_roundoff_ulps * f64::EPSILON).mul_add(
+        first.abs().max(last.abs()),
+        span * policy.trim_parameter_relative,
+    );
     slack.is_finite().then_some(slack)
 }
 
