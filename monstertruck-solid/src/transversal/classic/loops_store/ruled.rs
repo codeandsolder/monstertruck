@@ -46,6 +46,104 @@ fn normalized_ruled_knots_match(a: &KnotVector, b: &KnotVector, relative: f64) -
     })
 }
 
+/// Prove that the complete homogeneous control nets represent congruent
+/// ruled carriers with a positive common axial interval.
+fn congruent_ruled_sweeps(
+    net_a: &[Vec<Vector4>],
+    net_b: &[Vec<Vector4>],
+    spatial_tol: f64,
+    direction_tol: f64,
+    weight_tol: f64,
+) -> bool {
+    let Some(origin_a) = project(net_a[0][0]) else {
+        return false;
+    };
+    let Some(end_a) = project(net_a[0][1]) else {
+        return false;
+    };
+    let Some(origin_b) = project(net_b[0][0]) else {
+        return false;
+    };
+    let Some(end_b) = project(net_b[0][1]) else {
+        return false;
+    };
+    let sweep_a = end_a - origin_a;
+    let sweep_b = end_b - origin_b;
+    let length_a = sweep_a.magnitude();
+    let length_b = sweep_b.magnitude();
+    if !length_a.is_finite()
+        || !length_b.is_finite()
+        || length_a <= spatial_tol
+        || length_b <= spatial_tol
+    {
+        return false;
+    }
+    let axis = sweep_a.normalize();
+    // Both the angle and its model-space displacement along the complete
+    // sweep must agree. A tiny angle over a long sweep can still separate
+    // supporting carriers by much more than the permitted spatial residual.
+    if axis.cross(sweep_b / length_b).magnitude() > direction_tol
+        || axis.cross(sweep_b).magnitude() > spatial_tol
+        || (origin_b - origin_a).cross(axis).magnitude() > spatial_tol
+    {
+        return false;
+    }
+    let offset = origin_b - origin_a;
+    let mut profile_is_nondegenerate = false;
+    let reference_weight = net_a[0][0].w;
+    let candidate_weight = net_b[0][0].w;
+    if !reference_weight.is_finite()
+        || !candidate_weight.is_finite()
+        || reference_weight <= 0.0
+        || candidate_weight <= 0.0
+    {
+        return false;
+    }
+    for (row_a, row_b) in net_a.iter().zip(net_b) {
+        let Some(aa) = project(row_a[0]) else {
+            return false;
+        };
+        let Some(ab) = project(row_a[1]) else {
+            return false;
+        };
+        let Some(ba) = project(row_b[0]) else {
+            return false;
+        };
+        let Some(bb) = project(row_b[1]) else {
+            return false;
+        };
+        if (ab - aa - sweep_a).magnitude() > spatial_tol
+            || (bb - ba - sweep_b).magnitude() > spatial_tol
+            || (ba - aa - offset).magnitude() > spatial_tol
+        {
+            return false;
+        }
+        for (p, q) in row_a.iter().zip(row_b.iter()) {
+            if (p.w / reference_weight - q.w / candidate_weight).abs() > weight_tol {
+                return false;
+            }
+        }
+        if (row_a[0].w - row_a[1].w).abs() > weight_tol * row_a[0].w
+            || (row_b[0].w - row_b[1].w).abs() > weight_tol * row_b[0].w
+        {
+            return false;
+        }
+        profile_is_nondegenerate |= (aa - origin_a).cross(axis).magnitude() > spatial_tol;
+    }
+    if !profile_is_nondegenerate {
+        return false;
+    }
+    // The complete two-control-point sweeps each describe an exact finite
+    // axial interval; unlike a broad-phase bbox this is a support certificate.
+    let offset_on_axis = offset.dot(axis);
+    let sweep_b_on_axis = sweep_b.dot(axis);
+    let (b0, b1) = (
+        offset_on_axis.min(offset_on_axis + sweep_b_on_axis),
+        offset_on_axis.max(offset_on_axis + sweep_b_on_axis),
+    );
+    0.0f64.max(b0) + spatial_tol < length_a.min(b1)
+}
+
 /// Certify a positive-area shared carrier between two complete rational
 /// ruled-extrusion patches (same profile, independently trimmed sweep spans).
 /// This does not prove a boolean face relation, wire trim membership or
@@ -87,89 +185,69 @@ pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
         return false;
     }
 
-    let Some(origin_a) = project(net_a[0][0]) else {
-        return false;
-    };
-    let Some(end_a) = project(net_a[0][1]) else {
-        return false;
-    };
-    let Some(origin_b) = project(net_b[0][0]) else {
-        return false;
-    };
-    let Some(end_b) = project(net_b[0][1]) else {
-        return false;
-    };
-    let sweep_a = end_a - origin_a;
-    let sweep_b = end_b - origin_b;
-    let length_a = sweep_a.magnitude();
-    let length_b = sweep_b.magnitude();
-    if !length_a.is_finite()
-        || !length_b.is_finite()
-        || length_a <= spatial_tol
-        || length_b <= spatial_tol
-    {
-        return false;
+    congruent_ruled_sweeps(net_a, net_b, spatial_tol, direction_tol, weight_tol)
+}
+
+/// Certify a full quadratic rational Bezier span algebraically, not from
+/// sampled points. Every coefficient of the degree-four circle polynomial
+/// must vanish within its accumulated homogeneous roundoff budget.
+fn certify_circular_span(
+    segment: &monstertruck_geometry::prelude::BsplineCurve<Vector4>,
+    origin: Point3,
+    basis_u: Vector3,
+    basis_v: Vector3,
+    cx: f64,
+    cy: f64,
+    radius2: f64,
+    coefficient_eps: f64,
+) -> Option<()> {
+    let cp = segment.control_points();
+    if cp.len() != 3 {
+        return None;
     }
-    let axis = sweep_a.normalize();
-    // Both the angle and its model-space displacement along the complete
-    // sweep must agree. A tiny angle over a long sweep can still separate
-    // supporting carriers by much more than the permitted spatial residual.
-    if axis.cross(sweep_b / length_b).magnitude() > direction_tol
-        || axis.cross(sweep_b).magnitude() > spatial_tol
-        || (origin_b - origin_a).cross(axis).magnitude() > spatial_tol
-    {
-        return false;
-    }
-    let offset = origin_b - origin_a;
-    let mut profile_is_nondegenerate = false;
-    let weight_a0 = net_a[0][0].w;
-    let weight_b0 = net_b[0][0].w;
-    if !weight_a0.is_finite() || !weight_b0.is_finite() || weight_a0 <= 0.0 || weight_b0 <= 0.0 {
-        return false;
-    }
-    for (row_a, row_b) in net_a.iter().zip(net_b) {
-        let Some(aa) = project(row_a[0]) else {
-            return false;
-        };
-        let Some(ab) = project(row_a[1]) else {
-            return false;
-        };
-        let Some(ba) = project(row_b[0]) else {
-            return false;
-        };
-        let Some(bb) = project(row_b[1]) else {
-            return false;
-        };
-        if (ab - aa - sweep_a).magnitude() > spatial_tol
-            || (bb - ba - sweep_b).magnitude() > spatial_tol
-            || (ba - aa - offset).magnitude() > spatial_tol
-        {
-            return false;
+    let mut x = [0.0; 3];
+    let mut y = [0.0; 3];
+    let mut w = [0.0; 3];
+    for (i, h) in cp.iter().copied().enumerate() {
+        if !h.w.is_finite() || h.w <= 0.0 {
+            return None;
         }
-        for (p, q) in row_a.iter().zip(row_b.iter()) {
-            if (p.w / weight_a0 - q.w / weight_b0).abs() > weight_tol {
-                return false;
-            }
-        }
-        if (row_a[0].w - row_a[1].w).abs() > weight_tol * row_a[0].w
-            || (row_b[0].w - row_b[1].w).abs() > weight_tol * row_b[0].w
-        {
-            return false;
-        }
-        profile_is_nondegenerate |= (aa - origin_a).cross(axis).magnitude() > spatial_tol;
+        let relative = Vector3::new(h.x, h.y, h.z) - origin.to_vec() * h.w;
+        x[i] = cx.mul_add(-h.w, relative.dot(basis_u));
+        y[i] = cy.mul_add(-h.w, relative.dot(basis_v));
+        w[i] = h.w;
     }
-    if !profile_is_nondegenerate {
-        return false;
+    let power = |c: [f64; 3]| {
+        [
+            c[0],
+            2.0 * (c[1] - c[0]),
+            (-2.0_f64).mul_add(c[1], c[0] + c[2]),
+        ]
+    };
+    let x = power(x);
+    let y = power(y);
+    let w = power(w);
+    let mut residual = [0.0f64; 5];
+    let mut coefficient_scale = [0.0f64; 5];
+    for i in 0..3 {
+        for j in 0..3 {
+            let xx = x[i] * x[j];
+            let yy = y[i] * y[j];
+            let rr = radius2 * w[i] * w[j];
+            residual[i + j] += xx + yy - rr;
+            coefficient_scale[i + j] += xx.abs() + yy.abs() + rr.abs();
+        }
     }
-    // The complete two-control-point sweeps each describe an exact finite
-    // axial interval; unlike a broad-phase bbox this is a support certificate.
-    let offset_on_axis = offset.dot(axis);
-    let sweep_b_on_axis = sweep_b.dot(axis);
-    let (b0, b1) = (
-        offset_on_axis.min(offset_on_axis + sweep_b_on_axis),
-        offset_on_axis.max(offset_on_axis + sweep_b_on_axis),
-    );
-    0.0f64.max(b0) + spatial_tol < length_a.min(b1)
+    // All five coefficients come from the same polynomial identity.
+    // Zero or near-zero coefficients still accumulate roundoff from
+    // the entire rational circle fit, not just their own cancellation.
+    // Normalize by the maximum *actual squared-length* coefficient
+    // contribution, keeping one dimensionally consistent scale.
+    let scale = coefficient_scale.into_iter().fold(0.0_f64, f64::max);
+    residual
+        .iter()
+        .all(|value| value.abs() <= coefficient_eps * scale)
+        .then_some(())
 }
 
 /// Algebraically certify a circular-cylinder carrier represented by a
@@ -231,14 +309,14 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
     let p0 = xy(profile.evaluate(lo))?;
     let p1 = xy(profile.evaluate(f64::midpoint(lo, hi)))?;
     let p2 = xy(profile.evaluate(hi))?;
-    let twice_det = 2.0 * ((p1.0 - p0.0) * (p2.1 - p0.1) - (p2.0 - p0.0) * (p1.1 - p0.1));
+    let twice_det = 2.0 * (p2.0 - p0.0).mul_add(-(p1.1 - p0.1), (p1.0 - p0.0) * (p2.1 - p0.1));
     if twice_det.abs() <= spatial_eps * spatial_eps {
         return None;
     }
     let d1 = p1.0.mul_add(p1.0, p1.1 * p1.1) - p0.0.mul_add(p0.0, p0.1 * p0.1);
     let d2 = p2.0.mul_add(p2.0, p2.1 * p2.1) - p0.0.mul_add(p0.0, p0.1 * p0.1);
-    let cx = (d1 * (p2.1 - p0.1) - d2 * (p1.1 - p0.1)) / twice_det;
-    let cy = ((p1.0 - p0.0) * d2 - (p2.0 - p0.0) * d1) / twice_det;
+    let cx = d2.mul_add(-(p1.1 - p0.1), d1 * (p2.1 - p0.1)) / twice_det;
+    let cy = (p2.0 - p0.0).mul_add(-d1, (p1.0 - p0.0) * d2) / twice_det;
     let radius2 = (p0.0 - cx).mul_add(p0.0 - cx, (p0.1 - cy).powi(2));
     if !radius2.is_finite() || radius2 <= spatial_eps * spatial_eps {
         return None;
@@ -248,53 +326,12 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
     // (X - cx W)^2 + (Y - cy W)^2 - r² W² == 0 identically.
     // Convert this product to power-basis coefficients, not to a collection of
     // point samples. Nonzero knot intervals are split by exact knot insertion.
-    let certify = |segment: &BsplineCurve<Vector4>| -> Option<()> {
-        let cp = segment.control_points();
-        if cp.len() != 3 {
-            return None;
-        }
-        let mut x = [0.0; 3];
-        let mut y = [0.0; 3];
-        let mut w = [0.0; 3];
-        for (i, h) in cp.iter().copied().enumerate() {
-            if !h.w.is_finite() || h.w <= 0.0 {
-                return None;
-            }
-            let relative = Vector3::new(h.x, h.y, h.z) - origin.to_vec() * h.w;
-            x[i] = relative.dot(basis_u) - cx * h.w;
-            y[i] = relative.dot(basis_v) - cy * h.w;
-            w[i] = h.w;
-        }
-        let power = |c: [f64; 3]| [c[0], 2.0 * (c[1] - c[0]), c[0] - 2.0 * c[1] + c[2]];
-        let x = power(x);
-        let y = power(y);
-        let w = power(w);
-        let mut residual = [0.0f64; 5];
-        let mut coefficient_scale = [0.0f64; 5];
-        for i in 0..3 {
-            for j in 0..3 {
-                let xx = x[i] * x[j];
-                let yy = y[i] * y[j];
-                let rr = radius2 * w[i] * w[j];
-                residual[i + j] += xx + yy - rr;
-                coefficient_scale[i + j] += xx.abs() + yy.abs() + rr.abs();
-            }
-        }
-        // All five coefficients come from the same polynomial identity.
-        // Zero or near-zero coefficients still accumulate roundoff from
-        // the entire rational circle fit, not just their own cancellation.
-        // Normalize by the maximum *actual squared-length* coefficient
-        // contribution, keeping one dimensionally consistent scale.
-        let scale = coefficient_scale.into_iter().fold(0.0_f64, f64::max);
-        residual
-            .iter()
-            .all(|value| value.abs() <= coefficient_eps * scale)
-            .then_some(())
-    };
 
     let mut remaining = profile;
-    let knot_slack = policy.boolean_cylinder_knot_relative * (hi - lo).abs()
-        + policy.boolean_iso_parameter_roundoff_ulps * f64::EPSILON * lo.abs().max(hi.abs());
+    let knot_slack = (policy.boolean_iso_parameter_roundoff_ulps * f64::EPSILON).mul_add(
+        lo.abs().max(hi.abs()),
+        policy.boolean_cylinder_knot_relative * (hi - lo).abs(),
+    );
     let mut interior = knots
         .iter()
         .copied()
@@ -302,11 +339,29 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
         .collect::<Vec<_>>();
     interior.dedup_by(|a, b| (*a - *b).abs() <= knot_slack);
     for knot in interior {
-        let next = remaining.cut(knot);
-        certify(&remaining)?;
-        remaining = next;
+        let tail_segment = remaining.cut(knot);
+        certify_circular_span(
+            &remaining,
+            origin,
+            basis_u,
+            basis_v,
+            cx,
+            cy,
+            radius2,
+            coefficient_eps,
+        )?;
+        remaining = tail_segment;
     }
-    certify(&remaining)?;
+    certify_circular_span(
+        &remaining,
+        origin,
+        basis_u,
+        basis_v,
+        cx,
+        cy,
+        radius2,
+        coefficient_eps,
+    )?;
     let center = origin + basis_u * cx + basis_v * cy;
     let axial = (origin.to_vec().dot(axis), end.to_vec().dot(axis));
     Some((center, axis, radius2.sqrt(), axial))
