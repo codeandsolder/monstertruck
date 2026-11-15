@@ -4,6 +4,8 @@ use super::{
 };
 
 type Tuple = (f64, f64);
+/// A complete second-order surface derivative jet `(point, du, dv, duu, duv, dvv)`.
+pub type SurfaceSecondJet<P, V> = (P, V, V, V, V, V);
 /// A surface defined by a mapping `S(u, v)` from two parameters to a point.
 ///
 /// As `(u, v)` varies over the parameter domain, the returned points sweep out the surface.
@@ -53,14 +55,7 @@ pub trait ParametricSurface: Clone {
         &self,
         u: f64,
         v: f64,
-    ) -> (
-        Self::Point,
-        Self::Vector,
-        Self::Vector,
-        Self::Vector,
-        Self::Vector,
-        Self::Vector,
-    ) {
+    ) -> SurfaceSecondJet<Self::Point, Self::Vector> {
         (
             self.evaluate(u, v),
             self.derivative_u(u, v),
