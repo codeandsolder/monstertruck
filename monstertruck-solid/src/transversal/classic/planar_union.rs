@@ -549,6 +549,82 @@ fn reconcile_shared_vertex_uv<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     Some(())
 }
 
+/// Materialize noded exact edges from reconciled native UV charts and
+/// normalize their deterministic traversal independent of edge allocation.
+fn finish_projected_arrangement<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    projected: Vec<Vec<Vec<Point2>>>,
+    samples: &HashMap<EdgeId<AltCurve<C, S>>, PolylineCurve<Point3>>,
+    surface: S,
+    cylinder: Option<CylinderChart>,
+) -> Option<PlanarArrangement<C, S>> {
+    let mut polygons = Vec::new();
+    let mut edges = HashMap::<EdgeId<AltCurve<C, S>>, ProjectedEdge<AltCurve<C, S>>>::default();
+    let mut span_min = Point2::new(f64::INFINITY, f64::INFINITY);
+    let mut span_max = Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for (region, region_loops) in source.iter().zip(projected) {
+        for (wire, poly) in region.absolute_boundaries().iter().zip(&region_loops) {
+            for &point in poly {
+                span_min.x = span_min.x.min(point.x);
+                span_min.y = span_min.y.min(point.y);
+                span_max.x = span_max.x.max(point.x);
+                span_max.y = span_max.y.max(point.y);
+            }
+            // Every exact edge must use its parent wire's *normalized*
+            // chart coordinates, rather than a separate inverse projection.
+            let mut start = 0;
+            for edge in wire {
+                let segment_count = samples.get(&edge.id())?.len().checked_sub(1)?;
+                let end = start + segment_count;
+                let mut uv = poly.get(start..=end)?.to_vec();
+                if !edge.orientation() {
+                    uv.reverse();
+                }
+                edges.entry(edge.id()).or_insert_with(|| ProjectedEdge {
+                    edge: edge.absolute_clone(),
+                    uv,
+                });
+                start = end;
+            }
+            if start + 1 != poly.len() {
+                return None;
+            }
+        }
+        polygons.push(region_loops);
+    }
+    let span = (span_max.x - span_min.x).max(span_max.y - span_min.y);
+    if !span.is_finite() || span <= 0.0 {
+        return None;
+    }
+    // Edge IDs are allocation-specific; use a geometric traversal order
+    // so intersection evidence never depends on hash-table iteration.
+    let mut edges = edges.into_values().collect::<Vec<_>>();
+    edges.sort_by(|a, b| {
+        let (af, ab, bf, bb) = (
+            a.edge.front().point(),
+            a.edge.back().point(),
+            b.edge.front().point(),
+            b.edge.back().point(),
+        );
+        let curve_middle = |edge: &ProjectedEdge<AltCurve<C, S>>| {
+            let curve = edge.edge.oriented_curve();
+            let (t0, t1) = curve.range_tuple();
+            curve.evaluate(f64::midpoint(t0, t1))
+        };
+        point_lex_cmp(&af, &bf)
+            .then_with(|| point_lex_cmp(&ab, &bb))
+            .then_with(|| point_lex_cmp(&curve_middle(a), &curve_middle(b)))
+            .then_with(|| a.uv.len().cmp(&b.uv.len()))
+    });
+    Some(PlanarArrangement {
+        surface,
+        cylinder,
+        polygons,
+        edges,
+        span,
+    })
+}
+
 fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     source: &[AltRegion<C, S>],
     tol: f64,
@@ -640,71 +716,7 @@ fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         &mut projected,
     )?;
 
-    let mut polygons = Vec::new();
-    let mut edges = HashMap::<EdgeId<AltCurve<C, S>>, ProjectedEdge<AltCurve<C, S>>>::default();
-    let mut span_min = Point2::new(f64::INFINITY, f64::INFINITY);
-    let mut span_max = Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for (region, region_loops) in source.iter().zip(projected) {
-        for (wire, poly) in region.absolute_boundaries().iter().zip(&region_loops) {
-            for &point in poly {
-                span_min.x = span_min.x.min(point.x);
-                span_min.y = span_min.y.min(point.y);
-                span_max.x = span_max.x.max(point.x);
-                span_max.y = span_max.y.max(point.y);
-            }
-            // Every exact edge must use its parent wire's *normalized*
-            // chart coordinates, rather than a separate inverse projection.
-            let mut start = 0;
-            for edge in wire {
-                let segment_count = samples.get(&edge.id())?.len().checked_sub(1)?;
-                let end = start + segment_count;
-                let mut uv = poly.get(start..=end)?.to_vec();
-                if !edge.orientation() {
-                    uv.reverse();
-                }
-                edges.entry(edge.id()).or_insert_with(|| ProjectedEdge {
-                    edge: edge.absolute_clone(),
-                    uv,
-                });
-                start = end;
-            }
-            if start + 1 != poly.len() {
-                return None;
-            }
-        }
-        polygons.push(region_loops);
-    }
-    let span = (span_max.x - span_min.x).max(span_max.y - span_min.y);
-    if !span.is_finite() || span <= 0.0 {
-        return None;
-    }
-    // Edge IDs are allocation-specific; use a geometric traversal order
-    // so intersection evidence never depends on hash-table iteration.
-    let mut edges = edges.into_values().collect::<Vec<_>>();
-    edges.sort_by(|a, b| {
-        let (af, ab, bf, bb) = (
-            a.edge.front().point(),
-            a.edge.back().point(),
-            b.edge.front().point(),
-            b.edge.back().point(),
-        );
-        let curve_middle = |edge: &ProjectedEdge<AltCurve<C, S>>| {
-            let curve = edge.edge.oriented_curve();
-            let (t0, t1) = curve.range_tuple();
-            curve.evaluate(f64::midpoint(t0, t1))
-        };
-        point_lex_cmp(&af, &bf)
-            .then_with(|| point_lex_cmp(&ab, &bb))
-            .then_with(|| point_lex_cmp(&curve_middle(a), &curve_middle(b)))
-            .then_with(|| a.uv.len().cmp(&b.uv.len()))
-    });
-    Some(PlanarArrangement {
-        surface,
-        cylinder,
-        polygons,
-        edges,
-        span,
-    })
+    finish_projected_arrangement(source, projected, &samples, surface, cylinder)
 }
 
 /// Probe both sides of each exact edge, retaining only the union boundary.

@@ -262,6 +262,21 @@ where
     }
 }
 
+/// Seed an exact intersection projection without weakening incidence
+/// checks. A missing seed remains an explicit rejection, with optional trace.
+fn seed_bridge_surface<S>(surface: &S, at: Point3, name: &str, debug: bool) -> Option<(f64, f64)>
+where S: ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3> {
+    let result = surface
+        .search_parameter(at, None, 100)
+        .or_else(|| surface.search_nearest_parameter(at, None, 100));
+    if result.is_none() && debug {
+        eprintln!("CURVED_BRIDGE_FAIL {name} at={at:?}");
+    }
+    result
+}
+
 /// Correct a short curved SSI gap using transverse slicing planes.
 /// Both endpoints come from certified fragments, and intermediate predictor
 /// points are corrected by the exact two-surface/one-plane Newton problem.
@@ -308,23 +323,8 @@ where
     let leader = PolylineCurve(vec![a, b]);
     let intersection = IntersectionCurve::new(surface0.clone(), surface1.clone(), leader);
     let debug = std::env::var_os("MT_CURVED_SSI_TRACE").is_some();
-    let seed = |surface: &S, point: Point3| {
-        surface
-            .search_parameter(point, None, 100)
-            .or_else(|| surface.search_nearest_parameter(point, None, 100))
-    };
-    let mut hint0 = seed(surface0, a).or_else(|| {
-        if debug {
-            eprintln!("CURVED_BRIDGE_FAIL seed_surface0 at={a:?}");
-        }
-        None
-    })?;
-    let mut hint1 = seed(surface1, a).or_else(|| {
-        if debug {
-            eprintln!("CURVED_BRIDGE_FAIL seed_surface1 at={a:?}");
-        }
-        None
-    })?;
+    let mut hint0 = seed_bridge_surface(surface0, a, "seed_surface0", debug)?;
+    let mut hint1 = seed_bridge_surface(surface1, a, "seed_surface1", debug)?;
     // A nonfinite quotient is not a license to silently undersample a gap.
     let subdivisions = length / (mesh_scale * 0.5);
     if !subdivisions.is_finite() {
@@ -553,6 +553,91 @@ where
 /// certified duplicate suffix. No new geometric surface tolerance is needed:
 /// candidates are corrected on both exact surfaces and sampled through the
 /// overlap, not guessed from a coincident endpoint.
+/// Certify that every corrected point of a discarded suffix progresses
+/// monotonically along exactly one branch of the retained SSI fragment.
+fn certified_overlap_progress<S>(
+    trace: &[Point3],
+    second: &Polyline,
+    surface0: &S,
+    surface1: &S,
+    tolerances: BooleanTolerance,
+) -> Option<f64>
+where
+    S: ParametricSurface3D
+        + Clone
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let tolerance = tolerances.fragment_residual();
+    let surface_residual = tolerances.surface_support_residual();
+    let second_start = *trace.first()?;
+    let first_end = *trace.last()?;
+    let mut previous_progress = 0.0_f64;
+    let mesh_step = tolerances.mesh_seed * 0.5;
+    let mut samples = 0usize;
+    let ic = IntersectionCurve::new(
+        surface0.clone(),
+        surface1.clone(),
+        PolylineCurve(vec![second_start, first_end]),
+    );
+    for pair in trace.windows(2) {
+        let delta = pair[1] - pair[0];
+        // Reject nonfinite/overflowed counts instead of saturating a float
+        // cast and overflowing the cumulative sampling budget.
+        let count = (delta.magnitude() / mesh_step).ceil().max(1.0).to_usize()?;
+        if samples.checked_add(count).is_none_or(|total| total > 4096) {
+            return None;
+        }
+        for step in 1..=count {
+            let fraction = step.to_f64()? / count.to_f64()?;
+            let point = if step == count {
+                pair[1]
+            } else {
+                let predictor = pair[0] + delta * fraction;
+                let seed = |surface: &S| {
+                    surface
+                        .search_parameter(pair[0], None, 100)
+                        .or_else(|| surface.search_nearest_parameter(pair[0], None, 100))
+                };
+                let (exact, u0, u1) = ic.search_intersection_in_plane(
+                    predictor,
+                    delta,
+                    seed(surface0),
+                    seed(surface1),
+                    100,
+                )?;
+                if surface0
+                    .evaluate(u0.x, u0.y)
+                    .distance(surface1.evaluate(u1.x, u1.y))
+                    > surface_residual
+                    || exact.distance(predictor) > delta.magnitude() * 0.5
+                {
+                    return None;
+                }
+                exact
+            };
+            let (index, local) = locate_on_exact_fragment(
+                second,
+                point,
+                surface0,
+                surface1,
+                tolerance,
+                surface_residual,
+                tolerances.mesh_seed,
+            )?;
+            let progress = index.to_f64()? + local;
+            if progress + DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_progress_slack
+                < previous_progress
+            {
+                return None;
+            }
+            previous_progress = progress;
+            samples += 1;
+        }
+    }
+    Some(previous_progress)
+}
+
 fn overlap_join_candidate<S>(
     first: &Polyline,
     second: &Polyline,
@@ -617,72 +702,11 @@ where
     }
     // The discarded first suffix must progress along the retained second
     // fragment, not cross it or return along a distinct branch.
-    let mut previous_progress = 0.0_f64;
     let mut trace = Vec::with_capacity(first.len() - cut_index);
     trace.push(second_start);
     trace.extend_from_slice(&first[cut_index + 1..]);
-    let mesh_step = tolerances.mesh_seed * 0.5;
-    let mut samples = 0usize;
-    let ic = IntersectionCurve::new(
-        surface0.clone(),
-        surface1.clone(),
-        PolylineCurve(vec![second_start, first_end]),
-    );
-    for pair in trace.windows(2) {
-        let delta = pair[1] - pair[0];
-        // Reject nonfinite/overflowed counts instead of saturating a float
-        // cast and overflowing the cumulative sampling budget.
-        let count = (delta.magnitude() / mesh_step).ceil().max(1.0).to_usize()?;
-        if samples.checked_add(count).is_none_or(|total| total > 4096) {
-            return None;
-        }
-        for step in 1..=count {
-            let fraction = step.to_f64()? / count.to_f64()?;
-            let point = if step == count {
-                pair[1]
-            } else {
-                let predictor = pair[0] + delta * fraction;
-                let seed = |surface: &S| {
-                    surface
-                        .search_parameter(pair[0], None, 100)
-                        .or_else(|| surface.search_nearest_parameter(pair[0], None, 100))
-                };
-                let (exact, u0, u1) = ic.search_intersection_in_plane(
-                    predictor,
-                    delta,
-                    seed(surface0),
-                    seed(surface1),
-                    100,
-                )?;
-                if surface0
-                    .evaluate(u0.x, u0.y)
-                    .distance(surface1.evaluate(u1.x, u1.y))
-                    > surface_residual
-                    || exact.distance(predictor) > delta.magnitude() * 0.5
-                {
-                    return None;
-                }
-                exact
-            };
-            let (index, local) = locate_on_exact_fragment(
-                second,
-                point,
-                surface0,
-                surface1,
-                tolerance,
-                surface_residual,
-                tolerances.mesh_seed,
-            )?;
-            let progress = index.to_f64()? + local;
-            if progress + DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_progress_slack
-                < previous_progress
-            {
-                return None;
-            }
-            previous_progress = progress;
-            samples += 1;
-        }
-    }
+    let previous_progress =
+        certified_overlap_progress(&trace, second, surface0, surface1, tolerances)?;
     if previous_progress
         < overlap_index.to_f64()? + overlap_fraction
             - DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_overlap_parameter_slack
