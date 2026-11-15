@@ -70,10 +70,7 @@ pub(super) fn division(leader: usize, samples: usize, tol: f64) {
             metrics.biggest = (leader as u64, samples as u64, tol.to_bits());
         }
         if samples > 2048 {
-            eprintln!(
-                "SSI_DIVISION_HEAVY leader={} samples={} tol={}",
-                leader, samples, tol
-            );
+            eprintln!("SSI_DIVISION_HEAVY leader={leader} samples={samples} tol={tol}");
         }
     });
 }
