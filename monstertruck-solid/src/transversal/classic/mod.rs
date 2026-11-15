@@ -678,12 +678,81 @@ fn orient_regular_shell<P, C, S>(shell: &mut Shell<P, C, S>) -> bool {
     shell.shell_condition() != ShellCondition::Regular
 }
 
+/// Separate closed boundary sheets that share only a non-manifold edge.
+///
+/// A Boolean union of two solids touching along an edge is not a single
+/// two-manifold boundary, but it can be represented by separate closed
+/// boundary shells. Only edges with exactly two incident face uses may
+/// connect faces within a manifold sheet. Every resulting sheet must still
+/// pass the full canonical solid-boundary validator before being accepted.
+fn partition_manifold_sheets<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell: &Shell<Point3, C, S>,
+) -> Option<Vec<Shell<Point3, C, S>>> {
+    let faces: Vec<_> = shell.iter().cloned().collect();
+    let mut edge_users = HashMap::<EdgeId<C>, Vec<usize>>::new();
+    for (face_index, face) in faces.iter().enumerate() {
+        for edge in face.edge_iter() {
+            edge_users.entry(edge.id()).or_default().push(face_index);
+        }
+    }
+    if !edge_users.values().any(|uses| uses.len() > 2) {
+        return None;
+    }
+    let mut adjacency = vec![Vec::<usize>::new(); faces.len()];
+    for uses in edge_users.values() {
+        if let [a, b] = uses.as_slice()
+            && a != b
+        {
+            adjacency[*a].push(*b);
+            adjacency[*b].push(*a);
+        }
+    }
+    let mut seen = vec![false; faces.len()];
+    let mut components = Vec::new();
+    for start in 0..faces.len() {
+        if seen[start] {
+            continue;
+        }
+        seen[start] = true;
+        let mut queue = VecDeque::from([start]);
+        let mut members = Vec::new();
+        while let Some(index) = queue.pop_front() {
+            members.push(index);
+            for &neighbor in &adjacency[index] {
+                if !seen[neighbor] {
+                    seen[neighbor] = true;
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        // Preserve input face order independent of hash-table traversal.
+        members.sort_unstable();
+        let mut component: Shell<_, _, _> = members
+            .into_iter()
+            .map(|index| faces[index].clone())
+            .collect();
+        let _ = orient_regular_shell(&mut component);
+        if component.check_solid_boundary().is_err() {
+            return None;
+        }
+        components.push(component);
+    }
+    (components.len() > 1).then_some(components)
+}
+
 fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     operation: &'static str,
     mut shell: Shell<Point3, C, S>,
 ) -> ClassicResult<Solid<Point3, C, S>> {
     let _ = orient_regular_shell(&mut shell);
-    let boundaries = shell.connected_components();
+    let mut boundaries = shell.connected_components();
+    if boundaries
+        .iter()
+        .any(|boundary| boundary.check_solid_boundary().is_err())
+        && let Some(manifold_sheets) = partition_manifold_sheets(&shell)
+    {
+        boundaries = manifold_sheets;
+    }
     for (shell_index, boundary) in boundaries.iter().enumerate() {
         if boundary.check_solid_boundary().is_ok() {
             continue;
