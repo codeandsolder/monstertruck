@@ -245,7 +245,7 @@ pub(super) fn remove_redundant_interference_strands(
             let fraction = fraction.clamp(0.0, 1.0);
             let foot = segment[0] + direction * fraction;
             let distance2 = foot.distance2(point);
-            let progress = cumulative + length * fraction;
+            let progress = length.mul_add(fraction, cumulative);
             if closest.is_none_or(|(best, _)| distance2 < best) {
                 closest = Some((distance2, progress));
             }

@@ -295,9 +295,10 @@ fn classic_boolean_tolerance(
     let override_length = std::env::var("MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH")
         .ok()
         .map(|value| {
-            let length: f64 = value
-                .parse()
-                .expect("MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH must be numeric");
+            let length: f64 = value.parse().unwrap_or_else(|error| {
+                eprintln!("invalid MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH={value:?}: {error}");
+                std::process::exit(2);
+            });
             assert!(
                 length.is_finite() && length > 0.0,
                 "MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH must be finite and positive"

@@ -14,6 +14,9 @@ pub(super) struct BooleanTolerance {
     pub(super) mesh_seed: f64,
 }
 
+// An explicitly requested sampling experiment must not silently fall back.
+static EXPERIMENT_MESH_FLOOR: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+
 impl BooleanTolerance {
     pub(super) fn new(requested: f64) -> Self {
         // The caller's positive length tolerance is authoritative: a larger
@@ -25,21 +28,20 @@ impl BooleanTolerance {
         let length = requested;
         // EXPERIMENT ONLY: isolate mesh-discretization granularity from
         // geometric admission tolerances and curve adaptive chord sampling.
-        static EXPERIMENT_MESH_FLOOR: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
         let mesh_floor = *EXPERIMENT_MESH_FLOOR.get_or_init(|| {
             std::env::var("MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM")
                 .ok()
-                .map(|text| {
-                    let value: f64 = text
-                        .parse()
-                        .expect("MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM must be a number");
+                .map_or(0.0, |text| {
+                    let value: f64 = text.parse().unwrap_or_else(|error| {
+                        eprintln!("invalid MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM={text:?}: {error}");
+                        std::process::exit(2);
+                    });
                     assert!(
                         value.is_finite() && value > 0.0,
                         "MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM must be finite and positive"
                     );
                     value
                 })
-                .unwrap_or(0.0)
         });
         Self {
             length,
@@ -55,14 +57,16 @@ impl BooleanTolerance {
 
     /// Native B-spline parameter interval slack, not a geometric length.
     /// Span-relative drift plus arithmetic roundoff at the interval's absolute parameter scale.
-    pub(super) fn iso_parameter_slack(self, (lo, hi): (f64, f64)) -> Option<f64> {
+    pub(super) fn iso_parameter_slack((lo, hi): (f64, f64)) -> Option<f64> {
         let span = hi - lo;
         if !lo.is_finite() || !hi.is_finite() || !span.is_finite() || span <= 0.0 {
             return None;
         }
         let policy = DEFAULT_NUMERICAL_TOLERANCES;
-        let slack = policy.boolean_iso_parameter_relative * span
-            + policy.boolean_iso_parameter_roundoff_ulps * f64::EPSILON * lo.abs().max(hi.abs());
+        let slack = (policy.boolean_iso_parameter_roundoff_ulps * f64::EPSILON).mul_add(
+            lo.abs().max(hi.abs()),
+            policy.boolean_iso_parameter_relative * span,
+        );
         (slack.is_finite() && slack > 0.0).then_some(slack)
     }
 
@@ -106,29 +110,16 @@ mod tests {
 
     #[test]
     fn iso_parameter_slack_scales_with_domain_not_world_length() {
-        let precise = BooleanTolerance::new(1.0e-8);
-        let broad = BooleanTolerance::new(1.0e-5);
-        let tiny = precise
-            .iso_parameter_slack((0.0, 1.0e-9))
-            .expect("finite interval");
-        let unit = precise
-            .iso_parameter_slack((0.0, 1.0))
-            .expect("finite interval");
-        let shifted = precise
-            .iso_parameter_slack((1.0e9, 1.0e9 + 1.0))
+        let tiny = BooleanTolerance::iso_parameter_slack((0.0, 1.0e-9)).expect("finite interval");
+        let unit = BooleanTolerance::iso_parameter_slack((0.0, 1.0)).expect("finite interval");
+        let shifted = BooleanTolerance::iso_parameter_slack((1.0e9, 1.0e9 + 1.0))
             .expect("finite shifted interval");
         assert!(tiny < 1.0e-14);
         assert!(unit > 1.0e-7);
         assert!(shifted > unit);
-        assert_eq!(
-            unit,
-            broad
-                .iso_parameter_slack((0.0, 1.0))
-                .expect("finite interval")
-        );
-        assert!(precise.iso_parameter_slack((1.0, 1.0)).is_none());
-        assert!(precise.iso_parameter_slack((f64::NAN, 1.0)).is_none());
-        assert!(precise.iso_parameter_slack((f64::INFINITY, 1.0)).is_none());
+        assert!(BooleanTolerance::iso_parameter_slack((1.0, 1.0)).is_none());
+        assert!(BooleanTolerance::iso_parameter_slack((f64::NAN, 1.0)).is_none());
+        assert!(BooleanTolerance::iso_parameter_slack((f64::INFINITY, 1.0)).is_none());
     }
 
     #[test]
