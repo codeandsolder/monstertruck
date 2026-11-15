@@ -139,6 +139,60 @@ where
         .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
 }
 
+/// Corroborate a preclassified region against actual opposing-solid volume.
+///
+/// A boundary-local And/Or label does not establish occupancy throughout the
+/// face, especially after SSI imprinting. We correct it only if every sampled
+/// interior point is classifiable, agrees, and has the same inside/outside
+/// relation after equal-magnitude offsets to both sides of its source surface.
+/// Mixed samples, boundary contacts, and zero-area regions are NOT evidence
+/// for either label and must never be force-classified.
+fn unanimous_region_containment<C, S>(
+    poly_shell: &PolyShell,
+    region: &faces_classification::BooleanRegion<Point3, C, S>,
+    tol: f64,
+) -> Option<bool>
+where
+    C: PolylineableCurve + ParameterDivision1D<Point = Point3> + Clone,
+    S: MeshableSurface
+        + Clone
+        + ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let samples = if let Some(face) = region.try_face() {
+        classification::sample_points_on_face(&face, tol)?
+    } else {
+        divide_face::sample_points_on_region(region.absolute_boundaries(), &region.surface(), tol)?
+    };
+    let surface = region.surface();
+    let classify = |point: Point3| -> Option<bool> {
+        let verdict = classification::classify_inside_with_polyshell(poly_shell, point)?;
+        // A point on the other solid's boundary can receive a misleading
+        // signed-winding verdict. Both small physical displacements normal to
+        // this face must agree with the point's label; a coincident/tangent
+        // contact therefore cannot override a topological boundary label.
+        let (u, v) = surface
+            .search_parameter(point, None, 100)
+            .or_else(|| surface.search_nearest_parameter(point, None, 100))?;
+        let normal = surface.normal(u, v);
+        let length = normal.magnitude();
+        if !length.is_finite() || length <= f64::EPSILON {
+            return None;
+        }
+        let offset = normal / length * BooleanTolerance::new(tol).classifier_offset;
+        (classification::classify_inside_with_polyshell(poly_shell, point + offset)? == verdict
+            && classification::classify_inside_with_polyshell(poly_shell, point - offset)?
+                == verdict)
+            .then_some(verdict)
+    };
+    let mut samples = samples.into_iter();
+    let first = classify(samples.next()?)?;
+    samples.try_fold(first, |label, point| {
+        (classify(point)? == label).then_some(label)
+    })
+}
+
 fn classify_relation<C, S>(
     poly_shell: &PolyShell,
     region: &faces_classification::BooleanRegion<Point3, C, S>,
@@ -215,7 +269,25 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let full_positive_regions = analysis.cls0.all_regions();
     let full_cutter_regions = analysis.cls1.all_regions();
 
-    let [_inside0, mut difference0, unknown0] = analysis.cls0.and_or_unknown();
+    let [known_and0, known_or0, unknown0] = analysis.cls0.and_or_unknown();
+    // An SSI boundary label describes the winding at one interface; it is
+    // not evidence that the entire resulting face lies inside/outside the
+    // other solid. In particular, an imprinted, retraced edge can mark a
+    // large region And although all its interior witnesses are outside.
+    // Only contradict labels with UNANIMOUS geometric witnesses. If the
+    // region cannot be sampled or has mixed classifications, retain its
+    // existing status; never fabricate an interior for zero-area regions.
+    let mut difference0 = Vec::new();
+    for region in known_and0 {
+        if unanimous_region_containment(&analysis.poly_shell1, &region, tol) == Some(false) {
+            difference0.push(region);
+        }
+    }
+    for region in known_or0 {
+        if unanimous_region_containment(&analysis.poly_shell1, &region, tol) != Some(true) {
+            difference0.push(region);
+        }
+    }
     for region in unknown0 {
         if !classify_unknown(&analysis.poly_shell1, &region, tol, 0)? {
             difference0.push(region);
@@ -799,6 +871,122 @@ mod structural_classification_tests {
         let edge = builder::extrude(&vertex, Vector3::unit_x());
         let face = builder::extrude(&edge, Vector3::unit_y());
         builder::extrude(&face, Vector3::unit_z())
+    }
+
+    #[test]
+    fn preclassified_difference_regions_require_unanimous_geometric_corroboration() {
+        let solid = unit_cube();
+        let poly_shell = solid.boundaries()[0].triangulation(0.01);
+        let flat_region = |xlo: f64, xhi: f64, z: f64, key: usize| {
+            let points = [
+                Point3::new(xlo, 0.25, z),
+                Point3::new(xhi, 0.25, z),
+                Point3::new(xhi, 0.75, z),
+                Point3::new(xlo, 0.75, z),
+            ];
+            let vertices = points.map(Vertex::new);
+            let wire: Wire<Point3, AltCurve<Curve, Surface>> = (0..4)
+                .map(|index| {
+                    let next = (index + 1) % 4;
+                    Edge::new_unchecked(
+                        &vertices[index],
+                        &vertices[next],
+                        Alternative::FirstType(Curve::from(Line(points[index], points[next]))),
+                    )
+                })
+                .collect();
+            AltRegion::new(
+                vec![wire],
+                Surface::Plane(Plane::new(
+                    Point3::new(0.0, 0.0, z),
+                    Point3::new(1.0, 0.0, z),
+                    Point3::new(0.0, 1.0, z),
+                )),
+                true,
+                key,
+                key,
+            )
+        };
+        let outside = flat_region(0.25, 0.75, 1.5, 1);
+        let inside = flat_region(0.25, 0.75, 0.5, 2);
+        let crossing = flat_region(-0.3, 0.3, 0.5, 3);
+        assert_eq!(
+            unanimous_region_containment(&poly_shell, &outside, 1.0e-5),
+            Some(false),
+            "confident outside evidence must recover a region incorrectly marked And"
+        );
+        assert_eq!(
+            unanimous_region_containment(&poly_shell, &inside, 1.0e-5),
+            Some(true),
+            "confident inside evidence must reject a region incorrectly marked Or"
+        );
+        assert_eq!(
+            unanimous_region_containment(&poly_shell, &crossing, 1.0e-5),
+            None,
+            "a region straddling the other shell cannot inherit either label"
+        );
+
+        let boundary_contact = {
+            let points = [
+                Point3::new(1.0, 0.25, 0.25),
+                Point3::new(1.0, 0.75, 0.25),
+                Point3::new(1.0, 0.75, 0.75),
+                Point3::new(1.0, 0.25, 0.75),
+            ];
+            let vertices = points.map(Vertex::new);
+            let wire: Wire<Point3, AltCurve<Curve, Surface>> = (0..4)
+                .map(|index| {
+                    let next = (index + 1) % 4;
+                    Edge::new_unchecked(
+                        &vertices[index],
+                        &vertices[next],
+                        Alternative::FirstType(Curve::from(Line(points[index], points[next]))),
+                    )
+                })
+                .collect();
+            AltRegion::new(
+                vec![wire],
+                Surface::Plane(Plane::new(
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(1.0, 1.0, 0.0),
+                    Point3::new(1.0, 0.0, 1.0),
+                )),
+                true,
+                5,
+                5,
+            )
+        };
+        assert_eq!(
+            unanimous_region_containment(&poly_shell, &boundary_contact, 1.0e-5),
+            None,
+            "an exact coincident boundary cannot certify inside or outside from the surface itself"
+        );
+
+        // This is the small topology pattern seen in the source-derived stage6:
+        // two forward collinear edges and one retraced inverse edge. All exact
+        // curve samples are collinear: there is no real 2-D area to classify.
+        let points = [
+            Point3::new(0.2, 0.2, 0.5),
+            Point3::new(0.4, 0.2, 0.5),
+            Point3::new(0.8, 0.2, 0.5),
+        ];
+        let vertices = points.map(Vertex::new);
+        let retraced: Wire<Point3, AltCurve<Curve, Surface>> = (0..3)
+            .map(|index| {
+                let next = (index + 1) % 3;
+                Edge::new_unchecked(
+                    &vertices[index],
+                    &vertices[next],
+                    Alternative::FirstType(Curve::from(Line(points[index], points[next]))),
+                )
+            })
+            .collect();
+        let zero_area = AltRegion::new(vec![retraced], Surface::Plane(Plane::xy()), true, 4, 4);
+        assert_eq!(
+            unanimous_region_containment(&poly_shell, &zero_area, 1.0e-5),
+            None,
+            "zero-area retraces must not gain an invented interior witness"
+        );
     }
 
     #[test]
