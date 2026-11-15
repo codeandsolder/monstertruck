@@ -379,12 +379,11 @@ pub mod monstertruck {
 
     type EvaluationCache = HashMap<(NodeId, PolicyKey), Solid>;
 
-    /// Evaluate multiple roots of the same CAD model without recomputing
-    /// shared geometry or earlier constructive stages. Cached topology and
-    /// returned shapes own separate mutable geometry.
+    /// Evaluate several CAD roots without recomputing common geometry.
     ///
-    /// Plain `Solid::clone()` would share `Arc<Mutex<_>>` vertices,
-    /// curves and surfaces across cached results.
+    /// Cached topology and returned shapes own independent mutable geometry;
+    /// a plain `Solid::clone()` would share the underlying
+    /// `Arc<Mutex<_>>` vertices, curves, and surfaces across evaluations.
     pub struct EvaluationSession<'a> {
         model: &'a CadModel,
         policy: GeometryPolicy,

@@ -117,22 +117,22 @@ pub fn compose_union_model(fragments: &[CadFragment]) -> Result<(CadModel, NodeI
     compose_union_models(&models)
 }
 
-/// One independently editable CAD feature in a source-ordered constructive
-/// sequence. The first feature is positive material (`operation = None`);
-/// each following feature combines with the accumulated body in this exact
-/// order. Difference is intentionally not commutative.
+/// One independently editable CAD feature in a source-ordered sequence.
+///
+/// The first feature creates positive material (`operation = None`).
+/// Subsequent features combine with the accumulated body in source order;
+/// difference is intentionally noncommutative.
 pub struct ConstructiveStep<'a> {
     pub model: &'a CadModel,
     pub root: NodeId,
     pub operation: Option<BooleanOp>,
 }
 
-/// Compose source-derived features into one executable CAD tree, retaining
-/// each feature's provenance and preserving the exact Boolean operation order.
+/// Compose ordered source-derived features into one executable CAD tree.
 ///
-/// The component models, not imported STEP solids, are the owners of all
-/// sketch/profile/loft geometry. Evaluating this model starts at the leaf CAD
-/// nodes and never reloads an intermediate B-rep.
+/// Each feature retains its provenance and the specified Boolean order.
+/// Component models own their sketches, profiles, and loft geometry rather
+/// than relying on reimported intermediate STEP solids.
 ///
 /// # Errors
 /// Refuses empty sequences, an operation on the first feature, a missing

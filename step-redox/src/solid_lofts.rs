@@ -686,10 +686,7 @@ fn terminal_sectioned_ruled_extension(
     let mut consumed = BTreeSet::from([cap.id]);
     let mut wall_ids = Vec::new();
     let mut direction = 0.0_f64;
-    loop {
-        let Some((next, walls)) = next_quad_wall_ring(solid, &current, &consumed) else {
-            break;
-        };
+    while let Some((next, walls)) = next_quad_wall_ring(solid, &current, &consumed) {
         let Some(stage) = section_from_wall_ring(&next, origin, axis, x, y) else {
             break;
         };
