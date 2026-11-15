@@ -840,6 +840,57 @@ where S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = 
         })
 }
 
+/// Verify that two independently represented exact trims lie on one
+/// imprintable locus, not merely at two coincident mesh endpoints.
+fn certified_same_imprint_locus<C>(
+    reference: &Edge<Point3, C>,
+    candidate: &Edge<Point3, C>,
+    tolerances: BooleanTolerance,
+) -> bool
+where
+    C: ParametricCurve<Point = Point3>
+        + BoundedCurve<Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>
+        + Clone,
+{
+    let same_endpoints = (reference
+        .absolute_front()
+        .point()
+        .distance(candidate.absolute_front().point())
+        <= tolerances.length
+        && reference
+            .absolute_back()
+            .point()
+            .distance(candidate.absolute_back().point())
+            <= tolerances.length)
+        || (reference
+            .absolute_front()
+            .point()
+            .distance(candidate.absolute_back().point())
+            <= tolerances.length
+            && reference
+                .absolute_back()
+                .point()
+                .distance(candidate.absolute_front().point())
+                <= tolerances.length);
+    let reference_curve = reference.curve();
+    let edge_curve = candidate.curve();
+    let same_curve =
+        validate_sampled_coincidence::<Point3, _>(&reference_curve, &edge_curve, tolerances)
+            == CurveCoincidence::SampledValidation
+            || validate_sampled_containment::<Point3, _>(&reference_curve, &edge_curve, tolerances)
+                == CurveCoincidence::SampledValidation
+            || validate_sampled_containment::<Point3, _>(&edge_curve, &reference_curve, tolerances)
+                == CurveCoincidence::SampledValidation
+            || (same_endpoints
+                && validate_endpoint_aligned_coincidence::<Point3, _>(
+                    &reference_curve,
+                    &edge_curve,
+                    tolerances,
+                ) == CurveCoincidence::SampledValidation);
+    same_curve
+}
+
 impl<C> LoopsStore<Point3, C> {
     fn search_boundary_parameter(
         &self,
@@ -1012,49 +1063,8 @@ impl<C> LoopsStore<Point3, C> {
                             continue;
                         }
                         if let Some((_, reference, _)) = interior.first() {
-                            let same_endpoints = (reference
-                                .absolute_front()
-                                .point()
-                                .distance(edge.absolute_front().point())
-                                <= tolerances.length
-                                && reference
-                                    .absolute_back()
-                                    .point()
-                                    .distance(edge.absolute_back().point())
-                                    <= tolerances.length)
-                                || (reference
-                                    .absolute_front()
-                                    .point()
-                                    .distance(edge.absolute_back().point())
-                                    <= tolerances.length
-                                    && reference
-                                        .absolute_back()
-                                        .point()
-                                        .distance(edge.absolute_front().point())
-                                        <= tolerances.length);
-                            let reference_curve = reference.curve();
-                            let edge_curve = edge.curve();
-                            let same_curve = validate_sampled_coincidence::<Point3, _>(
-                                &reference_curve,
-                                &edge_curve,
-                                tolerances,
-                            ) == CurveCoincidence::SampledValidation
-                                || validate_sampled_containment::<Point3, _>(
-                                    &reference_curve,
-                                    &edge_curve,
-                                    tolerances,
-                                ) == CurveCoincidence::SampledValidation
-                                || validate_sampled_containment::<Point3, _>(
-                                    &edge_curve,
-                                    &reference_curve,
-                                    tolerances,
-                                ) == CurveCoincidence::SampledValidation
-                                || (same_endpoints
-                                    && validate_endpoint_aligned_coincidence::<Point3, _>(
-                                        &reference_curve,
-                                        &edge_curve,
-                                        tolerances,
-                                    ) == CurveCoincidence::SampledValidation);
+                            let same_curve =
+                                certified_same_imprint_locus(reference, edge, tolerances);
                             if !same_curve {
                                 return None;
                             }
@@ -1311,61 +1321,44 @@ impl<C> LoopsStore<Point3, C> {
         if let Some(projected) = projected {
             vertex.set_point(projected);
         }
-        let mut coalesce_endpoint = |this: &mut Self, old_vertex: Vertex<Point3>| {
-            vertex.set_point(old_vertex.point());
-            this.change_vertex(&old_vertex, vertex, emap);
+        let final_kind = if matches!(kind, ParameterKind::Inner(_)) {
+            let curve = self[loops_index][wire_index][edge_index].curve();
+            // Polyline and exact curve endpoint labels may disagree: the exact
+            // carrier projection resolves classification before topology edits.
+            let (exact_point, parameter, _) = curve_surface_projection(
+                &curve,
+                None,
+                another_surface,
+                None,
+                vertex.point(),
+                tolerances,
+                100,
+            )?;
+            let exact_kind = ParameterKind::try_new(parameter, &curve, tolerances)?;
+            if let ParameterKind::Inner(parameter) = exact_kind {
+                vertex.set_point(exact_point);
+                let edge = self[loops_index][wire_index][edge_index].absolute_clone();
+                let edge_id = edge.id();
+                let (edge0, edge1) = edge.cut_with_parameter(vertex, parameter)?;
+                let new_wire: Wire<_, _> = vec![edge0, edge1].into();
+                self.swap_edge_into_wire(edge_id, &new_wire);
+                return Some(());
+            }
+            exact_kind
+        } else {
+            kind
         };
-        match kind {
-            ParameterKind::Front => {
-                let old_vertex = self[loops_index][wire_index][edge_index]
-                    .absolute_front()
-                    .clone();
-                coalesce_endpoint(self, old_vertex);
-            }
-            ParameterKind::Back => {
-                let old_vertex = self[loops_index][wire_index][edge_index]
-                    .absolute_back()
-                    .clone();
-                coalesce_endpoint(self, old_vertex);
-            }
-            ParameterKind::Inner(_) => {
-                let curve = self[loops_index][wire_index][edge_index].curve();
-                // Polyline and exact curves can disagree about whether a recovered SSI
-                // point is just inside a trim or exactly on its endpoint. Classify the
-                // solved exact parameter before deciding whether topology needs a cut.
-                let (projected, parameter, _) = curve_surface_projection(
-                    &curve,
-                    None,
-                    another_surface,
-                    None,
-                    vertex.point(),
-                    tolerances,
-                    100,
-                )?;
-                match ParameterKind::try_new(parameter, &curve, tolerances)? {
-                    ParameterKind::Front => {
-                        let old_vertex = self[loops_index][wire_index][edge_index]
-                            .absolute_front()
-                            .clone();
-                        coalesce_endpoint(self, old_vertex);
-                    }
-                    ParameterKind::Back => {
-                        let old_vertex = self[loops_index][wire_index][edge_index]
-                            .absolute_back()
-                            .clone();
-                        coalesce_endpoint(self, old_vertex);
-                    }
-                    ParameterKind::Inner(parameter) => {
-                        vertex.set_point(projected);
-                        let edge = self[loops_index][wire_index][edge_index].absolute_clone();
-                        let edge_id = edge.id();
-                        let (edge0, edge1) = edge.cut_with_parameter(vertex, parameter)?;
-                        let new_wire: Wire<_, _> = vec![edge0, edge1].into();
-                        self.swap_edge_into_wire(edge_id, &new_wire);
-                    }
-                }
-            }
-        }
+        let old_vertex = match final_kind {
+            ParameterKind::Front => self[loops_index][wire_index][edge_index]
+                .absolute_front()
+                .clone(),
+            ParameterKind::Back => self[loops_index][wire_index][edge_index]
+                .absolute_back()
+                .clone(),
+            ParameterKind::Inner(_) => return None,
+        };
+        vertex.set_point(old_vertex.point());
+        self.change_vertex(&old_vertex, vertex, emap);
         Some(())
     }
 }
@@ -1925,6 +1918,56 @@ fn analyze_coplanar_interfaces(
     })
 }
 
+/// Cache exact planar supports and pairs with algebraically certified
+/// identical rational ruled carriers before the face-pair SSI sweep.
+fn certify_face_pair_supports<C, S>(
+    geom_shell0: &Shell<Point3, C, S>,
+    geom_shell1: &Shell<Point3, C, S>,
+) -> (
+    Vec<Option<Plane>>,
+    Vec<Option<Plane>>,
+    HashSet<(usize, usize)>,
+)
+where
+    S: Clone + TryIntoHomogeneousBsplineSurface + TryIntoAnalyticSurfaceKind,
+{
+    // Proof-first common-carrier discovery: identical rational profile control
+    // nets with collinear affine sweep rows describe the same ruled support.
+    // Cached once per input face; sampling never authorizes surface identity.
+    let net0 = geom_shell0
+        .iter()
+        .map(|f| f.surface().try_into_homogeneous_bspline_surface())
+        .collect::<Vec<_>>();
+    let net1 = geom_shell1
+        .iter()
+        .map(|f| f.surface().try_into_homogeneous_bspline_surface())
+        .collect::<Vec<_>>();
+    // Full carrier recognition/control-net certification is done once per
+    // face, not once for every O(F0*F1) candidate pair.
+    let planes0 = geom_shell0
+        .iter()
+        .zip(net0.iter())
+        .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
+        .collect::<Vec<_>>();
+    let planes1 = geom_shell1
+        .iter()
+        .zip(net1.iter())
+        .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
+        .collect::<Vec<_>>();
+    let mut shared_ruled_pairs = HashSet::default();
+    for (i, left) in net0.iter().enumerate() {
+        for (j, right) in net1.iter().enumerate() {
+            if let (Some(a), Some(b)) = (left, right)
+                && (ruled::common_ruled_extrusion_strip(a, b)
+                    || ruled::common_circular_extrusion_cylinder(a, b))
+            {
+                shared_ruled_pairs.insert((i, j));
+            }
+        }
+    }
+    (planes0, planes1, shared_ruled_pairs)
+}
+
 pub(super) fn create_loops_stores<C, S>(
     geom_shell0: &Shell<Point3, C, S>,
     poly_shell0: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
@@ -1964,41 +2007,9 @@ where
     let boundary_search_tolerance = boolean_tolerance.mesh_seed;
     let coplanar =
         analyze_coplanar_interfaces(poly_shell0, poly_shell1, coplanar_tol, imprint_coplanar)?;
-    // Proof-first common-carrier discovery: identical rational profile control
-    // nets with collinear affine sweep rows describe the same ruled support.
-    // Cached once per input face; sampling never authorizes surface identity.
-    let net0 = geom_shell0
-        .iter()
-        .map(|f| f.surface().try_into_homogeneous_bspline_surface())
-        .collect::<Vec<_>>();
-    let net1 = geom_shell1
-        .iter()
-        .map(|f| f.surface().try_into_homogeneous_bspline_surface())
-        .collect::<Vec<_>>();
-    // Full carrier recognition/control-net certification is done once per
-    // face, not once for every O(F0*F1) candidate pair.
-    let planes0 = geom_shell0
-        .iter()
-        .zip(net0.iter())
-        .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
-        .collect::<Vec<_>>();
-    let planes1 = geom_shell1
-        .iter()
-        .zip(net1.iter())
-        .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
-        .collect::<Vec<_>>();
+    let (planes0, planes1, shared_ruled_pairs) =
+        certify_face_pair_supports(geom_shell0, geom_shell1);
     let mut endpoint_registry = Vec::<(Vertex<Point3>, Vertex<Point3>)>::new();
-    let mut shared_ruled_pairs = HashSet::default();
-    for (i, left) in net0.iter().enumerate() {
-        for (j, right) in net1.iter().enumerate() {
-            if let (Some(a), Some(b)) = (left, right)
-                && (ruled::common_ruled_extrusion_strip(a, b)
-                    || ruled::common_circular_extrusion_cylinder(a, b))
-            {
-                shared_ruled_pairs.insert((i, j));
-            }
-        }
-    }
     let has_shared_ruled = !shared_ruled_pairs.is_empty();
     (0..store0_len)
         .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
