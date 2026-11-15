@@ -1665,3 +1665,88 @@ then fails independently at
 this commit does not assert full six-stage success.
 The accelerated curve/SSI sampling knobs remain
 exclusive to the experimental branch.
+
+## Difference-region occupancy labels must agree with geometric evidence (2026-11-15)
+
+`ShapesOpStatus::{And,Or}` on a divided Boolean face is derived
+from **interface loop orientation** and component propagation. It is
+a useful topological hint, **not a volume-occupancy proof for the
+whole resulting region**. A retraced interface can give a large
+face the `And` label even though its actual interior remains outside
+the cutting solid. Excluding that region creates a true open boundary.
+
+For the positive operand of `process_difference_analysis`, both
+preclassified `And` and `Or` regions are now corroborated by a
+geometrically distributed set of interior witnesses against the
+opposing triangulated solid. Only a **unanimous, finite, stable**
+inside/outside result may override the loop label:
+- Each sample must be classifiable by the existing signed-winding
+  check in the current physical coordinate system.
+- The same classification must hold at two **equal, opposite physical
+  normal offsets**, using the existing
+  `BooleanTolerance::classifier_offset` policy. A point on the
+  other solid's coincident/tangent skin must not override an
+  interface label based on a potentially ambiguous boundary vote.
+- The region needs at least one real interior witness. An exactly
+  retraced zero-area face, a projected boundary with no valid
+  interior, or a surface that cannot provide a finite nonzero normal
+  has **no** classification evidence.
+- All available witnesses must agree. A partially split region with
+  mixed classifications retains its original label; it is not
+  forced inside/outside by a majority vote.
+- If evidence is inconclusive, leave the preclassified `And` or
+  `Or` decision unchanged. This preserves the existing fallback
+  rather than fabricating a source boundary or broadening a
+  geometric identity tolerance.
+
+The corroboration is **sampled finite evidence**, not a mathematical
+proof that the entire trimmed face is on one side. It strengthens the
+existing winding-based Boolean classification by requiring both
+unanimity and two-sided boundary clearance. The previously defined
+`classifier_offset` is a physical witness displacement, **not**
+an increased Boolean length, mesh seed, or new geometric equality
+budget. No stage IDs or fixture-specific coordinates occur in the
+implementation.
+
+Focused regression
+`preclassified_difference_regions_require_unanimous_geometric_corroboration`
+checks a planar region strictly outside a solid, one strictly
+inside, one crossing its boundary, a face exactly coincident with
+the solid's skin, and a genuinely zero-area closed retraced wire.
+Only the first two provide conclusive opposite labels. Mixed,
+skin-coincident and zero-area cases remain unknown.
+
+### Source-derived constructive CAD stage6 evidence
+
+The stage6` Difference` primary classification originally omitted
+positive source face6's major **12-edge planar region**, because a
+local interface loop labeled it `And`. All **nine actual interior
+samples** gave `Some(false)` (outside the four-face lower-round
+cutter). That missing region helped create a 27-edge open shell.
+The companion three-edge region7 was exactly collinear and retraced
+(two forward sections, one inverse), with zero UV area and no valid
+interior sample. The old primary output was a 44-face open shell
+and its fallback reclassified that zero-area `And` region,
+failing with `UnknownClassificationFailed { shell_index: 0 }`.
+
+Correcting the independently contradicted positive-side labels
+restores missing face coverage **without attempting to classify
+the true zero-area retrace**. Under the separate experimental SSI
+endpoint/junction/weld implementation, the complete constructive
+six-stage source CAD test now passes as a geometrically consistent
+single solid with exact expected face counts:
+`17, 31, 37, 47, 47, 47`.
+Stage6-only diagnostic corroboration (no earlier-stage changes)
+also passed; the generic symmetric `And/Or` rule with two-sided
+normal-clearance corroboration independently passed the same
+end-to-end test.
+
+This status correction is independent of the experiment-only
+coarse curve/SSI sample controls and can be maintained in the
+production tolerance-audit PR. The **earlier stages still require
+the separate experimental SSI endpoint/junction/weld work**
+to pass the full replay; inclusion of this status fix in
+production alone does not establish full source CAD recovery.
+The old fallback still attempts to classify degenerate
+regions when a separate primary shell is open, and needs its
+own topologically correct fix.
