@@ -143,8 +143,10 @@ fn clamp_near_range(value: f64, (min, max): (f64, f64)) -> f64 {
         return value;
     }
     let policy = DEFAULT_NUMERICAL_TOLERANCES;
-    let slack = policy.step_trim_knot_parameter_relative * span
-        + policy.step_trim_knot_parameter_roundoff_ulps * f64::EPSILON * min.abs().max(max.abs());
+    let slack = (policy.step_trim_knot_parameter_roundoff_ulps * f64::EPSILON).mul_add(
+        min.abs().max(max.abs()),
+        policy.step_trim_knot_parameter_relative * span,
+    );
     if value < min && min - value <= slack {
         min
     } else if value > max && value - max <= slack {

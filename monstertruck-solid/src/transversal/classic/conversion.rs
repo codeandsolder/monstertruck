@@ -40,10 +40,9 @@ fn trim_homogeneous_curve(
     mut curve: NurbsCurve<Vector4>,
     start: f64,
     end: f64,
-    tolerances: BooleanTolerance,
 ) -> Option<NurbsCurve<Vector4>> {
     let (range0, range1) = curve.range_tuple();
-    let slack = tolerances.iso_parameter_slack((range0, range1))?;
+    let slack = BooleanTolerance::iso_parameter_slack((range0, range1))?;
     if !start.is_finite() || !end.is_finite() || (start - end).abs() <= slack {
         return None;
     }
@@ -77,14 +76,13 @@ fn homogeneous_iso_curve<S: ShapeOpsSurface>(
     constant: f64,
     start: f64,
     end: f64,
-    tolerances: BooleanTolerance,
 ) -> Option<NurbsCurve<Vector4>> {
     let mut homogeneous = surface.try_into_homogeneous_bspline_surface()?;
     let (u_range, v_range) = homogeneous.range_tuple();
     let ((u0, u1), (v0, v1)) = (u_range, v_range);
     let curve = match iso {
         IsoParameter::U => {
-            let slack = tolerances.iso_parameter_slack(u_range)?;
+            let slack = BooleanTolerance::iso_parameter_slack(u_range)?;
             if !constant.is_finite() || constant < u0 - slack || constant > u1 + slack {
                 return None;
             }
@@ -100,7 +98,7 @@ fn homogeneous_iso_curve<S: ShapeOpsSurface>(
             NurbsCurve::new(homogeneous.curve_v(row))
         }
         IsoParameter::V => {
-            let slack = tolerances.iso_parameter_slack(v_range)?;
+            let slack = BooleanTolerance::iso_parameter_slack(v_range)?;
             if !constant.is_finite() || constant < v0 - slack || constant > v1 + slack {
                 return None;
             }
@@ -116,7 +114,7 @@ fn homogeneous_iso_curve<S: ShapeOpsSurface>(
             NurbsCurve::new(homogeneous.curve_u(column))
         }
     };
-    trim_homogeneous_curve(curve, start, end, tolerances)
+    trim_homogeneous_curve(curve, start, end)
 }
 
 fn surface_parameter_with_hint<S: ShapeOpsSurface>(
@@ -270,9 +268,7 @@ pub(super) fn exact_iso_leader<S: ShapeOpsSurface>(
                 IsoParameter::U => params.last()?.1,
                 IsoParameter::V => params.last()?.0,
             };
-            let Some(candidate) =
-                homogeneous_iso_curve(surface, iso, constant, start, end, tolerances)
-            else {
+            let Some(candidate) = homogeneous_iso_curve(surface, iso, constant, start, end) else {
                 continue;
             };
             if prove_iso_candidate(
@@ -346,13 +342,12 @@ mod tests {
                 Vector4::new(1.0, 0.0, 0.0, 1.0),
             ],
         ));
-        let tolerances = BooleanTolerance::new(1.0e-8);
-        let trimmed = trim_homogeneous_curve(curve.clone(), 2.0e-10, 8.0e-10, tolerances)
+        let trimmed = trim_homogeneous_curve(curve.clone(), 2.0e-10, 8.0e-10)
             .expect("a tiny but well-resolved parameter interval is valid");
         let (lo, hi) = trimmed.range_tuple();
         assert!((lo - 2.0e-10).abs() <= 1.0e-15);
         assert!((hi - 8.0e-10).abs() <= 1.0e-15);
-        assert!(trim_homogeneous_curve(curve.clone(), -1.0e-8, 8.0e-10, tolerances).is_none());
-        assert!(trim_homogeneous_curve(curve, 2.0e-10, 2.0e-10 + 1.0e-16, tolerances).is_none());
+        assert!(trim_homogeneous_curve(curve.clone(), -1.0e-8, 8.0e-10).is_none());
+        assert!(trim_homogeneous_curve(curve, 2.0e-10, 2.0e-10 + 1.0e-16).is_none());
     }
 }
