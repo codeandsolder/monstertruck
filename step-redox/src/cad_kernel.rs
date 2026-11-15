@@ -2017,7 +2017,7 @@ pub mod monstertruck {
         /// The independent OCC constructive decomposition of a curved lip
         /// combines two exact circular boundary arcs with planar tapered
         /// side limits. Native intersection must retain both types of carrier.
-
+        ///
         /// The residual treatment is not an opaque B-rep: both rounded
         /// terminals are executable analytic arc extrusions and intersections.
         #[test]
