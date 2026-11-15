@@ -53,6 +53,62 @@ pub(in crate::transversal::classic) fn certified_plane<S: TryIntoAnalyticSurface
         .then_some(plane)
 }
 
+/// Certify that two exact planar carriers represent the same support over
+/// both *trimmed* face regions. Their homogeneous control nets have already
+/// been separately certified planar by `certified_plane`.
+///
+/// Two genuinely transverse supports need SSI; two common planar supports
+/// cannot have a transverse SSI branch and must instead exchange exact trim
+/// edges. The bound is structural roundoff, independent of the Boolean
+/// modeling tolerance, and capped at the native projection precision.
+pub(in crate::transversal::classic) fn common_planar_support(
+    plane0: Plane,
+    polygon0: &PolygonMesh,
+    plane1: Plane,
+    polygon1: &PolygonMesh,
+) -> bool {
+    let origin0 = plane0.origin();
+    let origin1 = plane1.origin();
+    let normal0 = plane0.normal();
+    let normal1 = plane1.normal();
+    let roundoff = DEFAULT_NUMERICAL_TOLERANCES.boolean_common_plane_roundoff_ulps * f64::EPSILON;
+    if !normal0.magnitude2().is_finite()
+        || !normal1.magnitude2().is_finite()
+        || normal0.cross(normal1).magnitude() > roundoff
+    {
+        return false;
+    }
+    let scale = origin0
+        .to_vec()
+        .magnitude()
+        .max(origin1.to_vec().magnitude())
+        .max(1.0);
+    let residual = (roundoff * scale)
+        .min(DEFAULT_NUMERICAL_TOLERANCES.structural * scale)
+        .min(DEFAULT_NUMERICAL_TOLERANCES.parameter_projection);
+    if !residual.is_finite() {
+        return false;
+    }
+    // Both trimmed regions must lie on both certified supports. Checking
+    // all polygon vertices rejects nearly-parallel planes that intersect at
+    // their origins but diverge elsewhere across their actual face extents.
+    let on_both = |point: &Point3| {
+        let distance0 = (*point - origin0).dot(normal0);
+        let distance1 = (*point - origin1).dot(normal1);
+        distance0.is_finite()
+            && distance1.is_finite()
+            && distance0.abs() <= residual
+            && distance1.abs() <= residual
+    };
+    !polygon0.positions().is_empty()
+        && !polygon1.positions().is_empty()
+        && polygon0
+            .positions()
+            .iter()
+            .chain(polygon1.positions())
+            .all(on_both)
+}
+
 fn merge_intervals(mut intervals: Vec<Interval>, eps: f64) -> Option<Vec<Interval>> {
     if intervals
         .iter()
@@ -249,6 +305,62 @@ mod tests {
             .collect::<Vec<_>>();
         segments.sort_by(|a, b| a.0.total_cmp(&b.0));
         segments
+    }
+
+    #[test]
+    fn common_planar_support_accepts_partial_trims_without_assuming_equal_area() {
+        let a = square_xy(-1.0, 1.0, -1.0, 1.0);
+        let b = square_xy(0.2, 1.5, -0.4, 0.4);
+        let shifted_chart = Plane::new(
+            Point3::new(0.4, 0.2, 5.0e-15),
+            Point3::new(1.4, 0.2, 5.0e-15),
+            Point3::new(0.4, 1.2, 5.0e-15),
+        );
+        assert!(common_planar_support(Plane::xy(), &a, shifted_chart, &b));
+        assert!(common_planar_support(shifted_chart, &b, Plane::xy(), &a));
+        let opposite = Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+        );
+        assert!(common_planar_support(Plane::xy(), &a, opposite, &b));
+    }
+
+    #[test]
+    fn common_planar_support_rejects_separated_or_gently_crossing_planes() {
+        let a = square_xy(-1.0, 1.0, -1.0, 1.0);
+        let b = square_xy(-1.0, 1.0, -1.0, 1.0);
+        for shift in [1.0e-7, 1.0e-9, 5.0e-13] {
+            let separated = Plane::new(
+                Point3::new(0.0, 0.0, shift),
+                Point3::new(1.0, 0.0, shift),
+                Point3::new(0.0, 1.0, shift),
+            );
+            assert!(!common_planar_support(Plane::xy(), &a, separated, &b));
+        }
+        let almost_transverse = Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 1.0e-8),
+            Point3::new(0.0, 1.0, 0.0),
+        );
+        assert!(!common_planar_support(
+            Plane::xy(),
+            &a,
+            almost_transverse,
+            &b
+        ));
+    }
+
+    #[test]
+    fn common_planar_support_rejects_substructural_transverse_tilts() {
+        let a = square_xy(-1.0, 1.0, -1.0, 1.0);
+        let b = square_xy(-1.0, 1.0, -1.0, 1.0);
+        let tilted = Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 5.0e-13),
+            Point3::new(0.0, 1.0, 0.0),
+        );
+        assert!(!common_planar_support(Plane::xy(), &a, tilted, &b));
     }
 
     #[test]
