@@ -27,17 +27,16 @@ use std::{ops::Bound, sync::OnceLock};
 // division from both modeling-curve division and topological admission.
 // An explicitly supplied experimental configuration must be valid: falling
 // back to the default sampling silently changes which Boolean we evaluate.
-#[expect(
-    clippy::expect_used,
-    reason = "invalid explicit experimental sampling configuration must fail fast"
-)]
 fn experimental_ssi_curve_sample_floor() -> Option<f64> {
     static FLOOR: OnceLock<Option<f64>> = OnceLock::new();
     *FLOOR.get_or_init(|| {
         std::env::var("MT_EXPERIMENT_SSI_CURVE_SAMPLE_FLOOR_MM")
             .ok()
             .map(|value| {
-                let floor: f64 = value.parse().expect("SSI sampling floor must be a number");
+                let floor: f64 = value.parse().unwrap_or_else(|error| {
+                    eprintln!("invalid MT_EXPERIMENT_SSI_CURVE_SAMPLE_FLOOR_MM={value:?}: {error}");
+                    std::process::exit(2);
+                });
                 assert!(
                     floor.is_finite() && floor > 0.0,
                     "SSI sampling floor must be positive"
