@@ -148,9 +148,10 @@ pub fn compose_constructive_sequence_model(
     Ok((model, root))
 }
 
-/// Compose an ordered CAD feature sequence and return every cumulative stage
-/// root, so an incremental evaluator can inspect each feature result without
-/// reconstructing or re-evaluating earlier Boolean subtrees.
+/// Compose ordered CAD features and return all cumulative stage roots.
+///
+/// An incremental evaluator can inspect each stage without rebuilding or
+/// re-evaluating earlier Boolean subtrees.
 ///
 /// Only the final cumulative stage is registered as the model's root. All
 /// intermediate stage IDs remain valid and can be evaluated independently.
