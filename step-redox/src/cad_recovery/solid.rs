@@ -162,15 +162,9 @@ pub fn recover_solid_extrusion_fragments(
         .collect()
 }
 
-/// Recover a proven constant-round-section closed composite sweep.
-///
-/// The detector has already proven a planar cycle of exact cylinder and torus
-/// supports. The CAD node keeps that proof as a circular profile plus exact
-/// rigid translation/rotation path segments; no tessellation enters the IR.
-///
-/// # Errors
-/// Returns an error if the recovered frame/path is malformed or cannot form valid CAD IR.
-pub fn recover_round_sweep_fragment(sweep: &RecoveredRoundSweep) -> Result<CadFragment> {
+/// Reject incomplete round-sweep sources and frames inconsistent with their
+/// certified circular section before creating any executable CAD node.
+fn validate_round_sweep_proof(sweep: &RecoveredRoundSweep) -> Result<()> {
     if sweep.solid_id == 0
         || !sweep.profile_radius_mm.is_finite()
         || sweep.profile_radius_mm <= 0.0
@@ -198,6 +192,20 @@ pub fn recover_round_sweep_fragment(sweep: &RecoveredRoundSweep) -> Result<CadFr
     {
         bail!("closed round sweep frame axes are not perpendicular");
     }
+
+    Ok(())
+}
+
+/// Recover a proven constant-round-section closed composite sweep.
+///
+/// The detector has already proven a planar cycle of exact cylinder and torus
+/// supports. The CAD node keeps that proof as a circular profile plus exact
+/// rigid translation/rotation path segments; no tessellation enters the IR.
+///
+/// # Errors
+/// Returns an error if the recovered frame/path is malformed or cannot form valid CAD IR.
+pub fn recover_round_sweep_fragment(sweep: &RecoveredRoundSweep) -> Result<CadFragment> {
+    validate_round_sweep_proof(sweep)?;
 
     let profile = Profile2d {
         loops: vec![ProfileLoop {
