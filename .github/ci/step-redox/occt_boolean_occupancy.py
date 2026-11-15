@@ -78,7 +78,7 @@ def read_points(path: Path) -> list[tuple[float, float, float]]:
     for point in raw:
         if len(point) != 3:
             raise ValueError(f"expected a 3D point, got {point!r}")
-        result.append(tuple(float(value) for value in point))
+        result.append((float(point[0]), float(point[1]), float(point[2])))
     return result
 
 
@@ -145,7 +145,7 @@ def main() -> int:
         a = classify(left, point, args.tolerance)
         b = classify(right, point, args.tolerance)
         counts["total"] += 1
-        if None in (a, b, actual):
+        if a is None or b is None or actual is None:
             counts["boundary_ambiguous"] += 1
             continue
         expected = material_occupancy(args.operation, a, b)
