@@ -9,16 +9,17 @@ import argparse
 import json
 import random
 import sys
+from itertools import starmap
 from pathlib import Path
 
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+from OCP.gp import gp_Pnt
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.STEPControl import STEPControl_Reader
 from OCP.TopAbs import TopAbs_IN, TopAbs_ON, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
-from OCP.gp import gp_Pnt
 
 
 def read_classifiers(path: Path) -> list[BRepClass3d_SolidClassifier]:
@@ -37,7 +38,9 @@ def read_classifiers(path: Path) -> list[BRepClass3d_SolidClassifier]:
 
 
 def classify(
-    solids: list[BRepClass3d_SolidClassifier], point: tuple[float, float, float], tol: float
+    solids: list[BRepClass3d_SolidClassifier],
+    point: tuple[float, float, float],
+    tol: float,
 ) -> bool | None:
     p = gp_Pnt(*point)
     ambiguous = False
@@ -66,11 +69,11 @@ def material_occupancy(operation: str, left: bool, right: bool) -> bool:
 
 
 def read_points(path: Path) -> list[tuple[float, float, float]]:
-    raw = json.loads(path.read_text())
+    raw = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(raw, dict):
         raw = raw["points"]
     if not isinstance(raw, list):
-        raise ValueError(f"expected a list of 3D points in {path}")
+        raise TypeError(f"expected a list of 3D points in {path}")
     result = []
     for point in raw:
         if len(point) != 3:
@@ -81,13 +84,31 @@ def read_points(path: Path) -> list[tuple[float, float, float]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--operation", required=True, choices=["difference", "intersection", "union", "xor"])
+    parser.add_argument(
+        "--operation",
+        required=True,
+        choices=["difference", "intersection", "union", "xor"],
+    )
     parser.add_argument("--left", required=True, type=Path)
     parser.add_argument("--right", required=True, type=Path)
     parser.add_argument("--result", required=True, type=Path)
-    parser.add_argument("--point", nargs=3, type=float, action="append", default=[], metavar=("X", "Y", "Z"))
-    parser.add_argument("--points-json", type=Path, help='JSON list of [x,y,z], or {"points": [...]}')
-    parser.add_argument("--box", nargs=6, type=float, metavar=("XMIN", "XMAX", "YMIN", "YMAX", "ZMIN", "ZMAX"))
+    parser.add_argument(
+        "--point",
+        nargs=3,
+        type=float,
+        action="append",
+        default=[],
+        metavar=("X", "Y", "Z"),
+    )
+    parser.add_argument(
+        "--points-json", type=Path, help='JSON list of [x,y,z], or {"points": [...]}'
+    )
+    parser.add_argument(
+        "--box",
+        nargs=6,
+        type=float,
+        metavar=("XMIN", "XMAX", "YMIN", "YMAX", "ZMIN", "ZMAX"),
+    )
     parser.add_argument("--samples", type=int, default=0)
     parser.add_argument("--seed", type=int, default=20261115)
     parser.add_argument("--tolerance", type=float, default=1e-7)
@@ -105,10 +126,12 @@ def main() -> int:
         if any(not (low < high) for low, high in bounds):
             parser.error("--box needs ordered finite coordinate bounds")
         rng = random.Random(args.seed)
-        points.extend(tuple(rng.uniform(lo, hi) for lo, hi in bounds) for _ in range(args.samples))
+        points.extend(tuple(starmap(rng.uniform, bounds)) for _ in range(args.samples))
     if not points:
         parser.error("supply --point, --points-json, or --box with --samples")
-    if any(any(not (-float("inf") < v < float("inf")) for v in point) for point in points):
+    if any(
+        any(not (-float("inf") < v < float("inf")) for v in point) for point in points
+    ):
         parser.error("points must have finite coordinates")
 
     left = read_classifiers(args.left)
@@ -131,7 +154,14 @@ def main() -> int:
         else:
             counts["mismatched"] += 1
             violations.append(
-                {"index": index, "point": point, "left": a, "right": b, "expected": expected, "actual": actual}
+                {
+                    "index": index,
+                    "point": point,
+                    "left": a,
+                    "right": b,
+                    "expected": expected,
+                    "actual": actual,
+                }
             )
     report = {
         "operation": args.operation,
