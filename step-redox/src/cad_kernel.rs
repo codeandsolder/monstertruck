@@ -1388,15 +1388,14 @@ pub mod monstertruck {
             };
             let mut knots = KnotVector::bezier_knot(2);
             knots.transform(2.5, 7.0);
-            *intersection.leader_mut() =
-                Box::new(Curve::BsplineCurve(BsplineCurve::new_unchecked(
-                    knots,
-                    vec![
-                        Point3::new(0.0, 0.0, 0.0),
-                        Point3::new(0.5, 0.0, 0.01),
-                        Point3::new(1.0, 0.0, 0.0),
-                    ],
-                )));
+            **intersection.leader_mut() = Curve::BsplineCurve(BsplineCurve::new_unchecked(
+                knots,
+                vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(0.5, 0.0, 0.01),
+                    Point3::new(1.0, 0.0, 0.0),
+                ],
+            ));
             let original = Curve::Intersection(intersection);
             let range = (7.0, 9.5);
             assert_eq!(original.range_tuple(), range);
@@ -1427,7 +1426,7 @@ pub mod monstertruck {
                     Vector4::new(1.0, 0.0, 0.0, 1.0),
                 ],
             ));
-            *intersection.leader_mut() = Box::new(Curve::NurbsCurve(exact_line));
+            **intersection.leader_mut() = Curve::NurbsCurve(exact_line);
             let curve = Curve::Intersection(intersection);
             let corrected = corrected_step_curve(&curve, 1e-5)?;
             let Curve::Intersection(exported) = corrected else {
@@ -1449,10 +1448,10 @@ pub mod monstertruck {
             let Curve::Intersection(mut intersection) = bowed_intersection(None) else {
                 bail!("fixture must be an intersection");
             };
-            *intersection.leader_mut() = Box::new(Curve::Line(monstertruck_modeling::Line(
+            **intersection.leader_mut() = Curve::Line(monstertruck_modeling::Line(
                 Point3::new(0.0, 0.0, 0.01),
                 Point3::new(1.0, 0.0, 0.01),
-            )));
+            ));
             let error = corrected_step_curve(&Curve::Intersection(intersection), 1e-5)
                 .err()
                 .ok_or_else(|| {
