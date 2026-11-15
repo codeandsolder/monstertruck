@@ -99,7 +99,6 @@ pub mod monstertruck {
         SearchNearestParameter, SearchParameter, Shell, Solid, Surface, SurfaceCurve, Vector3,
         Vector4, Wire, algo, builder, primitive, profile,
     };
-    use num_traits::ToPrimitive;
     use std::collections::HashMap;
 
     #[derive(Debug, Clone, Copy)]
@@ -300,12 +299,24 @@ pub mod monstertruck {
                 return Ok(curve.clone());
             }
         }
-        let segment_count = points.len() - 1;
-        let mut knots = KnotVector::uniform_knot(1, segment_count);
-        let knot_span = segment_count
-            .to_f64()
-            .context("STEP knot span exceeds f64 range")?;
-        knots.transform(knot_span, 0.0);
+        // Preserve each native parameter, including nonuniform adaptive
+        // subdivisions and shifted input domains. A uniform 0..N knot
+        // vector changes the curve's parameterization after STEP export.
+        ensure!(
+            parameters.len() == points.len()
+                && parameters.first().copied() == Some(start)
+                && parameters.last().copied() == Some(end)
+                && parameters
+                    .windows(2)
+                    .all(|pair| pair[0].is_finite() && pair[1] > pair[0]),
+            "STEP intersection sampling must cover a strictly increasing native parameter range"
+        );
+        let knots = KnotVector::from(
+            std::iter::once(start)
+                .chain(parameters.iter().copied())
+                .chain(std::iter::once(end))
+                .collect::<Vec<_>>(),
+        );
         let leader = Curve::BsplineCurve(BsplineCurve::new_unchecked(knots, points));
         let mut exported = SurfaceCurve::with_boundaries(
             intersection.surface0().clone(),
@@ -1368,6 +1379,40 @@ pub mod monstertruck {
                 bail!("original intersection was replaced");
             };
             assert!(source.leader().evaluate(0.5).z > 0.004);
+            Ok(())
+        }
+
+        #[test]
+        fn step_export_preserves_nonuniform_native_intersection_parameters() -> Result<()> {
+            let Curve::Intersection(mut intersection) = bowed_intersection(None) else {
+                bail!("fixture must be an intersection");
+            };
+            let mut knots = KnotVector::bezier_knot(2);
+            knots.transform(2.5, 7.0);
+            *intersection.leader_mut() =
+                Box::new(Curve::BsplineCurve(BsplineCurve::new_unchecked(
+                    knots,
+                    vec![
+                        Point3::new(0.0, 0.0, 0.0),
+                        Point3::new(0.5, 0.0, 0.01),
+                        Point3::new(1.0, 0.0, 0.0),
+                    ],
+                )));
+            let original = Curve::Intersection(intersection);
+            let range = (7.0, 9.5);
+            assert_eq!(original.range_tuple(), range);
+            let (parameters, points) = algo::curve::parameter_division(&original, range, 1e-5);
+            let Curve::Intersection(exported) = corrected_step_curve(&original, 1e-5)? else {
+                bail!("STEP correction lost intersection support");
+            };
+            assert_eq!(exported.range_tuple(), range);
+            for (parameter, point) in parameters.into_iter().zip(points) {
+                let rebuilt = exported.leader().evaluate(parameter);
+                assert!(
+                    (rebuilt - point).magnitude() < 1e-9,
+                    "STEP remapped native sample {parameter}: {rebuilt:?} versus {point:?}"
+                );
+            }
             Ok(())
         }
 
