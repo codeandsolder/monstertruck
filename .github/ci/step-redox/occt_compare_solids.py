@@ -126,6 +126,47 @@ def solids(path):
     return solids_from_shape(load(path))
 
 
+def adaptive_volume(solid):
+    """OCC adaptive volume and its estimated integration error.
+
+    The classic fixed quadrature can disagree by milliths of a cubic
+    millimetre for equivalent curved STEP boundaries. Conversely, an OCC
+    Boolean cut may return an *empty* result even when separately integrated
+    valid solids differ materially. Check both independent diagnostics.
+    """
+    properties = GProp_GProps()
+    error = BRepGProp.VolumePropertiesGK_s(solid, properties, 1e-8, True, True)
+    return float(properties.Mass()), float(error)
+
+
+def adaptive_volume_agreement(a, b):
+    volume_a, estimate_a = adaptive_volume(a)
+    volume_b, estimate_b = adaptive_volume(b)
+    delta = abs(volume_a - volume_b)
+    # OCC's error estimates are numerical diagnostics, not mathematical
+    # guarantees. Account conservatively for either absolute or relative
+    # interpretation, and never tighten below the existing volume policy.
+    error_allowance = max(estimate_a, estimate_a * abs(volume_a)) + max(
+        estimate_b, estimate_b * abs(volume_b)
+    )
+    tolerance = volume_tolerance(volume_a, volume_b) + error_allowance
+    return {
+        "a": {"volume": volume_a, "estimated_error": estimate_a},
+        "b": {"volume": volume_b, "estimated_error": estimate_b},
+        "delta": delta,
+        "consistency_tolerance": tolerance,
+        "consistent": (
+            all(
+                math.isfinite(value)
+                for value in (volume_a, volume_b, estimate_a, estimate_b, tolerance)
+            )
+            and estimate_a >= 0.0
+            and estimate_b >= 0.0
+            and delta <= tolerance
+        ),
+    }
+
+
 def cut_volume(a, b):
     operation = BRepAlgoAPI_Cut(a, b)
     operation.Build()
@@ -202,14 +243,15 @@ if args.a_entity_id is not None:
     candidate_minus_source = cut_volume(b_shape, a_shape)
     boolean_volume_tolerance = volume_tolerance(a_solid["volume"], b_solid["volume"])
 
-    # For entity-rank validation, occupied geometry is the contract. OCCT can
-    # integrate mass properties differently for distinct but valid B-rep
-    # representations of the same set, so use the stronger set-equivalence
-    # oracle: both inputs must be valid and both directional set differences
-    # must be empty within the scale-aware Boolean volume tolerance. Keep mass
-    # properties and conservative analytic bounding boxes as diagnostics.
+    # Independent diagnostics must agree. In particular, OCC may report
+    # *both* Boolean cuts empty for two valid solids whose adaptive volumes
+    # disagree beyond integration uncertainty. Empty cuts alone are not a
+    # reliable equivalence certificate for approximate STEP intersection
+    # curves. Classic fixed-quadrature volumes are only reported.
+    adaptive = adaptive_volume_agreement(a_shape, b_shape)
     geometry_equal = (
-        a_solid["brep_valid"]
+        adaptive["consistent"]
+        and a_solid["brep_valid"]
         and b_solid["brep_valid"]
         and source_minus_candidate <= boolean_volume_tolerance
         and candidate_minus_source <= boolean_volume_tolerance
@@ -222,6 +264,7 @@ if args.a_entity_id is not None:
                 "a": a_solid,
                 "b": b_solid,
                 "geometry_equal": geometry_equal,
+                "adaptive_volume": adaptive,
                 "errors": {
                     "volume": volume_error,
                     "area": area_error,

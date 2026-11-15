@@ -87,14 +87,17 @@ pub mod monstertruck {
         EdgeTreatmentProfile, LoftSection, NodeId, Primitive, Profile2d, RigidTransform,
         SweepPath3d, SweepSegment3d,
     };
-    use anyhow::{Result, bail};
-    use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+    use anyhow::{Context, Result, bail, ensure};
+    use monstertruck_core::tolerance::{
+        DEFAULT_NUMERICAL_TOLERANCES, DEFAULT_STEP_RECOVERY_TOLERANCES,
+    };
     use monstertruck_fillet::{FilletOptions, FilletProfile, RadiusSpec, fillet_edges_generic};
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
     use monstertruck_modeling::{
         BoundedCurve, BsplineCurve, Curve, Edge, EuclideanSpace, InnerSpace, KnotVector, Matrix4,
-        NurbsCurve, ParametricCurve, ParametricSurface3D, Point3, Rad, Shell, Solid, Surface,
-        Vector3, Vector4, Wire, builder, primitive, profile,
+        NurbsCurve, ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, Rad,
+        SearchNearestParameter, SearchParameter, Shell, Solid, Surface, SurfaceCurve, Vector3,
+        Vector4, Wire, algo, builder, primitive, profile,
     };
     use std::collections::HashMap;
 
@@ -117,6 +120,239 @@ pub mod monstertruck {
 
         #[must_use]
         pub const fn project_standard() -> Self { Self::new(GeometryPolicy::project_standard()) }
+    }
+
+    /// STEP is a sampled representation of a non-analytic surface intersection.
+    /// The numerical export precision is separate from the modeling policy:
+    /// Standard provides a physical upper bound; Equivalent uses the kernel's
+    /// numerical representation threshold, without altering any CAD geometry.
+    fn step_intersection_accuracy(policy: GeometryPolicy) -> Result<f64> {
+        let tolerance = match policy {
+            GeometryPolicy::Equivalent => DEFAULT_NUMERICAL_TOLERANCES.kernel_f64,
+            GeometryPolicy::Standard { tolerance_mm } => tolerance_mm,
+        };
+        ensure!(
+            tolerance.is_finite() && tolerance >= DEFAULT_NUMERICAL_TOLERANCES.kernel_f64,
+            "STEP intersection accuracy must be finite and >= {} mm; requested {tolerance}",
+            DEFAULT_NUMERICAL_TOLERANCES.kernel_f64,
+        );
+        Ok(tolerance)
+    }
+
+    fn polyline_closest_distance(point: Point3, polyline: &[Point3]) -> Option<f64> {
+        polyline
+            .windows(2)
+            .map(|segment| {
+                let [a, b] = [segment[0], segment[1]];
+                let ab = b - a;
+                let squared = ab.magnitude2();
+                let t = if squared > 0.0 {
+                    ((point - a).dot(ab) / squared).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (point - (a + ab * t)).magnitude()
+            })
+            .reduce(f64::min)
+    }
+
+    /// Evaluating an `IntersectionCurve` can fall back to its marching leader
+    /// if the two-surface solver cannot find a corrected common point.
+    /// Certify every proposed STEP guide vertex against *both* carrier
+    /// surfaces rather than serializing potentially unsupported fallback data.
+    fn validated_step_surface_support(
+        surface: &Surface,
+        points: &[Point3],
+        tolerance: f64,
+    ) -> bool {
+        let mut hint = None;
+        points.iter().copied().all(|point| {
+            let uv = surface
+                .search_parameter(point, hint, 100)
+                .or_else(|| surface.search_nearest_parameter(point, hint, 100))
+                .or_else(|| surface.search_nearest_parameter(point, None, 100));
+            let Some((u, v)) = uv else { return false };
+            if !u.is_finite()
+                || !v.is_finite()
+                || (surface.evaluate(u, v) - point).magnitude() > tolerance
+            {
+                return false;
+            }
+            hint = Some((u, v));
+            true
+        })
+    }
+
+    /// A STEP PCURVE has its *own* chart and parameter range, unrelated to
+    /// the 3-D curve parameter values. Validate the geometric locus in both
+    /// directions; never compare equal normalized t-values.
+    fn validated_step_parameter_curve(
+        boundary: &monstertruck_modeling::ParameterCurve<
+            monstertruck_modeling::Curve2D,
+            Box<Surface>,
+        >,
+        intersection_points: &[Point3],
+        tolerance: f64,
+    ) -> bool {
+        let (_, points) =
+            algo::curve::parameter_division(boundary, boundary.range_tuple(), tolerance);
+        !points.is_empty()
+            && points.iter().all(|point| {
+                point.x.is_finite()
+                    && point.y.is_finite()
+                    && point.z.is_finite()
+                    && polyline_closest_distance(*point, intersection_points)
+                        .is_some_and(|dist| dist <= tolerance)
+            })
+            && intersection_points.iter().all(|point| {
+                polyline_closest_distance(*point, &points).is_some_and(|dist| dist <= tolerance)
+            })
+    }
+
+    /// A degree-one two-control-point rational spline has an exact straight
+    /// point-set locus (including nonuniform positive homogeneous weights).
+    /// Keep that structural information instead of introducing a spurious
+    /// transverse component by projecting its endpoints independently.
+    fn straight_step_guide(guide: &Curve) -> bool {
+        match guide {
+            Curve::Line(_) => true,
+            Curve::BsplineCurve(spline) => {
+                spline.degree() == 1 && spline.control_points().len() == 2
+            }
+            Curve::NurbsCurve(spline) => {
+                spline.degree() == 1
+                    && spline.control_points().len() == 2
+                    && spline
+                        .control_points()
+                        .iter()
+                        .all(|point| point.w.is_finite() && point.w > 0.0)
+            }
+            Curve::ParameterCurve(_) | Curve::Intersection(_) => false,
+        }
+    }
+
+    /// Construct a STEP-exchange guide from the *evaluated* two-surface
+    /// intersection, not the marching leader used to find it. This is export
+    /// only: replacing Boolean/SSI sampling globally breaks interface
+    /// construction in real CAD models.
+    fn corrected_step_curve(curve: &Curve, tolerance: f64) -> Result<Curve> {
+        let Curve::Intersection(intersection) = curve else {
+            return Ok(curve.clone());
+        };
+        let (start, end) = intersection.range_tuple();
+        ensure!(
+            start.is_finite() && end.is_finite() && end > start,
+            "invalid STEP intersection parameter range {start}..{end}"
+        );
+        let (parameters, points) =
+            algo::curve::parameter_division(intersection, (start, end), tolerance);
+        ensure!(
+            points.len() >= 2,
+            "STEP intersection has fewer than two vertices"
+        );
+        ensure!(
+            points
+                .iter()
+                .all(|point| point.x.is_finite() && point.y.is_finite() && point.z.is_finite()),
+            "non-finite evaluated STEP intersection guide"
+        );
+        ensure!(
+            validated_step_surface_support(intersection.surface0(), &points, tolerance)
+                && validated_step_surface_support(intersection.surface1(), &points, tolerance),
+            "evaluated STEP intersection guide does not lie on both carriers within {tolerance} mm"
+        );
+        for (index, boundary) in [intersection.boundary0(), intersection.boundary1()]
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(boundary) = boundary {
+                ensure!(
+                    validated_step_parameter_curve(boundary, &points, tolerance),
+                    "STEP intersection PCURVE {index} does not match evaluated 3-D curve within {tolerance} mm"
+                );
+            }
+        }
+        // An already exact straight guide can satisfy the whole-line
+        // certificate while Newton's independently projected points carry
+        // tiny transverse noise. Reusing it is valid only when it agrees
+        // with the evaluated SSI and BOTH carriers within the export policy.
+        // The curved/unsupported guide path still uses evaluated samples.
+        if straight_step_guide(intersection.leader()) {
+            let guide_points = parameters
+                .iter()
+                .map(|&parameter| intersection.leader().evaluate(parameter))
+                .collect::<Vec<_>>();
+            let pointwise_agreement = guide_points
+                .iter()
+                .zip(&points)
+                .all(|(guide, evaluated)| (*guide - *evaluated).magnitude() <= tolerance);
+            if pointwise_agreement
+                && validated_step_surface_support(intersection.surface0(), &guide_points, tolerance)
+                && validated_step_surface_support(intersection.surface1(), &guide_points, tolerance)
+                && [intersection.boundary0(), intersection.boundary1()]
+                    .into_iter()
+                    .flatten()
+                    .all(|boundary| {
+                        validated_step_parameter_curve(boundary, &guide_points, tolerance)
+                    })
+            {
+                return Ok(curve.clone());
+            }
+        }
+        // Preserve each native parameter, including nonuniform adaptive
+        // subdivisions and shifted input domains. A uniform 0..N knot
+        // vector changes the curve's parameterization after STEP export.
+        ensure!(
+            parameters.len() == points.len()
+                && parameters.first().copied() == Some(start)
+                && parameters.last().copied() == Some(end)
+                && parameters
+                    .windows(2)
+                    .all(|pair| pair[0].is_finite() && pair[1] > pair[0]),
+            "STEP intersection sampling must cover a strictly increasing native parameter range"
+        );
+        let knots = KnotVector::from(
+            std::iter::once(start)
+                .chain(parameters.iter().copied())
+                .chain(std::iter::once(end))
+                .collect::<Vec<_>>(),
+        );
+        let leader = Curve::BsplineCurve(BsplineCurve::new_unchecked(knots, points));
+        let mut exported = SurfaceCurve::with_boundaries(
+            intersection.surface0().clone(),
+            intersection.surface1().clone(),
+            Box::new(leader),
+            intersection.boundary0().cloned(),
+            intersection.boundary1().cloned(),
+        );
+        let (front, back) = intersection.endpoint_anchors();
+        exported.set_endpoint_anchors(front, back);
+        Ok(Curve::Intersection(exported))
+    }
+
+    /// No topology, edge IDs or evaluated CAD curves are modified during
+    /// exchange. A malformed 3-D/PCURVE association is an export error, not
+    /// permission to serialize a misleading curve.
+    fn step_export_solid(source: &Solid, policy: GeometryPolicy) -> Result<Solid> {
+        let tolerance = step_intersection_accuracy(policy)?;
+        let first_error = std::cell::RefCell::new(None);
+        let exported = source.try_mapped(
+            |point| Some(*point),
+            |curve| match corrected_step_curve(curve, tolerance) {
+                Ok(converted) => Some(converted),
+                Err(error) => {
+                    if first_error.borrow().is_none() {
+                        *first_error.borrow_mut() = Some(error);
+                    }
+                    None
+                }
+            },
+            |surface| Some(surface.clone()),
+        );
+        if let Some(error) = first_error.into_inner() {
+            return Err(error).context("STEP intersection geometry conversion failed");
+        }
+        exported.context("STEP export could not reconstruct original solid topology")
     }
 
     /// Opaque wrapper: Monstertruck topology does not escape the backend module.
@@ -1059,7 +1295,8 @@ pub mod monstertruck {
         fn supports_step_export(&self) -> bool { true }
 
         fn to_step(&self, evaluated: &Self::Evaluated) -> Result<String> {
-            let compressed = evaluated.solid.compress();
+            let export_solid = step_export_solid(&evaluated.solid, self.policy)?;
+            let compressed = export_solid.compress();
             Ok(CompleteStepDisplay::new(
                 save::StepModel::from(&compressed),
                 save::StepHeaderDescriptor {
@@ -1078,6 +1315,191 @@ pub mod monstertruck {
             reason = "legacy test fixture code is allowed narrow lint exceptions; production paths remain strict"
         )]
         use super::*;
+        use monstertruck_modeling::{Curve2D, Line, ParameterCurve, Plane, Point2};
+
+        fn bowed_intersection(boundary_y: Option<f64>) -> Curve {
+            let first = Surface::Plane(Plane::xy());
+            let second = Surface::Plane(Plane::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 1.0),
+            ));
+            let guide = Curve::BsplineCurve(BsplineCurve::new_unchecked(
+                KnotVector::uniform_knot(2, 1),
+                vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(0.5, 0.0, 0.01),
+                    Point3::new(1.0, 0.0, 0.0),
+                ],
+            ));
+            Curve::Intersection(SurfaceCurve::with_boundaries(
+                Box::new(first.clone()),
+                Box::new(second),
+                Box::new(guide),
+                boundary_y.map(|offset| {
+                    ParameterCurve::new(
+                        Curve2D::Line(Line(Point2::new(0.0, offset), Point2::new(1.0, offset))),
+                        Box::new(first),
+                    )
+                }),
+                None,
+            ))
+        }
+
+        #[test]
+        fn step_export_uses_evaluated_intersection_not_marching_guide() -> Result<()> {
+            let original = bowed_intersection(Some(0.0));
+            let old_at_middle = original.evaluate(0.5);
+            assert!(old_at_middle.z.abs() < 1e-7);
+            let Curve::Intersection(raw) = &original else {
+                bail!("test fixture is not an intersection");
+            };
+            assert!(raw.leader().evaluate(0.5).z > 0.004);
+
+            let corrected = corrected_step_curve(&original, 1e-5)?;
+            let Curve::Intersection(intersection) = corrected else {
+                bail!("STEP correction lost intersection support");
+            };
+            assert!(intersection.boundary0().is_some());
+            assert!(intersection.boundary1().is_none());
+            let (lo, hi) = intersection.range_tuple();
+            for i in 0..=32_u32 {
+                let fraction = f64::from(i) / 32.0;
+                let point = intersection
+                    .leader()
+                    .evaluate(f64::mul_add(hi - lo, fraction, lo));
+                assert!(
+                    point.y.abs() < 1e-5 && point.z.abs() < 1e-5,
+                    "STEP leader must follow the true shared line: {point:?}"
+                );
+            }
+            // Original evaluated CAD geometry is immutable under STEP export.
+            let Curve::Intersection(source) = original else {
+                bail!("original intersection was replaced");
+            };
+            assert!(source.leader().evaluate(0.5).z > 0.004);
+            Ok(())
+        }
+
+        #[test]
+        fn step_export_preserves_nonuniform_native_intersection_parameters() -> Result<()> {
+            let Curve::Intersection(mut intersection) = bowed_intersection(None) else {
+                bail!("fixture must be an intersection");
+            };
+            let mut knots = KnotVector::bezier_knot(2);
+            knots.transform(2.5, 7.0);
+            **intersection.leader_mut() = Curve::BsplineCurve(BsplineCurve::new_unchecked(
+                knots,
+                vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(0.5, 0.0, 0.01),
+                    Point3::new(1.0, 0.0, 0.0),
+                ],
+            ));
+            let original = Curve::Intersection(intersection);
+            let range = (7.0, 9.5);
+            assert_eq!(original.range_tuple(), range);
+            let (parameters, points) = algo::curve::parameter_division(&original, range, 1e-5);
+            let Curve::Intersection(exported) = corrected_step_curve(&original, 1e-5)? else {
+                bail!("STEP correction lost intersection support");
+            };
+            assert_eq!(exported.range_tuple(), range);
+            for (parameter, point) in parameters.into_iter().zip(points) {
+                let rebuilt = exported.leader().evaluate(parameter);
+                assert!(
+                    (rebuilt - point).magnitude() < 1e-9,
+                    "STEP remapped native sample {parameter}: {rebuilt:?} versus {point:?}"
+                );
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn step_export_retains_certified_straight_rational_guide() -> Result<()> {
+            let Curve::Intersection(mut intersection) = bowed_intersection(None) else {
+                bail!("fixture must be an intersection");
+            };
+            let exact_line = NurbsCurve::new(BsplineCurve::new_unchecked(
+                KnotVector::bezier_knot(1),
+                vec![
+                    Vector4::new(0.0, 0.0, 0.0, 1.0),
+                    Vector4::new(1.0, 0.0, 0.0, 1.0),
+                ],
+            ));
+            **intersection.leader_mut() = Curve::NurbsCurve(exact_line);
+            let curve = Curve::Intersection(intersection);
+            let corrected = corrected_step_curve(&curve, 1e-5)?;
+            let Curve::Intersection(exported) = corrected else {
+                bail!("STEP conversion lost the intersection");
+            };
+            assert!(matches!(exported.leader().as_ref(), Curve::NurbsCurve(_)));
+            let (lo, hi) = exported.range_tuple();
+            for fraction in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                let p = exported
+                    .leader()
+                    .evaluate(f64::mul_add(hi - lo, fraction, lo));
+                assert!(p.y.abs() < 1e-10 && p.z.abs() < 1e-10);
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn step_export_rejects_off_carrier_straight_guide() -> Result<()> {
+            let Curve::Intersection(mut intersection) = bowed_intersection(None) else {
+                bail!("fixture must be an intersection");
+            };
+            **intersection.leader_mut() = Curve::Line(monstertruck_modeling::Line(
+                Point3::new(0.0, 0.0, 0.01),
+                Point3::new(1.0, 0.0, 0.01),
+            ));
+            let error = corrected_step_curve(&Curve::Intersection(intersection), 1e-5)
+                .err()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("unsupported straight guide must not be exported")
+                })?;
+            assert!(error.to_string().contains("both carriers"));
+            Ok(())
+        }
+
+        #[test]
+        fn step_export_rejects_inconsistent_associated_parameter_curve() {
+            let wrong = bowed_intersection(Some(0.1));
+            assert!(
+                corrected_step_curve(&wrong, 1e-5)
+                    .is_err_and(|error| error.to_string().contains("PCURVE 0"))
+            );
+        }
+
+        #[test]
+        fn step_export_rejects_unresolved_nonintersecting_carriers() -> Result<()> {
+            let original = bowed_intersection(None);
+            let Curve::Intersection(mut intersection) = original else {
+                return Err(anyhow::anyhow!("fixture must be an intersection"));
+            };
+            **intersection.surface1_mut() = Surface::Plane(Plane::new(
+                Point3::new(0.0, 0.0, 0.1),
+                Point3::new(1.0, 0.0, 0.1),
+                Point3::new(0.0, 1.0, 0.1),
+            ));
+            let wrong = Curve::Intersection(intersection);
+            assert!(
+                corrected_step_curve(&wrong, 1e-5)
+                    .is_err_and(|error| error.to_string().contains("both carriers"))
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn step_export_accuracy_never_silently_widens_requested_tolerance() {
+            assert!(step_intersection_accuracy(GeometryPolicy::standard_mm(1e-5)).is_ok());
+            assert!(step_intersection_accuracy(GeometryPolicy::standard_mm(1e-8)).is_err());
+            assert!(step_intersection_accuracy(GeometryPolicy::standard_mm(f64::NAN)).is_err());
+            assert!(
+                step_intersection_accuracy(GeometryPolicy::standard_mm(f64::INFINITY)).is_err()
+            );
+            assert!(step_intersection_accuracy(GeometryPolicy::Equivalent).is_ok());
+        }
+
         use crate::cad_ir::{
             Axis3, CadNode, Curve2d, LoftSection, Profile2d, ProfileLoop, RigidTransform,
             SweepPath3d, SweepSegment3d,
