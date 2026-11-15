@@ -292,6 +292,10 @@ fn split_non_simple_wire<P: Clone, C: Clone>(wire: &Wire<P, C>) -> Vec<Wire<P, C
     simple
 }
 
+// Keep the classifier's strongest independent witnesses, not a large
+// collection of nearby points with correlated numerical error.
+const MAX_REGION_WITNESSES: usize = 9;
+
 pub(super) fn sample_points_on_region<C, S>(
     boundaries: &[Wire<Point3, C>],
     surface: &S,
@@ -333,7 +337,6 @@ where
     // Picking its first epsilon-inset witness is not a geometric interior
     // classification. Rank witnesses by actual clearance to ALL projected
     // trim segments (including holes), and distribute the strongest samples.
-    const MAX_SAMPLES: usize = 9;
     let clearance2 = |candidate: Point2| {
         parameter_loops
             .iter()
@@ -363,7 +366,7 @@ where
     if let Some((_, uv)) = candidates.first() {
         chosen.push(*uv);
     }
-    while chosen.len() < MAX_SAMPLES {
+    while chosen.len() < MAX_REGION_WITNESSES {
         let next = candidates
             .iter()
             .filter(|(_, uv)| {

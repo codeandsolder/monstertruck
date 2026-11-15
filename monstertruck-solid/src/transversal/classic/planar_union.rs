@@ -119,7 +119,7 @@ impl CylinderChart {
                 .unwrap_or(angles[0] + std::f64::consts::TAU);
             let gap = end - start;
             if gap > largest.0 {
-                largest = (gap, start + gap * 0.5);
+                largest = (gap, gap.mul_add(0.5, start));
             }
         }
         self.seam = largest.1.rem_euclid(std::f64::consts::TAU);
@@ -136,8 +136,10 @@ impl CylinderChart {
         let phase = self.raw_phase(point);
         let mut angle = (phase - self.seam).rem_euclid(std::f64::consts::TAU) + self.seam;
         if let Some(previous) = previous {
-            angle += std::f64::consts::TAU
-                * ((previous.y / self.radius - angle) / std::f64::consts::TAU).round();
+            angle = std::f64::consts::TAU.mul_add(
+                ((previous.y / self.radius - angle) / std::f64::consts::TAU).round(),
+                angle,
+            );
         }
         Some(Point2::new(axial, self.radius * angle))
     }
@@ -1043,7 +1045,7 @@ fn same_oriented_difference_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .absolute_boundaries()
         .first()
         .and_then(Wire::front_vertex)
-        .map(|vertex| vertex.point())
+        .map(monstertruck_topology::Vertex::point)
     else {
         return false;
     };

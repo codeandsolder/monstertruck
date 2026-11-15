@@ -105,12 +105,7 @@ where
                     .filter(|parameter| within_tolerance(*parameter))
             })
     });
-    if let Some(parameter) = parameter {
-        *hint = Some(parameter);
-        true
-    } else {
-        false
-    }
+    parameter.inspect(|&found| *hint = Some(found)).is_some()
 }
 
 fn validated_linear_fragment_join<S>(
@@ -330,11 +325,16 @@ where
         }
         None
     })?;
-    let intervals = (length / (mesh_scale * 0.5)).ceil().clamp(2.0, 128.0) as usize;
+    // A nonfinite quotient is not a license to silently undersample a gap.
+    let subdivisions = length / (mesh_scale * 0.5);
+    if !subdivisions.is_finite() {
+        return None;
+    }
+    let intervals = subdivisions.ceil().clamp(2.0, 128.0).to_usize()?;
     let mut samples = Vec::with_capacity(intervals + 1);
     samples.push(a);
     for index in 1..intervals {
-        let fraction = index as f64 / intervals as f64;
+        let fraction = index.to_f64()? / intervals.to_f64()?;
         let predictor = a + span * fraction;
         let (q, uv0, uv1) = intersection.search_intersection_in_plane(
             predictor,
@@ -535,7 +535,7 @@ where
         if residual > surface_residual || q.distance(point) > tolerance {
             continue;
         }
-        let progress = index as f64 + along.clamp(0.0, 1.0);
+        let progress = index.to_f64()? + along.clamp(0.0, 1.0);
         // Nonadjacent repeated solutions mean self-overlap, not a unique splice.
         if matched_progress.is_some_and(|prior| (progress - prior).abs() > 1.5) {
             return None;
@@ -630,12 +630,14 @@ where
     );
     for pair in trace.windows(2) {
         let delta = pair[1] - pair[0];
-        let count = (delta.magnitude() / mesh_step).ceil().max(1.0) as usize;
-        if samples + count > 4096 {
+        // Reject nonfinite/overflowed counts instead of saturating a float
+        // cast and overflowing the cumulative sampling budget.
+        let count = (delta.magnitude() / mesh_step).ceil().max(1.0).to_usize()?;
+        if samples.checked_add(count).is_none_or(|total| total > 4096) {
             return None;
         }
         for step in 1..=count {
-            let fraction = step as f64 / count as f64;
+            let fraction = step.to_f64()? / count.to_f64()?;
             let point = if step == count {
                 pair[1]
             } else {
@@ -671,7 +673,7 @@ where
                 surface_residual,
                 tolerances.mesh_seed,
             )?;
-            let progress = index as f64 + local;
+            let progress = index.to_f64()? + local;
             if progress + DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_progress_slack
                 < previous_progress
             {
@@ -682,7 +684,7 @@ where
         }
     }
     if previous_progress
-        < overlap_index as f64 + overlap_fraction
+        < overlap_index.to_f64()? + overlap_fraction
             - DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_overlap_parameter_slack
     {
         return None;
@@ -734,8 +736,10 @@ where
                             // A and B can admit the same union in reversed order.
                             // Use canonical 3D endpoint order to admit one
                             // orientation while retaining genuine ambiguity.
-                            let front = *merged.first().unwrap();
-                            let back = *merged.last().unwrap();
+                            let (Some(&front), Some(&back)) = (merged.first(), merged.last())
+                            else {
+                                continue;
+                            };
                             if front
                                 .x
                                 .total_cmp(&back.x)
@@ -762,10 +766,8 @@ where
         let (first, second, _, _, merged) = matches.remove(0);
         if std::env::var_os("MT_CURVED_SSI_TRACE").is_some() {
             eprintln!(
-                "SSI_OVERLAP_SPLICE before={} first={} second={} result_points={}",
+                "SSI_OVERLAP_SPLICE before={} first={first} second={second} result_points={}",
                 chains.len(),
-                first,
-                second,
                 merged.len()
             );
         }

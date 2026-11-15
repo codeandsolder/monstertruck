@@ -231,10 +231,10 @@ impl ParameterKind {
         if t > t1 {
             return (at_back && !at_front).then_some(Self::Back);
         }
-        if t == t0 {
+        if t.partial_cmp(&t0).is_some_and(std::cmp::Ordering::is_eq) {
             return Some(Self::Front);
         }
-        if t == t1 {
+        if t.partial_cmp(&t1).is_some_and(std::cmp::Ordering::is_eq) {
             return Some(Self::Back);
         }
         match (at_front, at_back) {
@@ -626,12 +626,7 @@ impl<C> Loops<Point3, C> {
                             .then_some(parameter)
                     };
                     let parameter = nearest(previous).or_else(|| nearest(None));
-                    if let Some(parameter) = parameter {
-                        previous = Some(parameter);
-                        true
-                    } else {
-                        false
-                    }
+                    parameter.inspect(|&found| previous = Some(found)).is_some()
                 };
                 let dense = parameters
                     .into_iter()
@@ -1218,11 +1213,11 @@ impl<C> LoopsStore<Point3, C> {
                 .find(|(existing, _, _)| existing.distance(location) <= tolerances.length)
             {
                 if !vertices.iter().any(|known| known.id() == vertex.id()) {
-                    vertices.push(vertex.clone());
+                    vertices.push(vertex);
                 }
                 continue;
             }
-            candidates.push((location, distance, vec![vertex.clone()]));
+            candidates.push((location, distance, vec![vertex]));
         }
         candidates.sort_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1));
         let (_, closest_distance, selected) = candidates.first()?;
