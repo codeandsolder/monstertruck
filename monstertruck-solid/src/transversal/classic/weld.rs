@@ -57,6 +57,7 @@ type VertexKey = VertexId<Point3>;
 type SourceEdgeId<C, S> = EdgeId<AltCurve<C, S>>;
 type SourceVertexId = VertexId<Point3>;
 type SourceEdgeEvidence = (SourceVertexId, SourceVertexId, Point3);
+type RebuiltEdgeCache<C, S> = HashMap<(SourceEdgeId<C, S>, bool), Vec<AltEdge<C, S>>>;
 
 // Weld representatives are geometric, not HashMap/EdgeId insertion-order
 // choices. A full ordering is necessary near tolerance-cell boundaries.
@@ -105,7 +106,7 @@ struct WeldContext<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> {
     additional_nodes: Vec<Point3>,
     // An edge can occur in multiple selected face regions. Splitting it is
     // purely a function of the fixed input graph and canonical vertex set.
-    rebuilt_edges: HashMap<(SourceEdgeId<C, S>, bool), Vec<AltEdge<C, S>>>,
+    rebuilt_edges: RebuiltEdgeCache<C, S>,
 }
 
 impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
