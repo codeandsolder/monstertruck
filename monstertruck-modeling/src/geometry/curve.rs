@@ -29,9 +29,10 @@ fn experimental_curve_sample_floor() -> Option<f64> {
         std::env::var("MT_EXPERIMENT_CURVE_SAMPLE_FLOOR_MM")
             .ok()
             .map(|value| {
-                let requested = value
-                    .parse::<f64>()
-                    .expect("MT_EXPERIMENT_CURVE_SAMPLE_FLOOR_MM must be a finite positive f64");
+                let requested = value.parse::<f64>().unwrap_or_else(|error| {
+                    eprintln!("invalid MT_EXPERIMENT_CURVE_SAMPLE_FLOOR_MM={value:?}: {error}");
+                    std::process::exit(2);
+                });
                 assert!(
                     requested.is_finite() && requested >= 1.0e-6,
                     "MT_EXPERIMENT_CURVE_SAMPLE_FLOOR_MM must be finite and >= 1e-6"

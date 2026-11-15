@@ -44,10 +44,8 @@ pub(super) fn native_boundary_slack((lo, hi): (f64, f64), relative: f64) -> Opti
     {
         return None;
     }
-    let slack = relative * span
-        + DEFAULT_NUMERICAL_TOLERANCES.mesh_boundary_roundoff_ulps
-            * f64::EPSILON
-            * lo.abs().max(hi.abs());
+    let slack = (DEFAULT_NUMERICAL_TOLERANCES.mesh_boundary_roundoff_ulps * f64::EPSILON)
+        .mul_add(lo.abs().max(hi.abs()), relative * span);
     slack.is_finite().then_some(slack)
 }
 
@@ -65,10 +63,8 @@ fn periodic_parameter_slack(period: f64, coordinates: &[f64], relative: f64) -> 
     let coordinate_scale = coordinates
         .iter()
         .fold(period, |maximum, coordinate| maximum.max(coordinate.abs()));
-    let slack = relative * period
-        + DEFAULT_NUMERICAL_TOLERANCES.mesh_boundary_roundoff_ulps
-            * f64::EPSILON
-            * coordinate_scale;
+    let slack = (DEFAULT_NUMERICAL_TOLERANCES.mesh_boundary_roundoff_ulps * f64::EPSILON)
+        .mul_add(coordinate_scale, relative * period);
     slack.is_finite().then_some(slack)
 }
 

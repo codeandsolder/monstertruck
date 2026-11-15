@@ -90,7 +90,7 @@ fn reversed_connector_is_shorter(direct: f64, reversed: f64) -> bool {
     let relative = DEFAULT_NUMERICAL_TOLERANCES.mesh_open_pair_connector_score_relative;
     direct.is_finite()
         && reversed.is_finite()
-        && reversed + relative * direct.max(reversed) < direct
+        && relative.mul_add(direct.max(reversed), reversed) < direct
 }
 
 pub(in crate::tessellation::triangulation) fn boundary_segment_parameter(
