@@ -875,20 +875,18 @@ where
                 <= tolerances.length);
     let reference_curve = reference.curve();
     let edge_curve = candidate.curve();
-    let same_curve =
-        validate_sampled_coincidence::<Point3, _>(&reference_curve, &edge_curve, tolerances)
+    validate_sampled_coincidence::<Point3, _>(&reference_curve, &edge_curve, tolerances)
+        == CurveCoincidence::SampledValidation
+        || validate_sampled_containment::<Point3, _>(&reference_curve, &edge_curve, tolerances)
             == CurveCoincidence::SampledValidation
-            || validate_sampled_containment::<Point3, _>(&reference_curve, &edge_curve, tolerances)
-                == CurveCoincidence::SampledValidation
-            || validate_sampled_containment::<Point3, _>(&edge_curve, &reference_curve, tolerances)
-                == CurveCoincidence::SampledValidation
-            || (same_endpoints
-                && validate_endpoint_aligned_coincidence::<Point3, _>(
-                    &reference_curve,
-                    &edge_curve,
-                    tolerances,
-                ) == CurveCoincidence::SampledValidation);
-    same_curve
+        || validate_sampled_containment::<Point3, _>(&edge_curve, &reference_curve, tolerances)
+            == CurveCoincidence::SampledValidation
+        || (same_endpoints
+            && validate_endpoint_aligned_coincidence::<Point3, _>(
+                &reference_curve,
+                &edge_curve,
+                tolerances,
+            ) == CurveCoincidence::SampledValidation)
 }
 
 impl<C> LoopsStore<Point3, C> {
@@ -1918,16 +1916,18 @@ fn analyze_coplanar_interfaces(
     })
 }
 
+/// Cache of algebraic surface-support certificates for one shell pair.
+struct FacePairSupports {
+    planes: [Vec<Option<Plane>>; 2],
+    shared_ruled_pairs: HashSet<(usize, usize)>,
+}
+
 /// Cache exact planar supports and pairs with algebraically certified
 /// identical rational ruled carriers before the face-pair SSI sweep.
 fn certify_face_pair_supports<C, S>(
     geom_shell0: &Shell<Point3, C, S>,
     geom_shell1: &Shell<Point3, C, S>,
-) -> (
-    Vec<Option<Plane>>,
-    Vec<Option<Plane>>,
-    HashSet<(usize, usize)>,
-)
+) -> FacePairSupports
 where
     S: Clone + TryIntoHomogeneousBsplineSurface + TryIntoAnalyticSurfaceKind,
 {
@@ -1965,7 +1965,54 @@ where
             }
         }
     }
-    (planes0, planes1, shared_ruled_pairs)
+    FacePairSupports {
+        planes: [planes0, planes1],
+        shared_ruled_pairs,
+    }
+}
+
+/// Complete the exact face-pair interface after all SSI branches are split.
+/// Coplanar edge imprint precedes sampled/analytic wire synchronization.
+fn materialize_interface_loops<C>(
+    [mut operand0, mut operand1]: [OperandLoopStores<C>; 2],
+    [poly_shell0, poly_shell1]: [&Shell<Point3, PolylineCurve, Option<PolygonMesh>>; 2],
+    tolerances: BooleanTolerance,
+    coplanar: CoplanarInterfaceAnalysis,
+    has_shared_ruled: bool,
+) -> Option<InterfaceLoops<C>>
+where
+    C: ParametricCurve3D
+        + BoundedCurve<Point = Point3>
+        + Cut<Point = Point3, Vector = Vector3>
+        + SearchParameter<CurveParameter, Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>
+        + ParameterDivision1D<Point = Point3>
+        + Invertible,
+{
+    let tol = tolerances.length;
+    // Mesh/mesh interference intentionally ignores coplanar contact. By this
+    // point ordinary SSI has already split the boundary edges at transverse
+    // intersections, so imprint those existing edge segments onto any face of
+    // the opposite operand that contains them. This supplies the missing trim
+    // lines for coplanar overlap without manufacturing approximate SSI curves.
+    if coplanar.partial_overlap || has_shared_ruled {
+        let source0 = operand0.geom.clone();
+        let source1 = operand1.geom.clone();
+        imprint_edges_on_faces(&source1, poly_shell0, &mut operand0.geom, tol)?;
+        imprint_edges_on_faces(&source0, poly_shell1, &mut operand1.geom, tol)?;
+    }
+
+    let sampled0 = (!(coplanar.partial_overlap || has_shared_ruled)
+        && loop_stores_are_synchronized(&operand0.geom, &operand0.poly, tolerances))
+    .then_some(operand0.poly);
+    let sampled1 = (!(coplanar.partial_overlap || has_shared_ruled)
+        && loop_stores_are_synchronized(&operand1.geom, &operand1.poly, tolerances))
+    .then_some(operand1.poly);
+    Some(InterfaceLoops {
+        geom: [operand0.geom, operand1.geom],
+        sampled: [sampled0, sampled1],
+        coplanar_overlap: coplanar.any_overlap,
+    })
 }
 
 pub(super) fn create_loops_stores<C, S>(
@@ -2007,10 +2054,9 @@ where
     let boundary_search_tolerance = boolean_tolerance.mesh_seed;
     let coplanar =
         analyze_coplanar_interfaces(poly_shell0, poly_shell1, coplanar_tol, imprint_coplanar)?;
-    let (planes0, planes1, shared_ruled_pairs) =
-        certify_face_pair_supports(geom_shell0, geom_shell1);
+    let supports = certify_face_pair_supports(geom_shell0, geom_shell1);
     let mut endpoint_registry = Vec::<(Vertex<Point3>, Vertex<Point3>)>::new();
-    let has_shared_ruled = !shared_ruled_pairs.is_empty();
+    let has_shared_ruled = !supports.shared_ruled_pairs.is_empty();
     (0..store0_len)
         .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
         .try_for_each(|(face_index0, face_index1)| {
@@ -2031,7 +2077,10 @@ where
             // A common ruled carrier has a two-dimensional overlap: a
             // transverse SSI curve is undefined. Partition its real trimmed
             // boundaries via exact edge imprinting below instead.
-            if shared_ruled_pairs.contains(&(face_index0, face_index1)) {
+            if supports
+                .shared_ruled_pairs
+                .contains(&(face_index0, face_index1))
+            {
                 return Some(());
             }
             // Exactly coincident trimmed planar faces are already a complete
@@ -2050,7 +2099,10 @@ where
                 surface1.clone(),
                 &polygon1,
                 boolean_tolerance,
-                (planes0[face_index0], planes1[face_index1]),
+                (
+                    supports.planes[0][face_index0],
+                    supports.planes[1][face_index1],
+                ),
             )?;
             curves
                 .into_iter()
@@ -2096,29 +2148,13 @@ where
                 })
         })?;
 
-    // Mesh/mesh interference intentionally ignores coplanar contact. By this
-    // point ordinary SSI has already split the boundary edges at transverse
-    // intersections, so imprint those existing edge segments onto any face of
-    // the opposite operand that contains them. This supplies the missing trim
-    // lines for coplanar overlap without manufacturing approximate SSI curves.
-    if coplanar.partial_overlap || has_shared_ruled {
-        let source0 = operand0.geom.clone();
-        let source1 = operand1.geom.clone();
-        imprint_edges_on_faces(&source1, poly_shell0, &mut operand0.geom, tol)?;
-        imprint_edges_on_faces(&source0, poly_shell1, &mut operand1.geom, tol)?;
-    }
-
-    let sampled0 = (!(coplanar.partial_overlap || has_shared_ruled)
-        && loop_stores_are_synchronized(&operand0.geom, &operand0.poly, boolean_tolerance))
-    .then_some(operand0.poly);
-    let sampled1 = (!(coplanar.partial_overlap || has_shared_ruled)
-        && loop_stores_are_synchronized(&operand1.geom, &operand1.poly, boolean_tolerance))
-    .then_some(operand1.poly);
-    Some(InterfaceLoops {
-        geom: [operand0.geom, operand1.geom],
-        sampled: [sampled0, sampled1],
-        coplanar_overlap: coplanar.any_overlap,
-    })
+    materialize_interface_loops(
+        [operand0, operand1],
+        [poly_shell0, poly_shell1],
+        boolean_tolerance,
+        coplanar,
+        has_shared_ruled,
+    )
 }
 
 #[cfg(test)]
