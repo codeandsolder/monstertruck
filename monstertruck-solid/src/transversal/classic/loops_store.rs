@@ -2089,6 +2089,16 @@ where
             {
                 return Some(());
             }
+            // Certified common planar support has no transverse intersection
+            // curve even when its two trims cover different regions. Existing
+            // exact edge imprinting owns the face-local split instead.
+            if let (Some(plane0), Some(plane1)) = (
+                supports.planes[0][face_index0],
+                supports.planes[1][face_index1],
+            ) && intersection_curve::common_planar_support(plane0, &polygon0, plane1, &polygon1)
+            {
+                return Some(());
+            }
             // Exactly coincident trimmed planar faces are already a complete
             // interface. Running generic SSI on coincident surfaces is both
             // unnecessary and degenerate; ownership is resolved by the

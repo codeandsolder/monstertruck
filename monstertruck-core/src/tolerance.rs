@@ -150,6 +150,9 @@ pub struct NumericalTolerances {
     pub boolean_fragment_overlap_parameter_slack: f64,
     /// Relative span padding for planar polygon overlap.
     pub boolean_planar_relative_span: f64,
+    /// Floating-point roundoff ulps for two already-certified common planar
+    /// supports; never an additional Boolean modeling tolerance.
+    pub boolean_common_plane_roundoff_ulps: f64,
     /// Relative native iso-parameter span admitted as end-of-domain rounding drift.
     pub boolean_iso_parameter_relative: f64,
     /// Floating-point ulps of the absolute parameter scale admitted at an iso endpoint.
@@ -305,6 +308,7 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     boolean_leader_progress_slack: 1.0e-8,
     boolean_fragment_overlap_parameter_slack: 1.0e-5,
     boolean_planar_relative_span: 1.0e-10,
+    boolean_common_plane_roundoff_ulps: 64.0,
     boolean_iso_parameter_relative: 1.0e-6,
     boolean_iso_parameter_roundoff_ulps: 8.0,
     boolean_iso_validation_segments: 32,
