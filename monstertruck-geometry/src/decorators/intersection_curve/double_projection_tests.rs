@@ -31,7 +31,7 @@ fn surface_curve_cut_preserves_exact_split_without_deforming_approximate_leader(
     let t = 0.43;
     let exact = curve.evaluate(t);
     assert!(exact.distance(Point3::new(0.86, 0.0, 0.0)) < 1e-10);
-    let original_leader = curve.leader().clone();
+    let original_leader = *curve.leader();
     let mut later = curve.cut(t);
     assert!(curve.back().distance(exact) < 1e-10);
     assert!(later.front().distance(exact) < 1e-10);
