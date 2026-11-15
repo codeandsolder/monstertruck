@@ -2,5 +2,17 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "github>codeandsolder/ci-workflows:renovate-fleet"
+  ],
+  "packageRules": [
+    {
+      "description": "The step-redox CAD tooling requires cadquery-ocp==8.0.1.1.0, which publishes CPython wheels only through cp314; do not propose cp315 until a compatible CAD wheel is available",
+      "matchFileNames": [
+        ".github/ci/step-redox/pyproject.toml"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "allowedVersions": "<3.15"
+    }
   ]
 }
