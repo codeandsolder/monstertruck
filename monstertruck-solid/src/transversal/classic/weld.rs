@@ -103,6 +103,9 @@ struct WeldContext<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> {
     source_vertex_points: HashMap<SourceVertexId, Point3>,
     source_edges: Vec<SourceEdgeEvidence>,
     additional_nodes: Vec<Point3>,
+    // An edge can occur in multiple selected face regions. Splitting it is
+    // purely a function of the fixed input graph and canonical vertex set.
+    rebuilt_edges: HashMap<(SourceEdgeId<C, S>, bool), Vec<AltEdge<C, S>>>,
 }
 
 impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
@@ -152,6 +155,7 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
             source_vertex_points,
             source_edges,
             additional_nodes: Vec::new(),
+            rebuilt_edges: HashMap::default(),
         };
         let mut source_points = context
             .source_vertex_points
@@ -311,6 +315,16 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
     }
 
     fn rebuild_edge(&mut self, edge: &AltEdge<C, S>) -> Option<Vec<AltEdge<C, S>>> {
+        let key = (edge.id(), edge.orientation());
+        if let Some(rebuilt) = self.rebuilt_edges.get(&key) {
+            return Some(rebuilt.clone());
+        }
+        let rebuilt = self.rebuild_edge_uncached(edge)?;
+        self.rebuilt_edges.insert(key, rebuilt.clone());
+        Some(rebuilt)
+    }
+
+    fn rebuild_edge_uncached(&mut self, edge: &AltEdge<C, S>) -> Option<Vec<AltEdge<C, S>>> {
         let front = self.canonical_vertex(edge.front().point())?;
         let back = self.canonical_vertex(edge.back().point())?;
         if front == back {
@@ -441,6 +455,36 @@ mod weld_tests {
 
     fn alt_line(front: Point3, back: Point3) -> AltCurve<Curve, Surface> {
         Alternative::FirstType(Curve::from(Line(front, back)))
+    }
+
+    #[test]
+    fn repeated_source_edge_reuses_exact_canonical_segments_per_orientation() {
+        let endpoints =
+            Vertex::from_points(&[Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+        let original = Edge::new_unchecked(
+            &endpoints[0],
+            &endpoints[1],
+            alt_line(endpoints[0].point(), endpoints[1].point()),
+        );
+        let mut context: WeldContext<Curve, Surface> =
+            WeldContext::new(&[], BooleanTolerance::new(1.0e-6))
+                .expect("empty input has a valid welding context");
+        context.additional_nodes.push(Point3::new(0.5, 0.0, 0.0));
+        let first = context.rebuild_edge(&original).expect("exact split");
+        let second = context.rebuild_edge(&original).expect("cached split");
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            first.iter().map(Edge::id).collect::<Vec<_>>(),
+            second.iter().map(Edge::id).collect::<Vec<_>>()
+        );
+        assert_eq!(context.rebuilt_edges.len(), 1);
+        let reversed = context
+            .rebuild_edge(&original.inverse())
+            .expect("inverse split");
+        assert_eq!(reversed.len(), 2);
+        assert_eq!(context.rebuilt_edges.len(), 2);
+        assert_eq!(first[0].front().point(), reversed[1].back().point());
+        assert_eq!(first[1].back().point(), reversed[0].front().point());
     }
 
     #[test]
