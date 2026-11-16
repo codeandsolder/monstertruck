@@ -461,7 +461,7 @@ mod weld_tests {
     #[test]
     fn repeated_source_edge_reuses_exact_canonical_segments_per_orientation() {
         let endpoints =
-            Vertex::from_points(&[Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+            Vertex::from_points([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
         let original = Edge::new_unchecked(
             &endpoints[0],
             &endpoints[1],
