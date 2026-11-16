@@ -673,6 +673,14 @@ pub mod monstertruck {
                 bail!("revolution generatrix endpoints must lie on the axis");
             }
 
+            // A generatrix running along the positive sweep axis creates
+            // an inward-oriented boundary. The missing axis segment closes
+            // the profile but does not contribute a swept face: choose the
+            // outward material orientation before constructing any coedges.
+            // This is axis-relative and independent of the world frame.
+            if (back.point() - front.point()).dot(direction) > 0.0 {
+                wire.invert();
+            }
             let shell =
                 builder::revolve_wire(&wire, origin, direction, builder::SweepAngle::Closed, 2)?;
             return Ok(Solid::new(vec![shell])?);
