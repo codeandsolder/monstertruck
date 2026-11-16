@@ -2212,6 +2212,38 @@ mod projection_tests {
     }
 
     #[test]
+    fn exact_endpoint_lookup_keeps_internal_edges_not_on_original_trim() {
+        let a0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let a1 = Vertex::new(Point3::new(0.0, 1.0, 0.0));
+        let original = Edge::new_unchecked(&a0, &a1, Line(a0.point(), a1.point()));
+        let b0 = Vertex::new(Point3::new(5.0, 0.0, 0.0));
+        let b1 = Vertex::new(Point3::new(5.0, 1.0, 0.0));
+        let internal = Edge::new_unchecked(&b0, &b1, Line(b0.point(), b1.point()));
+        let store = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![original, internal].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        let tolerances = BooleanTolerance::new(1.0e-8);
+        let (wire, edge, kind, _) = store
+            .search_boundary_parameter(0, b0.point(), 1.0e-5, tolerances)
+            .expect("an internal-only SSI endpoint is still a boundary candidate");
+        assert_eq!((wire, edge), (0, 1));
+        assert!(matches!(kind, ParameterKind::Front));
+        let (wire, edge, kind, _) = store
+            .search_boundary_parameter(0, Point3::new(5.0, 0.5, 0.0), 1.0e-5, tolerances)
+            .expect("an internal-only SSI edge interior must remain searchable");
+        assert_eq!((wire, edge), (0, 1));
+        assert!(matches!(kind, ParameterKind::Inner(_)));
+        // Mesh-seed endpoints can miss exact SSI geometry without being on
+        // an original source trim. They still need a nearest-edge fallback.
+        let (wire, edge, kind, _) = store
+            .search_boundary_parameter(0, Point3::new(5.000_005, 0.5, 0.0), 1.0e-5, tolerances)
+            .expect("internal SSI edge must remain a nearest candidate");
+        assert_eq!((wire, edge), (0, 1));
+        assert!(matches!(kind, ParameterKind::Inner(_)));
+    }
+
+    #[test]
     fn sampled_exact_loop_synchronization_respects_requested_spatial_length() {
         let gap = 5.0e-7;
         let g0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
