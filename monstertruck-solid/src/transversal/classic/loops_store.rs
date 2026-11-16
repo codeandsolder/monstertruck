@@ -1520,6 +1520,58 @@ struct BoundaryEndpoint<'a, S> {
 }
 
 impl<C> OperandLoopStores<C> {
+    /// Resolve a missed sampled trim against the live exact arrangement and
+    /// independently certify incidence on the opposite exact carrier.
+    /// Candidate selection must include internal SSI edges as well as source trims.
+    fn exact_boundary_contact<S>(
+        &self,
+        face_index: usize,
+        seed: Point3,
+        nearest_tolerance: f64,
+        tolerances: BooleanTolerance,
+        other_surface: &S,
+    ) -> Option<Point3>
+    where
+        C: BoundedCurve<Point = Point3>
+            + Cut<Point = Point3, Vector = Vector3>
+            + SearchParameter<CurveParameter, Point = Point3>
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Clone
+            + Send
+            + Sync,
+        S: ParametricSurface3D
+            + SearchParameter<SurfaceParameter, Point = Point3>
+            + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+    {
+        let (wi, ei, kind, _) =
+            self.geom
+                .search_boundary_parameter(face_index, seed, nearest_tolerance, tolerances)?;
+        let edge = &self.geom[face_index][wi][ei];
+        match kind {
+            ParameterKind::Front | ParameterKind::Back => {
+                let point = if matches!(kind, ParameterKind::Front) {
+                    edge.absolute_front().point()
+                } else {
+                    edge.absolute_back().point()
+                };
+                on_other_carrier(point, other_surface, tolerances).then_some(point)
+            }
+            ParameterKind::Inner(parameter) => {
+                let curve = edge.curve();
+                curve_surface_projection(
+                    &curve,
+                    Some(parameter),
+                    other_surface,
+                    None,
+                    curve.evaluate(parameter),
+                    tolerances,
+                    100,
+                )
+                .map(|(point, _, _)| point)
+            }
+        }
+    }
+
     fn add_boundary_endpoint<S>(
         &mut self,
         endpoint: &BoundaryEndpoint<'_, S>,
@@ -1554,39 +1606,13 @@ impl<C> OperandLoopStores<C> {
             // A sampled SSI endpoint can overrun the exact trim. Use the mesh seed
             // only to discover a candidate; certify its incidence on the
             // opposite exact carrier before changing shared topology.
-            let Some((wi, ei, kind, _)) = self.geom.search_boundary_parameter(
+            let Some(point) = self.exact_boundary_contact(
                 face_index,
                 geom_vertex.point(),
                 nearest_tolerance,
                 tolerances,
+                other_surface,
             ) else {
-                return Some(false);
-            };
-            let boundary_edge = &self.geom[face_index][wi][ei];
-            let certified = match kind {
-                ParameterKind::Front => {
-                    let pt = boundary_edge.absolute_front().point();
-                    on_other_carrier(pt, other_surface, tolerances).then_some(pt)
-                }
-                ParameterKind::Back => {
-                    let pt = boundary_edge.absolute_back().point();
-                    on_other_carrier(pt, other_surface, tolerances).then_some(pt)
-                }
-                ParameterKind::Inner(t) => {
-                    let curve = boundary_edge.curve();
-                    curve_surface_projection(
-                        &curve,
-                        Some(t),
-                        other_surface,
-                        None,
-                        curve.evaluate(t),
-                        tolerances,
-                        100,
-                    )
-                    .map(|(point, _, _)| point)
-                }
-            };
-            let Some(point) = certified else {
                 return Some(false);
             };
             // Boundary discovery must not mutate an entire nonzero SSI
