@@ -1984,7 +1984,20 @@ fn analyze_coplanar_interfaces(
 /// Cache of algebraic surface-support certificates for one shell pair.
 struct FacePairSupports {
     planes: [Vec<Option<Plane>>; 2],
+    certified_trim_bounds: [Vec<Option<(Point3, Point3)>>; 2],
     shared_ruled_pairs: HashSet<(usize, usize)>,
+}
+
+/// Build an enclosure only from certified bounds of *every* original edge.
+/// Mutable SSI overlay curves deliberately do not qualify as a source proof.
+fn certified_planar_trim_bounds<C, S>(face: &Face<Point3, C, S>) -> Option<(Point3, Point3)>
+where C: BoundedCurve<Point = Point3> {
+    let mut edges = face.edge_iter();
+    let mut bounds = edges.next()?.curve().certified_spatial_bounds()?;
+    for edge in edges {
+        bounds += edge.curve().certified_spatial_bounds()?;
+    }
+    Some((bounds.min(), bounds.max()))
 }
 
 /// Cache exact planar supports and pairs with algebraically certified
@@ -1994,6 +2007,7 @@ fn certify_face_pair_supports<C, S>(
     geom_shell1: &Shell<Point3, C, S>,
 ) -> FacePairSupports
 where
+    C: BoundedCurve<Point = Point3>,
     S: Clone + TryIntoHomogeneousBsplineSurface + TryIntoAnalyticSurfaceKind,
 {
     // Proof-first common-carrier discovery: identical rational profile control
@@ -2019,6 +2033,16 @@ where
         .zip(net1.iter())
         .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
         .collect::<Vec<_>>();
+    let certified_bounds0 = geom_shell0
+        .iter()
+        .zip(planes0.iter())
+        .map(|(face, plane)| plane.and_then(|_| certified_planar_trim_bounds(face)))
+        .collect();
+    let certified_bounds1 = geom_shell1
+        .iter()
+        .zip(planes1.iter())
+        .map(|(face, plane)| plane.and_then(|_| certified_planar_trim_bounds(face)))
+        .collect();
     let mut shared_ruled_pairs = HashSet::default();
     for (i, left) in net0.iter().enumerate() {
         for (j, right) in net1.iter().enumerate() {
@@ -2032,6 +2056,7 @@ where
     }
     FacePairSupports {
         planes: [planes0, planes1],
+        certified_trim_bounds: [certified_bounds0, certified_bounds1],
         shared_ruled_pairs,
     }
 }
@@ -2049,6 +2074,13 @@ impl FacePairSupports {
         match (self.planes[0][face0], self.planes[1][face1]) {
             (Some(plane0), Some(plane1)) => {
                 intersection_curve::common_planar_support(plane0, polygon0, plane1, polygon1)
+                    || self.certified_trim_bounds[0][face0]
+                        .zip(self.certified_trim_bounds[1][face1])
+                        .is_some_and(|(bounds0, bounds1)| {
+                            intersection_curve::finite_common_planar_support(
+                                plane0, bounds0, plane1, bounds1,
+                            )
+                        })
             }
             _ => false,
         }
@@ -2178,7 +2210,8 @@ pub(super) fn create_loops_stores<C, S>(
     imprint_coplanar: bool,
 ) -> Option<InterfaceLoops<C>>
 where
-    C: SearchNearestParameter<CurveParameter, Point = Point3>
+    C: BoundedCurve<Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>
         + SearchParameter<CurveParameter, Point = Point3>
         + ParameterDivision1D<Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>

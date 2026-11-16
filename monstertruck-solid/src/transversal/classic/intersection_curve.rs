@@ -7,7 +7,9 @@
 //! only the cleaned 3-D [`IntersectionCurve`] leader.
 
 mod analytic;
-pub(in crate::transversal::classic) use analytic::{certified_plane, common_planar_support};
+pub(in crate::transversal::classic) use analytic::{
+    certified_plane, common_planar_support, finite_common_planar_support,
+};
 
 use super::tolerance::BooleanTolerance;
 

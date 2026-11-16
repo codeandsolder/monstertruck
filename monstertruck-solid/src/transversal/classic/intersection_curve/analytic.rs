@@ -109,6 +109,75 @@ pub(in crate::transversal::classic) fn common_planar_support(
             .all(on_both)
 }
 
+/// Certify that two *finite* trimmed planar faces are indistinguishable at
+/// the kernel's structural precision. The two carriers are already certified
+/// exactly planar; each supplied box encloses every original exact trim edge.
+/// Subtracting each face's own exact plane equation leaves a small affine
+/// difference: its extrema over the certified trim enclosure lie at the
+/// eight corners, even for oblique faces whose AABB corners are off-plane.
+/// A nearly singular transverse plane intersection cannot supply an SSI line
+/// until the two finite supports are distinguishable at this precision.
+pub(in crate::transversal::classic) fn finite_common_planar_support(
+    plane0: Plane,
+    bounds0: (Point3, Point3),
+    plane1: Plane,
+    bounds1: (Point3, Point3),
+) -> bool {
+    let (normal0, normal1) = (plane0.normal(), plane1.normal());
+    if !normal0.magnitude2().is_finite()
+        || !normal1.magnitude2().is_finite()
+        || normal0.cross(normal1).magnitude() > DEFAULT_NUMERICAL_TOLERANCES.angular
+    {
+        return false;
+    }
+    let (origin0, origin1) = (plane0.origin(), plane1.origin());
+    let scale = origin0
+        .to_vec()
+        .magnitude()
+        .max(origin1.to_vec().magnitude())
+        .max(1.0);
+    let residual = (DEFAULT_NUMERICAL_TOLERANCES.structural * scale)
+        .min(DEFAULT_NUMERICAL_TOLERANCES.parameter_projection);
+    if !residual.is_finite() || residual <= 0.0 {
+        return false;
+    }
+    // Each exact face lies on its own supporting plane, so subtract that
+    // plane equation before evaluating the opposing plane. The remaining
+    // affine difference has a *small* normal and can be enclosed by an AABB
+    // even when an oblique face's AABB corners are far off its own plane.
+    let aligned_normal1 = if normal0.dot(normal1) >= 0.0 {
+        normal1
+    } else {
+        -normal1
+    };
+    let signed_offset0 = aligned_normal1.dot(origin0 - origin1);
+    let signed_offset1 = normal0.dot(origin1 - origin0);
+    [
+        (bounds0, aligned_normal1 - normal0, signed_offset0, origin0),
+        (bounds1, normal0 - aligned_normal1, signed_offset1, origin1),
+    ]
+    .into_iter()
+    .all(|((lower, upper), difference_normal, offset, origin)| {
+        if ![lower.x, lower.y, lower.z, upper.x, upper.y, upper.z]
+            .into_iter()
+            .all(f64::is_finite)
+            || lower.x > upper.x
+            || lower.y > upper.y
+            || lower.z > upper.z
+        {
+            return false;
+        }
+        [lower.x, upper.x].into_iter().all(|x| {
+            [lower.y, upper.y].into_iter().all(|y| {
+                [lower.z, upper.z].into_iter().all(|z| {
+                    let difference = difference_normal.dot(Point3::new(x, y, z) - origin) + offset;
+                    difference.is_finite() && difference.abs() <= residual
+                })
+            })
+        })
+    })
+}
+
 fn merge_intervals(mut intervals: Vec<Interval>, eps: f64) -> Option<Vec<Interval>> {
     if intervals
         .iter()
@@ -428,6 +497,67 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn finite_planar_support_accepts_numerical_tilt_but_not_true_transverse_contact() {
+        let base = Plane::new(
+            Point3::new(70.0, 0.0, 0.0),
+            Point3::new(71.0, 0.0, 0.0),
+            Point3::new(70.0, 1.0, 0.0),
+        );
+        let near = Plane::new(
+            Point3::new(70.0, 0.0, 0.0),
+            Point3::new(71.0, 0.0, 0.0),
+            Point3::new(70.0, 1.0, 1.4e-12),
+        );
+        let bounds0 = (Point3::new(70.0, -2.0, 0.0), Point3::new(72.0, -1.0, 0.0));
+        let bounds1 = (
+            Point3::new(70.0, -2.0, -2.8e-12),
+            Point3::new(72.0, -1.0, -1.4e-12),
+        );
+        assert!(finite_common_planar_support(base, bounds0, near, bounds1));
+        assert!(finite_common_planar_support(near, bounds1, base, bounds0));
+        let distant = Plane::new(
+            Point3::new(70.0, 0.0, 1.0e-7),
+            Point3::new(71.0, 0.0, 1.0e-7),
+            Point3::new(70.0, 1.0, 1.0e-7),
+        );
+        assert!(!finite_common_planar_support(
+            base, bounds0, distant, bounds1
+        ));
+        let transverse = Plane::new(
+            Point3::new(70.0, 0.0, 0.0),
+            Point3::new(71.0, 0.0, 0.0),
+            Point3::new(70.0, 1.0, 1.0e-3),
+        );
+        assert!(!finite_common_planar_support(
+            base, bounds0, transverse, bounds1
+        ));
+        let invalid = (Point3::new(72.0, 0.0, 0.0), Point3::new(70.0, 0.0, 0.0));
+        assert!(!finite_common_planar_support(base, invalid, near, bounds1));
+    }
+
+    #[test]
+    fn finite_planar_support_handles_oblique_bounding_box_overhang() {
+        let base = Plane::new(
+            Point3::new(70.0, 0.0, 0.0),
+            Point3::new(71.0, 0.0, 0.0),
+            Point3::new(70.0, 1.0, 1.0),
+        );
+        let near = Plane::new(
+            Point3::new(70.0, 0.0, 0.0),
+            Point3::new(71.0, 0.0, 0.0),
+            Point3::new(70.0, 1.0, 1.0 + 1.4e-12),
+        );
+        // AABB corners are up to 0.7 mm from the true oblique support.
+        // Only the DIFFERENCE of the two plane equations is small.
+        let box0 = (Point3::new(70.0, -2.0, -2.0), Point3::new(72.0, -1.0, -1.0));
+        let box1 = (
+            Point3::new(70.0, -2.0, -2.0 - 2.8e-12),
+            Point3::new(72.0, -1.0, -1.0 - 1.4e-12),
+        );
+        assert!(finite_common_planar_support(base, box0, near, box1));
     }
 
     #[test]
