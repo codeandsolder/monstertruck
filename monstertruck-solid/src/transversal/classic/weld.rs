@@ -7,7 +7,7 @@ use super::tolerance::BooleanTolerance;
 use super::{
     AltCurve, AltCurveShell, AltRegion, Alternative, BoundedCurve, BoundingBox, Cut, Edge, EdgeId,
     HashMap, NurbsCurve, ParametricCurve, Point3, SearchNearestParameter, SearchParameter,
-    ShapeOpsCurve, ShapeOpsSurface, SnapCurveEndpoints, Vector4, Vertex, VertexId, Wire,
+    ShapeOpsCurve, ShapeOpsSurface, Shell, SnapCurveEndpoints, Vector4, Vertex, VertexId, Wire,
     conversion, faces_classification,
 };
 use monstertruck_core::{cgmath64::MetricSpace, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
@@ -419,6 +419,75 @@ pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> Option<AltCurveShell<C, S>> {
     let rebuilt_regions = node_selected_regions(regions, &[], tolerances)?;
     faces_classification::materialize_regions(&rebuilt_regions)
+}
+
+/// Reconcile duplicate edge references after converting temporary SSI leaders
+/// to final curve types. Only edges with an already-shared vertex index pair
+/// are considered. Original curves are never altered: identity is shared only
+/// after symmetric geometric validation at the *numerical* Boolean tolerance.
+pub(super) fn weld_converted_duplicate_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell: &Shell<Point3, C, S>,
+    tolerances: BooleanTolerance,
+) -> Option<Shell<Point3, C, S>> {
+    let mut compressed = shell.compress();
+    let mut buckets = HashMap::<(usize, usize), Vec<usize>>::default();
+    let mut representatives = (0..compressed.edges.len()).collect::<Vec<_>>();
+    let mut reconciled = false;
+    for (index, edge) in compressed.edges.iter().enumerate() {
+        let (front, back) = edge.vertices;
+        let key = (front.min(back), front.max(back));
+        let candidates = buckets.entry(key).or_default();
+        let replacement = candidates.iter().copied().find(|&other| {
+            let prior = &compressed.edges[other].curve;
+            let candidate = &edge.curve;
+            let prior_inverse = prior.inverse();
+            let candidate_inverse = candidate.inverse();
+            [prior, &prior_inverse].into_iter().any(|left| {
+                [candidate, &candidate_inverse].into_iter().any(|right| {
+                    super::curve_equivalence::validate_shared_endpoint_interior_coincidence::<
+                        Point3,
+                        _,
+                    >(
+                        left,
+                        right,
+                        &[compressed.vertices[key.0], compressed.vertices[key.1]],
+                        tolerances,
+                    ) == CurveCoincidence::SampledValidation
+                        || validate_sampled_coincidence::<Point3, _>(left, right, tolerances)
+                            == CurveCoincidence::SampledValidation
+                        || validate_endpoint_aligned_coincidence::<Point3, _>(
+                            left, right, tolerances,
+                        ) == CurveCoincidence::SampledValidation
+                })
+            })
+        });
+        if let Some(other) = replacement {
+            representatives[index] = other;
+            reconciled = true;
+        } else {
+            candidates.push(index);
+        }
+    }
+    if !reconciled {
+        return None;
+    }
+    for use_ in compressed
+        .faces
+        .iter_mut()
+        .flat_map(|face| face.boundaries.iter_mut())
+        .flatten()
+    {
+        let original = use_.index;
+        let representative = representatives[original];
+        if representative != original {
+            if compressed.edges[original].vertices != compressed.edges[representative].vertices {
+                use_.orientation = !use_.orientation;
+            }
+            use_.index = representative;
+        }
+    }
+    compressed.compact_unused_topology().ok()?;
+    Shell::extract(compressed).ok()
 }
 
 #[cfg(test)]

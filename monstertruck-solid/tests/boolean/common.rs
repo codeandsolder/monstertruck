@@ -84,7 +84,7 @@ pub(super) fn assert_solid(label: &str, solid: &Solid, expected_volume: f64) -> 
 /// under test share the same classifier defect. Instead sum the oriented
 /// solid angle of every triangle: a closed oriented mesh winds by ±4π around
 /// an interior point and approximately zero around an exterior point.
-fn solid_angle_contains(mesh: &PolygonMesh, point: Point3) -> bool {
+pub(super) fn solid_angle_contains(mesh: &PolygonMesh, point: Point3) -> bool {
     let mut winding = 0.0;
     for triangle in mesh.faces().triangle_iter() {
         let a = mesh.positions()[triangle[0].pos] - point;
