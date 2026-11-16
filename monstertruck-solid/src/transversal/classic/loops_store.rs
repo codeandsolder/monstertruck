@@ -2153,59 +2153,63 @@ where
     let supports = certify_face_pair_supports(geom_shell0, geom_shell1);
     let mut endpoint_registry = Vec::<(Vertex<Point3>, Vertex<Point3>)>::new();
     let has_shared_ruled = !supports.shared_ruled_pairs.is_empty();
-    (0..store0_len)
-        .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
-        .try_for_each(|(face_index0, face_index1)| {
-            // Solids that meet on one complete trimmed planar face with
-            // opposite outward normals need no SSI at all. Generic SSI on
-            // their coincident continuation surfaces (e.g. coaxial cylinders)
-            // is degenerate; downstream coplanar classification removes the
-            // shared internal face and topology welding stitches the rim.
-            if coplanar.full_interface_adjacency.is_some() {
-                return Some(());
-            }
+    // Surface/surface intersections read only the immutable input shells.
+    // Evaluate bounded batches in parallel, then attach branches to the live
+    // topology in the original face-pair order. Bounding the batch prevents
+    // O(face_count^2) intermediate intersection curves from accumulating.
+    let total_pairs = store0_len.checked_mul(store1_len)?;
+    let batch_size = rayon::current_num_threads().saturating_mul(2).max(1);
+    for batch_start in (0..total_pairs).step_by(batch_size) {
+        let batch_end = batch_start.saturating_add(batch_size).min(total_pairs);
+        let batch: Option<Vec<_>> = (batch_start..batch_end)
+            .into_par_iter()
+            .map(|index| {
+                let face_index0 = index / store1_len;
+                let face_index1 = index % store1_len;
+                // A complete planar contact needs no transverse SSI curves.
+                if coplanar.full_interface_adjacency.is_some() {
+                    return Some((face_index0, face_index1, Vec::new()));
+                }
+                let surface0 = geom_shell0[face_index0].surface();
+                let surface1 = geom_shell1[face_index1].surface();
+                let polygon0 = poly_shell0[face_index0].surface()?;
+                let polygon1 = poly_shell1[face_index1].surface()?;
+                // A certified common ruled carrier also has no transverse SSI.
+                if supports
+                    .shared_ruled_pairs
+                    .contains(&(face_index0, face_index1))
+                    || supports.has_common_planar_support(
+                        face_index0,
+                        face_index1,
+                        &polygon0,
+                        &polygon1,
+                    )
+                    || planar_polygons_same_trimmed_face(&polygon0, &polygon1, coplanar_tol)
+                {
+                    return Some((face_index0, face_index1, Vec::new()));
+                }
+                let curves = intersection_curve::intersection_curves(
+                    surface0,
+                    &polygon0,
+                    surface1,
+                    &polygon1,
+                    boolean_tolerance,
+                    (
+                        supports.planes[0][face_index0],
+                        supports.planes[1][face_index1],
+                    ),
+                )?;
+                Some((face_index0, face_index1, curves))
+            })
+            .collect();
+        // Rayon indexed collection keeps the source pair order deterministic.
+        // Mutating an operand while another pair is evaluated would be wrong;
+        // no mutation is performed until the entire batch has finished.
+        for (face_index0, face_index1, curves) in batch? {
             let ori0 = geom_shell0[face_index0].orientation();
             let ori1 = geom_shell1[face_index1].orientation();
             let surface0 = geom_shell0[face_index0].surface();
             let surface1 = geom_shell1[face_index1].surface();
-            let polygon0 = poly_shell0[face_index0].surface()?;
-            let polygon1 = poly_shell1[face_index1].surface()?;
-            // A common ruled carrier has a two-dimensional overlap: a
-            // transverse SSI curve is undefined. Partition its real trimmed
-            // boundaries via exact edge imprinting below instead.
-            if supports
-                .shared_ruled_pairs
-                .contains(&(face_index0, face_index1))
-            {
-                return Some(());
-            }
-            // Certified common planar support has no transverse intersection
-            // curve even when its two trims cover different regions. Existing
-            // exact edge imprinting owns the face-local split instead.
-            if supports.has_common_planar_support(face_index0, face_index1, &polygon0, &polygon1) {
-                return Some(());
-            }
-            // Exactly coincident trimmed planar faces are already a complete
-            // interface. Running generic SSI on coincident surfaces is both
-            // unnecessary and degenerate; ownership is resolved by the
-            // coplanar face classifier after division.
-            if planar_polygons_same_trimmed_face(&polygon0, &polygon1, coplanar_tol) {
-                // The two complete trims already bound the same planar region.
-                // A transverse surface/surface curve is not defined on that
-                // two-dimensional coincidence, for difference as for union.
-                return Some(());
-            }
-            let curves = intersection_curve::intersection_curves(
-                surface0.clone(),
-                &polygon0,
-                surface1.clone(),
-                &polygon1,
-                boolean_tolerance,
-                (
-                    supports.planes[0][face_index0],
-                    supports.planes[1][face_index1],
-                ),
-            )?;
             curves
                 .into_iter()
                 .try_for_each(|(mut polyline, mut intersection_curve)| {
@@ -2247,8 +2251,9 @@ where
                         )?;
                     }
                     Some(())
-                })
-        })?;
+                })?;
+        }
+    }
 
     materialize_interface_loops(
         [operand0, operand1],
