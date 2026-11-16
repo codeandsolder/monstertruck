@@ -537,7 +537,9 @@ where
         + SearchNearestParameter<CurveParameter, Point = Point3>
         + ParameterDivision1D<Point = Point3>
         + Invertible
-        + Clone,
+        + Clone
+        + Send
+        + Sync,
 {
     let mut unique = Vec::<Edge<Point3, C>>::new();
     source

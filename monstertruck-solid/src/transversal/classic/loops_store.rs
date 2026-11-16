@@ -40,6 +40,7 @@ use planar::{
 pub(in crate::transversal::classic) use planar::{
     direct_planar_face_match, single_face_matches_planar_partition,
 };
+use rayon::prelude::*;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 type PolylineCurve = monstertruck_meshing::prelude::PolylineCurve<Point3>;
@@ -901,7 +902,9 @@ impl<C> LoopsStore<Point3, C> {
         C: Clone
             + BoundedCurve<Point = Point3>
             + SearchParameter<CurveParameter, Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3>,
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Send
+            + Sync,
     {
         let loops = &self[loops_index];
         let mut candidate = None;
@@ -944,26 +947,32 @@ impl<C> LoopsStore<Point3, C> {
             true
         };
 
-        // Prefer exact incidence, but still reject multiple distinct topological
-        // loci instead of silently taking the first edge whose inverse map succeeds.
-        let mut found_exact = false;
-        for (wire_index, wire) in loops.iter().enumerate() {
-            for (edge_index, edge) in wire.iter().enumerate() {
+        // Inverse search is pure per edge. Calculate it in parallel, but consume
+        // results in original wire/edge order to preserve ambiguity resolution.
+        let edges: Vec<_> = loops
+            .iter()
+            .enumerate()
+            .flat_map(|(wi, wire)| {
+                wire.iter()
+                    .enumerate()
+                    .map(move |(ei, edge)| (wi, ei, edge))
+            })
+            .collect();
+        let exact: Vec<_> = edges
+            .par_iter()
+            .map(|(_, _, edge)| {
                 let curve = edge.curve();
-                let Some(parameter) = curve.search_parameter(point, None, 1) else {
-                    continue;
-                };
-                // SearchParameter can use its own kernel epsilon. A returned
-                // parameter is only exact at the operation's requested spatial
-                // precision if its forward evaluation agrees independently.
-                if curve.evaluate(parameter).distance(point) > tolerances.length {
-                    continue;
-                }
-                let Some(kind) = ParameterKind::try_new(parameter, &curve, tolerances) else {
-                    continue;
-                };
+                let parameter = curve.search_parameter(point, None, 1)?;
+                (curve.evaluate(parameter).distance(point) <= tolerances.length)
+                    .then(|| ParameterKind::try_new(parameter, &curve, tolerances))
+                    .flatten()
+            })
+            .collect();
+        let mut found_exact = false;
+        for ((wire_index, edge_index, edge), kind) in edges.iter().zip(exact) {
+            if let Some(kind) = kind {
                 found_exact = true;
-                if !accept_candidate(wire_index, edge_index, edge, kind, None) {
+                if !accept_candidate(*wire_index, *edge_index, edge, kind, None) {
                     return None;
                 }
             }
@@ -978,27 +987,29 @@ impl<C> LoopsStore<Point3, C> {
         // before topology is mutated. Distinct nearby loci remain ambiguous and
         // fail closed; only repeated uses/shared endpoints or sampled-validated
         // copies of the same complete edge are deduplicated.
-        for (wire_index, wire) in loops.iter().enumerate() {
-            for (edge_index, edge) in wire.iter().enumerate() {
+        let nearest: Vec<_> = edges
+            .par_iter()
+            .map(|(_, _, edge)| {
                 let curve = edge.curve();
-                let Some(parameter) = curve.search_nearest_parameter(point, None, 10) else {
-                    continue;
-                };
+                let parameter = curve.search_nearest_parameter(point, None, 10)?;
                 let projected = curve.evaluate(parameter);
                 if projected.distance(point) > nearest_tolerance {
-                    continue;
+                    return None;
                 }
-                let Some(kind) = ParameterKind::try_new(parameter, &curve, tolerances) else {
-                    continue;
-                };
+                let kind = ParameterKind::try_new(parameter, &curve, tolerances)?;
                 let canonical_point = match kind {
                     ParameterKind::Front => edge.absolute_front().point(),
                     ParameterKind::Back => edge.absolute_back().point(),
                     ParameterKind::Inner(_) => projected,
                 };
-                if !accept_candidate(wire_index, edge_index, edge, kind, Some(canonical_point)) {
-                    return None;
-                }
+                Some((kind, canonical_point))
+            })
+            .collect();
+        for ((wi, ei, edge), result) in edges.iter().zip(nearest) {
+            if let Some((kind, canonical_point)) = result
+                && !accept_candidate(*wi, *ei, edge, kind, Some(canonical_point))
+            {
+                return None;
             }
         }
         candidate
@@ -1015,7 +1026,9 @@ impl<C> LoopsStore<Point3, C> {
         C: Clone
             + Cut<Point = Point3>
             + SearchParameter<CurveParameter, Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3>,
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Send
+            + Sync,
     {
         let point = vertex.point();
         let mut endpoint_vertices = Vec::<Vertex<Point3>>::new();
@@ -1108,7 +1121,9 @@ impl<C> LoopsStore<Point3, C> {
         C: Clone
             + Cut<Point = Point3>
             + SearchParameter<CurveParameter, Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3>,
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Send
+            + Sync,
     {
         let (wire_index, edge_index, kind, projected) = self.search_boundary_parameter(
             loops_index,
@@ -1253,7 +1268,9 @@ impl<C> LoopsStore<Point3, C> {
         C: BoundedCurve<Point = Point3>
             + Cut<Point = Point3, Vector = Vector3>
             + SearchParameter<CurveParameter, Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3>,
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Send
+            + Sync,
         S: ParametricSurface3D
             + SearchParameter<SurfaceParameter, Point = Point3>
             + SearchNearestParameter<SurfaceParameter, Point = Point3>,
@@ -1513,7 +1530,9 @@ impl<C> OperandLoopStores<C> {
             + Cut<Point = Point3, Vector = Vector3>
             + SearchParameter<CurveParameter, Point = Point3>
             + SearchNearestParameter<CurveParameter, Point = Point3>
-            + Clone,
+            + Clone
+            + Send
+            + Sync,
         S: ParametricSurface3D
             + SearchParameter<SurfaceParameter, Point = Point3>
             + SearchNearestParameter<SurfaceParameter, Point = Point3>,
@@ -1655,10 +1674,14 @@ where
         + Cut<Point = Point3, Vector = Vector3>
         + SearchParameter<CurveParameter, Point = Point3>
         + SearchNearestParameter<CurveParameter, Point = Point3>
-        + Clone,
+        + Clone
+        + Send
+        + Sync,
     S: ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>
+        + Send
+        + Sync,
 {
     let pv0 = Vertex::new(front);
     let pv1 = Vertex::new(back);
@@ -1776,12 +1799,16 @@ where
         + SearchParameter<CurveParameter, Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>
         + From<IntersectionCurve<PolylineCurve, S, S>>
-        + Invertible,
+        + Invertible
+        + Send
+        + Sync,
     S: ParametricSurface3D
         + Clone
         + Invertible
         + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>
+        + Send
+        + Sync,
 {
     let mut front = polyline.front();
     let mut back = polyline.back();
@@ -2006,7 +2033,9 @@ where
         + SearchParameter<CurveParameter, Point = Point3>
         + SearchNearestParameter<CurveParameter, Point = Point3>
         + ParameterDivision1D<Point = Point3>
-        + Invertible,
+        + Invertible
+        + Send
+        + Sync,
 {
     let tol = tolerances.length;
     // Mesh/mesh interference intentionally ignores coplanar contact. By this
@@ -2060,14 +2089,18 @@ where
         + ParameterDivision1D<Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>
         + From<IntersectionCurve<PolylineCurve, S, S>>
-        + Invertible,
+        + Invertible
+        + Send
+        + Sync,
     S: ParametricSurface3D
         + Clone
         + Invertible
         + TryIntoHomogeneousBsplineSurface
         + TryIntoAnalyticSurfaceKind
         + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>
+        + Send
+        + Sync,
 {
     let mut operand0 = operand_loops_from_shells(geom_shell0, poly_shell0);
     let mut operand1 = operand_loops_from_shells(geom_shell1, poly_shell1);
