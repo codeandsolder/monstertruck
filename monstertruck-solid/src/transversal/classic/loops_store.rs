@@ -1516,6 +1516,7 @@ struct BoundaryEndpoint<'a, S> {
     other_surface: &'a S,
     nearest_tolerance: f64,
     tolerances: BooleanTolerance,
+    other_branch_endpoint: Point3,
 }
 
 impl<C> OperandLoopStores<C> {
@@ -1544,6 +1545,7 @@ impl<C> OperandLoopStores<C> {
             other_surface,
             nearest_tolerance,
             tolerances,
+            other_branch_endpoint,
         } = *endpoint;
         let sampled_attachment =
             self.poly
@@ -1587,6 +1589,14 @@ impl<C> OperandLoopStores<C> {
             let Some(point) = certified else {
                 return Some(false);
             };
+            // Boundary discovery must not mutate an entire nonzero SSI
+            // segment into one topological point. A nearby exact trim can be
+            // a valid carrier intersection but the *wrong* endpoint for this
+            // branch, especially at a multi-face junction. Leave the original
+            // SSI endpoint alone so subsequent incident branches can join it.
+            if point.distance(other_branch_endpoint) <= tolerances.length {
+                return Some(false);
+            }
             if geom_vertex.point().distance(point) > nearest_tolerance
                 || self
                     .poly
@@ -1711,6 +1721,7 @@ where
                 other_surface,
                 nearest_tolerance: context.nearest_tolerance,
                 tolerances: context.tolerances,
+                other_branch_endpoint: back,
             },
             &mut pemap0,
             &mut gemap0,
@@ -1723,6 +1734,7 @@ where
                 other_surface,
                 nearest_tolerance: context.nearest_tolerance,
                 tolerances: context.tolerances,
+                other_branch_endpoint: front,
             },
             &mut pemap1,
             &mut gemap1,
@@ -2274,6 +2286,79 @@ mod projection_tests {
             .expect("internal SSI edge must remain a nearest candidate");
         assert_eq!((wire, edge), (0, 1));
         assert!(matches!(kind, ParameterKind::Inner(_)));
+    }
+
+    #[test]
+    fn mesh_fallback_cannot_collapse_an_open_ssi_branch() {
+        let seed = Point3::new(0.2501, 0.0003, 0.0);
+        let on_trim = Point3::new(0.25, 0.0, 0.0);
+        let crossing_surface = Plane::new(
+            on_trim,
+            Point3::new(0.25, 1.0, 0.0),
+            Point3::new(0.25, 0.0, 1.0),
+        );
+        let tolerances = BooleanTolerance::new(1.0e-8);
+        let attach = |other_branch_endpoint| {
+            let g0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+            let g1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+            let p0 = Vertex::new(g0.point());
+            let p1 = Vertex::new(g1.point());
+            let geom_edge = Edge::new_unchecked(&g0, &g1, Line(g0.point(), g1.point()));
+            let poly_edge =
+                Edge::new_unchecked(&p0, &p1, PolylineCurve(vec![p0.point(), p1.point()]));
+            let mut operand = OperandLoopStores {
+                geom: LoopsStore(vec![Loops(vec![BoundaryWire::new(
+                    vec![geom_edge].into(),
+                    ShapesOpStatus::Unknown,
+                )])]),
+                poly: LoopsStore(vec![Loops(vec![BoundaryWire::new(
+                    vec![poly_edge].into(),
+                    ShapesOpStatus::Unknown,
+                )])]),
+            };
+            let poly_vertex = Vertex::new(seed);
+            let geom_vertex = Vertex::new(seed);
+            let mut poly_map = HashMap::default();
+            let mut geom_map = HashMap::default();
+            let result = operand.add_boundary_endpoint(
+                &BoundaryEndpoint {
+                    face_index: 0,
+                    poly_vertex: &poly_vertex,
+                    geom_vertex: &geom_vertex,
+                    other_surface: &crossing_surface,
+                    nearest_tolerance: tolerances.mesh_seed,
+                    tolerances,
+                    other_branch_endpoint,
+                },
+                &mut poly_map,
+                &mut geom_map,
+            );
+            (
+                result,
+                poly_vertex.point(),
+                geom_vertex.point(),
+                operand.geom[0][0].len(),
+                operand.poly[0][0].len(),
+            )
+        };
+        // Ordinary exact trim recovery remains allowed when it retains a
+        // nonzero open intersection branch.
+        let ordinary = attach(Point3::new(0.75, 0.0, 0.0));
+        assert_eq!(ordinary.0, Some(true), "normal candidate: {ordinary:?}");
+        assert!(ordinary.2.distance(on_trim) <= tolerances.length);
+        // The same valid projection becomes illegal when it would collapse
+        // the OTHER end of the branch to the very same point. Nothing may be
+        // split or canonicalized before that decision.
+        let collapsed = attach(on_trim);
+        assert_eq!(
+            collapsed.0,
+            Some(false),
+            "collapsing candidate: {collapsed:?}"
+        );
+        assert_eq!(collapsed.1, seed);
+        assert_eq!(collapsed.2, seed);
+        assert_eq!(collapsed.3, 1);
+        assert_eq!(collapsed.4, 1);
     }
 
     #[test]
