@@ -2113,6 +2113,62 @@ fn operand_loops_from_shells<C, S>(
     }
 }
 
+/// Apply precomputed immutable surface intersections in the source face-pair
+/// order. Only this stage mutates the live exact and sampled arrangements.
+fn add_face_pair_branches<C, S>(
+    context: &mut BranchContext<'_, C, S>,
+    curves: Vec<(PolylineCurve, IntersectionCurve<PolylineCurve, S, S>)>,
+    orientations: [bool; 2],
+) -> Option<()>
+where
+    C: SearchNearestParameter<CurveParameter, Point = Point3>
+        + SearchParameter<CurveParameter, Point = Point3>
+        + Cut<Point = Point3, Vector = Vector3>
+        + From<IntersectionCurve<PolylineCurve, S, S>>
+        + Invertible
+        + Send
+        + Sync,
+    S: ParametricSurface3D
+        + Clone
+        + Invertible
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>
+        + Send
+        + Sync,
+{
+    curves
+        .into_iter()
+        .try_for_each(|(mut polyline, mut intersection_curve)| {
+            let status = orient_intersection_branch(&mut polyline, &mut intersection_curve)?;
+            let [status0, status1] = match orientations {
+                [true, true] => [status, status.not()],
+                [true, false] => [status.not(), status.not()],
+                [false, true] => [status, status],
+                [false, false] => [status.not(), status],
+            };
+            if polyline.front().distance(polyline.back()) <= context.tolerances.length {
+                let poly_wire = create_independent_loop(polyline);
+                context.operand0.poly[context.face_indices[0]]
+                    .add_independent_loop(BoundaryWire::new(poly_wire.clone(), status0));
+                context.operand1.poly[context.face_indices[1]]
+                    .add_independent_loop(BoundaryWire::new(poly_wire, status1));
+                let geom_wire = create_independent_loop(intersection_curve);
+                context.operand0.geom[context.face_indices[0]]
+                    .add_independent_loop(BoundaryWire::new(geom_wire.clone(), status0));
+                context.operand1.geom[context.face_indices[1]]
+                    .add_independent_loop(BoundaryWire::new(geom_wire, status1));
+            } else {
+                add_open_intersection_branch(
+                    context,
+                    polyline,
+                    intersection_curve,
+                    [status0, status1],
+                )?;
+            }
+            Some(())
+        })
+}
+
 pub(super) fn create_loops_stores<C, S>(
     geom_shell0: &Shell<Point3, C, S>,
     poly_shell0: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
@@ -2206,52 +2262,27 @@ where
         // Mutating an operand while another pair is evaluated would be wrong;
         // no mutation is performed until the entire batch has finished.
         for (face_index0, face_index1, curves) in batch? {
-            let ori0 = geom_shell0[face_index0].orientation();
-            let ori1 = geom_shell1[face_index1].orientation();
-            let surface0 = geom_shell0[face_index0].surface();
-            let surface1 = geom_shell1[face_index1].surface();
-            curves
-                .into_iter()
-                .try_for_each(|(mut polyline, mut intersection_curve)| {
-                    let status =
-                        orient_intersection_branch(&mut polyline, &mut intersection_curve)?;
-                    let (status0, status1) = match (ori0, ori1) {
-                        (true, true) => (status, status.not()),
-                        (true, false) => (status.not(), status.not()),
-                        (false, true) => (status, status),
-                        (false, false) => (status.not(), status),
-                    };
-                    if polyline.front().distance(polyline.back()) <= boolean_tolerance.length {
-                        let poly_wire = create_independent_loop(polyline);
-                        operand0.poly[face_index0]
-                            .add_independent_loop(BoundaryWire::new(poly_wire.clone(), status0));
-                        operand1.poly[face_index1]
-                            .add_independent_loop(BoundaryWire::new(poly_wire, status1));
-                        let geom_wire = create_independent_loop(intersection_curve);
-                        operand0.geom[face_index0]
-                            .add_independent_loop(BoundaryWire::new(geom_wire.clone(), status0));
-                        operand1.geom[face_index1]
-                            .add_independent_loop(BoundaryWire::new(geom_wire, status1));
-                    } else {
-                        let mut context = BranchContext {
-                            operand0: &mut operand0,
-                            operand1: &mut operand1,
-                            face_indices: [face_index0, face_index1],
-                            surfaces: [&surface0, &surface1],
-                            nearest_tolerance: boundary_search_tolerance,
-                            tolerances: boolean_tolerance,
-                            reuse_coincident: coplanar.partial_overlap,
-                            endpoint_registry: &mut endpoint_registry,
-                        };
-                        add_open_intersection_branch(
-                            &mut context,
-                            polyline,
-                            intersection_curve,
-                            [status0, status1],
-                        )?;
-                    }
-                    Some(())
-                })?;
+            let mut context = BranchContext {
+                operand0: &mut operand0,
+                operand1: &mut operand1,
+                face_indices: [face_index0, face_index1],
+                surfaces: [
+                    &geom_shell0[face_index0].surface(),
+                    &geom_shell1[face_index1].surface(),
+                ],
+                nearest_tolerance: boundary_search_tolerance,
+                tolerances: boolean_tolerance,
+                reuse_coincident: coplanar.partial_overlap,
+                endpoint_registry: &mut endpoint_registry,
+            };
+            add_face_pair_branches(
+                &mut context,
+                curves,
+                [
+                    geom_shell0[face_index0].orientation(),
+                    geom_shell1[face_index1].orientation(),
+                ],
+            )?;
         }
     }
 
