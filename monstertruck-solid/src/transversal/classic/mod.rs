@@ -139,6 +139,61 @@ where
         .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
 }
 
+#[derive(Clone, Copy)]
+enum DifferenceContactSide {
+    /// Source material survives only where the cutter is absent immediately
+    /// on the interior side of its original face.
+    SourceInterior,
+    /// An inverted cutter face is exposed where original material occupies
+    /// the exterior side of the cutter.
+    CutterExterior,
+}
+
+fn classify_difference_unknown<C, S>(
+    poly_shell: &PolyShell,
+    region: &faces_classification::BooleanRegion<Point3, C, S>,
+    tol: f64,
+    shell_index: usize,
+    side: DifferenceContactSide,
+) -> ClassicResult<bool>
+where
+    C: PolylineableCurve + ParameterDivision1D<Point = Point3> + Clone,
+    S: MeshableSurface
+        + Clone
+        + ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    if let Ok(label) = classify_unknown(poly_shell, region, tol, shell_index) {
+        return Ok(label);
+    }
+    let points = region
+        .try_face()
+        .map_or_else(
+            || {
+                divide_face::sample_points_on_region(
+                    region.absolute_boundaries(),
+                    &region.surface(),
+                    tol,
+                )
+            },
+            |face| classification::sample_points_on_face(&face, tol),
+        )
+        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
+    let [exterior, interior] = classification::unanimous_boundary_contact_sides(
+        poly_shell,
+        &points,
+        &region.surface(),
+        region.orientation(),
+        tol,
+    )
+    .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
+    Ok(match side {
+        DifferenceContactSide::SourceInterior => interior,
+        DifferenceContactSide::CutterExterior => exterior,
+    })
+}
+
 /// Corroborate a preclassified region against actual opposing-solid volume.
 ///
 /// A boundary-local And/Or label does not establish occupancy throughout the
@@ -258,6 +313,26 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     analysis.cls1.integrate_by_component();
     let full_positive_regions = analysis.cls0.all_regions();
     let full_cutter_regions = analysis.cls1.all_regions();
+    // Bind the material-side selection once; both the labeled overlay and
+    // the fallback reconstruction must make identical contact decisions.
+    let source_inside_cutter = |region: &AltRegion<C, S>| {
+        classify_difference_unknown(
+            &analysis.poly_shell1,
+            region,
+            tol,
+            0,
+            DifferenceContactSide::SourceInterior,
+        )
+    };
+    let cutter_exterior_inside_source = |region: &AltRegion<C, S>| {
+        classify_difference_unknown(
+            &analysis.poly_shell0,
+            region,
+            tol,
+            1,
+            DifferenceContactSide::CutterExterior,
+        )
+    };
 
     let [known_and0, known_or0, unknown0] = analysis.cls0.and_or_unknown();
     // An SSI boundary label describes the winding at one interface; it is
@@ -279,13 +354,13 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
     }
     for region in unknown0 {
-        if !classify_unknown(&analysis.poly_shell1, &region, tol, 0)? {
+        if !source_inside_cutter(&region)? {
             difference0.push(region);
         }
     }
     let [mut difference1, _outside1, unknown1] = analysis.cls1.and_or_unknown();
     for region in unknown1 {
-        if classify_unknown(&analysis.poly_shell0, &region, tol, 1)? {
+        if cutter_exterior_inside_source(&region)? {
             difference1.push(region);
         }
     }
@@ -319,13 +394,13 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let [and1, or1, unknown1] = analysis.cls1.and_or_unknown();
     let mut fallback = Vec::new();
     for region in and0.into_iter().chain(or0).chain(unknown0) {
-        if !classify_unknown(&analysis.poly_shell1, &region, tol, 0)? {
+        if !source_inside_cutter(&region)? {
             fallback.push(region);
         }
     }
     let fallback_positive_len = fallback.len();
     for mut region in and1.into_iter().chain(or1).chain(unknown1) {
-        if classify_unknown(&analysis.poly_shell0, &region, tol, 1)? {
+        if cutter_exterior_inside_source(&region)? {
             region.invert();
             fallback.push(region);
         }
@@ -743,8 +818,22 @@ fn partition_manifold_sheets<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     operation: &'static str,
     mut shell: Shell<Point3, C, S>,
+    tol: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
     let _ = orient_regular_shell(&mut shell);
+    if !shell_is_valid(&shell)
+        && let Some(mut repaired) =
+            weld::weld_converted_duplicate_edges(&shell, BooleanTolerance::new(tol))
+    {
+        let _ = orient_regular_shell(&mut repaired);
+        if shell_is_valid(&repaired)
+            && repaired
+                .edge_iter()
+                .all(|edge| edge.is_geometric_consistent())
+        {
+            shell = repaired;
+        }
+    }
     let mut boundaries = shell.connected_components();
     if boundaries
         .iter()
@@ -828,7 +917,7 @@ fn and_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let [res, _] = pair(&and_shell, shell)?;
         and_shell = res;
     }
-    finalize(operation, and_shell)
+    finalize(operation, and_shell, tol)
 }
 
 /// AND operation between two solids (classic backend).
@@ -869,7 +958,7 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let [_, res] = pair(&or_shell, shell)?;
         or_shell = res;
     }
-    finalize(operation, or_shell)
+    finalize(operation, or_shell, tol)
 }
 
 /// Difference: the region inside `solid0` but outside `solid1` (classic backend).
@@ -905,7 +994,7 @@ pub fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let [res, _] = difference_pair(&difference_shell, shell)?;
         difference_shell = res;
     }
-    finalize(operation, difference_shell)
+    finalize(operation, difference_shell, tol)
 }
 
 /// Symmetric difference (XOR): the region inside exactly one solid (classic backend).

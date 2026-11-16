@@ -137,6 +137,70 @@ pub(super) fn classify_points_inside(
     strict_majority(inside, outside)
 }
 
+/// For a face coincident with the other solid's boundary, unshifted ray
+/// winding is undefined. Accept only witnesses that all prove the *same*
+/// opposing inside/outside states on the two material sides of this face.
+/// Independently require stability at two offsets; a missed SSI partition
+/// remains inconclusive when its witnesses have different side relations.
+/// The returned pair is (source exterior, source interior).
+pub(super) fn unanimous_boundary_contact_sides<S>(
+    poly_shell: &PolyShell,
+    points: &[Point3],
+    surface: &S,
+    orientation: bool,
+    tol: f64,
+) -> Option<[bool; 2]>
+where
+    S: ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let tolerance = BooleanTolerance::new(tol);
+    let shift = tolerance.classifier_offset;
+    if !shift.is_finite() || shift <= 0.0 || points.is_empty() {
+        return None;
+    }
+    let sides = points.iter().map(|&point| {
+        let (u, v) = surface
+            .search_parameter(point, None, 100)
+            .or_else(|| surface.search_nearest_parameter(point, None, 100))?;
+        if surface.evaluate(u, v).distance(point) > tolerance.surface_support_residual() {
+            return None;
+        }
+        let normal = surface.normal(u, v);
+        let magnitude = normal.magnitude();
+        if !magnitude.is_finite() || magnitude <= f64::EPSILON {
+            return None;
+        }
+        let outward = normal / magnitude * if orientation { 1.0 } else { -1.0 };
+        let classify_pair = |scale| {
+            let delta = outward * (shift * scale);
+            Some([
+                classify_inside_with_polyshell(poly_shell, point + delta)?,
+                classify_inside_with_polyshell(poly_shell, point - delta)?,
+            ])
+        };
+        let first = classify_pair(1.0)?;
+        (classify_pair(2.0)? == first).then_some(first)
+    });
+    unanimous_opposing_sides(sides)
+}
+
+/// Reject mixed witnesses, missing ray votes, and points that do not straddle
+/// the target boundary. A contact is not certified by a majority.
+fn unanimous_opposing_sides(
+    votes: impl IntoIterator<Item = Option<[bool; 2]>>,
+) -> Option<[bool; 2]> {
+    let mut votes = votes.into_iter();
+    let first = votes.next()??;
+    if first[0] == first[1] {
+        return None;
+    }
+    votes.try_fold(first, |expected, current| {
+        (current? == expected).then_some(expected)
+    })
+}
+
 pub(super) fn classify_unknown_face<C, S>(
     poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
     face: &Face<Point3, C, S>,
@@ -305,6 +369,27 @@ mod vote_tests {
         // The no-mesh direct-UV path is exercised by the nine-core
         // STEP regression; it is not universally necessary when the
         // tessellator already provides valid samples for a curved face.
+    }
+
+    #[test]
+    fn boundary_contact_requires_two_stable_unanimous_sides() {
+        assert_eq!(
+            unanimous_opposing_sides([Some([false, true]), Some([false, true])]),
+            Some([false, true])
+        );
+        assert_eq!(
+            unanimous_opposing_sides([Some([true, false]), Some([true, false])]),
+            Some([true, false])
+        );
+        for votes in [
+            vec![],
+            vec![Some([true, true])],
+            vec![Some([false, false])],
+            vec![Some([true, false]), Some([false, true])],
+            vec![Some([true, false]), None],
+        ] {
+            assert_eq!(unanimous_opposing_sides(votes), None);
+        }
     }
 
     #[test]

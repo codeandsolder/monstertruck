@@ -296,7 +296,7 @@ pub(super) fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     altshell: &AltCurveShell<C, S>,
     tolerances: BooleanTolerance,
 ) -> Option<Shell<Point3, C, S>> {
-    altshell.try_mapped(
+    let converted = altshell.try_mapped(
         |p| Some(*p),
         |c| match c {
             Alternative::FirstType(c) => Some(c.clone()),
@@ -324,7 +324,46 @@ pub(super) fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             }
         },
         |s| Some(s.clone()),
-    )
+    )?;
+    for (source_face, converted_face) in altshell.iter().zip(converted.iter()) {
+        for (source_wire, converted_wire) in source_face
+            .absolute_boundaries()
+            .iter()
+            .zip(converted_face.absolute_boundaries())
+        {
+            for (source, target) in source_wire.iter().zip(converted_wire.iter()) {
+                let Alternative::SecondType(intersection) = source.curve() else {
+                    continue;
+                };
+                let start = target.absolute_front().point();
+                let end = target.absolute_back().point();
+                let on_carrier = |surface: &S, point: Point3| {
+                    surface
+                        .search_parameter(point, None, 100)
+                        .or_else(|| surface.search_nearest_parameter(point, None, 100))
+                        .is_some_and(|(u, v)| {
+                            surface.evaluate(u, v).distance(point)
+                                <= tolerances.surface_support_residual()
+                        })
+                };
+                if ![start, end].into_iter().all(|point| {
+                    on_carrier(intersection.surface0(), point)
+                        && on_carrier(intersection.surface1(), point)
+                }) {
+                    continue;
+                }
+                let mut curve = target.curve();
+                if curve.front().distance(start) > tolerances.fragment_residual()
+                    || curve.back().distance(end) > tolerances.fragment_residual()
+                {
+                    continue;
+                }
+                curve.snap_endpoints(start, end);
+                target.set_curve(curve);
+            }
+        }
+    }
+    Some(converted)
 }
 
 #[cfg(test)]
