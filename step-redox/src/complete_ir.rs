@@ -1337,19 +1337,41 @@ fn recover_boundary_feature_composites_for_section(
 ) -> Result<Vec<CadFragment>> {
     let entities = section.entities;
     let initial_index = &section.index;
-    let mut keyed_targets = BTreeMap::<crate::shape_identity::ShapeKey, Vec<_>>::new();
     let mut representative_targets = BTreeSet::new();
     let mut recovery_groups = HashMap::new();
+    // Canonical ShapeKey equality requires equal face counts. Build that
+    // inexpensive invariant first: unique counts cannot have a matching
+    // source solid to instance, so they do not need full geometry/topology
+    // fingerprinting. Ambiguous counts still receive the exact identity
+    // proof used previously; this also covers the common singleton case.
+    let mut by_face_count = BTreeMap::<usize, Vec<u64>>::new();
     for &solid_id in target_solid_ids {
-        if let Some(identity) =
-            crate::shape_identity::solid_identity(solid_id, entities, initial_index)
+        if let Some(faces) =
+            crate::shape_identity::manifold_solid_face_ids(solid_id, entities, initial_index)
         {
-            keyed_targets
-                .entry(identity.key.clone())
-                .or_default()
-                .push(identity);
+            by_face_count.entry(faces.len()).or_default().push(solid_id);
         } else {
+            // Full solid_identity would also reject an unresolved face list.
             representative_targets.insert(solid_id);
+        }
+    }
+    let mut keyed_targets = BTreeMap::<crate::shape_identity::ShapeKey, Vec<_>>::new();
+    for face_group in by_face_count.into_values() {
+        if let [solid_id] = face_group.as_slice() {
+            representative_targets.insert(*solid_id);
+            continue;
+        }
+        for solid_id in face_group {
+            if let Some(identity) =
+                crate::shape_identity::solid_identity(solid_id, entities, initial_index)
+            {
+                keyed_targets
+                    .entry(identity.key.clone())
+                    .or_default()
+                    .push(identity);
+            } else {
+                representative_targets.insert(solid_id);
+            }
         }
     }
     for (_, mut group) in keyed_targets {
@@ -2316,6 +2338,241 @@ mod tests {
     use super::*;
     use crate::AnalysisSession;
     use crate::cad_ir::{CadModel, CadNode, Primitive};
+
+    /// Compare the canonical-identity cost with the proof-preserving
+    /// boundary provider on real STEP models. A diagnostic, not a timing gate.
+    #[test]
+    #[ignore = "manual source-identity prefilter benchmark"]
+    fn boundary_identity_prefilter_benchmark() -> Result<()> {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        for (label, bytes, runs) in [
+            (
+                "radial_slot",
+                include_bytes!("../validation/fixtures/production_radial_slot.step").as_slice(),
+                12_u32,
+            ),
+            (
+                "split_ring",
+                include_bytes!("../validation/fixtures/native_split_ring_hollow_cylinder.step")
+                    .as_slice(),
+                4_u32,
+            ),
+        ] {
+            let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+            let [data] = exchange.data.as_slice() else {
+                anyhow::bail!("fixture must contain exactly one DATA section");
+            };
+            let entities = &data.entities;
+            let index = crate::step_graph::build_index(entities);
+            let section = RecoverySection {
+                data_section: 0,
+                entities,
+                index: Cow::Borrowed(&index),
+            };
+            let targets = scan_source_solids(&section)
+                .into_iter()
+                .map(|summary| summary.source.id)
+                .collect::<BTreeSet<_>>();
+            let session = AnalysisSession::from_bytes(bytes)?;
+            let measure = |task: &mut dyn FnMut() -> Result<()>| -> Result<f64> {
+                let start = Instant::now();
+                for _ in 0..runs {
+                    task()?;
+                }
+                Ok(start.elapsed().as_secs_f64() * 1_000.0 / f64::from(runs))
+            };
+            let identity_ms = measure(&mut || {
+                for &solid_id in &targets {
+                    black_box(crate::shape_identity::solid_identity(
+                        solid_id, entities, &index,
+                    ));
+                }
+                Ok(())
+            })?;
+            let boundary_ms = measure(&mut || {
+                black_box(recover_boundary_feature_composites_for_section(
+                    &section,
+                    &targets,
+                    ReducedBrepMutationMode::ParserOwned,
+                )?);
+                Ok(())
+            })?;
+            let complete_ir_ms = measure(&mut || {
+                black_box(session.complete_ir()?);
+                Ok(())
+            })?;
+            let parsing_ms = measure(&mut || {
+                black_box(AnalysisSession::from_bytes(bytes)?);
+                Ok(())
+            })?;
+            println!(
+                "boundary identity prefilter: {label}, entities={}, targets={}, runs={runs}, canonical_identity_ms={identity_ms:.3}, boundary_provider_ms={boundary_ms:.3}, parsed_complete_ir_ms={complete_ir_ms:.3}, parse_ms={parsing_ms:.3}",
+                entities.len(),
+                targets.len(),
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn singleton_boundary_recovery_preserves_nested_peels_and_data_section_identity() -> Result<()>
+    {
+        let bytes = include_bytes!("../validation/fixtures/boundary_boss_nested.step");
+        let original = recover_complete_ir_bytes(bytes)?;
+        let [expected] = original.boundary_feature_composites.as_slice() else {
+            anyhow::bail!("nested-boss fixture must recover exactly one boundary composite");
+        };
+        assert!(matches!(
+            expected.fragment.source,
+            CadFragmentSource::BoundaryFeatureComposite {
+                passes: 2,
+                feature_families: 2,
+                feature_instances: 2,
+                ..
+            }
+        ));
+        let mut exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let [source] = exchange.data.as_slice() else {
+            anyhow::bail!("nested-boss fixture must contain one DATA section");
+        };
+        exchange.data.push(source.clone());
+        let doubled =
+            recover_complete_ir_build_state(&exchange, ReducedBrepMutationMode::ParserOwned, None)?
+                .finish(COMPLETE_IR_SCHEMA, Vec::new(), None);
+        assert_eq!(doubled.body_count, 2);
+        assert_eq!(doubled.boundary_feature_composites.len(), 2);
+        for (data_section, composite) in doubled.boundary_feature_composites.iter().enumerate() {
+            assert_eq!(composite.source_solid.data_section, data_section);
+            assert_eq!(composite.fragment, expected.fragment);
+        }
+        assert_eq!(doubled.unrecovered_solid_count, 0);
+        Ok(())
+    }
+
+    /// Clone an independent source graph into the same DATA section while
+    /// preserving its internal references. Used to exercise real multi-solid
+    /// grouping, not the independent-index behavior of two DATA sections.
+    fn append_disjoint_source_entities(
+        into: &mut Vec<EntityInstance>,
+        source: &[EntityInstance],
+    ) -> Result<HashMap<u64, u64>> {
+        let offset = into
+            .iter()
+            .map(crate::step_graph::entity_id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("STEP test entity ID overflow"))?;
+        let aliases = source
+            .iter()
+            .map(|entity| {
+                let id = crate::step_graph::entity_id(entity);
+                id.checked_add(offset)
+                    .map(|replacement| (id, replacement))
+                    .ok_or_else(|| anyhow::anyhow!("STEP test entity ID overflow"))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
+        let mut cloned = source.to_vec();
+        for entity in &mut cloned {
+            crate::step_graph::rewrite_entity_refs(entity, &aliases);
+            let id = match entity {
+                EntityInstance::Simple { id, .. } | EntityInstance::Complex { id, .. } => id,
+            };
+            *id = aliases[id];
+        }
+        into.extend(cloned);
+        Ok(aliases)
+    }
+
+    #[test]
+    fn boundary_identity_prefilter_preserves_multi_solid_equivalence_and_distinct_shapes()
+    -> Result<()> {
+        let boss_bytes = include_bytes!("../validation/fixtures/boundary_boss_nested.step");
+        let conical_bytes = include_bytes!("../validation/fixtures/native_conical_frustum.step");
+        let mut boss = monstertruck_io::step::load::ParsedStepSource::parse(boss_bytes)?.exchange;
+        let conical = monstertruck_io::step::load::ParsedStepSource::parse(conical_bytes)?.exchange;
+        let [boss_data] = boss.data.as_mut_slice() else {
+            anyhow::bail!("expected exactly one boss DATA section");
+        };
+        let original = boss_data.entities.clone();
+        let boss_id = original
+            .iter()
+            .filter(|entity| {
+                crate::step_graph::simple_record(entity)
+                    .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
+            })
+            .map(crate::step_graph::entity_id)
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing boss source solid"))?;
+        let boss_aliases = append_disjoint_source_entities(&mut boss_data.entities, &original)?;
+        let [conical_data] = conical.data.as_slice() else {
+            anyhow::bail!("expected exactly one conical DATA section");
+        };
+        let conical_aliases =
+            append_disjoint_source_entities(&mut boss_data.entities, &conical_data.entities)?;
+        let conical_id = conical_data
+            .entities
+            .iter()
+            .filter(|entity| {
+                crate::step_graph::simple_record(entity)
+                    .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
+            })
+            .map(crate::step_graph::entity_id)
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing conical source solid"))?;
+        let index = crate::step_graph::build_index(&boss_data.entities);
+        let boss_faces =
+            crate::shape_identity::manifold_solid_face_ids(boss_id, &boss_data.entities, &index)
+                .ok_or_else(|| anyhow::anyhow!("missing boss faces"))?;
+        let conical_faces = crate::shape_identity::manifold_solid_face_ids(
+            conical_aliases[&conical_id],
+            &boss_data.entities,
+            &index,
+        )
+        .ok_or_else(|| anyhow::anyhow!("missing conical faces"))?;
+        assert_ne!(boss_faces.len(), conical_faces.len());
+
+        let section = RecoverySection {
+            data_section: 0,
+            entities: &boss_data.entities,
+            index: Cow::Borrowed(&index),
+        };
+        let targets = BTreeSet::from([
+            boss_id,
+            boss_aliases[&boss_id],
+            conical_aliases[&conical_id],
+        ]);
+        let fragments = recover_boundary_feature_composites_for_section(
+            &section,
+            &targets,
+            ReducedBrepMutationMode::ParserOwned,
+        )?;
+        let recovered_boss_ids = fragments
+            .iter()
+            .filter(|fragment| {
+                matches!(
+                    fragment.source,
+                    CadFragmentSource::BoundaryFeatureComposite {
+                        passes: 2,
+                        feature_families: 2,
+                        feature_instances: 2,
+                        ..
+                    }
+                )
+            })
+            .map(|fragment| source_solid_id(&fragment.source))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            recovered_boss_ids,
+            BTreeSet::from([boss_id, boss_aliases[&boss_id]])
+        );
+        for fragment in &fragments {
+            fragment.model.validate()?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn cached_session_complete_ir_matches_independent_section_indexes() -> Result<()> {
