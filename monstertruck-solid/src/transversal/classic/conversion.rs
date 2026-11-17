@@ -3,9 +3,9 @@
 use super::tolerance::BooleanTolerance;
 use super::{
     AltCurveShell, Alternative, BoundaryCurve2D, BoundedCurve, BoundedSurface, BsplineCurve, Cut,
-    IntersectionCurve, Invertible, KnotVector, MetricSpace, NurbsCurve, ParameterCurve,
-    ParametricCurve, Point3, PolylineCurve, ShapeOpsCurve, ShapeOpsSurface, Shell, SurfaceCurve,
-    Vector4,
+    InnerSpace, IntersectionCurve, Invertible, KnotVector, MetricSpace, NurbsCurve, ParameterCurve,
+    ParametricCurve, Point3, PolylineCurve, SearchNearestParameter, ShapeOpsCurve, ShapeOpsSurface,
+    Shell, SurfaceCurve, Vector4,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;
@@ -35,7 +35,8 @@ enum IsoParameter {
     V,
 }
 
-/// A trimmed exact iso-section uses native spline parameters, not world-space distances.
+/// A trimmed exact iso-section uses its *own* spline parameters, not world-space
+/// distances or the analytic carrier's possibly different parameter frame.
 fn trim_homogeneous_curve(
     mut curve: NurbsCurve<Vector4>,
     start: f64,
@@ -70,12 +71,10 @@ fn trim_homogeneous_curve(
     Some(curve)
 }
 
-fn homogeneous_iso_curve<S: ShapeOpsSurface>(
+fn homogeneous_iso_support_curve<S: ShapeOpsSurface>(
     surface: &S,
     iso: IsoParameter,
     constant: f64,
-    start: f64,
-    end: f64,
 ) -> Option<NurbsCurve<Vector4>> {
     let mut homogeneous = surface.try_into_homogeneous_bspline_surface()?;
     let (u_range, v_range) = homogeneous.range_tuple();
@@ -114,7 +113,77 @@ fn homogeneous_iso_curve<S: ShapeOpsSurface>(
             NurbsCurve::new(homogeneous.curve_u(column))
         }
     };
-    trim_homogeneous_curve(curve, start, end)
+    Some(curve)
+}
+
+/// An analytic revolution may use a radian angular coordinate while its exact
+/// rational B-spline conversion uses a normalized full-turn knot span. The
+/// geometric inverse is valid only after the full circular carrier has been
+/// algebraically certified, and the other carrier is a transverse exact plane.
+/// This avoids treating approximate or arbitrarily reparameterized splines as
+/// a proven exact intersection.
+fn certified_plane_cylinder_iso<S: ShapeOpsSurface>(
+    cylinder: &S,
+    plane: &S,
+    iso: IsoParameter,
+) -> bool {
+    let Some(mut net) = cylinder.try_into_homogeneous_bspline_surface() else {
+        return false;
+    };
+    // The cylinder certificate expects rational circle in U and linear sweep
+    // in V; a RevolutionSurface uses the opposite axis order.
+    if matches!(iso, IsoParameter::U) {
+        net.swap_axes();
+    }
+    let Some((_, axis, _, _)) = super::loops_store::certified_circular_cylinder(&net) else {
+        return false;
+    };
+    let plane_net = plane.try_into_homogeneous_bspline_surface();
+    let Some(exact_plane) = super::intersection_curve::certified_plane(plane, plane_net.as_ref())
+    else {
+        return false;
+    };
+    exact_plane.normal().cross(axis).magnitude() <= DEFAULT_NUMERICAL_TOLERANCES.angular
+}
+
+/// Guide samples come from tessellation, not geometric identity. Use only to
+/// choose the correct connected branch of an already certified exact circle.
+/// Test the *whole* candidate against the ordered guide, so coincident circle
+/// endpoints cannot promote the complement (or an entire extra revolution).
+fn iso_candidate_follows_guide(
+    candidate: &NurbsCurve<Vector4>,
+    guide: &PolylineCurve<Point3>,
+    tolerances: BooleanTolerance,
+) -> bool {
+    let (start, end) = candidate.range_tuple();
+    let mut previous_progress = 0.0;
+    let sample_count = DEFAULT_NUMERICAL_TOLERANCES
+        .boolean_iso_validation_segments
+        .max(32);
+    (0..=sample_count).all(|i| {
+        let fraction = f64::from(i) / f64::from(sample_count);
+        let point = candidate.evaluate(f64::mul_add(end - start, fraction, start));
+        let Some((progress, residual)) = guide
+            .windows(2)
+            .enumerate()
+            .filter_map(|(index, segment)| {
+                let delta = segment[1] - segment[0];
+                let squared = delta.magnitude2();
+                if !squared.is_finite() || squared <= 0.0 {
+                    return None;
+                }
+                let t = ((point - segment[0]).dot(delta) / squared).clamp(0.0, 1.0);
+                let distance = point.distance(segment[0] + delta * t);
+                Some((index as f64 + t, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+        else {
+            return false;
+        };
+        let forward = progress + 1.0e-8 >= previous_progress;
+        previous_progress = progress;
+        forward && residual.is_finite() && residual <= tolerances.mesh_seed
+    })
 }
 
 fn surface_parameter_with_hint<S: ShapeOpsSurface>(
@@ -268,16 +337,53 @@ pub(super) fn exact_iso_leader<S: ShapeOpsSurface>(
                 IsoParameter::U => params.last()?.1,
                 IsoParameter::V => params.last()?.0,
             };
-            let Some(candidate) = homogeneous_iso_curve(surface, iso, constant, start, end) else {
+            let Some(full) = homogeneous_iso_support_curve(surface, iso, constant) else {
                 continue;
             };
-            if prove_iso_candidate(
+            // First try the inexpensive same-parameter-frame path. It remains
+            // valid for ordinary native NURBS and planar surfaces.
+            if let Some(candidate) = trim_homogeneous_curve(full.clone(), start, end)
+                && prove_iso_candidate(
+                    &candidate,
+                    intersection.surface0(),
+                    intersection.surface1(),
+                    leader,
+                    tolerances,
+                )
+                && iso_candidate_follows_guide(&candidate, leader, tolerances)
+            {
+                return Some(candidate);
+            }
+            // Radian and rational-circle knot coordinates are not the same
+            // parameter. Find the exact circle's endpoint parameters by
+            // geometric inverse only for a structurally certified cylinder
+            // cut by an exact axis-normal plane.
+            let other = if std::ptr::eq(surface, intersection.surface0()) {
+                intersection.surface1()
+            } else {
+                intersection.surface0()
+            };
+            if !certified_plane_cylinder_iso(surface, other, iso) {
+                continue;
+            }
+            let Some((start, end)) = full
+                .search_nearest_parameter(leader.front(), None, 100)
+                .zip(full.search_nearest_parameter(leader.back(), None, 100))
+            else {
+                continue;
+            };
+            let Some(candidate) = trim_homogeneous_curve(full, start, end) else {
+                continue;
+            };
+            let carrier_ok = prove_iso_candidate(
                 &candidate,
                 intersection.surface0(),
                 intersection.surface1(),
                 leader,
                 tolerances,
-            ) {
+            );
+            let guide_ok = iso_candidate_follows_guide(&candidate, leader, tolerances);
+            if carrier_ok && guide_ok {
                 return Some(candidate);
             }
         }

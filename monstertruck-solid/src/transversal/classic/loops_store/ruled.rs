@@ -323,21 +323,36 @@ pub(in crate::transversal::classic) fn certified_circular_cylinder(
         let delta = p - origin;
         Some((delta.dot(basis_u), delta.dot(basis_v)))
     };
-    let p0 = xy(profile.evaluate(lo))?;
-    let p1 = xy(profile.evaluate(f64::midpoint(lo, hi)))?;
-    let p2 = xy(profile.evaluate(hi))?;
-    let twice_det = 2.0 * (p2.0 - p0.0).mul_add(-(p1.1 - p0.1), (p1.0 - p0.0) * (p2.1 - p0.1));
-    if twice_det.abs() <= spatial_eps * spatial_eps {
-        return None;
-    }
-    let d1 = p1.0.mul_add(p1.0, p1.1 * p1.1) - p0.0.mul_add(p0.0, p0.1 * p0.1);
-    let d2 = p2.0.mul_add(p2.0, p2.1 * p2.1) - p0.0.mul_add(p0.0, p0.1 * p0.1);
-    let cx = d2.mul_add(-(p1.1 - p0.1), d1 * (p2.1 - p0.1)) / twice_det;
-    let cy = (p2.0 - p0.0).mul_add(-d1, (p1.0 - p0.0) * d2) / twice_det;
-    let radius2 = (p0.0 - cx).mul_add(p0.0 - cx, (p0.1 - cy).powi(2));
-    if !radius2.is_finite() || radius2 <= spatial_eps * spatial_eps {
-        return None;
-    }
+    // Endpoints of a *closed* circular B-spline coincide. Fitting a center
+    // from (front, middle, back) is then singular, even though every rational
+    // quadratic knot span can be algebraically certified. Prefer the widest
+    // triple for open arcs, then use separated interior samples for closed
+    // profiles. This is only a center proposal; every homogeneous polynomial
+    // coefficient on every span is still required to prove a circle below.
+    let span = hi - lo;
+    let (cx, cy, radius2) = [
+        [0.0, 0.5, 1.0],
+        [0.0, 0.25, 0.5],
+        [0.25, 0.5, 0.75],
+        [0.0, 0.375, 0.75],
+    ]
+    .into_iter()
+    .find_map(|fractions| {
+        let [f0, f1, f2] = fractions;
+        let p0 = xy(profile.evaluate(f64::mul_add(span, f0, lo)))?;
+        let p1 = xy(profile.evaluate(f64::mul_add(span, f1, lo)))?;
+        let p2 = xy(profile.evaluate(f64::mul_add(span, f2, lo)))?;
+        let twice_det = 2.0 * (p2.0 - p0.0).mul_add(-(p1.1 - p0.1), (p1.0 - p0.0) * (p2.1 - p0.1));
+        if !twice_det.is_finite() || twice_det.abs() <= spatial_eps * spatial_eps {
+            return None;
+        }
+        let d1 = p1.0.mul_add(p1.0, p1.1 * p1.1) - p0.0.mul_add(p0.0, p0.1 * p0.1);
+        let d2 = p2.0.mul_add(p2.0, p2.1 * p2.1) - p0.0.mul_add(p0.0, p0.1 * p0.1);
+        let cx = d2.mul_add(-(p1.1 - p0.1), d1 * (p2.1 - p0.1)) / twice_det;
+        let cy = (p2.0 - p0.0).mul_add(-d1, (p1.0 - p0.0) * d2) / twice_det;
+        let radius2 = (p0.0 - cx).mul_add(p0.0 - cx, (p0.1 - cy).powi(2));
+        (radius2.is_finite() && radius2 > spatial_eps * spatial_eps).then_some((cx, cy, radius2))
+    })?;
 
     // Every degree-two homogeneous Bezier span must satisfy
     // (X - cx W)^2 + (Y - cy W)^2 - r² W² == 0 identically.
@@ -496,6 +511,33 @@ mod tests {
             &original,
             &reparameterized
         ));
+    }
+
+    #[test]
+    fn closed_rational_full_circle_is_certified_without_three_distinct_endpoints() {
+        use monstertruck_geometry::prelude::{
+            Line, RevolutionSurface, TryIntoHomogeneousBsplineSurface,
+        };
+        let radial = 0.4826;
+        let origin = Point3::new(59.384_373_707_781_98, -5.257_812_234_042_557, 0.0);
+        let start = origin + Vector3::unit_x() * radial;
+        let cylinder = RevolutionSurface::by_revolution(
+            Line(start, start + Vector3::unit_z()),
+            origin,
+            Vector3::unit_z(),
+        );
+        let mut net = cylinder.try_into_homogeneous_bspline_surface().unwrap();
+        net.swap_axes();
+        let (center, axis, radius, _) = certified_circular_cylinder(&net)
+            .expect("a closed 360-degree rational circle is structurally a cylinder");
+        assert!((radius - radial).abs() < 1e-10);
+        assert!((center - origin).cross(axis).magnitude() < 1e-10);
+        // Break a control point well beyond the coefficient proof tolerance.
+        net.control_point_mut(1, 0).x += 0.002;
+        assert!(
+            certified_circular_cylinder(&net).is_none(),
+            "a structurally perturbed rational circle is not a certified circle",
+        );
     }
 
     #[test]
