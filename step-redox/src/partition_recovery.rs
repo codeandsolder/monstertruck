@@ -420,7 +420,7 @@ fn apply_partition_recovery(
 
     // Work out ORIENTED_EDGE replacements against the old edge endpoints.
     let mut oe_updates = HashMap::<u64, (u64, bool)>::new();
-    for entity in entities {
+    for entity in entities.iter() {
         let id = entity_id(entity);
         if !retained_oes.contains(&id) {
             continue;
