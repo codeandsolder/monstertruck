@@ -276,7 +276,7 @@ impl<'ctx, 'data> ProfileSegmentContext<'ctx, 'data> {
     }
 }
 
-fn source_tolerance_by_representation_item(
+pub(crate) fn source_tolerance_by_representation_item(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> HashMap<u64, f64> {
@@ -461,6 +461,16 @@ pub(crate) fn detect_solid_revolutions_with_index(
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredSolidRevolution> {
     let source_tolerances = source_tolerance_by_representation_item(entities, index);
+    detect_solid_revolutions_with_tolerances(entities, index, &source_tolerances)
+}
+
+/// Preserve source uncertainty semantics while allowing compound analyses to
+/// reuse the proven representation context for both revolution detectors.
+pub(crate) fn detect_solid_revolutions_with_tolerances(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    source_tolerances: &HashMap<u64, f64>,
+) -> Vec<RecoveredSolidRevolution> {
     let mut out = Vec::new();
     for entity in entities {
         let Some(record) = simple_record(entity) else {
@@ -495,6 +505,14 @@ pub(crate) fn detect_radial_slot_revolutions_with_index(
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredRadialSlotRevolution> {
     let source_tolerances = source_tolerance_by_representation_item(entities, index);
+    detect_radial_slot_revolutions_with_tolerances(entities, index, &source_tolerances)
+}
+
+pub(crate) fn detect_radial_slot_revolutions_with_tolerances(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    source_tolerances: &HashMap<u64, f64>,
+) -> Vec<RecoveredRadialSlotRevolution> {
     let mut out = Vec::new();
     for entity in entities {
         let Some(record) = simple_record(entity) else {
