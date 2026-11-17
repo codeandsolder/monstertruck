@@ -6,7 +6,7 @@ use crate::step_entities::{
 };
 use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
-    visit_entity_refs,
+    undirected_components, visit_entity_refs,
 };
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record};
@@ -243,30 +243,10 @@ fn connected_components(interfaces: &[Interface]) -> Vec<Vec<u64>> {
             .insert(interface.a_solid);
     }
 
-    let mut seen = HashSet::new();
-    let mut raw_components = Vec::<Vec<u64>>::new();
-    let mut roots: Vec<u64> = adjacency.keys().copied().collect();
-    roots.sort_unstable();
-    for root in roots {
-        if seen.contains(&root) {
-            continue;
-        }
-        let mut stack = vec![root];
-        let mut component = BTreeSet::new();
-        while let Some(id) = stack.pop() {
-            if !component.insert(id) {
-                continue;
-            }
-            seen.insert(id);
-            if let Some(neighbors) = adjacency.get(&id) {
-                stack.extend(neighbors.iter().copied());
-            }
-        }
-        if component.len() > 1 {
-            raw_components.push(component.into_iter().collect());
-        }
-    }
-    raw_components
+    undirected_components(&adjacency)
+        .into_iter()
+        .map(|group| group.into_iter().collect())
+        .collect()
 }
 
 /// Validate that all component solids share one representation and style,

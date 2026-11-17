@@ -5,6 +5,7 @@ use crate::step_entities::{
 };
 use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
+    undirected_components,
 };
 use ruststep::ast::{EntityInstance, Parameter};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -66,31 +67,39 @@ fn coalesce_with_supports(
     entities: &mut Vec<EntityInstance>,
     allowed_supports: &[&str],
 ) -> FaceCoalesceStats {
-    let original = entities.clone();
-    coalesce_inner(entities, allowed_supports).unwrap_or_else(|| {
-        *entities = original;
-        FaceCoalesceStats::default()
-    })
+    let Some(plans) = plan_coalescence(entities, allowed_supports) else {
+        return FaceCoalesceStats::default();
+    };
+    commit_coalescence(entities, &plans)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"
-)]
-fn coalesce_inner(
+/// Commit a merge as one transaction. A failed rewrite leaves the source
+/// untouched even if the candidate already contains partially rewritten faces.
+fn commit_coalescence(
     entities: &mut Vec<EntityInstance>,
-    allowed_supports: &[&str],
-) -> Option<FaceCoalesceStats> {
-    if entities.is_empty() {
-        return Some(FaceCoalesceStats::default());
-    }
+    plans: &[MergePlan],
+) -> FaceCoalesceStats {
+    let mut candidate = entities.clone();
+    let Some(stats) = apply_coalescence(&mut candidate, plans) else {
+        return FaceCoalesceStats::default();
+    };
+    *entities = candidate;
+    stats
+}
 
+/// Prove all eligible merges without modifying or cloning the entity graph.
+fn plan_coalescence(
+    entities: &[EntityInstance],
+    allowed_supports: &[&str],
+) -> Option<Vec<MergePlan>> {
+    if entities.is_empty() {
+        return None;
+    }
     let index = build_index(entities);
-    let refs_before = ReferenceGraph::new(entities);
     let mut face_info = HashMap::<u64, FaceInfo>::new();
     let mut edge_faces: HashMap<u64, BTreeSet<u64>> = HashMap::new();
 
-    for entity in entities.iter() {
+    for entity in entities {
         let face = entity_id(entity);
         let Some(record) = simple_record(entity) else {
             continue;
@@ -129,157 +138,149 @@ fn coalesce_inner(
     }
 
     if adjacency.is_empty() {
-        return Some(FaceCoalesceStats::default());
+        return None;
     }
 
     let styles = styles_by_target(entities);
     let face_shells = face_shell_owners(entities, &index);
-
-    let mut roots: Vec<u64> = adjacency.keys().copied().collect();
-    roots.sort_unstable();
-    let mut seen = HashSet::new();
-    let mut plans = Vec::<MergePlan>::new();
-
-    for root in roots {
-        if seen.contains(&root) {
-            continue;
+    let proof = MergeProof {
+        entities,
+        index: &index,
+        face_info: &face_info,
+        edge_faces: &edge_faces,
+        styles: &styles,
+        face_shells: &face_shells,
+    };
+    let mut plans = Vec::new();
+    for component in undirected_components(&adjacency) {
+        if let Some(plan) = plan_component(component, &proof) {
+            plans.push(plan);
         }
-        let mut stack = vec![root];
-        let mut component = BTreeSet::new();
-        while let Some(face) = stack.pop() {
-            if !component.insert(face) {
-                continue;
-            }
-            seen.insert(face);
-            if let Some(neighbors) = adjacency.get(&face) {
-                stack.extend(neighbors.iter().copied());
-            }
-        }
-        if component.len() < 2 {
-            continue;
-        }
+    }
+    (!plans.is_empty()).then_some(plans)
+}
 
-        let canonical = *component.iter().next()?;
-        let canonical_info = face_info.get(&canonical)?;
-        let support = canonical_info.support;
-        let sense = canonical_info.sense;
+struct MergeProof<'a> {
+    entities: &'a [EntityInstance],
+    index: &'a HashMap<u64, usize>,
+    face_info: &'a HashMap<u64, FaceInfo>,
+    edge_faces: &'a HashMap<u64, BTreeSet<u64>>,
+    styles: &'a HashMap<u64, Vec<(u64, Vec<u64>)>>,
+    face_shells: &'a HashMap<u64, BTreeSet<u64>>,
+}
 
-        // All faces must belong to exactly the same one shell.
-        let Some(first_owners) = face_shells.get(&canonical) else {
-            continue;
-        };
-        if first_owners.len() != 1 {
-            continue;
-        }
-        if component
+/// Accept only one-shell, matching-style groups with provably internal seams
+/// and one exact closed topological outer boundary.
+fn plan_component(component: BTreeSet<u64>, proof: &MergeProof<'_>) -> Option<MergePlan> {
+    let canonical = *component.iter().next()?;
+    let canonical_info = proof.face_info.get(&canonical)?;
+    let support = canonical_info.support;
+    let sense = canonical_info.sense;
+
+    // All faces must belong to exactly the same one shell.
+    let first_owners = proof.face_shells.get(&canonical)?;
+    if first_owners.len() != 1
+        || component
             .iter()
-            .any(|f| face_shells.get(f) != Some(first_owners))
+            .any(|face| proof.face_shells.get(face) != Some(first_owners))
+    {
+        return None;
+    }
+    let shell = *first_owners.first()?;
+
+    // Direct face styles are either absent on every face, or exactly one
+    // identical assignment list on every face. Mixed inheritance is not
+    // merged because it can change effective appearance.
+    let mut style_signature: Option<Option<&[u64]>> = None;
+    let mut style_delete = HashSet::new();
+    for &face in &component {
+        let current = match proof.styles.get(&face) {
+            None => None,
+            Some(items) if items.len() == 1 => Some(items[0].1.as_slice()),
+            Some(_) => return None,
+        };
+        match style_signature {
+            None => style_signature = Some(current),
+            Some(expected) if expected == current => {}
+            Some(_) => return None,
+        }
+        if face != canonical
+            && let Some(styles) = proof.styles.get(&face)
         {
-            continue;
+            style_delete.extend(styles.iter().map(|(id, _)| *id));
         }
-        let shell = *first_owners.iter().next()?;
+    }
 
-        // Direct face styles are either absent on every face, or exactly one
-        // identical assignment list on every face. Mixed inheritance is not
-        // merged because it can change effective appearance.
-        let mut style_signature: Option<Option<Vec<u64>>> = None;
-        let mut style_delete = HashSet::new();
-        let mut style_ok = true;
-        for &face in &component {
-            let current = match styles.get(&face) {
-                None => None,
-                Some(v) if v.len() == 1 => Some(v[0].1.clone()),
-                Some(_) => {
-                    style_ok = false;
-                    break;
-                }
-            };
-            match &style_signature {
-                None => style_signature = Some(current),
-                Some(expected) if expected == &current => {}
-                Some(_) => {
-                    style_ok = false;
-                    break;
-                }
-            }
-            if face != canonical
-                && let Some(v) = styles.get(&face)
-            {
-                for (style, _) in v {
-                    style_delete.insert(*style);
-                }
-            }
-        }
-        if !style_ok {
-            continue;
-        }
-
-        // Any edge touched by >=2 group faces is an internal seam only if all
-        // of its users are inside the group.
-        let mut internal_edges = HashSet::new();
-        let mut ownership_ok = true;
-        for (&edge, users) in &edge_faces {
-            let hit = users.iter().filter(|f| component.contains(f)).count();
-            if hit >= 2 {
+    // Any edge touched by >=2 group faces is an internal seam only if all
+    // of its users are inside the group.
+    // Restrict evidence to edges incident on this component, rather than
+    // repeatedly traversing the entire STEP surface's candidate edge map.
+    let mut internal_edges = HashSet::new();
+    for face in &component {
+        for &(_, edge) in &proof.face_info.get(face)?.oes {
+            let users = proof.edge_faces.get(&edge)?;
+            let members = users.iter().filter(|f| component.contains(f)).count();
+            if members >= 2 {
                 if users.iter().any(|f| !component.contains(f)) {
-                    ownership_ok = false;
-                    break;
+                    return None;
                 }
                 internal_edges.insert(edge);
             }
         }
-        if !ownership_ok || internal_edges.is_empty() {
-            continue;
-        }
+    }
+    if internal_edges.is_empty() {
+        return None;
+    }
 
-        let mut surviving = Vec::<(u64, u64)>::new();
-        for face in &component {
-            let Some(info) = face_info.get(face) else {
-                ownership_ok = false;
-                break;
-            };
-            for &(oe, edge) in &info.oes {
-                if !internal_edges.contains(&edge) {
-                    surviving.push((oe, edge));
-                }
+    let mut surviving = Vec::<(u64, u64)>::new();
+    for face in &component {
+        for &(oe, edge) in &proof.face_info.get(face)?.oes {
+            if !internal_edges.contains(&edge) {
+                surviving.push((oe, edge));
             }
         }
-        if !ownership_ok || surviving.is_empty() {
-            continue;
-        }
-
-        // A group boundary may use each topological edge exactly once.
-        let mut edge_counts = HashMap::<u64, usize>::new();
-        for &(_, edge) in &surviving {
-            *edge_counts.entry(edge).or_default() += 1;
-        }
-        if edge_counts.values().any(|&n| n != 1) {
-            continue;
-        }
-
-        // Trace by exact VERTEX_POINT identity. The first production version
-        // deliberately accepts one loop only; holes/multiple loops require
-        // proper nesting classification rather than an edge-count heuristic.
-        let Some(loop_oes) = trace_single_loop(&surviving, entities, &index) else {
-            continue;
-        };
-
-        plans.push(MergePlan {
-            faces: component,
-            canonical,
-            shell,
-            support,
-            sense,
-            surviving_oes: loop_oes,
-            internal_edges,
-            style_delete,
-        });
+    }
+    if surviving.is_empty() {
+        return None;
     }
 
-    if plans.is_empty() {
-        return Some(FaceCoalesceStats::default());
+    // A group boundary may use each topological edge exactly once.
+    let mut edge_counts = HashMap::<u64, usize>::new();
+    for &(_, edge) in &surviving {
+        *edge_counts.entry(edge).or_default() += 1;
+    }
+    if edge_counts.values().any(|&n| n != 1) {
+        return None;
     }
 
+    // Trace by exact VERTEX_POINT identity. The first production version
+    // deliberately accepts one loop only; holes/multiple loops require
+    // proper nesting classification rather than an edge-count heuristic.
+    let loop_oes = trace_single_loop(&surviving, proof.entities, proof.index)?;
+
+    Some(MergePlan {
+        faces: component,
+        canonical,
+        shell,
+        support,
+        sense,
+        surviving_oes: loop_oes,
+        internal_edges,
+        style_delete,
+    })
+}
+
+/// Mutate only an already-detached transaction candidate.
+#[expect(
+    clippy::too_many_lines,
+    reason = "topology and presentation rewrites plus limited reachability GC form one atomic mutation"
+)]
+fn apply_coalescence(
+    entities: &mut Vec<EntityInstance>,
+    plans: &[MergePlan],
+) -> Option<FaceCoalesceStats> {
+    let index = build_index(entities);
+    let refs_before = ReferenceGraph::new(entities);
     let mut next_id = entities.iter().map(entity_id).max().unwrap_or(0) + 1;
     let mut shell_maps: HashMap<u64, HashMap<u64, u64>> = HashMap::new();
     let mut style_delete = HashSet::new();
@@ -289,7 +290,7 @@ fn coalesce_inner(
     // Candidate GC is restricted to old descendants of every face we rewrite
     // or delete. Shared supports/boundary topology remain protected by live
     // inbound references after the rewrites.
-    for plan in &plans {
+    for plan in plans {
         for &face in &plan.faces {
             let mut stack = vec![face];
             while let Some(id) = stack.pop() {
@@ -762,6 +763,54 @@ mod tests {
                 ],
             ),
         ]
+    }
+
+    #[test]
+    fn read_only_planner_does_not_mutate_eligible_faces() -> anyhow::Result<()> {
+        let entities = two_face_fixture("PLANE");
+        let original = entities.clone();
+        let plans = plan_coalescence(&entities, &["PLANE"])
+            .ok_or_else(|| anyhow::anyhow!("mergeable planar faces missing"))?;
+        assert_eq!(plans.len(), 1);
+        assert_eq!(entities, original);
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_direct_styles_fail_closed_without_mutating_faces() {
+        let mut entities = two_face_fixture("PLANE");
+        entities.push(simple(
+            80,
+            "STYLED_ITEM",
+            vec![
+                Parameter::String(String::new()),
+                Parameter::List(vec![entity_ref(91)]),
+                entity_ref(50),
+            ],
+        ));
+        let before = entities.clone();
+        assert!(plan_coalescence(&entities, &["PLANE"]).is_none());
+        let stats = coalesce_same_support_planar_faces(&mut entities);
+        assert_eq!(stats.groups, 0);
+        assert_eq!(entities, before);
+    }
+
+    #[test]
+    fn transaction_fails_without_committing_invalid_shell_rewrite() -> anyhow::Result<()> {
+        let original = two_face_fixture("PLANE");
+        let mut plans = plan_coalescence(&original, &["PLANE"])
+            .ok_or_else(|| anyhow::anyhow!("valid plan missing"))?;
+        plans[0].shell = u64::MAX;
+
+        let mut live = original.clone();
+        let stats = commit_coalescence(&mut live, &plans);
+        assert_eq!(stats.groups, 0);
+        assert_eq!(live, original);
+
+        let stats = coalesce_same_support_planar_faces(&mut live);
+        assert_eq!(stats.groups, 1);
+        assert_ne!(live, original);
+        Ok(())
     }
 
     #[test]
