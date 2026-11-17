@@ -16,7 +16,7 @@ the surface area it needs.
 
 ```toml
 [dependencies]
-monstertruck = { version = "0.3", features = ["full"] }
+monstertruck = { version = "0.4", features = ["full"] }
 ```
 
 ## Architecture
@@ -94,6 +94,14 @@ at the top.
 
 Build a cuboid and a cylinder, subtract the cylinder via boolean `AND`
 against its inverse, and emit the result as a STEP string.
+
+The facade defaults to `modeling` and `meshing`. The following example
+also uses the optional `solid` and `step` features:
+
+```toml
+[dependencies]
+monstertruck = { version = "0.4", features = ["solid", "step"] }
+```
 
 ```rust
 use monstertruck::modeling::*;

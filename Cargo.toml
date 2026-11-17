@@ -70,7 +70,9 @@ quote = "1"
 rand = "0.10"
 rayon = "1"
 rkyv = { version = "0.8", features = ["alloc"] }
-rclite = "0.4"
+# rclite 0.4.1 pulls branches 0.4.x, whose no-std nightly path calls the
+# removed core::intrinsics::abort. rclite 0.4.2 requires branches 0.5.
+rclite = "0.4.2"
 rustc-hash = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 step-p21 = "0.1"
