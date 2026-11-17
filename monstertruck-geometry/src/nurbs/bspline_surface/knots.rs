@@ -9,6 +9,57 @@ use super::{
 };
 use crate::errors::Error;
 
+/// Reconstruct one tensor-product axis into temporary slices and verify
+/// that removing its knot leaves every corresponding control point unchanged.
+///
+/// The caller supplies its axis-specific view of control points. No storage
+/// mutation occurs until this shared numerical validation succeeds.
+fn reconstructed_knot_lines<P, I, F>(
+    knot_vec: &KnotVector,
+    degree: usize,
+    count: usize,
+    idx: usize,
+    mut line: F,
+) -> Result<Vec<Vec<P>>>
+where
+    P: ControlPoint<f64> + Tolerance,
+    I: Iterator<Item = P>,
+    F: FnMut(usize) -> I,
+{
+    if idx < degree + 1 || idx >= count {
+        return Err(Error::CannotRemoveKnot(idx));
+    }
+
+    let mut new_points: Vec<Vec<P>> = Vec::with_capacity(degree + 1);
+    new_points.push(line(idx - degree - 1).collect());
+    for i in (idx - degree)..idx {
+        let delta = knot_vec[i + degree + 1] - knot_vec[i];
+        let a = inv_or_zero(delta) * (knot_vec[idx] - knot_vec[i]);
+        if a.so_small() {
+            break;
+        }
+        let Some(previous) = new_points.last() else {
+            return Err(Error::CannotRemoveKnot(idx));
+        };
+        let rebuilt = line(i)
+            .zip(previous)
+            .map(|(original, prior)| *prior + (original - *prior) / a)
+            .collect();
+        new_points.push(rebuilt);
+    }
+
+    let Some(previous) = new_points.last() else {
+        return Err(Error::CannotRemoveKnot(idx));
+    };
+    if line(idx)
+        .zip(previous)
+        .any(|(original, rebuilt)| !original.near(rebuilt))
+    {
+        return Err(Error::CannotRemoveKnot(idx));
+    }
+    Ok(new_points)
+}
+
 impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// Adds a knot `x` of the first parameter `u`, and do not change `self` as a surface.
     /// # Examples
@@ -148,44 +199,13 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///
     pub fn try_remove_knot_u(&mut self, idx: usize) -> Result<&mut Self> {
         let k = self.udegree();
-        let knot_vec = self.knot_vector_u();
-        let n = self.control_points.len();
-
-        if idx < k + 1 || idx >= n {
-            return Err(Error::CannotRemoveKnot(idx));
-        }
-
-        let mut new_points = Vec::with_capacity(k + 1);
-        let first_vec = self
-            .control_points_column_iter(idx - k - 1)
-            .copied()
-            .collect::<Vec<_>>();
-        new_points.push(first_vec);
-        for i in (idx - k)..idx {
-            let delta = knot_vec[i + k + 1] - knot_vec[i];
-            let a = inv_or_zero(delta) * (knot_vec[idx] - knot_vec[i]);
-            if a.so_small() {
-                break;
-            }
-            let Some(previous) = new_points.last() else {
-                return Err(Error::CannotRemoveKnot(idx));
-            };
-            let vec = self
-                .control_points_column_iter(i)
-                .zip(previous)
-                .map(|(pt0, pt1)| *pt1 + (*pt0 - *pt1) / a)
-                .collect();
-            new_points.push(vec);
-        }
-
-        let Some(previous) = new_points.last() else {
-            return Err(Error::CannotRemoveKnot(idx));
-        };
-        for (pt0, pt1) in self.control_points_column_iter(idx).zip(previous) {
-            if !pt0.near(pt1) {
-                return Err(Error::CannotRemoveKnot(idx));
-            }
-        }
+        let new_points = reconstructed_knot_lines(
+            self.knot_vector_u(),
+            k,
+            self.control_points.len(),
+            idx,
+            |i| self.control_points_column_iter(i).copied(),
+        )?;
 
         for (i, vec) in new_points.into_iter().skip(1).enumerate() {
             self.control_points[idx - k + i] = vec;
@@ -251,44 +271,13 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///
     pub fn try_remove_knot_v(&mut self, idx: usize) -> Result<&mut Self> {
         let (_, k) = self.degrees();
-        let knot_vec = self.knot_vector_v();
-        let n = self.control_points[0].len();
-
-        if idx < k + 1 || idx >= n {
-            return Err(Error::CannotRemoveKnot(idx));
-        }
-
-        let mut new_points = Vec::with_capacity(k + 1);
-        let first_vec = self
-            .control_points_row_iter(idx - k - 1)
-            .copied()
-            .collect::<Vec<_>>();
-        new_points.push(first_vec);
-        for i in (idx - k)..idx {
-            let delta = knot_vec[i + k + 1] - knot_vec[i];
-            let a = inv_or_zero(delta) * (knot_vec[idx] - knot_vec[i]);
-            if a.so_small() {
-                break;
-            }
-            let Some(previous) = new_points.last() else {
-                return Err(Error::CannotRemoveKnot(idx));
-            };
-            let vec = self
-                .control_points_row_iter(i)
-                .zip(previous)
-                .map(|(pt0, pt1)| *pt1 + (*pt0 - *pt1) / a)
-                .collect();
-            new_points.push(vec);
-        }
-
-        let Some(previous) = new_points.last() else {
-            return Err(Error::CannotRemoveKnot(idx));
-        };
-        for (pt0, pt1) in self.control_points_row_iter(idx).zip(previous) {
-            if !pt0.near(pt1) {
-                return Err(Error::CannotRemoveKnot(idx));
-            }
-        }
+        let new_points = reconstructed_knot_lines(
+            self.knot_vector_v(),
+            k,
+            self.control_points[0].len(),
+            idx,
+            |i| self.control_points_row_iter(i).copied(),
+        )?;
 
         for (i, vec) in new_points.into_iter().skip(1).enumerate() {
             for (j, pt) in vec.into_iter().enumerate() {
@@ -509,5 +498,112 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
             }
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use super::*;
+    use crate::prelude::Vector2;
+
+    fn sample_surface(columns: usize) -> BsplineSurface<Vector2> {
+        let control_points = [0.0_f64, 1.0, 2.0]
+            .map(|u| {
+                (0..columns)
+                    .map(|index| {
+                        let v = crate::usize_to_f64(index);
+                        Vector2::new(u + 0.15 * v * (2.0 - v), v + 0.23 * u * (2.0 - u))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .to_vec();
+        BsplineSurface::new_unchecked(
+            (
+                KnotVector::bezier_knot(2),
+                KnotVector::uniform_knot(2, columns - 2),
+            ),
+            control_points,
+        )
+    }
+
+    fn assert_same_surface(actual: &BsplineSurface<Vector2>, expected: &BsplineSurface<Vector2>) {
+        assert_eq!(actual.knot_vector_u(), expected.knot_vector_u());
+        assert_eq!(actual.knot_vector_v(), expected.knot_vector_v());
+        assert_eq!(
+            actual.control_points().len(),
+            expected.control_points().len()
+        );
+        for (row, original) in actual
+            .control_points()
+            .iter()
+            .zip(expected.control_points())
+        {
+            assert_eq!(row.len(), original.len());
+            for (point, original) in row.iter().zip(original) {
+                assert!(
+                    point.near(original),
+                    "knot removal changed {point:?} vs {original:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inserted_knot_can_be_removed_in_both_surface_directions() {
+        for (columns, along_u) in [(3, true), (3, false), (4, true), (4, false)] {
+            let mut surface = sample_surface(columns);
+            let original = surface.clone();
+            if along_u {
+                surface.add_knot_u(0.3);
+                surface
+                    .try_remove_knot_u(3)
+                    .expect("remove inserted U knot");
+            } else {
+                surface.add_knot_v(0.3);
+                surface
+                    .try_remove_knot_v(3)
+                    .expect("remove inserted V knot");
+            }
+            assert_same_surface(&surface, &original);
+        }
+    }
+
+    #[test]
+    fn failed_knot_removal_is_transactional_in_both_directions() {
+        for (columns, along_u) in [(3, true), (3, false), (4, true), (4, false)] {
+            let mut surface = sample_surface(columns);
+            let original = surface.clone();
+            if along_u {
+                assert!(matches!(
+                    surface.try_remove_knot_u(2),
+                    Err(Error::CannotRemoveKnot(2))
+                ));
+            } else {
+                assert!(matches!(
+                    surface.try_remove_knot_v(2),
+                    Err(Error::CannotRemoveKnot(2))
+                ));
+            }
+            assert_eq!(surface, original, "invalid index mutated surface");
+
+            if along_u {
+                surface.add_knot_u(0.3);
+                surface.control_points[3][1] += Vector2::new(0.5, -0.25);
+            } else {
+                surface.add_knot_v(0.3);
+                surface.control_points[1][3] += Vector2::new(0.5, -0.25);
+            }
+            let before = surface.clone();
+            let removed = if along_u {
+                surface.try_remove_knot_u(3)
+            } else {
+                surface.try_remove_knot_v(3)
+            };
+            assert!(
+                matches!(removed, Err(Error::CannotRemoveKnot(3))),
+                "perturbed control net accepted knot removal"
+            );
+            assert_eq!(surface, before, "failed reconstruction mutated surface");
+        }
     }
 }
