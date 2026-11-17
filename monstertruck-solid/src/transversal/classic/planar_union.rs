@@ -158,23 +158,42 @@ fn project_cylinder_wire<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     samples: &mut HashMap<EdgeId<AltCurve<C, S>>, PolylineCurve<Point3>>,
     tol: f64,
 ) -> Option<PolylineCurve<Point2>> {
+    let sampling_tol = BooleanTolerance::new(tol).mesh_seed;
+    let endpoint_tol = DEFAULT_NUMERICAL_TOLERANCES.boolean_curve_endpoint_factor * tol;
+    // The vertex belongs to an exact shared cylinder and is admitted only
+    // at numerical precision; the guide points below are approximate.
     let mut projected = vec![chart.project(wire.front_vertex()?.point(), None, tol)?];
     for edge in wire {
+        let curve = edge.curve();
         let poly = samples.entry(edge.id()).or_insert_with(|| {
-            let curve = edge.curve();
             PolylineCurve(
                 curve
-                    .parameter_division(curve.range_tuple(), BooleanTolerance::new(tol).mesh_seed)
+                    .parameter_division(curve.range_tuple(), sampling_tol)
                     .1,
             )
         });
-        let walk = if edge.orientation() {
+        // A sampled SSI guide can drift off its exact cylinder. Certify the
+        // curve's exact endpoints against topology at numerical precision,
+        // and the guide's endpoints against the curve at sampling precision.
+        let (t0, t1) = curve.range_tuple();
+        let (exact_front, exact_back) = (curve.evaluate(t0), curve.evaluate(t1));
+        if exact_front.distance(edge.absolute_front().point()) > endpoint_tol
+            || exact_back.distance(edge.absolute_back().point()) > endpoint_tol
+            || poly.first()?.distance(exact_front) > sampling_tol
+            || poly.last()?.distance(exact_back) > sampling_tol
+        {
+            return None;
+        }
+        let mut walk = if edge.orientation() {
             poly.iter().skip(1).copied().collect::<Vec<_>>()
         } else {
             poly.iter().rev().skip(1).copied().collect::<Vec<_>>()
         };
+        // Close each projected segment on its independently certified exact
+        // topological endpoint, not on a drifting sampled SSI leader.
+        *walk.last_mut()? = edge.back().point();
         for world in walk {
-            projected.push(chart.project(world, projected.last().copied(), tol)?);
+            projected.push(chart.project(world, projected.last().copied(), sampling_tol)?);
         }
     }
     Some(PolylineCurve(projected))

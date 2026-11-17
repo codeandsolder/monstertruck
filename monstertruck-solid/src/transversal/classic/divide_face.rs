@@ -104,33 +104,41 @@ where
     }
 
     for edge in wire {
+        let curve = edge.curve();
         let poly = polys.entry(edge.id()).or_insert_with(|| {
-            let curve = edge.curve();
             PolylineCurve(
                 curve
                     .parameter_division(curve.range_tuple(), sampling_tol)
                     .1,
             )
         });
-        // The topological endpoints, not independently evaluated curve
-        // samples, are the boundary of this edge. After a Boolean split an
-        // exact curve can differ from its canonical welded endpoint by a
-        // small, already-admitted endpoint residual. Letting the last
-        // sampled curve point choose the next UV chart representative can
-        // then fail inverse projection or leave adjacent edge charts open.
-        //
-        // Anchor only the first/last sample and ONLY with the existing
-        // explicit curve-endpoint consistency budget. Interior samples
-        // remain the analytic curve's samples; larger endpoint drift is a
-        // genuine topology inconsistency and must be rejected here.
-        let (raw_front, raw_back) = if edge.orientation() {
+        // The exact curve endpoints, not independently sampled SSI leader
+        // points, must agree with the topological vertices. The guide may
+        // depart from the exact curve within the mesh sampling budget even
+        // though the vertices remain correct to numerical precision.
+        // Validate the two contracts separately before anchoring this walk.
+        let (sampled_front, sampled_back) = if edge.orientation() {
             (poly.first()?, poly.last()?)
         } else {
             (poly.last()?, poly.first()?)
         };
+        let (t0, t1) = curve.range_tuple();
+        let (exact_front, exact_back) = if edge.orientation() {
+            (curve.evaluate(t0), curve.evaluate(t1))
+        } else {
+            (curve.evaluate(t1), curve.evaluate(t0))
+        };
         let endpoint_tol = DEFAULT_NUMERICAL_TOLERANCES.boolean_curve_endpoint_factor * tol;
-        if raw_front.distance(edge.front().point()) > endpoint_tol
-            || raw_back.distance(edge.back().point()) > endpoint_tol
+        // The curve's parameter division is only a sampled approximation,
+        // notably for SSI guides. Prove the exact curve endpoint agrees with
+        // the topological vertex at numerical precision, and *independently*
+        // prove the sampled point approximates that exact curve within the
+        // tessellation budget. Never promote a sampled endpoint to exact
+        // topological evidence.
+        if exact_front.distance(edge.front().point()) > endpoint_tol
+            || exact_back.distance(edge.back().point()) > endpoint_tol
+            || sampled_front.distance(exact_front) > sampling_tol
+            || sampled_back.distance(exact_back) > sampling_tol
         {
             return None;
         }
