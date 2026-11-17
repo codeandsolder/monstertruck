@@ -53,7 +53,7 @@ enum Analysis {
 }
 
 impl Analysis {
-    fn input(&self) -> &PathBuf {
+    const fn input(&self) -> &PathBuf {
         match self {
             Self::Support { input }
             | Self::Revolution { input }
