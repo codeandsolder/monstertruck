@@ -43,17 +43,10 @@ lint-check:
 test-cpu:
     cargo nextest run {{ cpu_crates }} --features derive --features polynomial
 
-# This real six-stage CAD fixture is currently an EXPERIMENT, not a default
-# numerical-tolerance admission test. Keep all four experiment-only settings
-# together: dropping them silently switches to a different, much slower
-# Boolean configuration that can fail face classification at stage five.
-# Geometric source equivalence is verified independently after STEP export.
-test-mixed-cad-experimental:
-    MT_EXPERIMENT_CURVE_SAMPLE_FLOOR_MM=0.01 \
-    MT_EXPERIMENT_SSI_CURVE_SAMPLE_FLOOR_MM=0.1 \
-    MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH=1e-5 \
-    MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM=0.01 \
-    cargo +1.99.1 test -p step-redox --features cad-kernel-monstertruck --lib mixed_complete_constructive_ir_replays_without_intermediate_step_import -- --nocapture
+# Validate the source-derived six-stage CAD fixture under normal production
+# geometry/tolerance policies. This is also covered by the Step-redox lib suite.
+test-mixed-cad:
+    cargo +1.100.0 test -p step-redox --features cad-kernel-monstertruck --lib mixed_complete_constructive_ir_replays_without_intermediate_step_import
 
 # Doctests. Nextest cannot run these, so they are their own step.
 test-doc:

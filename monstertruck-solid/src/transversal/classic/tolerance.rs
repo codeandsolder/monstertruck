@@ -14,9 +14,6 @@ pub(super) struct BooleanTolerance {
     pub(super) mesh_seed: f64,
 }
 
-// An explicitly requested sampling experiment must not silently fall back.
-static EXPERIMENT_MESH_FLOOR: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-
 impl BooleanTolerance {
     pub(super) fn new(requested: f64) -> Self {
         // The caller's positive length tolerance is authoritative: a larger
@@ -26,32 +23,13 @@ impl BooleanTolerance {
             "Boolean length tolerance must be finite and positive"
         );
         let length = requested;
-        // EXPERIMENT ONLY: isolate mesh-discretization granularity from
-        // geometric admission tolerances and curve adaptive chord sampling.
-        let mesh_floor = *EXPERIMENT_MESH_FLOOR.get_or_init(|| {
-            std::env::var("MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM")
-                .ok()
-                .map_or(0.0, |text| {
-                    let value: f64 = text.parse().unwrap_or_else(|error| {
-                        eprintln!("invalid MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM={text:?}: {error}");
-                        std::process::exit(2);
-                    });
-                    assert!(
-                        value.is_finite() && value > 0.0,
-                        "MT_EXPERIMENT_BOOLEAN_MESH_FLOOR_MM must be finite and positive"
-                    );
-                    value
-                })
-        });
         Self {
             length,
             area_floor: length * length,
             angular: DEFAULT_NUMERICAL_TOLERANCES.angular,
             classifier_offset: DEFAULT_NUMERICAL_TOLERANCES.boolean_classifier_offset_factor
                 * length,
-            mesh_seed: requested
-                .max(DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor)
-                .max(mesh_floor),
+            mesh_seed: requested.max(DEFAULT_NUMERICAL_TOLERANCES.mesh_seed_floor),
         }
     }
 
