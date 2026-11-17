@@ -437,8 +437,9 @@ impl TryIntoHomogeneousBsplineCurve for Curve {
             Curve::Line(curve) => curve.try_into_homogeneous_bspline_curve(),
             Curve::BsplineCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
             Curve::NurbsCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
-            Curve::ParameterCurve(_) => None,
-            Curve::IntersectionCurve(curve) => curve.leader().try_into_homogeneous_bspline_curve(),
+            // A surface intersection evaluates projected points, not its
+            // marching leader. Only the leader itself converts exactly.
+            Curve::ParameterCurve(_) | Curve::IntersectionCurve(_) => None,
         }
     }
 
@@ -608,5 +609,49 @@ impl Curve {
             );
         }
         result
+    }
+}
+
+/// Exact homogeneous conversion must preserve the evaluated curve.
+#[cfg(test)]
+mod exact_conversion_tests {
+    use super::*;
+
+    #[test]
+    fn projected_intersection_refuses_inexact_marching_guide() {
+        let plane0 = Surface::Plane(Plane::xy());
+        let plane1 = Surface::Plane(Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+        ));
+        let guide = Curve::BsplineCurve(BsplineCurve::new(
+            KnotVector::bezier_knot(2),
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.5, 0.0, 0.01),
+                Point3::new(1.0, 0.0, 0.0),
+            ],
+        ));
+        let guide_exact = guide
+            .try_into_homogeneous_bspline_curve()
+            .expect("the B-spline guide is exactly representable");
+        let projected = Curve::IntersectionCurve(SurfaceCurve::with_boundaries(
+            Box::new(plane0),
+            Box::new(plane1),
+            Box::new(guide),
+            None,
+            None,
+        ));
+        let midpoint = projected.evaluate(0.5);
+        let guide_midpoint = NurbsCurve::new(guide_exact).evaluate(0.5);
+        assert!(
+            (midpoint.z - guide_midpoint.z).abs() > 0.004,
+            "the test requires a guide distinct from the projected intersection"
+        );
+        assert!(
+            projected.try_into_homogeneous_bspline_curve().is_none(),
+            "a Newton-projected intersection must not present its B-spline guide as exact"
+        );
     }
 }

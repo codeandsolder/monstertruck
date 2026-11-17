@@ -29,15 +29,15 @@ impl TryIntoHomogeneousBsplineCurve for Curve3D {
         match self {
             Curve3D::Line(line) => line.try_into_homogeneous_bspline_curve(),
             Curve3D::Conic(Conic3D::Ellipse(curve)) => curve.try_into_homogeneous_bspline_curve(),
-            Curve3D::Conic(_) => None,
             Curve3D::BsplineCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
-            Curve3D::ParameterCurve(_) => None,
-            Curve3D::Polyline(_) => None,
             Curve3D::SurfaceCurve(curve) => curve.leader().try_into_homogeneous_bspline_curve(),
-            Curve3D::IntersectionCurve(curve) => {
-                curve.leader().try_into_homogeneous_bspline_curve()
-            }
             Curve3D::NurbsCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
+            // Surface intersections are Newton-projected; the marching
+            // leader is not a guaranteed exact representation.
+            Curve3D::Conic(_)
+            | Curve3D::ParameterCurve(_)
+            | Curve3D::Polyline(_)
+            | Curve3D::IntersectionCurve(_) => None,
         }
     }
 
