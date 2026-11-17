@@ -873,254 +873,151 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
     derive_try!(traits_scope(&implementation)).into()
 }
 
-/// Derive macro generating an impl of the trait `SearchNearestParameter<CurveParameter>` for Enums or single field tuple structs.
+/// The four search derives differ only in trait, parameter dimension,
+/// hint type, and delegated method. Generate their impls from one source so
+/// enum and single-field tuple struct behavior cannot drift independently.
+fn search_derive_impl(
+    input: &DeriveInput,
+    trait_name: &TokenStream2,
+    hint_type: &TokenStream2,
+    method_name: &Ident,
+    return_type: &TokenStream2,
+) -> Result<TokenStream2> {
+    let ty = &input.ident;
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+    let where_predicates = where_clause.iter().flat_map(|clause| &clause.predicates);
+    Ok(match &input.data {
+        Data::Enum(DataEnum { variants, .. }) => {
+            let top_ty = enum_field_type(variants, ty)?;
+            let method = Method {
+                name: quote! { #method_name },
+                generics: Some(quote! { <H: Into<#hint_type>> }),
+                self_field: quote! { &self, },
+                fields: vec![
+                    Field {
+                        var: quote! { pt },
+                        ty: quote! { Self::Point },
+                    },
+                    Field {
+                        var: quote! { hint },
+                        ty: quote! { H },
+                    },
+                    Field {
+                        var: quote! { trials },
+                        ty: quote! { usize },
+                    },
+                ],
+                return_type: return_type.clone(),
+                variants,
+                trait_name: trait_name.clone(),
+            }
+            .to_token_stream();
+            quote! {
+                #[automatically_derived]
+                impl #impl_generics #trait_name for #ty #type_generics
+                where
+                    #(#where_predicates,)*
+                    #top_ty: #trait_name,
+                {
+                    type Point = <#top_ty as #trait_name>::Point;
+                    #method
+                }
+            }
+        }
+        Data::Struct(DataStruct { fields, .. }) => {
+            let field_type = tuple_struct_field(fields)?;
+            quote! {
+                #[automatically_derived]
+                impl #impl_generics #trait_name for #ty #type_generics
+                where
+                    #(#where_predicates,)*
+                    #field_type: #trait_name,
+                {
+                    type Point = <#field_type as #trait_name>::Point;
+                    fn #method_name<H: Into<#hint_type>>(
+                        &self,
+                        pt: Self::Point,
+                        hint: H,
+                        trials: usize,
+                    ) -> #return_type {
+                        self.0.#method_name(pt, hint, trials)
+                    }
+                }
+            }
+        }
+        Data::Union(_) => unsupported_input(ty),
+    })
+}
+
+fn derive_search(
+    input: TokenStream,
+    trait_name: &TokenStream2,
+    hint_type: &TokenStream2,
+    method_name: &str,
+    return_type: &TokenStream2,
+) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let method_name = Ident::new(method_name, Span::call_site());
+    let implementation = derive_try!(search_derive_impl(
+        &input,
+        trait_name,
+        hint_type,
+        &method_name,
+        return_type,
+    ));
+    derive_try!(traits_scope(&implementation)).into()
+}
+
+/// Derives nearest-parameter search for curves.
 #[proc_macro_error]
 #[proc_macro_derive(SearchNearestParameterD1)]
 pub fn derive_snp_d1(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let trait_name = quote! { monstertruck_traits::SearchNearestParameter::<monstertruck_traits::CurveParameter> };
-    let ty = input.ident;
-    let generics_params = input.generics;
-    let where_predicates = generics_params
-        .where_clause
-        .iter()
-        .flat_map(|x| &x.predicates);
-    let implementation = match input.data {
-        Data::Enum(DataEnum { ref variants, .. }) => {
-            let top_ty = derive_try!(enum_field_type(variants, &ty));
-            let methods = methods!(
-                variants,
-                trait_name,
-                fn search_nearest_parameter<H: Into<monstertruck_traits::SearchParameterHint1D>>(
-                    &self,
-                    pt: Self::Point,
-                    hint: H,
-                    trials: usize,
-                ) -> Option<f64>,
-            );
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #top_ty: #trait_name,
-                    {
-                    type Point = <#top_ty as #trait_name>::Point;
-                    #(#methods)*
-                }
-            }
-        }
-        Data::Struct(DataStruct { ref fields, .. }) => {
-            let field_type = derive_try!(tuple_struct_field(fields));
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #field_type: #trait_name, {
-                    type Point = <#field_type as #trait_name>::Point;
-                    fn search_nearest_parameter<H: Into<monstertruck_traits::SearchParameterHint1D>>(
-                        &self,
-                        pt: Self::Point,
-                        hint: H,
-                        trials: usize,
-                    ) -> Option<f64> {
-                        self.0.search_nearest_parameter(pt, hint, trials)
-                    }
-                }
-            }
-        }
-        Data::Union(_) => unsupported_input(&ty),
-    };
-    derive_try!(traits_scope(&implementation)).into()
+    derive_search(
+        input,
+        &quote! { monstertruck_traits::SearchNearestParameter::<monstertruck_traits::CurveParameter> },
+        &quote! { monstertruck_traits::SearchParameterHint1D },
+        "search_nearest_parameter",
+        &quote! { Option<f64> },
+    )
 }
 
-/// Derive macro generating an impl of the trait `SearchNearestParameter<SurfaceParameter>` for Enums or single field tuple structs.
+/// Derives nearest-parameter search for surfaces.
 #[proc_macro_error]
 #[proc_macro_derive(SearchNearestParameterD2)]
 pub fn derive_snp_d2(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let trait_name = quote! { monstertruck_traits::SearchNearestParameter::<monstertruck_traits::SurfaceParameter> };
-    let ty = input.ident;
-    let generics_params = input.generics;
-    let where_predicates = generics_params
-        .where_clause
-        .iter()
-        .flat_map(|x| &x.predicates);
-    let implementation = match input.data {
-        Data::Enum(DataEnum { ref variants, .. }) => {
-            let top_ty = derive_try!(enum_field_type(variants, &ty));
-            let methods = methods!(
-                variants,
-                trait_name,
-                fn search_nearest_parameter<H: Into<monstertruck_traits::SearchParameterHint2D>>(
-                    &self,
-                    pt: Self::Point,
-                    hint: H,
-                    trials: usize,
-                ) -> Option<(f64, f64)>,
-            );
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #top_ty: #trait_name,
-                    {
-                    type Point = <#top_ty as #trait_name>::Point;
-                    #(#methods)*
-                }
-            }
-        }
-        Data::Struct(DataStruct { ref fields, .. }) => {
-            let field_type = derive_try!(tuple_struct_field(fields));
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #field_type: #trait_name, {
-                    type Point = <#field_type as #trait_name>::Point;
-                    fn search_nearest_parameter<H: Into<monstertruck_traits::SearchParameterHint2D>>(
-                        &self,
-                        pt: Self::Point,
-                        hint: H,
-                        trials: usize,
-                    ) -> Option<(f64, f64)> {
-                        self.0.search_nearest_parameter(pt, hint, trials)
-                    }
-                }
-            }
-        }
-        Data::Union(_) => unsupported_input(&ty),
-    };
-    derive_try!(traits_scope(&implementation)).into()
+    derive_search(
+        input,
+        &quote! { monstertruck_traits::SearchNearestParameter::<monstertruck_traits::SurfaceParameter> },
+        &quote! { monstertruck_traits::SearchParameterHint2D },
+        "search_nearest_parameter",
+        &quote! { Option<(f64, f64)> },
+    )
 }
 
-/// Derive macro generating an impl of the trait `SearchParameter<CurveParameter>` for Enums or single field tuple structs.
+/// Derives exact parameter search for curves.
 #[proc_macro_error]
 #[proc_macro_derive(SearchParameterD1)]
 pub fn derive_sp_d1(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let trait_name =
-        quote! { monstertruck_traits::SearchParameter::<monstertruck_traits::CurveParameter> };
-    let ty = input.ident;
-    let generics_params = input.generics;
-    let where_predicates = generics_params
-        .where_clause
-        .iter()
-        .flat_map(|x| &x.predicates);
-    let implementation = match input.data {
-        Data::Enum(DataEnum { ref variants, .. }) => {
-            let top_ty = derive_try!(enum_field_type(variants, &ty));
-            let methods = methods!(
-                variants,
-                trait_name,
-                fn search_parameter<H: Into<monstertruck_traits::SearchParameterHint1D>>(
-                    &self,
-                    pt: Self::Point,
-                    hint: H,
-                    trials: usize,
-                ) -> Option<f64>,
-            );
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #top_ty: #trait_name,
-                    {
-                    type Point = <#top_ty as #trait_name>::Point;
-                    #(#methods)*
-                }
-            }
-        }
-        Data::Struct(DataStruct { ref fields, .. }) => {
-            let field_type = derive_try!(tuple_struct_field(fields));
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #field_type: #trait_name, {
-                    type Point = <#field_type as #trait_name>::Point;
-                    fn search_parameter<H: Into<monstertruck_traits::SearchParameterHint1D>>(
-                        &self,
-                        pt: Self::Point,
-                        hint: H,
-                        trials: usize,
-                    ) -> Option<f64> {
-                        self.0.search_parameter(pt, hint, trials)
-                    }
-                }
-            }
-        }
-        Data::Union(_) => unsupported_input(&ty),
-    };
-    derive_try!(traits_scope(&implementation)).into()
+    derive_search(
+        input,
+        &quote! { monstertruck_traits::SearchParameter::<monstertruck_traits::CurveParameter> },
+        &quote! { monstertruck_traits::SearchParameterHint1D },
+        "search_parameter",
+        &quote! { Option<f64> },
+    )
 }
 
-/// Derive macro generating an impl of the trait `SearchParameter<SurfaceParameter>` for Enums or single field tuple structs.
+/// Derives exact parameter search for surfaces.
 #[proc_macro_error]
 #[proc_macro_derive(SearchParameterD2)]
 pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let trait_name =
-        quote! { monstertruck_traits::SearchParameter::<monstertruck_traits::SurfaceParameter> };
-    let ty = input.ident;
-    let generics_params = input.generics;
-    let where_predicates = generics_params
-        .where_clause
-        .iter()
-        .flat_map(|x| &x.predicates);
-    let implementation = match input.data {
-        Data::Enum(DataEnum { ref variants, .. }) => {
-            let top_ty = derive_try!(enum_field_type(variants, &ty));
-            let methods = methods!(
-                variants,
-                trait_name,
-                fn search_parameter<H: Into<monstertruck_traits::SearchParameterHint2D>>(
-                    &self,
-                    pt: Self::Point,
-                    hint: H,
-                    trials: usize,
-                ) -> Option<(f64, f64)>,
-            );
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #top_ty: #trait_name,
-                    {
-                    type Point = <#top_ty as #trait_name>::Point;
-                    #(#methods)*
-                }
-            }
-        }
-        Data::Struct(DataStruct { ref fields, .. }) => {
-            let field_type = derive_try!(tuple_struct_field(fields));
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #field_type: #trait_name, {
-                    type Point = <#field_type as #trait_name>::Point;
-                    fn search_parameter<H: Into<monstertruck_traits::SearchParameterHint2D>>(
-                        &self,
-                        pt: Self::Point,
-                        hint: H,
-                        trials: usize,
-                    ) -> Option<(f64, f64)> {
-                        self.0.search_parameter(pt, hint, trials)
-                    }
-                }
-            }
-        }
-        Data::Union(_) => unsupported_input(&ty),
-    };
-    derive_try!(traits_scope(&implementation)).into()
+    derive_search(
+        input,
+        &quote! { monstertruck_traits::SearchParameter::<monstertruck_traits::SurfaceParameter> },
+        &quote! { monstertruck_traits::SearchParameterHint2D },
+        "search_parameter",
+        &quote! { Option<(f64, f64)> },
+    )
 }
 
 /// Derive macro generating an impl of the trait `Transformed<Matrix3>` for enums or single field tuple structs.
