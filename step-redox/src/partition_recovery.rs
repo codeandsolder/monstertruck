@@ -113,31 +113,30 @@ impl UnionFind {
     }
 }
 
-#[expect(
-    clippy::option_if_let_else,
-    reason = "explicit rollback branch makes mutation recovery visible"
-)]
+/// Construct a transaction only when unambiguous, presentation-neutral
+/// partition interfaces can be merged. Most STEP inputs have no partitions,
+/// so planning borrows the input rather than cloning every entity.
 pub fn recover_partitioned_bodies(entities: &mut Vec<EntityInstance>) -> PartitionRecoveryStats {
-    let original = entities.clone();
-    if let Some(stats) = recover_inner(entities) {
-        stats
-    } else {
-        *entities = original;
-        PartitionRecoveryStats::default()
-    }
+    let Some(plans) = plan_partition_recovery(entities) else {
+        return PartitionRecoveryStats::default();
+    };
+
+    // Apply on a detached copy: malformed topology must not leave partial
+    // edge/vertex rewrites in the caller. Commit only on full success.
+    let mut candidate = entities.clone();
+    let Some(stats) = apply_partition_recovery(&mut candidate, &plans) else {
+        return PartitionRecoveryStats::default();
+    };
+    *entities = candidate;
+    stats
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"
-)]
-fn recover_inner(entities: &mut Vec<EntityInstance>) -> Option<PartitionRecoveryStats> {
+fn plan_partition_recovery(entities: &[EntityInstance]) -> Option<Vec<ComponentPlan>> {
     if entities.is_empty() {
-        return Some(PartitionRecoveryStats::default());
+        return None;
     }
 
     let index = build_index(entities);
-    let refs_before = ReferenceGraph::new(entities);
     let styles_by_target = styles_by_target(entities);
 
     let mut solid_shell = HashMap::new();
@@ -155,19 +154,47 @@ fn recover_inner(entities: &mut Vec<EntityInstance>) -> Option<PartitionRecovery
         }
     }
     if solid_shell.len() < 2 {
-        return Some(PartitionRecoveryStats::default());
+        return None;
     }
 
+    let interfaces = find_partition_interfaces(entities, &index, &solid_shell, &styles_by_target)?;
+    let rep_items = representation_items(entities);
+    let plans: Vec<ComponentPlan> = connected_components(&interfaces)
+        .into_iter()
+        .filter_map(|solids| {
+            build_component_plan(
+                solids,
+                &interfaces,
+                &styles_by_target,
+                &rep_items,
+                &solid_shell,
+                entities,
+                &index,
+            )
+        })
+        .collect();
+
+    (!plans.is_empty()).then_some(plans)
+}
+
+/// Each accepted interface must pair exactly two unstyled, oppositely oriented
+/// planar faces belonging to different solids.
+fn find_partition_interfaces(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    solid_shell: &HashMap<u64, u64>,
+    styles_by_target: &HashMap<u64, Vec<(u64, Vec<u64>)>>,
+) -> Option<Vec<Interface>> {
     // Partition interfaces must be presentation-neutral planar faces. A direct
     // face style is evidence that the face may be authored/visible semantics.
     let mut buckets: BTreeMap<FaceKey, Vec<FaceCandidate>> = BTreeMap::new();
-    for (&solid, &shell) in &solid_shell {
+    for (&solid, &shell) in solid_shell {
         let &shell_idx = index.get(&shell)?;
-        for face in direct_refs_of_type(&entities[shell_idx], entities, &index, "ADVANCED_FACE") {
+        for face in direct_refs_of_type(&entities[shell_idx], entities, index, "ADVANCED_FACE") {
             if styles_by_target.contains_key(&face) {
                 continue;
             }
-            let Some((key, outward)) = face_signature(face, entities, &index) else {
+            let Some((key, outward)) = face_signature(face, entities, index) else {
                 continue;
             };
             buckets.entry(key).or_default().push(FaceCandidate {
@@ -197,11 +224,15 @@ fn recover_inner(entities: &mut Vec<EntityInstance>) -> Option<PartitionRecovery
         });
     }
     if interfaces.is_empty() {
-        return Some(PartitionRecoveryStats::default());
+        return None;
     }
+    Some(interfaces)
+}
 
+/// Connected components of unambiguous cross-solid interfaces, in stable order.
+fn connected_components(interfaces: &[Interface]) -> Vec<Vec<u64>> {
     let mut adjacency: HashMap<u64, BTreeSet<u64>> = HashMap::new();
-    for interface in &interfaces {
+    for interface in interfaces {
         adjacency
             .entry(interface.a_solid)
             .or_default()
@@ -235,101 +266,119 @@ fn recover_inner(entities: &mut Vec<EntityInstance>) -> Option<PartitionRecovery
             raw_components.push(component.into_iter().collect());
         }
     }
+    raw_components
+}
 
-    let rep_items = representation_items(entities);
-    let mut plans = Vec::<ComponentPlan>::new();
-    for solids in raw_components {
-        let solid_set: HashSet<u64> = solids.iter().copied().collect();
-        let component_interfaces: Vec<Interface> = interfaces
-            .iter()
-            .filter(|it| solid_set.contains(&it.a_solid) && solid_set.contains(&it.b_solid))
-            .cloned()
-            .collect();
-        if component_interfaces.is_empty() {
-            continue;
-        }
+/// Validate that all component solids share one representation and style,
+/// and that removing the paired interface faces leaves nonempty exterior topology.
+fn build_component_plan(
+    solids: Vec<u64>,
+    interfaces: &[Interface],
+    styles_by_target: &HashMap<u64, Vec<(u64, Vec<u64>)>>,
+    rep_items: &HashMap<u64, Vec<u64>>,
+    solid_shell: &HashMap<u64, u64>,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<ComponentPlan> {
+    let solid_set: HashSet<u64> = solids.iter().copied().collect();
+    let component_interfaces: Vec<Interface> = interfaces
+        .iter()
+        .filter(|it| solid_set.contains(&it.a_solid) && solid_set.contains(&it.b_solid))
+        .cloned()
+        .collect();
+    if component_interfaces.is_empty() {
+        return None;
+    }
 
-        let mut assignment: Option<Vec<u64>> = None;
-        let mut old_styles = Vec::new();
-        let mut style_ok = true;
-        for solid in &solids {
-            let Some(styles) = styles_by_target.get(solid) else {
-                style_ok = false;
-                break;
-            };
-            if styles.len() != 1 {
-                style_ok = false;
-                break;
-            }
-            let (style_id, current) = &styles[0];
-            match &assignment {
-                None => assignment = Some(current.clone()),
-                Some(expected) if expected == current => {}
-                Some(_) => {
-                    style_ok = false;
-                    break;
-                }
-            }
-            old_styles.push(*style_id);
-        }
-        if !style_ok {
-            continue;
-        }
-        let Some(style_assignment) = assignment else {
-            continue;
+    let mut assignment: Option<Vec<u64>> = None;
+    let mut old_styles = Vec::new();
+    let mut style_ok = true;
+    for solid in &solids {
+        let Some(styles) = styles_by_target.get(solid) else {
+            style_ok = false;
+            break;
         };
-
-        let owners: Vec<u64> = rep_items
-            .iter()
-            .filter_map(|(&rep, items)| solids.iter().all(|s| items.contains(s)).then_some(rep))
-            .collect();
-        if owners.len() != 1 {
-            continue;
+        if styles.len() != 1 {
+            style_ok = false;
+            break;
         }
-
-        let drop_faces: HashSet<u64> = component_interfaces
-            .iter()
-            .flat_map(|it| [it.a_face, it.b_face])
-            .collect();
-        let mut retained_faces = Vec::new();
-        let mut retained_seen = HashSet::new();
-        let mut topology_ok = true;
-        for solid in &solids {
-            let Some(&shell) = solid_shell.get(solid) else {
-                topology_ok = false;
+        let (style_id, current) = &styles[0];
+        match &assignment {
+            None => assignment = Some(current.clone()),
+            Some(expected) if expected == current => {}
+            Some(_) => {
+                style_ok = false;
                 break;
-            };
-            let Some(&sh_idx) = index.get(&shell) else {
-                topology_ok = false;
-                break;
-            };
-            for face in direct_refs_of_type(&entities[sh_idx], entities, &index, "ADVANCED_FACE") {
-                if !drop_faces.contains(&face) && retained_seen.insert(face) {
-                    retained_faces.push(face);
-                }
             }
         }
-        if !topology_ok || retained_faces.is_empty() {
-            continue;
-        }
+        old_styles.push(*style_id);
+    }
+    if !style_ok {
+        return None;
+    }
+    let Some(style_assignment) = assignment else {
+        return None;
+    };
 
-        plans.push(ComponentPlan {
-            solids,
-            interfaces: component_interfaces,
-            retained_faces,
-            rep: owners[0],
-            style_assignment,
-            old_styles,
-        });
+    let owners: Vec<u64> = rep_items
+        .iter()
+        .filter_map(|(&rep, items)| solids.iter().all(|s| items.contains(s)).then_some(rep))
+        .collect();
+    if owners.len() != 1 {
+        return None;
     }
-    if plans.is_empty() {
-        return Some(PartitionRecoveryStats::default());
+
+    let drop_faces: HashSet<u64> = component_interfaces
+        .iter()
+        .flat_map(|it| [it.a_face, it.b_face])
+        .collect();
+    let mut retained_faces = Vec::new();
+    let mut retained_seen = HashSet::new();
+    let mut topology_ok = true;
+    for solid in &solids {
+        let Some(&shell) = solid_shell.get(solid) else {
+            topology_ok = false;
+            break;
+        };
+        let Some(&sh_idx) = index.get(&shell) else {
+            topology_ok = false;
+            break;
+        };
+        for face in direct_refs_of_type(&entities[sh_idx], entities, index, "ADVANCED_FACE") {
+            if !drop_faces.contains(&face) && retained_seen.insert(face) {
+                retained_faces.push(face);
+            }
+        }
     }
+    if !topology_ok || retained_faces.is_empty() {
+        return None;
+    }
+
+    Some(ComponentPlan {
+        solids,
+        interfaces: component_interfaces,
+        retained_faces,
+        rep: owners[0],
+        style_assignment,
+        old_styles,
+    })
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "transactional topology application keeps edge rewriting, representational rewrites and reachability GC in one auditable sequence"
+)]
+fn apply_partition_recovery(
+    entities: &mut Vec<EntityInstance>,
+    plans: &[ComponentPlan],
+) -> Option<PartitionRecoveryStats> {
+    let index = build_index(entities);
+    let refs_before = ReferenceGraph::new(entities);
 
     // Union only topology proven equivalent by matched interface faces.
     let mut vertex_uf = UnionFind::default();
     let mut edge_uf = UnionFind::default();
-    for plan in &plans {
+    for plan in plans {
         for interface in &plan.interfaces {
             let a_edges = keyed_face_edges(interface.a_face, entities, &index)?;
             let b_edges = keyed_face_edges(interface.b_face, entities, &index)?;
@@ -365,7 +414,7 @@ fn recover_inner(entities: &mut Vec<EntityInstance>) -> Option<PartitionRecovery
     // soon-to-be-deleted interface loops would orphan their duplicate edges
     // before reachability GC and needlessly preserve dead support geometry.
     let mut retained_oes = HashSet::new();
-    for plan in &plans {
+    for plan in plans {
         for &face in &plan.retained_faces {
             retained_oes.extend(face_oriented_edges(face, entities, &index)?);
         }
@@ -430,7 +479,7 @@ fn recover_inner(entities: &mut Vec<EntityInstance>) -> Option<PartitionRecovery
     let mut rep_replacements: HashMap<u64, HashMap<u64, u64>> = HashMap::new();
     let mut stats = PartitionRecoveryStats::default();
 
-    for plan in &plans {
+    for plan in plans {
         let shell = push_simple(
             entities,
             &mut next_id,
