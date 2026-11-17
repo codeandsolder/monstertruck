@@ -31,6 +31,15 @@ pub enum OrientedSupportKey {
         radius_mm: i64,
         radial_outward: bool,
     },
+    /// One *nappe* of a cone. Opposite nappes have identical implicit
+    /// quadratic equations but are different physical carriers.
+    Cone {
+        apex_mm: PointKey,
+        axis: [i64; 3],
+        slope: i64,
+        positive_nappe: bool,
+        radial_outward: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -43,6 +52,12 @@ enum SupportLocusKey {
         axis: [i64; 3],
         closest_mm: [i64; 3],
         radius_mm: i64,
+    },
+    Cone {
+        apex_mm: PointKey,
+        axis: [i64; 3],
+        slope: i64,
+        positive_nappe: bool,
     },
 }
 
@@ -90,6 +105,8 @@ struct FaceInfo {
 struct EdgeGeometry {
     start: PointKey,
     end: PointKey,
+    start_vertex: u64,
+    end_vertex: u64,
     curve_id: u64,
     support: CurveSupport,
 }
@@ -331,7 +348,7 @@ fn collect_boundary_graph(
 
     for (face_index, face_id) in face_ids.iter().copied().enumerate() {
         let support = oriented_support_key(face_id, entities, index)
-            .ok_or_else(|| format!("face #{face_id} is not a supported plane/cylinder"))?;
+            .ok_or_else(|| format!("face #{face_id} has no supported oriented analytic carrier"))?;
         let loops = brep::face_loops(face_id, entities, index)
             .ok_or_else(|| format!("face #{face_id} has unsupported boundary topology"))?;
         if loops.is_empty() {
@@ -359,6 +376,8 @@ fn collect_boundary_graph(
                         .ok_or_else(|| format!("edge #{} has non-finite start", edge.edge_id))?,
                     end: point_key(edge.end_mm)
                         .ok_or_else(|| format!("edge #{} has non-finite end", edge.edge_id))?,
+                    start_vertex: edge.start_vertex,
+                    end_vertex: edge.end_vertex,
                     curve_id: edge.curve_id,
                     support: edge.support.clone(),
                 };
@@ -384,8 +403,14 @@ fn validate_or_insert_edge_geometry(
         edge_geometry.insert(edge_id, geometry);
         return Ok(());
     };
-    let same = existing.start == geometry.start && existing.end == geometry.end;
-    let reversed = existing.start == geometry.end && existing.end == geometry.start;
+    let same = existing.start == geometry.start
+        && existing.end == geometry.end
+        && existing.start_vertex == geometry.start_vertex
+        && existing.end_vertex == geometry.end_vertex;
+    let reversed = existing.start == geometry.end
+        && existing.end == geometry.start
+        && existing.start_vertex == geometry.end_vertex
+        && existing.end_vertex == geometry.start_vertex;
     if !same && !reversed {
         return Err(format!(
             "edge #{edge_id} has inconsistent endpoint geometry"
@@ -494,7 +519,9 @@ fn group_physical_boundaries(
             .edge_geometry
             .get(edge_id)
             .ok_or_else(|| format!("edge #{edge_id} has no geometry"))?;
-        if geometry.start == geometry.end {
+        if geometry.start == geometry.end
+            && !edge_is_proven_closed_circle(geometry, entities, index)
+        {
             return Err(format!("edge #{edge_id} collapses after quantization"));
         }
         if !edge_proves_support_intersection(geometry, &supports, entities, index) {
@@ -621,6 +648,18 @@ const fn support_locus_key(support: &OrientedSupportKey) -> SupportLocusKey {
             closest_mm: *closest_mm,
             radius_mm: *radius_mm,
         },
+        OrientedSupportKey::Cone {
+            apex_mm,
+            axis,
+            slope,
+            positive_nappe,
+            ..
+        } => SupportLocusKey::Cone {
+            apex_mm: *apex_mm,
+            axis: *axis,
+            slope: *slope,
+            positive_nappe: *positive_nappe,
+        },
     }
 }
 
@@ -645,15 +684,56 @@ fn edge_proves_support_intersection(
         support => Some(support.clone()),
     };
     match support {
-        Some(CurveSupport::Line(line)) => {
-            loci.iter().all(|locus| line_lies_on_support(line, locus))
-        }
+        Some(CurveSupport::Line(line)) => loci.iter().all(|locus| match locus {
+            SupportLocusKey::Cone { .. } => {
+                line_segment_lies_on_cone(line, [edge.start, edge.end], locus)
+            }
+            _ => line_lies_on_support(line, locus),
+        }),
         Some(CurveSupport::Circle(circle)) => loci
             .iter()
             .all(|locus| circle_lies_on_support(circle, locus)),
         Some(CurveSupport::BSpline(spline)) => bspline_lies_on_supports(&spline, &loci),
         Some(CurveSupport::Other { .. }) | None => false,
     }
+}
+
+/// A topological edge with one shared start/end vertex can represent a whole
+/// periodic circle, not a zero-length segment. Admit that topology only when
+/// the underlying geometry is an untrimmed circle with positive radius and the
+/// vertex demonstrably lies on that circle. Arbitrary closed splines, lines,
+/// and coincident endpoints do not establish a complete periodic traversal.
+fn edge_is_proven_closed_circle(
+    edge: &EdgeGeometry,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> bool {
+    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    if edge.start_vertex != edge.end_vertex {
+        return false;
+    }
+    let circle = match &edge.support {
+        CurveSupport::Circle(circle) => Some(*circle),
+        CurveSupport::Other { .. } => {
+            match resolve_geometric_curve_support(edge.curve_id, entities, index) {
+                Some(CurveSupport::Circle(circle)) => Some(circle),
+                _ => None,
+            }
+        }
+        CurveSupport::Line(_) | CurveSupport::BSpline(_) => None,
+    };
+    let Some(circle) = circle else {
+        return false;
+    };
+    let Some(point) = dequantize_vector(edge.start, POINT_Q_MM) else {
+        return false;
+    };
+    let Some(normal) = normalize(circle.normal, 0.0) else {
+        return false;
+    };
+    let delta = sub(point, circle.center_mm);
+    dot(normal, delta).abs() <= LOCUS_TOLERANCE_MM
+        && (norm(delta) - circle.radius_mm).abs() <= LOCUS_TOLERANCE_MM
 }
 
 fn resolve_geometric_curve_support(
@@ -688,7 +768,23 @@ fn resolve_geometric_curve_support(
 
 fn bspline_lies_on_supports(spline: &BSplineSupport, loci: &[SupportLocusKey; 2]) -> bool {
     if let Some(line) = bspline_line_support(spline)
-        && loci.iter().all(|locus| line_lies_on_support(line, locus))
+        && loci.iter().all(|locus| match locus {
+            SupportLocusKey::Cone { .. } => {
+                // Positive rational weights make the spline a convex
+                // combination of its control points. Both ends and every
+                // control polygon segment must lie on one generator of the
+                // *same nappe*, not merely share a line through the apex.
+                spline
+                    .control_points_mm
+                    .iter()
+                    .copied()
+                    .all(|point| point_lies_on_cone_nappe(point, locus))
+                    && spline.control_points_mm.windows(2).all(|pair| {
+                        point_lies_on_cone_nappe(mul(add(pair[0], pair[1]), 0.5), locus)
+                    })
+            }
+            _ => line_lies_on_support(line, locus),
+        })
     {
         return true;
     }
@@ -729,58 +825,155 @@ fn bspline_line_support(spline: &BSplineSupport) -> Option<brep::LineSupport> {
     })
 }
 
+/// Decode the same canonical physical cone coordinates for line, circle and
+/// rational spline certificates. A zero or nonfinite quantized slope cannot
+/// establish a regular two-dimensional carrier.
+fn dequantize_cone(
+    apex_mm: PointKey,
+    axis: [i64; 3],
+    slope: i64,
+) -> Option<([f64; 3], [f64; 3], f64)> {
+    if slope <= 0 {
+        return None;
+    }
+    let apex = dequantize_vector(apex_mm, POINT_Q_MM)?;
+    let axis = dequantize_vector(axis, DIRECTION_Q)?;
+    let slope = slope.to_f64()? * DIRECTION_Q;
+    (slope.is_finite() && slope > 0.0).then_some((apex, axis, slope))
+}
+
+/// Return the plane's circular cross-section of either a cylinder or a
+/// single cone nappe. An oblique plane is left to a different curve
+/// certificate; fitting a circle from samples is not sufficient.
+fn circle_section_of_plane_and_support(
+    plane: &SupportLocusKey,
+    other: &SupportLocusKey,
+) -> Option<([f64; 3], [f64; 3], f64)> {
+    const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
+    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    let SupportLocusKey::Plane { normal, offset_mm } = plane else {
+        return None;
+    };
+    let normal = dequantize_vector(*normal, DIRECTION_Q)?;
+    let offset = dequantize_scalar(*offset_mm)?;
+    match other {
+        SupportLocusKey::Cylinder {
+            axis,
+            closest_mm,
+            radius_mm,
+        } => {
+            let axis = dequantize_vector(*axis, DIRECTION_Q)?;
+            if norm(cross(normal, axis)) > ANGULAR_TOLERANCE {
+                return None;
+            }
+            let closest = dequantize_vector(*closest_mm, POINT_Q_MM)?;
+            let radius = dequantize_scalar(*radius_mm)?;
+            let denominator = dot(normal, axis);
+            if denominator.abs() <= ANGULAR_TOLERANCE {
+                return None;
+            }
+            let center = add(
+                closest,
+                mul(axis, (offset - dot(normal, closest)) / denominator),
+            );
+            Some((center, axis, radius))
+        }
+        SupportLocusKey::Cone {
+            apex_mm,
+            axis,
+            slope,
+            positive_nappe,
+        } => {
+            let (apex, axis, slope) = dequantize_cone(*apex_mm, *axis, *slope)?;
+            if norm(cross(normal, axis)) > ANGULAR_TOLERANCE {
+                return None;
+            }
+            let denominator = dot(normal, axis);
+            if denominator.abs() <= ANGULAR_TOLERANCE {
+                return None;
+            }
+            let axial = (offset - dot(normal, apex)) / denominator;
+            let signed = if *positive_nappe { axial } else { -axial };
+            let radius = axial.abs() * slope;
+            if signed <= LOCUS_TOLERANCE_MM || radius <= LOCUS_TOLERANCE_MM || !radius.is_finite() {
+                return None;
+            }
+            Some((add(apex, mul(axis, axial)), axis, radius))
+        }
+        SupportLocusKey::Plane { .. } => None,
+    }
+}
+
 fn bspline_is_circular_section_of_supports(
     spline: &BSplineSupport,
     loci: &[SupportLocusKey; 2],
 ) -> bool {
+    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    let section = circle_section_of_plane_and_support(&loci[0], &loci[1])
+        .or_else(|| circle_section_of_plane_and_support(&loci[1], &loci[0]));
+    let Some((center, axis, radius)) = section else {
+        return false;
+    };
+    certify_rational_bspline_circle(spline, center, axis, radius, LOCUS_TOLERANCE_MM) == Some(true)
+}
+
+/// A point on the single physical cone nappe. Checking a quadratic cone
+/// equation alone would incorrectly identify both nappes as one carrier.
+fn point_lies_on_cone_nappe(point: [f64; 3], locus: &SupportLocusKey) -> bool {
+    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    let SupportLocusKey::Cone {
+        apex_mm,
+        axis,
+        slope,
+        positive_nappe,
+    } = locus
+    else {
+        return false;
+    };
+    let Some((apex, axis, slope)) = dequantize_cone(*apex_mm, *axis, *slope) else {
+        return false;
+    };
+    let delta = sub(point, apex);
+    let axial = dot(delta, axis);
+    let signed_axial = if *positive_nappe { axial } else { -axial };
+    if !signed_axial.is_finite() || signed_axial <= LOCUS_TOLERANCE_MM {
+        return false;
+    }
+    let radial = sub(delta, mul(axis, axial));
+    signed_axial.mul_add(-slope, norm(radial)).abs() <= LOCUS_TOLERANCE_MM
+}
+
+/// A linear STEP edge is *bounded* by its two topological vertices. For cones,
+/// proving that the infinite line passes through an apex is insufficient:
+/// verify that both endpoints and their midpoint lie on the same nappe, and
+/// that the declared geometric line actually contains those endpoints.
+fn line_segment_lies_on_cone(
+    line: brep::LineSupport,
+    endpoints_mm: [PointKey; 2],
+    locus: &SupportLocusKey,
+) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
     const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
-    let (normal, offset_mm, axis, closest_mm, radius_mm) = match (&loci[0], &loci[1]) {
-        (
-            SupportLocusKey::Plane { normal, offset_mm },
-            SupportLocusKey::Cylinder {
-                axis,
-                closest_mm,
-                radius_mm,
-            },
-        )
-        | (
-            SupportLocusKey::Cylinder {
-                axis,
-                closest_mm,
-                radius_mm,
-            },
-            SupportLocusKey::Plane { normal, offset_mm },
-        ) => (*normal, *offset_mm, *axis, *closest_mm, *radius_mm),
-        _ => return false,
-    };
-    let Some(normal) = dequantize_vector(normal, DIRECTION_Q) else {
+    let Some(start) = dequantize_vector(endpoints_mm[0], POINT_Q_MM) else {
         return false;
     };
-    let Some(axis) = dequantize_vector(axis, DIRECTION_Q) else {
+    let Some(end) = dequantize_vector(endpoints_mm[1], POINT_Q_MM) else {
         return false;
     };
-    if norm(cross(normal, axis)) > ANGULAR_TOLERANCE {
+    let Some(geometric_direction) = normalize(line.direction, 0.0) else {
+        return false;
+    };
+    let Some(chord_direction) = normalize(sub(end, start), LOCUS_TOLERANCE_MM) else {
+        return false;
+    };
+    if norm(cross(chord_direction, geometric_direction)) > ANGULAR_TOLERANCE
+        || norm(cross(sub(start, line.origin_mm), geometric_direction)) > LOCUS_TOLERANCE_MM
+    {
         return false;
     }
-    let Some(closest) = dequantize_vector(closest_mm, POINT_Q_MM) else {
-        return false;
-    };
-    let Some(offset) = dequantize_scalar(offset_mm) else {
-        return false;
-    };
-    let Some(radius) = dequantize_scalar(radius_mm) else {
-        return false;
-    };
-    let denominator = dot(normal, axis);
-    if denominator.abs() <= ANGULAR_TOLERANCE {
-        return false;
-    }
-    let center = add(
-        closest,
-        mul(axis, (offset - dot(normal, closest)) / denominator),
-    );
-    certify_rational_bspline_circle(spline, center, axis, radius, LOCUS_TOLERANCE_MM) == Some(true)
+    point_lies_on_cone_nappe(start, locus)
+        && point_lies_on_cone_nappe(end, locus)
+        && point_lies_on_cone_nappe(mul(add(start, end), 0.5), locus)
 }
 
 fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
@@ -835,7 +1028,16 @@ fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
             };
             (dot(normal, closest) - offset).abs() <= radius + LOCUS_TOLERANCE_MM
         }
-        (SupportLocusKey::Cylinder { .. }, SupportLocusKey::Cylinder { .. }) => false,
+        (SupportLocusKey::Cone { .. }, SupportLocusKey::Plane { .. })
+        | (SupportLocusKey::Plane { .. }, SupportLocusKey::Cone { .. }) => {
+            // Conservative feasibility prefilter. The *actual* curve has to
+            // prove global incidence on both surfaces before acceptance.
+            true
+        }
+        (SupportLocusKey::Cylinder { .. }, SupportLocusKey::Cylinder { .. })
+        | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cone { .. })
+        | (SupportLocusKey::Cylinder { .. }, SupportLocusKey::Cone { .. })
+        | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cylinder { .. }) => false,
     }
 }
 
@@ -875,6 +1077,7 @@ fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey) -> b
             norm(cross(direction, axis)) <= ANGULAR_TOLERANCE
                 && (norm(radial) - radius).abs() <= LOCUS_TOLERANCE_MM
         }
+        SupportLocusKey::Cone { .. } => false,
     }
 }
 
@@ -917,6 +1120,24 @@ fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey
             norm(cross(normal, axis)) <= ANGULAR_TOLERANCE
                 && norm(radial_center) <= LOCUS_TOLERANCE_MM
                 && (circle.radius_mm - radius).abs() <= LOCUS_TOLERANCE_MM
+        }
+        SupportLocusKey::Cone {
+            apex_mm,
+            axis,
+            slope,
+            positive_nappe,
+        } => {
+            let Some((apex, axis, slope)) = dequantize_cone(*apex_mm, *axis, *slope) else {
+                return false;
+            };
+            let delta = sub(circle.center_mm, apex);
+            let axial = dot(delta, axis);
+            let signed_axial = if *positive_nappe { axial } else { -axial };
+            let radial_center = sub(delta, mul(axis, axial));
+            signed_axial > LOCUS_TOLERANCE_MM
+                && norm(cross(normal, axis)) <= ANGULAR_TOLERANCE
+                && norm(radial_center) <= LOCUS_TOLERANCE_MM
+                && signed_axial.mul_add(-slope, circle.radius_mm).abs() <= LOCUS_TOLERANCE_MM
         }
     }
 }
@@ -997,6 +1218,33 @@ fn oriented_support_key(
                 axis: vector_key(axis, DIRECTION_Q)?,
                 closest_mm: point_key(closest)?,
                 radius_mm: quantize(cylinder.radius_mm, SCALAR_Q_MM)?,
+                radial_outward: forward,
+            })
+        }
+        SurfaceSupport::Cone(cone) => {
+            let raw_axis = normalize(cone.axis, 0.0)?;
+            let axis = canonical_direction(raw_axis);
+            let slope = cone.semi_angle_rad.tan();
+            if !slope.is_finite() || slope <= 0.0 {
+                return None;
+            }
+            let apex = sub(
+                cone.reference_origin_mm,
+                mul(raw_axis, cone.reference_radius_mm / slope),
+            );
+            let slope_key = quantize(slope, DIRECTION_Q)?;
+            if slope_key <= 0 {
+                // A positive cone angle that vanishes under key quantization
+                // has no recoverable nappe geometry: refuse ambiguous keys.
+                return None;
+            }
+            Some(OrientedSupportKey::Cone {
+                apex_mm: point_key(apex)?,
+                axis: vector_key(axis, DIRECTION_Q)?,
+                slope: slope_key,
+                // The original STEP chart's positive axial direction selects
+                // the nappe; canonicalizing the axis must also update its sign.
+                positive_nappe: dot(axis, raw_axis) >= 0.0,
                 radial_outward: forward,
             })
         }
@@ -1398,6 +1646,271 @@ mod tests {
         assert!(!line_lies_on_support(off_plane, &support));
     }
 
+    fn positive_cone() -> SupportLocusKey {
+        SupportLocusKey::Cone {
+            apex_mm: [0, 0, 0],
+            axis: [0, 0, 10_000_000_000],
+            slope: 5_000_000_000,
+            positive_nappe: true,
+        }
+    }
+
+    /// One exact rational quarter-circle shared by both cone- and cylinder-
+    /// section certificates. The z coordinate alone chooses the carrier plane.
+    fn rational_quarter_circle(z: f64) -> BSplineSupport {
+        let weight = 0.5_f64.sqrt();
+        BSplineSupport {
+            degree: 2,
+            control_points_mm: vec![[1.0, 0.0, z], [1.0, 1.0, z], [0.0, 1.0, z]],
+            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            weights: Some(vec![1.0, weight, 1.0]),
+        }
+    }
+
+    #[test]
+    fn conical_circle_carrier_separates_nappes_and_radius() {
+        let support = positive_cone();
+        let circle = brep::CircleSupport {
+            center_mm: [0.0, 0.0, 2.0],
+            normal: [0.0, 0.0, 1.0],
+            x_direction: [1.0, 0.0, 0.0],
+            radius_mm: 1.0,
+        };
+        assert!(circle_lies_on_support(circle, &support));
+        assert!(!circle_lies_on_support(
+            brep::CircleSupport {
+                radius_mm: 1.001,
+                ..circle
+            },
+            &support
+        ));
+        assert!(!circle_lies_on_support(
+            brep::CircleSupport {
+                center_mm: [0.0, 0.0, -2.0],
+                ..circle
+            },
+            &support
+        ));
+        let negative_nappe = SupportLocusKey::Cone {
+            apex_mm: [0, 0, 0],
+            axis: [0, 0, 10_000_000_000],
+            slope: 5_000_000_000,
+            positive_nappe: false,
+        };
+        assert!(!circle_lies_on_support(circle, &negative_nappe));
+        assert!(circle_lies_on_support(
+            brep::CircleSupport {
+                center_mm: [0.0, 0.0, -2.0],
+                ..circle
+            },
+            &negative_nappe
+        ));
+    }
+
+    #[test]
+    fn conical_generator_is_bounded_to_one_proven_nappe() {
+        let support = positive_cone();
+        let line = brep::LineSupport {
+            origin_mm: [0.0, 0.0, 0.0],
+            direction: [1.0, 0.0, 2.0],
+        };
+        let forward = [[10_000_000, 0, 20_000_000], [20_000_000, 0, 40_000_000]];
+        assert!(line_segment_lies_on_cone(line, forward, &support));
+        // Same quadratic cone equation but the segment crosses the singular
+        // apex into the opposite nappe. It must not be accepted.
+        let crossing = [[10_000_000, 0, 20_000_000], [-10_000_000, 0, -20_000_000]];
+        assert!(!line_segment_lies_on_cone(line, crossing, &support));
+        assert!(!line_segment_lies_on_cone(
+            line,
+            [
+                [10_000_000, 0, 20_000_000],
+                [20_000_000, 10_000_000, 40_000_000]
+            ],
+            &support
+        ));
+    }
+
+    #[test]
+    fn conical_rational_circle_requires_global_bernstein_proof() {
+        let support = positive_cone();
+        let plane = SupportLocusKey::Plane {
+            normal: [0, 0, 10_000_000_000],
+            offset_mm: 20_000_000,
+        };
+        let exact = rational_quarter_circle(2.0);
+        assert!(bspline_is_circular_section_of_supports(
+            &exact,
+            &[plane.clone(), support.clone()]
+        ));
+        assert!(bspline_is_circular_section_of_supports(
+            &exact,
+            &[support.clone(), plane.clone()]
+        ));
+        let mut between_sample_bump = exact.clone();
+        between_sample_bump.control_points_mm[1][0] += 1.0e-3;
+        assert!(!bspline_is_circular_section_of_supports(
+            &between_sample_bump,
+            &[plane.clone(), support]
+        ));
+        let negative_nappe = SupportLocusKey::Cone {
+            apex_mm: [0, 0, 0],
+            axis: [0, 0, 10_000_000_000],
+            slope: 5_000_000_000,
+            positive_nappe: false,
+        };
+        assert!(!bspline_is_circular_section_of_supports(
+            &exact,
+            &[plane, negative_nappe]
+        ));
+    }
+
+    #[test]
+    fn native_conical_frusta_have_bounded_analytic_source_support() -> anyhow::Result<()> {
+        for (name, bytes) in [
+            (
+                "solid cone",
+                include_bytes!("../validation/fixtures/native_conical_frustum.step").as_slice(),
+            ),
+            (
+                "hollow cone",
+                include_bytes!("../validation/fixtures/native_hollow_conical_frustum.step")
+                    .as_slice(),
+            ),
+        ] {
+            let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+            let [section] = exchange.data.as_slice() else {
+                anyhow::bail!("{name}: expected one DATA section");
+            };
+            let diagnostic = analytic_boundary_diagnostic(15, &section.entities);
+            assert!(diagnostic.supported, "{name}: {diagnostic:?}");
+            assert!(
+                diagnostic.signature.as_ref().is_some_and(|sig| {
+                    sig.supports
+                        .iter()
+                        .any(|s| matches!(s, OrientedSupportKey::Cone { .. }))
+                }),
+                "{name}"
+            );
+            assert!(
+                compare_analytic_boundaries(15, &section.entities, 15, &section.entities)
+                    .equivalent,
+                "{name}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn zero_length_topological_edge_requires_real_full_circle_carrier() {
+        let point = point_key([1.0, 0.0, 0.0]).expect("finite test point");
+        let mut edge = EdgeGeometry {
+            start: point,
+            end: point,
+            start_vertex: 17,
+            end_vertex: 17,
+            curve_id: 7,
+            support: CurveSupport::Line(brep::LineSupport {
+                origin_mm: [1.0, 0.0, 0.0],
+                direction: [0.0, 1.0, 0.0],
+            }),
+        };
+        let index = HashMap::new();
+        assert!(!edge_is_proven_closed_circle(&edge, &[], &index));
+        edge.support = CurveSupport::Other { entity_id: 7 };
+        assert!(!edge_is_proven_closed_circle(&edge, &[], &index));
+        edge.support = CurveSupport::Circle(brep::CircleSupport {
+            center_mm: [0.0, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            x_direction: [1.0, 0.0, 0.0],
+            radius_mm: 1.0,
+        });
+        assert!(edge_is_proven_closed_circle(&edge, &[], &index));
+        // Distinct topological vertices that quantize to the same coordinate
+        // do not establish a full periodic traversal.
+        edge.end_vertex = 18;
+        assert!(!edge_is_proven_closed_circle(&edge, &[], &index));
+        edge.end_vertex = edge.start_vertex;
+        edge.start = point_key([1.0, 0.0, 0.01]).expect("finite test point");
+        edge.end = edge.start;
+        assert!(!edge_is_proven_closed_circle(&edge, &[], &index));
+    }
+
+    #[test]
+    fn conical_boundary_equivalence_is_parameterization_independent_and_fail_closed()
+    -> anyhow::Result<()> {
+        let source = std::str::from_utf8(include_bytes!(
+            "../validation/fixtures/native_conical_frustum.step"
+        ))?;
+        let original =
+            monstertruck_io::step::load::ParsedStepSource::parse(source.as_bytes())?.exchange;
+        let [original_section] = original.data.as_slice() else {
+            anyhow::bail!("expected one DATA section");
+        };
+        assert!(
+            compare_analytic_boundaries(
+                15,
+                &original_section.entities,
+                15,
+                &original_section.entities,
+            )
+            .equivalent
+        );
+
+        let variants = [
+            // Moving the cone's reference section by -1 along its axis and
+            // increasing its reference radius by tan(angle) * 1 produces the
+            // *same* physical cone apex and nappe.
+            (
+                source
+                    .replace(
+                        "#31 = CONICAL_SURFACE('',#32,2.,0.463647609001);",
+                        "#31 = CONICAL_SURFACE('',#32,2.5,0.463647609001);",
+                    )
+                    .replace(
+                        "#33 = CARTESIAN_POINT('',(0.,0.,0.));",
+                        "#33 = CARTESIAN_POINT('',(0.,0.,-1.));",
+                    ),
+                true,
+            ),
+            (
+                source.replace(
+                    "#31 = CONICAL_SURFACE('',#32,2.,0.463647609001);",
+                    "#31 = CONICAL_SURFACE('',#32,2.,0.5);",
+                ),
+                false,
+            ),
+            (
+                source.replace(
+                    "#17 = ADVANCED_FACE('',(#18),#31,.T.);",
+                    "#17 = ADVANCED_FACE('',(#18),#31,.F.);",
+                ),
+                false,
+            ),
+            (
+                source.replace(
+                    "#57 = CARTESIAN_POINT('',(2.,-4.898587196589E-16,0.));",
+                    "#57 = CARTESIAN_POINT('',(2.001,-4.898587196589E-16,0.));",
+                ),
+                false,
+            ),
+        ];
+        for (changed, should_match) in variants {
+            assert_ne!(changed, source, "the conical test must modify source");
+            let parsed =
+                monstertruck_io::step::load::ParsedStepSource::parse(changed.as_bytes())?.exchange;
+            let [section] = parsed.data.as_slice() else {
+                anyhow::bail!("expected one DATA section");
+            };
+            let comparison =
+                compare_analytic_boundaries(15, &original_section.entities, 15, &section.entities);
+            assert_eq!(
+                comparison.equivalent, should_match,
+                "cone source comparison: {comparison:?}"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn circle_carrier_proof_rejects_wrong_cylinder_radius() {
         let support = SupportLocusKey::Cylinder {
@@ -1421,13 +1934,7 @@ mod tests {
 
     #[test]
     fn rational_quadratic_circle_certificate_rejects_between_span_bump() {
-        let weight = 0.5_f64.sqrt();
-        let exact = BSplineSupport {
-            degree: 2,
-            control_points_mm: vec![[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
-            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-            weights: Some(vec![1.0, weight, 1.0]),
-        };
+        let exact = rational_quarter_circle(0.0);
         assert_eq!(
             certify_rational_bspline_circle(&exact, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 1.0, 1.0e-7,),
             Some(true)
