@@ -5,6 +5,7 @@ use crate::{
 use anyhow::Result;
 use ruststep::ast::{EntityInstance, Exchange};
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::OnceLock;
 
 type EntityIndex = HashMap<u64, usize>;
@@ -34,6 +35,14 @@ impl SectionCache {
     }
 }
 
+/// A single owned signature tree with the exact output span of each source
+/// DATA section. Counts of source solids are insufficient: the detector skips
+/// solids whose face/topology evidence cannot be read.
+struct SurfaceSignatureCache {
+    signatures: Vec<solid_revolutions::SolidSurfaceSignature>,
+    section_ranges: Vec<Range<usize>>,
+}
+
 /// Owned STEP analysis context with reusable, lazily initialized per-section
 /// entity indexes and representation-context uncertainty evidence.
 ///
@@ -44,7 +53,7 @@ pub struct AnalysisSession {
     sections: Vec<SectionCache>,
     // Surface signatures are deep owned trees; retain them once and lend
     // references rather than cloning a large tree for every diagnostic call.
-    surface_signatures: OnceLock<Vec<solid_revolutions::SolidSurfaceSignature>>,
+    surface_signatures: OnceLock<SurfaceSignatureCache>,
 }
 
 impl AnalysisSession {
@@ -98,13 +107,26 @@ impl AnalysisSession {
     /// Call `.to_vec()` explicitly only when an owned snapshot is necessary.
     #[must_use]
     pub fn solid_surface_signatures(&self) -> &[solid_revolutions::SolidSurfaceSignature] {
-        self.surface_signatures.get_or_init(|| {
-            self.indexed_sections()
-                .flat_map(|(entities, index, _)| {
-                    solid_revolutions::detect_solid_surface_signatures_with_index(entities, index)
-                })
-                .collect()
-        })
+        &self
+            .surface_signatures
+            .get_or_init(|| {
+                let mut signatures = Vec::new();
+                let mut section_ranges = Vec::with_capacity(self.sections.len());
+                for (entities, index, _) in self.indexed_sections() {
+                    let start = signatures.len();
+                    signatures.extend(
+                        solid_revolutions::detect_solid_surface_signatures_with_index(
+                            entities, index,
+                        ),
+                    );
+                    section_ranges.push(start..signatures.len());
+                }
+                SurfaceSignatureCache {
+                    signatures,
+                    section_ranges,
+                }
+            })
+            .signatures
     }
 
     #[must_use]
@@ -166,9 +188,23 @@ impl AnalysisSession {
     /// # Errors
     /// Returns an error if detector output cannot be converted into exact CAD IR.
     pub fn complete_ir(&self) -> Result<complete_ir::CompleteIr> {
+        // An already-requested signature census can also supply Complete IR's
+        // compact per-source summaries. Do not initialize the full signature
+        // tree for a cold Complete IR request: that would retain heavyweight
+        // diagnostics that are only needed transiently in that call.
+        let signatures = self.surface_signatures.get();
         let context = self
             .indexed_sections()
-            .map(|(entities, index, cache)| (index, cache.source_tolerances(entities)))
+            .enumerate()
+            .map(
+                |(data_section, (entities, index, cache))| complete_ir::SectionEvidence {
+                    index,
+                    source_tolerances: cache.source_tolerances(entities),
+                    surface_signatures: signatures.map(|cached| {
+                        &cached.signatures[cached.section_ranges[data_section].clone()]
+                    }),
+                },
+            )
             .collect::<Vec<_>>();
         complete_ir::recover_complete_ir_exchange_with_context(&self.exchange, &context)
     }
@@ -393,6 +429,156 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(signatures, standalone.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn complete_ir_borrows_preexisting_signatures_but_does_not_eagerly_cache_them() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/production_radial_slot.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_conical_frustum.step").as_slice(),
+        ] {
+            let cold = AnalysisSession::from_bytes(bytes)?;
+            assert!(cold.surface_signatures.get().is_none());
+            let cold_report = cold.complete_ir()?;
+            assert!(cold.surface_signatures.get().is_none());
+            let warm = AnalysisSession::from_bytes(bytes)?;
+            let signatures = warm.solid_surface_signatures();
+            let cached = warm
+                .surface_signatures
+                .get()
+                .ok_or_else(|| anyhow::anyhow!("missing expected surface cache"))?;
+            assert_eq!(cached.section_ranges.len(), 1);
+            assert_eq!(cached.section_ranges[0], 0..signatures.len());
+            let warm_report = warm.complete_ir()?;
+            json_equal(&warm_report, &cold_report)?;
+            assert!(std::ptr::eq(signatures, warm.solid_surface_signatures()));
+            let warm_report_again = warm.complete_ir()?;
+            json_equal(&warm_report_again, &cold_report)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn complete_ir_reuses_exact_per_data_ranges_including_skipped_sections() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_conical_frustum.step");
+        let mut exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let [valid] = exchange.data.as_slice() else {
+            anyhow::bail!("expected one original DATA section");
+        };
+        let mut empty = valid.clone();
+        empty.entities.clear();
+        exchange.data = vec![empty.clone(), valid.clone(), empty, valid.clone()];
+        let cold = AnalysisSession::from_exchange(exchange.clone());
+        let report_without_cache = cold.complete_ir()?;
+        assert!(cold.surface_signatures.get().is_none());
+
+        let warm = AnalysisSession::from_exchange(exchange);
+        let signatures = warm.solid_surface_signatures();
+        assert_eq!(signatures.len(), 2);
+        assert_eq!(signatures[0], signatures[1]);
+        let cache = warm
+            .surface_signatures
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("surface cache disappeared"))?;
+        assert_eq!(cache.section_ranges, [0..0, 0..1, 1..1, 1..2]);
+        let report = warm.complete_ir()?;
+        json_equal(&report, &report_without_cache)?;
+        assert_eq!(report.surface_signature_summaries.len(), 2);
+        assert_eq!(
+            report
+                .surface_signature_summaries
+                .iter()
+                .map(|summary| summary.source.data_section)
+                .collect::<Vec<_>>(),
+            [1, 3]
+        );
+        assert!(std::ptr::eq(signatures, warm.solid_surface_signatures()));
+        Ok(())
+    }
+
+    #[test]
+    fn signature_section_ranges_follow_successful_detection_not_source_solid_counts() -> Result<()>
+    {
+        let bytes = include_bytes!("../validation/fixtures/native_conical_frustum.step");
+        let mut exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let [valid] = exchange.data.as_slice() else {
+            anyhow::bail!("expected one original DATA section");
+        };
+        let mut incomplete = valid.clone();
+        // Keep the source solid record, but remove its face evidence. A detector
+        // must skip this incomplete solid rather than reserve a fake cache slot.
+        incomplete.entities.retain(|entity| {
+            crate::step_graph::simple_record(entity)
+                .is_none_or(|record| record.name != "ADVANCED_FACE")
+        });
+        assert_eq!(
+            solid_revolutions::detect_solid_surface_signatures(&incomplete.entities).len(),
+            0
+        );
+        exchange.data = vec![incomplete, valid.clone(), valid.clone()];
+        let session = AnalysisSession::from_exchange(exchange);
+        let signatures = session.solid_surface_signatures();
+        let cache = session
+            .surface_signatures
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("surface cache disappeared"))?;
+        assert_eq!(cache.section_ranges, [0..0, 0..1, 1..2]);
+        assert_eq!(signatures.len(), 2);
+        assert_eq!(signatures[0], signatures[1]);
+        Ok(())
+    }
+
+    /// Manual end-to-end diagnostic: compare a cold Complete IR session with
+    /// a session whose surface-signature tree was previously requested.
+    /// The benchmark excludes STEP parsing and does not assert elapsed time.
+    #[test]
+    #[ignore = "manual Complete IR signature reuse benchmark"]
+    fn complete_ir_signature_reuse_benchmark() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/production_radial_slot.step");
+        let cold = AnalysisSession::from_bytes(bytes)?;
+        let warm = AnalysisSession::from_bytes(bytes)?;
+        let start = Instant::now();
+        let precomputed = warm.solid_surface_signatures();
+        let cache_initialization = start.elapsed();
+        let serialized_bytes = serde_json::to_vec(precomputed)?.len();
+        let runs = 64;
+        let mut cold_samples = Vec::with_capacity(runs);
+        let mut cached_samples = Vec::with_capacity(runs);
+        // Alternate execution order so unrelated CPU load doesn't skew
+        // two long consecutive blocks differently.
+        for iteration in 0..runs {
+            if iteration % 2 == 0 {
+                let start = Instant::now();
+                black_box(cold.complete_ir()?);
+                cold_samples.push(start.elapsed());
+                let start = Instant::now();
+                black_box(warm.complete_ir()?);
+                cached_samples.push(start.elapsed());
+            } else {
+                let start = Instant::now();
+                black_box(warm.complete_ir()?);
+                cached_samples.push(start.elapsed());
+                let start = Instant::now();
+                black_box(cold.complete_ir()?);
+                cold_samples.push(start.elapsed());
+            }
+        }
+        assert_eq!(
+            serde_json::to_value(cold.complete_ir()?)?,
+            serde_json::to_value(warm.complete_ir()?)?
+        );
+        cold_samples.sort_unstable();
+        cached_samples.sort_unstable();
+        let cold_median = cold_samples[runs / 2];
+        let cached_median = cached_samples[runs / 2];
+        let cold_total = cold_samples.iter().sum::<std::time::Duration>();
+        let cached_total = cached_samples.iter().sum::<std::time::Duration>();
+        println!(
+            "Complete IR paired signature evidence: runs={runs}, payload_bytes={serialized_bytes}, signatures={}, cache_initialize={cache_initialization:?}, cold_total={cold_total:?}, cached_total={cached_total:?}, cold_median={cold_median:?}, cached_median={cached_median:?}, median_ratio={:.3}x",
+            precomputed.len(),
+            cold_median.as_secs_f64() / cached_median.as_secs_f64()
+        );
         Ok(())
     }
 
