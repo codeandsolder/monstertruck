@@ -232,6 +232,48 @@ pub mod monstertruck {
         }
     }
 
+    /// Preserve a source NURBS guide only with independent whole-curve
+    /// Bernstein incidence certificates for both analytic carriers. For straight
+    /// guides, the exact point-set remains certified by their simple structure.
+    /// The evaluated SSI still controls both the endpoints and acceptance.
+    fn certified_step_guide(
+        guide: &Curve,
+        surfaces: [&Surface; 2],
+        parameters: &[f64],
+        evaluated: &[Point3],
+        tolerance: f64,
+    ) -> Option<Vec<Point3>> {
+        let proof_tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES
+            .solid_geometry_mm
+            .min(tolerance);
+        let globally_proven = matches!(guide, Curve::NurbsCurve(_))
+            && surfaces.iter().all(|&carrier| {
+                certify_analytic_curve_on_surface(guide, carrier, proof_tolerance)
+                    == CurveIncidence::Proven
+            });
+        if !straight_step_guide(guide) && !globally_proven {
+            return None;
+        }
+        let guide_points = parameters
+            .iter()
+            .map(|&parameter| guide.evaluate(parameter))
+            .collect::<Vec<_>>();
+        let accuracy = if globally_proven {
+            proof_tolerance
+        } else {
+            tolerance
+        };
+        (guide_points.len() == evaluated.len()
+            && guide_points
+                .iter()
+                .zip(evaluated)
+                .all(|(guide, point)| (*guide - *point).magnitude() <= accuracy)
+            && surfaces
+                .iter()
+                .all(|carrier| validated_step_surface_support(carrier, &guide_points, accuracy)))
+        .then_some(guide_points)
+    }
+
     /// Construct a STEP-exchange guide from the *evaluated* two-surface
     /// intersection, not the marching leader used to find it. This is export
     /// only: replacing Boolean/SSI sampling globally breaks interface
@@ -273,57 +315,18 @@ pub mod monstertruck {
                 );
             }
         }
-        // A curved *rational* guide can be more accurate than resampling the
-        // evaluated two-surface Newton projection into a degree-one polygon.
-        // Preserve it only if independent, global Bernstein coefficient bounds
-        // prove every knot span lies on BOTH original analytic carriers. A
-        // small sampled residual alone is never sufficient to promote a
-        // curved guide. The original straight-line certificate is retained.
-        let guide = intersection.leader();
-        let proof_tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES
-            .solid_geometry_mm
-            .min(tolerance);
-        let globally_proven = matches!(guide.as_ref(), Curve::NurbsCurve(_))
-            && [intersection.surface0(), intersection.surface1()]
-                .into_iter()
-                .all(|carrier| {
-                    certify_analytic_curve_on_surface(guide, carrier, proof_tolerance)
-                        == CurveIncidence::Proven
-                });
-        if straight_step_guide(guide) || globally_proven {
-            let guide_points = parameters
-                .iter()
-                .map(|&parameter| guide.evaluate(parameter))
-                .collect::<Vec<_>>();
-            let agreement_tolerance = if globally_proven {
-                proof_tolerance
-            } else {
-                tolerance
-            };
-            let pointwise_agreement = guide_points
-                .iter()
-                .zip(&points)
-                .all(|(guide, evaluated)| (*guide - *evaluated).magnitude() <= agreement_tolerance);
-            if pointwise_agreement
-                && validated_step_surface_support(
-                    intersection.surface0(),
-                    &guide_points,
-                    agreement_tolerance,
-                )
-                && validated_step_surface_support(
-                    intersection.surface1(),
-                    &guide_points,
-                    agreement_tolerance,
-                )
-                && [intersection.boundary0(), intersection.boundary1()]
-                    .into_iter()
-                    .flatten()
-                    .all(|boundary| {
-                        validated_step_parameter_curve(boundary, &guide_points, tolerance)
-                    })
-            {
-                return Ok(curve.clone());
-            }
+        if let Some(guide_points) = certified_step_guide(
+            intersection.leader(),
+            [intersection.surface0(), intersection.surface1()],
+            &parameters,
+            &points,
+            tolerance,
+        ) && [intersection.boundary0(), intersection.boundary1()]
+            .into_iter()
+            .flatten()
+            .all(|boundary| validated_step_parameter_curve(boundary, &guide_points, tolerance))
+        {
+            return Ok(curve.clone());
         }
         // Preserve each native parameter, including nonuniform adaptive
         // subdivisions and shifted input domains. A uniform 0..N knot
