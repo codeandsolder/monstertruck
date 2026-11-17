@@ -949,21 +949,55 @@ fn search_derive_impl(
     })
 }
 
+#[derive(Clone, Copy)]
+enum SearchOperation {
+    Nearest,
+    Exact,
+}
+
+#[derive(Clone, Copy)]
+enum SearchDimension {
+    Curve,
+    Surface,
+}
+
+/// Choose the trait and hint schema from dimension and requested search
+/// semantics, rather than repeating loosely coupled token tuples.
 fn derive_search(
     input: TokenStream,
-    trait_name: &TokenStream2,
-    hint_type: &TokenStream2,
-    method_name: &str,
-    return_type: &TokenStream2,
+    operation: SearchOperation,
+    dimension: SearchDimension,
 ) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let method_name = Ident::new(method_name, Span::call_site());
+    let (dimension_type, hint_type, return_type) = match dimension {
+        SearchDimension::Curve => (
+            quote! { monstertruck_traits::CurveParameter },
+            quote! { monstertruck_traits::SearchParameterHint1D },
+            quote! { Option<f64> },
+        ),
+        SearchDimension::Surface => (
+            quote! { monstertruck_traits::SurfaceParameter },
+            quote! { monstertruck_traits::SearchParameterHint2D },
+            quote! { Option<(f64, f64)> },
+        ),
+    };
+    let (trait_type, method) = match operation {
+        SearchOperation::Nearest => (
+            quote! { SearchNearestParameter },
+            Ident::new("search_nearest_parameter", Span::call_site()),
+        ),
+        SearchOperation::Exact => (
+            quote! { SearchParameter },
+            Ident::new("search_parameter", Span::call_site()),
+        ),
+    };
+    let trait_name = quote! { monstertruck_traits::#trait_type::<#dimension_type> };
     let implementation = derive_try!(search_derive_impl(
         &input,
-        trait_name,
-        hint_type,
-        &method_name,
-        return_type,
+        &trait_name,
+        &hint_type,
+        &method,
+        &return_type,
     ));
     derive_try!(traits_scope(&implementation)).into()
 }
@@ -972,163 +1006,119 @@ fn derive_search(
 #[proc_macro_error]
 #[proc_macro_derive(SearchNearestParameterD1)]
 pub fn derive_snp_d1(input: TokenStream) -> TokenStream {
-    derive_search(
-        input,
-        &quote! { monstertruck_traits::SearchNearestParameter::<monstertruck_traits::CurveParameter> },
-        &quote! { monstertruck_traits::SearchParameterHint1D },
-        "search_nearest_parameter",
-        &quote! { Option<f64> },
-    )
+    derive_search(input, SearchOperation::Nearest, SearchDimension::Curve)
 }
 
 /// Derives nearest-parameter search for surfaces.
 #[proc_macro_error]
 #[proc_macro_derive(SearchNearestParameterD2)]
 pub fn derive_snp_d2(input: TokenStream) -> TokenStream {
-    derive_search(
-        input,
-        &quote! { monstertruck_traits::SearchNearestParameter::<monstertruck_traits::SurfaceParameter> },
-        &quote! { monstertruck_traits::SearchParameterHint2D },
-        "search_nearest_parameter",
-        &quote! { Option<(f64, f64)> },
-    )
+    derive_search(input, SearchOperation::Nearest, SearchDimension::Surface)
 }
 
 /// Derives exact parameter search for curves.
 #[proc_macro_error]
 #[proc_macro_derive(SearchParameterD1)]
 pub fn derive_sp_d1(input: TokenStream) -> TokenStream {
-    derive_search(
-        input,
-        &quote! { monstertruck_traits::SearchParameter::<monstertruck_traits::CurveParameter> },
-        &quote! { monstertruck_traits::SearchParameterHint1D },
-        "search_parameter",
-        &quote! { Option<f64> },
-    )
+    derive_search(input, SearchOperation::Exact, SearchDimension::Curve)
 }
 
 /// Derives exact parameter search for surfaces.
 #[proc_macro_error]
 #[proc_macro_derive(SearchParameterD2)]
 pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
-    derive_search(
-        input,
-        &quote! { monstertruck_traits::SearchParameter::<monstertruck_traits::SurfaceParameter> },
-        &quote! { monstertruck_traits::SearchParameterHint2D },
-        "search_parameter",
-        &quote! { Option<(f64, f64)> },
-    )
+    derive_search(input, SearchOperation::Exact, SearchDimension::Surface)
 }
 
-/// Derive macro generating an impl of the trait `Transformed<Matrix3>` for enums or single field tuple structs.
+/// Shared generator for the 2D and 3D transformation derives.
+///
+/// The input shape and delegation are identical; the matrix type is the only
+/// meaningful difference. Splitting generics also preserves where clauses
+/// without emitting a second `where` on the implemented type.
+fn derive_transform(input: TokenStream, matrix: &TokenStream2) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let trait_name = quote! { monstertruck_traits::Transformed::<#matrix> };
+    let ty = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let where_predicates = where_clause.iter().flat_map(|clause| &clause.predicates);
+    let implementation = match &input.data {
+        Data::Enum(DataEnum { variants, .. }) => {
+            let top_ty = derive_try!(enum_field_type(variants, ty));
+            let methods = [
+                Method {
+                    name: quote! { transform_by },
+                    generics: None,
+                    self_field: quote! { &mut self, },
+                    fields: vec![Field {
+                        var: quote! { mat },
+                        ty: matrix.clone(),
+                    }],
+                    return_type: quote! { () },
+                    variants,
+                    trait_name: trait_name.clone(),
+                },
+                Method {
+                    name: quote! { transformed },
+                    generics: None,
+                    self_field: quote! { &self, },
+                    fields: vec![Field {
+                        var: quote! { mat },
+                        ty: matrix.clone(),
+                    }],
+                    return_type: quote! { Self },
+                    variants,
+                    trait_name: trait_name.clone(),
+                },
+            ];
+            let methods = methods.iter().map(Method::to_token_stream);
+            quote! {
+                #[automatically_derived]
+                impl #impl_generics #trait_name for #ty #ty_generics
+                where
+                    #(#where_predicates,)*
+                    #top_ty: #trait_name,
+                {
+                    #(#methods)*
+                }
+            }
+        }
+        Data::Struct(DataStruct { fields, .. }) => {
+            let field_type = derive_try!(tuple_struct_field(fields));
+            quote! {
+                #[automatically_derived]
+                impl #impl_generics #trait_name for #ty #ty_generics
+                where
+                    #(#where_predicates,)*
+                    #field_type: #trait_name,
+                {
+                    fn transform_by(&mut self, mat: #matrix) {
+                        self.0.transform_by(mat)
+                    }
+                    fn transformed(&self, mat: #matrix) -> Self {
+                        Self(self.0.transformed(mat))
+                    }
+                }
+            }
+        }
+        Data::Union(_) => unsupported_input(ty),
+    };
+    derive_try!(traits_scope(&implementation)).into()
+}
+
+/// Derive macro generating an impl of `Transformed<Matrix3>` for enums or single-field tuple structs.
 #[proc_macro_error]
 #[proc_macro_derive(TransformedM3)]
 pub fn derive_transform_m3(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let trait_name =
-        quote! { monstertruck_traits::Transformed::<monstertruck_traits::__private::Matrix3> };
-    let ty = input.ident;
-    let generics_params = input.generics;
-    let where_predicates = generics_params
-        .where_clause
-        .iter()
-        .flat_map(|x| &x.predicates);
-    let implementation = match input.data {
-        Data::Enum(DataEnum { ref variants, .. }) => {
-            let top_ty = derive_try!(enum_field_type(variants, &ty));
-            let methods = methods!(
-                variants,
-                trait_name,
-                fn transform_by(&mut self, mat: monstertruck_traits::__private::Matrix3) -> (),
-                fn transformed(&self, mat: monstertruck_traits::__private::Matrix3) -> Self,
-            );
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #top_ty: #trait_name,
-                    {
-                    #(#methods)*
-                }
-            }
-        }
-        Data::Struct(DataStruct { ref fields, .. }) => {
-            let field_type = derive_try!(tuple_struct_field(fields));
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #field_type: #trait_name, {
-                    fn transform_by(&mut self, mat: monstertruck_traits::__private::Matrix3) {
-                        self.0.transform_by(mat)
-                    }
-                    fn transformed(&self, mat: monstertruck_traits::__private::Matrix3) -> Self {
-                        Self(self.0.transformed(mat))
-                    }
-                }
-            }
-        }
-        Data::Union(_) => unsupported_input(&ty),
-    };
-    derive_try!(traits_scope(&implementation)).into()
+    derive_transform(input, &quote! { monstertruck_traits::__private::Matrix3 })
 }
 
-/// Derive macro generating an impl of the trait `Transformed<Matrix4>` for enums or single field tuple structs.
+/// Derive macro generating an impl of `Transformed<Matrix4>` for enums or single-field tuple structs.
 #[proc_macro_error]
 #[proc_macro_derive(TransformedM4)]
 pub fn derive_transform_m4(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let trait_name =
-        quote! { monstertruck_traits::Transformed::<monstertruck_traits::__private::Matrix4> };
-    let ty = input.ident;
-    let generics_params = input.generics;
-    let where_predicates = generics_params
-        .where_clause
-        .iter()
-        .flat_map(|x| &x.predicates);
-    let implementation = match input.data {
-        Data::Enum(DataEnum { ref variants, .. }) => {
-            let top_ty = derive_try!(enum_field_type(variants, &ty));
-            let methods = methods!(
-                variants,
-                trait_name,
-                fn transform_by(&mut self, mat: monstertruck_traits::__private::Matrix4) -> (),
-                fn transformed(&self, mat: monstertruck_traits::__private::Matrix4) -> Self,
-            );
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #top_ty: #trait_name,
-                    {
-                    #(#methods)*
-                }
-            }
-        }
-        Data::Struct(DataStruct { ref fields, .. }) => {
-            let field_type = derive_try!(tuple_struct_field(fields));
-            quote! {
-                #[automatically_derived]
-                impl #generics_params #trait_name for #ty #generics_params
-                where
-                    #(#where_predicates,)*
-                    #field_type: #trait_name, {
-                    fn transform_by(&mut self, mat: monstertruck_traits::__private::Matrix4) {
-                        self.0.transform_by(mat)
-                    }
-                    fn transformed(&self, mat: monstertruck_traits::__private::Matrix4) -> Self {
-                        Self(self.0.transformed(mat))
-                    }
-                }
-            }
-        }
-        Data::Union(_) => unsupported_input(&ty),
-    };
-    derive_try!(traits_scope(&implementation)).into()
+    derive_transform(input, &quote! { monstertruck_traits::__private::Matrix4 })
 }
+
 /// Derive macro generating an impl of the trait `StepLength` for enums or single field tuple structs.
 #[proc_macro_error]
 #[proc_macro_derive(StepLength)]
