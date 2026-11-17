@@ -30,22 +30,58 @@ struct SolidInfo {
     face_style: Vec<u64>,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"
-)]
-pub fn instance_z90_solids(entities: &mut Vec<EntityInstance>) -> InstanceStats {
-    let mut stats = InstanceStats::default();
-    if entities.is_empty() {
-        return stats;
-    }
+/// Geometric proof is independent of STEP mutation and assembly emission.
+struct Z90InstancePlan {
+    initial_index: HashMap<u64, usize>,
+    styles_by_target: HashMap<u64, Vec<StyleRef>>,
+    representations: Vec<Z90RepresentationPlan>,
+}
 
+struct Z90RepresentationPlan {
+    representation_id: u64,
+    context_id: u64,
+    groups: Vec<Z90GroupPlan>,
+}
+
+struct Z90GroupPlan {
+    face_style: Vec<u64>,
+    // The original large shape keys and vertex arrays are discarded after proof.
+    members: Vec<Z90Occurrence>,
+}
+
+struct Z90Occurrence {
+    root: u64,
+    closure: HashSet<u64>,
+    center: [f64; 3],
+    quarter: u8,
+}
+
+impl Z90Occurrence {
+    fn from_proven(info: SolidInfo, quarter: u8) -> Self {
+        Self {
+            root: info.root,
+            closure: info.closure,
+            center: info.center,
+            quarter,
+        }
+    }
+}
+
+impl Z90InstancePlan {
+    const fn is_empty(&self) -> bool { self.representations.is_empty() }
+}
+
+fn plan_z90_instances(entities: &[EntityInstance]) -> Z90InstancePlan {
+    if entities.is_empty() {
+        return Z90InstancePlan {
+            initial_index: HashMap::new(),
+            styles_by_target: HashMap::new(),
+            representations: Vec::new(),
+        };
+    }
     let initial_index = build_index(entities);
     let styles_by_target = collect_styles_by_target(entities);
-
-    // Only representations present before this pass are candidates. New source
-    // representations created below must not be recursively reconsidered.
-    let representation_ids: Vec<u64> = entities
+    let representations = entities
         .iter()
         .filter_map(|entity| match entity {
             EntityInstance::Simple { id, record }
@@ -55,8 +91,173 @@ pub fn instance_z90_solids(entities: &mut Vec<EntityInstance>) -> InstanceStats 
             }
             _ => None,
         })
+        .filter_map(|representation_id| {
+            plan_z90_representation(
+                representation_id,
+                entities,
+                &initial_index,
+                &styles_by_target,
+            )
+        })
         .collect();
 
+    Z90InstancePlan {
+        initial_index,
+        styles_by_target,
+        representations,
+    }
+}
+
+fn plan_z90_representation(
+    representation_id: u64,
+    entities: &[EntityInstance],
+    initial_index: &HashMap<u64, usize>,
+    styles_by_target: &HashMap<u64, Vec<StyleRef>>,
+) -> Option<Z90RepresentationPlan> {
+    let &rep_idx = initial_index.get(&representation_id)?;
+    let (item_ids, context_id) = representation_items_and_context(&entities[rep_idx])?;
+
+    let solid_ids: Vec<u64> = item_ids
+        .iter()
+        .copied()
+        .filter(|id| {
+            initial_index
+                .get(id)
+                .and_then(|&idx| simple_record(&entities[idx]))
+                .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
+        })
+        .collect();
+
+    if solid_ids.len() < 3 {
+        return None;
+    }
+
+    let mut infos = Vec::new();
+    for root in solid_ids.iter().copied() {
+        if let Some(info) = analyze_solid(root, entities, initial_index, styles_by_target) {
+            infos.push(info);
+        }
+    }
+
+    if std::env::var_os("STEP_REDOX_DEBUG_INSTANCES").is_some() {
+        trace_z90_candidates(representation_id, solid_ids.len(), &infos);
+    }
+    let groups = group_z90_candidates(infos);
+    let mut selected_groups = Vec::new();
+    for group in groups {
+        if group.len() < 2 || group[0].face_style.is_empty() {
+            continue;
+        }
+        let mut group = group.into_iter();
+        let Some(canonical) = group.next() else {
+            continue;
+        };
+        let mut selected = vec![(canonical, 0u8)];
+        for target in group {
+            if let Some(quarter) =
+                unique_relative_quarter(&selected[0].0, &target, entities, initial_index)
+            {
+                selected.push((target, quarter));
+            }
+        }
+        if selected.len() >= 2 {
+            let face_style = std::mem::take(&mut selected[0].0.face_style);
+            let members = selected
+                .into_iter()
+                .map(|(info, quarter)| Z90Occurrence::from_proven(info, quarter))
+                .collect();
+            selected_groups.push(Z90GroupPlan {
+                face_style,
+                members,
+            });
+        }
+    }
+    (!selected_groups.is_empty()).then_some(Z90RepresentationPlan {
+        representation_id,
+        context_id,
+        groups: selected_groups,
+    })
+}
+
+fn group_z90_candidates(mut infos: Vec<SolidInfo>) -> Vec<Vec<SolidInfo>> {
+    // Group owned analysis records directly. The old HashMap path cloned each
+    // potentially large ShapeKey and style vector just to form a grouping key.
+    infos.sort_by(|a, b| {
+        a.key
+            .cmp(&b.key)
+            .then_with(|| a.face_style.cmp(&b.face_style))
+            .then_with(|| a.root.cmp(&b.root))
+    });
+    let mut groups: Vec<Vec<SolidInfo>> = Vec::new();
+    for info in infos {
+        if let Some(group) = groups.last_mut()
+            && group[0].key == info.key
+            && group[0].face_style == info.face_style
+        {
+            group.push(info);
+        } else {
+            groups.push(vec![info]);
+        }
+    }
+    // Preserve the previous deterministic emission order.
+    groups.sort_by_key(|group| group.first().map_or(u64::MAX, |info| info.root));
+
+    groups
+}
+
+fn trace_z90_candidates(representation_id: u64, solid_count: usize, infos: &[SolidInfo]) {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn h<T: Hash>(value: &T) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    eprintln!(
+        "instance grouping representation={representation_id} solids={} analyzed={}",
+        solid_count,
+        infos.len()
+    );
+    for info in infos {
+        eprintln!(
+            "instance key root={} center={:?} basic=({},{},{},{}) points={:016x} edge_geom={:016x} face_geom={:016x} topo={:016x} style={:016x}",
+            info.root,
+            info.center,
+            info.key.vertices,
+            info.key.edges,
+            info.key.oriented_edges,
+            info.key.faces,
+            h(&info.key.points),
+            h(&info.key.edge_geometry),
+            h(&info.key.face_geometry),
+            h(&info.key.topology),
+            h(&info.face_style),
+        );
+    }
+}
+
+pub fn instance_z90_solids(entities: &mut Vec<EntityInstance>) -> InstanceStats {
+    let plan = plan_z90_instances(entities);
+    apply_z90_instances(entities, plan)
+}
+
+/// Emit proven mappings and prune only now-detached duplicate B-rep closures.
+#[expect(
+    clippy::too_many_lines,
+    reason = "source map emission and reachability GC must preserve exact STEP topology ownership"
+)]
+fn apply_z90_instances(entities: &mut Vec<EntityInstance>, plan: Z90InstancePlan) -> InstanceStats {
+    let mut stats = InstanceStats::default();
+    if plan.is_empty() {
+        return stats;
+    }
+    let Z90InstancePlan {
+        initial_index,
+        styles_by_target,
+        representations,
+    } = plan;
     let mut next_id = entities.iter().map(entity_id).max().unwrap_or(0) + 1;
     let mut geometry_candidates = HashSet::new();
     let mut duplicate_roots = HashSet::new();
@@ -65,116 +266,21 @@ pub fn instance_z90_solids(entities: &mut Vec<EntityInstance>) -> InstanceStats 
     let mut shape_rep_replacements = HashMap::new();
     let mut source_representations = HashSet::new();
 
-    for representation_id in representation_ids {
+    for Z90RepresentationPlan {
+        representation_id,
+        context_id,
+        groups,
+    } in representations
+    {
         let Some(&rep_idx) = initial_index.get(&representation_id) else {
             continue;
         };
-        let Some((item_ids, context_id)) = representation_items_and_context(&entities[rep_idx])
-        else {
-            continue;
-        };
-
-        let solid_ids: Vec<u64> = item_ids
-            .iter()
-            .copied()
-            .filter(|id| {
-                initial_index
-                    .get(id)
-                    .and_then(|&idx| simple_record(&entities[idx]))
-                    .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
-            })
-            .collect();
-
-        if solid_ids.len() < 3 {
-            continue;
-        }
-
-        let mut infos = Vec::new();
-        for root in solid_ids.iter().copied() {
-            if let Some(info) = analyze_solid(root, entities, &initial_index, &styles_by_target) {
-                infos.push(info);
-            }
-        }
-
-        if std::env::var_os("STEP_REDOX_DEBUG_INSTANCES").is_some() {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-
-            fn h<T: Hash>(value: &T) -> u64 {
-                let mut hasher = DefaultHasher::new();
-                value.hash(&mut hasher);
-                hasher.finish()
-            }
-
-            eprintln!(
-                "instance grouping representation={representation_id} solids={} analyzed={}",
-                solid_ids.len(),
-                infos.len()
-            );
-            for info in &infos {
-                eprintln!(
-                    "instance key root={} center={:?} basic=({},{},{},{}) points={:016x} edge_geom={:016x} face_geom={:016x} topo={:016x} style={:016x}",
-                    info.root,
-                    info.center,
-                    info.key.vertices,
-                    info.key.edges,
-                    info.key.oriented_edges,
-                    info.key.faces,
-                    h(&info.key.points),
-                    h(&info.key.edge_geometry),
-                    h(&info.key.face_geometry),
-                    h(&info.key.topology),
-                    h(&info.face_style),
-                );
-            }
-        }
-
-        // Group owned analysis records directly. The old HashMap path cloned each
-        // potentially large ShapeKey and style vector just to form a grouping key.
-        infos.sort_by(|a, b| {
-            a.key
-                .cmp(&b.key)
-                .then_with(|| a.face_style.cmp(&b.face_style))
-                .then_with(|| a.root.cmp(&b.root))
-        });
-        let mut groups: Vec<Vec<SolidInfo>> = Vec::new();
-        for info in infos {
-            if let Some(group) = groups.last_mut()
-                && group[0].key == info.key
-                && group[0].face_style == info.face_style
-            {
-                group.push(info);
-            } else {
-                groups.push(vec![info]);
-            }
-        }
-        // Preserve the previous deterministic emission order.
-        groups.sort_by_key(|group| group.first().map_or(u64::MAX, |info| info.root));
-
-        for group in groups {
-            if group.len() < 2 || group[0].face_style.is_empty() {
-                continue;
-            }
-
-            let canonical = &group[0];
-            let face_style = &canonical.face_style;
-
-            // Do not infer the actual instance transform from the canonical-key
-            // rotation. Symmetric envelopes can have several equivalent
-            // canonical rotations. Prove each source -> target transform
-            // directly against its transformed vertex and B-rep signatures.
-            let mut mapped_group = vec![(canonical, 0u8)];
-            for target in group.iter().skip(1) {
-                if let Some(quarter) =
-                    unique_relative_quarter(canonical, target, entities, &initial_index)
-                {
-                    mapped_group.push((target, quarter));
-                }
-            }
-            if mapped_group.len() < 2 {
-                continue;
-            }
-
+        for Z90GroupPlan {
+            members,
+            face_style,
+        } in groups
+        {
+            let canonical = &members[0];
             let z_dir = push_simple(
                 entities,
                 &mut next_id,
@@ -246,11 +352,11 @@ pub fn instance_z90_solids(entities: &mut Vec<EntityInstance>) -> InstanceStats 
             let mut replacements = HashMap::new();
             let mut group_new_styles = Vec::new();
 
-            for (target, relative_quarter) in &mapped_group {
+            for target in &members {
                 // Every visible occurrence is represented uniformly as a MAPPED_ITEM,
                 // including the canonical identity occurrence. The canonical B-rep
                 // itself remains alive only inside source_rep as the map source.
-                let relative_quarter = *relative_quarter;
+                let relative_quarter = target.quarter;
                 let translation =
                     rigid_translation(canonical.center, target.center, relative_quarter);
                 if std::env::var_os("STEP_REDOX_DEBUG_INSTANCES").is_some() {
@@ -300,7 +406,7 @@ pub fn instance_z90_solids(entities: &mut Vec<EntityInstance>) -> InstanceStats 
 
             // The canonical solid remains alive through source_rep. Only the
             // other expanded copies are deletion roots.
-            for (target, _) in mapped_group.iter().skip(1) {
+            for target in members.iter().skip(1) {
                 duplicate_roots.insert(target.root);
                 geometry_candidates.extend(target.closure.iter().copied());
             }
@@ -314,7 +420,7 @@ pub fn instance_z90_solids(entities: &mut Vec<EntityInstance>) -> InstanceStats 
 
             new_style_ids.extend(group_new_styles);
             stats.groups += 1;
-            stats.solids_replaced += mapped_group.len();
+            stats.solids_replaced += members.len();
         }
     }
 
@@ -419,19 +525,19 @@ pub fn instance_z90_solids_assembly(entities: &mut Vec<EntityInstance>) -> Insta
         return InstanceStats::default();
     }
 
-    // Reuse the mature geometric proof + guarded GC from the MAPPED_ITEM pass,
-    // then replace only its representation layer with the assembly structure
-    // emitted by OpenCascade itself. Keep a rollback copy because assembly
-    // conversion intentionally supports only simple, unambiguous product trees.
-    let original = entities.clone();
-    let stats = instance_z90_solids(entities);
-    if stats.groups == 0 {
-        return stats;
+    // Prove the geometric groups before paying for a transactional copy.
+    // Assembly admission is deliberately narrower than mapped-item instancing:
+    // an unsupported or ambiguous product tree must not mutate the source.
+    let plan = plan_z90_instances(entities);
+    if plan.is_empty() {
+        return InstanceStats::default();
     }
-    if convert_z90_mapped_items_to_assembly(entities) {
+    let mut candidate = entities.clone();
+    let stats = apply_z90_instances(&mut candidate, plan);
+    if stats.groups > 0 && convert_z90_mapped_items_to_assembly(&mut candidate) {
+        *entities = candidate;
         stats
     } else {
-        *entities = original;
         InstanceStats::default()
     }
 }

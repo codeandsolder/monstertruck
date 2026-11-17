@@ -580,3 +580,275 @@ fn curve_replica_signature_matches_explicit_translated_curve() -> anyhow::Result
     assert_eq!(explicit, replica);
     Ok(())
 }
+
+/// Duplicate the source-backed, asymmetric CAD B-rep rather than inventing a
+/// permissive mock topology. Each copy has distinct STEP entity identities,
+/// but shares the same presentation style and is placed in one representation.
+fn repeated_native_solid_fixture() -> anyhow::Result<Vec<EntityInstance>> {
+    repeated_native_solid_fixture_with_rotation(false)
+}
+
+fn repeated_native_solid_fixture_with_rotation(
+    rotate_last: bool,
+) -> anyhow::Result<Vec<EntityInstance>> {
+    let exchange = monstertruck_io::step::load::ParsedStepSource::parse(include_bytes!(
+        "../../validation/fixtures/native_planar_extrusion_bc1b8e95.step"
+    ))?
+    .exchange;
+    let mut entities = exchange.data[0].entities.clone();
+    let original_index = build_index(&entities);
+    let source_root = entities
+        .iter()
+        .find(|entity| {
+            simple_record(entity).is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
+        })
+        .map(entity_id)
+        .ok_or_else(|| anyhow::anyhow!("source fixture has no B-rep solid"))?;
+    let face_ids = manifold_solid_face_ids(source_root, &entities, &original_index)
+        .ok_or_else(|| anyhow::anyhow!("source fixture has no closed shell faces"))?;
+    let closure = closure_from(source_root, &entities, &original_index);
+    let seed = entities
+        .iter()
+        .filter(|entity| closure.contains(&entity_id(entity)))
+        .cloned()
+        .collect::<Vec<_>>();
+    let rep_idx = entities
+        .iter()
+        .position(|entity| {
+            simple_record(entity)
+                .is_some_and(|record| record.name == "ADVANCED_BREP_SHAPE_REPRESENTATION")
+                && representation_items_and_context(entity)
+                    .is_some_and(|(items, _)| items.contains(&source_root))
+        })
+        .ok_or_else(|| anyhow::anyhow!("source fixture has no parent representation"))?;
+
+    for offset in [10_000, 20_000] {
+        let aliases = closure
+            .iter()
+            .copied()
+            .map(|id| (id, id + offset))
+            .collect::<HashMap<_, _>>();
+        for source in &seed {
+            let mut copy = source.clone();
+            crate::step_graph::rewrite_entity_refs(&mut copy, &aliases);
+            if rotate_last
+                && offset == 20_000
+                && let Some(record) = simple_record_mut(&mut copy)
+                && matches!(record.name.as_str(), "CARTESIAN_POINT" | "DIRECTION")
+                && let Parameter::List(params) = &mut record.parameter
+                && let Some(Parameter::List(coords)) = params.get_mut(1)
+                && let [Parameter::Real(x), Parameter::Real(y), ..] = coords.as_mut_slice()
+            {
+                let (old_x, old_y) = (*x, *y);
+                *x = -old_y;
+                *y = old_x;
+            }
+            match &mut copy {
+                EntityInstance::Simple { id, .. } | EntityInstance::Complex { id, .. } => {
+                    *id += offset;
+                }
+            }
+            entities.push(copy);
+        }
+    }
+
+    let rep = simple_record_mut(&mut entities[rep_idx])
+        .ok_or_else(|| anyhow::anyhow!("missing source representation"))?;
+    let Parameter::List(parameters) = &mut rep.parameter else {
+        anyhow::bail!("invalid source representation");
+    };
+    let Some(Parameter::List(items)) = parameters.get_mut(1) else {
+        anyhow::bail!("invalid representation items");
+    };
+    for offset in [10_000, 20_000] {
+        items.push(entity_ref(source_root + offset));
+    }
+
+    append_repetition_styles(&mut entities, &face_ids);
+    Ok(entities)
+}
+
+/// One shared, fully referenced AP214 style for every copied face.
+fn append_repetition_styles(entities: &mut Vec<EntityInstance>, face_ids: &[u64]) {
+    // Give the styled faces a real, shared AP214 presentation chain rather
+    // than leaving an unresolved style reference in the validation fixture.
+    let mut next_style_component_id = 29_990;
+    let color = push_simple(
+        entities,
+        &mut next_style_component_id,
+        "COLOUR_RGB",
+        vec![
+            Parameter::String("fixture blue".to_string()),
+            Parameter::Real(0.2),
+            Parameter::Real(0.4),
+            Parameter::Real(0.7),
+        ],
+    );
+    let fill_color = push_simple(
+        entities,
+        &mut next_style_component_id,
+        "FILL_AREA_STYLE_COLOUR",
+        vec![Parameter::String(String::new()), entity_ref(color)],
+    );
+    let fill = push_simple(
+        entities,
+        &mut next_style_component_id,
+        "FILL_AREA_STYLE",
+        vec![
+            Parameter::String(String::new()),
+            Parameter::List(vec![entity_ref(fill_color)]),
+        ],
+    );
+    let surface_fill = push_simple(
+        entities,
+        &mut next_style_component_id,
+        "SURFACE_STYLE_FILL_AREA",
+        vec![entity_ref(fill)],
+    );
+    let surface_side = push_simple(
+        entities,
+        &mut next_style_component_id,
+        "SURFACE_SIDE_STYLE",
+        vec![
+            Parameter::String(String::new()),
+            Parameter::List(vec![entity_ref(surface_fill)]),
+        ],
+    );
+    let surface_usage = push_simple(
+        entities,
+        &mut next_style_component_id,
+        "SURFACE_STYLE_USAGE",
+        vec![
+            Parameter::Enumeration("BOTH".to_string()),
+            entity_ref(surface_side),
+        ],
+    );
+    let style_assignment_id = push_simple(
+        entities,
+        &mut next_style_component_id,
+        "PRESENTATION_STYLE_ASSIGNMENT",
+        vec![Parameter::List(vec![entity_ref(surface_usage)])],
+    );
+    let mut next_style_id = 30_000;
+    for offset in [0, 10_000, 20_000] {
+        for &face in face_ids {
+            entities.push(EntityInstance::Simple {
+                id: next_style_id,
+                record: Record {
+                    name: "STYLED_ITEM".to_string(),
+                    parameter: Parameter::List(vec![
+                        Parameter::String(String::new()),
+                        Parameter::List(vec![entity_ref(style_assignment_id)]),
+                        entity_ref(face + offset),
+                    ]),
+                },
+            });
+            next_style_id += 1;
+        }
+    }
+}
+
+#[test]
+fn z90_planner_proves_real_repeated_brep_without_mutating_source() -> anyhow::Result<()> {
+    let entities = repeated_native_solid_fixture()?;
+    let original = entities.clone();
+    let plan = plan_z90_instances(&entities);
+    assert_eq!(plan.representations.len(), 1);
+    let [group] = plan.representations[0].groups.as_slice() else {
+        anyhow::bail!("expected one proven repeated shape family");
+    };
+    assert_eq!(group.members.len(), 3);
+    assert!(group.members.iter().all(|member| member.quarter == 0));
+    assert_eq!(entities, original);
+    Ok(())
+}
+
+#[test]
+fn z90_planner_proves_a_quarter_turned_real_brep() -> anyhow::Result<()> {
+    let entities = repeated_native_solid_fixture_with_rotation(true)?;
+    let plan = plan_z90_instances(&entities);
+    let [representation] = plan.representations.as_slice() else {
+        anyhow::bail!("expected exactly one repeated representation");
+    };
+    let [group] = representation.groups.as_slice() else {
+        anyhow::bail!("missing quarter-turned B-rep group");
+    };
+    assert_eq!(group.members.len(), 3);
+    assert_eq!(group.members[0].quarter, 0);
+    assert_eq!(group.members[1].quarter, 0);
+    assert_eq!(group.members[2].quarter, 1);
+    Ok(())
+}
+
+#[test]
+fn z90_instancing_emits_all_proven_repeated_occurrences() -> anyhow::Result<()> {
+    let mut entities = repeated_native_solid_fixture()?;
+    let stats = instance_z90_solids(&mut entities);
+    assert_eq!(stats.groups, 1);
+    assert_eq!(stats.solids_replaced, 3);
+    assert_eq!(
+        entities
+            .iter()
+            .filter(|entity| simple_record(entity).is_some_and(|r| r.name == "MAPPED_ITEM"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        entities
+            .iter()
+            .filter(|entity| {
+                simple_record(entity).is_some_and(|r| r.name == "MANIFOLD_SOLID_BREP")
+            })
+            .count(),
+        1,
+        "redundant original B-rep copies must be unreachable"
+    );
+    Ok(())
+}
+
+#[test]
+fn z90_assembly_converts_source_backed_repetition() -> anyhow::Result<()> {
+    let mut entities = repeated_native_solid_fixture()?;
+    let stats = instance_z90_solids_assembly(&mut entities);
+    assert_eq!(stats.groups, 1);
+    assert_eq!(stats.solids_replaced, 3);
+    assert!(entities.iter().any(|entity| {
+        simple_record(entity).is_some_and(|record| record.name == "NEXT_ASSEMBLY_USAGE_OCCURRENCE")
+    }));
+    assert!(!entities.iter().any(|entity| {
+        simple_record(entity).is_some_and(|record| record.name == "MAPPED_ITEM")
+    }));
+    Ok(())
+}
+
+#[test]
+fn z90_assembly_rejects_unsupported_product_tree_atomically() -> anyhow::Result<()> {
+    let mut entities = repeated_native_solid_fixture()?;
+    // The geometric instancing stage must still find the three exact copies.
+    assert!(!plan_z90_instances(&entities).is_empty());
+    entities.retain(|entity| {
+        simple_record(entity).is_none_or(|record| record.name != "SHAPE_DEFINITION_REPRESENTATION")
+    });
+    let before = entities.clone();
+    let stats = instance_z90_solids_assembly(&mut entities);
+    assert_eq!(stats.groups, 0);
+    assert_eq!(entities, before);
+    Ok(())
+}
+
+#[test]
+fn z90_no_candidate_is_byte_identical_in_both_modes() -> anyhow::Result<()> {
+    let exchange = monstertruck_io::step::load::ParsedStepSource::parse(include_bytes!(
+        "../../validation/fixtures/native_planar_extrusion_bc1b8e95.step"
+    ))?
+    .exchange;
+    let original = exchange.data[0].entities.clone();
+    let mut mapped = original.clone();
+    let mut assembly = original.clone();
+    assert!(plan_z90_instances(&original).is_empty());
+    assert_eq!(instance_z90_solids(&mut mapped).groups, 0);
+    assert_eq!(instance_z90_solids_assembly(&mut assembly).groups, 0);
+    assert_eq!(mapped, original);
+    assert_eq!(assembly, original);
+    Ok(())
+}
