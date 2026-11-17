@@ -9,7 +9,11 @@
 //! would break the topology, or input it cannot reason about, is refused with
 //! a [`SnapError`] and the shell is left untouched.
 
-use super::*;
+use super::{
+    BsplineCurve, CompressedEdge, CompressedEdgeIndex, CompressedShell,
+    DEFAULT_NUMERICAL_TOLERANCES, EuclideanSpace, HashMap, InnerSpace, MetricSpace, NurbsCurve,
+    ParametricCurve, Point3, SnapCurveEndpoints, TryIntoHomogeneousBsplineCurve, Vector3, Vector4,
+};
 use monstertruck_topology::StableId;
 use std::{collections::BTreeMap, fmt};
 
@@ -103,14 +107,15 @@ pub struct SnapReport {
 
 impl SnapReport {
     /// Whether the weld changed the shell.
-    pub fn changed(&self) -> bool { self.merged_vertices > 0 || self.merged_edges > 0 }
+    #[must_use]
+    pub const fn changed(&self) -> bool { self.merged_vertices > 0 || self.merged_edges > 0 }
 
     fn unchanged<P, C, S>(
         shell: &CompressedShell<P, C, S>,
         naked_edges: Vec<usize>,
         skipped: Vec<(usize, usize, SkipReason)>,
     ) -> Self {
-        SnapReport {
+        Self {
             merged_vertices: 0,
             merged_edges: 0,
             naked_edges_before: naked_edges.len(),
@@ -181,27 +186,27 @@ pub enum SnapError {
 impl fmt::Display for SnapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SnapError::InvalidTolerance(tolerance) => {
+            Self::InvalidTolerance(tolerance) => {
                 write!(
                     f,
                     "weld tolerance {tolerance} is not finite and non-negative"
                 )
             }
-            SnapError::IndexOutOfRange => write!(f, "the shell has an out-of-range index"),
-            SnapError::StableIdLengthMismatch => {
+            Self::IndexOutOfRange => write!(f, "the shell has an out-of-range index"),
+            Self::StableIdLengthMismatch => {
                 write!(f, "a stable-ID array does not match its element count")
             }
-            SnapError::ThreeEdgeUses { edge } => {
+            Self::ThreeEdgeUses { edge } => {
                 write!(f, "edge {edge} joins or would join three or more faces")
             }
-            SnapError::CollapsedEdge { edge } => write!(f, "the weld would collapse edge {edge}"),
-            SnapError::NonSimpleWire { face } => {
+            Self::CollapsedEdge { edge } => write!(f, "the weld would collapse edge {edge}"),
+            Self::NonSimpleWire { face } => {
                 write!(f, "the weld would make a wire of face {face} non-simple")
             }
-            SnapError::SingularVertex { vertex } => {
+            Self::SingularVertex { vertex } => {
                 write!(f, "the weld would pinch the faces around vertex {vertex}")
             }
-            SnapError::CurveEndpointOutOfTolerance { edge } => write!(
+            Self::CurveEndpointOutOfTolerance { edge } => write!(
                 f,
                 "the weld would leave the curve of edge {edge} off its vertex"
             ),
@@ -297,10 +302,10 @@ where
     let (target, accepted) = accept_without_creep(shell, &candidates, tolerance, &mut skipped);
     skipped.sort_by_key(|&(keep, drop, _)| (keep, drop));
     let mut matches = vec![0usize; shell.edges.len()];
-    accepted.iter().for_each(|pair| {
+    for pair in &accepted {
         matches[pair.keep] += 1;
         matches[pair.drop] += 1;
-    });
+    }
     if let Some(edge) = matches.iter().position(|&count| count > 1) {
         return Err(SnapError::ThreeEdgeUses { edge });
     }
@@ -334,9 +339,10 @@ fn validate_indices<P, C, S>(
     let ids_ok = length_ok(&shell.vertex_stable_ids, vertex_count)
         && length_ok(&shell.edge_stable_ids, edge_count)
         && length_ok(&shell.face_stable_ids, shell.faces.len());
-    match ids_ok {
-        true => Ok(()),
-        false => Err(SnapError::StableIdLengthMismatch),
+    if ids_ok {
+        Ok(())
+    } else {
+        Err(SnapError::StableIdLengthMismatch)
     }
 }
 
@@ -389,12 +395,13 @@ struct Pair {
 
 impl Pair {
     /// The two vertex identifications this weld makes, `(keep's, drop's)`.
-    fn identifications<C>(&self, edges: &[CompressedEdge<C>]) -> [(usize, usize); 2] {
+    const fn identifications<C>(&self, edges: &[CompressedEdge<C>]) -> [(usize, usize); 2] {
         let (k0, k1) = edges[self.keep].vertices;
         let (d0, d1) = edges[self.drop].vertices;
-        match self.reversed {
-            true => [(k0, d1), (k1, d0)],
-            false => [(k0, d0), (k1, d1)],
+        if self.reversed {
+            [(k0, d1), (k1, d0)]
+        } else {
+            [(k0, d0), (k1, d1)]
         }
     }
 }
@@ -411,10 +418,20 @@ type BucketKey = [i64; 3];
 /// saturates; the neighbourhood below saturates too, so two points within one
 /// cell size still land in neighbouring cells.
 fn bucket_key(point: Point3, bucket_size: f64) -> BucketKey {
+    fn cell(value: f64, size: f64) -> i64 {
+        let quotient = (value / size).floor();
+        num_traits::ToPrimitive::to_i64(&quotient).unwrap_or_else(|| {
+            if quotient.is_sign_negative() {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        })
+    }
     [
-        (point.x / bucket_size).floor() as i64,
-        (point.y / bucket_size).floor() as i64,
-        (point.z / bucket_size).floor() as i64,
+        cell(point.x, bucket_size),
+        cell(point.y, bucket_size),
+        cell(point.z, bucket_size),
     ]
 }
 
@@ -456,15 +473,15 @@ where
 
     // Naked edges by the bucket of each of their end vertices.
     let mut buckets = HashMap::<BucketKey, Vec<usize>>::default();
-    naked.iter().for_each(|&edge| {
-        let (front, back) = shell.edges[edge].vertices;
-        [front, back].into_iter().for_each(|vertex| {
+    for &edge in naked {
+        let vertices: [usize; 2] = shell.edges[edge].vertices.into();
+        for vertex in vertices {
             buckets
                 .entry(bucket_key(shell.vertices[vertex], tolerance))
                 .or_default()
                 .push(edge);
-        });
-    });
+        }
+    }
 
     let flatness = tolerance * FLATNESS_FRACTION;
     let mut polylines: Vec<Option<Option<BoundedPolyline>>> = vec![None; shell.edges.len()];
@@ -476,7 +493,7 @@ where
 
     let mut pairs = Vec::new();
     let mut skipped = Vec::new();
-    naked.iter().for_each(|&keep| {
+    for &keep in naked {
         let (k0, k1) = shell.edges[keep].vertices;
         let mut candidates: Vec<usize> =
             neighboring_bucket_keys(bucket_key(shell.vertices[k0], tolerance))
@@ -487,16 +504,16 @@ where
                 .collect();
         candidates.sort_unstable();
         candidates.dedup();
-        candidates.into_iter().for_each(|drop| {
+        for drop in candidates {
             let (d0, d1) = shell.edges[drop].vertices;
             let reversed = near(k0, d1) && near(k1, d0);
             let aligned = near(k0, d0) && near(k1, d1);
             if !reversed && !aligned {
-                return;
+                continue;
             }
             if reversed && aligned {
                 skipped.push((keep, drop, SkipReason::AmbiguousEnds));
-                return;
+                continue;
             }
             let deviation = match (polyline_of(keep), polyline_of(drop)) {
                 (Some(lhs), Some(rhs)) => certified_deviation(&lhs, &rhs, tolerance),
@@ -506,11 +523,11 @@ where
                 Deviation::Within(bound) => bound,
                 Deviation::AtLeast(at_least) => {
                     skipped.push((keep, drop, SkipReason::CurvesDiffer { at_least }));
-                    return;
+                    continue;
                 }
                 Deviation::NotBounded => {
                     skipped.push((keep, drop, SkipReason::DeviationNotBounded));
-                    return;
+                    continue;
                 }
             };
             // Opposite traversal means: with fronts matched to backs the faces
@@ -520,7 +537,7 @@ where
             let forward_drop = uses[drop][0].1;
             if (forward_keep == forward_drop) != reversed {
                 skipped.push((keep, drop, SkipReason::IncompatibleOrientation));
-                return;
+                continue;
             }
             pairs.push(Pair {
                 keep,
@@ -528,8 +545,8 @@ where
                 reversed,
                 deviation,
             });
-        });
-    });
+        }
+    }
     MatchCandidates {
         candidates: pairs,
         skipped,
@@ -596,7 +613,7 @@ where C: ParametricCurve<Point = Point3, Vector = Vector3> {
     }
     let (knots, _) = homogeneous.knot_vector().to_single_multi();
     let mut parameters: Vec<f64> = knots.clone();
-    parameters.extend(knots.windows(2).map(|pair| 0.5 * (pair[0] + pair[1])));
+    parameters.extend(knots.windows(2).map(|pair| f64::midpoint(pair[0], pair[1])));
     parameters
         .into_iter()
         .filter(|t| (t0..=t1).contains(t))
@@ -698,9 +715,10 @@ fn certified_deviation(lhs: &BoundedPolyline, rhs: &BoundedPolyline, tolerance: 
             one_sided_bound(&lhs.points, &rhs.points, target),
             one_sided_bound(&rhs.points, &lhs.points, target),
         );
-    match upper <= tolerance {
-        true => Deviation::Within(upper),
-        false => Deviation::NotBounded,
+    if upper <= tolerance {
+        Deviation::Within(upper)
+    } else {
+        Deviation::NotBounded
     }
 }
 
@@ -769,9 +787,10 @@ fn segment_bound(p: Point3, q: Point3, to: &[Point3], target: f64, remaining: &m
 fn distance_to_segment(point: Point3, start: Point3, end: Point3) -> f64 {
     let direction = end - start;
     let length2 = direction.magnitude2();
-    let t = match length2 > 0.0 {
-        true => ((point - start).dot(direction) / length2).clamp(0.0, 1.0),
-        false => 0.0,
+    let t = if length2 > 0.0 {
+        ((point - start).dot(direction) / length2).clamp(0.0, 1.0)
+    } else {
+        0.0
     };
     point.distance(start + direction * t)
 }
@@ -803,7 +822,7 @@ fn accept_without_creep<C, S>(
         members.get(&group).cloned().unwrap_or_else(|| vec![group])
     };
     let mut accepted = Vec::new();
-    pairs.iter().for_each(|pair| {
+    for pair in pairs {
         let identifications = pair.identifications(&shell.edges);
         // The groups each identification joins; two identifications that
         // share a group join all of theirs into one.
@@ -839,9 +858,9 @@ fn accept_without_creep<C, S>(
         });
         if !within_tolerance {
             skipped.push((pair.keep, pair.drop, SkipReason::ToleranceCreep));
-            return;
+            continue;
         }
-        components.into_iter().for_each(|groups| {
+        for groups in components {
             let survivor = groups[0];
             let joined: Vec<usize> = groups
                 .iter()
@@ -851,13 +870,13 @@ fn accept_without_creep<C, S>(
                     group_members
                 })
                 .collect();
-            joined
-                .iter()
-                .for_each(|&vertex| group_of[vertex] = survivor);
+            for &vertex in &joined {
+                group_of[vertex] = survivor;
+            }
             members.insert(survivor, joined);
-        });
+        }
         accepted.push(*pair);
-    });
+    }
     // Each group is named by its lowest member, so `group_of` is the target.
     (group_of, accepted)
 }
@@ -872,67 +891,16 @@ struct Welded<C> {
     report: SnapReport,
 }
 
-fn build_welded<C, S>(
+/// Re-align surviving curve endpoint hints without mutating the input shell.
+fn align_surviving_curves<C, S>(
     shell: &CompressedShell<Point3, C, S>,
     target: &[usize],
-    accepted: &[Pair],
+    dropped: &[Option<usize>],
     tolerance: f64,
-) -> std::result::Result<Welded<C>, SnapError>
+) -> std::result::Result<(Vec<C>, f64), SnapError>
 where
     C: SnapCurveEndpoints + ParametricCurve<Point = Point3, Vector = Vector3>,
 {
-    let mut dropped: Vec<Option<usize>> = vec![None; shell.edges.len()];
-    accepted
-        .iter()
-        .for_each(|pair| dropped[pair.drop] = Some(pair.keep));
-
-    // Topology on the original indices, with vertices remapped to targets.
-    let remapped = |edge: usize| {
-        let (front, back) = shell.edges[edge].vertices;
-        (target[front], target[back])
-    };
-    if let Some(edge) = (0..shell.edges.len()).find(|&edge| {
-        let (front, back) = remapped(edge);
-        let (original_front, original_back) = shell.edges[edge].vertices;
-        dropped[edge].is_none() && front == back && original_front != original_back
-    }) {
-        return Err(SnapError::CollapsedEdge { edge });
-    }
-
-    // Original edge -> (surviving original edge, same direction).
-    let carrier = |edge: usize| match dropped[edge] {
-        Some(keep) => (keep, remapped(edge) == remapped(keep)),
-        None => (edge, true),
-    };
-    let use_front = |edge_use: &CompressedEdgeIndex, vertex_of: &dyn Fn(usize) -> usize| {
-        let (front, back) = shell.edges[edge_use.index].vertices;
-        match edge_use.orientation {
-            true => vertex_of(front),
-            false => vertex_of(back),
-        }
-    };
-    let has_repeat = |mut vertices: Vec<usize>| {
-        vertices.sort_unstable();
-        vertices.windows(2).any(|pair| pair[0] == pair[1])
-    };
-    for (face_index, face) in shell.faces.iter().enumerate() {
-        for wire in &face.boundaries {
-            let before: Vec<usize> = wire
-                .iter()
-                .map(|edge_use| use_front(edge_use, &|v| v))
-                .collect();
-            let after: Vec<usize> = wire
-                .iter()
-                .map(|edge_use| use_front(edge_use, &|v| target[v]))
-                .collect();
-            if has_repeat(after) && !has_repeat(before) {
-                return Err(SnapError::NonSimpleWire { face: face_index });
-            }
-        }
-    }
-
-    check_fans(shell, target, &carrier, &remapped)?;
-
     // Geometry: the surviving curves, endpoint hints re-aligned, moved ends
     // checked against the tolerance and against their gap before the weld.
     let mut max_curve_endpoint_gap = 0.0f64;
@@ -983,6 +951,16 @@ where
         curves.push(curve);
     }
 
+    Ok((curves, max_curve_endpoint_gap))
+}
+
+/// Build dense old-to-new vertex and oriented edge mappings after validation.
+fn compact_mapping<C, S>(
+    shell: &CompressedShell<Point3, C, S>,
+    target: &[usize],
+    dropped: &[Option<usize>],
+    carrier: &dyn Fn(usize) -> (usize, bool),
+) -> (Vec<usize>, Vec<CompressedEdgeIndex>) {
     // Compaction and the old-to-new mappings.
     let mut vertex_map = vec![0usize; target.len()];
     let mut next = 0;
@@ -1011,21 +989,14 @@ where
         })
         .collect();
 
-    let vertices: Vec<Point3> = (0..target.len())
-        .filter(|&vertex| target[vertex] == vertex)
-        .map(|vertex| shell.vertices[vertex])
-        .collect();
-    let edges: Vec<CompressedEdge<C>> = (0..shell.edges.len())
-        .filter(|&edge| dropped[edge].is_none())
-        .zip(curves)
-        .map(|(edge, curve)| {
-            let (front, back) = shell.edges[edge].vertices;
-            CompressedEdge {
-                vertices: (vertex_map[front], vertex_map[back]),
-                curve,
-            }
-        })
-        .collect();
+    (vertex_map, edge_map)
+}
+
+/// Relabel face wire edge uses, composing the original and merged orientations.
+fn map_welded_boundaries<C, S>(
+    shell: &CompressedShell<Point3, C, S>,
+    edge_map: &[CompressedEdgeIndex],
+) -> Vec<Vec<Vec<CompressedEdgeIndex>>> {
     let boundaries: Vec<Vec<Vec<CompressedEdgeIndex>>> = shell
         .faces
         .iter()
@@ -1046,6 +1017,15 @@ where
                 .collect()
         })
         .collect();
+    boundaries
+}
+
+/// Preserve only the stable IDs of surviving vertices and edges.
+fn remap_stable_ids<C, S>(
+    shell: &CompressedShell<Point3, C, S>,
+    target: &[usize],
+    dropped: &[Option<usize>],
+) -> (Option<Vec<StableId>>, Option<Vec<StableId>>) {
     let vertex_stable_ids = shell.vertex_stable_ids.as_ref().map(|ids| {
         (0..target.len())
             .filter(|&vertex| target[vertex] == vertex)
@@ -1058,6 +1038,95 @@ where
             .map(|edge| ids[edge])
             .collect()
     });
+
+    (vertex_stable_ids, edge_stable_ids)
+}
+
+fn build_welded<C, S>(
+    shell: &CompressedShell<Point3, C, S>,
+    target: &[usize],
+    accepted: &[Pair],
+    tolerance: f64,
+) -> std::result::Result<Welded<C>, SnapError>
+where
+    C: SnapCurveEndpoints + ParametricCurve<Point = Point3, Vector = Vector3>,
+{
+    let mut dropped: Vec<Option<usize>> = vec![None; shell.edges.len()];
+    for pair in accepted {
+        dropped[pair.drop] = Some(pair.keep);
+    }
+
+    // Topology on the original indices, with vertices remapped to targets.
+    let remapped = |edge: usize| {
+        let (front, back) = shell.edges[edge].vertices;
+        (target[front], target[back])
+    };
+    if let Some(edge) = (0..shell.edges.len()).find(|&edge| {
+        let (front, back) = remapped(edge);
+        let (original_front, original_back) = shell.edges[edge].vertices;
+        dropped[edge].is_none() && front == back && original_front != original_back
+    }) {
+        return Err(SnapError::CollapsedEdge { edge });
+    }
+
+    // Original edge -> (surviving original edge, same direction).
+    let carrier = |edge: usize| {
+        dropped[edge].map_or((edge, true), |keep| {
+            (keep, remapped(edge) == remapped(keep))
+        })
+    };
+    let use_front = |edge_use: &CompressedEdgeIndex, vertex_of: &dyn Fn(usize) -> usize| {
+        let (front, back) = shell.edges[edge_use.index].vertices;
+        if edge_use.orientation {
+            vertex_of(front)
+        } else {
+            vertex_of(back)
+        }
+    };
+    let has_repeat = |mut vertices: Vec<usize>| {
+        vertices.sort_unstable();
+        vertices.windows(2).any(|pair| pair[0] == pair[1])
+    };
+    for (face_index, face) in shell.faces.iter().enumerate() {
+        for wire in &face.boundaries {
+            let before: Vec<usize> = wire
+                .iter()
+                .map(|edge_use| use_front(edge_use, &|v| v))
+                .collect();
+            let after: Vec<usize> = wire
+                .iter()
+                .map(|edge_use| use_front(edge_use, &|v| target[v]))
+                .collect();
+            if has_repeat(after) && !has_repeat(before) {
+                return Err(SnapError::NonSimpleWire { face: face_index });
+            }
+        }
+    }
+
+    check_fans(shell, target, &carrier, &remapped)?;
+
+    let (curves, max_curve_endpoint_gap) =
+        align_surviving_curves(shell, target, &dropped, tolerance)?;
+
+    let (vertex_map, edge_map) = compact_mapping(shell, target, &dropped, &carrier);
+
+    let vertices: Vec<Point3> = (0..target.len())
+        .filter(|&vertex| target[vertex] == vertex)
+        .map(|vertex| shell.vertices[vertex])
+        .collect();
+    let edges: Vec<CompressedEdge<C>> = (0..shell.edges.len())
+        .filter(|&edge| dropped[edge].is_none())
+        .zip(curves)
+        .map(|(edge, curve)| {
+            let (front, back) = shell.edges[edge].vertices;
+            CompressedEdge {
+                vertices: (vertex_map[front], vertex_map[back]),
+                curve,
+            }
+        })
+        .collect();
+    let boundaries = map_welded_boundaries(shell, &edge_map);
+    let (vertex_stable_ids, edge_stable_ids) = remap_stable_ids(shell, target, &dropped);
 
     let max_vertex_displacement = (0..target.len())
         .filter(|&vertex| target[vertex] != vertex)
@@ -1101,14 +1170,12 @@ fn check_fans<C, S>(
 ) -> std::result::Result<(), SnapError> {
     // Merged vertex -> its members, original indices.
     let mut members = BTreeMap::<usize, Vec<usize>>::new();
-    (0..target.len())
-        .filter(|&vertex| target[vertex] != vertex)
-        .for_each(|vertex| {
-            members
-                .entry(target[vertex])
-                .or_insert_with(|| vec![target[vertex]])
-                .push(vertex)
-        });
+    for vertex in (0..target.len()).filter(|&vertex| target[vertex] != vertex) {
+        members
+            .entry(target[vertex])
+            .or_insert_with(|| vec![target[vertex]])
+            .push(vertex);
+    }
     if members.is_empty() {
         return Ok(());
     }
@@ -1125,7 +1192,7 @@ fn check_fans<C, S>(
         .for_each(|(face_index, face)| {
             face.boundaries.iter().flatten().for_each(|edge_use| {
                 let (front, back) = shell.edges[edge_use.index].vertices;
-                [front, back]
+                <[usize; 2]>::from((front, back))
                     .into_iter()
                     .filter(|&v| is_member(v))
                     .for_each(|vertex| {
@@ -1136,7 +1203,7 @@ fn check_fans<C, S>(
                     });
                 let surviving = carrier(edge_use.index).0;
                 let (front, back) = remapped(surviving);
-                [front, back]
+                <[usize; 2]>::from((front, back))
                     .into_iter()
                     .filter(|v| members.contains_key(v))
                     .for_each(|vertex| {
@@ -1166,28 +1233,28 @@ fn check_fans<C, S>(
 /// by an edge both use. `incident` lists `(face, edge)` for every use of an
 /// edge at one vertex.
 fn fan_components(incident: &[(usize, usize)]) -> usize {
-    let mut faces: Vec<usize> = incident.iter().map(|&(face, _)| face).collect();
-    faces.sort_unstable();
-    faces.dedup();
-    let mut parent: Vec<usize> = (0..faces.len()).collect();
-    fn root(parent: &mut [usize], mut node: usize) -> usize {
+    const fn root(parent: &mut [usize], mut node: usize) -> usize {
         while parent[node] != node {
             parent[node] = parent[parent[node]];
             node = parent[node];
         }
         node
     }
+    let mut faces: Vec<usize> = incident.iter().map(|&(face, _)| face).collect();
+    faces.sort_unstable();
+    faces.dedup();
+    let mut parent: Vec<usize> = (0..faces.len()).collect();
     let slot = |face: usize| faces.binary_search(&face).unwrap_or_default();
     let mut by_edge = BTreeMap::<usize, Vec<usize>>::new();
-    incident
-        .iter()
-        .for_each(|&(face, edge)| by_edge.entry(edge).or_default().push(slot(face)));
-    by_edge.values().for_each(|slots| {
-        slots.windows(2).for_each(|pair| {
+    for &(face, edge) in incident {
+        by_edge.entry(edge).or_default().push(slot(face));
+    }
+    for slots in by_edge.values() {
+        for pair in slots.windows(2) {
             let (a, b) = (root(&mut parent, pair[0]), root(&mut parent, pair[1]));
             parent[a.max(b)] = a.min(b);
-        });
-    });
+        }
+    }
     (0..faces.len())
         .filter(|&slot| root(&mut parent, slot) == slot)
         .count()
