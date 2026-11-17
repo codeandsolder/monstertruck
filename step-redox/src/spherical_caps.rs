@@ -9,6 +9,7 @@ use crate::step_entities::{
     representation_items_and_context,
 };
 use crate::step_graph::{ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter};
 use std::collections::{HashMap, HashSet};
 
@@ -686,7 +687,10 @@ fn single_face_style(
 }
 
 fn same_point(a: [f64; 3], b: [f64; 3]) -> bool {
-    (0..3).all(|axis| (a[axis] - b[axis]).abs() <= 1.0e-12)
+    (0..3).all(|axis| {
+        (a[axis] - b[axis]).abs()
+            <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
+    })
 }
 
 #[cfg(test)]

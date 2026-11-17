@@ -122,6 +122,10 @@ where
     #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) { self.entity.parameter_range() }
     #[inline]
+    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
+        self.entity.parameter_bounds_are_intrinsic()
+    }
+    #[inline]
     fn period_u(&self) -> Option<f64> {
         match (self.entity.period_u(), self.offset.period_u()) {
             (Some(x), Some(y)) if x.near(&y) => Some(f64::midpoint(x, y)),

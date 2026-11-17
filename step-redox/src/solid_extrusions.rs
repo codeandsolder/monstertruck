@@ -13,14 +13,15 @@ use crate::math3::{
 pub use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use crate::step_graph::{build_index, entity_id, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::TAU;
 
-const GEOM_TOL_MM: f64 = 1.0e-7;
-const DIR_TOL: f64 = 1.0e-10;
-const ANGLE_TOL_RAD: f64 = 1.0e-10;
+const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
+const ANGLE_TOL_RAD: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_extrusion_angle_rad;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecoveredSolidExtrusion {
@@ -204,6 +205,48 @@ fn source_cap_generator_station(
         .then_some(height)
 }
 
+/// Form a cap-derived extrusion proposal for an explicitly given axial station.
+///
+/// This does not assert that the positive source solid occupies the candidate.
+/// In particular, a source cap can bound an *empty* channel: such a proposal
+/// must only become a Boolean cutter after complete-source verification.
+pub(crate) fn source_cap_extrusion_proposal_at_station(
+    solid_id: u64,
+    cap_face_id: u64,
+    axis: [f64; 3],
+    height_mm: f64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<RecoveredSourceCapExtrusion> {
+    if !height_mm.is_finite() || height_mm <= GEOM_TOL_MM {
+        return None;
+    }
+    let cap = face_info(cap_face_id, entities, index)?;
+    let SurfaceSupport::Plane(plane) = cap.surface else {
+        return None;
+    };
+    let z_axis = normalize3(axis, DIR_TOL)?;
+    if dot(z_axis, normalize3(plane.normal, DIR_TOL)?).abs() < 1.0 - DIR_TOL
+        || !face_lies_on_plane(&cap, plane)
+    {
+        return None;
+    }
+    let roles = cap_loop_roles(&cap, z_axis)?;
+    let profile = canonical_profile(&cap, z_axis, &roles)?;
+    Some(RecoveredSourceCapExtrusion {
+        solid_id,
+        cap_face_id,
+        profile_curves: profile.curves,
+        inner_profile_loops: profile.inner_loops,
+        origin_mm: profile.origin_mm,
+        x_axis: profile.x_axis,
+        y_axis: profile.y_axis,
+        z_axis,
+        height_mm,
+        max_residual_mm: plane.max_residual_mm,
+    })
+}
+
 /// Recover a source cap as a *partial* extrusion, stopping at the earliest
 /// source-witnessed axial generator station. The opposite cap need not be
 /// exposed: this remains an unverified proposal until a union is independently
@@ -238,11 +281,6 @@ pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
             continue;
         };
         let inward = mul(normal, if cap.surface_forward { -1.0 } else { 1.0 });
-        let Some(profile) =
-            cap_loop_roles(cap, inward).and_then(|roles| canonical_profile(cap, inward, &roles))
-        else {
-            continue;
-        };
         let mut side_indices = HashSet::new();
         let mut all_edges_attached = true;
         for edge in &cap.loop_edges {
@@ -267,18 +305,11 @@ pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
         let Some(height) = source_cap_generator_station(cap, &side_indices, &faces, inward) else {
             continue;
         };
-        candidates.push(RecoveredSourceCapExtrusion {
-            solid_id,
-            cap_face_id: cap.id,
-            profile_curves: profile.curves,
-            inner_profile_loops: profile.inner_loops,
-            origin_mm: profile.origin_mm,
-            x_axis: profile.x_axis,
-            y_axis: profile.y_axis,
-            z_axis: inward,
-            height_mm: height,
-            max_residual_mm: plane.max_residual_mm,
-        });
+        if let Some(proposal) = source_cap_extrusion_proposal_at_station(
+            solid_id, cap.id, inward, height, entities, index,
+        ) {
+            candidates.push(proposal);
+        }
     }
     candidates.sort_by(|a, b| {
         a.height_mm
@@ -1954,19 +1985,17 @@ fn bspline_control_residual(
 fn bspline_parameterization_matches(first: &BSplineSupport, second: &BSplineSupport) -> bool {
     if first.degree != second.degree
         || first.knots.len() != second.knots.len()
-        || first
-            .knots
-            .iter()
-            .zip(&second.knots)
-            .any(|(a, b)| (a - b).abs() > 1.0e-12)
+        || first.knots.iter().zip(&second.knots).any(|(a, b)| {
+            (a - b).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_knot_residual
+        })
     {
         return false;
     }
     match (&first.weights, &second.weights) {
         (None, None) => true,
-        (Some(a), Some(b)) if a.len() == b.len() => {
-            a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 1.0e-12)
-        }
+        (Some(a), Some(b)) if a.len() == b.len() => a.iter().zip(b).all(|(a, b)| {
+            (a - b).abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_knot_residual
+        }),
         _ => false,
     }
 }
@@ -2370,10 +2399,10 @@ fn is_bezier_support(spline: &BSplineSupport) -> bool {
     }
     spline.knots[..order]
         .iter()
-        .all(|knot| knot.abs() <= 1.0e-12)
-        && spline.knots[order..]
-            .iter()
-            .all(|knot| (*knot - 1.0).abs() <= 1.0e-12)
+        .all(|knot| knot.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_knot_residual)
+        && spline.knots[order..].iter().all(|knot| {
+            (*knot - 1.0).abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_knot_residual
+        })
 }
 
 fn simplify_profile_curves(mut curves: Vec<RecoveredProfileCurve>) -> Vec<RecoveredProfileCurve> {
@@ -2604,7 +2633,7 @@ fn project2(point: [f64; 3], origin: [f64; 3], x_axis: [f64; 3], y_axis: [f64; 3
     let relative = sub(point, origin);
     let mut result = [dot(relative, x_axis), dot(relative, y_axis)];
     for value in &mut result {
-        if value.abs() <= 1.0e-14 {
+        if value.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_small_weight {
             *value = 0.0;
         }
     }

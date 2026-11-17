@@ -59,7 +59,7 @@ struct Cli {
 
     #[arg(
         long,
-        help = "Experimental: merge geometrically identical PLANE/LINE/CYLINDER supports at 1e-5 mm"
+        help = "Experimental: merge geometrically identical PLANE/LINE/CYLINDER supports using the configured recovery tolerance"
     )]
     experimental_intern_geometric_supports: bool,
 

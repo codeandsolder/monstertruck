@@ -3,12 +3,13 @@ use crate::math3::{
     add, canonical_direction, cross, dot, mul, norm, normalize, point_to_unit_line_distance, sub,
 };
 use crate::step_graph::{build_index, entity_id, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 const GEOM_TOL_MM: f64 = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM;
-const DIR_TOL: f64 = 1.0e-8;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.edge_treatment_direction;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]

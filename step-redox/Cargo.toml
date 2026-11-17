@@ -22,6 +22,7 @@ monstertruck-solid = { workspace = true, optional = true }
 monstertruck-fillet = { workspace = true, optional = true }
 monstertruck-topology = { workspace = true, optional = true }
 num-traits = "0.2.19"
+monstertruck-core = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

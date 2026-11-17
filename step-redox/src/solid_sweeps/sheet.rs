@@ -8,12 +8,13 @@ use crate::math3::{
     add, canonical_direction, cross, distance, dot, mul, norm, normalize,
     point_to_unit_line_distance, sub,
 };
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
-const SHEET_TOL_MM: f64 = 1.0e-5;
-const DIR_TOL: f64 = 1.0e-9;
+const SHEET_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.sheet_geometry_mm;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.sheet_direction;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecoveredRectangularTaperTip {
@@ -108,7 +109,8 @@ fn detect_one(
         .cloned()
         .collect::<Vec<_>>();
     if plane_pairs.len() != 2
-        || dot(plane_pairs[0].normal, plane_pairs[1].normal).abs() >= 1.0 - 1.0e-7
+        || dot(plane_pairs[0].normal, plane_pairs[1].normal).abs()
+            >= 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_normal_cosine
     {
         return None;
     }
@@ -236,7 +238,9 @@ fn detect_one(
             vector_mm: mul(tangent_proofs[end].inward_direction, overlap_mm),
         },
     ];
-    if dot(end_motion, tangent_proofs[end].inward_direction) < 1.0 - 1.0e-8 {
+    if dot(end_motion, tangent_proofs[end].inward_direction)
+        < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine
+    {
         return None;
     }
 
@@ -808,7 +812,9 @@ fn prove_skin_tangent(
     let straight_length_mm = common_value(&lengths)?;
     let first = normalize(inward_vectors[0], SHEET_TOL_MM)?;
     let second = normalize(inward_vectors[1], SHEET_TOL_MM)?;
-    if dot(first, second) < 1.0 - 1.0e-8 || dot(first, axis).abs() > DIR_TOL {
+    if dot(first, second) < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine
+        || dot(first, axis).abs() > DIR_TOL
+    {
         return None;
     }
     Some(SkinTangent {
@@ -833,8 +839,10 @@ fn choose_bend_order(
         let angle =
             dot(axis, cross(radials[start], radials[end])).atan2(dot(radials[start], radials[end]));
         if !angle.is_finite()
-            || angle.abs() <= 1.0e-8
-            || angle.abs() >= std::f64::consts::PI - 1.0e-8
+            || angle.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine
+            || angle.abs()
+                >= std::f64::consts::PI
+                    - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine
         {
             continue;
         }
@@ -843,8 +851,10 @@ fn choose_bend_order(
             SHEET_TOL_MM,
         )?;
         let end_motion = normalize(mul(cross(axis, radials[end]), angle.signum()), SHEET_TOL_MM)?;
-        if dot(start_motion, mul(tangents[start].inward_direction, -1.0)) > 1.0 - 1.0e-8
-            && dot(end_motion, tangents[end].inward_direction) > 1.0 - 1.0e-8
+        if dot(start_motion, mul(tangents[start].inward_direction, -1.0))
+            > 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine
+            && dot(end_motion, tangents[end].inward_direction)
+                > 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine
         {
             return Some((start, end, angle, start_motion, end_motion));
         }
@@ -897,7 +907,9 @@ fn prove_cylinder_sector(
                         return None;
                     }
                     let angle = dot(start_radial, end_radial).clamp(-1.0, 1.0).acos();
-                    if (angle - expected_angle).abs() > 1.0e-7 {
+                    if (angle - expected_angle).abs()
+                        > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_normal_cosine
+                    {
                         return None;
                     }
                     circles += 1;
@@ -920,8 +932,14 @@ fn radial_direction(point: [f64; 3], axis_origin: [f64; 3], axis: [f64; 3]) -> O
 
 fn endpoints_match_radials(start: [f64; 3], end: [f64; 3], expected: &[[f64; 3]]) -> bool {
     expected.len() == 2
-        && ((dot(start, expected[0]) > 1.0 - 1.0e-8 && dot(end, expected[1]) > 1.0 - 1.0e-8)
-            || (dot(start, expected[1]) > 1.0 - 1.0e-8 && dot(end, expected[0]) > 1.0 - 1.0e-8))
+        && ((dot(start, expected[0])
+            > 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine
+            && dot(end, expected[1])
+                > 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine)
+            || (dot(start, expected[1])
+                > 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine
+                && dot(end, expected[0])
+                    > 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_tangent_cosine))
 }
 
 fn simplify_collinear_3d(mut points: Vec<[f64; 3]>) -> Option<Vec<[f64; 3]>> {
@@ -1021,7 +1039,8 @@ fn common_value(values: &[f64]) -> Option<f64> {
 
 fn near(a: f64, b: f64) -> bool {
     let scale = a.abs().max(b.abs()).max(1.0);
-    (a - b).abs() <= SHEET_TOL_MM.max(scale * 1.0e-9)
+    (a - b).abs()
+        <= SHEET_TOL_MM.max(scale * DEFAULT_STEP_RECOVERY_TOLERANCES.source_sheet_relative_compare)
 }
 
 #[cfg(test)]

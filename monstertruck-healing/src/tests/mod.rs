@@ -4,6 +4,7 @@ mod closed_edges;
 mod closed_faces_cylinders;
 mod closed_faces_holes;
 mod non_simple_wires;
+mod parameter_domains;
 mod shell_orientation;
 
 fn sp<S>(surface: &S, p: Point3, hint: Option<(f64, f64)>) -> Option<(f64, f64)>

@@ -7,6 +7,7 @@
     reason = "paired surface-0/1 and U/V derivative names mirror the intersection equations"
 )]
 
+use super::intersection_trace;
 use super::{
     BoundedCurve, BsplineCurve, CurveDerivatives, CurveParameter, Cut, Debug, EuclideanSpace,
     InnerSpace, IntersectionCurve, Invertible, KERNEL_EPSILON, Line, Matrix, Matrix3, Matrix4,
@@ -16,10 +17,34 @@ use super::{
     SurfaceDerivatives, SurfaceParameter, Tolerance, Transformed, TrimmedCurve, Vector2, Vector3,
     Vector4, algo,
 };
+use monstertruck_core::Transform;
 use monstertruck_core::newton::{self, CalcOutput};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_traits::{ParametricCurve as ParametricCurveTrait, SnapCurveEndpoints};
-use std::ops::Bound;
+use std::{ops::Bound, sync::OnceLock};
+
+// Experiment only: isolate the *exact SSI representation's* adaptive curve
+// division from both modeling-curve division and topological admission.
+// An explicitly supplied experimental configuration must be valid: falling
+// back to the default sampling silently changes which Boolean we evaluate.
+fn experimental_ssi_curve_sample_floor() -> Option<f64> {
+    static FLOOR: OnceLock<Option<f64>> = OnceLock::new();
+    *FLOOR.get_or_init(|| {
+        std::env::var("MT_EXPERIMENT_SSI_CURVE_SAMPLE_FLOOR_MM")
+            .ok()
+            .map(|value| {
+                let floor: f64 = value.parse().unwrap_or_else(|error| {
+                    eprintln!("invalid MT_EXPERIMENT_SSI_CURVE_SAMPLE_FLOOR_MM={value:?}: {error}");
+                    std::process::exit(2);
+                });
+                assert!(
+                    floor.is_finite() && floor > 0.0,
+                    "SSI sampling floor must be positive"
+                );
+                floor
+            })
+    })
+}
 
 impl<P> SnapCurveEndpoints for Line<P> {}
 
@@ -60,11 +85,14 @@ where
     S0: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     S1: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
+    intersection_trace::mark(3);
     let function = move |Vector4 { x, y, z, w }| {
-        let ders0 = surface0.derivatives(1, x, y);
-        let (pt0, uder0, vder0) = (ders0[0][0], ders0[1][0], ders0[0][1]);
-        let ders1 = surface1.derivatives(1, z, w);
-        let (pt1, uder1, vder1) = (ders1[0][0], ders1[1][0], ders1[0][1]);
+        // The 4-variable surface/surface Newton solve needs two first-order
+        // surface jets. Asking for six independent derivative_mn evaluations
+        // at every iteration duplicates NURBS rational basis work.
+        let (pt0, uder0, vder0) = surface0.evaluate_with_first_derivatives(x, y);
+        let (pt1, uder1, vder1) = surface1.evaluate_with_first_derivatives(z, w);
+        let (pt0, pt1) = (pt0.to_vec(), pt1.to_vec());
         CalcOutput {
             value: (pt0 - pt1).extend(plane_normal.dot((pt0 + pt1) / 2.0 - plane_point.to_vec())),
             derivation: Matrix4::from_cols(
@@ -77,7 +105,12 @@ where
     };
     let (x, y) = hint0.or_else(|| surface0.search_nearest_parameter(plane_point, hint0, trials))?;
     let (z, w) = hint1.or_else(|| surface1.search_nearest_parameter(plane_point, hint1, trials))?;
-    let res = newton::solve(function, Vector4 { x, y, z, w }, trials);
+    let res = newton::solve(
+        function,
+        Vector4 { x, y, z, w },
+        trials,
+        DEFAULT_NUMERICAL_TOLERANCES.newton_intersection_parameter_step,
+    );
     let Ok(Vector4 { x, y, z, w }) = res else {
         let pt0 = surface0.evaluate(x, y);
         let pt1 = surface1.evaluate(z, w);
@@ -130,6 +163,18 @@ impl<C, S0, S1> IntersectionCurve<C, S0, S1> {
     pub fn destruct(self) -> (S0, S1, C) { (self.surface0, self.surface1, self.leader) }
 }
 
+/// Owned components of an exact surface intersection, including boundary
+/// charts and optional topological endpoint anchors.
+type SurfaceCurveParts<C, S0, S1, T0, T1> = (
+    S0,
+    S1,
+    C,
+    Option<T0>,
+    Option<T1>,
+    Option<Point3>,
+    Option<Point3>,
+);
+
 impl<C, S0, S1, T0, T1> SurfaceCurve<C, S0, S1, T0, T1> {
     /// Constructor with face-local boundary curves.
     #[inline]
@@ -146,6 +191,8 @@ impl<C, S0, S1, T0, T1> SurfaceCurve<C, S0, S1, T0, T1> {
             leader,
             boundary0,
             boundary1,
+            front_anchor: None,
+            back_anchor: None,
         }
     }
     /// This curve is carried by `self.surface0()` and `self.surface1()`.
@@ -178,15 +225,26 @@ impl<C, S0, S1, T0, T1> SurfaceCurve<C, S0, S1, T0, T1> {
     /// Returns the mutable exact face-local boundary on `surface1`, if available.
     #[inline]
     pub const fn boundary1_mut(&mut self) -> Option<&mut T1> { self.boundary1.as_mut() }
+    /// Certified exact topological endpoints, if the curve has been cut or snapped.
+    pub const fn endpoint_anchors(&self) -> (Option<Point3>, Option<Point3>) {
+        (self.front_anchor, self.back_anchor)
+    }
+    /// Set the world-space topological endpoint anchors of this curve.
+    pub const fn set_endpoint_anchors(&mut self, front: Option<Point3>, back: Option<Point3>) {
+        self.front_anchor = front;
+        self.back_anchor = back;
+    }
     /// Destructs `self`, preserving face-local boundaries.
     #[inline]
-    pub fn destruct_with_boundaries(self) -> (S0, S1, C, Option<T0>, Option<T1>) {
+    pub fn destruct_with_boundaries(self) -> SurfaceCurveParts<C, S0, S1, T0, T1> {
         (
             self.surface0,
             self.surface1,
             self.leader,
             self.boundary0,
             self.boundary1,
+            self.front_anchor,
+            self.back_anchor,
         )
     }
 }
@@ -203,6 +261,7 @@ where
     /// - the uv coordinate on `self.surface1()`
     #[inline]
     pub fn search_triple(&self, t: f64, trials: usize) -> Option<(Point3, Point2, Point2)> {
+        intersection_trace::mark(1);
         let point = self.leader.evaluate(t);
         double_projection(
             self.surface0(),
@@ -257,26 +316,14 @@ where
         hint1: Option<(f64, f64)>,
         trials: usize,
     ) -> Option<(Point3, Point2, Point2)> {
+        intersection_trace::mark(2);
         let (surface0, surface1) = (self.surface0(), self.surface1());
         let function = |Vector4 { x, y, z, w }| {
-            let ders0 = surface0.derivatives(2, x, y);
-            let (pt0, uder0, vder0, uuder0, uvder0, vvder0) = (
-                ders0[0][0],
-                ders0[1][0],
-                ders0[0][1],
-                ders0[2][0],
-                ders0[1][1],
-                ders0[0][2],
-            );
-            let ders1 = surface1.derivatives(2, z, w);
-            let (pt1, uder1, vder1, uuder1, uvder1, vvder1) = (
-                ders1[0][0],
-                ders1[1][0],
-                ders1[0][1],
-                ders1[2][0],
-                ders1[1][1],
-                ders1[0][2],
-            );
+            let (pt0, uder0, vder0, uuder0, uvder0, vvder0) =
+                surface0.evaluate_with_second_derivatives(x, y);
+            let (pt1, uder1, vder1, uuder1, uvder1, vvder1) =
+                surface1.evaluate_with_second_derivatives(z, w);
+            let (pt0, pt1) = (pt0.to_vec(), pt1.to_vec());
             let diff = (pt0 + pt1) / 2.0 - point.to_vec();
             let (n0, n1) = (uder0.cross(vder0), uder1.cross(vder1));
             let n = n0.cross(n1);
@@ -296,8 +343,13 @@ where
         };
         let (x, y) = hint0.or_else(|| surface0.search_nearest_parameter(point, hint0, trials))?;
         let (z, w) = hint1.or_else(|| surface1.search_nearest_parameter(point, hint1, trials))?;
-        let Vector4 { x, y, z, w } =
-            newton::solve(function, Vector4 { x, y, z, w }, trials).ok()?;
+        let Vector4 { x, y, z, w } = newton::solve(
+            function,
+            Vector4 { x, y, z, w },
+            trials,
+            DEFAULT_NUMERICAL_TOLERANCES.newton_intersection_parameter_step,
+        )
+        .ok()?;
         let point = surface0.evaluate(x, y).midpoint(surface1.evaluate(z, w));
         Some((point, Point2::new(x, y), Point2::new(z, w)))
     }
@@ -315,6 +367,7 @@ where
     /// - the uv coordinate on `self.surface1()`
     #[inline]
     pub fn search_triple(&self, t: f64, trials: usize) -> Option<(Point3, Point2, Point2)> {
+        intersection_trace::mark(1);
         let point = self.leader.evaluate(t);
         double_projection(
             self.surface0(),
@@ -338,11 +391,7 @@ where
         hint1: Option<(f64, f64)>,
         trials: usize,
     ) -> Option<(Point3, Point2, Point2)> {
-        let intersection = IntersectionCurve::new(
-            self.surface0.clone(),
-            self.surface1.clone(),
-            self.leader.clone(),
-        );
+        let intersection = IntersectionCurve::new(&self.surface0, &self.surface1, &self.leader);
         intersection.search_nearest_point(point, hint0, hint1, trials)
     }
 }
@@ -424,6 +473,7 @@ where
     type Point = Point3;
     type Vector = Vector3;
     fn evaluate(&self, t: f64) -> Point3 {
+        intersection_trace::mark(0);
         if let (Bound::Included(t0), Bound::Included(_)) = self.leader.parameter_range()
             && t.near(&t0)
         {
@@ -523,7 +573,11 @@ where
     type Point = Point3;
     #[inline]
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Point3>) {
-        algo::curve::parameter_division(self, range, tol)
+        let sampling_tol =
+            experimental_ssi_curve_sample_floor().map_or(tol, |floor| tol.max(floor));
+        let result = algo::curve::parameter_division(self, range, sampling_tol);
+        intersection_trace::division(0, result.0.len(), sampling_tol);
+        result
     }
 }
 
@@ -626,45 +680,35 @@ where
 {
     type Point = Point3;
     type Vector = Vector3;
+    #[expect(
+        clippy::float_cmp,
+        reason = "topological endpoint anchor applies only to the exact native knot, not nearby parameters"
+    )]
     fn evaluate(&self, t: f64) -> Point3 {
-        IntersectionCurve::new(
-            self.surface0.clone(),
-            self.surface1.clone(),
-            self.leader.clone(),
-        )
-        .evaluate(t)
+        let range = self.leader.parameter_range();
+        if matches!(range.0, Bound::Included(start) if t == start)
+            && let Some(point) = self.front_anchor
+        {
+            return point;
+        }
+        if matches!(range.1, Bound::Included(end) if t == end)
+            && let Some(point) = self.back_anchor
+        {
+            return point;
+        }
+        IntersectionCurve::new(&self.surface0, &self.surface1, &self.leader).evaluate(t)
     }
     fn derivative(&self, t: f64) -> Vector3 {
-        IntersectionCurve::new(
-            self.surface0.clone(),
-            self.surface1.clone(),
-            self.leader.clone(),
-        )
-        .derivative(t)
+        IntersectionCurve::new(&self.surface0, &self.surface1, &self.leader).derivative(t)
     }
     fn derivative_2(&self, t: f64) -> Vector3 {
-        IntersectionCurve::new(
-            self.surface0.clone(),
-            self.surface1.clone(),
-            self.leader.clone(),
-        )
-        .derivative_2(t)
+        IntersectionCurve::new(&self.surface0, &self.surface1, &self.leader).derivative_2(t)
     }
     fn derivative_n(&self, n: usize, t: f64) -> Vector3 {
-        IntersectionCurve::new(
-            self.surface0.clone(),
-            self.surface1.clone(),
-            self.leader.clone(),
-        )
-        .derivative_n(n, t)
+        IntersectionCurve::new(&self.surface0, &self.surface1, &self.leader).derivative_n(n, t)
     }
     fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Vector3> {
-        IntersectionCurve::new(
-            self.surface0.clone(),
-            self.surface1.clone(),
-            self.leader.clone(),
-        )
-        .derivatives(n, t)
+        IntersectionCurve::new(&self.surface0, &self.surface1, &self.leader).derivatives(n, t)
     }
     #[inline]
     fn parameter_range(&self) -> ParameterRange { self.leader.parameter_range() }
@@ -692,7 +736,11 @@ where
     type Point = Point3;
     #[inline]
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Point3>) {
-        algo::curve::parameter_division(self, range, tol)
+        let sampling_tol =
+            experimental_ssi_curve_sample_floor().map_or(tol, |floor| tol.max(floor));
+        let result = algo::curve::parameter_division(self, range, sampling_tol);
+        intersection_trace::division(0, result.0.len(), sampling_tol);
+        result
     }
 }
 
@@ -706,13 +754,35 @@ where
 {
     #[inline]
     fn cut(&mut self, t: f64) -> Self {
-        Self {
+        let (start, end) = self.leader.range_tuple();
+        // The uncut curve evaluates the exact two-surface intersection at
+        // this INTERIOR parameter. Retain that value before it becomes a
+        // leader endpoint, which otherwise bypasses analytical correction.
+        let split = (t > start && t < end).then(|| self.evaluate(t));
+        let old_front = self.front_anchor;
+        let old_back = self.back_anchor;
+        let mut later = Self {
             surface0: self.surface0.clone(),
             surface1: self.surface1.clone(),
             leader: self.leader.cut(t),
             boundary0: self.boundary0.as_mut().map(|boundary| boundary.cut(t)),
             boundary1: self.boundary1.as_mut().map(|boundary| boundary.cut(t)),
+            front_anchor: None,
+            back_anchor: old_back,
+        };
+        if let Some(point) = split {
+            self.back_anchor = Some(point);
+            later.front_anchor = Some(point);
+        } else if t <= start {
+            let front = old_front.unwrap_or_else(|| self.evaluate(start));
+            self.front_anchor = Some(front);
+            self.back_anchor = Some(front);
+            later.front_anchor = Some(front);
+        } else {
+            later.front_anchor = old_back.or_else(|| Some(self.evaluate(end)));
+            later.back_anchor = later.front_anchor;
         }
+        later
     }
 }
 
@@ -730,6 +800,7 @@ where
         if let Some(boundary) = self.boundary1_mut() {
             boundary.invert();
         }
+        std::mem::swap(&mut self.front_anchor, &mut self.back_anchor);
     }
 }
 
@@ -748,11 +819,7 @@ where
         hint: H,
         trials: usize,
     ) -> Option<f64> {
-        let intersection = IntersectionCurve::new(
-            self.surface0.clone(),
-            self.surface1.clone(),
-            self.leader.clone(),
-        );
+        let intersection = IntersectionCurve::new(&self.surface0, &self.surface1, &self.leader);
         intersection.search_parameter(point, hint, trials)
     }
 }
@@ -772,11 +839,7 @@ where
         hint: H,
         trials: usize,
     ) -> Option<f64> {
-        let intersection = IntersectionCurve::new(
-            self.surface0.clone(),
-            self.surface1.clone(),
-            self.leader.clone(),
-        );
+        let intersection = IntersectionCurve::new(&self.surface0, &self.surface1, &self.leader);
         intersection.search_nearest_parameter(point, hint, trials)
     }
 }
@@ -799,6 +862,8 @@ where
         if let Some(boundary) = self.boundary1_mut() {
             boundary.transform_by(trans);
         }
+        self.front_anchor = self.front_anchor.map(|p| trans.transform_point(p));
+        self.back_anchor = self.back_anchor.map(|p| trans.transform_point(p));
     }
 }
 

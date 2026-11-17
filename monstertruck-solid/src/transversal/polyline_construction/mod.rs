@@ -8,7 +8,7 @@
 //! release that shipped a self-contained boolean backend).
 
 use monstertruck_core::{
-    cgmath64::{EuclideanSpace, MetricSpace, Point3},
+    cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point3},
     tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON, Tolerance},
 };
 use monstertruck_meshing::prelude::PolylineCurve;
@@ -150,6 +150,181 @@ pub(super) fn merge_endpoint_join(
     left.extend(right.into_iter().skip(1));
     polylines.push(PolylineCurve(left));
     Some(())
+}
+
+/// Merge a certified, sampled *curved* gap. Unlike an endpoint midpoint
+/// snap, this retains the exact interior SSI points supplied by the corrector.
+/// The caller must certify the entire bridge on both analytic carriers.
+pub(super) fn merge_endpoint_join_with_bridge(
+    polylines: &mut Vec<PolylineCurve<Point3>>,
+    join: ChainJoin,
+    bridge: &[Point3],
+    tolerance: f64,
+) -> Option<()> {
+    if bridge.len() < 2 || join.first.chain == join.second.chain {
+        return None;
+    }
+    let first = polylines.get(join.first.chain)?;
+    let second = polylines.get(join.second.chain)?;
+    let a = endpoint_point(first, join.first.front)?;
+    let b = endpoint_point(second, join.second.front)?;
+    if a.distance(*bridge.first()?) > tolerance || b.distance(*bridge.last()?) > tolerance {
+        return None;
+    }
+    let (low, high, low_front, high_front, reverse_bridge) = if join.first.chain < join.second.chain
+    {
+        (
+            join.first.chain,
+            join.second.chain,
+            join.first.front,
+            join.second.front,
+            false,
+        )
+    } else {
+        (
+            join.second.chain,
+            join.first.chain,
+            join.second.front,
+            join.first.front,
+            true,
+        )
+    };
+    let mut right = polylines.remove(high).0;
+    let mut left = polylines.remove(low).0;
+    if low_front {
+        left.reverse();
+    }
+    if !high_front {
+        right.reverse();
+    }
+    let mut middle = bridge[1..bridge.len() - 1].to_vec();
+    if reverse_bridge {
+        middle.reverse();
+    }
+    left.extend(middle);
+    left.extend(right);
+    polylines.push(PolylineCurve(left));
+    Some(())
+}
+
+/// Closest squared offset and accumulated arclength along a polygonal
+/// interference strand. Degenerate segments are excluded.
+fn closest_progress_on_polyline(poly: &PolylineCurve<Point3>, point: Point3) -> Option<(f64, f64)> {
+    let mut cumulative = 0.0;
+    let mut closest = None::<(f64, f64)>;
+    for segment in poly.windows(2) {
+        let direction = segment[1] - segment[0];
+        let squared = direction.magnitude2();
+        if squared <= 0.0 || !squared.is_finite() {
+            continue;
+        }
+        let length = squared.sqrt();
+        let fraction = (point - segment[0]).dot(direction) / squared;
+        let fraction = fraction.clamp(0.0, 1.0);
+        let foot = segment[0] + direction * fraction;
+        let distance2 = foot.distance2(point);
+        let progress = length.mul_add(fraction, cumulative);
+        if closest.is_none_or(|(best, _)| distance2 < best) {
+            closest = Some((distance2, progress));
+        }
+        cumulative += length;
+    }
+    closest
+}
+
+/// Remove short duplicate strands produced when separate mesh triangles
+/// describe the same intersection path with a redundant overlapping arm.
+///
+/// An endpoint junction alone is not sufficient: every vertex and segment
+/// midpoint of the candidate must lie on the longer piecewise-linear path
+/// within kernel precision, and the projected positions must progress
+/// monotonically along that path. A real branching curve with a distinct
+/// locus remains untouched and will be rejected by ambiguous stitching.
+pub(super) fn remove_redundant_interference_strands(
+    polylines: Vec<PolylineCurve<Point3>>,
+    tolerance: f64,
+) -> Vec<PolylineCurve<Point3>> {
+    if !tolerance.is_finite() || tolerance <= 0.0 {
+        return polylines;
+    }
+    let lengths = polylines
+        .iter()
+        .map(|poly| {
+            poly.windows(2)
+                .map(|segment| segment[0].distance(segment[1]))
+                .sum::<f64>()
+        })
+        .collect::<Vec<_>>();
+
+    let contained = |candidate: &PolylineCurve<Point3>, container: &PolylineCurve<Point3>| {
+        let Some(start) = candidate.first().copied() else {
+            return false;
+        };
+        let Some(end) = candidate.last().copied() else {
+            return false;
+        };
+        let Some(container_start) = container.first().copied() else {
+            return false;
+        };
+        let Some(container_end) = container.last().copied() else {
+            return false;
+        };
+        // The duplicated arm must begin/end at a shared graph junction.
+        if [start, end].into_iter().all(|point| {
+            point.distance2(container_start) > tolerance * tolerance
+                && point.distance2(container_end) > tolerance * tolerance
+        }) {
+            return false;
+        }
+        let mut steps = Vec::new();
+        for segment in candidate.windows(2) {
+            if steps.is_empty() {
+                steps.push(segment[0]);
+            }
+            steps.push(segment[0].midpoint(segment[1]));
+            steps.push(segment[1]);
+        }
+        let Some(progress) = steps
+            .into_iter()
+            .map(|point| closest_progress_on_polyline(container, point))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
+        if progress
+            .iter()
+            .any(|(distance2, _)| *distance2 > tolerance * tolerance)
+        {
+            return false;
+        }
+        let increasing = progress
+            .windows(2)
+            .all(|pair| pair[1].1 + tolerance >= pair[0].1);
+        let decreasing = progress
+            .windows(2)
+            .all(|pair| pair[0].1 + tolerance >= pair[1].1);
+        increasing || decreasing
+    };
+    let mut keep = vec![true; polylines.len()];
+    for (index, candidate) in polylines.iter().enumerate() {
+        if !lengths[index].is_finite() || lengths[index] <= 0.0 {
+            continue;
+        }
+        for (other, container) in polylines.iter().enumerate() {
+            if index == other || lengths[other] <= lengths[index] + tolerance {
+                continue;
+            }
+            if contained(candidate, container) {
+                keep[index] = false;
+                break;
+            }
+        }
+    }
+    polylines
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(poly, retain)| retain.then_some(poly))
+        .collect()
 }
 
 /// Merge separate interference chains whose endpoints agree within the caller's

@@ -6,14 +6,15 @@ use crate::step_entities::{
 use crate::step_graph::{
     build_index, entity_id, entity_ref_value, simple_record, visit_entity_refs,
 };
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-const COLLINEAR_TOL: f64 = 1.0e-12;
-const MONOTONIC_TOL: f64 = 1.0e-12;
-const DIRECTION_QUANTUM: f64 = 1.0e-12;
-const DIRECTION_ENDPOINT_TOL: f64 = 2.0e-13;
-const DEGENERATE_CHORD2: f64 = 1.0e-24;
+const COLLINEAR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.line_collinear;
+const MONOTONIC_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.line_monotonic;
+const DIRECTION_QUANTUM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.line_direction_quant;
+const DIRECTION_ENDPOINT_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.line_endpoint_direction;
+const DEGENERATE_CHORD2: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.line_degenerate_chord_squared;
 
 #[derive(Debug, Default, Clone)]
 pub struct LineRecoveryStats {

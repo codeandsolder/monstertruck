@@ -1,14 +1,15 @@
 use crate::math3::{canonical_direction, cross, dot, norm, normalize as normalize3};
 use crate::step_entities::{cartesian_point, number as numeric_value};
 use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
 use crate::patterns::{InstancePattern, linear_pattern_sites};
 
-const GEOM_TOL_MM: f64 = 1.0e-5;
-const DIR_TOL: f64 = 1.0e-10;
+const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.periodic_geometry_mm;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PeriodicFaceFamily {
@@ -564,9 +565,13 @@ fn quantize_dir(v: [f64; 3]) -> Option<[i64; 3]> {
     Some(out)
 }
 
-fn parallel(a: [f64; 3], b: [f64; 3]) -> bool { norm(cross(a, b)) <= 1.0e-8 }
+fn parallel(a: [f64; 3], b: [f64; 3]) -> bool {
+    norm(cross(a, b)) <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_axis_direction_cosine
+}
 
-fn normalize(v: [f64; 3]) -> Option<[f64; 3]> { normalize3(v, 1.0e-15) }
+fn normalize(v: [f64; 3]) -> Option<[f64; 3]> {
+    normalize3(v, DEFAULT_STEP_RECOVERY_TOLERANCES.source_brep_direction)
+}
 
 #[cfg(test)]
 mod tests {

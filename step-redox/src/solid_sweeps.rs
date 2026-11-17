@@ -14,12 +14,13 @@ use crate::solid_revolutions::{
     RecoveredSolidRevolution, recover_axisymmetric_subbody_with_circular_cap,
 };
 use crate::step_graph::{entity_id, simple_record};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-const GEOM_TOL_MM: f64 = 1.0e-7;
-const DIR_TOL: f64 = 1.0e-9;
+const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.sweep_direction;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -492,8 +493,9 @@ fn detect_one_open_round_sweep(
         let angle = dot(bend.axis, cross(incoming_radial, outgoing_radial))
             .atan2(dot(incoming_radial, outgoing_radial));
         if !angle.is_finite()
-            || angle.abs() <= 1.0e-8
-            || angle.abs() >= std::f64::consts::PI - 1.0e-8
+            || angle.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
+            || angle.abs()
+                >= std::f64::consts::PI - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
         {
             return None;
         }
@@ -501,7 +503,9 @@ fn detect_one_open_round_sweep(
             mul(cross(bend.axis, incoming_radial), angle.signum()),
             GEOM_TOL_MM,
         )?;
-        if dot(predicted_in, tangent) < 1.0 - 1.0e-7 {
+        if dot(predicted_in, tangent)
+            < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
+        {
             return None;
         }
         let following_endpoint = run_bends[following]
@@ -516,7 +520,9 @@ fn detect_one_open_round_sweep(
             mul(cross(bend.axis, outgoing_radial), angle.signum()),
             GEOM_TOL_MM,
         )?;
-        if dot(predicted_out, outgoing_tangent) < 1.0 - 1.0e-7 {
+        if dot(predicted_out, outgoing_tangent)
+            < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
+        {
             return None;
         }
         max_residual_mm = max_residual_mm
@@ -658,8 +664,10 @@ fn detect_one_revolved_round_tail(
                 let angle_rad =
                     dot(bend.axis, cross(radial_in, radial_out)).atan2(dot(radial_in, radial_out));
                 if !angle_rad.is_finite()
-                    || angle_rad.abs() <= 1.0e-8
-                    || angle_rad.abs() >= std::f64::consts::PI - 1.0e-8
+                    || angle_rad.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
+                    || angle_rad.abs()
+                        >= std::f64::consts::PI
+                            - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
                 {
                     continue;
                 }
@@ -684,7 +692,9 @@ fn detect_one_revolved_round_tail(
                         continue;
                     }
                     let translation_dir = normalize(translation, GEOM_TOL_MM)?;
-                    if dot(translation_dir, bend_exit_tangent) < 1.0 - 1.0e-7 {
+                    if dot(translation_dir, bend_exit_tangent)
+                        < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
+                    {
                         continue;
                     }
 
@@ -732,7 +742,9 @@ fn detect_one_revolved_round_tail(
                     let profile_x_axis = bend.axis;
                     let profile_y_axis =
                         normalize(cross(path_tangent, profile_x_axis), GEOM_TOL_MM)?;
-                    if dot(cross(profile_x_axis, profile_y_axis), path_tangent) < 1.0 - 1.0e-7 {
+                    if dot(cross(profile_x_axis, profile_y_axis), path_tangent)
+                        < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
+                    {
                         continue;
                     }
                     let max_residual_mm = head.max_residual_mm.max(
@@ -748,7 +760,9 @@ fn detect_one_revolved_round_tail(
                                 outgoing.direction,
                             )),
                     );
-                    if max_residual_mm > 1.0e-5 {
+                    if max_residual_mm
+                        > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_absolute_residual_mm
+                    {
                         continue;
                     }
                     return Some(RecoveredRevolvedRoundTail {
@@ -1131,7 +1145,10 @@ fn prove_torus_trim(
         GEOM_TOL_MM,
     )?;
     let bend_angle = unit_angle(radial_a, radial_b)?;
-    if bend_angle <= 1.0e-8 || bend_angle >= std::f64::consts::PI - 1.0e-8 {
+    if bend_angle <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
+        || bend_angle
+            >= std::f64::consts::PI - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
+    {
         return None;
     }
 
@@ -1165,7 +1182,11 @@ fn prove_torus_trim(
                     }
                     TorusBoundaryCircle::MajorTrace => {
                         let sweep = directed_circle_sweep(&edge, &circle)?;
-                        if sweep <= 1.0e-10 || sweep > bend_angle + 1.0e-7 {
+                        if sweep <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_curve_parameter
+                            || sweep
+                                > bend_angle
+                                    + DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
+                        {
                             return None;
                         }
                         saw_major_trace = true;
@@ -1249,7 +1270,8 @@ fn direction_on_minor_arc(
     let Some(second) = unit_angle(point, end) else {
         return false;
     };
-    (first + second - total_angle).abs() <= 1.0e-7
+    (first + second - total_angle).abs()
+        <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
 }
 
 fn directed_circle_sweep(edge: &brep::OrientedEdgeUse, circle: &CircleSupport) -> Option<f64> {
@@ -1326,7 +1348,8 @@ fn common_value(values: &[f64]) -> Option<f64> {
 
 fn near(a: f64, b: f64) -> bool {
     let scale = a.abs().max(b.abs()).max(1.0);
-    (a - b).abs() <= GEOM_TOL_MM.max(scale * 1.0e-9)
+    (a - b).abs()
+        <= GEOM_TOL_MM.max(scale * DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_relative_compare)
 }
 
 fn lex_point(a: [f64; 3], b: [f64; 3]) -> std::cmp::Ordering {
@@ -1422,8 +1445,10 @@ impl ClosedRoundSweepBuilder<'_> {
             let angle = dot(self.plane_normal, cross(radial_in, radial_out))
                 .atan2(dot(radial_in, radial_out));
             if !angle.is_finite()
-                || angle.abs() <= 1.0e-8
-                || angle.abs() >= std::f64::consts::PI - 1.0e-8
+                || angle.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
+                || angle.abs()
+                    >= std::f64::consts::PI
+                        - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
             {
                 return None;
             }
@@ -1431,7 +1456,9 @@ impl ClosedRoundSweepBuilder<'_> {
             let sign = angle.signum();
             let expected_in =
                 normalize(mul(cross(self.plane_normal, radial_in), sign), GEOM_TOL_MM)?;
-            if dot(expected_in, tangent) < 1.0 - 1.0e-7 {
+            if dot(expected_in, tangent)
+                < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
+            {
                 return None;
             }
             let next_line_start = project_to_line(next_corner.center_mm, next_run);
@@ -1440,7 +1467,9 @@ impl ClosedRoundSweepBuilder<'_> {
             let outgoing = normalize(sub(next_line_end, next_line_start), GEOM_TOL_MM)?;
             let expected_out =
                 normalize(mul(cross(self.plane_normal, radial_out), sign), GEOM_TOL_MM)?;
-            if dot(expected_out, outgoing) < 1.0 - 1.0e-7 {
+            if dot(expected_out, outgoing)
+                < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
+            {
                 return None;
             }
 
@@ -1457,7 +1486,9 @@ impl ClosedRoundSweepBuilder<'_> {
         let path_tangent = start_tangent?;
         let section_normal = self.plane_normal;
         let section_binormal = normalize(cross(path_tangent, section_normal), GEOM_TOL_MM)?;
-        if dot(cross(section_normal, section_binormal), path_tangent) < 1.0 - 1.0e-7 {
+        if dot(cross(section_normal, section_binormal), path_tangent)
+            < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
+        {
             return None;
         }
 

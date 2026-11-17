@@ -4,6 +4,8 @@ use super::{
 };
 
 type Tuple = (f64, f64);
+/// A complete second-order surface derivative jet `(point, du, dv, duu, duv, dvv)`.
+pub type SurfaceSecondJet<P, V> = (P, V, V, V, V, V);
 /// A surface defined by a mapping `S(u, v)` from two parameters to a point.
 ///
 /// As `(u, v)` varies over the parameter domain, the returned points sweep out the surface.
@@ -26,6 +28,43 @@ pub trait ParametricSurface: Clone {
     fn derivative_uv(&self, u: f64, v: f64) -> Self::Vector;
     /// Returns `∂²S/∂v²` at `(u, v)`.
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector;
+    /// Evaluate the point and its first derivatives at the same parameter.
+    ///
+    /// Implementors with a shared basis/evaluation kernel can override this
+    /// without changing inverse-search semantics. The default preserves the
+    /// previous, individually evaluated derivatives exactly.
+    #[inline]
+    fn evaluate_with_first_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (Self::Point, Self::Vector, Self::Vector) {
+        (
+            self.evaluate(u, v),
+            self.derivative_u(u, v),
+            self.derivative_v(u, v),
+        )
+    }
+    /// Evaluate the point, gradient and Hessian of the surface at once.
+    ///
+    /// This is the hot-path "jet" for 3D nearest-point Newton projection.
+    /// Grouping the calls lets rational B-splines reuse homogeneous
+    /// evaluations that would otherwise repeat 2--4 times.
+    #[inline]
+    fn evaluate_with_second_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> SurfaceSecondJet<Self::Point, Self::Vector> {
+        (
+            self.evaluate(u, v),
+            self.derivative_u(u, v),
+            self.derivative_v(u, v),
+            self.derivative_uu(u, v),
+            self.derivative_uv(u, v),
+            self.derivative_vv(u, v),
+        )
+    }
     /// Returns the mixed partial `∂^(m+n)S / ∂u^m ∂v^n` at `(u, v)`.
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector;
     /// Returns all derivatives at `(u, v)` up to order `max_order`.
@@ -42,6 +81,10 @@ pub trait ParametricSurface: Clone {
         use Bound::Unbounded as X;
         ((X, X), (X, X))
     }
+    /// Indicates which reported axis bounds constrain the intrinsic surface.
+    /// False marks a synthetic meshing range that must not clamp projected UV.
+    #[inline]
+    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) { (true, true) }
     /// Return the ends of `parameter_range` by tuple.
     /// If the range is unbounded, return `None`.
     #[inline]
@@ -76,6 +119,29 @@ impl<S: ParametricSurface> ParametricSurface for &S {
     #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector { (*self).derivative_vv(u, v) }
     #[inline]
+    fn evaluate_with_first_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (Self::Point, Self::Vector, Self::Vector) {
+        (*self).evaluate_with_first_derivatives(u, v)
+    }
+    #[inline]
+    fn evaluate_with_second_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (
+        Self::Point,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+    ) {
+        (*self).evaluate_with_second_derivatives(u, v)
+    }
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         (*self).derivative_mn(m, n, u, v)
     }
@@ -85,6 +151,10 @@ impl<S: ParametricSurface> ParametricSurface for &S {
     }
     #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) { (*self).parameter_range() }
+    #[inline]
+    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
+        (*self).parameter_bounds_are_intrinsic()
+    }
     #[inline]
     fn period_u(&self) -> Option<f64> { (*self).period_u() }
     #[inline]
@@ -107,6 +177,29 @@ impl<S: ParametricSurface> ParametricSurface for Box<S> {
     #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector { (**self).derivative_vv(u, v) }
     #[inline]
+    fn evaluate_with_first_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (Self::Point, Self::Vector, Self::Vector) {
+        (**self).evaluate_with_first_derivatives(u, v)
+    }
+    #[inline]
+    fn evaluate_with_second_derivatives(
+        &self,
+        u: f64,
+        v: f64,
+    ) -> (
+        Self::Point,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+        Self::Vector,
+    ) {
+        (**self).evaluate_with_second_derivatives(u, v)
+    }
+    #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         (**self).derivative_mn(m, n, u, v)
     }
@@ -116,6 +209,10 @@ impl<S: ParametricSurface> ParametricSurface for Box<S> {
     }
     #[inline]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) { (**self).parameter_range() }
+    #[inline]
+    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
+        (**self).parameter_bounds_are_intrinsic()
+    }
     #[inline]
     fn period_u(&self) -> Option<f64> { (**self).period_u() }
     #[inline]

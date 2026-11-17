@@ -3,14 +3,15 @@
 use super::curve_equivalence::{
     CurveCoincidence, validate_endpoint_aligned_coincidence, validate_sampled_coincidence,
 };
+use super::tolerance::BooleanTolerance;
 use super::{
     AltCurve, AltCurveShell, AltRegion, Alternative, BoundedCurve, BoundingBox, Cut, Edge, EdgeId,
-    HashMap, KERNEL_EPSILON, NurbsCurve, ParametricCurve, Point3, SearchNearestParameter,
-    SearchParameter, ShapeOpsCurve, ShapeOpsSurface, SnapCurveEndpoints, Tolerance, Vector4,
-    Vertex, VertexId, Wire, conversion, faces_classification,
+    HashMap, NurbsCurve, ParametricCurve, Point3, SearchNearestParameter, SearchParameter,
+    ShapeOpsCurve, ShapeOpsSurface, Shell, SnapCurveEndpoints, Vector4, Vertex, VertexId, Wire,
+    conversion, faces_classification,
 };
-use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
-use num_traits::ToPrimitive;
+use monstertruck_core::{cgmath64::MetricSpace, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
+use std::{cmp::Ordering, collections::BTreeMap};
 
 fn certified_homogeneous_curve_box(curve: &NurbsCurve<Vector4>) -> Option<BoundingBox<Point3>> {
     let mut bounds = BoundingBox::new();
@@ -30,13 +31,17 @@ fn certified_homogeneous_curve_box(curve: &NurbsCurve<Vector4>) -> Option<Boundi
     any.then_some(bounds)
 }
 
-fn certified_alt_curve_box<C, S>(curve: &AltCurve<C, S>) -> Option<BoundingBox<Point3>>
+fn certified_alt_curve_box<C, S>(
+    curve: &AltCurve<C, S>,
+    tolerances: BooleanTolerance,
+) -> Option<BoundingBox<Point3>>
 where
     C: BoundedCurve<Point = Point3>,
-    S: ShapeOpsSurface, {
+    S: ShapeOpsSurface,
+{
     match curve {
         Alternative::FirstType(curve) => curve.certified_spatial_bounds(),
-        Alternative::SecondType(curve) => conversion::exact_iso_leader(curve)
+        Alternative::SecondType(curve) => conversion::exact_iso_leader(curve, tolerances)
             .and_then(|exact| certified_homogeneous_curve_box(&exact)),
     }
 }
@@ -48,55 +53,64 @@ fn point_inside_padded_box(bounds: BoundingBox<Point3>, point: Point3, pad: f64)
 }
 
 type AltEdge<C, S> = Edge<Point3, AltCurve<C, S>>;
-type VertexCell = [i64; 3];
 type VertexKey = VertexId<Point3>;
 type SourceEdgeId<C, S> = EdgeId<AltCurve<C, S>>;
 type SourceVertexId = VertexId<Point3>;
 type SourceEdgeEvidence = (SourceVertexId, SourceVertexId, Point3);
+type RebuiltEdgeCache<C, S> = HashMap<(SourceEdgeId<C, S>, bool), Vec<AltEdge<C, S>>>;
 
-fn cell_coordinate(coordinate: f64) -> i64 {
-    let value = (coordinate / KERNEL_EPSILON).floor();
-    value.to_i64().unwrap_or_else(|| {
-        if value.is_nan() {
-            0
-        } else if value.is_sign_negative() {
-            i64::MIN
-        } else {
-            i64::MAX
-        }
-    })
+// Weld representatives are geometric, not HashMap/EdgeId insertion-order
+// choices. A full ordering is necessary near tolerance-cell boundaries.
+pub(super) fn point_lex_cmp(a: &Point3, b: &Point3) -> std::cmp::Ordering {
+    a.x.total_cmp(&b.x)
+        .then_with(|| a.y.total_cmp(&b.y))
+        .then_with(|| a.z.total_cmp(&b.z))
 }
 
-fn vertex_cell(point: Point3) -> VertexCell {
-    [
-        cell_coordinate(point.x),
-        cell_coordinate(point.y),
-        cell_coordinate(point.z),
-    ]
+/// Total-ordered floating X coordinate for an unquantized spatial index.
+#[derive(Clone, Copy, Debug)]
+struct SpatialX(f64);
+impl PartialEq for SpatialX {
+    fn eq(&self, other: &Self) -> bool { self.cmp(other) == Ordering::Equal }
+}
+impl Eq for SpatialX {}
+impl PartialOrd for SpatialX {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+}
+impl Ord for SpatialX {
+    fn cmp(&self, other: &Self) -> Ordering { self.0.total_cmp(&other.0) }
+}
+const fn finite_point(point: Point3) -> bool {
+    point.x.is_finite() && point.y.is_finite() && point.z.is_finite()
 }
 
 fn curves_sampled_coincident<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     lhs: &AltEdge<C, S>,
     rhs: &AltEdge<C, S>,
+    tolerances: BooleanTolerance,
 ) -> bool {
     let lhs = lhs.oriented_curve();
     let rhs = rhs.oriented_curve();
-    validate_endpoint_aligned_coincidence::<Point3, _>(&lhs, &rhs)
+    validate_endpoint_aligned_coincidence::<Point3, _>(&lhs, &rhs, tolerances)
         == CurveCoincidence::SampledValidation
-        || validate_sampled_coincidence::<Point3, _>(&lhs, &rhs)
+        || validate_sampled_coincidence::<Point3, _>(&lhs, &rhs, tolerances)
             == CurveCoincidence::SampledValidation
 }
 
 struct WeldContext<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> {
-    vertex_cells: HashMap<VertexCell, Vec<Vertex<Point3>>>,
+    vertices_by_x: BTreeMap<SpatialX, Vec<Vertex<Point3>>>,
+    tolerances: BooleanTolerance,
     edges: HashMap<(VertexKey, VertexKey), Vec<AltEdge<C, S>>>,
     source_vertex_points: HashMap<SourceVertexId, Point3>,
     source_edges: Vec<SourceEdgeEvidence>,
     additional_nodes: Vec<Point3>,
+    // An edge can occur in multiple selected face regions. Splitting it is
+    // purely a function of the fixed input graph and canonical vertex set.
+    rebuilt_edges: RebuiltEdgeCache<C, S>,
 }
 
 impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
-    fn new(regions: &[AltRegion<C, S>]) -> Self {
+    fn new(regions: &[AltRegion<C, S>], tolerances: BooleanTolerance) -> Option<Self> {
         let mut source_edges_by_id =
             HashMap::<SourceEdgeId<C, S>, (SourceVertexId, SourceVertexId, AltCurve<C, S>)>::new();
         let mut source_vertex_points = HashMap::<SourceVertexId, Point3>::new();
@@ -118,57 +132,68 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                 .entry(absolute.id())
                 .or_insert_with(|| (front.id(), back.id(), absolute.oriented_curve()));
         }
-        let source_edges = source_edges_by_id
+        let mut source_edges = source_edges_by_id
             .into_values()
             .map(|(front, back, curve)| {
                 let (t0, t1) = curve.range_tuple();
                 (front, back, curve.evaluate(f64::midpoint(t0, t1)))
             })
-            .collect();
+            .collect::<Vec<_>>();
+        // When independently imported edges have endpoints within the weld
+        // tolerance, the first representative must not depend on randomized
+        // source IDs or the iteration order of the hash table.
+        source_edges.sort_by(|a, b| {
+            point_lex_cmp(&source_vertex_points[&a.0], &source_vertex_points[&b.0])
+                .then_with(|| {
+                    point_lex_cmp(&source_vertex_points[&a.1], &source_vertex_points[&b.1])
+                })
+                .then_with(|| point_lex_cmp(&a.2, &b.2))
+        });
         let mut context = Self {
-            vertex_cells: HashMap::new(),
+            vertices_by_x: BTreeMap::new(),
+            tolerances,
             edges: HashMap::new(),
             source_vertex_points,
             source_edges,
             additional_nodes: Vec::new(),
+            rebuilt_edges: HashMap::default(),
         };
-        let source_points = context
+        let mut source_points = context
             .source_vertex_points
             .values()
             .copied()
             .collect::<Vec<_>>();
+        source_points.sort_by(point_lex_cmp);
         for point in source_points {
-            context.canonical_vertex(point);
+            context.canonical_vertex(point)?;
         }
-        context
+        Some(context)
     }
 
-    fn canonical_vertex(&mut self, point: Point3) -> Vertex<Point3> {
-        let key = vertex_cell(point);
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    let neighbor = [
-                        key[0].saturating_add(dx),
-                        key[1].saturating_add(dy),
-                        key[2].saturating_add(dz),
-                    ];
-                    if let Some(vertex) = self
-                        .vertex_cells
-                        .get(&neighbor)
-                        .and_then(|bucket| bucket.iter().find(|vertex| vertex.point().near(&point)))
-                    {
-                        return vertex.clone();
-                    }
-                }
-            }
+    fn canonical_vertex(&mut self, point: Point3) -> Option<Vertex<Point3>> {
+        if !finite_point(point) {
+            return None;
+        }
+        let tol = self.tolerances.length;
+        // Ordered X-coordinate interval only discovers candidates. Exact
+        // 3D distance at the operation's requested length proves acceptance.
+        let min = SpatialX(point.x - tol);
+        let max = SpatialX(point.x + tol);
+        if let Some(existing) = self
+            .vertices_by_x
+            .range(min..=max)
+            .flat_map(|(_, vertices)| vertices)
+            .filter(|vertex| vertex.point().distance(point) <= tol)
+            .min_by(|a, b| point_lex_cmp(&a.point(), &b.point()))
+        {
+            return Some(existing.clone());
         }
         let vertex = Vertex::new(point);
-        self.vertex_cells
-            .entry(key)
+        self.vertices_by_x
+            .entry(SpatialX(point.x))
             .or_default()
             .push(vertex.clone());
-        vertex
+        Some(vertex)
     }
 
     fn canonical_edge(&mut self, rebuilt: AltEdge<C, S>) -> AltEdge<C, S> {
@@ -180,7 +205,7 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
             .into_iter()
             .chain(self.edges.get(&reverse))
             .flatten()
-            .find(|candidate| curves_sampled_coincident(candidate, &rebuilt))
+            .find(|candidate| curves_sampled_coincident(candidate, &rebuilt, self.tolerances))
             .cloned();
         if let Some(canonical) = canonical {
             if canonical.front() == rebuilt.front() {
@@ -199,21 +224,24 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
         curve: &AltCurve<C, S>,
         front: &Vertex<Point3>,
         back: &Vertex<Point3>,
-    ) -> Vec<(f64, f64, Vertex<Point3>)> {
-        let curve_bounds = certified_alt_curve_box(curve);
+    ) -> Option<Vec<(f64, f64, Vertex<Point3>)>> {
+        let curve_bounds = certified_alt_curve_box(curve, self.tolerances);
         let (t0, t1) = curve.range_tuple();
         let span = t1 - t0;
-        if span.abs() <= f64::EPSILON {
-            return Vec::new();
+        if !t0.is_finite() || !t1.is_finite() || t1 <= t0 {
+            return None;
         }
         let parameter_on_curve = |point: Point3| {
             curve
                 .search_parameter(point, None, 100)
                 .or_else(|| curve.search_nearest_parameter(point, None, 100))
-                .filter(|&parameter| curve.evaluate(parameter).near(&point))
+                .filter(|&parameter| {
+                    parameter.is_finite()
+                        && curve.evaluate(parameter).distance(point) <= self.tolerances.length
+                })
         };
         let projection_pad =
-            DEFAULT_NUMERICAL_TOLERANCES.boolean_weld_projection_factor * KERNEL_EPSILON;
+            DEFAULT_NUMERICAL_TOLERANCES.boolean_weld_projection_factor * self.tolerances.length;
         let projected_vertices = self
             .source_vertex_points
             .iter()
@@ -266,9 +294,13 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                 }
             }
         }
+        // Canonicalize near-equal cut points in geometric order BEFORE
+        // assigning their shared vertex identity. Sorting only after this
+        // step leaves the representative to arbitrary source-edge ordering.
+        raw_splits.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| point_lex_cmp(&a.2, &b.2)));
         let mut split_vertices = Vec::new();
         for (progress, parameter, point) in raw_splits {
-            let vertex = self.canonical_vertex(point);
+            let vertex = self.canonical_vertex(point)?;
             if vertex != *front
                 && vertex != *back
                 && !split_vertices
@@ -280,35 +312,57 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
         }
         split_vertices.sort_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0));
         split_vertices.dedup_by(|lhs, rhs| lhs.2 == rhs.2);
-        split_vertices
+        Some(split_vertices)
     }
 
     fn rebuild_edge(&mut self, edge: &AltEdge<C, S>) -> Option<Vec<AltEdge<C, S>>> {
-        let front = self.canonical_vertex(edge.front().point());
-        let back = self.canonical_vertex(edge.back().point());
+        let key = (edge.id(), edge.orientation());
+        if let Some(rebuilt) = self.rebuilt_edges.get(&key) {
+            return Some(rebuilt.clone());
+        }
+        let rebuilt = self.rebuild_edge_uncached(edge)?;
+        self.rebuilt_edges.insert(key, rebuilt.clone());
+        Some(rebuilt)
+    }
+
+    fn rebuild_edge_uncached(&mut self, edge: &AltEdge<C, S>) -> Option<Vec<AltEdge<C, S>>> {
+        let front = self.canonical_vertex(edge.front().point())?;
+        let back = self.canonical_vertex(edge.back().point())?;
         if front == back {
             return Some(Vec::new());
         }
         let curve = edge.oriented_curve();
-        let split_vertices = self.split_vertices(&curve, &front, &back);
+        let split_vertices = self.split_vertices(&curve, &front, &back)?;
         let mut pieces = Vec::with_capacity(split_vertices.len() + 1);
         let mut remaining = curve;
         let mut segment_front = front;
-        for (_, _, split_vertex) in split_vertices {
-            // The parameter of a later split belongs to the *remaining* curve.
-            // A line cut resets its domain to [0, 1], while a B-spline cut
-            // retains its original knot values. Reusing parameters from the
-            // initial curve corrupts its analytic endpoints after multiple cuts.
+        for (_, original_parameter, split_vertex) in split_vertices {
             let point = split_vertex.point();
-            let parameter = remaining
-                .search_parameter(point, None, 100)
-                .or_else(|| remaining.search_nearest_parameter(point, None, 100))
-                .filter(|&t| {
-                    let (start, end) = remaining.range_tuple();
-                    t > start && t < end && remaining.evaluate(t).near(&point)
-                })?;
+            // The discovery pass already certified this original-curve
+            // parameter. Prefer it when it is still valid in the *remaining*
+            // curve's domain. B-spline cuts often preserve knot parameters,
+            // but lines reset their domain: a later split must be recovered
+            // from the remaining curve if the initial parameter no longer
+            // evaluates to this exact vertex.
+            let on_remaining = |t: f64| {
+                let (start, end) = remaining.range_tuple();
+                t.is_finite()
+                    && t > start
+                    && t < end
+                    && remaining.evaluate(t).distance(point) <= self.tolerances.length
+            };
+            let parameter = if on_remaining(original_parameter) {
+                original_parameter
+            } else {
+                remaining
+                    .search_parameter(point, None, 100)
+                    .or_else(|| remaining.search_nearest_parameter(point, None, 100))
+                    .filter(|&t| on_remaining(t))?
+            };
             let later = remaining.cut(parameter);
-            if !remaining.back().near(&point) || !later.front().near(&point) {
+            if remaining.back().distance(point) > self.tolerances.length
+                || later.front().distance(point) > self.tolerances.length
+            {
                 return None;
             }
             remaining.snap_endpoints(segment_front.point(), point);
@@ -330,8 +384,9 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
 pub(super) fn node_selected_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
     nodes: &[Point3],
+    tolerances: BooleanTolerance,
 ) -> Option<Vec<AltRegion<C, S>>> {
-    let mut context = WeldContext::new(regions);
+    let mut context = WeldContext::new(regions, tolerances)?;
     context.additional_nodes = nodes.to_vec();
     regions
         .iter()
@@ -360,9 +415,79 @@ pub(super) fn node_selected_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 
 pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
+    tolerances: BooleanTolerance,
 ) -> Option<AltCurveShell<C, S>> {
-    let rebuilt_regions = node_selected_regions(regions, &[])?;
+    let rebuilt_regions = node_selected_regions(regions, &[], tolerances)?;
     faces_classification::materialize_regions(&rebuilt_regions)
+}
+
+/// Reconcile duplicate edge references after converting temporary SSI leaders
+/// to final curve types. Only edges with an already-shared vertex index pair
+/// are considered. Original curves are never altered: identity is shared only
+/// after symmetric geometric validation at the *numerical* Boolean tolerance.
+pub(super) fn weld_converted_duplicate_edges<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell: &Shell<Point3, C, S>,
+    tolerances: BooleanTolerance,
+) -> Option<Shell<Point3, C, S>> {
+    let mut compressed = shell.compress();
+    let mut buckets = HashMap::<(usize, usize), Vec<usize>>::default();
+    let mut representatives = (0..compressed.edges.len()).collect::<Vec<_>>();
+    let mut reconciled = false;
+    for (index, edge) in compressed.edges.iter().enumerate() {
+        let (front, back) = edge.vertices;
+        let key = (front.min(back), front.max(back));
+        let candidates = buckets.entry(key).or_default();
+        let replacement = candidates.iter().copied().find(|&other| {
+            let prior = &compressed.edges[other].curve;
+            let candidate = &edge.curve;
+            let prior_inverse = prior.inverse();
+            let candidate_inverse = candidate.inverse();
+            [prior, &prior_inverse].into_iter().any(|left| {
+                [candidate, &candidate_inverse].into_iter().any(|right| {
+                    super::curve_equivalence::validate_shared_endpoint_interior_coincidence::<
+                        Point3,
+                        _,
+                    >(
+                        left,
+                        right,
+                        &[compressed.vertices[key.0], compressed.vertices[key.1]],
+                        tolerances,
+                    ) == CurveCoincidence::SampledValidation
+                        || validate_sampled_coincidence::<Point3, _>(left, right, tolerances)
+                            == CurveCoincidence::SampledValidation
+                        || validate_endpoint_aligned_coincidence::<Point3, _>(
+                            left, right, tolerances,
+                        ) == CurveCoincidence::SampledValidation
+                })
+            })
+        });
+        if let Some(other) = replacement {
+            representatives[index] = other;
+            reconciled = true;
+        } else {
+            candidates.push(index);
+        }
+    }
+    if !reconciled {
+        return None;
+    }
+    for use_ in compressed
+        .faces
+        .iter_mut()
+        .flat_map(|face| face.boundaries.iter_mut())
+        .flatten()
+    {
+        let original = use_.index;
+        let representative = representatives[original];
+        if representative != original {
+            if compressed.edges[original].vertices != compressed.edges[representative].vertices {
+                use_.orientation = !use_.orientation;
+            }
+            use_.index = representative;
+        }
+    }
+    compressed.compact_unused_topology().ok()?;
+    Shell::extract(compressed).ok()
 }
 
 #[cfg(test)]
@@ -382,19 +507,175 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             )
         })
         .collect::<Vec<_>>();
-    weld_coincident_regions(&regions).unwrap_or_default()
+    weld_coincident_regions(
+        &regions,
+        BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length),
+    )
+    .expect("test fixture must produce a valid welded shell")
 }
 
 #[cfg(test)]
 mod weld_tests {
     use super::*;
     use monstertruck_core::cgmath64::EuclideanSpace;
+    use monstertruck_core::tolerance::{KERNEL_EPSILON, Tolerance};
     use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, Line, Plane};
     use monstertruck_modeling::{Curve, Surface};
     use monstertruck_topology::{Face, Shell};
 
     fn alt_line(front: Point3, back: Point3) -> AltCurve<Curve, Surface> {
         Alternative::FirstType(Curve::from(Line(front, back)))
+    }
+
+    #[test]
+    fn repeated_source_edge_reuses_exact_canonical_segments_per_orientation() {
+        let endpoints =
+            Vertex::from_points([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+        let original = Edge::new_unchecked(
+            &endpoints[0],
+            &endpoints[1],
+            alt_line(endpoints[0].point(), endpoints[1].point()),
+        );
+        let mut context: WeldContext<Curve, Surface> =
+            WeldContext::new(&[], BooleanTolerance::new(1.0e-6))
+                .expect("empty input has a valid welding context");
+        context.additional_nodes.push(Point3::new(0.5, 0.0, 0.0));
+        let first = context.rebuild_edge(&original).expect("exact split");
+        let second = context.rebuild_edge(&original).expect("cached split");
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            first.iter().map(Edge::id).collect::<Vec<_>>(),
+            second.iter().map(Edge::id).collect::<Vec<_>>()
+        );
+        assert_eq!(context.rebuilt_edges.len(), 1);
+        let reversed = context
+            .rebuild_edge(&original.inverse())
+            .expect("inverse split");
+        assert_eq!(reversed.len(), 2);
+        assert_eq!(context.rebuilt_edges.len(), 2);
+        assert_eq!(first[0].front().point(), reversed[1].back().point());
+        assert_eq!(first[1].back().point(), reversed[0].front().point());
+    }
+
+    #[test]
+    fn vertex_weld_respects_sub_epsilon_length_and_extreme_finite_coordinates() {
+        let first = Point3::new(0.0, 0.0, 0.0);
+        let different = Point3::new(0.0, 0.0, 5.0e-7);
+        let genuinely_near = Point3::new(0.0, 0.0, 5.0e-9);
+        let mut precise: WeldContext<Curve, Surface> =
+            WeldContext::new(&[], BooleanTolerance::new(1.0e-8)).expect("empty source");
+        let origin = precise.canonical_vertex(first).expect("finite point");
+        let unrelated = precise.canonical_vertex(different).expect("finite point");
+        assert_ne!(origin.id(), unrelated.id());
+        assert_eq!(
+            precise
+                .canonical_vertex(genuinely_near)
+                .expect("finite point")
+                .id(),
+            origin.id()
+        );
+
+        let mut broad: WeldContext<Curve, Surface> =
+            WeldContext::new(&[], BooleanTolerance::new(1.0e-6)).expect("empty source");
+        let same = broad.canonical_vertex(first).expect("finite point");
+        assert_eq!(
+            broad
+                .canonical_vertex(different)
+                .expect("finite point")
+                .id(),
+            same.id()
+        );
+
+        // The previous f64/i64 cell quantization saturated for large
+        // coordinates. Ordered floating-coordinate searches do not.
+        let high = 1.0e24_f64;
+        let next = f64::from_bits(high.to_bits() + 1);
+        let huge_a = Point3::new(high, 0.0, 0.0);
+        let huge_b = Point3::new(next, 0.0, 0.0);
+        let first = precise.canonical_vertex(huge_a).expect("finite huge point");
+        let second = precise.canonical_vertex(huge_b).expect("finite huge point");
+        assert_ne!(first.id(), second.id());
+        assert!(
+            precise
+                .canonical_vertex(Point3::new(f64::NAN, 0.0, 0.0))
+                .is_none()
+        );
+        assert!(
+            precise
+                .canonical_vertex(Point3::new(f64::INFINITY, 0.0, 0.0))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn edge_coincidence_uses_operation_length_not_global_kernel_epsilon() {
+        let start = Point3::new(0.0, 0.0, 0.0);
+        let end = Point3::new(1.0, 0.0, 0.0);
+        let gap = 5.0e-7;
+        let offset_start = Point3::new(0.0, 0.0, gap);
+        let offset_end = Point3::new(1.0, 0.0, gap);
+        let a = Vertex::new(start);
+        let b = Vertex::new(end);
+        let c = Vertex::new(offset_start);
+        let d = Vertex::new(offset_end);
+        let first = Edge::new_unchecked(&a, &b, alt_line(start, end));
+        let second = Edge::new_unchecked(&c, &d, alt_line(offset_start, offset_end));
+        assert!(!curves_sampled_coincident(
+            &first,
+            &second,
+            BooleanTolerance::new(1.0e-8),
+        ));
+        assert!(curves_sampled_coincident(
+            &first,
+            &second,
+            BooleanTolerance::new(1.0e-6),
+        ));
+    }
+
+    #[test]
+    fn near_coincident_weld_representatives_are_order_invariant() {
+        let first = Point3::new(0.0, 0.0, 0.0);
+        let second = Point3::new(KERNEL_EPSILON * 0.25, 0.0, 0.0);
+        let right = Point3::new(2.0, 0.0, 0.0);
+        let top = Point3::new(2.0, 1.0, 0.0);
+        let mk = |a: Point3, b: Point3, id: usize| {
+            let front = Vertex::new(a);
+            let back = Vertex::new(b);
+            faces_classification::BooleanRegion::new(
+                vec![Wire::from(vec![Edge::new_unchecked(
+                    &front,
+                    &back,
+                    alt_line(a, b),
+                )])],
+                Surface::Plane(Plane::xy()),
+                true,
+                id,
+                id,
+            )
+        };
+        let near = mk(second, top, 1);
+        let exact = mk(first, right, 2);
+        for regions in [[near.clone(), exact.clone()], [exact, near]] {
+            let mut context = WeldContext::new(
+                &regions,
+                BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length),
+            )
+            .expect("valid finite source regions");
+            assert_eq!(
+                context
+                    .canonical_vertex(first)
+                    .expect("finite point")
+                    .point(),
+                first
+            );
+            assert_eq!(
+                context
+                    .canonical_vertex(second)
+                    .expect("finite point")
+                    .point(),
+                first
+            );
+        }
     }
 
     #[test]
@@ -503,7 +784,11 @@ mod weld_tests {
                 0,
                 0,
             );
-            let mut context = WeldContext::new(&[region]);
+            let mut context = WeldContext::new(
+                &[region],
+                BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length),
+            )
+            .expect("finite region geometry");
             context.additional_nodes = [1.0, 2.0, 3.0].map(|x| Point3::new(x, 0.0, 0.0)).to_vec();
             let pieces = context
                 .rebuild_edge(&whole)
@@ -518,6 +803,45 @@ mod weld_tests {
                     piece.is_geometric_consistent(),
                     "noding must not stretch curves away from canonical vertices"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn weld_multi_split_reuses_only_parameters_valid_on_remaining_curve() {
+        let p0 = Point3::new(0.0, 0.0, 0.0);
+        let p1 = Point3::new(1.0, 0.0, 0.0);
+        let p2 = Point3::new(2.0, 0.0, 0.0);
+        let p3 = Point3::new(3.0, 0.0, 0.0);
+        for curve in [
+            alt_line(p0, p3),
+            Alternative::FirstType(Curve::from(BsplineCurve::new_unchecked(
+                KnotVector::bezier_knot(1),
+                vec![p0, p3],
+            ))),
+        ] {
+            let first = Vertex::new(p0);
+            let last = Vertex::new(p3);
+            let edge = Edge::new_unchecked(&first, &last, curve);
+            let mut context: WeldContext<Curve, Surface> = WeldContext::new(
+                &[],
+                BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length),
+            )
+            .expect("empty regions admit a weld context");
+            context.additional_nodes = vec![p1, p2];
+            let fragments = context
+                .rebuild_edge(&edge)
+                .expect("two distinct exact interior nodes must both split the analytic edge");
+            assert_eq!(fragments.len(), 3);
+            assert_eq!(fragments[0].front().point(), p0);
+            assert_eq!(fragments[0].back().point(), p1);
+            assert_eq!(fragments[1].front().point(), p1);
+            assert_eq!(fragments[1].back().point(), p2);
+            assert_eq!(fragments[2].front().point(), p2);
+            assert_eq!(fragments[2].back().point(), p3);
+            for edge in fragments {
+                assert!(edge.oriented_curve().front().near(&edge.front().point()));
+                assert!(edge.oriented_curve().back().near(&edge.back().point()));
             }
         }
     }

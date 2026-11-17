@@ -254,7 +254,11 @@ impl IncludeCurve<Curve> for Surface {
             {
                 return true;
             }
-            if sampled_curve_lies_on_surface(curve.leader().as_ref(), self) {
+            // The leader is an approximation used to seed the actual
+            // surface/surface intersection solver. In particular, a chord
+            // joining samples of a curved intersection need not lie on either
+            // carrier. Validate the evaluated intersection, not its guide.
+            if sampled_curve_lies_on_surface(curve, self) {
                 return true;
             }
         }

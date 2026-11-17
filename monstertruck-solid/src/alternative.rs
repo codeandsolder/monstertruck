@@ -77,6 +77,15 @@ where
             Self::SecondType(curve) => curve.range_tuple(),
         }
     }
+
+    /// An alternative is a representation choice, not a loss of its
+    /// constituent's spatial certificate. Unknown curves remain unknown.
+    fn certified_spatial_bounds(&self) -> Option<BoundingBox<Self::Point>> {
+        match self {
+            Self::FirstType(curve) => curve.certified_spatial_bounds(),
+            Self::SecondType(curve) => curve.certified_spatial_bounds(),
+        }
+    }
 }
 
 impl<S0, S1> ParametricSurface for Alternative<S0, S1>
@@ -485,5 +494,31 @@ where
             Self::FirstType(got) => got.search_nearest_parameter(point, hint, trials),
             Self::SecondType(got) => got.search_nearest_parameter(point, hint, trials),
         }
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+    use monstertruck_geometry::prelude::{Line, Point3};
+    use monstertruck_modeling::Curve;
+
+    #[test]
+    fn alternatives_preserve_certificates_and_unknowns() {
+        let a = Point3::new(-2.0, 1.0, 3.0);
+        let b = Point3::new(4.0, 5.0, 7.0);
+        let exact = Alternative::<Curve, PolylineCurve<Point3>>::FirstType(Curve::Line(Line(a, b)));
+        let bounds = exact
+            .certified_spatial_bounds()
+            .expect("exact segment certificate");
+        assert_eq!(bounds.min(), a);
+        assert_eq!(bounds.max(), b);
+
+        let approximate =
+            Alternative::<Curve, PolylineCurve<Point3>>::SecondType(PolylineCurve(vec![a, b]));
+        assert!(
+            approximate.certified_spatial_bounds().is_none(),
+            "sampled leader is not an exact enclosure certificate"
+        );
     }
 }

@@ -1,10 +1,11 @@
 use crate::math3::{canonical_direction, cross, norm, normalize as normalize3};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use serde::Serialize;
 
 use crate::patterns::{InstancePattern, linear_pattern_sites};
 use crate::periodic_bodies::PeriodicBodyPattern;
 
-const TOL_MM: f64 = 1.0e-5;
+const TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.periodic_geometry_mm;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RecoveredCountParameter {
@@ -87,7 +88,13 @@ pub fn detect_count_parameters(
             continue;
         }
         let p = &patterns[index];
-        let axis = canonical_direction(normalize3(p.basis[0], 1.0e-15).unwrap_or([1.0, 0.0, 0.0]));
+        let axis = canonical_direction(
+            normalize3(
+                p.basis[0],
+                DEFAULT_STEP_RECOVERY_TOLERANCES.source_brep_direction,
+            )
+            .unwrap_or([1.0, 0.0, 0.0]),
+        );
         let pitch = norm(p.basis[0]);
         let Some(sites) = linear_pattern_sites(p) else {
             continue;
@@ -106,9 +113,16 @@ pub fn detect_count_parameters(
             {
                 continue;
             }
-            let q_axis =
-                canonical_direction(normalize3(q.basis[0], 1.0e-15).unwrap_or([1.0, 0.0, 0.0]));
-            if norm(cross(axis, q_axis)) > 1.0e-8 {
+            let q_axis = canonical_direction(
+                normalize3(
+                    q.basis[0],
+                    DEFAULT_STEP_RECOVERY_TOLERANCES.source_brep_direction,
+                )
+                .unwrap_or([1.0, 0.0, 0.0]),
+            );
+            if norm(cross(axis, q_axis))
+                > DEFAULT_STEP_RECOVERY_TOLERANCES.source_axis_direction_cosine
+            {
                 continue;
             }
             indices.push(other);

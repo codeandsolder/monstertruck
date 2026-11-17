@@ -19,13 +19,14 @@
 
 use super::{Curve3D, Surface, uv_clamp};
 use crate::step::load::Table;
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::{ParameterBoundary2D, Point2};
 use monstertruck_topology::compress::CompressedShell;
 use std::path::{Path, PathBuf};
 
 /// The tolerance the real healing callers pass (`real_world_step_tests.rs`,
 /// `healing_partial_solid.rs`).
-const TOL: f64 = 1.0e-3;
+const TOL: f64 = DEFAULT_NUMERICAL_TOLERANCES.step_uv_clamp_probe;
 
 fn corpus_root() -> Option<PathBuf> {
     std::env::var_os("MONSTERTRUCK_STEP_CORPUS")

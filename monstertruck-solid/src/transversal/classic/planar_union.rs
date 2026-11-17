@@ -6,9 +6,15 @@
 
 use super::divide_face::create_parameter_boundary_on_surface;
 use super::faces_classification::BooleanRegion;
-use super::weld::node_selected_regions;
+use super::loops_store::{
+    certified_circular_cylinder, common_circular_extrusion_cylinder, common_ruled_extrusion_strip,
+};
+use super::tolerance::BooleanTolerance;
+use super::weld::{node_selected_regions, point_lex_cmp};
 use super::{AltCurve, AltRegion, ShapeOpsCurve, ShapeOpsSurface};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::*;
+use monstertruck_meshing::prelude::PolylineCurve;
 use monstertruck_topology::{Edge, EdgeId, VertexId, Wire};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::BTreeSet;
@@ -22,9 +28,175 @@ struct ProjectedEdge<C> {
 
 struct PlanarArrangement<C, S> {
     surface: S,
+    cylinder: Option<CylinderChart>,
     polygons: Vec<Vec<Vec<Point2>>>,
     edges: Vec<ProjectedEdge<AltCurve<C, S>>>,
     span: f64,
+}
+
+/// Global metric chart for a certified rational circular extrusion.
+///
+/// Two independently parameterized rational arcs may inhabit the same exact
+/// cylinder but have incompatible local NURBS parameter domains. Projecting
+/// one arc through the other's local inverse map can invent winding and
+/// intersections. The cylinder's axial coordinate + unwrapped arc length
+/// supplies a single chart for the entire certified common carrier.
+#[derive(Clone, Copy)]
+struct CylinderChart {
+    center: Point3,
+    axis: Vector3,
+    radius: f64,
+    basis_u: Vector3,
+    basis_v: Vector3,
+    handedness: f64,
+    seam: f64,
+}
+
+impl CylinderChart {
+    fn new<S: ShapeOpsSurface>(surface: &S, first_point: Point3, tol: f64) -> Option<Self> {
+        let rational = surface.try_into_homogeneous_bspline_surface()?;
+        let (center, axis, radius, _) = certified_circular_cylinder(&rational)?;
+        let reference = if axis.x.abs()
+            < DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_reference_axis_component_limit
+        {
+            Vector3::unit_x()
+        } else {
+            Vector3::unit_y()
+        };
+        let basis_u = axis.cross(reference).normalize();
+        let basis_v = axis.cross(basis_u).normalize();
+        let axial = (first_point - center).dot(axis);
+        let radial = first_point - center - axis * axial;
+        if (radial.magnitude() - radius).abs() > tol {
+            return None;
+        }
+        let uv = surface
+            .search_parameter(first_point, None, 100)
+            .or_else(|| surface.search_nearest_parameter(first_point, None, 100))?;
+        let normal = surface.normal(uv.0, uv.1);
+        let radial_alignment = normal.dot(radial.normalize()) / normal.magnitude();
+        if !radial_alignment.is_finite()
+            || radial_alignment.abs()
+                < DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_normal_alignment_cosine
+        {
+            return None;
+        }
+        // With this right-handed axis basis, (axial, increasing angle) has
+        // an inward normal. Choose chart orientation to agree with the
+        // reference surface's raw normal, preserving outer/hole winding.
+        let handedness = if radial_alignment < 0.0 { 1.0 } else { -1.0 };
+        Some(Self {
+            center,
+            axis,
+            radius,
+            basis_u,
+            basis_v,
+            handedness,
+            seam: 0.0,
+        })
+    }
+
+    fn raw_phase(&self, point: Point3) -> f64 {
+        let delta = point - self.center;
+        (self.handedness * delta.dot(self.basis_v).atan2(delta.dot(self.basis_u)))
+            .rem_euclid(std::f64::consts::TAU)
+    }
+
+    fn set_seam(&mut self, points: impl IntoIterator<Item = Point3>) -> Option<()> {
+        let mut angles = points
+            .into_iter()
+            .map(|point| self.raw_phase(point))
+            .collect::<Vec<_>>();
+        if angles.is_empty() {
+            return None;
+        }
+        angles.sort_by(f64::total_cmp);
+        let mut largest = (f64::NEG_INFINITY, 0.0);
+        for (i, &start) in angles.iter().enumerate() {
+            let end = angles
+                .get(i + 1)
+                .copied()
+                .unwrap_or(angles[0] + std::f64::consts::TAU);
+            let gap = end - start;
+            if gap > largest.0 {
+                largest = (gap, gap.mul_add(0.5, start));
+            }
+        }
+        self.seam = largest.1.rem_euclid(std::f64::consts::TAU);
+        Some(())
+    }
+
+    fn project(&self, point: Point3, previous: Option<Point2>, tol: f64) -> Option<Point2> {
+        let delta = point - self.center;
+        let axial = delta.dot(self.axis);
+        let radial = delta - self.axis * axial;
+        if !axial.is_finite() || (radial.magnitude() - self.radius).abs() > tol {
+            return None;
+        }
+        let phase = self.raw_phase(point);
+        let mut angle = (phase - self.seam).rem_euclid(std::f64::consts::TAU) + self.seam;
+        if let Some(previous) = previous {
+            angle = std::f64::consts::TAU.mul_add(
+                ((previous.y / self.radius - angle) / std::f64::consts::TAU).round(),
+                angle,
+            );
+        }
+        Some(Point2::new(axial, self.radius * angle))
+    }
+
+    fn evaluate(&self, uv: Point2) -> Point3 {
+        let angle = self.handedness * uv.y / self.radius;
+        self.center
+            + self.axis * uv.x
+            + (self.basis_u * angle.cos() + self.basis_v * angle.sin()) * self.radius
+    }
+}
+
+fn project_cylinder_wire<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    chart: &CylinderChart,
+    wire: &Wire<Point3, AltCurve<C, S>>,
+    samples: &mut HashMap<EdgeId<AltCurve<C, S>>, PolylineCurve<Point3>>,
+    tol: f64,
+) -> Option<PolylineCurve<Point2>> {
+    let sampling_tol = BooleanTolerance::new(tol).mesh_seed;
+    let endpoint_tol = DEFAULT_NUMERICAL_TOLERANCES.boolean_curve_endpoint_factor * tol;
+    // The vertex belongs to an exact shared cylinder and is admitted only
+    // at numerical precision; the guide points below are approximate.
+    let mut projected = vec![chart.project(wire.front_vertex()?.point(), None, tol)?];
+    for edge in wire {
+        let curve = edge.curve();
+        let poly = samples.entry(edge.id()).or_insert_with(|| {
+            PolylineCurve(
+                curve
+                    .parameter_division(curve.range_tuple(), sampling_tol)
+                    .1,
+            )
+        });
+        // A sampled SSI guide can drift off its exact cylinder. Certify the
+        // curve's exact endpoints against topology at numerical precision,
+        // and the guide's endpoints against the curve at sampling precision.
+        let (t0, t1) = curve.range_tuple();
+        let (exact_front, exact_back) = (curve.evaluate(t0), curve.evaluate(t1));
+        if exact_front.distance(edge.absolute_front().point()) > endpoint_tol
+            || exact_back.distance(edge.absolute_back().point()) > endpoint_tol
+            || poly.first()?.distance(exact_front) > sampling_tol
+            || poly.last()?.distance(exact_back) > sampling_tol
+        {
+            return None;
+        }
+        let mut walk = if edge.orientation() {
+            poly.iter().skip(1).copied().collect::<Vec<_>>()
+        } else {
+            poly.iter().rev().skip(1).copied().collect::<Vec<_>>()
+        };
+        // Close each projected segment on its independently certified exact
+        // topological endpoint, not on a drifting sampled SSI leader.
+        *walk.last_mut()? = edge.back().point();
+        for world in walk {
+            projected.push(chart.project(world, projected.last().copied(), sampling_tol)?);
+        }
+    }
+    Some(PolylineCurve(projected))
 }
 
 fn signed_area(poly: &[Point2]) -> f64 {
@@ -65,8 +237,8 @@ fn covered(polygons: &[Vec<Vec<Point2>>], point: Point2) -> bool {
 
 /// Return true when existing exact edge identities are insufficient to form
 /// an already-noded arrangement. Such crossings must be split, not guessed.
-fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64) -> bool {
-    let epsilon = span * 1.0e-10;
+fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64, tol: f64) -> bool {
+    let epsilon = span * DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_relative_span;
     let cross = |start: Point2, end: Point2, point: Point2| {
         let direction = end - start;
         direction
@@ -80,21 +252,43 @@ fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64) -> bool {
             return false;
         }
         let position = (point - start).dot(direction) / length2;
-        position > 1.0e-6
-            && position < 1.0 - 1.0e-6
+        position > DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_end_fraction
+            && position < 1.0 - DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_end_fraction
             && (point - (start + direction * position)).magnitude2() < epsilon * epsilon
     };
     for (index, lhs) in edges.iter().enumerate() {
         for rhs in edges.iter().skip(index + 1) {
             let lhs_uv = &lhs.uv;
             let rhs_uv = &rhs.uv;
-            for &(point, other) in &[
-                (lhs_uv[0], rhs_uv),
-                (lhs_uv[lhs_uv.len() - 1], rhs_uv),
-                (rhs_uv[0], lhs_uv),
-                (rhs_uv[rhs_uv.len() - 1], lhs_uv),
+            for (uv_endpoint, world_endpoint, other_edge, other_uv) in [
+                (lhs_uv[0], lhs.edge.front().point(), &rhs.edge, rhs_uv),
+                (
+                    lhs_uv[lhs_uv.len() - 1],
+                    lhs.edge.back().point(),
+                    &rhs.edge,
+                    rhs_uv,
+                ),
+                (rhs_uv[0], rhs.edge.front().point(), &lhs.edge, lhs_uv),
+                (
+                    rhs_uv[rhs_uv.len() - 1],
+                    rhs.edge.back().point(),
+                    &lhs.edge,
+                    lhs_uv,
+                ),
             ] {
-                if other.windows(2).any(|w| on_interior(point, w[0], w[1])) {
+                // UV projection is approximate even when analytic edges
+                // share a world endpoint. Ignore chart drift only when
+                // spatial agreement meets this operation's requested
+                // numerical length, not the global kernel epsilon.
+                if world_endpoint.distance(other_edge.front().point()) <= tol
+                    || world_endpoint.distance(other_edge.back().point()) <= tol
+                {
+                    continue;
+                }
+                if other_uv
+                    .windows(2)
+                    .any(|w| on_interior(uv_endpoint, w[0], w[1]))
+                {
                     return true;
                 }
             }
@@ -221,7 +415,10 @@ fn exact_node_points<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                         continue;
                     }
                     let uv = first[0] + lhs_direction * first_fraction;
-                    let approximate = arrangement.surface.evaluate(uv.x, uv.y);
+                    let approximate = arrangement.cylinder.as_ref().map_or_else(
+                        || arrangement.surface.evaluate(uv.x, uv.y),
+                        |chart| chart.evaluate(uv),
+                    );
                     let point = exact_curve_crossing(lhs, rhs, approximate, tol)?;
                     if !nodes.iter().any(|existing| existing.distance(point) <= tol) {
                         nodes.push(point);
@@ -239,55 +436,177 @@ fn exact_node_points<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     (!nodes.is_empty()).then_some(nodes)
 }
 
-fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    source: &[AltRegion<C, S>],
-    tol: f64,
-) -> Option<PlanarArrangement<C, S>> {
-    let surface = source.first()?.surface();
-    if !matches!(
-        surface.try_into_analytic_surface_kind(),
-        Some(AnalyticSurfaceKind::Plane(_))
-    ) {
-        return None;
+/// A closed topological wire must not acquire an artificial gap merely
+/// because its first UV inverse projection had no continuation hint while
+/// the last one did. Preserve actual periodic winding: a full parameter
+/// period is a nonlocal jump, larger than the adjacent sampled UV steps.
+fn reconcile_local_wire_uv_closure<S: ParametricSurface3D>(
+    surface: &S,
+    cylinder: Option<&CylinderChart>,
+    world_vertex: Point3,
+    uv: &mut [Point2],
+) {
+    if uv.len() < 3 {
+        return;
     }
-    let mut samples = HashMap::default();
+    let first = uv[0];
+    let last_index = uv.len() - 1;
+    let last = uv[last_index];
+    let gap = (first - last).magnitude2();
+    let first_step = (uv[1] - first).magnitude2();
+    let last_step = (uv[last_index - 1] - last).magnitude2();
+    // Reconcile only a local inverse-map discrepancy. A wire which winds
+    // around a periodic surface can legitimately start/end at parameter
+    // coordinates a whole period apart despite sharing its 3D vertex.
+    if !gap.is_finite() || gap >= first_step || gap >= last_step {
+        return;
+    }
+    let evaluate = |uv: Point2| {
+        cylinder.map_or_else(|| surface.evaluate(uv.x, uv.y), |chart| chart.evaluate(uv))
+    };
+    let first_residual = evaluate(first).distance2(world_vertex);
+    let last_residual = evaluate(last).distance2(world_vertex);
+    let representative = if first_residual <= last_residual {
+        first
+    } else {
+        last
+    };
+    uv[0] = representative;
+    uv[last_index] = representative;
+}
+
+/// Share a surface-chart parameter for every occurrence of a welded 3D
+/// vertex, including occurrences in independently imported source faces.
+///
+/// Distinct periodic-chart lifts are retained: an occurrence is synchronized
+/// only with candidates closer than both local incident edge steps. Among
+/// equivalent inverse-map solutions, choose the smaller world-space residual.
+fn reconcile_shared_vertex_uv<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    surface: &S,
+    cylinder: Option<&CylinderChart>,
+    samples: &HashMap<EdgeId<AltCurve<C, S>>, PolylineCurve<Point3>>,
+    projected: &mut [Vec<Vec<Point2>>],
+) -> Option<()> {
+    struct Occurrence {
+        region: usize,
+        wire: usize,
+        index: usize,
+        uv: Point2,
+        local_step2: f64,
+        world: Point3,
+    }
+
+    let mut occurrences = HashMap::<VertexId<Point3>, Vec<Occurrence>>::default();
+    for (region_index, (region, loops)) in source.iter().zip(projected.iter()).enumerate() {
+        for (wire_index, (wire, poly)) in region.absolute_boundaries().iter().zip(loops).enumerate()
+        {
+            let mut current = 0;
+            for edge in wire {
+                let segment_count = samples.get(&edge.id())?.len().checked_sub(1)?;
+                if segment_count == 0 {
+                    return None;
+                }
+                let next = current + segment_count;
+                for (vertex, index) in [(edge.front(), current), (edge.back(), next)] {
+                    let uv = *poly.get(index)?;
+                    let previous_step = (index > 0).then(|| (uv - poly[index - 1]).magnitude2());
+                    let next_step = poly.get(index + 1).map(|next| (*next - uv).magnitude2());
+                    let local_step2 = previous_step
+                        .into_iter()
+                        .chain(next_step)
+                        .filter(|step| *step > 0.0 && step.is_finite())
+                        .fold(f64::INFINITY, f64::min);
+                    occurrences
+                        .entry(vertex.id())
+                        .or_default()
+                        .push(Occurrence {
+                            region: region_index,
+                            wire: wire_index,
+                            index,
+                            uv,
+                            local_step2,
+                            world: vertex.point(),
+                        });
+                }
+                current = next;
+            }
+            if current + 1 != poly.len() {
+                return None;
+            }
+        }
+    }
+    for group in occurrences.values() {
+        for point in group {
+            let representative = group
+                .iter()
+                .filter(|candidate| {
+                    let gap2 = (candidate.uv - point.uv).magnitude2();
+                    gap2 == 0.0
+                        || candidate.local_step2.is_finite()
+                            && point.local_step2.is_finite()
+                            && gap2 < candidate.local_step2
+                            && gap2 < point.local_step2
+                })
+                .min_by(|lhs, rhs| {
+                    let residual = |occ: &Occurrence| {
+                        cylinder
+                            .map_or_else(
+                                || surface.evaluate(occ.uv.x, occ.uv.y),
+                                |chart| chart.evaluate(occ.uv),
+                            )
+                            .distance2(occ.world)
+                    };
+                    residual(lhs)
+                        .total_cmp(&residual(rhs))
+                        .then_with(|| lhs.uv.x.total_cmp(&rhs.uv.x))
+                        .then_with(|| lhs.uv.y.total_cmp(&rhs.uv.y))
+                })?;
+            projected[point.region][point.wire][point.index] = representative.uv;
+        }
+    }
+    Some(())
+}
+
+/// Materialize noded exact edges from reconciled native UV charts and
+/// normalize their deterministic traversal independent of edge allocation.
+fn finish_projected_arrangement<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    projected: Vec<Vec<Vec<Point2>>>,
+    samples: &HashMap<EdgeId<AltCurve<C, S>>, PolylineCurve<Point3>>,
+    surface: S,
+    cylinder: Option<CylinderChart>,
+) -> Option<PlanarArrangement<C, S>> {
     let mut polygons = Vec::new();
     let mut edges = HashMap::<EdgeId<AltCurve<C, S>>, ProjectedEdge<AltCurve<C, S>>>::default();
     let mut span_min = Point2::new(f64::INFINITY, f64::INFINITY);
     let mut span_max = Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for region in source {
-        let mut region_loops = Vec::new();
-        for wire in region.absolute_boundaries() {
-            let projected =
-                create_parameter_boundary_on_surface(&surface, wire, None, &mut samples, tol)?;
-            if projected.len() < 3 {
-                return None;
-            }
-            for &point in &projected.0 {
+    for (region, region_loops) in source.iter().zip(projected) {
+        for (wire, poly) in region.absolute_boundaries().iter().zip(&region_loops) {
+            for &point in poly {
                 span_min.x = span_min.x.min(point.x);
                 span_min.y = span_min.y.min(point.y);
                 span_max.x = span_max.x.max(point.x);
                 span_max.y = span_max.y.max(point.y);
             }
-            region_loops.push(projected.0);
+            // Every exact edge must use its parent wire's *normalized*
+            // chart coordinates, rather than a separate inverse projection.
+            let mut start = 0;
             for edge in wire {
-                if edges.contains_key(&edge.id()) {
-                    continue;
+                let segment_count = samples.get(&edge.id())?.len().checked_sub(1)?;
+                let end = start + segment_count;
+                let mut uv = poly.get(start..=end)?.to_vec();
+                if !edge.orientation() {
+                    uv.reverse();
                 }
-                let absolute = edge.absolute_clone();
-                let one = Wire::from(vec![absolute.clone()]);
-                let projected =
-                    create_parameter_boundary_on_surface(&surface, &one, None, &mut samples, tol)?;
-                if projected.len() < 2 {
-                    return None;
-                }
-                edges.insert(
-                    edge.id(),
-                    ProjectedEdge {
-                        edge: absolute,
-                        uv: projected.0,
-                    },
-                );
+                edges.entry(edge.id()).or_insert_with(|| ProjectedEdge {
+                    edge: edge.absolute_clone(),
+                    uv,
+                });
+                start = end;
+            }
+            if start + 1 != poly.len() {
+                return None;
             }
         }
         polygons.push(region_loops);
@@ -296,17 +615,133 @@ fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if !span.is_finite() || span <= 0.0 {
         return None;
     }
+    // Edge IDs are allocation-specific; use a geometric traversal order
+    // so intersection evidence never depends on hash-table iteration.
+    let mut edges = edges.into_values().collect::<Vec<_>>();
+    edges.sort_by(|a, b| {
+        let (af, ab, bf, bb) = (
+            a.edge.front().point(),
+            a.edge.back().point(),
+            b.edge.front().point(),
+            b.edge.back().point(),
+        );
+        let curve_middle = |edge: &ProjectedEdge<AltCurve<C, S>>| {
+            let curve = edge.edge.oriented_curve();
+            let (t0, t1) = curve.range_tuple();
+            curve.evaluate(f64::midpoint(t0, t1))
+        };
+        point_lex_cmp(&af, &bf)
+            .then_with(|| point_lex_cmp(&ab, &bb))
+            .then_with(|| point_lex_cmp(&curve_middle(a), &curve_middle(b)))
+            .then_with(|| a.uv.len().cmp(&b.uv.len()))
+    });
     Some(PlanarArrangement {
         surface,
+        cylinder,
         polygons,
-        edges: edges.into_values().collect(),
+        edges,
         span,
     })
 }
 
+fn project_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    tol: f64,
+    certified_curved: bool,
+) -> Option<PlanarArrangement<C, S>> {
+    let surface = source.first()?.surface();
+    if !matches!(
+        surface.try_into_analytic_surface_kind(),
+        Some(AnalyticSurfaceKind::Plane(_))
+    ) {
+        if !certified_curved {
+            return None;
+        }
+        // Project onto one exact chart only when every complete underlying
+        // surface has an algebraic common-carrier certificate. The later
+        // noding/occupancy phases operate on the original analytic edges.
+        let chart = surface.try_into_homogeneous_bspline_surface()?;
+        for region in source {
+            let other = region.surface().try_into_homogeneous_bspline_surface()?;
+            if !common_ruled_extrusion_strip(&chart, &other)
+                && !common_circular_extrusion_cylinder(&chart, &other)
+            {
+                return None;
+            }
+        }
+    }
+    let mut samples = HashMap::default();
+    let first = source
+        .first()?
+        .absolute_boundaries()
+        .first()?
+        .front_vertex()?
+        .point();
+    let mut cylinder = CylinderChart::new(&surface, first, tol);
+    if let Some(chart) = cylinder.as_mut() {
+        let mut world_samples = Vec::new();
+        for region in source {
+            for edge in region
+                .absolute_boundaries()
+                .iter()
+                .flat_map(|wire| wire.iter())
+            {
+                let poly = samples.entry(edge.id()).or_insert_with(|| {
+                    let curve = edge.curve();
+                    PolylineCurve(
+                        curve
+                            .parameter_division(
+                                curve.range_tuple(),
+                                BooleanTolerance::new(tol).mesh_seed,
+                            )
+                            .1,
+                    )
+                });
+                world_samples.extend(poly.iter().copied());
+            }
+        }
+        chart.set_seam(world_samples)?;
+    }
+    let mut projected = Vec::with_capacity(source.len());
+    for region in source {
+        let mut region_loops = Vec::new();
+        for wire in region.absolute_boundaries() {
+            let mut loop_uv = if let Some(chart) = cylinder.as_ref() {
+                project_cylinder_wire(chart, wire, &mut samples, tol)?
+            } else {
+                create_parameter_boundary_on_surface(&surface, wire, None, &mut samples, tol)?
+            };
+            if loop_uv.len() < 3 {
+                return None;
+            }
+            let front = wire.front_vertex()?;
+            if front.id() == wire.back_vertex()?.id() {
+                reconcile_local_wire_uv_closure(
+                    &surface,
+                    cylinder.as_ref(),
+                    front.point(),
+                    &mut loop_uv.0,
+                );
+            }
+            region_loops.push(loop_uv.0);
+        }
+        projected.push(region_loops);
+    }
+    reconcile_shared_vertex_uv(
+        source,
+        &surface,
+        cylinder.as_ref(),
+        &samples,
+        &mut projected,
+    )?;
+
+    finish_projected_arrangement(source, projected, &samples, surface, cylinder)
+}
+
 /// Probe both sides of each exact edge, retaining only the union boundary.
-fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+fn selected_boundary_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     arrangement: &PlanarArrangement<C, S>,
+    membership: impl Fn(Point2) -> bool,
 ) -> Option<Vec<ProjectedEdge<AltCurve<C, S>>>> {
     let mut boundary = Vec::new();
     for item in &arrangement.edges {
@@ -319,19 +754,19 @@ fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
         let left = Vector2::new(-tangent.y, tangent.x) / length;
         let center = start.midpoint(end);
-        let mut membership = None;
-        for ratio in [1.0e-8, 1.0e-7, 1.0e-6, 1.0e-5] {
+        let mut edge_transition = None;
+        for ratio in DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_primary_probe_ratios {
             let offset = ratio * arrangement.span;
             let (left_covered, right_covered) = (
-                covered(&arrangement.polygons, center + left * offset),
-                covered(&arrangement.polygons, center - left * offset),
+                membership(center + left * offset),
+                membership(center - left * offset),
             );
             if left_covered != right_covered {
-                membership = Some((left_covered, right_covered));
+                edge_transition = Some((left_covered, right_covered));
                 break;
             }
         }
-        match membership {
+        match edge_transition {
             Some((true, false)) => boundary.push(ProjectedEdge {
                 edge: item.edge.clone(),
                 uv: item.uv.clone(),
@@ -345,7 +780,14 @@ fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             _ => {}
         }
     }
-    (!boundary.is_empty()).then_some(boundary)
+    Some(boundary)
+}
+
+fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    arrangement: &PlanarArrangement<C, S>,
+) -> Option<Vec<ProjectedEdge<AltCurve<C, S>>>> {
+    selected_boundary_with(arrangement, |point| covered(&arrangement.polygons, point))
+        .filter(|boundary| !boundary.is_empty())
 }
 
 /// Reconstruct exact-edge loops by choosing clockwise exits at junctions.
@@ -416,9 +858,10 @@ fn trace_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     Some(loops)
 }
 
-fn validates_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+fn validates_occupancy_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     arrangement: &PlanarArrangement<C, S>,
     loops: &[OverlayLoop<C, S>],
+    membership: impl Fn(Point2) -> bool,
 ) -> bool {
     let traced = |point| {
         loops
@@ -438,13 +881,25 @@ fn validates_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         }
         let left = Vector2::new(-tangent.y, tangent.x) / length;
         let center = start.midpoint(end);
-        [1.0e-7, 1.0e-6].into_iter().all(|ratio| {
-            let offset = arrangement.span * ratio;
-            let left_probe = center + left * offset;
-            let right_probe = center - left * offset;
-            covered(&arrangement.polygons, left_probe) == traced(left_probe)
-                && covered(&arrangement.polygons, right_probe) == traced(right_probe)
-        })
+        DEFAULT_NUMERICAL_TOLERANCES
+            .boolean_planar_secondary_probe_ratios
+            .into_iter()
+            .all(|ratio| {
+                let offset = arrangement.span * ratio;
+                let left_probe = center + left * offset;
+                let right_probe = center - left * offset;
+                membership(left_probe) == traced(left_probe)
+                    && membership(right_probe) == traced(right_probe)
+            })
+    })
+}
+
+fn validates_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    arrangement: &PlanarArrangement<C, S>,
+    loops: &[OverlayLoop<C, S>],
+) -> bool {
+    validates_occupancy_with(arrangement, loops, |point| {
+        covered(&arrangement.polygons, point)
     })
 }
 
@@ -499,19 +954,19 @@ fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // Canonicalize their exact geometric edge identities before computing
     // occupancy; otherwise two independently encoded copies would be emitted
     // as two exterior boundaries rather than one filled face.
-    let canonical_regions = node_selected_regions(source, &[])?;
-    let initial = project_source(&canonical_regions, tol)?;
-    let arrangement = if needs_exact_noding(&initial.edges, initial.span) {
+    let canonical_regions = node_selected_regions(source, &[], BooleanTolerance::new(tol))?;
+    let initial = project_source(&canonical_regions, tol, false)?;
+    let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
         let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical_regions, &points)?;
-        project_source(&noded, tol)?
+        let noded = node_selected_regions(&canonical_regions, &points, BooleanTolerance::new(tol))?;
+        project_source(&noded, tol, false)?
     } else {
         initial
     };
     let boundary = selected_boundary(&arrangement)?;
     // Crossings between edges entirely inside the union do not affect the
     // extracted boundary. Reject only unresolved noding on surviving edges.
-    if needs_exact_noding(&boundary, arrangement.span) {
+    if needs_exact_noding(&boundary, arrangement.span, tol) {
         return None;
     }
     let loops = trace_boundary(boundary)?;
@@ -574,9 +1029,117 @@ fn same_oriented_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     } else {
         -rhs_plane.normal()
     };
-    lhs_normal.dot(rhs_normal) >= 1.0 - 1.0e-10
+    lhs_normal.dot(rhs_normal)
+        >= 1.0 - DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_normal_cosine_slack
         && region_lies_on_plane(lhs, &rhs_plane, tol)
         && region_lies_on_plane(rhs, &lhs_plane, tol)
+}
+
+/// Certified common ruled carrier with the SAME original material-facing
+/// normal. The carrier identity is an algebraic rational control-net/circle
+/// certificate, while the evaluated normal is used ONLY to distinguish its
+/// two possible orientations at a shared geometric point.
+fn same_oriented_difference_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    lhs: &AltRegion<C, S>,
+    rhs: &AltRegion<C, S>,
+    tol: f64,
+) -> bool {
+    if same_oriented_support(lhs, rhs, tol) {
+        return true;
+    }
+    let (Some(a), Some(b)) = (
+        lhs.surface().try_into_homogeneous_bspline_surface(),
+        rhs.surface().try_into_homogeneous_bspline_surface(),
+    ) else {
+        return false;
+    };
+    let cylindrical = common_circular_extrusion_cylinder(&a, &b);
+    if !common_ruled_extrusion_strip(&a, &b) && !cylindrical {
+        return false;
+    }
+    if cylindrical {
+        let (Some((ca, aa, _, _)), Some((cb, ab, _, _))) = (
+            certified_circular_cylinder(&a),
+            certified_circular_cylinder(&b),
+        ) else {
+            return false;
+        };
+        let Some(lhs_sign) = oriented_cylinder_radial_sign(lhs, ca, aa, tol) else {
+            return false;
+        };
+        let Some(rhs_sign) = oriented_cylinder_radial_sign(rhs, cb, ab, tol) else {
+            return false;
+        };
+        return lhs_sign * rhs_sign > 0.0;
+    }
+    let Some(point) = rhs
+        .absolute_boundaries()
+        .first()
+        .and_then(Wire::front_vertex)
+        .map(monstertruck_topology::Vertex::point)
+    else {
+        return false;
+    };
+    let mut lhs_surface = lhs.surface();
+    let mut rhs_surface = rhs.surface();
+    if !lhs.orientation() {
+        lhs_surface.invert();
+    }
+    if !rhs.orientation() {
+        rhs_surface.invert();
+    }
+    let Some(lhs_uv) = lhs_surface
+        .search_parameter(point, None, 100)
+        .or_else(|| lhs_surface.search_nearest_parameter(point, None, 100))
+    else {
+        return false;
+    };
+    let Some(rhs_uv) = rhs_surface
+        .search_parameter(point, None, 100)
+        .or_else(|| rhs_surface.search_nearest_parameter(point, None, 100))
+    else {
+        return false;
+    };
+    if lhs_surface.evaluate(lhs_uv.0, lhs_uv.1).distance(point) > tol
+        || rhs_surface.evaluate(rhs_uv.0, rhs_uv.1).distance(point) > tol
+    {
+        return false;
+    }
+    lhs_surface
+        .normal(lhs_uv.0, lhs_uv.1)
+        .dot(rhs_surface.normal(rhs_uv.0, rhs_uv.1))
+        > 1.0 - DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_tangent_cosine_slack
+}
+
+fn oriented_cylinder_radial_sign<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    region: &AltRegion<C, S>,
+    center: Point3,
+    axis: Vector3,
+    tol: f64,
+) -> Option<f64> {
+    let point = region
+        .absolute_boundaries()
+        .first()?
+        .front_vertex()?
+        .point();
+    let surface = region.surface();
+    let uv = surface
+        .search_parameter(point, None, 100)
+        .or_else(|| surface.search_nearest_parameter(point, None, 100))?;
+    if surface.evaluate(uv.0, uv.1).distance(point) > tol {
+        return None;
+    }
+    let radial = point - center - axis * (point - center).dot(axis);
+    let normal = surface.normal(uv.0, uv.1);
+    let length = normal.magnitude() * radial.magnitude();
+    if !length.is_finite() || length <= 0.0 {
+        return None;
+    }
+    let sign = normal.dot(radial) / length;
+    if sign.abs() < DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_normal_alignment_cosine {
+        return None;
+    }
+    Some(if region.orientation() { sign } else { -sign })
 }
 
 /// Union selected cells sharing oriented planar support, including distinct source faces.
@@ -608,6 +1171,154 @@ pub(super) fn overlay_source_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             group
         })
         .collect()
+}
+
+/// Exact positive-minus-cutter occupancy on a certified common surface
+/// chart (planar or algebraically shared rational ruled). Operands can be independently parameterized or have
+/// partial edge overlaps. Intersections become shared exact curve nodes.
+fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    positive: &[AltRegion<C, S>],
+    cutter: &[AltRegion<C, S>],
+    tol: f64,
+) -> Option<Vec<AltRegion<C, S>>> {
+    let joined = positive.iter().chain(cutter).cloned().collect::<Vec<_>>();
+    let canonical = node_selected_regions(&joined, &[], BooleanTolerance::new(tol))?;
+    let initial = project_source(&canonical, tol, true)?;
+    let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
+        let points = exact_node_points(&initial, tol)?;
+        let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol))?;
+        project_source(&noded, tol, true)?
+    } else {
+        initial
+    };
+    let positive_count = positive.len();
+    let membership = |point| {
+        covered(&arrangement.polygons[..positive_count], point)
+            && !covered(&arrangement.polygons[positive_count..], point)
+    };
+    let boundary = selected_boundary_with(&arrangement, membership)?;
+    if needs_exact_noding(&boundary, arrangement.span, tol) {
+        return None;
+    }
+    if boundary.is_empty() {
+        return validates_occupancy_with(&arrangement, &[], membership).then_some(Vec::new());
+    }
+    let loops = trace_boundary(boundary)?;
+    if !validates_occupancy_with(&arrangement, &loops, membership) {
+        return None;
+    }
+    assemble_regions(loops, &positive[0], &arrangement.surface)
+}
+
+/// Remove selected cutter patches that share a plane and *original outward
+/// facing* with selected positive patches. Without this overlay the two
+/// operands each own a coincident planar wall, creating triply-used edges at
+/// the neighboring curved wall. Merely removing those faces would erase the
+/// positive wall instead of carving its correctly trimmed remainder.
+///
+/// The inverted cutter regions have the opposite final orientation to their
+/// original outside-facing surfaces, so compare positive regions against
+/// the *uninverted* cutter to identify the same-facing subtraction interface.
+pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    regions: Vec<AltRegion<C, S>>,
+    positive_count: usize,
+    original_positive: &[AltRegion<C, S>],
+    original_cutter: &[AltRegion<C, S>],
+    tol: f64,
+) -> Option<Vec<AltRegion<C, S>>> {
+    if positive_count > regions.len() {
+        return None;
+    }
+    // The face divider may produce a non-simple planar walk, e.g. an end
+    // cap with retraced zero-area digons. Its boundary still describes a
+    // well-defined selected planar region. Canonicalize its actual material
+    // occupancy with exact analytic edges *before* comparing with other
+    // planar supports. Keep the operand-side partition through expansion.
+    let mut normalized = Vec::new();
+    let mut normalized_positive_count = 0;
+    for (index, region) in regions.into_iter().enumerate() {
+        let fragments = if region.try_face().is_none()
+            && matches!(
+                region.surface().try_into_analytic_surface_kind(),
+                Some(AnalyticSurfaceKind::Plane(_))
+            ) {
+            overlay_one_source(std::slice::from_ref(&region), tol)?
+        } else {
+            vec![region]
+        };
+        if index < positive_count {
+            normalized_positive_count += fragments.len();
+        }
+        normalized.extend(fragments);
+    }
+    let regions = normalized;
+    let positive_count = normalized_positive_count;
+    // A shared *infinite* support is not a common trimmed NURBS patch.
+    // Every original source face owns its finite parameter domain. Combining
+    // fragments from distinct source faces here and assigning the union to
+    // the first fragment's surface can create a topologically closed shell
+    // whose boundary curves are unrepresentable by that finite patch.
+    //
+    // Clip each original positive face independently. A complete original
+    // cutter footprint is a geometric subtractor even when its own inverted
+    // face was excluded by volume classification. Only the separately
+    // selected inverted cutter fragments can survive as inward walls.
+    let mut taken_positive = vec![false; positive_count];
+    let mut result = Vec::new();
+    for first in 0..positive_count {
+        if taken_positive[first] {
+            continue;
+        }
+        let positive_indices = (first..positive_count)
+            .filter(|&index| {
+                !taken_positive[index]
+                    && regions[index].source_face() == regions[first].source_face()
+                    && regions[index].orientation() == regions[first].orientation()
+            })
+            .collect::<Vec<_>>();
+        let positive = positive_indices
+            .iter()
+            .map(|&index| regions[index].clone())
+            .collect::<Vec<_>>();
+        let original_clipping = original_cutter
+            .iter()
+            .filter(|region| same_oriented_difference_support(&regions[first], region, tol))
+            .cloned()
+            .collect::<Vec<_>>();
+        if original_clipping.is_empty() {
+            result.extend(positive);
+        } else {
+            result.extend(overlay_planar_subtract(&positive, &original_clipping, tol)?);
+        }
+        for index in positive_indices {
+            taken_positive[index] = true;
+        }
+    }
+
+    // An inverted cutter patch is kept only where the COMPLETE source
+    // positive did not already own the same outward-facing surface.
+    // This stage must not depend on preclassified positive remnants.
+    // Distinct cutter source regions are never assigned to each other's
+    // finite surface parameter domains.
+    for cutter in regions.into_iter().skip(positive_count) {
+        let mut original = cutter.clone();
+        original.invert();
+        let complete_positive = original_positive
+            .iter()
+            .filter(|region| same_oriented_difference_support(&original, region, tol))
+            .cloned()
+            .collect::<Vec<_>>();
+        if complete_positive.is_empty() {
+            result.push(cutter);
+        } else {
+            result.extend(overlay_planar_subtract(
+                std::slice::from_ref(&cutter),
+                &complete_positive,
+                tol,
+            )?);
+        }
+    }
+    Some(result)
 }
 
 #[cfg(test)]
@@ -673,6 +1384,685 @@ mod tests {
                 source_face,
             )
         }
+    }
+
+    /// An analytic quadratic profile swept in x: every edge is an original
+    /// line or whole rational spline, not a chord sampled from a mesh.
+    fn ruled_difference_region(
+        axial: (f64, f64),
+        orientation: bool,
+        source_face: usize,
+    ) -> TestRegion {
+        use monstertruck_geometry::prelude::{
+            BsplineCurve, BsplineSurface, KnotVector, NurbsCurve, NurbsSurface,
+        };
+        let profile = [(0.0, 0.0), (0.5, 0.4), (1.0, 0.0)];
+        let net = profile
+            .into_iter()
+            .map(|(y, z)| {
+                vec![
+                    Vector4::new(axial.0, y, z, 1.0),
+                    Vector4::new(axial.1, y, z, 1.0),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let vertices = [
+            Vertex::new(Point3::new(axial.0, 0.0, 0.0)),
+            Vertex::new(Point3::new(axial.1, 0.0, 0.0)),
+            Vertex::new(Point3::new(axial.1, 1.0, 0.0)),
+            Vertex::new(Point3::new(axial.0, 1.0, 0.0)),
+        ];
+        let line = |a: usize, b: usize| {
+            Edge::new_unchecked(
+                &vertices[a],
+                &vertices[b],
+                Alternative::FirstType(Curve::from(Line(vertices[a].point(), vertices[b].point()))),
+            )
+        };
+        let profile_edge = |column: usize, a: usize, b: usize| {
+            Edge::new_unchecked(
+                &vertices[a],
+                &vertices[b],
+                Alternative::FirstType(Curve::NurbsCurve(NurbsCurve::new(
+                    BsplineCurve::new_unchecked(
+                        KnotVector::bezier_knot(2),
+                        net.iter().map(|row| row[column]).collect(),
+                    ),
+                ))),
+            )
+        };
+        let wire = Wire::from(vec![
+            line(0, 1),
+            profile_edge(1, 1, 2),
+            line(2, 3),
+            profile_edge(0, 0, 3).inverse(),
+        ]);
+        BooleanRegion::new(
+            vec![wire],
+            Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new_unchecked(
+                (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
+                net,
+            ))),
+            orientation,
+            0,
+            source_face,
+        )
+    }
+
+    fn circular_arc_region(
+        axial: (f64, f64),
+        angles: (f64, f64),
+        radius: f64,
+        source_face: usize,
+    ) -> TestRegion {
+        let mid = f64::midpoint(angles.0, angles.1);
+        let w = ((angles.1 - angles.0) * 0.5).cos();
+        let pts = [
+            (radius * angles.0.cos(), radius * angles.0.sin(), 1.0),
+            (radius * mid.cos() / w, radius * mid.sin() / w, w),
+            (radius * angles.1.cos(), radius * angles.1.sin(), 1.0),
+        ];
+        let net = pts
+            .into_iter()
+            .map(|(y, z, weight)| {
+                vec![
+                    Vector4::new(axial.0 * weight, y * weight, z * weight, weight),
+                    Vector4::new(axial.1 * weight, y * weight, z * weight, weight),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let point = |x: f64, angle: f64| Point3::new(x, radius * angle.cos(), radius * angle.sin());
+        let vertices = [
+            Vertex::new(point(axial.0, angles.0)),
+            Vertex::new(point(axial.1, angles.0)),
+            Vertex::new(point(axial.1, angles.1)),
+            Vertex::new(point(axial.0, angles.1)),
+        ];
+        let line = |a: usize, b: usize| {
+            Edge::new_unchecked(
+                &vertices[a],
+                &vertices[b],
+                Alternative::FirstType(Curve::from(Line(vertices[a].point(), vertices[b].point()))),
+            )
+        };
+        let arc = |column: usize, a: usize, b: usize| {
+            Edge::new_unchecked(
+                &vertices[a],
+                &vertices[b],
+                Alternative::FirstType(Curve::NurbsCurve(NurbsCurve::new(
+                    BsplineCurve::new_unchecked(
+                        KnotVector::bezier_knot(2),
+                        net.iter().map(|row| row[column]).collect(),
+                    ),
+                ))),
+            )
+        };
+        BooleanRegion::new(
+            vec![Wire::from(vec![
+                line(0, 1),
+                arc(1, 1, 2),
+                line(2, 3),
+                arc(0, 0, 3).inverse(),
+            ])],
+            Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new_unchecked(
+                (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
+                net,
+            ))),
+            true,
+            0,
+            source_face,
+        )
+    }
+
+    #[test]
+    fn adjacent_circular_source_faces_keep_distinct_finite_surface_ownership() {
+        let r = 0.6731;
+        let a = circular_arc_region((0.0, 2.0), (0.0, std::f64::consts::FRAC_PI_4), r, 101);
+        let b = circular_arc_region(
+            (0.0, 2.0),
+            (std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_2),
+            r,
+            202,
+        );
+        // The cutter touches A only on the common arc boundary; its actual
+        // material overlap is a notch in B. Both positives share the exact
+        // infinite cylinder but NOT the finite source-arc parameter domain.
+        let cutter = circular_arc_region(
+            (0.5, 1.0),
+            (std::f64::consts::FRAC_PI_4, std::f64::consts::PI / 3.0),
+            r,
+            303,
+        );
+        assert!(same_oriented_difference_support(&a, &b, 1.0e-6));
+        let result = overlay_difference_regions(
+            vec![a.clone(), b.clone()],
+            2,
+            &[a.clone(), b.clone()],
+            &[cutter],
+            1.0e-6,
+        )
+        .expect("each original positive face must retain its own finite cylindrical support");
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|region| region.try_face().is_some()));
+        let area = |region: &TestRegion| {
+            let arrangement = project_source(std::slice::from_ref(region), 1.0e-6, true)
+                .expect("a source face remains a coherent circular parameter region");
+            arrangement.polygons[0]
+                .iter()
+                .map(|wire| signed_area(wire))
+                .sum::<f64>()
+                .abs()
+        };
+        let face_a = result
+            .iter()
+            .find(|region| region.source_face() == 101)
+            .expect("untouched adjacent cylinder arc retains its own source face");
+        let face_b = result
+            .iter()
+            .find(|region| region.source_face() == 202)
+            .expect("notched source face is not merged onto its neighboring arc");
+        assert!(
+            (area(face_a) - area(&a)).abs() < 2.0e-5,
+            "a touching cutter must not remove finite surface coverage from the neighbor"
+        );
+        let removed = area(&b) - area(face_b);
+        let expected = r * 0.5 * (std::f64::consts::PI / 3.0 - std::f64::consts::FRAC_PI_4);
+        assert!(
+            (removed - expected).abs() < 2.0e-5,
+            "source B lost wrong area: removed={removed}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn rational_arcs_on_one_cylinder_use_a_shared_metric_chart() {
+        let radius = 0.6731;
+        let outer = circular_arc_region((0.0, 2.0), (0.0, std::f64::consts::FRAC_PI_2), radius, 19);
+        let inner = circular_arc_region((0.5, 1.0), (0.0, std::f64::consts::FRAC_PI_4), radius, 22);
+        assert!(same_oriented_difference_support(&outer, &inner, 1.0e-6));
+        let source = [outer.clone(), inner.clone()];
+        let chart = project_source(&source, 1.0e-6, true)
+            .expect("different rational arc charts share the exact cylinder");
+        assert!(chart.cylinder.is_some());
+        let result = overlay_planar_subtract(&[outer], &[inner], 1.0e-6)
+            .expect("circular common carrier has one exact clipped wire");
+        assert_eq!(result.len(), 1);
+        assert!(result[0].try_face().is_some());
+        assert_eq!(result[0].absolute_boundaries().len(), 1);
+        let regions = project_source(&result, 1.0e-6, true).unwrap();
+        let actual = signed_area(&regions.polygons[0][0]).abs();
+        let expected = radius * 7.0 * std::f64::consts::PI / 8.0;
+        assert!(
+            (actual - expected).abs() < 2.0e-5,
+            "actual={actual},expected={expected}"
+        );
+    }
+
+    #[test]
+    fn projected_uv_t_junction_at_shared_world_vertex_does_not_request_noding() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+        let horizontal = fixture.edge(0, 1);
+        let vertical = fixture.edge(0, 2);
+        let shared = Point2::new(0.0, 0.62);
+        let edges = [
+            ProjectedEdge {
+                edge: horizontal,
+                uv: vec![shared, Point2::new(1.0, 0.62)],
+            },
+            ProjectedEdge {
+                edge: vertical,
+                uv: vec![
+                    Point2::new(0.0, 0.6200002),
+                    Point2::new(0.0, 0.6199998),
+                    Point2::new(0.0, 0.5),
+                ],
+            },
+        ];
+        assert!(
+            !needs_exact_noding(&edges, 1.0, 1.0e-6),
+            "inverse-mapping drift at the SAME analytic 3D endpoint is not an interior cut"
+        );
+    }
+
+    #[test]
+    fn projected_uv_t_junction_at_distinct_world_vertex_still_requests_noding() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [1.0, 0.0], [1.0, 1.0]]);
+        let edges = [
+            ProjectedEdge {
+                edge: fixture.edge(0, 1),
+                uv: vec![Point2::new(0.0, 0.0), Point2::new(2.0, 0.0)],
+            },
+            ProjectedEdge {
+                edge: fixture.edge(2, 3),
+                uv: vec![Point2::new(1.0, 0.0), Point2::new(1.0, 1.0)],
+            },
+        ];
+        assert!(
+            needs_exact_noding(&edges, 2.0, 1.0e-6),
+            "a distinct 3D edge endpoint on an exact edge interior needs an analytic split"
+        );
+    }
+
+    #[test]
+    fn cylinder_chart_radial_validation_respects_operation_precision() {
+        let region =
+            circular_arc_region((0.0, 1.0), (0.0, std::f64::consts::FRAC_PI_2), 0.6731, 101);
+        let surface = region.surface();
+        let point = region
+            .absolute_boundaries()
+            .first()
+            .and_then(Wire::front_vertex)
+            .expect("source cylinder must have an initial vertex")
+            .point();
+        let displaced = point + Vector3::new(0.0, 5.0e-7, 0.0);
+        assert!(
+            CylinderChart::new(&surface, displaced, 1.0e-8).is_none(),
+            "a 500 nm radial error is not a 10 nm certified chart point"
+        );
+        assert!(
+            CylinderChart::new(&surface, displaced, 1.0e-6).is_some(),
+            "an explicitly coarser tolerance may qualify the same chart point"
+        );
+    }
+
+    #[test]
+    fn projected_uv_endpoint_drift_requires_operation_local_world_agreement() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [1.0, 0.0], [5.0e-7, 0.0], [0.0, 1.0]]);
+        let edges = [
+            ProjectedEdge {
+                edge: fixture.edge(0, 1),
+                uv: vec![Point2::new(0.0, 0.62), Point2::new(1.0, 0.62)],
+            },
+            ProjectedEdge {
+                edge: fixture.edge(2, 3),
+                uv: vec![
+                    Point2::new(0.0, 0.6200002),
+                    Point2::new(0.0, 0.6199998),
+                    Point2::new(0.0, 0.5),
+                ],
+            },
+        ];
+        assert!(
+            !needs_exact_noding(&edges, 1.0, 1.0e-6),
+            "a coarsely admitted shared endpoint does not need a second node"
+        );
+        assert!(
+            needs_exact_noding(&edges, 1.0, 1.0e-8),
+            "two endpoints 500 nm apart cannot share identity at 10 nm precision"
+        );
+    }
+
+    #[test]
+    fn closed_wire_projection_reconciles_local_inverse_drift_without_erasing_winding() {
+        let surface = Plane::xy();
+        let vertex = Point3::new(0.0, 0.62, 0.0);
+        let mut locally_drifting = vec![
+            Point2::new(2.8e-7, 0.62),
+            Point2::new(0.25, 0.62),
+            Point2::new(0.25, 1.0),
+            Point2::new(0.0, 1.0),
+            Point2::new(0.0, 0.62),
+        ];
+        reconcile_local_wire_uv_closure(&surface, None, vertex, &mut locally_drifting);
+        assert_eq!(locally_drifting[0], locally_drifting[4]);
+        assert_eq!(locally_drifting[0], Point2::new(0.0, 0.62));
+
+        // A closed 3D wire wrapping an intrinsic periodic parameter remains
+        // open in the universal-cover UV chart by its actual winding period.
+        let mut winding = vec![
+            Point2::new(0.0, 0.62),
+            Point2::new(0.25, 0.62),
+            Point2::new(0.5, 0.62),
+            Point2::new(0.75, 0.62),
+            Point2::new(1.0, 0.62),
+        ];
+        reconcile_local_wire_uv_closure(&surface, None, vertex, &mut winding);
+        assert_eq!(winding[0], Point2::new(0.0, 0.62));
+        assert_eq!(winding[4], Point2::new(1.0, 0.62));
+    }
+
+    #[test]
+    fn equivalent_welded_vertices_share_a_coherent_chart_across_regions() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [0.0, 1.0]]);
+        let a = fixture.region(&[0, 1, 2, 3, 0]);
+        let b = fixture.region(&[0, 1, 2, 3, 0]);
+        let source = [a, b];
+        let mut polylines = HashMap::default();
+        let mut projected = source
+            .iter()
+            .map(|region| {
+                region
+                    .absolute_boundaries()
+                    .iter()
+                    .map(|wire| {
+                        create_parameter_boundary_on_surface(
+                            &region.surface(),
+                            wire,
+                            None,
+                            &mut polylines,
+                            1.0e-6,
+                        )
+                        .unwrap()
+                        .0
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        // The same topological first vertex appears in both source regions,
+        // but one independent inverse mapping wandered in its UV chart.
+        projected[1][0][0].x = 2.8e-7;
+        projected[1][0][4].x = 2.8e-7;
+        reconcile_shared_vertex_uv(
+            &source,
+            &Surface::Plane(Plane::xy()),
+            None,
+            &polylines,
+            &mut projected,
+        )
+        .expect("welded source vertices admit chart reconciliation");
+        assert_eq!(projected[1][0][0], projected[0][0][0]);
+        assert_eq!(projected[1][0][4], projected[0][0][4]);
+
+        // Different lifts of one periodic world vertex must not be merged
+        // merely because their welded topological ID agrees.
+        let mut winding = projected.clone();
+        for uv in &mut winding[1][0] {
+            uv.x += 2.0;
+        }
+        reconcile_shared_vertex_uv(
+            &source,
+            &Surface::Plane(Plane::xy()),
+            None,
+            &polylines,
+            &mut winding,
+        )
+        .expect("separate chart lifts are retained");
+        assert_eq!(winding[1][0][0].x, projected[1][0][0].x + 2.0);
+        assert_eq!(winding[1][0][4].x, projected[1][0][4].x + 2.0);
+    }
+
+    #[test]
+    fn projected_edge_charts_follow_their_parent_wire_walk() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]);
+        // Arrange that the last wire edge is inverse to its stored edge.
+        fixture.edge(0, 3);
+        let planar = fixture.region(&[0, 1, 2, 3, 0]);
+        let curved = ruled_difference_region((0.0, 2.0), true, 4);
+        for region in [planar, curved] {
+            let arrangement = project_source(std::slice::from_ref(&region), 1.0e-6, true)
+                .expect("wire and edge curves must share one UV projection");
+            let poly = &arrangement.polygons[0][0];
+            let mut start = 0;
+            for edge in &region.absolute_boundaries()[0] {
+                let item = arrangement
+                    .edges
+                    .iter()
+                    .find(|item| item.edge.id() == edge.id())
+                    .expect("projected edge retained original identity");
+                let mut uv = item.uv.clone();
+                if !edge.orientation() {
+                    uv.reverse();
+                }
+                assert_eq!(
+                    &poly[start..start + uv.len()],
+                    uv,
+                    "every projected edge must be a contiguous part of its source wire"
+                );
+                start += uv.len() - 1;
+            }
+            assert_eq!(start + 1, poly.len());
+        }
+    }
+
+    #[test]
+    fn ruled_difference_masks_cutter_against_original_not_selected_remnant() {
+        let original = ruled_difference_region((0.0, 2.0), true, 10);
+        let selected = ruled_difference_region((0.0, 0.4), true, 10);
+        let inverted_cutter = ruled_difference_region((0.7, 1.2), false, 7);
+        let mut unflipped = inverted_cutter.clone();
+        unflipped.invert();
+        assert!(same_oriented_difference_support(
+            &original, &unflipped, 1.0e-6
+        ));
+        let result = overlay_difference_regions(
+            vec![selected, inverted_cutter],
+            1,
+            &[original],
+            &[unflipped],
+            1.0e-6,
+        )
+        .expect("exact common ruled patch must support original ownership");
+        assert_eq!(
+            result.len(),
+            1,
+            "the cutter inside original source cannot be resurrected"
+        );
+        assert!(
+            result[0].try_face().is_some(),
+            "the remaining curved face is valid"
+        );
+    }
+
+    #[test]
+    fn original_same_facing_cutter_trims_positive_even_when_not_selected() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 4.0],
+            [0.0, 4.0],
+            [1.0, 3.0],
+            [3.0, 3.0],
+            [3.0, 4.0],
+            [1.0, 4.0],
+        ]);
+        let host = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 17);
+        let original_cutter = fixture.region_on(&[4, 5, 6, 7, 4], Plane::xy(), true, 3);
+        let result =
+            overlay_difference_regions(vec![host.clone()], 1, &[host], &[original_cutter], 1.0e-6)
+                .expect("a coincident unselected cutter still clips the source positive face");
+        assert_eq!(result.len(), 1);
+        let face = result[0].try_face().expect("notched face remains valid");
+        assert_eq!(face.absolute_boundaries().len(), 1);
+        assert_eq!(face.absolute_boundaries()[0].len(), 8);
+        let projected = project_source(&result, 1.0e-6, false).unwrap();
+        assert!(
+            (signed_area(&projected.polygons[0][0]) - 14.0).abs() < 1.0e-7,
+            "the whole original coincident cutter footprint must carve a 2-square-unit notch"
+        );
+    }
+
+    #[test]
+    fn disjoint_unselected_original_cutter_does_not_remove_positive_material() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 2.0],
+            [0.0, 2.0],
+            [4.0, 0.0],
+            [6.0, 0.0],
+            [6.0, 2.0],
+            [4.0, 2.0],
+        ]);
+        let host = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 1);
+        let original_cutter = fixture.region_on(&[4, 5, 6, 7, 4], Plane::xy(), true, 2);
+        let result =
+            overlay_difference_regions(vec![host.clone()], 1, &[host], &[original_cutter], 1.0e-6)
+                .expect("source cutter on same carrier but away from material is harmless");
+        assert_eq!(result.len(), 1);
+        let poly = project_source(&result, 1.0e-6, false).unwrap();
+        assert!((signed_area(&poly.polygons[0][0]) - 4.0).abs() < 1.0e-7);
+    }
+
+    #[test]
+    fn planar_difference_normalizes_single_selected_non_simple_cap() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0]]);
+        // The same exact horizontal edge is traversed twice with opposite
+        // incidence: this is an arrangement walk, not a valid B-rep face.
+        let cap = fixture.region_on(&[0, 1, 2, 3, 0, 1, 0], Plane::xy(), true, 0);
+        assert!(
+            cap.try_face().is_none(),
+            "raw retraced cap must be non-simple"
+        );
+        let pieces = overlay_difference_regions(vec![cap.clone()], 1, &[cap], &[], 1.0e-6)
+            .expect("exact planar material occupancy must normalize a cap walk");
+        assert_eq!(pieces.len(), 1);
+        let face = pieces[0]
+            .try_face()
+            .expect("normalized cap must be a valid face");
+        assert_eq!(face.absolute_boundaries().len(), 1);
+        assert_eq!(face.absolute_boundaries()[0].len(), 4);
+        let mut samples = HashMap::default();
+        let poly = create_parameter_boundary_on_surface(
+            &pieces[0].surface(),
+            &pieces[0].absolute_boundaries()[0],
+            None,
+            &mut samples,
+            1.0e-6,
+        )
+        .expect("normalized cap retained source analytic edges");
+        assert!((signed_area(&poly.0) - 12.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn planar_difference_masks_cutter_by_original_positive_not_preclassified_remnant() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 3.0],
+            [0.0, 3.0],
+            [4.0, 4.0],
+            [0.0, 4.0],
+            [1.0, 3.0],
+            [3.0, 3.0],
+            [3.0, 4.0],
+            [1.0, 4.0],
+        ]);
+        let original = fixture.region_on(&[0, 1, 4, 5, 0], Plane::xy(), true, 1);
+        // The classifier already removed y=3..4 from the selected
+        // positive: comparing the cutter against this selected fragment
+        // would incorrectly resurrect the discarded shared source wall.
+        let selected = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 1);
+        let cutter = fixture.region_on(&[6, 7, 8, 9, 6], Plane::xy(), false, 2);
+        let mut original_cutter = cutter.clone();
+        original_cutter.invert();
+        let result = overlay_difference_regions(
+            vec![selected, cutter],
+            1,
+            &[original],
+            &[original_cutter],
+            1e-6,
+        )
+        .expect("complete original support is needed for cutter ownership");
+        assert_eq!(
+            result.len(),
+            1,
+            "same-facing cutter inside original must cancel"
+        );
+        let face = result[0]
+            .try_face()
+            .expect("selected positive remnant remains intact");
+        assert_eq!(face.absolute_boundaries().len(), 1);
+        let mut samples = HashMap::default();
+        let poly = create_parameter_boundary_on_surface(
+            &result[0].surface(),
+            &result[0].absolute_boundaries()[0],
+            None,
+            &mut samples,
+            1e-6,
+        )
+        .expect("remnant retains exact source boundary");
+        assert!((signed_area(&poly.0) - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn planar_difference_carves_partial_same_facing_wall_without_losing_remainder() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 4.0],
+            [0.0, 4.0],
+            [1.0, 3.0],
+            [3.0, 3.0],
+            [3.0, 4.0],
+            [1.0, 4.0],
+        ]);
+        let host = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 17);
+        // A same-original-facing cutter has opposite orientation after
+        // inversion to become a Boolean difference face.
+        let void_inverted = fixture.region_on(&[4, 5, 6, 7, 4], Plane::xy(), false, 3);
+        let mut original_cutter = void_inverted.clone();
+        original_cutter.invert();
+        let remainder = overlay_difference_regions(
+            vec![host.clone(), void_inverted],
+            1,
+            &[host],
+            &[original_cutter],
+            1.0e-6,
+        )
+        .expect("shared planar wall must support exact subtraction overlay");
+        assert_eq!(remainder.len(), 1, "partial notch leaves one host face");
+        let face = remainder[0]
+            .try_face()
+            .expect("notched wall remains a face");
+        assert_eq!(face.absolute_boundaries().len(), 1);
+        assert_eq!(face.absolute_boundaries()[0].len(), 8);
+        let mut samples = HashMap::default();
+        let projected = create_parameter_boundary_on_surface(
+            &remainder[0].surface(),
+            &remainder[0].absolute_boundaries()[0],
+            None,
+            &mut samples,
+            1.0e-6,
+        )
+        .expect("analytic boundary must project");
+        assert!((signed_area(&projected.0) - 14.0).abs() < 1.0e-7);
+    }
+
+    #[test]
+    fn planar_difference_removes_fully_covered_common_wall() {
+        let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]);
+        let host = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 1);
+        let void_inverted = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), false, 2);
+        let mut original_cutter = void_inverted.clone();
+        original_cutter.invert();
+        let remainder = overlay_difference_regions(
+            vec![host.clone(), void_inverted],
+            1,
+            &[host],
+            &[original_cutter],
+            1.0e-6,
+        )
+        .expect("fully coincident source wall should be consumed exactly");
+        assert!(
+            remainder.is_empty(),
+            "identical same-facing contact patches cancel"
+        );
+    }
+
+    #[test]
+    fn planar_difference_does_not_remove_unrelated_or_thin_separate_wall() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 2.0],
+            [0.0, 2.0],
+            [4.0, 0.0],
+            [6.0, 0.0],
+            [6.0, 2.0],
+            [4.0, 2.0],
+        ]);
+        let host = fixture.region_on(&[0, 1, 2, 3, 0], Plane::xy(), true, 1);
+        let void_inverted = fixture.region_on(&[4, 5, 6, 7, 4], Plane::xy(), false, 2);
+        let mut original_cutter = void_inverted.clone();
+        original_cutter.invert();
+        let result = overlay_difference_regions(
+            vec![host.clone(), void_inverted],
+            1,
+            &[host],
+            &[original_cutter],
+            1.0e-6,
+        )
+        .expect("disjoint surface footprints remain usable");
+        assert_eq!(result.len(), 2, "do not drop a disjoint cutter face");
     }
 
     #[test]

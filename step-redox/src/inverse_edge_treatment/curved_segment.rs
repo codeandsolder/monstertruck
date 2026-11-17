@@ -16,6 +16,7 @@ use super::{
 };
 use crate::brep::{BSplineSupport, CylinderSupport, PlaneSupport};
 use anyhow::{Context, Result, bail, ensure};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use std::collections::BTreeSet;
 
 const FIT_MM: f64 = crate::numeric::DEFAULT_FEATURE_HEAL_TOL_MM;
@@ -38,7 +39,7 @@ impl CylinderPlaneConic {
         let axis = normalize(cylinder.axis, DIR_TOL).context("degenerate cylinder axis")?;
         let denominator = dot(normal, axis);
         ensure!(
-            denominator.abs() >= 1.0e-6,
+            denominator.abs() >= DEFAULT_STEP_RECOVERY_TOLERANCES.source_rounding_arc_residual_rad,
             "plane parallel to cylindrical rulings: intersection is not a conic"
         );
         let radial_u = normalize(
@@ -171,7 +172,8 @@ impl CylinderPlaneConic {
         let span =
             (b - a + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
         ensure!(
-            span.abs() > 1.0e-10 && span.abs() < std::f64::consts::PI,
+            span.abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_rounding_quarter_turn_slack_rad
+                && span.abs() < std::f64::consts::PI,
             "retained source conic arc has ambiguous or degenerate winding"
         );
         Ok(KernelPatchCurve::EllipseArc {

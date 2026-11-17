@@ -14,7 +14,7 @@ proptest! {
             value: poly(x) - poly(x0),
             derivation: (3.0 * a[3] * x).mul_add(x, f64::mul_add(2.0 * a[2], x, a[1])),
         };
-        match solve(function, x0 + delta, 100) {
+        match solve(function, x0 + delta, 100, KERNEL_EPSILON) {
             Ok(res) => prop_assert_near!(function(res).value, 0.0),
             Err(log) => prop_assert!(log.degenerate(), "{log}"),
         }
@@ -35,7 +35,7 @@ proptest! {
             derivation: Matrix2::new(2.0 * vec.x, n.x, 2.0 * vec.y, n.y),
         };
         let hint = Matrix2::from_angle(-Rad(PI / 2.0)) * n + Vector2::from(delta);
-        match solve(function, hint, 10) {
+        match solve(function, hint, 10, KERNEL_EPSILON) {
             Ok(res) => prop_assert_near!(function(res).value, Vector2::zero()),
             Err(log) => prop_assert!(log.degenerate(), "{log}"),
         }

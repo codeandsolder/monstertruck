@@ -60,6 +60,10 @@ fn collect_assigned_edge_stable_id<P, C>(
 impl<P, C, S> Solid<P, C, S> {
     /// Creates a solid whose boundaries are non-empty, connected, closed manifolds.
     ///
+    /// This is a **topological** check: it does not prove that surface normals
+    /// point outward or that the shells describe positive material winding.
+    /// Callers constructing material solids must orient their shells accordingly.
+    ///
     /// # Errors
     /// Returns the topology validation error reported by [`Shell::check_solid_boundary`]
     /// for the first invalid boundary shell.

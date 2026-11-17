@@ -49,7 +49,7 @@ fn carrier(surface: &Surface) -> Option<AnalyticCarrier> {
 #[inline]
 fn unwrap_parameter_component(value: f64, reference: f64, period: Option<f64>) -> f64 {
     period
-        .filter(|period| period.is_finite() && *period > KERNEL_EPSILON)
+        .filter(|period| period.is_finite() && *period > 0.0)
         .map_or(value, |period| {
             ((reference - value) / period)
                 .round()
@@ -134,6 +134,15 @@ fn exact_linear_revolution_parameter(
         .then_some(external)
 }
 
+/// Inverting the torus' polar sine is dimensionless. No model-distance
+/// scale may widen this trigonometric domain.
+fn torus_sine_with_roundoff(sine: f64) -> Option<f64> {
+    let slack = DEFAULT_NUMERICAL_TOLERANCES.step_torus_inverse_sine_roundoff_ulps
+        * f64::EPSILON
+        * sine.abs().max(1.0);
+    (sine.is_finite() && sine.abs() <= 1.0 + slack).then(|| sine.clamp(-1.0, 1.0))
+}
+
 fn exact_torus_parameter(surface: &Processor<Torus, Matrix4>, point: Point3) -> Option<Point2> {
     similarity_scale(*surface.transform())?;
     let inverse = surface.transform().invert()?;
@@ -142,18 +151,15 @@ fn exact_torus_parameter(surface: &Processor<Torus, Matrix4>, point: Point3) -> 
     let relative = local - torus.center();
     let rho = relative.x.hypot(relative.y);
     let radius = torus.small_radius();
+    if !radius.is_finite() || radius <= 0.0 {
+        return None;
+    }
     let scale = torus
         .large_radius()
         .max(radius)
         .max(relative.magnitude())
         .max(1.0);
-    let sine = relative.z / radius;
-    let epsilon = 128.0 * f64::EPSILON * scale;
-    if !sine.is_finite() || sine < -1.0 - epsilon || sine > 1.0 + epsilon {
-        return None;
-    }
-
-    let alpha = sine.clamp(-1.0, 1.0).asin();
+    let alpha = torus_sine_with_roundoff(relative.z / radius)?.asin();
     let azimuth = relative.y.atan2(relative.x);
     [
         alpha.rem_euclid(std::f64::consts::TAU),
@@ -363,6 +369,42 @@ mod tests {
     use super::*;
 
     fn surface(elementary: ElementarySurface) -> Surface { Surface::Elementary(elementary) }
+
+    #[test]
+    fn torus_polar_inverse_never_scales_its_sine_slack_with_model_size() {
+        // This ratio is independent of whether the underlying torus is 1 mm
+        // or 1 km across. A fixed world-size multiplier could admit it.
+        for radius in [1.0e-6, 1.0, 1.0e9] {
+            let close = radius * (1.0 + 2.0 * f64::EPSILON);
+            let far = radius * (1.0 + 1.0e-10);
+            assert_eq!(torus_sine_with_roundoff(close / radius), Some(1.0));
+            assert_eq!(torus_sine_with_roundoff(-close / radius), Some(-1.0));
+            assert!(torus_sine_with_roundoff(far / radius).is_none());
+            assert!(torus_sine_with_roundoff(-far / radius).is_none());
+        }
+        assert!(torus_sine_with_roundoff(f64::INFINITY).is_none());
+        assert!(torus_sine_with_roundoff(f64::NAN).is_none());
+    }
+
+    #[test]
+    fn periodic_parameter_unwrapping_does_not_assume_spatial_epsilon() {
+        let period = 1.0e-9;
+        let unwrapped = unwrap_parameter_component(3.2 * period, 0.0, Some(period));
+        assert!((unwrapped - 0.2 * period).abs() <= 1.0e-15);
+        assert_eq!(unwrap_parameter_component(5.0, 0.0, Some(0.0)), 5.0);
+    }
+
+    #[test]
+    fn synthetic_plane_bounds_remain_explicit_through_step_surface_enums() {
+        let plane = surface(ElementarySurface::Plane(Plane::xy()));
+        assert_eq!(
+            plane.try_range_tuple(),
+            (Some((0.0, 1.0)), Some((0.0, 1.0)))
+        );
+        assert_eq!(plane.parameter_bounds_are_intrinsic(), (false, false));
+        let cylinder = cylinder(Point3::origin(), Vector3::unit_z(), 2.0);
+        assert_eq!(cylinder.parameter_bounds_are_intrinsic(), (true, true));
+    }
 
     #[test]
     fn sheared_elementary_surfaces_are_not_analytic_same_domain_supports() {

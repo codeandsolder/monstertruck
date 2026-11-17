@@ -4,11 +4,12 @@ use crate::math3::{
     add, cross, distance, mul, normalize as normalize3, point_to_unit_line_distance, sub,
 };
 use crate::step_graph::entity_id;
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::EntityInstance;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-const GEOM_TOL_MM: f64 = 1.0e-7;
-const DIR_TOL: f64 = 1.0e-10;
+const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.reduced_brep_direction;
 
 /// Geometry/topology view used by inverse-feature reducers.
 ///

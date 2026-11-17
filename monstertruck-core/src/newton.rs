@@ -51,9 +51,78 @@ impl_jacobian!(Matrix2, Vector2);
 impl_jacobian!(Matrix3, Vector3);
 impl_jacobian!(Matrix4, Vector4);
 
+/// Opt-in iteration histogram for diagnosing expensive CAD projections.
+///
+/// The solver's success/failure and precision are not changed by collecting
+/// the histogram. Set `MT_NEWTON_PROFILE=1` when replaying a real CAD operation.
+mod profiling {
+    use std::{any::type_name, cell::RefCell, collections::BTreeMap, sync::OnceLock};
+
+    #[derive(Default)]
+    struct Count {
+        calls: u64,
+        converged: u64,
+        singular: u64,
+        capped: u64,
+        iterations: u64,
+        histogram: [u64; 8],
+    }
+
+    #[derive(Default)]
+    struct Profile(BTreeMap<&'static str, Count>);
+
+    impl Drop for Profile {
+        fn drop(&mut self) {
+            if enabled() {
+                for (dimension, s) in &self.0 {
+                    eprintln!(
+                        "NEWTON_PROFILE vector={dimension} calls={} success={} singular={} cap={} iterations={} bins_1_2_4_8_16_32_64_more={:?}",
+                        s.calls, s.converged, s.singular, s.capped, s.iterations, s.histogram
+                    );
+                }
+            }
+        }
+    }
+
+    thread_local! {
+        static STATS: RefCell<Profile> = RefCell::new(Profile::default());
+    }
+
+    fn enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var_os("MT_NEWTON_PROFILE").is_some())
+    }
+
+    pub(super) fn record<V>(steps: usize, outcome: u8) {
+        if !enabled() {
+            return;
+        }
+        STATS.with(|stats| {
+            let mut stats = stats.borrow_mut();
+            let count = stats.0.entry(type_name::<V>()).or_default();
+            count.calls += 1;
+            count.iterations += steps as u64;
+            match outcome {
+                0 => count.converged += 1,
+                1 => count.singular += 1,
+                _ => count.capped += 1,
+            }
+            let bucket = if steps <= 1 {
+                0
+            } else {
+                ((steps - 1).ilog2() + 1).min(7) as usize
+            };
+            count.histogram[bucket] += 1;
+        });
+    }
+}
+
 /// Solve equation by Newton's method
 /// # Errors
 /// Returns a [`NewtonLog`] when the Jacobian becomes singular or convergence is not reached within `trials`.
+///
+/// # Panics
+/// Panics if `convergence_step` is not finite and strictly positive.
 ///
 /// # Examples
 /// ```
@@ -64,7 +133,7 @@ impl_jacobian!(Matrix4, Vector4);
 ///     value: x * x - 2.0,
 ///     derivation: 2.0 * x,
 /// };
-/// let sqrt2 = solve(function, 1.0, 10).map_err(|e| anyhow::anyhow!("{e}"))?;
+/// let sqrt2 = solve(function, 1.0, 10, 1.0e-6).map_err(|e| anyhow::anyhow!("{e}"))?;
 /// assert_near2!(sqrt2, f64::sqrt(2.0));
 /// # Ok(())
 /// # }
@@ -73,25 +142,33 @@ pub fn solve<V, M>(
     function: impl Fn(V) -> CalcOutput<V, M>,
     mut hint: V,
     trials: usize,
+    convergence_step: f64,
 ) -> Result<V, NewtonLog<V>>
 where
     V: Sub<Output = V> + Copy + Tolerance,
     M: Jacobian<V>,
 {
+    assert!(
+        convergence_step.is_finite() && convergence_step > 0.0,
+        "Newton convergence threshold must be finite and strictly positive"
+    );
     let mut log = NewtonLog::new(cfg!(debug_assertions), trials);
-    for _ in 0..=trials {
+    for step in 0..=trials {
         log.push(hint);
         let CalcOutput { value, derivation } = function(hint);
         let Some(inv) = derivation.invert() else {
             log.set_degenerate(true);
+            profiling::record::<V>(step + 1, 1);
             return Err(log);
         };
         let next = hint - inv * value;
-        if next.near(&hint) {
+        if next.abs_diff_eq(&hint, convergence_step) {
+            profiling::record::<V>(step + 1, 0);
             return Ok(next);
         }
         hint = next;
     }
+    profiling::record::<V>(trials.saturating_add(1), 2);
     Err(log)
 }
 
@@ -107,6 +184,7 @@ pub fn solve_v2<V, M>(
     function: impl Fn(V) -> CalcOutput<V, M>,
     mut hint: V,
     trials: usize,
+    convergence_step: V::Epsilon,
 ) -> Result<V, NewtonLog<V>>
 where
     V: Sub<Output = V> + Copy + crate::scalar::ToleranceV2,
@@ -114,19 +192,22 @@ where
     M: Jacobian<V>,
 {
     let mut log = NewtonLog::new(cfg!(debug_assertions), trials);
-    for _ in 0..=trials {
+    for step in 0..=trials {
         log.push(hint);
         let CalcOutput { value, derivation } = function(hint);
         let Some(inv) = derivation.invert() else {
             log.set_degenerate(true);
+            profiling::record::<V>(step + 1, 1);
             return Err(log);
         };
         let next = hint - inv * value;
-        if next.near_v2(&hint) {
+        if next.abs_diff_eq(&hint, convergence_step) {
+            profiling::record::<V>(step + 1, 0);
             return Ok(next);
         }
         hint = next;
     }
+    profiling::record::<V>(trials.saturating_add(1), 2);
     Err(log)
 }
 

@@ -301,3 +301,42 @@ fn large_finite_interference_coordinates_are_preserved_and_stitched() {
         "large finite coordinates must not make interference segments disappear"
     );
 }
+
+#[test]
+fn overlapping_mesh_strand_is_removed_before_ambiguous_endpoint_stitching() {
+    let base = PolylineCurve(vec![
+        Point3::new(-1.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 0.0),
+    ]);
+    let long = PolylineCurve(vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+    let duplicated = PolylineCurve(vec![
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.25, 0.0, 0.0),
+    ]);
+    assert!(
+        stitch_nearby_polylines(vec![base.clone(), long.clone(), duplicated.clone()], 1.0e-6)
+            .is_none()
+    );
+    let clean = remove_redundant_interference_strands(vec![base, long, duplicated], 1.0e-6);
+    assert_eq!(clean.len(), 2);
+    let joined = stitch_nearby_polylines(clean, 1.0e-6)
+        .expect("the genuine intersection path is no longer branched");
+    assert_eq!(joined.len(), 1);
+    assert_eq!(joined[0].len(), 3);
+}
+
+#[test]
+fn distinct_meshed_branches_are_not_silently_deleted() {
+    let base = PolylineCurve(vec![
+        Point3::new(-1.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 0.0),
+    ]);
+    let branch0 = PolylineCurve(vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+    let branch1 = PolylineCurve(vec![
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.25, 0.01, 0.0),
+    ]);
+    let clean = remove_redundant_interference_strands(vec![base, branch0, branch1], 1.0e-6);
+    assert_eq!(clean.len(), 3);
+    assert!(stitch_nearby_polylines(clean, 1.0e-6).is_none());
+}

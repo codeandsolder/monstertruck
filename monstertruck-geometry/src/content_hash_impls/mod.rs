@@ -172,6 +172,9 @@ impl<
         self.surface1().content_hash(state);
         self.boundary0().content_hash(state);
         self.boundary1().content_hash(state);
+        let (front, back) = self.endpoint_anchors();
+        front.content_hash(state);
+        back.content_hash(state);
     }
 }
 

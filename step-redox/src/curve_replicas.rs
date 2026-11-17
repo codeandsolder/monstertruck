@@ -4,15 +4,16 @@ use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, rewrite_entity_refs, simple_record,
 };
 use crate::step_identity::{IndexBucket, hash_parameter, parameters_equivalent};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
-const GEOMETRY_TOLERANCE_MM: f64 = 1.0e-5;
+const GEOMETRY_TOLERANCE_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.curve_replica_geometry_mm;
 // Translation values are part of the actual replica transform. They must not
 // be coalesced at the looser geometry-equivalence tolerance: doing so can move
 // edge supports enough to break B-rep vertex/edge consistency.
-const TRANSFORM_TOLERANCE_MM: f64 = 1.0e-12;
+const TRANSFORM_TOLERANCE_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.curve_replica_transform_mm;
 
 #[derive(Debug, Default, Clone)]
 pub struct CurveReplicaStats {

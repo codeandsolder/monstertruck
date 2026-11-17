@@ -1,5 +1,6 @@
 use crate::math2::{cross, distance, dot, sub};
 use crate::profile_curves::RecoveredProfileCurve;
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct MeridianLine {
@@ -32,7 +33,8 @@ impl MeridianArc {
     }
 
     fn angle_tolerance(&self, tolerance: f64) -> f64 {
-        (tolerance / self.radius.max(tolerance)).max(1.0e-12)
+        (tolerance / self.radius.max(tolerance))
+            .max(DEFAULT_STEP_RECOVERY_TOLERANCES.source_revolution_param_floor)
     }
 
     fn contains_point(&self, point: [f64; 2], tolerance: f64) -> bool {

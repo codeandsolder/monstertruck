@@ -27,6 +27,8 @@ mod faces_classification;
 mod intersection_curve;
 mod loops_store;
 mod planar_union;
+#[cfg(test)]
+mod radial_slot_tests;
 mod tolerance;
 mod weld;
 
@@ -139,6 +141,115 @@ where
         .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
 }
 
+#[derive(Clone, Copy)]
+enum DifferenceContactSide {
+    /// Source material survives only where the cutter is absent immediately
+    /// on the interior side of its original face.
+    SourceInterior,
+    /// An inverted cutter face is exposed where original material occupies
+    /// the exterior side of the cutter.
+    CutterExterior,
+}
+
+fn classify_difference_unknown<C, S>(
+    poly_shell: &PolyShell,
+    region: &faces_classification::BooleanRegion<Point3, C, S>,
+    tol: f64,
+    shell_index: usize,
+    side: DifferenceContactSide,
+) -> ClassicResult<bool>
+where
+    C: PolylineableCurve + ParameterDivision1D<Point = Point3> + Clone,
+    S: MeshableSurface
+        + Clone
+        + ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    if let Ok(label) = classify_unknown(poly_shell, region, tol, shell_index) {
+        return Ok(label);
+    }
+    let points = region
+        .try_face()
+        .map_or_else(
+            || {
+                divide_face::sample_points_on_region(
+                    region.absolute_boundaries(),
+                    &region.surface(),
+                    tol,
+                )
+            },
+            |face| classification::sample_points_on_face(&face, tol),
+        )
+        .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
+    let [exterior, interior] = classification::unanimous_boundary_contact_sides(
+        poly_shell,
+        &points,
+        &region.surface(),
+        region.orientation(),
+        tol,
+    )
+    .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
+    Ok(match side {
+        DifferenceContactSide::SourceInterior => interior,
+        DifferenceContactSide::CutterExterior => exterior,
+    })
+}
+
+/// Corroborate a preclassified region against actual opposing-solid volume.
+///
+/// A boundary-local And/Or label does not establish occupancy throughout the
+/// face, especially after SSI imprinting. We correct it only if every sampled
+/// interior point is classifiable, agrees, and has the same inside/outside
+/// relation after equal-magnitude offsets to both sides of its source surface.
+/// Mixed samples, boundary contacts, and zero-area regions are NOT evidence
+/// for either label and must never be force-classified.
+fn unanimous_region_containment<C, S>(
+    poly_shell: &PolyShell,
+    region: &faces_classification::BooleanRegion<Point3, C, S>,
+    tol: f64,
+) -> Option<bool>
+where
+    C: PolylineableCurve + ParameterDivision1D<Point = Point3> + Clone,
+    S: MeshableSurface
+        + Clone
+        + ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let samples = if let Some(face) = region.try_face() {
+        classification::sample_points_on_face(&face, tol)?
+    } else {
+        divide_face::sample_points_on_region(region.absolute_boundaries(), &region.surface(), tol)?
+    };
+    let surface = region.surface();
+    let classify = |point: Point3| -> Option<bool> {
+        let verdict = classification::classify_inside_with_polyshell(poly_shell, point)?;
+        // A point on the other solid's boundary can receive a misleading
+        // signed-winding verdict. Both small physical displacements normal to
+        // this face must agree with the point's label; a coincident/tangent
+        // contact therefore cannot override a topological boundary label.
+        let (u, v) = surface
+            .search_parameter(point, None, 100)
+            .or_else(|| surface.search_nearest_parameter(point, None, 100))?;
+        let normal = surface.normal(u, v);
+        let length = normal.magnitude();
+        if !length.is_finite() || length <= f64::EPSILON {
+            return None;
+        }
+        let offset = normal / length * BooleanTolerance::new(tol).classifier_offset;
+        (classification::classify_inside_with_polyshell(poly_shell, point + offset)? == verdict
+            && classification::classify_inside_with_polyshell(poly_shell, point - offset)?
+                == verdict)
+            .then_some(verdict)
+    };
+    let mut samples = samples.into_iter();
+    let first = classify(samples.next()?)?;
+    samples.try_fold(first, |label, point| {
+        (classify(point)? == label).then_some(label)
+    })
+}
+
 fn classify_relation<C, S>(
     poly_shell: &PolyShell,
     region: &faces_classification::BooleanRegion<Point3, C, S>,
@@ -172,26 +283,20 @@ where
 fn convert_alt_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell: &AltCurveShell<C, S>,
     operation: &'static str,
+    tolerances: BooleanTolerance,
 ) -> ClassicResult<Shell<Point3, C, S>> {
-    altshell_to_shell(shell).ok_or(ShapeOpsError::AltShellConversionFailed { operation })
-}
-
-fn convert_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    regions: &[AltRegion<C, S>],
-    operation: &'static str,
-) -> ClassicResult<Shell<Point3, C, S>> {
-    let shell = faces_classification::materialize_regions(regions)
-        .ok_or(ShapeOpsError::RegionMaterializationFailed { operation })?;
-    convert_alt_shell(&shell, operation)
+    altshell_to_shell(shell, tolerances)
+        .ok_or(ShapeOpsError::AltShellConversionFailed { operation })
 }
 
 fn weld_and_convert<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
     operation: &'static str,
+    tolerances: BooleanTolerance,
 ) -> ClassicResult<Shell<Point3, C, S>> {
-    let shell = weld_coincident_regions(regions)
+    let shell = weld_coincident_regions(regions, tolerances)
         .ok_or(ShapeOpsError::RegionMaterializationFailed { operation })?;
-    convert_alt_shell(&shell, operation)
+    convert_alt_shell(&shell, operation, tolerances)
 }
 
 fn shell_is_valid<P, C, S>(shell: &Shell<P, C, S>) -> bool {
@@ -208,24 +313,76 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let tol = analysis.tolerance;
     analysis.cls0.integrate_by_component();
     analysis.cls1.integrate_by_component();
+    let full_positive_regions = analysis.cls0.all_regions();
+    let full_cutter_regions = analysis.cls1.all_regions();
+    // Bind the material-side selection once; both the labeled overlay and
+    // the fallback reconstruction must make identical contact decisions.
+    let source_inside_cutter = |region: &AltRegion<C, S>| {
+        classify_difference_unknown(
+            &analysis.poly_shell1,
+            region,
+            tol,
+            0,
+            DifferenceContactSide::SourceInterior,
+        )
+    };
+    let cutter_exterior_inside_source = |region: &AltRegion<C, S>| {
+        classify_difference_unknown(
+            &analysis.poly_shell0,
+            region,
+            tol,
+            1,
+            DifferenceContactSide::CutterExterior,
+        )
+    };
 
-    let [_inside0, mut difference0, unknown0] = analysis.cls0.and_or_unknown();
+    let [known_and0, known_or0, unknown0] = analysis.cls0.and_or_unknown();
+    // An SSI boundary label describes the winding at one interface; it is
+    // not evidence that the entire resulting face lies inside/outside the
+    // other solid. In particular, an imprinted, retraced edge can mark a
+    // large region And although all its interior witnesses are outside.
+    // Only contradict labels with UNANIMOUS geometric witnesses. If the
+    // region cannot be sampled or has mixed classifications, retain its
+    // existing status; never fabricate an interior for zero-area regions.
+    let mut difference0 = Vec::new();
+    for region in known_and0 {
+        if unanimous_region_containment(&analysis.poly_shell1, &region, tol) == Some(false) {
+            difference0.push(region);
+        }
+    }
+    for region in known_or0 {
+        if unanimous_region_containment(&analysis.poly_shell1, &region, tol) != Some(true) {
+            difference0.push(region);
+        }
+    }
     for region in unknown0 {
-        if !classify_unknown(&analysis.poly_shell1, &region, tol, 0)? {
+        if !source_inside_cutter(&region)? {
             difference0.push(region);
         }
     }
     let [mut difference1, _outside1, unknown1] = analysis.cls1.and_or_unknown();
     for region in unknown1 {
-        if classify_unknown(&analysis.poly_shell0, &region, tol, 1)? {
+        if cutter_exterior_inside_source(&region)? {
             difference1.push(region);
         }
     }
     for region in &mut difference1 {
         region.invert();
     }
+    let label_positive_len = difference0.len();
     difference0.append(&mut difference1);
-    let mut label_shell = weld_and_convert(&difference0, "difference")?;
+    let label_regions = planar_union::overlay_difference_regions(
+        difference0,
+        label_positive_len,
+        &full_positive_regions,
+        &full_cutter_regions,
+        tol,
+    )
+    .ok_or(ShapeOpsError::RegionMaterializationFailed {
+        operation: "difference_planar_overlay",
+    })?;
+    let mut label_shell =
+        weld_and_convert(&label_regions, "difference", BooleanTolerance::new(tol))?;
     let _ = orient_regular_shell(&mut label_shell);
     if label_shell
         .connected_components()
@@ -239,17 +396,30 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let [and1, or1, unknown1] = analysis.cls1.and_or_unknown();
     let mut fallback = Vec::new();
     for region in and0.into_iter().chain(or0).chain(unknown0) {
-        if !classify_unknown(&analysis.poly_shell1, &region, tol, 0)? {
+        if !source_inside_cutter(&region)? {
             fallback.push(region);
         }
     }
+    let fallback_positive_len = fallback.len();
     for mut region in and1.into_iter().chain(or1).chain(unknown1) {
-        if classify_unknown(&analysis.poly_shell0, &region, tol, 1)? {
+        if cutter_exterior_inside_source(&region)? {
             region.invert();
             fallback.push(region);
         }
     }
-    Ok([weld_and_convert(&fallback, "difference")?, Shell::default()])
+    let fallback_regions = planar_union::overlay_difference_regions(
+        fallback,
+        fallback_positive_len,
+        &full_positive_regions,
+        &full_cutter_regions,
+        tol,
+    )
+    .ok_or(ShapeOpsError::RegionMaterializationFailed {
+        operation: "difference_planar_overlay",
+    })?;
+    let fallback_shell =
+        weld_and_convert(&fallback_regions, "difference", BooleanTolerance::new(tol))?;
+    Ok([fallback_shell, Shell::default()])
 }
 
 fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -276,7 +446,10 @@ fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     and0.append(&mut and1);
     or0.append(&mut or1);
-    Ok([convert_regions(&and0, "and")?, convert_regions(&or0, "or")?])
+    Ok([
+        weld_and_convert(&and0, "and", BooleanTolerance::new(tol))?,
+        weld_and_convert(&or0, "or", BooleanTolerance::new(tol))?,
+    ])
 }
 
 fn partition_evidence<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -401,8 +574,8 @@ fn classify_complete_label_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     and0.append(&mut and1);
     or0.append(&mut or1);
-    let label_and_shell = weld_and_convert(&and0, "and")?;
-    let label_or_shell = weld_and_convert(&or0, "or")?;
+    let label_and_shell = weld_and_convert(&and0, "and", BooleanTolerance::new(tol))?;
+    let label_or_shell = weld_and_convert(&or0, "or", BooleanTolerance::new(tol))?;
     if !label_or_shell.is_empty()
         && shell_is_valid(&label_and_shell)
         && shell_is_valid(&label_or_shell)
@@ -500,8 +673,8 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     and0.append(&mut and1);
     or0.append(&mut or1);
     Ok([
-        weld_and_convert(&and0, "and")?,
-        weld_and_convert(&or0, "or")?,
+        weld_and_convert(&and0, "and", BooleanTolerance::new(tol))?,
+        weld_and_convert(&or0, "or", BooleanTolerance::new(tol))?,
     ])
 }
 
@@ -582,12 +755,95 @@ fn orient_regular_shell<P, C, S>(shell: &mut Shell<P, C, S>) -> bool {
     shell.shell_condition() != ShellCondition::Regular
 }
 
+/// Separate closed boundary sheets that share only a non-manifold edge.
+///
+/// A Boolean union of two solids touching along an edge is not a single
+/// two-manifold boundary, but it can be represented by separate closed
+/// boundary shells. Only edges with exactly two incident face uses may
+/// connect faces within a manifold sheet. Every resulting sheet must still
+/// pass the full canonical solid-boundary validator before being accepted.
+fn partition_manifold_sheets<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell: &Shell<Point3, C, S>,
+) -> Option<Vec<Shell<Point3, C, S>>> {
+    let faces: Vec<_> = shell.iter().cloned().collect();
+    let mut edge_users = HashMap::<EdgeId<C>, Vec<usize>>::new();
+    for (face_index, face) in faces.iter().enumerate() {
+        for edge in face.edge_iter() {
+            edge_users.entry(edge.id()).or_default().push(face_index);
+        }
+    }
+    if !edge_users.values().any(|uses| uses.len() > 2) {
+        return None;
+    }
+    let mut adjacency = vec![Vec::<usize>::new(); faces.len()];
+    for uses in edge_users.values() {
+        if let [a, b] = uses.as_slice()
+            && a != b
+        {
+            adjacency[*a].push(*b);
+            adjacency[*b].push(*a);
+        }
+    }
+    let mut seen = vec![false; faces.len()];
+    let mut components = Vec::new();
+    for start in 0..faces.len() {
+        if seen[start] {
+            continue;
+        }
+        seen[start] = true;
+        let mut queue = VecDeque::from([start]);
+        let mut members = Vec::new();
+        while let Some(index) = queue.pop_front() {
+            members.push(index);
+            for &neighbor in &adjacency[index] {
+                if !seen[neighbor] {
+                    seen[neighbor] = true;
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        // Preserve input face order independent of hash-table traversal.
+        members.sort_unstable();
+        let mut component: Shell<_, _, _> = members
+            .into_iter()
+            .map(|index| faces[index].clone())
+            .collect();
+        let _ = orient_regular_shell(&mut component);
+        if component.check_solid_boundary().is_err() {
+            return None;
+        }
+        components.push(component);
+    }
+    (components.len() > 1).then_some(components)
+}
+
 fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     operation: &'static str,
     mut shell: Shell<Point3, C, S>,
+    tol: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
     let _ = orient_regular_shell(&mut shell);
-    let boundaries = shell.connected_components();
+    if !shell_is_valid(&shell)
+        && let Some(mut repaired) =
+            weld::weld_converted_duplicate_edges(&shell, BooleanTolerance::new(tol))
+    {
+        let _ = orient_regular_shell(&mut repaired);
+        if shell_is_valid(&repaired)
+            && repaired
+                .edge_iter()
+                .all(|edge| edge.is_geometric_consistent())
+        {
+            shell = repaired;
+        }
+    }
+    let mut boundaries = shell.connected_components();
+    if boundaries
+        .iter()
+        .any(|boundary| boundary.check_solid_boundary().is_err())
+        && let Some(manifold_sheets) = partition_manifold_sheets(&shell)
+    {
+        boundaries = manifold_sheets;
+    }
     for (shell_index, boundary) in boundaries.iter().enumerate() {
         if boundary.check_solid_boundary().is_ok() {
             continue;
@@ -663,7 +919,7 @@ fn and_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let [res, _] = pair(&and_shell, shell)?;
         and_shell = res;
     }
-    finalize(operation, and_shell)
+    finalize(operation, and_shell, tol)
 }
 
 /// AND operation between two solids (classic backend).
@@ -704,7 +960,7 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let [_, res] = pair(&or_shell, shell)?;
         or_shell = res;
     }
-    finalize(operation, or_shell)
+    finalize(operation, or_shell, tol)
 }
 
 /// Difference: the region inside `solid0` but outside `solid1` (classic backend).
@@ -740,7 +996,7 @@ pub fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let [res, _] = difference_pair(&difference_shell, shell)?;
         difference_shell = res;
     }
-    finalize(operation, difference_shell)
+    finalize(operation, difference_shell, tol)
 }
 
 /// Symmetric difference (XOR): the region inside exactly one solid (classic backend).
@@ -765,6 +1021,122 @@ mod structural_classification_tests {
         let edge = builder::extrude(&vertex, Vector3::unit_x());
         let face = builder::extrude(&edge, Vector3::unit_y());
         builder::extrude(&face, Vector3::unit_z())
+    }
+
+    #[test]
+    fn preclassified_difference_regions_require_unanimous_geometric_corroboration() {
+        let solid = unit_cube();
+        let poly_shell = solid.boundaries()[0].triangulation(0.01);
+        let flat_region = |xlo: f64, xhi: f64, z: f64, key: usize| {
+            let points = [
+                Point3::new(xlo, 0.25, z),
+                Point3::new(xhi, 0.25, z),
+                Point3::new(xhi, 0.75, z),
+                Point3::new(xlo, 0.75, z),
+            ];
+            let vertices = points.map(Vertex::new);
+            let wire: Wire<Point3, AltCurve<Curve, Surface>> = (0..4)
+                .map(|index| {
+                    let next = (index + 1) % 4;
+                    Edge::new_unchecked(
+                        &vertices[index],
+                        &vertices[next],
+                        Alternative::FirstType(Curve::from(Line(points[index], points[next]))),
+                    )
+                })
+                .collect();
+            AltRegion::new(
+                vec![wire],
+                Surface::Plane(Plane::new(
+                    Point3::new(0.0, 0.0, z),
+                    Point3::new(1.0, 0.0, z),
+                    Point3::new(0.0, 1.0, z),
+                )),
+                true,
+                key,
+                key,
+            )
+        };
+        let outside = flat_region(0.25, 0.75, 1.5, 1);
+        let inside = flat_region(0.25, 0.75, 0.5, 2);
+        let crossing = flat_region(-0.3, 0.3, 0.5, 3);
+        assert_eq!(
+            unanimous_region_containment(&poly_shell, &outside, 1.0e-5),
+            Some(false),
+            "confident outside evidence must recover a region incorrectly marked And"
+        );
+        assert_eq!(
+            unanimous_region_containment(&poly_shell, &inside, 1.0e-5),
+            Some(true),
+            "confident inside evidence must reject a region incorrectly marked Or"
+        );
+        assert_eq!(
+            unanimous_region_containment(&poly_shell, &crossing, 1.0e-5),
+            None,
+            "a region straddling the other shell cannot inherit either label"
+        );
+
+        let boundary_contact = {
+            let points = [
+                Point3::new(1.0, 0.25, 0.25),
+                Point3::new(1.0, 0.75, 0.25),
+                Point3::new(1.0, 0.75, 0.75),
+                Point3::new(1.0, 0.25, 0.75),
+            ];
+            let vertices = points.map(Vertex::new);
+            let wire: Wire<Point3, AltCurve<Curve, Surface>> = (0..4)
+                .map(|index| {
+                    let next = (index + 1) % 4;
+                    Edge::new_unchecked(
+                        &vertices[index],
+                        &vertices[next],
+                        Alternative::FirstType(Curve::from(Line(points[index], points[next]))),
+                    )
+                })
+                .collect();
+            AltRegion::new(
+                vec![wire],
+                Surface::Plane(Plane::new(
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(1.0, 1.0, 0.0),
+                    Point3::new(1.0, 0.0, 1.0),
+                )),
+                true,
+                5,
+                5,
+            )
+        };
+        assert_eq!(
+            unanimous_region_containment(&poly_shell, &boundary_contact, 1.0e-5),
+            None,
+            "an exact coincident boundary cannot certify inside or outside from the surface itself"
+        );
+
+        // This is the small topology pattern seen in the source-derived stage6:
+        // two forward collinear edges and one retraced inverse edge. All exact
+        // curve samples are collinear: there is no real 2-D area to classify.
+        let points = [
+            Point3::new(0.2, 0.2, 0.5),
+            Point3::new(0.4, 0.2, 0.5),
+            Point3::new(0.8, 0.2, 0.5),
+        ];
+        let vertices = points.map(Vertex::new);
+        let retraced: Wire<Point3, AltCurve<Curve, Surface>> = (0..3)
+            .map(|index| {
+                let next = (index + 1) % 3;
+                Edge::new_unchecked(
+                    &vertices[index],
+                    &vertices[next],
+                    Alternative::FirstType(Curve::from(Line(points[index], points[next]))),
+                )
+            })
+            .collect();
+        let zero_area = AltRegion::new(vec![retraced], Surface::Plane(Plane::xy()), true, 4, 4);
+        assert_eq!(
+            unanimous_region_containment(&poly_shell, &zero_area, 1.0e-5),
+            None,
+            "zero-area retraces must not gain an invented interior witness"
+        );
     }
 
     #[test]

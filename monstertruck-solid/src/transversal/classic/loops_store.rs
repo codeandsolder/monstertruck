@@ -20,22 +20,27 @@ use super::{
     tolerance::BooleanTolerance,
 };
 mod planar;
+mod ruled;
+pub(super) use ruled::{
+    certified_circular_cylinder, common_circular_extrusion_cylinder, common_ruled_extrusion_strip,
+};
 
 use monstertruck_core::{
     cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point2, Point3, Vector2, Vector3},
-    tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON},
+    tolerance::DEFAULT_NUMERICAL_TOLERANCES,
 };
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::*;
 use monstertruck_topology::{Edge, EdgeId, Face, Shell, Vertex, VertexId, Wire, wire};
 use planar::{
-    CROSS_FACE_STITCH_TOLERANCE, FullPlanarInterfaceMatch, imprint_edges_on_faces,
-    planar_polygons_same_trimmed_face, shells_full_planar_interface_pair,
-    shells_have_partial_planar_overlap, shells_have_positive_aabb_overlap,
+    FullPlanarInterfaceMatch, imprint_edges_on_faces, planar_polygons_same_trimmed_face,
+    shells_full_planar_interface_pair, shells_have_partial_planar_overlap,
+    shells_have_positive_aabb_overlap,
 };
 pub(in crate::transversal::classic) use planar::{
     direct_planar_face_match, single_face_matches_planar_partition,
 };
+use rayon::prelude::*;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 type PolylineCurve = monstertruck_meshing::prelude::PolylineCurve<Point3>;
@@ -194,31 +199,76 @@ enum ParameterKind {
 }
 
 impl ParameterKind {
-    fn try_new(t: f64, (t0, t1): (f64, f64)) -> Option<Self> {
-        if t0.near(&t) {
-            Some(Self::Front)
-        } else if t1.near(&t) {
-            Some(Self::Back)
-        } else if t0 < t && t < t1 {
-            Some(Self::Inner(t))
-        } else {
-            None
+    /// Classify an evaluated point against the actual trimmed curve endpoints.
+    ///
+    /// Parameter values have arbitrary units and scale: being near an endpoint
+    /// parameter does not mean being near the endpoint in model coordinates.
+    /// An interior root within the operation's spatial length tolerance of
+    /// exactly one endpoint belongs to that endpoint. A root close to both
+    /// endpoints is ambiguous, never an arbitrary Front/Back preference.
+    fn try_new<C>(t: f64, curve: &C, tolerances: BooleanTolerance) -> Option<Self>
+    where
+        C: BoundedCurve,
+        C::Point: MetricSpace<Metric = f64> + Clone, {
+        let (t0, t1) = curve.range_tuple();
+        if !t.is_finite() || !t0.is_finite() || !t1.is_finite() || t0 >= t1 {
+            return None;
+        }
+        // An inverse solver can return a parameter just outside an endpoint.
+        // Allow an endpoint ONLY if the extrapolated *model-space point* is
+        // within the requested numerical length of that endpoint. A parameter
+        // epsilon would be meaningless on curves with arbitrary domains.
+        let point = curve.evaluate(t);
+        let front_distance = point.clone().distance(curve.evaluate(t0));
+        let back_distance = point.distance(curve.evaluate(t1));
+        if !front_distance.is_finite() || !back_distance.is_finite() {
+            return None;
+        }
+        let at_front = front_distance <= tolerances.length;
+        let at_back = back_distance <= tolerances.length;
+        if t < t0 {
+            return (at_front && !at_back).then_some(Self::Front);
+        }
+        if t > t1 {
+            return (at_back && !at_front).then_some(Self::Back);
+        }
+        if t.partial_cmp(&t0).is_some_and(std::cmp::Ordering::is_eq) {
+            return Some(Self::Front);
+        }
+        if t.partial_cmp(&t1).is_some_and(std::cmp::Ordering::is_eq) {
+            return Some(Self::Back);
+        }
+        match (at_front, at_back) {
+            (true, false) => Some(Self::Front),
+            (false, true) => Some(Self::Back),
+            (false, false) => Some(Self::Inner(t)),
+            (true, true) => None,
         }
     }
 }
 
 impl<P: Copy, C: Clone> Loops<P, C> {
-    fn search_parameter(&self, pt: P) -> Option<(usize, usize, ParameterKind)>
-    where C: BoundedCurve<Point = P> + SearchParameter<CurveParameter, Point = P> {
+    /// An exact trim hit must satisfy the caller's *spatial* budget even when
+    /// the individual inverse solver uses a looser global search epsilon.
+    fn search_parameter(
+        &self,
+        point: P,
+        tolerances: BooleanTolerance,
+    ) -> Option<(usize, usize, ParameterKind)>
+    where
+        P: MetricSpace<Metric = f64>,
+        C: BoundedCurve<Point = P> + SearchParameter<CurveParameter, Point = P>,
+    {
         self.iter()
             .enumerate()
-            .flat_map(move |(i, wire)| wire.iter().enumerate().map(move |(j, edge)| (i, j, edge)))
+            .flat_map(|(i, wire)| wire.iter().enumerate().map(move |(j, edge)| (i, j, edge)))
             .find_map(|(i, j, edge)| {
                 let curve = edge.curve();
-                curve.search_parameter(pt, None, 1).and_then(|t| {
-                    let kind = ParameterKind::try_new(t, curve.range_tuple())?;
-                    Some((i, j, kind))
-                })
+                let t = curve.search_parameter(point, None, 1)?;
+                if curve.evaluate(t).distance(point) > tolerances.length {
+                    return None;
+                }
+                Some((i, j, ParameterKind::try_new(t, &curve, tolerances)?))
             })
     }
 
@@ -295,22 +345,27 @@ impl<P: Copy, C: Clone> Loops<P, C> {
         self.push(r#loop);
     }
 
-    fn reuse_coincident_edge(&mut self, edge0: &Edge<P, C>) -> bool
+    fn reuse_coincident_edge(&mut self, edge0: &Edge<P, C>, tolerances: BooleanTolerance) -> bool
     where
-        P: Tolerance,
+        P: Tolerance + MetricSpace<Metric = f64>,
         C: ParametricCurve<Point = P>
             + BoundedCurve<Point = P>
             + SearchNearestParameter<CurveParameter, Point = P>
             + Invertible, {
         let curves_sampled_match = |edge: &Edge<P, C>| {
-            validate_sampled_coincidence::<P, _>(&edge.oriented_curve(), &edge0.oriented_curve())
-                == CurveCoincidence::SampledValidation
+            validate_sampled_coincidence::<P, _>(
+                &edge.oriented_curve(),
+                &edge0.oriented_curve(),
+                tolerances,
+            ) == CurveCoincidence::SampledValidation
         };
         let coincident = self.iter().flat_map(|wire| wire.iter()).find_map(|edge| {
-            let same_direction = edge.front().point().near(&edge0.front().point())
-                && edge.back().point().near(&edge0.back().point());
-            let opposite_direction = edge.front().point().near(&edge0.back().point())
-                && edge.back().point().near(&edge0.front().point());
+            let same_direction = edge.front().point().distance(edge0.front().point())
+                <= tolerances.length
+                && edge.back().point().distance(edge0.back().point()) <= tolerances.length;
+            let opposite_direction = edge.front().point().distance(edge0.back().point())
+                <= tolerances.length
+                && edge.back().point().distance(edge0.front().point()) <= tolerances.length;
             (same_direction || opposite_direction)
                 .then(|| curves_sampled_match(edge))
                 .filter(|matched| *matched)
@@ -333,10 +388,12 @@ impl<P: Copy, C: Clone> Loops<P, C> {
         }
         self.iter_mut().for_each(|wire| {
             wire.iter_mut().for_each(|edge| {
-                let same_direction = edge.front().point().near(&edge0.front().point())
-                    && edge.back().point().near(&edge0.back().point());
-                let opposite_direction = edge.front().point().near(&edge0.back().point())
-                    && edge.back().point().near(&edge0.front().point());
+                let same_direction = edge.front().point().distance(edge0.front().point())
+                    <= tolerances.length
+                    && edge.back().point().distance(edge0.back().point()) <= tolerances.length;
+                let opposite_direction = edge.front().point().distance(edge0.back().point())
+                    <= tolerances.length
+                    && edge.back().point().distance(edge0.front().point()) <= tolerances.length;
                 if same_direction {
                     *edge = edge0.clone();
                 } else if opposite_direction {
@@ -352,15 +409,16 @@ impl<P: Copy, C: Clone> Loops<P, C> {
         edge0: Edge<P, C>,
         status: ShapesOpStatus,
         reuse_coincident: bool,
+        tolerances: BooleanTolerance,
     ) -> [Option<(usize, usize)>; 2]
     where
-        P: Tolerance,
+        P: Tolerance + MetricSpace<Metric = f64>,
         C: ParametricCurve<Point = P>
             + BoundedCurve<Point = P>
             + SearchNearestParameter<CurveParameter, Point = P>
             + Invertible,
     {
-        if reuse_coincident && self.reuse_coincident_edge(&edge0) {
+        if reuse_coincident && self.reuse_coincident_edge(&edge0, tolerances) {
             return [None, None];
         }
 
@@ -463,6 +521,7 @@ fn same_boundary_candidate<C>(
     existing_endpoint: Option<VertexId<Point3>>,
     edge: &Edge<Point3, C>,
     endpoint: Option<VertexId<Point3>>,
+    tolerances: BooleanTolerance,
 ) -> bool
 where
     C: Clone
@@ -475,34 +534,182 @@ where
     let same_endpoints = (existing
         .absolute_front()
         .point()
-        .near(&edge.absolute_front().point())
+        .distance(edge.absolute_front().point())
+        <= tolerances.length
         && existing
             .absolute_back()
             .point()
-            .near(&edge.absolute_back().point()))
+            .distance(edge.absolute_back().point())
+            <= tolerances.length)
         || (existing
             .absolute_front()
             .point()
-            .near(&edge.absolute_back().point())
+            .distance(edge.absolute_back().point())
+            <= tolerances.length
             && existing
                 .absolute_back()
                 .point()
-                .near(&edge.absolute_front().point()));
+                .distance(edge.absolute_front().point())
+                <= tolerances.length);
     same_endpoints
-        && (validate_sampled_coincidence::<Point3, _>(&existing.curve(), &edge.curve())
+        && (validate_sampled_coincidence::<Point3, _>(&existing.curve(), &edge.curve(), tolerances)
             == CurveCoincidence::SampledValidation
-            || validate_endpoint_aligned_coincidence::<Point3, _>(&existing.curve(), &edge.curve())
-                == CurveCoincidence::SampledValidation)
+            || validate_endpoint_aligned_coincidence::<Point3, _>(
+                &existing.curve(),
+                &edge.curve(),
+                tolerances,
+            ) == CurveCoincidence::SampledValidation)
 }
 
 impl<C> Loops<Point3, C> {
-    fn has_partitioned_coincident_path(&self, edge0: &Edge<Point3, C>) -> bool
-    where C: Clone
+    /// Canonicalize an edge already present in this face's trim arrangement.
+    ///
+    /// Independent STEP carriers may represent the same physical edge with
+    /// slightly different parameterizations and sub-kernel geometric noise.
+    /// The imprint stage is explicitly allowed the caller's Boolean length
+    /// tolerance, unlike the kernel-global exact incidence methods. Require
+    /// matching oriented endpoints AND agreement of the whole sampled path;
+    /// otherwise a genuine thin lens sharing its endpoints must not collapse.
+    fn reuse_imprinted_coincident_edge(
+        &mut self,
+        incoming: &Edge<Point3, C>,
+        length_tol: f64,
+    ) -> bool
+    where
+        C: ParametricCurve<Point = Point3>
+            + BoundedCurve<Point = Point3>
+            + ParameterDivision1D<Point = Point3>
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Invertible
+            + Clone,
+    {
+        // Reject an invalid tolerance; silently clamping it would change
+        // which distinct trimmed edges can be welded into one identity.
+        if !length_tol.is_finite() || length_tol <= 0.0 {
+            return false;
+        }
+        let same_endpoints = |edge: &Edge<Point3, C>| {
+            if edge.front().point().distance(incoming.front().point()) <= length_tol
+                && edge.back().point().distance(incoming.back().point()) <= length_tol
+            {
+                Some(true)
+            } else if edge.front().point().distance(incoming.back().point()) <= length_tol
+                && edge.back().point().distance(incoming.front().point()) <= length_tol
+            {
+                Some(false)
+            } else {
+                None
+            }
+        };
+        let same_path = |edge: &Edge<Point3, C>, _same_direction: bool| {
+            // Trimmed curves can have unrelated parameterizations (especially
+            // after STEP import and independent SSI reconstruction). Equality
+            // at a normalized parameter fraction is NOT geometric equality.
+            // Require both directed paths to project back onto the other
+            // exact curve within the caller's actual length tolerance.
+            let a = edge.curve();
+            let b = incoming.curve();
+            let samples_on = |curve: &C, other: &C| {
+                let (t0, t1) = curve.range_tuple();
+                // The adaptive division has *already evaluated* every
+                // returned point on the exact curve. Do not throw those
+                // results away and redo millions of expensive 4D SSI solves
+                // merely to re-check their exact same parameter.
+                let (parameters, points) = curve.parameter_division((t0, t1), length_tol);
+                if parameters.len() != points.len() {
+                    return false;
+                }
+                let mut previous = None;
+                let mut verify = |point: Point3| {
+                    let nearest = |hint| {
+                        let parameter = other.search_nearest_parameter(point, hint, 100)?;
+                        (other.evaluate(parameter).distance(point) <= length_tol)
+                            .then_some(parameter)
+                    };
+                    let parameter = nearest(previous).or_else(|| nearest(None));
+                    parameter.inspect(|&found| previous = Some(found)).is_some()
+                };
+                let dense = parameters
+                    .into_iter()
+                    .zip(points)
+                    .map(|(parameter, point)| {
+                        let fraction = (parameter - t0) / (t1 - t0);
+                        // Original validation normalized and reconstructed every
+                        // parameter. Reuse the stored exact evaluation when those
+                        // floating-point operations return exactly the same bits.
+                        // Otherwise retain the original re-evaluation to preserve
+                        // all existing strict acceptance behavior, even at seams.
+                        let mapped = (t1 - t0).mul_add(fraction, t0);
+                        (
+                            fraction,
+                            if mapped.to_bits() == parameter.to_bits() {
+                                point
+                            } else {
+                                curve.evaluate(mapped)
+                            },
+                        )
+                    });
+                let coarse = (0..=16).map(|i| {
+                    let fraction = f64::from(i) / 16.0;
+                    (fraction, curve.evaluate((t1 - t0).mul_add(fraction, t0)))
+                });
+                dense.chain(coarse).all(|(fraction, point)| {
+                    fraction.is_finite() && (0.0..=1.0).contains(&fraction) && verify(point)
+                })
+            };
+            samples_on(&a, &b) && samples_on(&b, &a)
+        };
+        let matching = self.iter().flat_map(|wire| wire.iter()).find_map(|edge| {
+            let direction = same_endpoints(edge)?;
+            same_path(edge, direction)
+                .then(|| (edge.front().clone(), edge.back().clone(), direction))
+        });
+        let Some((old_front, old_back, direction)) = matching else {
+            return false;
+        };
+        let (new_front, new_back) = if direction {
+            (incoming.front().clone(), incoming.back().clone())
+        } else {
+            (incoming.back().clone(), incoming.front().clone())
+        };
+        let mut map = HashMap::default();
+        if old_front.id() != new_front.id() {
+            self.change_vertex(&old_front, &new_front, &mut map);
+        }
+        if old_back.id() != new_back.id() {
+            self.change_vertex(&old_back, &new_back, &mut map);
+        }
+
+        // Only canonicalize edges individually proven to coincide. Another
+        // contour can share both vertices without describing the same trim.
+        self.iter_mut().for_each(|wire| {
+            wire.iter_mut().for_each(|edge| {
+                if let Some(direction) = same_endpoints(edge)
+                    && same_path(edge, direction)
+                {
+                    *edge = if direction {
+                        incoming.clone()
+                    } else {
+                        incoming.inverse()
+                    };
+                }
+            });
+        });
+        true
+    }
+
+    fn has_partitioned_coincident_path(
+        &self,
+        edge0: &Edge<Point3, C>,
+        tolerances: BooleanTolerance,
+    ) -> bool
+    where
+        C: Clone
             + ParametricCurve<Point = Point3>
             + BoundedCurve<Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3> {
+            + SearchNearestParameter<CurveParameter, Point = Point3>,
+    {
         let reference = edge0.curve();
-        let reference_range = reference.range_tuple();
         let start = edge0.front().id();
         let goal = edge0.back().id();
 
@@ -575,10 +782,8 @@ impl<C> Loops<Point3, C> {
                         let validated_parameter = |search_hint| {
                             let parameter =
                                 reference.search_nearest_parameter(point, search_hint, 100)?;
-                            ParameterKind::try_new(parameter, reference_range)?;
-                            reference
-                                .evaluate(parameter)
-                                .near(&point)
+                            ParameterKind::try_new(parameter, &reference, tolerances)?;
+                            (reference.evaluate(parameter).distance(point) <= tolerances.length)
                                 .then_some(parameter)
                         };
                         let parameter = validated_parameter(hint)
@@ -622,18 +827,84 @@ impl<P: Copy + Tolerance, C: Clone> LoopsStore<P, C> {
     }
 }
 
+/// Prove that a candidate canonical boundary point lies on the other exact
+/// Boolean carrier, not merely within the coarse tessellation search radius.
+///
+/// Inverse search may find an approximate UV for an off-surface point. Only its
+/// forward-evaluated spatial residual is evidence of incidence.
+fn on_other_carrier<S>(point: Point3, other_surface: &S, tolerances: BooleanTolerance) -> bool
+where S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3> {
+    other_surface
+        .search_nearest_parameter(point, None, 25)
+        .is_some_and(|(u, v)| {
+            other_surface.evaluate(u, v).distance(point) <= tolerances.surface_support_residual()
+        })
+}
+
+/// Verify that two independently represented exact trims lie on one
+/// imprintable locus, not merely at two coincident mesh endpoints.
+fn certified_same_imprint_locus<C>(
+    reference: &Edge<Point3, C>,
+    candidate: &Edge<Point3, C>,
+    tolerances: BooleanTolerance,
+) -> bool
+where
+    C: ParametricCurve<Point = Point3>
+        + BoundedCurve<Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>
+        + Clone,
+{
+    let same_endpoints = (reference
+        .absolute_front()
+        .point()
+        .distance(candidate.absolute_front().point())
+        <= tolerances.length
+        && reference
+            .absolute_back()
+            .point()
+            .distance(candidate.absolute_back().point())
+            <= tolerances.length)
+        || (reference
+            .absolute_front()
+            .point()
+            .distance(candidate.absolute_back().point())
+            <= tolerances.length
+            && reference
+                .absolute_back()
+                .point()
+                .distance(candidate.absolute_front().point())
+                <= tolerances.length);
+    let reference_curve = reference.curve();
+    let edge_curve = candidate.curve();
+    validate_sampled_coincidence::<Point3, _>(&reference_curve, &edge_curve, tolerances)
+        == CurveCoincidence::SampledValidation
+        || validate_sampled_containment::<Point3, _>(&reference_curve, &edge_curve, tolerances)
+            == CurveCoincidence::SampledValidation
+        || validate_sampled_containment::<Point3, _>(&edge_curve, &reference_curve, tolerances)
+            == CurveCoincidence::SampledValidation
+        || (same_endpoints
+            && validate_endpoint_aligned_coincidence::<Point3, _>(
+                &reference_curve,
+                &edge_curve,
+                tolerances,
+            ) == CurveCoincidence::SampledValidation)
+}
+
 impl<C> LoopsStore<Point3, C> {
     fn search_boundary_parameter(
         &self,
         loops_index: usize,
         point: Point3,
         nearest_tolerance: f64,
+        tolerances: BooleanTolerance,
     ) -> Option<(usize, usize, ParameterKind, Option<Point3>)>
     where
         C: Clone
             + BoundedCurve<Point = Point3>
             + SearchParameter<CurveParameter, Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3>,
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Send
+            + Sync,
     {
         let loops = &self[loops_index];
         let mut candidate = None;
@@ -651,7 +922,13 @@ impl<C> LoopsStore<Point3, C> {
                 ParameterKind::Inner(_) => None,
             };
             if let Some(existing) = candidate_edge.as_ref() {
-                return same_boundary_candidate(existing, candidate_endpoint, edge, endpoint);
+                return same_boundary_candidate(
+                    existing,
+                    candidate_endpoint,
+                    edge,
+                    endpoint,
+                    tolerances,
+                );
             }
 
             let canonical_point = match kind {
@@ -670,20 +947,32 @@ impl<C> LoopsStore<Point3, C> {
             true
         };
 
-        // Prefer exact incidence, but still reject multiple distinct topological
-        // loci instead of silently taking the first edge whose inverse map succeeds.
-        let mut found_exact = false;
-        for (wire_index, wire) in loops.iter().enumerate() {
-            for (edge_index, edge) in wire.iter().enumerate() {
+        // Inverse search is pure per edge. Calculate it in parallel, but consume
+        // results in original wire/edge order to preserve ambiguity resolution.
+        let edges: Vec<_> = loops
+            .iter()
+            .enumerate()
+            .flat_map(|(wi, wire)| {
+                wire.iter()
+                    .enumerate()
+                    .map(move |(ei, edge)| (wi, ei, edge))
+            })
+            .collect();
+        let exact: Vec<_> = edges
+            .par_iter()
+            .map(|(_, _, edge)| {
                 let curve = edge.curve();
-                let Some(parameter) = curve.search_parameter(point, None, 1) else {
-                    continue;
-                };
-                let Some(kind) = ParameterKind::try_new(parameter, curve.range_tuple()) else {
-                    continue;
-                };
+                let parameter = curve.search_parameter(point, None, 1)?;
+                (curve.evaluate(parameter).distance(point) <= tolerances.length)
+                    .then(|| ParameterKind::try_new(parameter, &curve, tolerances))
+                    .flatten()
+            })
+            .collect();
+        let mut found_exact = false;
+        for ((wire_index, edge_index, edge), kind) in edges.iter().zip(exact) {
+            if let Some(kind) = kind {
                 found_exact = true;
-                if !accept_candidate(wire_index, edge_index, edge, kind, None) {
+                if !accept_candidate(*wire_index, *edge_index, edge, kind, None) {
                     return None;
                 }
             }
@@ -698,27 +987,29 @@ impl<C> LoopsStore<Point3, C> {
         // before topology is mutated. Distinct nearby loci remain ambiguous and
         // fail closed; only repeated uses/shared endpoints or sampled-validated
         // copies of the same complete edge are deduplicated.
-        for (wire_index, wire) in loops.iter().enumerate() {
-            for (edge_index, edge) in wire.iter().enumerate() {
+        let nearest: Vec<_> = edges
+            .par_iter()
+            .map(|(_, _, edge)| {
                 let curve = edge.curve();
-                let Some(parameter) = curve.search_nearest_parameter(point, None, 10) else {
-                    continue;
-                };
+                let parameter = curve.search_nearest_parameter(point, None, 10)?;
                 let projected = curve.evaluate(parameter);
                 if projected.distance(point) > nearest_tolerance {
-                    continue;
+                    return None;
                 }
-                let Some(kind) = ParameterKind::try_new(parameter, curve.range_tuple()) else {
-                    continue;
-                };
+                let kind = ParameterKind::try_new(parameter, &curve, tolerances)?;
                 let canonical_point = match kind {
                     ParameterKind::Front => edge.absolute_front().point(),
                     ParameterKind::Back => edge.absolute_back().point(),
                     ParameterKind::Inner(_) => projected,
                 };
-                if !accept_candidate(wire_index, edge_index, edge, kind, Some(canonical_point)) {
-                    return None;
-                }
+                Some((kind, canonical_point))
+            })
+            .collect();
+        for ((wi, ei, edge), result) in edges.iter().zip(nearest) {
+            if let Some((kind, canonical_point)) = result
+                && !accept_candidate(*wi, *ei, edge, kind, Some(canonical_point))
+            {
+                return None;
             }
         }
         candidate
@@ -728,13 +1019,16 @@ impl<C> LoopsStore<Point3, C> {
         &mut self,
         loops_index: usize,
         vertex: &Vertex<Point3>,
+        tolerances: BooleanTolerance,
         emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
     ) -> Option<()>
     where
         C: Clone
             + Cut<Point = Point3>
             + SearchParameter<CurveParameter, Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3>,
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Send
+            + Sync,
     {
         let point = vertex.point();
         let mut endpoint_vertices = Vec::<Vertex<Point3>>::new();
@@ -746,7 +1040,14 @@ impl<C> LoopsStore<Point3, C> {
                 let Some(parameter) = curve.search_parameter(point, None, 1) else {
                     continue;
                 };
-                let Some(kind) = ParameterKind::try_new(parameter, curve.range_tuple()) else {
+                // As with exact boundary inverse search, the curve's own
+                // SearchParameter tolerance is not authoritative. Two trims
+                // separated by less than the global epsilon must not be
+                // imprinted onto each other at a tighter operation tolerance.
+                if curve.evaluate(parameter).distance(point) > tolerances.length {
+                    continue;
+                }
+                let Some(kind) = ParameterKind::try_new(parameter, &curve, tolerances) else {
                     continue;
                 };
                 match kind {
@@ -773,41 +1074,8 @@ impl<C> LoopsStore<Point3, C> {
                             continue;
                         }
                         if let Some((_, reference, _)) = interior.first() {
-                            let same_endpoints = (reference
-                                .absolute_front()
-                                .point()
-                                .near(&edge.absolute_front().point())
-                                && reference
-                                    .absolute_back()
-                                    .point()
-                                    .near(&edge.absolute_back().point()))
-                                || (reference
-                                    .absolute_front()
-                                    .point()
-                                    .near(&edge.absolute_back().point())
-                                    && reference
-                                        .absolute_back()
-                                        .point()
-                                        .near(&edge.absolute_front().point()));
-                            let reference_curve = reference.curve();
-                            let edge_curve = edge.curve();
-                            let same_curve = validate_sampled_coincidence::<Point3, _>(
-                                &reference_curve,
-                                &edge_curve,
-                            ) == CurveCoincidence::SampledValidation
-                                || validate_sampled_containment::<Point3, _>(
-                                    &reference_curve,
-                                    &edge_curve,
-                                ) == CurveCoincidence::SampledValidation
-                                || validate_sampled_containment::<Point3, _>(
-                                    &edge_curve,
-                                    &reference_curve,
-                                ) == CurveCoincidence::SampledValidation
-                                || (same_endpoints
-                                    && validate_endpoint_aligned_coincidence::<Point3, _>(
-                                        &reference_curve,
-                                        &edge_curve,
-                                    ) == CurveCoincidence::SampledValidation);
+                            let same_curve =
+                                certified_same_imprint_locus(reference, edge, tolerances);
                             if !same_curve {
                                 return None;
                             }
@@ -819,7 +1087,13 @@ impl<C> LoopsStore<Point3, C> {
         }
 
         if endpoint_vertices.is_empty() && interior.is_empty() {
-            self.add_polygon_vertex(loops_index, vertex, emap)?;
+            self.add_polygon_vertex(
+                loops_index,
+                vertex,
+                tolerances.boundary_residual(),
+                tolerances,
+                emap,
+            )?;
             return Some(());
         }
 
@@ -842,22 +1116,30 @@ impl<C> LoopsStore<Point3, C> {
         Some(())
     }
 
+    /// Locate a polyline edge with an independent sampling-error radius.
+    /// The radius selects an existing candidate, not a new exact geometric
+    /// equality criterion; the attaching caller certifies exact incidence.
     fn add_polygon_vertex(
         &mut self,
         loops_index: usize,
         vertex: &Vertex<Point3>,
+        discovery_radius: f64,
+        tolerances: BooleanTolerance,
         emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
     ) -> Option<(usize, usize, ParameterKind)>
     where
         C: Clone
             + Cut<Point = Point3>
             + SearchParameter<CurveParameter, Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3>,
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Send
+            + Sync,
     {
         let (wire_index, edge_index, kind, projected) = self.search_boundary_parameter(
             loops_index,
             vertex.point(),
-            DEFAULT_NUMERICAL_TOLERANCES.boolean_boundary_search_factor * KERNEL_EPSILON,
+            discovery_radius,
+            tolerances,
         )?;
         if let Some(projected) = projected {
             vertex.set_point(projected);
@@ -892,6 +1174,7 @@ impl<C> LoopsStore<Point3, C> {
         (wire_index, edge_index): (usize, usize),
         point: Point3,
         nearest_tolerance: f64,
+        tolerances: BooleanTolerance,
     ) -> Option<(usize, usize, ParameterKind, Option<Point3>)>
     where
         C: BoundedCurve<Point = Point3>
@@ -900,12 +1183,12 @@ impl<C> LoopsStore<Point3, C> {
     {
         let edge = self.get(loops_index)?.get(wire_index)?.get(edge_index)?;
         let curve = edge.curve();
-        let classify = |parameter: f64| {
+        let classify = |parameter: f64, residual_limit: f64| {
             let projected = curve.evaluate(parameter);
-            if projected.distance(point) > nearest_tolerance {
+            if projected.distance(point) > residual_limit {
                 return None;
             }
-            let kind = ParameterKind::try_new(parameter, curve.range_tuple())?;
+            let kind = ParameterKind::try_new(parameter, &curve, tolerances)?;
             let canonical_point = match kind {
                 ParameterKind::Front => edge.absolute_front().point(),
                 ParameterKind::Back => edge.absolute_back().point(),
@@ -916,100 +1199,191 @@ impl<C> LoopsStore<Point3, C> {
 
         curve
             .search_parameter(point, None, 1)
-            .and_then(classify)
+            .and_then(|t| classify(t, tolerances.length))
             .or_else(|| {
                 curve
                     .search_nearest_parameter(point, None, 10)
-                    .and_then(classify)
+                    .and_then(|t| classify(t, nearest_tolerance))
             })
+    }
+
+    /// Resolve a sampled SSI endpoint to an *existing* exact face vertex.
+    ///
+    /// After prior SSI splits, the polygonal wire index need no longer identify
+    /// the same exact wire/edge. Search the entire face's existing vertices,
+    /// selecting a unique nearest geometric locus within the tessellation
+    /// seed error, and independently verify that locus on the intersecting
+    /// surface before changing any topology. Distinct nearly equidistant
+    /// locations are ambiguous, even if their edge inverse solvers disagree.
+    fn supported_boundary_vertex<S>(
+        &self,
+        face_index: usize,
+        point: Point3,
+        nearest_tolerance: f64,
+        tolerances: BooleanTolerance,
+        other_surface: &S,
+    ) -> Option<Vec<Vertex<Point3>>>
+    where
+        S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+    {
+        let ambiguity_tol = tolerances.boundary_residual();
+        let mut candidates: Vec<(Point3, f64, Vec<Vertex<Point3>>)> = Vec::new();
+        for vertex in self
+            .get(face_index)?
+            .iter()
+            .flat_map(|wire| wire.vertex_iter())
+        {
+            let location = vertex.point();
+            let distance = location.distance(point);
+            if distance > nearest_tolerance {
+                continue;
+            }
+            if !on_other_carrier(location, other_surface, tolerances) {
+                continue;
+            }
+            if let Some((_, _, vertices)) = candidates
+                .iter_mut()
+                .find(|(existing, _, _)| existing.distance(location) <= tolerances.length)
+            {
+                if !vertices.iter().any(|known| known.id() == vertex.id()) {
+                    vertices.push(vertex);
+                }
+                continue;
+            }
+            candidates.push((location, distance, vec![vertex]));
+        }
+        candidates.sort_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1));
+        let (_, closest_distance, selected) = candidates.first()?;
+        // Do not choose by index among two distinguishable but numerically
+        // indistinguishable exact vertices.
+        if candidates
+            .get(1)
+            .is_some_and(|(_, next_distance, _)| next_distance - closest_distance <= ambiguity_tol)
+        {
+            return None;
+        }
+        Some(selected.clone())
     }
 
     fn add_geom_vertex<S>(
         &mut self,
         loops_index: usize,
-        boundary_hint: Option<(usize, usize)>,
+        request: BoundarySearchRequest,
         vertex: &Vertex<Point3>,
         another_surface: &S,
-        nearest_tolerance: f64,
+        tolerances: BooleanTolerance,
         emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
     ) -> Option<()>
     where
         C: BoundedCurve<Point = Point3>
             + Cut<Point = Point3, Vector = Vector3>
             + SearchParameter<CurveParameter, Point = Point3>
-            + SearchNearestParameter<CurveParameter, Point = Point3>,
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Send
+            + Sync,
         S: ParametricSurface3D
             + SearchParameter<SurfaceParameter, Point = Point3>
             + SearchNearestParameter<SurfaceParameter, Point = Point3>,
     {
+        let BoundarySearchRequest {
+            hint: boundary_hint,
+            sampled_on_boundary_vertex,
+            nearest_tolerance,
+        } = request;
         // Polygon and exact loop stores can diverge after earlier endpoint
         // canonicalization. A polygon boundary index is therefore only a
         // candidate hint: accept it when the corresponding exact edge still
         // resolves the endpoint within the tessellation budget, otherwise fall
         // back to the global ambiguity-safe exact-boundary search.
         let hinted = boundary_hint.and_then(|hint| {
-            self.resolve_boundary_hint(loops_index, hint, vertex.point(), nearest_tolerance)
+            self.resolve_boundary_hint(
+                loops_index,
+                hint,
+                vertex.point(),
+                nearest_tolerance,
+                tolerances,
+            )
         });
-        let (wire_index, edge_index, kind, projected) = hinted.or_else(|| {
-            self.search_boundary_parameter(loops_index, vertex.point(), nearest_tolerance)
-        })?;
+        let resolved = hinted.or_else(|| {
+            self.search_boundary_parameter(
+                loops_index,
+                vertex.point(),
+                nearest_tolerance,
+                tolerances,
+            )
+        });
+        if resolved.is_none()
+            && sampled_on_boundary_vertex
+            && let Some(vertices) = self.supported_boundary_vertex(
+                loops_index,
+                vertex.point(),
+                nearest_tolerance,
+                tolerances,
+                another_surface,
+            )
+        {
+            let canonical = vertices[0].point();
+            vertex.set_point(canonical);
+            for old in vertices {
+                self.change_vertex(&old, vertex, emap);
+            }
+            return Some(());
+        }
+        let (wire_index, edge_index, kind, projected) = resolved?;
+        // Nearest-curve search is only discovery. Before coalescing an
+        // *existing* exact endpoint, certify its location against the
+        // intersecting exact surface, independently of the mesh error budget.
+        // Perform this before set_point/change_vertex mutates either store.
+        let wire_edge = &self[loops_index][wire_index][edge_index];
+        let endpoint = match kind {
+            ParameterKind::Front => Some(wire_edge.absolute_front().point()),
+            ParameterKind::Back => Some(wire_edge.absolute_back().point()),
+            ParameterKind::Inner(_) => None,
+        };
+        if endpoint.is_some_and(|point| !on_other_carrier(point, another_surface, tolerances)) {
+            return None;
+        }
         if let Some(projected) = projected {
             vertex.set_point(projected);
         }
-        let mut coalesce_endpoint = |this: &mut Self, old_vertex: Vertex<Point3>| {
-            vertex.set_point(old_vertex.point());
-            this.change_vertex(&old_vertex, vertex, emap);
+        let final_kind = if matches!(kind, ParameterKind::Inner(_)) {
+            let curve = self[loops_index][wire_index][edge_index].curve();
+            // Polyline and exact curve endpoint labels may disagree: the exact
+            // carrier projection resolves classification before topology edits.
+            let (exact_point, parameter, _) = curve_surface_projection(
+                &curve,
+                None,
+                another_surface,
+                None,
+                vertex.point(),
+                tolerances,
+                100,
+            )?;
+            let exact_kind = ParameterKind::try_new(parameter, &curve, tolerances)?;
+            if let ParameterKind::Inner(parameter) = exact_kind {
+                vertex.set_point(exact_point);
+                let edge = self[loops_index][wire_index][edge_index].absolute_clone();
+                let edge_id = edge.id();
+                let (edge0, edge1) = edge.cut_with_parameter(vertex, parameter)?;
+                let new_wire: Wire<_, _> = vec![edge0, edge1].into();
+                self.swap_edge_into_wire(edge_id, &new_wire);
+                return Some(());
+            }
+            exact_kind
+        } else {
+            kind
         };
-        match kind {
-            ParameterKind::Front => {
-                let old_vertex = self[loops_index][wire_index][edge_index]
-                    .absolute_front()
-                    .clone();
-                coalesce_endpoint(self, old_vertex);
-            }
-            ParameterKind::Back => {
-                let old_vertex = self[loops_index][wire_index][edge_index]
-                    .absolute_back()
-                    .clone();
-                coalesce_endpoint(self, old_vertex);
-            }
-            ParameterKind::Inner(_) => {
-                let curve = self[loops_index][wire_index][edge_index].curve();
-                // Polyline and exact curves can disagree about whether a recovered SSI
-                // point is just inside a trim or exactly on its endpoint. Classify the
-                // solved exact parameter before deciding whether topology needs a cut.
-                let (projected, parameter, _) = curve_surface_projection(
-                    &curve,
-                    None,
-                    another_surface,
-                    None,
-                    vertex.point(),
-                    100,
-                )?;
-                match ParameterKind::try_new(parameter, curve.range_tuple())? {
-                    ParameterKind::Front => {
-                        let old_vertex = self[loops_index][wire_index][edge_index]
-                            .absolute_front()
-                            .clone();
-                        coalesce_endpoint(self, old_vertex);
-                    }
-                    ParameterKind::Back => {
-                        let old_vertex = self[loops_index][wire_index][edge_index]
-                            .absolute_back()
-                            .clone();
-                        coalesce_endpoint(self, old_vertex);
-                    }
-                    ParameterKind::Inner(parameter) => {
-                        vertex.set_point(projected);
-                        let edge = self[loops_index][wire_index][edge_index].absolute_clone();
-                        let edge_id = edge.id();
-                        let (edge0, edge1) = edge.cut_with_parameter(vertex, parameter)?;
-                        let new_wire: Wire<_, _> = vec![edge0, edge1].into();
-                        self.swap_edge_into_wire(edge_id, &new_wire);
-                    }
-                }
-            }
-        }
+        let old_vertex = match final_kind {
+            ParameterKind::Front => self[loops_index][wire_index][edge_index]
+                .absolute_front()
+                .clone(),
+            ParameterKind::Back => self[loops_index][wire_index][edge_index]
+                .absolute_back()
+                .clone(),
+            ParameterKind::Inner(_) => return None,
+        };
+        vertex.set_point(old_vertex.point());
+        self.change_vertex(&old_vertex, vertex, emap);
         Some(())
     }
 }
@@ -1020,6 +1394,7 @@ fn curve_surface_projection<C, S>(
     surface: &S,
     surface_hint: Option<(f64, f64)>,
     point: Point3,
+    tolerances: BooleanTolerance,
     trials: usize,
 ) -> Option<(Point3, f64, Point2)>
 where
@@ -1042,24 +1417,22 @@ where
         .or_else(|| surface.search_nearest_parameter(point, surface_hint, 10))?;
     let pt1 = surface.evaluate(u, v);
 
-    // SSI endpoints come from tessellated carrier surfaces, so a seed can be a
-    // few kernel tolerances away from the exact curve/surface intersection even
-    // when the two independent exact projections already agree. Accept that
-    // validation before taking the Newton step below: near tangencies make
-    // `curve.derivative(t).dot(surface.normal(u, v))` singular and an otherwise
-    // solved endpoint can be thrown arbitrarily far away. The 8x envelope is
-    // the same fixed kernel-precision bound used to canonicalize adjacent SSI
-    // endpoints; it deliberately does not grow with the caller's modeling
-    // tolerance.
-    let seed_tolerance =
-        DEFAULT_NUMERICAL_TOLERANCES.boolean_boundary_search_factor * KERNEL_EPSILON;
-    if pt0.near(&pt1)
+    // SSI seeds originate from tessellated carriers. The *seed* must lie
+    // within the operation's boundary residual of both projections, while the
+    // independently projected curve/surface points must themselves agree
+    // within the operation's numerical length (rather than the independently
+    // coarser SSI support-projection envelope). Near tangencies can
+    // make a Newton update singular even when the two exact projections
+    // already agree; accept that verified case before attempting a step.
+    // The Standard modeling-error budget never widens these thresholds.
+    let seed_tolerance = tolerances.boundary_residual();
+    if pt0.distance(pt1) <= tolerances.length
         && point.distance(pt0) <= seed_tolerance
         && point.distance(pt1) <= seed_tolerance
     {
-        // Keep the point exactly on the boundary curve. `pt0.near(pt1)` proves
-        // that it is also on the other surface to kernel precision, while `t`
-        // remains the exact split parameter for the edge below.
+        // Keep the point exactly on the boundary curve. Independent carrier
+        // evaluations agreed to the operation's numerical length, and `t`
+        // remains the exact split parameter of this trim edge.
         return Some((pt0, t, Point2::new(u, v)));
     }
 
@@ -1076,6 +1449,7 @@ where
         surface,
         Some((u, v)),
         pt0 + t0 * l,
+        tolerances,
         trials - 1,
     )
 }
@@ -1084,9 +1458,10 @@ fn unique_nearby_loop_point<C>(
     lhs: &Loops<Point3, C>,
     rhs: &Loops<Point3, C>,
     point: Point3,
-    tolerance: f64,
+    tolerances: BooleanTolerance,
 ) -> Option<Point3> {
     let mut candidate = None;
+    let tolerance = tolerances.cross_face_stitch_residual();
     for nearby in lhs
         .iter()
         .chain(rhs.iter())
@@ -1096,7 +1471,7 @@ fn unique_nearby_loop_point<C>(
     {
         match candidate {
             None => candidate = Some(nearby),
-            Some(existing) if existing.near(&nearby) => {}
+            Some(existing) if existing.distance(nearby) <= tolerances.length => {}
             Some(_) => return None,
         }
     }
@@ -1128,7 +1503,19 @@ struct BranchContext<'a, C, S> {
     face_indices: [usize; 2],
     surfaces: [&'a S; 2],
     nearest_tolerance: f64,
+    tolerances: BooleanTolerance,
     reuse_coincident: bool,
+    // Every SSI endpoint in one pair analysis is a single topological vertex
+    // even when independently recovered branches use different face pairs.
+    endpoint_registry: &'a mut Vec<(Vertex<Point3>, Vertex<Point3>)>,
+}
+
+/// Candidate boundary-search evidence and its independent mesh radius.
+#[derive(Clone, Copy)]
+struct BoundarySearchRequest {
+    hint: Option<(usize, usize)>,
+    sampled_on_boundary_vertex: bool,
+    nearest_tolerance: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -1138,9 +1525,66 @@ struct BoundaryEndpoint<'a, S> {
     geom_vertex: &'a Vertex<Point3>,
     other_surface: &'a S,
     nearest_tolerance: f64,
+    tolerances: BooleanTolerance,
+    other_branch_endpoint: Point3,
+    /// A previous original trim has already pinned this shared SSI endpoint;
+    /// later attachments must preserve that certified exact locus.
+    already_attached: bool,
 }
 
 impl<C> OperandLoopStores<C> {
+    /// Resolve a missed sampled trim against the live exact arrangement and
+    /// independently certify incidence on the opposite exact carrier.
+    /// Candidate selection must include internal SSI edges as well as source trims.
+    fn exact_boundary_contact<S>(
+        &self,
+        face_index: usize,
+        seed: Point3,
+        nearest_tolerance: f64,
+        tolerances: BooleanTolerance,
+        other_surface: &S,
+    ) -> Option<Point3>
+    where
+        C: BoundedCurve<Point = Point3>
+            + Cut<Point = Point3, Vector = Vector3>
+            + SearchParameter<CurveParameter, Point = Point3>
+            + SearchNearestParameter<CurveParameter, Point = Point3>
+            + Clone
+            + Send
+            + Sync,
+        S: ParametricSurface3D
+            + SearchParameter<SurfaceParameter, Point = Point3>
+            + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+    {
+        let (wi, ei, kind, _) =
+            self.geom
+                .search_boundary_parameter(face_index, seed, nearest_tolerance, tolerances)?;
+        let edge = &self.geom[face_index][wi][ei];
+        match kind {
+            ParameterKind::Front | ParameterKind::Back => {
+                let point = if matches!(kind, ParameterKind::Front) {
+                    edge.absolute_front().point()
+                } else {
+                    edge.absolute_back().point()
+                };
+                on_other_carrier(point, other_surface, tolerances).then_some(point)
+            }
+            ParameterKind::Inner(parameter) => {
+                let curve = edge.curve();
+                curve_surface_projection(
+                    &curve,
+                    Some(parameter),
+                    other_surface,
+                    None,
+                    curve.evaluate(parameter),
+                    tolerances,
+                    100,
+                )
+                .map(|(point, _, _)| point)
+            }
+        }
+    }
+
     fn add_boundary_endpoint<S>(
         &mut self,
         endpoint: &BoundaryEndpoint<'_, S>,
@@ -1152,7 +1596,9 @@ impl<C> OperandLoopStores<C> {
             + Cut<Point = Point3, Vector = Vector3>
             + SearchParameter<CurveParameter, Point = Point3>
             + SearchNearestParameter<CurveParameter, Point = Point3>
-            + Clone,
+            + Clone
+            + Send
+            + Sync,
         S: ParametricSurface3D
             + SearchParameter<SurfaceParameter, Point = Point3>
             + SearchNearestParameter<SurfaceParameter, Point = Point3>,
@@ -1163,21 +1609,106 @@ impl<C> OperandLoopStores<C> {
             geom_vertex,
             other_surface,
             nearest_tolerance,
+            tolerances,
+            other_branch_endpoint,
+            already_attached,
         } = *endpoint;
-        let Some((wire_index, edge_index, _)) =
-            self.poly
-                .add_polygon_vertex(face_index, poly_vertex, poly_edge_map)
-        else {
-            return Some(false);
+        let sampled_attachment = self.poly.add_polygon_vertex(
+            face_index,
+            poly_vertex,
+            tolerances.boundary_residual(),
+            tolerances,
+            poly_edge_map,
+        );
+        let Some((wire_index, edge_index, polygon_kind)) = sampled_attachment else {
+            // A sampled SSI endpoint can overrun the exact trim. Use the mesh seed
+            // only to discover a candidate; certify its incidence on the
+            // opposite exact carrier before changing shared topology.
+            let Some(point) = self.exact_boundary_contact(
+                face_index,
+                geom_vertex.point(),
+                nearest_tolerance,
+                tolerances,
+                other_surface,
+            ) else {
+                return Some(false);
+            };
+            // Boundary discovery must not mutate an entire nonzero SSI
+            // segment into one topological point. A nearby exact trim can be
+            // a valid carrier intersection but the *wrong* endpoint for this
+            // branch, especially at a multi-face junction. Leave the original
+            // SSI endpoint alone so subsequent incident branches can join it.
+            if point.distance(other_branch_endpoint) <= tolerances.length {
+                return Some(false);
+            }
+            // Candidate discovery on a tessellated polyline must use its
+            // sampling-error budget: a point already certified on the exact
+            // source trim and opposing carrier need not lie within numerical
+            // length of the approximate chord. Nearby distinct loci remain
+            // ambiguous and fail closed in search_boundary_parameter.
+            let sampled_candidate = self.poly.search_boundary_parameter(
+                face_index,
+                point,
+                nearest_tolerance,
+                tolerances,
+            );
+            // Once an earlier operand has certified the SSI endpoint on its
+            // original trim, a later extended cutter cannot move that shared
+            // vertex onto a distinct cap merely because the two trims are
+            // closer than the (independently coarser) tessellation radius.
+            let motion_budget = if already_attached {
+                tolerances.fragment_residual()
+            } else {
+                nearest_tolerance
+            };
+            if geom_vertex.point().distance(point) > motion_budget || sampled_candidate.is_none() {
+                return Some(false);
+            }
+            geom_vertex.set_point(point);
+            poly_vertex.set_point(point);
+            let (wi, ei, kind) = self.poly.add_polygon_vertex(
+                face_index,
+                poly_vertex,
+                nearest_tolerance,
+                tolerances,
+                poly_edge_map,
+            )?;
+            self.geom.add_geom_vertex(
+                face_index,
+                BoundarySearchRequest {
+                    hint: Some((wi, ei)),
+                    sampled_on_boundary_vertex: matches!(
+                        kind,
+                        ParameterKind::Front | ParameterKind::Back
+                    ),
+                    nearest_tolerance,
+                },
+                geom_vertex,
+                other_surface,
+                tolerances,
+                geom_edge_map,
+            )?;
+            return Some(true);
         };
         self.geom.add_geom_vertex(
             face_index,
-            Some((wire_index, edge_index)),
+            BoundarySearchRequest {
+                hint: Some((wire_index, edge_index)),
+                sampled_on_boundary_vertex: matches!(
+                    polygon_kind,
+                    ParameterKind::Front | ParameterKind::Back
+                ),
+                nearest_tolerance,
+            },
             geom_vertex,
             other_surface,
-            nearest_tolerance,
+            tolerances,
             geom_edge_map,
         )?;
+        // Both stores must share the same canonical endpoint coordinate.
+        // A split of an exact curve is not represented by the polygon vertex
+        // retaining its old mesh-only position.
+        poly_vertex.set_point(geom_vertex.point());
         Some(true)
     }
 
@@ -1188,6 +1719,7 @@ impl<C> OperandLoopStores<C> {
         geom_edge: Edge<Point3, C>,
         status: ShapesOpStatus,
         reuse_coincident: bool,
+        tolerances: BooleanTolerance,
     ) where
         C: ParametricCurve<Point = Point3>
             + BoundedCurve<Point = Point3>
@@ -1195,8 +1727,8 @@ impl<C> OperandLoopStores<C> {
             + Invertible
             + Clone,
     {
-        self.poly[face_index].add_edge(poly_edge, status, reuse_coincident);
-        self.geom[face_index].add_edge(geom_edge, status, reuse_coincident);
+        self.poly[face_index].add_edge(poly_edge, status, reuse_coincident, tolerances);
+        self.geom[face_index].add_edge(geom_edge, status, reuse_coincident, tolerances);
     }
 }
 
@@ -1210,10 +1742,14 @@ where
         + Cut<Point = Point3, Vector = Vector3>
         + SearchParameter<CurveParameter, Point = Point3>
         + SearchNearestParameter<CurveParameter, Point = Point3>
-        + Clone,
+        + Clone
+        + Send
+        + Sync,
     S: ParametricSurface3D
         + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>
+        + Send
+        + Sync,
 {
     let pv0 = Vertex::new(front);
     let pv1 = Vertex::new(back);
@@ -1223,6 +1759,8 @@ where
     let mut pemap1 = HashMap::default();
     let mut gemap0 = HashMap::default();
     let mut gemap1 = HashMap::default();
+    let mut anchored_front = false;
+    let mut anchored_back = false;
     for (operand, face_index, other_surface) in [
         (
             &mut *context.operand0,
@@ -1235,30 +1773,95 @@ where
             context.surfaces[0],
         ),
     ] {
-        operand.add_boundary_endpoint(
+        let attached_front = operand.add_boundary_endpoint(
             &BoundaryEndpoint {
                 face_index,
                 poly_vertex: &pv0,
                 geom_vertex: &gv0,
                 other_surface,
                 nearest_tolerance: context.nearest_tolerance,
+                tolerances: context.tolerances,
+                other_branch_endpoint: back,
+                already_attached: anchored_front,
             },
             &mut pemap0,
             &mut gemap0,
         )?;
-        operand.add_boundary_endpoint(
+        anchored_front |= attached_front;
+        let attached_back = operand.add_boundary_endpoint(
             &BoundaryEndpoint {
                 face_index,
                 poly_vertex: &pv1,
                 geom_vertex: &gv1,
                 other_surface,
                 nearest_tolerance: context.nearest_tolerance,
+                tolerances: context.tolerances,
+                other_branch_endpoint: front,
+                already_attached: anchored_back,
             },
             &mut pemap1,
             &mut gemap1,
         )?;
+        anchored_back |= attached_back;
     }
     Some((pv0, pv1, gv0, gv1))
+}
+
+/// Join independently discovered SSI branches at an already certified
+/// common endpoint. Both the polygonal and exact stores must share vertex
+/// identities, otherwise two curves that geometrically close a contour
+/// remain separate zero-area retraced walks.
+fn share_intersection_endpoint<C, S>(
+    context: &mut BranchContext<'_, C, S>,
+    polygon: &mut Vertex<Point3>,
+    exact: &mut Vertex<Point3>,
+) -> Option<()>
+where
+    C: Clone,
+    S: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let precision = context.tolerances;
+    let new_point = exact.point();
+    let compatible = context
+        .endpoint_registry
+        .iter()
+        .filter(|(_, known)| known.point().distance(new_point) <= precision.length)
+        .filter(|(_, known)| {
+            let point = known.point();
+            on_other_carrier(point, context.surfaces[0], precision)
+                && on_other_carrier(point, context.surfaces[1], precision)
+        })
+        .collect::<Vec<_>>();
+    let matching = match compatible.as_slice() {
+        [] => None,
+        [one] => Some((one.0.clone(), one.1.clone())),
+        _ => return None, // distinct existing vertex identities are ambiguous
+    };
+    let Some((old_poly, old_geom)) = matching else {
+        context
+            .endpoint_registry
+            .push((polygon.clone(), exact.clone()));
+        return Some(());
+    };
+    if old_geom.id() == exact.id() {
+        *polygon = old_poly;
+        return Some(());
+    }
+    // The same SSI edge occurs in both Boolean operands. Reconstruct its
+    // identity once, then reuse the replacement in both stores.
+    let mut exact_replacements = HashMap::default();
+    let mut sampled_replacements = HashMap::default();
+    for operand in [&mut *context.operand0, &mut *context.operand1] {
+        operand
+            .geom
+            .change_vertex(exact, &old_geom, &mut exact_replacements);
+        operand
+            .poly
+            .change_vertex(polygon, &old_poly, &mut sampled_replacements);
+    }
+    *polygon = old_poly;
+    *exact = old_geom;
+    Some(())
 }
 
 fn add_open_intersection_branch<C, S>(
@@ -1272,12 +1875,16 @@ where
         + SearchParameter<CurveParameter, Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>
         + From<IntersectionCurve<PolylineCurve, S, S>>
-        + Invertible,
+        + Invertible
+        + Send
+        + Sync,
     S: ParametricSurface3D
         + Clone
         + Invertible
         + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>
+        + Send
+        + Sync,
 {
     let mut front = polyline.front();
     let mut back = polyline.back();
@@ -1285,7 +1892,7 @@ where
         &context.operand0.geom[context.face_indices[0]],
         &context.operand1.geom[context.face_indices[1]],
         front,
-        CROSS_FACE_STITCH_TOLERANCE,
+        context.tolerances,
     ) {
         front = point;
     }
@@ -1293,12 +1900,12 @@ where
         &context.operand0.geom[context.face_indices[0]],
         &context.operand1.geom[context.face_indices[1]],
         back,
-        CROSS_FACE_STITCH_TOLERANCE,
+        context.tolerances,
     ) {
         back = point;
     }
     // Canonicalization can collapse a numerically tiny SSI fragment to a point.
-    if front.near(&back) {
+    if front.distance(back) <= context.tolerances.length {
         return Some(());
     }
     *polyline.first_mut()? = front;
@@ -1306,7 +1913,9 @@ where
     *intersection_curve.leader_mut().first_mut()? = front;
     *intersection_curve.leader_mut().last_mut()? = back;
 
-    let (pv0, pv1, gv0, gv1) = add_branch_boundary_vertices(context, front, back)?;
+    let (mut pv0, mut pv1, mut gv0, mut gv1) = add_branch_boundary_vertices(context, front, back)?;
+    share_intersection_endpoint(context, &mut pv0, &mut gv0)?;
+    share_intersection_endpoint(context, &mut pv1, &mut gv1)?;
     *intersection_curve.leader_mut().first_mut()? = gv0.point();
     *intersection_curve.leader_mut().last_mut()? = gv1.point();
 
@@ -1318,6 +1927,7 @@ where
         gedge.clone(),
         statuses[0],
         context.reuse_coincident,
+        context.tolerances,
     );
     context.operand1.add_intersection_edge(
         context.face_indices[1],
@@ -1325,6 +1935,7 @@ where
         gedge,
         statuses[1],
         context.reuse_coincident,
+        context.tolerances,
     );
     Some(())
 }
@@ -1332,6 +1943,7 @@ where
 fn loop_stores_are_synchronized<C>(
     geom: &LoopsStore<Point3, C>,
     poly: &LoopsStore<Point3, PolylineCurve>,
+    tolerances: BooleanTolerance,
 ) -> bool {
     geom.len() == poly.len()
         && geom
@@ -1346,11 +1958,16 @@ fn loop_stores_are_synchronized<C>(
                             geom_wire.len() == poly_wire.len()
                                 && geom_wire.iter().zip(poly_wire.iter()).all(
                                     |(geom_edge, poly_edge)| {
-                                        geom_edge.front().point().near(&poly_edge.front().point())
+                                        geom_edge
+                                            .front()
+                                            .point()
+                                            .distance(poly_edge.front().point())
+                                            <= tolerances.length
                                             && geom_edge
                                                 .back()
                                                 .point()
-                                                .near(&poly_edge.back().point())
+                                                .distance(poly_edge.back().point())
+                                                <= tolerances.length
                                     },
                                 )
                         })
@@ -1402,6 +2019,226 @@ fn analyze_coplanar_interfaces(
     })
 }
 
+/// Cache of algebraic surface-support certificates for one shell pair.
+struct FacePairSupports {
+    planes: [Vec<Option<Plane>>; 2],
+    certified_trim_bounds: [Vec<Option<(Point3, Point3)>>; 2],
+    shared_ruled_pairs: HashSet<(usize, usize)>,
+}
+
+/// Build an enclosure only from certified bounds of *every* original edge.
+/// Mutable SSI overlay curves deliberately do not qualify as a source proof.
+fn certified_planar_trim_bounds<C, S>(face: &Face<Point3, C, S>) -> Option<(Point3, Point3)>
+where C: BoundedCurve<Point = Point3> {
+    let mut edges = face.edge_iter();
+    let mut bounds = edges.next()?.curve().certified_spatial_bounds()?;
+    for edge in edges {
+        bounds += edge.curve().certified_spatial_bounds()?;
+    }
+    Some((bounds.min(), bounds.max()))
+}
+
+/// Cache exact planar supports and pairs with algebraically certified
+/// identical rational ruled carriers before the face-pair SSI sweep.
+fn certify_face_pair_supports<C, S>(
+    geom_shell0: &Shell<Point3, C, S>,
+    geom_shell1: &Shell<Point3, C, S>,
+) -> FacePairSupports
+where
+    C: BoundedCurve<Point = Point3>,
+    S: Clone + TryIntoHomogeneousBsplineSurface + TryIntoAnalyticSurfaceKind,
+{
+    // Proof-first common-carrier discovery: identical rational profile control
+    // nets with collinear affine sweep rows describe the same ruled support.
+    // Cached once per input face; sampling never authorizes surface identity.
+    let net0 = geom_shell0
+        .iter()
+        .map(|f| f.surface().try_into_homogeneous_bspline_surface())
+        .collect::<Vec<_>>();
+    let net1 = geom_shell1
+        .iter()
+        .map(|f| f.surface().try_into_homogeneous_bspline_surface())
+        .collect::<Vec<_>>();
+    // Full carrier recognition/control-net certification is done once per
+    // face, not once for every O(F0*F1) candidate pair.
+    let planes0 = geom_shell0
+        .iter()
+        .zip(net0.iter())
+        .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
+        .collect::<Vec<_>>();
+    let planes1 = geom_shell1
+        .iter()
+        .zip(net1.iter())
+        .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
+        .collect::<Vec<_>>();
+    let certified_bounds0 = geom_shell0
+        .iter()
+        .zip(planes0.iter())
+        .map(|(face, plane)| plane.and_then(|_| certified_planar_trim_bounds(face)))
+        .collect();
+    let certified_bounds1 = geom_shell1
+        .iter()
+        .zip(planes1.iter())
+        .map(|(face, plane)| plane.and_then(|_| certified_planar_trim_bounds(face)))
+        .collect();
+    let mut shared_ruled_pairs = HashSet::default();
+    for (i, left) in net0.iter().enumerate() {
+        for (j, right) in net1.iter().enumerate() {
+            if let (Some(a), Some(b)) = (left, right)
+                && (ruled::common_ruled_extrusion_strip(a, b)
+                    || ruled::common_circular_extrusion_cylinder(a, b))
+            {
+                shared_ruled_pairs.insert((i, j));
+            }
+        }
+    }
+    FacePairSupports {
+        planes: [planes0, planes1],
+        certified_trim_bounds: [certified_bounds0, certified_bounds1],
+        shared_ruled_pairs,
+    }
+}
+
+impl FacePairSupports {
+    /// Transverse SSI is undefined on a common certified planar carrier,
+    /// regardless of whether its two trims cover equal or partial regions.
+    fn has_common_planar_support(
+        &self,
+        face0: usize,
+        face1: usize,
+        polygon0: &PolygonMesh,
+        polygon1: &PolygonMesh,
+    ) -> bool {
+        match (self.planes[0][face0], self.planes[1][face1]) {
+            (Some(plane0), Some(plane1)) => {
+                intersection_curve::common_planar_support(plane0, polygon0, plane1, polygon1)
+                    || self.certified_trim_bounds[0][face0]
+                        .zip(self.certified_trim_bounds[1][face1])
+                        .is_some_and(|(bounds0, bounds1)| {
+                            intersection_curve::finite_common_planar_support(
+                                plane0, bounds0, plane1, bounds1,
+                            )
+                        })
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Complete the exact face-pair interface after all SSI branches are split.
+/// Coplanar edge imprint precedes sampled/analytic wire synchronization.
+fn materialize_interface_loops<C>(
+    [mut operand0, mut operand1]: [OperandLoopStores<C>; 2],
+    [poly_shell0, poly_shell1]: [&Shell<Point3, PolylineCurve, Option<PolygonMesh>>; 2],
+    tolerances: BooleanTolerance,
+    coplanar: &CoplanarInterfaceAnalysis,
+    has_shared_ruled: bool,
+) -> Option<InterfaceLoops<C>>
+where
+    C: ParametricCurve3D
+        + BoundedCurve<Point = Point3>
+        + Cut<Point = Point3, Vector = Vector3>
+        + SearchParameter<CurveParameter, Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>
+        + ParameterDivision1D<Point = Point3>
+        + Invertible
+        + Send
+        + Sync,
+{
+    let tol = tolerances.length;
+    // Mesh/mesh interference intentionally ignores coplanar contact. By this
+    // point ordinary SSI has already split the boundary edges at transverse
+    // intersections, so imprint those existing edge segments onto any face of
+    // the opposite operand that contains them. This supplies the missing trim
+    // lines for coplanar overlap without manufacturing approximate SSI curves.
+    if coplanar.partial_overlap || has_shared_ruled {
+        let source0 = operand0.geom.clone();
+        let source1 = operand1.geom.clone();
+        imprint_edges_on_faces(&source1, poly_shell0, &mut operand0.geom, tol)?;
+        imprint_edges_on_faces(&source0, poly_shell1, &mut operand1.geom, tol)?;
+    }
+
+    let sampled0 = (!(coplanar.partial_overlap || has_shared_ruled)
+        && loop_stores_are_synchronized(&operand0.geom, &operand0.poly, tolerances))
+    .then_some(operand0.poly);
+    let sampled1 = (!(coplanar.partial_overlap || has_shared_ruled)
+        && loop_stores_are_synchronized(&operand1.geom, &operand1.poly, tolerances))
+    .then_some(operand1.poly);
+    Some(InterfaceLoops {
+        geom: [operand0.geom, operand1.geom],
+        sampled: [sampled0, sampled1],
+        coplanar_overlap: coplanar.any_overlap,
+    })
+}
+
+/// Initialize exact and tessellated loops for one input shell without
+/// conflating their independently owned topology.
+fn operand_loops_from_shells<C, S>(
+    geom_shell: &Shell<Point3, C, S>,
+    poly_shell: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+) -> OperandLoopStores<C> {
+    OperandLoopStores {
+        geom: geom_shell.face_iter().collect(),
+        poly: poly_shell.face_iter().collect(),
+    }
+}
+
+/// Apply precomputed immutable surface intersections in the source face-pair
+/// order. Only this stage mutates the live exact and sampled arrangements.
+fn add_face_pair_branches<C, S>(
+    context: &mut BranchContext<'_, C, S>,
+    curves: Vec<(PolylineCurve, IntersectionCurve<PolylineCurve, S, S>)>,
+    orientations: [bool; 2],
+) -> Option<()>
+where
+    C: SearchNearestParameter<CurveParameter, Point = Point3>
+        + SearchParameter<CurveParameter, Point = Point3>
+        + Cut<Point = Point3, Vector = Vector3>
+        + From<IntersectionCurve<PolylineCurve, S, S>>
+        + Invertible
+        + Send
+        + Sync,
+    S: ParametricSurface3D
+        + Clone
+        + Invertible
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>
+        + Send
+        + Sync,
+{
+    curves
+        .into_iter()
+        .try_for_each(|(mut polyline, mut intersection_curve)| {
+            let status = orient_intersection_branch(&mut polyline, &mut intersection_curve)?;
+            let [status0, status1] = match orientations {
+                [true, true] => [status, status.not()],
+                [true, false] => [status.not(), status.not()],
+                [false, true] => [status, status],
+                [false, false] => [status.not(), status],
+            };
+            if polyline.front().distance(polyline.back()) <= context.tolerances.length {
+                let poly_wire = create_independent_loop(polyline);
+                context.operand0.poly[context.face_indices[0]]
+                    .add_independent_loop(BoundaryWire::new(poly_wire.clone(), status0));
+                context.operand1.poly[context.face_indices[1]]
+                    .add_independent_loop(BoundaryWire::new(poly_wire, status1));
+                let geom_wire = create_independent_loop(intersection_curve);
+                context.operand0.geom[context.face_indices[0]]
+                    .add_independent_loop(BoundaryWire::new(geom_wire.clone(), status0));
+                context.operand1.geom[context.face_indices[1]]
+                    .add_independent_loop(BoundaryWire::new(geom_wire, status1));
+            } else {
+                add_open_intersection_branch(
+                    context,
+                    polyline,
+                    intersection_curve,
+                    [status0, status1],
+                )?;
+            }
+            Some(())
+        })
+}
+
 pub(super) fn create_loops_stores<C, S>(
     geom_shell0: &Shell<Point3, C, S>,
     poly_shell0: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
@@ -1411,135 +2248,128 @@ pub(super) fn create_loops_stores<C, S>(
     imprint_coplanar: bool,
 ) -> Option<InterfaceLoops<C>>
 where
-    C: SearchNearestParameter<CurveParameter, Point = Point3>
+    C: BoundedCurve<Point = Point3>
+        + SearchNearestParameter<CurveParameter, Point = Point3>
         + SearchParameter<CurveParameter, Point = Point3>
+        + ParameterDivision1D<Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>
         + From<IntersectionCurve<PolylineCurve, S, S>>
-        + Invertible,
+        + Invertible
+        + Send
+        + Sync,
     S: ParametricSurface3D
         + Clone
         + Invertible
+        + TryIntoHomogeneousBsplineSurface
+        + TryIntoAnalyticSurfaceKind
         + SearchParameter<SurfaceParameter, Point = Point3>
-        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>
+        + Send
+        + Sync,
 {
-    let mut operand0 = OperandLoopStores {
-        geom: geom_shell0.face_iter().collect(),
-        poly: poly_shell0.face_iter().collect(),
-    };
-    let mut operand1 = OperandLoopStores {
-        geom: geom_shell1.face_iter().collect(),
-        poly: poly_shell1.face_iter().collect(),
-    };
+    let mut operand0 = operand_loops_from_shells(geom_shell0, poly_shell0);
+    let mut operand1 = operand_loops_from_shells(geom_shell1, poly_shell1);
     let store0_len = operand0.geom.len();
     let store1_len = operand1.geom.len();
     let boolean_tolerance = BooleanTolerance::new(tol);
-    let coplanar_tol = 2.0 * boolean_tolerance.length;
+    let coplanar_tol =
+        DEFAULT_NUMERICAL_TOLERANCES.boolean_coplanar_scale * boolean_tolerance.length;
     let boundary_search_tolerance = boolean_tolerance.mesh_seed;
     let coplanar =
         analyze_coplanar_interfaces(poly_shell0, poly_shell1, coplanar_tol, imprint_coplanar)?;
-    (0..store0_len)
-        .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
-        .try_for_each(|(face_index0, face_index1)| {
-            // Solids that meet on one complete trimmed planar face with
-            // opposite outward normals need no SSI at all. Generic SSI on
-            // their coincident continuation surfaces (e.g. coaxial cylinders)
-            // is degenerate; downstream coplanar classification removes the
-            // shared internal face and topology welding stitches the rim.
-            if coplanar.full_interface_adjacency.is_some() {
-                return Some(());
-            }
-            let ori0 = geom_shell0[face_index0].orientation();
-            let ori1 = geom_shell1[face_index1].orientation();
-            let surface0 = geom_shell0[face_index0].surface();
-            let surface1 = geom_shell1[face_index1].surface();
-            let polygon0 = poly_shell0[face_index0].surface()?;
-            let polygon1 = poly_shell1[face_index1].surface()?;
-            // Exactly coincident trimmed planar faces are already a complete
-            // interface. Running generic SSI on coincident surfaces is both
-            // unnecessary and degenerate; ownership is resolved by the
-            // coplanar face classifier after division.
-            if imprint_coplanar
-                && planar_polygons_same_trimmed_face(&polygon0, &polygon1, coplanar_tol)
-            {
-                return Some(());
-            }
-            let curves = intersection_curve::intersection_curves(
-                surface0.clone(),
-                &polygon0,
-                surface1.clone(),
-                &polygon1,
-                tol,
+    let supports = certify_face_pair_supports(geom_shell0, geom_shell1);
+    let mut endpoint_registry = Vec::<(Vertex<Point3>, Vertex<Point3>)>::new();
+    let has_shared_ruled = !supports.shared_ruled_pairs.is_empty();
+    // Surface/surface intersections read only the immutable input shells.
+    // Evaluate bounded batches in parallel, then attach branches to the live
+    // topology in the original face-pair order. Bounding the batch prevents
+    // O(face_count^2) intermediate intersection curves from accumulating.
+    let total_pairs = store0_len.checked_mul(store1_len)?;
+    let batch_size = rayon::current_num_threads().saturating_mul(2).max(1);
+    for batch_start in (0..total_pairs).step_by(batch_size) {
+        let batch_end = batch_start.saturating_add(batch_size).min(total_pairs);
+        let batch: Option<Vec<_>> = (batch_start..batch_end)
+            .into_par_iter()
+            .map(|index| {
+                let face_index0 = index / store1_len;
+                let face_index1 = index % store1_len;
+                // A complete planar contact needs no transverse SSI curves.
+                if coplanar.full_interface_adjacency.is_some() {
+                    return Some((face_index0, face_index1, Vec::new()));
+                }
+                let surface0 = geom_shell0[face_index0].surface();
+                let surface1 = geom_shell1[face_index1].surface();
+                let polygon0 = poly_shell0[face_index0].surface()?;
+                let polygon1 = poly_shell1[face_index1].surface()?;
+                // A certified common ruled carrier also has no transverse SSI.
+                if supports
+                    .shared_ruled_pairs
+                    .contains(&(face_index0, face_index1))
+                    || supports.has_common_planar_support(
+                        face_index0,
+                        face_index1,
+                        &polygon0,
+                        &polygon1,
+                    )
+                    || planar_polygons_same_trimmed_face(&polygon0, &polygon1, coplanar_tol)
+                {
+                    return Some((face_index0, face_index1, Vec::new()));
+                }
+                let curves = intersection_curve::intersection_curves(
+                    surface0,
+                    &polygon0,
+                    surface1,
+                    &polygon1,
+                    boolean_tolerance,
+                    (
+                        supports.planes[0][face_index0],
+                        supports.planes[1][face_index1],
+                    ),
+                )?;
+                Some((face_index0, face_index1, curves))
+            })
+            .collect();
+        // Rayon indexed collection keeps the source pair order deterministic.
+        // Mutating an operand while another pair is evaluated would be wrong;
+        // no mutation is performed until the entire batch has finished.
+        for (face_index0, face_index1, curves) in batch? {
+            let mut context = BranchContext {
+                operand0: &mut operand0,
+                operand1: &mut operand1,
+                face_indices: [face_index0, face_index1],
+                surfaces: [
+                    &geom_shell0[face_index0].surface(),
+                    &geom_shell1[face_index1].surface(),
+                ],
+                nearest_tolerance: boundary_search_tolerance,
+                tolerances: boolean_tolerance,
+                reuse_coincident: coplanar.partial_overlap,
+                endpoint_registry: &mut endpoint_registry,
+            };
+            add_face_pair_branches(
+                &mut context,
+                curves,
+                [
+                    geom_shell0[face_index0].orientation(),
+                    geom_shell1[face_index1].orientation(),
+                ],
             )?;
-            curves
-                .into_iter()
-                .try_for_each(|(mut polyline, mut intersection_curve)| {
-                    let status =
-                        orient_intersection_branch(&mut polyline, &mut intersection_curve)?;
-                    let (status0, status1) = match (ori0, ori1) {
-                        (true, true) => (status, status.not()),
-                        (true, false) => (status.not(), status.not()),
-                        (false, true) => (status, status),
-                        (false, false) => (status.not(), status),
-                    };
-                    if polyline.front().near(&polyline.back()) {
-                        let poly_wire = create_independent_loop(polyline);
-                        operand0.poly[face_index0]
-                            .add_independent_loop(BoundaryWire::new(poly_wire.clone(), status0));
-                        operand1.poly[face_index1]
-                            .add_independent_loop(BoundaryWire::new(poly_wire, status1));
-                        let geom_wire = create_independent_loop(intersection_curve);
-                        operand0.geom[face_index0]
-                            .add_independent_loop(BoundaryWire::new(geom_wire.clone(), status0));
-                        operand1.geom[face_index1]
-                            .add_independent_loop(BoundaryWire::new(geom_wire, status1));
-                    } else {
-                        let mut context = BranchContext {
-                            operand0: &mut operand0,
-                            operand1: &mut operand1,
-                            face_indices: [face_index0, face_index1],
-                            surfaces: [&surface0, &surface1],
-                            nearest_tolerance: boundary_search_tolerance,
-                            reuse_coincident: coplanar.partial_overlap,
-                        };
-                        add_open_intersection_branch(
-                            &mut context,
-                            polyline,
-                            intersection_curve,
-                            [status0, status1],
-                        )?;
-                    }
-                    Some(())
-                })
-        })?;
-
-    // Mesh/mesh interference intentionally ignores coplanar contact. By this
-    // point ordinary SSI has already split the boundary edges at transverse
-    // intersections, so imprint those existing edge segments onto any face of
-    // the opposite operand that contains them. This supplies the missing trim
-    // lines for coplanar overlap without manufacturing approximate SSI curves.
-    if coplanar.partial_overlap {
-        let source0 = operand0.geom.clone();
-        let source1 = operand1.geom.clone();
-        imprint_edges_on_faces(&source1, poly_shell0, &mut operand0.geom, tol)?;
-        imprint_edges_on_faces(&source0, poly_shell1, &mut operand1.geom, tol)?;
+        }
     }
 
-    let sampled0 = (!coplanar.partial_overlap
-        && loop_stores_are_synchronized(&operand0.geom, &operand0.poly))
-    .then_some(operand0.poly);
-    let sampled1 = (!coplanar.partial_overlap
-        && loop_stores_are_synchronized(&operand1.geom, &operand1.poly))
-    .then_some(operand1.poly);
-    Some(InterfaceLoops {
-        geom: [operand0.geom, operand1.geom],
-        sampled: [sampled0, sampled1],
-        coplanar_overlap: coplanar.any_overlap,
-    })
+    materialize_interface_loops(
+        [operand0, operand1],
+        [poly_shell0, poly_shell1],
+        boolean_tolerance,
+        &coplanar,
+        has_shared_ruled,
+    )
 }
 
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+    use monstertruck_core::tolerance::KERNEL_EPSILON;
 
     #[test]
     fn ssi_carrier_normal_orientation_is_independent_of_polyline_direction() {
@@ -1557,6 +2387,142 @@ mod projection_tests {
             normalized.push(polyline.0);
         }
         assert_eq!(normalized[0], normalized[1]);
+    }
+
+    #[test]
+    fn exact_endpoint_lookup_keeps_internal_edges_not_on_original_trim() {
+        let a0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let a1 = Vertex::new(Point3::new(0.0, 1.0, 0.0));
+        let original = Edge::new_unchecked(&a0, &a1, Line(a0.point(), a1.point()));
+        let b0 = Vertex::new(Point3::new(5.0, 0.0, 0.0));
+        let b1 = Vertex::new(Point3::new(5.0, 1.0, 0.0));
+        let internal = Edge::new_unchecked(&b0, &b1, Line(b0.point(), b1.point()));
+        let store = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![original, internal].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        let tolerances = BooleanTolerance::new(1.0e-8);
+        let (wire, edge, kind, _) = store
+            .search_boundary_parameter(0, b0.point(), 1.0e-5, tolerances)
+            .expect("an internal-only SSI endpoint is still a boundary candidate");
+        assert_eq!((wire, edge), (0, 1));
+        assert!(matches!(kind, ParameterKind::Front));
+        let (wire, edge, kind, _) = store
+            .search_boundary_parameter(0, Point3::new(5.0, 0.5, 0.0), 1.0e-5, tolerances)
+            .expect("an internal-only SSI edge interior must remain searchable");
+        assert_eq!((wire, edge), (0, 1));
+        assert!(matches!(kind, ParameterKind::Inner(_)));
+        // Mesh-seed endpoints can miss exact SSI geometry without being on
+        // an original source trim. They still need a nearest-edge fallback.
+        let (wire, edge, kind, _) = store
+            .search_boundary_parameter(0, Point3::new(5.000_005, 0.5, 0.0), 1.0e-5, tolerances)
+            .expect("internal SSI edge must remain a nearest candidate");
+        assert_eq!((wire, edge), (0, 1));
+        assert!(matches!(kind, ParameterKind::Inner(_)));
+    }
+
+    #[test]
+    fn mesh_fallback_cannot_collapse_an_open_ssi_branch() {
+        let seed = Point3::new(0.2501, 0.0003, 0.0);
+        let on_trim = Point3::new(0.25, 0.0, 0.0);
+        let crossing_surface = Plane::new(
+            on_trim,
+            Point3::new(0.25, 1.0, 0.0),
+            Point3::new(0.25, 0.0, 1.0),
+        );
+        let tolerances = BooleanTolerance::new(1.0e-8);
+        let attach = |other_branch_endpoint| {
+            let g0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+            let g1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+            let p0 = Vertex::new(g0.point());
+            let p1 = Vertex::new(g1.point());
+            let geom_edge = Edge::new_unchecked(&g0, &g1, Line(g0.point(), g1.point()));
+            let poly_edge =
+                Edge::new_unchecked(&p0, &p1, PolylineCurve(vec![p0.point(), p1.point()]));
+            let mut operand = OperandLoopStores {
+                geom: LoopsStore(vec![Loops(vec![BoundaryWire::new(
+                    vec![geom_edge].into(),
+                    ShapesOpStatus::Unknown,
+                )])]),
+                poly: LoopsStore(vec![Loops(vec![BoundaryWire::new(
+                    vec![poly_edge].into(),
+                    ShapesOpStatus::Unknown,
+                )])]),
+            };
+            let poly_vertex = Vertex::new(seed);
+            let geom_vertex = Vertex::new(seed);
+            let mut poly_map = HashMap::default();
+            let mut geom_map = HashMap::default();
+            let result = operand.add_boundary_endpoint(
+                &BoundaryEndpoint {
+                    face_index: 0,
+                    poly_vertex: &poly_vertex,
+                    geom_vertex: &geom_vertex,
+                    other_surface: &crossing_surface,
+                    nearest_tolerance: tolerances.mesh_seed,
+                    tolerances,
+                    other_branch_endpoint,
+                    already_attached: false,
+                },
+                &mut poly_map,
+                &mut geom_map,
+            );
+            (
+                result,
+                poly_vertex.point(),
+                geom_vertex.point(),
+                operand.geom[0][0].len(),
+                operand.poly[0][0].len(),
+            )
+        };
+        // Ordinary exact trim recovery remains allowed when it retains a
+        // nonzero open intersection branch.
+        let ordinary = attach(Point3::new(0.75, 0.0, 0.0));
+        assert_eq!(ordinary.0, Some(true), "normal candidate: {ordinary:?}");
+        assert!(ordinary.2.distance(on_trim) <= tolerances.length);
+        // The same valid projection becomes illegal when it would collapse
+        // the OTHER end of the branch to the very same point. Nothing may be
+        // split or canonicalized before that decision.
+        let collapsed = attach(on_trim);
+        assert_eq!(
+            collapsed.0,
+            Some(false),
+            "collapsing candidate: {collapsed:?}"
+        );
+        assert_eq!(collapsed.1, seed);
+        assert_eq!(collapsed.2, seed);
+        assert_eq!(collapsed.3, 1);
+        assert_eq!(collapsed.4, 1);
+    }
+
+    #[test]
+    fn sampled_exact_loop_synchronization_respects_requested_spatial_length() {
+        let gap = 5.0e-7;
+        let g0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let g1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let exact_edge = Edge::new_unchecked(&g0, &g1, Line(g0.point(), g1.point()));
+        let geom = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![exact_edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        let p0 = Vertex::new(g0.point());
+        let p1 = Vertex::new(Point3::new(1.0, gap, 0.0));
+        let sampled_edge =
+            Edge::new_unchecked(&p0, &p1, PolylineCurve(vec![p0.point(), p1.point()]));
+        let sampled = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![sampled_edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        assert!(!loop_stores_are_synchronized(
+            &geom,
+            &sampled,
+            BooleanTolerance::new(1.0e-8)
+        ));
+        assert!(loop_stores_are_synchronized(
+            &geom,
+            &sampled,
+            BooleanTolerance::new(1.0e-6)
+        ));
     }
 
     #[test]
@@ -1580,7 +2546,11 @@ mod projection_tests {
             vec![poly_edge].into(),
             ShapesOpStatus::Unknown,
         )])]);
-        assert!(loop_stores_are_synchronized(&geom, &poly));
+        assert!(loop_stores_are_synchronized(
+            &geom,
+            &poly,
+            BooleanTolerance::new(KERNEL_EPSILON)
+        ));
 
         let stale_back = Vertex::new(Point3::new(1.0, 0.01, 0.0));
         let stale_edge = Edge::new_unchecked(
@@ -1592,7 +2562,11 @@ mod projection_tests {
             vec![stale_edge].into(),
             ShapesOpStatus::Unknown,
         )])]);
-        assert!(!loop_stores_are_synchronized(&geom, &stale));
+        assert!(!loop_stores_are_synchronized(
+            &geom,
+            &stale,
+            BooleanTolerance::new(KERNEL_EPSILON)
+        ));
     }
 
     #[test]
@@ -1615,6 +2589,70 @@ mod projection_tests {
     }
 
     #[test]
+    fn parameter_endpoint_classification_obeys_spatial_not_parameter_scale() {
+        let tolerance = BooleanTolerance::new(1.0e-7);
+        // The same 1e-8 normalized parameter shift is 1 mm on this line:
+        // old global f64::near misclassified it as the front endpoint.
+        let long = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(100_000.0, 0.0, 0.0));
+        assert_eq!(
+            ParameterKind::try_new(1.0e-8, &long, tolerance),
+            Some(ParameterKind::Inner(1.0e-8))
+        );
+        // Conversely, a 1e-2 parameter shift on a tiny line is only
+        // 1e-8 model units: it should canonicalize to the true endpoint.
+        let short = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0e-6, 0.0, 0.0));
+        assert_eq!(
+            ParameterKind::try_new(0.01, &short, tolerance),
+            Some(ParameterKind::Front)
+        );
+        assert_eq!(
+            ParameterKind::try_new(0.99, &short, tolerance),
+            Some(ParameterKind::Back)
+        );
+        assert_eq!(
+            ParameterKind::try_new(0.5, &long, tolerance),
+            Some(ParameterKind::Inner(0.5))
+        );
+    }
+
+    #[test]
+    fn parameter_endpoint_classification_rejects_ambiguous_or_outside_trim() {
+        let tolerance = BooleanTolerance::new(1.0e-7);
+        let tiny = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0e-9, 0.0, 0.0));
+        assert_eq!(ParameterKind::try_new(0.5, &tiny, tolerance), None);
+        assert_eq!(
+            ParameterKind::try_new(0.0, &tiny, tolerance),
+            Some(ParameterKind::Front)
+        );
+        assert_eq!(
+            ParameterKind::try_new(1.0, &tiny, tolerance),
+            Some(ParameterKind::Back)
+        );
+        for t in [f64::INFINITY, f64::NAN] {
+            assert_eq!(ParameterKind::try_new(t, &tiny, tolerance), None);
+        }
+        // A tiny edge shorter than the tolerance has *both* endpoints
+        // nearby and remains ambiguous. An edge longer than the tolerance
+        // can safely identify the extrapolated root's unique endpoint.
+        assert_eq!(ParameterKind::try_new(-1.0e-8, &tiny, tolerance), None);
+        let short = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0e-6, 0.0, 0.0));
+        assert_eq!(
+            ParameterKind::try_new(-1.0e-8, &short, tolerance),
+            Some(ParameterKind::Front),
+            "numerically extrapolated roots require unique spatial endpoint evidence"
+        );
+        assert_eq!(
+            ParameterKind::try_new(1.0 + 1.0e-8, &short, tolerance),
+            Some(ParameterKind::Back)
+        );
+        let long = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(100_000.0, 0.0, 0.0));
+        assert_eq!(ParameterKind::try_new(-1.0e-8, &long, tolerance), None);
+        assert_eq!(ParameterKind::try_new(1.0 + 1.0e-8, &long, tolerance), None);
+        let invalid = Line(Point3::new(f64::NAN, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+        assert_eq!(ParameterKind::try_new(0.5, &invalid, tolerance), None);
+    }
+
+    #[test]
     fn loop_boundary_search_accepts_unique_bounded_nearest_projection() {
         let v0 = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let v1 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
@@ -1627,9 +2665,42 @@ mod projection_tests {
         let point = Point3::new(0.5, 1.125 * KERNEL_EPSILON, 0.0);
 
         let (_, _, kind, projected) = store
-            .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
+            .search_boundary_parameter(
+                0,
+                point,
+                8.0 * KERNEL_EPSILON,
+                BooleanTolerance::new(KERNEL_EPSILON),
+            )
             .expect("unique bounded nearest projection should recover the boundary parameter");
 
+        assert!(matches!(kind, ParameterKind::Inner(_)));
+        assert_eq!(projected, Some(Point3::new(0.5, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn boundary_exact_inverse_requires_requested_spatial_precision() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let z = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new_unchecked(&a, &z, Line(a.point(), z.point()));
+        let store = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        let query = Point3::new(0.5, 5.0e-7, 0.0);
+        let precision = BooleanTolerance::new(1.0e-8);
+        // The line inverse itself uses the generic kernel epsilon and
+        // regards this point as on the line. The Boolean MUST reject that
+        // classification at the tighter operation-specific tolerance.
+        assert!(
+            store
+                .search_boundary_parameter(0, query, precision.boundary_residual(), precision)
+                .is_none()
+        );
+        // A separate mesh candidate search is allowed to find the line:
+        // candidate proximity is not an exact-incidence certificate.
+        let (_, _, kind, projected) = store
+            .search_boundary_parameter(0, query, 1.0e-3, precision)
+            .expect("coarse candidate search should return the exact projection");
         assert!(matches!(kind, ParameterKind::Inner(_)));
         assert_eq!(projected, Some(Point3::new(0.5, 0.0, 0.0)));
     }
@@ -1648,12 +2719,101 @@ mod projection_tests {
         let mut emap = HashMap::default();
 
         let (_, _, kind) = store
-            .add_polygon_vertex(0, &vertex, &mut emap)
+            .add_polygon_vertex(
+                0,
+                &vertex,
+                BooleanTolerance::new(KERNEL_EPSILON).boundary_residual(),
+                BooleanTolerance::new(KERNEL_EPSILON),
+                &mut emap,
+            )
             .expect("recovered boundary projection should split the exact edge");
 
         assert!(matches!(kind, ParameterKind::Inner(_)));
         assert_eq!(vertex.point(), Point3::new(0.5, 0.0, 0.0));
         assert_eq!(store[0][0].len(), 2);
+    }
+
+    #[test]
+    fn coarse_endpoint_candidates_must_belong_to_other_exact_carrier() {
+        // The input SSI seed lies on z=0 but the unique nearby boundary edge
+        // is actually on z=5e-7. Global Point::near and mesh search would
+        // have incorrectly welded that boundary into the plane.
+        let gap = 5.0e-7;
+        for hint in [None, Some((0, 0))] {
+            let old_front = Vertex::new(Point3::new(0.0, 0.0, gap));
+            let old_back = Vertex::new(Point3::new(1.0, 0.0, gap));
+            let edge = Edge::new_unchecked(
+                &old_front,
+                &old_back,
+                Line(old_front.point(), old_back.point()),
+            );
+            let mut store = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+                vec![edge].into(),
+                ShapesOpStatus::Unknown,
+            )])]);
+            let seed = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+            let mut edge_map = HashMap::default();
+            assert!(
+                store
+                    .add_geom_vertex(
+                        0,
+                        BoundarySearchRequest {
+                            hint,
+                            sampled_on_boundary_vertex: false,
+                            nearest_tolerance: 1.0e-3,
+                        },
+                        &seed,
+                        &Plane::xy(),
+                        BooleanTolerance::new(1.0e-8),
+                        &mut edge_map,
+                    )
+                    .is_none(),
+                "neither a hinted nor a global coarse candidate proves opposite-carrier incidence"
+            );
+            assert_eq!(store[0][0].len(), 1);
+            assert_eq!(store[0][0][0].absolute_front().id(), old_front.id());
+            assert_eq!(old_front.point(), Point3::new(0.0, 0.0, gap));
+            assert_eq!(seed.point(), Point3::new(0.0, 0.0, 0.0));
+            assert!(edge_map.is_empty());
+        }
+    }
+
+    #[test]
+    fn coarse_endpoint_search_may_snap_to_proven_exact_carrier() {
+        // A mesh seed may be off the carrier. Its exact boundary candidate,
+        // however, lies on the other surface and is safe to canonicalize.
+        let old_front = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let old_back = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new_unchecked(
+            &old_front,
+            &old_back,
+            Line(old_front.point(), old_back.point()),
+        );
+        let mut store = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![edge].into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        let seed = Vertex::new(Point3::new(0.0, 0.0, 5.0e-7));
+        let mut edge_map = HashMap::default();
+        assert!(
+            store
+                .add_geom_vertex(
+                    0,
+                    BoundarySearchRequest {
+                        hint: Some((0, 0)),
+                        sampled_on_boundary_vertex: false,
+                        nearest_tolerance: 1.0e-3,
+                    },
+                    &seed,
+                    &Plane::xy(),
+                    BooleanTolerance::new(1.0e-8),
+                    &mut edge_map,
+                )
+                .is_some()
+        );
+        assert_eq!(seed.point(), old_front.point());
+        assert_eq!(store[0][0][0].absolute_front().id(), seed.id());
+        assert_eq!(store[0][0].len(), 1);
     }
 
     #[test]
@@ -1671,10 +2831,14 @@ mod projection_tests {
 
         let inserted = store.add_geom_vertex(
             0,
-            None,
+            BoundarySearchRequest {
+                hint: None,
+                sampled_on_boundary_vertex: false,
+                nearest_tolerance: 8.0 * KERNEL_EPSILON,
+            },
             &recovered,
             &Plane::xy(),
-            8.0 * KERNEL_EPSILON,
+            BooleanTolerance::new(KERNEL_EPSILON),
             &mut emap,
         );
         assert!(
@@ -1701,10 +2865,20 @@ mod projection_tests {
 
         assert!(
             store
-                .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
+                .search_boundary_parameter(
+                    0,
+                    point,
+                    8.0 * KERNEL_EPSILON,
+                    BooleanTolerance::new(KERNEL_EPSILON)
+                )
                 .is_none()
         );
-        let recovered = store.search_boundary_parameter(0, point, 1.0e-3);
+        let recovered = store.search_boundary_parameter(
+            0,
+            point,
+            1.0e-3,
+            BooleanTolerance::new(KERNEL_EPSILON),
+        );
         assert!(
             recovered.is_some(),
             "mesh-error budget may discover a unique exact boundary candidate"
@@ -1729,7 +2903,12 @@ mod projection_tests {
         let store = LoopsStore(vec![loops]);
         let point = Point3::new(0.0, 3.0e-4, 0.0);
 
-        let recovered = store.search_boundary_parameter(0, point, 1.0e-3);
+        let recovered = store.search_boundary_parameter(
+            0,
+            point,
+            1.0e-3,
+            BooleanTolerance::new(KERNEL_EPSILON),
+        );
         assert!(
             recovered.is_some(),
             "coincident endpoint copies are one geometric boundary locus"
@@ -1763,7 +2942,12 @@ mod projection_tests {
 
         assert!(
             store
-                .search_boundary_parameter(0, Point3::new(0.0, 0.0, 0.0), 1.0e-3)
+                .search_boundary_parameter(
+                    0,
+                    Point3::new(0.0, 0.0, 0.0),
+                    1.0e-3,
+                    BooleanTolerance::new(KERNEL_EPSILON)
+                )
                 .is_none()
         );
     }
@@ -1784,7 +2968,11 @@ mod projection_tests {
         let split = Vertex::new(Point3::new(0.5, 0.0, 0.0));
         let mut emap = HashMap::default();
 
-        assert!(store.add_imprint_vertex(0, &split, &mut emap).is_some());
+        assert!(
+            store
+                .add_imprint_vertex(0, &split, BooleanTolerance::new(KERNEL_EPSILON), &mut emap)
+                .is_some()
+        );
         assert_eq!(store[0][0].len(), 2);
         assert_eq!(store[0][1].len(), 2);
         assert!(
@@ -1810,7 +2998,11 @@ mod projection_tests {
         let split = Vertex::new(Point3::new(1.5, 0.0, 0.0));
         let mut emap = HashMap::default();
 
-        assert!(store.add_imprint_vertex(0, &split, &mut emap).is_some());
+        assert!(
+            store
+                .add_imprint_vertex(0, &split, BooleanTolerance::new(KERNEL_EPSILON), &mut emap)
+                .is_some()
+        );
         assert_eq!(store[0][0].len(), 2);
         assert_eq!(store[0][1].len(), 2);
         assert!(
@@ -1818,6 +3010,38 @@ mod projection_tests {
                 .iter()
                 .all(|wire| wire.vertex_iter().any(|v| v == split))
         );
+    }
+
+    #[test]
+    fn imprint_does_not_split_nearby_distinct_edges_with_sub_epsilon_tolerance() {
+        let gap = 5.0e-7;
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let c = Vertex::new(Point3::new(0.0, 0.0, gap));
+        let d = Vertex::new(Point3::new(1.0, 0.0, gap));
+        let edge0 = Edge::new_unchecked(&a, &b, Line(a.point(), b.point()));
+        let edge1 = Edge::new_unchecked(&c, &d, Line(c.point(), d.point()));
+        let loops = Loops(vec![
+            BoundaryWire::new(vec![edge0].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![edge1].into(), ShapesOpStatus::Unknown),
+        ]);
+        let mut store = LoopsStore(vec![loops]);
+        let split = Vertex::new(Point3::new(0.5, 0.0, 0.0));
+        let mut edge_map = HashMap::default();
+
+        assert!(
+            store
+                .add_imprint_vertex(0, &split, BooleanTolerance::new(1.0e-8), &mut edge_map)
+                .is_some()
+        );
+        assert_eq!(store[0][0].len(), 2);
+        assert_eq!(
+            store[0][1].len(),
+            1,
+            "the parallel edge 5e-7 away must not be split or welded"
+        );
+        assert_eq!(store[0][1][0].absolute_front().id(), c.id());
+        assert_eq!(store[0][1][0].absolute_back().id(), d.id());
     }
 
     #[test]
@@ -1836,7 +3060,11 @@ mod projection_tests {
         let split = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let mut emap = HashMap::default();
 
-        assert!(store.add_imprint_vertex(0, &split, &mut emap).is_none());
+        assert!(
+            store
+                .add_imprint_vertex(0, &split, BooleanTolerance::new(KERNEL_EPSILON), &mut emap)
+                .is_none()
+        );
         assert_eq!(store[0][0].len(), 1);
         assert_eq!(store[0][1].len(), 1);
     }
@@ -1855,7 +3083,12 @@ mod projection_tests {
 
         assert!(
             store
-                .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
+                .search_boundary_parameter(
+                    0,
+                    point,
+                    8.0 * KERNEL_EPSILON,
+                    BooleanTolerance::new(KERNEL_EPSILON)
+                )
                 .is_some()
         );
     }
@@ -1875,7 +3108,12 @@ mod projection_tests {
         let point = Point3::new(1.0, 1.125 * KERNEL_EPSILON, 0.0);
 
         let (_, _, kind, projected) = store
-            .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
+            .search_boundary_parameter(
+                0,
+                point,
+                8.0 * KERNEL_EPSILON,
+                BooleanTolerance::new(KERNEL_EPSILON),
+            )
             .expect("incident edges sharing one vertex are one boundary locus");
 
         assert!(matches!(kind, ParameterKind::Front | ParameterKind::Back));
@@ -1899,8 +3137,150 @@ mod projection_tests {
 
         assert!(
             store
-                .search_boundary_parameter(0, point, 8.0 * KERNEL_EPSILON)
+                .search_boundary_parameter(
+                    0,
+                    point,
+                    8.0 * KERNEL_EPSILON,
+                    BooleanTolerance::new(KERNEL_EPSILON)
+                )
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn nearby_distinct_boundary_edges_cannot_pass_global_coincidence_epsilon() {
+        let gap = 5.0e-7;
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let c = Vertex::new(Point3::new(0.0, 0.0, gap));
+        let d = Vertex::new(Point3::new(1.0, 0.0, gap));
+        let edge0 = Edge::new_unchecked(&a, &b, Line(a.point(), b.point()));
+        let edge1 = Edge::new_unchecked(&c, &d, Line(c.point(), d.point()));
+        let store = LoopsStore(vec![Loops(vec![
+            BoundaryWire::new(vec![edge0].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![edge1].into(), ShapesOpStatus::Unknown),
+        ])]);
+        let query = Point3::new(0.5, 0.0, gap / 2.0);
+        let tolerances = BooleanTolerance::new(1.0e-8);
+        // Both are plausible nearest-search candidates. Neither is exact,
+        // and they do not constitute one topological locus at 1e-8.
+        assert!(
+            store
+                .search_boundary_parameter(0, query, 1.0e-3, tolerances)
+                .is_none(),
+            "two globally-near but operation-distinct trim edges are ambiguous"
+        );
+    }
+
+    #[test]
+    fn sampled_endpoint_selects_unique_exact_vertex_on_opposite_surface() {
+        let near = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let far = Vertex::new(Point3::new(1.0, 0.0003, 0.0));
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(2.0, 0.0003, 0.0));
+        let edge0 = Edge::new_unchecked(&a, &near, Line(a.point(), near.point()));
+        let edge1 = Edge::new_unchecked(&far, &b, Line(far.point(), b.point()));
+        let loops = Loops(vec![
+            BoundaryWire::new(vec![edge0].into(), ShapesOpStatus::Unknown),
+            BoundaryWire::new(vec![edge1].into(), ShapesOpStatus::Unknown),
+        ]);
+        let store = LoopsStore(vec![loops]);
+        let selected = store
+            .supported_boundary_vertex(
+                0,
+                Point3::new(1.0, 0.00002, 0.0),
+                0.001,
+                BooleanTolerance::new(KERNEL_EPSILON),
+                &Plane::xy(),
+            )
+            .expect("one supported exact vertex is decisively nearer");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id(), near.id());
+    }
+
+    #[test]
+    fn sampled_endpoint_rejects_ambiguous_or_unsupported_exact_vertices() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(0.0, 0.000012, 0.0));
+        let far0 = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let far1 = Vertex::new(Point3::new(1.0, 0.000012, 0.0));
+        let loops = Loops(vec![
+            BoundaryWire::new(
+                vec![Edge::new_unchecked(
+                    &a,
+                    &far0,
+                    Line(a.point(), far0.point()),
+                )]
+                .into(),
+                ShapesOpStatus::Unknown,
+            ),
+            BoundaryWire::new(
+                vec![Edge::new_unchecked(
+                    &b,
+                    &far1,
+                    Line(b.point(), far1.point()),
+                )]
+                .into(),
+                ShapesOpStatus::Unknown,
+            ),
+        ]);
+        let store = LoopsStore(vec![loops]);
+        assert!(
+            store
+                .supported_boundary_vertex(
+                    0,
+                    Point3::new(0.0, 0.000006, 0.0),
+                    0.001,
+                    BooleanTolerance::new(KERNEL_EPSILON),
+                    &Plane::xy()
+                )
+                .is_none(),
+            "two similarly close distinct vertices are ambiguous"
+        );
+
+        let lifted = LoopsStore(vec![Loops(vec![BoundaryWire::new(
+            vec![Edge::new_unchecked(
+                &Vertex::new(Point3::new(0.0, 0.0, 0.02)),
+                &Vertex::new(Point3::new(1.0, 0.0, 0.02)),
+                Line(Point3::new(0.0, 0.0, 0.02), Point3::new(1.0, 0.0, 0.02)),
+            )]
+            .into(),
+            ShapesOpStatus::Unknown,
+        )])]);
+        assert!(
+            lifted
+                .supported_boundary_vertex(
+                    0,
+                    Point3::new(0.0, 0.0, 0.02),
+                    0.001,
+                    BooleanTolerance::new(KERNEL_EPSILON),
+                    &Plane::xy()
+                )
+                .is_none(),
+            "vertex off opposite carrier cannot be reused"
+        );
+    }
+
+    #[test]
+    fn cross_face_stitch_respects_sub_epsilon_numerical_length() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let edge = Edge::new_unchecked(&a, &b, Line(a.point(), b.point()));
+        let lhs = Loops(vec![BoundaryWire::new(
+            vec![edge].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        let rhs = Loops(Vec::new());
+        let near = Point3::new(0.0, 0.0, 5.0e-7);
+        assert_eq!(
+            unique_nearby_loop_point(&lhs, &rhs, near, BooleanTolerance::new(1.0e-8)),
+            None,
+            "a tight Boolean may not canonicalize different endpoints"
+        );
+        assert_eq!(
+            unique_nearby_loop_point(&lhs, &rhs, near, BooleanTolerance::new(1.0e-6)),
+            Some(a.point()),
+            "a larger numerical budget admits the same candidate"
         );
     }
 
@@ -1917,7 +3297,12 @@ mod projection_tests {
 
         let kernel_near = Point3::new(0.0, 0.0, 4.0 * KERNEL_EPSILON);
         assert_eq!(
-            unique_nearby_loop_point(&lhs, &rhs, kernel_near, CROSS_FACE_STITCH_TOLERANCE),
+            unique_nearby_loop_point(
+                &lhs,
+                &rhs,
+                kernel_near,
+                BooleanTolerance::new(KERNEL_EPSILON)
+            ),
             Some(a.point())
         );
 
@@ -1929,7 +3314,7 @@ mod projection_tests {
                 &lhs,
                 &rhs,
                 model_scale_distinct,
-                CROSS_FACE_STITCH_TOLERANCE
+                BooleanTolerance::new(KERNEL_EPSILON)
             )
             .is_none()
         );
@@ -1995,7 +3380,12 @@ mod projection_tests {
         let mut loops = Loops(vec![upper, lower]);
         let incoming = line(&b, &c);
 
-        let _ = loops.add_edge(incoming, ShapesOpStatus::And, false);
+        let _ = loops.add_edge(
+            incoming,
+            ShapesOpStatus::And,
+            false,
+            BooleanTolerance::new(KERNEL_EPSILON),
+        );
 
         // The operation must split the lower sibling into the two triangles
         // A-B-C and B-F-C without merging the upper A-C-D-E region.
@@ -2027,6 +3417,142 @@ mod projection_tests {
     }
 
     #[test]
+    fn imprint_reuses_wiggled_same_edge_within_explicit_boolean_tolerance() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let c = Vertex::new(Point3::new(1.0, 1.0, 0.0));
+        let d = Vertex::new(Point3::new(0.0, 1.0, 0.0));
+        let smooth = Edge::new_unchecked(
+            &a,
+            &b,
+            PolylineCurve(vec![
+                a.point(),
+                Point3::new(0.25, 0.0, 0.0),
+                Point3::new(0.5, 0.0, 0.0),
+                Point3::new(0.75, 0.0, 0.0),
+                b.point(),
+            ]),
+        );
+        let line = |front: &Vertex<Point3>, back: &Vertex<Point3>| {
+            Edge::new_unchecked(
+                front,
+                back,
+                PolylineCurve(vec![front.point(), back.point()]),
+            )
+        };
+        let mut loops = Loops(vec![BoundaryWire::new(
+            vec![smooth.clone(), line(&b, &c), line(&c, &d), line(&d, &a)].into(),
+            ShapesOpStatus::Or,
+        )]);
+        let a2 = Vertex::new(Point3::new(2.0e-7, 1.0e-7, 0.0));
+        let b2 = Vertex::new(Point3::new(1.0 + 3.0e-7, 2.0e-7, 0.0));
+        let incoming = Edge::new_unchecked(
+            &a2,
+            &b2,
+            PolylineCurve(vec![
+                a2.point(),
+                Point3::new(0.25, -4.0e-7, 0.0),
+                Point3::new(0.5, 2.0e-6, 0.0),
+                Point3::new(0.75, -5.0e-7, 0.0),
+                b2.point(),
+            ]),
+        );
+        assert!(
+            loops.reuse_imprinted_coincident_edge(&incoming, 1.0e-5),
+            "a tolerance-supported coincident source edge must be reused"
+        );
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].len(), 4);
+        assert!(
+            loops[0].iter().any(|edge| edge.id() == incoming.id()),
+            "the existing target uses must share the canonical incoming EdgeId"
+        );
+        assert!(
+            !Loops(vec![BoundaryWire::new(
+                vec![smooth, line(&b, &c), line(&c, &d), line(&d, &a)].into(),
+                ShapesOpStatus::Or,
+            )])
+            .reuse_imprinted_coincident_edge(&incoming, 1.0e-6),
+            "the same noise is distinguishable under a tighter Boolean tolerance"
+        );
+    }
+
+    #[test]
+    fn imprint_coincidence_does_not_require_matching_curve_parameters() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let existing = Edge::new_unchecked(
+            &a,
+            &b,
+            PolylineCurve(vec![
+                a.point(),
+                Point3::new(0.25, 0.0, 0.0),
+                Point3::new(0.5, 0.0, 0.0),
+                Point3::new(0.75, 0.0, 0.0),
+                b.point(),
+            ]),
+        );
+        let incoming = Edge::new_unchecked(
+            &a,
+            &b,
+            PolylineCurve(vec![
+                a.point(),
+                Point3::new(0.02, 0.0, 0.0),
+                Point3::new(0.11, 0.0, 0.0),
+                Point3::new(0.42, 0.0, 0.0),
+                Point3::new(0.93, 0.0, 0.0),
+                b.point(),
+            ]),
+        );
+        let mut loops = Loops(vec![BoundaryWire::new(
+            vec![existing].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        assert!(
+            loops.reuse_imprinted_coincident_edge(&incoming, 1.0e-6),
+            "spatially identical curves with unrelated knot parameters must share an imprint edge"
+        );
+        assert_eq!(loops[0][0].id(), incoming.id());
+    }
+
+    #[test]
+    fn imprint_keeps_real_thin_lenses_and_matching_endpoints_with_distinct_paths() {
+        let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
+        let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
+        let start = Edge::new_unchecked(&a, &b, PolylineCurve(vec![a.point(), b.point()]));
+        let candidate = |offsets: &[f64]| {
+            Edge::new_unchecked(
+                &a,
+                &b,
+                PolylineCurve(
+                    offsets
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &y)| {
+                            Point3::new(index as f64 / (offsets.len() - 1) as f64, y, 0.0)
+                        })
+                        .collect(),
+                ),
+            )
+        };
+        let mut existing = Loops(vec![BoundaryWire::new(
+            vec![start].into(),
+            ShapesOpStatus::Unknown,
+        )]);
+        assert!(
+            !existing.reuse_imprinted_coincident_edge(&candidate(&[0.0, 5.0e-5, 0.0]), 1.0e-5,),
+            "a nonzero thin lens beyond requested tolerance cannot collapse"
+        );
+        assert!(
+            !existing.reuse_imprinted_coincident_edge(
+                &candidate(&[0.0, 4.0e-5, 0.0, -4.0e-5, 0.0]),
+                1.0e-5,
+            ),
+            "matching endpoints and midpoint must not hide a distinct path"
+        );
+    }
+
+    #[test]
     fn partitioned_coincident_path_is_already_imprinted() {
         let a = Vertex::new(Point3::new(0.0, 0.0, 0.0));
         let b = Vertex::new(Point3::new(1.0, 0.0, 0.0));
@@ -2049,7 +3575,10 @@ mod projection_tests {
         let loops = Loops(vec![wire]);
         let incoming = Edge::new_unchecked(&a, &d, Line(a.point(), d.point()));
 
-        assert!(loops.has_partitioned_coincident_path(&incoming));
+        assert!(loops.has_partitioned_coincident_path(
+            &incoming,
+            BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length),
+        ));
     }
 
     #[test]
@@ -2071,7 +3600,47 @@ mod projection_tests {
         let loops = Loops(vec![wire]);
         let incoming = Edge::new_unchecked(&a, &d, Line(a.point(), d.point()));
 
-        assert!(!loops.has_partitioned_coincident_path(&incoming));
+        assert!(!loops.has_partitioned_coincident_path(
+            &incoming,
+            BooleanTolerance::new(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length),
+        ));
+    }
+
+    #[test]
+    fn tangent_boundary_projection_rejects_distinct_sub_epsilon_supports() {
+        // This line and plane are parallel and genuinely 5e-7 apart.
+        // Their projections coincide only if the caller explicitly permits
+        // that much exact support error. A singular tangent update cannot
+        // serve as an alternative proof of incidence.
+        let z = 5.0e-7;
+        let line = Line(Point3::new(0.0, 0.0, z), Point3::new(1.0, 0.0, z));
+        let seed = Point3::new(0.5, 0.0, z);
+        assert!(
+            curve_surface_projection(
+                &line,
+                None,
+                &Plane::xy(),
+                None,
+                seed,
+                BooleanTolerance::new(1.0e-8),
+                100,
+            )
+            .is_none(),
+            "the exact supports are distinct at 1e-8 numerical length"
+        );
+        assert!(
+            curve_surface_projection(
+                &line,
+                None,
+                &Plane::xy(),
+                None,
+                seed,
+                BooleanTolerance::new(1.0e-6),
+                100,
+            )
+            .is_some(),
+            "the same projected pair may pass a deliberately wider budget"
+        );
     }
 
     #[test]
@@ -2080,8 +3649,16 @@ mod projection_tests {
         let sphere = Sphere::new(Point3::origin(), 1.0);
         let seed = Point3::new(1.0 + 1.5 * KERNEL_EPSILON, 0.0, 0.0);
 
-        let (point, parameter, _) = curve_surface_projection(&line, None, &sphere, None, seed, 100)
-            .expect("agreeing exact projections should resolve a tangent SSI seed");
+        let (point, parameter, _) = curve_surface_projection(
+            &line,
+            None,
+            &sphere,
+            None,
+            seed,
+            BooleanTolerance::new(KERNEL_EPSILON),
+            100,
+        )
+        .expect("agreeing exact projections should resolve a tangent SSI seed");
 
         assert!(point.near(&Point3::new(1.0, 0.0, 0.0)));
         assert!((parameter - 0.5).abs() <= KERNEL_EPSILON);

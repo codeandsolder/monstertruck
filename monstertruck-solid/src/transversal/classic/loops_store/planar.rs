@@ -2,11 +2,10 @@
 
 use super::{
     BooleanTolerance, BoundedCurve, CurveParameter, Cut, Edge, EuclideanSpace, HashMap, InnerSpace,
-    Invertible, KERNEL_EPSILON, LoopsStore, MetricSpace, Origin, ParametricCurve3D, Point2, Point3,
-    PolygonMesh, PolylineCurve, SearchNearestParameter, SearchParameter, ShapesOpStatus, Shell,
-    StandardVertex, Vector2, Vector3, WithPointCloud,
+    Invertible, LoopsStore, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point2,
+    Point3, PolygonMesh, PolylineCurve, SearchNearestParameter, SearchParameter, ShapesOpStatus,
+    Shell, StandardVertex, Vector2, Vector3, WithPointCloud,
 };
-use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vector3)> {
     let tolerance = BooleanTolerance::new(tol);
@@ -536,8 +535,11 @@ where
         + Cut<Point = Point3, Vector = Vector3>
         + SearchParameter<CurveParameter, Point = Point3>
         + SearchNearestParameter<CurveParameter, Point = Point3>
+        + ParameterDivision1D<Point = Point3>
         + Invertible
-        + Clone,
+        + Clone
+        + Send
+        + Sync,
 {
     let mut unique = Vec::<Edge<Point3, C>>::new();
     source
@@ -550,10 +552,11 @@ where
             }
         });
 
-    let proximity = 2.0 * BooleanTolerance::new(tol).length;
-    for face_index in 0..target.len() {
-        let polygon = target_poly_shell[face_index].surface()?;
-        for edge in &unique {
+    // The same source edge is tested against many target faces. Evaluate its
+    // expensive exact SSI midpoint once, not once for every candidate face.
+    let candidates = unique
+        .into_iter()
+        .map(|edge| {
             let curve = edge.oriented_curve();
             let (t0, t1) = curve.range_tuple();
             let samples = [
@@ -561,36 +564,58 @@ where
                 curve.evaluate(f64::midpoint(t0, t1)),
                 edge.back().point(),
             ];
-            if !polygon.neighborhood_include(&samples, proximity) {
+            (edge, samples)
+        })
+        .collect::<Vec<_>>();
+    let proximity = 2.0 * BooleanTolerance::new(tol).length;
+    for face_index in 0..target.len() {
+        let polygon = target_poly_shell[face_index].surface()?;
+        for (edge, samples) in &candidates {
+            if !polygon.neighborhood_include(samples, proximity) {
                 continue;
             }
             if target[face_index]
-                .search_parameter(edge.front().point())
+                .search_parameter(edge.front().point(), BooleanTolerance::new(tol))
                 .is_none()
                 || target[face_index]
-                    .search_parameter(edge.back().point())
+                    .search_parameter(edge.back().point(), BooleanTolerance::new(tol))
                     .is_none()
             {
                 continue;
             }
 
-            if target[face_index].reuse_coincident_edge(edge) {
+            if target[face_index]
+                .reuse_imprinted_coincident_edge(edge, BooleanTolerance::new(tol).length)
+            {
                 continue;
             }
             let mut emap = HashMap::default();
-            target.add_imprint_vertex(face_index, edge.front(), &mut emap)?;
-            target.add_imprint_vertex(face_index, edge.back(), &mut emap)?;
-            if target[face_index].has_partitioned_coincident_path(edge) {
+            target.add_imprint_vertex(
+                face_index,
+                edge.front(),
+                BooleanTolerance::new(tol),
+                &mut emap,
+            )?;
+            target.add_imprint_vertex(
+                face_index,
+                edge.back(),
+                BooleanTolerance::new(tol),
+                &mut emap,
+            )?;
+            if target[face_index].has_partitioned_coincident_path(edge, BooleanTolerance::new(tol))
+            {
                 continue;
             }
-            target[face_index].add_edge(edge.clone(), ShapesOpStatus::And, true);
+            target[face_index].add_edge(
+                edge.clone(),
+                ShapesOpStatus::And,
+                true,
+                BooleanTolerance::new(tol),
+            );
         }
     }
     Some(())
 }
-
-pub(super) const CROSS_FACE_STITCH_TOLERANCE: f64 =
-    DEFAULT_NUMERICAL_TOLERANCES.cross_face_stitch_factor * KERNEL_EPSILON;
 
 #[cfg(test)]
 mod planar_region_identity_tests {
@@ -612,6 +637,31 @@ mod planar_region_identity_tests {
             Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
         )
         .expect("fixture mesh is valid")
+    }
+
+    #[test]
+    fn parallel_faces_inside_global_epsilon_are_distinct_at_requested_tolerance() {
+        // A global 1e-6 floor would silently conflate these distinct planes.
+        // The caller is explicitly requesting one hundredth of that distance.
+        let base = rectangle(0.0, 0.0, 1.0, 1.0);
+        let lifted = PolygonMesh::new(
+            StandardAttributes {
+                positions: vec![
+                    Point3::new(0.0, 0.0, 5.0e-7),
+                    Point3::new(1.0, 0.0, 5.0e-7),
+                    Point3::new(1.0, 1.0, 5.0e-7),
+                    Point3::new(0.0, 1.0, 5.0e-7),
+                ],
+                ..Default::default()
+            },
+            Faces::from_iter(vec![[0, 1, 2], [0, 2, 3]]),
+        )
+        .expect("fixture mesh is valid");
+        assert!(!planar_polygons_coplanar(&base, &lifted, 1.0e-8));
+        assert!(!planar_polygons_same_trimmed_face(&base, &lifted, 1.0e-8));
+        // The same planar offset may be accepted at an explicitly wider
+        // tolerance; *only* the caller decides whether to spend that budget.
+        assert!(planar_polygons_coplanar(&base, &lifted, 1.0e-6));
     }
 
     #[test]
