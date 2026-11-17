@@ -1,12 +1,10 @@
-#![expect(
-    clippy::similar_names,
-    reason = "paired S/T parametric-coordinate names are standard T-spline notation"
-)]
-
 use super::{
     Arc, Error, KnotVector, Origin, Result, RwLock, Tmesh, TmeshConnectionType, TmeshControlPoint,
     TmeshDirection,
 };
+
+/// Source point, connection direction, and fractional position along the edge.
+type StraddlingEdge<P> = (Arc<RwLock<TmeshControlPoint<P>>>, TmeshDirection, f64);
 
 impl<P> Tmesh<P> {
     /// Constructs a new rectangular T-mesh from four points in space and a value for
@@ -211,6 +209,60 @@ impl<P> Tmesh<P> {
         Ok(p)
     }
 
+    /// Locates the unique edge straddling a parametric point. Vertical (Up)
+    /// edges take precedence over horizontal (Right) edges, as in both
+    /// absolute-point insertion algorithms. A knot at an existing vertex is
+    /// ambiguous and must be handled by the explicit knot insertion API.
+    pub(super) fn locate_straddling_edge(
+        &self,
+        knot_coords: (f64, f64),
+    ) -> Result<StraddlingEdge<P>> {
+        let target = [knot_coords.0, knot_coords.1];
+        if target.iter().any(|&coord| !(0.0..=1.0).contains(&coord)) {
+            return Err(Error::TmeshOutOfBoundsInsertion);
+        }
+
+        if self.control_points.iter().any(|point| {
+            let (s, t) = point.read().knot_coordinates();
+            (s - target[0]).so_small() && (t - target[1]).so_small()
+        }) {
+            return Err(Error::TmeshExistingControlPoint);
+        }
+
+        // An Up connection has fixed S and varying T; a Right connection
+        // has fixed T and varying S. Preserve that priority and check for
+        // multiple intersecting edges before attempting either mutation.
+        for (fixed, varying, direction) in
+            [(0, 1, TmeshDirection::Up), (1, 0, TmeshDirection::Right)]
+        {
+            let mut candidate = None;
+            for point in &self.control_points {
+                let control = point.read();
+                let (s, t) = control.knot_coordinates();
+                let coordinates = [s, t];
+                if !(coordinates[fixed] - target[fixed]).so_small() {
+                    continue;
+                }
+                let Some(connection) = control.get(direction) else {
+                    continue;
+                };
+                let start = coordinates[varying];
+                let interval = connection.1;
+                if start < target[varying] && start + interval > target[varying] {
+                    if candidate.is_some() {
+                        return Err(Error::TmeshMalformedMesh);
+                    }
+                    candidate = Some((Arc::clone(point), (target[varying] - start) / interval));
+                }
+            }
+            if let Some((point, fraction)) = candidate {
+                return Ok((point, direction, fraction));
+            }
+        }
+
+        Err(Error::TmeshConnectionNotFound)
+    }
+
     /// Attemps to add a control point to the mesh given the cartesian point `p` and the absolute knot coordinates `knot_coords`
     /// in the form `(s, t)`. In order for insertion to succeed, there must either be an S or T edge located at the parametric
     /// point `knot_coords` in the mesh `self`. Note that zero knot insertions will return an error, as the side on which to
@@ -234,122 +286,8 @@ impl<P> Tmesh<P> {
         p: P,
         knot_coords: (f64, f64),
     ) -> Result<Arc<RwLock<TmeshControlPoint<P>>>> {
-        // Make sure desred knot coordinates are within mesh bounds
-        if knot_coords.0 < 0.0 || knot_coords.0 > 1.0 || knot_coords.1 < 0.0 || knot_coords.1 > 1.0
-        {
-            return Err(Error::TmeshOutOfBoundsInsertion);
-        }
-
-        // If a point already exists at the desired knot coordinates, return an error. Zero knot intervals can be put
-        // on any side of a point and still have the same knot coordinates, but the structure of the mesh will not be
-        // different. Thus, zero knot insertion must be done manually.
-        if self.control_points.iter().any(|c| {
-            let c_coords = c.read().knot_coordinates();
-            let comparison = (c_coords.0 - knot_coords.0, c_coords.1 - knot_coords.1);
-            comparison.0.so_small() && comparison.1.so_small()
-        }) {
-            return Err(Error::TmeshExistingControlPoint);
-        }
-
-        // The function checks for any T or S edges that intersect the point in paramtric space where the
-        // point is to be insertet, then computes the knot ratio needed such that the point is inserted
-        // at the correct place and inserts it using add_control_point.
-
-        // Check for any T edges which intersect the parametric location of the new point.
-        let mut point_t_coord = 0.0;
-        let mut con_knot = 0.0;
-        let s_axis_straddle_points = self
-            .control_points
-            .iter()
-            // Filter all points along the S axis of inserton
-            .filter(|point| (point.read().knot_coordinates().0 - knot_coords.0).so_small())
-            // Filter those points to only include the point that straddles the T axis of insertion
-            .filter(|point| {
-                if let Some(con) = point.read().get(TmeshDirection::Up) {
-                    let temp_t_coord = point.read().knot_coordinates().1;
-                    let temp_inter = con.1;
-
-                    // Knot of the new point is located on the connection being investigated?
-                    if temp_t_coord < knot_coords.1 && temp_t_coord + temp_inter > knot_coords.1 {
-                        point_t_coord = temp_t_coord; // T coordinate of the current point
-                        con_knot = temp_inter; // Edge knot interval
-
-                        return true;
-                    }
-                }
-                false
-            })
-            .map(Arc::clone)
-            .collect::<Vec<Arc<RwLock<TmeshControlPoint<P>>>>>();
-
-        // Depending on the number of points whose connections intersect the location of the new point,
-        // different errors or actions are taken
-        match s_axis_straddle_points.len() {
-            // No T-edge instersects the point where the point needs to be inserted,
-            // try to find an S edge which intersects the location of the point
-            0 => {}
-            1 => {
-                // A T-edge is found where the point intersects
-                return self.add_control_point(
-                    p,
-                    &s_axis_straddle_points[0],
-                    TmeshDirection::Up,
-                    (knot_coords.1 - point_t_coord) / con_knot,
-                );
-            }
-            _ => {
-                // Multiple T-edges are found where the point intersects (Should never happen)
-                return Err(Error::TmeshMalformedMesh);
-            }
-        }
-
-        let mut point_s_coord = 0.0;
-        let mut con_knot = 0.0;
-        let t_axis_straddle_points = self
-            .control_points
-            .iter()
-            // Filter all points along the T axis of inserton
-            .filter(|point| (point.read().knot_coordinates().1 - knot_coords.1).so_small())
-            // Filter those points to only include the point that straddles the S axis of insertion
-            .filter(|point| {
-                if let Some(con) = point.read().get(TmeshDirection::Right) {
-                    let temp_s_coord = point.read().knot_coordinates().0;
-                    let temp_inter = con.1;
-
-                    // Knot of the new point is located on the connection being investigated?
-                    if temp_s_coord < knot_coords.0 && temp_s_coord + temp_inter > knot_coords.0 {
-                        point_s_coord = temp_s_coord; // S coordinate of the current point
-                        con_knot = temp_inter; // Edge knot interval
-
-                        return true;
-                    }
-                }
-                false
-            })
-            .map(Arc::clone)
-            .collect::<Vec<Arc<RwLock<TmeshControlPoint<P>>>>>();
-
-        // Depending on the number of points whose connections intersect the location of the new point,
-        // different errors or actions are taken
-        match t_axis_straddle_points.len() {
-            0 => {
-                // No S-edge instersects the point where the point needs to be inserted, return an error
-                Err(Error::TmeshConnectionNotFound)
-            }
-            1 => {
-                // An S-edge is found where the point intersects
-                self.add_control_point(
-                    p,
-                    &t_axis_straddle_points[0],
-                    TmeshDirection::Right,
-                    (knot_coords.0 - point_s_coord) / con_knot,
-                )
-            }
-            _ => {
-                // Multiple S-edges are found where the point intersects (Should never happen)
-                Err(Error::TmeshMalformedMesh)
-            }
-        }
+        let (point, direction, fraction) = self.locate_straddling_edge(knot_coords)?;
+        self.add_control_point(p, &point, direction, fraction)
     }
 
     /// Generates the S and T knot vectors for a particular point. The returned tuple is of the form `(S_vector, T_vector)`,

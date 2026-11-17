@@ -184,6 +184,87 @@ fn plain_and_trimmed_solid_imports_assign_the_same_source_identity() -> anyhow::
 }
 
 #[test]
+fn shared_solid_import_preserves_identity_across_void_boundaries() -> anyhow::Result<()> {
+    let step_string = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../resources/step/occt-cylinder.step",
+    ));
+    let table = Table::from_step(step_string)?;
+    let mut solid = table
+        .manifold_solid_brep
+        .values()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("the cylinder fixture must contain a STEP solid"))?
+        .clone();
+
+    // Repeat a source shell as a synthetic void to exercise the shared
+    // allocator/provenance domain without depending on a particular void fixture.
+    // This verifies import bookkeeping, not the validity of a B-rep cavity.
+    let PlaceHolder::Ref(Name::Entity(outer_id)) = &solid.outer else {
+        anyhow::bail!("the fixture must reference an outer shell");
+    };
+    let outer_id = *outer_id;
+    solid.voids.push(PlaceHolder::Ref(Name::Entity(outer_id)));
+
+    let plain = table.to_compressed_solid_import(&solid)?;
+    let trimmed = table.to_compressed_trimmed_solid_import(&solid)?;
+    assert_eq!(plain.solid.boundaries.len(), 2);
+    assert_eq!(trimmed.solid.boundaries.len(), 2);
+    assert_eq!(plain.shell_reports, trimmed.shell_reports);
+    assert_eq!(plain.provenance, trimmed.provenance);
+    for boundaries in [
+        (
+            &plain.solid.boundaries[0].vertex_stable_ids,
+            &plain.solid.boundaries[1].vertex_stable_ids,
+            &plain.solid.boundaries[0].edge_stable_ids,
+            &plain.solid.boundaries[1].edge_stable_ids,
+            &plain.solid.boundaries[0].face_stable_ids,
+            &plain.solid.boundaries[1].face_stable_ids,
+        ),
+        (
+            &trimmed.solid.boundaries[0].vertex_stable_ids,
+            &trimmed.solid.boundaries[1].vertex_stable_ids,
+            &trimmed.solid.boundaries[0].edge_stable_ids,
+            &trimmed.solid.boundaries[1].edge_stable_ids,
+            &trimmed.solid.boundaries[0].face_stable_ids,
+            &trimmed.solid.boundaries[1].face_stable_ids,
+        ),
+    ] {
+        assert_eq!(boundaries.0, boundaries.1);
+        assert_eq!(boundaries.2, boundaries.3);
+        assert_eq!(boundaries.4, boundaries.5);
+    }
+    Ok(())
+}
+
+#[test]
+fn solid_import_rejects_unresolvable_outer_and_void_shells() -> anyhow::Result<()> {
+    let step_string = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../resources/step/occt-cylinder.step",
+    ));
+    let table = Table::from_step(step_string)?;
+    let solid = table
+        .manifold_solid_brep
+        .values()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("the cylinder fixture must contain a STEP solid"))?;
+
+    let mut broken_outer = solid.clone();
+    broken_outer.outer = PlaceHolder::Ref(Name::Entity(u64::MAX));
+    let mut broken_void = solid.clone();
+    broken_void
+        .voids
+        .push(PlaceHolder::Ref(Name::Entity(u64::MAX)));
+
+    for malformed in [&broken_outer, &broken_void] {
+        assert!(table.to_compressed_solid_import(malformed).is_err());
+        assert!(table.to_compressed_trimmed_solid_import(malformed).is_err());
+    }
+    Ok(())
+}
+
+#[test]
 fn stable_id_assigner_reuses_source_identity_only_for_named_sources() -> anyhow::Result<()> {
     let mut assigner = StableIdAssigner::default();
     let named = assigner.id_for_source(Some(42))?;
