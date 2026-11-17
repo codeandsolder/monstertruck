@@ -14,13 +14,13 @@ pub trait SourceStepLoadInspector {
     /// Returns an error when the previously parsed source cannot be resolved or when the
     /// backend's diagnostic load path itself fails unexpectedly.
     /// One parsed exchange and its kernel-owned typed entity tables.
-    type Document: AsRef<ruststep::ast::Exchange>;
+    type Document: AsRef<step_p21::ast::Exchange>;
 
     /// Build the typed resolution graph once per source document.
     ///
     /// # Errors
     /// Returns an error if the backend cannot initialize the source document.
-    fn resolve_source_exchange(&self, exchange: ruststep::ast::Exchange) -> Result<Self::Document>;
+    fn resolve_source_exchange(&self, exchange: step_p21::ast::Exchange) -> Result<Self::Document>;
 
     /// Inspect the already resolved source document.
     ///
@@ -342,7 +342,7 @@ mod monstertruck_adapter {
 
         fn resolve_source_exchange(
             &self,
-            exchange: ruststep::ast::Exchange,
+            exchange: step_p21::ast::Exchange,
         ) -> Result<Self::Document> {
             Ok(ResolvedStepDocument::from_exchange(exchange))
         }

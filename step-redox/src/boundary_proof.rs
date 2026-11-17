@@ -3,9 +3,9 @@ use crate::math3::{add, canonical_direction, cross, distance, dot, mul, norm, no
 use crate::step_graph::{build_index, entity_ref_value, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use num_traits::ToPrimitive;
-use ruststep::ast::{EntityInstance, Parameter};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use step_p21::ast::{EntityInstance, Parameter};
 
 const POINT_Q_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_point_quant_mm;
 const DIRECTION_Q: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_direction_quant;
@@ -1539,7 +1539,7 @@ mod tests {
 
     #[test]
     fn strict_boundary_proof_rejects_foreign_and_duplicate_shell_members() {
-        use ruststep::ast::{Name, Record};
+        use step_p21::ast::{Name, Record};
         let entity = |id, name: &str, params| EntityInstance::Simple {
             id,
             record: Record {

@@ -4,9 +4,9 @@ use crate::math3::{
 };
 use crate::step_graph::{build_index, entity_id, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use step_p21::ast::EntityInstance;
 
 const GEOM_TOL_MM: f64 = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.edge_treatment_direction;

@@ -9,9 +9,9 @@ use crate::math3::{
     point_to_unit_line_distance, sub,
 };
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::EntityInstance;
 
 const SHEET_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.sheet_geometry_mm;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.sheet_direction;

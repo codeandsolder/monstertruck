@@ -1,7 +1,7 @@
 use crate::step_entities::{entity_ref_list, integer_list, integer_value, numeric_list};
 use crate::step_graph::{entity_id, visit_entity_refs};
-use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::HashMap;
+use step_p21::ast::{EntityInstance, Parameter, Record};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BezierRecoveryStats {
@@ -165,7 +165,7 @@ fn inbound_map(entities: &[EntityInstance]) -> HashMap<u64, Vec<u64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ruststep::ast::Name;
+    use step_p21::ast::Name;
 
     fn r(id: u64) -> Parameter { Parameter::Ref(Name::Entity(id)) }
 

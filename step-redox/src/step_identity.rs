@@ -1,6 +1,6 @@
-use ruststep::ast::{Name, Parameter};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use step_p21::ast::{Name, Parameter};
 
 #[derive(Debug)]
 pub enum IndexBucket {

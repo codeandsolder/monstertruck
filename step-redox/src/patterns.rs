@@ -13,9 +13,9 @@ use crate::step_graph::{
 };
 use anyhow::{Result, bail};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Parameter};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Parameter};
 
 const ORIENTATION_Q: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.pattern_orientation;
 

@@ -28,10 +28,10 @@ use crate::planar_features::{
 use crate::solid_revolutions::SolidSurfaceSignature;
 use anyhow::{Context, Result, bail};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Exchange};
 use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Exchange};
 
 pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
 pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v18";

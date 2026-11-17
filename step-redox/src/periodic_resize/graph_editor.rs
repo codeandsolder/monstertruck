@@ -7,8 +7,8 @@ use crate::step_graph::{
 };
 use anyhow::{Result, anyhow, bail};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Name, Parameter, Record};
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Traversal {

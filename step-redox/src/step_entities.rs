@@ -1,6 +1,6 @@
 use crate::step_graph::{entity_ref_value, simple_record, simple_record_mut, visit_entity_refs};
-use ruststep::ast::{EntityInstance, Name, Parameter, Record};
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
 pub fn cartesian_point(
     id: u64,

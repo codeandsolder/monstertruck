@@ -7,8 +7,8 @@ use crate::step_graph::{
     build_index, entity_id, entity_ref_value, simple_record, visit_entity_refs,
 };
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Parameter, Record};
 
 const COLLINEAR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.line_collinear;
 const MONOTONIC_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.line_monotonic;

@@ -15,9 +15,9 @@ use crate::solid_revolutions::{
 };
 use crate::step_graph::{entity_id, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
+use step_p21::ast::EntityInstance;
 
 const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.sweep_direction;

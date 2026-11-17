@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
-use ruststep::ast::{EntityInstance, Exchange, Name, Parameter, Record};
 use std::fmt::Write as _;
+use step_p21::ast::{EntityInstance, Exchange, Name, Parameter, Record};
 
 pub fn require_supported_sections(exchange: &Exchange) -> Result<()> {
     if !exchange.anchor.is_empty()

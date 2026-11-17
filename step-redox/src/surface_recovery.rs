@@ -7,8 +7,8 @@ use crate::step_graph::{
     build_index, entity_id, entity_ref_value, simple_record, visit_entity_refs,
 };
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 
 // Geometry below 10 nm is exporter noise for the ECAD/display corpus.  Do not
 // let sub-1e-5 mm differences prevent semantic recovery; parameter/weight

@@ -1,5 +1,5 @@
-use ruststep::ast::{EntityInstance, Name, Parameter, Record};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
 /// Connected components in a symmetric adjacency graph, ordered by their
 /// smallest node. Singleton nodes are not candidate merge groups.

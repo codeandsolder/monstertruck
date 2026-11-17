@@ -5,8 +5,8 @@ use crate::step_entities::{
 };
 use crate::step_graph::{ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Parameter, Record};
 
 const TRANSFORM_TOLERANCE_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.surface_replica_transform_mm;
 
@@ -296,7 +296,7 @@ fn quant_transform(value: f64) -> i64 { (value / TRANSFORM_TOLERANCE_MM).round()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ruststep::ast::Name;
+    use step_p21::ast::Name;
 
     fn reference(id: u64) -> Parameter { Parameter::Ref(Name::Entity(id)) }
 

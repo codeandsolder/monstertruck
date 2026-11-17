@@ -4,9 +4,9 @@ use crate::math3::{add, dot, scale};
 use crate::periodic_bodies::PeriodicBodyPattern;
 use crate::step_graph::entity_ref_value;
 use anyhow::{Result, anyhow, bail};
-use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::EntityInstance;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PeriodicBodyResizeStats {

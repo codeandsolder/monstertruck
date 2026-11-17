@@ -1679,7 +1679,7 @@ mod tests {
             let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
             let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&evaluated).geometrically_consistent);
-            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
         }
         Ok(())
     }
@@ -1703,7 +1703,7 @@ mod tests {
             let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
             let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&evaluated).geometrically_consistent);
-            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
         }
         Ok(())
     }
@@ -1768,7 +1768,7 @@ mod tests {
             let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
             let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&evaluated).geometrically_consistent);
-            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
         }
         Ok(())
     }

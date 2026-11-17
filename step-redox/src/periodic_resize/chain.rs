@@ -9,9 +9,9 @@ use crate::math3::{add, dot, scale};
 use crate::periodic_chains::PeriodicChainPattern;
 use crate::step_graph::{ReferenceGraph, build_index, entity_ref_value};
 use anyhow::{Result, anyhow, bail};
-use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::EntityInstance;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PeriodicChainResizeStats {

@@ -1,6 +1,6 @@
-use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use step_p21::ast::EntityInstance;
 
 #[expect(
     clippy::struct_excessive_bools,

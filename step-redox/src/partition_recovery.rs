@@ -9,8 +9,8 @@ use crate::step_graph::{
     undirected_components, visit_entity_refs,
 };
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Parameter, Record};
 
 const POINT_Q: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.partition_point_quant_mm;
 const NORMAL_Q: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.partition_normal_quant;

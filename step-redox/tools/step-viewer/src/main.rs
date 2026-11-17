@@ -2,11 +2,11 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use monstertruck_io::step::load::Table;
 use monstertruck_meshing::prelude::*;
-use ruststep::ast::{EntityInstance, Name, Parameter, Record};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
 #[derive(Parser, Debug)]
 #[command(about = "Generate an interactive before/after STEP body/face viewer")]
@@ -30,7 +30,7 @@ struct Cli {
 
 #[derive(Clone)]
 struct StepDoc {
-    exchange: ruststep::ast::Exchange,
+    exchange: step_p21::ast::Exchange,
     entity_types: HashMap<u64, String>,
     inbound: HashMap<u64, Vec<u64>>,
     shell_faces: HashMap<u64, Vec<u64>>,
@@ -141,7 +141,7 @@ fn main() -> Result<()> {
 
 impl StepDoc {
     fn parse(text: &str) -> Result<Self> {
-        let exchange = ruststep::parser::parse(text)?;
+        let exchange = step_p21::parser::parse(text)?;
         let mut entity_types = HashMap::new();
         let mut inbound = HashMap::<u64, Vec<u64>>::new();
         let mut shell_faces = HashMap::new();

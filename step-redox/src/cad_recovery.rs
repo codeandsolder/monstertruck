@@ -322,7 +322,7 @@ pub(crate) fn rebuilt_kernel_boundary_matches_source<K: CadKernel>(
     kernel: &K,
     evaluated: &K::Evaluated,
     source_solid_id: u64,
-    source_entities: &[ruststep::ast::EntityInstance],
+    source_entities: &[step_p21::ast::EntityInstance],
 ) -> Result<bool> {
     let rebuilt_step = kernel.to_step(evaluated)?;
     let rebuilt = ParsedStepSource::parse(rebuilt_step.as_bytes())?.exchange;
@@ -477,7 +477,7 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
 /// ruled carrier intersections are all derived from the STEP B-rep.
 fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
     solid_id: u64,
-    entities: &[ruststep::ast::EntityInstance],
+    entities: &[step_p21::ast::EntityInstance],
     index: &std::collections::HashMap<u64, usize>,
     kernel: &K,
 ) -> Result<Option<CadFragment>> {

@@ -14,10 +14,10 @@ pub use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use crate::step_graph::{build_index, entity_id, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::EntityInstance;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::TAU;
+use step_p21::ast::EntityInstance;
 
 const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;

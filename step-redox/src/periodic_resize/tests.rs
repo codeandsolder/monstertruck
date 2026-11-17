@@ -10,8 +10,8 @@ use super::{
 use crate::instances::collect_styles_by_target;
 use crate::step_graph::{build_index, entity_id, simple_record};
 use anyhow::{anyhow, bail};
-use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Parameter, Record};
 
 #[test]
 fn face_style_clone_and_remove_updates_presentation_containers() -> anyhow::Result<()> {
@@ -202,7 +202,7 @@ fn rational_single_span_seam_key_ignores_parameter_interval_noise() -> anyhow::R
     };
     let curve = |id: u64, knot0: f64, knot1: f64, inner_weight: f64| EntityInstance::Complex {
         id,
-        subsuper: ruststep::ast::SubSuperRecord(vec![
+        subsuper: step_p21::ast::SubSuperRecord(vec![
             Record {
                 name: "BOUNDED_CURVE".to_string(),
                 parameter: Parameter::List(Vec::new()),

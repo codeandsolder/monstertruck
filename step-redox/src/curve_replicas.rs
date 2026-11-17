@@ -5,9 +5,9 @@ use crate::step_graph::{
 };
 use crate::step_identity::{IndexBucket, hash_parameter, parameters_equivalent};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Parameter, Record};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use step_p21::ast::{EntityInstance, Parameter, Record};
 
 const GEOMETRY_TOLERANCE_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.curve_replica_geometry_mm;
 // Translation values are part of the actual replica transform. They must not

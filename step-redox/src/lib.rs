@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::Exchange;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use step_p21::ast::Exchange;
 
 pub mod analysis;
 pub use analysis::AnalysisSession;
@@ -1597,7 +1597,7 @@ mod tests {
         let out = clean_bytes(&src, &Options::default())?;
         assert!(out.stats.output_bytes < out.stats.input_bytes);
         assert_eq!(out.stats.interned_entities, 1);
-        ruststep::parser::parse(std::str::from_utf8(&out.bytes)?)?;
+        step_p21::parser::parse(std::str::from_utf8(&out.bytes)?)?;
         Ok(())
     }
 
@@ -1683,7 +1683,7 @@ mod tests {
     #[test]
     fn doubled_apostrophe_step_strings_parse_directly() -> Result<()> {
         let src = wrap("#1=CARTESIAN_POINT('M3'' thread',(0.0,0.0,0.0));");
-        ruststep::parser::parse(std::str::from_utf8(&src)?)?;
+        step_p21::parser::parse(std::str::from_utf8(&src)?)?;
         let out = clean_bytes(&src, &Options::default())?;
         assert_eq!(out.stats.input_entities, 1);
         Ok(())
