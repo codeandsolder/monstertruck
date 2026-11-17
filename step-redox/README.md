@@ -77,6 +77,24 @@ A browser/WASM prototype lives under `web/`, including an experimental
 periodic bodies, and higher-level recovered count parameters; bidirectional
 periodic-body growth/shrink are implemented in `periodic_resize.rs`.
 
+## Read-only STEP inspection
+
+The read-only evidence scanners are unified into `step-inspect`, which accepts a
+typed subcommand, one STEP input path, and emits one JSON document to stdout:
+
+```bash
+cargo run -p step-redox --bin step-inspect -- support INPUT.step
+cargo run -p step-redox --bin step-inspect -- revolution INPUT.step
+cargo run -p step-redox --bin step-inspect -- radial-slot INPUT.step
+cargo run -p step-redox --bin step-inspect -- sweep INPUT.step
+cargo run -p step-redox --bin step-inspect -- healed-extrusion-core INPUT.step SOLID_ID CAP_A CAP_B
+```
+
+Other subcommands are `extrusion`, `extrusion-core`, `dominant-extrusion`,
+`edge-treatment` and `boundary-feature`. This replaces the ten independent
+`step-*-scan` binaries; the JSON schemas are those of the underlying analysis
+functions. Corpus tooling passes `--scanner` the `step-inspect` executable.
+
 ## Canonical CAD recovery
 
 The long-term representation is a backend-neutral constructive DAG rather than an

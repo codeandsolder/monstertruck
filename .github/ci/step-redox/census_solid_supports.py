@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Run step-support-scan over a TSV corpus manifest and retain matching solids."""
+"""Run step-inspect support over a TSV corpus manifest and retain matching solids."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def load_manifest(path: Path) -> list[dict[str, str]]:
 
 def scan_one(scanner: Path, row: dict[str, str]) -> dict[str, Any]:
     proc = subprocess.run(
-        [str(scanner), row["path"]],
+        [str(scanner), "support", row["path"]],
         capture_output=True,
         text=True,
         check=False,
