@@ -9,8 +9,8 @@ pub use crate::step_graph::visit_entity_refs;
 use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
 };
-use ruststep::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 
 #[derive(Debug, Default, Clone)]
 pub struct InstanceStats {

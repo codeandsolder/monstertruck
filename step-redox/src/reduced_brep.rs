@@ -5,8 +5,8 @@ use crate::math3::{
 };
 use crate::step_graph::entity_id;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::EntityInstance;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use step_p21::ast::EntityInstance;
 
 const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.reduced_brep_direction;

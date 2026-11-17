@@ -1,6 +1,6 @@
-use ruststep::ast::{EntityInstance, Parameter, Record};
 use serde::Serialize;
 use std::collections::HashMap;
+use step_p21::ast::{EntityInstance, Parameter, Record};
 
 /// Parser-neutral read-only view over one located STEP DATA section.
 ///
@@ -159,7 +159,7 @@ impl<'a> StepValue<'a> {
 
     pub const fn entity_ref(self) -> Option<u64> {
         match self.0 {
-            Parameter::Ref(ruststep::ast::Name::Entity(id)) => Some(*id),
+            Parameter::Ref(step_p21::ast::Name::Entity(id)) => Some(*id),
             _ => None,
         }
     }
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn hides_parser_ast_behind_source_stable_views() -> anyhow::Result<()> {
-        let exchange = ruststep::parser::parse(
+        let exchange = step_p21::parser::parse(
             "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'1');\nFILE_NAME('a','b',(''),(''),'x','y','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n#10=(NAMED_UNIT(#1)LENGTH_UNIT()SI_UNIT(.MILLI.,.METRE.));\nENDSEC;\nEND-ISO-10303-21;\n",
         )?;
         let section = exchange

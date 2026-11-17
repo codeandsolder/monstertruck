@@ -2,9 +2,9 @@ use crate::step_graph::visit_entity_refs;
 use crate::step_identity::{
     IndexBucket, hash_parameter_with_alias, parameters_equivalent_with_alias, resolve_alias,
 };
-use ruststep::ast::{EntityInstance, Name, Parameter, Record};
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
+use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
 #[derive(Default)]
 pub struct ConsolidateStats {

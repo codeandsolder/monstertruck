@@ -9,7 +9,7 @@ use crate::{
 };
 use anyhow::Result;
 use monstertruck_io::step::load::ParsedStepSource;
-use ruststep::ast::Exchange;
+use step_p21::ast::Exchange;
 
 #[expect(
     clippy::cast_precision_loss,

@@ -10,8 +10,8 @@ use crate::cad_recovery::{CadFragment, CadFragmentSource};
 use crate::math3::{cross, distance, dot, normalize, sub};
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::EntityInstance;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use step_p21::ast::EntityInstance;
 
 const TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.loft_direction;

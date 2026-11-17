@@ -209,7 +209,7 @@ const PATCH_POINT_TOL_MM: f64 = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM;
 /// match the evidence, a required source entity has no unique kernel topology identity, or the
 /// treatment cannot be normalized into a complete fail-closed patch.
 pub fn plan_source_edge_treatment_patch(
-    exchange: &ruststep::ast::Exchange,
+    exchange: &step_p21::ast::Exchange,
     source: SourceEntity,
     evidence: &crate::edge_treatments::EdgeTreatmentEvidence,
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
@@ -228,7 +228,7 @@ pub fn plan_source_edge_treatment_patch(
 /// treatment cannot be normalized, or two local plans make incompatible claims about retained
 /// topology.
 pub fn plan_source_edge_treatment_patches(
-    exchange: &ruststep::ast::Exchange,
+    exchange: &step_p21::ast::Exchange,
     source: SourceEntity,
     evidence: &[crate::edge_treatments::EdgeTreatmentEvidence],
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
@@ -274,7 +274,7 @@ pub fn plan_source_edge_treatment_patches(
 /// Returns an error when source identity cannot be resolved or any proven source face/edge lacks a
 /// unique retained kernel topology identity.
 pub fn plan_source_coplanar_normalization_patch(
-    exchange: &ruststep::ast::Exchange,
+    exchange: &step_p21::ast::Exchange,
     source: SourceEntity,
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
 ) -> Result<Option<KernelTopologyPatch>> {
@@ -291,7 +291,7 @@ pub fn plan_source_coplanar_normalization_patch(
 /// its source shell and retained kernel `StableId` journal.
 pub(crate) fn plan_source_boundary_feature_peel_from_entities(
     source: SourceEntity,
-    entities: &[ruststep::ast::EntityInstance],
+    entities: &[step_p21::ast::EntityInstance],
     index: &std::collections::HashMap<u64, usize>,
     report: &crate::planar_features::BoundaryFeatureDiagnostics,
     selected_indices: &[usize],
@@ -316,7 +316,7 @@ pub(crate) fn plan_source_boundary_feature_peel_from_entities(
 )]
 fn boundary_feature_peel_patch(
     source: SourceEntity,
-    entities: &[ruststep::ast::EntityInstance],
+    entities: &[step_p21::ast::EntityInstance],
     index: &std::collections::HashMap<u64, usize>,
     peel: &crate::planar_features::BoundaryFeaturePeelPlan,
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
@@ -489,7 +489,7 @@ fn source_loop_kernel_boundary(
 
 fn source_edge_face_users(
     faces: &BTreeSet<u64>,
-    entities: &[ruststep::ast::EntityInstance],
+    entities: &[step_p21::ast::EntityInstance],
     index: &std::collections::HashMap<u64, usize>,
 ) -> Result<BTreeMap<u64, BTreeSet<u64>>> {
     let mut users = BTreeMap::<u64, BTreeSet<u64>>::new();
@@ -584,7 +584,7 @@ fn topology_face(
 }
 
 fn source_reduced_solid(
-    exchange: &ruststep::ast::Exchange,
+    exchange: &step_p21::ast::Exchange,
     source: SourceEntity,
 ) -> Result<crate::reduced_brep::ReducedSolid> {
     let section = exchange

@@ -5,12 +5,12 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use monstertruck_io::step::load::ParsedStepSource;
-use ruststep::ast::{DataSection, EntityInstance, Exchange, Parameter};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::Hasher;
 use std::path::Path;
+use step_p21::ast::{DataSection, EntityInstance, Exchange, Parameter};
 
 #[derive(Debug, Serialize)]
 struct ScanReport {
@@ -109,7 +109,7 @@ fn fingerprint(value: &shape_identity::ShapeKey) -> String {
     format!("{:016x}{:016x}", hashers[0].finish(), hashers[1].finish())
 }
 
-fn parse_exchange(path: &Path) -> Result<ruststep::ast::Exchange> {
+fn parse_exchange(path: &Path) -> Result<step_p21::ast::Exchange> {
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     Ok(ParsedStepSource::parse(&bytes)?.exchange)
 }

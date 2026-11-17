@@ -8,9 +8,9 @@ use crate::step_entities::{
 use crate::step_graph::{entity_ref_value, simple_record, simple_record_mut};
 use crate::surface_recovery;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 
 const DIRECTION_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.source_brep_direction;
 
@@ -1049,7 +1049,7 @@ END-ISO-10303-21;
              #10=LINE('',#1,#9);
              #11=SURFACE_OF_REVOLUTION('',#10,#8);",
         );
-        let exchange = ruststep::parser::parse(&text)?;
+        let exchange = step_p21::parser::parse(&text)?;
         let entities = &exchange.data[0].entities;
         let index = entities
             .iter()
@@ -1093,7 +1093,7 @@ END-ISO-10303-21;
             "#1=CARTESIAN_POINT('',(1.,2.,3.));
              #2=AXIS1_PLACEMENT('',#1,$);",
         );
-        let exchange = ruststep::parser::parse(&text)?;
+        let exchange = step_p21::parser::parse(&text)?;
         let entities = &exchange.data[0].entities;
         let index = entities
             .iter()
@@ -1118,7 +1118,7 @@ END-ISO-10303-21;
              #6=CARTESIAN_POINT('',(2.,2.,0.));
              #10=B_SPLINE_SURFACE_WITH_KNOTS('',2,1,((#1,#2),(#3,#4),(#5,#6)),.UNSPECIFIED.,.F.,.F.,.F.,(3,3),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.);",
         );
-        let exchange = ruststep::parser::parse(&text)?;
+        let exchange = step_p21::parser::parse(&text)?;
         let entities = &exchange.data[0].entities;
         let index = entities
             .iter()
@@ -1143,7 +1143,7 @@ END-ISO-10303-21;
              #6=CARTESIAN_POINT('',(2.,2.,3.));
              #10=B_SPLINE_SURFACE_WITH_KNOTS('',1,2,((#1,#2,#3),(#4,#5,#6)),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(3,3),(0.,1.),(0.,1.),.UNSPECIFIED.);",
         );
-        let exchange = ruststep::parser::parse(&text)?;
+        let exchange = step_p21::parser::parse(&text)?;
         let entities = &exchange.data[0].entities;
         let index = entities
             .iter()
@@ -1173,7 +1173,7 @@ END-ISO-10303-21;
              #9=EDGE_LOOP('',(#8));
              #10=FACE_OUTER_BOUND('',#9,.T.);",
         );
-        let exchange = ruststep::parser::parse(&text)?;
+        let exchange = step_p21::parser::parse(&text)?;
         let entities = &exchange.data[0].entities;
         let index = entities
             .iter()
@@ -1207,7 +1207,7 @@ END-ISO-10303-21;
              #9=ORIENTED_EDGE('',*,*,#8,.F.);
              #10=ORIENTED_EDGE('',*,*,#9,.F.);",
         );
-        let exchange = ruststep::parser::parse(&text)?;
+        let exchange = step_p21::parser::parse(&text)?;
         let entities = &exchange.data[0].entities;
         let index = entities
             .iter()

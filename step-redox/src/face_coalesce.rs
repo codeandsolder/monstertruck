@@ -7,8 +7,8 @@ use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
     undirected_components,
 };
-use ruststep::ast::{EntityInstance, Parameter};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Parameter};
 
 const SURFACE_TYPES: &[&str] = &[
     "PLANE",
@@ -615,7 +615,7 @@ fn remove_refs_from_direct_lists(param: &mut Parameter, drop: &HashSet<u64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ruststep::ast::Record;
+    use step_p21::ast::Record;
 
     fn simple(id: u64, name: &str, params: Vec<Parameter>) -> EntityInstance {
         EntityInstance::Simple {

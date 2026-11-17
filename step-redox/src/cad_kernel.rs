@@ -1800,7 +1800,7 @@ pub mod monstertruck {
             assert_eq!(summary.shells, 1);
             assert_eq!(summary.faces, 6);
             let step = kernel.to_step(&evaluated)?;
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
             assert!(
                 !step.contains("B_SPLINE_SURFACE"),
                 "coplanar straight-edge loft walls should remain analytic planes"
@@ -1843,7 +1843,7 @@ pub mod monstertruck {
 
             let step = kernel.to_step(&evaluated)?;
             assert!(step.contains(expected_step_fragment));
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
             Ok(())
         }
 
@@ -1888,7 +1888,7 @@ pub mod monstertruck {
             assert_eq!(summary.faces, 14);
 
             let step = kernel.to_step(&evaluated)?;
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
             Ok(())
         }
 
@@ -1915,7 +1915,7 @@ pub mod monstertruck {
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
             assert!(summary.faces > 6);
-            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
             Ok(())
         }
 
@@ -1963,7 +1963,7 @@ pub mod monstertruck {
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
             assert!(summary.faces > 3);
-            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
             Ok(())
         }
 
@@ -2141,7 +2141,7 @@ pub mod monstertruck {
             let summary = kernel.summarize(&evaluated);
             assert!(summary.geometrically_consistent);
             assert!(summary.faces >= 8);
-            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
             Ok(())
         }
 
@@ -2166,13 +2166,13 @@ pub mod monstertruck {
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
             let step = kernel.to_step(&evaluated)?;
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
             let recovered = crate::detect_solid_revolutions_bytes(step.as_bytes())?;
             assert_eq!(recovered.len(), 1);
             let fragment = crate::cad_recovery::recover_solid_revolution_fragment(&recovered[0])?;
             let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&rebuilt).geometrically_consistent);
-            ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+            step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
             Ok(())
         }
 
@@ -2196,7 +2196,7 @@ pub mod monstertruck {
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
             let step = kernel.to_step(&evaluated)?;
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
             Ok(())
         }
 
@@ -2221,13 +2221,13 @@ pub mod monstertruck {
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
             let step = kernel.to_step(&evaluated)?;
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
             let recovered = crate::detect_solid_revolutions_bytes(step.as_bytes())?;
             assert_eq!(recovered.len(), 1);
             let fragment = crate::cad_recovery::recover_solid_revolution_fragment(&recovered[0])?;
             let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&rebuilt).geometrically_consistent);
-            ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+            step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
             Ok(())
         }
 
@@ -2249,7 +2249,7 @@ pub mod monstertruck {
             let evaluated = kernel.evaluate(&model, root)?;
             assert!(kernel.summarize(&evaluated).geometrically_consistent);
             let step = kernel.to_step(&evaluated)?;
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
 
             // Re-recognition of whichever STEP surface grammar Monstertruck chooses
             // is a separate detector concern. This test proves exact construction and
@@ -2288,7 +2288,7 @@ pub mod monstertruck {
             let summary = kernel.summarize(&evaluated);
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
-            ruststep::parser::parse(&kernel.to_step(&evaluated)?)?;
+            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
             Ok(())
         }
 
@@ -2377,7 +2377,7 @@ pub mod monstertruck {
             assert_eq!(summary.faces, 8);
 
             let step = kernel.to_step(&evaluated)?;
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
             let recovered = crate::detect_solid_extrusions_bytes(step.as_bytes())?;
             assert_eq!(recovered.len(), 1);
             assert_eq!(recovered[0].inner_profile_loops.len(), 1);
@@ -2407,7 +2407,7 @@ pub mod monstertruck {
             let rebuilt_summary = kernel.summarize(&rebuilt);
             assert!(rebuilt_summary.geometrically_consistent);
             assert_eq!(rebuilt_summary.faces, 8);
-            ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+            step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
             Ok(())
         }
 
@@ -2435,7 +2435,7 @@ pub mod monstertruck {
             let fragment = crate::cad_recovery::recover_solid_extrusion_fragment(&recovered[0])?;
             let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&rebuilt).geometrically_consistent);
-            ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+            step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
             Ok(())
         }
 
@@ -2499,7 +2499,7 @@ pub mod monstertruck {
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
             let step = kernel.to_step(&evaluated)?;
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
             Ok(())
         }
 
@@ -2529,7 +2529,7 @@ pub mod monstertruck {
             assert_eq!(summary.shells, 1);
             let step = kernel.to_step(&evaluated)?;
             assert!(step.starts_with("ISO-10303-21;"));
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
             Ok(())
         }
 
@@ -2604,7 +2604,7 @@ pub mod monstertruck {
 
             let step = kernel.to_step(&evaluated)?;
             assert!(step.starts_with("ISO-10303-21;"));
-            ruststep::parser::parse(&step)?;
+            step_p21::parser::parse(&step)?;
             Ok(())
         }
     }

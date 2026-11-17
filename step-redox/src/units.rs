@@ -109,11 +109,11 @@ mod tests {
     use super::*;
     use crate::step_graph::build_index;
 
-    fn parse_units(data: &str) -> anyhow::Result<ruststep::ast::Exchange> {
+    fn parse_units(data: &str) -> anyhow::Result<step_p21::ast::Exchange> {
         let text = format!(
             "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'1');\nFILE_NAME('a','b',(''),(''),'x','y','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n{data}\nENDSEC;\nEND-ISO-10303-21;\n"
         );
-        Ok(ruststep::parser::parse(&text)?)
+        Ok(step_p21::parser::parse(&text)?)
     }
 
     #[test]

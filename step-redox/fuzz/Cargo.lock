@@ -1030,8 +1030,7 @@ checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
 [[package]]
 name = "step-p21"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "261fb24eb3fd1de07c36523c41063ea901cde514594603cb6dfe7afe64f1b967"
+source = "git+https://github.com/codeandsolder/step-p21-fast.git?rev=17da5a2ef90dfeac94336d28541f0de03351048c#17da5a2ef90dfeac94336d28541f0de03351048c"
 dependencies = [
  "Inflector",
  "derive-new",
@@ -1047,8 +1046,7 @@ dependencies = [
 [[package]]
 name = "step-p21-derive"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "432f60e41744c351a88a444fbe134ca9bb8d930c6442fe6334728963ba5dd782"
+source = "git+https://github.com/codeandsolder/step-p21-fast.git?rev=17da5a2ef90dfeac94336d28541f0de03351048c#17da5a2ef90dfeac94336d28541f0de03351048c"
 dependencies = [
  "Inflector",
  "proc-macro-crate",
@@ -1064,6 +1062,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "monstertruck-core",
  "monstertruck-io",
  "num-traits",
  "serde",

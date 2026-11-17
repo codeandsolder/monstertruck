@@ -79,7 +79,7 @@ fn profile_has_arc(
 #[test]
 fn reads_representation_length_uncertainty_with_hard_cap() -> anyhow::Result<()> {
     fn tolerance_from(text: &str) -> anyhow::Result<Option<f64>> {
-        let exchange = ruststep::parser::parse(text)?;
+        let exchange = step_p21::parser::parse(text)?;
         let entities = &exchange
             .data
             .first()
@@ -764,7 +764,7 @@ fn recovers_split_hemispherical_end_topology() -> anyhow::Result<()> {
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
         assert!(kernel.summarize(&rebuilt).geometrically_consistent);
-        ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+        step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
     }
 
     let tampered = split_hemisphere_faces(1.01);
@@ -1342,7 +1342,7 @@ fn shared_edge_incidence_distinguishes_open_interfaces_from_closed_shells() -> a
 #[test]
 fn shared_source_face_loader_matches_surface_signature_census() -> anyhow::Result<()> {
     let bytes = include_bytes!("../../validation/fixtures/native_spherical_cap.step");
-    let exchange = ruststep::parser::parse(std::str::from_utf8(bytes)?)?;
+    let exchange = step_p21::parser::parse(std::str::from_utf8(bytes)?)?;
     let entities = &exchange.data[0].entities;
     let index = build_index(entities);
     let solid_id = entities
@@ -1541,7 +1541,7 @@ fn recovers_native_conical_frustum_fixture() -> anyhow::Result<()> {
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
         assert!(kernel.summarize(&rebuilt).geometrically_consistent);
-        ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+        step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
     }
     Ok(())
 }
@@ -1566,7 +1566,7 @@ fn recovers_native_hollow_conical_frustum_fixture() -> anyhow::Result<()> {
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
         assert!(kernel.summarize(&rebuilt).geometrically_consistent);
-        ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+        step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
     }
     Ok(())
 }
@@ -1647,7 +1647,7 @@ fn recovers_native_spherical_cap_fixture() -> anyhow::Result<()> {
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
         assert!(kernel.summarize(&rebuilt).geometrically_consistent);
-        ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+        step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
     }
     Ok(())
 }
@@ -1690,7 +1690,7 @@ fn recovers_positive_spherical_cap_fixture() -> anyhow::Result<()> {
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
         assert!(kernel.summarize(&rebuilt).geometrically_consistent);
-        ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+        step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
     }
     Ok(())
 }
@@ -1729,7 +1729,7 @@ fn recovers_native_ring_torus_fixture() -> anyhow::Result<()> {
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
         assert!(kernel.summarize(&rebuilt).geometrically_consistent);
-        ruststep::parser::parse(&kernel.to_step(&rebuilt)?)?;
+        step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
     }
     Ok(())
 }

@@ -2,8 +2,8 @@ use crate::math2::rotate_quarter_xy as rotate_xy;
 use crate::step_entities::{cartesian_point, closure_from, nth_entity_ref, number};
 use crate::step_graph::{entity_ref_value, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Name, Parameter, Record};
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ShapeKey {

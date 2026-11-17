@@ -4,8 +4,8 @@ use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, rewrite_entity_refs, simple_record,
 };
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Parameter};
 use std::collections::{HashMap, HashSet};
+use step_p21::ast::{EntityInstance, Parameter};
 
 const POS_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.geometric_intern_position_mm;
 const SCALAR_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.geometric_intern_scalar_mm;
@@ -381,7 +381,7 @@ fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ruststep::ast::{Name, Record};
+    use step_p21::ast::{Name, Record};
 
     fn r(id: u64) -> Parameter { Parameter::Ref(Name::Entity(id)) }
 

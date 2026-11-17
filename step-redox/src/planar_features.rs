@@ -18,9 +18,9 @@ use crate::step_graph::{
 };
 use anyhow::{Result, bail};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use ruststep::ast::{EntityInstance, Parameter};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use step_p21::ast::{EntityInstance, Parameter};
 
 mod mapped_emitter;
 pub use mapped_emitter::instance_boundary_features;
@@ -2069,7 +2069,7 @@ mod tests {
 
     #[test]
     fn boundary_feature_peel_plan_is_pure_and_deterministic() -> Result<()> {
-        use ruststep::ast::Record;
+        use step_p21::ast::Record;
 
         fn host_face(id: u64, bounds: &[u64]) -> EntityInstance {
             EntityInstance::Simple {

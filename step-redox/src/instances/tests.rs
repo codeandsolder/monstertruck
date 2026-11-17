@@ -230,7 +230,7 @@ ENDSEC;
 END-ISO-10303-21;
 "
         );
-        let exchange = ruststep::parser::parse(&text)?;
+        let exchange = step_p21::parser::parse(&text)?;
         let entities = &exchange.data[0].entities;
         let index = build_index(entities);
         Ok(solid_shape_key(17, entities, &index)
@@ -279,7 +279,7 @@ ENDSEC;
 END-ISO-10303-21;
 "
         );
-        let exchange = ruststep::parser::parse(&text)?;
+        let exchange = step_p21::parser::parse(&text)?;
         let entities = &exchange.data[0].entities;
         let index = build_index(entities);
         Ok(solid_shape_key(17, entities, &index)
@@ -311,7 +311,7 @@ ENDSEC;
 END-ISO-10303-21;
 "
         );
-        let exchange = ruststep::parser::parse(&text)?;
+        let exchange = step_p21::parser::parse(&text)?;
         let entities = exchange.data[0].entities.clone();
         let index = build_index(&entities);
         Ok((entities, index))
@@ -568,7 +568,7 @@ fn circle_locus_ignores_parameter_seam_direction() -> anyhow::Result<()> {
 #[test]
 fn curve_replica_signature_matches_explicit_translated_curve() -> anyhow::Result<()> {
     let text = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'1');\nFILE_NAME('a','b',(''),(''),'x','y','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n#1=CARTESIAN_POINT('',(0.,0.,0.));\n#2=CARTESIAN_POINT('',(1.,0.,0.));\n#3=CARTESIAN_POINT('',(3.,0.,0.));\n#4=CARTESIAN_POINT('',(4.,0.,0.));\n#5=CARTESIAN_POINT('',(3.,0.,0.));\n#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#2),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);\n#20=B_SPLINE_CURVE_WITH_KNOTS('',1,(#3,#4),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);\n#30=CARTESIAN_TRANSFORMATION_OPERATOR_3D('','','',$,$,#5,$,$);\n#40=CURVE_REPLICA('',#10,#30);\nENDSEC;\nEND-ISO-10303-21;\n";
-    let exchange = ruststep::parser::parse(text)?;
+    let exchange = step_p21::parser::parse(text)?;
     let entities = &exchange.data[0].entities;
     let index = build_index(entities);
     let center = [3.5, 0.0, 0.0];
