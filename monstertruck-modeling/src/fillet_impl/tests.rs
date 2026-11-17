@@ -41,16 +41,23 @@ fn intersection_curve_with_leader(leader: Curve) -> Curve {
     ))
 }
 
-/// Boolean seam edges are `IntersectionCurve`s with exact leaders. The
-/// fillet conversion must return THAT curve, not a resampled polyline.
+/// The plain NURBS leader converts exactly, but wrapping it in a projected
+/// surface intersection changes the contract: even a representable leader
+/// does not prove equality of the Newton-evaluated curve at all parameters.
 #[test]
-fn intersection_curve_with_exact_leader_converts_exactly() {
+fn projected_intersection_does_not_inherit_its_exact_leader_conversion() {
     let leader = exact_quadratic_leader();
-    let curve = intersection_curve_with_leader(Curve::NurbsCurve(leader.clone()));
-    let converted = NurbsCurve::<Vector4>::try_from(curve).expect("exact leader must convert");
+    let converted = NurbsCurve::<Vector4>::try_from(Curve::NurbsCurve(leader.clone()))
+        .expect("a direct NURBS curve must convert exactly");
     assert_eq!(converted.degree(), leader.degree());
     assert_eq!(converted.knot_vector(), leader.knot_vector());
     assert_eq!(converted.control_points(), leader.control_points());
+
+    let projected = intersection_curve_with_leader(Curve::NurbsCurve(leader));
+    assert!(
+        NurbsCurve::<Vector4>::try_from(projected).is_err(),
+        "a projected intersection may not silently become its leader"
+    );
 }
 
 /// A parameter curve has no exact NURBS representation: refuse, never
