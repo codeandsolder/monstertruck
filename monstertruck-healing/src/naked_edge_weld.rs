@@ -733,8 +733,10 @@ fn one_sided_bound(from: &[Point3], to: &[Point3], target: f64) -> f64 {
 /// The distance from `x` to one segment of `to` is convex along `[p, q]`, so
 /// its largest value is at `p` or `q`; the distance to the polyline is at most
 /// the distance to any one of its segments. Halving `[p, q]` tightens the
-/// bound; it stops once the bound meets `target` or the piece is shorter than
-/// a quarter of it.
+/// bound. Subdivision stops when the bound reaches `target`, the segment is
+/// shorter than a quarter of it, the midpoint no longer advances, or the
+/// shared refinement budget is spent. In the latter cases the returned bound
+/// stays conservative; it may simply decline an otherwise valid weld.
 fn segment_bound(p: Point3, q: Point3, to: &[Point3], target: f64, remaining: &mut usize) -> f64 {
     let bound = match to {
         [only] => f64::max(p.distance(*only), q.distance(*only)),
