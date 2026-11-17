@@ -290,7 +290,10 @@ where
     if let Some(edge) = uses.iter().position(|uses| uses.len() > 2) {
         return Err(SnapError::ThreeEdgeUses { edge });
     }
-    let (candidates, mut skipped) = matching_pairs(shell, &uses, &naked, tolerance);
+    let MatchCandidates {
+        candidates,
+        mut skipped,
+    } = matching_pairs(shell, &uses, &naked, tolerance);
     let (target, accepted) = accept_without_creep(shell, &candidates, tolerance, &mut skipped);
     skipped.sort_by_key(|&(keep, drop, _)| (keep, drop));
     let mut matches = vec![0usize; shell.edges.len()];
@@ -396,6 +399,12 @@ impl Pair {
     }
 }
 
+/// Candidate pairs and explicit reasons for every examined pair we could not join.
+struct MatchCandidates {
+    candidates: Vec<Pair>,
+    skipped: Vec<(usize, usize, SkipReason)>,
+}
+
 type BucketKey = [i64; 3];
 
 /// The grid cell of `point`. A coordinate whose quotient overflows `i64`
@@ -433,13 +442,12 @@ fn neighboring_bucket_keys(key: BucketKey) -> impl Iterator<Item = BucketKey> {
 /// Finds the pairs of naked edges whose ends correspond, proves their curves
 /// agree and checks their orientation. Returns the weldable pairs in
 /// `(keep, drop)` order and the pairs left naked with their reason.
-#[allow(clippy::type_complexity)]
 fn matching_pairs<C, S>(
     shell: &CompressedShell<Point3, C, S>,
     uses: &[Vec<(usize, bool)>],
     naked: &[usize],
     tolerance: f64,
-) -> (Vec<Pair>, Vec<(usize, usize, SkipReason)>)
+) -> MatchCandidates
 where
     C: ParametricCurve<Point = Point3, Vector = Vector3> + TryIntoHomogeneousBsplineCurve,
 {
@@ -522,7 +530,10 @@ where
             });
         });
     });
-    (pairs, skipped)
+    MatchCandidates {
+        candidates: pairs,
+        skipped,
+    }
 }
 
 /// A polyline with its vertices on a curve, and an upper bound on the
