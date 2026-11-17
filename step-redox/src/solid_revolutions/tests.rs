@@ -719,7 +719,7 @@ fn incidence_retains_duplicate_seam_uses_and_rejects_empty_loops() {
     let seam = test_line_edge(10, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
     let shared = test_line_edge(20, [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]);
     let faces = vec![
-        test_face(plane, vec![seam.clone(), seam, shared.clone()]),
+        test_face(plane.clone(), vec![seam.clone(), seam, shared.clone()]),
         test_face(plane, vec![shared]),
     ];
     let uses = edge_face_incidence(&faces).expect("all faces have loops");
