@@ -14,6 +14,7 @@ from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.STEPControl import STEPControl_Reader
+from OCP.Standard import Standard_Failure
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SOLID, TopAbs_VERTEX
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
@@ -171,7 +172,7 @@ def cut_volume(a, b):
     operation = BRepAlgoAPI_Cut(a, b)
     try:
         operation.Build()
-    except Exception as exc:
+    except Standard_Failure as exc:
         return None, f"OpenCascade raised {type(exc).__name__}: {exc}"
     if not operation.IsDone():
         return None, "OpenCascade Boolean cut did not complete"
