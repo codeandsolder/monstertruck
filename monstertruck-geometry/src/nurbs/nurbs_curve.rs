@@ -1,10 +1,10 @@
 use super::{
     Bound, Bounded, BoundedCurve, BoundingBox, BsplineCurve, Concat, ConcatError, ControlPoint,
     CurveDerivatives, CurveParameter, Cut, Debug, Error, EuclideanSpace, HashGen, Homogeneous,
-    InnerSpace, Invertible, KnotVector, MetricSpace, NurbsCurve, Origin, PRESEARCH_DIVISION,
-    ParameterDivision1D, ParameterRange, ParameterTransform, ParametricCurve, Result,
-    SearchNearestParameter, SearchParameter, SearchParameterHint1D, Tolerance, Transformed, algo,
-    rational_derivative,
+    InnerSpace, Invertible, KnotVector, MetricSpace, NurbsCurve, Origin, ParameterDivision1D,
+    ParameterRange, ParameterTransform, ParametricCurve, Result, SearchNearestParameter,
+    SearchParameter, SearchParameterHint1D, Tolerance, Transformed, algo, rational_derivative,
+    search_curve_with_hint,
 };
 
 impl<V> NurbsCurve<V> {
@@ -505,16 +505,13 @@ where
         hint: H,
         trial: usize,
     ) -> Option<f64> {
-        let hint = match hint.into() {
-            SearchParameterHint1D::Parameter(hint) => hint,
-            SearchParameterHint1D::Range(x, y) => {
-                algo::curve::presearch(self, point, (x, y), PRESEARCH_DIVISION)
-            }
-            SearchParameterHint1D::None => {
-                algo::curve::presearch(self, point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
-        algo::curve::search_nearest_parameter(self, point, hint, trial)
+        search_curve_with_hint(
+            self,
+            point,
+            hint,
+            trial,
+            algo::curve::search_nearest_parameter,
+        )
     }
 }
 
@@ -532,16 +529,7 @@ where
         hint: H,
         trial: usize,
     ) -> Option<f64> {
-        let hint = match hint.into() {
-            SearchParameterHint1D::Parameter(hint) => hint,
-            SearchParameterHint1D::Range(x, y) => {
-                algo::curve::presearch(self, point, (x, y), PRESEARCH_DIVISION)
-            }
-            SearchParameterHint1D::None => {
-                algo::curve::presearch(self, point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
-        algo::curve::search_parameter(self, point, hint, trial)
+        search_curve_with_hint(self, point, hint, trial, algo::curve::search_parameter)
     }
 }
 
