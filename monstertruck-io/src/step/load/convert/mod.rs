@@ -148,6 +148,117 @@ fn assign_shell_sources(
     })
 }
 
+/// The normal and exact-trim shell types share source identity semantics,
+/// but keep their distinct face/trim representations.
+trait SourceIdentifiedShell {
+    fn entity_counts(&self) -> (usize, usize, usize);
+    fn install_stable_ids(&mut self, ids: ShellStableIds);
+}
+
+trait SolidImportTarget: Sized {
+    type Shell: SourceIdentifiedShell;
+
+    fn convert_shell(table: &Table, id: u64) -> Result<ShellConversion<Self::Shell>, LoadError>;
+    fn from_boundaries(boundaries: Vec<Self::Shell>, allocator: StableIdAllocator) -> Self;
+}
+
+// The corresponding compressed shell and solid layouts deliberately share
+// identity fields. Implement their bookkeeping once without conflating the
+// different geometric representations or creating a separate topology owner.
+macro_rules! impl_solid_import_target {
+    ($shell:ty, $solid:ty, $converter:ident, $constructor:ident) => {
+        impl SourceIdentifiedShell for $shell {
+            fn entity_counts(&self) -> (usize, usize, usize) {
+                (self.vertices.len(), self.edges.len(), self.faces.len())
+            }
+
+            fn install_stable_ids(&mut self, ids: ShellStableIds) {
+                self.vertex_stable_ids = Some(ids.vertices);
+                self.edge_stable_ids = Some(ids.edges);
+                self.face_stable_ids = Some(ids.faces);
+            }
+        }
+
+        impl SolidImportTarget for $solid {
+            type Shell = $shell;
+
+            fn convert_shell(
+                table: &Table,
+                id: u64,
+            ) -> Result<ShellConversion<Self::Shell>, LoadError> {
+                table.$converter(id)
+            }
+
+            fn from_boundaries(boundaries: Vec<Self::Shell>, allocator: StableIdAllocator) -> Self {
+                $constructor {
+                    boundaries,
+                    id_allocator: Some(allocator),
+                    attributes: None,
+                }
+            }
+        }
+    };
+}
+
+impl_solid_import_target!(
+    StepCompressedShell,
+    StepCompressedSolid,
+    shell_conversion_by_id,
+    CompressedSolid
+);
+impl_solid_import_target!(
+    StepCompressedTrimmedShell,
+    StepCompressedTrimmedSolid,
+    trimmed_shell_conversion_by_id,
+    CompressedTrimmedSolid
+);
+
+/// Resolve outer and void shells in source order, allocating stable IDs and
+/// source provenance once per solid. Geometry conversion remains specific to
+/// the selected concrete shell type.
+fn import_solid<S: SolidImportTarget>(
+    table: &Table,
+    solid: &ManifoldSolidBrepHolder,
+) -> Result<StepSolidImport<S>, LoadError> {
+    let PlaceHolder::Ref(Name::Entity(outer_idx)) = &solid.outer else {
+        return Err("failed to reference `solid.outer`".into());
+    };
+    let mut conversions = vec![S::convert_shell(table, *outer_idx)?];
+    for inner in &solid.voids {
+        let PlaceHolder::Ref(Name::Entity(inner_idx)) = inner else {
+            return Err("failed to reference a member of `solid.voids`".into());
+        };
+        conversions.push(S::convert_shell(table, *inner_idx)?);
+    }
+
+    let mut assigner = StableIdAssigner::default();
+    let mut provenance = StepTopologyProvenance::default();
+    let mut boundaries = Vec::with_capacity(conversions.len());
+    let mut shell_reports = Vec::with_capacity(conversions.len());
+    for conversion in conversions {
+        let ShellConversion {
+            mut shell,
+            report,
+            sources,
+        } = conversion;
+        let ids = assign_shell_sources(
+            &mut assigner,
+            sources,
+            shell.entity_counts(),
+            &mut provenance,
+        )?;
+        shell.install_stable_ids(ids);
+        boundaries.push(shell);
+        shell_reports.push(report);
+    }
+
+    Ok(StepSolidImport {
+        solid: S::from_boundaries(boundaries, assigner.into_allocator()),
+        shell_reports,
+        provenance,
+    })
+}
+
 impl Table {
     fn place_holder_edge_any_to_index_and_edge_curve(
         &self,
@@ -1085,6 +1196,18 @@ impl Table {
             .map(|import| import.solid)
     }
 
+    /// Constructs a compressed trimmed solid from `ManifoldSolidBrep` in a STEP file.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or converted.
+    pub fn to_compressed_trimmed_solid(
+        &self,
+        solid: &ManifoldSolidBrepHolder,
+    ) -> Result<StepCompressedTrimmedSolid, LoadError> {
+        self.to_compressed_trimmed_solid_import(solid)
+            .map(|import| import.solid)
+    }
+
     /// Imports one STEP solid with kernel-local stable identity and explicit
     /// source provenance.
     ///
@@ -1100,44 +1223,24 @@ impl Table {
         &self,
         solid: &ManifoldSolidBrepHolder,
     ) -> Result<StepSolidImport<StepCompressedSolid>, LoadError> {
-        let PlaceHolder::Ref(Name::Entity(outer_idx)) = &solid.outer else {
-            return Err("failed to reference `solid.outer`".into());
-        };
-        let mut conversions = vec![self.shell_conversion_by_id(*outer_idx)?];
-        for inner in &solid.voids {
-            let PlaceHolder::Ref(Name::Entity(inner_idx)) = inner else {
-                return Err("failed to reference a member of `solid.voids`".into());
-            };
-            conversions.push(self.shell_conversion_by_id(*inner_idx)?);
-        }
+        import_solid(self, solid)
+    }
 
-        let mut assigner = StableIdAssigner::default();
-        let mut provenance = StepTopologyProvenance::default();
-        let mut boundaries = Vec::with_capacity(conversions.len());
-        let mut shell_reports = Vec::with_capacity(conversions.len());
-        for conversion in conversions {
-            let ShellConversion {
-                mut shell,
-                report,
-                sources,
-            } = conversion;
-            let counts = (shell.vertices.len(), shell.edges.len(), shell.faces.len());
-            let stable_ids = assign_shell_sources(&mut assigner, sources, counts, &mut provenance)?;
-            shell.vertex_stable_ids = Some(stable_ids.vertices);
-            shell.edge_stable_ids = Some(stable_ids.edges);
-            shell.face_stable_ids = Some(stable_ids.faces);
-            boundaries.push(shell);
-            shell_reports.push(report);
-        }
-        Ok(StepSolidImport {
-            solid: CompressedSolid {
-                boundaries,
-                id_allocator: Some(assigner.into_allocator()),
-                attributes: None,
-            },
-            shell_reports,
-            provenance,
-        })
+    /// Imports one exact-trim STEP solid with kernel-local stable identity and
+    /// explicit source provenance.
+    ///
+    /// Identity is assigned on the compressed topology before healing, so
+    /// surviving source topology keeps its stable IDs while later repair-created
+    /// topology can remain explicitly unassigned until allocated by the caller.
+    ///
+    /// # Errors
+    /// Returns an error if referenced STEP entities cannot be resolved or
+    /// converted, or if the stable-ID space is exhausted.
+    pub fn to_compressed_trimmed_solid_import(
+        &self,
+        solid: &ManifoldSolidBrepHolder,
+    ) -> Result<StepSolidImport<StepCompressedTrimmedSolid>, LoadError> {
+        import_solid(self, solid)
     }
 
     /// [`Self::to_compressed_solid`] plus one [`ShellLoadReport`] per boundary.
@@ -1159,72 +1262,6 @@ impl Table {
             provenance: _,
         } = self.to_compressed_solid_import(solid)?;
         Ok((solid, shell_reports))
-    }
-
-    /// Constructs a compressed trimmed solid from `ManifoldSolidBrep` in a STEP file.
-    ///
-    /// # Errors
-    /// Returns an error if referenced STEP entities cannot be resolved or converted.
-    pub fn to_compressed_trimmed_solid(
-        &self,
-        solid: &ManifoldSolidBrepHolder,
-    ) -> Result<StepCompressedTrimmedSolid, LoadError> {
-        self.to_compressed_trimmed_solid_import(solid)
-            .map(|import| import.solid)
-    }
-
-    /// Imports one exact-trim STEP solid with kernel-local stable identity and
-    /// explicit source provenance.
-    ///
-    /// Identity is assigned on the compressed topology before healing, so
-    /// surviving source topology keeps its stable IDs while later repair-created
-    /// topology can remain explicitly unassigned until allocated by the caller.
-    ///
-    /// # Errors
-    /// Returns an error if referenced STEP entities cannot be resolved or
-    /// converted, or if the stable-ID space is exhausted.
-    pub fn to_compressed_trimmed_solid_import(
-        &self,
-        solid: &ManifoldSolidBrepHolder,
-    ) -> Result<StepSolidImport<StepCompressedTrimmedSolid>, LoadError> {
-        let PlaceHolder::Ref(Name::Entity(outer_idx)) = &solid.outer else {
-            return Err("failed to reference `solid.outer`".into());
-        };
-        let mut conversions = vec![self.trimmed_shell_conversion_by_id(*outer_idx)?];
-        for inner in &solid.voids {
-            let PlaceHolder::Ref(Name::Entity(inner_idx)) = inner else {
-                return Err("failed to reference a member of `solid.voids`".into());
-            };
-            conversions.push(self.trimmed_shell_conversion_by_id(*inner_idx)?);
-        }
-
-        let mut assigner = StableIdAssigner::default();
-        let mut provenance = StepTopologyProvenance::default();
-        let mut boundaries = Vec::with_capacity(conversions.len());
-        let mut shell_reports = Vec::with_capacity(conversions.len());
-        for conversion in conversions {
-            let ShellConversion {
-                mut shell,
-                report,
-                sources,
-            } = conversion;
-            let counts = (shell.vertices.len(), shell.edges.len(), shell.faces.len());
-            let stable_ids = assign_shell_sources(&mut assigner, sources, counts, &mut provenance)?;
-            shell.vertex_stable_ids = Some(stable_ids.vertices);
-            shell.edge_stable_ids = Some(stable_ids.edges);
-            shell.face_stable_ids = Some(stable_ids.faces);
-            boundaries.push(shell);
-            shell_reports.push(report);
-        }
-        Ok(StepSolidImport {
-            solid: CompressedTrimmedSolid {
-                boundaries,
-                id_allocator: Some(assigner.into_allocator()),
-                attributes: None,
-            },
-            shell_reports,
-            provenance,
-        })
     }
 
     /// [`Self::to_compressed_trimmed_solid`] plus one [`ShellLoadReport`] per boundary.
