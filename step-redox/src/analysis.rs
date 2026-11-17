@@ -42,6 +42,9 @@ impl SectionCache {
 pub struct AnalysisSession {
     exchange: Exchange,
     sections: Vec<SectionCache>,
+    // Surface signatures are deep owned trees; retain them once and lend
+    // references rather than cloning a large tree for every diagnostic call.
+    surface_signatures: OnceLock<Vec<solid_revolutions::SolidSurfaceSignature>>,
 }
 
 impl AnalysisSession {
@@ -49,7 +52,11 @@ impl AnalysisSession {
         let sections = std::iter::repeat_with(SectionCache::default)
             .take(exchange.data.len())
             .collect();
-        Self { exchange, sections }
+        Self {
+            exchange,
+            sections,
+            surface_signatures: OnceLock::new(),
+        }
     }
 
     /// Decode and parse one supported STEP exchange.
@@ -84,20 +91,27 @@ impl AnalysisSession {
             .collect()
     }
 
+    /// Borrow the session's immutable surface/loop signatures. The first call
+    /// builds them from each DATA section in source order; subsequent calls
+    /// return the same evidence without geometry traversal or deep cloning.
+    ///
+    /// Call `.to_vec()` explicitly only when an owned snapshot is necessary.
     #[must_use]
-    pub fn solid_surface_signatures(&self) -> Vec<solid_revolutions::SolidSurfaceSignature> {
-        self.indexed_sections()
-            .flat_map(|(entities, index, _)| {
-                solid_revolutions::detect_solid_surface_signatures_with_index(entities, index)
-            })
-            .collect()
+    pub fn solid_surface_signatures(&self) -> &[solid_revolutions::SolidSurfaceSignature] {
+        self.surface_signatures.get_or_init(|| {
+            self.indexed_sections()
+                .flat_map(|(entities, index, _)| {
+                    solid_revolutions::detect_solid_surface_signatures_with_index(entities, index)
+                })
+                .collect()
+        })
     }
 
     #[must_use]
     pub fn dominant_extrusion_candidates(
         &self,
     ) -> Vec<dominant_extrusions::DominantExtrusionCandidate> {
-        dominant_extrusions::detect_dominant_extrusion_candidates(&self.solid_surface_signatures())
+        dominant_extrusions::detect_dominant_extrusion_candidates(self.solid_surface_signatures())
     }
 
     #[must_use]
@@ -303,6 +317,147 @@ mod tests {
         let report = session.complete_ir()?;
         assert_eq!(report.body_count, 2);
         assert_eq!(session.sections.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn surface_signatures_are_borrowed_and_shared_with_dominant_extrusions() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_split_ring_hollow_cylinder.step");
+        let session = AnalysisSession::from_bytes(bytes)?;
+        assert!(session.surface_signatures.get().is_none());
+        // Other detectors should not eagerly retain the surface signature tree.
+        let _ = session.formed_sheet_evidence();
+        assert!(session.surface_signatures.get().is_none());
+
+        let original =
+            solid_revolutions::detect_solid_surface_signatures(&session.exchange.data[0].entities);
+        let first = session.solid_surface_signatures();
+        assert_eq!(first, original.as_slice());
+        assert!(!first.is_empty());
+        assert!(std::ptr::eq(first, session.solid_surface_signatures()));
+
+        let expected = dominant_extrusions::detect_dominant_extrusion_candidates(&original);
+        assert_eq!(session.dominant_extrusion_candidates(), expected);
+        assert!(std::ptr::eq(first, session.solid_surface_signatures()));
+
+        // The reverse call order primes the same cache exactly once.
+        let reverse = AnalysisSession::from_bytes(bytes)?;
+        assert!(reverse.surface_signatures.get().is_none());
+        assert_eq!(reverse.dominant_extrusion_candidates(), expected);
+        assert_eq!(reverse.solid_surface_signatures(), original.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn surface_signature_cache_is_shared_across_readers_and_data_sections() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_conical_frustum.step");
+        let mut exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let [section] = exchange.data.as_slice() else {
+            anyhow::bail!("expected exactly one source DATA section");
+        };
+        exchange.data.push(section.clone());
+        let session = AnalysisSession::from_exchange(exchange);
+        assert!(session.surface_signatures.get().is_none());
+
+        let signatures = std::thread::scope(|scope| {
+            let handles = (0..4)
+                .map(|_| scope.spawn(|| session.solid_surface_signatures()))
+                .collect::<Vec<_>>();
+            let mut results = Vec::with_capacity(handles.len());
+            for handle in handles {
+                results.push(
+                    handle
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("signature reader panicked"))?,
+                );
+            }
+            Ok::<_, anyhow::Error>(results)
+        })?;
+        assert!(
+            signatures
+                .windows(2)
+                .all(|pair| std::ptr::eq(pair[0], pair[1]))
+        );
+        let signatures = session.solid_surface_signatures();
+        assert_eq!(signatures.len(), 2);
+        assert_eq!(signatures[0], signatures[1]);
+        assert!(std::ptr::eq(signatures, session.solid_surface_signatures()));
+        assert_eq!(session.sections.len(), 2);
+        // Equal IDs must not merge distinct DATA sections or reorder results.
+        let standalone = session
+            .exchange
+            .data
+            .iter()
+            .flat_map(|section| {
+                solid_revolutions::detect_solid_surface_signatures(&section.entities)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(signatures, standalone.as_slice());
+        Ok(())
+    }
+
+    /// Profile the surface-signature census, a deep owned clone, and borrowed
+    /// dominant-extrusion analysis on an actual STEP file. Intentionally not a
+    /// timing assertion; compare this before and after session caching.
+    #[test]
+    #[ignore = "manual profile of signature retention and borrowing"]
+    fn surface_signature_cost_benchmark() -> Result<()> {
+        let session = AnalysisSession::from_bytes(include_bytes!(
+            "../validation/fixtures/native_split_ring_hollow_cylinder.step"
+        ))?;
+        let (entities, index, _) = session
+            .indexed_sections()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no DATA section"))?;
+        let original =
+            solid_revolutions::detect_solid_surface_signatures_with_index(entities, index);
+        let faces = original
+            .iter()
+            .map(|solid| solid.faces.len())
+            .sum::<usize>();
+        let serialized_bytes = serde_json::to_vec(&original)?.len();
+        let runs = 36;
+        let start = Instant::now();
+        for _ in 0..runs {
+            black_box(
+                solid_revolutions::detect_solid_surface_signatures_with_index(entities, index),
+            );
+        }
+        let recompute = start.elapsed();
+        let start = Instant::now();
+        for _ in 0..runs {
+            black_box(original.clone());
+        }
+        let deep_clone = start.elapsed();
+        let start = Instant::now();
+        for _ in 0..runs {
+            black_box(dominant_extrusions::detect_dominant_extrusion_candidates(
+                black_box(&original),
+            ));
+        }
+        let dominant_only = start.elapsed();
+        let start = Instant::now();
+        let from_cache = session.solid_surface_signatures();
+        let cache_build = start.elapsed();
+        assert_eq!(from_cache, original.as_slice());
+        let start = Instant::now();
+        for _ in 0..runs {
+            black_box(session.solid_surface_signatures());
+            black_box(session.dominant_extrusion_candidates());
+        }
+        let borrowed_reuse = start.elapsed();
+        println!(
+            "signature census: solids={}, faces={}, serialized_bytes={}, runs={}, recompute={:?}, deep_clone={:?}, dominant_only={:?}, cache_build={:?}, borrowed_signature_and_dominant={:?}",
+            original.len(),
+            faces,
+            serialized_bytes,
+            runs,
+            recompute,
+            deep_clone,
+            dominant_only,
+            cache_build,
+            borrowed_reuse
+        );
         Ok(())
     }
 
