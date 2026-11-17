@@ -10,8 +10,8 @@ use crate::patterns::{
 };
 use crate::shape_identity::{face_topology_signature, oriented_edge_signature};
 use crate::step_entities::{
-    cartesian_point, direction_components, entity_ref, patch_presentation_lists, push_point,
-    push_simple, representation_items_and_context,
+    cartesian_point, direction_components, entity_ref, named_entity_parameters,
+    patch_presentation_lists, push_point, push_simple, representation_items_and_context,
 };
 use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
@@ -1920,21 +1920,9 @@ fn plane_frame(
     index: &HashMap<u64, usize>,
 ) -> Option<PlaneFrame> {
     let surface_id = face_surface(host_face, entities, index)?;
-    let surface = simple_record(&entities[*index.get(&surface_id)?])?;
-    if surface.name != "PLANE" {
-        return None;
-    }
-    let Parameter::List(surface_params) = &surface.parameter else {
-        return None;
-    };
+    let surface_params = named_entity_parameters(surface_id, "PLANE", entities, index)?;
     let axis_id = entity_ref_value(surface_params.get(1)?)?;
-    let axis = simple_record(&entities[*index.get(&axis_id)?])?;
-    if axis.name != "AXIS2_PLACEMENT_3D" {
-        return None;
-    }
-    let Parameter::List(axis_params) = &axis.parameter else {
-        return None;
-    };
+    let axis_params = named_entity_parameters(axis_id, "AXIS2_PLACEMENT_3D", entities, index)?;
     let origin_id = entity_ref_value(axis_params.get(1)?)?;
     let direction_id = entity_ref_value(axis_params.get(2)?)?;
     let origin = cartesian_point(origin_id, entities, index)?;

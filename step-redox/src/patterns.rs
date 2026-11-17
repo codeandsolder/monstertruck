@@ -5,7 +5,7 @@ use crate::numeric::{
     exact_i64_to_f64, exact_usize_to_f64, floored_f64_to_i64, rounded_f64_to_i64,
 };
 use crate::step_entities::{
-    entity_ref, entity_ref_list, numeric_list, push_simple,
+    cartesian_point, direction_components, entity_ref, entity_ref_list, push_simple,
     styled_items_by_target as style_records_by_target,
 };
 use crate::step_graph::{
@@ -1504,13 +1504,13 @@ fn target_frame(
             let Parameter::List(params) = &record.parameter else {
                 return None;
             };
-            let origin = point_coords(entity_ref_value(params.get(1)?)?, entities, index)?;
-            let z = normalize(direction_coords(
+            let origin = cartesian_point(entity_ref_value(params.get(1)?)?, entities, index)?;
+            let z = normalize(direction_components(
                 entity_ref_value(params.get(2)?)?,
                 entities,
                 index,
             )?)?;
-            let mut x = normalize(direction_coords(
+            let mut x = normalize(direction_components(
                 entity_ref_value(params.get(3)?)?,
                 entities,
                 index,
@@ -1526,18 +1526,18 @@ fn target_frame(
             if params.len() < 6 {
                 return None;
             }
-            let x = normalize(direction_coords(
+            let x = normalize(direction_components(
                 entity_ref_value(params.get(1)?)?,
                 entities,
                 index,
             )?)?;
-            let y = normalize(direction_coords(
+            let y = normalize(direction_components(
                 entity_ref_value(params.get(2)?)?,
                 entities,
                 index,
             )?)?;
-            let origin = point_coords(entity_ref_value(params.get(3)?)?, entities, index)?;
-            let z = normalize(direction_coords(
+            let origin = cartesian_point(entity_ref_value(params.get(3)?)?, entities, index)?;
+            let z = normalize(direction_components(
                 entity_ref_value(params.get(5)?)?,
                 entities,
                 index,
@@ -1584,38 +1584,6 @@ fn styles_by_target(entities: &[EntityInstance]) -> HashMap<u64, Vec<Vec<u64>>> 
             )
         })
         .collect()
-}
-
-fn point_coords(
-    point: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<[f64; 3]> {
-    let record = simple_record(entities.get(*index.get(&point)?)?)?;
-    if record.name != "CARTESIAN_POINT" {
-        return None;
-    }
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
-    let values = numeric_list(params.get(1)?)?;
-    (values.len() == 3).then(|| [values[0], values[1], values[2]])
-}
-
-fn direction_coords(
-    direction: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<[f64; 3]> {
-    let record = simple_record(entities.get(*index.get(&direction)?)?)?;
-    if record.name != "DIRECTION" {
-        return None;
-    }
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
-    let values = numeric_list(params.get(1)?)?;
-    (values.len() == 3).then(|| [values[0], values[1], values[2]])
 }
 
 fn quantize_matrix(matrix: [[f64; 3]; 3]) -> Option<[i64; 9]> {

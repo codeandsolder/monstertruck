@@ -1,7 +1,7 @@
 use crate::math3::{add, dot, norm, scale, sub};
 use crate::step_entities::{
-    entity_ref, entity_ref_list, integer_list, integer_value, number as numeric_value,
-    numeric_list, push_simple,
+    cartesian_point, entity_ref, entity_ref_list, integer_list, integer_value, numeric_list,
+    push_simple,
 };
 use crate::step_graph::{
     build_index, entity_id, entity_ref_value, simple_record, visit_entity_refs,
@@ -288,7 +288,7 @@ fn analyze_candidate(
 
     let points = poles
         .iter()
-        .map(|id| point_coords(*id, entities, index))
+        .map(|id| cartesian_point(*id, entities, index))
         .collect::<Option<Vec<_>>>()?;
     if points.iter().flatten().any(|value| !value.is_finite()) {
         return None;
@@ -430,7 +430,7 @@ fn vertex_coords(
     let Parameter::List(params) = &record.parameter else {
         return None;
     };
-    point_coords(entity_ref_value(params.get(1)?)?, entities, index)
+    cartesian_point(entity_ref_value(params.get(1)?)?, entities, index)
 }
 
 fn inbound_map_for_targets(
@@ -462,31 +462,6 @@ fn inbound_counts_for_targets(
         });
     }
     out
-}
-
-fn point_coords(
-    id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<[f64; 3]> {
-    let record = simple_record(entities.get(*index.get(&id)?)?)?;
-    if record.name != "CARTESIAN_POINT" {
-        return None;
-    }
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
-    let Parameter::List(coords) = params.get(1)? else {
-        return None;
-    };
-    if coords.len() != 3 {
-        return None;
-    }
-    Some([
-        numeric_value(&coords[0])?,
-        numeric_value(&coords[1])?,
-        numeric_value(&coords[2])?,
-    ])
 }
 
 fn is_false_logical(param: &Parameter) -> bool {

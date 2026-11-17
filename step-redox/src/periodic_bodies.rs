@@ -1,5 +1,5 @@
 use crate::math3::{canonical_direction, cross, dot, norm, normalize as normalize3};
-use crate::step_entities::{cartesian_point, number as numeric_value};
+use crate::step_entities::{cartesian_point, direction_components, named_entity_parameters};
 use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use serde::Serialize;
@@ -504,32 +504,9 @@ fn plane_normal(
         return None;
     };
     let placement = entity_ref_value(params.get(1)?)?;
-    let placement_record = simple_record(entities.get(*index.get(&placement)?)?)?;
-    if placement_record.name != "AXIS2_PLACEMENT_3D" {
-        return None;
-    }
-    let Parameter::List(place_params) = &placement_record.parameter else {
-        return None;
-    };
+    let place_params = named_entity_parameters(placement, "AXIS2_PLACEMENT_3D", entities, index)?;
     let direction = entity_ref_value(place_params.get(2)?)?;
-    let direction_record = simple_record(entities.get(*index.get(&direction)?)?)?;
-    if direction_record.name != "DIRECTION" {
-        return None;
-    }
-    let Parameter::List(dir_params) = &direction_record.parameter else {
-        return None;
-    };
-    let Parameter::List(coords) = dir_params.get(1)? else {
-        return None;
-    };
-    if coords.len() != 3 {
-        return None;
-    }
-    normalize([
-        numeric_value(&coords[0])?,
-        numeric_value(&coords[1])?,
-        numeric_value(&coords[2])?,
-    ])
+    normalize(direction_components(direction, entities, index)?)
 }
 
 fn orthogonal_basis(axis: [f64; 3]) -> Option<([f64; 3], [f64; 3])> {

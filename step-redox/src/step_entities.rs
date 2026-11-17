@@ -2,19 +2,30 @@ use crate::step_graph::{entity_ref_value, simple_record, simple_record_mut, visi
 use std::collections::{HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
-pub fn cartesian_point(
+/// Fetch the positional parameters of a simple STEP entity of the requested type.
+/// Complex entities, malformed parameter lists, and stale IDs fail closed.
+pub fn named_entity_parameters<'a>(
     id: u64,
-    entities: &[EntityInstance],
+    expected_name: &str,
+    entities: &'a [EntityInstance],
     index: &HashMap<u64, usize>,
-) -> Option<[f64; 3]> {
-    let &idx = index.get(&id)?;
-    let record = simple_record(&entities[idx])?;
-    if record.name != "CARTESIAN_POINT" {
+) -> Option<&'a [Parameter]> {
+    let record = simple_record(entities.get(*index.get(&id)?)?)?;
+    if record.name != expected_name {
         return None;
     }
     let Parameter::List(params) = &record.parameter else {
         return None;
     };
+    Some(params)
+}
+
+pub fn cartesian_point(
+    id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<[f64; 3]> {
+    let params = named_entity_parameters(id, "CARTESIAN_POINT", entities, index)?;
     let Parameter::List(coords) = params.get(1)? else {
         return None;
     };
@@ -41,13 +52,7 @@ pub fn direction_components(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<[f64; 3]> {
-    let record = simple_record(&entities[*index.get(&id)?])?;
-    if record.name != "DIRECTION" {
-        return None;
-    }
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
+    let params = named_entity_parameters(id, "DIRECTION", entities, index)?;
     let Parameter::List(values) = params.get(1)? else {
         return None;
     };
@@ -299,3 +304,78 @@ pub fn push_simple(
 }
 
 pub const fn entity_ref(id: u64) -> Parameter { Parameter::Ref(Name::Entity(id)) }
+
+#[cfg(test)]
+mod coordinate_lookup_tests {
+    use super::*;
+
+    fn entity(id: u64, kind: &str, values: Vec<Parameter>) -> EntityInstance {
+        EntityInstance::Simple {
+            id,
+            record: Record {
+                name: kind.to_owned(),
+                parameter: Parameter::List(vec![
+                    Parameter::String(String::new()),
+                    Parameter::List(values),
+                ]),
+            },
+        }
+    }
+
+    #[test]
+    fn shared_coordinate_accessors_preserve_point_and_direction_types() {
+        let entities = vec![
+            entity(
+                1,
+                "CARTESIAN_POINT",
+                vec![
+                    Parameter::Integer(3),
+                    Parameter::Real(-2.5),
+                    Parameter::Real(0.0),
+                ],
+            ),
+            entity(
+                2,
+                "DIRECTION",
+                vec![
+                    Parameter::Real(0.0),
+                    Parameter::Integer(0),
+                    Parameter::Real(1.0),
+                ],
+            ),
+        ];
+        let index = HashMap::from([(1, 0), (2, 1)]);
+        assert_eq!(
+            cartesian_point(1, &entities, &index),
+            Some([3.0, -2.5, 0.0])
+        );
+        assert_eq!(
+            direction_components(2, &entities, &index),
+            Some([0.0, 0.0, 1.0])
+        );
+        assert_eq!(cartesian_point(2, &entities, &index), None);
+        assert_eq!(direction_components(1, &entities, &index), None);
+    }
+
+    #[test]
+    fn shared_coordinate_accessors_reject_incomplete_or_stale_references() {
+        let entities = vec![
+            entity(1, "CARTESIAN_POINT", vec![Parameter::Real(1.0)]),
+            entity(
+                2,
+                "DIRECTION",
+                vec![
+                    Parameter::Real(1.0),
+                    Parameter::String("bad".to_owned()),
+                    Parameter::Real(3.0),
+                ],
+            ),
+        ];
+        let index = HashMap::from([(1, 0), (2, 1), (3, 100)]);
+        assert_eq!(cartesian_point(1, &entities, &index), None);
+        assert_eq!(direction_components(2, &entities, &index), None);
+        assert_eq!(cartesian_point(3, &entities, &index), None);
+        assert_eq!(direction_components(3, &entities, &index), None);
+        assert_eq!(cartesian_point(4, &entities, &index), None);
+    }
+}

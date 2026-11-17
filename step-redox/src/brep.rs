@@ -2,8 +2,8 @@ use crate::math3::{dot, mul, normalize as normalize3, sub};
 use crate::shape_identity::{manifold_solid_face_ids, resolve_edge_curve_use};
 use crate::step_entities::{
     cartesian_point, direction_components as raw_direction_components, entity_ref,
-    enumeration_bool as parse_enumeration_bool, finite_numeric_list, number,
-    vertex_point as parse_vertex_point,
+    enumeration_bool as parse_enumeration_bool, finite_numeric_list, named_entity_parameters,
+    number, vertex_point as parse_vertex_point,
 };
 use crate::step_graph::{entity_ref_value, simple_record, simple_record_mut};
 use crate::surface_recovery;
@@ -212,13 +212,7 @@ pub fn oriented_edge_use(
 ) -> Option<OrientedEdgeUse> {
     let (edge_id, forward) = resolve_edge_curve_use(oriented_edge_id, entities, index)?;
 
-    let edge_record = simple_record(&entities[*index.get(&edge_id)?])?;
-    if edge_record.name != "EDGE_CURVE" {
-        return None;
-    }
-    let Parameter::List(edge_params) = &edge_record.parameter else {
-        return None;
-    };
+    let edge_params = named_entity_parameters(edge_id, "EDGE_CURVE", entities, index)?;
     let raw_start = entity_ref_value(edge_params.get(1)?)?;
     let raw_end = entity_ref_value(edge_params.get(2)?)?;
     let curve_id = entity_ref_value(edge_params.get(3)?)?;
