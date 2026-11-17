@@ -6,10 +6,10 @@
 use super::{
     Bound, Bounded, BoundedCurve, BoundingBox, BsplineCurve, Concat, ConcatError, ControlPoint,
     CurveCollector, CurveParameter, Cut, Deserialize, EuclideanSpace, HashGen, Homogeneous,
-    InnerSpace, Invertible, KERNEL_EPSILON, KnotVector, MetricSpace, Origin, PRESEARCH_DIVISION,
-    ParameterDivision1D, ParameterRange, ParameterTransform, ParametricCurve, Result,
-    SearchNearestParameter, SearchParameter, SearchParameterHint1D, Tolerance, Transform,
-    Transformed, Zero, algo, gaussian_elimination, inv_or_zero,
+    InnerSpace, Invertible, KERNEL_EPSILON, KnotVector, MetricSpace, Origin, ParameterDivision1D,
+    ParameterRange, ParameterTransform, ParametricCurve, Result, SearchNearestParameter,
+    SearchParameter, SearchParameterHint1D, Tolerance, Transform, Transformed, Zero, algo,
+    gaussian_elimination, inv_or_zero, search_curve_with_hint,
 };
 use crate::errors::Error;
 #[cfg(test)]
@@ -1372,16 +1372,13 @@ where
         hint: H,
         trial: usize,
     ) -> Option<f64> {
-        let hint = match hint.into() {
-            SearchParameterHint1D::Parameter(hint) => hint,
-            SearchParameterHint1D::Range(x, y) => {
-                algo::curve::presearch(self, point, (x, y), PRESEARCH_DIVISION)
-            }
-            SearchParameterHint1D::None => {
-                algo::curve::presearch(self, point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
-        algo::curve::search_nearest_parameter(self, point, hint, trial)
+        search_curve_with_hint(
+            self,
+            point,
+            hint,
+            trial,
+            algo::curve::search_nearest_parameter,
+        )
     }
 }
 impl<P> SearchParameter<CurveParameter> for BsplineCurve<P>
@@ -1399,16 +1396,7 @@ where
         hint: H,
         trial: usize,
     ) -> Option<f64> {
-        let hint = match hint.into() {
-            SearchParameterHint1D::Parameter(hint) => hint,
-            SearchParameterHint1D::Range(x, y) => {
-                algo::curve::presearch(self, point, (x, y), PRESEARCH_DIVISION)
-            }
-            SearchParameterHint1D::None => {
-                algo::curve::presearch(self, point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
-        algo::curve::search_parameter(self, point, hint, trial)
+        search_curve_with_hint(self, point, hint, trial, algo::curve::search_parameter)
     }
 }
 

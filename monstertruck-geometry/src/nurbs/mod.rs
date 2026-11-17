@@ -254,6 +254,53 @@ pub mod fair;
 /// Curve and surface offset operations.
 pub mod offset;
 
+/// Resolve a one-dimensional curve search hint into a Newton seed.
+///
+/// A supplied parameter must bypass sampling; a bounded search range only
+/// samples that range; an absent hint samples the curve's natural domain.
+/// Both exact and nearest searches intentionally use the same presearch.
+#[inline]
+fn resolve_curve_search_hint<C, H>(curve: &C, point: C::Point, hint: H) -> f64
+where
+    C: BoundedCurve,
+    C::Point: MetricSpace<Metric = f64> + Copy,
+    H: Into<monstertruck_traits::SearchParameterHint1D>, {
+    use monstertruck_traits::SearchParameterHint1D;
+
+    match hint.into() {
+        SearchParameterHint1D::Parameter(parameter) => parameter,
+        SearchParameterHint1D::Range(start, end) => {
+            algo::curve::presearch(curve, point, (start, end), PRESEARCH_DIVISION)
+        }
+        SearchParameterHint1D::None => {
+            algo::curve::presearch(curve, point, curve.range_tuple(), PRESEARCH_DIVISION)
+        }
+    }
+}
+
+/// Apply a selected exact or nearest-point solver after resolving its
+/// seed. Keeping the presearch/dispatch pair together avoids divergence
+/// between search traits and between polynomial and rational splines.
+#[inline]
+fn search_curve_with_hint<C, H>(
+    curve: &C,
+    point: C::Point,
+    hint: H,
+    trials: usize,
+    solver: fn(&C, C::Point, f64, usize) -> Option<f64>,
+) -> Option<f64>
+where
+    C: BoundedCurve,
+    C::Point: MetricSpace<Metric = f64> + Copy,
+    H: Into<monstertruck_traits::SearchParameterHint1D>,
+{
+    let seed = resolve_curve_search_hint(curve, point, hint);
+    solver(curve, point, seed, trials)
+}
+
+#[cfg(test)]
+mod search_hint_tests;
+
 mod bspline_curve;
 mod bspline_surface;
 /// Full-boundary continuity capability inspection.
