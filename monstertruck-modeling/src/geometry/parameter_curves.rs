@@ -471,6 +471,7 @@ impl ToCompressedTrimmedParameterCurves for Solid {
 mod surface_identity_tests {
     use super::*;
     use crate::{IncludeCurve, ParameterBoundary2D, Plane, SurfaceCurve};
+    use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
 
     #[test]
     fn coincident_support_does_not_reuse_foreign_uv_curve() {
@@ -534,6 +535,10 @@ mod surface_identity_tests {
                 Point3::new(1.0, 0.0, 0.0),
             ],
         ));
+        assert!(
+            leader.try_into_homogeneous_bspline_curve().is_some(),
+            "the approximate leader has an exact B-spline representation"
+        );
         assert!(!target.include(&leader), "guide is not on target");
         assert!(!same_surface_parameterization(&plane0, &target));
         let corrected = Curve::Intersection(SurfaceCurve::with_boundaries(
@@ -548,6 +553,10 @@ mod surface_identity_tests {
         assert!(
             middle.z.abs() < 1.0e-8,
             "intersection solver must correct the guide: {middle:?}"
+        );
+        assert!(
+            corrected.try_into_homogeneous_bspline_curve().is_none(),
+            "a projected intersection is not exactly its B-spline leader"
         );
         assert!(
             target.include(&corrected),

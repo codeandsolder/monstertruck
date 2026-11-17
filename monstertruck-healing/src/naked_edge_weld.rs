@@ -229,8 +229,11 @@ impl std::error::Error for SnapError {}
 ///
 /// The curve proof needs each curve's exact B-spline form
 /// ([`TryIntoHomogeneousBsplineCurve`]); lines, B-splines and NURBS have one.
-/// The conversion is checked against the curve at every knot and span
-/// midpoint. A curve without one is never welded.
+/// Knot and midpoint comparisons are sanity checks, **not** proof of exactness
+/// between samples: that is the conversion trait's contract. Projected surface
+/// intersections whose evaluated geometry may differ from their marching
+/// leader therefore refuse the conversion. A curve without an exact form is
+/// never welded.
 ///
 /// Guarantees:
 ///

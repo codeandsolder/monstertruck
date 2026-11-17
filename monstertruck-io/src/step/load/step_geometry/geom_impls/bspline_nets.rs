@@ -36,8 +36,11 @@ impl TryIntoHomogeneousBsplineCurve for Curve3D {
             Self::Conic(Conic3D::Ellipse(curve)) => curve.try_into_homogeneous_bspline_curve(),
             Self::Conic(_) | Self::ParameterCurve(_) | Self::Polyline(_) => None,
             Self::BsplineCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
+            // A STEP surface curve evaluates its own leader directly.
             Self::SurfaceCurve(curve) => curve.leader().try_into_homogeneous_bspline_curve(),
-            Self::IntersectionCurve(curve) => curve.leader().try_into_homogeneous_bspline_curve(),
+            // A surface intersection instead evaluates Newton-projected points;
+            // its marching leader is not generally the same exact curve.
+            Self::IntersectionCurve(_) => None,
             Self::NurbsCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
         }
     }

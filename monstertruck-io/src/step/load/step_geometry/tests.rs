@@ -6,6 +6,47 @@
 use super::*;
 
 #[test]
+fn projected_step_intersection_cannot_claim_its_leader_as_exact_nurbs() {
+    let plane_xy = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
+    let plane_xz = Surface::Elementary(ElementarySurface::Plane(Plane::new(
+        Point3::origin(),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 1.0),
+    )));
+    let leader = Curve3D::BsplineCurve(BsplineCurve::new_unchecked(
+        KnotVector::bezier_knot(2),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.5, 0.0, 0.01),
+            Point3::new(1.0, 0.0, 0.0),
+        ],
+    ));
+    assert!(leader.try_into_homogeneous_bspline_curve().is_some());
+    // Unlike a projected intersection, STEP surface_curve evaluation delegates
+    // directly to the leader and may retain its exact representation.
+    let direct = Curve3D::SurfaceCurve(SurfaceCurve3D::new(
+        SurfaceCurveKind::Surface,
+        Box::new(leader.clone()),
+        Vec::new(),
+        SurfaceCurveRepresentation::Curve3D,
+    ));
+    assert!(direct.try_into_homogeneous_bspline_curve().is_some());
+    let projected = Curve3D::IntersectionCurve(IntersectionCurve::new(
+        Box::new(plane_xy),
+        Box::new(plane_xz),
+        Box::new(leader),
+    ));
+    assert!(
+        projected.evaluate(0.5).z.abs() < 1.0e-8,
+        "the projected curve must lie on both planes"
+    );
+    assert!(
+        projected.try_into_homogeneous_bspline_curve().is_none(),
+        "a STEP intersection must not falsely certify its marching guide"
+    );
+}
+
+#[test]
 fn surface_curve_rejects_invalid_pcurve_on_identical_surface() {
     let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
     let leader = Curve3D::Line(Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)));
