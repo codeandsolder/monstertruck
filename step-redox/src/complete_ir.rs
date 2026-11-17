@@ -1132,7 +1132,13 @@ where
     failures
 }
 
-type SectionEvidence<'a> = (&'a HashMap<u64, usize>, &'a HashMap<u64, f64>);
+/// Borrowed, per-DATA read-only evidence supplied by an `AnalysisSession`.
+/// Never qualify signatures using a document-global raw entity ID.
+pub(crate) struct SectionEvidence<'a> {
+    pub index: &'a HashMap<u64, usize>,
+    pub source_tolerances: &'a HashMap<u64, f64>,
+    pub surface_signatures: Option<&'a [SolidSurfaceSignature]>,
+}
 
 /// Borrow section-local indexes and source tolerances from the owning
 /// `AnalysisSession`. Kernel-owned recovery still builds evidence independently.
@@ -1172,7 +1178,7 @@ fn recover_complete_ir_build_state<'a>(
         let cached = sections.and_then(|items| items.get(data_section));
         let index = cached.map_or_else(
             || Cow::Owned(crate::step_graph::build_index(&section.entities)),
-            |(index, _)| Cow::Borrowed(*index),
+            |context| Cow::Borrowed(context.index),
         );
         let recovery_section = RecoverySection {
             data_section,
@@ -1180,24 +1186,34 @@ fn recover_complete_ir_build_state<'a>(
             index,
         };
 
-        for signature in crate::solid_revolutions::detect_solid_surface_signatures_with_index(
-            recovery_section.entities,
-            &recovery_section.index,
-        ) {
+        let section_signatures = cached
+            .and_then(|context| context.surface_signatures)
+            .map_or_else(
+                || {
+                    Cow::Owned(
+                        crate::solid_revolutions::detect_solid_surface_signatures_with_index(
+                            recovery_section.entities,
+                            &recovery_section.index,
+                        ),
+                    )
+                },
+                Cow::Borrowed,
+            );
+        for signature in section_signatures.iter() {
             let source = recovery_section.source_entity(signature.solid_id).ok_or_else(|| {
                 anyhow::anyhow!(
                     "surface signature refers to missing solid #{} in DATA section {data_section}",
                     signature.solid_id
                 )
             })?;
-            signatures.push(SurfaceSignatureSummary::from_source(source, &signature));
+            signatures.push(SurfaceSignatureSummary::from_source(source, signature));
         }
 
-        let mut section_candidates = if let Some((_, tolerances)) = cached {
+        let mut section_candidates = if let Some(context) = cached {
             recover_constructive_fragments_with_tolerances(
                 recovery_section.entities,
                 &recovery_section.index,
-                tolerances,
+                context.source_tolerances,
             )?
         } else {
             recover_constructive_fragments_from_entities_with_index(
