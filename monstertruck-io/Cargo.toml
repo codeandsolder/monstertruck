@@ -67,6 +67,8 @@ cadmpeg-codec-step = { version = "0.6", optional = true }
 cadmpeg-core = { version = "0.6", optional = true }
 
 [dev-dependencies]
+# Use cadmpeg's independent cube fixture to validate its IR contract.
+cadmpeg-ir = { version = "0.6", features = ["examples"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 image = { workspace = true }
