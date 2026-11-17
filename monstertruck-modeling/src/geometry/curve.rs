@@ -515,8 +515,10 @@ impl TryIntoHomogeneousBsplineCurve for Curve {
             Self::Line(curve) => curve.try_into_homogeneous_bspline_curve(),
             Self::BsplineCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
             Self::NurbsCurve(curve) => curve.try_into_homogeneous_bspline_curve(),
-            Self::ParameterCurve(_) => None,
-            Self::Intersection(curve) => curve.leader().try_into_homogeneous_bspline_curve(),
+            // The evaluated surface intersection is Newton-projected and may
+            // differ from its approximate marching leader between samples.
+            // Returning the leader would break the exact-conversion contract.
+            Self::ParameterCurve(_) | Self::Intersection(_) => None,
         }
     }
 

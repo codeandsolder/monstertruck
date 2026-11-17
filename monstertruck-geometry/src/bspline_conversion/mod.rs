@@ -68,6 +68,12 @@ fn parameter_range_reaches_outside(requested: (f64, f64), own: (f64, f64)) -> bo
 
 /// Attempts to produce an exact homogeneous B-spline curve representation.
 ///
+/// A successful conversion must preserve the curve's evaluated points at
+/// *every* parameter in its domain, not merely agree at sampled knots or span
+/// midpoints. In particular, a geometric guide to a numerically projected
+/// surface intersection is not an exact representation of the intersection.
+/// Return \`None\` if this identity cannot be established.
+///
 /// The returned control net is in homogeneous coordinates, so true rational
 /// NURBS curves remain exact.
 pub trait TryIntoHomogeneousBsplineCurve {

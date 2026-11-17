@@ -25,11 +25,11 @@ impl TryFrom<Surface> for NurbsSurface<Vector4> {
 
 impl TryFrom<Curve> for NurbsCurve<Vector4> {
     type Error = ();
-    // Exact or refuse: boolean seam edges are `IntersectionCurve`s whose
-    // exact leader must survive conversion; a sampled polyline stand-in would
-    // silently degrade downstream fillet/chamfer geometry. Parameter curves
-    // and non-exact leader chains have no exact NURBS form, so they refuse
-    // here and surface as `FilletError::UnsupportedGeometry`.
+    // Exact or refuse: surface intersections can evaluate to Newton-projected
+    // points that differ from the marching B-spline leader. Such curves have
+    // no certified exact NURBS conversion, and must be refused rather than
+    // silently changing fillet/chamfer geometry. Parameter curves likewise
+    // refuse unless an exact representation is independently available.
     fn try_from(curve: Curve) -> std::result::Result<Self, ()> {
         curve
             .try_into_homogeneous_bspline_curve()
