@@ -3,6 +3,7 @@ use super::*;
 mod closed_edges;
 mod closed_faces_cylinders;
 mod closed_faces_holes;
+mod naked_edge_weld;
 mod non_simple_wires;
 mod parameter_domains;
 mod shell_orientation;

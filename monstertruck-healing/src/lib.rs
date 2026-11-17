@@ -2,7 +2,8 @@
 //!
 //! The compressed-shell repair passes that turn a loaded B-rep into something a
 //! boolean kernel can work with: closed-edge and closed-face splitting, seam
-//! stripping, pass-through-edge dedup and shell orientation normalization.
+//! stripping, pass-through-edge dedup, shell orientation normalization and opt-in
+//! conservative naked-edge welding.
 //!
 //! These passes are POST-CSG and kernel-independent -- nothing here references a
 //! boolean backend, which is why the crate sits below both the published
@@ -34,6 +35,9 @@ use std::env;
 // `web_time::Instant` is `std::time::Instant` on native and falls back to the
 // browser performance clock on wasm32, where `std::time::Instant::now()` panics.
 use web_time::Instant;
+
+mod naked_edge_weld;
+pub use naked_edge_weld::{SkipReason, SnapError, SnapReport, snap_naked_edges};
 
 type Edge<C> = CompressedEdge<C>;
 type EdgeIndex = CompressedEdgeIndex;
