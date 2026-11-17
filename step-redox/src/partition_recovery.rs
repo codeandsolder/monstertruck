@@ -1,8 +1,8 @@
 use crate::math3::{canonical_direction, canonical_unit_direction, dot, normalize as normalize3};
 use crate::step_entities::{
-    edge_vertices, entity_ref, entity_ref_list, enumeration_bool as logical_bool,
-    number as numeric_value, numeric_list, oriented_edge_element, oriented_edge_orientation,
-    push_simple, styled_items_by_target as styles_by_target,
+    cartesian_point, direction_components, edge_vertices, entity_ref, entity_ref_list,
+    enumeration_bool as logical_bool, number as numeric_value, oriented_edge_element,
+    oriented_edge_orientation, push_simple, styled_items_by_target as styles_by_target,
 };
 use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
@@ -798,8 +798,8 @@ fn axis_location_and_axis(
     let Parameter::List(params) = &record.parameter else {
         return None;
     };
-    let point = point_coords(entity_ref_value(params.get(1)?)?, entities, index)?;
-    let axis = direction_coords(entity_ref_value(params.get(2)?)?, entities, index)?;
+    let point = cartesian_point(entity_ref_value(params.get(1)?)?, entities, index)?;
+    let axis = direction_components(entity_ref_value(params.get(2)?)?, entities, index)?;
     Some((point, axis))
 }
 
@@ -815,39 +815,7 @@ fn vertex_point(
     let Parameter::List(params) = &record.parameter else {
         return None;
     };
-    point_coords(entity_ref_value(params.get(1)?)?, entities, index)
-}
-
-fn point_coords(
-    point: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<[f64; 3]> {
-    let record = simple_record(entities.get(*index.get(&point)?)?)?;
-    if record.name != "CARTESIAN_POINT" {
-        return None;
-    }
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
-    let xyz = numeric_list(params.get(1)?)?;
-    (xyz.len() == 3).then(|| [xyz[0], xyz[1], xyz[2]])
-}
-
-fn direction_coords(
-    direction: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<[f64; 3]> {
-    let record = simple_record(entities.get(*index.get(&direction)?)?)?;
-    if record.name != "DIRECTION" {
-        return None;
-    }
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
-    let xyz = numeric_list(params.get(1)?)?;
-    (xyz.len() == 3).then(|| [xyz[0], xyz[1], xyz[2]])
+    cartesian_point(entity_ref_value(params.get(1)?)?, entities, index)
 }
 
 fn rewrite_edge_vertices(record: &mut Record, uf: &mut UnionFind) -> Option<()> {

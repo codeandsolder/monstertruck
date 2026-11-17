@@ -1,7 +1,7 @@
 use crate::math3::{distance, norm, sub};
 use crate::step_entities::{
-    cartesian_point, closure_from, direction_components, entity_ref, number, push_point,
-    push_simple,
+    cartesian_point, closure_from, direction_components, entity_ref, named_entity_parameters,
+    number, push_point, push_simple,
 };
 use crate::step_graph::{ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
@@ -240,13 +240,8 @@ fn parse_surface(
     };
     let name = params.first()?.clone();
     let placement_id = entity_ref_value(params.get(1)?)?;
-    let placement = simple_record(&entities[*index.get(&placement_id)?])?;
-    if placement.name != "AXIS2_PLACEMENT_3D" {
-        return None;
-    }
-    let Parameter::List(place_params) = &placement.parameter else {
-        return None;
-    };
+    let place_params =
+        named_entity_parameters(placement_id, "AXIS2_PLACEMENT_3D", entities, index)?;
     let origin_id = entity_ref_value(place_params.get(1)?)?;
     let axis_id = entity_ref_value(place_params.get(2)?)?;
     let ref_id = entity_ref_value(place_params.get(3)?)?;
