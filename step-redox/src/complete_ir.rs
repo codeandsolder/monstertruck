@@ -3354,6 +3354,51 @@ END-ISO-10303-21;
         Ok(())
     }
 
+    /// The real JLC connector's four independent rectangular stations are
+    /// recognized without source-specific dimensions. A valid native loft
+    /// alone is not an automatic source admission: the exported *oriented*
+    /// analytic boundary must independently match the original solid.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_staged_connector_loft_is_source_boundary_proven() -> Result<()> {
+        let input = include_bytes!("../validation/fixtures/native_staged_rectangular_loft.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let source = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+        let [section] = source.data.as_slice() else {
+            bail!("JLC connector source needs exactly one DATA section");
+        };
+        let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(
+            report.unrecovered_solid_count, 0,
+            "{:?}",
+            report.kernel_recovery_failures
+        );
+        let [loft] = report.solid_lofts.as_slice() else {
+            bail!("JLC connector did not admit precisely one editable loft");
+        };
+        let CadFragmentSource::SolidLoft { solid_id, .. } = loft.fragment.source else {
+            bail!("JLC connector selected an unexpected CAD source");
+        };
+        loft.fragment.model.validate()?;
+        let rebuilt = kernel.evaluate(&loft.fragment.model, loft.fragment.root)?;
+        assert!(kernel.summarize(&rebuilt).is_single_solid());
+        assert!(
+            rebuilt_kernel_boundary_matches_source(&kernel, &rebuilt, solid_id, &section.entities)?,
+            "automatically recovered JLC staged loft must match its complete oriented source boundary"
+        );
+        assert!(
+            recover_verified_direct_constructive_fragment(
+                report.body_scan.solids[0].source,
+                &source,
+                &kernel,
+            )?
+            .is_some(),
+            "the generic source-admission path must independently certify this JLC loft"
+        );
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn real_open_round_bend_paths_recover_as_executable_cad_sweeps() -> Result<()> {
