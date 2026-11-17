@@ -692,10 +692,6 @@ fn selected_faces_connected(face_count: usize, edge_faces: &HashMap<u64, Vec<usi
 /// Recover a connected axisymmetric subset of one source solid when removing the
 /// remaining feature leaves exactly one circular interface. The missing interface
 /// is capped only in constructive meridian space; source topology remains untouched.
-#[expect(
-    clippy::too_many_lines,
-    reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"
-)]
 pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
     solid_id: u64,
     selected_face_ids: &[u64],
