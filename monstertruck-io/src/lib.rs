@@ -9,7 +9,7 @@
 //! | format | feature | default | state |
 //! | --- | --- | --- | --- |
 //! | ISO 10303-21 (STEP) | `step` | yes | read and write, ours |
-//! | IGES 5.3 | `iges` | no | read only, and 5.3 only -- see below |
+//! | IGES 4.0 to 5.3 | `iges` | no | read only, via cadmpeg 0.6 |
 //!
 //! ```
 //! use monstertruck_io::step::load::{*, step_geometry::*};
@@ -30,10 +30,10 @@
 //!
 //! It deliberately does **not** go through cadmpeg. It is measured against a
 //! corpus, routes analytic surfaces onto closed forms so booleans stay exact,
-//! and reports what a file lost. Measured 2026-08-04 on `occt-cylinder.step`:
-//! monstertruck reads it correctly, and cadmpeg drops the whole
-//! `MANIFOLD_SOLID_BREP` because one parameter-space `CIRCLE` fails to decode
-//! (cadmpeg/cadmpeg#79). Writing STEP is ours outright.
+//! and reports what a file lost. The cadmpeg 0.6 bridge is a separate,
+//! opt-in alternative used for comparative import testing, not our STEP writer.
+//! Earlier cadmpeg losses on circular edges (cadmpeg/cadmpeg#79) were fixed
+//! upstream (cadmpeg/cadmpeg#83).
 //!
 //! # IGES: the conversion works, the decoder is the limit
 //!
@@ -49,24 +49,21 @@
 //!
 //! ## What still stops a real file
 //!
-//! **`cadmpeg-codec-iges` 0.4 decodes IGES 5.3 only.** Older exports are refused
-//! by the decoder before the converter is reached: measured 2026-08-18, an IGES
-//! 4.0 file and an IGES 5.2 file both return [`Error::Decode`]. So a failure to
-//! read an IGES file in the wild is more likely the version ceiling than
-//! anything here, and no work in this crate moves it.
+//! **`cadmpeg-codec-iges` 0.6 decodes fixed-format ASCII IGES 4.0 through 5.3.**
+//! It returns decoder losses with their original provenance, even when the
+//! decoder succeeds. Unsupported body types remain named refusals.
 //!
 //! Carriers this crate refuses on its own are refused BY NAME
 //! ([`Error::UnsupportedSurfaceKind`], [`Error::UnsupportedCurveKind`]): ellipses
-//! and the other conics, composite curves, periodic NURBS, pole loops, and
-//! coedge-local edges.
+//! and the other conics, composite curves, procedural carriers without exact
+//! caches, pole loops, and coedge-local edges. Periodic NURBS are supported.
 //!
 //! ## Nothing is ever silently empty
 //!
-//! A caller cannot mistake any failure for "this file contained no geometry". An
-//! empty document is [`Error::NoGeometry`]; a body that cannot be represented
-//! fails the whole call and names itself, because a returned `Vec` cannot report
-//! that one of its entries was left out. `Ok(vec![])` is unreachable, and
-//! `tests/refuses_rather_than_returns_nothing.rs` pins that.
+//! An empty document yields [`Error::NoGeometry`]. The normal IGES reader returns
+//! [`cadmpeg::Import`] with convertible bodies, explicitly named refusals, and
+//! decoder losses. Callers needing all-or-nothing behavior can request a strict
+//! conversion, which fails on the first unsupported body.
 //!
 //! Adding a format is cheap because the cadmpeg codecs all decode into ONE
 //! intermediate representation, `cadmpeg_ir::CadIr`: the per-format work is only
