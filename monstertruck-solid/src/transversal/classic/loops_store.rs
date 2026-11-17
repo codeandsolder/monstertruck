@@ -1087,7 +1087,13 @@ impl<C> LoopsStore<Point3, C> {
         }
 
         if endpoint_vertices.is_empty() && interior.is_empty() {
-            self.add_polygon_vertex(loops_index, vertex, tolerances, emap)?;
+            self.add_polygon_vertex(
+                loops_index,
+                vertex,
+                tolerances.boundary_residual(),
+                tolerances,
+                emap,
+            )?;
             return Some(());
         }
 
@@ -1110,10 +1116,14 @@ impl<C> LoopsStore<Point3, C> {
         Some(())
     }
 
+    /// Locate a polyline edge with an independent sampling-error radius.
+    /// The radius selects an existing candidate, not a new exact geometric
+    /// equality criterion; the attaching caller certifies exact incidence.
     fn add_polygon_vertex(
         &mut self,
         loops_index: usize,
         vertex: &Vertex<Point3>,
+        discovery_radius: f64,
         tolerances: BooleanTolerance,
         emap: &mut HashMap<EdgeId<C>, Edge<Point3, C>>,
     ) -> Option<(usize, usize, ParameterKind)>
@@ -1128,7 +1138,7 @@ impl<C> LoopsStore<Point3, C> {
         let (wire_index, edge_index, kind, projected) = self.search_boundary_parameter(
             loops_index,
             vertex.point(),
-            tolerances.boundary_residual(),
+            discovery_radius,
             tolerances,
         )?;
         if let Some(projected) = projected {
@@ -1517,6 +1527,9 @@ struct BoundaryEndpoint<'a, S> {
     nearest_tolerance: f64,
     tolerances: BooleanTolerance,
     other_branch_endpoint: Point3,
+    /// A previous original trim has already pinned this shared SSI endpoint;
+    /// later attachments must preserve that certified exact locus.
+    already_attached: bool,
 }
 
 impl<C> OperandLoopStores<C> {
@@ -1598,10 +1611,15 @@ impl<C> OperandLoopStores<C> {
             nearest_tolerance,
             tolerances,
             other_branch_endpoint,
+            already_attached,
         } = *endpoint;
-        let sampled_attachment =
-            self.poly
-                .add_polygon_vertex(face_index, poly_vertex, tolerances, poly_edge_map);
+        let sampled_attachment = self.poly.add_polygon_vertex(
+            face_index,
+            poly_vertex,
+            tolerances.boundary_residual(),
+            tolerances,
+            poly_edge_map,
+        );
         let Some((wire_index, edge_index, polygon_kind)) = sampled_attachment else {
             // A sampled SSI endpoint can overrun the exact trim. Use the mesh seed
             // only to discover a candidate; certify its incidence on the
@@ -1623,24 +1641,38 @@ impl<C> OperandLoopStores<C> {
             if point.distance(other_branch_endpoint) <= tolerances.length {
                 return Some(false);
             }
-            if geom_vertex.point().distance(point) > nearest_tolerance
-                || self
-                    .poly
-                    .search_boundary_parameter(
-                        face_index,
-                        point,
-                        tolerances.boundary_residual(),
-                        tolerances,
-                    )
-                    .is_none()
-            {
+            // Candidate discovery on a tessellated polyline must use its
+            // sampling-error budget: a point already certified on the exact
+            // source trim and opposing carrier need not lie within numerical
+            // length of the approximate chord. Nearby distinct loci remain
+            // ambiguous and fail closed in search_boundary_parameter.
+            let sampled_candidate = self.poly.search_boundary_parameter(
+                face_index,
+                point,
+                nearest_tolerance,
+                tolerances,
+            );
+            // Once an earlier operand has certified the SSI endpoint on its
+            // original trim, a later extended cutter cannot move that shared
+            // vertex onto a distinct cap merely because the two trims are
+            // closer than the (independently coarser) tessellation radius.
+            let motion_budget = if already_attached {
+                tolerances.fragment_residual()
+            } else {
+                nearest_tolerance
+            };
+            if geom_vertex.point().distance(point) > motion_budget || sampled_candidate.is_none() {
                 return Some(false);
             }
             geom_vertex.set_point(point);
             poly_vertex.set_point(point);
-            let (wi, ei, kind) =
-                self.poly
-                    .add_polygon_vertex(face_index, poly_vertex, tolerances, poly_edge_map)?;
+            let (wi, ei, kind) = self.poly.add_polygon_vertex(
+                face_index,
+                poly_vertex,
+                nearest_tolerance,
+                tolerances,
+                poly_edge_map,
+            )?;
             self.geom.add_geom_vertex(
                 face_index,
                 BoundarySearchRequest {
@@ -1727,6 +1759,8 @@ where
     let mut pemap1 = HashMap::default();
     let mut gemap0 = HashMap::default();
     let mut gemap1 = HashMap::default();
+    let mut anchored_front = false;
+    let mut anchored_back = false;
     for (operand, face_index, other_surface) in [
         (
             &mut *context.operand0,
@@ -1739,7 +1773,7 @@ where
             context.surfaces[0],
         ),
     ] {
-        operand.add_boundary_endpoint(
+        let attached_front = operand.add_boundary_endpoint(
             &BoundaryEndpoint {
                 face_index,
                 poly_vertex: &pv0,
@@ -1748,11 +1782,13 @@ where
                 nearest_tolerance: context.nearest_tolerance,
                 tolerances: context.tolerances,
                 other_branch_endpoint: back,
+                already_attached: anchored_front,
             },
             &mut pemap0,
             &mut gemap0,
         )?;
-        operand.add_boundary_endpoint(
+        anchored_front |= attached_front;
+        let attached_back = operand.add_boundary_endpoint(
             &BoundaryEndpoint {
                 face_index,
                 poly_vertex: &pv1,
@@ -1761,10 +1797,12 @@ where
                 nearest_tolerance: context.nearest_tolerance,
                 tolerances: context.tolerances,
                 other_branch_endpoint: front,
+                already_attached: anchored_back,
             },
             &mut pemap1,
             &mut gemap1,
         )?;
+        anchored_back |= attached_back;
     }
     Some((pv0, pv1, gv0, gv1))
 }
@@ -2424,6 +2462,7 @@ mod projection_tests {
                     nearest_tolerance: tolerances.mesh_seed,
                     tolerances,
                     other_branch_endpoint,
+                    already_attached: false,
                 },
                 &mut poly_map,
                 &mut geom_map,
@@ -2680,7 +2719,13 @@ mod projection_tests {
         let mut emap = HashMap::default();
 
         let (_, _, kind) = store
-            .add_polygon_vertex(0, &vertex, BooleanTolerance::new(KERNEL_EPSILON), &mut emap)
+            .add_polygon_vertex(
+                0,
+                &vertex,
+                BooleanTolerance::new(KERNEL_EPSILON).boundary_residual(),
+                BooleanTolerance::new(KERNEL_EPSILON),
+                &mut emap,
+            )
             .expect("recovered boundary projection should split the exact edge");
 
         assert!(matches!(kind, ParameterKind::Inner(_)));

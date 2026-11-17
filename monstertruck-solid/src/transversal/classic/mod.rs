@@ -27,6 +27,8 @@ mod faces_classification;
 mod intersection_curve;
 mod loops_store;
 mod planar_union;
+#[cfg(test)]
+mod radial_slot_tests;
 mod tolerance;
 mod weld;
 
