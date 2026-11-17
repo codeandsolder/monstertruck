@@ -140,7 +140,7 @@ fn plan_partition_recovery(entities: &[EntityInstance]) -> Option<Vec<ComponentP
     let styles_by_target = styles_by_target(entities);
 
     let mut solid_shell = HashMap::new();
-    for entity in entities.iter() {
+    for entity in entities {
         let id = entity_id(entity);
         let Some(record) = simple_record(entity) else {
             continue;
@@ -316,9 +316,7 @@ fn build_component_plan(
     if !style_ok {
         return None;
     }
-    let Some(style_assignment) = assignment else {
-        return None;
-    };
+    let style_assignment = assignment?;
 
     let owners: Vec<u64> = rep_items
         .iter()
@@ -422,7 +420,7 @@ fn apply_partition_recovery(
 
     // Work out ORIENTED_EDGE replacements against the old edge endpoints.
     let mut oe_updates = HashMap::<u64, (u64, bool)>::new();
-    for entity in entities.iter() {
+    for entity in entities {
         let id = entity_id(entity);
         if !retained_oes.contains(&id) {
             continue;
