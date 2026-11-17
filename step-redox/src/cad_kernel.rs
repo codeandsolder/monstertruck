@@ -130,7 +130,19 @@ pub mod monstertruck {
     fn step_intersection_accuracy(policy: GeometryPolicy) -> Result<f64> {
         let tolerance = match policy {
             GeometryPolicy::Equivalent => DEFAULT_NUMERICAL_TOLERANCES.kernel_f64,
-            GeometryPolicy::Standard { tolerance_mm } => tolerance_mm,
+            GeometryPolicy::Standard { tolerance_mm } => {
+                ensure!(
+                    tolerance_mm.is_finite()
+                        && tolerance_mm >= DEFAULT_NUMERICAL_TOLERANCES.kernel_f64,
+                    "STEP modeling tolerance must be finite and >= {} mm; requested {tolerance_mm}",
+                    DEFAULT_NUMERICAL_TOLERANCES.kernel_f64
+                );
+                // The modeling budget limits acceptable changes to CAD geometry;
+                // it does not need to coarsen the independent STEP serialization
+                // of already-evaluated intersection curves. Smaller user-requested
+                // tolerances remain authoritative.
+                tolerance_mm.min(DEFAULT_STEP_RECOVERY_TOLERANCES.cad_step_export_accuracy_mm)
+            }
         };
         ensure!(
             tolerance.is_finite() && tolerance >= DEFAULT_NUMERICAL_TOLERANCES.kernel_f64,
@@ -1576,13 +1588,36 @@ pub mod monstertruck {
 
         #[test]
         fn step_export_accuracy_never_silently_widens_requested_tolerance() {
-            assert!(step_intersection_accuracy(GeometryPolicy::standard_mm(1e-5)).is_ok());
-            assert!(step_intersection_accuracy(GeometryPolicy::standard_mm(1e-8)).is_err());
-            assert!(step_intersection_accuracy(GeometryPolicy::standard_mm(f64::NAN)).is_err());
-            assert!(
-                step_intersection_accuracy(GeometryPolicy::standard_mm(f64::INFINITY)).is_err()
+            let export_accuracy = DEFAULT_STEP_RECOVERY_TOLERANCES.cad_step_export_accuracy_mm;
+            assert_eq!(export_accuracy, 1.0e-5);
+            assert_eq!(
+                step_intersection_accuracy(GeometryPolicy::project_standard()).ok(),
+                Some(export_accuracy),
+                "the default modeling allowance must not coarsen STEP edge fidelity"
             );
-            assert!(step_intersection_accuracy(GeometryPolicy::Equivalent).is_ok());
+            assert_eq!(
+                step_intersection_accuracy(GeometryPolicy::standard_mm(0.1)).ok(),
+                Some(export_accuracy)
+            );
+            assert_eq!(
+                step_intersection_accuracy(GeometryPolicy::standard_mm(5e-6)).ok(),
+                Some(5e-6),
+                "a stricter caller-requested accuracy must remain authoritative"
+            );
+            assert_eq!(
+                step_intersection_accuracy(GeometryPolicy::standard_mm(1e-6)).ok(),
+                Some(DEFAULT_NUMERICAL_TOLERANCES.kernel_f64)
+            );
+            for bad in [0.0, -1.0, 1e-8, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                assert!(
+                    step_intersection_accuracy(GeometryPolicy::standard_mm(bad)).is_err(),
+                    "invalid modeling tolerance must not become valid after an export cap: {bad}"
+                );
+            }
+            assert_eq!(
+                step_intersection_accuracy(GeometryPolicy::Equivalent).ok(),
+                Some(DEFAULT_NUMERICAL_TOLERANCES.kernel_f64)
+            );
         }
 
         use crate::cad_ir::{

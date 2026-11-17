@@ -375,6 +375,9 @@ pub struct StepRecoveryTolerances {
     /// Default permitted STEP CAD modeling-error budget.
     /// Unit: mm.
     pub cad_project_standard_mm: f64,
+    /// STEP intersection chord-sampling accuracy target, independent of the
+    /// CAD modeling-change budget. Unit: mm.
+    pub cad_step_export_accuracy_mm: f64,
     /// Matching user-selected edge endpoints against their literal coordinates.
     /// Unit: mm.
     pub cad_edge_selector_mm: f64,
@@ -697,6 +700,7 @@ pub const DEFAULT_STEP_RECOVERY_TOLERANCES: StepRecoveryTolerances = StepRecover
     numerical_geometry_mm: 1.0e-7,
     feature_heal_mm: 0.01,
     cad_project_standard_mm: 0.01,
+    cad_step_export_accuracy_mm: 1.0e-5,
     cad_edge_selector_mm: 1.0e-7,
     cad_axis_angle_rad: 1.0e-10,
     cad_axis_locus_mm: 1.0e-9,
