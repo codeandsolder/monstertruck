@@ -18,15 +18,17 @@ fn saved_operands() -> (ModelingSolid, ModelingSolid) {
     (host, cutter)
 }
 
+type RadialFaceSplits = (
+    loops_store::InterfaceLoops<AltCurve<Curve, Surface>>,
+    AltCurveShell<Curve, Surface>,
+    AltCurveShell<Curve, Surface>,
+);
+
 fn split_original_faces(
     source: Shell<Point3, Curve, Surface>,
     cutter: Shell<Point3, Curve, Surface>,
     source_face: usize,
-) -> (
-    loops_store::InterfaceLoops<AltCurve<Curve, Surface>>,
-    AltCurveShell<Curve, Surface>,
-    AltCurveShell<Curve, Surface>,
-) {
+) -> RadialFaceSplits {
     let numeric =
         monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length;
     let mesh_seed = BooleanTolerance::new(numeric).mesh_seed;
