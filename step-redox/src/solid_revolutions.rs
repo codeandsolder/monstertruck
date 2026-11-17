@@ -15,8 +15,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 mod profile_graph;
 use profile_graph::{
-    between, push_unique_segment, segment_radius_at_axial, shell_faces_connected,
-    unique_neighbor_face,
+    between, push_unique_segment, segment_radius_at_axial, selected_faces_connected,
+    shell_faces_connected, unique_neighbor_face,
 };
 
 mod meridian;
@@ -192,6 +192,57 @@ struct FaceInfo {
     loops: Vec<brep::FaceLoop>,
 }
 
+/// Load source STEP face support and boundary uses in caller-specified face
+/// order. The same representation feeds diagnostics, complete solids and
+/// selected-face recovery; a malformed face invalidates the entire selection.
+fn source_face_infos(
+    face_ids: &[u64],
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<Vec<FaceInfo>> {
+    face_ids
+        .iter()
+        .copied()
+        .map(|id| {
+            Some(FaceInfo {
+                surface: brep::surface_support(
+                    brep::face_surface(id, entities, index)?,
+                    entities,
+                    index,
+                ),
+                loops: brep::face_loops(id, entities, index)?,
+            })
+        })
+        .collect()
+}
+
+/// Collect oriented edge *uses*, never unique face owners. A periodic seam
+/// traversed twice by the same face must count twice for manifold admission.
+fn face_edge_uses(faces: &[FaceInfo]) -> Option<HashMap<u64, Vec<usize>>> {
+    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
+    for (face_index, face) in faces.iter().enumerate() {
+        if face.loops.is_empty() {
+            return None;
+        }
+        for edge in face.loops.iter().flat_map(|loop_| &loop_.edges) {
+            edge_faces.entry(edge.edge_id).or_default().push(face_index);
+        }
+    }
+    Some(edge_faces)
+}
+
+/// Complete source and reduced B-reps require exactly two uses per edge and
+/// one connected closed shell; partial axisymmetric recovery permits open rims.
+fn closed_shell_edge_uses(faces: &[FaceInfo]) -> Option<HashMap<u64, Vec<usize>>> {
+    let edge_faces = face_edge_uses(faces)?;
+    if edge_faces.values().any(|attached| attached.len() != 2)
+        || !shell_faces_connected(faces.len(), &edge_faces)
+    {
+        return None;
+    }
+    Some(edge_faces)
+}
+
 struct TopologyContext<'a> {
     faces: &'a [FaceInfo],
     edge_faces: &'a HashMap<u64, Vec<usize>>,
@@ -345,34 +396,23 @@ pub(crate) fn detect_solid_surface_signatures_with_index(
         let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
             continue;
         };
-        let Some(faces) = face_ids
-            .iter()
-            .copied()
-            .map(|face_id| {
-                let surface_id = brep::face_surface(face_id, entities, index)?;
-                let surface = brep::surface_support(surface_id, entities, index);
-                let loops = brep::face_loops(face_id, entities, index)?;
-                Some((face_id, surface, loops))
-            })
-            .collect::<Option<Vec<_>>>()
-        else {
+        let Some(faces) = source_face_infos(&face_ids, entities, index) else {
             continue;
         };
 
         let mut support_counts = BTreeMap::new();
         let mut signatures = Vec::with_capacity(faces.len());
         let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
-        let mut unique_edges = HashSet::new();
         let mut edge_use_count = 0_usize;
-        for (face_index, (face_id, surface, loops)) in faces.iter().enumerate() {
-            let support = surface_kind(surface).to_owned();
+        for (face_index, (&face_id, face)) in face_ids.iter().zip(&faces).enumerate() {
+            let support = surface_kind(&face.surface).to_owned();
             *support_counts.entry(support.clone()).or_insert(0) += 1;
-            let loop_signatures = loops
+            let loop_signatures = face
+                .loops
                 .iter()
                 .map(|loop_| {
                     let mut curve_counts = BTreeMap::new();
                     for edge in &loop_.edges {
-                        unique_edges.insert(edge.edge_id);
                         edge_faces.entry(edge.edge_id).or_default().push(face_index);
                         edge_use_count += 1;
                         *curve_counts
@@ -387,9 +427,9 @@ pub(crate) fn detect_solid_surface_signatures_with_index(
                 })
                 .collect();
             signatures.push(SolidFaceSignature {
-                face_id: *face_id,
+                face_id,
                 support,
-                geometry: surface_geometry(surface),
+                geometry: surface_geometry(&face.surface),
                 loops: loop_signatures,
             });
         }
@@ -401,7 +441,7 @@ pub(crate) fn detect_solid_surface_signatures_with_index(
             face_count: face_ids.len(),
             support_counts,
             faces: signatures,
-            unique_edge_count: unique_edges.len(),
+            unique_edge_count: edge_faces.len(),
             edge_use_count,
             closed_two_manifold,
         });
@@ -485,20 +525,7 @@ fn detect_one_solid(
     source_tolerance_mm: f64,
 ) -> Option<RecoveredSolidRevolution> {
     let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
-    let faces = face_ids
-        .iter()
-        .copied()
-        .map(|id| {
-            Some(FaceInfo {
-                surface: brep::surface_support(
-                    brep::face_surface(id, entities, index)?,
-                    entities,
-                    index,
-                ),
-                loops: brep::face_loops(id, entities, index)?,
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
+    let faces = source_face_infos(&face_ids, entities, index)?;
     detect_one_solid_from_faces(
         solid_id,
         face_ids,
@@ -554,20 +581,7 @@ fn detect_one_solid_from_faces(
 ) -> Option<RecoveredSolidRevolution> {
     // Closed two-manifold proof. A STEP seam may occur twice on one face; counting
     // oriented uses rather than distinct faces handles that case correctly.
-    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
-    for (face_index, face) in faces.iter().enumerate() {
-        if face.loops.is_empty() {
-            return None;
-        }
-        for edge in face.loops.iter().flat_map(|loop_| &loop_.edges) {
-            edge_faces.entry(edge.edge_id).or_default().push(face_index);
-        }
-    }
-    if edge_faces.values().any(|attached| attached.len() != 2)
-        || !shell_faces_connected(faces.len(), &edge_faces)
-    {
-        return None;
-    }
+    let edge_faces = closed_shell_edge_uses(faces)?;
     let context = TopologyContext {
         faces,
         edge_faces: &edge_faces,
@@ -647,45 +661,9 @@ fn same_circle_support(a: brep::CircleSupport, b: brep::CircleSupport) -> bool {
         && parallel(a.normal, b.normal)
 }
 
-fn selected_faces_connected(face_count: usize, edge_faces: &HashMap<u64, Vec<usize>>) -> bool {
-    if face_count == 0
-        || edge_faces
-            .values()
-            .any(|attached| attached.is_empty() || attached.len() > 2)
-    {
-        return false;
-    }
-    let mut adjacency = vec![Vec::<usize>::new(); face_count];
-    for attached in edge_faces.values().filter(|attached| attached.len() == 2) {
-        let [a, b] = attached.as_slice() else {
-            return false;
-        };
-        if a != b {
-            adjacency[*a].push(*b);
-            adjacency[*b].push(*a);
-        }
-    }
-    let mut seen = vec![false; face_count];
-    let mut stack = vec![0usize];
-    seen[0] = true;
-    while let Some(face) = stack.pop() {
-        for &neighbor in &adjacency[face] {
-            if !seen[neighbor] {
-                seen[neighbor] = true;
-                stack.push(neighbor);
-            }
-        }
-    }
-    seen.into_iter().all(|value| value)
-}
-
 /// Recover a connected axisymmetric subset of one source solid when removing the
 /// remaining feature leaves exactly one circular interface. The missing interface
 /// is capped only in constructive meridian space; source topology remains untouched.
-#[expect(
-    clippy::too_many_lines,
-    reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"
-)]
 pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
     solid_id: u64,
     selected_face_ids: &[u64],
@@ -695,29 +673,8 @@ pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
     if selected_face_ids.len() < 3 {
         return None;
     }
-    let faces = selected_face_ids
-        .iter()
-        .copied()
-        .map(|id| {
-            Some(FaceInfo {
-                surface: brep::surface_support(
-                    brep::face_surface(id, entities, index)?,
-                    entities,
-                    index,
-                ),
-                loops: brep::face_loops(id, entities, index)?,
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
-    for (face_index, face) in faces.iter().enumerate() {
-        if face.loops.is_empty() {
-            return None;
-        }
-        for edge in face.loops.iter().flat_map(|loop_| &loop_.edges) {
-            edge_faces.entry(edge.edge_id).or_default().push(face_index);
-        }
-    }
+    let faces = source_face_infos(selected_face_ids, entities, index)?;
+    let edge_faces = face_edge_uses(&faces)?;
     if !selected_faces_connected(faces.len(), &edge_faces) {
         return None;
     }
@@ -815,35 +772,9 @@ fn detect_one_radial_slot(
     source_tolerance_mm: f64,
 ) -> Option<RecoveredRadialSlotRevolution> {
     let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
-    let faces = face_ids
-        .iter()
-        .copied()
-        .map(|id| {
-            Some(FaceInfo {
-                surface: brep::surface_support(
-                    brep::face_surface(id, entities, index)?,
-                    entities,
-                    index,
-                ),
-                loops: brep::face_loops(id, entities, index)?,
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
+    let faces = source_face_infos(&face_ids, entities, index)?;
 
-    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
-    for (face_index, face) in faces.iter().enumerate() {
-        if face.loops.is_empty() {
-            return None;
-        }
-        for edge in face.loops.iter().flat_map(|loop_| &loop_.edges) {
-            edge_faces.entry(edge.edge_id).or_default().push(face_index);
-        }
-    }
-    if edge_faces.values().any(|attached| attached.len() != 2)
-        || !shell_faces_connected(faces.len(), &edge_faces)
-    {
-        return None;
-    }
+    let edge_faces = closed_shell_edge_uses(&faces)?;
     let context = TopologyContext {
         faces: &faces,
         edge_faces: &edge_faces,
