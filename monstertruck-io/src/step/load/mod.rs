@@ -21,6 +21,7 @@ use step_p21::{
 
 pub mod convert;
 mod document;
+mod rational_complex;
 pub use document::{ParsedStepSource, ResolvedStepDocument, decode_step_input};
 /// Stable kernel identity assigned while importing STEP topology.
 pub mod provenance;
@@ -707,250 +708,6 @@ impl Table {
                 .all(|(record, expected)| record.name == *expected)
     }
 
-    fn push_rational_curve_knots_or_bezier(
-        &mut self,
-        id: u64,
-        records: &[Record],
-    ) -> step_p21::error::Result<bool> {
-        use NonRationalBsplineCurveHolder as NRBC;
-        let (bsp_idx, knots_idx) = if Self::records_named(
-            records,
-            &[
-                "BOUNDED_CURVE",
-                "B_SPLINE_CURVE",
-                "B_SPLINE_CURVE_WITH_KNOTS",
-                "CURVE",
-                "GEOMETRIC_REPRESENTATION_ITEM",
-                "RATIONAL_B_SPLINE_CURVE",
-                "REPRESENTATION_ITEM",
-            ],
-        ) {
-            (1, Some(2))
-        } else if Self::records_named(
-            records,
-            &[
-                "BEZIER_CURVE",
-                "BOUNDED_CURVE",
-                "B_SPLINE_CURVE",
-                "CURVE",
-                "GEOMETRIC_REPRESENTATION_ITEM",
-                "RATIONAL_B_SPLINE_CURVE",
-                "REPRESENTATION_ITEM",
-            ],
-        ) {
-            (2, None)
-        } else {
-            return Ok(false);
-        };
-        let (Parameter::List(bsp_params), Parameter::List(weights), Parameter::List(label)) = (
-            &records[bsp_idx].parameter,
-            &records[5].parameter,
-            &records[6].parameter,
-        ) else {
-            return Ok(false);
-        };
-        let mut params = label.clone();
-        params.extend(bsp_params.clone());
-        let non_rational = if let Some(knots_idx) = knots_idx {
-            let Parameter::List(knots_params) = &records[knots_idx].parameter else {
-                return Ok(false);
-            };
-            params.extend(knots_params.clone());
-            NRBC::BsplineCurveWithKnots(Deserialize::deserialize(&Parameter::List(params))?)
-        } else {
-            NRBC::BezierCurve(Deserialize::deserialize(&Parameter::List(params))?)
-        };
-        self.rational_b_spline_curve.insert(
-            id,
-            RationalBsplineCurveHolder {
-                non_rational_b_spline_curve: PlaceHolder::Owned(non_rational),
-                weights_data: Deserialize::deserialize(&weights[0])?,
-            },
-        );
-        Ok(true)
-    }
-
-    fn push_rational_curve_quasi_or_uniform(
-        &mut self,
-        id: u64,
-        records: &[Record],
-    ) -> step_p21::error::Result<bool> {
-        use NonRationalBsplineCurveHolder as NRBC;
-        let (quasi, weights_idx, label_idx) = if Self::records_named(
-            records,
-            &[
-                "BOUNDED_CURVE",
-                "B_SPLINE_CURVE",
-                "CURVE",
-                "GEOMETRIC_REPRESENTATION_ITEM",
-                "QUASI_UNIFORM_CURVE",
-                "RATIONAL_B_SPLINE_CURVE",
-                "REPRESENTATION_ITEM",
-            ],
-        ) {
-            (true, 5, 6)
-        } else if Self::records_named(
-            records,
-            &[
-                "BOUNDED_CURVE",
-                "B_SPLINE_CURVE",
-                "CURVE",
-                "GEOMETRIC_REPRESENTATION_ITEM",
-                "RATIONAL_B_SPLINE_CURVE",
-                "REPRESENTATION_ITEM",
-                "UNIFORM_CURVE",
-            ],
-        ) {
-            (false, 4, 5)
-        } else {
-            return Ok(false);
-        };
-        let (Parameter::List(bsp_params), Parameter::List(weights), Parameter::List(label)) = (
-            &records[1].parameter,
-            &records[weights_idx].parameter,
-            &records[label_idx].parameter,
-        ) else {
-            return Ok(false);
-        };
-        let mut params = vec![label[0].clone()];
-        params.extend(bsp_params.iter().cloned());
-        let non_rational = if quasi {
-            NRBC::QuasiUniformCurve(Deserialize::deserialize(&Parameter::List(params))?)
-        } else {
-            NRBC::UniformCurve(Deserialize::deserialize(&Parameter::List(params))?)
-        };
-        self.rational_b_spline_curve.insert(
-            id,
-            RationalBsplineCurveHolder {
-                non_rational_b_spline_curve: PlaceHolder::Owned(non_rational),
-                weights_data: Deserialize::deserialize(&weights[0])?,
-            },
-        );
-        Ok(true)
-    }
-
-    fn push_rational_surface_knots_or_bezier(
-        &mut self,
-        id: u64,
-        records: &[Record],
-    ) -> step_p21::error::Result<bool> {
-        use NonRationalBsplineSurfaceHolder as NRBS;
-        let (bsp_idx, knots_idx) = if Self::records_named(
-            records,
-            &[
-                "BOUNDED_SURFACE",
-                "B_SPLINE_SURFACE",
-                "B_SPLINE_SURFACE_WITH_KNOTS",
-                "GEOMETRIC_REPRESENTATION_ITEM",
-                "RATIONAL_B_SPLINE_SURFACE",
-                "REPRESENTATION_ITEM",
-                "SURFACE",
-            ],
-        ) {
-            (1, Some(2))
-        } else if Self::records_named(
-            records,
-            &[
-                "BEZIER_SURFACE",
-                "BOUNDED_SURFACE",
-                "B_SPLINE_SURFACE",
-                "GEOMETRIC_REPRESENTATION_ITEM",
-                "RATIONAL_B_SPLINE_SURFACE",
-                "REPRESENTATION_ITEM",
-                "SURFACE",
-            ],
-        ) {
-            (2, None)
-        } else {
-            return Ok(false);
-        };
-        let (Parameter::List(bsp_params), Parameter::List(weights), Parameter::List(label)) = (
-            &records[bsp_idx].parameter,
-            &records[4].parameter,
-            &records[5].parameter,
-        ) else {
-            return Ok(false);
-        };
-        let mut params = label.clone();
-        params.extend(bsp_params.clone());
-        let non_rational = if let Some(knots_idx) = knots_idx {
-            let Parameter::List(knots_params) = &records[knots_idx].parameter else {
-                return Ok(false);
-            };
-            params.extend(knots_params.clone());
-            NRBS::BsplineSurfaceWithKnots(Deserialize::deserialize(&Parameter::List(params))?)
-        } else {
-            NRBS::BezierSurface(Deserialize::deserialize(&Parameter::List(params))?)
-        };
-        self.rational_b_spline_surface.insert(
-            id,
-            RationalBsplineSurfaceHolder {
-                non_rational_b_spline_surface: PlaceHolder::Owned(non_rational),
-                weights_data: Deserialize::deserialize(&weights[0])?,
-            },
-        );
-        Ok(true)
-    }
-
-    fn push_rational_surface_quasi_or_uniform(
-        &mut self,
-        id: u64,
-        records: &[Record],
-    ) -> step_p21::error::Result<bool> {
-        use NonRationalBsplineSurfaceHolder as NRBS;
-        let (quasi, weights_idx, label_idx) = if Self::records_named(
-            records,
-            &[
-                "BOUNDED_SURFACE",
-                "B_SPLINE_SURFACE",
-                "GEOMETRIC_REPRESENTATION_ITEM",
-                "QUASI_UNIFORM_SURFACE",
-                "RATIONAL_B_SPLINE_SURFACE",
-                "REPRESENTATION_ITEM",
-                "SURFACE",
-            ],
-        ) {
-            (true, 4, 5)
-        } else if Self::records_named(
-            records,
-            &[
-                "BOUNDED_SURFACE",
-                "B_SPLINE_SURFACE",
-                "GEOMETRIC_REPRESENTATION_ITEM",
-                "RATIONAL_B_SPLINE_SURFACE",
-                "REPRESENTATION_ITEM",
-                "SURFACE",
-                "UNIFORM_SURFACE",
-            ],
-        ) {
-            (false, 3, 4)
-        } else {
-            return Ok(false);
-        };
-        let (Parameter::List(bsp_params), Parameter::List(weights), Parameter::List(label)) = (
-            &records[1].parameter,
-            &records[weights_idx].parameter,
-            &records[label_idx].parameter,
-        ) else {
-            return Ok(false);
-        };
-        let mut params = label.clone();
-        params.extend(bsp_params.clone());
-        let non_rational = if quasi {
-            NRBS::QuasiUniformSurface(Deserialize::deserialize(&Parameter::List(params))?)
-        } else {
-            NRBS::UniformSurface(Deserialize::deserialize(&Parameter::List(params))?)
-        };
-        self.rational_b_spline_surface.insert(
-            id,
-            RationalBsplineSurfaceHolder {
-                non_rational_b_spline_surface: PlaceHolder::Owned(non_rational),
-                weights_data: Deserialize::deserialize(&weights[0])?,
-            },
-        );
-        Ok(true)
-    }
-
     fn push_complex_relationship(
         &mut self,
         id: u64,
@@ -989,12 +746,7 @@ impl Table {
         records: &[Record],
     ) -> step_p21::error::Result<()> {
         let handled = match records.len() {
-            7 => {
-                self.push_rational_curve_knots_or_bezier(id, records)?
-                    || self.push_rational_curve_quasi_or_uniform(id, records)?
-                    || self.push_rational_surface_knots_or_bezier(id, records)?
-                    || self.push_rational_surface_quasi_or_uniform(id, records)?
-            }
+            7 => self.push_rational_complex(id, records)?,
             3 => self.push_complex_relationship(id, records)?,
             _ => false,
         };
@@ -1089,3 +841,6 @@ impl<'a> FromIterator<&'a EntityInstance> for Table {
         res
     }
 }
+
+#[cfg(test)]
+mod rational_complex_tests;
