@@ -13,6 +13,7 @@ from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_RetDone
+from OCP.Standard import Standard_Failure
 from OCP.STEPControl import STEPControl_Reader
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SOLID, TopAbs_VERTEX
 from OCP.TopExp import TopExp_Explorer
@@ -169,11 +170,15 @@ def adaptive_volume_agreement(a, b):
 
 def cut_volume(a, b):
     operation = BRepAlgoAPI_Cut(a, b)
-    operation.Build()
-    assert operation.IsDone()
+    try:
+        operation.Build()
+    except Standard_Failure as exc:
+        return None, f"OpenCascade raised {type(exc).__name__}: {exc}"
+    if not operation.IsDone():
+        return None, "OpenCascade Boolean cut did not complete"
     volume = GProp_GProps()
     BRepGProp.VolumeProperties_s(operation.Shape(), volume)
-    return abs(float(volume.Mass()))
+    return abs(float(volume.Mass())), None
 
 
 def volume_tolerance(a, b):
@@ -239,8 +244,8 @@ if args.a_entity_id is not None:
     bbox_error = max(
         abs(x - y) for x, y in zip(a_solid["bbox"], b_solid["bbox"], strict=False)
     )
-    source_minus_candidate = cut_volume(a_shape, b_shape)
-    candidate_minus_source = cut_volume(b_shape, a_shape)
+    source_minus_candidate, source_cut_error = cut_volume(a_shape, b_shape)
+    candidate_minus_source, candidate_cut_error = cut_volume(b_shape, a_shape)
     boolean_volume_tolerance = volume_tolerance(a_solid["volume"], b_solid["volume"])
 
     # Independent diagnostics must agree. In particular, OCC may report
@@ -253,6 +258,8 @@ if args.a_entity_id is not None:
         adaptive["consistent"]
         and a_solid["brep_valid"]
         and b_solid["brep_valid"]
+        and source_cut_error is None
+        and candidate_cut_error is None
         and source_minus_candidate <= boolean_volume_tolerance
         and candidate_minus_source <= boolean_volume_tolerance
     )
@@ -274,6 +281,8 @@ if args.a_entity_id is not None:
                 "boolean_residual_volume": {
                     "a_minus_b": source_minus_candidate,
                     "b_minus_a": candidate_minus_source,
+                    "a_minus_b_error": source_cut_error,
+                    "b_minus_a_error": candidate_cut_error,
                 },
                 "tolerances": {
                     "geometry_abs": ABS_GEOM_TOL,
