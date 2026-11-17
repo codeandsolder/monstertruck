@@ -706,13 +706,29 @@ fn split_hemisphere_faces(cylinder_radius_mm: f64) -> Vec<FaceInfo> {
 }
 
 fn edge_face_map(faces: &[FaceInfo]) -> HashMap<u64, Vec<usize>> {
-    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
-    for (face_index, face) in faces.iter().enumerate() {
-        for edge in face.loops.iter().flat_map(|loop_| &loop_.edges) {
-            edge_faces.entry(edge.edge_id).or_default().push(face_index);
-        }
-    }
-    edge_faces
+    edge_face_incidence(faces).expect("synthetic fixture faces must have loops")
+}
+
+#[test]
+fn incidence_retains_duplicate_seam_uses_and_rejects_empty_loops() {
+    let plane = SurfaceSupport::Plane(brep::PlaneSupport {
+        origin_mm: [0.0, 0.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        max_residual_mm: 0.0,
+    });
+    let seam = test_line_edge(10, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let shared = test_line_edge(20, [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]);
+    let faces = vec![
+        test_face(plane, vec![seam.clone(), seam, shared.clone()]),
+        test_face(plane, vec![shared]),
+    ];
+    let uses = edge_face_incidence(&faces).expect("all faces have loops");
+    assert_eq!(uses.get(&10), Some(&vec![0, 0]));
+    assert_eq!(uses.get(&20), Some(&vec![0, 1]));
+
+    let mut invalid_faces = faces;
+    invalid_faces[1].loops.clear();
+    assert!(edge_face_incidence(&invalid_faces).is_none());
 }
 
 #[test]

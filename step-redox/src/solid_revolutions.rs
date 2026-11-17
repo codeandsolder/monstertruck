@@ -192,6 +192,45 @@ struct FaceInfo {
     loops: Vec<brep::FaceLoop>,
 }
 
+/// Interpret each source face exactly once. Consumers decide which topology
+/// constraints apply; a selected open interface is not a closed shell.
+fn source_face_infos(
+    face_ids: &[u64],
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<Vec<FaceInfo>> {
+    face_ids
+        .iter()
+        .copied()
+        .map(|id| {
+            Some(FaceInfo {
+                surface: brep::surface_support(
+                    brep::face_surface(id, entities, index)?,
+                    entities,
+                    index,
+                ),
+                loops: brep::face_loops(id, entities, index)?,
+            })
+        })
+        .collect()
+}
+
+/// Count oriented edge *uses*, not distinct owning faces: a seam can occur
+/// twice on the same face. Keep manifold/connectedness checks at call sites,
+/// since selected-face recovery explicitly admits a circular open boundary.
+fn edge_face_incidence(faces: &[FaceInfo]) -> Option<HashMap<u64, Vec<usize>>> {
+    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
+    for (face_index, face) in faces.iter().enumerate() {
+        if face.loops.is_empty() {
+            return None;
+        }
+        for edge in face.loops.iter().flat_map(|loop_| &loop_.edges) {
+            edge_faces.entry(edge.edge_id).or_default().push(face_index);
+        }
+    }
+    Some(edge_faces)
+}
+
 struct TopologyContext<'a> {
     faces: &'a [FaceInfo],
     edge_faces: &'a HashMap<u64, Vec<usize>>,
@@ -345,17 +384,7 @@ pub(crate) fn detect_solid_surface_signatures_with_index(
         let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
             continue;
         };
-        let Some(faces) = face_ids
-            .iter()
-            .copied()
-            .map(|face_id| {
-                let surface_id = brep::face_surface(face_id, entities, index)?;
-                let surface = brep::surface_support(surface_id, entities, index);
-                let loops = brep::face_loops(face_id, entities, index)?;
-                Some((face_id, surface, loops))
-            })
-            .collect::<Option<Vec<_>>>()
-        else {
+        let Some(faces) = source_face_infos(&face_ids, entities, index) else {
             continue;
         };
 
@@ -364,10 +393,12 @@ pub(crate) fn detect_solid_surface_signatures_with_index(
         let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
         let mut unique_edges = HashSet::new();
         let mut edge_use_count = 0_usize;
-        for (face_index, (face_id, surface, loops)) in faces.iter().enumerate() {
+        for (face_index, (face_id, face)) in face_ids.iter().zip(&faces).enumerate() {
+            let surface = &face.surface;
             let support = surface_kind(surface).to_owned();
             *support_counts.entry(support.clone()).or_insert(0) += 1;
-            let loop_signatures = loops
+            let loop_signatures = face
+                .loops
                 .iter()
                 .map(|loop_| {
                     let mut curve_counts = BTreeMap::new();
@@ -485,20 +516,7 @@ fn detect_one_solid(
     source_tolerance_mm: f64,
 ) -> Option<RecoveredSolidRevolution> {
     let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
-    let faces = face_ids
-        .iter()
-        .copied()
-        .map(|id| {
-            Some(FaceInfo {
-                surface: brep::surface_support(
-                    brep::face_surface(id, entities, index)?,
-                    entities,
-                    index,
-                ),
-                loops: brep::face_loops(id, entities, index)?,
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
+    let faces = source_face_infos(&face_ids, entities, index)?;
     detect_one_solid_from_faces(
         solid_id,
         face_ids,
@@ -554,15 +572,7 @@ fn detect_one_solid_from_faces(
 ) -> Option<RecoveredSolidRevolution> {
     // Closed two-manifold proof. A STEP seam may occur twice on one face; counting
     // oriented uses rather than distinct faces handles that case correctly.
-    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
-    for (face_index, face) in faces.iter().enumerate() {
-        if face.loops.is_empty() {
-            return None;
-        }
-        for edge in face.loops.iter().flat_map(|loop_| &loop_.edges) {
-            edge_faces.entry(edge.edge_id).or_default().push(face_index);
-        }
-    }
+    let edge_faces = edge_face_incidence(faces)?;
     if edge_faces.values().any(|attached| attached.len() != 2)
         || !shell_faces_connected(faces.len(), &edge_faces)
     {
@@ -695,29 +705,8 @@ pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
     if selected_face_ids.len() < 3 {
         return None;
     }
-    let faces = selected_face_ids
-        .iter()
-        .copied()
-        .map(|id| {
-            Some(FaceInfo {
-                surface: brep::surface_support(
-                    brep::face_surface(id, entities, index)?,
-                    entities,
-                    index,
-                ),
-                loops: brep::face_loops(id, entities, index)?,
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
-    for (face_index, face) in faces.iter().enumerate() {
-        if face.loops.is_empty() {
-            return None;
-        }
-        for edge in face.loops.iter().flat_map(|loop_| &loop_.edges) {
-            edge_faces.entry(edge.edge_id).or_default().push(face_index);
-        }
-    }
+    let faces = source_face_infos(selected_face_ids, entities, index)?;
+    let edge_faces = edge_face_incidence(&faces)?;
     if !selected_faces_connected(faces.len(), &edge_faces) {
         return None;
     }
@@ -815,30 +804,9 @@ fn detect_one_radial_slot(
     source_tolerance_mm: f64,
 ) -> Option<RecoveredRadialSlotRevolution> {
     let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
-    let faces = face_ids
-        .iter()
-        .copied()
-        .map(|id| {
-            Some(FaceInfo {
-                surface: brep::surface_support(
-                    brep::face_surface(id, entities, index)?,
-                    entities,
-                    index,
-                ),
-                loops: brep::face_loops(id, entities, index)?,
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
+    let faces = source_face_infos(&face_ids, entities, index)?;
 
-    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
-    for (face_index, face) in faces.iter().enumerate() {
-        if face.loops.is_empty() {
-            return None;
-        }
-        for edge in face.loops.iter().flat_map(|loop_| &loop_.edges) {
-            edge_faces.entry(edge.edge_id).or_default().push(face_index);
-        }
-    }
+    let edge_faces = edge_face_incidence(&faces)?;
     if edge_faces.values().any(|attached| attached.len() != 2)
         || !shell_faces_connected(faces.len(), &edge_faces)
     {
