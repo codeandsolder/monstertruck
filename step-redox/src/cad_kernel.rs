@@ -92,12 +92,13 @@ pub mod monstertruck {
         DEFAULT_NUMERICAL_TOLERANCES, DEFAULT_STEP_RECOVERY_TOLERANCES,
     };
     use monstertruck_fillet::{FilletOptions, FilletProfile, RadiusSpec, fillet_edges_generic};
+    use monstertruck_geometry::analytic_curve_incidence::CurveIncidence;
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
     use monstertruck_modeling::{
         BoundedCurve, BsplineCurve, Curve, Edge, EuclideanSpace, InnerSpace, KnotVector, Matrix4,
         NurbsCurve, ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, Rad,
         SearchNearestParameter, SearchParameter, Shell, Solid, Surface, SurfaceCurve, Vector3,
-        Vector4, Wire, algo, builder, primitive, profile,
+        Vector4, Wire, algo, builder, certify_analytic_curve_on_surface, primitive, profile,
     };
     use std::collections::HashMap;
 
@@ -231,6 +232,48 @@ pub mod monstertruck {
         }
     }
 
+    /// Preserve a source NURBS guide only with independent whole-curve
+    /// Bernstein incidence certificates for both analytic carriers. For straight
+    /// guides, the exact point-set remains certified by their simple structure.
+    /// The evaluated SSI still controls both the endpoints and acceptance.
+    fn certified_step_guide(
+        guide: &Curve,
+        surfaces: [&Surface; 2],
+        parameters: &[f64],
+        evaluated: &[Point3],
+        tolerance: f64,
+    ) -> Option<Vec<Point3>> {
+        let proof_tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES
+            .solid_geometry_mm
+            .min(tolerance);
+        let globally_proven = matches!(guide, Curve::NurbsCurve(_))
+            && surfaces.iter().all(|&carrier| {
+                certify_analytic_curve_on_surface(guide, carrier, proof_tolerance)
+                    == CurveIncidence::Proven
+            });
+        if !straight_step_guide(guide) && !globally_proven {
+            return None;
+        }
+        let guide_points = parameters
+            .iter()
+            .map(|&parameter| guide.evaluate(parameter))
+            .collect::<Vec<_>>();
+        let accuracy = if globally_proven {
+            proof_tolerance
+        } else {
+            tolerance
+        };
+        (guide_points.len() == evaluated.len()
+            && guide_points
+                .iter()
+                .zip(evaluated)
+                .all(|(guide, point)| (*guide - *point).magnitude() <= accuracy)
+            && surfaces
+                .iter()
+                .all(|carrier| validated_step_surface_support(carrier, &guide_points, accuracy)))
+        .then_some(guide_points)
+    }
+
     /// Construct a STEP-exchange guide from the *evaluated* two-surface
     /// intersection, not the marching leader used to find it. This is export
     /// only: replacing Boolean/SSI sampling globally breaks interface
@@ -272,32 +315,18 @@ pub mod monstertruck {
                 );
             }
         }
-        // An already exact straight guide can satisfy the whole-line
-        // certificate while Newton's independently projected points carry
-        // tiny transverse noise. Reusing it is valid only when it agrees
-        // with the evaluated SSI and BOTH carriers within the export policy.
-        // The curved/unsupported guide path still uses evaluated samples.
-        if straight_step_guide(intersection.leader()) {
-            let guide_points = parameters
-                .iter()
-                .map(|&parameter| intersection.leader().evaluate(parameter))
-                .collect::<Vec<_>>();
-            let pointwise_agreement = guide_points
-                .iter()
-                .zip(&points)
-                .all(|(guide, evaluated)| (*guide - *evaluated).magnitude() <= tolerance);
-            if pointwise_agreement
-                && validated_step_surface_support(intersection.surface0(), &guide_points, tolerance)
-                && validated_step_surface_support(intersection.surface1(), &guide_points, tolerance)
-                && [intersection.boundary0(), intersection.boundary1()]
-                    .into_iter()
-                    .flatten()
-                    .all(|boundary| {
-                        validated_step_parameter_curve(boundary, &guide_points, tolerance)
-                    })
-            {
-                return Ok(curve.clone());
-            }
+        if let Some(guide_points) = certified_step_guide(
+            intersection.leader(),
+            [intersection.surface0(), intersection.surface1()],
+            &parameters,
+            &points,
+            tolerance,
+        ) && [intersection.boundary0(), intersection.boundary1()]
+            .into_iter()
+            .flatten()
+            .all(|boundary| validated_step_parameter_curve(boundary, &guide_points, tolerance))
+        {
+            return Ok(curve.clone());
         }
         // Preserve each native parameter, including nonuniform adaptive
         // subdivisions and shifted input domains. A uniform 0..N knot
@@ -1447,6 +1476,54 @@ pub mod monstertruck {
                     .leader()
                     .evaluate(f64::mul_add(hi - lo, fraction, lo));
                 assert!(p.y.abs() < 1e-10 && p.z.abs() < 1e-10);
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn step_export_preserves_globally_proven_quadratic_circle_not_its_chord() -> Result<()> {
+            use monstertruck_geometry::analytic_curve_incidence::CurveIncidence;
+            use monstertruck_modeling::{Line, Plane, Processor, RevolutionSurface};
+            let cylinder = Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
+                Curve::Line(Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0))),
+                Point3::origin(),
+                Vector3::unit_z(),
+            )));
+            let plane = Surface::Plane(Plane::xy());
+            let w = f64::sqrt(0.5);
+            let original = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new_unchecked(
+                KnotVector::bezier_knot(2),
+                vec![
+                    Vector4::new(2.0, 0.0, 0.0, 1.0),
+                    Vector4::new(2.0 * w, 2.0 * w, 0.0, w),
+                    Vector4::new(0.0, 2.0, 0.0, 1.0),
+                ],
+            )));
+            for surface in [&cylinder, &plane] {
+                assert_eq!(
+                    certify_analytic_curve_on_surface(&original, surface, 1.0e-7),
+                    CurveIncidence::Proven,
+                );
+            }
+            let intersection = Curve::Intersection(SurfaceCurve::with_boundaries(
+                Box::new(cylinder),
+                Box::new(plane),
+                Box::new(original),
+                None,
+                None,
+            ));
+            let Curve::Intersection(exported) = corrected_step_curve(&intersection, 1.0e-5)? else {
+                bail!("STEP conversion lost the intersection");
+            };
+            let Curve::NurbsCurve(exact) = exported.leader().as_ref() else {
+                bail!("globally certified quadratic rational arc degraded into a polyline");
+            };
+            assert_eq!(exact.degree(), 2);
+            for i in 0..=64 {
+                let t = f64::from(i) / 64.0;
+                let p = exact.evaluate(t);
+                assert!((p.x.hypot(p.y) - 2.0).abs() < 1.0e-9);
+                assert!(p.z.abs() < 1.0e-9);
             }
             Ok(())
         }

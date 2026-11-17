@@ -1,5 +1,6 @@
 use super::common::solid_angle_contains;
 use anyhow::Result;
+use monstertruck_geometry::prelude::ParametricCurve;
 use monstertruck_meshing::prelude::*;
 use monstertruck_modeling::Solid;
 use monstertruck_solid::{GeometryPolicy, difference};
@@ -69,6 +70,56 @@ fn source_radial_slot_exact_difference_preserves_material_and_manifold() -> Resu
     anyhow::ensure!(
         checked == 375 && surviving > 0 && removed > 0,
         "radial-slot occupancy sample missed material or removed volume: surviving={surviving}, removed={removed}"
+    );
+
+    // Independently measured analytic STEP source, not a point inferred from
+    // the Boolean result: the two slot-root planar/cylindrical SSI arcs have
+    // radius 0.4826 mm about this exact source cylinder axis. Endpoints alone
+    // are insufficient: the previous degree-1 spline export displaced the
+    // interior by 0.0095 mm while retaining every topological endpoint.
+    let source_axis_xy = (59.384_373_707_781_98_f64, -5.257_812_234_042_557_f64);
+    let source_root_z = -2.590_787_765_957_25_f64;
+    let source_radius = 0.4826_f64;
+    let on_root_circle = |point: Point3| {
+        (point.z - source_root_z).abs() <= 1.0e-6
+            && ((point.x - source_axis_xy.0).hypot(point.y - source_axis_xy.1) - source_radius)
+                .abs()
+                <= 1.0e-6
+    };
+    let mut certified_root_edges = std::collections::HashSet::new();
+    for edge in result.edge_iter() {
+        let (front, back) = (edge.absolute_front().point(), edge.absolute_back().point());
+        if !on_root_circle(front) || !on_root_circle(back) || front.distance(back) < 0.1 {
+            continue;
+        }
+        if !certified_root_edges.insert(edge.id()) {
+            continue;
+        }
+        let curve = edge.curve();
+        let monstertruck_modeling::Curve::Intersection(intersection) = &curve else {
+            anyhow::bail!("slot-root SSI arc lost its native two-carrier intersection identity");
+        };
+        let monstertruck_modeling::Curve::NurbsCurve(guide) = intersection.leader().as_ref() else {
+            anyhow::bail!("slot-root SSI leader degraded to a piecewise-linear guide");
+        };
+        anyhow::ensure!(
+            guide.degree() == 2,
+            "slot-root SSI must retain its quadratic rational circle"
+        );
+        let (lo, hi) = curve.range_tuple();
+        for sample in 0..=64 {
+            let t = f64::mul_add(hi - lo, f64::from(sample) / 64.0, lo);
+            let point = curve.evaluate(t);
+            anyhow::ensure!(
+                on_root_circle(point),
+                "exact planar-cylinder SSI arc strayed from the source circle at sample {sample}:                  {point:?}, radius error={}",
+                (point.x - source_axis_xy.0).hypot(point.y - source_axis_xy.1) - source_radius,
+            );
+        }
+    }
+    anyhow::ensure!(
+        certified_root_edges.len() >= 2,
+        "the Boolean result lost the two independent exact circular SSI root arcs"
     );
     Ok(())
 }
