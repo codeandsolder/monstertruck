@@ -1275,6 +1275,102 @@ fn solid_surface_signature_reports_native_spherical_cap() -> anyhow::Result<()> 
 }
 
 #[test]
+fn shared_edge_incidence_preserves_twice_used_periodic_seams() -> anyhow::Result<()> {
+    let seam = test_line_edge(41, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let faces = vec![test_face(
+        SurfaceSupport::Other { entity_id: 10 },
+        vec![seam.clone(), seam],
+    )];
+    let edges =
+        face_edge_uses(&faces).ok_or_else(|| anyhow::anyhow!("twice-used seam was rejected"))?;
+    assert_eq!(edges.get(&41), Some(&vec![0, 0]));
+    assert_eq!(closed_shell_edge_uses(&faces), Some(edges));
+    Ok(())
+}
+
+#[test]
+fn shared_edge_incidence_distinguishes_open_interfaces_from_closed_shells() -> anyhow::Result<()> {
+    let edge = |id| test_line_edge(id, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let faces = vec![
+        test_face(
+            SurfaceSupport::Other { entity_id: 11 },
+            vec![edge(1), edge(2)],
+        ),
+        test_face(
+            SurfaceSupport::Other { entity_id: 12 },
+            vec![edge(1), edge(3)],
+        ),
+    ];
+    let incidence = face_edge_uses(&faces)
+        .ok_or_else(|| anyhow::anyhow!("valid open interface not collected"))?;
+    assert_eq!(incidence.get(&1), Some(&vec![0, 1]));
+    assert_eq!(incidence.get(&2), Some(&vec![0]));
+    assert!(selected_faces_connected(2, &incidence));
+    assert!(closed_shell_edge_uses(&faces).is_none());
+
+    let nonmanifold = vec![
+        faces[0].clone(),
+        faces[1].clone(),
+        test_face(SurfaceSupport::Other { entity_id: 13 }, vec![edge(1)]),
+    ];
+    let incident = face_edge_uses(&nonmanifold)
+        .ok_or_else(|| anyhow::anyhow!("nonmanifold source incidence missing"))?;
+    assert_eq!(incident.get(&1), Some(&vec![0, 1, 2]));
+    assert!(!selected_faces_connected(3, &incident));
+    assert!(closed_shell_edge_uses(&nonmanifold).is_none());
+
+    // Connectivity must be based on shared two-use edges, not merely the
+    // presence of individually admissible one-use rim edges.
+    let disconnected =
+        HashMap::from([(1, vec![0, 1]), (2, vec![2, 3]), (3, vec![0]), (4, vec![2])]);
+    assert!(!selected_faces_connected(4, &disconnected));
+    assert!(!shell_faces_connected(4, &disconnected));
+    assert!(!selected_faces_connected(
+        2,
+        &HashMap::from([(1, vec![0, 2])])
+    ));
+
+    let no_bound = [FaceInfo {
+        surface: SurfaceSupport::Other { entity_id: 20 },
+        loops: vec![],
+    }];
+    assert!(face_edge_uses(&no_bound).is_none());
+    assert!(closed_shell_edge_uses(&no_bound).is_none());
+    Ok(())
+}
+
+#[test]
+fn shared_source_face_loader_matches_surface_signature_census() -> anyhow::Result<()> {
+    let bytes = include_bytes!("../../validation/fixtures/native_spherical_cap.step");
+    let exchange = ruststep::parser::parse(std::str::from_utf8(bytes)?)?;
+    let entities = &exchange.data[0].entities;
+    let index = build_index(entities);
+    let solid_id = entities
+        .iter()
+        .find(|entity| simple_record(entity).is_some_and(|r| r.name == "MANIFOLD_SOLID_BREP"))
+        .map(entity_id)
+        .ok_or_else(|| anyhow::anyhow!("spherical cap fixture has no solid"))?;
+    let face_ids = brep::solid_face_ids(solid_id, entities, &index)
+        .ok_or_else(|| anyhow::anyhow!("spherical cap fixture has no faces"))?;
+    let faces = source_face_infos(&face_ids, entities, &index)
+        .ok_or_else(|| anyhow::anyhow!("source face loading failed"))?;
+    let incidence = closed_shell_edge_uses(&faces)
+        .ok_or_else(|| anyhow::anyhow!("closed shell incidence failed"))?;
+    let census = detect_solid_surface_signatures_with_index(entities, &index);
+    let [signature] = census.as_slice() else {
+        anyhow::bail!("unexpected number of solid signatures");
+    };
+    assert_eq!(signature.face_count, faces.len());
+    assert_eq!(signature.unique_edge_count, incidence.len());
+    assert_eq!(
+        signature.edge_use_count,
+        incidence.values().map(Vec::len).sum::<usize>()
+    );
+    assert!(signature.closed_two_manifold);
+    Ok(())
+}
+
+#[test]
 fn shell_connectivity_rejects_disconnected_two_manifolds() {
     let connected = HashMap::from([(1, vec![0, 1]), (2, vec![1, 2]), (3, vec![2, 0])]);
     assert!(shell_faces_connected(3, &connected));

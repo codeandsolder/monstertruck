@@ -12,24 +12,49 @@ pub(super) fn segment_radius_at_axial(segment: Segment2, axial: f64) -> Option<f
     (radius.is_finite() && radius >= -GEOM_TOL_MM).then_some(radius.max(0.0))
 }
 
+#[derive(Clone, Copy)]
+enum BoundaryMode {
+    ClosedShell,
+    OpenRim,
+}
+
 pub(super) fn shell_faces_connected(
     face_count: usize,
     edge_faces: &HashMap<u64, Vec<usize>>,
+) -> bool {
+    faces_connected(face_count, edge_faces, BoundaryMode::ClosedShell)
+}
+
+pub(super) fn selected_faces_connected(
+    face_count: usize,
+    edge_faces: &HashMap<u64, Vec<usize>>,
+) -> bool {
+    faces_connected(face_count, edge_faces, BoundaryMode::OpenRim)
+}
+
+/// Connectivity is common to closed and cut-open shells. Admission differs:
+/// closed shells require two oriented uses on every edge, while a selected
+/// subbody may have single-use rim edges. A two-use seam on one face counts
+/// as two uses but adds no adjacency to a different face.
+fn faces_connected(
+    face_count: usize,
+    edge_faces: &HashMap<u64, Vec<usize>>,
+    mode: BoundaryMode,
 ) -> bool {
     if face_count == 0 {
         return false;
     }
     let mut adjacency = vec![Vec::<usize>::new(); face_count];
     for attached in edge_faces.values() {
-        let [a, b] = attached.as_slice() else {
-            return false;
-        };
-        if *a >= face_count || *b >= face_count {
-            return false;
-        }
-        if a != b {
-            adjacency[*a].push(*b);
-            adjacency[*b].push(*a);
+        match attached.as_slice() {
+            [a, b] if *a < face_count && *b < face_count => {
+                if a != b {
+                    adjacency[*a].push(*b);
+                    adjacency[*b].push(*a);
+                }
+            }
+            [a] if matches!(mode, BoundaryMode::OpenRim) && *a < face_count => {}
+            _ => return false,
         }
     }
 
