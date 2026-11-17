@@ -216,8 +216,7 @@ fn trace_z90_candidates(representation_id: u64, solid_count: usize, infos: &[Sol
     }
 
     eprintln!(
-        "instance grouping representation={representation_id} solids={} analyzed={}",
-        solid_count,
+        "instance grouping representation={representation_id} solids={solid_count} analyzed={}",
         infos.len()
     );
     for info in infos {
