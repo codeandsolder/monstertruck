@@ -129,6 +129,14 @@ cargo add monstertruck
 cargo add monstertruck-modeling monstertruck-solid monstertruck-meshing
 ```
 
+The default `modeling` and `meshing` features do not expose the Boolean
+kernel or the STEP reader. Enable `solid` and `step` when using the
+subtraction-and-export example in the facade README:
+
+```toml
+monstertruck = { version = "0.4", features = ["solid", "step"] }
+```
+
 ### Running the Examples
 
 All examples are located under the `examples` directory within each respective crate. They use standard Cargo syntax for execution.
