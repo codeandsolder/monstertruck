@@ -18,17 +18,13 @@ fn main() -> Result<()> {
         "usage: step-extrusion-core-treatment-replay INPUT.step SOLID_ID CAP_A CAP_B OUTPUT_PREFIX";
     let args = extrusion_core_args::ExtrusionCoreArgs::parse(usage)?;
     let solid_id = args.solid_id;
-    let [cap_a, cap_b] = args.caps;
     let output_prefix = &args.output;
     let bytes = args.read_input()?;
-    let candidate = step_redox::recover_treatment_healed_extrusion_core_from_cap_faces_bytes(
+    let candidate = args.recover(
         &bytes,
-        solid_id,
-        [cap_a, cap_b],
-    )?
-    .with_context(|| {
-        format!("no treatment-healed extrusion core for solid #{solid_id} caps #{cap_a}/#{cap_b}")
-    })?;
+        "treatment-healed extrusion core",
+        step_redox::recover_treatment_healed_extrusion_core_from_cap_faces_bytes,
+    )?;
     let evidence = step_redox::detect_edge_treatment_evidence_bytes(&bytes)?;
     let mut treatments = candidate
         .healed_treatment_face_ids

@@ -10,15 +10,13 @@ fn main() -> Result<()> {
 
     let usage = "usage: step-extrusion-core-rebuild INPUT.step SOLID_ID CAP_A CAP_B OUTPUT.step";
     let args = extrusion_core_args::ExtrusionCoreArgs::parse(usage)?;
-    let solid_id = args.solid_id;
-    let [cap_a, cap_b] = args.caps;
     let output = &args.output;
     let bytes = args.read_input()?;
-    let core =
-        step_redox::recover_extrusion_core_from_cap_faces_bytes(&bytes, solid_id, [cap_a, cap_b])?
-            .with_context(|| {
-                format!("no translated-cap core for solid #{solid_id} caps #{cap_a}/#{cap_b}")
-            })?;
+    let core = args.recover(
+        &bytes,
+        "translated-cap core",
+        step_redox::recover_extrusion_core_from_cap_faces_bytes,
+    )?;
     let fragment = step_redox::cad_recovery::recover_solid_extrusion_fragment(&core)?;
 
     let kernel = MonstertruckKernel::project_standard();

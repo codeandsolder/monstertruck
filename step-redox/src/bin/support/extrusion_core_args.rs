@@ -45,6 +45,22 @@ impl ExtrusionCoreArgs {
     pub fn read_input(&self) -> Result<Vec<u8>> {
         std::fs::read(&self.input).with_context(|| format!("read {}", self.input.display()))
     }
+
+    /// Resolve an extrusion-core diagnostic using its own recovery and admission rule.
+    pub fn recover<T>(
+        &self,
+        bytes: &[u8],
+        description: &str,
+        recover: impl FnOnce(&[u8], u64, [u64; 2]) -> Result<Option<T>>,
+    ) -> Result<T> {
+        recover(bytes, self.solid_id, self.caps)?.with_context(|| {
+            let [cap_a, cap_b] = self.caps;
+            format!(
+                "no {description} for solid #{} caps #{cap_a}/#{cap_b}",
+                self.solid_id
+            )
+        })
+    }
 }
 
 #[cfg(test)]
@@ -63,6 +79,24 @@ mod tests {
         assert_eq!(parsed.solid_id, 42);
         assert_eq!(parsed.caps, [12, 34]);
         assert_eq!(parsed.output, PathBuf::from("out.step"));
+    }
+
+    #[test]
+    fn recovery_forwards_source_identity_and_preserves_missing_candidate_diagnostic() {
+        let parsed = args(&["source.step", "42", "12", "34", "out.step"]).expect("valid args");
+        let result = parsed
+            .recover(b"step", "candidate", |bytes, id, caps| {
+                assert_eq!(bytes, b"step");
+                assert_eq!(id, 42);
+                assert_eq!(caps, [12, 34]);
+                Ok(Some(7_u8))
+            })
+            .expect("candidate");
+        assert_eq!(result, 7);
+        let error = parsed
+            .recover(b"", "candidate", |_, _, _| Ok(None::<u8>))
+            .expect_err("no candidate");
+        assert_eq!(error.to_string(), "no candidate for solid #42 caps #12/#34");
     }
 
     #[test]

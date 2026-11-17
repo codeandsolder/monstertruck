@@ -2,6 +2,17 @@ use crate::step_graph::{entity_ref_value, simple_record, simple_record_mut, visi
 use std::collections::{HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
+/// Resolve a STEP reference only when the index still names the requested entity.
+/// An in-bounds but stale index must not silently substitute another entity.
+fn indexed_entity<'a>(
+    id: u64,
+    entities: &'a [EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<&'a EntityInstance> {
+    let entity = entities.get(*index.get(&id)?)?;
+    (crate::step_graph::entity_id(entity) == id).then_some(entity)
+}
+
 /// Fetch the positional parameters of a simple STEP entity of the requested type.
 /// Complex entities, malformed parameter lists, and stale IDs fail closed.
 pub fn named_entity_parameters<'a>(
@@ -10,7 +21,7 @@ pub fn named_entity_parameters<'a>(
     entities: &'a [EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<&'a [Parameter]> {
-    let record = simple_record(entities.get(*index.get(&id)?)?)?;
+    let record = simple_record(indexed_entity(id, entities, index)?)?;
     if record.name != expected_name {
         return None;
     }
@@ -20,23 +31,29 @@ pub fn named_entity_parameters<'a>(
     Some(params)
 }
 
+/// Read an exactly three-component STEP coordinate tuple of the required entity kind.
+fn coordinate_components(
+    id: u64,
+    name: &str,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<[f64; 3]> {
+    let params = named_entity_parameters(id, name, entities, index)?;
+    let Parameter::List(components) = params.get(1)? else {
+        return None;
+    };
+    let [x, y, z] = components.as_slice() else {
+        return None;
+    };
+    Some([number(x)?, number(y)?, number(z)?])
+}
+
 pub fn cartesian_point(
     id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<[f64; 3]> {
-    let params = named_entity_parameters(id, "CARTESIAN_POINT", entities, index)?;
-    let Parameter::List(coords) = params.get(1)? else {
-        return None;
-    };
-    if coords.len() != 3 {
-        return None;
-    }
-    Some([
-        number(&coords[0])?,
-        number(&coords[1])?,
-        number(&coords[2])?,
-    ])
+    coordinate_components(id, "CARTESIAN_POINT", entities, index)
 }
 
 pub fn number(param: &Parameter) -> Option<f64> {
@@ -52,18 +69,7 @@ pub fn direction_components(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<[f64; 3]> {
-    let params = named_entity_parameters(id, "DIRECTION", entities, index)?;
-    let Parameter::List(values) = params.get(1)? else {
-        return None;
-    };
-    if values.len() != 3 {
-        return None;
-    }
-    Some([
-        number(&values[0])?,
-        number(&values[1])?,
-        number(&values[2])?,
-    ])
+    coordinate_components(id, "DIRECTION", entities, index)
 }
 
 pub fn vertex_point(
@@ -71,7 +77,7 @@ pub fn vertex_point(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<[f64; 3]> {
-    let record = simple_record(&entities[*index.get(&vertex_id)?])?;
+    let record = simple_record(indexed_entity(vertex_id, entities, index)?)?;
     if record.name != "VERTEX_POINT" {
         return None;
     }
@@ -107,11 +113,11 @@ pub fn closure_from(
         if !seen.insert(id) {
             continue;
         }
-        let Some(&idx) = index.get(&id) else {
+        let Some(entity) = indexed_entity(id, entities, index) else {
             continue;
         };
-        visit_entity_refs(&entities[idx], &mut |child| {
-            if index.contains_key(&child) && !seen.contains(&child) {
+        visit_entity_refs(entity, &mut |child| {
+            if indexed_entity(child, entities, index).is_some() && !seen.contains(&child) {
                 stack.push(child);
             }
         });
@@ -184,13 +190,7 @@ pub fn edge_vertices(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<[u64; 2]> {
-    let record = simple_record(entities.get(*index.get(&edge)?)?)?;
-    if record.name != "EDGE_CURVE" {
-        return None;
-    }
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
+    let params = named_entity_parameters(edge, "EDGE_CURVE", entities, index)?;
     Some([
         entity_ref_value(params.get(1)?)?,
         entity_ref_value(params.get(2)?)?,
@@ -377,5 +377,75 @@ mod coordinate_lookup_tests {
         assert_eq!(cartesian_point(3, &entities, &index), None);
         assert_eq!(direction_components(3, &entities, &index), None);
         assert_eq!(cartesian_point(4, &entities, &index), None);
+    }
+
+    #[test]
+    fn in_bounds_stale_indices_cannot_substitute_other_entities() {
+        let entities = vec![
+            entity(
+                1,
+                "CARTESIAN_POINT",
+                vec![
+                    Parameter::Real(1.0),
+                    Parameter::Real(2.0),
+                    Parameter::Real(3.0),
+                ],
+            ),
+            entity(
+                2,
+                "CARTESIAN_POINT",
+                vec![
+                    Parameter::Real(4.0),
+                    Parameter::Real(5.0),
+                    Parameter::Real(6.0),
+                ],
+            ),
+            EntityInstance::Simple {
+                id: 10,
+                record: Record {
+                    name: "VERTEX_POINT".to_owned(),
+                    parameter: Parameter::List(vec![
+                        Parameter::String(String::new()),
+                        entity_ref(1),
+                    ]),
+                },
+            },
+            EntityInstance::Simple {
+                id: 20,
+                record: Record {
+                    name: "EDGE_CURVE".to_owned(),
+                    parameter: Parameter::List(vec![
+                        Parameter::String(String::new()),
+                        entity_ref(10),
+                        entity_ref(10),
+                    ]),
+                },
+            },
+        ];
+        let mut index = HashMap::from([
+            (1, 0),
+            (2, 1),
+            (10, 2),
+            (20, 3),
+            (99, 0),
+            (110, 2),
+            (120, 3),
+        ]);
+        assert_eq!(cartesian_point(99, &entities, &index), None);
+        assert_eq!(vertex_point(110, &entities, &index), None);
+        assert_eq!(edge_vertices(120, &entities, &index), None);
+        assert_eq!(vertex_point(10, &entities, &index), Some([1.0, 2.0, 3.0]));
+        assert_eq!(edge_vertices(20, &entities, &index), Some([10, 10]));
+        assert_eq!(
+            closure_from(20, &entities, &index),
+            HashSet::from([1, 10, 20])
+        );
+
+        // A stale index that points at a different, but equally typed, point
+        // must fail closed rather than quietly supplying the wrong coordinates.
+        index.insert(1, 1);
+        assert_eq!(cartesian_point(1, &entities, &index), None);
+        assert_eq!(vertex_point(10, &entities, &index), None);
+        assert_eq!(closure_from(20, &entities, &index), HashSet::from([10, 20]));
     }
 }

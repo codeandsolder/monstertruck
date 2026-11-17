@@ -618,6 +618,22 @@ fn line_support_signature(
     ))
 }
 
+/// Extract a placement origin and oriented axis with entity-kind and ID checks.
+fn axis2_placement_frame(
+    placement_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<([f64; 3], [f64; 3])> {
+    let params = named_entity_parameters(placement_id, "AXIS2_PLACEMENT_3D", entities, index)?;
+    let point = cartesian_point(entity_ref_value(params.get(1)?)?, entities, index)?;
+    let axis = crate::step_entities::direction_components(
+        entity_ref_value(params.get(2)?)?,
+        entities,
+        index,
+    )?;
+    Some((point, axis))
+}
+
 #[expect(
     clippy::cast_possible_truncation,
     reason = "finite geometric values are intentionally quantized into stable integer identity keys"
@@ -634,12 +650,7 @@ pub fn circle_support_signature(
     };
     let placement_id = entity_ref_value(params.get(1)?)?;
     let radius = number(params.get(2)?)?;
-    let place_params =
-        named_entity_parameters(placement_id, "AXIS2_PLACEMENT_3D", entities, index)?;
-    let point = cartesian_point(entity_ref_value(place_params.get(1)?)?, entities, index)?;
-    let axis_id = entity_ref_value(place_params.get(2)?)?;
-    let axis_record = simple_record(&entities[*index.get(&axis_id)?])?;
-    let axis = direction_components(axis_record)?;
+    let (point, axis) = axis2_placement_frame(placement_id, entities, index)?;
     let q_center = transform_point(point, center, quarter);
     let q_axis = transform_direction(axis, quarter);
     Some(format!(
@@ -671,13 +682,7 @@ pub fn cylindrical_surface_signature(
     };
     let placement_id = entity_ref_value(params.get(1)?)?;
     let radius = number(params.get(2)?)?;
-    let place_params =
-        named_entity_parameters(placement_id, "AXIS2_PLACEMENT_3D", entities, index)?;
-    let point_id = entity_ref_value(place_params.get(1)?)?;
-    let axis_id = entity_ref_value(place_params.get(2)?)?;
-    let point = cartesian_point(point_id, entities, index)?;
-    let axis_record = simple_record(&entities[*index.get(&axis_id)?])?;
-    let axis = direction_components(axis_record)?;
+    let (point, axis) = axis2_placement_frame(placement_id, entities, index)?;
 
     // Sliding the placement origin along the cylinder axis changes only the
     // parameter-space V origin. Rotating AXIS2_PLACEMENT_3D.ref_direction
@@ -755,13 +760,7 @@ fn plane_support_signature(
         return None;
     };
     let placement_id = entity_ref_value(params.get(1)?)?;
-    let place_params =
-        named_entity_parameters(placement_id, "AXIS2_PLACEMENT_3D", entities, index)?;
-    let point_id = entity_ref_value(place_params.get(1)?)?;
-    let axis_id = entity_ref_value(place_params.get(2)?)?;
-    let point = cartesian_point(point_id, entities, index)?;
-    let axis_record = simple_record(&entities[*index.get(&axis_id)?])?;
-    let axis = direction_components(axis_record)?;
+    let (point, axis) = axis2_placement_frame(placement_id, entities, index)?;
 
     // A plane is invariant to sliding AXIS2_PLACEMENT_3D's origin within
     // itself, and to rotating ref_direction around the normal. Signature the
