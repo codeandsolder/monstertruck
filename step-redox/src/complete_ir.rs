@@ -146,7 +146,8 @@ struct RecoveredBoundaryFeatureFamily {
 struct RecoverySection<'a> {
     data_section: usize,
     entities: &'a [EntityInstance],
-    index: HashMap<u64, usize>,
+    // A session lends its cached index; standalone kernel recovery owns one.
+    index: Cow<'a, HashMap<u64, usize>>,
 }
 
 impl RecoverySection<'_> {
@@ -623,8 +624,11 @@ pub fn recover_complete_ir_with_kernel_bytes<
 ) -> Result<CompleteIr> {
     let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
     let document = kernel.resolve_source_exchange(exchange)?;
-    let mut build =
-        recover_complete_ir_build_state(document.as_ref(), ReducedBrepMutationMode::KernelOwned)?;
+    let mut build = recover_complete_ir_build_state(
+        document.as_ref(),
+        ReducedBrepMutationMode::KernelOwned,
+        None,
+    )?;
     let source_load = kernel.inspect_source_document(&document)?;
     let mut failures = apply_kernel_recovery(
         &mut build.recovery,
@@ -1128,19 +1132,35 @@ where
     failures
 }
 
-pub(crate) fn recover_complete_ir_exchange(exchange: &Exchange) -> Result<CompleteIr> {
+type SectionEvidence<'a> = (&'a HashMap<u64, usize>, &'a HashMap<u64, f64>);
+
+/// Borrow section-local indexes and source tolerances from the owning
+/// `AnalysisSession`. Kernel-owned recovery still builds evidence independently.
+pub(crate) fn recover_complete_ir_exchange_with_context(
+    exchange: &Exchange,
+    sections: &[SectionEvidence<'_>],
+) -> Result<CompleteIr> {
+    anyhow::ensure!(
+        exchange.data.len() == sections.len(),
+        "one cached evidence pair is required per STEP DATA section"
+    );
+    recover_complete_ir_exchange_inner(exchange, Some(sections))
+}
+
+fn recover_complete_ir_exchange_inner(
+    exchange: &Exchange,
+    sections: Option<&[SectionEvidence<'_>]>,
+) -> Result<CompleteIr> {
     Ok(
-        recover_complete_ir_build_state(exchange, ReducedBrepMutationMode::ParserOwned)?.finish(
-            COMPLETE_IR_SCHEMA,
-            Vec::new(),
-            None,
-        ),
+        recover_complete_ir_build_state(exchange, ReducedBrepMutationMode::ParserOwned, sections)?
+            .finish(COMPLETE_IR_SCHEMA, Vec::new(), None),
     )
 }
 
-fn recover_complete_ir_build_state(
-    exchange: &Exchange,
+fn recover_complete_ir_build_state<'a>(
+    exchange: &'a Exchange,
     mutation_mode: ReducedBrepMutationMode,
+    sections: Option<&[SectionEvidence<'a>]>,
 ) -> Result<CompleteIrBuildState> {
     let mut signatures = Vec::new();
     let mut patterns = Vec::new();
@@ -1149,7 +1169,11 @@ fn recover_complete_ir_build_state(
     let mut recovery_sections = Vec::with_capacity(exchange.data.len());
 
     for (data_section, section) in exchange.data.iter().enumerate() {
-        let index = crate::step_graph::build_index(&section.entities);
+        let cached = sections.and_then(|items| items.get(data_section));
+        let index = cached.map_or_else(
+            || Cow::Owned(crate::step_graph::build_index(&section.entities)),
+            |(index, _)| Cow::Borrowed(*index),
+        );
         let recovery_section = RecoverySection {
             data_section,
             entities: &section.entities,
@@ -1169,10 +1193,18 @@ fn recover_complete_ir_build_state(
             signatures.push(SurfaceSignatureSummary::from_source(source, &signature));
         }
 
-        let mut section_candidates = recover_constructive_fragments_from_entities_with_index(
-            recovery_section.entities,
-            &recovery_section.index,
-        )?;
+        let mut section_candidates = if let Some((_, tolerances)) = cached {
+            recover_constructive_fragments_with_tolerances(
+                recovery_section.entities,
+                &recovery_section.index,
+                tolerances,
+            )?
+        } else {
+            recover_constructive_fragments_from_entities_with_index(
+                recovery_section.entities,
+                &recovery_section.index,
+            )?
+        };
         let periodic_chains = crate::periodic_chains::detect_periodic_chains_with_index(
             recovery_section.entities,
             &recovery_section.index,
@@ -1639,11 +1671,27 @@ fn recover_constructive_fragments_from_entities_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Result<Vec<CadFragment>> {
+    let source_tolerances =
+        crate::solid_revolutions::source_tolerance_by_representation_item(entities, index);
+    recover_constructive_fragments_with_tolerances(entities, index, &source_tolerances)
+}
+
+fn recover_constructive_fragments_with_tolerances(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    source_tolerances: &HashMap<u64, f64>,
+) -> Result<Vec<CadFragment>> {
     let extrusions = crate::solid_extrusions::detect_solid_extrusions_with_index(entities, index);
-    let revolutions =
-        crate::solid_revolutions::detect_solid_revolutions_with_index(entities, index);
-    let radial_slots =
-        crate::solid_revolutions::detect_radial_slot_revolutions_with_index(entities, index);
+    let revolutions = crate::solid_revolutions::detect_solid_revolutions_with_tolerances(
+        entities,
+        index,
+        source_tolerances,
+    );
+    let radial_slots = crate::solid_revolutions::detect_radial_slot_revolutions_with_tolerances(
+        entities,
+        index,
+        source_tolerances,
+    );
     let closed_sweeps = crate::solid_sweeps::detect_round_sweeps(entities, index);
     let revolved_round_tails = crate::solid_sweeps::detect_revolved_round_tails(entities, index);
     let open_sweeps = crate::solid_sweeps::sheet::detect_open_rectangular_sweeps(entities, index);
@@ -2252,6 +2300,29 @@ mod tests {
     use super::*;
     use crate::AnalysisSession;
     use crate::cad_ir::{CadModel, CadNode, Primitive};
+
+    #[test]
+    fn cached_session_complete_ir_matches_independent_section_indexes() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_conical_frustum.step").as_slice(),
+            include_bytes!("../validation/fixtures/production_radial_slot.step").as_slice(),
+        ] {
+            let session = AnalysisSession::from_bytes(bytes)?;
+            let cached = session.complete_ir()?;
+            let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+            let rebuilt = recover_complete_ir_build_state(
+                &exchange,
+                ReducedBrepMutationMode::ParserOwned,
+                None,
+            )?
+            .finish(COMPLETE_IR_SCHEMA, Vec::new(), None);
+            assert_eq!(
+                serde_json::to_value(&cached)?,
+                serde_json::to_value(&rebuilt)?
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn owned_analysis_session_outlives_its_step_input_and_omits_rewrite_diagnostics() -> Result<()>

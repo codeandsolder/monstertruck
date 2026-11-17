@@ -126,9 +126,16 @@ struct PlanePairCandidate {
 #[must_use]
 pub fn detect_formed_sheet_evidence(entities: &[EntityInstance]) -> Vec<FormedSheetEvidence> {
     let index = build_index(entities);
+    detect_formed_sheet_evidence_with_index(entities, &index)
+}
+
+pub(crate) fn detect_formed_sheet_evidence_with_index(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<FormedSheetEvidence> {
     detect_formed_sheet_evidence_with_min_pairs(
         entities,
-        &index,
+        index,
         MIN_COAXIAL_PAIRS,
         MIN_PARALLEL_PLANE_PAIRS,
     )
