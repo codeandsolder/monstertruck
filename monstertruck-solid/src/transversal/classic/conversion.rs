@@ -156,7 +156,7 @@ fn iso_candidate_follows_guide(
     tolerances: BooleanTolerance,
 ) -> bool {
     let (start, end) = candidate.range_tuple();
-    let mut previous_progress = 0.0;
+    let mut previous_progress = (0_usize, 0.0_f64);
     let sample_count = DEFAULT_NUMERICAL_TOLERANCES
         .boolean_iso_validation_segments
         .max(32);
@@ -174,13 +174,17 @@ fn iso_candidate_follows_guide(
                 }
                 let t = ((point - segment[0]).dot(delta) / squared).clamp(0.0, 1.0);
                 let distance = point.distance(segment[0] + delta * t);
-                Some((index as f64 + t, distance))
+                Some(((index, t), distance))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))
         else {
             return false;
         };
-        let forward = progress + 1.0e-8 >= previous_progress;
+        // Avoid lossy conversion of large polyline indices to f64. Exact
+        // segment indices and local interpolation parameters form an ordered
+        // progress key without collapsing distinct distant guide segments.
+        let forward = progress.0 > previous_progress.0
+            || (progress.0 == previous_progress.0 && progress.1 + 1.0e-8 >= previous_progress.1);
         previous_progress = progress;
         forward && residual.is_finite() && residual <= tolerances.mesh_seed
     })
