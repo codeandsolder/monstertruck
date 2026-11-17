@@ -992,26 +992,6 @@ fn resize_periodic_chain_bytes_one_side(
     })
 }
 
-/// Backward-compatible growth-only wrapper around `resize_periodic_chain_bytes`.
-///
-/// # Errors
-/// Returns an error if the STEP input is invalid or the selected periodic chain cannot be expanded safely.
-pub fn expand_periodic_chain_bytes(
-    input: &[u8],
-    chain_index: usize,
-    new_sites: usize,
-) -> Result<PeriodicChainEditOutput> {
-    let chains = detect_periodic_chains_bytes(input)?;
-    let old_sites = chains
-        .get(chain_index)
-        .map(|chain| chain.sites)
-        .ok_or_else(|| anyhow::anyhow!("periodic chain index {chain_index} not found"))?;
-    if new_sites <= old_sites {
-        bail!("periodic-chain expansion requires growth ({old_sites} -> {new_sites})");
-    }
-    resize_periodic_chain_bytes(input, chain_index, new_sites)
-}
-
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CountAnchor {
@@ -1383,26 +1363,6 @@ fn find_matching_count_parameter(
         [] => bail!("could not rediscover the intermediate {sites}-site count parameter"),
         _ => bail!("multiple matching intermediate {sites}-site count parameters: {matches:?}"),
     }
-}
-
-/// Backward-compatible growth-only wrapper.
-///
-/// # Errors
-/// Returns an error if the STEP input is invalid or the requested count expansion cannot be proven and applied safely.
-pub fn expand_count_parameter_bytes(
-    input: &[u8],
-    parameter_index: usize,
-    new_sites: usize,
-) -> Result<CountEditOutput> {
-    let edited = resize_count_parameter_bytes(input, parameter_index, new_sites)?;
-    if edited.resize.new_sites <= edited.resize.old_sites {
-        bail!(
-            "expand_count_parameter_bytes requires growth ({} -> {})",
-            edited.resize.old_sites,
-            edited.resize.new_sites
-        );
-    }
-    Ok(edited)
 }
 
 /// Expand one detected periodic body at its positive-axis end.
