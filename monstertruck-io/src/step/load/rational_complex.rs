@@ -157,7 +157,7 @@ fn unpack_components(records: &[Record]) -> Result<Option<Components<'_>>> {
         ),
     }
     params.extend(base.iter().cloned());
-    if let Basis::Knots = basis {
+    if matches!(basis, Basis::Knots) {
         let Some(knots) = list_component(records, knot_name) else {
             return Ok(None);
         };
