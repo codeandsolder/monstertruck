@@ -2,17 +2,15 @@ use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
 /// Shared positional contract for the extrusion-core recovery diagnostics.
-pub(super) struct ExtrusionCoreArgs {
+pub struct ExtrusionCoreArgs {
     input: PathBuf,
-    pub(super) solid_id: u64,
-    pub(super) caps: [u64; 2],
-    pub(super) output: PathBuf,
+    pub solid_id: u64,
+    pub caps: [u64; 2],
+    pub output: PathBuf,
 }
 
 impl ExtrusionCoreArgs {
-    pub(super) fn parse(usage: &str) -> Result<Self> {
-        Self::parse_from(std::env::args().skip(1), usage)
-    }
+    pub fn parse(usage: &str) -> Result<Self> { Self::parse_from(std::env::args().skip(1), usage) }
 
     fn parse_from(args: impl IntoIterator<Item = String>, usage: &str) -> Result<Self> {
         let mut args = args.into_iter();
@@ -44,7 +42,7 @@ impl ExtrusionCoreArgs {
         })
     }
 
-    pub(super) fn read_input(&self) -> Result<Vec<u8>> {
+    pub fn read_input(&self) -> Result<Vec<u8>> {
         std::fs::read(&self.input).with_context(|| format!("read {}", self.input.display()))
     }
 }

@@ -27,7 +27,7 @@ fn main() -> Result<()> {
     if !summary.geometrically_consistent {
         bail!("Monstertruck rebuilt a geometrically inconsistent extrusion core");
     }
-    std::fs::write(&output, kernel.to_step(&evaluated)?)
+    std::fs::write(output, kernel.to_step(&evaluated)?)
         .with_context(|| format!("write {}", output.display()))?;
     Ok(())
 }

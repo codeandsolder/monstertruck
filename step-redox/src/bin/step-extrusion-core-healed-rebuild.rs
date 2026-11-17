@@ -31,7 +31,7 @@ fn main() -> Result<()> {
     if !summary.geometrically_consistent || summary.shells != 1 {
         bail!("Monstertruck rebuilt an invalid treatment-healed extrusion host: {summary:?}");
     }
-    std::fs::write(&output, kernel.to_step(&evaluated)?)
+    std::fs::write(output, kernel.to_step(&evaluated)?)
         .with_context(|| format!("write {}", output.display()))?;
     Ok(())
 }
