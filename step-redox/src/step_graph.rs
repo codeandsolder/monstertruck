@@ -1,5 +1,35 @@
 use ruststep::ast::{EntityInstance, Name, Parameter, Record};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+/// Connected components in a symmetric adjacency graph, ordered by their
+/// smallest node. Singleton nodes are not candidate merge groups.
+pub fn undirected_components(adjacency: &HashMap<u64, BTreeSet<u64>>) -> Vec<BTreeSet<u64>> {
+    let mut roots: Vec<u64> = adjacency.keys().copied().collect();
+    roots.sort_unstable();
+
+    let mut seen = HashSet::new();
+    let mut components = Vec::new();
+    for root in roots {
+        if seen.contains(&root) {
+            continue;
+        }
+        let mut stack = vec![root];
+        let mut component = BTreeSet::new();
+        while let Some(id) = stack.pop() {
+            if !component.insert(id) {
+                continue;
+            }
+            seen.insert(id);
+            if let Some(neighbors) = adjacency.get(&id) {
+                stack.extend(neighbors.iter().copied());
+            }
+        }
+        if component.len() > 1 {
+            components.push(component);
+        }
+    }
+    components
+}
 
 pub fn build_index(entities: &[EntityInstance]) -> HashMap<u64, usize> {
     entities
@@ -212,5 +242,24 @@ impl ReferenceGraph {
     ) -> HashSet<u64> {
         let candidates = self.descendant_closure(present, roots);
         self.propagate_detached(&candidates, Some(roots), HashSet::new())
+    }
+}
+
+#[cfg(test)]
+mod connected_component_tests {
+    use super::*;
+
+    #[test]
+    fn components_are_deterministic_and_exclude_singletons() {
+        let mut graph: HashMap<u64, BTreeSet<u64>> = HashMap::new();
+        for (a, b) in [(20, 30), (10, 20), (4, 5)] {
+            graph.entry(a).or_default().insert(b);
+            graph.entry(b).or_default().insert(a);
+        }
+        graph.insert(99, BTreeSet::new());
+        assert_eq!(
+            undirected_components(&graph),
+            vec![BTreeSet::from([4, 5]), BTreeSet::from([10, 20, 30])]
+        );
     }
 }
