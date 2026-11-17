@@ -137,6 +137,34 @@ impl<S> CompressedFace<S> {
     }
 }
 
+/// Expose boundary edge indices without losing the face-local trim payload.
+///
+/// The two compressed face representations have different edge-use types;
+/// topology compaction needs only their shared index field.
+trait FaceEdgeIndices {
+    fn edge_indices(&self) -> impl Iterator<Item = usize> + '_;
+    fn edge_indices_mut(&mut self) -> impl Iterator<Item = &mut usize> + '_;
+}
+
+// Each face flavor stores edges under the same boundary-index layout, but
+// the edge-use type differs because trimmed faces retain local trim curves.
+macro_rules! impl_face_edge_indices {
+    ($($generic:ident),+ => $face:ty) => {
+        impl<$($generic),+> FaceEdgeIndices for $face {
+            fn edge_indices(&self) -> impl Iterator<Item = usize> + '_ {
+                self.boundaries.iter().flatten().map(|edge| edge.index)
+            }
+
+            fn edge_indices_mut(&mut self) -> impl Iterator<Item = &mut usize> + '_ {
+                self.boundaries.iter_mut().flatten().map(|edge| &mut edge.index)
+            }
+        }
+    };
+}
+
+impl_face_edge_indices!(S => CompressedFace<S>);
+impl_face_edge_indices!(S, T => CompressedTrimmedFace<S, T>);
+
 /// Serialized compressed shell
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompressedShell<P, C, S> {
@@ -379,6 +407,49 @@ fn compact_edge_vertex_storage<P, C>(
         edge.vertices.1 = vertex_remap[edge.vertices.1];
     }
     Ok(edge_remap)
+}
+
+/// Shared transaction for compacted shells, independent of whether a face
+/// carries face-local trim curves. Validate all references before remapping any
+/// storage so malformed shells remain unchanged.
+fn compact_unused_shell_storage<P, C, F: FaceEdgeIndices>(
+    vertices: &mut Vec<P>,
+    edges: &mut Vec<CompressedEdge<C>>,
+    faces: &mut [F],
+    vertex_stable_ids: &mut Option<Vec<StableId>>,
+    edge_stable_ids: &mut Option<Vec<StableId>>,
+    face_stable_ids: Option<&[StableId]>,
+) -> Result<()> {
+    validate_stable_id_counts(
+        vertex_stable_ids.as_deref(),
+        vertices.len(),
+        edge_stable_ids.as_deref(),
+        edges.len(),
+        face_stable_ids,
+        faces.len(),
+    )?;
+    let mut used_edges = vec![false; edges.len()];
+    for index in faces.iter().flat_map(FaceEdgeIndices::edge_indices) {
+        let Some(used) = used_edges.get_mut(index) else {
+            return Err(Error::CompressedReferenceOutOfBounds {
+                entity: "edge",
+                index,
+                len: edges.len(),
+            });
+        };
+        *used = true;
+    }
+    let edge_remap = compact_edge_vertex_storage(
+        vertices,
+        edges,
+        vertex_stable_ids,
+        edge_stable_ids,
+        &used_edges,
+    )?;
+    for index in faces.iter_mut().flat_map(FaceEdgeIndices::edge_indices_mut) {
+        *index = edge_remap[*index];
+    }
+    Ok(())
 }
 
 fn retain_with_stable_ids<T>(
@@ -865,67 +936,40 @@ where
     }
 }
 
-impl<P, C, S, T> CompressedTrimmedShell<P, C, S, T> {
-    /// Removes edges and vertices unused by any face boundary, remapping indices and stable IDs.
-    ///
-    /// The operation validates all stable-ID sidecar cardinalities and compressed references before
-    /// mutating the shell. Face order and face stable IDs are unchanged.
-    ///
-    /// # Errors
-    /// Returns a typed topology error when a stable-ID sidecar is malformed or a face/edge
-    /// references an out-of-range edge/vertex index.
-    pub fn compact_unused_topology(&mut self) -> Result<()> {
-        validate_stable_id_counts(
-            self.vertex_stable_ids.as_deref(),
-            self.vertices.len(),
-            self.edge_stable_ids.as_deref(),
-            self.edges.len(),
-            self.face_stable_ids.as_deref(),
-            self.faces.len(),
-        )?;
-        let mut used_edges = vec![false; self.edges.len()];
-        for edge_use in self
-            .faces
-            .iter()
-            .flat_map(|face| face.boundaries.iter())
-            .flatten()
-        {
-            let Some(used) = used_edges.get_mut(edge_use.index) else {
-                return Err(Error::CompressedReferenceOutOfBounds {
-                    entity: "edge",
-                    index: edge_use.index,
-                    len: self.edges.len(),
-                });
-            };
-            *used = true;
+/// Both compressed shell representations have identical topology identity
+/// operations. Generate the public methods once; face-local trim payloads
+/// remain untouched by the shared index-compaction implementation.
+macro_rules! compressed_shell_compaction_methods {
+    () => {
+        /// Removes unused edges and vertices, updating indices and stable IDs
+        /// without changing face order or face-local trim data.
+        ///
+        /// # Errors
+        /// Returns a typed error for malformed identity sidecars or invalid
+        /// compressed references, leaving the shell unchanged.
+        pub fn compact_unused_topology(&mut self) -> Result<()> {
+            compact_unused_shell_storage(
+                &mut self.vertices,
+                &mut self.edges,
+                &mut self.faces,
+                &mut self.vertex_stable_ids,
+                &mut self.edge_stable_ids,
+                self.face_stable_ids.as_deref(),
+            )
         }
-        let edge_remap = compact_edge_vertex_storage(
-            &mut self.vertices,
-            &mut self.edges,
-            &mut self.vertex_stable_ids,
-            &mut self.edge_stable_ids,
-            &used_edges,
-        )?;
-        for edge_use in self
-            .faces
-            .iter_mut()
-            .flat_map(|face| face.boundaries.iter_mut())
-            .flatten()
-        {
-            edge_use.index = edge_remap[edge_use.index];
-        }
-        Ok(())
-    }
 
-    /// Discards all stable topology identity carried by this shell.
-    ///
-    /// Use this before arbitrary topology surgery that cannot preserve or remap the
-    /// existing identity domain. Geometry and connectivity are unchanged.
-    pub fn discard_topology_identity(&mut self) {
-        self.vertex_stable_ids = None;
-        self.edge_stable_ids = None;
-        self.face_stable_ids = None;
-    }
+        /// Discards all stable topology identity before arbitrary surgery that
+        /// cannot preserve or remap it; geometry remains unchanged.
+        pub fn discard_topology_identity(&mut self) {
+            self.vertex_stable_ids = None;
+            self.edge_stable_ids = None;
+            self.face_stable_ids = None;
+        }
+    };
+}
+
+impl<P, C, S, T> CompressedTrimmedShell<P, C, S, T> {
+    compressed_shell_compaction_methods!();
 
     /// Retains only faces accepted by `keep`, compacting the parallel face stable-ID sidecar.
     pub fn retain_faces(&mut self, keep: impl FnMut(&CompressedTrimmedFace<S, T>) -> bool) {
@@ -1031,63 +1075,7 @@ impl<P, C, S, T> CompressedTrimmedSolid<P, C, S, T> {
 }
 
 impl<P, C, S> CompressedShell<P, C, S> {
-    /// Removes edges and vertices unused by any face boundary, remapping indices and stable IDs.
-    ///
-    /// The operation validates all stable-ID sidecar cardinalities and compressed references before
-    /// mutating the shell. Face order and face stable IDs are unchanged.
-    ///
-    /// # Errors
-    /// Returns a typed topology error when a stable-ID sidecar is malformed or a face/edge
-    /// references an out-of-range edge/vertex index.
-    pub fn compact_unused_topology(&mut self) -> Result<()> {
-        validate_stable_id_counts(
-            self.vertex_stable_ids.as_deref(),
-            self.vertices.len(),
-            self.edge_stable_ids.as_deref(),
-            self.edges.len(),
-            self.face_stable_ids.as_deref(),
-            self.faces.len(),
-        )?;
-        let mut used_edges = vec![false; self.edges.len()];
-        for edge_use in self
-            .faces
-            .iter()
-            .flat_map(|face| face.boundaries.iter())
-            .flatten()
-        {
-            let Some(used) = used_edges.get_mut(edge_use.index) else {
-                return Err(Error::CompressedReferenceOutOfBounds {
-                    entity: "edge",
-                    index: edge_use.index,
-                    len: self.edges.len(),
-                });
-            };
-            *used = true;
-        }
-        let edge_remap = compact_edge_vertex_storage(
-            &mut self.vertices,
-            &mut self.edges,
-            &mut self.vertex_stable_ids,
-            &mut self.edge_stable_ids,
-            &used_edges,
-        )?;
-        for edge_use in self
-            .faces
-            .iter_mut()
-            .flat_map(|face| face.boundaries.iter_mut())
-            .flatten()
-        {
-            edge_use.index = edge_remap[edge_use.index];
-        }
-        Ok(())
-    }
-
-    /// Discards all stable topology identity carried by this shell.
-    pub fn discard_topology_identity(&mut self) {
-        self.vertex_stable_ids = None;
-        self.edge_stable_ids = None;
-        self.face_stable_ids = None;
-    }
+    compressed_shell_compaction_methods!();
 
     /// Retains only faces accepted by `keep`, compacting the parallel face stable-ID sidecar.
     pub fn retain_faces(&mut self, keep: impl FnMut(&CompressedFace<S>) -> bool) {
