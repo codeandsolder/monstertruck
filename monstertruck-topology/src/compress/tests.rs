@@ -262,9 +262,21 @@ fn compact_unused_topology_preserves_sidecars_and_plain_trimmed_parity() -> Resu
     Ok(())
 }
 
+/// Check transactional failure for either compressed shell representation.
+#[track_caller]
+fn assert_compaction_rejected_without_mutation<T: Clone + PartialEq + std::fmt::Debug>(
+    mut shell: T,
+    expected: &Error,
+    compact: impl FnOnce(&mut T) -> Result<()>,
+) {
+    let original = shell.clone();
+    assert_eq!(compact(&mut shell).as_ref(), Err(expected));
+    assert_eq!(shell, original);
+}
+
 #[test]
 fn compact_unused_topology_refuses_invalid_references_without_mutation() {
-    let mut bad_edge_use = CompressedTrimmedShell::<(), (), (), ()> {
+    let bad_edge_use = CompressedTrimmedShell::<(), (), (), ()> {
         vertices: vec![(), ()],
         edges: vec![CompressedEdge {
             vertices: (0, 1),
@@ -283,30 +295,59 @@ fn compact_unused_topology_refuses_invalid_references_without_mutation() {
         edge_stable_ids: Some(vec![StableId::new(3)]),
         face_stable_ids: Some(vec![StableId::new(4)]),
     };
-    let before = bad_edge_use.clone();
-    assert_eq!(
-        bad_edge_use.compact_unused_topology(),
-        Err(Error::CompressedReferenceOutOfBounds {
-            entity: "edge",
-            index: 7,
-            len: 1,
-        })
-    );
-    assert_eq!(bad_edge_use, before);
 
-    let mut bad_vertex = before;
+    let invalid_edge = Error::CompressedReferenceOutOfBounds {
+        entity: "edge",
+        index: 7,
+        len: 1,
+    };
+    assert_compaction_rejected_without_mutation(
+        bad_edge_use.clone(),
+        &invalid_edge,
+        CompressedTrimmedShell::compact_unused_topology,
+    );
+    assert_compaction_rejected_without_mutation(
+        bad_edge_use.clone().erase_trims(),
+        &invalid_edge,
+        CompressedShell::compact_unused_topology,
+    );
+
+    let mut bad_vertex = bad_edge_use;
     bad_vertex.faces[0].boundaries[0][0].index = 0;
     bad_vertex.edges[0].vertices.1 = 9;
-    let before = bad_vertex.clone();
-    assert_eq!(
-        bad_vertex.compact_unused_topology(),
-        Err(Error::CompressedReferenceOutOfBounds {
-            entity: "vertex",
-            index: 9,
-            len: 2,
-        })
+    let invalid_vertex = Error::CompressedReferenceOutOfBounds {
+        entity: "vertex",
+        index: 9,
+        len: 2,
+    };
+    assert_compaction_rejected_without_mutation(
+        bad_vertex.clone(),
+        &invalid_vertex,
+        CompressedTrimmedShell::compact_unused_topology,
     );
-    assert_eq!(bad_vertex, before);
+    assert_compaction_rejected_without_mutation(
+        bad_vertex.clone().erase_trims(),
+        &invalid_vertex,
+        CompressedShell::compact_unused_topology,
+    );
+
+    let mut bad_ids = bad_vertex;
+    bad_ids.face_stable_ids = Some(Vec::new());
+    let invalid_ids = Error::StableIdCountMismatch {
+        entity: "faces",
+        expected: 1,
+        actual: 0,
+    };
+    assert_compaction_rejected_without_mutation(
+        bad_ids.clone(),
+        &invalid_ids,
+        CompressedTrimmedShell::compact_unused_topology,
+    );
+    assert_compaction_rejected_without_mutation(
+        bad_ids.erase_trims(),
+        &invalid_ids,
+        CompressedShell::compact_unused_topology,
+    );
 }
 
 #[test]
