@@ -217,7 +217,7 @@ impl<P> Tmesh<P> {
         &self,
         knot_coords: (f64, f64),
     ) -> Result<StraddlingEdge<P>> {
-        let target = [knot_coords.0, knot_coords.1];
+        let target: [f64; 2] = knot_coords.into();
         if target.iter().any(|&coord| !(0.0..=1.0).contains(&coord)) {
             return Err(Error::TmeshOutOfBoundsInsertion);
         }
@@ -237,17 +237,21 @@ impl<P> Tmesh<P> {
         {
             let mut candidate = None;
             for point in &self.control_points {
-                let control = point.read();
-                let (s, t) = control.knot_coordinates();
-                let coordinates = [s, t];
+                let (coordinates, interval) = {
+                    let control = point.read();
+                    let coordinates: [f64; 2] = control.knot_coordinates().into();
+                    (
+                        coordinates,
+                        control.get(direction).map(|connection| connection.1),
+                    )
+                };
                 if !(coordinates[fixed] - target[fixed]).so_small() {
                     continue;
                 }
-                let Some(connection) = control.get(direction) else {
+                let Some(interval) = interval else {
                     continue;
                 };
                 let start = coordinates[varying];
-                let interval = connection.1;
                 if start < target[varying] && start + interval > target[varying] {
                     if candidate.is_some() {
                         return Err(Error::TmeshMalformedMesh);
