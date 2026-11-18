@@ -368,42 +368,6 @@ fn create_fillet_pcurve_edge(
     Some(Edge::new_unchecked(front, back, pcurve.into()))
 }
 
-#[cfg(test)]
-mod fillet_pcurve_edge_tests {
-    use super::*;
-
-    #[test]
-    fn seam_edge_evaluates_on_the_original_carrier() {
-        let knots = KnotVector::bezier_knot(1);
-        let homogeneous_points = [0.0, 1.0]
-            .into_iter()
-            .map(|x| {
-                [0.0, 1.0]
-                    .into_iter()
-                    .map(|y| Point3::new(x, y, 0.0).to_homogeneous())
-                    .collect()
-            })
-            .collect();
-        let plane = NurbsSurface::new(BsplineSurface::new_unchecked(
-            (knots.clone(), knots),
-            homogeneous_points,
-        ));
-        let front = Vertex::new(plane.evaluate(0.0, 0.2));
-        let back = Vertex::new(plane.evaluate(1.0, 0.8));
-        let edge = create_fillet_pcurve_edge(&plane, &front, &back, (0.0, 0.2), (1.0, 0.8))
-            .expect("the second endpoint lies on the parameterized carrier");
-        let curve = edge.oriented_curve();
-        for t in [0.0, 0.2, 0.5, 0.8, 1.0] {
-            let expected = Point3::new(t, 0.2 + 0.6 * t, 0.0);
-            let actual = curve.evaluate(t);
-            assert!(
-                (actual - expected).magnitude() < 1.0e-9,
-                "t={t}: expected {expected:?}, got {actual:?}",
-            );
-        }
-    }
-}
-
 /// Open-wire fillet face construction (original logic).
 #[expect(
     clippy::too_many_lines,
@@ -752,4 +716,40 @@ fn fillet_along_wire_closed(
     shell.extend(fillet_faces);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod fillet_pcurve_edge_tests {
+    use super::*;
+
+    #[test]
+    fn seam_edge_evaluates_on_the_original_carrier() {
+        let knots = KnotVector::bezier_knot(1);
+        let homogeneous_points = [0.0, 1.0]
+            .into_iter()
+            .map(|x| {
+                [0.0, 1.0]
+                    .into_iter()
+                    .map(|y| Point3::new(x, y, 0.0).to_homogeneous())
+                    .collect()
+            })
+            .collect();
+        let plane = NurbsSurface::new(BsplineSurface::new_unchecked(
+            (knots.clone(), knots),
+            homogeneous_points,
+        ));
+        let front = Vertex::new(plane.evaluate(0.0, 0.2));
+        let back = Vertex::new(plane.evaluate(1.0, 0.8));
+        let edge = create_fillet_pcurve_edge(&plane, &front, &back, (0.0, 0.2), (1.0, 0.8))
+            .expect("the second endpoint lies on the parameterized carrier");
+        let curve = edge.oriented_curve();
+        for t in [0.0, 0.2, 0.5, 0.8, 1.0] {
+            let expected = Point3::new(t, 0.2 + 0.6 * t, 0.0);
+            let actual = curve.evaluate(t);
+            assert!(
+                (actual - expected).magnitude() < 1.0e-9,
+                "t={t}: expected {expected:?}, got {actual:?}",
+            );
+        }
+    }
 }
