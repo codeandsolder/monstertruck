@@ -1,6 +1,6 @@
 //! Baseline behavioral contracts for STEP conic trimming, both dimensions.
-//! The existing parabola path deliberately returns a hyperbola; fixing that
-//! representation is a separate geometry issue, not a parser deduplication.
+//! In particular, STEP parabolas must remain parabolas rather than being
+//! accidentally reinterpreted as hyperbolas.
 use super::super::{
     Axis2Placement, Axis2Placement2d, Axis2Placement3d, Circle, Ellipse, Hyperbola, Parabola,
 };
@@ -67,9 +67,7 @@ fn point(kind: &str, t: f64) -> Point2 {
         "circle" => Point2::new(2.0 * t.cos(), 2.0 * t.sin()),
         "ellipse" => Point2::new(2.0 * t.cos(), 3.0 * t.sin()),
         "hyperbola" => Point2::new(2.0 * t.cosh(), 3.0 * t.sinh()),
-        // Existing EdgeCurve parser represents a STEP parabola with a
-        // hyperbola unit curve; preserve this exactly in the refactor.
-        "parabola" => Point2::new(2.0 * t.cosh(), 2.0 * t.sinh()),
+        "parabola" => Point2::new(2.0 * t * t, 4.0 * t),
         _ => unreachable!(),
     }
 }
@@ -90,9 +88,18 @@ macro_rules! check_conic_endpoints {
             $dim,
             $kind
         );
-        assert_eq!(
-            matches!(parsed, $curve_ty::Conic($conic_ty::Ellipse(_))),
-            $kind == "circle" || $kind == "ellipse",
+        assert!(
+            matches!(
+                ($kind, parsed),
+                (
+                    "circle" | "ellipse",
+                    $curve_ty::Conic($conic_ty::Ellipse(_))
+                ) | ("hyperbola", $curve_ty::Conic($conic_ty::Hyperbola(_)))
+                    | ("parabola", $curve_ty::Conic($conic_ty::Parabola(_)))
+            ),
+            "unexpected conic variant {} {}",
+            $dim,
+            $kind,
         );
     }};
 }
@@ -151,7 +158,7 @@ fn singular_conic_transform_errors_remain_dimension_specific() {
 }
 
 #[test]
-fn wrap_behaviors_differ_for_2d_and_3d_hyperbolas() {
+fn hyperbolas_do_not_wrap_nonperiodic_parameters() {
     let p = point("hyperbola", 0.6);
     let q = point("hyperbola", -0.2);
     let curve2 = EdgeCurve::parse_conic_2d(&conic(2, "hyperbola", 1.0), p, q).unwrap();
@@ -163,7 +170,18 @@ fn wrap_behaviors_differ_for_2d_and_3d_hyperbolas() {
     .unwrap();
     let (start2, end2) = BoundedCurve::range_tuple(&curve2);
     let (start3, end3) = BoundedCurve::range_tuple(&curve3);
-    assert!(end2 < start2);
-    assert!(end3 > start3);
-    assert!((end3 - end2 - 2.0 * PI).abs() < 1.0e-8);
+    assert!(
+        end2 < start2,
+        "2D reversed hyperbola trim must be decreasing"
+    );
+    assert!(
+        end3 < start3,
+        "3D reversed hyperbola trim must be decreasing"
+    );
+    assert!((start2 - start3).abs() < 1.0e-8);
+    assert!((end2 - end3).abs() < 1.0e-8);
+    assert!(ParametricCurve::evaluate(&curve2, start2).near(&p));
+    assert!(ParametricCurve::evaluate(&curve2, end2).near(&q));
+    assert!(ParametricCurve::evaluate(&curve3, start3).near(&Point3::new(p.x, p.y, 0.0)));
+    assert!(ParametricCurve::evaluate(&curve3, end3).near(&Point3::new(q.x, q.y, 0.0)));
 }
