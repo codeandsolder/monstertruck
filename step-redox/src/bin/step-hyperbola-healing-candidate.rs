@@ -46,6 +46,9 @@ struct CandidateReport<'a> {
     /// Analytic intersection with corrected plane and original-cone support;
     /// this is a STEP geometry fragment, not a healed topological solid.
     native_intersection_step_fragment: String,
+    /// New open STEP edge with original directed vertices and two source coedges.
+    /// This is not a complete healed face, shell or solid.
+    healed_open_edge: step_redox::healed_edge_topology::HealedEdgeTopologyFragment,
 }
 
 #[cfg(feature = "cad-kernel-monstertruck")]
@@ -76,6 +79,11 @@ fn main() -> Result<()> {
         endpoint_tolerance_mm: cli.endpoint_tolerance_mm,
         target_gap_mm: cli.target_gap_mm,
     })?;
+    let healed_open_edge = step_redox::healed_edge_topology::healed_edge_with_source_vertices(
+        &candidate,
+        &section.entities,
+        cli.endpoint_tolerance_mm,
+    )?;
     let native = candidate.modeling_curve();
     let report = CandidateReport {
         evidence: &candidate.evidence,
@@ -89,6 +97,7 @@ fn main() -> Result<()> {
             1,
         )
         .to_string(),
+        healed_open_edge,
     };
     serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
     println!();

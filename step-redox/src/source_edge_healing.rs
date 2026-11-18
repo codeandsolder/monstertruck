@@ -34,7 +34,7 @@ pub struct SourceFaceEdgeUse {
     pub parameter_forward: bool,
 }
 
-fn unique_original_face_edge_use(
+pub(crate) fn unique_original_face_edge_use(
     face_id: u64,
     edge_id: u64,
     entities: &[step_p21::ast::EntityInstance],
