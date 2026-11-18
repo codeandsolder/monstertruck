@@ -667,66 +667,59 @@ where
         })
 }
 
-impl IncludeCurve<BsplineCurve<Point3>> for RevolutionSurface<&BsplineCurve<Point3>> {
-    fn include(&self, curve: &BsplineCurve<Point3>) -> bool {
-        let knots = curve.knot_vector().to_single_multi().0;
-        let degree = usize::max(2, usize::max(curve.degree(), self.curve.degree()));
-        sub_include(self, curve, &knots, degree)
-    }
+/// Spline families supported by curve inclusion on a surface of revolution.
+///
+/// Rational generators and rational candidate curves require denser sampling
+/// than a polynomial-on-polynomial pair. Keeping this information next to
+/// the curve type avoids diverging sampling policies for owned/borrowed forms.
+trait RevolutionInclusionSpline: ParametricCurve3D + BoundedCurve {
+    const RATIONAL: bool;
+
+    fn inclusion_knots(&self) -> Vec<f64>;
+    fn inclusion_degree(&self) -> usize;
 }
 
-impl IncludeCurve<BsplineCurve<Point3>> for RevolutionSurface<BsplineCurve<Point3>> {
-    fn include(&self, curve: &BsplineCurve<Point3>) -> bool {
-        let knots = curve.knot_vector().to_single_multi().0;
-        let degree = usize::max(2, usize::max(curve.degree(), self.curve.degree()));
-        sub_include(self, curve, &knots, degree)
-    }
+impl RevolutionInclusionSpline for BsplineCurve<Point3> {
+    const RATIONAL: bool = false;
+
+    fn inclusion_knots(&self) -> Vec<f64> { self.knot_vector().to_single_multi().0 }
+
+    fn inclusion_degree(&self) -> usize { self.degree() }
 }
 
-impl IncludeCurve<BsplineCurve<Point3>> for RevolutionSurface<&NurbsCurve<Vector4>> {
-    fn include(&self, curve: &BsplineCurve<Point3>) -> bool {
-        let knots = curve.knot_vector().to_single_multi().0;
-        let degree = curve.degree() + usize::max(2, self.curve.degree());
-        sub_include(self, curve, &knots, degree)
-    }
+impl RevolutionInclusionSpline for NurbsCurve<Vector4> {
+    const RATIONAL: bool = true;
+
+    fn inclusion_knots(&self) -> Vec<f64> { self.knot_vector().to_single_multi().0 }
+
+    fn inclusion_degree(&self) -> usize { self.degree() }
 }
 
-impl IncludeCurve<BsplineCurve<Point3>> for RevolutionSurface<NurbsCurve<Vector4>> {
-    fn include(&self, curve: &BsplineCurve<Point3>) -> bool {
-        let knots = curve.knot_vector().to_single_multi().0;
-        let degree = curve.degree() + usize::max(2, self.curve.degree());
-        sub_include(self, curve, &knots, degree)
-    }
+impl<T: RevolutionInclusionSpline> RevolutionInclusionSpline for &T {
+    const RATIONAL: bool = T::RATIONAL;
+
+    fn inclusion_knots(&self) -> Vec<f64> { T::inclusion_knots(self) }
+
+    fn inclusion_degree(&self) -> usize { T::inclusion_degree(self) }
 }
 
-impl IncludeCurve<NurbsCurve<Vector4>> for RevolutionSurface<&BsplineCurve<Point3>> {
-    fn include(&self, curve: &NurbsCurve<Vector4>) -> bool {
-        let knots = curve.knot_vector().to_single_multi().0;
-        let degree = curve.degree() + usize::max(2, self.curve.degree());
-        sub_include(self, curve, &knots, degree)
-    }
-}
+impl<C, D> IncludeCurve<D> for RevolutionSurface<C>
+where
+    C: RevolutionInclusionSpline,
+    D: RevolutionInclusionSpline,
+{
+    fn include(&self, curve: &D) -> bool {
+        let knots = curve.inclusion_knots();
+        let source_degree = self.curve.inclusion_degree();
+        let candidate_degree = curve.inclusion_degree();
 
-impl IncludeCurve<NurbsCurve<Vector4>> for RevolutionSurface<BsplineCurve<Point3>> {
-    fn include(&self, curve: &NurbsCurve<Vector4>) -> bool {
-        let knots = curve.knot_vector().to_single_multi().0;
-        let degree = curve.degree() + usize::max(2, self.curve.degree());
-        sub_include(self, curve, &knots, degree)
-    }
-}
-
-impl IncludeCurve<NurbsCurve<Vector4>> for RevolutionSurface<&NurbsCurve<Vector4>> {
-    fn include(&self, curve: &NurbsCurve<Vector4>) -> bool {
-        let knots = curve.knot_vector().to_single_multi().0;
-        let degree = curve.degree() + usize::max(2, self.curve.degree());
-        sub_include(self, curve, &knots, degree)
-    }
-}
-
-impl IncludeCurve<NurbsCurve<Vector4>> for RevolutionSurface<NurbsCurve<Vector4>> {
-    fn include(&self, curve: &NurbsCurve<Vector4>) -> bool {
-        let knots = curve.knot_vector().to_single_multi().0;
-        let degree = curve.degree() + usize::max(2, self.curve.degree());
+        // Preserve the historical polynomial-polynomial maximum-degree
+        // density and the additive density of every rational combination.
+        let degree = if C::RATIONAL || D::RATIONAL {
+            candidate_degree + usize::max(2, source_degree)
+        } else {
+            usize::max(2, usize::max(candidate_degree, source_degree))
+        };
         sub_include(self, curve, &knots, degree)
     }
 }
