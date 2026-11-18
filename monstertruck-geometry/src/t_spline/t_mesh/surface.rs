@@ -49,10 +49,15 @@ impl Tmesh<Point3> {
             for (i, (s_kv, t_kv)) in all_kvs.iter().enumerate().take(num_points) {
                 let s_slice = s_kv.as_slice();
                 let t_slice = t_kv.as_slice();
+                // The V basis is independent of the U derivative order.
+                // Cache the at-most-three values once per control point.
+                let mut t_values = [0.0; 3];
+                for (q, val) in t_values[..n_cols].iter_mut().enumerate() {
+                    *val = basis_function_der(v, t_slice, q);
+                }
                 for p in 0..=m {
                     let s_val = basis_function_der(u, s_slice, p);
-                    for q in 0..=n {
-                        let t_val = basis_function_der(v, t_slice, q);
+                    for (q, &t_val) in t_values[..n_cols].iter().enumerate() {
                         basis_derivs[p * bd_stride + q * num_points + i] = s_val * t_val;
                     }
                 }
