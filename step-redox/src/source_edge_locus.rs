@@ -132,11 +132,19 @@ fn complete_bspline_edge(
     step: StepEdge<'_>,
     endpoint_tolerance_mm: f64,
 ) -> Result<NurbsCurve<Vector4>> {
+    let index = build_index(step.entities);
+    complete_bspline_edge_with_index(step, &index, endpoint_tolerance_mm)
+}
+
+fn complete_bspline_edge_with_index(
+    step: StepEdge<'_>,
+    index: &std::collections::HashMap<u64, usize>,
+    endpoint_tolerance_mm: f64,
+) -> Result<NurbsCurve<Vector4>> {
     if !endpoint_tolerance_mm.is_finite() || endpoint_tolerance_mm <= 0.0 {
         bail!("edge endpoint tolerance must be positive and finite");
     }
-    let index = build_index(step.entities);
-    let params = named_entity_parameters(step.id, "EDGE_CURVE", step.entities, &index)
+    let params = named_entity_parameters(step.id, "EDGE_CURVE", step.entities, index)
         .with_context(|| format!("EDGE_CURVE #{} is missing or malformed", step.id))?;
     let start_id = params
         .get(1)
@@ -150,11 +158,11 @@ fn complete_bspline_edge(
         .get(3)
         .and_then(entity_ref_value)
         .ok_or_else(|| anyhow!("edge #{} has no geometric curve", step.id))?;
-    let start = vertex_point(start_id, step.entities, &index)
+    let start = vertex_point(start_id, step.entities, index)
         .ok_or_else(|| anyhow!("edge #{} has invalid starting vertex", step.id))?;
-    let end = vertex_point(end_id, step.entities, &index)
+    let end = vertex_point(end_id, step.entities, index)
         .ok_or_else(|| anyhow!("edge #{} has invalid ending vertex", step.id))?;
-    let CurveSupport::BSpline(spline) = brep::curve_support(curve_id, step.entities, &index) else {
+    let CurveSupport::BSpline(spline) = brep::curve_support(curve_id, step.entities, index) else {
         bail!("edge #{} has no supported full B-spline geometry", step.id);
     };
     let count = spline.control_points_mm.len();
@@ -381,6 +389,514 @@ mod tests {
             )
             .is_err()
         );
+        Ok(())
+    }
+}
+
+/// Resolve the source solid's declared STEP coordinate length unit.
+///
+/// The input geometry API consumes the source coordinates as written in STEP.
+/// A bounding tolerance in millimetres is only meaningful after resolving the
+/// unit from the solid's own B-rep shape representation context. A missing or
+/// contradictory representation is an error, not an implicit mm assumption.
+///
+/// # Errors
+/// Returns an error for absent, malformed or inconsistent source length units.
+pub fn source_solid_length_scale_mm(solid_id: u64, entities: &[EntityInstance]) -> Result<f64> {
+    use crate::step_document::StepSectionView;
+    use crate::step_entities::representation_items_and_context;
+    use crate::step_graph::simple_record;
+
+    let index = build_index(entities);
+    let section = StepSectionView::new(entities, &index);
+    let mut scale: Option<f64> = None;
+    for entity in entities {
+        let Some(record) = simple_record(entity) else {
+            continue;
+        };
+        if record.name != "ADVANCED_BREP_SHAPE_REPRESENTATION" {
+            continue;
+        }
+        let Some((items, context_id)) = representation_items_and_context(entity) else {
+            bail!("malformed B-rep shape representation");
+        };
+        if !items.contains(&solid_id) {
+            continue;
+        }
+        let units = section
+            .entity(context_id)
+            .and_then(|entry| entry.record_named("GLOBAL_UNIT_ASSIGNED_CONTEXT"))
+            .and_then(|record| record.value().list())
+            .ok_or_else(|| anyhow!("solid #{solid_id} has no valid unit context"))?;
+        let unit_refs = units
+            .get(0)
+            .and_then(crate::step_document::StepValue::list)
+            .filter(|_| units.len() == 1)
+            .ok_or_else(|| anyhow!("solid #{solid_id} has malformed unit context entries"))?;
+        let mut context_scale = None;
+        for unit in unit_refs.iter() {
+            let unit_id = unit
+                .entity_ref()
+                .ok_or_else(|| anyhow!("solid #{solid_id} has a malformed unit reference"))?;
+            if section
+                .entity(unit_id)
+                .and_then(|entry| entry.record_named("LENGTH_UNIT"))
+                .is_none()
+            {
+                continue;
+            }
+            let value = crate::units::length_unit_scale_mm(unit_id, &section)
+                .ok_or_else(|| anyhow!("solid #{solid_id} has an unresolvable length unit"))?;
+            if context_scale.replace(value).is_some() {
+                bail!("solid #{solid_id} has multiple length units in one context");
+            }
+        }
+        let value = context_scale
+            .ok_or_else(|| anyhow!("solid #{solid_id} has no declared length unit"))?;
+        if let Some(prior) = scale.replace(value)
+            && prior.total_cmp(&value).is_ne()
+        {
+            bail!("solid #{solid_id} has conflicting length unit contexts");
+        }
+    }
+    scale.ok_or_else(|| anyhow!("solid #{solid_id} has no B-rep shape representation"))
+}
+
+/// A whole-domain maximum-distance bracket for a B-spline on an incident plane.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct SourcePlaneDeviation {
+    pub lower_mm: f64,
+    pub upper_mm: f64,
+    pub arithmetic_margin_mm: f64,
+    pub subdivisions: usize,
+}
+
+impl From<monstertruck_geometry::analytic_plane_deviation::PlaneDeviationBounds>
+    for SourcePlaneDeviation
+{
+    fn from(value: monstertruck_geometry::analytic_plane_deviation::PlaneDeviationBounds) -> Self {
+        Self {
+            lower_mm: value.lower,
+            upper_mm: value.upper,
+            arithmetic_margin_mm: value.arithmetic_margin,
+            subdivisions: value.subdivisions,
+        }
+    }
+}
+
+/// Undetermined is neither a clean source plane nor a certified defect.
+/// Unsupported indicates a failure of the full-edge curve/domain proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourcePlaneIncidenceStatus {
+    WithinTolerance,
+    ExceedsTolerance,
+    Undetermined,
+    Unsupported,
+}
+
+/// A real STEP edge/face incidence, not a geometric-proximity guess.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct SourcePlaneIncidence {
+    pub face_id: u64,
+    pub edge_id: u64,
+    pub status: SourcePlaneIncidenceStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bound: Option<SourcePlaneDeviation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Audit source B-spline edges on authored planar faces.
+///
+/// Inspects complete B-spline incidences on literal STEP `PLANE` faces.
+/// Other edge carriers are counted, not declared conformant. This does not
+/// establish or admit an editable CAD reconstruction.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct SourcePlanarEdgeAudit {
+    pub solid_id: u64,
+    pub tolerance_mm: f64,
+    pub coordinate_scale_mm: f64,
+    pub planar_faces: usize,
+    pub non_bspline_edge_incidences: usize,
+    pub unresolved_curve_edge_incidences: usize,
+    pub incidences: Vec<SourcePlaneIncidence>,
+}
+
+impl SourcePlanarEdgeAudit {
+    /// Applies only to examined B-spline incidence loci, never whole solids.
+    #[must_use]
+    pub fn checked_bspline_incidences_are_within_tolerance(&self) -> bool {
+        !self.incidences.is_empty()
+            && self.unresolved_curve_edge_incidences == 0
+            && self
+                .incidences
+                .iter()
+                .all(|item| item.status == SourcePlaneIncidenceStatus::WithinTolerance)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PlaneIncidenceSettings {
+    endpoint_tolerance: f64,
+    source_target_gap: f64,
+    coordinate_scale_mm: f64,
+    tolerance_mm: f64,
+}
+
+fn check_bspline_planar_incidence(
+    edge: StepEdge<'_>,
+    index: &std::collections::HashMap<u64, usize>,
+    face_id: u64,
+    plane: brep::PlaneSupport,
+    settings: PlaneIncidenceSettings,
+) -> SourcePlaneIncidence {
+    let (status, bound, reason) =
+        match complete_bspline_edge_with_index(edge, index, settings.endpoint_tolerance) {
+            Err(error) => (
+                SourcePlaneIncidenceStatus::Unsupported,
+                None,
+                Some(error.to_string()),
+            ),
+            Ok(curve) => {
+                let origin =
+                    Point3::new(plane.origin_mm[0], plane.origin_mm[1], plane.origin_mm[2]);
+                let normal = Vector3::new(plane.normal[0], plane.normal[1], plane.normal[2]);
+                monstertruck_geometry::analytic_plane_deviation::bound_nurbs_plane_deviation(
+                    &curve,
+                    origin,
+                    normal,
+                    settings.source_target_gap,
+                )
+                .and_then(|bounds| {
+                    let mut deviation: SourcePlaneDeviation = bounds.into();
+                    deviation.lower_mm *= settings.coordinate_scale_mm;
+                    deviation.upper_mm *= settings.coordinate_scale_mm;
+                    deviation.arithmetic_margin_mm *= settings.coordinate_scale_mm;
+                    (deviation.lower_mm.is_finite()
+                        && deviation.upper_mm.is_finite()
+                        && deviation.arithmetic_margin_mm.is_finite())
+                    .then_some(deviation)
+                })
+                .map_or_else(
+                    || {
+                        (
+                            SourcePlaneIncidenceStatus::Unsupported,
+                            None,
+                            Some("numerically unsupported whole-curve plane deviation".to_owned()),
+                        )
+                    },
+                    |deviation| {
+                        let status = if deviation.lower_mm > settings.tolerance_mm {
+                            SourcePlaneIncidenceStatus::ExceedsTolerance
+                        } else if deviation.upper_mm <= settings.tolerance_mm {
+                            SourcePlaneIncidenceStatus::WithinTolerance
+                        } else {
+                            SourcePlaneIncidenceStatus::Undetermined
+                        };
+                        (status, Some(deviation), None)
+                    },
+                )
+            }
+        };
+    SourcePlaneIncidence {
+        face_id,
+        edge_id: edge.id,
+        status,
+        bound,
+        reason,
+    }
+}
+
+/// Analyze every literal analytic planar face and its incident source B-spline
+/// edge loci, without an external CAD kernel or a reconstructed candidate.
+///
+/// All plane faces must have resolvable topology. Ambiguous B-spline geometry
+/// is reported as `Unsupported`, not silently dropped. `ExceedsTolerance` proves
+/// an internal source inconsistency independently of later projection/export.
+///
+/// # Errors
+/// Returns an error for missing or malformed source solid/plane topology,
+/// non-finite/negative tolerances, or unsupported source plane coordinates.
+pub fn audit_source_solid_planar_bspline_incidences(
+    solid_id: u64,
+    entities: &[EntityInstance],
+    tolerance_mm: f64,
+    target_gap_mm: f64,
+    coordinate_scale_mm: f64,
+) -> Result<SourcePlanarEdgeAudit> {
+    if !tolerance_mm.is_finite() || tolerance_mm < 0.0 {
+        bail!("source plane incidence tolerance must be nonnegative and finite");
+    }
+    if !target_gap_mm.is_finite() || target_gap_mm <= 0.0 {
+        bail!("source plane incidence target gap must be positive and finite");
+    }
+    if !coordinate_scale_mm.is_finite() || coordinate_scale_mm <= 0.0 {
+        bail!("source coordinate millimetre scale must be positive and finite");
+    }
+    let source_target_gap = target_gap_mm / coordinate_scale_mm;
+    let endpoint_tolerance = 1.0e-7 / coordinate_scale_mm;
+    if !source_target_gap.is_finite()
+        || source_target_gap <= 0.0
+        || !endpoint_tolerance.is_finite()
+        || endpoint_tolerance <= 0.0
+    {
+        bail!("source unit scale cannot represent required precision");
+    }
+    let settings = PlaneIncidenceSettings {
+        endpoint_tolerance,
+        source_target_gap,
+        coordinate_scale_mm,
+        tolerance_mm,
+    };
+    let index = build_index(entities);
+    let face_ids = brep::solid_face_ids(solid_id, entities, &index)
+        .with_context(|| format!("solid #{solid_id} has unsupported face topology"))?;
+    let mut result = SourcePlanarEdgeAudit {
+        solid_id,
+        tolerance_mm,
+        coordinate_scale_mm,
+        planar_faces: 0,
+        non_bspline_edge_incidences: 0,
+        unresolved_curve_edge_incidences: 0,
+        incidences: Vec::new(),
+    };
+    for face_id in face_ids {
+        let surface_id = brep::face_surface(face_id, entities, &index)
+            .with_context(|| format!("face #{face_id} has no surface"))?;
+        // A spline approximated as planar is not an authored STEP PLANE.
+        // A malformed literal PLANE, however, is a hard failure, not a skip.
+        let literal_plane = index
+            .get(&surface_id)
+            .and_then(|&ordinal| entities.get(ordinal))
+            .and_then(crate::step_graph::simple_record)
+            .is_some_and(|record| record.name == "PLANE");
+        if !literal_plane {
+            continue;
+        }
+        let brep::SurfaceSupport::Plane(plane) =
+            brep::surface_support(surface_id, entities, &index)
+        else {
+            bail!("face #{face_id} contains a malformed analytic plane");
+        };
+        let loops = brep::face_loops(face_id, entities, &index)
+            .with_context(|| format!("face #{face_id} has unsupported edge loops"))?;
+        let mut edges = std::collections::BTreeMap::new();
+        for loop_ in loops {
+            for edge in loop_.edges {
+                edges.entry(edge.edge_id).or_insert(edge);
+            }
+        }
+        result.planar_faces += 1;
+        for (edge_id, edge) in edges {
+            match edge.support {
+                CurveSupport::BSpline(_) => {}
+                CurveSupport::Other { .. } => {
+                    result.unresolved_curve_edge_incidences += 1;
+                    continue;
+                }
+                _ => {
+                    result.non_bspline_edge_incidences += 1;
+                    continue;
+                }
+            }
+            result.incidences.push(check_bspline_planar_incidence(
+                StepEdge {
+                    id: edge_id,
+                    entities,
+                },
+                &index,
+                face_id,
+                plane,
+                settings,
+            ));
+        }
+    }
+    result
+        .incidences
+        .sort_by_key(|item| (item.face_id, item.edge_id));
+    Ok(result)
+}
+
+#[cfg(test)]
+mod source_planar_audit_tests {
+    use super::*;
+
+    fn simple_source(interior_z: f64) -> String {
+        format!(
+            "ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('source'),'2;1');
+FILE_NAME('','',(''),(''),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));
+ENDSEC;
+DATA;
+#1=MANIFOLD_SOLID_BREP('',#2);
+#2=CLOSED_SHELL('',(#3));
+#3=ADVANCED_FACE('',(#4),#5,.T.);
+#4=FACE_OUTER_BOUND('',#6,.T.);
+#5=PLANE('',#16);
+#6=EDGE_LOOP('',(#7));
+#7=ORIENTED_EDGE('',*,*,#8,.T.);
+#8=EDGE_CURVE('',#9,#10,#11,.T.);
+#9=VERTEX_POINT('',#12);
+#10=VERTEX_POINT('',#13);
+#11=B_SPLINE_CURVE_WITH_KNOTS('',3,(#12,#14,#15,#13),.UNSPECIFIED.,.F.,.F.,(4,4),(0.,1.),.UNSPECIFIED.);
+#12=CARTESIAN_POINT('',(0.,0.,0.));
+#13=CARTESIAN_POINT('',(1.,0.,0.));
+#14=CARTESIAN_POINT('',(0.25,0.2,{interior_z}));
+#15=CARTESIAN_POINT('',(0.75,0.2,{interior_z}));
+#16=AXIS2_PLACEMENT_3D('',#17,#18,#19);
+#17=CARTESIAN_POINT('',(0.,0.,0.));
+#18=DIRECTION('',(0.,0.,1.));
+#19=DIRECTION('',(1.,0.,0.));
+ENDSEC;
+END-ISO-10303-21;"
+        )
+    }
+
+    fn inspect(data: &str) -> Result<SourcePlanarEdgeAudit> {
+        let exchange = step_p21::parser::parse(data)?;
+        let [section] = exchange.data.as_slice() else {
+            bail!("expected a single DATA section");
+        };
+        audit_source_solid_planar_bspline_incidences(1, &section.entities, 1.0e-5, 1.0e-10, 1.0)
+    }
+
+    #[test]
+    fn authored_planes_are_checked_over_full_bspline_spans() -> Result<()> {
+        let exact = inspect(&simple_source(0.0))?;
+        assert_eq!(exact.planar_faces, 1);
+        assert_eq!(exact.non_bspline_edge_incidences, 0);
+        assert_eq!(exact.incidences.len(), 1);
+        assert_eq!(exact.incidences[0].edge_id, 8);
+        assert_eq!(
+            exact.incidences[0].status,
+            SourcePlaneIncidenceStatus::WithinTolerance
+        );
+        assert!(exact.checked_bspline_incidences_are_within_tolerance());
+
+        let off_plane = inspect(&simple_source(0.002))?;
+        assert_eq!(off_plane.incidences.len(), 1);
+        assert_eq!(
+            off_plane.incidences[0].status,
+            SourcePlaneIncidenceStatus::ExceedsTolerance
+        );
+        assert!(
+            off_plane.incidences[0]
+                .bound
+                .is_some_and(|b| b.lower_mm > 0.001)
+        );
+        assert!(!off_plane.checked_bspline_incidences_are_within_tolerance());
+
+        // The same source coordinates are within tolerance when their unit
+        // is a micrometre, rather than a millimetre.
+        let exchange = step_p21::parser::parse(&simple_source(0.002))?;
+        let [section] = exchange.data.as_slice() else {
+            bail!("expected one DATA section");
+        };
+        let scaled = audit_source_solid_planar_bspline_incidences(
+            1,
+            &section.entities,
+            1.0e-5,
+            1.0e-10,
+            0.001,
+        )?;
+        assert_eq!(scaled.coordinate_scale_mm, 0.001);
+        assert_eq!(
+            scaled.incidences[0].status,
+            SourcePlaneIncidenceStatus::WithinTolerance
+        );
+        assert!(scaled.checked_bspline_incidences_are_within_tolerance());
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_edges_and_unsupported_carriers_are_not_assumed_conformant() -> Result<()> {
+        let invalid = simple_source(0.0).replace(
+            "#15=CARTESIAN_POINT('',(0.75,0.2,0));",
+            "#15=CARTESIAN_POINT('',(-0.75,0.2,0));",
+        );
+        // The exact numeric representation in the synthetic fixture is
+        // generated by Display, so use a geometric control edit.
+        let invalid = if invalid == simple_source(0.0) {
+            simple_source(0.0).replace(
+                "#15=CARTESIAN_POINT('',(0.75,0.2,0.0));",
+                "#15=CARTESIAN_POINT('',(-0.75,0.2,0.0));",
+            )
+        } else {
+            invalid
+        };
+        let refused = inspect(&invalid)?;
+        assert_eq!(
+            refused.incidences[0].status,
+            SourcePlaneIncidenceStatus::Unsupported
+        );
+        assert!(refused.incidences[0].reason.is_some());
+
+        let line = simple_source(0.0).replace(
+            "#11=B_SPLINE_CURVE_WITH_KNOTS('',3,(#12,#14,#15,#13),.UNSPECIFIED.,.F.,.F.,(4,4),(0.,1.),.UNSPECIFIED.);",
+            "#11=LINE('',#12,#20);\n#20=VECTOR('',#19,1.);",
+        );
+        let unexamined = inspect(&line)?;
+        assert_eq!(unexamined.planar_faces, 1);
+        assert_eq!(unexamined.non_bspline_edge_incidences, 1);
+        assert!(unexamined.incidences.is_empty());
+        assert!(!unexamined.checked_bspline_incidences_are_within_tolerance());
+        assert_eq!(unexamined.unresolved_curve_edge_incidences, 0);
+
+        let malformed = simple_source(0.0).replace(
+            "#11=B_SPLINE_CURVE_WITH_KNOTS('',3,(#12,#14,#15,#13),.UNSPECIFIED.,.F.,.F.,(4,4),(0.,1.),.UNSPECIFIED.);",
+            "#11=UNKNOWN_GEOMETRIC_CURVE('');",
+        );
+        let unknown = inspect(&malformed)?;
+        assert_eq!(unknown.non_bspline_edge_incidences, 0);
+        assert_eq!(unknown.unresolved_curve_edge_incidences, 1);
+        assert!(unknown.incidences.is_empty());
+        assert!(!unknown.checked_bspline_incidences_are_within_tolerance());
+        Ok(())
+    }
+
+    #[test]
+    fn real_radial_slot_audit_finds_original_off_plane_source_edge() -> Result<()> {
+        let source = std::str::from_utf8(include_bytes!(
+            "../validation/fixtures/production_radial_slot.step"
+        ))?;
+        let exchange = step_p21::parser::parse(source)?;
+        let [section] = exchange.data.as_slice() else {
+            bail!("expected one DATA section");
+        };
+        assert_eq!(source_solid_length_scale_mm(15385, &section.entities)?, 1.0);
+        let centimeter_source =
+            source.replacen("SI_UNIT(.MILLI.,.METRE.)", "SI_UNIT(.CENTI.,.METRE.)", 1);
+        assert_ne!(centimeter_source, source);
+        let centimeter_exchange = step_p21::parser::parse(&centimeter_source)?;
+        let [centimeter_section] = centimeter_exchange.data.as_slice() else {
+            bail!("expected one DATA section");
+        };
+        assert_eq!(
+            source_solid_length_scale_mm(15385, &centimeter_section.entities)?,
+            10.0,
+        );
+
+        let audit = audit_source_solid_planar_bspline_incidences(
+            15385,
+            &section.entities,
+            1.0e-5,
+            1.0e-10,
+            1.0,
+        )?;
+        let edge = audit
+            .incidences
+            .iter()
+            .find(|edge| edge.edge_id == 93481 && edge.face_id == 125603)
+            .ok_or_else(|| anyhow!("radial source edge was not audited"))?;
+        assert_eq!(edge.status, SourcePlaneIncidenceStatus::ExceedsTolerance);
+        assert!(
+            edge.bound
+                .is_some_and(|bounds| bounds.lower_mm > 0.00015706)
+        );
+        assert!(!audit.checked_bspline_incidences_are_within_tolerance());
         Ok(())
     }
 }
