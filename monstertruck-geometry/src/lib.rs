@@ -123,6 +123,8 @@ pub mod analytic_cone_deviation;
 pub mod analytic_curve_incidence;
 /// Non-sampling complete-curve locus bounds against finite line segments.
 pub mod analytic_line_segment;
+/// Exact single-nappe hyperbola from an axis-parallel, axis-offset plane and cone.
+pub mod analytic_plane_cone_hyperbola;
 /// Global lower/upper bounds on spline distance to a plane.
 pub mod analytic_plane_deviation;
 mod analytic_surface;
