@@ -9,7 +9,8 @@ use super::{
     PcurveOrSurface, PlaceHolder, Point2, Point3, PreferredSurfaceCurveRepresentation, Processor,
     Result, SearchNearestParameter, Serialize, SquareMatrix, StepConvertingError, Surface,
     SurfaceAny, SurfaceAnyHolder, SurfaceCurve, SurfaceCurveEntityKind, Table, Tolerance,
-    Transform, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, geom, step_geometry,
+    Transform, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, geom,
+    step_geometry,
 };
 
 /// `vertex_point`
@@ -163,13 +164,11 @@ impl EdgeCurve {
                 |_: Point2| "the point is not on hyparbola".to_string(),
                 false
             ))),
-            // The preexisting STEP edge path represents parabolas as
-            // hyperbolas. Correcting this requires a separate geometry fix.
-            Conic::Parabola(parabola) => Curve2D::Conic(Conic2D::Hyperbola(trimmed_step_conic!(
+            Conic::Parabola(parabola) => Curve2D::Conic(Conic2D::Parabola(trimmed_step_conic!(
                 Matrix3::try_from(&parabola.position)? * Matrix3::from_scale(parabola.focal_dist),
                 p,
                 q,
-                UnitHyperbola<Point2>,
+                UnitParabola<Point2>,
                 "Failed to convert Parabola",
                 |_: Point2| "the point is not on parabola".to_string(),
                 |_: Point2| "the point is not on parabola".to_string(),
@@ -231,13 +230,13 @@ impl EdgeCurve {
                 "Failed to convert Circle",
                 |_: Point3| "the point is not on circle".to_string(),
                 |_: Point3| "the point is not on circle".to_string(),
-                true
+                false
             ))),
-            Conic::Parabola(parabola) => Curve3D::Conic(Conic3D::Hyperbola(trimmed_step_conic!(
+            Conic::Parabola(parabola) => Curve3D::Conic(Conic3D::Parabola(trimmed_step_conic!(
                 Matrix4::try_from(&parabola.position)? * Matrix4::from_scale(parabola.focal_dist),
                 p,
                 q,
-                UnitHyperbola<Point3>,
+                UnitParabola<Point3>,
                 "Failed to convert Parabola",
                 |_: Point3| "the point is not on parabola".to_string(),
                 |_: Point3| "the point is not on parabola".to_string(),
