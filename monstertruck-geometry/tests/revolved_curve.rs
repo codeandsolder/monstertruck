@@ -299,3 +299,114 @@ fn include_curve_abnormal1() {
     let line = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![pt0, pt1]);
     assert!(!surface.include(&line));
 }
+
+/// All eight curve/revolution representations must agree on the geometric
+/// inclusion decision, including when the underlying control points are
+/// homogeneous NURBS instead of polynomial B-splines.
+#[test]
+fn include_curve_owned_and_borrowed_rationality_matrix() {
+    let generator = BsplineCurve::new_unchecked(
+        KnotVector::bezier_knot(1),
+        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 2.0, 2.0)],
+    );
+    let generator_nurbs = NurbsCurve::from(generator.clone());
+
+    let check = |candidate: BsplineCurve<Point3>, expected| {
+        let candidate_nurbs = NurbsCurve::from(candidate.clone());
+        let owned_bspline = RevolutionSurface::by_revolution(
+            generator.clone(),
+            Point3::origin(),
+            Vector3::unit_y(),
+        );
+        let borrowed_bspline =
+            RevolutionSurface::by_revolution(&generator, Point3::origin(), Vector3::unit_y());
+        let owned_nurbs = RevolutionSurface::by_revolution(
+            generator_nurbs.clone(),
+            Point3::origin(),
+            Vector3::unit_y(),
+        );
+        let borrowed_nurbs =
+            RevolutionSurface::by_revolution(&generator_nurbs, Point3::origin(), Vector3::unit_y());
+        let results = [
+            owned_bspline.include(&candidate),
+            borrowed_bspline.include(&candidate),
+            owned_nurbs.include(&candidate),
+            borrowed_nurbs.include(&candidate),
+            owned_bspline.include(&candidate_nurbs),
+            borrowed_bspline.include(&candidate_nurbs),
+            owned_nurbs.include(&candidate_nurbs),
+            borrowed_nurbs.include(&candidate_nurbs),
+        ];
+        assert_eq!(
+            results, [expected; 8],
+            "polynomial/rational and owned/borrowed representation disagree"
+        );
+    };
+
+    check(
+        BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(2),
+            vec![
+                Point3::new(1.0, 1.0, 0.0),
+                Point3::new(0.0, 0.0, 1.0),
+                Point3::new(-1.0, 1.0, 0.0),
+            ],
+        ),
+        true,
+    );
+    check(
+        BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(2),
+            vec![
+                Point3::new(1.0, 1.0, 0.0),
+                Point3::new(0.0, 0.0, 2.0),
+                Point3::new(-1.0, 1.0, 0.0),
+            ],
+        ),
+        false,
+    );
+}
+
+/// Weighted homogeneous control points change the parameterization, even
+/// when the generator's geometric locus remains the same straight ray.
+#[test]
+fn include_curve_genuinely_weighted_revolution_and_candidate() {
+    let knots = KnotVector::bezier_knot(1);
+    let generator = NurbsCurve::new(BsplineCurve::new_unchecked(
+        knots.clone(),
+        vec![
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector4::new(0.0, 4.0, 4.0, 2.0),
+        ],
+    ));
+    let unrelated = NurbsCurve::new(BsplineCurve::new_unchecked(
+        knots.clone(),
+        vec![
+            Vector4::new(0.4, 0.0, 0.0, 1.0),
+            Vector4::new(0.8, 4.0, 4.0, 2.0),
+        ],
+    ));
+    let on_generator = BsplineCurve::new_unchecked(
+        knots,
+        vec![Point3::new(0.0, 0.5, 0.5), Point3::new(0.0, 1.5, 1.5)],
+    );
+    let owned =
+        RevolutionSurface::by_revolution(generator.clone(), Point3::origin(), Vector3::unit_y());
+    let borrowed =
+        RevolutionSurface::by_revolution(&generator, Point3::origin(), Vector3::unit_y());
+    for inside in [owned.include(&generator), borrowed.include(&generator)] {
+        assert!(inside, "weighted generator must lie on its own revolution");
+    }
+    for inside in [
+        owned.include(&on_generator),
+        borrowed.include(&on_generator),
+    ] {
+        assert!(
+            inside,
+            "polynomial subsegment must lie on weighted revolution"
+        );
+    }
+    for outside in [owned.include(&unrelated), borrowed.include(&unrelated)] {
+        assert!(!outside, "offset rational curve is outside the cone");
+    }
+}
