@@ -115,8 +115,10 @@ pub mod decorators;
 pub mod t_spline;
 
 mod analytic_bezier_partition;
+mod analytic_bezier_refinement;
 /// Checked geometric identities and orientation for analytic surface carriers.
 pub mod analytic_carrier;
+pub mod analytic_cone_deviation;
 /// Non-sampling, polynomial-bounded curve incidence on analytic carriers.
 pub mod analytic_curve_incidence;
 /// Non-sampling complete-curve locus bounds against finite line segments.

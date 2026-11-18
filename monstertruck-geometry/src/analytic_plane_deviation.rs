@@ -6,14 +6,10 @@
 //! de Casteljau subdivision tightens that bound without sampling a grid.
 
 use crate::analytic_bezier_partition::proof_bezier_spans;
+use crate::analytic_bezier_refinement::refine_maximum;
 use crate::analytic_curve_incidence::valid;
 use crate::prelude::*;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-
-const MAX_SUBDIVISIONS: usize = 32_768;
-const MAX_SUBDIVISION_DEPTH: usize = 48;
 
 /// Bounds the maximum absolute signed distance of a complete spline to a plane.
 ///
@@ -42,36 +38,6 @@ impl PlaneDeviationBounds {
     }
 }
 
-type HomogeneousControls = Vec<[f64; 4]>;
-type SplitControls = (HomogeneousControls, HomogeneousControls);
-
-struct Span {
-    controls: Vec<[f64; 4]>,
-    upper: f64,
-    depth: usize,
-    sequence: usize,
-}
-
-impl PartialEq for Span {
-    fn eq(&self, other: &Self) -> bool {
-        self.sequence == other.sequence && self.upper.total_cmp(&other.upper).is_eq()
-    }
-}
-
-impl Eq for Span {}
-
-impl PartialOrd for Span {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
-}
-
-impl Ord for Span {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.upper
-            .total_cmp(&other.upper)
-            .then(self.sequence.cmp(&other.sequence))
-    }
-}
-
 fn signed_distance(control: &[f64; 4], origin: Point3, normal: Vector3) -> Option<f64> {
     if control[3] <= 0.0 || !control.iter().all(|value| value.is_finite()) {
         return None;
@@ -87,29 +53,6 @@ fn upper_bound(controls: &[[f64; 4]], origin: Point3, normal: Vector3) -> Option
     controls.iter().try_fold(0.0_f64, |max, point| {
         Some(max.max(signed_distance(point, origin, normal)?.abs()))
     })
-}
-
-/// Subdivide homogeneous Bernstein controls at exactly the parametric midpoint.
-fn subdivide(controls: &[[f64; 4]]) -> Option<SplitControls> {
-    let mut row = controls.to_vec();
-    let mut left = Vec::with_capacity(row.len());
-    let mut right = Vec::with_capacity(row.len());
-    while let (Some(first), Some(last)) = (row.first(), row.last()) {
-        left.push(*first);
-        right.push(*last);
-        if row.len() == 1 {
-            break;
-        }
-        row = row
-            .windows(2)
-            .map(|pair| std::array::from_fn(|i| f64::midpoint(pair[0][i], pair[1][i])))
-            .collect();
-        if row.iter().flatten().any(|value| !value.is_finite()) {
-            return None;
-        }
-    }
-    right.reverse();
-    Some((left, right))
 }
 
 fn arithmetic_margin(
@@ -162,60 +105,22 @@ pub fn bound_nurbs_plane_deviation(
     }
     let spans = proof_bezier_spans(curve.non_rationalized())?;
     let degree = spans.first()?.controls.len().checked_sub(1)?;
-    let mut nodes = BinaryHeap::with_capacity(spans.len());
-    let mut lower = 0.0_f64;
-    let mut max_depth = 0_usize;
-    let mut max_margin = 0.0_f64;
-    for (sequence, span) in spans.into_iter().enumerate() {
-        let controls = span.controls;
-        let front = signed_distance(controls.first()?, origin, normal)?.abs();
-        let back = signed_distance(controls.last()?, origin, normal)?.abs();
-        lower = lower.max(front).max(back);
-        max_margin = max_margin.max(arithmetic_margin(&controls, origin, degree, 0)?);
-        nodes.push(Span {
-            upper: upper_bound(&controls, origin, normal)?,
-            controls,
-            depth: 0,
-            sequence,
-        });
-    }
-    let mut next_sequence = nodes.len();
-
-    let mut subdivisions = 0;
-    loop {
-        let largest = nodes.peek()?;
-        if largest.upper - lower <= target_gap
-            || largest.depth >= MAX_SUBDIVISION_DEPTH
-            || subdivisions >= MAX_SUBDIVISIONS
-        {
-            break;
-        }
-        let previous = nodes.pop()?;
-        let depth = previous.depth + 1;
-        let (left, right) = subdivide(&previous.controls)?;
-        // The last control of the left piece is the *actual* curve midpoint.
-        lower = lower.max(signed_distance(left.last()?, origin, normal)?.abs());
-        for controls in [left, right] {
-            let upper = upper_bound(&controls, origin, normal)?;
-            nodes.push(Span {
-                controls,
-                upper,
-                depth,
-                sequence: next_sequence,
-            });
-            next_sequence += 1;
-        }
-        subdivisions += 1;
-        max_depth = max_depth.max(depth);
-    }
+    let max_margin = spans.iter().try_fold(0.0_f64, |margin, span| {
+        Some(margin.max(arithmetic_margin(&span.controls, origin, degree, 0)?))
+    })?;
+    let bracket = refine_maximum(spans, target_gap, |controls| {
+        let first = signed_distance(controls.first()?, origin, normal)?.abs();
+        let last = signed_distance(controls.last()?, origin, normal)?.abs();
+        Some((first.max(last), upper_bound(controls, origin, normal)?))
+    })?;
     // The final numerical allowance accounts for dehomogenization, dot products
     // and up to max_depth rounds of homogeneous midpoint interpolation.
-    let margin = max_margin * crate::usize_to_f64(max_depth + 1);
+    let margin = max_margin * crate::usize_to_f64(bracket.max_depth + 1);
     if !margin.is_finite() {
         return None;
     }
-    let upper = nodes.peek()?.upper + margin;
-    let lower = (lower - margin).max(0.0);
+    let upper = bracket.upper + margin;
+    let lower = (bracket.lower - margin).max(0.0);
     if !lower.is_finite() || !upper.is_finite() || lower > upper {
         return None;
     }
@@ -223,7 +128,7 @@ pub fn bound_nurbs_plane_deviation(
         lower,
         upper,
         arithmetic_margin: margin,
-        subdivisions,
+        subdivisions: bracket.subdivisions,
     })
 }
 
