@@ -227,6 +227,45 @@ pub fn bound_nurbs_plane_deviation(
     })
 }
 
+/// A lower bound on the directed point-set distance from one entire curve
+/// to another, obtained from their distances to the same reference plane.
+///
+/// Both curves may have unrelated knot vectors, parameterizations, degrees,
+/// and numbers of spans. A large source-plane excursion and a small target-
+/// plane excursion separate their geometric loci by the reverse triangle
+/// inequality. Zero is inconclusive, not an equivalence certificate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlaneDirectedSeparationBounds {
+    pub source: PlaneDeviationBounds,
+    pub target: PlaneDeviationBounds,
+    /// A lower bound on sup_{p in source} inf_{q in target} |p - q|.
+    pub minimum_source_to_target_mm: f64,
+}
+
+/// Bound source-to-target geometric disagreement without matching parameters.
+///
+/// The target only needs a proven global bound to the reference plane; it
+/// need not have an exact planar representation. Both splines are checked over
+/// their entire active knot domains by the same Bernstein partitioner.
+/// This does not establish B-rep topology, edge trim, or face orientation.
+#[must_use]
+pub fn bound_nurbs_curves_separation_by_plane(
+    source: &NurbsCurve<Vector4>,
+    target: &NurbsCurve<Vector4>,
+    plane_origin: Point3,
+    plane_normal: Vector3,
+    target_gap: f64,
+) -> Option<PlaneDirectedSeparationBounds> {
+    let source = bound_nurbs_plane_deviation(source, plane_origin, plane_normal, target_gap)?;
+    let target = bound_nurbs_plane_deviation(target, plane_origin, plane_normal, target_gap)?;
+    let minimum_source_to_target_mm = (source.lower - target.upper).max(0.0);
+    Some(PlaneDirectedSeparationBounds {
+        source,
+        target,
+        minimum_source_to_target_mm,
+    })
+}
+
 /// Polynomial B-spline specialization using positive unit weights.
 #[must_use]
 pub fn bound_bspline_plane_deviation(
@@ -276,6 +315,56 @@ mod tests {
         assert!(bound.lower > 0.05, "{bound:?}");
         assert!(bound.upper - bound.lower < 1.0e-6, "{bound:?}");
         assert!(bound.exceeds(0.01));
+    }
+
+    #[test]
+    fn planar_separator_proves_real_locus_disagreement_across_parameterizations() {
+        let source = NurbsCurve::from(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(3),
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(0.3, 0.0, 0.0002),
+                p(0.7, 0.0, 0.0002),
+                p(1.0, 0.0, 0.0),
+            ],
+        ));
+        let target = NurbsCurve::from(BsplineCurve::new_unchecked(
+            KnotVector::from(vec![10.0, 10.0, 11.0, 12.0, 12.0]),
+            vec![p(0.0, 0.0, 0.0), p(0.5, 0.0, 0.0), p(1.0, 0.0, 0.0)],
+        ));
+        let origin = p(0.0, 0.0, 0.0);
+        let normal = Vector3::unit_z();
+        let bound =
+            bound_nurbs_curves_separation_by_plane(&source, &target, origin, normal, 1.0e-10)
+                .expect("finite complete curves");
+        assert!(bound.minimum_source_to_target_mm > 0.00014999, "{bound:?}");
+        assert!(bound.target.upper < 1.0e-8, "{bound:?}");
+
+        let reverse =
+            bound_nurbs_curves_separation_by_plane(&target, &source, origin, normal, 1.0e-10)
+                .expect("reverse remains defined");
+        assert_eq!(reverse.minimum_source_to_target_mm, 0.0);
+    }
+
+    #[test]
+    fn same_plane_is_inconclusive_even_for_different_loci() {
+        let source = NurbsCurve::from(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(1),
+            vec![p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0)],
+        ));
+        let target = NurbsCurve::from(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(1),
+            vec![p(0.0, 5.0, 0.0), p(1.0, 5.0, 0.0)],
+        ));
+        let bound = bound_nurbs_curves_separation_by_plane(
+            &source,
+            &target,
+            p(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            1.0e-10,
+        )
+        .expect("same plane");
+        assert_eq!(bound.minimum_source_to_target_mm, 0.0);
     }
 
     #[test]

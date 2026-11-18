@@ -442,7 +442,10 @@ fn curve_support_inner(
     let entity = &entities[entity_index];
 
     if let Some(record) = simple_record(entity)
-        && matches!(record.name.as_str(), "SURFACE_CURVE" | "SEAM_CURVE")
+        && matches!(
+            record.name.as_str(),
+            "SURFACE_CURVE" | "SEAM_CURVE" | "INTERSECTION_CURVE"
+        )
         && let Parameter::List(params) = &record.parameter
         && let Some(inner_curve) = params.get(1).and_then(entity_ref_value)
         && inner_curve != curve_id
@@ -1026,6 +1029,39 @@ ENDSEC;
 END-ISO-10303-21;
 "
         )
+    }
+
+    #[test]
+    fn intersection_curve_wrappers_expose_their_checked_3d_geometry() -> anyhow::Result<()> {
+        let source = wrapped(
+            "#1=CARTESIAN_POINT('',(0.,0.,0.));
+             #2=CARTESIAN_POINT('',(2.,0.,0.));
+             #3=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#2),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);
+             #4=INTERSECTION_CURVE('',#3,(),.CURVE_3D.);
+             #5=SURFACE_CURVE('',#4,(),.CURVE_3D.);
+             #6=INTERSECTION_CURVE('',#6,(),.CURVE_3D.);
+             #7=INTERSECTION_CURVE('',#999,(),.CURVE_3D.);",
+        );
+        let exchange = step_p21::parser::parse(&source)?;
+        let entities = &exchange.data[0].entities;
+        let index = crate::step_graph::build_index(entities);
+        for curve_id in [3, 4, 5] {
+            let CurveSupport::BSpline(curve) = curve_support(curve_id, entities, &index) else {
+                anyhow::bail!("wrapper #{curve_id} did not preserve its 3D B-spline");
+            };
+            assert_eq!(curve.degree, 1);
+            assert_eq!(
+                curve.control_points_mm,
+                vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]
+            );
+        }
+        for bad in [6, 7] {
+            assert!(matches!(
+                curve_support(bad, entities, &index),
+                CurveSupport::Other { .. }
+            ));
+        }
+        Ok(())
     }
 
     #[test]

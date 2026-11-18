@@ -47,6 +47,8 @@ pub mod solid_extrusions;
 mod solid_lofts;
 pub mod solid_revolutions;
 pub mod solid_sweeps;
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub mod source_edge_locus;
 mod spherical_caps;
 mod step_document;
 pub use step_document::SourceEntity;
