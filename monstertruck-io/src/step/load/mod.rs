@@ -515,7 +515,9 @@ impl Table {
                 self.shell
                     .insert(id, Deserialize::deserialize(&record.parameter)?);
             }
-            "ORIENTED_OPEN_SHELL" => {
+            // Both oriented shell subtypes have identical STEP attributes. Keep
+            // the original subtype name in diagnostics on malformed records.
+            "ORIENTED_OPEN_SHELL" | "ORIENTED_CLOSED_SHELL" => {
                 if let Parameter::List(params) = &record.parameter
                     && params.len() == 4
                 {
@@ -528,33 +530,7 @@ impl Table {
                         },
                     );
                 } else {
-                    self.note_unexpected_shape(
-                        "ORIENTED_OPEN_SHELL",
-                        id,
-                        "a list of 4",
-                        &record.parameter,
-                    );
-                }
-            }
-            "ORIENTED_CLOSED_SHELL" => {
-                if let Parameter::List(params) = &record.parameter
-                    && params.len() == 4
-                {
-                    self.oriented_shell.insert(
-                        id,
-                        OrientedShellHolder {
-                            label: Deserialize::deserialize(&params[0])?,
-                            shell_element: Deserialize::deserialize(&params[2])?,
-                            orientation: Deserialize::deserialize(&params[3])?,
-                        },
-                    );
-                } else {
-                    self.note_unexpected_shape(
-                        "ORIENTED_CLOSED_SHELL",
-                        id,
-                        "a list of 4",
-                        &record.parameter,
-                    );
+                    self.note_unexpected_shape(&record.name, id, "a list of 4", &record.parameter);
                 }
             }
             "SHELL_BASED_SURFACE_MODEL" => {

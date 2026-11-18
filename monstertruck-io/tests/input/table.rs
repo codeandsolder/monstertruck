@@ -738,3 +738,30 @@ ENDSEC;",
         .expect("geometryless EDGE_CURVE must remain attributable");
     assert!(edge.edge_geometry.is_none());
 }
+
+#[test]
+fn oriented_shells_keep_distinct_types_and_shape_diagnostics() {
+    let data = DataSection::from_str(
+        r#"DATA;
+#1 = ORIENTED_OPEN_SHELL('open', *, #11, .F.);
+#2 = ORIENTED_CLOSED_SHELL('closed', *, #12, .T.);
+#3 = ORIENTED_OPEN_SHELL('missing orientation', *, #11);
+#4 = ORIENTED_CLOSED_SHELL('missing element', *, .T.);
+ENDSEC;"#,
+    )
+    .expect("STEP syntax must parse despite entity arity mismatches");
+    let table = Table::from_data_section(&data);
+    let open = table.oriented_shell.get(&1).expect("open shell holder");
+    let closed = table.oriented_shell.get(&2).expect("closed shell holder");
+    assert_eq!(open.label, "open");
+    assert_eq!(closed.label, "closed");
+    assert_eq!(open.shell_element, PlaceHolder::Ref(Name::Entity(11)));
+    assert_eq!(closed.shell_element, PlaceHolder::Ref(Name::Entity(12)));
+    assert!(!open.orientation);
+    assert!(closed.orientation);
+    assert!(!table.oriented_shell.contains_key(&3));
+    assert!(!table.oriented_shell.contains_key(&4));
+    assert_eq!(table.entity_report.total_shape_unexpected(), 2);
+    assert_eq!(table.entity_report.swallowed_of("ORIENTED_OPEN_SHELL"), 1);
+    assert_eq!(table.entity_report.swallowed_of("ORIENTED_CLOSED_SHELL"), 1);
+}
