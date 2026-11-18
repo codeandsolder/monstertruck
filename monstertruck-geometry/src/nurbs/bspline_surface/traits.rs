@@ -1,8 +1,9 @@
+use super::super::curve_inclusion;
 use super::{
     BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, ControlPoint, Deserialize,
-    EuclideanSpace, HashGen, INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible, KERNEL_EPSILON,
-    KnotVector, Matrix2, Matrix3, Matrix4, MetricSpace, NurbsCurve, PRESEARCH_DIVISION,
-    ParameterDivision2D, ParametricCurve, ParametricSurface, ParametricSurface3D, Point2, Point3,
+    EuclideanSpace, HashGen, INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible, KnotVector, Matrix2,
+    Matrix3, Matrix4, MetricSpace, NurbsCurve, PRESEARCH_DIVISION, ParameterDivision2D,
+    ParametricCurve, ParametricSurface, ParametricSurface3D, Point2, Point3,
     SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
     SurfaceParameterRange, Tolerance, Transform, Transformed, Vector2, Vector3, Vector4, algo,
 };
@@ -202,108 +203,72 @@ where
     }
 }
 
+// The B-spline solver deliberately uses explicit grid presearch on the
+// initial point, then plain Newton iterations with the previous seed.
+fn include_bspline_curve<P, C>(
+    surface: &BsplineSurface<P>,
+    curve: &C,
+    first_point: P,
+    knots: &KnotVector,
+    degree: usize,
+) -> bool
+where
+    P: ControlPoint<f64>
+        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + MetricSpace<Metric = f64>
+        + Tolerance,
+    <P as ControlPoint<f64>>::Diff: SearchParameterVector<Point = P>,
+    C: ParametricCurve<Point = P>,
+{
+    curve_inclusion::includes_curve(
+        surface,
+        curve,
+        first_point,
+        knots,
+        (surface.knot_vector_u(), surface.knot_vector_v()),
+        degree,
+        |point, previous| {
+            let seed = previous.unwrap_or_else(|| {
+                algo::surface::presearch(surface, point, surface.range_tuple(), PRESEARCH_DIVISION)
+            });
+            algo::surface::search_parameter(surface, point, seed, INCLUDE_CURVE_TRIALS)
+        },
+    )
+}
+
 impl IncludeCurve<BsplineCurve<Point2>> for BsplineSurface<Point2> {
     fn include(&self, curve: &BsplineCurve<Point2>) -> bool {
-        let pt = curve.front();
-        let mut hint = algo::surface::presearch(self, pt, self.range_tuple(), PRESEARCH_DIVISION);
-        hint = match algo::surface::search_parameter(self, pt, hint, INCLUDE_CURVE_TRIALS) {
-            Some(got) => got,
-            None => return false,
-        };
-        let knot_vector_u = self.knot_vector_u();
-        let knot_vector_v = self.knot_vector_v();
-        let degree = curve.degree() * 6;
-        let (knots, _) = curve.knot_vector().to_single_multi();
-        for i in 1..knots.len() {
-            for j in 1..=degree {
-                let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
-                let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = ParametricCurve::evaluate(curve, t);
-                hint = match algo::surface::search_parameter(self, pt, hint, INCLUDE_CURVE_TRIALS) {
-                    Some(got) => got,
-                    None => return false,
-                };
-                if !ParametricSurface::evaluate(self, hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
-                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
-                {
-                    return false;
-                }
-            }
-        }
-        true
+        include_bspline_curve(
+            self,
+            curve,
+            curve.front(),
+            curve.knot_vector(),
+            curve.degree(),
+        )
     }
 }
 
 impl IncludeCurve<BsplineCurve<Point3>> for BsplineSurface<Point3> {
     fn include(&self, curve: &BsplineCurve<Point3>) -> bool {
-        let pt = curve.front();
-        let mut hint = algo::surface::presearch(self, pt, self.range_tuple(), PRESEARCH_DIVISION);
-        hint = match algo::surface::search_parameter(self, pt, hint, INCLUDE_CURVE_TRIALS) {
-            Some(got) => got,
-            None => return false,
-        };
-        let knot_vector_u = self.knot_vector_u();
-        let knot_vector_v = self.knot_vector_v();
-        let degree = curve.degree() * 6;
-        let (knots, _) = curve.knot_vector().to_single_multi();
-        for i in 1..knots.len() {
-            for j in 1..=degree {
-                let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
-                let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = ParametricCurve::evaluate(curve, t);
-                hint = match algo::surface::search_parameter(self, pt, hint, INCLUDE_CURVE_TRIALS) {
-                    Some(got) => got,
-                    None => return false,
-                };
-                if !ParametricSurface::evaluate(self, hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
-                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
-                {
-                    return false;
-                }
-            }
-        }
-        true
+        include_bspline_curve(
+            self,
+            curve,
+            curve.front(),
+            curve.knot_vector(),
+            curve.degree(),
+        )
     }
 }
 
 impl IncludeCurve<NurbsCurve<Vector4>> for BsplineSurface<Point3> {
     fn include(&self, curve: &NurbsCurve<Vector4>) -> bool {
-        let pt = curve.evaluate(curve.knot_vector()[0]);
-        let mut hint = algo::surface::presearch(self, pt, self.range_tuple(), PRESEARCH_DIVISION);
-        hint = match algo::surface::search_parameter(self, pt, hint, INCLUDE_CURVE_TRIALS) {
-            Some(got) => got,
-            None => return false,
-        };
-        let knot_vector_u = self.knot_vector_u();
-        let knot_vector_v = self.knot_vector_v();
-        let degree = curve.degree() * 6;
-        let (knots, _) = curve.knot_vector().to_single_multi();
-        for i in 1..knots.len() {
-            for j in 1..=degree {
-                let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
-                let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = curve.evaluate(t);
-                hint = match algo::surface::search_parameter(self, pt, hint, INCLUDE_CURVE_TRIALS) {
-                    Some(got) => got,
-                    None => return false,
-                };
-                if !ParametricSurface::evaluate(self, hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
-                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
-                {
-                    return false;
-                }
-            }
-        }
-        true
+        include_bspline_curve(
+            self,
+            curve,
+            curve.evaluate(curve.knot_vector()[0]),
+            curve.knot_vector(),
+            curve.degree(),
+        )
     }
 }
 

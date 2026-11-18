@@ -6,14 +6,13 @@
 use super::{
     BasisWindow, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve, BsplineSurface,
     ControlPoint, Error, EuclideanSpace, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve,
-    InnerSpace, Invertible, KERNEL_EPSILON, KERNEL_EPSILON_SQUARED, KnotVector, MetricSpace,
-    NurbsCurve, NurbsSurface, PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange,
-    ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, Result,
-    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
-    SurfaceParameterRange, Tolerance, Transformed, Vector3, Vector4, Zero, algo,
-    multi_rational_derivative, rational_derivative,
+    InnerSpace, Invertible, KERNEL_EPSILON_SQUARED, KnotVector, MetricSpace, NurbsCurve,
+    NurbsSurface, PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve,
+    ParametricSurface, ParametricSurface3D, Point3, Result, SearchNearestParameter,
+    SearchParameter, SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance,
+    Transformed, Vector3, Vector4, Zero, algo, multi_rational_derivative, rational_derivative,
 };
-use super::{presearch_trace, seed_index::SeedSpatialIndex};
+use super::{curve_inclusion, presearch_trace, seed_index::SeedSpatialIndex};
 #[cfg(test)]
 use crate::prelude::Vector2;
 use algo::surface::{SearchNearestParameterVector, SearchParameterVector};
@@ -1046,105 +1045,79 @@ where
     }
 }
 
+// A NURBS surface retains its optimized exact-search trait and cached
+// presearch policy, unlike the direct B-spline Newton search.
+fn include_nurbs_curve<V, C>(
+    surface: &NurbsSurface<V>,
+    curve: &C,
+    first_point: V::Point,
+    knots: &KnotVector,
+    degree: usize,
+) -> bool
+where
+    V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Clone + PartialEq + 'static,
+    V::Point: ControlPoint<f64, Diff = <V::Point as EuclideanSpace>::Diff>
+        + MetricSpace<Metric = f64>
+        + Bounded<Scalar = f64>
+        + Tolerance
+        + 'static,
+    <V::Point as EuclideanSpace>::Diff: SearchParameterVector<Point = V::Point>,
+    C: ParametricCurve<Point = V::Point>,
+{
+    curve_inclusion::includes_curve(
+        surface,
+        curve,
+        first_point,
+        knots,
+        (surface.knot_vector_u(), surface.knot_vector_v()),
+        degree,
+        |point, previous| {
+            SearchParameter::<SurfaceParameter>::search_parameter(
+                surface,
+                point,
+                previous,
+                INCLUDE_CURVE_TRIALS,
+            )
+        },
+    )
+}
+
 impl IncludeCurve<NurbsCurve<Vector3>> for NurbsSurface<Vector3> {
     #[inline]
     fn include(&self, curve: &NurbsCurve<Vector3>) -> bool {
-        let pt = curve.evaluate(curve.knot_vector()[0]);
-        let Some(mut hint) = self.search_parameter(pt, None, INCLUDE_CURVE_TRIALS) else {
-            return false;
-        };
-        let knot_vector_u = self.knot_vector_u();
-        let knot_vector_v = self.knot_vector_v();
-        let degree = curve.degree() * 6;
-        let (knots, _) = curve.knot_vector().to_single_multi();
-        for i in 1..knots.len() {
-            for j in 1..=degree {
-                let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
-                let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = curve.evaluate(t);
-                hint = match self.search_parameter(pt, Some(hint), INCLUDE_CURVE_TRIALS) {
-                    Some(got) => got,
-                    None => return false,
-                };
-                if !self.evaluate(hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
-                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
-                {
-                    return false;
-                }
-            }
-        }
-        true
+        include_nurbs_curve(
+            self,
+            curve,
+            curve.evaluate(curve.knot_vector()[0]),
+            curve.knot_vector(),
+            curve.degree(),
+        )
     }
 }
 
 impl IncludeCurve<BsplineCurve<Point3>> for NurbsSurface<Vector4> {
     #[inline]
     fn include(&self, curve: &BsplineCurve<Point3>) -> bool {
-        let pt = curve.front();
-        let Some(mut hint) = self.search_parameter(pt, None, INCLUDE_CURVE_TRIALS) else {
-            return false;
-        };
-        let knot_vector_u = self.knot_vector_u();
-        let knot_vector_v = self.knot_vector_v();
-        let degree = curve.degree() * 6;
-        let (knots, _) = curve.knot_vector().to_single_multi();
-        for i in 1..knots.len() {
-            for j in 1..=degree {
-                let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
-                let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = curve.evaluate(t);
-                hint = match self.search_parameter(pt, Some(hint), INCLUDE_CURVE_TRIALS) {
-                    Some(got) => got,
-                    None => return false,
-                };
-                if !self.evaluate(hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
-                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
-                {
-                    return false;
-                }
-            }
-        }
-        true
+        include_nurbs_curve(
+            self,
+            curve,
+            curve.front(),
+            curve.knot_vector(),
+            curve.degree(),
+        )
     }
 }
 
 impl IncludeCurve<NurbsCurve<Vector4>> for NurbsSurface<Vector4> {
     #[inline]
     fn include(&self, curve: &NurbsCurve<Vector4>) -> bool {
-        let pt = curve.front();
-        let Some(mut hint) = self.search_parameter(pt, None, INCLUDE_CURVE_TRIALS) else {
-            return false;
-        };
-        let knot_vector_u = self.knot_vector_u();
-        let knot_vector_v = self.knot_vector_v();
-        let degree = curve.degree() * 6;
-        let (knots, _) = curve.knot_vector().to_single_multi();
-        for i in 1..knots.len() {
-            for j in 1..=degree {
-                let p = crate::usize_to_f64(j) / crate::usize_to_f64(degree);
-                let t = f64::mul_add(knots[i], p, knots[i - 1] * (1.0 - p));
-                let pt = curve.evaluate(t);
-                hint = match self.search_parameter(pt, Some(hint), INCLUDE_CURVE_TRIALS) {
-                    Some(got) => got,
-                    None => return false,
-                };
-                if !self.evaluate(hint.0, hint.1).near(&pt)
-                    || hint.0 < knot_vector_u[0] - KERNEL_EPSILON
-                    || hint.0 - knot_vector_u[0] > knot_vector_u.range_length() + KERNEL_EPSILON
-                    || hint.1 < knot_vector_v[0] - KERNEL_EPSILON
-                    || hint.1 - knot_vector_v[0] > knot_vector_v.range_length() + KERNEL_EPSILON
-                {
-                    return false;
-                }
-            }
-        }
-        true
+        include_nurbs_curve(
+            self,
+            curve,
+            curve.front(),
+            curve.knot_vector(),
+            curve.degree(),
+        )
     }
 }
 
