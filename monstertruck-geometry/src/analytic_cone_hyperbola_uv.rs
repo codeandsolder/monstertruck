@@ -68,6 +68,11 @@ impl ConeHyperbolaUv {
         })
     }
 
+    /// The source-aligned orthonormal reference vectors used by the native
+    /// cone-revolution surface (with the original STEP axis preserved).
+    #[must_use]
+    pub const fn reference_axes(self) -> (Vector3, Vector3) { (self.x, self.y) }
+
     /// Analytic UV at the existing 3D hyperbola parameter, with no wrap.
     ///
     /// Axial coordinate = (|d| cosh(t) - r0) / slope.
