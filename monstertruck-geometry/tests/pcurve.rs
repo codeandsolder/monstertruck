@@ -1,6 +1,33 @@
+#![expect(
+    clippy::similar_names,
+    reason = "paired u/v coefficient variables reflect geometric parameter axes"
+)]
+
 use monstertruck_geometry::prelude::*;
 use monstertruck_traits::polynomial::*;
 use proptest::prelude::*;
+
+// The explicit Faà di Bruno derivative and polynomial coefficient composition
+// evaluate algebraically identical derivatives through different floating-point
+// operation sequences. A fixed absolute kernel-space tolerance does not scale
+// to fifth derivatives whose magnitudes can be thousands; compare each
+// component with a strict relative budget while retaining the absolute floor.
+fn prop_assert_derivative_agreement(
+    left: Vector3,
+    right: Vector3,
+) -> std::result::Result<(), TestCaseError> {
+    const RELATIVE_TOLERANCE: f64 = 1.0e-9;
+    for axis in 0..3 {
+        let lhs = left[axis];
+        let rhs = right[axis];
+        let tolerance = KERNEL_EPSILON.max(RELATIVE_TOLERANCE * lhs.abs().max(rhs.abs()));
+        prop_assert!(
+            lhs.is_finite() && rhs.is_finite() && (lhs - rhs).abs() <= tolerance,
+            "derivative component {axis} differs: left={lhs:?}, right={rhs:?}, tolerance={tolerance:?}",
+        );
+    }
+    Ok(())
+}
 
 fn exec_pcurve_derivation(
     curve_coef: &[[f64; 2]],
@@ -21,7 +48,7 @@ fn exec_pcurve_derivation(
     let pcurve0 = ParameterCurve::new(curve, surface);
     let pcurve1 = pcurve0.surface().composite(pcurve0.curve());
 
-    prop_assert_near!(pcurve0.derivative_n(n, t), pcurve1.derivative_n(n, t));
+    prop_assert_derivative_agreement(pcurve0.derivative_n(n, t), pcurve1.derivative_n(n, t))?;
 
     let ders0 = (0..=n)
         .map(|i| pcurve0.derivative_n(i, t))
@@ -31,11 +58,10 @@ fn exec_pcurve_derivation(
 
     prop_assert_eq!(ders0.len(), ders1.len());
 
-    let mut iter = ders0.into_iter().zip(&*ders1);
-    iter.try_for_each(|(v0, v1)| {
-        prop_assert_near!(v0, v1);
-        Ok(())
-    })?;
+    ders0
+        .into_iter()
+        .zip(&*ders1)
+        .try_for_each(|(left, right)| prop_assert_derivative_agreement(left, *right))?;
     Ok(())
 }
 
@@ -59,4 +85,35 @@ proptest! {
             t,
         )?;
     }
+}
+
+#[test]
+fn high_order_pcurve_derivative_regression_from_ci() {
+    // Shrunk from the CI proptest failure on 2026-11-18.
+    let curve = [
+        [-0.017_093_239_736_548_603, 0.066_779_720_106_981_45],
+        [0.0, 0.210_174_389_360_958_97],
+        [-0.942_841_532_951_020_7, 0.838_479_701_226_748_2],
+        [0.0, -0.955_215_861_886_636_2],
+        [0.825_498_531_480_303_9, -0.883_044_902_082_598_1],
+        [-0.529_182_018_438_617_5, 0.412_348_547_486_633_47],
+    ];
+    let u = [
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, -0.543_720_736_235_002],
+    ];
+    let v = [
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, -0.942_648_615_904_186_1],
+    ];
+    exec_pcurve_derivation(&curve, &u, &v, 5, 0.969_411_026_851_627_3)
+        .expect("composite and explicit parameter-curve derivatives must agree");
 }
