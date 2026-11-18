@@ -9,7 +9,8 @@ use crate::types::*;
 // redundant.
 use super::{
     FilletOptions, RadiusSpec, build_5face_box, build_6face_box, build_box_shell, dump_shell_step,
-    fillet_along_wire, fillet_edges, fillet_edges_generic, fillet_with_side,
+    fillet_along_wire, fillet_closed_top_loop, fillet_edges, fillet_edges_generic,
+    fillet_with_side,
 };
 
 #[test]
@@ -132,101 +133,10 @@ fn fillet_semi_cube() {
 
 #[test]
 fn fillet_closed_wire_box_top() {
-    // Build a 5-face partial box (top + 4 sides), then fillet all 4 top edges
-    // which form a closed square wire on the top face.
-    let p = [
-        Point3::new(0.0, 0.0, 1.0),
-        Point3::new(1.0, 0.0, 1.0),
-        Point3::new(1.0, 1.0, 1.0),
-        Point3::new(0.0, 1.0, 1.0),
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(1.0, 0.0, 0.0),
-        Point3::new(1.0, 1.0, 0.0),
-        Point3::new(0.0, 1.0, 0.0),
-    ];
-    let v = Vertex::from_points(p);
-
-    let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
-    };
-    let edge = [
-        line(0, 1), // 0: top front
-        line(1, 2), // 1: top right
-        line(2, 3), // 2: top back
-        line(3, 0), // 3: top left
-        line(0, 4), // 4
-        line(1, 5), // 5
-        line(2, 6), // 6
-        line(3, 7), // 7
-        line(4, 5), // 8
-        line(5, 6), // 9
-        line(6, 7), // 10
-        line(7, 4), // 11
-    ];
-
-    let plane = |i: usize, j: usize, k: usize, l: usize| {
-        let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
-        let knot_vec = KnotVector::bezier_knot(1);
-        let knot_vecs = (knot_vec.clone(), knot_vec);
-        let bsp = BsplineSurface::new_unchecked(knot_vecs, control_points);
-
-        let wire: Wire = [i, j, k, l]
-            .into_iter()
-            .circular_tuple_windows()
-            .map(|(i, j)| {
-                edge.iter()
-                    .find_map(|edge| {
-                        if edge.front() == &v[i] && edge.back() == &v[j] {
-                            Some(edge.clone())
-                        } else if edge.back() == &v[i] && edge.front() == &v[j] {
-                            Some(edge.inverse())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap()
-            })
-            .collect();
-        Face::new_unchecked(vec![wire], bsp.into())
-    };
-
-    let mut shell: Shell = [
-        plane(0, 1, 2, 3), // face 0: top
-        plane(1, 0, 4, 5), // face 1: front
-        plane(2, 1, 5, 6), // face 2: right
-        plane(3, 2, 6, 7), // face 3: back
-        plane(0, 3, 7, 4), // face 4: left
-    ]
-    .into();
-
-    let initial_face_count = shell.len();
-
-    // All 4 top edges form a closed wire on the top face.
-    let closed_wire: Wire = [
-        edge[0].clone(),
-        edge[1].clone(),
-        edge[2].clone(),
-        edge[3].clone(),
-    ]
-    .into();
-    assert!(closed_wire.is_closed());
-
-    fillet_along_wire(
-        &mut shell,
-        &closed_wire,
-        &FilletOptions {
-            radius: RadiusSpec::Constant(0.2),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-
-    // 4 fillet faces should be added.
-    assert_eq!(shell.len(), initial_face_count + 4);
-
-    // The shell should still triangulate cleanly.
-    let _poly = shell.robust_triangulation(0.001).to_polygon();
+    let shell = fillet_closed_top_loop(&FilletOptions {
+        radius: RadiusSpec::Constant(0.2),
+        ..Default::default()
+    });
     dump_shell_step("fillet-closed-box-top", &shell);
 }
 

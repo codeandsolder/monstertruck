@@ -121,213 +121,108 @@ where S: StepFormat + StepLength {
     );
 }
 
-/// Helper: builds a box-like shell with `plane()` and `line()` helpers.
-/// Returns `(shell, edges, vertices)`.
-fn build_box_shell() -> (Shell, [Edge; 12], Vec<Vertex>) {
-    let p = [
-        Point3::new(0.0, 0.0, 1.0),
-        Point3::new(1.0, 0.0, 1.0),
-        Point3::new(1.0, 1.0, 1.0),
-        Point3::new(0.0, 1.0, 1.0),
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(1.0, 0.0, 0.0),
-        Point3::new(1.0, 1.0, 0.0),
-        Point3::new(0.0, 1.0, 0.0),
+/// Build a unit-height box with the first `FACE_COUNT` faces, in stable
+/// top/front/right/back/left/bottom order. The shared vertex/edge identities
+/// are important to the fillet tests: adjoining faces must use the same edges.
+fn build_box_with_faces<const FACE_COUNT: usize>() -> (Shell, [Edge; 12], Vec<Vertex>) {
+    const FACE_CORNERS: [[usize; 4]; 6] = [
+        [0, 1, 2, 3], // 0: top
+        [1, 0, 4, 5], // 1: front
+        [2, 1, 5, 6], // 2: right
+        [3, 2, 6, 7], // 3: back
+        [0, 3, 7, 4], // 4: left
+        [5, 4, 7, 6], // 5: bottom
     ];
-    let v = Vertex::from_points(p);
-
-    let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
-    };
-    let edge = [
-        line(0, 1), // 0
-        line(1, 2), // 1
-        line(2, 3), // 2
-        line(3, 0), // 3
-        line(0, 4), // 4
-        line(1, 5), // 5
-        line(2, 6), // 6
-        line(3, 7), // 7
-        line(4, 5), // 8
-        line(5, 6), // 9
-        line(6, 7), // 10
-        line(7, 4), // 11
+    const XY_CORNERS: [(f64, f64); 4] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+    const EDGE_ENDPOINTS: [[usize; 2]; 12] = [
+        [0, 1],
+        [1, 2],
+        [2, 3],
+        [3, 0],
+        [0, 4],
+        [1, 5],
+        [2, 6],
+        [3, 7],
+        [4, 5],
+        [5, 6],
+        [6, 7],
+        [7, 4],
     ];
+    assert!(FACE_COUNT <= FACE_CORNERS.len());
 
-    let plane = |i: usize, j: usize, k: usize, l: usize| {
-        let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
-        let knot_vec = KnotVector::bezier_knot(1);
-        let knot_vecs = (knot_vec.clone(), knot_vec);
-        let bsp = BsplineSurface::new_unchecked(knot_vecs, control_points);
-
+    let points: [Point3; 8] = std::array::from_fn(|index| {
+        let (x, y) = XY_CORNERS[index % XY_CORNERS.len()];
+        Point3::new(x, y, if index < 4 { 1.0 } else { 0.0 })
+    });
+    let vertices = Vertex::from_points(points);
+    // Fixed indexing retains the edge-order contract used by every fillet test.
+    let edges = EDGE_ENDPOINTS.map(|[front, back]| {
+        let line = Line(points[front], points[back]);
+        let curve = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![line.0, line.1]);
+        Edge::new_unchecked(
+            &vertices[front],
+            &vertices[back],
+            NurbsCurve::from(curve).into(),
+        )
+    });
+    let plane = |[i, j, k, l]: [usize; 4]| {
+        let control_points = vec![vec![points[i], points[l]], vec![points[j], points[k]]];
+        let knots = KnotVector::bezier_knot(1);
+        let bspline = BsplineSurface::new_unchecked((knots.clone(), knots), control_points);
         let wire: Wire = [i, j, k, l]
             .into_iter()
             .circular_tuple_windows()
-            .map(|(i, j)| {
-                edge.iter()
-                    .find_map(|edge| {
-                        if edge.front() == &v[i] && edge.back() == &v[j] {
-                            Some(edge.clone())
-                        } else if edge.back() == &v[i] && edge.front() == &v[j] {
-                            Some(edge.inverse())
+            .map(|(front, back)| {
+                // Rather than search the edge list by floating-point endpoint
+                // equality, use the canonical endpoint indices.
+                let (edge_index, inverse) = EDGE_ENDPOINTS
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, &[a, b])| {
+                        if a == front && b == back {
+                            Some((index, false))
+                        } else if b == front && a == back {
+                            Some((index, true))
                         } else {
                             None
                         }
                     })
-                    .unwrap()
+                    .expect("face boundary must reference a canonical box edge");
+                if inverse {
+                    edges[edge_index].inverse()
+                } else {
+                    edges[edge_index].clone()
+                }
             })
             .collect();
-        Face::new_unchecked(vec![wire], bsp.into())
+        Face::new_unchecked(vec![wire], bspline.into())
     };
-
-    // Top, front, right, back (partial box -- 4 faces sharing edges).
-    let shell: Shell = [
-        plane(0, 1, 2, 3), // face 0: top
-        plane(1, 0, 4, 5), // face 1: front
-        plane(2, 1, 5, 6), // face 2: right
-        plane(3, 2, 6, 7), // face 3: back
-    ]
-    .into();
-
-    (shell, edge, v)
+    let shell: Shell = FACE_CORNERS
+        .into_iter()
+        .take(FACE_COUNT)
+        .map(plane)
+        .collect();
+    (shell, edges, vertices)
 }
 
-/// Helper: builds a 5-face cuboid (top + 4 sides, no bottom) with 12 edges.
-fn build_5face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
-    let p = [
-        Point3::new(0.0, 0.0, 1.0),
-        Point3::new(1.0, 0.0, 1.0),
-        Point3::new(1.0, 1.0, 1.0),
-        Point3::new(0.0, 1.0, 1.0),
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(1.0, 0.0, 0.0),
-        Point3::new(1.0, 1.0, 0.0),
-        Point3::new(0.0, 1.0, 0.0),
-    ];
-    let v = Vertex::from_points(p);
-
-    let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
-    };
-    let edge = [
-        line(0, 1), // 0: top front
-        line(1, 2), // 1: top right
-        line(2, 3), // 2: top back
-        line(3, 0), // 3: top left
-        line(0, 4), // 4
-        line(1, 5), // 5
-        line(2, 6), // 6
-        line(3, 7), // 7
-        line(4, 5), // 8: bottom front
-        line(5, 6), // 9: bottom right
-        line(6, 7), // 10: bottom back
-        line(7, 4), // 11: bottom left
-    ];
-
-    let plane = |i: usize, j: usize, k: usize, l: usize| {
-        let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
-        let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
-        let wire: Wire = [i, j, k, l]
-            .into_iter()
-            .circular_tuple_windows()
-            .map(|(a, b)| {
-                edge.iter()
-                    .find_map(|e| {
-                        if e.front() == &v[a] && e.back() == &v[b] {
-                            Some(e.clone())
-                        } else if e.back() == &v[a] && e.front() == &v[b] {
-                            Some(e.inverse())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap()
-            })
-            .collect();
-        Face::new_unchecked(vec![wire], bsp.into())
-    };
-
-    let shell: Shell = [
-        plane(0, 1, 2, 3), // face 0: top
-        plane(1, 0, 4, 5), // face 1: front
-        plane(2, 1, 5, 6), // face 2: right
-        plane(3, 2, 6, 7), // face 3: back
-        plane(0, 3, 7, 4), // face 4: left
-    ]
-    .into();
-
-    (shell, edge, v)
+/// Exercise a five-face box's four-edge top loop with the chosen fillet
+/// options. The profile-specific tests still supply their distinct geometry.
+fn fillet_closed_top_loop(options: &FilletOptions) -> Shell {
+    let (mut shell, edges, _) = build_5face_box();
+    let face_count = shell.len();
+    let top: Wire = edges[..4].iter().cloned().collect();
+    assert!(top.is_closed());
+    fillet_along_wire(&mut shell, &top, options).expect("closed top loop fillet");
+    assert_eq!(shell.len(), face_count + 4);
+    let _poly = shell.robust_triangulation(0.001).to_polygon();
+    shell
 }
 
-/// Helper: builds a 6-face closed cuboid with 12 edges.
-fn build_6face_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
-    let p = [
-        Point3::new(0.0, 0.0, 1.0),
-        Point3::new(1.0, 0.0, 1.0),
-        Point3::new(1.0, 1.0, 1.0),
-        Point3::new(0.0, 1.0, 1.0),
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(1.0, 0.0, 0.0),
-        Point3::new(1.0, 1.0, 0.0),
-        Point3::new(0.0, 1.0, 0.0),
-    ];
-    let v = Vertex::from_points(p);
+/// Four-face test box: top/front/right/back, open on the bottom and left.
+fn build_box_shell() -> (Shell, [Edge; 12], Vec<Vertex>) { build_box_with_faces::<4>() }
 
-    let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
-    };
-    let edge = [
-        line(0, 1), // 0: top front
-        line(1, 2), // 1: top right
-        line(2, 3), // 2: top back
-        line(3, 0), // 3: top left
-        line(0, 4), // 4
-        line(1, 5), // 5
-        line(2, 6), // 6
-        line(3, 7), // 7
-        line(4, 5), // 8: bottom front
-        line(5, 6), // 9: bottom right
-        line(6, 7), // 10: bottom back
-        line(7, 4), // 11: bottom left
-    ];
+/// Five-face test box: top and four sides, open on the bottom.
+fn build_5face_box() -> (Shell, [Edge; 12], Vec<Vertex>) { build_box_with_faces::<5>() }
 
-    let plane = |i: usize, j: usize, k: usize, l: usize| {
-        let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
-        let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
-        let wire: Wire = [i, j, k, l]
-            .into_iter()
-            .circular_tuple_windows()
-            .map(|(a, b)| {
-                edge.iter()
-                    .find_map(|e| {
-                        if e.front() == &v[a] && e.back() == &v[b] {
-                            Some(e.clone())
-                        } else if e.back() == &v[a] && e.front() == &v[b] {
-                            Some(e.inverse())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap()
-            })
-            .collect();
-        Face::new_unchecked(vec![wire], bsp.into())
-    };
-
-    let shell: Shell = [
-        plane(0, 1, 2, 3), // face 0: top
-        plane(1, 0, 4, 5), // face 1: front
-        plane(2, 1, 5, 6), // face 2: right
-        plane(3, 2, 6, 7), // face 3: back
-        plane(0, 3, 7, 4), // face 4: left
-        plane(5, 4, 7, 6), // face 5: bottom
-    ]
-    .into();
-
-    (shell, edge, v)
-}
+/// Closed six-face test box.
+fn build_6face_box() -> (Shell, [Edge; 12], Vec<Vertex>) { build_box_with_faces::<6>() }

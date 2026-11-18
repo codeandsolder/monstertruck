@@ -136,94 +136,11 @@ fn chamfer_semi_cube() {
 /// Chamfer along a closed wire (same topology as fillet_closed_wire_box_top).
 #[test]
 fn chamfer_closed_wire() {
-    let p = [
-        Point3::new(0.0, 0.0, 1.0),
-        Point3::new(1.0, 0.0, 1.0),
-        Point3::new(1.0, 1.0, 1.0),
-        Point3::new(0.0, 1.0, 1.0),
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(1.0, 0.0, 0.0),
-        Point3::new(1.0, 1.0, 0.0),
-        Point3::new(0.0, 1.0, 0.0),
-    ];
-    let v = Vertex::from_points(p);
-
-    let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
-    };
-    let edge = [
-        line(0, 1),
-        line(1, 2),
-        line(2, 3),
-        line(3, 0),
-        line(0, 4),
-        line(1, 5),
-        line(2, 6),
-        line(3, 7),
-        line(4, 5),
-        line(5, 6),
-        line(6, 7),
-        line(7, 4),
-    ];
-
-    let plane = |i: usize, j: usize, k: usize, l: usize| {
-        let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
-        let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
-        let wire: Wire = [i, j, k, l]
-            .into_iter()
-            .circular_tuple_windows()
-            .map(|(i, j)| {
-                edge.iter()
-                    .find_map(|edge| {
-                        if edge.front() == &v[i] && edge.back() == &v[j] {
-                            Some(edge.clone())
-                        } else if edge.back() == &v[i] && edge.front() == &v[j] {
-                            Some(edge.inverse())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap()
-            })
-            .collect();
-        Face::new_unchecked(vec![wire], bsp.into())
-    };
-
-    let mut shell: Shell = [
-        plane(0, 1, 2, 3),
-        plane(1, 0, 4, 5),
-        plane(2, 1, 5, 6),
-        plane(3, 2, 6, 7),
-        plane(0, 3, 7, 4),
-    ]
-    .into();
-
-    let initial_face_count = shell.len();
-
-    let closed_wire: Wire = [
-        edge[0].clone(),
-        edge[1].clone(),
-        edge[2].clone(),
-        edge[3].clone(),
-    ]
-    .into();
-    assert!(closed_wire.is_closed());
-
-    fillet_along_wire(
-        &mut shell,
-        &closed_wire,
-        &FilletOptions {
-            radius: RadiusSpec::Constant(0.2),
-            profile: FilletProfile::Chamfer,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-
-    assert_eq!(shell.len(), initial_face_count + 4);
-    let _poly = shell.robust_triangulation(0.001).to_polygon();
+    fillet_closed_top_loop(&FilletOptions {
+        radius: RadiusSpec::Constant(0.2),
+        profile: FilletProfile::Chamfer,
+        ..Default::default()
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -362,94 +279,11 @@ fn ridge_semi_cube() {
 /// Ridge along a closed wire (same topology as chamfer_closed_wire).
 #[test]
 fn ridge_closed_wire() {
-    let p = [
-        Point3::new(0.0, 0.0, 1.0),
-        Point3::new(1.0, 0.0, 1.0),
-        Point3::new(1.0, 1.0, 1.0),
-        Point3::new(0.0, 1.0, 1.0),
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(1.0, 0.0, 0.0),
-        Point3::new(1.0, 1.0, 0.0),
-        Point3::new(0.0, 1.0, 0.0),
-    ];
-    let v = Vertex::from_points(p);
-
-    let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
-    };
-    let edge = [
-        line(0, 1),
-        line(1, 2),
-        line(2, 3),
-        line(3, 0),
-        line(0, 4),
-        line(1, 5),
-        line(2, 6),
-        line(3, 7),
-        line(4, 5),
-        line(5, 6),
-        line(6, 7),
-        line(7, 4),
-    ];
-
-    let plane = |i: usize, j: usize, k: usize, l: usize| {
-        let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
-        let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
-        let wire: Wire = [i, j, k, l]
-            .into_iter()
-            .circular_tuple_windows()
-            .map(|(i, j)| {
-                edge.iter()
-                    .find_map(|edge| {
-                        if edge.front() == &v[i] && edge.back() == &v[j] {
-                            Some(edge.clone())
-                        } else if edge.back() == &v[i] && edge.front() == &v[j] {
-                            Some(edge.inverse())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap()
-            })
-            .collect();
-        Face::new_unchecked(vec![wire], bsp.into())
-    };
-
-    let mut shell: Shell = [
-        plane(0, 1, 2, 3),
-        plane(1, 0, 4, 5),
-        plane(2, 1, 5, 6),
-        plane(3, 2, 6, 7),
-        plane(0, 3, 7, 4),
-    ]
-    .into();
-
-    let initial_face_count = shell.len();
-
-    let closed_wire: Wire = [
-        edge[0].clone(),
-        edge[1].clone(),
-        edge[2].clone(),
-        edge[3].clone(),
-    ]
-    .into();
-    assert!(closed_wire.is_closed());
-
-    fillet_along_wire(
-        &mut shell,
-        &closed_wire,
-        &FilletOptions {
-            radius: RadiusSpec::Constant(0.2),
-            profile: FilletProfile::Ridge,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-
-    assert_eq!(shell.len(), initial_face_count + 4);
-    let _poly = shell.robust_triangulation(0.001).to_polygon();
+    fillet_closed_top_loop(&FilletOptions {
+        radius: RadiusSpec::Constant(0.2),
+        profile: FilletProfile::Ridge,
+        ..Default::default()
+    });
 }
 
 // ---------------------------------------------------------------------------
