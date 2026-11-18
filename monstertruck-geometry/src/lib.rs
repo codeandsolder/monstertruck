@@ -121,6 +121,8 @@ pub mod analytic_carrier;
 pub mod analytic_curve_incidence;
 /// Non-sampling complete-curve locus bounds against finite line segments.
 pub mod analytic_line_segment;
+/// Global lower/upper bounds on spline distance to a plane.
+pub mod analytic_plane_deviation;
 mod analytic_surface;
 /// [`DeterministicContentHash`](monstertruck_core::DeterministicContentHash) impls for geometry types.
 mod content_hash_impls;
