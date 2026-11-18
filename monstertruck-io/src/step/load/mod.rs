@@ -90,6 +90,19 @@ use step_geometry::{
 };
 pub use step_types::*;
 
+// The generated STEP holders are Eq exactly when their constituent fields are
+// Eq. Keep the non-floating-point contracts explicit: the Holder derive cannot
+// inspect a sibling `#[derive(Eq)]` attribute.
+impl Eq for RepresentationHolder {}
+impl Eq for ProductContextHolder {}
+impl Eq for ProductHolder {}
+impl Eq for ProductDefinitionFormationHolder {}
+impl Eq for ProductDefinitionContextHolder {}
+impl Eq for ProductDefinitionHolder {}
+impl Eq for ShapeRepresentationHolder {}
+impl Eq for ShapeRepresentationRelationshipHolder {}
+impl Eq for NextAssemblyUsageOccurrenceHolder {}
+
 /// the exchange structure corresponds to a graph in STEP file
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Table {
