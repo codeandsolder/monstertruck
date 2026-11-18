@@ -122,9 +122,21 @@ where S: StepFormat + StepLength {
 }
 
 /// Build a unit-height box with the first `FACE_COUNT` faces, in stable
-/// top/front/right/back/left/bottom order. The shared vertex/edge identities
-/// are important to the fillet tests: adjoining faces must use the same edges.
+/// top/front/right/back/left/bottom order, preserving shared edge identity.
 fn build_box_with_faces<const FACE_COUNT: usize>() -> (Shell, [Edge; 12], Vec<Vertex>) {
+    const XY_CORNERS: [(f64, f64); 4] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+    let points: [Point3; 8] = std::array::from_fn(|index| {
+        let (x, y) = XY_CORNERS[index % XY_CORNERS.len()];
+        Point3::new(x, y, if index < 4 { 1.0 } else { 0.0 })
+    });
+    build_box_from_points::<FACE_COUNT>(points)
+}
+
+/// Build an indexed box topology from arbitrary vertex coordinates, reusing
+/// the same 12 physical edges across all of its parametric planar faces.
+fn build_box_from_points<const FACE_COUNT: usize>(
+    points: [Point3; 8],
+) -> (Shell, [Edge; 12], Vec<Vertex>) {
     const FACE_CORNERS: [[usize; 4]; 6] = [
         [0, 1, 2, 3], // 0: top
         [1, 0, 4, 5], // 1: front
@@ -133,7 +145,6 @@ fn build_box_with_faces<const FACE_COUNT: usize>() -> (Shell, [Edge; 12], Vec<Ve
         [0, 3, 7, 4], // 4: left
         [5, 4, 7, 6], // 5: bottom
     ];
-    const XY_CORNERS: [(f64, f64); 4] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
     const EDGE_ENDPOINTS: [[usize; 2]; 12] = [
         [0, 1],
         [1, 2],
@@ -150,10 +161,6 @@ fn build_box_with_faces<const FACE_COUNT: usize>() -> (Shell, [Edge; 12], Vec<Ve
     ];
     assert!(FACE_COUNT <= FACE_CORNERS.len());
 
-    let points: [Point3; 8] = std::array::from_fn(|index| {
-        let (x, y) = XY_CORNERS[index % XY_CORNERS.len()];
-        Point3::new(x, y, if index < 4 { 1.0 } else { 0.0 })
-    });
     let vertices = Vertex::from_points(points);
     // Fixed indexing retains the edge-order contract used by every fillet test.
     let edges = EDGE_ENDPOINTS.map(|[front, back]| {
@@ -205,6 +212,51 @@ fn build_box_with_faces<const FACE_COUNT: usize>() -> (Shell, [Edge; 12], Vec<Ve
     (shell, edges, vertices)
 }
 
+/// Four-face semi-cube with splayed bottom vertices used for the open
+/// two-edge fillet tests. This intentionally differs from the unit box.
+fn build_stretched_open_box() -> (Shell, [Edge; 12], Vec<Vertex>) {
+    let points = [
+        Point3::new(0.0, 0.0, 1.0),
+        Point3::new(1.0, 0.0, 1.0),
+        Point3::new(1.0, 1.0, 1.0),
+        Point3::new(0.0, 1.0, 1.0),
+        Point3::new(0.0, -0.1, 0.0),
+        Point3::new(1.1, -0.1, 0.0),
+        Point3::new(1.1, 1.1, 0.0),
+        Point3::new(0.0, 1.1, 0.0),
+    ];
+    build_box_from_points::<4>(points)
+}
+
+/// Add the two initial fillet side faces, then return the open top boundary
+/// for the profile-specific second fillet. Keep original topology and edge
+/// orientation, including which end edge is removed from the top wire.
+fn prepare_stretched_open_wire(
+    shell: &mut Shell,
+    edges: &[Edge; 12],
+    options: &FilletOptions,
+) -> Wire {
+    // Sequentially update both neighboring carrier faces and the shared
+    // top face, preserving the original two-edge construction order.
+    for (face0_index, face1_index, edge_index) in [(1, 2, 5), (2, 3, 6)] {
+        let (face0, face1, face2, _, side1) = fillet_with_side(
+            &shell[face0_index],
+            &shell[face1_index],
+            edges[edge_index].id(),
+            None,
+            Some(&shell[0]),
+            options,
+        )
+        .unwrap();
+        (shell[face0_index], shell[face1_index], shell[0]) = (face0, face1, side1.unwrap());
+        shell.push(face2);
+    }
+
+    let mut boundary = shell[0].boundaries().pop().unwrap();
+    boundary.pop_back();
+    boundary
+}
+
 /// Exercise a five-face box's four-edge top loop with the chosen fillet
 /// options. The profile-specific tests still supply their distinct geometry.
 fn fillet_closed_top_loop(options: &FilletOptions) -> Shell {
@@ -226,3 +278,33 @@ fn build_5face_box() -> (Shell, [Edge; 12], Vec<Vertex>) { build_box_with_faces:
 
 /// Closed six-face test box.
 fn build_6face_box() -> (Shell, [Edge; 12], Vec<Vertex>) { build_box_with_faces::<6>() }
+
+#[test]
+fn stretched_open_box_fixture_keeps_splayed_geometry_and_shared_edges() {
+    let (mut shell, edges, vertices) = build_stretched_open_box();
+    assert_eq!(shell.len(), 4);
+    assert_eq!(vertices[4].point(), Point3::new(0.0, -0.1, 0.0));
+    assert_eq!(vertices[5].point(), Point3::new(1.1, -0.1, 0.0));
+    assert_eq!(vertices[6].point(), Point3::new(1.1, 1.1, 0.0));
+    assert_eq!(vertices[7].point(), Point3::new(0.0, 1.1, 0.0));
+    for (edge_index, first_face, second_face) in [(5, 1, 2), (6, 2, 3)] {
+        assert!(
+            shell[first_face]
+                .edge_iter()
+                .any(|e| e.id() == edges[edge_index].id())
+        );
+        assert!(
+            shell[second_face]
+                .edge_iter()
+                .any(|e| e.id() == edges[edge_index].id())
+        );
+    }
+    let opts = FilletOptions {
+        radius: RadiusSpec::Constant(0.4),
+        ..Default::default()
+    };
+    let boundary = prepare_stretched_open_wire(&mut shell, &edges, &opts);
+    assert_eq!(shell.len(), 6);
+    assert_eq!(boundary.front_vertex().unwrap(), &vertices[0]);
+    assert!(!boundary.is_closed());
+}

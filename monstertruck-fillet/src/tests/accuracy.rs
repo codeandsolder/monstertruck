@@ -77,99 +77,13 @@ fn radius_error_bounds() {
 fn continuity_at_wire_joins() {
     // Use the same 4-face semi-cube topology as fillet_semi_cube, producing
     // a 2-edge open wire fillet with two adjacent fillet surfaces.
-    let p = [
-        Point3::new(0.0, 0.0, 1.0),
-        Point3::new(1.0, 0.0, 1.0),
-        Point3::new(1.0, 1.0, 1.0),
-        Point3::new(0.0, 1.0, 1.0),
-        Point3::new(0.0, -0.1, 0.0),
-        Point3::new(1.1, -0.1, 0.0),
-        Point3::new(1.1, 1.1, 0.0),
-        Point3::new(0.0, 1.1, 0.0),
-    ];
-    let v = Vertex::from_points(p);
-
-    let line = |i: usize, j: usize| {
-        let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![p[i], p[j]]);
-        Edge::new_unchecked(&v[i], &v[j], NurbsCurve::from(bsp).into())
-    };
-    let edge = [
-        line(0, 1),
-        line(1, 2),
-        line(2, 3),
-        line(3, 0),
-        line(0, 4),
-        line(1, 5),
-        line(2, 6),
-        line(3, 7),
-        line(4, 5),
-        line(5, 6),
-        line(6, 7),
-        line(7, 4),
-    ];
-
-    let plane = |i: usize, j: usize, k: usize, l: usize| {
-        let control_points = vec![vec![p[i], p[l]], vec![p[j], p[k]]];
-        let knot_vec = KnotVector::bezier_knot(1);
-        let bsp = BsplineSurface::new_unchecked((knot_vec.clone(), knot_vec), control_points);
-        let wire: Wire = [i, j, k, l]
-            .into_iter()
-            .circular_tuple_windows()
-            .map(|(i, j)| {
-                edge.iter()
-                    .find_map(|edge| {
-                        if edge.front() == &v[i] && edge.back() == &v[j] {
-                            Some(edge.clone())
-                        } else if edge.back() == &v[i] && edge.front() == &v[j] {
-                            Some(edge.inverse())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap()
-            })
-            .collect();
-        Face::new_unchecked(vec![wire], bsp.into())
-    };
-
-    let mut shell: Shell = [
-        plane(0, 1, 2, 3),
-        plane(1, 0, 4, 5),
-        plane(2, 1, 5, 6),
-        plane(3, 2, 6, 7),
-    ]
-    .into();
+    let (mut shell, edge, _) = build_stretched_open_box();
 
     let opts = FilletOptions {
         radius: RadiusSpec::Constant(0.4),
         ..Default::default()
     };
-    let (face0, face1, face2, _, side1) = fillet_with_side(
-        &shell[1],
-        &shell[2],
-        edge[5].id(),
-        None,
-        Some(&shell[0]),
-        &opts,
-    )
-    .unwrap();
-    (shell[1], shell[2], shell[0]) = (face0, face1, side1.unwrap());
-    shell.push(face2);
-
-    let (face0, face1, face2, _, side1) = fillet_with_side(
-        &shell[2],
-        &shell[3],
-        edge[6].id(),
-        None,
-        Some(&shell[0]),
-        &opts,
-    )
-    .unwrap();
-    (shell[2], shell[3], shell[0]) = (face0, face1, side1.unwrap());
-    shell.push(face2);
-
-    let mut boundary = shell[0].boundaries().pop().unwrap();
-    boundary.pop_back();
+    let boundary = prepare_stretched_open_wire(&mut shell, &edge, &opts);
 
     let initial_count = shell.len();
     fillet_along_wire(
