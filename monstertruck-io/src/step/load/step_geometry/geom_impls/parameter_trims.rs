@@ -455,23 +455,33 @@ where C: ParametricCurve3D<Point = Point3> + BoundedCurve {
     })
 }
 
+// An exact planar conic trim uses the curve's existing parameter interval and
+// orientation, only changing from world-space to the carrier's UV coordinates.
+// Each conic supplies its concrete unit basis and matching 2D enum variant.
+macro_rules! exact_projected_conic_trim {
+    ($curve:expr, $plane:expr, $surface:expr, $unit:expr, $variant:ident) => {{
+        let curve = $curve;
+        transformed_xy_support_matches_plane(curve.transform(), $plane).then_some(())?;
+        let trimmed = TrimmedCurve::new($unit, curve.entity().range());
+        let mut projected = Processor::with_transform(
+            trimmed,
+            projected_conic_transform_on_plane(curve.transform(), $plane)?,
+        );
+        if !curve.orientation() {
+            projected.invert();
+        }
+        let trim = Curve2D::Conic(Conic2D::$variant(projected));
+        pcurve_sanity_matches_surface_curve(curve, &trim, $surface)
+            .then(|| StepParameterCurve::new(Box::new(trim), Box::new($surface.clone())))
+    }};
+}
+
 fn exact_ellipse_parameter_curve_on_plane(
     curve: &Ellipse<Point3, Matrix4>,
     plane: &Plane,
     surface: &Surface,
 ) -> Option<StepParameterCurve> {
-    transformed_xy_support_matches_plane(curve.transform(), plane).then_some(())?;
-    let trimmed = TrimmedCurve::new(UnitCircle::new(), curve.entity().range());
-    let mut projected = Processor::with_transform(
-        trimmed,
-        projected_conic_transform_on_plane(curve.transform(), plane)?,
-    );
-    if !curve.orientation() {
-        projected.invert();
-    }
-    let trim = Curve2D::Conic(Conic2D::Ellipse(projected));
-    pcurve_sanity_matches_surface_curve(curve, &trim, surface)
-        .then(|| StepParameterCurve::new(Box::new(trim), Box::new(surface.clone())))
+    exact_projected_conic_trim!(curve, plane, surface, UnitCircle::<Point2>::new(), Ellipse)
 }
 
 fn exact_hyperbola_parameter_curve_on_plane(
@@ -479,18 +489,13 @@ fn exact_hyperbola_parameter_curve_on_plane(
     plane: &Plane,
     surface: &Surface,
 ) -> Option<StepParameterCurve> {
-    transformed_xy_support_matches_plane(curve.transform(), plane).then_some(())?;
-    let trimmed = TrimmedCurve::new(UnitHyperbola::new(), curve.entity().range());
-    let mut projected = Processor::with_transform(
-        trimmed,
-        projected_conic_transform_on_plane(curve.transform(), plane)?,
-    );
-    if !curve.orientation() {
-        projected.invert();
-    }
-    let trim = Curve2D::Conic(Conic2D::Hyperbola(projected));
-    pcurve_sanity_matches_surface_curve(curve, &trim, surface)
-        .then(|| StepParameterCurve::new(Box::new(trim), Box::new(surface.clone())))
+    exact_projected_conic_trim!(
+        curve,
+        plane,
+        surface,
+        UnitHyperbola::<Point2>::new(),
+        Hyperbola
+    )
 }
 
 fn exact_parabola_parameter_curve_on_plane(
@@ -498,18 +503,13 @@ fn exact_parabola_parameter_curve_on_plane(
     plane: &Plane,
     surface: &Surface,
 ) -> Option<StepParameterCurve> {
-    transformed_xy_support_matches_plane(curve.transform(), plane).then_some(())?;
-    let trimmed = TrimmedCurve::new(UnitParabola::new(), curve.entity().range());
-    let mut projected = Processor::with_transform(
-        trimmed,
-        projected_conic_transform_on_plane(curve.transform(), plane)?,
-    );
-    if !curve.orientation() {
-        projected.invert();
-    }
-    let trim = Curve2D::Conic(Conic2D::Parabola(projected));
-    pcurve_sanity_matches_surface_curve(curve, &trim, surface)
-        .then(|| StepParameterCurve::new(Box::new(trim), Box::new(surface.clone())))
+    exact_projected_conic_trim!(
+        curve,
+        plane,
+        surface,
+        UnitParabola::<Point2>::new(),
+        Parabola
+    )
 }
 
 fn line_parameter_curve(line: Line<Point2>, surface: &Surface) -> StepParameterCurve {
@@ -1229,6 +1229,58 @@ fn tilted_planar_conic_is_not_exact_even_when_old_five_samples_are_near_plane() 
             > KERNEL_EPSILON
     );
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());
+}
+
+#[test]
+fn exact_planar_conic_projection_retains_kind_and_parameters() {
+    let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
+    let transform = Matrix4::from_translation(Vector3::new(2.0, -3.0, 0.0))
+        * Matrix4::from_nonuniform_scale(2.0, 3.0, 1.0);
+
+    for inverted in [false, true] {
+        let curves = [
+            Curve3D::Conic(Conic3D::Ellipse(Processor::with_transform(
+                TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.35, 2.1)),
+                transform,
+            ))),
+            Curve3D::Conic(Conic3D::Hyperbola(Processor::with_transform(
+                TrimmedCurve::new(UnitHyperbola::<Point3>::new(), (-0.8, 0.7)),
+                transform,
+            ))),
+            Curve3D::Conic(Conic3D::Parabola(Processor::with_transform(
+                TrimmedCurve::new(UnitParabola::<Point3>::new(), (-1.0, 0.6)),
+                transform,
+            ))),
+        ];
+        for (kind, mut curve) in curves.into_iter().enumerate() {
+            if inverted {
+                curve.invert();
+            }
+            let trim = curve
+                .exact_parameter_boundary_2d(&surface)
+                .unwrap_or_else(|| {
+                    panic!("exact planar conic {kind} must retain an analytic UV trim")
+                });
+            let correct_kind = matches!(
+                (kind, trim.curve().as_ref()),
+                (0, Curve2D::Conic(Conic2D::Ellipse(_)))
+                    | (1, Curve2D::Conic(Conic2D::Hyperbola(_)))
+                    | (2, Curve2D::Conic(Conic2D::Parabola(_)))
+            );
+            assert!(correct_kind, "wrong projected conic kind {kind}");
+            let (first, last) = curve.range_tuple();
+            for fraction in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                let parameter = f64::mul_add(last - first, fraction, first);
+                let uv = trim.curve().evaluate(parameter);
+                assert!(
+                    surface
+                        .evaluate(uv.x, uv.y)
+                        .near(&curve.evaluate(parameter)),
+                    "projected conic {kind}, inverted={inverted} disagrees at {parameter}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
