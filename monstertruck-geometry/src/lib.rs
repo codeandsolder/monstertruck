@@ -119,6 +119,8 @@ mod analytic_bezier_refinement;
 /// Checked geometric identities and orientation for analytic surface carriers.
 pub mod analytic_carrier;
 pub mod analytic_cone_deviation;
+/// Continuous exact axial/azimuthal chart for plane-cone hyperbola branches.
+pub mod analytic_cone_hyperbola_uv;
 /// Non-sampling, polynomial-bounded curve incidence on analytic carriers.
 pub mod analytic_curve_incidence;
 /// Non-sampling complete-curve locus bounds against finite line segments.

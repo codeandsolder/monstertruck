@@ -262,6 +262,8 @@ impl AxisParallelPlaneConeHyperbola {
     }
 
     #[must_use]
+    pub const fn reference_origin(self) -> Point3 { self.origin }
+    #[must_use]
     pub const fn signed_plane_offset(self) -> f64 { self.offset }
     #[must_use]
     pub const fn reference_radius(self) -> f64 { self.radius }
