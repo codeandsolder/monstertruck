@@ -318,63 +318,83 @@ fn almost_fillet_patch(rs0: RelaySphere, rs1: RelaySphere) -> BsplineSurface<Vec
     BsplineSurface::new_unchecked(knot_vecs, control_points)
 }
 
-pub fn expand_fillet(
+/// Assemble a fillet surface by joining adjacent relay sections along the
+/// shared longitudinal B-spline direction. Each fillet profile supplies only
+/// its own cross-sectional geometry; the knot and concatenation rules are
+/// identical for every profile.
+fn expand_profile_segments(
     relay_spheres: &[RelaySphere],
     surface0: &NurbsSurface<Vector4>,
     surface1: &NurbsSurface<Vector4>,
+    cross_section_knots: KnotVector,
+    cross_section_points: usize,
+    section: impl Fn(&Vector4, &Vector4, Point3) -> BsplineCurve<Vector4>,
 ) -> Option<NurbsSurface<Vector4>> {
-    const LEN: usize = number_of_cpts_of_unit_circle();
-    if relay_spheres.len() < 2 {
+    if relay_spheres.len() < 2 || cross_section_points == 0 {
         return None;
     }
-    let mut collectors = vec![CurveCollector::<BsplineCurve<_>>::Singleton; LEN];
-    for (n, u) in relay_spheres.windows(2).enumerate() {
-        let transit_line = Line(u[0].transit, u[1].transit);
+    let mut collectors = vec![CurveCollector::<BsplineCurve<_>>::Singleton; cross_section_points];
+    for (n, pair) in relay_spheres.windows(2).enumerate() {
+        let transit_line = Line(pair[0].transit, pair[1].transit);
         let mut bezier0 = {
-            let line0 = Line(u[0].contact0.1, u[1].contact0.1);
-            composite_line_bezier(line0, surface0)?
+            let line = Line(pair[0].contact0.1, pair[1].contact0.1);
+            composite_line_bezier(line, surface0)?
         };
         let mut bezier1 = {
-            let line1 = Line(u[0].contact1.1, u[1].contact1.1);
-            composite_line_bezier(line1, surface1)?
+            let line = Line(pair[0].contact1.1, pair[1].contact1.1);
+            composite_line_bezier(line, surface1)?
         };
         BsplineCurve::syncro_degree(&mut bezier0, &mut bezier1);
 
         let (cpts0, cpts1) = (bezier0.control_points(), bezier1.control_points());
-        let iter = cpts0.iter().zip(cpts1).enumerate();
-        let control_points = iter
+        let cross_sections = cpts0
+            .iter()
+            .zip(cpts1)
+            .enumerate()
             .map(|(i, (p0, p1))| {
                 let t = crate::count_as_f64(i) / crate::count_as_f64(cpts0.len() - 1);
-                let transit = transit_line.evaluate(t);
-                circle_arc_by_three_points(*p0, *p1, transit)
+                section(p0, p1, transit_line.evaluate(t)).destruct().1
             })
-            .map(|wire| BsplineCurve::from(wire).destruct().1)
             .collect();
         let homo_surface = BsplineSurface::new_unchecked(
-            (bezier0.knot_vector().clone(), unit_circle_knot_vec()),
-            control_points,
+            (bezier0.knot_vector().clone(), cross_section_knots.clone()),
+            cross_sections,
         );
-
         for (i, collector) in collectors.iter_mut().enumerate() {
             let mut curve = homo_surface.curve_u(i);
             curve.knot_translate(crate::count_as_f64(n));
             collector.try_concat(&curve).ok()?;
         }
     }
+
     let curves = collectors
         .into_iter()
         .map(Option::<BsplineCurve<Vector4>>::from)
         .collect::<Option<Vec<_>>>()?;
-    let knot_vector_v = curves[0].knot_vector().clone();
+    let longitudinal_knots = curves[0].knot_vector().clone();
     let control_points = curves
         .into_iter()
         .map(|curve| curve.destruct().1)
         .collect::<Vec<_>>();
-
-    let knot_vecs = (unit_circle_knot_vec(), knot_vector_v);
-    let mut bsp_surface = BsplineSurface::new_unchecked(knot_vecs, control_points);
+    let mut bsp_surface =
+        BsplineSurface::new_unchecked((cross_section_knots, longitudinal_knots), control_points);
     bsp_surface.knot_normalize();
     Some(NurbsSurface::new(bsp_surface))
+}
+
+pub fn expand_fillet(
+    relay_spheres: &[RelaySphere],
+    surface0: &NurbsSurface<Vector4>,
+    surface1: &NurbsSurface<Vector4>,
+) -> Option<NurbsSurface<Vector4>> {
+    expand_profile_segments(
+        relay_spheres,
+        surface0,
+        surface1,
+        unit_circle_knot_vec(),
+        number_of_cpts_of_unit_circle(),
+        |p0, p1, transit| BsplineCurve::from(circle_arc_by_three_points(*p0, *p1, transit)),
+    )
 }
 
 pub fn asymmetric_chamfer_contacts(
@@ -442,55 +462,14 @@ pub fn expand_chamfer(
     surface0: &NurbsSurface<Vector4>,
     surface1: &NurbsSurface<Vector4>,
 ) -> Option<NurbsSurface<Vector4>> {
-    const CHAMFER_CPTS: usize = 2; // degree-1 cross-section: 2 control points
-    if relay_spheres.len() < 2 {
-        return None;
-    }
-    let mut collectors = vec![CurveCollector::<BsplineCurve<_>>::Singleton; CHAMFER_CPTS];
-    for (n, u) in relay_spheres.windows(2).enumerate() {
-        let mut bezier0 = {
-            let line0 = Line(u[0].contact0.1, u[1].contact0.1);
-            composite_line_bezier(line0, surface0)?
-        };
-        let mut bezier1 = {
-            let line1 = Line(u[0].contact1.1, u[1].contact1.1);
-            composite_line_bezier(line1, surface1)?
-        };
-        BsplineCurve::syncro_degree(&mut bezier0, &mut bezier1);
-
-        let (cpts0, cpts1) = (bezier0.control_points(), bezier1.control_points());
-        // Degree-1 cross-section: straight line from contact0 to contact1
-        let control_points = cpts0
-            .iter()
-            .zip(cpts1)
-            .map(|(p0, p1)| BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![*p0, *p1]))
-            .map(|wire| wire.destruct().1)
-            .collect();
-        let homo_surface = BsplineSurface::new_unchecked(
-            (bezier0.knot_vector().clone(), KnotVector::bezier_knot(1)),
-            control_points,
-        );
-
-        for (i, collector) in collectors.iter_mut().enumerate() {
-            let mut curve = homo_surface.curve_u(i);
-            curve.knot_translate(crate::count_as_f64(n));
-            collector.try_concat(&curve).ok()?;
-        }
-    }
-    let curves = collectors
-        .into_iter()
-        .map(Option::<BsplineCurve<Vector4>>::from)
-        .collect::<Option<Vec<_>>>()?;
-    let knot_vector_v = curves[0].knot_vector().clone();
-    let control_points = curves
-        .into_iter()
-        .map(|curve| curve.destruct().1)
-        .collect::<Vec<_>>();
-
-    let knot_vecs = (KnotVector::bezier_knot(1), knot_vector_v);
-    let mut bsp_surface = BsplineSurface::new_unchecked(knot_vecs, control_points);
-    bsp_surface.knot_normalize();
-    Some(NurbsSurface::new(bsp_surface))
+    expand_profile_segments(
+        relay_spheres,
+        surface0,
+        surface1,
+        KnotVector::bezier_knot(1),
+        2,
+        |p0, p1, _| BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![*p0, *p1]),
+    )
 }
 
 pub fn expand_ridge(
@@ -498,66 +477,19 @@ pub fn expand_ridge(
     surface0: &NurbsSurface<Vector4>,
     surface1: &NurbsSurface<Vector4>,
 ) -> Option<NurbsSurface<Vector4>> {
-    const RIDGE_CPTS: usize = 3; // degree-1 piecewise: p0, transit, p1
-    if relay_spheres.len() < 2 {
-        return None;
-    }
-    let mut collectors = vec![CurveCollector::<BsplineCurve<_>>::Singleton; RIDGE_CPTS];
-    for (n, u) in relay_spheres.windows(2).enumerate() {
-        let transit_line = Line(u[0].transit, u[1].transit);
-        let mut bezier0 = {
-            let line0 = Line(u[0].contact0.1, u[1].contact0.1);
-            composite_line_bezier(line0, surface0)?
-        };
-        let mut bezier1 = {
-            let line1 = Line(u[0].contact1.1, u[1].contact1.1);
-            composite_line_bezier(line1, surface1)?
-        };
-        BsplineCurve::syncro_degree(&mut bezier0, &mut bezier1);
-
-        let (cpts0, cpts1) = (bezier0.control_points(), bezier1.control_points());
-        let control_points = cpts0
-            .iter()
-            .zip(cpts1)
-            .enumerate()
-            .map(|(i, (p0, p1))| {
-                let t = crate::count_as_f64(i) / crate::count_as_f64(cpts0.len() - 1);
-                let transit = transit_line.evaluate(t);
-                BsplineCurve::new_unchecked(
-                    KnotVector::uniform_knot(1, 2),
-                    vec![*p0, transit.to_homogeneous(), *p1],
-                )
-            })
-            .map(|wire| wire.destruct().1)
-            .collect();
-        let homo_surface = BsplineSurface::new_unchecked(
-            (
-                bezier0.knot_vector().clone(),
+    expand_profile_segments(
+        relay_spheres,
+        surface0,
+        surface1,
+        KnotVector::uniform_knot(1, 2),
+        3,
+        |p0, p1, transit| {
+            BsplineCurve::new_unchecked(
                 KnotVector::uniform_knot(1, 2),
-            ),
-            control_points,
-        );
-
-        for (i, collector) in collectors.iter_mut().enumerate() {
-            let mut curve = homo_surface.curve_u(i);
-            curve.knot_translate(crate::count_as_f64(n));
-            collector.try_concat(&curve).ok()?;
-        }
-    }
-    let curves = collectors
-        .into_iter()
-        .map(Option::<BsplineCurve<Vector4>>::from)
-        .collect::<Option<Vec<_>>>()?;
-    let knot_vector_v = curves[0].knot_vector().clone();
-    let control_points = curves
-        .into_iter()
-        .map(|curve| curve.destruct().1)
-        .collect::<Vec<_>>();
-
-    let knot_vecs = (KnotVector::uniform_knot(1, 2), knot_vector_v);
-    let mut bsp_surface = BsplineSurface::new_unchecked(knot_vecs, control_points);
-    bsp_surface.knot_normalize();
-    Some(NurbsSurface::new(bsp_surface))
+                vec![*p0, transit.to_homogeneous(), *p1],
+            )
+        },
+    )
 }
 
 pub fn ridge_fillet_surface(
@@ -605,60 +537,14 @@ pub fn expand_custom(
     surface1: &NurbsSurface<Vector4>,
     profile: &BsplineCurve<Point2>,
 ) -> Option<NurbsSurface<Vector4>> {
-    let num_cpts = profile.control_points().len();
-    if relay_spheres.len() < 2 {
-        return None;
-    }
-    let mut collectors = vec![CurveCollector::<BsplineCurve<_>>::Singleton; num_cpts];
-    for (n, u) in relay_spheres.windows(2).enumerate() {
-        let transit_line = Line(u[0].transit, u[1].transit);
-        let mut bezier0 = {
-            let line0 = Line(u[0].contact0.1, u[1].contact0.1);
-            composite_line_bezier(line0, surface0)?
-        };
-        let mut bezier1 = {
-            let line1 = Line(u[0].contact1.1, u[1].contact1.1);
-            composite_line_bezier(line1, surface1)?
-        };
-        BsplineCurve::syncro_degree(&mut bezier0, &mut bezier1);
-
-        let (cpts0, cpts1) = (bezier0.control_points(), bezier1.control_points());
-        let control_points = cpts0
-            .iter()
-            .zip(cpts1)
-            .enumerate()
-            .map(|(i, (p0, p1))| {
-                let t = crate::count_as_f64(i) / crate::count_as_f64(cpts0.len() - 1);
-                let transit = transit_line.evaluate(t);
-                map_profile_to_3d(p0, p1, transit, profile)
-            })
-            .map(|wire| wire.destruct().1)
-            .collect();
-        let homo_surface = BsplineSurface::new_unchecked(
-            (bezier0.knot_vector().clone(), profile.knot_vector().clone()),
-            control_points,
-        );
-
-        for (i, collector) in collectors.iter_mut().enumerate() {
-            let mut curve = homo_surface.curve_u(i);
-            curve.knot_translate(crate::count_as_f64(n));
-            collector.try_concat(&curve).ok()?;
-        }
-    }
-    let curves = collectors
-        .into_iter()
-        .map(Option::<BsplineCurve<Vector4>>::from)
-        .collect::<Option<Vec<_>>>()?;
-    let knot_vector_v = curves[0].knot_vector().clone();
-    let control_points = curves
-        .into_iter()
-        .map(|curve| curve.destruct().1)
-        .collect::<Vec<_>>();
-
-    let knot_vecs = (profile.knot_vector().clone(), knot_vector_v);
-    let mut bsp_surface = BsplineSurface::new_unchecked(knot_vecs, control_points);
-    bsp_surface.knot_normalize();
-    Some(NurbsSurface::new(bsp_surface))
+    expand_profile_segments(
+        relay_spheres,
+        surface0,
+        surface1,
+        profile.knot_vector().clone(),
+        profile.control_points().len(),
+        |p0, p1, transit| map_profile_to_3d(p0, p1, transit, profile),
+    )
 }
 
 // One argument past the lint threshold: `radius: impl Fn` resists struct
@@ -714,4 +600,87 @@ pub fn rolling_ball_fillet_surface(
         surface0, surface1, curve, division, radius, extend, flip_side,
     )?;
     expand_fillet(&relay_spheres, surface0, surface1)
+}
+
+#[cfg(test)]
+mod profile_assembly_tests {
+    use super::*;
+
+    #[test]
+    fn four_profile_expansions_preserve_contact_boundaries() {
+        let knots = KnotVector::bezier_knot(1);
+        let surface0 = NurbsSurface::new(BsplineSurface::new_unchecked(
+            (knots.clone(), knots.clone()),
+            vec![
+                vec![
+                    Vector4::new(0.0, 0.0, 0.0, 1.0),
+                    Vector4::new(0.0, 0.0, 1.0, 1.0),
+                ],
+                vec![
+                    Vector4::new(1.0, 0.0, 0.0, 1.0),
+                    Vector4::new(1.0, 0.0, 1.0, 1.0),
+                ],
+            ],
+        ));
+        let surface1 = NurbsSurface::new(BsplineSurface::new_unchecked(
+            (knots.clone(), knots),
+            vec![
+                vec![
+                    Vector4::new(0.0, 0.0, 0.0, 1.0),
+                    Vector4::new(0.0, 0.0, 1.0, 1.0),
+                ],
+                vec![
+                    Vector4::new(0.0, 1.0, 0.0, 1.0),
+                    Vector4::new(0.0, 1.0, 1.0, 1.0),
+                ],
+            ],
+        ));
+        let relays = [0.0, 0.5, 1.0].map(|t| RelaySphere {
+            center: Point3::new(0.3, 0.3, t),
+            contact0: (Point3::new(0.3, 0.0, t), Point2::new(0.3, t)),
+            contact1: (Point3::new(0.0, 0.3, t), Point2::new(0.3, t)),
+            transit: Point3::new(0.3, 0.3, t),
+        });
+        let custom_profile = BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(2),
+            vec![
+                Point2::new(0.0, 0.0),
+                Point2::new(0.5, 0.2),
+                Point2::new(1.0, 0.0),
+            ],
+        );
+        let surfaces = [
+            ("round", expand_fillet(&relays, &surface0, &surface1), 6),
+            ("chamfer", expand_chamfer(&relays, &surface0, &surface1), 2),
+            ("ridge", expand_ridge(&relays, &surface0, &surface1), 3),
+            (
+                "custom",
+                expand_custom(&relays, &surface0, &surface1, &custom_profile),
+                3,
+            ),
+        ];
+        for (kind, surface, expected_rows) in surfaces {
+            let surface = surface.unwrap_or_else(|| panic!("{kind}: cannot build profile"));
+            assert_eq!(surface.control_points().len(), expected_rows, "{kind}");
+            for v in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                let start = surface.evaluate(0.0, v);
+                let end = surface.evaluate(1.0, v);
+                assert!(
+                    start.near(&Point3::new(0.3, 0.0, v)),
+                    "{kind} start: {start:?} at {v}"
+                );
+                assert!(
+                    end.near(&Point3::new(0.0, 0.3, v)),
+                    "{kind} end: {end:?} at {v}"
+                );
+                for u in [0.2, 0.5, 0.8] {
+                    let point = surface.evaluate(u, v);
+                    assert!(
+                        point.x.is_finite() && point.y.is_finite() && point.z.is_finite(),
+                        "{kind} produced nonfinite point {point:?} at ({u},{v})"
+                    );
+                }
+            }
+        }
+    }
 }
