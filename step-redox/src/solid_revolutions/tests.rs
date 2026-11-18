@@ -1823,3 +1823,130 @@ fn rejects_branching_or_self_intersecting_profiles() {
         .is_none()
     );
 }
+
+#[cfg(feature = "cad-kernel-monstertruck")]
+#[test]
+fn manufacturer_radial_slot_cubic_plane_deviation_bracket() -> anyhow::Result<()> {
+    use monstertruck_geometry::analytic_plane_deviation::bound_nurbs_plane_deviation;
+    use monstertruck_geometry::prelude::{
+        BsplineCurve, KnotVector, NurbsCurve, Point3, Vector3, Vector4,
+    };
+
+    let source = include_bytes!("../../validation/fixtures/production_radial_slot.step");
+    let exchange = step_p21::parser::parse(std::str::from_utf8(source)?)?;
+    let entities = &exchange.data[0].entities;
+    let index = build_index(entities);
+    let edge_params =
+        crate::step_entities::named_entity_parameters(93481, "EDGE_CURVE", entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing manufacturer edge #93481"))?;
+    let curve_id = entity_ref_value(
+        edge_params
+            .get(3)
+            .ok_or_else(|| anyhow::anyhow!("edge lacks curve"))?,
+    )
+    .ok_or_else(|| anyhow::anyhow!("bad edge curve reference"))?;
+    assert_eq!(curve_id, 60612);
+    let brep::CurveSupport::BSpline(spline) = brep::curve_support(curve_id, entities, &index)
+    else {
+        anyhow::bail!("manufacturer edge is not a B-spline");
+    };
+    let weights = spline
+        .weights
+        .unwrap_or_else(|| vec![1.0; spline.control_points_mm.len()]);
+    let controls = spline
+        .control_points_mm
+        .into_iter()
+        .zip(weights)
+        .map(|(point, weight)| {
+            Vector4::new(
+                point[0] * weight,
+                point[1] * weight,
+                point[2] * weight,
+                weight,
+            )
+        })
+        .collect::<Vec<_>>();
+    // The source EDGE_CURVE endpoints coincide with the full spline domain
+    // endpoints: the deviation witness is on the actual trimmed edge, not
+    // an unreachable extension of the underlying geometric curve.
+    for (slot, control) in [(1_usize, controls.first()), (2, controls.last())] {
+        let vertex_id = entity_ref_value(
+            edge_params
+                .get(slot)
+                .ok_or_else(|| anyhow::anyhow!("missing STEP edge vertex"))?,
+        )
+        .ok_or_else(|| anyhow::anyhow!("bad STEP edge vertex"))?;
+        let vertex = crate::step_entities::vertex_point(vertex_id, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing endpoint coordinates"))?;
+        let control = control.ok_or_else(|| anyhow::anyhow!("missing spline endpoint"))?;
+        assert_eq!(
+            [
+                control.x / control.w,
+                control.y / control.w,
+                control.z / control.w
+            ],
+            vertex,
+        );
+    }
+    let curve = NurbsCurve::new(BsplineCurve::new_unchecked(
+        KnotVector::from(spline.knots),
+        controls,
+    ));
+
+    let solid_id = entities
+        .iter()
+        .find(|entity| simple_record(entity).is_some_and(|r| r.name == "MANIFOLD_SOLID_BREP"))
+        .map(entity_id)
+        .ok_or_else(|| anyhow::anyhow!("missing source solid"))?;
+    let source_tolerance = source_tolerance_by_representation_item(entities, &index)
+        .get(&solid_id)
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("missing declared source tolerance"))?;
+    let faces = brep::solid_face_ids(solid_id, entities, &index)
+        .ok_or_else(|| anyhow::anyhow!("missing source faces"))?;
+    let mut checked_faces = 0;
+    for face_id in faces {
+        let loops = brep::face_loops(face_id, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("malformed face loops"))?;
+        if !loops
+            .iter()
+            .flat_map(|loop_| &loop_.edges)
+            .any(|edge| edge.edge_id == 93481)
+        {
+            continue;
+        }
+        let surface_id = brep::face_surface(face_id, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing surface"))?;
+        let brep::SurfaceSupport::Plane(plane) =
+            brep::surface_support(surface_id, entities, &index)
+        else {
+            continue;
+        };
+        let origin = Point3::new(plane.origin_mm[0], plane.origin_mm[1], plane.origin_mm[2]);
+        let normal = Vector3::new(plane.normal[0], plane.normal[1], plane.normal[2]);
+        let bracket = bound_nurbs_plane_deviation(&curve, origin, normal, 1.0e-10)
+            .ok_or_else(|| anyhow::anyhow!("source cubic plane bound failed"))?;
+        eprintln!(
+            "source edge #93481 on face #{face_id}: source_tol={source_tolerance:.15e} bounds={bracket:?}"
+        );
+        assert!(bracket.lower <= bracket.upper);
+        assert!(
+            bracket.exceeds(source_tolerance),
+            "source edge should fail its declared uncertainty: {bracket:?}"
+        );
+        assert!(
+            bracket.exceeds(1.54455e-4),
+            "source curve also exceeds the previously measured imported OCCT edge tolerance: {bracket:?}"
+        );
+        assert!(
+            bracket.upper - bracket.lower < 2.0e-9,
+            "source spline bound is too loose: {bracket:?}"
+        );
+        checked_faces += 1;
+    }
+    assert!(
+        checked_faces > 0,
+        "edge must belong to at least one plane face"
+    );
+    Ok(())
+}
