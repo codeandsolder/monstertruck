@@ -43,12 +43,16 @@ struct CandidateReport<'a> {
     oriented_hyperbola_parameters: [f64; 2],
     /// A syntactically valid STEP entity fragment, NOT a complete STEP file.
     native_hyperbola_step_fragment: String,
+    /// Analytic intersection with corrected plane and original-cone support;
+    /// this is a STEP geometry fragment, not a healed topological solid.
+    native_intersection_step_fragment: String,
 }
 
 #[cfg(feature = "cad-kernel-monstertruck")]
 fn main() -> Result<()> {
     use monstertruck_io::step::{load::ParsedStepSource, save::StepDisplay};
     use step_redox::{
+        native_hyperbola_intersection::native_healed_intersection_curve,
         source_edge_healing::{HyperbolaHealingRequest, propose_plane_cone_hyperbola_healing},
         source_edge_locus::StepEdge,
     };
@@ -80,6 +84,11 @@ fn main() -> Result<()> {
             candidate.trim.end_parameter,
         ],
         native_hyperbola_step_fragment: StepDisplay::new(&native, 1).to_string(),
+        native_intersection_step_fragment: StepDisplay::new(
+            &native_healed_intersection_curve(&candidate),
+            1,
+        )
+        .to_string(),
     };
     serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
     println!();

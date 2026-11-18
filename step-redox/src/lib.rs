@@ -40,6 +40,9 @@ pub mod periodic_chains;
 pub mod periodic_resize;
 mod planar_features;
 pub use planar_features::{PlanarFeatureDiagnostics, PlanarHostDiagnostic};
+/// Read-only, provenance-tracked native STEP geometry for separately healed edges.
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub mod native_hyperbola_intersection;
 pub mod profile_curves;
 mod reduced_brep;
 mod shape_identity;
