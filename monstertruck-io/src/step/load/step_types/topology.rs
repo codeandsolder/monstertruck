@@ -50,6 +50,37 @@ pub struct EdgeCurve {
     pub same_sense: bool,
 }
 
+/// Trim a STEP conic in its unit frame, then apply the dimension-specific
+/// placement and scaling. The error messages and periodic wrap policy are
+/// passed by each caller to preserve historical STEP conversion behavior.
+///
+/// This is a macro rather than an erased dynamic curve because the distinct
+/// unit basis, point and transform types are fully known at each call site.
+macro_rules! trimmed_step_conic {
+    ($mat:expr, $start:expr, $end:expr, $basis:ty,
+     $inverse_error:literal, $start_error:expr, $end_error:expr, $wrap:literal) => {{
+        let matrix = $mat;
+        let inverse = matrix.invert().ok_or_else(|| $inverse_error.to_string())?;
+        let (start, end) = (
+            inverse.transform_point($start),
+            inverse.transform_point($end),
+        );
+        let unit = <$basis>::new();
+        let u = unit
+            .search_nearest_parameter(start, None, 0)
+            .ok_or_else(|| ($start_error)(start))?;
+        let mut v = unit
+            .search_nearest_parameter(end, None, 0)
+            .ok_or_else(|| ($end_error)(end))?;
+        if $wrap && v <= u + KERNEL_EPSILON {
+            v = 2.0f64.mul_add(PI, v);
+        }
+        let mut converted = Processor::new(TrimmedCurve::new(unit, (u, v)));
+        converted.transform_by(matrix);
+        converted
+    }};
+}
+
 impl EdgeCurve {
     /// Converts this STEP edge geometry into a bounded 2D curve.
     ///
@@ -100,91 +131,50 @@ impl EdgeCurve {
     /// singular, or cannot be parameterized at the edge endpoints.
     fn parse_conic_2d(curve: &Conic, p: Point2, q: Point2) -> Result<Curve2D, StepConvertingError> {
         Ok(match curve {
-            Conic::Circle(circle) => {
-                let mat = Matrix3::try_from(&circle.position)? * Matrix3::from_scale(circle.radius);
-                let inv_mat = mat
-                    .invert()
-                    .ok_or_else(|| "Failed to convert Circle".to_string())?;
-                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                let (u, mut v) = (
-                    UnitCircle::<Point2>::new()
-                        .search_nearest_parameter(p, None, 0)
-                        .ok_or_else(|| "the point is not on circle".to_string())?,
-                    UnitCircle::<Point2>::new()
-                        .search_nearest_parameter(q, None, 0)
-                        .ok_or_else(|| "the point is not on circle".to_string())?,
-                );
-                if v <= u + KERNEL_EPSILON {
-                    v = 2.0f64.mul_add(PI, v);
-                }
-                let circle = TrimmedCurve::new(UnitCircle::<Point2>::new(), (u, v));
-                let mut ellipse = Processor::new(circle);
-                ellipse.transform_by(mat);
-                Curve2D::Conic(Conic2D::Ellipse(ellipse))
-            }
-            Conic::Ellipse(ellipse) => {
-                let mat = Matrix3::try_from(&ellipse.position)?
-                    * Matrix3::from_nonuniform_scale(ellipse.semi_axis_1, ellipse.semi_axis_2);
-                let inv_mat = mat
-                    .invert()
-                    .ok_or_else(|| "Failed to convert Circle".to_string())?;
-                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                let (u, mut v) = (
-                    UnitCircle::<Point2>::new()
-                        .search_nearest_parameter(p, None, 0)
-                        .ok_or_else(|| "the point is not on circle".to_string())?,
-                    UnitCircle::<Point2>::new()
-                        .search_nearest_parameter(q, None, 0)
-                        .ok_or_else(|| "the point is not on circle".to_string())?,
-                );
-                if v <= u + KERNEL_EPSILON {
-                    v = 2.0f64.mul_add(PI, v);
-                }
-                let circle = TrimmedCurve::new(UnitCircle::<Point2>::new(), (u, v));
-                let mut ellipse = Processor::new(circle);
-                ellipse.transform_by(mat);
-                Curve2D::Conic(Conic2D::Ellipse(ellipse))
-            }
-            Conic::Hyperbola(hyperbola) => {
-                let mat = Matrix3::try_from(&hyperbola.position)?
-                    * Matrix3::from_nonuniform_scale(hyperbola.semi_axis, hyperbola.semi_imag_axis);
-                let inv_mat = mat
-                    .invert()
-                    .ok_or_else(|| "Failed to convert Hyperbola".to_string())?;
-                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                let (u, v) = (
-                    UnitHyperbola::<Point2>::new()
-                        .search_nearest_parameter(p, None, 0)
-                        .ok_or_else(|| "the point is not on hyperbola".to_string())?,
-                    UnitHyperbola::<Point2>::new()
-                        .search_nearest_parameter(q, None, 0)
-                        .ok_or_else(|| "the point is not on hyparbola".to_string())?,
-                );
-                let unit = TrimmedCurve::new(UnitHyperbola::<Point2>::new(), (u, v));
-                let mut hyperbola = Processor::new(unit);
-                hyperbola.transform_by(mat);
-                Curve2D::Conic(Conic2D::Hyperbola(hyperbola))
-            }
-            Conic::Parabola(parabola) => {
-                let mat = Matrix3::try_from(&parabola.position)?
-                    * Matrix3::from_scale(parabola.focal_dist);
-                let inv_mat = mat
-                    .invert()
-                    .ok_or_else(|| "Failed to convert Parabola".to_string())?;
-                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                let (u, v) = (
-                    UnitHyperbola::<Point2>::new()
-                        .search_nearest_parameter(p, None, 0)
-                        .ok_or_else(|| "the point is not on parabola".to_string())?,
-                    UnitHyperbola::<Point2>::new()
-                        .search_nearest_parameter(q, None, 0)
-                        .ok_or_else(|| "the point is not on parabola".to_string())?,
-                );
-                let unit = TrimmedCurve::new(UnitHyperbola::<Point2>::new(), (u, v));
-                let mut parabola = Processor::new(unit);
-                parabola.transform_by(mat);
-                Curve2D::Conic(Conic2D::Hyperbola(parabola))
-            }
+            Conic::Circle(circle) => Curve2D::Conic(Conic2D::Ellipse(trimmed_step_conic!(
+                Matrix3::try_from(&circle.position)? * Matrix3::from_scale(circle.radius),
+                p,
+                q,
+                UnitCircle<Point2>,
+                "Failed to convert Circle",
+                |_: Point2| "the point is not on circle".to_string(),
+                |_: Point2| "the point is not on circle".to_string(),
+                true
+            ))),
+            Conic::Ellipse(ellipse) => Curve2D::Conic(Conic2D::Ellipse(trimmed_step_conic!(
+                Matrix3::try_from(&ellipse.position)?
+                    * Matrix3::from_nonuniform_scale(ellipse.semi_axis_1, ellipse.semi_axis_2),
+                p,
+                q,
+                UnitCircle<Point2>,
+                "Failed to convert Circle",
+                |_: Point2| "the point is not on circle".to_string(),
+                |_: Point2| "the point is not on circle".to_string(),
+                true
+            ))),
+            Conic::Hyperbola(hyperbola) => Curve2D::Conic(Conic2D::Hyperbola(trimmed_step_conic!(
+                Matrix3::try_from(&hyperbola.position)?
+                    * Matrix3::from_nonuniform_scale(hyperbola.semi_axis, hyperbola.semi_imag_axis),
+                p,
+                q,
+                UnitHyperbola<Point2>,
+                "Failed to convert Hyperbola",
+                |_: Point2| "the point is not on hyperbola".to_string(),
+                |_: Point2| "the point is not on hyparbola".to_string(),
+                false
+            ))),
+            // The preexisting STEP edge path represents parabolas as
+            // hyperbolas. Correcting this requires a separate geometry fix.
+            Conic::Parabola(parabola) => Curve2D::Conic(Conic2D::Hyperbola(trimmed_step_conic!(
+                Matrix3::try_from(&parabola.position)? * Matrix3::from_scale(parabola.focal_dist),
+                p,
+                q,
+                UnitHyperbola<Point2>,
+                "Failed to convert Parabola",
+                |_: Point2| "the point is not on parabola".to_string(),
+                |_: Point2| "the point is not on parabola".to_string(),
+                false
+            ))),
         })
     }
 
@@ -203,102 +193,56 @@ impl EdgeCurve {
     }
     fn parse_conic_3d(curve: &Conic, p: Point3, q: Point3) -> Result<Curve3D, StepConvertingError> {
         Ok(match curve {
-            Conic::Circle(circle) => {
-                let mat = Matrix4::try_from(&circle.position)? * Matrix4::from_scale(circle.radius);
-                let inv_mat = mat
-                    .invert()
-                    .ok_or_else(|| "Failed to convert Circle".to_string())?;
-                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                let (u, mut v) = (
-                    UnitCircle::<Point3>::new()
-                        .search_nearest_parameter(p, None, 0)
-                        .ok_or_else(|| format!("the point is not on circle: {p:?}"))?,
-                    UnitCircle::<Point3>::new()
-                        .search_nearest_parameter(q, None, 0)
-                        .ok_or_else(|| format!("the point is not on circle: {q:?}"))?,
-                );
-                if v <= u + KERNEL_EPSILON {
-                    v = 2.0f64.mul_add(PI, v);
-                }
-                let circle = TrimmedCurve::new(UnitCircle::<Point3>::new(), (u, v));
-                let mut ellipse = Processor::new(circle);
-                ellipse.transform_by(mat);
-                Curve3D::Conic(Conic3D::Ellipse(ellipse))
-            }
-            Conic::Ellipse(ellipse) => {
-                let mat = Matrix4::try_from(&ellipse.position)?
+            Conic::Circle(circle) => Curve3D::Conic(Conic3D::Ellipse(trimmed_step_conic!(
+                Matrix4::try_from(&circle.position)? * Matrix4::from_scale(circle.radius),
+                p,
+                q,
+                UnitCircle<Point3>,
+                "Failed to convert Circle",
+                |point: Point3| format!("the point is not on circle: {point:?}"),
+                |point: Point3| format!("the point is not on circle: {point:?}"),
+                true
+            ))),
+            Conic::Ellipse(ellipse) => Curve3D::Conic(Conic3D::Ellipse(trimmed_step_conic!(
+                Matrix4::try_from(&ellipse.position)?
                     * Matrix4::from_nonuniform_scale(
                         ellipse.semi_axis_1,
                         ellipse.semi_axis_2,
                         f64::min(ellipse.semi_axis_1, ellipse.semi_axis_2),
-                    );
-                let inv_mat = mat
-                    .invert()
-                    .ok_or_else(|| "Failed to convert Circle".to_string())?;
-                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                let (u, mut v) = (
-                    UnitCircle::<Point3>::new()
-                        .search_nearest_parameter(p, None, 0)
-                        .ok_or_else(|| format!("the point is not on circle: {p:?}"))?,
-                    UnitCircle::<Point3>::new()
-                        .search_nearest_parameter(q, None, 0)
-                        .ok_or_else(|| format!("the point is not on circle: {q:?}"))?,
-                );
-                if v <= u + KERNEL_EPSILON {
-                    v = 2.0f64.mul_add(PI, v);
-                }
-                let circle = TrimmedCurve::new(UnitCircle::<Point3>::new(), (u, v));
-                let mut ellipse = Processor::new(circle);
-                ellipse.transform_by(mat);
-                Curve3D::Conic(Conic3D::Ellipse(ellipse))
-            }
-            Conic::Hyperbola(hyperbola) => {
-                let mat = Matrix4::try_from(&hyperbola.position)?
+                    ),
+                p,
+                q,
+                UnitCircle<Point3>,
+                "Failed to convert Circle",
+                |point: Point3| format!("the point is not on circle: {point:?}"),
+                |point: Point3| format!("the point is not on circle: {point:?}"),
+                true
+            ))),
+            Conic::Hyperbola(hyperbola) => Curve3D::Conic(Conic3D::Hyperbola(trimmed_step_conic!(
+                Matrix4::try_from(&hyperbola.position)?
                     * Matrix4::from_nonuniform_scale(
                         hyperbola.semi_axis,
                         hyperbola.semi_imag_axis,
                         f64::min(hyperbola.semi_axis, hyperbola.semi_imag_axis),
-                    );
-                let inv_mat = mat
-                    .invert()
-                    .ok_or_else(|| "Failed to convert Circle".to_string())?;
-                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                let (u, mut v) = (
-                    UnitHyperbola::<Point3>::new()
-                        .search_nearest_parameter(p, None, 0)
-                        .ok_or_else(|| "the point is not on circle".to_string())?,
-                    UnitHyperbola::<Point3>::new()
-                        .search_nearest_parameter(q, None, 0)
-                        .ok_or_else(|| "the point is not on circle".to_string())?,
-                );
-                if v <= u + KERNEL_EPSILON {
-                    v = 2.0f64.mul_add(PI, v);
-                }
-                let unit = TrimmedCurve::new(UnitHyperbola::<Point3>::new(), (u, v));
-                let mut hyperbola = Processor::new(unit);
-                hyperbola.transform_by(mat);
-                Curve3D::Conic(Conic3D::Hyperbola(hyperbola))
-            }
-            Conic::Parabola(parabola) => {
-                let mat = Matrix4::try_from(&parabola.position)?
-                    * Matrix4::from_scale(parabola.focal_dist);
-                let inv_mat = mat
-                    .invert()
-                    .ok_or_else(|| "Failed to convert Parabola".to_string())?;
-                let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
-                let (u, v) = (
-                    UnitHyperbola::<Point3>::new()
-                        .search_nearest_parameter(p, None, 0)
-                        .ok_or_else(|| "the point is not on parabola".to_string())?,
-                    UnitHyperbola::<Point3>::new()
-                        .search_nearest_parameter(q, None, 0)
-                        .ok_or_else(|| "the point is not on parabola".to_string())?,
-                );
-                let unit = TrimmedCurve::new(UnitHyperbola::<Point3>::new(), (u, v));
-                let mut parabola = Processor::new(unit);
-                parabola.transform_by(mat);
-                Curve3D::Conic(Conic3D::Hyperbola(parabola))
-            }
+                    ),
+                p,
+                q,
+                UnitHyperbola<Point3>,
+                "Failed to convert Circle",
+                |_: Point3| "the point is not on circle".to_string(),
+                |_: Point3| "the point is not on circle".to_string(),
+                true
+            ))),
+            Conic::Parabola(parabola) => Curve3D::Conic(Conic3D::Hyperbola(trimmed_step_conic!(
+                Matrix4::try_from(&parabola.position)? * Matrix4::from_scale(parabola.focal_dist),
+                p,
+                q,
+                UnitHyperbola<Point3>,
+                "Failed to convert Parabola",
+                |_: Point3| "the point is not on parabola".to_string(),
+                |_: Point3| "the point is not on parabola".to_string(),
+                false
+            ))),
         })
     }
 
@@ -733,3 +677,7 @@ pub struct ManifoldSolidBrep {
     #[holder(use_place_holder)]
     pub voids: Vec<OrientedShell>,
 }
+
+#[cfg(test)]
+#[path = "topology_conic_tests.rs"]
+mod conic_tests;
