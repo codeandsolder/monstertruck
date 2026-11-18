@@ -352,6 +352,22 @@ pub fn fillet_along_wire(shell: &mut Shell, wire: &Wire, options: &FilletOptions
     }
 }
 
+/// Construct a linear parameter-curve edge between two vertices on the
+/// same fillet surface. Search hints and starting parameters are supplied
+/// separately because open-wire endpoints and closed-wire seams differ.
+fn create_fillet_pcurve_edge(
+    surface: &NurbsSurface<Vector4>,
+    front: &Vertex,
+    back: &Vertex,
+    start_uv: (f64, f64),
+    end_hint: (f64, f64),
+) -> Option<Edge> {
+    let end_uv = surface.search_parameter(back.point(), end_hint, 100)?;
+    let param_line = Line(start_uv.into(), end_uv.into());
+    let pcurve = ParameterCurveLinear::new(param_line, surface.clone());
+    Some(Edge::new_unchecked(front, back, pcurve.into()))
+}
+
 /// Open-wire fillet face construction (original logic).
 #[expect(
     clippy::too_many_lines,
@@ -371,21 +387,21 @@ fn fillet_along_wire_open(
 
         let edge1 = cut_face_by_last_bezier(shell, *face_index, &fillet_surface)?;
 
-        let edge2 = {
-            let (v0, v1) = (edge0.front(), edge1.back());
-            let (u, v) = fillet_surface.search_parameter(v1.point(), (1.0, 1.0), 100)?;
-            let param_line = Line((0.0, 1.0).into(), (u, v).into());
-            let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new_unchecked(v0, v1, pcurve.into())
-        };
+        let edge2 = create_fillet_pcurve_edge(
+            &fillet_surface,
+            edge0.front(),
+            edge1.back(),
+            (0.0, 1.0),
+            (1.0, 1.0),
+        )?;
 
-        let edge3 = {
-            let (v0, v1) = (edge0.back(), edge1.front());
-            let (u, v) = fillet_surface.search_parameter(v1.point(), (1.0, 2.0), 100)?;
-            let param_line = Line((0.0, 2.0).into(), (u, v).into());
-            let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new_unchecked(v0, v1, pcurve.into())
-        };
+        let edge3 = create_fillet_pcurve_edge(
+            &fillet_surface,
+            edge0.back(),
+            edge1.front(),
+            (0.0, 2.0),
+            (1.0, 2.0),
+        )?;
 
         let boundary = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
         Some(Face::new_unchecked(vec![boundary], fillet_surface))
@@ -433,30 +449,28 @@ fn fillet_along_wire_open(
             },
         )?;
 
-        let edge2 = {
-            let (v0, v1) = (edge0.front(), edge1.back());
-            let t0 = edge0.curve().range_tuple().0;
-            let (u, v) = fillet_surface
-                .search_parameter(v1.point(), (1.0, 0.0), 100)
-                .ok_or(FilletError::GeometryFailed {
-                    context: "search parameter for first fillet edge2",
-                })?;
-            let param_line = Line((0.0, t0).into(), (u, v).into());
-            let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new_unchecked(v0, v1, pcurve.into())
-        };
+        let t0 = edge0.curve().range_tuple().0;
+        let edge2 = create_fillet_pcurve_edge(
+            &fillet_surface,
+            edge0.front(),
+            edge1.back(),
+            (0.0, t0),
+            (1.0, 0.0),
+        )
+        .ok_or(FilletError::GeometryFailed {
+            context: "search parameter for first fillet edge2",
+        })?;
 
-        let edge3 = {
-            let (v0, v1) = (edge0.back(), edge1.front());
-            let (u, v) = fillet_surface
-                .search_parameter(v1.point(), (1.0, 1.0), 100)
-                .ok_or(FilletError::GeometryFailed {
-                    context: "search parameter for first fillet edge3",
-                })?;
-            let param_line = Line((0.0, 1.0).into(), (u, v).into());
-            let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new_unchecked(v0, v1, pcurve.into())
-        };
+        let edge3 = create_fillet_pcurve_edge(
+            &fillet_surface,
+            edge0.back(),
+            edge1.front(),
+            (0.0, 1.0),
+            (1.0, 1.0),
+        )
+        .ok_or(FilletError::GeometryFailed {
+            context: "search parameter for first fillet edge3",
+        })?;
 
         let wire = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
         Face::new_unchecked(vec![wire], fillet_surface)
@@ -498,30 +512,28 @@ fn fillet_along_wire_open(
                 context: "cut face by last bezier for last fillet",
             })?;
 
-        let edge2 = {
-            let (v0, v1) = (edge0.front(), edge1.back());
-            let (u, v) = fillet_surface
-                .search_parameter(v1.point(), (1.0, 1.0), 100)
-                .ok_or(FilletError::GeometryFailed {
-                    context: "search parameter for last fillet edge2",
-                })?;
-            let param_line = Line((0.0, 1.0).into(), (u, v).into());
-            let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new_unchecked(v0, v1, pcurve.into())
-        };
+        let edge2 = create_fillet_pcurve_edge(
+            &fillet_surface,
+            edge0.front(),
+            edge1.back(),
+            (0.0, 1.0),
+            (1.0, 1.0),
+        )
+        .ok_or(FilletError::GeometryFailed {
+            context: "search parameter for last fillet edge2",
+        })?;
 
-        let edge3 = {
-            let (v0, v1) = (edge0.back(), edge1.front());
-            let t0 = edge0.curve().range_tuple().1;
-            let (u, v) = fillet_surface
-                .search_parameter(v1.point(), (1.0, 2.0), 100)
-                .ok_or(FilletError::GeometryFailed {
-                    context: "search parameter for last fillet edge3",
-                })?;
-            let param_line = Line((0.0, t0 + 1.0).into(), (u, v).into());
-            let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new_unchecked(v0, v1, pcurve.into())
-        };
+        let t0 = edge0.curve().range_tuple().1;
+        let edge3 = create_fillet_pcurve_edge(
+            &fillet_surface,
+            edge0.back(),
+            edge1.front(),
+            (0.0, t0 + 1.0),
+            (1.0, 2.0),
+        )
+        .ok_or(FilletError::GeometryFailed {
+            context: "search parameter for last fillet edge3",
+        })?;
 
         let wire = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
         Face::new_unchecked(vec![wire], fillet_surface)
@@ -644,29 +656,27 @@ fn fillet_along_wire_closed(
             },
         )?;
 
-        let edge2 = {
-            let (v0, v1) = (edge0.front(), edge1.back());
-            let (u, v) = fillet_surface
-                .search_parameter(v1.point(), (1.0, 1.0), 100)
-                .ok_or(FilletError::GeometryFailed {
-                    context: "search parameter for closed fillet edge2",
-                })?;
-            let param_line = Line((0.0, 1.0).into(), (u, v).into());
-            let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new_unchecked(v0, v1, pcurve.into())
-        };
+        let edge2 = create_fillet_pcurve_edge(
+            &fillet_surface,
+            edge0.front(),
+            edge1.back(),
+            (0.0, 1.0),
+            (1.0, 1.0),
+        )
+        .ok_or(FilletError::GeometryFailed {
+            context: "search parameter for closed fillet edge2",
+        })?;
 
-        let edge3 = {
-            let (v0, v1) = (edge0.back(), edge1.front());
-            let (u, v) = fillet_surface
-                .search_parameter(v1.point(), (1.0, 2.0), 100)
-                .ok_or(FilletError::GeometryFailed {
-                    context: "search parameter for closed fillet edge3",
-                })?;
-            let param_line = Line((0.0, 2.0).into(), (u, v).into());
-            let pcurve = ParameterCurveLinear::new(param_line, fillet_surface.clone());
-            Edge::new_unchecked(v0, v1, pcurve.into())
-        };
+        let edge3 = create_fillet_pcurve_edge(
+            &fillet_surface,
+            edge0.back(),
+            edge1.front(),
+            (0.0, 2.0),
+            (1.0, 2.0),
+        )
+        .ok_or(FilletError::GeometryFailed {
+            context: "search parameter for closed fillet edge3",
+        })?;
 
         let boundary = [edge0.inverse(), edge2, edge1.inverse(), edge3.inverse()].into();
         fillet_faces.push(Face::new_unchecked(vec![boundary], fillet_surface));
@@ -706,4 +716,40 @@ fn fillet_along_wire_closed(
     shell.extend(fillet_faces);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod fillet_pcurve_edge_tests {
+    use super::*;
+
+    #[test]
+    fn seam_edge_evaluates_on_the_original_carrier() {
+        let knots = KnotVector::bezier_knot(1);
+        let homogeneous_points = [0.0, 1.0]
+            .into_iter()
+            .map(|x| {
+                [0.0, 1.0]
+                    .into_iter()
+                    .map(|y| Point3::new(x, y, 0.0).to_homogeneous())
+                    .collect()
+            })
+            .collect();
+        let plane = NurbsSurface::new(BsplineSurface::new_unchecked(
+            (knots.clone(), knots),
+            homogeneous_points,
+        ));
+        let front = Vertex::new(plane.evaluate(0.0, 0.2));
+        let back = Vertex::new(plane.evaluate(1.0, 0.8));
+        let edge = create_fillet_pcurve_edge(&plane, &front, &back, (0.0, 0.2), (1.0, 0.8))
+            .expect("the second endpoint lies on the parameterized carrier");
+        let curve = edge.oriented_curve();
+        for t in [0.0, 0.2, 0.5, 0.8, 1.0] {
+            let expected = Point3::new(t, 0.2 + 0.6 * t, 0.0);
+            let actual = curve.evaluate(t);
+            assert!(
+                (actual - expected).magnitude() < 1.0e-9,
+                "t={t}: expected {expected:?}, got {actual:?}",
+            );
+        }
+    }
 }
