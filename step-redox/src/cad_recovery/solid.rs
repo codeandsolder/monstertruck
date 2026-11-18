@@ -1684,6 +1684,106 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn radial_slot_source_edge_witness(
+        source: &[u8],
+        rebuilt_step: &str,
+        source_solid_id: u64,
+        source_tolerance_mm: f64,
+    ) -> Result<()> {
+        use crate::source_edge_locus::{
+            StepEdge, bound_complete_step_edges_separation_by_plane, incident_edge_plane,
+        };
+        use crate::step_entities::{named_entity_parameters, vertex_point};
+        use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
+
+        fn endpoints(
+            edge_id: u64,
+            entities: &[step_p21::ast::EntityInstance],
+            index: &std::collections::HashMap<u64, usize>,
+        ) -> Option<[[f64; 3]; 2]> {
+            let params = named_entity_parameters(edge_id, "EDGE_CURVE", entities, index)?;
+            Some([
+                vertex_point(entity_ref_value(params.get(1)?)?, entities, index)?,
+                vertex_point(entity_ref_value(params.get(2)?)?, entities, index)?,
+            ])
+        }
+
+        fn near(first: [f64; 3], second: [f64; 3], tolerance: f64) -> bool {
+            (first[0] - second[0])
+                .hypot(first[1] - second[1])
+                .hypot(first[2] - second[2])
+                <= tolerance
+        }
+
+        let original = step_p21::parser::parse(std::str::from_utf8(source)?)?;
+        let rebuilt = step_p21::parser::parse(rebuilt_step)?;
+        let [source_section] = original.data.as_slice() else {
+            bail!("radial source has unexpected DATA section count");
+        };
+        let [rebuilt_section] = rebuilt.data.as_slice() else {
+            bail!("radial rebuild has unexpected DATA section count");
+        };
+        let original = &source_section.entities;
+        let candidate = &rebuilt_section.entities;
+        let source_id = 93481;
+        let endpoint_tolerance_mm = 1.0e-7;
+        let original_ends = endpoints(source_id, original, &build_index(original))
+            .ok_or_else(|| anyhow::anyhow!("missing manufacturer edge endpoint geometry"))?;
+        let candidate_index = build_index(candidate);
+        let matching_edges = candidate
+            .iter()
+            .map(entity_id)
+            .filter(|&id| {
+                let Some(ends) = endpoints(id, candidate, &candidate_index) else {
+                    return false;
+                };
+                (near(ends[0], original_ends[0], endpoint_tolerance_mm)
+                    && near(ends[1], original_ends[1], endpoint_tolerance_mm))
+                    || (near(ends[0], original_ends[1], endpoint_tolerance_mm)
+                        && near(ends[1], original_ends[0], endpoint_tolerance_mm))
+            })
+            .collect::<Vec<_>>();
+        let [target_id] = matching_edges.as_slice() else {
+            bail!("radial rebuild edge endpoint correspondence is ambiguous: {matching_edges:?}");
+        };
+        let plane = incident_edge_plane(125603, source_id, original)?;
+        let bound = bound_complete_step_edges_separation_by_plane(
+            StepEdge {
+                id: source_id,
+                entities: original,
+            },
+            StepEdge {
+                id: *target_id,
+                entities: candidate,
+            },
+            plane,
+            endpoint_tolerance_mm,
+            1.0e-10,
+        )?;
+        let target_solid_id = candidate
+            .iter()
+            .find(|entity| {
+                simple_record(entity).is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
+            })
+            .map(entity_id)
+            .ok_or_else(|| anyhow::anyhow!("rebuilt radial slot has no solid"))?;
+        let comparison = crate::boundary_proof::compare_analytic_boundaries(
+            source_solid_id,
+            original,
+            target_solid_id,
+            candidate,
+        );
+        if bound.minimum_source_to_target_mm > source_tolerance_mm {
+            assert!(
+                !comparison.equivalent,
+                "boundary admission equated disjoint source/rebuild 3D edge loci: {bound:?}"
+            );
+        }
+        eprintln!("radial full-edge source #{source_id} vs rebuilt #{target_id}: {bound:?}");
+        Ok(())
+    }
+
     #[test]
     fn production_radial_slot_fixture_recovers_and_evaluates() -> Result<()> {
         let bytes = include_bytes!("../../validation/fixtures/production_radial_slot.step");
@@ -1703,7 +1803,14 @@ mod tests {
             let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
             let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&evaluated).geometrically_consistent);
-            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
+            let output = kernel.to_step(&evaluated)?;
+            step_p21::parser::parse(&output)?;
+            radial_slot_source_edge_witness(
+                bytes,
+                &output,
+                recovered[0].base.solid_id,
+                recovered[0].base.source_tolerance_mm,
+            )?;
         }
         Ok(())
     }
