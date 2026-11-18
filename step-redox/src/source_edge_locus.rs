@@ -128,7 +128,7 @@ fn has_strict_chord_progress(
 /// in either orientation establishes full-range coverage for an ordinary
 /// open edge; unresolved cyclic or self-intersecting topologies need a
 /// separate trim/branch proof, never inferred from this metric.
-fn complete_bspline_edge(
+pub(crate) fn complete_bspline_edge(
     step: StepEdge<'_>,
     endpoint_tolerance_mm: f64,
 ) -> Result<NurbsCurve<Vector4>> {

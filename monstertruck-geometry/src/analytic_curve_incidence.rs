@@ -114,6 +114,30 @@ fn cone(points: &[[f64; 4]], apex: Point3, axis: Vector3, slope: f64) -> Option<
     add_scaled(&dot3(&[x, y, z])?, &axial2, slope.mul_add(-slope, -1.0))
 }
 
+/// Homogeneous Bernstein polynomial for the squared radial residual of a
+/// cone referenced at an arbitrary positive radius, without forming its apex.
+/// The result is `(radial_distance² - expected_radius²) * weight²`.
+pub(crate) fn reference_cone_polynomial(
+    points: &[[f64; 4]],
+    origin: Point3,
+    axis: Vector3,
+    reference_radius: f64,
+    slope: f64,
+) -> Option<Vec<f64>> {
+    let [x, y, z, w] = coordinates(points, origin)?;
+    let axial = centered(points, origin, axis)?;
+    let radial_squared = add_scaled(&dot3(&[x, y, z])?, &squared(&axial)?, -1.0)?;
+    let radius = w
+        .iter()
+        .zip(axial)
+        .map(|(weight, height)| {
+            let value = slope.mul_add(height, reference_radius * weight);
+            value.is_finite().then_some(value)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    add_scaled(&radial_squared, &squared(&radius)?, -1.0)
+}
+
 fn torus(
     points: &[[f64; 4]],
     center: Point3,

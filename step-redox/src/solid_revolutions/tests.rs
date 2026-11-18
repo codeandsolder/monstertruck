@@ -1825,73 +1825,45 @@ fn rejects_branching_or_self_intersecting_profiles() {
 }
 
 #[cfg(feature = "cad-kernel-monstertruck")]
+fn manufacturer_full_cubic(
+    edge_id: u64,
+    expected_curve_id: u64,
+    entities: &[step_p21::ast::EntityInstance],
+    index: &std::collections::HashMap<u64, usize>,
+) -> anyhow::Result<
+    monstertruck_geometry::prelude::NurbsCurve<monstertruck_geometry::prelude::Vector4>,
+> {
+    let edge_params =
+        crate::step_entities::named_entity_parameters(edge_id, "EDGE_CURVE", entities, index)
+            .ok_or_else(|| anyhow::anyhow!("missing manufacturer EDGE_CURVE #{edge_id}"))?;
+    let curve_id = edge_params
+        .get(3)
+        .and_then(entity_ref_value)
+        .ok_or_else(|| anyhow::anyhow!("edge #{edge_id} has no curve reference"))?;
+    assert_eq!(curve_id, expected_curve_id);
+    // Reuse the conservative trim certificate from the source comparison API:
+    // equal endpoint coordinates alone are insufficient if the basis curve
+    // revisits an endpoint or contains a disconnected knot discontinuity.
+    crate::source_edge_locus::complete_bspline_edge(
+        crate::source_edge_locus::StepEdge {
+            id: edge_id,
+            entities,
+        },
+        1.0e-8,
+    )
+}
+
+#[cfg(feature = "cad-kernel-monstertruck")]
 #[test]
 fn manufacturer_radial_slot_cubic_plane_deviation_bracket() -> anyhow::Result<()> {
     use monstertruck_geometry::analytic_plane_deviation::bound_nurbs_plane_deviation;
-    use monstertruck_geometry::prelude::{
-        BsplineCurve, KnotVector, NurbsCurve, Point3, Vector3, Vector4,
-    };
+    use monstertruck_geometry::prelude::{Point3, Vector3};
 
     let source = include_bytes!("../../validation/fixtures/production_radial_slot.step");
     let exchange = step_p21::parser::parse(std::str::from_utf8(source)?)?;
     let entities = &exchange.data[0].entities;
     let index = build_index(entities);
-    let edge_params =
-        crate::step_entities::named_entity_parameters(93481, "EDGE_CURVE", entities, &index)
-            .ok_or_else(|| anyhow::anyhow!("missing manufacturer edge #93481"))?;
-    let curve_id = entity_ref_value(
-        edge_params
-            .get(3)
-            .ok_or_else(|| anyhow::anyhow!("edge lacks curve"))?,
-    )
-    .ok_or_else(|| anyhow::anyhow!("bad edge curve reference"))?;
-    assert_eq!(curve_id, 60612);
-    let brep::CurveSupport::BSpline(spline) = brep::curve_support(curve_id, entities, &index)
-    else {
-        anyhow::bail!("manufacturer edge is not a B-spline");
-    };
-    let weights = spline
-        .weights
-        .unwrap_or_else(|| vec![1.0; spline.control_points_mm.len()]);
-    let controls = spline
-        .control_points_mm
-        .into_iter()
-        .zip(weights)
-        .map(|(point, weight)| {
-            Vector4::new(
-                point[0] * weight,
-                point[1] * weight,
-                point[2] * weight,
-                weight,
-            )
-        })
-        .collect::<Vec<_>>();
-    // The source EDGE_CURVE endpoints coincide with the full spline domain
-    // endpoints: the deviation witness is on the actual trimmed edge, not
-    // an unreachable extension of the underlying geometric curve.
-    for (slot, control) in [(1_usize, controls.first()), (2, controls.last())] {
-        let vertex_id = entity_ref_value(
-            edge_params
-                .get(slot)
-                .ok_or_else(|| anyhow::anyhow!("missing STEP edge vertex"))?,
-        )
-        .ok_or_else(|| anyhow::anyhow!("bad STEP edge vertex"))?;
-        let vertex = crate::step_entities::vertex_point(vertex_id, entities, &index)
-            .ok_or_else(|| anyhow::anyhow!("missing endpoint coordinates"))?;
-        let control = control.ok_or_else(|| anyhow::anyhow!("missing spline endpoint"))?;
-        assert_eq!(
-            [
-                control.x / control.w,
-                control.y / control.w,
-                control.z / control.w
-            ],
-            vertex,
-        );
-    }
-    let curve = NurbsCurve::new(BsplineCurve::new_unchecked(
-        KnotVector::from(spline.knots),
-        controls,
-    ));
+    let curve = manufacturer_full_cubic(93481, 60612, entities, &index)?;
 
     let solid_id = entities
         .iter()
@@ -1948,5 +1920,80 @@ fn manufacturer_radial_slot_cubic_plane_deviation_bracket() -> anyhow::Result<()
         checked_faces > 0,
         "edge must belong to at least one plane face"
     );
+    Ok(())
+}
+
+#[cfg(feature = "cad-kernel-monstertruck")]
+#[test]
+fn manufacturer_radial_slot_cubics_depart_from_their_own_conical_carriers() -> anyhow::Result<()> {
+    use monstertruck_geometry::analytic_cone_deviation::bound_nurbs_cone_deviation;
+    use monstertruck_geometry::prelude::{Point3, Vector3};
+
+    let source = include_bytes!("../../validation/fixtures/production_radial_slot.step");
+    let exchange = step_p21::parser::parse(std::str::from_utf8(source)?)?;
+    let [section] = exchange.data.as_slice() else {
+        anyhow::bail!("expected one manufacturer source DATA section");
+    };
+    let entities = &section.entities;
+    let index = build_index(entities);
+    let source_tolerance = source_tolerance_by_representation_item(entities, &index)
+        .get(&15385)
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("source representation tolerance missing"))?;
+    assert_eq!(source_tolerance, 1.0e-5);
+
+    // STEP face-edge incidence, not a nearest-cone candidate. Both topological
+    // edges cover their entire referenced B-spline parameter range, verified
+    // by manufacturer_full_cubic before the whole-domain bound is applied.
+    for (edge_id, curve_id, cone_face_id, minimum_witness) in [
+        (93481, 60612, 58899, 1.5e-5),
+        (120654, 122924, 36791, 8.0e-5),
+    ] {
+        let curve = manufacturer_full_cubic(edge_id, curve_id, entities, &index)?;
+        let loops = brep::face_loops(cone_face_id, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("manufacturer conical face has invalid topology"))?;
+        assert!(
+            loops
+                .iter()
+                .flat_map(|boundary| &boundary.edges)
+                .any(|edge| edge.edge_id == edge_id)
+        );
+        let surface_id = brep::face_surface(cone_face_id, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing authored conical surface"))?;
+        let brep::SurfaceSupport::Cone(cone) = brep::surface_support(surface_id, entities, &index)
+        else {
+            anyhow::bail!("incident source face is not a cone");
+        };
+        let origin = Point3::new(
+            cone.reference_origin_mm[0],
+            cone.reference_origin_mm[1],
+            cone.reference_origin_mm[2],
+        );
+        let axis = Vector3::new(cone.axis[0], cone.axis[1], cone.axis[2]);
+        let bounds = bound_nurbs_cone_deviation(
+            &curve,
+            origin,
+            axis,
+            cone.reference_radius_mm,
+            cone.semi_angle_rad.tan(),
+            1.0e-9,
+        )
+        .ok_or_else(|| anyhow::anyhow!("whole-source conical radial bracket unsupported"))?;
+        eprintln!(
+            "manufacturer conical edge #{edge_id} on face #{cone_face_id}: source_tol={source_tolerance:.13e} bracket={bounds:?}"
+        );
+        assert!(
+            bounds.exceeds(source_tolerance),
+            "manufacturer cubic diverges from authored cone above source tolerance: {bounds:?}"
+        );
+        assert!(
+            bounds.lower > minimum_witness,
+            "source 3D curve must retain an interior off-cone witness: {bounds:?}"
+        );
+        assert!(
+            bounds.upper - bounds.lower < 1.0e-6,
+            "global radial upper bound remains excessively loose: {bounds:?}"
+        );
+    }
     Ok(())
 }
