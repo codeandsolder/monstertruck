@@ -199,7 +199,18 @@ impl IncludeCurve<BsplineCurve<Point3>> for Sphere {
 impl IncludeCurve<NurbsCurve<Vector4>> for Sphere {
     fn include(&self, curve: &NurbsCurve<Vector4>) -> bool {
         let (knots, _) = curve.knot_vector().to_single_multi();
-        let degree = curve.degree() * 2;
+        // An empty span sequence must not make inclusion vacuously true.
+        if knots.len() < 2 {
+            return false;
+        }
+        // Interior samples miss tangent chords with off-sphere endpoints;
+        // checking only global endpoints also misses off-sphere interior knots.
+        if !knots.iter().all(|&t| self.include(curve.evaluate(t))) {
+            return false;
+        }
+        // Degree-zero NURBS are piecewise constant; sample every span once
+        // rather than accepting an empty interior-sampling loop.
+        let degree = (curve.degree() * 2).max(2);
         knots
             .windows(2)
             .flat_map(move |window| (1..degree).map(move |i| (window, i)))
