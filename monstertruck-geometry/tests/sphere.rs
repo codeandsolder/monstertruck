@@ -274,3 +274,83 @@ fn a_chord_coarser_than_the_radius_divides_instead_of_panicking() {
         }
     }
 }
+
+/// A degree-one rational curve can touch the sphere at its sole interior
+/// sample even though its endpoints are a full distance off the surface.
+#[test]
+fn rational_curve_inclusion_rejects_tangent_chord_with_outside_endpoints() {
+    let sphere = Sphere::new(Point3::origin(), 1.0);
+    let tangent = NurbsCurve::new(BsplineCurve::new_unchecked(
+        KnotVector::bezier_knot(1),
+        vec![
+            Vector4::new(1.0, -1.0, 0.0, 1.0),
+            Vector4::new(1.0, 1.0, 0.0, 1.0),
+        ],
+    ));
+    assert_near!(tangent.evaluate(0.5), Point3::new(1.0, 0.0, 0.0));
+    assert!(!IncludeCurve::include(&sphere, &tangent));
+}
+
+/// Degree zero must not accidentally pass an empty interior-sampling loop.
+#[test]
+fn rational_curve_inclusion_checks_constant_curves() {
+    let sphere = Sphere::new(Point3::origin(), 1.0);
+    let inside = NurbsCurve::new(BsplineCurve::new_unchecked(
+        KnotVector::bezier_knot(0),
+        vec![Vector4::new(1.0, 0.0, 0.0, 1.0)],
+    ));
+    let outside = NurbsCurve::new(BsplineCurve::new_unchecked(
+        KnotVector::bezier_knot(0),
+        vec![Vector4::new(2.0, 0.0, 0.0, 1.0)],
+    ));
+    assert!(IncludeCurve::include(&sphere, &inside));
+    assert!(!IncludeCurve::include(&sphere, &outside));
+
+    // Degree-zero splines may contain multiple constant spans: verifying
+    // only their endpoints is not enough if a middle span goes off-sphere.
+    let piecewise = NurbsCurve::new(BsplineCurve::new_unchecked(
+        KnotVector::from(vec![0.0, 1.0, 2.0, 3.0]),
+        vec![
+            Vector4::new(1.0, 0.0, 0.0, 1.0),
+            Vector4::new(2.0, 0.0, 0.0, 1.0),
+            Vector4::new(0.0, 1.0, 0.0, 1.0),
+        ],
+    ));
+    assert!(!IncludeCurve::include(&sphere, &piecewise));
+}
+
+/// Interior-only sampling plus global endpoints can still miss a curve
+/// passing outside at a *middle* knot between two sampled sphere crossings.
+#[test]
+fn rational_curve_inclusion_rejects_off_sphere_internal_knots() {
+    let sphere = Sphere::new(Point3::origin(), 1.0);
+    let excursion = NurbsCurve::new(BsplineCurve::new_unchecked(
+        KnotVector::from(vec![0.0, 0.0, 1.0, 2.0, 2.0]),
+        vec![
+            Vector4::new(-1.0, 0.0, 0.0, 1.0),
+            Vector4::new(3.0, 0.0, 0.0, 1.0),
+            Vector4::new(-1.0, 0.0, 0.0, 1.0),
+        ],
+    ));
+    for t in [0.0, 0.5, 1.5, 2.0] {
+        assert!(sphere.include(excursion.evaluate(t)), "t={t}");
+    }
+    assert!(!sphere.include(excursion.evaluate(1.0)));
+    assert!(!IncludeCurve::include(&sphere, &excursion));
+}
+
+/// Exact rational quadratic quarter-circle arcs remain included.
+#[test]
+fn rational_curve_inclusion_accepts_true_spherical_arc() {
+    let sphere = Sphere::new(Point3::origin(), 1.0);
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let arc = NurbsCurve::new(BsplineCurve::new_unchecked(
+        KnotVector::bezier_knot(2),
+        vec![
+            Vector4::new(1.0, 0.0, 0.0, 1.0),
+            Vector4::new(w, w, 0.0, w),
+            Vector4::new(0.0, 1.0, 0.0, 1.0),
+        ],
+    ));
+    assert!(IncludeCurve::include(&sphere, &arc));
+}
