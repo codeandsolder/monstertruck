@@ -86,7 +86,7 @@ fn rematch_selected_edge_id(
             let (start, end) = curve.range_tuple();
             // Interior samples distinguish different paths with the same ends.
             [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().all(|fraction| {
-                let t = start + (end - start) * fraction;
+                let t = (end - start).mul_add(fraction, start);
                 curve_contains_point(original_curve, curve.evaluate(t))
             })
         })
@@ -98,7 +98,6 @@ fn rematch_selected_edge_id(
     // successors are ambiguous and must not be selected arbitrarily.
     candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
     match candidates.as_slice() {
-        [] => None,
         [(id, _)] => Some(*id),
         [(id, longest), (_, runner_up), ..] if longest - runner_up > KERNEL_EPSILON => Some(*id),
         _ => None,
