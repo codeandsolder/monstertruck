@@ -110,7 +110,7 @@ impl TryFrom<Curve> for NurbsCurve<Vector4> {
 /// Convert an external shell to internal fillet types.
 ///
 /// Returns the internal shell and the internal `EdgeId`s corresponding to
-/// the selected external edges (matched by endpoint positions).
+/// the selected external edges (matched by topology identity).
 pub fn convert_shell_in<C: FilletableCurve, S: FilletableSurface>(
     shell: &monstertruck_topology::Shell<Point3, C, S>,
     edges: &[monstertruck_topology::Edge<Point3, C>],

@@ -434,11 +434,24 @@ fn apply_single_edge_fillet(
 ///
 /// Returns [`FilletError`] when an edge is missing/non-manifold, radius/profile validation fails,
 /// or the required geometry/topology construction cannot be completed.
+pub fn fillet_edges(
+    shell: &mut Shell,
+    edge_ids: &[EdgeId],
+    params: Option<&FilletOptions>,
+) -> Result<()> {
+    // One request may contain several independent chains. Per-wire and
+    // per-chain transactions are not enough: a hard failure in a later chain
+    // must also roll back every chain successfully edited earlier.
+    ops::edit_shell_transactionally(shell, |candidate| {
+        fillet_edges_in_place(candidate, edge_ids, params)
+    })
+}
+
 #[expect(
     clippy::too_many_lines,
-    reason = "the transactional chain resolver deliberately keeps selection rematching, per-edge fallback, and rollback in one mutation scope"
+    reason = "the transactional chain resolver deliberately keeps selection rematching and per-edge fallback in one mutation scope"
 )]
-pub fn fillet_edges(
+fn fillet_edges_in_place(
     shell: &mut Shell,
     edge_ids: &[EdgeId],
     params: Option<&FilletOptions>,
@@ -769,7 +782,10 @@ where
     let options = params.unwrap_or(&default_options);
     let (mut internal_shell, internal_edge_ids) = convert_shell_in(shell, edges)?;
     let original_shell = internal_shell.clone();
-    fillet_edges(&mut internal_shell, &internal_edge_ids, Some(options))?;
+    // The NURBS shell is already a detached conversion. No additional
+    // request-level clone is needed: the caller's shell is only updated after
+    // both filleting and conversion back have succeeded.
+    fillet_edges_in_place(&mut internal_shell, &internal_edge_ids, Some(options))?;
     if internal_shell.shell_condition() != ShellCondition::Closed
         && env::var_os("MT_FILLET_STRICT_CLOSED").is_some()
     {
