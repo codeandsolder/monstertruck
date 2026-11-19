@@ -214,6 +214,21 @@ pub fn fillet_with_side(
     Ok((new_face0, new_face1, fillet, new_side0, new_side1))
 }
 
+/// Applies a topology edit to a detached shell and commits only on success.
+///
+/// Shell cloning preserves edge identities, which the fillet wire and adjacency
+/// indices need. Edits must replace topology rather than mutate the geometry
+/// stored behind shared edge/face handles.
+pub fn edit_shell_transactionally(
+    shell: &mut Shell,
+    edit: impl FnOnce(&mut Shell) -> Result<()>,
+) -> Result<()> {
+    let mut candidate = shell.clone();
+    edit(&mut candidate)?;
+    *shell = candidate;
+    Ok(())
+}
+
 /// Fillets along a wire of edges sharing a common face in the shell.
 ///
 /// Supports both open and closed wires. Modifies `shell` in place by replacing
@@ -333,23 +348,28 @@ pub fn fillet_along_wire(shell: &mut Shell, wire: &Wire, options: &FilletOptions
         }
     }
 
-    if closed {
-        fillet_along_wire_closed(
-            shell,
-            wire,
-            shared_face_index,
-            &adjacent_faces,
-            &fillet_surfaces,
-        )
-    } else {
-        fillet_along_wire_open(
-            shell,
-            wire,
-            shared_face_index,
-            &adjacent_faces,
-            &fillet_surfaces,
-        )
-    }
+    // Both wire constructors can replace adjacent faces before a later cut
+    // fails. Never expose these partial edits to the caller or its per-edge
+    // fallback: only commit the fully reconstructed shell.
+    edit_shell_transactionally(shell, |candidate| {
+        if closed {
+            fillet_along_wire_closed(
+                candidate,
+                wire,
+                shared_face_index,
+                &adjacent_faces,
+                &fillet_surfaces,
+            )
+        } else {
+            fillet_along_wire_open(
+                candidate,
+                wire,
+                shared_face_index,
+                &adjacent_faces,
+                &fillet_surfaces,
+            )
+        }
+    })
 }
 
 /// Construct a linear parameter-curve edge between two vertices on the

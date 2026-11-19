@@ -21,6 +21,7 @@ mod edges;
 mod profile;
 mod radius;
 mod surface;
+mod transactions;
 
 // CSG/boolean-result fillet coverage lives in
 // monstertruck-modeling/tests/fillet_test.rs (feature `fillet`): the

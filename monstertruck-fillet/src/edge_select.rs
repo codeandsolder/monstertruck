@@ -524,7 +524,6 @@ pub fn fillet_edges(
     // Process each chain with a fresh edge-face map, so that mutations from
     // earlier chains don't cause stale face indices.
     for chain in &chains {
-        let shell_checkpoint = shell.clone();
         let edge_face_map = build_edge_face_map(shell);
         let mut used_ids = HashSet::<EdgeId>::new();
         let mut resolved_pairs: Vec<(EdgeId, EdgeId)> = Vec::new();
@@ -680,67 +679,66 @@ pub fn fillet_edges(
             };
 
             if wire_fillet_failed {
-                let original_to_resolved: HashMap<EdgeId, EdgeId> =
-                    resolved_pairs.iter().copied().collect();
-                let mut fallback_used_ids = HashSet::<EdgeId>::new();
-                let mut chain_failed = false;
-                for original_eid in chain.edge_ids.iter().copied() {
-                    let edge_face_map = build_edge_face_map(shell);
-                    let initial_eid = original_to_resolved
-                        .get(&original_eid)
-                        .copied()
-                        .unwrap_or(original_eid);
-                    let resolved_eid = if is_manifold_edge(&edge_face_map, initial_eid)
-                        && !fallback_used_ids.contains(&initial_eid)
-                    {
-                        initial_eid
-                    } else {
-                        let Some(original_curve) = original_edge_curves.get(&original_eid) else {
-                            chain_failed = true;
-                            break;
+                // The wire attempt is atomic. Run each fallback edge against
+                // a second detached shell, and publish the chain only after
+                // every edge has succeeded. Hard failures roll back too.
+                let fallback_result = ops::edit_shell_transactionally(shell, |candidate| {
+                    let original_to_resolved: HashMap<EdgeId, EdgeId> =
+                        resolved_pairs.iter().copied().collect();
+                    let mut fallback_used_ids = HashSet::<EdgeId>::new();
+                    for original_eid in chain.edge_ids.iter().copied() {
+                        let edge_face_map = build_edge_face_map(candidate);
+                        let initial_eid = original_to_resolved
+                            .get(&original_eid)
+                            .copied()
+                            .unwrap_or(original_eid);
+                        let resolved_eid = if is_manifold_edge(&edge_face_map, initial_eid)
+                            && !fallback_used_ids.contains(&initial_eid)
+                        {
+                            initial_eid
+                        } else {
+                            let original_curve = original_edge_curves.get(&original_eid).ok_or(
+                                FilletError::GeometryFailed {
+                                    context: "resolve per-edge fillet fallback curve",
+                                },
+                            )?;
+                            rematch_selected_edge_id(
+                                candidate,
+                                original_curve,
+                                &fallback_used_ids,
+                                &edge_face_map,
+                            )
+                            .ok_or(FilletError::GeometryFailed {
+                                context: "resolve per-edge fillet fallback edge",
+                            })?
                         };
-                        let Some(rematched) = rematch_selected_edge_id(
-                            shell,
-                            original_curve,
-                            &fallback_used_ids,
-                            &edge_face_map,
-                        ) else {
-                            chain_failed = true;
-                            break;
-                        };
-                        rematched
-                    };
-                    fallback_used_ids.insert(resolved_eid);
+                        fallback_used_ids.insert(resolved_eid);
 
-                    let single_edge_opts;
-                    let opts = if options.profile.uses_radius()
-                        && let RadiusSpec::PerEdge(radii) = &options.radius
-                    {
-                        single_edge_opts = FilletOptions {
-                            radius: RadiusSpec::Constant(radii[edge_id_to_idx[&original_eid]]),
-                            divisions: options.divisions,
-                            profile: options.profile.clone(),
+                        let single_edge_opts;
+                        let opts = if options.profile.uses_radius()
+                            && let RadiusSpec::PerEdge(radii) = &options.radius
+                        {
+                            single_edge_opts = FilletOptions {
+                                radius: RadiusSpec::Constant(radii[edge_id_to_idx[&original_eid]]),
+                                divisions: options.divisions,
+                                profile: options.profile.clone(),
+                            };
+                            &single_edge_opts
+                        } else {
+                            options
                         };
-                        &single_edge_opts
-                    } else {
-                        options
-                    };
-                    match apply_single_edge_fillet(
-                        shell,
-                        resolved_eid,
-                        Some(chain.shared_face_idx),
-                        opts,
-                    ) {
-                        Ok(()) => {}
-                        Err(FilletError::GeometryFailed { .. }) => {
-                            chain_failed = true;
-                            break;
-                        }
-                        Err(error) => return Err(error),
+                        apply_single_edge_fillet(
+                            candidate,
+                            resolved_eid,
+                            Some(chain.shared_face_idx),
+                            opts,
+                        )?;
                     }
-                }
-                if chain_failed {
-                    *shell = shell_checkpoint;
+                    Ok(())
+                });
+                match fallback_result {
+                    Ok(()) | Err(FilletError::GeometryFailed { .. }) => {}
+                    Err(error) => return Err(error),
                 }
             }
         }
