@@ -289,7 +289,7 @@ pub fn relay_spheres(
                     (curve.evaluate(t), curve.derivative(t)),
                     surface0,
                     surface1,
-                    radius(b),
+                    radius(b.clamp(0.0, 1.0)),
                     flip_side,
                 )
             })

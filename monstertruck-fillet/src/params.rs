@@ -1,6 +1,8 @@
 use monstertruck_geometry::prelude::*;
 use std::num::NonZeroUsize;
 
+use super::error::FilletError;
+
 /// Profile shape for fillet operations.
 #[derive(Debug, Clone, Default)]
 pub enum FilletProfile {
@@ -52,6 +54,59 @@ pub enum RadiusSpec {
     PerEdge(Vec<f64>),
 }
 
+fn valid_radius_value(value: f64) -> bool { value.is_finite() && value > 0.0 }
+
+/// Runtime check for values returned by arbitrary radius functions between
+/// pre-validation samples. Geometry helpers accept a plain f64 callback, so
+/// record invalid evaluations and convert them to hard errors afterward.
+#[derive(Default)]
+pub struct RuntimeRadiusValidation(std::cell::Cell<bool>);
+
+impl RuntimeRadiusValidation {
+    pub fn observe(&self, radius: f64) -> f64 {
+        if !valid_radius_value(radius) {
+            self.0.set(true);
+        }
+        radius
+    }
+
+    pub const fn ensure_valid(&self) -> std::result::Result<(), FilletError> {
+        if self.0.get() {
+            Err(FilletError::InvalidRadius)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl RadiusSpec {
+    /// Validate the defined input domain before topology mutation and return
+    /// an upper bound for the selected radii. Variable functions are arbitrary,
+    /// so their representative domain samples are supplemented by checks at
+    /// actual geometry evaluation sites.
+    pub(crate) fn validated_upper_bound(&self) -> std::result::Result<f64, FilletError> {
+        const VARIABLE_RADIUS_SAMPLES: usize = 32;
+        let valid = |value: f64| {
+            valid_radius_value(value)
+                .then_some(value)
+                .ok_or(FilletError::InvalidRadius)
+        };
+        match self {
+            Self::Constant(radius) => valid(*radius),
+            Self::PerEdge(radii) => radii.iter().copied().try_fold(0.0f64, |max, radius| {
+                valid(radius).map(|radius| max.max(radius))
+            }),
+            Self::Variable(function) => (0..=VARIABLE_RADIUS_SAMPLES)
+                .map(|i| {
+                    function(crate::count_as_f64(i) / crate::count_as_f64(VARIABLE_RADIUS_SAMPLES))
+                })
+                .try_fold(0.0f64, |max, radius| {
+                    valid(radius).map(|radius| max.max(radius))
+                }),
+        }
+    }
+}
+
 impl std::fmt::Debug for RadiusSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -84,6 +139,16 @@ impl Default for FilletOptions {
 }
 
 impl FilletOptions {
+    /// Validate the radius consumed by the selected profile. Asymmetric
+    /// chamfer setbacks determine their own geometry and ignore the radius.
+    pub(crate) fn validated_radius_upper_bound(&self) -> std::result::Result<f64, FilletError> {
+        if self.profile.uses_radius() {
+            self.radius.validated_upper_bound()
+        } else {
+            Ok(0.0)
+        }
+    }
+
     /// Creates options with a constant radius.
     #[must_use]
     pub fn constant(radius: f64) -> Self {

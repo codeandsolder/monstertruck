@@ -6,7 +6,7 @@ use super::geometry::{
     asymmetric_chamfer_contacts, chamfer_fillet_surface, custom_fillet_surface, expand_chamfer,
     ridge_fillet_surface, rolling_ball_fillet_surface,
 };
-use super::params::{FilletOptions, FilletProfile, RadiusSpec};
+use super::params::{FilletOptions, FilletProfile, RadiusSpec, RuntimeRadiusValidation};
 use super::topology::{
     FaceBoundaryEdgeIndex, concat_fillet_surface, create_free_edge, create_new_side,
     create_pcurve_edge, cut_face_by_bezier, cut_face_by_last_bezier, enumerate_adjacent_faces,
@@ -33,12 +33,25 @@ pub fn fillet(
     filleted_edge_id: EdgeId,
     options: &FilletOptions,
 ) -> Result<(Face, Face, Face)> {
+    options.validated_radius_upper_bound()?;
+    if options.profile.uses_radius()
+        && let RadiusSpec::PerEdge(radii) = &options.radius
+        && radii.len() != 1
+    {
+        return Err(FilletError::PerEdgeRadiusMismatch {
+            given: radii.len(),
+            expected: 1,
+        });
+    }
     // The relay-sphere construction picks its cutting side from the seam
     // direction relative to the two surface normals. Boolean output reaches
     // both boundary-winding conventions, so when the natural-side attempt
     // fails geometrically, retry with the sphere side flipped.
-    fillet_on_side(face0, face1, filleted_edge_id, options, false, None)
-        .or_else(|_| fillet_on_side(face0, face1, filleted_edge_id, options, true, None))
+    match fillet_on_side(face0, face1, filleted_edge_id, options, false, None) {
+        Ok(result) => Ok(result),
+        Err(FilletError::InvalidRadius) => Err(FilletError::InvalidRadius),
+        Err(_) => fillet_on_side(face0, face1, filleted_edge_id, options, true, None),
+    }
 }
 
 #[expect(
@@ -75,6 +88,10 @@ fn fillet_on_side(
     }
 
     let division = options.divisions.get();
+    // A user-provided variable-radius function can be invalid between the
+    // upfront validation samples. Detect every actual geometry evaluation,
+    // even if the solver would otherwise retry at a neighboring parameter.
+    let checked_radius = RuntimeRadiusValidation::default();
     let surface0 = face0.oriented_surface();
     let surface1 = face1.oriented_surface();
     let fillet_surface = {
@@ -113,17 +130,20 @@ fn fillet_on_side(
         let surface = if !options.profile.uses_radius() {
             make(None)
         } else if let Some(radius) = radius_override {
-            make(Some(radius))
+            make(Some(&|t| checked_radius.observe(radius(t))))
         } else {
             match &options.radius {
                 RadiusSpec::Constant(r) => {
                     let r = *r;
-                    make(Some(&|_| r))
+                    make(Some(&|_| checked_radius.observe(r)))
                 }
-                RadiusSpec::Variable(f) => make(Some(f.as_ref())),
-                RadiusSpec::PerEdge(radii) => radii.first().and_then(|&r| make(Some(&|_| r))),
+                RadiusSpec::Variable(f) => make(Some(&|t| checked_radius.observe(f(t)))),
+                RadiusSpec::PerEdge(radii) => radii
+                    .first()
+                    .and_then(|&r| make(Some(&|_| checked_radius.observe(r)))),
             }
         };
+        checked_radius.ensure_valid()?;
         surface.ok_or(FilletError::GeometryFailed {
             context: "fillet surface computation",
         })?
@@ -199,24 +219,25 @@ pub fn fillet_with_side_radius(
     radius_override: Option<&dyn Fn(f64) -> f64>,
 ) -> SideFilletResult {
     let (new_face0, new_face1, fillet) = if radius_override.is_some() {
-        fillet_on_side(
+        match fillet_on_side(
             face0,
             face1,
             filleted_edge_id,
             options,
             false,
             radius_override,
-        )
-        .or_else(|_| {
-            fillet_on_side(
+        ) {
+            Ok(result) => Ok(result),
+            Err(FilletError::InvalidRadius) => Err(FilletError::InvalidRadius),
+            Err(_) => fillet_on_side(
                 face0,
                 face1,
                 filleted_edge_id,
                 options,
                 true,
                 radius_override,
-            )
-        })?
+            ),
+        }?
     } else {
         fillet(face0, face1, filleted_edge_id, options)?
     };
@@ -287,6 +308,7 @@ pub fn fillet_along_wire(shell: &mut Shell, wire: &Wire, options: &FilletOptions
     if matches!(&options.profile, FilletProfile::AsymmetricChamfer { .. }) {
         return Err(FilletError::AsymmetricChamferWireUnsupported);
     }
+    options.validated_radius_upper_bound()?;
     let division = options.divisions.get();
 
     // Validate variable radius constraint for closed wire fillets.
@@ -308,7 +330,8 @@ pub fn fillet_along_wire(shell: &mut Shell, wire: &Wire, options: &FilletOptions
     let adjacent_faces = enumerate_adjacent_faces(shell, wire, shared_face_index)
         .ok_or(FilletError::AdjacentFacesNotFound)?;
 
-    let mut fillet_surfaces = match &options.radius {
+    let checked_radius = RuntimeRadiusValidation::default();
+    let fillet_surfaces = match &options.radius {
         RadiusSpec::Constant(r) => {
             let r = *r;
             fillet_surfaces_along_wire(
@@ -316,7 +339,7 @@ pub fn fillet_along_wire(shell: &mut Shell, wire: &Wire, options: &FilletOptions
                 wire,
                 shared_face_index,
                 &adjacent_faces,
-                move |_| r,
+                |_| checked_radius.observe(r),
                 division,
                 &options.profile,
             )
@@ -326,7 +349,7 @@ pub fn fillet_along_wire(shell: &mut Shell, wire: &Wire, options: &FilletOptions
             wire,
             shared_face_index,
             &adjacent_faces,
-            f.as_ref(),
+            |t| checked_radius.observe(f(t)),
             division,
             &options.profile,
         ),
@@ -354,14 +377,15 @@ pub fn fillet_along_wire(shell: &mut Shell, wire: &Wire, options: &FilletOptions
                     let index = ends
                         .partition_point(|&end| end < global_t)
                         .min(radii.len() - 1);
-                    radii[index]
+                    checked_radius.observe(radii[index])
                 },
                 division,
                 &options.profile,
             )
         }
-    }
-    .ok_or(FilletError::FilletSurfaceComputationFailed)?;
+    };
+    checked_radius.ensure_valid()?;
+    let mut fillet_surfaces = fillet_surfaces.ok_or(FilletError::FilletSurfaceComputationFailed)?;
 
     // Interior seam averaging.
     (1..fillet_surfaces.len()).for_each(|i| {

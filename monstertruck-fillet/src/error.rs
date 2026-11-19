@@ -36,9 +36,9 @@ pub enum FilletError {
     /// The same topological edge was requested more than once.
     #[error("Duplicate topological edge in fillet selection.")]
     DuplicateSelectedEdge,
-    /// A selected edge no longer has exactly one usable manifold successor
-    /// after earlier topology edits in the same request.
-    #[error("Selected edge has no unique manifold successor after topology changes.")]
+    /// A selected edge has no unambiguous set of non-overlapping manifold
+    /// successors after earlier topology edits in the same request.
+    #[error("Selected edge has no unambiguous non-overlapping manifold successors.")]
     UnresolvableSelectedEdge,
     /// The requested edge was not found in the shell.
     #[error("Edge not found in shell.")]
@@ -49,6 +49,9 @@ pub enum FilletError {
         /// Description of which conversion failed.
         context: &'static str,
     },
+    /// A radius is non-finite, zero, or negative.
+    #[error("Fillet radii must be finite and strictly positive.")]
+    InvalidRadius,
     /// The edge is too short for the requested fillet radius.
     #[error("Edge too short for fillet radius.")]
     DegenerateEdge,

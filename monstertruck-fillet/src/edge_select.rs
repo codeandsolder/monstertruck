@@ -86,12 +86,6 @@ fn curve_interval_on_original(original: &Curve, candidate: &Curve) -> Option<(f6
     Some((first.min(last), first.max(last)))
 }
 
-fn sampled_variable_radius_upper_bound(radius: &dyn Fn(f64) -> f64, sample_count: usize) -> f64 {
-    (0..=sample_count)
-        .map(|i| radius(crate::count_as_f64(i) / crate::count_as_f64(sample_count)))
-        .fold(f64::NEG_INFINITY, f64::max)
-}
-
 /// Return every non-overlapping manifold segment of the original curve in
 /// its original parameter order. Overlapping matches are ambiguous topology,
 /// not a reason to pick whichever surviving edge happens to be longest.
@@ -363,7 +357,10 @@ fn group_edges_into_chains(
 /// Stored before modifying any chain, so later fragments retain the same
 /// variable-radius function instead of independently restarting at t=0.
 struct OriginalEdgeSpan {
-    curve: Curve,
+    // Keep the selected topology's Arc-backed identity alive throughout the
+    // whole request. Otherwise replacing an earlier chain can free a selected
+    // edge, then pointer reuse may make its obsolete EdgeId match another edge.
+    source_edge: Edge,
     start: f64,
     span: f64,
 }
@@ -391,7 +388,7 @@ fn original_edge_spans(
             spans.insert(
                 edge.id(),
                 OriginalEdgeSpan {
-                    curve: edge.oriented_curve(),
+                    source_edge: edge.clone(),
                     start,
                     span,
                 },
@@ -410,12 +407,12 @@ fn radius_on_original_wire<'a>(
     radius: &'a dyn Fn(f64) -> f64,
 ) -> impl Fn(f64) -> f64 + 'a {
     let (fragment_start, fragment_end) = fragment_curve.range_tuple();
-    let (original_start, original_end) = original.curve.range_tuple();
+    let original_curve = original.source_edge.oriented_curve();
+    let (original_start, original_end) = original_curve.range_tuple();
     move |t| {
         let parameter = (fragment_end - fragment_start).mul_add(t, fragment_start);
         let point = fragment_curve.evaluate(parameter);
-        let global_t = original
-            .curve
+        let global_t = original_curve
             .search_nearest_parameter(point, None, 100)
             .map_or(f64::NAN, |original_parameter| {
                 let edge_t =
@@ -530,7 +527,7 @@ fn apply_single_edge_fillet(
     let mapped_radius = radius_mapping
         .map(|mapping| {
             let fragment = edge.oriented_curve();
-            curve_interval_on_original(&mapping.original.curve, &fragment)
+            curve_interval_on_original(&mapping.original.source_edge.oriented_curve(), &fragment)
                 .ok_or(FilletError::UnresolvableSelectedEdge)?;
             Ok(radius_on_original_wire(
                 fragment,
@@ -653,15 +650,12 @@ fn fillet_edges_in_place(
         });
     }
 
+    let variable_radius_upper_bound = options.validated_radius_upper_bound()?;
+
     // Reject edges that are too short for the requested rolling radius.
     // Asymmetric chamfer setbacks are perpendicular to the seam and do not
     // impose this along-edge radius bound.
     if options.profile.uses_radius() {
-        let variable_radius_upper_bound = if let RadiusSpec::Variable(f) = &options.radius {
-            sampled_variable_radius_upper_bound(f.as_ref(), 32)
-        } else {
-            0.0
-        };
         for (i, &eid) in edge_ids.iter().enumerate() {
             let effective_radius = match &options.radius {
                 RadiusSpec::Constant(r) => *r,
@@ -700,14 +694,15 @@ fn fillet_edges_in_place(
         let mut used_ids = HashSet::<EdgeId>::new();
         let mut resolved_pairs: Vec<(EdgeId, EdgeId)> = Vec::new();
         for original_eid in chain.edge_ids.iter().copied() {
-            let original_curve = &original_spans
+            let original_curve = original_spans
                 .get(&original_eid)
                 .ok_or(FilletError::EdgeNotFound)?
-                .curve;
+                .source_edge
+                .oriented_curve();
             for resolved_id in resolve_active_edge_ids(
                 shell,
                 original_eid,
-                original_curve,
+                &original_curve,
                 &used_ids,
                 &edge_face_map,
             )? {
@@ -1097,6 +1092,29 @@ mod rematch_tests {
     }
 
     #[test]
+    fn original_edge_snapshot_retains_selected_ids_after_topology_removal() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let (mut shell, selected) = manifold_shell(&[(a, b, line(a, b))]);
+        let face_map = build_edge_face_map(&shell);
+        let chains = group_edges_into_chains(&shell, &selected, &face_map).unwrap();
+        let originals = original_edge_spans(&shell, &chains).unwrap();
+        let source = &originals[&selected[0]].source_edge;
+        assert_eq!(source.id(), selected[0]);
+        shell.clear();
+        assert_eq!(source.id(), selected[0]);
+        assert!(curve_interval_on_original(&line(a, b), &source.oriented_curve()).is_some());
+
+        // A selected ID represents an Arc allocation. As long as the original
+        // snapshot owns a source handle, replacing the shell cannot recycle
+        // that allocation for unrelated edges during a later chain.
+        for _ in 0..128 {
+            let candidate = Edge::new_unchecked(&Vertex::new(a), &Vertex::new(b), line(a, b));
+            assert_ne!(candidate.id(), selected[0]);
+        }
+    }
+
+    #[test]
     fn rematch_visits_both_survivors_after_an_intermediate_piece_was_removed() {
         let a = Point3::new(0.0, 0.0, 0.0);
         let b = Point3::new(1.0, 0.0, 0.0);
@@ -1154,8 +1172,10 @@ mod rematch_tests {
 
     #[test]
     fn variable_radius_uses_the_original_wire_position_for_reversed_fragments() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
         let original = OriginalEdgeSpan {
-            curve: line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)),
+            source_edge: Edge::new_unchecked(&Vertex::new(a), &Vertex::new(b), line(a, b)),
             start: 0.2,
             span: 0.3,
         };
@@ -1168,8 +1188,10 @@ mod rematch_tests {
 
     #[test]
     fn variable_radius_tracks_nonlinear_reparameterized_fragment_geometry() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
         let original = OriginalEdgeSpan {
-            curve: line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)),
+            source_edge: Edge::new_unchecked(&Vertex::new(a), &Vertex::new(b), line(a, b)),
             start: 0.2,
             span: 0.3,
         };
