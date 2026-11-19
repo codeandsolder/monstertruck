@@ -68,17 +68,24 @@ fn rematch_selected_edge_id(
     shell: &Shell,
     original_curve: &Curve,
     used_ids: &HashSet<EdgeId>,
+    edge_face_map: &HashMap<EdgeId, FaceList>,
 ) -> Option<EdgeId> {
     let tolerance = KERNEL_EPSILON;
     let tolerance_squared = tolerance * tolerance;
     shell
         .edge_iter()
-        .filter(|edge| !used_ids.contains(&edge.id()))
+        .filter(|edge| !used_ids.contains(&edge.id()) && is_manifold_edge(edge_face_map, edge.id()))
         .filter(|edge| {
             let (front, back) = edge.ends();
             sampled_curve_distance_squared(original_curve, front.point(), 24) < tolerance_squared
                 && sampled_curve_distance_squared(original_curve, back.point(), 24)
                     < tolerance_squared
+                && {
+                    let (t0, t1) = edge.curve().range_tuple();
+                    sampled_curve_distance_squared(
+                        original_curve, edge.curve().evaluate((t0 + t1) * 0.5), 24,
+                    ) < tolerance_squared
+                }
         })
         .max_by(|left, right| {
             approximate_edge_length(left, 8).total_cmp(&approximate_edge_length(right, 8))
@@ -519,7 +526,7 @@ pub fn fillet_edges(
                 original_edge_curves
                     .get(&original_eid)
                     .and_then(|original_curve| {
-                        rematch_selected_edge_id(shell, original_curve, &used_ids)
+                        rematch_selected_edge_id(shell, original_curve, &used_ids, &edge_face_map)
                     })
             };
             if let Some(resolved_eid) = resolved_eid {
@@ -682,7 +689,7 @@ pub fn fillet_edges(
                             break;
                         };
                         let Some(rematched) =
-                            rematch_selected_edge_id(shell, original_curve, &fallback_used_ids)
+                            rematch_selected_edge_id(shell, original_curve, &fallback_used_ids, &edge_face_map)
                         else {
                             chain_failed = true;
                             break;
