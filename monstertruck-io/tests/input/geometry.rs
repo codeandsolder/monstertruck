@@ -310,6 +310,38 @@ proptest! {
     }
 }
 
+/// Compare the complete underlying spline representation, not merely the
+/// shape it evaluates to. Both polynomial and weighted NURBS STEP loaders
+/// must preserve knot placement and each homogeneous control point.
+fn assert_bspline_curve_data_near<P: Tolerance>(
+    decoded: &BsplineCurve<P>,
+    expected: &BsplineCurve<P>,
+) {
+    assert_eq!(decoded.knot_vector().len(), expected.knot_vector().len());
+    assert_eq!(
+        decoded.control_points().len(),
+        expected.control_points().len()
+    );
+    decoded
+        .knot_vector()
+        .iter()
+        .zip(expected.knot_vector())
+        .for_each(|(a, b)| assert_near!(a, b));
+    decoded
+        .control_points()
+        .iter()
+        .zip(expected.control_points())
+        .for_each(|(a, b)| assert_near!(a, b));
+}
+
+/// Decode a rational STEP curve and assert that every homogeneous control
+/// point and knot survives its subtype's representation unchanged.
+fn assert_nurbs_curve_step_data_near(step_str: &str, expected: &NurbsCurve<Vector4>) {
+    let parsed = step_to_entity::<RationalBsplineCurveHolder>(step_str);
+    let decoded: NurbsCurve<Vector4> = (&parsed).try_into().unwrap();
+    assert_bspline_curve_data_near(decoded.non_rationalized(), expected.non_rationalized());
+}
+
 fn exec_b_spline_curve_with_knots(
     knot_len: usize,
     knot_incrs: Vec<f64>,
@@ -337,16 +369,7 @@ fn exec_b_spline_curve_with_knots(
     let step_str = format!("DATA;{}ENDSEC;", StepDisplay::new(&bsp, 1));
     let bsp_step = step_to_entity::<BsplineCurveWithKnotsHolder>(&step_str);
     let res: BsplineCurve<Point3> = (&bsp_step).try_into().unwrap();
-    assert_eq!(res.knot_vector().len(), bsp.knot_vector().len());
-    assert_eq!(res.control_points().len(), bsp.control_points().len());
-    res.knot_vector()
-        .iter()
-        .zip(bsp.knot_vector())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.control_points()
-        .iter()
-        .zip(bsp.control_points())
-        .for_each(|(x, y)| assert_near!(x, y));
+    assert_bspline_curve_data_near(&res, &bsp);
 }
 
 proptest! {
@@ -374,6 +397,17 @@ fn step_bsp_curve_ctrls(points: &[Point3]) -> (String, String) {
     )
 }
 
+/// Materialize the shared STEP control-point and weight fields while
+/// preserving each rational subtype's distinct entity components/order.
+fn step_rational_curve_ctrls(
+    points: &[Point3],
+    weights: &mut Vec<f64>,
+) -> (String, String, String) {
+    weights.truncate(points.len());
+    let (indices, points) = step_bsp_curve_ctrls(points);
+    (indices, points, SliceDisplay(&*weights).to_string())
+}
+
 fn exec_bezier_curve(degree: usize, ctrlpt_coords: Vec<[f64; 3]>) {
     let points = ctrlpt_coords
         .into_iter()
@@ -389,16 +423,7 @@ fn exec_bezier_curve(degree: usize, ctrlpt_coords: Vec<[f64; 3]>) {
     let bsp_step = step_to_entity::<BezierCurveHolder>(&step_str);
     let res: BsplineCurve<Point3> = (&bsp_step).try_into().unwrap();
     let ans = BsplineCurve::new_unchecked(KnotVector::bezier_knot(degree), points);
-    assert_eq!(res.knot_vector().len(), ans.knot_vector().len());
-    assert_eq!(res.control_points().len(), ans.control_points().len());
-    res.knot_vector()
-        .iter()
-        .zip(ans.knot_vector())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.control_points()
-        .iter()
-        .zip(ans.control_points())
-        .for_each(|(x, y)| assert_near!(x, y));
+    assert_bspline_curve_data_near(&res, &ans);
 }
 
 proptest! {
@@ -428,16 +453,7 @@ fn exec_quasi_uniform_curve(degree: usize, division: usize, ctrlpt_coords: Vec<[
     let bsp_step = step_to_entity::<QuasiUniformCurveHolder>(&step_str);
     let res: BsplineCurve<Point3> = (&bsp_step).try_into().unwrap();
     let ans = BsplineCurve::new_unchecked(knots, points);
-    assert_eq!(res.knot_vector().len(), ans.knot_vector().len());
-    assert_eq!(res.control_points().len(), ans.control_points().len());
-    res.knot_vector()
-        .iter()
-        .zip(ans.knot_vector())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.control_points()
-        .iter()
-        .zip(ans.control_points())
-        .for_each(|(x, y)| assert_near!(x, y));
+    assert_bspline_curve_data_near(&res, &ans);
 }
 
 proptest! {
@@ -467,16 +483,7 @@ fn exec_uniform_curve(degree: usize, knot_len: usize, ctrlpt_coords: Vec<[f64; 3
     let bsp_step = step_to_entity::<UniformCurveHolder>(&step_str);
     let res: BsplineCurve<Point3> = (&bsp_step).try_into().unwrap();
     let ans = BsplineCurve::new_unchecked(knots, points);
-    assert_eq!(res.knot_vector().len(), ans.knot_vector().len());
-    assert_eq!(res.control_points().len(), ans.control_points().len());
-    res.knot_vector()
-        .iter()
-        .zip(ans.knot_vector())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.control_points()
-        .iter()
-        .zip(ans.control_points())
-        .for_each(|(x, y)| assert_near!(x, y));
+    assert_bspline_curve_data_near(&res, &ans);
 }
 
 proptest! {
@@ -518,18 +525,7 @@ fn exec_nurbs_curve_b_spline_with_knots(
     let bsp = BsplineCurve::new_unchecked(knots, cps);
     let nurbs = NurbsCurve::<Vector4>::try_from_bspline_and_weights(bsp, weights).unwrap();
     let step_str = format!("DATA;{}ENDSEC;", StepDisplay::new(&nurbs, 1));
-    let nurbs_step = step_to_entity::<RationalBsplineCurveHolder>(&step_str);
-    let res: NurbsCurve<Vector4> = (&nurbs_step).try_into().unwrap();
-    assert_eq!(res.knot_vector().len(), nurbs.knot_vector().len());
-    assert_eq!(res.control_points().len(), nurbs.control_points().len());
-    res.knot_vector()
-        .iter()
-        .zip(nurbs.knot_vector())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.control_points()
-        .iter()
-        .zip(nurbs.control_points())
-        .for_each(|(x, y)| assert_near!(x, y));
+    assert_nurbs_curve_step_data_near(&step_str, &nurbs);
 }
 
 proptest! {
@@ -556,9 +552,8 @@ fn exec_nurbs_curve_bezier_curve(
         .take(degree + 1)
         .map(Point3::from)
         .collect::<Vec<_>>();
-    weights.truncate(points.len());
-    let weights_display = SliceDisplay(&weights);
-    let (step_cps_indices, step_cps) = step_bsp_curve_ctrls(&points);
+    let (step_cps_indices, step_cps, weights_display) =
+        step_rational_curve_ctrls(&points, &mut weights);
     let step_str = format!(
         "DATA;
 #1 = (
@@ -572,20 +567,9 @@ fn exec_nurbs_curve_bezier_curve(
 );
 {step_cps}ENDSEC;"
     );
-    let bsp_step = step_to_entity::<RationalBsplineCurveHolder>(&step_str);
-    let res: NurbsCurve<Vector4> = (&bsp_step).try_into().unwrap();
     let bsp = BsplineCurve::new_unchecked(KnotVector::bezier_knot(degree), points);
     let ans = NurbsCurve::<Vector4>::try_from_bspline_and_weights(bsp, weights).unwrap();
-    assert_eq!(res.knot_vector().len(), ans.knot_vector().len());
-    assert_eq!(res.control_points().len(), ans.control_points().len());
-    res.knot_vector()
-        .iter()
-        .zip(ans.knot_vector())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.control_points()
-        .iter()
-        .zip(ans.control_points())
-        .for_each(|(x, y)| assert_near!(x, y));
+    assert_nurbs_curve_step_data_near(&step_str, &ans);
 }
 
 proptest! {
@@ -612,9 +596,8 @@ fn exec_nurbs_curve_quasi_uniform_curve(
         .take(knots.len() - degree - 1)
         .map(Point3::from)
         .collect::<Vec<_>>();
-    weights.truncate(points.len());
-    let weights_display = SliceDisplay(&weights);
-    let (step_cps_indices, step_cps) = step_bsp_curve_ctrls(&points);
+    let (step_cps_indices, step_cps, weights_display) =
+        step_rational_curve_ctrls(&points, &mut weights);
     let step_str = format!(
         "DATA;
 #1 = (
@@ -628,20 +611,9 @@ fn exec_nurbs_curve_quasi_uniform_curve(
 );
 {step_cps}ENDSEC;"
     );
-    let bsp_step = step_to_entity::<RationalBsplineCurveHolder>(&step_str);
-    let res: NurbsCurve<Vector4> = (&bsp_step).try_into().unwrap();
     let bsp = BsplineCurve::new_unchecked(knots, points);
     let ans = NurbsCurve::<Vector4>::try_from_bspline_and_weights(bsp, weights).unwrap();
-    assert_eq!(res.knot_vector().len(), ans.knot_vector().len());
-    assert_eq!(res.control_points().len(), ans.control_points().len());
-    res.knot_vector()
-        .iter()
-        .zip(ans.knot_vector())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.control_points()
-        .iter()
-        .zip(ans.control_points())
-        .for_each(|(x, y)| assert_near!(x, y));
+    assert_nurbs_curve_step_data_near(&step_str, &ans);
 }
 
 proptest! {
@@ -668,9 +640,8 @@ fn exec_nurbs_curve_uniform_curve(
         .take(knot_len - degree - 1)
         .map(Point3::from)
         .collect::<Vec<_>>();
-    weights.truncate(points.len());
-    let weights_display = SliceDisplay(&weights);
-    let (step_cps_indices, step_cps) = step_bsp_curve_ctrls(&points);
+    let (step_cps_indices, step_cps, weights_display) =
+        step_rational_curve_ctrls(&points, &mut weights);
     let step_str = format!(
         "DATA;
 #1 = (
@@ -684,20 +655,9 @@ fn exec_nurbs_curve_uniform_curve(
 );
 {step_cps}ENDSEC;"
     );
-    let bsp_step = step_to_entity::<RationalBsplineCurveHolder>(&step_str);
-    let res: NurbsCurve<Vector4> = (&bsp_step).try_into().unwrap();
     let bsp = BsplineCurve::new_unchecked(knots, points);
     let ans = NurbsCurve::<Vector4>::try_from_bspline_and_weights(bsp, weights).unwrap();
-    assert_eq!(res.knot_vector().len(), ans.knot_vector().len());
-    assert_eq!(res.control_points().len(), ans.control_points().len());
-    res.knot_vector()
-        .iter()
-        .zip(ans.knot_vector())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.control_points()
-        .iter()
-        .zip(ans.control_points())
-        .for_each(|(x, y)| assert_near!(x, y));
+    assert_nurbs_curve_step_data_near(&step_str, &ans);
 }
 
 proptest! {
@@ -1198,42 +1158,77 @@ fn coords_to_points(
         .collect()
 }
 
-fn compare_bsp_surfaces(res: &BsplineSurface<Point3>, ans: &BsplineSurface<Point3>) {
-    assert_eq!(res.knot_vector_u().len(), ans.knot_vector_u().len());
-    assert_eq!(res.knot_vector_v().len(), ans.knot_vector_v().len());
-    assert_eq!(res.control_points().len(), ans.control_points().len());
-    res.knot_vector_u()
+/// Compare the complete two-dimensional control grid and both knot axes.
+/// In addition to point values, verify *each* row length: flattening two
+/// ragged grids can otherwise make distinct control meshes appear identical.
+fn assert_bspline_surface_data_near<P: Tolerance>(
+    decoded: &BsplineSurface<P>,
+    expected: &BsplineSurface<P>,
+) {
+    assert_eq!(
+        decoded.knot_vector_u().len(),
+        expected.knot_vector_u().len()
+    );
+    assert_eq!(
+        decoded.knot_vector_v().len(),
+        expected.knot_vector_v().len()
+    );
+    assert_eq!(
+        decoded.control_points().len(),
+        expected.control_points().len()
+    );
+    decoded
+        .knot_vector_u()
         .iter()
-        .zip(ans.knot_vector_u())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.knot_vector_v()
+        .zip(expected.knot_vector_u())
+        .for_each(|(a, b)| assert_near!(a, b));
+    decoded
+        .knot_vector_v()
         .iter()
-        .zip(ans.knot_vector_v())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.control_points()
+        .zip(expected.knot_vector_v())
+        .for_each(|(a, b)| assert_near!(a, b));
+    for (decoded_row, expected_row) in decoded
+        .control_points()
         .iter()
-        .flatten()
-        .zip(ans.control_points().iter().flatten())
-        .for_each(|(x, y)| assert_near!(x, y));
+        .zip(expected.control_points())
+    {
+        assert_eq!(decoded_row.len(), expected_row.len());
+        decoded_row
+            .iter()
+            .zip(expected_row)
+            .for_each(|(a, b)| assert_near!(a, b));
+    }
 }
 
-fn compare_nurbs_surfaces(res: &NurbsSurface<Vector4>, ans: &NurbsSurface<Vector4>) {
-    assert_eq!(res.knot_vector_u().len(), ans.knot_vector_u().len());
-    assert_eq!(res.knot_vector_v().len(), ans.knot_vector_v().len());
-    assert_eq!(res.control_points().len(), ans.control_points().len());
-    res.knot_vector_u()
-        .iter()
-        .zip(ans.knot_vector_u())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.knot_vector_v()
-        .iter()
-        .zip(ans.knot_vector_v())
-        .for_each(|(x, y)| assert_near!(x, y));
-    res.control_points()
-        .iter()
-        .flatten()
-        .zip(ans.control_points().iter().flatten())
-        .for_each(|(x, y)| assert_near!(x, y));
+fn compare_bsp_surfaces(decoded: &BsplineSurface<Point3>, expected: &BsplineSurface<Point3>) {
+    assert_bspline_surface_data_near(decoded, expected);
+}
+
+fn compare_nurbs_surfaces(decoded: &NurbsSurface<Vector4>, expected: &NurbsSurface<Vector4>) {
+    assert_bspline_surface_data_near(decoded.non_rationalized(), expected.non_rationalized());
+}
+
+#[test]
+#[should_panic(expected = "assertion `left == right` failed")]
+fn surface_control_grid_comparison_rejects_ragged_row_mismatch() {
+    let knots = KnotVector::bezier_knot(1);
+    let points = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+        Point3::new(1.0, 1.0, 0.0),
+    ];
+    let regular = BsplineSurface::new_unchecked(
+        (knots.clone(), knots.clone()),
+        vec![vec![points[0], points[1]], vec![points[2], points[3]]],
+    );
+    // Same outer row count, total points, and flattened values, but a
+    // different 2D control mesh: older tests silently accepted this.
+    let ragged = BsplineSurface::new_unchecked(
+        (knots.clone(), knots),
+        vec![vec![points[0]], vec![points[1], points[2], points[3]]],
+    );
+    assert_bspline_surface_data_near(&regular, &ragged);
 }
 
 fn exec_b_spline_surface_with_knots(
