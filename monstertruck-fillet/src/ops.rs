@@ -17,6 +17,8 @@ use super::types::{Edge, EdgeId, Face, NotStrictlyCut, ParameterCurveLinear, She
 
 type Result<T> = std::result::Result<T, FilletError>;
 
+type SideFilletResult = Result<(Face, Face, Face, Option<Face>, Option<Face>)>;
+
 /// Fillets a single shared edge between two faces.
 ///
 /// Returns `(new_face0, new_face1, fillet_face)`.
@@ -35,8 +37,8 @@ pub fn fillet(
     // direction relative to the two surface normals. Boolean output reaches
     // both boundary-winding conventions, so when the natural-side attempt
     // fails geometrically, retry with the sphere side flipped.
-    fillet_on_side(face0, face1, filleted_edge_id, options, false)
-        .or_else(|_| fillet_on_side(face0, face1, filleted_edge_id, options, true))
+    fillet_on_side(face0, face1, filleted_edge_id, options, false, None)
+        .or_else(|_| fillet_on_side(face0, face1, filleted_edge_id, options, true, None))
 }
 
 #[expect(
@@ -49,6 +51,7 @@ fn fillet_on_side(
     filleted_edge_id: EdgeId,
     options: &FilletOptions,
     flip_side: bool,
+    radius_override: Option<&dyn Fn(f64) -> f64>,
 ) -> Result<(Face, Face, Face)> {
     let is_filleted_edge = move |edge: &Edge| edge.id() == filleted_edge_id;
     let filleted_edge =
@@ -107,7 +110,11 @@ fn fillet_on_side(
         let make = |radius: Option<&dyn Fn(f64) -> f64>| {
             make_with_extend(radius, true).or_else(|| make_with_extend(radius, false))
         };
-        let surface = if options.profile.uses_radius() {
+        let surface = if !options.profile.uses_radius() {
+            make(None)
+        } else if let Some(radius) = radius_override {
+            make(Some(radius))
+        } else {
             match &options.radius {
                 RadiusSpec::Constant(r) => {
                     let r = *r;
@@ -116,8 +123,6 @@ fn fillet_on_side(
                 RadiusSpec::Variable(f) => make(Some(f.as_ref())),
                 RadiusSpec::PerEdge(radii) => radii.first().and_then(|&r| make(Some(&|_| r))),
             }
-        } else {
-            make(None)
         };
         surface.ok_or(FilletError::GeometryFailed {
             context: "fillet surface computation",
@@ -166,10 +171,6 @@ fn fillet_on_side(
 ///
 /// Returns [`FilletError`] when the core fillet geometry cannot be built or its adjacent
 /// carrier-edge reconstruction fails.
-#[expect(
-    clippy::type_complexity,
-    reason = "the five-element tuple is the direct correlated topology result of a fillet operation"
-)]
 pub fn fillet_with_side(
     face0: &Face,
     face1: &Face,
@@ -177,8 +178,48 @@ pub fn fillet_with_side(
     side0: Option<&Face>,
     side1: Option<&Face>,
     options: &FilletOptions,
-) -> Result<(Face, Face, Face, Option<Face>, Option<Face>)> {
-    let (new_face0, new_face1, fillet) = fillet(face0, face1, filleted_edge_id, options)?;
+) -> SideFilletResult {
+    fillet_with_side_radius(face0, face1, filleted_edge_id, side0, side1, options, None)
+}
+
+/// Like [`fillet_with_side`], with a borrowed radius function supplied by a
+/// selected-edge fragment's original wire parameterization. This avoids
+/// boxing or restarting a variable radius at each fallback segment.
+///
+/// # Errors
+///
+/// Returns [`FilletError`] when fillet geometry or carrier reconstruction fails.
+pub fn fillet_with_side_radius(
+    face0: &Face,
+    face1: &Face,
+    filleted_edge_id: EdgeId,
+    side0: Option<&Face>,
+    side1: Option<&Face>,
+    options: &FilletOptions,
+    radius_override: Option<&dyn Fn(f64) -> f64>,
+) -> SideFilletResult {
+    let (new_face0, new_face1, fillet) = if radius_override.is_some() {
+        fillet_on_side(
+            face0,
+            face1,
+            filleted_edge_id,
+            options,
+            false,
+            radius_override,
+        )
+        .or_else(|_| {
+            fillet_on_side(
+                face0,
+                face1,
+                filleted_edge_id,
+                options,
+                true,
+                radius_override,
+            )
+        })?
+    } else {
+        fillet(face0, face1, filleted_edge_id, options)?
+    };
 
     let (front_edge0, back_edge0) = {
         let fillet_edge_id = fillet.absolute_boundaries()[0][0].id();

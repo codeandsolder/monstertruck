@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::env;
 
 use crate::HashSet;
@@ -15,6 +15,7 @@ use super::convert::{FilletableCurve, FilletableSurface, convert_shell_in, conve
 use super::error::FilletError;
 use super::ops;
 use super::params::{FilletOptions, FilletProfile, RadiusSpec};
+use super::topology::wire_edge_starts_and_spans;
 use super::types::{
     Curve, Edge, EdgeId, Shell, VertexId, Wire, approximate_edge_length, squared_distance,
 };
@@ -48,15 +49,41 @@ fn build_edge_face_map(shell: &Shell) -> HashMap<EdgeId, FaceList> {
     map
 }
 
-/// Checks a point against the actual curve rather than a fixed parameter grid.
-/// Fixed-grid matching rejects valid subdivided edges whose cut parameters
-/// do not coincide with the grid points.
-fn curve_contains_point(curve: &Curve, point: Point3) -> bool {
-    curve
-        .search_nearest_parameter(point, None, 100)
-        .is_some_and(|t| {
-            squared_distance(curve.evaluate(t), point) < KERNEL_EPSILON * KERNEL_EPSILON
-        })
+/// Project a surviving edge onto the original curve. The projected samples
+/// must follow one monotone interval; a loop, reversal, or deviation must not
+/// accidentally classify an unrelated edge as one of its descendants.
+fn curve_interval_on_original(original: &Curve, candidate: &Curve) -> Option<(f64, f64)> {
+    let (candidate_start, candidate_end) = candidate.range_tuple();
+    let (original_start, original_end) = original.range_tuple();
+    let interval_epsilon = (original_end - original_start).abs() * KERNEL_EPSILON;
+    let mut previous = None;
+    let mut projected = Vec::with_capacity(5);
+    for fraction in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let t = (candidate_end - candidate_start).mul_add(fraction, candidate_start);
+        let point = candidate.evaluate(t);
+        let u = original.search_nearest_parameter(point, None, 100)?;
+        if !u.is_finite()
+            || squared_distance(original.evaluate(u), point) >= KERNEL_EPSILON * KERNEL_EPSILON
+        {
+            return None;
+        }
+        if let Some(previous) = previous {
+            projected.push(u - previous);
+        }
+        previous = Some(u);
+    }
+    let direction = projected.iter().sum::<f64>();
+    if direction.abs() <= interval_epsilon
+        || projected
+            .iter()
+            .any(|&step| step * direction < -interval_epsilon * direction.abs())
+    {
+        return None;
+    }
+    let first =
+        original.search_nearest_parameter(candidate.evaluate(candidate_start), None, 100)?;
+    let last = previous?;
+    Some((first.min(last), first.max(last)))
 }
 
 fn sampled_variable_radius_upper_bound(radius: &dyn Fn(f64) -> f64, sample_count: usize) -> f64 {
@@ -65,14 +92,15 @@ fn sampled_variable_radius_upper_bound(radius: &dyn Fn(f64) -> f64, sample_count
         .fold(f64::NEG_INFINITY, f64::max)
 }
 
-fn rematch_selected_edge_id(
+/// Return every non-overlapping manifold segment of the original curve in
+/// its original parameter order. Overlapping matches are ambiguous topology,
+/// not a reason to pick whichever surviving edge happens to be longest.
+fn rematch_selected_edge_ids(
     shell: &Shell,
     original_curve: &Curve,
     used_ids: &HashSet<EdgeId>,
     edge_face_map: &HashMap<EdgeId, FaceList>,
-) -> Option<EdgeId> {
-    // The same topological edge appears in both incident faces. Deduplicate it
-    // before deciding whether several distinct candidates are indistinguishable.
+) -> Option<Vec<EdgeId>> {
     let mut seen_ids = HashSet::new();
     let mut candidates = shell
         .edge_iter()
@@ -81,44 +109,84 @@ fn rematch_selected_edge_id(
                 && !used_ids.contains(&edge.id())
                 && is_manifold_edge(edge_face_map, edge.id())
         })
-        .filter(|edge| {
-            let curve = edge.curve();
-            let (start, end) = curve.range_tuple();
-            // Interior samples distinguish different paths with the same ends.
-            [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().all(|fraction| {
-                let t = (end - start).mul_add(fraction, start);
-                curve_contains_point(original_curve, curve.evaluate(t))
-            })
+        .filter_map(|edge| {
+            curve_interval_on_original(original_curve, &edge.curve())
+                .map(|interval| (edge.id(), interval))
         })
-        .map(|edge| (edge.id(), approximate_edge_length(&edge, 8)))
         .collect::<Vec<_>>();
-
-    // When topology has changed there is no identity-preserving mapping. A
-    // unique longest segment is a useful best-effort successor; equal-length
-    // successors are ambiguous and must not be selected arbitrarily.
-    candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
-    match candidates.as_slice() {
-        [(id, _)] => Some(*id),
-        [(id, longest), (_, runner_up), ..] if longest - runner_up > KERNEL_EPSILON => Some(*id),
-        _ => None,
+    candidates.sort_by(|a, b| a.1.0.total_cmp(&b.1.0));
+    let (start, end) = original_curve.range_tuple();
+    let interval_epsilon = (end - start).abs() * KERNEL_EPSILON;
+    if candidates.is_empty()
+        || candidates
+            .windows(2)
+            .any(|pair| pair[1].1.0 < pair[0].1.1 - interval_epsilon)
+    {
+        return None;
     }
+    Some(candidates.into_iter().map(|(id, _)| id).collect())
 }
 
-/// Resolve the requested identity against the current topology. Geometric
-/// rematching is permitted only when the original ID is no longer usable;
-/// ambiguity must be reported as a hard error, never silently drop an edge.
-fn resolve_active_edge_id(
+/// Exact identity takes precedence over geometry. A replaced edge may have
+/// multiple non-overlapping successors; returning only the longest would omit
+/// valid portions of the user's selection.
+fn resolve_active_edge_ids(
     shell: &Shell,
     original_id: EdgeId,
     original_curve: &Curve,
     used_ids: &HashSet<EdgeId>,
     edge_face_map: &HashMap<EdgeId, FaceList>,
-) -> Result<EdgeId> {
+) -> Result<Vec<EdgeId>> {
     if is_manifold_edge(edge_face_map, original_id) && !used_ids.contains(&original_id) {
-        return Ok(original_id);
+        return Ok(vec![original_id]);
     }
-    rematch_selected_edge_id(shell, original_curve, used_ids, edge_face_map)
+    rematch_selected_edge_ids(shell, original_curve, used_ids, edge_face_map)
         .ok_or(FilletError::UnresolvableSelectedEdge)
+}
+
+/// Visit every surviving fragment, including descendants created by a
+/// preceding fillet in this same chain. Each pending fragment stores its own
+/// curve so later rematching never falls back to an unrelated, longer portion
+/// of the parent edge. The caller owns the surrounding shell transaction.
+fn visit_surviving_fragments(
+    shell: &mut Shell,
+    segments: VecDeque<(EdgeId, EdgeId, Curve)>,
+    mut apply: impl FnMut(&mut Shell, EdgeId, EdgeId) -> Result<()>,
+) -> Result<()> {
+    let mut pending = segments;
+    let mut used = HashSet::<EdgeId>::new();
+    // EdgeId is pointer-derived. Retain every pending and processed edge's
+    // Arc-backed handle until the visit ends, preventing a freed ID from being
+    // recycled for a new segment (the ABA problem).
+    let mut pinned_edges: Vec<Edge> = pending
+        .iter()
+        .filter_map(|(_, id, _)| shell.edge_iter().find(|edge| edge.id() == *id))
+        .collect();
+    while let Some((original_id, active_id, hint_curve)) = pending.pop_front() {
+        let edge_face_map = build_edge_face_map(shell);
+        let successors =
+            resolve_active_edge_ids(shell, active_id, &hint_curve, &used, &edge_face_map)?;
+        let matched_edges: Vec<Edge> = successors
+            .into_iter()
+            .map(|id| {
+                shell
+                    .edge_iter()
+                    .find(|edge| edge.id() == id)
+                    .ok_or(FilletError::EdgeNotFound)
+            })
+            .collect::<Result<_>>()?;
+        let first_id = matched_edges[0].id();
+        // Descendants may be split again by the next topology edit. Queue
+        // them with their actual geometry before touching the shell.
+        for edge in matched_edges.iter().skip(1).rev() {
+            pending.push_front((original_id, edge.id(), edge.oriented_curve()));
+        }
+        pinned_edges.extend(matched_edges);
+        debug_assert!(pinned_edges.iter().any(|edge| edge.id() == first_id));
+        used.insert(first_id);
+        apply(shell, original_id, first_id)?;
+    }
+    Ok(())
 }
 
 fn sampled_curve_surface_max_distance(
@@ -291,6 +359,82 @@ fn group_edges_into_chains(
     Ok(chains)
 }
 
+/// Original parameterization of a selected edge within its initial wire.
+/// Stored before modifying any chain, so later fragments retain the same
+/// variable-radius function instead of independently restarting at t=0.
+struct OriginalEdgeSpan {
+    curve: Curve,
+    start: f64,
+    span: f64,
+}
+
+fn original_edge_spans(
+    shell: &Shell,
+    chains: &[Chain],
+) -> Result<HashMap<EdgeId, OriginalEdgeSpan>> {
+    let mut spans = HashMap::new();
+    for chain in chains {
+        let boundary_edges = chain
+            .edge_ids
+            .iter()
+            .map(|&id| {
+                shell[chain.shared_face_idx]
+                    .edge_iter()
+                    .find(|edge| edge.id() == id)
+                    .ok_or(FilletError::EdgeNotFound)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let wire: Wire = boundary_edges.into();
+        let (starts, lengths) =
+            wire_edge_starts_and_spans(&wire).ok_or(FilletError::DiscontinuousWire)?;
+        for (edge, (start, span)) in wire.edge_iter().zip(starts.into_iter().zip(lengths)) {
+            spans.insert(
+                edge.id(),
+                OriginalEdgeSpan {
+                    curve: edge.oriented_curve(),
+                    start,
+                    span,
+                },
+            );
+        }
+    }
+    Ok(spans)
+}
+
+/// Evaluates a fragment's radius by projecting each position back onto the
+/// originally selected edge, then mapping to the original wire's normalized
+/// parameter. Works for reversed and nonlinearly reparameterized descendants.
+fn radius_on_original_wire<'a>(
+    fragment_curve: Curve,
+    original: &'a OriginalEdgeSpan,
+    radius: &'a dyn Fn(f64) -> f64,
+) -> impl Fn(f64) -> f64 + 'a {
+    let (fragment_start, fragment_end) = fragment_curve.range_tuple();
+    let (original_start, original_end) = original.curve.range_tuple();
+    move |t| {
+        let parameter = (fragment_end - fragment_start).mul_add(t, fragment_start);
+        let point = fragment_curve.evaluate(parameter);
+        let global_t = original
+            .curve
+            .search_nearest_parameter(point, None, 100)
+            .map_or(f64::NAN, |original_parameter| {
+                let edge_t =
+                    (original_parameter - original_start) / (original_end - original_start);
+                original
+                    .span
+                    .mul_add(edge_t, original.start)
+                    .clamp(0.0, 1.0)
+            });
+        radius(global_t)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct VariableRadiusMapping<'a> {
+    original: &'a OriginalEdgeSpan,
+    radius: &'a dyn Fn(f64) -> f64,
+}
+
 /// Finds the side face adjacent to a given vertex in a chain, if any.
 ///
 /// A side face is one that shares the vertex and an edge with one of the two
@@ -328,6 +472,7 @@ fn apply_single_edge_fillet(
     edge_id: EdgeId,
     preferred_shared_face_idx: Option<usize>,
     options: &FilletOptions,
+    radius_mapping: Option<VariableRadiusMapping<'_>>,
 ) -> Result<()> {
     let edge_face_map = build_edge_face_map(shell);
     let faces = edge_face_map
@@ -337,6 +482,14 @@ fn apply_single_edge_fillet(
         return Err(FilletError::NonManifoldEdge(faces.len()));
     }
 
+    // Asymmetric chamfer setbacks are tied to the two face roles: do not
+    // arbitrarily swap them if a replaced fragment no longer touches the
+    // originally selected shared face.
+    if matches!(&options.profile, FilletProfile::AsymmetricChamfer { .. })
+        && preferred_shared_face_idx.is_some_and(|idx| !faces.contains(&idx))
+    {
+        return Err(FilletError::SharedFaceNotFound);
+    }
     let shared_face_idx = preferred_shared_face_idx
         .filter(|idx| faces.contains(idx))
         .unwrap_or(faces[0]);
@@ -374,13 +527,28 @@ fn apply_single_edge_fillet(
     let side0 = side0_idx.map(|idx| shell[idx].clone());
     let side1 = side1_idx.map(|idx| shell[idx].clone());
 
-    let fillet_result = ops::fillet_with_side(
+    let mapped_radius = radius_mapping
+        .map(|mapping| {
+            let fragment = edge.oriented_curve();
+            curve_interval_on_original(&mapping.original.curve, &fragment)
+                .ok_or(FilletError::UnresolvableSelectedEdge)?;
+            Ok(radius_on_original_wire(
+                fragment,
+                mapping.original,
+                mapping.radius,
+            ))
+        })
+        .transpose()?;
+    let fillet_result = ops::fillet_with_side_radius(
         &face_a,
         &face_b,
         edge_id,
         side0.as_ref(),
         side1.as_ref(),
         options,
+        mapped_radius
+            .as_ref()
+            .map(|radius| radius as &dyn Fn(f64) -> f64),
     );
     let (new_face_a, new_face_b, fillet, new_side0, new_side1) = match fillet_result {
         Ok(result) => result,
@@ -523,17 +691,7 @@ fn fillet_edges_in_place(
         .enumerate()
         .map(|(i, &eid)| (eid, i))
         .collect();
-    let original_edge_curves: HashMap<EdgeId, Curve> = edge_ids
-        .iter()
-        .copied()
-        .map(|eid| {
-            shell
-                .edge_iter()
-                .find(|edge| edge.id() == eid)
-                .map(|edge| (eid, edge.oriented_curve()))
-                .ok_or(FilletError::EdgeNotFound)
-        })
-        .collect::<Result<_>>()?;
+    let original_spans = original_edge_spans(shell, &chains)?;
 
     // Process each chain with a fresh edge-face map, so that mutations from
     // earlier chains don't cause stale face indices.
@@ -542,18 +700,20 @@ fn fillet_edges_in_place(
         let mut used_ids = HashSet::<EdgeId>::new();
         let mut resolved_pairs: Vec<(EdgeId, EdgeId)> = Vec::new();
         for original_eid in chain.edge_ids.iter().copied() {
-            let original_curve = original_edge_curves
+            let original_curve = &original_spans
                 .get(&original_eid)
-                .ok_or(FilletError::EdgeNotFound)?;
-            let resolved_eid = resolve_active_edge_id(
+                .ok_or(FilletError::EdgeNotFound)?
+                .curve;
+            for resolved_id in resolve_active_edge_ids(
                 shell,
                 original_eid,
                 original_curve,
                 &used_ids,
                 &edge_face_map,
-            )?;
-            used_ids.insert(resolved_eid);
-            resolved_pairs.push((original_eid, resolved_eid));
+            )? {
+                used_ids.insert(resolved_id);
+                resolved_pairs.push((original_eid, resolved_id));
+            }
         }
         let resolved_edge_ids: Vec<EdgeId> = resolved_pairs
             .iter()
@@ -582,7 +742,7 @@ fn fillet_edges_in_place(
             faces[0]
         };
 
-        if chain.edge_ids.len() == 1 {
+        if chain.edge_ids.len() == 1 && resolved_pairs.len() == 1 {
             let chain_opts;
             let opts = if options.profile.uses_radius()
                 && let RadiusSpec::PerEdge(radii) = &options.radius
@@ -598,120 +758,143 @@ fn fillet_edges_in_place(
                 options
             };
 
-            match apply_single_edge_fillet(shell, first_eid, Some(shared_face_idx), opts) {
+            match apply_single_edge_fillet(shell, first_eid, Some(shared_face_idx), opts, None) {
                 Ok(()) | Err(FilletError::GeometryFailed { .. }) => {}
                 Err(error) => return Err(error),
             }
         } else {
-            // Multi-edge chain: build a Wire from the shared face's boundary
-            // to get edges in the correct orientation for that face.
-            let chain_id_set: HashSet<EdgeId> = resolved_edge_ids.iter().copied().collect();
-            let Some(wire): Option<Wire> = shell[shared_face_idx]
-                .boundary_iters()
-                .into_iter()
-                .find_map(|boundary| {
-                    let edges = boundary
-                        .filter(|edge| chain_id_set.contains(&edge.id()))
-                        .collect::<Vec<_>>();
-                    (edges.len() == resolved_edge_ids.len()).then_some(edges.into())
-                })
-            else {
-                // The requested chain no longer has a shared carrier wire.
-                // Returning success here would silently omit those edges.
-                return Err(FilletError::DiscontinuousWire);
-            };
-
-            let chain_opts;
-            let opts = if options.profile.uses_radius()
-                && let RadiusSpec::PerEdge(radii) = &options.radius
-            {
-                let chain_radii: Vec<f64> = wire
-                    .edge_iter()
-                    .map(|edge| {
-                        resolved_to_original
-                            .get(&edge.id())
-                            .copied()
-                            .ok_or(FilletError::EdgeNotFound)
-                            .map(|eid| radii[edge_id_to_idx[&eid]])
-                    })
-                    .collect::<Result<_>>()?;
-                chain_opts = FilletOptions {
-                    radius: RadiusSpec::PerEdge(chain_radii),
-                    divisions: options.divisions,
-                    profile: options.profile.clone(),
-                };
-                &chain_opts
+            // An original edge can have several surviving subsegments after
+            // another fillet. Do not pass a larger, partially disconnected
+            // selection to the original wire constructor; visit every segment
+            // transactionally through the per-edge path below.
+            let has_split_edge = resolved_pairs.len() != chain.edge_ids.len();
+            let wire_fillet_failed = if has_split_edge {
+                true
             } else {
-                options
-            };
+                // Multi-edge chain: build a Wire from the shared face's boundary
+                // to get edges in the correct orientation for that face.
+                let chain_id_set: HashSet<EdgeId> = resolved_edge_ids.iter().copied().collect();
+                let wire: Option<Wire> = shell[shared_face_idx]
+                    .boundary_iters()
+                    .into_iter()
+                    .find_map(|boundary| {
+                        let edges = boundary
+                            .filter(|edge| chain_id_set.contains(&edge.id()))
+                            .collect::<Vec<_>>();
+                        (edges.len() == resolved_edge_ids.len()).then_some(edges.into())
+                    });
+                if let Some(wire) = wire {
+                    let chain_opts;
+                    let opts = if options.profile.uses_radius()
+                        && let RadiusSpec::PerEdge(radii) = &options.radius
+                    {
+                        let chain_radii: Vec<f64> = wire
+                            .edge_iter()
+                            .map(|edge| {
+                                resolved_to_original
+                                    .get(&edge.id())
+                                    .copied()
+                                    .ok_or(FilletError::EdgeNotFound)
+                                    .map(|eid| radii[edge_id_to_idx[&eid]])
+                            })
+                            .collect::<Result<_>>()?;
+                        chain_opts = FilletOptions {
+                            radius: RadiusSpec::PerEdge(chain_radii),
+                            divisions: options.divisions,
+                            profile: options.profile.clone(),
+                        };
+                        &chain_opts
+                    } else {
+                        options
+                    };
 
-            let wire_fillet_failed = match ops::fillet_along_wire(shell, &wire, opts) {
-                Ok(()) => false,
-                Err(
-                    error @ (FilletError::FilletSurfaceComputationFailed
-                    | FilletError::GeometryFailed { .. }
-                    | FilletError::SharedFaceNotFound
-                    | FilletError::AdjacentFacesNotFound
-                    | FilletError::DiscontinuousWire),
-                ) => {
+                    match ops::fillet_along_wire(shell, &wire, opts) {
+                        Ok(()) => false,
+                        Err(
+                            error @ (FilletError::FilletSurfaceComputationFailed
+                            | FilletError::GeometryFailed { .. }
+                            | FilletError::SharedFaceNotFound
+                            | FilletError::AdjacentFacesNotFound
+                            | FilletError::DiscontinuousWire),
+                        ) => {
+                            if env::var_os("MT_FILLET_DEBUG").is_some() {
+                                eprintln!(
+                                    "debug fillet chain {:?}: wire fillet failed ({error}), falling back per edge.",
+                                    chain.edge_ids
+                                );
+                            }
+                            true
+                        }
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    // Carrier-face reconstruction may have split the original
+                    // run over several boundaries. The per-edge visitor can
+                    // still apply every surviving piece without a common wire.
                     if env::var_os("MT_FILLET_DEBUG").is_some() {
                         eprintln!(
-                            "debug fillet chain {:?}: wire fillet failed ({error}), falling back per edge.",
+                            "debug fillet chain {:?}: no shared carrier wire; retrying per-edge.",
                             chain.edge_ids
                         );
                     }
                     true
                 }
-                Err(error) => return Err(error),
             };
 
             if wire_fillet_failed {
                 // The wire attempt is atomic. Run each fallback edge against
                 // a second detached shell, and publish the chain only after
                 // every edge has succeeded. Hard failures roll back too.
+                let pending: VecDeque<(EdgeId, EdgeId, Curve)> = resolved_pairs
+                    .iter()
+                    .map(|&(original_id, active_id)| {
+                        shell
+                            .edge_iter()
+                            .find(|edge| edge.id() == active_id)
+                            .map(|edge| (original_id, active_id, edge.oriented_curve()))
+                            .ok_or(FilletError::EdgeNotFound)
+                    })
+                    .collect::<Result<_>>()?;
                 let fallback_result = ops::edit_shell_transactionally(shell, |candidate| {
-                    let original_to_resolved: HashMap<EdgeId, EdgeId> =
-                        resolved_pairs.iter().copied().collect();
-                    let mut fallback_used_ids = HashSet::<EdgeId>::new();
-                    for original_eid in chain.edge_ids.iter().copied() {
-                        let edge_face_map = build_edge_face_map(candidate);
-                        let initial_eid = original_to_resolved
-                            .get(&original_eid)
-                            .copied()
-                            .unwrap_or(original_eid);
-                        let original_curve = original_edge_curves
-                            .get(&original_eid)
-                            .ok_or(FilletError::EdgeNotFound)?;
-                        let resolved_eid = resolve_active_edge_id(
-                            candidate,
-                            initial_eid,
-                            original_curve,
-                            &fallback_used_ids,
-                            &edge_face_map,
-                        )?;
-                        fallback_used_ids.insert(resolved_eid);
-
-                        let single_edge_opts;
-                        let opts = if options.profile.uses_radius()
-                            && let RadiusSpec::PerEdge(radii) = &options.radius
-                        {
-                            single_edge_opts = FilletOptions {
-                                radius: RadiusSpec::Constant(radii[edge_id_to_idx[&original_eid]]),
-                                divisions: options.divisions,
-                                profile: options.profile.clone(),
+                    visit_surviving_fragments(
+                        candidate,
+                        pending,
+                        |current, original_id, active_id| {
+                            let single_edge_opts;
+                            let opts = if options.profile.uses_radius()
+                                && let RadiusSpec::PerEdge(radii) = &options.radius
+                            {
+                                single_edge_opts = FilletOptions {
+                                    radius: RadiusSpec::Constant(
+                                        radii[edge_id_to_idx[&original_id]],
+                                    ),
+                                    divisions: options.divisions,
+                                    profile: options.profile.clone(),
+                                };
+                                &single_edge_opts
+                            } else {
+                                options
                             };
-                            &single_edge_opts
-                        } else {
-                            options
-                        };
-                        apply_single_edge_fillet(
-                            candidate,
-                            resolved_eid,
-                            Some(chain.shared_face_idx),
-                            opts,
-                        )?;
-                    }
-                    Ok(())
+                            let radius_mapping =
+                                if let RadiusSpec::Variable(radius) = &options.radius {
+                                    Some(VariableRadiusMapping {
+                                        original: original_spans
+                                            .get(&original_id)
+                                            .ok_or(FilletError::EdgeNotFound)?,
+                                        radius: radius.as_ref(),
+                                    })
+                                } else {
+                                    None
+                                };
+                            apply_single_edge_fillet(
+                                current,
+                                active_id,
+                                Some(chain.shared_face_idx),
+                                opts,
+                                radius_mapping,
+                            )
+                        },
+                    )
                 });
                 match fallback_result {
                     Ok(()) | Err(FilletError::GeometryFailed { .. }) => {}
@@ -821,14 +1004,14 @@ mod rematch_tests {
         assert_eq!(faces.get(&ids[0]).map(|faces| faces.len()), Some(2));
         assert_eq!(faces.get(&ids[1]).map(|faces| faces.len()), Some(2));
         assert_eq!(
-            rematch_selected_edge_id(&shell, &original, &HashSet::new(), &faces),
+            rematch_selected_edge_ids(&shell, &original, &HashSet::new(), &faces),
             None
         );
 
         let used = HashSet::from([ids[0]]);
         assert_eq!(
-            rematch_selected_edge_id(&shell, &original, &used, &faces),
-            Some(ids[1])
+            rematch_selected_edge_ids(&shell, &original, &used, &faces),
+            Some(vec![ids[1]])
         );
     }
 
@@ -843,14 +1026,14 @@ mod rematch_tests {
             Edge::new_unchecked(&Vertex::new(a), &Vertex::new(b), original.clone()).id();
         assert!(!face_map.contains_key(&missing_id));
         assert!(matches!(
-            resolve_active_edge_id(&shell, missing_id, &original, &HashSet::new(), &face_map),
+            resolve_active_edge_ids(&shell, missing_id, &original, &HashSet::new(), &face_map),
             Err(FilletError::UnresolvableSelectedEdge),
         ));
         // The exact identity remains authoritative even if coincident
         // alternatives would make geometric matching ambiguous.
         assert_eq!(
-            resolve_active_edge_id(&shell, ids[0], &original, &HashSet::new(), &face_map).unwrap(),
-            ids[0],
+            resolve_active_edge_ids(&shell, ids[0], &original, &HashSet::new(), &face_map).unwrap(),
+            vec![ids[0]],
         );
     }
 
@@ -861,7 +1044,7 @@ mod rematch_tests {
         let (mut shell, ids) = manifold_shell(&[(a, b, line(a, b))]);
         shell.pop();
         assert!(matches!(
-            apply_single_edge_fillet(&mut shell, ids[0], None, &FilletOptions::default()),
+            apply_single_edge_fillet(&mut shell, ids[0], None, &FilletOptions::default(), None),
             Err(FilletError::NonManifoldEdge(1)),
         ));
     }
@@ -875,13 +1058,13 @@ mod rematch_tests {
         let (shell, ids) = manifold_shell(&[(a, cut, line(a, cut))]);
         let faces = build_edge_face_map(&shell);
         assert_eq!(
-            rematch_selected_edge_id(&shell, &original, &HashSet::new(), &faces),
-            Some(ids[0])
+            rematch_selected_edge_ids(&shell, &original, &HashSet::new(), &faces),
+            Some(vec![ids[0]])
         );
     }
 
     #[test]
-    fn rematch_prefers_the_unique_longest_surviving_segment() {
+    fn rematch_rejects_overlapping_survivors_even_when_lengths_differ() {
         let a = Point3::new(0.0, 0.0, 0.0);
         let b = Point3::new(1.0, 0.0, 0.0);
         let short = Point3::new(0.37, 0.0, 0.0);
@@ -890,9 +1073,119 @@ mod rematch_tests {
         let (shell, ids) = manifold_shell(&[(a, short, line(a, short)), (a, long, line(a, long))]);
         let faces = build_edge_face_map(&shell);
         assert_eq!(
-            rematch_selected_edge_id(&shell, &original, &HashSet::new(), &faces),
-            Some(ids[1]),
+            rematch_selected_edge_ids(&shell, &original, &HashSet::new(), &faces),
+            None,
         );
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn rematch_returns_every_nonoverlapping_descendant_in_parameter_order() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let split = Point3::new(0.37, 0.0, 0.0);
+        let original = line(a, b);
+        // Store the later part first to check sorting, and reverse its curve
+        // orientation. Neither must affect which pieces are visited.
+        let (shell, ids) =
+            manifold_shell(&[(b, split, line(b, split)), (a, split, line(a, split))]);
+        let faces = build_edge_face_map(&shell);
+        assert_eq!(
+            rematch_selected_edge_ids(&shell, &original, &HashSet::new(), &faces),
+            Some(vec![ids[1], ids[0]]),
+        );
+    }
+
+    #[test]
+    fn rematch_visits_both_survivors_after_an_intermediate_piece_was_removed() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let left = Point3::new(0.24, 0.0, 0.0);
+        let right = Point3::new(0.81, 0.0, 0.0);
+        let original = line(a, b);
+        let (shell, ids) = manifold_shell(&[(right, b, line(right, b)), (a, left, line(a, left))]);
+        let faces = build_edge_face_map(&shell);
+        assert_eq!(
+            rematch_selected_edge_ids(&shell, &original, &HashSet::new(), &faces),
+            Some(vec![ids[1], ids[0]]),
+        );
+    }
+
+    #[test]
+    fn visiting_survivors_handles_fragments_split_again_by_an_earlier_edit() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let first_cut = Point3::new(0.37, 0.0, 0.0);
+        let second_cut = Point3::new(0.68, 0.0, 0.0);
+        let (mut shell, ids) = manifold_shell(&[
+            (a, first_cut, line(a, first_cut)),
+            (first_cut, b, line(first_cut, b)),
+        ]);
+        let original_curve = line(a, b);
+        let original_id =
+            Edge::new_unchecked(&Vertex::new(a), &Vertex::new(b), original_curve.clone()).id();
+        let mut visited = Vec::new();
+        let mut expected_new_ids = Vec::new();
+        visit_surviving_fragments(
+            &mut shell,
+            VecDeque::from([(original_id, original_id, original_curve)]),
+            |shell, parent_id, current_id| {
+                assert_eq!(parent_id, original_id);
+                visited.push(current_id);
+                if current_id == ids[0] {
+                    // A fillet on the first fragment modifies topology before
+                    // its sibling is processed. Emulate the resulting split.
+                    shell.pop();
+                    shell.pop();
+                    let (later, fragment_ids) = manifold_shell(&[
+                        (first_cut, second_cut, line(first_cut, second_cut)),
+                        (second_cut, b, line(second_cut, b)),
+                    ]);
+                    expected_new_ids = fragment_ids;
+                    shell.extend(later);
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(visited, [ids[0], expected_new_ids[0], expected_new_ids[1]]);
+        assert!(!visited.contains(&ids[1]));
+    }
+
+    #[test]
+    fn variable_radius_uses_the_original_wire_position_for_reversed_fragments() {
+        let original = OriginalEdgeSpan {
+            curve: line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)),
+            start: 0.2,
+            span: 0.3,
+        };
+        let linear = line(Point3::new(0.75, 0.0, 0.0), Point3::new(0.25, 0.0, 0.0));
+        let mapped = radius_on_original_wire(linear, &original, &|t| t);
+        assert!((mapped(0.0) - 0.425).abs() < 1e-5);
+        assert!((mapped(0.5) - 0.35).abs() < 1e-5);
+        assert!((mapped(1.0) - 0.275).abs() < 1e-5);
+    }
+
+    #[test]
+    fn variable_radius_tracks_nonlinear_reparameterized_fragment_geometry() {
+        let original = OriginalEdgeSpan {
+            curve: line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)),
+            start: 0.2,
+            span: 0.3,
+        };
+        let nonlinear = Curve::NurbsCurve(NurbsCurve::from(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(2),
+            vec![
+                Point3::new(0.25, 0.0, 0.0),
+                Point3::new(0.25, 0.0, 0.0),
+                Point3::new(0.75, 0.0, 0.0),
+            ],
+        )));
+        let mapped = radius_on_original_wire(nonlinear, &original, &|t| t);
+        assert!((mapped(0.0) - 0.275).abs() < 1e-5);
+        // An endpoint-only affine map would incorrectly return 0.35 here.
+        assert!((mapped(0.5) - 0.3125).abs() < 1e-5);
+        assert!((mapped(1.0) - 0.425).abs() < 1e-5);
     }
 
     #[test]
@@ -904,7 +1197,7 @@ mod rematch_tests {
         shell.pop(); // The remaining edge is incident to only one face.
         let faces = build_edge_face_map(&shell);
         assert_eq!(
-            rematch_selected_edge_id(&shell, &original, &HashSet::new(), &faces),
+            rematch_selected_edge_ids(&shell, &original, &HashSet::new(), &faces),
             None,
         );
     }
@@ -926,7 +1219,7 @@ mod rematch_tests {
         let (shell, _) = manifold_shell(&[(a, b, different)]);
         let faces = build_edge_face_map(&shell);
         assert_eq!(
-            rematch_selected_edge_id(&shell, &original, &HashSet::new(), &faces),
+            rematch_selected_edge_ids(&shell, &original, &HashSet::new(), &faces),
             None
         );
     }
