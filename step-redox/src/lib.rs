@@ -40,6 +40,9 @@ pub mod periodic_chains;
 pub mod periodic_resize;
 mod planar_features;
 pub use planar_features::{PlanarFeatureDiagnostics, PlanarHostDiagnostic};
+/// Source-topological vertices and coedge identities for separately healed analytic edges.
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub mod healed_edge_topology;
 /// Read-only, provenance-tracked native STEP geometry for separately healed edges.
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub mod native_hyperbola_intersection;
