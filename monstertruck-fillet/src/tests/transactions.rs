@@ -159,3 +159,26 @@ fn generic_fillet_request_preserves_external_shell_after_late_hard_failure() {
     );
     assert_shell_topology_unchanged(&shell, &original);
 }
+
+#[test]
+fn repeated_selected_edge_is_rejected_without_mutating_shell() {
+    let (mut shell, edges, _) = build_box_shell();
+    let original = shell.clone();
+    let edge_id = edges[5].id();
+    let options = FilletOptions {
+        radius: RadiusSpec::PerEdge(vec![0.2, 0.3]),
+        ..Default::default()
+    };
+    assert!(matches!(
+        fillet_edges(&mut shell, &[edge_id, edge_id], Some(&options)),
+        Err(FilletError::DuplicateSelectedEdge),
+    ));
+    assert_shell_topology_unchanged(&shell, &original);
+
+    let selected = shell.edge_iter().find(|edge| edge.id() == edge_id).unwrap();
+    assert!(matches!(
+        fillet_edges_generic(&mut shell, &[selected.clone(), selected], Some(&options)),
+        Err(FilletError::DuplicateSelectedEdge),
+    ));
+    assert_shell_topology_unchanged(&shell, &original);
+}

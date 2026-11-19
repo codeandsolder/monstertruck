@@ -104,6 +104,23 @@ fn rematch_selected_edge_id(
     }
 }
 
+/// Resolve the requested identity against the current topology. Geometric
+/// rematching is permitted only when the original ID is no longer usable;
+/// ambiguity must be reported as a hard error, never silently drop an edge.
+fn resolve_active_edge_id(
+    shell: &Shell,
+    original_id: EdgeId,
+    original_curve: &Curve,
+    used_ids: &HashSet<EdgeId>,
+    edge_face_map: &HashMap<EdgeId, FaceList>,
+) -> Result<EdgeId> {
+    if is_manifold_edge(edge_face_map, original_id) && !used_ids.contains(&original_id) {
+        return Ok(original_id);
+    }
+    rematch_selected_edge_id(shell, original_curve, used_ids, edge_face_map)
+        .ok_or(FilletError::UnresolvableSelectedEdge)
+}
+
 fn sampled_curve_surface_max_distance(
     curve: &Curve,
     surface: &NurbsSurface<Vector4>,
@@ -223,27 +240,7 @@ fn group_edges_into_chains(
     // 2. For each face boundary, find contiguous runs of selected edges.
     let candidate_runs = collect_boundary_runs(shell, &selected);
 
-    // 3. Each selected edge appears in exactly 2 candidate runs (one per face).
-    //    Assign each edge to its longest run (tiebreak: lower face_idx).
-    let mut edge_best_run: HashMap<EdgeId, usize> = HashMap::new();
-    for (run_idx, (face_idx, run_edges)) in candidate_runs.iter().enumerate() {
-        for &eid in run_edges {
-            let replace = match edge_best_run.get(&eid) {
-                None => true,
-                Some(&prev_idx) => {
-                    let prev_len = candidate_runs[prev_idx].1.len();
-                    let this_len = run_edges.len();
-                    this_len > prev_len
-                        || (this_len == prev_len && *face_idx < candidate_runs[prev_idx].0)
-                }
-            };
-            if replace {
-                edge_best_run.insert(eid, run_idx);
-            }
-        }
-    }
-
-    // 4. Collect final chains: process runs longest-first, claiming unclaimed
+    // 3. Collect final chains: process runs longest-first, claiming unclaimed
     //    edges and splitting on gaps where edges were already claimed.
     let mut run_order: Vec<usize> = (0..candidate_runs.len()).collect();
     run_order.sort_by(|&a, &b| {
@@ -283,7 +280,7 @@ fn group_edges_into_chains(
         globally_claimed.extend(run_edges);
     }
 
-    // 5. Sort final chains: longest first, then shared_face_idx for determinism.
+    // 4. Sort final chains: longest first, then shared_face_idx for determinism.
     chains.sort_by(|a, b| {
         b.edge_ids
             .len()
@@ -337,13 +334,7 @@ fn apply_single_edge_fillet(
         .get(&edge_id)
         .ok_or(FilletError::EdgeNotFound)?;
     if faces.len() != 2 {
-        if env::var_os("MT_FILLET_DEBUG").is_some() {
-            eprintln!(
-                "debug fillet edge {edge_id:?}: skipped non-manifold candidate ({} faces).",
-                faces.len()
-            );
-        }
-        return Ok(());
+        return Err(FilletError::NonManifoldEdge(faces.len()));
     }
 
     let shared_face_idx = preferred_shared_face_idx
@@ -432,8 +423,9 @@ fn apply_single_edge_fillet(
 ///
 /// # Errors
 ///
-/// Returns [`FilletError`] when an edge is missing/non-manifold, radius/profile validation fails,
-/// or the required geometry/topology construction cannot be completed.
+/// Returns [`FilletError`] when an edge is missing, duplicated, non-manifold,
+/// or no longer uniquely resolvable, when radius/profile validation fails, or
+/// when the required geometry/topology construction cannot be completed.
 pub fn fillet_edges(
     shell: &mut Shell,
     edge_ids: &[EdgeId],
@@ -460,6 +452,15 @@ fn fillet_edges_in_place(
     let options = params.unwrap_or(&default_options);
     if matches!(&options.profile, FilletProfile::AsymmetricChamfer { .. }) && edge_ids.len() != 1 {
         return Err(FilletError::AsymmetricChamferWireUnsupported);
+    }
+
+    // A repeated edge cannot be independently filleted twice, and a per-edge
+    // radius list cannot assign two different radii to the same topology ID.
+    let mut distinct_ids = HashSet::new();
+    for &eid in edge_ids {
+        if !distinct_ids.insert(eid) {
+            return Err(FilletError::DuplicateSelectedEdge);
+        }
     }
 
     // Validate all requested edges exist and are manifold up-front.
@@ -541,29 +542,18 @@ fn fillet_edges_in_place(
         let mut used_ids = HashSet::<EdgeId>::new();
         let mut resolved_pairs: Vec<(EdgeId, EdgeId)> = Vec::new();
         for original_eid in chain.edge_ids.iter().copied() {
-            let resolved_eid = if is_manifold_edge(&edge_face_map, original_eid)
-                && !used_ids.contains(&original_eid)
-            {
-                Some(original_eid)
-            } else {
-                original_edge_curves
-                    .get(&original_eid)
-                    .and_then(|original_curve| {
-                        rematch_selected_edge_id(shell, original_curve, &used_ids, &edge_face_map)
-                    })
-            };
-            if let Some(resolved_eid) = resolved_eid {
-                used_ids.insert(resolved_eid);
-                resolved_pairs.push((original_eid, resolved_eid));
-            } else if env::var_os("MT_FILLET_DEBUG").is_some() {
-                eprintln!(
-                    "debug fillet chain {:?}: unresolved edge {original_eid:?}, skipping.",
-                    chain.edge_ids
-                );
-            }
-        }
-        if resolved_pairs.is_empty() {
-            continue;
+            let original_curve = original_edge_curves
+                .get(&original_eid)
+                .ok_or(FilletError::EdgeNotFound)?;
+            let resolved_eid = resolve_active_edge_id(
+                shell,
+                original_eid,
+                original_curve,
+                &used_ids,
+                &edge_face_map,
+            )?;
+            used_ids.insert(resolved_eid);
+            resolved_pairs.push((original_eid, resolved_eid));
         }
         let resolved_edge_ids: Vec<EdgeId> = resolved_pairs
             .iter()
@@ -575,27 +565,15 @@ fn fillet_edges_in_place(
             .collect();
 
         // Resolve face_a (shared face from grouping) and face_b from current map.
-        let Some(first_eid) = resolved_edge_ids.first().copied() else {
-            continue;
-        };
-        let Some(faces) = edge_face_map.get(&first_eid) else {
-            if env::var_os("MT_FILLET_DEBUG").is_some() {
-                eprintln!(
-                    "debug fillet chain {:?}: missing seed edge {first_eid:?}, skipping.",
-                    chain.edge_ids
-                );
-            }
-            continue;
-        };
+        let first_eid = resolved_edge_ids
+            .first()
+            .copied()
+            .ok_or(FilletError::EdgeNotFound)?;
+        let faces = edge_face_map
+            .get(&first_eid)
+            .ok_or(FilletError::EdgeNotFound)?;
         if faces.len() != 2 {
-            if env::var_os("MT_FILLET_DEBUG").is_some() {
-                eprintln!(
-                    "debug fillet chain {:?}: skipped non-manifold seed edge {first_eid:?} ({} faces).",
-                    chain.edge_ids,
-                    faces.len()
-                );
-            }
-            continue;
+            return Err(FilletError::NonManifoldEdge(faces.len()));
         }
         // face_a is the shared face from boundary-run grouping; face_b is the other.
         let shared_face_idx = if faces.contains(&chain.shared_face_idx) {
@@ -638,13 +616,9 @@ fn fillet_edges_in_place(
                     (edges.len() == resolved_edge_ids.len()).then_some(edges.into())
                 })
             else {
-                if env::var_os("MT_FILLET_DEBUG").is_some() {
-                    eprintln!(
-                        "debug fillet chain {:?}: failed to construct wire, skipping.",
-                        chain.edge_ids
-                    );
-                }
-                continue;
+                // The requested chain no longer has a shared carrier wire.
+                // Returning success here would silently omit those edges.
+                return Err(FilletError::DiscontinuousWire);
             };
 
             let chain_opts;
@@ -705,26 +679,16 @@ fn fillet_edges_in_place(
                             .get(&original_eid)
                             .copied()
                             .unwrap_or(original_eid);
-                        let resolved_eid = if is_manifold_edge(&edge_face_map, initial_eid)
-                            && !fallback_used_ids.contains(&initial_eid)
-                        {
-                            initial_eid
-                        } else {
-                            let original_curve = original_edge_curves.get(&original_eid).ok_or(
-                                FilletError::GeometryFailed {
-                                    context: "resolve per-edge fillet fallback curve",
-                                },
-                            )?;
-                            rematch_selected_edge_id(
-                                candidate,
-                                original_curve,
-                                &fallback_used_ids,
-                                &edge_face_map,
-                            )
-                            .ok_or(FilletError::GeometryFailed {
-                                context: "resolve per-edge fillet fallback edge",
-                            })?
-                        };
+                        let original_curve = original_edge_curves
+                            .get(&original_eid)
+                            .ok_or(FilletError::EdgeNotFound)?;
+                        let resolved_eid = resolve_active_edge_id(
+                            candidate,
+                            initial_eid,
+                            original_curve,
+                            &fallback_used_ids,
+                            &edge_face_map,
+                        )?;
                         fallback_used_ids.insert(resolved_eid);
 
                         let single_edge_opts;
@@ -866,6 +830,40 @@ mod rematch_tests {
             rematch_selected_edge_id(&shell, &original, &used, &faces),
             Some(ids[1])
         );
+    }
+
+    #[test]
+    fn ambiguous_rematch_is_an_error_instead_of_a_partial_fillet() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let original = line(a, b);
+        let (shell, ids) = manifold_shell(&[(a, b, original.clone()), (a, b, original.clone())]);
+        let face_map = build_edge_face_map(&shell);
+        let missing_id =
+            Edge::new_unchecked(&Vertex::new(a), &Vertex::new(b), original.clone()).id();
+        assert!(!face_map.contains_key(&missing_id));
+        assert!(matches!(
+            resolve_active_edge_id(&shell, missing_id, &original, &HashSet::new(), &face_map),
+            Err(FilletError::UnresolvableSelectedEdge),
+        ));
+        // The exact identity remains authoritative even if coincident
+        // alternatives would make geometric matching ambiguous.
+        assert_eq!(
+            resolve_active_edge_id(&shell, ids[0], &original, &HashSet::new(), &face_map).unwrap(),
+            ids[0],
+        );
+    }
+
+    #[test]
+    fn nonmanifold_candidate_is_an_error_instead_of_a_silent_success() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let (mut shell, ids) = manifold_shell(&[(a, b, line(a, b))]);
+        shell.pop();
+        assert!(matches!(
+            apply_single_edge_fillet(&mut shell, ids[0], None, &FilletOptions::default()),
+            Err(FilletError::NonManifoldEdge(1)),
+        ));
     }
 
     #[test]

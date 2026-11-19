@@ -33,6 +33,13 @@ pub enum FilletError {
     /// The edge is shared by a non-manifold number of faces.
     #[error("Non-manifold edge: shared by {0} faces.")]
     NonManifoldEdge(usize),
+    /// The same topological edge was requested more than once.
+    #[error("Duplicate topological edge in fillet selection.")]
+    DuplicateSelectedEdge,
+    /// A selected edge no longer has exactly one usable manifold successor
+    /// after earlier topology edits in the same request.
+    #[error("Selected edge has no unique manifold successor after topology changes.")]
+    UnresolvableSelectedEdge,
     /// The requested edge was not found in the shell.
     #[error("Edge not found in shell.")]
     EdgeNotFound,
