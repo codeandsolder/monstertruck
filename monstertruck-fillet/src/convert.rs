@@ -142,7 +142,12 @@ pub fn convert_shell_in<C: FilletableCurve, S: FilletableSurface>(
     }
     let internal_edge_ids = edges
         .iter()
-        .map(|edge| mapped_ids.get(&edge.id()).copied().ok_or(FilletError::EdgeNotFound))
+        .map(|edge| {
+            mapped_ids
+                .get(&edge.id())
+                .copied()
+                .ok_or(FilletError::EdgeNotFound)
+        })
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     Ok((internal_shell, internal_edge_ids))
@@ -184,11 +189,13 @@ mod tests {
         ];
         let vertices = Vertex::from_points(points);
         let make_edge = |i: usize, j: usize| {
-            let curve = BsplineCurve::new_unchecked(
-                KnotVector::bezier_knot(1),
-                vec![points[i], points[j]],
-            );
-            Edge::new_unchecked(&vertices[i], &vertices[j], Curve::NurbsCurve(NurbsCurve::from(curve)))
+            let curve =
+                BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![points[i], points[j]]);
+            Edge::new_unchecked(
+                &vertices[i],
+                &vertices[j],
+                Curve::NurbsCurve(NurbsCurve::from(curve)),
+            )
         };
         let first = make_edge(0, 1);
         let second = make_edge(0, 1);
@@ -200,10 +207,12 @@ mod tests {
             ))
         };
         let make_face = |edge: Edge<_, _>| {
-            let wire: Wire<_, _> = vec![edge, make_edge(1, 2), make_edge(2, 3), make_edge(3, 0)].into();
+            let wire: Wire<_, _> =
+                vec![edge, make_edge(1, 2), make_edge(2, 3), make_edge(3, 0)].into();
             Face::new_unchecked(vec![wire], surface())
         };
-        let shell: Shell<_, _, _> = vec![make_face(first.clone()), make_face(second.clone())].into();
+        let shell: Shell<_, _, _> =
+            vec![make_face(first.clone()), make_face(second.clone())].into();
         let (converted, ids) = convert_shell_in(&shell, &[second, first]).unwrap();
         assert_eq!(ids.len(), 2);
         assert_ne!(ids[0], ids[1]);
