@@ -48,14 +48,15 @@ fn build_edge_face_map(shell: &Shell) -> HashMap<EdgeId, FaceList> {
     map
 }
 
-fn sampled_curve_distance_squared(curve: &Curve, point: Point3, sample_count: usize) -> f64 {
-    let (t0, t1) = curve.range_tuple();
-    (0..=sample_count)
-        .map(|i| {
-            let t = t0 + (t1 - t0) * crate::count_as_f64(i) / crate::count_as_f64(sample_count);
-            squared_distance(curve.evaluate(t), point)
+/// Checks a point against the actual curve rather than a fixed parameter grid.
+/// Fixed-grid matching rejects valid subdivided edges whose cut parameters
+/// do not coincide with the grid points.
+fn curve_contains_point(curve: &Curve, point: Point3) -> bool {
+    curve
+        .search_nearest_parameter(point, None, 100)
+        .is_some_and(|t| {
+            squared_distance(curve.evaluate(t), point) < KERNEL_EPSILON * KERNEL_EPSILON
         })
-        .fold(f64::INFINITY, f64::min)
 }
 
 fn sampled_variable_radius_upper_bound(radius: &dyn Fn(f64) -> f64, sample_count: usize) -> f64 {
@@ -70,27 +71,38 @@ fn rematch_selected_edge_id(
     used_ids: &HashSet<EdgeId>,
     edge_face_map: &HashMap<EdgeId, FaceList>,
 ) -> Option<EdgeId> {
-    let tolerance = KERNEL_EPSILON;
-    let tolerance_squared = tolerance * tolerance;
-    shell
+    // The same topological edge appears in both incident faces. Deduplicate it
+    // before deciding whether several distinct candidates are indistinguishable.
+    let mut seen_ids = HashSet::new();
+    let mut candidates = shell
         .edge_iter()
-        .filter(|edge| !used_ids.contains(&edge.id()) && is_manifold_edge(edge_face_map, edge.id()))
         .filter(|edge| {
-            let (front, back) = edge.ends();
-            sampled_curve_distance_squared(original_curve, front.point(), 24) < tolerance_squared
-                && sampled_curve_distance_squared(original_curve, back.point(), 24)
-                    < tolerance_squared
-                && {
-                    let (t0, t1) = edge.curve().range_tuple();
-                    sampled_curve_distance_squared(
-                        original_curve, edge.curve().evaluate((t0 + t1) * 0.5), 24,
-                    ) < tolerance_squared
-                }
+            seen_ids.insert(edge.id())
+                && !used_ids.contains(&edge.id())
+                && is_manifold_edge(edge_face_map, edge.id())
         })
-        .max_by(|left, right| {
-            approximate_edge_length(left, 8).total_cmp(&approximate_edge_length(right, 8))
+        .filter(|edge| {
+            let curve = edge.curve();
+            let (start, end) = curve.range_tuple();
+            // Interior samples distinguish different paths with the same ends.
+            [0.0, 0.25, 0.5, 0.75, 1.0].into_iter().all(|fraction| {
+                let t = start + (end - start) * fraction;
+                curve_contains_point(original_curve, curve.evaluate(t))
+            })
         })
-        .map(|edge| edge.id())
+        .map(|edge| (edge.id(), approximate_edge_length(&edge, 8)))
+        .collect::<Vec<_>>();
+
+    // When topology has changed there is no identity-preserving mapping. A
+    // unique longest segment is a useful best-effort successor; equal-length
+    // successors are ambiguous and must not be selected arbitrarily.
+    candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
+    match candidates.as_slice() {
+        [] => None,
+        [(id, _)] => Some(*id),
+        [(id, longest), (_, runner_up), ..] if longest - runner_up > KERNEL_EPSILON => Some(*id),
+        _ => None,
+    }
 }
 
 fn sampled_curve_surface_max_distance(
@@ -688,9 +700,12 @@ pub fn fillet_edges(
                             chain_failed = true;
                             break;
                         };
-                        let Some(rematched) =
-                            rematch_selected_edge_id(shell, original_curve, &fallback_used_ids, &edge_face_map)
-                        else {
+                        let Some(rematched) = rematch_selected_edge_id(
+                            shell,
+                            original_curve,
+                            &fallback_used_ids,
+                            &edge_face_map,
+                        ) else {
                             chain_failed = true;
                             break;
                         };
@@ -770,4 +785,138 @@ where
     }
     *shell = convert_shell_out(&internal_shell)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod rematch_tests {
+    use super::*;
+    use monstertruck_geometry::prelude::{BsplineCurve, BsplineSurface, KnotVector, NurbsCurve};
+    use monstertruck_topology::{Face, Vertex};
+
+    fn line(start: Point3, end: Point3) -> Curve {
+        Curve::NurbsCurve(NurbsCurve::from(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(1),
+            vec![start, end],
+        )))
+    }
+
+    /// Each requested segment has two incident faces and its own topology.
+    /// Segments may share coordinates without sharing edge identities.
+    fn manifold_shell(curves: &[(Point3, Point3, Curve)]) -> (Shell, Vec<EdgeId>) {
+        let mut faces = Vec::new();
+        let mut ids = Vec::new();
+        for (front, back, curve) in curves {
+            let offset = monstertruck_geometry::prelude::Vector3::new(0.0, 1.0, 0.0);
+            let vertices = Vertex::from_points([*front, *back, *back + offset, *front + offset]);
+            let selected = Edge::new_unchecked(&vertices[0], &vertices[1], curve.clone());
+            ids.push(selected.id());
+            let other_edges = [(1, 2), (2, 3), (3, 0)];
+            let mut boundary = vec![selected];
+            for (a, b) in other_edges {
+                boundary.push(Edge::new_unchecked(
+                    &vertices[a],
+                    &vertices[b],
+                    line(vertices[a].point(), vertices[b].point()),
+                ));
+            }
+            let knots = KnotVector::bezier_knot(1);
+            let surface = NurbsSurface::from(BsplineSurface::new_unchecked(
+                (knots.clone(), knots),
+                vec![
+                    vec![vertices[0].point(), vertices[3].point()],
+                    vec![vertices[1].point(), vertices[2].point()],
+                ],
+            ));
+            let face = Face::new_unchecked(vec![boundary.into()], surface);
+            faces.push(face.clone());
+            faces.push(face.inverse());
+        }
+        (Shell::from(faces), ids)
+    }
+
+    #[test]
+    fn indistinguishable_manifold_edges_are_not_rematched_arbitrarily() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let original = line(a, b);
+        let (shell, ids) = manifold_shell(&[(a, b, original.clone()), (a, b, original.clone())]);
+        let faces = build_edge_face_map(&shell);
+        assert_eq!(faces.get(&ids[0]).map(|faces| faces.len()), Some(2));
+        assert_eq!(faces.get(&ids[1]).map(|faces| faces.len()), Some(2));
+        assert_eq!(
+            rematch_selected_edge_id(&shell, &original, &HashSet::new(), &faces),
+            None
+        );
+
+        let used = HashSet::from([ids[0]]);
+        assert_eq!(
+            rematch_selected_edge_id(&shell, &original, &used, &faces),
+            Some(ids[1])
+        );
+    }
+
+    #[test]
+    fn rematch_accepts_non_grid_aligned_subdivision() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let cut = Point3::new(0.37, 0.0, 0.0);
+        let original = line(a, b);
+        let (shell, ids) = manifold_shell(&[(a, cut, line(a, cut))]);
+        let faces = build_edge_face_map(&shell);
+        assert_eq!(
+            rematch_selected_edge_id(&shell, &original, &HashSet::new(), &faces),
+            Some(ids[0])
+        );
+    }
+
+    #[test]
+    fn rematch_prefers_the_unique_longest_surviving_segment() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let short = Point3::new(0.37, 0.0, 0.0);
+        let long = Point3::new(0.72, 0.0, 0.0);
+        let original = line(a, b);
+        let (shell, ids) = manifold_shell(&[(a, short, line(a, short)), (a, long, line(a, long))]);
+        let faces = build_edge_face_map(&shell);
+        assert_eq!(
+            rematch_selected_edge_id(&shell, &original, &HashSet::new(), &faces),
+            Some(ids[1]),
+        );
+    }
+
+    #[test]
+    fn rematch_ignores_boundary_edges_even_with_identical_geometry() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let original = line(a, b);
+        let (mut shell, _) = manifold_shell(&[(a, b, original.clone())]);
+        shell.pop(); // The remaining edge is incident to only one face.
+        let faces = build_edge_face_map(&shell);
+        assert_eq!(
+            rematch_selected_edge_id(&shell, &original, &HashSet::new(), &faces),
+            None,
+        );
+    }
+
+    #[test]
+    fn rematch_rejects_curve_with_same_endpoints_and_midpoint() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let original = line(a, b);
+        let different = Curve::NurbsCurve(NurbsCurve::from(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(3),
+            vec![
+                a,
+                Point3::new(1.0 / 3.0, 1.0, 0.0),
+                Point3::new(2.0 / 3.0, -1.0, 0.0),
+                b,
+            ],
+        )));
+        let (shell, _) = manifold_shell(&[(a, b, different)]);
+        let faces = build_edge_face_map(&shell);
+        assert_eq!(
+            rematch_selected_edge_id(&shell, &original, &HashSet::new(), &faces),
+            None
+        );
+    }
 }
