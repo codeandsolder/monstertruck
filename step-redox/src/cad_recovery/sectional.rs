@@ -673,6 +673,14 @@ mod tests {
     fn sectional_real_sources_are_automatically_source_equivalent() -> Result<()> {
         let cases: &[(&str, &[u8], u64, usize)] = &[
             (
+                "multiple planar transitions b906",
+                include_bytes!(
+                    "../../validation/fixtures/native_sectional_transitions_b906e9ab.step"
+                ),
+                146,
+                5,
+            ),
+            (
                 "recess 6cba",
                 include_bytes!("../../validation/fixtures/native_sectional_recess_6cbaef14.step"),
                 55,
@@ -725,6 +733,16 @@ mod tests {
                         fragment.source,
                         CadFragmentSource::SectionalExtrusionUnion { solid_id: 99, .. }
                             | CadFragmentSource::SectionalExtrusionTransitions { solid_id: 99, .. }
+                    ),
+                    "{label}: {:?}",
+                    fragment.source
+                );
+            }
+            if expected_id == 146 {
+                assert!(
+                    matches!(
+                        fragment.source,
+                        CadFragmentSource::SectionalExtrusionTransitions { solid_id: 146, .. }
                     ),
                     "{label}: {:?}",
                     fragment.source
