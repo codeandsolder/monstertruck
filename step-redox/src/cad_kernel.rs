@@ -2439,14 +2439,11 @@ pub mod monstertruck {
             Ok(())
         }
 
-        #[test]
-        fn evaluates_native_mixed_tangent_rim() -> Result<()> {
-            use std::f64::consts::FRAC_PI_2;
-            let mut model = CadModel::new();
+        fn tangent_rim_box(model: &mut CadModel) -> NodeId {
             let child = model.add_node(CadNode::Primitive(Primitive::Box {
                 size_mm: [6.0, 5.0, 4.0],
             }));
-            let core = model.add_node(CadNode::EdgeTreatment {
+            model.add_node(CadNode::EdgeTreatment {
                 child,
                 profile: EdgeTreatmentProfile::Round,
                 edges: [[0.0, 0.0], [6.0, 0.0], [6.0, 5.0], [0.0, 5.0]]
@@ -2459,43 +2456,51 @@ pub mod monstertruck {
                         radius_mm: 1.0,
                     })
                     .collect(),
-            });
-            let top_edges = |z: f64, offset: [f64; 2]| {
-                let points = [
-                    [1.0, 0.0],
-                    [5.0, 0.0],
-                    [6.0, 1.0],
-                    [6.0, 4.0],
-                    [5.0, 5.0],
-                    [1.0, 5.0],
-                    [0.0, 4.0],
-                    [0.0, 1.0],
-                ];
-                let centers = [[5.0, 1.0], [5.0, 4.0], [1.0, 4.0], [1.0, 1.0]];
-                let at_top = |[x, y]: [f64; 2]| [x + offset[0], y + offset[1], z];
-                let mut edges = Vec::new();
-                for i in 0..4 {
-                    edges.push(EdgeTreatmentEdge {
-                        selector: EdgeSelector::Segment {
-                            start_mm: at_top(points[2 * i]),
-                            end_mm: at_top(points[2 * i + 1]),
-                        },
-                        radius_mm: 0.25,
-                    });
-                    edges.push(EdgeTreatmentEdge {
-                        selector: EdgeSelector::CircleArc {
-                            center_mm: at_top(centers[i]),
-                            normal: [0.0, 0.0, 1.0],
-                            radius_mm: 1.0,
-                            start_mm: at_top(points[2 * i + 1]),
-                            sweep_rad: FRAC_PI_2,
-                        },
-                        radius_mm: 0.25,
-                    });
-                }
-                edges
-            };
-            let mut edges = top_edges(4.0, [0.0; 2]);
+            })
+        }
+
+        fn tangent_rim_selectors(z: f64, offset: [f64; 2]) -> Vec<EdgeTreatmentEdge> {
+            use std::f64::consts::FRAC_PI_2;
+            let points = [
+                [1.0, 0.0],
+                [5.0, 0.0],
+                [6.0, 1.0],
+                [6.0, 4.0],
+                [5.0, 5.0],
+                [1.0, 5.0],
+                [0.0, 4.0],
+                [0.0, 1.0],
+            ];
+            let centers = [[5.0, 1.0], [5.0, 4.0], [1.0, 4.0], [1.0, 1.0]];
+            let at_top = |[x, y]: [f64; 2]| [x + offset[0], y + offset[1], z];
+            let mut edges = Vec::new();
+            for i in 0..4 {
+                edges.push(EdgeTreatmentEdge {
+                    selector: EdgeSelector::Segment {
+                        start_mm: at_top(points[2 * i]),
+                        end_mm: at_top(points[2 * i + 1]),
+                    },
+                    radius_mm: 0.25,
+                });
+                edges.push(EdgeTreatmentEdge {
+                    selector: EdgeSelector::CircleArc {
+                        center_mm: at_top(centers[i]),
+                        normal: [0.0, 0.0, 1.0],
+                        radius_mm: 1.0,
+                        start_mm: at_top(points[2 * i + 1]),
+                        sweep_rad: FRAC_PI_2,
+                    },
+                    radius_mm: 0.25,
+                });
+            }
+            edges
+        }
+
+        #[test]
+        fn evaluates_native_mixed_tangent_rim() -> Result<()> {
+            let mut model = CadModel::new();
+            let core = tangent_rim_box(&mut model);
+            let mut edges = tangent_rim_selectors(4.0, [0.0; 2]);
             let kernel = MonstertruckKernel::project_standard();
             let root = model.add_node(CadNode::EdgeTreatment {
                 child: core,
@@ -2535,7 +2540,7 @@ pub mod monstertruck {
             let expected = kernel.evaluate(&model, reversed)?;
             // Exact native carrier incidence and deterministic complete
             // exported topology are the order-invariance contract here.
-            // The STEP boundary comparator does not yet encode torus loci.
+            // This also checks deterministic native serialization.
             monstertruck_modeling::certify_native_analytic_boundary_incidence(
                 &evaluated.solid,
                 crate::numeric::NUMERICAL_GEOMETRY_TOL_MM,
@@ -2551,6 +2556,14 @@ pub mod monstertruck {
             )?
             .exchange;
             assert_eq!(first.data[0].entities, second.data[0].entities);
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_translated_reentrant_tangent_rim() -> Result<()> {
+            let mut model = CadModel::new();
+            let core = tangent_rim_box(&mut model);
+            let kernel = MonstertruckKernel::project_standard();
             let base = model.add_node(CadNode::Primitive(Primitive::Box {
                 size_mm: [10.0, 9.0, 1.0],
             }));
@@ -2565,7 +2578,7 @@ pub mod monstertruck {
             let round = model.add_node(CadNode::EdgeTreatment {
                 child: shoulder,
                 profile: EdgeTreatmentProfile::Round,
-                edges: top_edges(1.0, [2.0; 2]),
+                edges: tangent_rim_selectors(1.0, [2.0; 2]),
             });
             let reentrant = kernel.evaluate(&model, round)?;
             assert!(
@@ -2605,6 +2618,7 @@ pub mod monstertruck {
 
         #[test]
         fn evaluates_three_way_spherical_round_network() -> Result<()> {
+            use crate::brep::SurfaceSupport;
             let mut model = CadModel::new();
             let child = model.add_node(CadNode::Primitive(Primitive::Box {
                 size_mm: [6.0, 5.0, 4.0],
@@ -2654,7 +2668,6 @@ pub mod monstertruck {
             let solid =
                 crate::reduced_brep::ReducedSolid::from_step(solid_id, &section.entities, &index)
                     .context("cannot resolve analytic rounded solid")?;
-            use crate::brep::SurfaceSupport;
             assert_eq!(
                 solid
                     .faces()

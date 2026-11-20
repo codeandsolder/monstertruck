@@ -35,7 +35,7 @@ use step_p21::ast::{EntityInstance, Exchange};
 mod treatment_layers;
 
 pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
-pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v18";
+pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v19";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReducedBrepMutationMode {
@@ -127,6 +127,10 @@ pub struct CompleteIr {
     pub unrecovered_solids: Vec<SourceSolidSummary>,
     pub body_scan: BodyScanSummary,
     pub body_count: usize,
+    /// Selected models independently compared with their original oriented
+    /// analytic source boundaries, not merely structurally reconstructed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source_boundary_verified_solids: Vec<SourceEntity>,
     pub constructively_recovered_solid_count: usize,
     pub semantically_recovered_solid_count: usize,
     pub unrecovered_solid_count: usize,
@@ -525,6 +529,12 @@ impl CompleteIrBuildState {
             kernel_source_load,
             unrecovered_solid_count: unrecovered_solids.len(),
             body_count: self.body_scan.len(),
+            source_boundary_verified_solids: self
+                .recovery
+                .selected
+                .iter()
+                .filter_map(|(&source, selected)| selected.boundary_verified.then_some(source))
+                .collect(),
             constructively_recovered_solid_count,
             semantically_recovered_solid_count: selected.len(),
             body_scan: BodyScanSummary {
@@ -566,7 +576,7 @@ pub fn recover_complete_ir_bytes(input: &[u8]) -> Result<CompleteIr> {
 /// through a supplied CAD kernel plus the independent analytic boundary proof.
 ///
 /// The parser-only [`recover_complete_ir_bytes`] path reports schema v10 and never
-/// invokes a CAD backend. This explicit kernel-backed path reports schema v15,
+/// invokes a CAD backend. This explicit kernel-backed path reports its versioned schema,
 /// includes parser-neutral source-load evidence,
 /// records admitted kernel-owned topology-normalized composites and extrusion-core unions separately, and leaves any unsupported
 /// or unproven body in `unrecovered_solids`. Backend failures are diagnostic per
@@ -637,7 +647,10 @@ pub fn recover_complete_ir_with_kernel_bytes<
     let source_load = kernel.inspect_source_document(&document)?;
     let mut failures = apply_kernel_recovery(
         &mut build.recovery,
-        |source| recover_kernel_boundary_feature_fragment(source, &source_load, &document, kernel),
+        |source| {
+            recover_kernel_boundary_feature_fragment(source, &source_load, &document, kernel)
+                .map(|candidate| candidate.map(KernelRecoveryCandidate::structural))
+        },
         false,
     );
     failures.extend(apply_kernel_recovery(
@@ -657,6 +670,7 @@ pub fn recover_complete_ir_with_kernel_bytes<
                     source.id,
                     kernel,
                 )
+                .map(|candidate| candidate.map(KernelRecoveryCandidate::verified))
             },
             true,
         ));
@@ -664,6 +678,7 @@ pub fn recover_complete_ir_with_kernel_bytes<
             &mut build.recovery,
             |source| {
                 recover_verified_direct_constructive_fragment(source, document.as_ref(), kernel)
+                    .map(|candidate| candidate.map(KernelRecoveryCandidate::verified))
             },
             true,
         ));
@@ -891,7 +906,7 @@ fn recover_kernel_topology_normalized_fragment<
     source: SourceEntity,
     source_load: &KernelSourceLoadEvidence,
     kernel: &K,
-) -> Result<Option<CadFragment>> {
+) -> Result<Option<KernelRecoveryCandidate>> {
     let exchange = document.as_ref();
     let Some(load) = source_load
         .solids
@@ -950,17 +965,31 @@ fn recover_kernel_topology_normalized_fragment<
     host.model.provenance.clear();
     if unchanged {
         return kernel_replay_is_single_solid(kernel, &host)
-            .map(|accepted| accepted.then_some(host));
+            .map(|accepted| accepted.then(|| KernelRecoveryCandidate::structural(host)));
     }
 
     if layers.is_empty() {
         host.source = CadFragmentSource::SameDomainNormalized {
             solid_id: source.id,
         };
-        return Ok(Some(host));
+        return Ok(Some(KernelRecoveryCandidate::structural(host)));
     }
     let fragment = treatment_layers::replay(host, source.id, layers)?;
-    kernel_replay_is_single_solid(kernel, &fragment).map(|accepted| accepted.then_some(fragment))
+    let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
+    if !kernel.summarize(&evaluated).is_single_solid() {
+        return Ok(None);
+    }
+    if !kernel.supports_step_export() {
+        return Ok(Some(KernelRecoveryCandidate::structural(fragment)));
+    }
+    let entities = &exchange.data[source.data_section].entities;
+    // A closed replay is only a candidate. Export-capable kernels must
+    // certify the reconstructed occupied boundary against the original,
+    // not merely the intermediate peeled host.
+    if !rebuilt_kernel_boundary_matches_source(kernel, &evaluated, source.id, entities)? {
+        bail!("native edge-treatment replay did not prove original-source boundary equivalence");
+    }
+    Ok(Some(KernelRecoveryCandidate::verified(fragment)))
 }
 
 fn replayable_source_treatments(
@@ -1076,26 +1105,50 @@ fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragmen
     Ok(kernel.summarize(&evaluated).is_single_solid())
 }
 
+/// Whole-solid evidence belongs to the individual candidate, not to the
+/// provider: native topology recovery may prove a treatment composite with
+/// an independent source-boundary comparison, or return a structural host.
+struct KernelRecoveryCandidate {
+    fragment: CadFragment,
+    boundary_verified: bool,
+}
+
+impl KernelRecoveryCandidate {
+    const fn structural(fragment: CadFragment) -> Self {
+        Self {
+            fragment,
+            boundary_verified: false,
+        }
+    }
+
+    const fn verified(fragment: CadFragment) -> Self {
+        Self {
+            fragment,
+            boundary_verified: true,
+        }
+    }
+}
+
 fn apply_kernel_recovery<F>(
     recovery: &mut WholeSolidRecoveryState,
     mut recover: F,
-    boundary_verified: bool,
+    all_sources: bool,
 ) -> Vec<KernelRecoveryFailure>
 where
-    F: FnMut(SourceEntity) -> Result<Option<CadFragment>>,
+    F: FnMut(SourceEntity) -> Result<Option<KernelRecoveryCandidate>>,
 {
     let mut failures = Vec::new();
     // Independently proven material may replace a cheaper but merely
     // structurally inferred source candidate. Otherwise previously selected
     // candidates would prevent the kernel-backed source proof from ever running.
-    let targets = if boundary_verified {
+    let targets = if all_sources {
         recovery.source_solids.clone()
     } else {
         recovery.semantically_unrecovered_sources()
     };
     for source in targets {
         match recover(source) {
-            Ok(Some(fragment)) if source_solid_id(&fragment.source) == source.id => {
+            Ok(Some(KernelRecoveryCandidate { fragment, boundary_verified })) if source_solid_id(&fragment.source) == source.id => {
                 if let Err(error) = recovery.add_candidates_with_proof(
                     [SourceCadFragment {
                         source_solid: source,
@@ -1109,7 +1162,7 @@ where
                     });
                 }
             }
-            Ok(Some(fragment)) => failures.push(KernelRecoveryFailure {
+            Ok(Some(KernelRecoveryCandidate { fragment, .. })) => failures.push(KernelRecoveryFailure {
                 source,
                 error: format!(
                     "kernel recovery returned local solid #{} while recovering DATA section {:?} solid #{}",
@@ -2873,6 +2926,7 @@ mod tests {
             unrecovered_solids: solids.clone(),
             body_scan: BodyScanSummary { solids },
             body_count: solid_ids.len(),
+            source_boundary_verified_solids: Vec::new(),
             constructively_recovered_solid_count: 0,
             semantically_recovered_solid_count: 0,
             unrecovered_solid_count: solid_ids.len(),
@@ -2894,8 +2948,14 @@ mod tests {
     fn apply_test_kernel_recovery<F>(solid_ids: &[u64], mut recover: F) -> CompleteIr
     where F: FnMut(u64) -> Result<Option<CadFragment>> {
         let mut build = build_state_with_unrecovered(solid_ids);
-        let failures =
-            apply_kernel_recovery(&mut build.recovery, |source| recover(source.id), false);
+        let failures = apply_kernel_recovery(
+            &mut build.recovery,
+            |source| {
+                recover(source.id)
+                    .map(|candidate| candidate.map(KernelRecoveryCandidate::structural))
+            },
+            false,
+        );
         build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, None)
     }
 
@@ -3467,7 +3527,12 @@ mod tests {
         let verified = constructive_fragment(7, 5)?;
         let expected_complexity = verified.model.complexity_score(verified.root)?;
         state.add_candidates([qualified_fragment(constructive_fragment(7, 1)?)])?;
-        state.add_candidates_with_proof([qualified_fragment(verified)], true)?;
+        let failures = apply_kernel_recovery(
+            &mut state,
+            |_| Ok(Some(KernelRecoveryCandidate::verified(verified.clone()))),
+            true,
+        );
+        assert!(failures.is_empty(), "{failures:?}");
         assert!(state.selected[&test_source(7)].boundary_verified);
         assert_eq!(
             state.selected[&test_source(7)].complexity,

@@ -1110,8 +1110,8 @@ fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
         (SupportLocusKey::Cylinder { .. }, SupportLocusKey::Cylinder { .. })
         | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cone { .. })
         | (SupportLocusKey::Cylinder { .. }, SupportLocusKey::Cone { .. })
-        | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cylinder { .. }) => loci[0] != loci[1],
-        (SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. }, _)
+        | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cylinder { .. })
+        | (SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. }, _)
         | (_, SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. }) => loci[0] != loci[1],
     }
 }

@@ -170,7 +170,7 @@ mod tests {
             compare(&sa, &sb, || raw(&a, 9.6), || raw(&b, 11.4)),
             Some(false)
         );
-        let mut changed = sb.clone();
+        let mut changed = sb;
         changed.chains.clear();
         assert_eq!(
             compare(&sa, &changed, || raw(&a, 10.49), || raw(&b, 10.51)),

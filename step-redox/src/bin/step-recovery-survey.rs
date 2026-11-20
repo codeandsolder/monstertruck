@@ -1,7 +1,7 @@
-//! Read-only, corpus-level measurement of automatic STEP-to-constructive-IR recovery.
+//! Read-only corpus measurement of automatic STEP-to-constructive-IR recovery.
 //!
-//! Constructive recovery and independent source-exact admission are distinct
-//! claims: this command reports the former, never silently asserts the latter.
+//! Structural recovery and independently source-boundary-verified admission
+//! are counted separately, without inferring verification from recovery family.
 
 #[cfg(feature = "cad-kernel-monstertruck")]
 mod survey {
@@ -17,7 +17,7 @@ mod survey {
     use step_redox::{SourceEntity, cad_kernel::monstertruck::MonstertruckKernel};
 
     mod journal;
-    const SCHEMA: &str = "step-redox.recovery-survey.v2";
+    const SCHEMA: &str = "step-redox.recovery-survey.v3";
 
     #[derive(Debug, Parser)]
     #[command(about = "Measure automatic constructive recovery across STEP inputs as JSON")]
@@ -54,6 +54,7 @@ mod survey {
         semantically_recovered: Option<usize>,
         unrecovered: Option<usize>,
         families: BTreeMap<String, usize>,
+        source_boundary_verified_sources: Vec<SourceEntity>,
         unrecovered_sources: Vec<SourceEntity>,
         kernel_failures: Vec<KernelRecoveryFailure>,
         error: Option<String>,
@@ -65,11 +66,13 @@ mod survey {
         inputs_with_errors: usize,
         files_with_no_solids: usize,
         fully_constructive_files: usize,
+        fully_source_boundary_verified_files: usize,
         partially_constructive_files: usize,
         semantic_only_files: usize,
         unrecovered_files: usize,
         source_solids: usize,
         constructively_recovered_solids: usize,
+        source_boundary_verified_solids: usize,
         semantically_recovered_solids: usize,
         unrecovered_solids: usize,
     }
@@ -78,7 +81,7 @@ mod survey {
     struct Survey {
         schema: &'static str,
         executable_sha256: String,
-        /// Recovery counts are not independent proof of source-equivalent geometry.
+        /// Only explicitly verified source IDs count as independent boundary evidence.
         claim: &'static str,
         totals: Totals,
         cases: Vec<Case>,
@@ -142,6 +145,7 @@ mod survey {
             semantically_recovered: None,
             unrecovered: None,
             families: BTreeMap::new(),
+            source_boundary_verified_sources: Vec::new(),
             unrecovered_sources: Vec::new(),
             kernel_failures: Vec::new(),
             error: None,
@@ -170,6 +174,7 @@ mod survey {
                     .iter()
                     .map(|solid| solid.source)
                     .collect();
+                entry.source_boundary_verified_sources = report.source_boundary_verified_solids;
                 entry.kernel_failures = report.kernel_recovery_failures;
             }
             Err(error) => entry.error = Some(format!("{error:#}")),
@@ -188,6 +193,11 @@ mod survey {
                 Outcome::PartialConstructive => self.partially_constructive_files += 1,
                 Outcome::SemanticOnly => self.semantic_only_files += 1,
                 Outcome::Unrecovered => self.unrecovered_files += 1,
+            }
+            let verified = entry.source_boundary_verified_sources.len();
+            self.source_boundary_verified_solids += verified;
+            if verified > 0 && entry.body_count == Some(verified) {
+                self.fully_source_boundary_verified_files += 1;
             }
             self.source_solids += entry.body_count.unwrap_or_default();
             self.constructively_recovered_solids +=
@@ -243,7 +253,7 @@ mod survey {
         let report = Survey {
             schema: SCHEMA,
             executable_sha256: identity.executable_sha256,
-            claim: "automatic constructive IR selection; independent source-boundary equivalence not measured",
+            claim: "automatic constructive IR selection; source-boundary verified IDs are explicit independent analytic equivalence certificates",
             totals,
             cases,
         };
@@ -293,6 +303,15 @@ mod survey {
             run_survey(false)?;
             let original: serde_json::Value = serde_json::from_slice(&std::fs::read(&output)?)?;
             assert_eq!(original["totals"]["fully_constructive_files"], 1);
+            assert_eq!(
+                original["totals"]["fully_source_boundary_verified_files"],
+                1
+            );
+            assert_eq!(original["totals"]["source_boundary_verified_solids"], 1);
+            let verified = original["cases"][0]["source_boundary_verified_sources"]
+                .as_array()
+                .context("missing verified source IDs")?;
+            assert_eq!(verified.len(), 1);
             assert_eq!(original["totals"]["inputs_with_errors"], 1);
             assert!(run_survey(false).is_err());
             std::fs::remove_file(&output)?;

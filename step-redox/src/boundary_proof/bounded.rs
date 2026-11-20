@@ -1,6 +1,14 @@
 //! Physical line and circular-arc coverage, independent of edge subdivision.
 //! Samples propose a circle; whole-domain rational certificates prove it.
-use super::*;
+use super::{
+    ANALYTIC_BOUNDARY_PROOF_TOL_MM, BSplineSupport, BoundaryChainKey, CircleLocusKey, CurveSupport,
+    DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM, PointKey, SCALAR_Q_MM,
+    SupportLocusKey, brep, bspline_domain, bspline_line_support, canonical_boundary_direction,
+    circle_lies_on_support, circle_section_of_plane_and_support, dequantize_scalar,
+    dequantize_vector, evaluate_bspline, line_lies_on_support, line_segment_lies_on_cone,
+    point_key, quantize, support_pair_can_intersect,
+};
+use crate::math3::{add, cross, distance, dot, mul, norm, normalize, sub};
 use monstertruck_geometry::{
     analytic_carrier::AnalyticSupport,
     analytic_curve_incidence::{
@@ -10,12 +18,13 @@ use monstertruck_geometry::{
     analytic_line_segment::{SegmentLocus, certify_nurbs_segment_locus},
     prelude::{BsplineCurve, KnotVector, NurbsCurve, Point3, Vector3, Vector4},
 };
+use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 
 const TOL: f64 = ANALYTIC_BOUNDARY_PROOF_TOL_MM;
 
-fn point(p: [f64; 3]) -> Point3 { Point3::new(p[0], p[1], p[2]) }
-fn vector(v: [f64; 3]) -> Vector3 { Vector3::new(v[0], v[1], v[2]) }
+const fn point(p: [f64; 3]) -> Point3 { Point3::new(p[0], p[1], p[2]) }
+const fn vector(v: [f64; 3]) -> Vector3 { Vector3::new(v[0], v[1], v[2]) }
 fn decode(p: PointKey) -> Option<[f64; 3]> { dequantize_vector(p, POINT_Q_MM) }
 
 fn rational(spline: &BSplineSupport) -> Option<NurbsCurve<Vector4>> {
@@ -510,6 +519,7 @@ pub(super) fn normalize_arcs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::boundary_proof::support_locus_key;
     use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI};
     const Z: [i64; 3] = [0, 0, 10_000_000_000];
     const R: i64 = 10_000_000;
@@ -595,7 +605,7 @@ mod tests {
         let cycle =
             normalize_arcs(&supports, &locus, &[half, other_half]).map_err(anyhow::Error::msg)?;
         let rounded = Arc {
-            sweep: other_half.sweep + 4.0 * f64::EPSILON,
+            sweep: 4.0_f64.mul_add(f64::EPSILON, other_half.sweep),
             ..other_half
         };
         assert_eq!(
