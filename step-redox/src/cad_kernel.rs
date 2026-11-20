@@ -91,7 +91,7 @@ pub mod monstertruck {
     use monstertruck_core::tolerance::{
         DEFAULT_NUMERICAL_TOLERANCES, DEFAULT_STEP_RECOVERY_TOLERANCES,
     };
-    use monstertruck_fillet::{FilletOptions, FilletProfile, RadiusSpec, fillet_edges_generic};
+    use monstertruck_fillet::{FilletOptions, FilletProfile, RadiusSpec};
     use monstertruck_geometry::analytic_curve_incidence::CurveIncidence;
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
     use monstertruck_modeling::{
@@ -1266,7 +1266,7 @@ pub mod monstertruck {
             profile: fillet_profile,
             ..FilletOptions::default()
         };
-        fillet_edges_generic(shell, &selected, Some(&options))?;
+        monstertruck_modeling::fillet_edges(shell, &selected, Some(&options))?;
         Ok(Solid::new(boundaries)?)
     }
 
@@ -2060,6 +2060,76 @@ pub mod monstertruck {
             assert_eq!(summary.shells, 1);
             assert_eq!(summary.faces, 14);
             step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_three_way_spherical_round_network() -> Result<()> {
+            let mut model = CadModel::new();
+            let child = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [6.0, 5.0, 4.0],
+            }));
+            let corners = [
+                [0.0, 0.0, 4.0],
+                [6.0, 0.0, 4.0],
+                [6.0, 5.0, 4.0],
+                [0.0, 5.0, 4.0],
+            ];
+            let mut edges = Vec::new();
+            for (index, point) in corners.iter().copied().enumerate() {
+                for end_mm in [corners[(index + 1) % 4], [point[0], point[1], 0.0]] {
+                    edges.push(EdgeTreatmentEdge {
+                        selector: EdgeSelector::Segment {
+                            start_mm: point,
+                            end_mm,
+                        },
+                        radius_mm: 0.5,
+                    });
+                }
+            }
+            let root = model.add_node(CadNode::EdgeTreatment {
+                child,
+                profile: EdgeTreatmentProfile::Round,
+                edges,
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.is_single_solid(), "{summary:?}");
+            assert_eq!(summary.faces, 18);
+            let step = kernel.to_step(&evaluated)?;
+            let exchange = step_p21::parser::parse(&step)?;
+            let section = &exchange.data[0];
+            let index = crate::step_graph::build_index(&section.entities);
+            let solid_id = section
+                .entities
+                .iter()
+                .find_map(|entity| {
+                    let record = crate::step_graph::simple_record(entity)?;
+                    (record.name == "MANIFOLD_SOLID_BREP")
+                        .then(|| crate::step_graph::entity_id(entity))
+                })
+                .context("missing rounded solid")?;
+            let solid =
+                crate::reduced_brep::ReducedSolid::from_step(solid_id, &section.entities, &index)
+                    .context("cannot resolve analytic rounded solid")?;
+            use crate::brep::SurfaceSupport;
+            assert_eq!(
+                solid
+                    .faces()
+                    .filter(|face| matches!(face.surface, SurfaceSupport::Sphere(_)))
+                    .count(),
+                4
+            );
+            assert_eq!(
+                solid
+                    .faces()
+                    .filter(|face| matches!(face.surface, SurfaceSupport::Cylinder(_)))
+                    .count(),
+                8
+            );
+            assert!(solid.validate_closed_topology().is_some());
             Ok(())
         }
 

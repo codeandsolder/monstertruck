@@ -1,7 +1,43 @@
+mod planar_network;
+use planar_network::try_round_planar_network;
+
 use monstertruck_fillet::{FilletIntersectionCurve, ParameterCurveLinear};
 use monstertruck_geometry::prelude::*;
 
 use crate::{Curve, Curve2D, Surface};
+
+/// Fillet the native modeling shell, preferring simultaneous analytic
+/// rolling-ball construction for compatible planar corner networks.
+///
+/// # Errors
+/// Returns the generic fillet solver's error for other geometry or an
+/// invalid request. No partial analytic network is ever committed.
+pub fn fillet_edges(
+    shell: &mut crate::Shell,
+    edges: &[crate::Edge],
+    options: Option<&monstertruck_fillet::FilletOptions>,
+) -> std::result::Result<(), monstertruck_fillet::FilletError> {
+    use monstertruck_fillet::{FilletOptions, FilletProfile, RadiusSpec};
+    let default = FilletOptions::default();
+    let options = options.unwrap_or(&default);
+    if matches!(options.profile, FilletProfile::Round) {
+        let constant;
+        let radii = match &options.radius {
+            RadiusSpec::Constant(radius) => {
+                constant = vec![*radius; edges.len()];
+                Some(constant.as_slice())
+            }
+            RadiusSpec::PerEdge(radii) => Some(radii.as_slice()),
+            RadiusSpec::Variable(_) => None,
+        };
+        if let Some(rebuilt) = radii.and_then(|radii| try_round_planar_network(shell, edges, radii))
+        {
+            *shell = rebuilt;
+            return Ok(());
+        }
+    }
+    monstertruck_fillet::fillet_edges_generic(shell, edges, Some(options))
+}
 
 impl TryFrom<Surface> for NurbsSurface<Vector4> {
     type Error = ();
