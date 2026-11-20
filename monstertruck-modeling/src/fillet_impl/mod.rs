@@ -71,6 +71,26 @@ pub fn chamfer_planar_edges(
     )
 }
 
+/// Form exact unequal planar bevels, with the first setback attached to a
+/// specified carrier normal independently of face iteration order.
+/// # Errors
+/// Returns an error if the selected topology does not support native construction.
+pub fn chamfer_carrier_edges(
+    shell: &mut crate::Shell,
+    edges: &[crate::Edge],
+    setbacks: &[f64],
+    first_normal: Vector3,
+    second_setback: f64,
+) -> std::result::Result<(), monstertruck_fillet::FilletError> {
+    let rebuilt =
+        planar_network::try_carrier_chamfer(shell, edges, setbacks, first_normal, second_setback)
+            .ok_or(monstertruck_fillet::FilletError::UnsupportedGeometry {
+            context: "carrier-bound planar chamfer construction failed",
+        })?;
+    *shell = rebuilt;
+    Ok(())
+}
+
 impl TryFrom<Surface> for NurbsSurface<Vector4> {
     type Error = ();
     fn try_from(surface: Surface) -> std::result::Result<Self, ()> {

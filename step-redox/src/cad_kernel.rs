@@ -1356,13 +1356,25 @@ pub mod monstertruck {
                 radii.push(treatment.radius_mm);
             }
         }
-        if profile == EdgeTreatmentProfile::Chamfer {
-            monstertruck_modeling::chamfer_planar_edges(shell, &selected, &radii)?;
-            return Ok(Solid::new(boundaries)?);
-        }
         let fillet_profile = match profile {
+            EdgeTreatmentProfile::Chamfer => {
+                monstertruck_modeling::chamfer_planar_edges(shell, &selected, &radii)?;
+                return Ok(Solid::new(boundaries)?);
+            }
+            EdgeTreatmentProfile::CarrierChamfer {
+                first_carrier_normal: [x, y, z],
+                second_setback_mm,
+            } => {
+                monstertruck_modeling::chamfer_carrier_edges(
+                    shell,
+                    &selected,
+                    &radii,
+                    Vector3::new(x, y, z),
+                    second_setback_mm,
+                )?;
+                return Ok(Solid::new(boundaries)?);
+            }
             EdgeTreatmentProfile::Round => FilletProfile::Round,
-            EdgeTreatmentProfile::Chamfer => FilletProfile::Chamfer,
             EdgeTreatmentProfile::AsymmetricChamfer {
                 first_setback_mm,
                 second_setback_mm,

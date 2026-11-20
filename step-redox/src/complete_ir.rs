@@ -2033,10 +2033,19 @@ fn replayable_edge_treatment(
             {
                 return None;
             }
-            // Supplier exports with micrometre-scale asymmetric setbacks
-            // represent the same intended nominal chamfer. Fit both setbacks
-            // to one canonical dimension rather than declaring non-recovery.
-            (EdgeTreatmentProfile::Chamfer, first.midpoint(second))
+            if (first - second).abs() <= crate::numeric::NUMERICAL_GEOMETRY_TOL_MM {
+                (EdgeTreatmentProfile::Chamfer, first.midpoint(second))
+            } else {
+                // Preserve the source carrier position, rather than fitting a
+                // nominal common size that moves later dependent selectors.
+                (
+                    EdgeTreatmentProfile::CarrierChamfer {
+                        first_carrier_normal: item.first_setback_carrier_normal?,
+                        second_setback_mm: second,
+                    },
+                    first,
+                )
+            }
         }
         crate::edge_treatments::EdgeTreatmentKind::CylindricalFillet
         | crate::edge_treatments::EdgeTreatmentKind::ToroidalFillet => {
@@ -2957,6 +2966,7 @@ mod tests {
             ],
             inferred_radius_mm: None,
             inferred_setbacks_mm: Some([0.5, 0.5]),
+            first_setback_carrier_normal: Some([1.0, 0.0, 0.0]),
             inferred_angle_rad: Some(std::f64::consts::FRAC_PI_4),
             carrier_angle_rad: std::f64::consts::FRAC_PI_2,
             virtual_edge: EdgeTreatmentVirtualEdge::Segment {
@@ -3032,13 +3042,19 @@ mod tests {
     }
 
     #[test]
-    fn supplier_chamfer_micron_setback_drift_replays_at_common_nominal_size() -> Result<()> {
+    fn supplier_chamfer_micron_setback_drift_preserves_both_dimensions() -> Result<()> {
         let mut evidence = test_treatment_evidence(42, 77);
         evidence.inferred_setbacks_mm = Some([0.5, 0.506_7]);
         let (profile, edge) = replayable_edge_treatment(&evidence)
             .ok_or_else(|| anyhow::anyhow!("6.7 micrometre difference must replay"))?;
-        assert_eq!(profile, EdgeTreatmentProfile::Chamfer);
-        assert!((edge.radius_mm - 0.503_35).abs() < 1.0e-12);
+        assert_eq!(
+            profile,
+            EdgeTreatmentProfile::CarrierChamfer {
+                first_carrier_normal: [1.0, 0.0, 0.0],
+                second_setback_mm: 0.506_7,
+            }
+        );
+        assert_eq!(edge.radius_mm, 0.5);
         evidence.inferred_setbacks_mm = Some([0.5, 0.510_1]);
         assert!(replayable_edge_treatment(&evidence).is_none());
         evidence.inferred_setbacks_mm = Some([0.5, f64::NAN]);

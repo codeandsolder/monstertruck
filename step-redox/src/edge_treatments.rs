@@ -62,6 +62,8 @@ pub struct EdgeTreatmentEvidence {
     pub carriers: [EdgeTreatmentCarrier; 2],
     pub inferred_radius_mm: Option<f64>,
     pub inferred_setbacks_mm: Option<[f64; 2]>,
+    /// Unoriented normal of the carrier corresponding to the first setback.
+    pub first_setback_carrier_normal: Option<[f64; 3]>,
     pub inferred_angle_rad: Option<f64>,
     pub carrier_angle_rad: f64,
     pub virtual_edge: EdgeTreatmentVirtualEdge,
@@ -670,6 +672,11 @@ fn prove_planar_chamfer(
     } else {
         [setbacks[1], setbacks[0]]
     });
+    result.first_setback_carrier_normal = Some(if result.carriers[0].face_id == first.face_id {
+        first_normal
+    } else {
+        second_normal
+    });
     Some(result)
 }
 
@@ -864,6 +871,7 @@ fn evidence(
         carriers,
         inferred_radius_mm,
         inferred_setbacks_mm: None,
+        first_setback_carrier_normal: None,
         inferred_angle_rad,
         carrier_angle_rad,
         virtual_edge,

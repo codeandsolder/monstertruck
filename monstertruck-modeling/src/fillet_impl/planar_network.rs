@@ -75,10 +75,18 @@ fn normal(shell: &Shell, face: usize) -> Option<Vector3> {
     normal.magnitude().near(&1.0).then_some(normal)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum PlanarTreatment {
     Round,
     Chamfer,
+    CarrierChamfer {
+        first_normal: Vector3,
+        second_setback: f64,
+    },
+}
+
+impl PlanarTreatment {
+    fn is_round(self) -> bool { matches!(self, Self::Round) }
 }
 
 /// For planar carriers, equal transverse setbacks are related to the
@@ -100,6 +108,7 @@ struct SelectedEdge {
     axis: Vector3,
     faces: [FaceUse; 2],
     normals: [Vector3; 2],
+    setbacks: Option<[f64; 2]>,
 }
 
 impl SelectedEdge {
@@ -133,9 +142,27 @@ impl SelectedEdge {
             return None;
         }
         let normals = [na, nb];
-        let radius = match profile {
-            PlanarTreatment::Round => size,
-            PlanarTreatment::Chamfer => chamfer_radius(normals, size)?,
+        let (radius, setbacks) = match profile {
+            PlanarTreatment::Round => (size, None),
+            PlanarTreatment::Chamfer => (chamfer_radius(normals, size)?, Some([size; 2])),
+            PlanarTreatment::CarrierChamfer {
+                first_normal,
+                second_setback,
+            } => {
+                if !second_setback.is_finite()
+                    || second_setback <= KERNEL_EPSILON
+                    || !first_normal.magnitude().near(&1.0)
+                {
+                    return None;
+                }
+                let distances = normals.map(|n| n.cross(first_normal).magnitude());
+                let setbacks = match distances.map(|d| d <= ANGULAR) {
+                    [true, false] => [size, second_setback],
+                    [false, true] => [second_setback, size],
+                    _ => return None,
+                };
+                (size, Some(setbacks))
+            }
         };
         Some(Self {
             id: edge_id,
@@ -143,6 +170,7 @@ impl SelectedEdge {
             axis,
             faces: [a, b],
             normals,
+            setbacks,
         })
     }
 }
@@ -232,9 +260,10 @@ impl Corner {
                 }
             }
             [first, second, third]
-                if [second.radius, third.radius]
-                    .iter()
-                    .all(|r| r.near(&first.radius)) =>
+                if rounded.iter().all(|edge| edge.setbacks.is_none())
+                    && [second.radius, third.radius]
+                        .iter()
+                        .all(|r| r.near(&first.radius)) =>
             {
                 CornerKind::Sphere
             }
@@ -279,7 +308,17 @@ impl Corner {
             if offsets[i] == 0.0 {
                 continue;
             }
-            let contact = center + projected_radial(radius * normals[i], &kind);
+            let contact = if let [edge] = rounded.as_slice()
+                && let Some(setbacks) = edge.setbacks
+            {
+                let slot = edge.faces.iter().position(|u| u.face == face)?;
+                let n = edge.normals[slot];
+                let other = edge.normals[1 - slot];
+                let direction = -(other - n * n.dot(other)).normalize();
+                point + projected_radial(direction * setbacks[slot], &kind)
+            } else {
+                center + projected_radial(radius * normals[i], &kind)
+            };
             if normals
                 .iter()
                 .any(|n| n.dot(contact - point) > KERNEL_EPSILON)
@@ -436,7 +475,7 @@ impl TreatedEdge {
                     Some(exact_cylinder(&start, &end, edge)?),
                 )
             }
-            PlanarTreatment::Chamfer => {
+            PlanarTreatment::Chamfer | PlanarTreatment::CarrierChamfer { .. } => {
                 // The bevel is a plane. Both rails must retain a positive
                 // axial interval even with oblique termination planes.
                 if rails.iter().any(|rail| {
@@ -693,7 +732,7 @@ fn planar_network(
         .any(|c| matches!(c.kind, CornerKind::Sphere));
     // Round junction support is a spherical patch; a three-bevel corner
     // requires a separate planar junction construction.
-    if spherical != (profile == PlanarTreatment::Round) {
+    if spherical != profile.is_round() {
         return None;
     }
     let rounds = selected
@@ -761,6 +800,24 @@ pub(super) fn try_chamfer_planar_network(
     setbacks: &[f64],
 ) -> Option<Shell> {
     planar_network(shell, edges, setbacks, PlanarTreatment::Chamfer)
+}
+
+pub(super) fn try_carrier_chamfer(
+    shell: &Shell,
+    edges: &[Edge],
+    setbacks: &[f64],
+    first_normal: Vector3,
+    second_setback: f64,
+) -> Option<Shell> {
+    planar_network(
+        shell,
+        edges,
+        setbacks,
+        PlanarTreatment::CarrierChamfer {
+            first_normal,
+            second_setback,
+        },
+    )
 }
 
 pub(super) fn planar_chamfer_radii(
