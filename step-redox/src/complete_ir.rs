@@ -3846,6 +3846,46 @@ END-ISO-10303-21;
         Ok(())
     }
 
+    /// Historical corpus case 99527c was unrecovered before the general
+    /// source-derived union improvements. Its independently published STEP
+    /// manifold is the acceptance oracle, not any implementation's node order.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_four_core_union_99527c_is_automatically_source_recovered() -> Result<()> {
+        use crate::cad_kernel::CadKernel;
+
+        let input = include_bytes!("../validation/fixtures/native_four_core_union_99527c.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(
+            report.constructively_recovered_solid_count, 1,
+            "source solid #56 must automatically recover: {:?}",
+            report.kernel_recovery_failures
+        );
+        assert_eq!(report.unrecovered_solid_count, 0);
+        assert_eq!(report.body_scan.solids[0].source.id, 56);
+
+        let selected = selected_unique_source_fragment(&report)?;
+        selected.model.validate()?;
+        let rebuilt = kernel.evaluate(&selected.model, selected.root)?;
+        assert!(kernel.summarize(&rebuilt).is_single_solid());
+        let source = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+        let [source_section] = source.data.as_slice() else {
+            bail!("four-core source did not have one DATA section");
+        };
+        assert!(
+            rebuilt_kernel_boundary_matches_source(
+                &kernel,
+                &rebuilt,
+                56,
+                &source_section.entities,
+            )?,
+            "automatically selected editable model is not source-boundary equivalent"
+        );
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn real_open_cap_and_hook_union_reconstructs_complete_editable_body() -> Result<()> {
