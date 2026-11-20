@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Formatter, Result};
 
-use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
+use monstertruck_core::{cgmath64::Matrix3, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
 use monstertruck_topology::compress::{
     CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell, CompressedSolid,
     CompressedTrimmedShell, CompressedTrimmedSolid,
@@ -161,15 +161,23 @@ pub trait StepFormat {
     /// # Errors
     /// Returns an error if writing the STEP representation fails.
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result;
+
+    /// Affine map from this surface's native UV coordinates into the
+    /// emitted STEP surface's parameter chart, when they differ.
+    fn parameter_space_transform(&self) -> Option<Matrix3> { None }
 }
 
 impl<T: StepFormat> StepFormat for &T {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result { StepFormat::fmt(*self, idx, f) }
+    fn parameter_space_transform(&self) -> Option<Matrix3> { (*self).parameter_space_transform() }
 }
 
 impl<T: StepFormat> StepFormat for Box<T> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         StepFormat::fmt(self.as_ref(), idx, f)
+    }
+    fn parameter_space_transform(&self) -> Option<Matrix3> {
+        self.as_ref().parameter_space_transform()
     }
 }
 
