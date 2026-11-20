@@ -197,7 +197,7 @@ mod survey {
         }
     }
 
-    fn run(cli: Cli) -> Result<()> {
+    fn run(cli: &Cli) -> Result<()> {
         let inputs = cli
             .inputs
             .iter()
@@ -257,7 +257,7 @@ mod survey {
         }
     }
 
-    pub fn main() -> Result<()> { run(Cli::parse()) }
+    pub fn main() -> Result<()> { run(&Cli::parse()) }
 
     #[cfg(test)]
     mod tests {
@@ -284,7 +284,7 @@ mod survey {
                 include_bytes!("../../validation/fixtures/native_staged_rectangular_loft.step"),
             )?;
             let run_survey = |resume| {
-                run(Cli {
+                run(&Cli {
                     output: Some(output.clone()),
                     resume,
                     inputs: vec![first.clone(), second.clone()],
