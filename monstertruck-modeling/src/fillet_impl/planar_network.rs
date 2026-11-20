@@ -666,6 +666,17 @@ fn round_planar_network(shell: &Shell, edges: &[Edge], radii: &[f64]) -> Option<
     Some(result)
 }
 
+/// Construct an exact simultaneous convex planar three-way rolling-ball
+/// network, including oblique planar terminal caps. The input is never
+/// mutated and unsupported corner incidence is routed to the other solver.
+pub(super) fn try_round_planar_network(
+    shell: &Shell,
+    edges: &[Edge],
+    radii: &[f64],
+) -> Option<Shell> {
+    round_planar_network(shell, edges, radii)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,15 +747,4 @@ mod tests {
         assert!(shell.is_geometric_consistent());
         Ok(())
     }
-}
-
-/// Construct an exact simultaneous convex planar three-way rolling-ball
-/// network, including oblique planar terminal caps. The input is never
-/// mutated and unsupported corner incidence is routed to the other solver.
-pub(super) fn try_round_planar_network(
-    shell: &Shell,
-    edges: &[Edge],
-    radii: &[f64],
-) -> Option<Shell> {
-    round_planar_network(shell, edges, radii)
 }
