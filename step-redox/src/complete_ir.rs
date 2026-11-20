@@ -19,7 +19,6 @@ use crate::kernel_source_load::{
 use crate::kernel_topology::plan_source_coplanar_normalization_patch;
 use crate::kernel_topology::{
     SourceTopologyEditor, plan_source_boundary_feature_peel_from_entities,
-    plan_source_edge_treatment_transaction,
 };
 use crate::patterns::InstancePattern;
 use crate::planar_features::{
@@ -32,6 +31,8 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Exchange};
+
+mod treatment_layers;
 
 pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
 pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v18";
@@ -906,26 +907,19 @@ fn recover_kernel_topology_normalized_fragment<
     };
 
     let evidence = replayable_source_treatments(exchange, source)?;
-    let (patches, coupled_selectors) = if evidence.is_empty() {
-        (Vec::new(), Vec::new())
-    } else {
-        let planned =
-            plan_source_edge_treatment_transaction(exchange, source, &evidence, &provenance)
-                .context("construct inverse edge-treatment topology patch")?;
-        (vec![planned.patch], planned.coupled_selectors)
-    };
-    // Keep one exact kernel-owned source throughout both reduction stages.
-    // The source identity journal does not depend on temporary STEP numbers.
-    let mut edited = kernel
-        .edit_source_topology(document, source, &patches)
-        .context("apply inverse edge-treatment topology patch to source")?;
+    let treatment_layers::PeelOutcome {
+        mut edited,
+        layers,
+        stop,
+    } = treatment_layers::peel(kernel, document, source, &provenance, &evidence)
+        .context("peel dependency-ordered native edge treatments")?;
     if kernel.inspect_edited_source(&edited)?.faces == 0 {
         return Ok(None);
     }
     let same_domain_merges = kernel
         .normalize_edited_source(&mut edited)
         .context("normalize native source faces after inverse treatments")?;
-    let unchanged = patches.is_empty() && same_domain_merges == 0;
+    let unchanged = layers.is_empty() && same_domain_merges == 0;
     // Even an unedited source can have a native constructive representation
     // that the parser-only path did not recognize (e.g. an exact U-directed
     // rational spline extrusion). Do not needlessly serialize that source or
@@ -946,6 +940,9 @@ fn recover_kernel_topology_normalized_fragment<
             |fragment| Ok(Some(fragment)),
         )?
     }) else {
+        if let Some(reason) = stop {
+            bail!("inverse treatment fixed point: {reason}");
+        }
         return Ok(None);
     };
     // Synthetic edited-native identifiers are never original STEP provenance.
@@ -955,23 +952,13 @@ fn recover_kernel_topology_normalized_fragment<
             .map(|accepted| accepted.then_some(host));
     }
 
-    if evidence.is_empty() {
+    if layers.is_empty() {
         host.source = CadFragmentSource::SameDomainNormalized {
             solid_id: source.id,
         };
         return Ok(Some(host));
     }
-
-    let replay = evidence
-        .iter()
-        .filter_map(|item| {
-            replayable_edge_treatment(item).map(|(profile, edge)| (item, profile, edge))
-        })
-        .collect::<Vec<_>>();
-    if replay.len() != evidence.len() {
-        return Ok(None);
-    }
-    let fragment = replay_grouped_edge_treatments(host, source.id, replay, coupled_selectors)?;
+    let fragment = treatment_layers::replay(host, source.id, layers)?;
     kernel_replay_is_single_solid(kernel, &fragment).map(|accepted| accepted.then_some(fragment))
 }
 
@@ -993,7 +980,6 @@ fn replayable_source_treatments(
         ),
     );
     evidence.sort_by_key(|item| item.treatment_face_id);
-    evidence.dedup_by_key(|item| item.treatment_face_id);
     Ok(evidence)
 }
 
@@ -1835,19 +1821,42 @@ fn replay_edge_treatments(
     replay_grouped_edge_treatments(fragment, solid_id, replay, Vec::new())
 }
 
-/// Every connected perimeter is one operation, not a sequence of
-/// independently replayed rounds that would destroy their common junctions.
+/// Owned forward operation. Geometry is captured in the inverse layer's
+/// current coordinate space, while provenance is independently mapped back
+/// to original STEP member identities.
+struct TreatmentReplayGroup {
+    face_ids: Vec<u64>,
+    profile: EdgeTreatmentProfile,
+    edges: Vec<EdgeTreatmentEdge>,
+    max_residual_mm: f64,
+}
+
 fn replay_grouped_edge_treatments(
-    mut fragment: CadFragment,
+    fragment: CadFragment,
     solid_id: u64,
     replay: Vec<ReplayTreatment<'_>>,
     coupled_selectors: Vec<Vec<(u64, EdgeSelector)>>,
 ) -> Result<CadFragment> {
-    let mut remaining = replay
-        .into_iter()
-        .map(|item| (item.0.treatment_face_id, item))
-        .collect::<BTreeMap<_, _>>();
-    let treatment_face_ids = remaining.keys().copied().collect::<Vec<_>>();
+    apply_treatment_replay_groups(
+        fragment,
+        solid_id,
+        make_treatment_replay_groups(replay, coupled_selectors)?,
+    )
+}
+
+/// Every connected perimeter is one operation, not a sequence of
+/// independently replayed rounds that would destroy their common junctions.
+fn make_treatment_replay_groups(
+    replay: Vec<ReplayTreatment<'_>>,
+    coupled_selectors: Vec<Vec<(u64, EdgeSelector)>>,
+) -> Result<Vec<TreatmentReplayGroup>> {
+    let mut remaining = BTreeMap::new();
+    for item in replay {
+        anyhow::ensure!(
+            remaining.insert(item.0.treatment_face_id, item).is_none(),
+            "multiple forward treatment interpretations for the same face"
+        );
+    }
     let mut groups = Vec::<Vec<ReplayTreatment<'_>>>::new();
     for selectors in coupled_selectors {
         let group = selectors
@@ -1868,35 +1877,74 @@ fn replay_grouped_edge_treatments(
         group.sort_by_key(|(item, _, _)| item.treatment_face_id);
     }
     groups.sort_by_key(|group| group[0].0.treatment_face_id);
+    groups
+        .into_iter()
+        .map(prepare_treatment_replay_group)
+        .collect()
+}
+
+fn prepare_treatment_replay_group(group: Vec<ReplayTreatment<'_>>) -> Result<TreatmentReplayGroup> {
+    let profile = group[0].1;
+    anyhow::ensure!(
+        group.iter().all(|(_, p, _)| *p == profile),
+        "one coupled treatment perimeter has mixed forward profiles"
+    );
+    let mut face_ids = Vec::with_capacity(group.len());
+    let mut max_residual_mm = 0.0_f64;
+    let mut edges = Vec::<EdgeTreatmentEdge>::new();
+    for (item, _, edge) in group {
+        face_ids.push(item.treatment_face_id);
+        max_residual_mm = max_residual_mm.max(item.max_boundary_residual_mm);
+        if let Some(existing) = edges
+            .iter()
+            .find(|existing| existing.selector == edge.selector)
+        {
+            anyhow::ensure!(
+                crate::numeric::near_imported_feature_mm(
+                    (existing.radius_mm - edge.radius_mm).abs()
+                ),
+                "split treatment has conflicting forward dimensions"
+            );
+        } else {
+            edges.push(edge);
+        }
+    }
+    Ok(TreatmentReplayGroup {
+        face_ids,
+        profile,
+        edges,
+        max_residual_mm,
+    })
+}
+
+fn apply_treatment_replay_groups(
+    mut fragment: CadFragment,
+    solid_id: u64,
+    groups: impl IntoIterator<Item = TreatmentReplayGroup>,
+) -> Result<CadFragment> {
+    let mut treatment_face_ids = BTreeSet::new();
     fragment.model.roots.clear();
     let mut root = fragment.root;
     for group in groups {
-        let profile = group[0].1;
-        anyhow::ensure!(
-            group.iter().all(|(_, p, _)| *p == profile),
-            "one coupled treatment perimeter has mixed forward profiles"
-        );
-        let mut source_entity_ids = vec![solid_id];
-        let mut max_residual = 0.0_f64;
-        let edges = group
-            .into_iter()
-            .map(|(item, _, edge)| {
-                source_entity_ids.push(item.treatment_face_id);
-                max_residual = max_residual.max(item.max_boundary_residual_mm);
-                edge
-            })
-            .collect();
+        for &id in &group.face_ids {
+            anyhow::ensure!(
+                treatment_face_ids.insert(id),
+                "source treatment replayed twice"
+            );
+        }
         root = fragment.model.add_node(CadNode::EdgeTreatment {
             child: root,
-            profile,
-            edges,
+            profile: group.profile,
+            edges: group.edges,
         });
+        let mut source_entity_ids = vec![solid_id];
+        source_entity_ids.extend(group.face_ids);
         fragment.model.set_provenance(
             root,
             Provenance {
                 source_entity_ids,
                 proof: ProofStatus::WithinTolerance,
-                max_residual_mm: Some(max_residual),
+                max_residual_mm: Some(group.max_residual_mm),
             },
         )?;
     }
@@ -1905,7 +1953,7 @@ fn replay_grouped_edge_treatments(
     if !treatment_face_ids.is_empty() {
         fragment.source = CadFragmentSource::EdgeTreatmentComposite {
             solid_id,
-            treatment_face_ids,
+            treatment_face_ids: treatment_face_ids.into_iter().collect(),
         };
     }
     fragment.model.validate()?;
@@ -1922,6 +1970,13 @@ fn select_replayable_treatments(
     evidence.retain(|item| replayable_edge_treatment(item).is_some());
     let profile_faces = crate::edge_treatments::reciprocal_planar_profile_faces(&evidence);
     evidence.retain(|item| !profile_faces.contains(&(item.solid_id, item.treatment_face_id)));
+    let mut counts = HashMap::new();
+    for item in &evidence {
+        *counts
+            .entry((item.solid_id, item.treatment_face_id))
+            .or_insert(0_usize) += 1;
+    }
+    evidence.retain(|item| counts[&(item.solid_id, item.treatment_face_id)] == 1);
     evidence
 }
 

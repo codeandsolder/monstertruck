@@ -191,6 +191,27 @@ fn detect_solid_edge_treatments(
         return Vec::new();
     };
 
+    detect_face_treatments(solid_id, &faces)
+}
+
+/// Redetect features on the current native B-rep, not stale STEP boundaries.
+pub(crate) fn detect_native_edge_treatments(
+    solid: &crate::reduced_brep::ReducedSolid,
+) -> Vec<EdgeTreatmentEvidence> {
+    let faces = solid
+        .faces()
+        .map(|face| FaceInfo {
+            face_id: face.id,
+            surface: face.surface.clone(),
+            loops: face.loops.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut evidence = detect_face_treatments(solid.solid_id(), &faces);
+    mark_unique_carrier_pairs(&mut evidence);
+    evidence
+}
+
+fn detect_face_treatments(solid_id: u64, faces: &[FaceInfo]) -> Vec<EdgeTreatmentEvidence> {
     let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
     let mut edge_geometry = HashMap::<u64, brep::OrientedEdgeUse>::new();
     for (face_index, face) in faces.iter().enumerate() {
@@ -207,7 +228,7 @@ fn detect_solid_edge_treatments(
 
     let mut out = Vec::new();
     for treatment_index in 0..faces.len() {
-        let neighbors = neighbor_shared_edges(treatment_index, &faces, &edge_faces);
+        let neighbors = neighbor_shared_edges(treatment_index, faces, &edge_faces);
         let entries = neighbors.into_iter().collect::<Vec<_>>();
         for first_index in 0..entries.len() {
             for second_index in first_index + 1..entries.len() {
