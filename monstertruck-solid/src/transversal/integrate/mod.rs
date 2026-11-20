@@ -11,7 +11,8 @@ use super::classic;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::tessellation::{ExactTrimBoundary2D, Parallelizable};
 use monstertruck_topology::{
-    Edge, Face, Solid, Vertex, errors::Error as TopologyError, shell, shell::ShellCondition, wire,
+    Edge, Face, Shell, Solid, Vertex, errors::Error as TopologyError, shell, shell::ShellCondition,
+    wire,
 };
 use thiserror::Error;
 
@@ -740,6 +741,59 @@ where
         solid: cut,
         section,
     })
+}
+
+/// Attempt a union of solids that have a certified planar separating
+/// interface. Returns `None` if the halfspace or footprint reconstruction
+/// cannot be established. No volumetric intersection solver is run.
+///
+/// # Errors
+/// Returns an error for an invalid geometry policy.
+pub fn try_planar_contact_union<
+    C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve,
+    S: ShapeOpsSurface,
+>(
+    lhs: &Solid<Point3, C, S>,
+    rhs: &Solid<Point3, C, S>,
+    policy: GeometryPolicy,
+) -> ShapeOpsResult<Option<Solid<Point3, C, S>>> {
+    let tol = classic_boolean_tolerance(policy, "planar contact union")?;
+    #[cfg(feature = "marching-ssi")]
+    {
+        Ok(classic::planar_contact::union(lhs, rhs, tol))
+    }
+    #[cfg(not(feature = "marching-ssi"))]
+    {
+        let _ = (lhs, rhs, tol);
+        Ok(None)
+    }
+}
+
+/// Union bounded coplanar material faces in one shared analytic plane.
+/// Disconnected regions remain separate faces, with their original line
+/// and curve edges. A refused arrangement returns `None`.
+///
+/// # Errors
+/// Returns an error for an invalid or unsupported geometry policy.
+pub fn try_planar_profile_union<C, S>(
+    faces: &[Face<Point3, C, S>],
+    policy: GeometryPolicy,
+) -> ShapeOpsResult<Option<Shell<Point3, C, S>>>
+where
+    C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve,
+    S: ShapeOpsSurface,
+    Plane: ToSameGeometry<S>,
+{
+    let tol = classic_boolean_tolerance(policy, "planar profile union")?;
+    #[cfg(feature = "marching-ssi")]
+    {
+        Ok(classic::planar_contact::profiles(faces, tol))
+    }
+    #[cfg(not(feature = "marching-ssi"))]
+    {
+        let _ = (faces, tol);
+        Ok(None)
+    }
 }
 
 /// OR operation between two solids.

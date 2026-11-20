@@ -14,6 +14,8 @@ const BINOMIAL_2: [f64; 3] = [1.0, 2.0, 1.0];
 const BINOMIAL_4: [f64; 5] = [1.0, 4.0, 6.0, 4.0, 1.0];
 pub(crate) const ANALYTIC_BOUNDARY_PROOF_TOL_MM: f64 = 4.0 * SCALAR_Q_MM;
 
+mod direction_cells;
+
 type PointKey = [i64; 3];
 type GroupedBoundarySegments = BTreeMap<[OrientedSupportKey; 2], Vec<(PointKey, PointKey)>>;
 
@@ -179,10 +181,21 @@ pub fn compare_analytic_boundaries(
 ) -> AnalyticBoundaryComparison {
     let first = analytic_boundary_diagnostic(first_solid_id, first_entities);
     let second = analytic_boundary_diagnostic(second_solid_id, second_entities);
-    let equivalent = first.supported
-        && second.supported
-        && first.signature.is_some()
-        && first.signature == second.signature;
+    let equivalent = match (&first.signature, &second.signature) {
+        (Some(a), Some(b)) if a == b => true,
+        (Some(a), Some(b))
+            if a.supports.len() == b.supports.len() && a.chains.len() == b.chains.len() =>
+        {
+            direction_cells::compare(
+                a,
+                b,
+                || direction_cells::plane_normals(first_solid_id, first_entities),
+                || direction_cells::plane_normals(second_solid_id, second_entities),
+            )
+            .unwrap_or(false)
+        }
+        _ => false,
+    };
     AnalyticBoundaryComparison {
         equivalent,
         first,
