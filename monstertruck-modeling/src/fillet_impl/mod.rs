@@ -40,8 +40,10 @@ pub fn fillet_edges(
 }
 
 /// Form planar chamfers using physical, equal setbacks measured from the
-/// sharp seam on each carrier. The native graph edits only incident topology;
-/// unsupported corner topology may use the generic solver with the correctly
+/// sharp seam on each carrier.
+///
+/// The native graph edits only incident topology; unsupported corner topology
+/// may use the generic solver with the correctly
 /// converted auxiliary rolling radii.
 /// # Errors
 /// Returns an error for nonplanar or invalid selections, or failed construction.

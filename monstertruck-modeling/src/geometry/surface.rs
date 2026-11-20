@@ -564,7 +564,8 @@ impl SupportsExactPatchDomains for Surface {
 impl TryIntoAnalyticSurfaceKind for Surface {
     fn has_boundary_linear_extrema(&self) -> bool {
         matches!(
-            analytic_carrier(self).map(|carrier| carrier.support()),
+            analytic_carrier(self)
+                .map(monstertruck_geometry::analytic_carrier::AnalyticCarrier::support),
             Some(
                 AnalyticSupport::Plane { .. }
                     | AnalyticSupport::Cylinder { .. }

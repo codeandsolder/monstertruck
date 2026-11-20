@@ -213,6 +213,51 @@ fn projected_radial(radial: Vector3, kind: &CornerKind) -> Vector3 {
     }
 }
 
+fn validate_corner_seams(
+    incidence: &Incidence,
+    vertex: &Vertex,
+    faces: [usize; 3],
+    normals: [Vector3; 3],
+    offsets: [f64; 3],
+    sense: f64,
+) -> Option<()> {
+    let incident = incidence.at_vertex.get(&vertex.id())?;
+    let point = vertex.point();
+    // A spherical junction requires a convex trihedron. For one treated
+    // edge, the terminal plane can instead be a reentrant shoulder: the
+    // bevel/round enlarges its opening or fills its notch. The two
+    // retained edges must still point into the treated carrier halfspaces,
+    // and the later segment-trimming proof must keep their new endpoints
+    // inside their original finite spans.
+    for id in incident {
+        let source = &incidence.edges[id];
+        let [a, b] = source.uses.as_slice() else {
+            return None;
+        };
+        if a.face == b.face || a.forward == b.forward {
+            return None;
+        }
+        let other = if source.edge.absolute_front().id() == vertex.id() {
+            source.edge.absolute_back()
+        } else {
+            source.edge.absolute_front()
+        };
+        let missing = faces
+            .iter()
+            .position(|&f| source.uses.iter().all(|u| u.face != f))?;
+        let advance = normals[missing].dot(other.point() - point);
+        if offsets[missing] == 0.0 {
+            if advance.abs() <= KERNEL_EPSILON {
+                return None;
+            }
+        } else if sense * advance >= -KERNEL_EPSILON {
+            return None;
+        }
+        line_axis(&source.edge)?;
+    }
+    Some(())
+}
+
 impl Corner {
     fn new(
         shell: &Shell,
@@ -271,38 +316,7 @@ impl Corner {
             _ => return None,
         };
         let point = vertex.point();
-        // A spherical junction requires a convex trihedron. For one treated
-        // edge, the terminal plane can instead be a reentrant shoulder: the
-        // bevel/round enlarges its opening or fills its notch. The two
-        // retained edges must still point into the treated carrier halfspaces,
-        // and the later segment-trimming proof must keep their new endpoints
-        // inside their original finite spans.
-        for id in incident {
-            let source = &incidence.edges[id];
-            let [a, b] = source.uses.as_slice() else {
-                return None;
-            };
-            if a.face == b.face || a.forward == b.forward {
-                return None;
-            }
-            let other = if source.edge.absolute_front().id() == vertex.id() {
-                source.edge.absolute_back()
-            } else {
-                source.edge.absolute_front()
-            };
-            let missing = faces
-                .iter()
-                .position(|&f| source.uses.iter().all(|u| u.face != f))?;
-            let advance = normals[missing].dot(other.point() - point);
-            if offsets[missing] == 0.0 {
-                if advance.abs() <= KERNEL_EPSILON {
-                    return None;
-                }
-            } else if sense * advance >= -KERNEL_EPSILON {
-                return None;
-            }
-            line_axis(&source.edge)?;
-        }
+        validate_corner_seams(incidence, vertex, faces, normals, offsets, sense)?;
         let center = point + intersection_displacement(normals, offsets)?;
         let mut contacts = Map::default();
         for (i, &face) in faces.iter().enumerate() {

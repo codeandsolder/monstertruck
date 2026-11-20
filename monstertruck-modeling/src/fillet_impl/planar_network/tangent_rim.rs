@@ -44,7 +44,7 @@ impl Side {
                 sense,
             } => {
                 Matrix4::from_translation(center.to_vec())
-                    * Matrix4::from_scale((original - sense * radius) / original)
+                    * Matrix4::from_scale((sense.mul_add(-radius, original)) / original)
                     * Matrix4::from_translation(-center.to_vec())
             }
         };
@@ -74,7 +74,7 @@ impl Side {
                 sense,
             } => {
                 let radius = offset.abs();
-                let major = original - sense * offset;
+                let major = sense.mul_add(-offset, original);
                 // A ring torus has a regular, globally oriented support.
                 if major <= radius + KERNEL_EPSILON {
                     return None;
@@ -103,6 +103,41 @@ struct RimEdge {
     side_face: usize,
     side: Side,
     convex: bool,
+}
+
+/// Determine whether the complete directed cap edge bounds a convex rim or
+/// a reentrant shoulder, using the certified line/circle carrier tangent.
+fn rim_convexity(edge: &Edge, side: Side, normal: Vector3) -> Option<bool> {
+    let curve = edge.oriented_curve();
+    let (start, end) = curve.range_tuple();
+    // The directed cap wire's outside conormal equals the side's
+    // physical outward normal at convex rims and its negative at
+    // reentrant shoulders. Both must agree over the complete edge.
+    let initial = curve.derivative(start);
+    let magnitude = initial.magnitude();
+    if !magnitude.is_finite() || magnitude <= KERNEL_EPSILON {
+        return None;
+    }
+    let convex = initial
+        .normalize()
+        .cross(normal)
+        .dot(side.outward(edge.front().point()))
+        > 0.0;
+    let sense = if convex { 1.0 } else { -1.0 };
+    for (t, vertex) in [(start, edge.front()), (end, edge.back())] {
+        let tangent = curve.derivative(t);
+        let magnitude = tangent.magnitude();
+        let residual =
+            (tangent.normalize().cross(normal) - side.outward(vertex.point()) * sense).magnitude();
+        if !magnitude.is_finite()
+            || magnitude <= KERNEL_EPSILON
+            || !residual.is_finite()
+            || residual > ANGULAR
+        {
+            return None;
+        }
+    }
+    Some(convex)
 }
 
 impl RimEdge {
@@ -178,38 +213,14 @@ impl RimEdge {
             }
             _ => return None,
         };
-        let curve = edge.oriented_curve();
-        let (start, end) = curve.range_tuple();
-        // The directed cap wire's outside conormal equals the side's
-        // physical outward normal at convex rims and its negative at
-        // reentrant shoulders. Both must agree over the complete edge.
-        let initial = curve.derivative(start);
-        let magnitude = initial.magnitude();
-        if !magnitude.is_finite() || magnitude <= KERNEL_EPSILON {
-            return None;
-        }
-        let convex = initial.normalize().cross(normal).dot(side.outward(point)) > 0.0;
+        let convex = rim_convexity(&edge, side, normal)?;
         let sense = if convex { 1.0 } else { -1.0 };
-        for (t, vertex) in [(start, edge.front()), (end, edge.back())] {
-            let tangent = curve.derivative(t);
-            let magnitude = tangent.magnitude();
-            let residual = (tangent.normalize().cross(normal)
-                - side.outward(vertex.point()) * sense)
-                .magnitude();
-            if !magnitude.is_finite()
-                || magnitude <= KERNEL_EPSILON
-                || !residual.is_finite()
-                || residual > ANGULAR
-            {
-                return None;
-            }
-        }
         if let Side::Circular {
             radius: original,
             sense: radial,
             ..
         } = side
-            && original - radial * sense * radius <= radius + KERNEL_EPSILON
+            && (radial * sense).mul_add(-radius, original) <= radius + KERNEL_EPSILON
         {
             return None;
         }
