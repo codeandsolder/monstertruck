@@ -413,6 +413,20 @@ fn complete_face_boundary_replacement_reuses_edges_and_regenerates_trims() -> an
         ]
     );
     assert!(wire.iter().all(|edge_use| edge_use.trim_curve.is_some()));
+    // Replacing a face's coedges must not touch any retained neighbor's
+    // existing trim (including absent optional trims). The shared 3D edge
+    // has not changed. This also exercises cyclic wire reordering.
+    for (face_index, other) in shell.faces.iter().enumerate() {
+        if face_index != index {
+            assert!(
+                other
+                    .boundaries
+                    .iter()
+                    .flatten()
+                    .all(|edge| edge.trim_curve.is_none())
+            );
+        }
+    }
     let _: crate::trimmed::TrimmedSolid<Point3, Line<Point3>, Plane, Trim> = solid.try_into()?;
     Ok(())
 }
