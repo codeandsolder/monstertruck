@@ -55,3 +55,38 @@ Fixture policy:
 3. Never commit the downloaded STEP files.
 4. Pin every fixture by SHA-256.
 5. Keep enough provenance in source_note to locate/review the source later.
+
+## Constructive recovery coverage survey
+
+From the unified Monstertruck workspace root, run a batch of STEP documents in
+one kernel-backed process:
+
+    cargo +stable run -p step-redox --bin step-recovery-survey \
+      --features cad-kernel-monstertruck -- \
+      --output /tmp/step-recovery-survey.json \
+      step-redox/validation/fixtures/native_staged_rectangular_loft.step \
+      step-redox/validation/fixtures/native_mixed_treatment_4a6356.step \
+      step-redox/validation/fixtures/production_radial_slot.step
+
+Without `--output`, the command writes JSON to stdout. Each input produces a
+record (even if reading/parsing fails) with a SHA-256 for successfully read
+bytes, elapsed time, body-level constructive/semantic/unrecovered counts,
+recovered operation families, and original source IDs for unrecovered solids.
+Aggregate counters distinguish fully and partly constructive documents from
+semantic-only, wholly unrecovered, empty, and failed inputs.
+
+This survey measures **automatic constructive IR selection**, not an independent
+source-exact equality oracle. A recovered radial-slot body can be editable
+while its exported B-rep differs from the original manufacturer geometry.
+Track independent oriented analytic-boundary proofs, OCCT differential checks,
+and explicit source-healing experiments separately. The checked-in `native_*`
+fixtures contain a mixture of real-source captures and generated regressions;
+never interpret their success rate as an unbiased JLC/catalog success rate.
+For real manufacturer surveys, preserve input provenance and compare the
+reported SHA-256 to the pinned hashes in `validation/fixtures.json`.
+
+When `--output` is provided, a sibling `*.cases.jsonl` checkpoint journal is
+also written. Each complete case is flushed before the next source is
+attempted, so a long-running or interrupted survey retains preceding results;
+the final aggregate JSON appears only after all requested inputs are processed.
+The journal starts fresh on each invocation.
