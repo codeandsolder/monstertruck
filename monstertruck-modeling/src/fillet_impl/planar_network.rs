@@ -1,0 +1,750 @@
+//! Simultaneous analytic rolling-ball construction on trivalent planar edges.
+//!
+//! Each original corner owns its contact vertices. The selected edge owns
+//! the two cylindrical rails and cross-sections, and a fully rounded corner
+//! owns the spherical patch connecting the three cross-sections. This is
+//! independent of source-edge iteration order and does not weld by proximity.
+
+use crate::{Curve, Edge, EdgeId, Face, Shell, Surface, Vertex, VertexId, Wire, builder};
+use monstertruck_geometry::{analytic_curve_incidence::CurveIncidence, prelude::*};
+use rustc_hash::{FxHashMap as Map, FxHashSet as Set};
+
+const ANGULAR: f64 = monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES.angular;
+
+#[derive(Clone, Copy)]
+struct FaceUse {
+    face: usize,
+    forward: bool,
+}
+
+struct SourceEdge {
+    edge: Edge,
+    uses: Vec<FaceUse>,
+}
+
+struct Incidence {
+    edges: Map<EdgeId, SourceEdge>,
+    at_vertex: Map<VertexId, Vec<EdgeId>>,
+}
+
+impl Incidence {
+    fn new(shell: &Shell) -> Self {
+        let mut edges = Map::<EdgeId, SourceEdge>::default();
+        for (face, original) in shell.iter().enumerate() {
+            for edge in original.edge_iter() {
+                edges
+                    .entry(edge.id())
+                    .or_insert_with(|| SourceEdge {
+                        edge: edge.absolute_clone(),
+                        uses: Vec::new(),
+                    })
+                    .uses
+                    .push(FaceUse {
+                        face,
+                        forward: edge.orientation(),
+                    });
+            }
+        }
+        let mut at_vertex = Map::<VertexId, Vec<EdgeId>>::default();
+        for (&id, edge) in &edges {
+            for vertex in [edge.edge.absolute_front(), edge.edge.absolute_back()] {
+                at_vertex.entry(vertex.id()).or_default().push(id);
+            }
+        }
+        Self { edges, at_vertex }
+    }
+}
+
+fn line_axis(edge: &Edge) -> Option<Vector3> {
+    let Curve::Line(line) = edge.curve() else {
+        return None;
+    };
+    let delta = edge.absolute_back().point() - edge.absolute_front().point();
+    (delta.magnitude() > KERNEL_EPSILON
+        && line.0.near(&edge.absolute_front().point())
+        && line.1.near(&edge.absolute_back().point()))
+    .then(|| delta.normalize())
+}
+
+fn normal(shell: &Shell, face: usize) -> Option<Vector3> {
+    let Surface::Plane(p) = shell.get(face)?.oriented_surface() else {
+        return None;
+    };
+    let normal = p.normal();
+    normal.magnitude().near(&1.0).then_some(normal)
+}
+
+struct SelectedEdge {
+    id: EdgeId,
+    radius: f64,
+    axis: Vector3,
+    faces: [FaceUse; 2],
+    normals: [Vector3; 2],
+}
+
+impl SelectedEdge {
+    fn new(shell: &Shell, incidence: &Incidence, edge_id: EdgeId, radius: f64) -> Option<Self> {
+        if !radius.is_finite() || radius <= KERNEL_EPSILON {
+            return None;
+        }
+        let original = incidence.edges.get(&edge_id)?;
+        let axis = line_axis(&original.edge)?;
+        let &[a, b] = original.uses.as_slice() else {
+            return None;
+        };
+        if a.face == b.face || a.forward == b.forward {
+            return None;
+        }
+        let na = normal(shell, a.face)?;
+        let nb = normal(shell, b.face)?;
+        let forward = if a.forward { axis } else { -axis };
+        // The interior of face A is on the left of its outward-oriented
+        // coedge. It must lie strictly inside the halfspace of face B.
+        if nb.dot(na.cross(forward)) >= -ANGULAR
+            || na.dot(axis).abs() > ANGULAR
+            || nb.dot(axis).abs() > ANGULAR
+        {
+            return None;
+        }
+        Some(Self {
+            id: edge_id,
+            radius,
+            axis,
+            faces: [a, b],
+            normals: [na, nb],
+        })
+    }
+}
+
+enum CornerKind {
+    Sphere,
+    Cap {
+        face: usize,
+        normal: Vector3,
+        axis: Vector3,
+    },
+}
+
+struct Corner {
+    center: Point3,
+    radius: f64,
+    kind: CornerKind,
+    contacts: Map<usize, Vertex>,
+}
+
+fn intersection_displacement(normals: [Vector3; 3], offsets: [f64; 3]) -> Option<Vector3> {
+    let [a, b, c] = normals;
+    let det = a.dot(b.cross(c));
+    if det.abs() <= ANGULAR {
+        return None;
+    }
+    let displacement =
+        (b.cross(c) * offsets[0] + c.cross(a) * offsets[1] + a.cross(b) * offsets[2]) / det;
+    normals
+        .iter()
+        .zip(offsets)
+        .all(|(n, d)| (n.dot(displacement) - d).abs() <= KERNEL_EPSILON)
+        .then_some(displacement)
+}
+
+fn projected_radial(radial: Vector3, kind: &CornerKind) -> Vector3 {
+    match *kind {
+        CornerKind::Sphere => radial,
+        CornerKind::Cap { normal, axis, .. } => {
+            radial - axis * (normal.dot(radial) / normal.dot(axis))
+        }
+    }
+}
+
+impl Corner {
+    fn new(
+        shell: &Shell,
+        incidence: &Incidence,
+        selected: &Map<EdgeId, SelectedEdge>,
+        vertex: &Vertex,
+    ) -> Option<Self> {
+        let incident = incidence.at_vertex.get(&vertex.id())?;
+        if incident.len() != 3 {
+            return None;
+        }
+        let mut faces = incident
+            .iter()
+            .flat_map(|id| incidence.edges[id].uses.iter().map(|u| u.face))
+            .collect::<Vec<_>>();
+        faces.sort_unstable();
+        faces.dedup();
+        let [a, b, c] = faces.as_slice() else {
+            return None;
+        };
+        let faces = [*a, *b, *c];
+        let normals = [normal(shell, *a)?, normal(shell, *b)?, normal(shell, *c)?];
+        let rounded = incident
+            .iter()
+            .filter_map(|id| selected.get(id))
+            .collect::<Vec<_>>();
+        let radius = rounded.first()?.radius;
+        let mut offsets = [-radius; 3];
+        let kind = match rounded.as_slice() {
+            [edge] => {
+                let cap_index = faces
+                    .iter()
+                    .position(|&f| edge.faces.iter().all(|u| u.face != f))?;
+                let cap_normal = normals[cap_index];
+                if cap_normal.dot(edge.axis).abs() <= ANGULAR {
+                    return None;
+                }
+                offsets[cap_index] = 0.0;
+                CornerKind::Cap {
+                    face: faces[cap_index],
+                    normal: cap_normal,
+                    axis: edge.axis,
+                }
+            }
+            [first, second, third]
+                if [second.radius, third.radius]
+                    .iter()
+                    .all(|r| r.near(&first.radius)) =>
+            {
+                CornerKind::Sphere
+            }
+            _ => return None,
+        };
+        let point = vertex.point();
+        // All three carrier planes share the original vertex, and each
+        // incident line must point into the halfspace of the third plane.
+        for id in incident {
+            let source = &incidence.edges[id];
+            let [a, b] = source.uses.as_slice() else {
+                return None;
+            };
+            if a.face == b.face || a.forward == b.forward {
+                return None;
+            }
+            let other = if source.edge.absolute_front().id() == vertex.id() {
+                source.edge.absolute_back()
+            } else {
+                source.edge.absolute_front()
+            };
+            let missing = faces
+                .iter()
+                .position(|&f| source.uses.iter().all(|u| u.face != f))?;
+            if normals[missing].dot(other.point() - point) >= -KERNEL_EPSILON {
+                return None;
+            }
+            line_axis(&source.edge)?;
+        }
+        let center = point + intersection_displacement(normals, offsets)?;
+        let mut contacts = Map::default();
+        for (i, &face) in faces.iter().enumerate() {
+            if offsets[i] == 0.0 {
+                continue;
+            }
+            let contact = center + projected_radial(radius * normals[i], &kind);
+            if normals
+                .iter()
+                .any(|n| n.dot(contact - point) > KERNEL_EPSILON)
+            {
+                return None;
+            }
+            contacts.insert(face, Vertex::new(contact));
+        }
+        Some(Self {
+            center,
+            radius,
+            kind,
+            contacts,
+        })
+    }
+}
+
+/// Exact (possibly elliptical) cross-section of a cylindrical round.
+/// The cosine/sine vectors include axial projection into an oblique cap.
+struct Section {
+    center: Point3,
+    cosine: Vector3,
+    sine: Vector3,
+    angle: f64,
+}
+
+impl Section {
+    fn new(corner: &Corner, edge: &SelectedEdge) -> Option<Self> {
+        let [a, b] = edge.normals;
+        let cosine = a.dot(b);
+        let tangent = b - a * cosine;
+        let angle = tangent.magnitude().atan2(cosine);
+        if angle <= ANGULAR || std::f64::consts::PI - angle <= ANGULAR {
+            return None;
+        }
+        Some(Self {
+            center: corner.center,
+            cosine: projected_radial(edge.radius * a, &corner.kind),
+            sine: projected_radial(edge.radius * tangent.normalize(), &corner.kind),
+            angle,
+        })
+    }
+
+    fn curve(&self) -> Curve {
+        let basis = self.cosine.cross(self.sine).normalize();
+        let transform = Matrix4::from_cols(
+            self.cosine.extend(0.0),
+            self.sine.extend(0.0),
+            basis.extend(0.0),
+            self.center.to_homogeneous(),
+        );
+        Processor::with_transform(
+            TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, self.angle)),
+            transform,
+        )
+        .to_same_geometry()
+    }
+
+    fn edge(&self, corner: &Corner, edge: &SelectedEdge) -> Option<Edge> {
+        let a = corner.contacts.get(&edge.faces[0].face)?;
+        let b = corner.contacts.get(&edge.faces[1].face)?;
+        let seam = Edge::new(a, b, self.curve()).ok()?;
+        seam.is_geometric_consistent().then_some(seam)
+    }
+
+    fn axial_coefficients(&self, axis: Vector3) -> [f64; 2] {
+        [axis.dot(self.cosine), axis.dot(self.sine)]
+    }
+}
+
+/// Exact extrema of the axial projection on a bounded circle parameter.
+fn trig_bounds(a: f64, b: f64, angle: f64) -> [f64; 2] {
+    let endpoint = a.mul_add(angle.cos(), b * angle.sin());
+    let mut low = a.min(endpoint);
+    let mut high = a.max(endpoint);
+    let peak = b.atan2(a).rem_euclid(std::f64::consts::TAU);
+    let minimum = (peak + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU);
+    let amplitude = a.hypot(b);
+    if peak <= angle {
+        high = amplitude;
+    }
+    if minimum <= angle {
+        low = -amplitude;
+    }
+    [low, high]
+}
+
+fn certify_generated_face(face: &Face) -> bool {
+    let surface = face.surface();
+    face.edge_iter().all(|edge| {
+        edge.is_geometric_consistent()
+            && crate::certify_analytic_curve_on_surface(&edge.curve(), &surface, KERNEL_EPSILON)
+                == CurveIncidence::Proven
+    })
+}
+
+struct RoundEdge {
+    rails: [Edge; 2],
+    seams: [Edge; 2],
+    face: Face,
+}
+
+fn exact_cylinder(start: &Section, end: &Section, edge: &SelectedEdge) -> Option<Surface> {
+    let axis = edge.axis;
+    let center_delta = end.center - start.center;
+    let span = center_delta.dot(axis);
+    if (center_delta - axis * span).magnitude() > KERNEL_EPSILON {
+        return None;
+    }
+    let [a, b] = start.axial_coefficients(axis);
+    let [c, d] = end.axial_coefficients(axis);
+    // Cross-sections cannot pass through one another anywhere in the
+    // angular interval, even when the terminating caps are oblique.
+    if span + trig_bounds(c - a, d - b, start.angle)[0] <= KERNEL_EPSILON {
+        return None;
+    }
+    let low = trig_bounds(a, b, start.angle)[0];
+    let high = span + trig_bounds(c, d, start.angle)[1];
+    let radial = edge.normals[0] * edge.radius;
+    let generator = Curve::Line(Line(
+        start.center + radial + axis * low,
+        start.center + radial + axis * high,
+    ));
+    let orbit_axis = edge.normals[0].cross(edge.normals[1]).normalize();
+    let mut surface = Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
+        generator,
+        start.center,
+        orbit_axis,
+    )));
+    if surface.normal(0.5, 0.0).dot(edge.normals[0]) < 0.0 {
+        surface.invert();
+    }
+    Some(surface)
+}
+
+impl RoundEdge {
+    fn new(edge: &SelectedEdge, original: &Edge, corners: &Map<VertexId, Corner>) -> Option<Self> {
+        let a = corners.get(&original.absolute_front().id())?;
+        let b = corners.get(&original.absolute_back().id())?;
+        let start = Section::new(a, edge)?;
+        let end = Section::new(b, edge)?;
+        let surface = exact_cylinder(&start, &end, edge)?;
+        let rails = edge
+            .faces
+            .map(|u| builder::line(&a.contacts[&u.face], &b.contacts[&u.face]));
+        let seams = [start.edge(a, edge)?, end.edge(b, edge)?];
+        let wire = if edge.faces[0].forward {
+            vec![
+                rails[0].inverse(),
+                seams[0].clone(),
+                rails[1].clone(),
+                seams[1].inverse(),
+            ]
+        } else {
+            vec![
+                rails[0].clone(),
+                seams[1].clone(),
+                rails[1].inverse(),
+                seams[0].inverse(),
+            ]
+        };
+        let face = Face::new(vec![Wire::from(wire)], surface).ok()?;
+        certify_generated_face(&face).then_some(Self { rails, seams, face })
+    }
+}
+
+fn orient(edge: &Edge, forward: bool) -> Edge {
+    if forward {
+        edge.clone()
+    } else {
+        edge.inverse()
+    }
+}
+
+fn retained_endpoint(
+    original: &SourceEdge,
+    vertex: &Vertex,
+    corners: &Map<VertexId, Corner>,
+) -> Option<Vertex> {
+    let Some(corner) = corners.get(&vertex.id()) else {
+        return Some(vertex.clone());
+    };
+    let CornerKind::Cap { face, .. } = corner.kind else {
+        return None;
+    };
+    if !original.uses.iter().any(|u| u.face == face) {
+        return None;
+    }
+    let carrier = original.uses.iter().find(|u| u.face != face)?.face;
+    corner.contacts.get(&carrier).cloned()
+}
+
+fn shortened_edges(
+    incidence: &Incidence,
+    selected: &Map<EdgeId, SelectedEdge>,
+    corners: &Map<VertexId, Corner>,
+) -> Option<Map<EdgeId, Edge>> {
+    let mut retained = Map::default();
+    for (&id, original) in &incidence.edges {
+        if selected.contains_key(&id) {
+            continue;
+        }
+        let old_a = original.edge.absolute_front();
+        let old_b = original.edge.absolute_back();
+        if !corners.contains_key(&old_a.id()) && !corners.contains_key(&old_b.id()) {
+            continue;
+        }
+        let axis = line_axis(&original.edge)?;
+        let a = retained_endpoint(original, old_a, corners)?;
+        let b = retained_endpoint(original, old_b, corners)?;
+        let length = (old_b.point() - old_a.point()).dot(axis);
+        let ta = (a.point() - old_a.point()).dot(axis);
+        let tb = (b.point() - old_a.point()).dot(axis);
+        if ta < -KERNEL_EPSILON
+            || tb > length + KERNEL_EPSILON
+            || tb - ta <= KERNEL_EPSILON
+            || (old_a.point() + axis * ta).distance(a.point()) > KERNEL_EPSILON
+            || (old_a.point() + axis * tb).distance(b.point()) > KERNEL_EPSILON
+        {
+            return None;
+        }
+        retained.insert(id, builder::line(&a, &b));
+    }
+    Some(retained)
+}
+
+fn cap_seams(
+    incidence: &Incidence,
+    selected: &Map<EdgeId, SelectedEdge>,
+    rounds: &Map<EdgeId, RoundEdge>,
+    corners: &Map<VertexId, Corner>,
+) -> Option<Map<(VertexId, usize), Edge>> {
+    let mut seams = Map::default();
+    for (&id, corner) in corners {
+        let CornerKind::Cap { face, .. } = corner.kind else {
+            continue;
+        };
+        let edge = incidence.at_vertex[&id]
+            .iter()
+            .find(|id| selected.contains_key(id))?;
+        let original = &incidence.edges[edge].edge;
+        let index = usize::from(original.absolute_back().id() == id);
+        let oriented = rounds[edge]
+            .face
+            .edge_iter()
+            .find(|e| e.id() == rounds[edge].seams[index].id())?;
+        seams.insert((id, face), oriented.inverse());
+    }
+    Some(seams)
+}
+
+struct ReplacementGeometry<'a> {
+    selected: &'a Map<EdgeId, SelectedEdge>,
+    rounds: &'a Map<EdgeId, RoundEdge>,
+    retained: &'a Map<EdgeId, Edge>,
+    cap_seams: &'a Map<(VertexId, usize), Edge>,
+}
+
+impl ReplacementGeometry<'_> {
+    fn edge(&self, face: usize, edge: &Edge) -> Option<Edge> {
+        if let Some(round) = self.rounds.get(&edge.id()) {
+            let slot = self.selected[&edge.id()]
+                .faces
+                .iter()
+                .position(|u| u.face == face)?;
+            return Some(orient(&round.rails[slot], edge.orientation()));
+        }
+        Some(self.retained.get(&edge.id()).map_or_else(
+            || edge.clone(),
+            |replacement| orient(replacement, edge.orientation()),
+        ))
+    }
+
+    fn face(&self, face_index: usize, face: &Face) -> Option<Face> {
+        let mut changed = false;
+        let mut boundaries = Vec::new();
+        for wire in face.boundary_iters() {
+            let source = wire.collect::<Vec<_>>();
+            let edges = source
+                .iter()
+                .map(|edge| self.edge(face_index, edge))
+                .collect::<Option<Vec<_>>>()?;
+            let mut new_wire = Vec::new();
+            for (i, edge) in edges.iter().enumerate() {
+                changed |= edge.id() != source[i].id();
+                new_wire.push(edge.clone());
+                let next = &edges[(i + 1) % edges.len()];
+                if edge.back().id() != next.front().id() {
+                    let seam = self.cap_seams.get(&(source[i].back().id(), face_index))?;
+                    if seam.front().id() != edge.back().id()
+                        || seam.back().id() != next.front().id()
+                    {
+                        return None;
+                    }
+                    new_wire.push(seam.clone());
+                    changed = true;
+                }
+            }
+            boundaries.push(Wire::from(new_wire));
+        }
+        if !changed {
+            return Some(face.clone());
+        }
+        let mut rebuilt = Face::new(boundaries, face.oriented_surface()).ok()?;
+        rebuilt.set_stable_id(face.stable_id());
+        rebuilt.is_geometric_consistent().then_some(rebuilt)
+    }
+}
+
+fn spherical_face(corner: &Corner, original: &Vertex, mut seams: Vec<Edge>) -> Option<Face> {
+    if seams.len() != 3 {
+        return None;
+    }
+    let mut cycle = vec![seams.pop()?];
+    while !seams.is_empty() {
+        let last = cycle.last()?.back().id();
+        let next = seams.iter().position(|edge| edge.front().id() == last)?;
+        cycle.push(seams.swap_remove(next));
+    }
+    // All normals of the convex corner lie in the hemisphere pointing
+    // towards the old sharp point. Place the spherical seam and poles in
+    // the opposite hemisphere, away from the finite triangular trim.
+    let x = (corner.center - original.point()).normalize();
+    let seed = if x.x.abs() < x.y.abs() && x.x.abs() < x.z.abs() {
+        Vector3::unit_x()
+    } else if x.y.abs() < x.z.abs() {
+        Vector3::unit_y()
+    } else {
+        Vector3::unit_z()
+    };
+    let z = x.cross(seed).normalize();
+    let y = z.cross(x);
+    let transform = Matrix4::from_cols(
+        x.extend(0.0),
+        y.extend(0.0),
+        z.extend(0.0),
+        corner.center.to_homogeneous(),
+    );
+    let surface = Surface::Sphere(Processor::with_transform(
+        Sphere::new(Point3::origin(), corner.radius),
+        transform,
+    ));
+    let face = Face::new(vec![Wire::from(cycle)], surface).ok()?;
+    certify_generated_face(&face).then_some(face)
+}
+
+fn round_planar_network(shell: &Shell, edges: &[Edge], radii: &[f64]) -> Option<Shell> {
+    if edges.len() != radii.len() || edges.is_empty() {
+        return None;
+    }
+    let incidence = Incidence::new(shell);
+    let mut selected = Map::default();
+    let mut vertices = Vec::<Vertex>::new();
+    let mut seen = Set::default();
+    for (edge, &radius) in edges.iter().zip(radii) {
+        let id = edge.id();
+        let selected_edge = SelectedEdge::new(shell, &incidence, id, radius)?;
+        if selected.insert(id, selected_edge).is_some() {
+            return None;
+        }
+        for vertex in [edge.absolute_front(), edge.absolute_back()] {
+            if seen.insert(vertex.id()) {
+                vertices.push(vertex.clone());
+            }
+        }
+    }
+    let corners = vertices
+        .iter()
+        .map(|v| Some((v.id(), Corner::new(shell, &incidence, &selected, v)?)))
+        .collect::<Option<Map<_, _>>>()?;
+    // The ordinary edge/wire implementation remains available for
+    // operations with no three-way corner.
+    if !corners
+        .values()
+        .any(|c| matches!(c.kind, CornerKind::Sphere))
+    {
+        return None;
+    }
+    let rounds = selected
+        .values()
+        .map(|edge| {
+            Some((
+                edge.id,
+                RoundEdge::new(edge, &incidence.edges[&edge.id].edge, &corners)?,
+            ))
+        })
+        .collect::<Option<Map<_, _>>>()?;
+    let retained = shortened_edges(&incidence, &selected, &corners)?;
+    let cap_seams = cap_seams(&incidence, &selected, &rounds, &corners)?;
+    let replacements = ReplacementGeometry {
+        selected: &selected,
+        rounds: &rounds,
+        retained: &retained,
+        cap_seams: &cap_seams,
+    };
+    let mut rebuilt = shell
+        .iter()
+        .enumerate()
+        .map(|(i, face)| replacements.face(i, face))
+        .collect::<Option<Vec<_>>>()?;
+    for edge in edges {
+        rebuilt.push(rounds[&edge.id()].face.clone());
+    }
+    for vertex in vertices {
+        let corner = &corners[&vertex.id()];
+        if !matches!(corner.kind, CornerKind::Sphere) {
+            continue;
+        }
+        let mut seams = Vec::new();
+        for id in &incidence.at_vertex[&vertex.id()] {
+            let original = &incidence.edges[id].edge;
+            let end = usize::from(original.absolute_back().id() == vertex.id());
+            let round = &rounds[id];
+            let edge = round
+                .face
+                .edge_iter()
+                .find(|e| e.id() == round.seams[end].id())?;
+            seams.push(edge.inverse());
+        }
+        rebuilt.push(spherical_face(corner, &vertex, seams)?);
+    }
+    let result = Shell::from(rebuilt);
+    result.check_solid_boundary().ok()?;
+    Some(result)
+}
+
+/// Construct an exact simultaneous convex planar three-way rolling-ball
+/// network, including oblique planar terminal caps. The input is never
+/// mutated and unsupported corner incidence is routed to the other solver.
+pub(super) fn try_round_planar_network(
+    shell: &Shell,
+    edges: &[Edge],
+    radii: &[f64],
+) -> Option<Shell> {
+    round_planar_network(shell, edges, radii)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Solid;
+
+    fn oblique_prism() -> crate::Result<(Solid, Vec<Edge>)> {
+        // An irregular trapezoidal profile in an oblique plane. Its top
+        // has non-right-angle trihedral junctions and the lower round
+        // termination curves are elliptical, not circular.
+        let points = [[0.0, 0.0], [6.0, 0.0], [5.0, 4.0], [0.5, 4.0]]
+            .map(|[x, y]| Point3::new(x, y, 0.2_f64.mul_add(x, 0.15 * y)));
+        let vertices = points.map(Vertex::new);
+        let wire = Wire::from(
+            (0..4)
+                .map(|i| builder::line(&vertices[i], &vertices[(i + 1) % 4]))
+                .collect::<Vec<_>>(),
+        );
+        let cap: Face = builder::try_attach_plane([wire])?;
+        let solid: Solid = builder::extrude(&cap, Vector3::new(0.0, 0.0, 4.0));
+        let mut seen = Set::default();
+        let edges = solid.boundaries()[0]
+            .edge_iter()
+            .filter(|edge| seen.insert(edge.id()))
+            .filter(|edge| {
+                [edge.front().point(), edge.back().point()]
+                    .iter()
+                    .any(|p| (p.z - 0.2_f64.mul_add(p.x, 0.15 * p.y) - 4.0).abs() <= KERNEL_EPSILON)
+            })
+            .collect();
+        Ok((solid, edges))
+    }
+
+    #[test]
+    fn oblique_round_network_is_closed_and_order_independent() -> crate::Result<()> {
+        let (solid, mut edges) = oblique_prism()?;
+        let shell = &solid.boundaries()[0];
+        assert_eq!(edges.len(), 8);
+        let radii = [0.25; 8];
+        let first = round_planar_network(shell, &edges, &radii).expect("analytic oblique network");
+        assert_eq!(first.len(), 18);
+        assert!(first.is_geometric_consistent());
+        first.check_solid_boundary()?;
+        edges.reverse();
+        let second = round_planar_network(shell, &edges, &radii).expect("reverse selected order");
+        second.check_solid_boundary()?;
+        assert_eq!(second.len(), 18);
+        let vertices = |shell: &Shell| {
+            let mut seen = Set::default();
+            shell
+                .vertex_iter()
+                .filter(|v| seen.insert(v.id()))
+                .map(|v| v.point())
+                .collect::<Vec<_>>()
+        };
+        let first_points = vertices(&first);
+        let second_points = vertices(&second);
+        assert_eq!(first_points.len(), second_points.len());
+        assert!(
+            first_points
+                .iter()
+                .all(|point| second_points.iter().any(|other| point.near(other)))
+        );
+        assert!(round_planar_network(shell, &edges, &[4.0; 8]).is_none());
+        let mut incompatible = radii;
+        incompatible[0] = 0.4;
+        assert!(round_planar_network(shell, &edges, &incompatible).is_none());
+        assert_eq!(shell.len(), 6);
+        assert!(shell.is_geometric_consistent());
+        Ok(())
+    }
+}

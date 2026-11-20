@@ -128,6 +128,8 @@ mod topo_impls;
 
 #[cfg(feature = "fillet")]
 mod fillet_impl;
+#[cfg(feature = "fillet")]
+pub use fillet_impl::fillet_edges;
 
 /// Font outline ingestion and conversion to wires.
 ///
@@ -141,5 +143,4 @@ pub mod text;
 #[cfg(feature = "fillet")]
 pub use monstertruck_fillet::{
     FilletError, FilletIntersectionCurve, FilletOptions, FilletProfile, RadiusSpec,
-    fillet_edges_generic as fillet_edges,
 };

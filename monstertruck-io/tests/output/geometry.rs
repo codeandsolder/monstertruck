@@ -254,7 +254,7 @@ fn geometry() {
         "\
 #1 = SPHERICAL_SURFACE('', #2, 15.0);
 #2 = AXIS2_PLACEMENT_3D('', #3, #4, #5);
-#3 = CARTESIAN_POINT('', (3.0, 3.0, 6.0));
+#3 = CARTESIAN_POINT('', (-4.0, 4.0, 12.0));
 #4 = DIRECTION('', (0.0, 0.0, 1.0));
 #5 = DIRECTION('', (0.0, 1.0, 0.0));\n",
         5,
@@ -271,7 +271,7 @@ fn geometry() {
         "\
 #1 = TOROIDAL_SURFACE('', #2, 15.0, 9.0);
 #2 = AXIS2_PLACEMENT_3D('', #3, #4, #5);
-#3 = CARTESIAN_POINT('', (3.0, 3.0, 6.0));
+#3 = CARTESIAN_POINT('', (-4.0, 4.0, 12.0));
 #4 = DIRECTION('', (0.0, 0.0, 1.0));
 #5 = DIRECTION('', (0.0, 1.0, 0.0));\n",
         5,
@@ -366,4 +366,55 @@ fn geometry() {
 #13 = CARTESIAN_POINT('', (2.0, 3.0));\n",
     13
     );
+}
+
+#[test]
+fn native_round_surface_parameter_curves_preserve_world_locus() -> anyhow::Result<()> {
+    use monstertruck_io::step::load::{PcurveHolder, Table, step_geometry::StepParameterCurve};
+    use monstertruck_modeling::{Curve2D as ModelCurve, Surface as ModelSurface};
+    use step_p21::tables::EntityTable;
+
+    let center = Point3::new(1.0, 2.0, 3.0);
+    for sign in [1.0, -1.0] {
+        let transform = Matrix4::from_cols(
+            Vector4::new(0.0, 3.0, 0.0, 0.0),
+            Vector4::new(-3.0 * sign, 0.0, 0.0, 0.0),
+            Vector4::new(0.0, 0.0, 3.0, 0.0),
+            Vector4::new(2.0, 1.0, 3.0, 1.0),
+        );
+        for inverted in [false, true] {
+            let mut sphere = Processor::new(Sphere::new(center, 5.0)).transformed(transform);
+            let mut torus = Processor::new(Torus::new(center, 5.0, 2.0)?).transformed(transform);
+            if inverted {
+                sphere.invert();
+                torus.invert();
+            }
+            for (surface, entity) in [
+                (ModelSurface::Sphere(sphere), "SPHERICAL_SURFACE"),
+                (ModelSurface::Torus(torus), "TOROIDAL_SURFACE"),
+            ] {
+                let uv = Line(Point2::new(1.02, 0.6), Point2::new(1.3, 1.2));
+                let native = ParameterCurve::new(ModelCurve::Line(uv), Box::new(surface));
+                let text =
+                    CompleteStepDisplay::new(StepDisplay::new(&native, 1), Default::default())
+                        .to_string();
+                assert!(text.contains(entity));
+                let table = Table::from_step(&text)?;
+                let owned = EntityTable::<PcurveHolder>::get_owned(&table, 1)?;
+                let restored: StepParameterCurve = (&owned)
+                    .try_into()
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                    assert!(
+                        native.evaluate(t).near(&restored.evaluate(t)),
+                        "{entity}, reflected={}, inverted={inverted}, t={t}: {:?} != {:?}",
+                        sign < 0.0,
+                        native.evaluate(t),
+                        restored.evaluate(t)
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }

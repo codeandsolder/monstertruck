@@ -491,7 +491,7 @@ impl<C: StepCurve, S0, S1> StepCurve for IntersectionCurve<C, S0, S1> {
 
 impl<C, S> StepFormat for ParameterCurve<C, S>
 where
-    C: StepFormat,
+    C: StepFormat + Transformed<Matrix3> + Clone,
     S: StepFormat + StepLength,
 {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
@@ -499,7 +499,11 @@ where
         let repr_idx = surface_idx + self.surface().step_length();
         let context_idx = repr_idx + 1;
         let curve_idx = repr_idx + 2;
-        let curve = StepDisplay::new(self.curve(), curve_idx);
+        let mapped = self
+            .surface()
+            .parameter_space_transform()
+            .map(|transform| self.curve().transformed(transform));
+        let curve = StepDisplay::new(mapped.as_ref().unwrap_or_else(|| self.curve()), curve_idx);
         let surface = StepDisplay::new(self.surface(), surface_idx);
         f.write_fmt(format_args!(
             "#{idx} = PCURVE('', #{surface_idx}, #{repr_idx});
@@ -624,31 +628,63 @@ impl_const_step_length!(Plane, 5);
 
 impl StepSurface for Plane {}
 
+/// A right-handed STEP elementary-surface placement from a certified
+/// similarity. The center must undergo the full affine transformation,
+/// not merely be added to the translation.
+fn elementary_pose(center: Point3, transform: &Matrix4) -> Option<(Point3, Vector3, Vector3, f64)> {
+    let scale = monstertruck_geometry::analytic_carrier::similarity_scale(*transform)?;
+    let location = transform.transform_point(center);
+    [location.x, location.y, location.z]
+        .into_iter()
+        .all(f64::is_finite)
+        .then_some((
+            location,
+            transform.z.truncate() / scale,
+            transform.x.truncate() / scale,
+            scale,
+        ))
+}
+
+fn sphere_pose(sphere: &Processor<Sphere, Matrix4>) -> Option<(Point3, Vector3, Vector3, f64)> {
+    let (location, axis, reference, scale) =
+        elementary_pose(sphere.entity().center(), sphere.transform())?;
+    let radius = scale * sphere.entity().radius();
+    (radius.is_finite() && radius > 0.0).then_some((location, axis, reference, radius))
+}
+
 impl StepFormat for Processor<Sphere, Matrix4> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
-        let sphere = *self.entity();
-        let transform = self.transform();
+        let (location, axis, reference, radius) = sphere_pose(self).ok_or(std::fmt::Error)?;
         let position_idx = idx + 1;
         let location_idx = idx + 2;
         let axis_idx = idx + 3;
         let ref_direction_idx = idx + 4;
-        let location = transform[3].to_point() + sphere.center().to_vec();
-        let axis = VectorAsDirection(transform[2].truncate().normalize());
-        let r0 = transform[0].magnitude();
-        let r1 = transform[1].magnitude();
-        if !r0.near(&r1) {
-            f.write_str("The transform of sphere includes non-uniform scale.")?;
-            return ERR;
-        }
-        let ref_direction = VectorAsDirection(transform[0].truncate() / r0);
-        let r = FloatDisplay(r0 * sphere.radius());
+        let r = FloatDisplay(radius);
         f.write_fmt(format_args!(
             "#{idx} = SPHERICAL_SURFACE('', #{position_idx}, {r});
-#{position_idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});\n"
+#{position_idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});
+"
         ))?;
         StepFormat::fmt(&location, location_idx, f)?;
-        StepFormat::fmt(&axis, axis_idx, f)?;
-        StepFormat::fmt(&ref_direction, ref_direction_idx, f)
+        StepFormat::fmt(&VectorAsDirection(axis), axis_idx, f)?;
+        StepFormat::fmt(&VectorAsDirection(reference), ref_direction_idx, f)
+    }
+    fn parameter_space_transform(&self) -> Option<Matrix3> {
+        sphere_pose(self)?;
+        let sign = if self.transform().determinant() > 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let longitude = Vector3::new(sign, 0.0, 0.0);
+        let polar = Vector3::new(0.0, -1.0, 0.0);
+        let translation = Vector3::new(0.0, std::f64::consts::FRAC_PI_2, 1.0);
+        let (first, second) = if self.orientation() {
+            (polar, longitude)
+        } else {
+            (longitude, polar)
+        };
+        Some(Matrix3::from_cols(first, second, translation))
     }
 }
 impl_const_step_length!(Processor<Sphere, Matrix4>, 5);
@@ -661,38 +697,56 @@ impl StepFormat for Sphere {
 impl_const_step_length!(Sphere, 5);
 impl StepSurface for Sphere {}
 
+fn torus_pose(torus: &Processor<Torus, Matrix4>) -> Option<(Point3, Vector3, Vector3, f64, f64)> {
+    let (location, axis, reference, scale) =
+        elementary_pose(torus.entity().center(), torus.transform())?;
+    let major = scale * torus.entity().large_radius();
+    let minor = scale * torus.entity().small_radius();
+    ([major, minor]
+        .iter()
+        .all(|radius| radius.is_finite() && *radius > 0.0))
+    .then_some((location, axis, reference, major, minor))
+}
+
 impl StepFormat for Processor<Torus, Matrix4> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
-        let torus = *self.entity();
-        let transform = self.transform();
+        let (location, axis, reference, major, minor) = torus_pose(self).ok_or(std::fmt::Error)?;
         let position_idx = idx + 1;
         let location_idx = idx + 2;
         let axis_idx = idx + 3;
         let ref_direction_idx = idx + 4;
-        let location = transform[3].to_point() + torus.center().to_vec();
-        let axis = VectorAsDirection(transform[2].truncate().normalize());
-        let r0 = transform[0].magnitude();
-        let r1 = transform[1].magnitude();
-        if !r0.near(&r1) {
-            f.write_str("The transform of sphere includes non-uniform scale.")?;
-            return ERR;
-        }
-        let ref_direction = VectorAsDirection(transform[0].truncate() / r0);
-        let greater = FloatDisplay(r0 * torus.large_radius());
-        let lesser = FloatDisplay(r0 * torus.small_radius());
+        let greater = FloatDisplay(major);
+        let lesser = FloatDisplay(minor);
         f.write_fmt(format_args!(
             "#{idx} = TOROIDAL_SURFACE('', #{position_idx}, {greater}, {lesser});
-#{position_idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});\n",
+#{position_idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});
+",
         ))?;
         StepFormat::fmt(&location, location_idx, f)?;
-        StepFormat::fmt(&axis, axis_idx, f)?;
-        StepFormat::fmt(&ref_direction, ref_direction_idx, f)
+        StepFormat::fmt(&VectorAsDirection(axis), axis_idx, f)?;
+        StepFormat::fmt(&VectorAsDirection(reference), ref_direction_idx, f)
+    }
+    fn parameter_space_transform(&self) -> Option<Matrix3> {
+        torus_pose(self)?;
+        let sign = if self.transform().determinant() > 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let longitude = Vector3::new(sign, 0.0, 0.0);
+        let meridian = Vector3::new(0.0, 1.0, 0.0);
+        let (first, second) = if self.orientation() {
+            (longitude, meridian)
+        } else {
+            (meridian, longitude)
+        };
+        Some(Matrix3::from_cols(first, second, Vector3::unit_z()))
     }
 }
 impl_const_step_length!(Processor<Torus, Matrix4>, 5);
 
 impl StepSurface for Processor<Torus, Matrix4> {
-    fn same_sense(&self) -> bool { self.orientation() }
+    fn same_sense(&self) -> bool { self.orientation() == (self.transform().determinant() > 0.0) }
 }
 
 impl StepFormat for Torus {
@@ -978,17 +1032,23 @@ impl StepFormat for ModelingSurface {
                 let bsp = t_mesh.to_bspline_surface(4).map_err(|_| std::fmt::Error)?;
                 StepFormat::fmt(&bsp, idx, f)
             }
-            // Saved as the exact rational net, which is BYTE-IDENTICAL to what
-            // these faces emitted before spec 012 U1.2 moved them onto the
-            // analytic variants -- they were that net. Emitting a real
-            // `SPHERICAL_SURFACE` / `TOROIDAL_SURFACE` would be better save
-            // fidelity and is recorded as follow-on work, but it is a save
-            // OUTPUT change and this track is the tessellation one.
+            Self::Sphere(sphere) if sphere_pose(sphere).is_some() => {
+                StepFormat::fmt(sphere, idx, f)
+            }
+            Self::Torus(torus) if torus_pose(torus).is_some() => StepFormat::fmt(torus, idx, f),
+            // Non-similarity transforms require the full rational net.
             Self::Sphere(_) | Self::Torus(_) => self
                 .try_into_homogeneous_bspline_surface()
                 .map_or(Err(std::fmt::Error), |bsp| {
                     StepFormat::fmt(&NurbsSurface::new(bsp), idx, f)
                 }),
+        }
+    }
+    fn parameter_space_transform(&self) -> Option<Matrix3> {
+        match self {
+            Self::Sphere(sphere) => sphere.parameter_space_transform(),
+            Self::Torus(torus) => torus.parameter_space_transform(),
+            _ => None,
         }
     }
 }
@@ -1011,7 +1071,8 @@ impl StepLength for ModelingSurface {
             Self::Tspline(t_mesh) => t_mesh
                 .to_bspline_surface(4)
                 .map_or(0, |bsp| bsp.step_length()),
-            // Must agree with `StepFormat::fmt` above, which emits the net.
+            Self::Sphere(sphere) if sphere_pose(sphere).is_some() => sphere.step_length(),
+            Self::Torus(torus) if torus_pose(torus).is_some() => torus.step_length(),
             Self::Sphere(_) | Self::Torus(_) => self
                 .try_into_homogeneous_bspline_surface()
                 .map_or(0, |bsp| NurbsSurface::new(bsp).step_length()),
@@ -1019,4 +1080,14 @@ impl StepLength for ModelingSurface {
     }
 }
 
-impl StepSurface for ModelingSurface {}
+impl StepSurface for ModelingSurface {
+    fn same_sense(&self) -> bool {
+        match self {
+            Self::Sphere(sphere) if sphere_pose(sphere).is_some() => {
+                sphere.orientation() == (sphere.transform().determinant() > 0.0)
+            }
+            Self::Torus(torus) if torus_pose(torus).is_some() => StepSurface::same_sense(torus),
+            _ => true,
+        }
+    }
+}
