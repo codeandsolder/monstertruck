@@ -10,6 +10,7 @@ use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use monstertruck_io::step::load::ParsedStepSource;
 use serde::Serialize;
 
+mod cap_cover;
 mod multi_axis_sheet;
 pub(crate) mod sectional;
 mod solid;
@@ -83,6 +84,12 @@ pub enum CadFragmentSource {
     },
     /// Source-derived extrusion groups of a folded sheet with nonparallel bends.
     FormedSheetExtrusionUnion {
+        solid_id: u64,
+        face_ids: Vec<u64>,
+        cap_face_ids: Vec<u64>,
+    },
+    /// A whole solid proven from the union of independently witnessed source caps.
+    SourceCapExtrusionUnion {
         solid_id: u64,
         face_ids: Vec<u64>,
         cap_face_ids: Vec<u64>,
@@ -702,7 +709,10 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
     if let Some(fragment) = sectional::recover(solid_id, entities, &index, kernel)? {
         return Ok(Some(fragment));
     }
-    multi_axis_sheet::recover(solid_id, entities, &index, kernel)
+    if let Some(fragment) = multi_axis_sheet::recover(solid_id, entities, &index, kernel)? {
+        return Ok(Some(fragment));
+    }
+    cap_cover::recover(solid_id, entities, &index, kernel)
 }
 
 /// Recover a first-class fused periodic-chain IR fragment from a proven source partition.

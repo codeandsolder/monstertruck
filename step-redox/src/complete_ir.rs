@@ -516,6 +516,7 @@ impl CompleteIrBuildState {
                         | CadFragmentSource::SectionalExtrusionUnion { .. }
                         | CadFragmentSource::SectionalExtrusionTransitions { .. }
                         | CadFragmentSource::FormedSheetExtrusionUnion { .. }
+                        | CadFragmentSource::SourceCapExtrusionUnion { .. }
                         | CadFragmentSource::ExtrusionCoreRuledEnds { .. }
                         | CadFragmentSource::CapExtrusionRuledEnds { .. }
                 )
@@ -2395,6 +2396,7 @@ const fn source_solid_id(source: &CadFragmentSource) -> u64 {
         | CadFragmentSource::SectionalExtrusionUnion { solid_id, .. }
         | CadFragmentSource::SectionalExtrusionTransitions { solid_id, .. }
         | CadFragmentSource::FormedSheetExtrusionUnion { solid_id, .. }
+        | CadFragmentSource::SourceCapExtrusionUnion { solid_id, .. }
         | CadFragmentSource::ExtrusionCoreRuledEnds { solid_id, .. }
         | CadFragmentSource::CapExtrusionRuledEnds { solid_id, .. }
         | CadFragmentSource::RuledEndExtension { solid_id, .. }

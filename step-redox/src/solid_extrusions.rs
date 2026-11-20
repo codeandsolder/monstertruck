@@ -740,7 +740,7 @@ pub(crate) fn discard_boundary_penetrating_extrusion_cores(
 /// Exact locations on a STEP edge, not approximations of its mesh.
 /// A B-spline edge may be a proper trim of its parent spline; without a
 /// proven parameter interval we deliberately skip those interior samples.
-fn source_boundary_edge_witness_points(edge: &OrientedEdgeUse) -> Vec<[f64; 3]> {
+pub(crate) fn source_boundary_edge_witness_points(edge: &OrientedEdgeUse) -> Vec<[f64; 3]> {
     const FRACTIONS: [f64; 3] = [0.25, 0.5, 0.75];
     match &edge.support {
         CurveSupport::Line(_) => FRACTIONS
@@ -827,6 +827,63 @@ fn core_strictly_contains_source_boundary_point(
     core.inner_profile_loops
         .iter()
         .all(|hole| strict_profile_contains(hole, local, margin) == Some(false))
+}
+
+fn point_on_curve(curve: &RecoveredProfileCurve, point: [f64; 2]) -> bool {
+    match curve {
+        RecoveredProfileCurve::Line {
+            start_mm, end_mm, ..
+        } => {
+            let delta = sub2(*end_mm, *start_mm);
+            let length2 = dot2(delta, delta);
+            if length2 <= GEOM_TOL_MM * GEOM_TOL_MM {
+                return false;
+            }
+            let t = (dot2(sub2(point, *start_mm), delta) / length2).clamp(0.0, 1.0);
+            distance2(
+                point,
+                [
+                    t.mul_add(delta[0], start_mm[0]),
+                    t.mul_add(delta[1], start_mm[1]),
+                ],
+            ) <= GEOM_TOL_MM
+        }
+        RecoveredProfileCurve::CircleArc {
+            center_mm,
+            radius_mm,
+            start_angle_rad,
+            end_angle_rad,
+            ..
+        } => {
+            let d = sub2(point, *center_mm);
+            (d[0].hypot(d[1]) - radius_mm).abs() <= GEOM_TOL_MM
+                && angle_on_arc(
+                    d[1].atan2(d[0]),
+                    *start_angle_rad,
+                    *end_angle_rad,
+                    GEOM_TOL_MM / radius_mm,
+                )
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn cap_contains(cap: &RecoveredSourceCapExtrusion, point: [f64; 3]) -> bool {
+    let relative = sub(point, cap.origin_mm);
+    let z = dot(relative, cap.z_axis);
+    if z < -GEOM_TOL_MM || z > cap.height_mm + GEOM_TOL_MM {
+        return false;
+    }
+    let p = [dot(relative, cap.x_axis), dot(relative, cap.y_axis)];
+    let within = |ring: &[RecoveredProfileCurve]| {
+        ring.iter().any(|curve| point_on_curve(curve, p))
+            || profile_contains_with_rotated_ray(ring, p, GEOM_TOL_MM) == Some(true)
+    };
+    within(&cap.profile_curves)
+        && cap.inner_profile_loops.iter().all(|ring| {
+            ring.iter().any(|curve| point_on_curve(curve, p))
+                || profile_contains_with_rotated_ray(ring, p, GEOM_TOL_MM) == Some(false)
+        })
 }
 
 /// Pick a ray separated from all endpoints and circular tangencies, then use

@@ -11,13 +11,11 @@ use crate::brep::{CurveSupport, SurfaceSupport};
 use crate::cad_ir::{CadModel, CadNode, NodeId};
 use crate::cad_kernel::CadKernel;
 use crate::formed_sheet::{self, FormedSheetEvidence, SheetCylinderPair};
-use crate::math2::{distance as distance2, dot as dot2, sub as sub2};
 use crate::math3::{add, cross, dot, mul, norm, normalize, sub};
-use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use crate::solid_extrusions::{
-    RecoveredSourceCapExtrusion, angle_on_arc, profile_contains_with_rotated_ray,
-    signed_area_curves, source_cap_extrusion_proposal_at_station,
+    RecoveredSourceCapExtrusion, cap_contains, signed_area_curves,
+    source_cap_extrusion_proposal_at_station,
 };
 use anyhow::Result;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
@@ -159,63 +157,6 @@ fn group_cap(
                 .then_with(|| b.1.cap_face_id.cmp(&a.1.cap_face_id))
         })
         .map(|(_, cap)| cap)
-}
-
-fn point_on_curve(curve: &RecoveredProfileCurve, point: [f64; 2]) -> bool {
-    match curve {
-        RecoveredProfileCurve::Line {
-            start_mm, end_mm, ..
-        } => {
-            let delta = sub2(*end_mm, *start_mm);
-            let length2 = dot2(delta, delta);
-            if length2 <= LENGTH * LENGTH {
-                return false;
-            }
-            let t = (dot2(sub2(point, *start_mm), delta) / length2).clamp(0.0, 1.0);
-            distance2(
-                point,
-                [
-                    t.mul_add(delta[0], start_mm[0]),
-                    t.mul_add(delta[1], start_mm[1]),
-                ],
-            ) <= LENGTH
-        }
-        RecoveredProfileCurve::CircleArc {
-            center_mm,
-            radius_mm,
-            start_angle_rad,
-            end_angle_rad,
-            ..
-        } => {
-            let d = sub2(point, *center_mm);
-            (d[0].hypot(d[1]) - radius_mm).abs() <= LENGTH
-                && angle_on_arc(
-                    d[1].atan2(d[0]),
-                    *start_angle_rad,
-                    *end_angle_rad,
-                    LENGTH / radius_mm,
-                )
-        }
-        _ => false,
-    }
-}
-
-fn cap_contains(cap: &RecoveredSourceCapExtrusion, point: [f64; 3]) -> bool {
-    let relative = sub(point, cap.origin_mm);
-    let z = dot(relative, cap.z_axis);
-    if z < -LENGTH || z > cap.height_mm + LENGTH {
-        return false;
-    }
-    let p = [dot(relative, cap.x_axis), dot(relative, cap.y_axis)];
-    let within = |ring: &[RecoveredProfileCurve]| {
-        ring.iter().any(|curve| point_on_curve(curve, p))
-            || profile_contains_with_rotated_ray(ring, p, LENGTH) == Some(true)
-    };
-    within(&cap.profile_curves)
-        && cap.inner_profile_loops.iter().all(|ring| {
-            ring.iter().any(|curve| point_on_curve(curve, p))
-                || profile_contains_with_rotated_ray(ring, p, LENGTH) == Some(false)
-        })
 }
 
 fn remaining_plane_caps(
