@@ -945,7 +945,7 @@ fn assemble_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 }
 
 /// Union one source face's selected patches without changing exact edge curves.
-fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+pub(super) fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     source: &[AltRegion<C, S>],
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
@@ -1176,7 +1176,7 @@ pub(super) fn overlay_source_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 /// Exact positive-minus-cutter occupancy on a certified common surface
 /// chart (planar or algebraically shared rational ruled). Operands can be independently parameterized or have
 /// partial edge overlaps. Intersections become shared exact curve nodes.
-fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+pub(super) fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     positive: &[AltRegion<C, S>],
     cutter: &[AltRegion<C, S>],
     tol: f64,

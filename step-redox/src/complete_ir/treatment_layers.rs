@@ -210,7 +210,8 @@ pub(super) fn replay(
 mod tests {
     use super::*;
     use crate::{
-        cad_kernel::monstertruck::MonstertruckKernel, kernel_source_load::SourceStepLoadInspector,
+        cad_kernel::{CadKernel, monstertruck::MonstertruckKernel},
+        kernel_source_load::SourceStepLoadInspector,
     };
 
     #[test]
@@ -372,6 +373,21 @@ mod tests {
             "TE must peel at least two native layers: {:?}",
             result.stop
         );
+        // The same real fixture must now admit a constructive peeled host,
+        // not merely operate on its native face topology.
+        let mut edited = result.edited;
+        kernel.normalize_edited_source(&mut edited)?;
+        let snapshot = kernel.edited_source_to_step(&edited)?;
+        let exchange =
+            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange;
+        let host = super::super::recognize_single_healed_host(&exchange, &kernel)?
+            .context("normalized TE host did not pass analytic boundary proof")?;
+        assert!(matches!(
+            host.source,
+            crate::cad_recovery::CadFragmentSource::SectionalExtrusionUnion { .. }
+        ));
+        let rebuilt = kernel.evaluate(&host.model, host.root)?;
+        assert!(kernel.summarize(&rebuilt).is_single_solid());
         Ok(())
     }
 }
