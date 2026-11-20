@@ -19,7 +19,7 @@ use crate::kernel_source_load::{
 use crate::kernel_topology::plan_source_coplanar_normalization_patch;
 use crate::kernel_topology::{
     SourceTopologyEditor, plan_source_boundary_feature_peel_from_entities,
-    plan_source_edge_treatment_patches,
+    plan_source_edge_treatment_transaction,
 };
 use crate::patterns::InstancePattern;
 use crate::planar_features::{
@@ -906,13 +906,13 @@ fn recover_kernel_topology_normalized_fragment<
     };
 
     let evidence = replayable_source_treatments(exchange, source)?;
-    let patches = if evidence.is_empty() {
-        Vec::new()
+    let (patches, coupled_selectors) = if evidence.is_empty() {
+        (Vec::new(), Vec::new())
     } else {
-        vec![
-            plan_source_edge_treatment_patches(exchange, source, &evidence, &provenance)
-                .context("construct inverse edge-treatment topology patch")?,
-        ]
+        let planned =
+            plan_source_edge_treatment_transaction(exchange, source, &evidence, &provenance)
+                .context("construct inverse edge-treatment topology patch")?;
+        (vec![planned.patch], planned.coupled_selectors)
     };
     // Keep one exact kernel-owned source throughout both reduction stages.
     // The source identity journal does not depend on temporary STEP numbers.
@@ -971,7 +971,7 @@ fn recover_kernel_topology_normalized_fragment<
     if replay.len() != evidence.len() {
         return Ok(None);
     }
-    let fragment = replay_edge_treatments(host, source.id, replay)?;
+    let fragment = replay_grouped_edge_treatments(host, source.id, replay, coupled_selectors)?;
     kernel_replay_is_single_solid(kernel, &fragment).map(|accepted| accepted.then_some(fragment))
 }
 
@@ -1821,34 +1821,82 @@ fn recover_reduced_brep_fragments(
     Ok(out)
 }
 
+type ReplayTreatment<'a> = (
+    &'a crate::edge_treatments::EdgeTreatmentEvidence,
+    EdgeTreatmentProfile,
+    EdgeTreatmentEdge,
+);
+
 fn replay_edge_treatments(
+    fragment: CadFragment,
+    solid_id: u64,
+    replay: Vec<ReplayTreatment<'_>>,
+) -> Result<CadFragment> {
+    replay_grouped_edge_treatments(fragment, solid_id, replay, Vec::new())
+}
+
+/// Every connected perimeter is one operation, not a sequence of
+/// independently replayed rounds that would destroy their common junctions.
+fn replay_grouped_edge_treatments(
     mut fragment: CadFragment,
     solid_id: u64,
-    mut replay: Vec<(
-        &crate::edge_treatments::EdgeTreatmentEvidence,
-        EdgeTreatmentProfile,
-        EdgeTreatmentEdge,
-    )>,
+    replay: Vec<ReplayTreatment<'_>>,
+    coupled_selectors: Vec<Vec<(u64, EdgeSelector)>>,
 ) -> Result<CadFragment> {
-    replay.sort_by_key(|(item, _, _)| item.treatment_face_id);
-    let treatment_face_ids = replay
-        .iter()
-        .map(|(item, _, _)| item.treatment_face_id)
-        .collect::<Vec<_>>();
+    let mut remaining = replay
+        .into_iter()
+        .map(|item| (item.0.treatment_face_id, item))
+        .collect::<BTreeMap<_, _>>();
+    let treatment_face_ids = remaining.keys().copied().collect::<Vec<_>>();
+    let mut groups = Vec::<Vec<ReplayTreatment<'_>>>::new();
+    for selectors in coupled_selectors {
+        let group = selectors
+            .into_iter()
+            .map(|(id, selector)| {
+                let mut item = remaining
+                    .remove(&id)
+                    .with_context(|| format!("coupled replay has no source treatment #{id}"))?;
+                item.2.selector = selector;
+                Ok(item)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        anyhow::ensure!(!group.is_empty(), "empty coupled replay group");
+        groups.push(group);
+    }
+    groups.extend(remaining.into_values().map(|item| vec![item]));
+    for group in &mut groups {
+        group.sort_by_key(|(item, _, _)| item.treatment_face_id);
+    }
+    groups.sort_by_key(|group| group[0].0.treatment_face_id);
     fragment.model.roots.clear();
     let mut root = fragment.root;
-    for (item, profile, edge) in replay {
+    for group in groups {
+        let profile = group[0].1;
+        anyhow::ensure!(
+            group.iter().all(|(_, p, _)| *p == profile),
+            "one coupled treatment perimeter has mixed forward profiles"
+        );
+        let mut source_entity_ids = vec![solid_id];
+        let mut max_residual = 0.0_f64;
+        let edges = group
+            .into_iter()
+            .map(|(item, _, edge)| {
+                source_entity_ids.push(item.treatment_face_id);
+                max_residual = max_residual.max(item.max_boundary_residual_mm);
+                edge
+            })
+            .collect();
         root = fragment.model.add_node(CadNode::EdgeTreatment {
             child: root,
             profile,
-            edges: vec![edge],
+            edges,
         });
         fragment.model.set_provenance(
             root,
             Provenance {
-                source_entity_ids: vec![solid_id, item.treatment_face_id],
+                source_entity_ids,
                 proof: ProofStatus::WithinTolerance,
-                max_residual_mm: Some(item.max_boundary_residual_mm),
+                max_residual_mm: Some(max_residual),
             },
         )?;
     }
@@ -2957,6 +3005,59 @@ mod tests {
         assert_eq!(
             fragment.model.provenance[&fragment.root].source_entity_ids,
             vec![solid_id, 77]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn coupled_replay_retains_bounded_arcs_and_an_atomic_treatment_node() -> Result<()> {
+        let mut first = test_treatment_evidence(42, 77);
+        first.kind = crate::edge_treatments::EdgeTreatmentKind::ToroidalFillet;
+        first.inferred_radius_mm = Some(0.2);
+        first.virtual_edge = crate::edge_treatments::EdgeTreatmentVirtualEdge::Circle {
+            center_mm: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+            radius_mm: 2.0,
+        };
+        let mut second = test_treatment_evidence(42, 78);
+        second.kind = crate::edge_treatments::EdgeTreatmentKind::CylindricalFillet;
+        second.inferred_radius_mm = Some(0.2);
+        let replay = [&first, &second]
+            .into_iter()
+            .map(|e| {
+                let (profile, edge) =
+                    replayable_edge_treatment(e).context("missing replayable treatment")?;
+                Ok((e, profile, edge))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let arc = EdgeSelector::CircleArc {
+            center_mm: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+            radius_mm: 2.0,
+            start_mm: [2.0, 0.0, 0.0],
+            sweep_rad: std::f64::consts::FRAC_PI_2,
+        };
+        let segment = EdgeSelector::Segment {
+            start_mm: [0.0, 2.0, 0.0],
+            end_mm: [-1.0, 2.0, 0.0],
+        };
+        let fragment = replay_grouped_edge_treatments(
+            constructive_fragment(42, 1)?,
+            42,
+            replay,
+            vec![vec![(78, segment.clone()), (77, arc.clone())]],
+        )?;
+        let CadNode::EdgeTreatment { edges, profile, .. } = fragment.model.node(fragment.root)?
+        else {
+            bail!("missing atomic treatment node");
+        };
+        assert_eq!(*profile, EdgeTreatmentProfile::Round);
+        assert_eq!(edges.len(), 2);
+        assert_eq!(edges[0].selector, arc);
+        assert_eq!(edges[1].selector, segment);
+        assert_eq!(
+            fragment.model.provenance[&fragment.root].source_entity_ids,
+            vec![42, 77, 78]
         );
         Ok(())
     }

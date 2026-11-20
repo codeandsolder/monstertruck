@@ -15,6 +15,8 @@ use super::topology::{
 };
 use super::types::{Edge, EdgeId, Face, NotStrictlyCut, ParameterCurveLinear, Shell, Vertex, Wire};
 
+mod closed_wire;
+
 type Result<T> = std::result::Result<T, FilletError>;
 
 type SideFilletResult = Result<(Face, Face, Face, Option<Face>, Option<Face>)>;
@@ -712,11 +714,23 @@ fn fillet_along_wire_open(
 /// "first" or "last" face since the wire wraps around.
 fn fillet_along_wire_closed(
     shell: &mut Shell,
-    _wire: &Wire,
+    wire: &Wire,
     shared_face_index: FaceBoundaryEdgeIndex,
     adjacent_faces: &[FaceBoundaryEdgeIndex],
     fillet_surfaces: &[NurbsSurface<Vector4>],
 ) -> Result<()> {
+    if let Some(reconstructed) = closed_wire::reconstruct(
+        shell,
+        wire,
+        shared_face_index.face_index,
+        adjacent_faces,
+        fillet_surfaces,
+    ) {
+        *shell = reconstructed;
+        return Ok(());
+    }
+    // Non-coincident junctions require a miter/corner intersection; the
+    // existing extended-rail construction is kept for that distinct case.
     let n = fillet_surfaces.len();
 
     // Build fillet faces with circular [prev, curr, next] windowing.
