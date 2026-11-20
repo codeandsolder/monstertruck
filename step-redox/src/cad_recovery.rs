@@ -10,6 +10,7 @@ use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use monstertruck_io::step::load::ParsedStepSource;
 use serde::Serialize;
 
+mod multi_axis_sheet;
 pub(crate) mod sectional;
 mod solid;
 pub use solid::{
@@ -79,6 +80,12 @@ pub enum CadFragmentSource {
         solid_id: u64,
         face_ids: Vec<u64>,
         slabs: usize,
+    },
+    /// Source-derived extrusion groups of a folded sheet with nonparallel bends.
+    FormedSheetExtrusionUnion {
+        solid_id: u64,
+        face_ids: Vec<u64>,
+        cap_face_ids: Vec<u64>,
     },
     /// Exact ruled end caps added to an extrusion-core union.
     CapExtrusionRuledEnds {
@@ -590,6 +597,26 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
     Ok(None)
 }
 
+/// Attach the original whole-solid provenance after successful source-boundary proof.
+fn set_proven_source_boundary(
+    model: &mut CadModel,
+    root: NodeId,
+    solid: &crate::reduced_brep::ReducedSolid,
+) -> Result<Vec<u64>> {
+    let face_ids = solid.faces().map(|face| face.id).collect::<Vec<_>>();
+    let mut source_entity_ids = vec![solid.solid_id()];
+    source_entity_ids.extend(&face_ids);
+    model.set_provenance(
+        root,
+        Provenance {
+            source_entity_ids,
+            proof: ProofStatus::WithinTolerance,
+            max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
+        },
+    )?;
+    Ok(face_ids)
+}
+
 /// Detect all source-derived extrusion cores, discard those that contradict
 /// known source boundary geometry, and admit only the complete surviving union.
 ///
@@ -672,7 +699,10 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
     {
         return Ok(Some(fragment));
     }
-    sectional::recover(solid_id, entities, &index, kernel)
+    if let Some(fragment) = sectional::recover(solid_id, entities, &index, kernel)? {
+        return Ok(Some(fragment));
+    }
+    multi_axis_sheet::recover(solid_id, entities, &index, kernel)
 }
 
 /// Recover a first-class fused periodic-chain IR fragment from a proven source partition.

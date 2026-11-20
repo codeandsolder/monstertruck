@@ -836,6 +836,7 @@ fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             shell = repaired;
         }
     }
+    let shell = planar_union::split_disconnected_planar_faces(&shell, tol);
     let mut boundaries = shell.connected_components();
     if boundaries
         .iter()

@@ -16,7 +16,7 @@ use crate::step_graph::{build_index, entity_id, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::f64::consts::TAU;
+use std::f64::consts::{PI, TAU};
 use step_p21::ast::EntityInstance;
 
 const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
@@ -827,6 +827,84 @@ fn core_strictly_contains_source_boundary_point(
     core.inner_profile_loops
         .iter()
         .all(|hole| strict_profile_contains(hole, local, margin) == Some(false))
+}
+
+/// Pick a ray separated from all endpoints and circular tangencies, then use
+/// the same analytic strict inclusion test as the extrusion-core recognizer.
+/// No perturbed sample point or polygonal approximation is involved.
+pub(crate) fn profile_contains_with_rotated_ray(
+    ring: &[RecoveredProfileCurve],
+    point: [f64; 2],
+    margin: f64,
+) -> Option<bool> {
+    let mut forbidden = Vec::new();
+    for curve in ring {
+        for vertex in [curve.start_point()?, curve.end_point()?] {
+            let relative = sub2(vertex, point);
+            if relative[0].hypot(relative[1]) <= margin {
+                return None;
+            }
+            forbidden.push(relative[1].atan2(relative[0]).rem_euclid(PI));
+        }
+        if let RecoveredProfileCurve::CircleArc {
+            center_mm,
+            radius_mm,
+            ..
+        } = curve
+        {
+            let relative = sub2(*center_mm, point);
+            let distance = relative[0].hypot(relative[1]);
+            if distance >= *radius_mm {
+                let bearing = relative[1].atan2(relative[0]);
+                let tangent = (radius_mm / distance).asin();
+                forbidden.extend([
+                    (bearing - tangent).rem_euclid(PI),
+                    (bearing + tangent).rem_euclid(PI),
+                ]);
+            }
+        }
+    }
+    forbidden.sort_by(f64::total_cmp);
+    let first = *forbidden.first()?;
+    forbidden.push(first + PI);
+    let interval = forbidden
+        .windows(2)
+        .max_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))?;
+    let angle = interval[0].midpoint(interval[1]);
+    let (sin, cos) = angle.sin_cos();
+    let rotate = |p| {
+        let [x, y] = sub2(p, point);
+        [x.mul_add(cos, y * sin), y.mul_add(cos, -x * sin)]
+    };
+    let rotated = ring
+        .iter()
+        .map(|curve| match curve {
+            RecoveredProfileCurve::Line {
+                source_edge_ids,
+                start_mm,
+                end_mm,
+            } => Some(RecoveredProfileCurve::Line {
+                source_edge_ids: source_edge_ids.clone(),
+                start_mm: rotate(*start_mm),
+                end_mm: rotate(*end_mm),
+            }),
+            RecoveredProfileCurve::CircleArc {
+                source_edge_ids,
+                center_mm,
+                radius_mm,
+                start_angle_rad,
+                end_angle_rad,
+            } => Some(RecoveredProfileCurve::CircleArc {
+                source_edge_ids: source_edge_ids.clone(),
+                center_mm: rotate(*center_mm),
+                radius_mm: *radius_mm,
+                start_angle_rad: start_angle_rad - angle,
+                end_angle_rad: end_angle_rad - angle,
+            }),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    strict_profile_contains(&rotated, [0.0; 2], margin)
 }
 
 /// Strict odd-even inclusion for closed line/circular-arc profiles. This
