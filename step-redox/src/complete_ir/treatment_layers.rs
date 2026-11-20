@@ -456,6 +456,60 @@ mod tests {
             selected.source_solid.id,
             &original.data[selected.source_solid.data_section].entities,
         )?);
+        // An editable result must respond to a real parameter change, not
+        // just reproduce a fixed source snapshot. The terminal round has no
+        // downstream dependent selectors and can be reduced independently.
+        let mut edited = fragment.model.clone();
+        let Some(crate::cad_ir::CadNode::EdgeTreatment {
+            profile: crate::cad_ir::EdgeTreatmentProfile::Round,
+            edges,
+            ..
+        }) = edited.nodes.get_mut(fragment.root.0)
+        else {
+            anyhow::bail!("expected an editable terminal round");
+        };
+        ensure!(!edges.is_empty(), "terminal round has no selectors");
+        for edge in edges {
+            edge.radius_mm *= 0.75;
+        }
+        edited.provenance.remove(&fragment.root);
+        edited.validate()?;
+        let shape = kernel.evaluate(&edited, fragment.root)?;
+        let summary = kernel.summarize(&shape);
+        assert!(summary.is_single_solid(), "edited round: {summary:?}");
+        let step = kernel.to_step(&shape)?;
+        let exchange =
+            monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange;
+        let [section] = exchange.data.as_slice() else {
+            anyhow::bail!("edited round export must contain one DATA section");
+        };
+        let solids = section
+            .entities
+            .iter()
+            .filter_map(|entity| {
+                crate::step_graph::simple_record(entity)
+                    .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
+                    .then_some(crate::step_graph::entity_id(entity))
+            })
+            .collect::<Vec<_>>();
+        let [id] = solids.as_slice() else {
+            anyhow::bail!("edited round export must contain one solid");
+        };
+        let comparison = crate::boundary_proof::compare_analytic_boundaries(
+            selected.source_solid.id,
+            &original.data[selected.source_solid.data_section].entities,
+            *id,
+            &section.entities,
+        );
+        assert!(
+            comparison.first.supported && comparison.second.supported,
+            "edited boundary must remain certifiable: {:?}",
+            comparison.second.reason
+        );
+        assert!(
+            !comparison.equivalent,
+            "radius edit must change the certified boundary"
+        );
         Ok(())
     }
 }
