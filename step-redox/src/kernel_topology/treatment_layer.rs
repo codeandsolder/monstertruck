@@ -1,8 +1,8 @@
 //! Dependency and conflict scheduling of independent inverse treatment groups.
 use super::{
-    KernelPatchEdgeRef, KernelTopologyId, KernelTopologyPatch, PlannedTreatmentTransaction,
-    combine_treatment_transactions, merge_topology_patches, plan_treatment_component,
-    treatment_components,
+    CoupledTreatmentReplay, KernelPatchEdgeRef, KernelTopologyId, KernelTopologyPatch,
+    PlannedTreatmentTransaction, combine_treatment_transactions, merge_topology_patches,
+    plan_treatment_component, treatment_components,
 };
 use crate::{
     edge_treatments::EdgeTreatmentEvidence, inverse_edge_treatment::TreatmentTopology,
@@ -150,14 +150,17 @@ fn carrier_users(evidence: &[EdgeTreatmentEvidence]) -> BTreeMap<u64, BTreeSet<u
 }
 
 fn ready(group: &[&EdgeTreatmentEvidence], users: &BTreeMap<u64, BTreeSet<u64>>) -> bool {
-    let ids = group
-        .iter()
-        .map(|item| item.treatment_face_id)
-        .collect::<BTreeSet<_>>();
+    group_ready(
+        &group.iter().map(|item| item.treatment_face_id).collect(),
+        users,
+    )
+}
+
+fn group_ready(ids: &BTreeSet<u64>, users: &BTreeMap<u64, BTreeSet<u64>>) -> bool {
     ids.iter().all(|id| {
         users
             .get(id)
-            .is_none_or(|dependents| dependents.is_subset(&ids))
+            .is_none_or(|dependents| dependents.is_subset(ids))
     })
 }
 
@@ -256,7 +259,44 @@ pub fn plan_treatment_layer(
     let users = carrier_users(evidence);
     let mut candidates = Vec::new();
     let mut refusals = Vec::new();
-    for (closed, group) in treatment_components(solid, evidence) {
+    // Certified three-way corner components must never be split into
+    // individual cylindrical strips, even if some member is ready alone.
+    let networks =
+        crate::inverse_edge_treatment::spherical_junction::round_networks(solid, evidence);
+    let mut reserved = BTreeSet::new();
+    for network in networks {
+        reserved.extend(network.rounds.iter().map(|item| item.treatment_face_id));
+        let ids = network
+            .rounds
+            .iter()
+            .map(|item| item.treatment_face_id)
+            .chain(network.junctions.iter().map(|junction| junction.face_id))
+            .collect::<BTreeSet<_>>();
+        if !group_ready(&ids, &users) {
+            continue;
+        }
+        match crate::inverse_edge_treatment::spherical_junction::plan_round_network(
+            solid, &network, section, provenance,
+        ) {
+            Ok(plan) => candidates.push(Candidate::new(
+                PlannedTreatmentTransaction {
+                    patch: plan.patch,
+                    coupled_groups: vec![CoupledTreatmentReplay {
+                        selectors: plan.selectors,
+                        junction_faces: plan.junction_faces,
+                    }],
+                },
+                network.rounds.into_iter().cloned().collect(),
+            )),
+            Err(error) => refusals.push(format!("{ids:?}: {error:#}")),
+        }
+    }
+    let remaining = evidence
+        .iter()
+        .filter(|item| !reserved.contains(&item.treatment_face_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    for (closed, group) in treatment_components(solid, &remaining) {
         if !ready(&group, &users) {
             continue;
         }
@@ -325,7 +365,7 @@ mod tests {
         };
         Candidate::new(
             PlannedTreatmentTransaction {
-                coupled_selectors: Vec::new(),
+                coupled_groups: Vec::new(),
                 patch: KernelTopologyPatch {
                     remove_faces: vec![KernelTopologyId::from_raw(face)],
                     new_vertices: vec![chosen],

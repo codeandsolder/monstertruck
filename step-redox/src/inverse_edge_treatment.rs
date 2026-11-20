@@ -89,6 +89,7 @@ impl TreatmentTopology for NativeTreatmentTopology {
 
 mod coupled;
 mod curved_segment;
+pub mod spherical_junction;
 
 #[cfg(all(test, feature = "cad-kernel-monstertruck"))]
 pub fn te_treatment_fixture() -> Result<Vec<u8>> {

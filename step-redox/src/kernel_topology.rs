@@ -246,7 +246,23 @@ pub fn plan_source_edge_treatment_patches(
 /// treatment perimeter that must be replayed in one native operation.
 pub(crate) struct PlannedTreatmentTransaction {
     pub patch: KernelTopologyPatch,
-    pub coupled_selectors: Vec<Vec<(u64, crate::cad_ir::EdgeSelector)>>,
+    pub coupled_groups: Vec<CoupledTreatmentReplay>,
+}
+
+/// One connected forward operation, including generated corner blend faces
+/// which have no standalone selected sharp edge of their own.
+pub(crate) struct CoupledTreatmentReplay {
+    pub selectors: Vec<(u64, crate::cad_ir::EdgeSelector)>,
+    pub junction_faces: Vec<u64>,
+}
+
+impl CoupledTreatmentReplay {
+    const fn edges(selectors: Vec<(u64, crate::cad_ir::EdgeSelector)>) -> Self {
+        Self {
+            selectors,
+            junction_faces: Vec::new(),
+        }
+    }
 }
 
 pub(crate) fn plan_source_edge_treatment_transaction(
@@ -294,7 +310,7 @@ fn plan_treatment_component(
         )?;
         return Ok(PlannedTreatmentTransaction {
             patch: result.patch,
-            coupled_selectors: vec![result.selectors],
+            coupled_groups: vec![CoupledTreatmentReplay::edges(result.selectors)],
         });
     }
     let patch = if group.len() == 1 {
@@ -304,10 +320,13 @@ fn plan_treatment_component(
     } else {
         crate::inverse_edge_treatment::plan_circle_family_patch(solid, group, section, provenance)?
     };
-    let coupled_selectors = circular_replay_selectors(&patch, group)?;
+    let coupled_groups = circular_replay_selectors(&patch, group)?
+        .into_iter()
+        .map(CoupledTreatmentReplay::edges)
+        .collect();
     Ok(PlannedTreatmentTransaction {
         patch,
-        coupled_selectors,
+        coupled_groups,
     })
 }
 
@@ -388,14 +407,14 @@ fn combine_treatment_transactions(
     plans: Vec<PlannedTreatmentTransaction>,
 ) -> Result<PlannedTreatmentTransaction> {
     let mut patches = Vec::new();
-    let mut coupled_selectors = Vec::new();
+    let mut coupled_groups = Vec::new();
     for plan in plans {
         patches.push(plan.patch);
-        coupled_selectors.extend(plan.coupled_selectors);
+        coupled_groups.extend(plan.coupled_groups);
     }
     Ok(PlannedTreatmentTransaction {
         patch: merge_topology_patches(patches)?,
-        coupled_selectors,
+        coupled_groups,
     })
 }
 

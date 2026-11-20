@@ -683,8 +683,9 @@ mod tests {
             &selected,
             provenance,
         )?;
-        assert_eq!(planned.coupled_selectors.len(), 3);
-        for group in &planned.coupled_selectors {
+        assert_eq!(planned.coupled_groups.len(), 3);
+        for group in &planned.coupled_groups {
+            let group = &group.selectors;
             assert_eq!(group.len(), 8);
             assert_eq!(
                 group

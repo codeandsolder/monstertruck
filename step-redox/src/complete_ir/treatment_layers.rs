@@ -34,7 +34,15 @@ impl ReplayLayer {
                 Ok((item, profile, edge))
             })
             .collect::<Result<Vec<ReplayTreatment<'_>>>>()?;
-        let mut groups = make_treatment_replay_groups(replay, plan.coupled_selectors)?;
+        let mut groups = make_treatment_replay_groups(replay, plan.coupled_groups)?;
+        ensure!(
+            groups
+                .iter()
+                .map(|group| group.face_ids.len())
+                .sum::<usize>()
+                == plan.patch.remove_faces.len(),
+            "inverse patch and forward replay face provenance counts disagree"
+        );
         for group in &mut groups {
             group.face_ids = group
                 .face_ids
@@ -323,7 +331,42 @@ mod tests {
             );
         }
         assert!(counts.first().is_some_and(|count| *count >= 64));
-        assert!(summary.faces <= 237);
+        // The last four spherical corner patches belong to the same
+        // eight-edge network as the surrounding cylindrical fillets.
+        for id in [
+            8430, 8459, 8487, 8513, 8527, 8554, 8581, 9149, 8472, 9160, 8567, 9171,
+        ] {
+            assert!(
+                removed.contains(&id),
+                "spherical round network retained #{id}: {:?}",
+                result.stop
+            );
+        }
+        let spherical_faces = std::collections::BTreeSet::from([
+            8430, 8459, 8487, 8513, 8527, 8554, 8581, 9149, 8472, 9160, 8567, 9171,
+        ]);
+        let network = result
+            .layers
+            .iter()
+            .flat_map(|layer| &layer.groups)
+            .find(|group| {
+                group
+                    .face_ids
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    == spherical_faces
+            })
+            .context("spherical junctions must share one replay operation")?;
+        assert_eq!(network.edges.len(), 8);
+        assert_eq!(network.profile, crate::cad_ir::EdgeTreatmentProfile::Round);
+        assert!(
+            network
+                .edges
+                .iter()
+                .all(|edge| matches!(edge.selector, crate::cad_ir::EdgeSelector::Segment { .. }))
+        );
+        assert!(summary.faces <= 225);
         assert!(
             counts.len() >= 2,
             "TE must peel at least two native layers: {:?}",

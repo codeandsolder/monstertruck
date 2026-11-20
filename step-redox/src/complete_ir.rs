@@ -1835,12 +1835,12 @@ fn replay_grouped_edge_treatments(
     fragment: CadFragment,
     solid_id: u64,
     replay: Vec<ReplayTreatment<'_>>,
-    coupled_selectors: Vec<Vec<(u64, EdgeSelector)>>,
+    coupled_groups: Vec<crate::kernel_topology::CoupledTreatmentReplay>,
 ) -> Result<CadFragment> {
     apply_treatment_replay_groups(
         fragment,
         solid_id,
-        make_treatment_replay_groups(replay, coupled_selectors)?,
+        make_treatment_replay_groups(replay, coupled_groups)?,
     )
 }
 
@@ -1848,7 +1848,7 @@ fn replay_grouped_edge_treatments(
 /// independently replayed rounds that would destroy their common junctions.
 fn make_treatment_replay_groups(
     replay: Vec<ReplayTreatment<'_>>,
-    coupled_selectors: Vec<Vec<(u64, EdgeSelector)>>,
+    coupled_groups: Vec<crate::kernel_topology::CoupledTreatmentReplay>,
 ) -> Result<Vec<TreatmentReplayGroup>> {
     let mut remaining = BTreeMap::new();
     for item in replay {
@@ -1857,9 +1857,10 @@ fn make_treatment_replay_groups(
             "multiple forward treatment interpretations for the same face"
         );
     }
-    let mut groups = Vec::<Vec<ReplayTreatment<'_>>>::new();
-    for selectors in coupled_selectors {
-        let group = selectors
+    let mut groups = Vec::<TreatmentReplayGroup>::new();
+    for planned in coupled_groups {
+        let mut group = planned
+            .selectors
             .into_iter()
             .map(|(id, selector)| {
                 let mut item = remaining
@@ -1870,17 +1871,26 @@ fn make_treatment_replay_groups(
             })
             .collect::<Result<Vec<_>>>()?;
         anyhow::ensure!(!group.is_empty(), "empty coupled replay group");
-        groups.push(group);
-    }
-    groups.extend(remaining.into_values().map(|item| vec![item]));
-    for group in &mut groups {
         group.sort_by_key(|(item, _, _)| item.treatment_face_id);
+        let mut prepared = prepare_treatment_replay_group(group)?;
+        if !planned.junction_faces.is_empty() {
+            prepared.max_residual_mm = prepared
+                .max_residual_mm
+                .max(crate::numeric::NUMERICAL_GEOMETRY_TOL_MM);
+        }
+        prepared.face_ids.extend(planned.junction_faces);
+        prepared.face_ids.sort_unstable();
+        anyhow::ensure!(
+            prepared.face_ids.windows(2).all(|pair| pair[0] != pair[1]),
+            "coupled treatment contains a duplicated junction"
+        );
+        groups.push(prepared);
     }
-    groups.sort_by_key(|group| group[0].0.treatment_face_id);
-    groups
-        .into_iter()
-        .map(prepare_treatment_replay_group)
-        .collect()
+    for item in remaining.into_values() {
+        groups.push(prepare_treatment_replay_group(vec![item])?);
+    }
+    groups.sort_by_key(|group| group.face_ids[0]);
+    Ok(groups)
 }
 
 fn prepare_treatment_replay_group(group: Vec<ReplayTreatment<'_>>) -> Result<TreatmentReplayGroup> {
@@ -3100,7 +3110,10 @@ mod tests {
             constructive_fragment(42, 1)?,
             42,
             replay,
-            vec![vec![(78, segment.clone()), (77, arc.clone())]],
+            vec![crate::kernel_topology::CoupledTreatmentReplay {
+                selectors: vec![(78, segment.clone()), (77, arc.clone())],
+                junction_faces: Vec::new(),
+            }],
         )?;
         let CadNode::EdgeTreatment { edges, profile, .. } = fragment.model.node(fragment.root)?
         else {
