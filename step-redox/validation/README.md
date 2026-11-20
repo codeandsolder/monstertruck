@@ -84,3 +84,9 @@ fixtures contain a mixture of real-source captures and generated regressions;
 never interpret their success rate as an unbiased JLC/catalog success rate.
 For real manufacturer surveys, preserve input provenance and compare the
 reported SHA-256 to the pinned hashes in `validation/fixtures.json`.
+
+When `--output` is provided, a sibling `*.cases.jsonl` checkpoint journal is
+also written. Each complete case is flushed before the next source is
+attempted, so a long-running or interrupted survey retains preceding results;
+the final aggregate JSON appears only after all requested inputs are processed.
+The journal starts fresh on each invocation.

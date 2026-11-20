@@ -10,6 +10,7 @@ mod survey {
     use serde::Serialize;
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
+    use std::fs::File;
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::time::Instant;
@@ -203,15 +204,27 @@ mod survey {
     fn run(cli: Cli) -> Result<()> {
         let kernel = MonstertruckKernel::project_standard();
         let mut totals = Totals::default();
-        let cases = cli
-            .inputs
-            .iter()
-            .map(|path| {
-                let entry = recover_case(path, &kernel);
-                totals.include(&entry);
-                entry
+        // Persist each result before attempting the next potentially expensive
+        // solid. A failed later input cannot erase prior corpus evidence.
+        let mut journal = cli
+            .output
+            .as_ref()
+            .map(|output| {
+                let path = output.with_extension("cases.jsonl");
+                File::create(&path).with_context(|| format!("create {}", path.display()))
             })
-            .collect();
+            .transpose()?;
+        let mut cases = Vec::with_capacity(cli.inputs.len());
+        for path in &cli.inputs {
+            let entry = recover_case(path, &kernel);
+            totals.include(&entry);
+            if let Some(journal) = journal.as_mut() {
+                serde_json::to_writer(&mut *journal, &entry)?;
+                journal.write_all(b"\n")?;
+                journal.flush()?;
+            }
+            cases.push(entry);
+        }
         let report = Survey {
             schema: "step-redox.recovery-survey.v1",
             claim: "automatic constructive IR selection; independent source-boundary equivalence not measured",
