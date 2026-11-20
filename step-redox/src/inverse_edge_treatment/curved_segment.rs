@@ -22,6 +22,34 @@ use std::collections::BTreeSet;
 const FIT_MM: f64 = crate::numeric::DEFAULT_FEATURE_HEAL_TOL_MM;
 const SAMPLES_PER_KNOT_SPAN: u32 = 32;
 
+#[cfg(feature = "cad-kernel-monstertruck")]
+mod plane_cone;
+
+#[derive(Clone, Copy)]
+enum RetainedConic {
+    Cylinder(CylinderPlaneConic),
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    Cone(plane_cone::PlaneConeHyperbola),
+}
+
+impl RetainedConic {
+    fn extend_to(self, point: [f64; 3], direction: [f64; 3]) -> Result<[f64; 3]> {
+        match self {
+            Self::Cylinder(conic) => conic.extend_to(point, direction),
+            #[cfg(feature = "cad-kernel-monstertruck")]
+            Self::Cone(conic) => conic.extend_to(point, direction),
+        }
+    }
+
+    fn trimmed(self, first: [f64; 3], second: [f64; 3]) -> Result<KernelPatchCurve> {
+        match self {
+            Self::Cylinder(conic) => conic.trimmed(first, second),
+            #[cfg(feature = "cad-kernel-monstertruck")]
+            Self::Cone(conic) => conic.trimmed(first, second),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct CylinderPlaneConic {
     center: [f64; 3],
@@ -190,7 +218,7 @@ struct CurvedNeighbor {
     edge: OrientedEdgeUse,
     vertex: u64,
     original: [f64; 3],
-    conic: Option<CylinderPlaneConic>,
+    conic: Option<RetainedConic>,
 }
 
 /// Intersect a retained analytic line with the independently recovered
@@ -241,10 +269,12 @@ fn retained_line_intersection(
 
 impl CurvedNeighbor {
     fn extend_to(&self, virtual_endpoint: [f64; 3], direction: [f64; 3]) -> Result<[f64; 3]> {
-        self.conic.map_or_else(
-            || retained_line_intersection(&self.edge, virtual_endpoint, direction),
-            |conic| conic.extend_to(virtual_endpoint, direction),
-        )
+        self.conic
+            .map_or_else(
+                || retained_line_intersection(&self.edge, virtual_endpoint, direction),
+                |conic| conic.extend_to(virtual_endpoint, direction),
+            )
+            .with_context(|| format!("extend retained source edge #{}", self.edge.edge_id))
     }
 }
 
@@ -280,11 +310,20 @@ fn curved_neighbor(
                 .into_iter()
                 .find(|&id| id != planar_carrier.id)
                 .context("retained spline has no other source face")?;
-            let SurfaceSupport::Cylinder(cylinder) = face(solid, neighbor_id)?.surface else {
-                bail!("retained spline is not shared by a cylindrical carrier");
+            let conic = match face(solid, neighbor_id)?.surface {
+                SurfaceSupport::Cylinder(cylinder) => {
+                    let conic = CylinderPlaneConic::new(plane, cylinder)?;
+                    conic.fitted_to_source(spline, plane)?;
+                    RetainedConic::Cylinder(conic)
+                }
+                #[cfg(feature = "cad-kernel-monstertruck")]
+                SurfaceSupport::Cone(cone) => {
+                    let conic = plane_cone::PlaneConeHyperbola::new(plane, cone)?;
+                    conic.fitted_to_source(spline, global_points)?;
+                    RetainedConic::Cone(conic)
+                }
+                _ => bail!("retained spline is not shared by a supported analytic carrier"),
             };
-            let conic = CylinderPlaneConic::new(plane, cylinder)?;
-            conic.fitted_to_source(spline, plane)?;
             let (first, last) = crate::boundary_proof::bspline_domain(spline)
                 .context("retained spline has no domain")?;
             let first = crate::boundary_proof::evaluate_bspline(spline, first)

@@ -314,6 +314,7 @@ mod monstertruck_adapter {
     use monstertruck_geometry::analytic_line_segment::{
         SegmentLocus, certify_bspline_segment_locus, certify_nurbs_segment_locus,
     };
+    use monstertruck_geometry::prelude::UnitHyperbola;
     #[cfg(test)]
     use monstertruck_io::step::load::ParsedStepSource;
     use monstertruck_io::step::load::convert::StepCompressedTrimmedSolid;
@@ -1357,6 +1358,30 @@ mod monstertruck_adapter {
                     transform,
                 )))
             }
+            KernelPatchCurve::HyperbolaArc {
+                center_mm,
+                cosh_axis_mm,
+                sinh_axis_mm,
+                start_parameter,
+                end_parameter,
+            } => {
+                let real = Vector3::from(cosh_axis_mm);
+                let imaginary = Vector3::from(sinh_axis_mm);
+                let normal = real.cross(imaginary);
+                let transform = Matrix4::from_cols(
+                    real.extend(0.0),
+                    imaginary.extend(0.0),
+                    normal.extend(0.0),
+                    Vector4::new(center_mm[0], center_mm[1], center_mm[2], 1.0),
+                );
+                Curve3D::Conic(Conic3D::Hyperbola(Processor::with_transform(
+                    TrimmedCurve::new(
+                        UnitHyperbola::<Point3>::new(),
+                        (start_parameter, end_parameter),
+                    ),
+                    transform,
+                )))
+            }
             KernelPatchCurve::CircleArc {
                 center_mm,
                 normal,
@@ -1496,6 +1521,33 @@ mod monstertruck_adapter {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn bounded_hyperbola_patch_preserves_directed_native_parameters() -> Result<()> {
+            use monstertruck_geometry::prelude::{BoundedCurve, ParametricCurve};
+
+            let patch = KernelPatchCurve::HyperbolaArc {
+                center_mm: [1.0, 2.0, 3.0],
+                cosh_axis_mm: [0.0, 0.0, 0.5],
+                sinh_axis_mm: [0.0, 0.25, 0.0],
+                start_parameter: 0.8,
+                end_parameter: -0.4,
+            };
+            let native = translate_curve(&patch);
+            let Curve3D::Conic(Conic3D::Hyperbola(curve)) = native else {
+                anyhow::bail!("hyperbola topology patch lost its exact conic type");
+            };
+            assert_eq!(curve.range_tuple(), (0.8, -0.4));
+            for parameter in [0.8_f64, 0.1, -0.4] {
+                let expected = Point3::new(
+                    1.0,
+                    0.25_f64.mul_add(parameter.sinh(), 2.0),
+                    0.5_f64.mul_add(parameter.cosh(), 3.0),
+                );
+                assert!((curve.evaluate(parameter) - expected).magnitude() <= 1.0e-13);
+            }
+            Ok(())
+        }
 
         fn inspect_bytes(input: &[u8]) -> Result<KernelSourceLoadEvidence> {
             let kernel = MonstertruckKernel::project_standard();
