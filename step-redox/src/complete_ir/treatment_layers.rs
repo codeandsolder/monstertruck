@@ -396,6 +396,18 @@ mod tests {
             "{reconstructed_summary:?}"
         );
         assert_eq!(reconstructed_summary.faces, 309);
+        // Every reconstructed support, bounded edge locus, and oriented
+        // boundary chain must agree with the original, including the
+        // cylindrical, toroidal, and spherical treatment surfaces.
+        assert!(
+            crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
+                &kernel,
+                &reconstructed,
+                source.id,
+                &document.as_ref().data[source.data_section].entities,
+            )?,
+            "replayed TE differs from the original analytic boundary"
+        );
         Ok(())
     }
 }

@@ -2033,7 +2033,11 @@ fn replayable_edge_treatment(
             {
                 return None;
             }
-            if (first - second).abs() <= crate::numeric::NUMERICAL_GEOMETRY_TOL_MM {
+            // Numerical point tolerance is not a symmetry certificate:
+            // a tiny setback difference over a short bevel can alter its
+            // plane normal far beyond the direction quantum. Coalesce only
+            // arithmetic roundoff, not measured geometric asymmetry.
+            if (first - second).abs() <= f64::EPSILON * first.max(second) {
                 (EdgeTreatmentProfile::Chamfer, first.midpoint(second))
             } else {
                 // Preserve the source carrier position, rather than fitting a
@@ -3052,6 +3056,17 @@ mod tests {
             EdgeTreatmentProfile::CarrierChamfer {
                 first_carrier_normal: [1.0, 0.0, 0.0],
                 second_setback_mm: 0.506_7,
+            }
+        );
+        assert_eq!(edge.radius_mm, 0.5);
+        evidence.inferred_setbacks_mm = Some([0.5, 0.500_000_01]);
+        let (profile, edge) = replayable_edge_treatment(&evidence)
+            .context("sub-tolerance setback asymmetry must be preserved")?;
+        assert_eq!(
+            profile,
+            EdgeTreatmentProfile::CarrierChamfer {
+                first_carrier_normal: [1.0, 0.0, 0.0],
+                second_setback_mm: 0.500_000_01,
             }
         );
         assert_eq!(edge.radius_mm, 0.5);
