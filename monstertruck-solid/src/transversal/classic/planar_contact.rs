@@ -45,34 +45,50 @@ struct FaceBounds {
     outward_plane: Option<Separator>,
 }
 
-/// Planes and curve extrusions have no extremum of a linear functional
-/// away from their bounded wires: each point lies on a straight ruling
-/// reaching the trim boundary. Positive rational weights certify that the
-/// complete boundary curve lies inside its Euclidean control hull.
+/// A complete positive-weight homogeneous control hull bounds a bounded
+/// surface on every knot span, regardless of whether the spline happens to
+/// encode an extrusion. Unbounded planes use their trimmed boundary hull.
 fn face_bounds<C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve, S: ShapeOpsSurface>(
     face: &Face<Point3, C, S>,
 ) -> Option<FaceBounds> {
-    match face.surface().try_into_analytic_surface_kind()? {
-        AnalyticSurfaceKind::Plane(_) | AnalyticSurfaceKind::HomogeneousExtrusion(_) => {}
-        AnalyticSurfaceKind::SphericalRevolution(_) => return None,
-    }
+    let surface = face.surface();
+    let outward_plane = Separator::from_face(face);
     let mut points = Vec::new();
-    for edge in face.edge_iter() {
-        let curve = edge.curve().try_into_homogeneous_bspline_curve()?;
-        for control in curve.control_points() {
-            if !control.w.is_finite() || control.w <= 0.0 {
-                return None;
+    let mut push = |control: Vector4| {
+        if !control.w.is_finite() || control.w <= 0.0 {
+            return None;
+        }
+        let p = Point3::from_vec(control.truncate() / control.w);
+        if ![p.x, p.y, p.z].into_iter().all(f64::is_finite) {
+            return None;
+        }
+        points.push(p);
+        Some(())
+    };
+    if surface.supports_exact_patch_domains() {
+        // Unlike an unbounded analytic surface's incidental profile range,
+        // a spline's intrinsic knot domain encloses the entire trimmed face.
+        let net = surface.try_into_homogeneous_bspline_surface()?;
+        for row in net.control_points() {
+            for &control in row {
+                push(control)?;
             }
-            let p = Point3::from_vec(control.truncate() / control.w);
-            if ![p.x, p.y, p.z].into_iter().all(f64::is_finite) {
-                return None;
+        }
+    } else {
+        match surface.try_into_analytic_surface_kind()? {
+            AnalyticSurfaceKind::Plane(_) | AnalyticSurfaceKind::HomogeneousExtrusion(_) => {}
+            AnalyticSurfaceKind::SphericalRevolution(_) => return None,
+        }
+        for edge in face.edge_iter() {
+            let curve = edge.curve().try_into_homogeneous_bspline_curve()?;
+            for &control in curve.control_points() {
+                push(control)?;
             }
-            points.push(p);
         }
     }
-    (!points.is_empty()).then(|| FaceBounds {
+    (!points.is_empty()).then_some(FaceBounds {
         points,
-        outward_plane: Separator::from_face(face),
+        outward_plane,
     })
 }
 
@@ -149,36 +165,77 @@ fn regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     PartitionedRegions { retained, contact }
 }
 
-/// Try to construct the union using a proven separating plane. A successful
-/// result is assembled from the original exact side geometry and the two
-/// exposed (positive minus opposite) portions of the contact footprints.
-pub(in crate::transversal) fn union<
+/// Complete conservative bounds in a common world coordinate chart.
+fn bounds_box(bounds: &[FaceBounds]) -> Option<([f64; 3], [f64; 3])> {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for p in bounds.iter().flat_map(|f| &f.points) {
+        for (axis, value) in [p.x, p.y, p.z].into_iter().enumerate() {
+            lo[axis] = lo[axis].min(value);
+            hi[axis] = hi[axis].max(value);
+        }
+    }
+    lo.iter()
+        .chain(&hi)
+        .all(|v| v.is_finite())
+        .then_some((lo, hi))
+}
+
+fn disjoint_boxes(a: &([f64; 3], [f64; 3]), b: &([f64; 3], [f64; 3]), tol: f64) -> bool {
+    (0..3).any(|axis| a.1[axis] + tol < b.0[axis] || b.1[axis] + tol < a.0[axis])
+}
+
+/// A separating plane between a host and disjoint attachment solids.
+/// Evaluate the complete contact arrangement only once.
+pub(in crate::transversal) fn union_many<
     C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve,
     S: ShapeOpsSurface,
 >(
     lhs: &Solid<Point3, C, S>,
-    rhs: &Solid<Point3, C, S>,
+    rhs: &[&Solid<Point3, C, S>],
     tol: f64,
 ) -> Option<Solid<Point3, C, S>> {
+    if rhs.is_empty() {
+        return None;
+    }
     let lhs_bounds = shell_bounds(lhs)?;
-    let rhs_bounds = shell_bounds(rhs)?;
+    let rhs_bounds = rhs
+        .iter()
+        .map(|&solid| shell_bounds(solid))
+        .collect::<Option<Vec<_>>>()?;
+    let boxes = rhs_bounds
+        .iter()
+        .map(|b| bounds_box(b))
+        .collect::<Option<Vec<_>>>()?;
+    for (i, a) in boxes.iter().enumerate() {
+        if boxes[..i].iter().any(|b| !disjoint_boxes(a, b, tol)) {
+            return None;
+        }
+    }
     for separator in lhs_bounds.iter().filter_map(|face| face.outward_plane) {
         let Some(left_caps) = cap_partition(&lhs_bounds, separator, 1.0, tol) else {
             continue;
         };
-        let Some(right_caps) = cap_partition(&rhs_bounds, separator, -1.0, tol) else {
+        let Some(right_caps) = rhs_bounds
+            .iter()
+            .map(|b| cap_partition(b, separator, -1.0, tol))
+            .collect::<Option<Vec<_>>>()
+        else {
             continue;
         };
         let PartitionedRegions {
             retained: mut left,
             contact: left_contact,
         } = regions(lhs, &left_caps, 0);
-        let PartitionedRegions {
-            retained: right,
-            contact: right_contact,
-        } = regions(rhs, &right_caps, lhs_bounds.len());
-        // The two differences are independently computed on their own
-        // oriented charts, so both exposed cap normals remain authoritative.
+        let mut right_contact = Vec::new();
+        let mut right = Vec::new();
+        let mut offset = lhs_bounds.len();
+        for ((solid, caps), bounds) in rhs.iter().zip(&right_caps).zip(&rhs_bounds) {
+            let part = regions(solid, caps, offset);
+            offset += bounds.len();
+            right_contact.extend(part.contact);
+            right.extend(part.retained);
+        }
         for (positive, cutter) in [
             (&left_contact, &right_contact),
             (&right_contact, &left_contact),
@@ -201,6 +258,17 @@ pub(in crate::transversal) fn union<
         return Solid::new(components).ok();
     }
     None
+}
+
+pub(in crate::transversal) fn union<
+    C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve,
+    S: ShapeOpsSurface,
+>(
+    lhs: &Solid<Point3, C, S>,
+    rhs: &Solid<Point3, C, S>,
+    tol: f64,
+) -> Option<Solid<Point3, C, S>> {
+    union_many(lhs, &[rhs], tol)
 }
 
 /// Union co-oriented planar material regions, including overlapping profiles
@@ -285,6 +353,22 @@ mod tests {
         assert!(union(&bottom, &shifted, 1e-6).is_none());
         let gap = builder::translated(&top, Vector3::new(0., 0., 0.1));
         assert!(union(&bottom, &gap, 1e-6).is_none());
+    }
+
+    #[test]
+    fn planar_contact_batch_handles_disjoint_tools_and_refuses_interference() {
+        let host = box_at(Point3::origin(), Vector3::new(5., 3., 2.));
+        let a = box_at(Point3::new(0.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
+        let b = box_at(Point3::new(3., 1., 2.), Vector3::new(1., 1., 0.01));
+        let result = union_many(&host, &[&a, &b], 1e-6).expect("disjoint contact batch");
+        assert_eq!(result.boundaries().len(), 1);
+        assert!(result.is_geometric_consistent());
+        assert_eq!(result.face_iter().count(), 16);
+        let overlap = box_at(Point3::new(0.8, 0.8, 2.), Vector3::new(1., 1., 0.01));
+        assert!(union_many(&host, &[&a, &overlap], 1e-6).is_none());
+        let penetrating = box_at(Point3::new(3., 1., 1.9), Vector3::new(1., 1., 0.2));
+        assert!(union_many(&host, &[&a, &penetrating], 1e-6).is_none());
+        assert!(union_many(&host, &[], 1e-6).is_none());
     }
 
     #[test]

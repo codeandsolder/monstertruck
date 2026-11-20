@@ -769,6 +769,30 @@ pub fn try_planar_contact_union<
     }
 }
 
+/// Try a single separating-plane union against pairwise disjoint attachments.
+///
+/// # Errors
+/// Returns an error for an invalid geometry policy.
+pub fn try_planar_contact_union_many<
+    C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve,
+    S: ShapeOpsSurface,
+>(
+    lhs: &Solid<Point3, C, S>,
+    rhs: &[&Solid<Point3, C, S>],
+    policy: GeometryPolicy,
+) -> ShapeOpsResult<Option<Solid<Point3, C, S>>> {
+    let tol = classic_boolean_tolerance(policy, "planar contact union")?;
+    #[cfg(feature = "marching-ssi")]
+    {
+        Ok(classic::planar_contact::union_many(lhs, rhs, tol))
+    }
+    #[cfg(not(feature = "marching-ssi"))]
+    {
+        let _ = (lhs, rhs, tol);
+        Ok(None)
+    }
+}
+
 /// Union bounded coplanar material faces in one shared analytic plane.
 /// Disconnected regions remain separate faces, with their original line
 /// and curve edges. A refused arrangement returns `None`.
