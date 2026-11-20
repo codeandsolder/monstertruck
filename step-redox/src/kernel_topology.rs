@@ -140,6 +140,15 @@ pub enum KernelPatchCurve {
         start_angle_rad: f64,
         end_angle_rad: f64,
     },
+    /// Directed bounded hyperbolic arc, parameterized by
+    /// `center + cosh_axis * cosh(t) + sinh_axis * sinh(t)`.
+    HyperbolaArc {
+        center_mm: [f64; 3],
+        cosh_axis_mm: [f64; 3],
+        sinh_axis_mm: [f64; 3],
+        start_parameter: f64,
+        end_parameter: f64,
+    },
     /// Bounded circular arc in a deterministic orthonormal frame.
     CircleArc {
         center_mm: [f64; 3],
@@ -952,7 +961,9 @@ fn merge_endpoint(
 const fn line_points(curve: &KernelPatchCurve) -> Option<[[f64; 3]; 2]> {
     match *curve {
         KernelPatchCurve::Line { start_mm, end_mm } => Some([start_mm, end_mm]),
-        KernelPatchCurve::CircleArc { .. } | KernelPatchCurve::EllipseArc { .. } => None,
+        KernelPatchCurve::CircleArc { .. }
+        | KernelPatchCurve::EllipseArc { .. }
+        | KernelPatchCurve::HyperbolaArc { .. } => None,
     }
 }
 
