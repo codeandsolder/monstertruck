@@ -52,9 +52,8 @@ struct FaceBounds {
 fn face_bounds<C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve, S: ShapeOpsSurface>(
     face: &Face<Point3, C, S>,
 ) -> Option<FaceBounds> {
-    match face.surface().try_into_analytic_surface_kind()? {
-        AnalyticSurfaceKind::Plane(_) | AnalyticSurfaceKind::HomogeneousExtrusion(_) => {}
-        AnalyticSurfaceKind::SphericalRevolution(_) => return None,
+    if !face.surface().has_boundary_linear_extrema() {
+        return None;
     }
     let mut points = Vec::new();
     for edge in face.edge_iter() {

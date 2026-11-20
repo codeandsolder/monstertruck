@@ -1080,7 +1080,7 @@ pub mod monstertruck {
             return Ok(None);
         };
         let mut boundaries = Vec::new();
-        for face in united.iter() {
+        for face in &united {
             let solid: Solid = builder::extrude(face, Vector3::new(0.0, 0.0, length));
             boundaries.extend(solid.into_boundaries());
         }
@@ -2436,6 +2436,170 @@ pub mod monstertruck {
             assert_eq!(summary.shells, 1);
             assert_eq!(summary.faces, 14);
             step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_native_mixed_tangent_rim() -> Result<()> {
+            use std::f64::consts::FRAC_PI_2;
+            let mut model = CadModel::new();
+            let child = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [6.0, 5.0, 4.0],
+            }));
+            let core = model.add_node(CadNode::EdgeTreatment {
+                child,
+                profile: EdgeTreatmentProfile::Round,
+                edges: [[0.0, 0.0], [6.0, 0.0], [6.0, 5.0], [0.0, 5.0]]
+                    .into_iter()
+                    .map(|[x, y]| EdgeTreatmentEdge {
+                        selector: EdgeSelector::Segment {
+                            start_mm: [x, y, 0.0],
+                            end_mm: [x, y, 4.0],
+                        },
+                        radius_mm: 1.0,
+                    })
+                    .collect(),
+            });
+            let top_edges = |z: f64, offset: [f64; 2]| {
+                let points = [
+                    [1.0, 0.0],
+                    [5.0, 0.0],
+                    [6.0, 1.0],
+                    [6.0, 4.0],
+                    [5.0, 5.0],
+                    [1.0, 5.0],
+                    [0.0, 4.0],
+                    [0.0, 1.0],
+                ];
+                let centers = [[5.0, 1.0], [5.0, 4.0], [1.0, 4.0], [1.0, 1.0]];
+                let at_top = |[x, y]: [f64; 2]| [x + offset[0], y + offset[1], z];
+                let mut edges = Vec::new();
+                for i in 0..4 {
+                    edges.push(EdgeTreatmentEdge {
+                        selector: EdgeSelector::Segment {
+                            start_mm: at_top(points[2 * i]),
+                            end_mm: at_top(points[2 * i + 1]),
+                        },
+                        radius_mm: 0.25,
+                    });
+                    edges.push(EdgeTreatmentEdge {
+                        selector: EdgeSelector::CircleArc {
+                            center_mm: at_top(centers[i]),
+                            normal: [0.0, 0.0, 1.0],
+                            radius_mm: 1.0,
+                            start_mm: at_top(points[2 * i + 1]),
+                            sweep_rad: FRAC_PI_2,
+                        },
+                        radius_mm: 0.25,
+                    });
+                }
+                edges
+            };
+            let mut edges = top_edges(4.0, [0.0; 2]);
+            let kernel = MonstertruckKernel::project_standard();
+            let root = model.add_node(CadNode::EdgeTreatment {
+                child: core,
+                profile: EdgeTreatmentProfile::Round,
+                edges: edges.clone(),
+            });
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.is_single_solid());
+            assert_eq!(summary.faces, 18);
+            let torus_count = evaluated
+                .solid
+                .face_iter()
+                .filter(|face| {
+                    if let Surface::Torus(torus) = face.surface() {
+                        assert!(
+                            (torus.entity().large_radius() - 0.75).abs()
+                                < crate::numeric::NUMERICAL_GEOMETRY_TOL_MM
+                        );
+                        assert!(
+                            (torus.entity().small_radius() - 0.25).abs()
+                                < crate::numeric::NUMERICAL_GEOMETRY_TOL_MM
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .count();
+            assert_eq!(torus_count, 4, "native analytic tori must survive");
+            edges.reverse();
+            let reversed = model.add_node(CadNode::EdgeTreatment {
+                child: core,
+                profile: EdgeTreatmentProfile::Round,
+                edges,
+            });
+            let expected = kernel.evaluate(&model, reversed)?;
+            // Exact native carrier incidence and deterministic complete
+            // exported topology are the order-invariance contract here.
+            // The STEP boundary comparator does not yet encode torus loci.
+            monstertruck_modeling::certify_native_analytic_boundary_incidence(
+                &evaluated.solid,
+                crate::numeric::NUMERICAL_GEOMETRY_TOL_MM,
+                DEFAULT_STEP_RECOVERY_TOLERANCES.edge_treatment_direction,
+            )
+            .map_err(|error| anyhow::anyhow!("native rim incidence: {error:?}"))?;
+            let first = monstertruck_io::step::load::ParsedStepSource::parse(
+                kernel.to_step(&evaluated)?.as_bytes(),
+            )?
+            .exchange;
+            let second = monstertruck_io::step::load::ParsedStepSource::parse(
+                kernel.to_step(&expected)?.as_bytes(),
+            )?
+            .exchange;
+            assert_eq!(first.data[0].entities, second.data[0].entities);
+            let base = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [10.0, 9.0, 1.0],
+            }));
+            let boss = model.add_node(CadNode::Transform {
+                transform: RigidTransform::translation_mm([2.0, 2.0, 1.0]),
+                child: core,
+            });
+            let shoulder = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children: vec![base, boss],
+            });
+            let round = model.add_node(CadNode::EdgeTreatment {
+                child: shoulder,
+                profile: EdgeTreatmentProfile::Round,
+                edges: top_edges(1.0, [2.0; 2]),
+            });
+            let reentrant = kernel.evaluate(&model, round)?;
+            assert!(
+                kernel.summarize(&reentrant).is_single_solid(),
+                "{:?}",
+                kernel.summarize(&reentrant)
+            );
+            let tori = reentrant
+                .solid
+                .face_iter()
+                .filter(|face| {
+                    if let Surface::Torus(torus) = face.oriented_surface() {
+                        assert!(
+                            (torus.entity().large_radius() - 1.25).abs()
+                                < crate::numeric::NUMERICAL_GEOMETRY_TOL_MM
+                        );
+                        assert!(
+                            (torus.entity().small_radius() - 0.25).abs()
+                                < crate::numeric::NUMERICAL_GEOMETRY_TOL_MM
+                        );
+                        assert!(!torus.orientation());
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .count();
+            assert_eq!(tori, 4, "reentrant rim must retain inverted analytic tori");
+            monstertruck_modeling::certify_native_analytic_boundary_incidence(
+                &reentrant.solid,
+                crate::numeric::NUMERICAL_GEOMETRY_TOL_MM,
+                DEFAULT_STEP_RECOVERY_TOLERANCES.edge_treatment_direction,
+            )
+            .map_err(|error| anyhow::anyhow!("native reentrant rim incidence: {error:?}"))?;
             Ok(())
         }
 

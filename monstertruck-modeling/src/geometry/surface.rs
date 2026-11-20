@@ -12,8 +12,11 @@ use super::{
     TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface, TryIntoHomogeneousBsplineSurface, Vector3,
     Vector4, algo, env,
 };
+use crate::SquareMatrix;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
-use monstertruck_geometry::analytic_carrier::{AnalyticCarrier, CarrierDomainRelation};
+use monstertruck_geometry::analytic_carrier::{
+    AnalyticCarrier, AnalyticSupport, CarrierDomainRelation,
+};
 
 /// 3-dimensional surfaces
 #[derive(
@@ -205,6 +208,12 @@ fn revolution_surface_includes_curve(
     surface: &Processor<RevolutionSurface<Curve>, Matrix4>,
     curve: &Curve,
 ) -> bool {
+    // The revolution generator belongs to the processor's local chart,
+    // while the incident edge is expressed in world coordinates.
+    let Some(inverse) = surface.transform().invert() else {
+        return false;
+    };
+    let curve = &curve.transformed(inverse);
     let origin = surface.origin();
     let axis = surface.axis();
     match surface.entity_curve() {
@@ -553,6 +562,20 @@ impl SupportsExactPatchDomains for Surface {
 }
 
 impl TryIntoAnalyticSurfaceKind for Surface {
+    fn has_boundary_linear_extrema(&self) -> bool {
+        matches!(
+            analytic_carrier(self).map(|carrier| carrier.support()),
+            Some(
+                AnalyticSupport::Plane { .. }
+                    | AnalyticSupport::Cylinder { .. }
+                    | AnalyticSupport::Cone { .. }
+            )
+        ) || matches!(
+            self.try_into_analytic_surface_kind(),
+            Some(AnalyticSurfaceKind::Plane(_) | AnalyticSurfaceKind::HomogeneousExtrusion(_))
+        )
+    }
+
     fn try_into_analytic_surface_kind(&self) -> Option<AnalyticSurfaceKind> {
         match self {
             Self::Plane(p) => p.try_into_analytic_surface_kind(),

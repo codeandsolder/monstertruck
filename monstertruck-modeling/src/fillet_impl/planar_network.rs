@@ -11,6 +11,8 @@ use monstertruck_geometry::{
 };
 use rustc_hash::{FxHashMap as Map, FxHashSet as Set};
 
+mod tangent_rim;
+
 const ANGULAR: f64 = monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES.angular;
 
 #[derive(Clone, Copy)]
@@ -105,6 +107,7 @@ struct SelectedEdge {
     faces: [FaceUse; 2],
     normals: [Vector3; 2],
     setbacks: Option<[f64; 2]>,
+    convex: bool,
 }
 
 impl SelectedEdge {
@@ -129,12 +132,10 @@ impl SelectedEdge {
         let na = normal(shell, a.face)?;
         let nb = normal(shell, b.face)?;
         let forward = if a.forward { axis } else { -axis };
-        // The interior of face A is on the left of its outward-oriented
-        // coedge. It must lie strictly inside the halfspace of face B.
-        if nb.dot(na.cross(forward)) >= -ANGULAR
-            || na.dot(axis).abs() > ANGULAR
-            || nb.dot(axis).abs() > ANGULAR
-        {
+        // The interior of face A lies to the left of its outward coedge.
+        // Its relation to carrier B distinguishes convex and reentrant edges.
+        let bend = nb.dot(na.cross(forward));
+        if bend.abs() <= ANGULAR || na.dot(axis).abs() > ANGULAR || nb.dot(axis).abs() > ANGULAR {
             return None;
         }
         let normals = [na, nb];
@@ -167,6 +168,7 @@ impl SelectedEdge {
             faces: [a, b],
             normals,
             setbacks,
+            convex: bend < 0.0,
         })
     }
 }
@@ -238,7 +240,8 @@ impl Corner {
             .filter_map(|id| selected.get(id))
             .collect::<Vec<_>>();
         let radius = rounded.first()?.radius;
-        let mut offsets = [-radius; 3];
+        let sense = if rounded.first()?.convex { 1.0 } else { -1.0 };
+        let mut offsets = [-sense * radius; 3];
         let kind = match rounded.as_slice() {
             [edge] => {
                 let cap_index = faces
@@ -256,7 +259,9 @@ impl Corner {
                 }
             }
             [first, second, third]
-                if rounded.iter().all(|edge| edge.setbacks.is_none())
+                if rounded
+                    .iter()
+                    .all(|edge| edge.setbacks.is_none() && edge.convex)
                     && [second.radius, third.radius]
                         .iter()
                         .all(|r| r.near(&first.radius)) =>
@@ -293,7 +298,7 @@ impl Corner {
                 if advance.abs() <= KERNEL_EPSILON {
                     return None;
                 }
-            } else if advance >= -KERNEL_EPSILON {
+            } else if sense * advance >= -KERNEL_EPSILON {
                 return None;
             }
             line_axis(&source.edge)?;
@@ -310,15 +315,19 @@ impl Corner {
                 let slot = edge.faces.iter().position(|u| u.face == face)?;
                 let n = edge.normals[slot];
                 let other = edge.normals[1 - slot];
-                let direction = -(other - n * n.dot(other)).normalize();
+                let direction = -sense * (other - n * n.dot(other)).normalize();
                 point + projected_radial(direction * setbacks[slot], &kind)
             } else {
-                center + projected_radial(radius * normals[i], &kind)
+                center + projected_radial(sense * radius * normals[i], &kind)
             };
-            if normals
-                .iter()
-                .any(|n| n.dot(contact - point) > KERNEL_EPSILON)
-            {
+            if normals.iter().zip(offsets).any(|(n, offset)| {
+                let distance = n.dot(contact - point);
+                if offset == 0.0 {
+                    distance.abs() > KERNEL_EPSILON
+                } else {
+                    sense * distance > KERNEL_EPSILON
+                }
+            }) {
                 return None;
             }
             contacts.insert(face, Vertex::new(contact));
@@ -350,10 +359,11 @@ impl Section {
         if angle <= ANGULAR || std::f64::consts::PI - angle <= ANGULAR {
             return None;
         }
+        let sense = if edge.convex { 1.0 } else { -1.0 };
         Some(Self {
             center: corner.center,
-            cosine: projected_radial(edge.radius * a, &corner.kind),
-            sine: projected_radial(edge.radius * tangent.normalize(), &corner.kind),
+            cosine: projected_radial(sense * edge.radius * a, &corner.kind),
+            sine: projected_radial(sense * edge.radius * tangent.normalize(), &corner.kind),
             angle,
         })
     }
@@ -433,7 +443,8 @@ fn exact_cylinder(start: &Section, end: &Section, edge: &SelectedEdge) -> Option
     }
     let low = trig_bounds(a, b, start.angle)[0];
     let high = span + trig_bounds(c, d, start.angle)[1];
-    let radial = edge.normals[0] * edge.radius;
+    let sense = if edge.convex { 1.0 } else { -1.0 };
+    let radial = edge.normals[0] * (sense * edge.radius);
     let generator = Curve::Line(Line(
         start.center + radial + axis * low,
         start.center + radial + axis * high,
@@ -780,6 +791,7 @@ pub(super) fn try_round_planar_network(
     radii: &[f64],
 ) -> Option<Shell> {
     planar_network(shell, edges, radii, PlanarTreatment::Round)
+        .or_else(|| tangent_rim::try_round_tangent_rim(shell, edges, radii))
 }
 
 pub(super) fn try_chamfer_planar_network(

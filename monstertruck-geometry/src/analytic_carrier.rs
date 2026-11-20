@@ -153,6 +153,10 @@ impl AnalyticCarrier {
     #[must_use]
     pub const fn support(self) -> AnalyticSupport { self.support }
 
+    /// Whether the chart normal agrees with the canonical implicit support normal.
+    #[must_use]
+    pub const fn positive_orientation(self) -> bool { self.orientation }
+
     /// Certify a planar carrier with its parametric orientation.
     #[must_use]
     pub fn plane(plane: &Plane) -> Option<Self> {

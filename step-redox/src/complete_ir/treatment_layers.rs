@@ -388,6 +388,14 @@ mod tests {
         ));
         let rebuilt = kernel.evaluate(&host.model, host.root)?;
         assert!(kernel.summarize(&rebuilt).is_single_solid());
+        let recovered = replay(host, source.id, result.layers)?;
+        let reconstructed = kernel.evaluate(&recovered.model, recovered.root)?;
+        let reconstructed_summary = kernel.summarize(&reconstructed);
+        assert!(
+            reconstructed_summary.is_single_solid(),
+            "{reconstructed_summary:?}"
+        );
+        assert_eq!(reconstructed_summary.faces, 309);
         Ok(())
     }
 }
