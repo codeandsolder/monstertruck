@@ -13,7 +13,7 @@ use crate::compress::{
 };
 use crate::trimmed::TrimmedSolid;
 use crate::{ExactParameterBoundary2D, StableId, StableIdExhausted};
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::BTreeSet;
 use thiserror::Error;
 
@@ -737,11 +737,15 @@ where
     }
     changed_edges.extend(new_edge_base..shell.edges.len());
 
+    // A replacement of a face's wire membership is not a rewrite of its
+    // shared edge geometry. In particular, the neighboring face may carry
+    // a valid imported pcurve that cannot be regenerated analytically.
+    let mut changed_uses = HashSet::default();
     apply_face_boundary_replacements(
         shell,
         &resolved.face_boundary_replacements,
         new_edge_base,
-        &mut changed_edges,
+        &mut changed_uses,
     );
 
     for splice in &resolved.face_splices {
@@ -750,7 +754,7 @@ where
             .iter()
             .map(|&(edge, orientation)| {
                 let index = resolved_edge_index(edge, new_edge_base);
-                changed_edges.insert(index);
+                changed_uses.insert((splice.face_id, index, orientation));
                 CompressedEdgeUse {
                     index,
                     orientation,
@@ -785,7 +789,7 @@ where
         }
     }
 
-    regenerate_exact_trims(shell, &changed_edges)?;
+    regenerate_exact_trims(shell, &changed_edges, &changed_uses)?;
     shell.compact_unused_topology()?;
 
     Ok(CompressedTrimmedTopologyPatchResult {
@@ -794,13 +798,32 @@ where
     })
 }
 
-fn apply_face_boundary_replacements<P, C, S, T>(
+/// Preserve existing face-local trims for uniquely identified unchanged
+/// coedges. A seam with several indistinguishable uses must instead be
+/// regenerated, never matched by arbitrary iteration order.
+type ChangedCoedges = HashSet<(StableId, usize, bool)>;
+
+fn apply_face_boundary_replacements<P, C, S, T: Clone>(
     shell: &mut CompressedTrimmedShell<P, C, S, T>,
     replacements: &[ResolvedFaceBoundaryReplacement],
     new_edge_base: usize,
-    changed_edges: &mut HashSet<usize>,
+    changed_uses: &mut ChangedCoedges,
 ) {
     for replacement in replacements {
+        let face_id = shell
+            .face_stable_ids
+            .as_ref()
+            .and_then(|ids| ids.get(replacement.face_index))
+            .copied()
+            .unwrap_or(StableId::UNASSIGNED);
+        let face = &mut shell.faces[replacement.face_index];
+        let mut retained = HashMap::default();
+        for edge in face.boundaries.iter().flatten() {
+            retained
+                .entry((edge.index, edge.orientation))
+                .and_modify(|trim| *trim = None)
+                .or_insert(edge.trim_curve.as_ref());
+        }
         let boundaries = replacement
             .boundaries
             .iter()
@@ -808,17 +831,20 @@ fn apply_face_boundary_replacements<P, C, S, T>(
                 wire.iter()
                     .map(|&(edge, orientation)| {
                         let index = resolved_edge_index(edge, new_edge_base);
-                        changed_edges.insert(index);
+                        let trim_curve = retained.remove(&(index, orientation)).flatten().cloned();
+                        if trim_curve.is_none() {
+                            changed_uses.insert((face_id, index, orientation));
+                        }
                         CompressedEdgeUse {
                             index,
                             orientation,
-                            trim_curve: None,
+                            trim_curve,
                         }
                     })
                     .collect()
             })
             .collect();
-        shell.faces[replacement.face_index].boundaries = boundaries;
+        face.boundaries = boundaries;
     }
 }
 
@@ -908,6 +934,7 @@ fn splice_face_boundary_run<P, C, S, T: Clone>(
 fn regenerate_exact_trims<P, C, S, T>(
     shell: &mut CompressedTrimmedShell<P, C, S, T>,
     changed_edges: &HashSet<usize>,
+    changed_uses: &ChangedCoedges,
 ) -> Result<(), CompressedTopologyPatchError>
 where
     C: ExactParameterBoundary2D<S, BoundaryCurve = T>,
@@ -916,8 +943,14 @@ where
     let face_ids = shell.face_stable_ids.as_deref();
     let edges = &shell.edges;
     for (face_index, face) in shell.faces.iter_mut().enumerate() {
+        let face_id = face_ids
+            .and_then(|ids| ids.get(face_index))
+            .copied()
+            .unwrap_or(StableId::UNASSIGNED);
         for edge_use in face.boundaries.iter_mut().flatten() {
-            if !changed_edges.contains(&edge_use.index) {
+            if !changed_edges.contains(&edge_use.index)
+                && !changed_uses.contains(&(face_id, edge_use.index, edge_use.orientation))
+            {
                 continue;
             }
             let edge = &edges[edge_use.index];
@@ -929,10 +962,7 @@ where
                         .and_then(|ids| ids.get(edge_use.index))
                         .copied()
                         .unwrap_or(StableId::UNASSIGNED),
-                    face: face_ids
-                        .and_then(|ids| ids.get(face_index))
-                        .copied()
-                        .unwrap_or(StableId::UNASSIGNED),
+                    face: face_id,
                 })?;
             edge_use.trim_curve = Some(trim_curve);
         }

@@ -10,20 +10,19 @@ use super::{
     solid::{local_frame_transform, recovered_profile_curve_to_ir},
 };
 use crate::brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport};
-use crate::cad_ir::{CadModel, CadNode, Profile2d, ProfileLoop, ProofStatus, Provenance};
+use crate::cad_ir::{CadModel, CadNode, Profile2d, ProfileLoop};
 use crate::cad_kernel::CadKernel;
-use crate::math2::{distance as distance2, sub as sub2};
+use crate::math2::distance as distance2;
 use crate::math3::{
     add, canonical_unit_direction, cross, distance, dot, mul, norm, normalize,
     point_to_unit_line_distance, sub,
 };
 use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
-use crate::solid_extrusions::{signed_area_curves, strict_profile_contains};
+use crate::solid_extrusions::{profile_contains_with_rotated_ray, signed_area_curves};
 use anyhow::Result;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use std::collections::{BTreeMap, HashMap};
-use std::f64::consts::PI;
 use step_p21::ast::EntityInstance;
 
 mod circular;
@@ -254,80 +253,6 @@ impl SliceGraph {
     }
 }
 
-/// Pick a ray separated from all endpoints and circular tangencies, then use
-/// the same analytic strict inclusion test as the extrusion-core recognizer.
-/// No perturbed sample point or polygonal approximation is involved.
-fn contains(ring: &[RecoveredProfileCurve], point: [f64; 2]) -> Option<bool> {
-    let mut forbidden = Vec::new();
-    for curve in ring {
-        for vertex in [curve.start_point()?, curve.end_point()?] {
-            let relative = sub2(vertex, point);
-            if relative[0].hypot(relative[1]) <= LENGTH {
-                return None;
-            }
-            forbidden.push(relative[1].atan2(relative[0]).rem_euclid(PI));
-        }
-        if let RecoveredProfileCurve::CircleArc {
-            center_mm,
-            radius_mm,
-            ..
-        } = curve
-        {
-            let relative = sub2(*center_mm, point);
-            let distance = relative[0].hypot(relative[1]);
-            if distance >= *radius_mm {
-                let bearing = relative[1].atan2(relative[0]);
-                let tangent = (radius_mm / distance).asin();
-                forbidden.extend([
-                    (bearing - tangent).rem_euclid(PI),
-                    (bearing + tangent).rem_euclid(PI),
-                ]);
-            }
-        }
-    }
-    forbidden.sort_by(f64::total_cmp);
-    let first = *forbidden.first()?;
-    forbidden.push(first + PI);
-    let interval = forbidden
-        .windows(2)
-        .max_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))?;
-    let angle = interval[0].midpoint(interval[1]);
-    let (sin, cos) = angle.sin_cos();
-    let rotate = |p| {
-        let [x, y] = sub2(p, point);
-        [x.mul_add(cos, y * sin), y.mul_add(cos, -x * sin)]
-    };
-    let rotated = ring
-        .iter()
-        .map(|curve| match curve {
-            RecoveredProfileCurve::Line {
-                source_edge_ids,
-                start_mm,
-                end_mm,
-            } => Some(RecoveredProfileCurve::Line {
-                source_edge_ids: source_edge_ids.clone(),
-                start_mm: rotate(*start_mm),
-                end_mm: rotate(*end_mm),
-            }),
-            RecoveredProfileCurve::CircleArc {
-                source_edge_ids,
-                center_mm,
-                radius_mm,
-                start_angle_rad,
-                end_angle_rad,
-            } => Some(RecoveredProfileCurve::CircleArc {
-                source_edge_ids: source_edge_ids.clone(),
-                center_mm: rotate(*center_mm),
-                radius_mm: *radius_mm,
-                start_angle_rad: start_angle_rad - angle,
-                end_angle_rad: end_angle_rad - angle,
-            }),
-            _ => None,
-        })
-        .collect::<Option<Vec<_>>>()?;
-    strict_profile_contains(&rotated, [0.0; 2], LENGTH)
-}
-
 fn section_profiles(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Profile2d>> {
     let areas = rings
         .iter()
@@ -361,7 +286,9 @@ fn section_profiles(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Profile2
         let mut parents = Vec::new();
         let witness = ring.first()?.start_point()?;
         for &j in outers.keys() {
-            if areas[j] > -areas[i] && contains(&rings[j], witness)? {
+            if areas[j] > -areas[i]
+                && profile_contains_with_rotated_ray(&rings[j], witness, LENGTH)?
+            {
                 parents.push(j);
             }
         }
@@ -492,17 +419,7 @@ pub fn recover<K: CadKernel>(
         {
             continue;
         }
-        let face_ids = solid.faces().map(|face| face.id).collect::<Vec<_>>();
-        let mut source_entity_ids = vec![solid_id];
-        source_entity_ids.extend(&face_ids);
-        model.set_provenance(
-            root,
-            Provenance {
-                source_entity_ids,
-                proof: ProofStatus::WithinTolerance,
-                max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
-            },
-        )?;
+        let face_ids = super::set_proven_source_boundary(&mut model, root, &solid)?;
         return Ok(Some(CadFragment {
             source: if transitions {
                 CadFragmentSource::SectionalExtrusionTransitions {
@@ -616,9 +533,18 @@ mod tests {
             end_angle_rad: -std::f64::consts::TAU,
         }];
         let island = rectangle(-0.5, -0.5, 1.0, 1.0);
-        assert_eq!(contains(&circle, [0.0, 0.0]), Some(true));
-        assert_eq!(contains(&circle, [3.0, 0.0]), Some(false));
-        assert_eq!(contains(&circle, [2.0, 0.0]), None);
+        assert_eq!(
+            profile_contains_with_rotated_ray(&circle, [0.0, 0.0], LENGTH),
+            Some(true)
+        );
+        assert_eq!(
+            profile_contains_with_rotated_ray(&circle, [3.0, 0.0], LENGTH),
+            Some(false)
+        );
+        assert_eq!(
+            profile_contains_with_rotated_ray(&circle, [2.0, 0.0], LENGTH),
+            None
+        );
         let profiles = section_profiles(&[outer, circle, island]).unwrap();
         assert_eq!(profiles.len(), 2);
         assert_eq!(profiles[0].loops.len(), 2);
