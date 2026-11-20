@@ -33,6 +33,13 @@ pub enum FilletError {
     /// The edge is shared by a non-manifold number of faces.
     #[error("Non-manifold edge: shared by {0} faces.")]
     NonManifoldEdge(usize),
+    /// The same topological edge was requested more than once.
+    #[error("Duplicate topological edge in fillet selection.")]
+    DuplicateSelectedEdge,
+    /// A selected edge has no unambiguous set of non-overlapping manifold
+    /// successors after earlier topology edits in the same request.
+    #[error("Selected edge has no unambiguous non-overlapping manifold successors.")]
+    UnresolvableSelectedEdge,
     /// The requested edge was not found in the shell.
     #[error("Edge not found in shell.")]
     EdgeNotFound,
@@ -42,6 +49,9 @@ pub enum FilletError {
         /// Description of which conversion failed.
         context: &'static str,
     },
+    /// A radius is non-finite, zero, or negative.
+    #[error("Fillet radii must be finite and strictly positive.")]
+    InvalidRadius,
     /// The edge is too short for the requested fillet radius.
     #[error("Edge too short for fillet radius.")]
     DegenerateEdge,

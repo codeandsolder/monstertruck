@@ -1,4 +1,5 @@
-use monstertruck_core::tolerance::Tolerance;
+use std::collections::HashMap;
+
 use monstertruck_geometry::prelude::*;
 use monstertruck_traits::{BoundedCurve, ParametricCurve, ParametricSurface};
 
@@ -109,17 +110,11 @@ impl TryFrom<Curve> for NurbsCurve<Vector4> {
 /// Convert an external shell to internal fillet types.
 ///
 /// Returns the internal shell and the internal `EdgeId`s corresponding to
-/// the selected external edges (matched by endpoint positions).
+/// the selected external edges (matched by topology identity).
 pub fn convert_shell_in<C: FilletableCurve, S: FilletableSurface>(
     shell: &monstertruck_topology::Shell<Point3, C, S>,
     edges: &[monstertruck_topology::Edge<Point3, C>],
 ) -> std::result::Result<(InternalShell, Vec<types::EdgeId>), FilletError> {
-    // Collect endpoint pairs for requested edges (front, back).
-    let edge_endpoints: Vec<(Point3, Point3)> = edges
-        .iter()
-        .map(|e| (e.absolute_front().point(), e.absolute_back().point()))
-        .collect();
-
     let internal_shell: InternalShell = shell
         .try_mapped(
             |p| Some(*p),
@@ -130,19 +125,27 @@ pub fn convert_shell_in<C: FilletableCurve, S: FilletableSurface>(
             context: "failed to convert shell curves or surfaces to NURBS",
         })?;
 
-    // Match external edges to internal edges by endpoint positions.
-    let internal_edge_ids: Vec<types::EdgeId> = edge_endpoints
+    // Shell mapping retains face, boundary and edge order, even when several
+    // distinct edges have identical endpoints. Match their topology identities,
+    // not their coordinates (which are not unique in a CAD B-rep).
+    let mut mapped_ids = HashMap::new();
+    for (source_face, mapped_face) in shell.face_iter().zip(internal_shell.face_iter()) {
+        for (source_wire, mapped_wire) in source_face
+            .absolute_boundaries()
+            .iter()
+            .zip(mapped_face.absolute_boundaries())
+        {
+            for (source_edge, mapped_edge) in source_wire.iter().zip(mapped_wire.iter()) {
+                mapped_ids.insert(source_edge.id(), mapped_edge.id());
+            }
+        }
+    }
+    let internal_edge_ids = edges
         .iter()
-        .map(|(ext_front, ext_back)| {
-            internal_shell
-                .edge_iter()
-                .find(|ie| {
-                    let f = ie.absolute_front().point();
-                    let b = ie.absolute_back().point();
-                    (f.near(ext_front) && b.near(ext_back))
-                        || (f.near(ext_back) && b.near(ext_front))
-                })
-                .map(|ie| ie.id())
+        .map(|edge| {
+            mapped_ids
+                .get(&edge.id())
+                .copied()
                 .ok_or(FilletError::EdgeNotFound)
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -169,4 +172,51 @@ pub fn convert_shell_out<C: FilletableCurve, S: FilletableSurface>(
         .ok_or(FilletError::UnsupportedGeometry {
             context: "failed to convert internal shell back to external types",
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use monstertruck_topology::{Edge, Face, Shell, Vertex, Wire};
+
+    #[test]
+    fn conversion_preserves_distinct_edges_with_identical_endpoints() {
+        let points = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        let vertices = Vertex::from_points(points);
+        let make_edge = |i: usize, j: usize| {
+            let curve =
+                BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![points[i], points[j]]);
+            Edge::new_unchecked(
+                &vertices[i],
+                &vertices[j],
+                Curve::NurbsCurve(NurbsCurve::from(curve)),
+            )
+        };
+        let first = make_edge(0, 1);
+        let second = make_edge(0, 1);
+        let surface = || {
+            let knots = KnotVector::bezier_knot(1);
+            NurbsSurface::from(BsplineSurface::new_unchecked(
+                (knots.clone(), knots),
+                vec![vec![points[0], points[3]], vec![points[1], points[2]]],
+            ))
+        };
+        let make_face = |edge: Edge<_, _>| {
+            let wire: Wire<_, _> =
+                vec![edge, make_edge(1, 2), make_edge(2, 3), make_edge(3, 0)].into();
+            Face::new_unchecked(vec![wire], surface())
+        };
+        let shell: Shell<_, _, _> =
+            vec![make_face(first.clone()), make_face(second.clone())].into();
+        let (converted, ids) = convert_shell_in(&shell, &[second, first]).unwrap();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1]);
+        assert!(converted.edge_iter().any(|edge| edge.id() == ids[0]));
+        assert!(converted.edge_iter().any(|edge| edge.id() == ids[1]));
+    }
 }

@@ -40,6 +40,9 @@ pub fn squared_distance(a: Point3, b: Point3) -> f64 {
 }
 
 pub fn approximate_edge_length(edge: &Edge, sample_count: usize) -> f64 {
+    if sample_count == 0 {
+        return 0.0;
+    }
     let curve = edge.curve();
     let (t0, t1) = curve.range_tuple();
     let points: Vec<_> = (0..=sample_count)
@@ -78,17 +81,13 @@ impl NotStrictlyCut for Edge {
     fn not_strictly_cut(&self, vertex: &Vertex) -> Option<(Self, Self)> {
         let curve0 = self.curve();
         let t = curve0.search_nearest_parameter(vertex.point(), None, 100)?;
-        let (t0, t1) = curve0.range_tuple();
-        if t < t0 + KERNEL_EPSILON || t1 - KERNEL_EPSILON < t {
-            return None;
-        }
-        Some(self.pre_cut(vertex, curve0, t))
+        self.not_strictly_cut_with_parameter(vertex, t)
     }
 
     fn not_strictly_cut_with_parameter(&self, vertex: &Vertex, t: f64) -> Option<(Self, Self)> {
         let curve0 = self.curve();
         let (t0, t1) = curve0.range_tuple();
-        if t < t0 + KERNEL_EPSILON || t1 - KERNEL_EPSILON < t {
+        if !t.is_finite() || t < t0 + KERNEL_EPSILON || t1 - KERNEL_EPSILON < t {
             return None;
         }
         Some(self.pre_cut(vertex, curve0, t))

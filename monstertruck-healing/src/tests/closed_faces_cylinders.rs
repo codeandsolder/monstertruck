@@ -441,7 +441,6 @@ fn double_closed_boundary_cylinder() {
         SearchNearestParameterD1,
     )]
     enum Curve {
-        Line(Line<Point3>),
         Arc(TrimmedCurve<Processor<UnitCircle<Point3>, Matrix4>>),
         ParameterCurve(ParameterCurve<ParamCurve2D, Surface>),
     }
@@ -455,7 +454,6 @@ fn double_closed_boundary_cylinder() {
     impl ParameterBoundary2D<Surface> for Curve {
         fn parameter_boundary_2d(&self, surface: &Surface, tolerance: f64) -> Option<Vec<Point2>> {
             match self {
-                Curve::Line(c) => c.parameter_boundary_2d(surface, tolerance),
                 Curve::Arc(c) => c.parameter_boundary_2d(surface, tolerance),
                 Curve::ParameterCurve(c) => c.parameter_boundary_2d(surface, tolerance),
             }
@@ -726,7 +724,6 @@ fn many_closed_boundary_cylinder() {
         SearchNearestParameterD1,
     )]
     enum Curve {
-        Line(Line<Point3>),
         Arc(TrimmedCurve<Processor<UnitCircle<Point3>, Matrix4>>),
         ParameterCurve(ParameterCurve<ParamCurve2D, Surface>),
     }
@@ -740,7 +737,6 @@ fn many_closed_boundary_cylinder() {
     impl ParameterBoundary2D<Surface> for Curve {
         fn parameter_boundary_2d(&self, surface: &Surface, tolerance: f64) -> Option<Vec<Point2>> {
             match self {
-                Curve::Line(c) => c.parameter_boundary_2d(surface, tolerance),
                 Curve::Arc(c) => c.parameter_boundary_2d(surface, tolerance),
                 Curve::ParameterCurve(c) => c.parameter_boundary_2d(surface, tolerance),
             }
