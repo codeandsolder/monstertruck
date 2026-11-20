@@ -503,7 +503,7 @@ where
             .surface()
             .parameter_space_transform()
             .map(|transform| self.curve().transformed(transform));
-        let curve = StepDisplay::new(mapped.as_ref().unwrap_or(self.curve()), curve_idx);
+        let curve = StepDisplay::new(mapped.as_ref().unwrap_or_else(|| self.curve()), curve_idx);
         let surface = StepDisplay::new(self.surface(), surface_idx);
         f.write_fmt(format_args!(
             "#{idx} = PCURVE('', #{surface_idx}, #{repr_idx});
