@@ -597,6 +597,26 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
     Ok(None)
 }
 
+/// Attach the original whole-solid provenance after successful source-boundary proof.
+fn set_proven_source_boundary(
+    model: &mut CadModel,
+    root: NodeId,
+    solid: &crate::reduced_brep::ReducedSolid,
+) -> Result<Vec<u64>> {
+    let face_ids = solid.faces().map(|face| face.id).collect::<Vec<_>>();
+    let mut source_entity_ids = vec![solid.solid_id()];
+    source_entity_ids.extend(&face_ids);
+    model.set_provenance(
+        root,
+        Provenance {
+            source_entity_ids,
+            proof: ProofStatus::WithinTolerance,
+            max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
+        },
+    )?;
+    Ok(face_ids)
+}
+
 /// Detect all source-derived extrusion cores, discard those that contradict
 /// known source boundary geometry, and admit only the complete surviving union.
 ///

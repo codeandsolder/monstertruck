@@ -10,7 +10,7 @@ use super::{
     solid::{local_frame_transform, recovered_profile_curve_to_ir},
 };
 use crate::brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport};
-use crate::cad_ir::{CadModel, CadNode, Profile2d, ProfileLoop, ProofStatus, Provenance};
+use crate::cad_ir::{CadModel, CadNode, Profile2d, ProfileLoop};
 use crate::cad_kernel::CadKernel;
 use crate::math2::distance as distance2;
 use crate::math3::{
@@ -415,17 +415,7 @@ pub fn recover<K: CadKernel>(
         {
             continue;
         }
-        let face_ids = solid.faces().map(|face| face.id).collect::<Vec<_>>();
-        let mut source_entity_ids = vec![solid_id];
-        source_entity_ids.extend(&face_ids);
-        model.set_provenance(
-            root,
-            Provenance {
-                source_entity_ids,
-                proof: ProofStatus::WithinTolerance,
-                max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
-            },
-        )?;
+        let face_ids = super::set_proven_source_boundary(&mut model, root, &solid)?;
         return Ok(Some(CadFragment {
             source: if transitions {
                 CadFragmentSource::SectionalExtrusionTransitions {

@@ -8,7 +8,7 @@ use super::{
     solid::{local_frame_transform, recover_source_cap_extrusion_model},
 };
 use crate::brep::{CurveSupport, SurfaceSupport};
-use crate::cad_ir::{CadModel, CadNode, NodeId, ProofStatus, Provenance};
+use crate::cad_ir::{CadModel, CadNode, NodeId};
 use crate::cad_kernel::CadKernel;
 use crate::formed_sheet::{self, FormedSheetEvidence, SheetCylinderPair};
 use crate::math2::{distance as distance2, dot as dot2, sub as sub2};
@@ -414,17 +414,7 @@ pub(super) fn recover<K: CadKernel>(
     let Some((mut model, root)) = selected else {
         return Ok(None);
     };
-    let face_ids = solid.faces().map(|f| f.id).collect::<Vec<_>>();
-    let mut source_entity_ids = vec![solid_id];
-    source_entity_ids.extend(&face_ids);
-    model.set_provenance(
-        root,
-        Provenance {
-            source_entity_ids,
-            proof: ProofStatus::WithinTolerance,
-            max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
-        },
-    )?;
+    let face_ids = super::set_proven_source_boundary(&mut model, root, &solid)?;
     Ok(Some(CadFragment {
         source: CadFragmentSource::FormedSheetExtrusionUnion {
             solid_id,

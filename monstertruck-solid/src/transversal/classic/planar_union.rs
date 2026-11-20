@@ -903,16 +903,19 @@ fn validates_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     })
 }
 
-fn assemble_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    loops: Vec<OverlayLoop<C, S>>,
-    reference: &AltRegion<C, S>,
-    surface: &S,
-) -> Option<Vec<AltRegion<C, S>>> {
-    let mut outer = Vec::<(Vec<Wire<Point3, AltCurve<C, S>>>, Vec<Point2>)>::new();
+/// Group positive contours with their innermost containing negative contours.
+fn group_planar_contours<W>(
+    loops: impl IntoIterator<Item = (W, Vec<Point2>)>,
+) -> Option<Vec<Vec<W>>> {
+    let mut outer = Vec::new();
     let mut holes = Vec::new();
     for (wire, poly) in loops {
-        if signed_area(&poly) > 0.0 {
-            outer.push((vec![wire], poly));
+        let area = signed_area(&poly);
+        if !area.is_finite() || area == 0.0 {
+            return None;
+        }
+        if area > 0.0 {
+            outer.push((vec![wire], poly, area));
         } else {
             holes.push((wire, poly));
         }
@@ -922,16 +925,24 @@ fn assemble_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let parent = outer
             .iter()
             .enumerate()
-            .filter(|(_, (_, poly))| winding(poly, point) != 0)
-            .min_by(|(_, lhs), (_, rhs)| signed_area(&lhs.1).total_cmp(&signed_area(&rhs.1)))
+            .filter(|(_, (_, poly, _))| winding(poly, point) != 0)
+            .min_by(|(_, lhs), (_, rhs)| lhs.2.total_cmp(&rhs.2))
             .map(|(index, _)| index)?;
         outer[parent].0.push(hole);
     }
+    Some(outer.into_iter().map(|(wires, _, _)| wires).collect())
+}
+
+fn assemble_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    loops: Vec<OverlayLoop<C, S>>,
+    reference: &AltRegion<C, S>,
+    surface: &S,
+) -> Option<Vec<AltRegion<C, S>>> {
     Some(
-        outer
+        group_planar_contours(loops)?
             .into_iter()
             .enumerate()
-            .map(|(key, (wires, _))| {
+            .map(|(key, wires)| {
                 BooleanRegion::new(
                     wires,
                     surface.clone(),
@@ -990,36 +1001,17 @@ where
         return None;
     }
     let mut samples = HashMap::default();
-    let mut outer = Vec::new();
-    let mut holes = Vec::new();
-    for wire in boundaries {
-        let mut poly =
-            create_parameter_boundary_on_surface(surface, wire, None, &mut samples, tol)?.0;
-        reconcile_local_wire_uv_closure(surface, None, wire.front_vertex()?.point(), &mut poly);
-        let area = signed_area(&poly);
-        if !area.is_finite() || area == 0.0 {
-            return None;
-        }
-        if area > 0.0 {
-            outer.push((vec![wire.clone()], poly));
-        } else {
-            holes.push((wire.clone(), poly));
-        }
-    }
-    if outer.len() < 2 {
-        return None;
-    }
-    for (hole, poly) in holes {
-        let point = *poly.first()?;
-        let parent = outer
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, candidate))| winding(candidate, point) != 0)
-            .min_by(|(_, a), (_, b)| signed_area(&a.1).total_cmp(&signed_area(&b.1)))
-            .map(|(i, _)| i)?;
-        outer[parent].0.push(hole);
-    }
-    Some(outer.into_iter().map(|(wires, _)| wires).collect())
+    let loops = boundaries
+        .iter()
+        .map(|wire| {
+            let mut poly =
+                create_parameter_boundary_on_surface(surface, wire, None, &mut samples, tol)?.0;
+            reconcile_local_wire_uv_closure(surface, None, wire.front_vertex()?.point(), &mut poly);
+            Some((wire.clone(), poly))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let groups = group_planar_contours(loops)?;
+    (groups.len() > 1).then_some(groups)
 }
 
 /// Conversion and global topology repair can resolve an intermediate
