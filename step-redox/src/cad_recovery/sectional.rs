@@ -429,7 +429,7 @@ fn sectional_model(
     Ok(Some((model, root)))
 }
 
-pub(super) fn recover<K: CadKernel>(
+pub fn recover<K: CadKernel>(
     solid_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,

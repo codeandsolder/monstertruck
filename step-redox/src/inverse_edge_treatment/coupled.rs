@@ -5,10 +5,10 @@
 //! Each of the two original carrier runs must certify that same junction.
 
 use super::{
-    CircleFrame, DIR_TOL, EndpointEdit, GEOM_TOL_MM, carrier_run_neighbors, circle_carrier_run,
-    circle_carrier_supports_inverse, circle_line_endpoint_edit, edge_face_users, face,
-    normalize_retained_edge_rewrites, open_inverse_circle_arc, same_virtual_circle, topology_edges,
-    topology_face, unique_face_edges,
+    CircleFrame, DIR_TOL, EndpointEdit, GEOM_TOL_MM, TreatmentTopology, carrier_run_neighbors,
+    circle_carrier_run, circle_carrier_supports_inverse, circle_line_endpoint_edit,
+    edge_face_users, face, normalize_retained_edge_rewrites, open_inverse_circle_arc,
+    same_virtual_circle, topology_edges, topology_face, unique_face_edges,
 };
 use crate::{
     brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport},
@@ -16,7 +16,6 @@ use crate::{
     edge_treatments::{
         EdgeTreatmentEvidence, EdgeTreatmentEvidenceStrength, EdgeTreatmentVirtualEdge,
     },
-    kernel_source_load::KernelTopologyProvenance,
     kernel_topology::{
         KernelFaceSplice, KernelNewEdge, KernelPatchCurve, KernelPatchEdgeRef, KernelPatchEdgeUse,
         KernelPatchVertexRef, KernelTopologyPatch,
@@ -521,7 +520,7 @@ impl Perimeter {
         &mut self,
         treatment: &Treatment,
         section: usize,
-        provenance: &KernelTopologyProvenance,
+        provenance: &impl TreatmentTopology,
     ) -> Result<EdgeSelector> {
         let AddedChain {
             from,
@@ -590,7 +589,7 @@ pub fn plan_closed_perimeter(
     solid: &ReducedSolid,
     group: &[&EdgeTreatmentEvidence],
     section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
 ) -> Result<PlannedPerimeter> {
     let treatments = group
         .iter()
@@ -635,21 +634,12 @@ mod tests {
     use crate::cad_kernel::monstertruck::MonstertruckKernel;
     use crate::kernel_source_load::SourceStepLoadInspector;
     use crate::kernel_topology::{SourceTopologyEditor, plan_source_edge_treatment_transaction};
-    use std::io::{Cursor, Read};
 
     #[test]
     fn real_te_closed_perimeter_is_one_native_topology_transaction() -> Result<()> {
         // Existing bundled, SHA-pinned manufacturer source. No synthetic
         // source geometry or manually adjusted candidate parameters.
-        let archive = include_bytes!("../../validation/fixtures/bundled/te-T2111092004-000.zip");
-        let mut zip = zip::ZipArchive::new(Cursor::new(archive))?;
-        let mut bytes = Vec::new();
-        zip.by_index(0)?.read_to_end(&mut bytes)?;
-        use sha2::{Digest, Sha256};
-        assert_eq!(
-            hex::encode(Sha256::digest(&bytes)),
-            "b485ad005657eec408ee345f77d68848d54c42940892a9e40aae30d2d18d95cf"
-        );
+        let bytes = super::super::te_treatment_fixture()?;
         let kernel = MonstertruckKernel::project_standard();
         let document = kernel.resolve_source_exchange(
             monstertruck_io::step::load::ParsedStepSource::parse(&bytes)?.exchange,
@@ -693,8 +683,9 @@ mod tests {
             &selected,
             provenance,
         )?;
-        assert_eq!(planned.coupled_selectors.len(), 3);
-        for group in &planned.coupled_selectors {
+        assert_eq!(planned.coupled_groups.len(), 3);
+        for group in &planned.coupled_groups {
+            let group = &group.selectors;
             assert_eq!(group.len(), 8);
             assert_eq!(
                 group

@@ -113,9 +113,9 @@ impl ReducedSolid {
 
     /// Build a semantic B-rep view directly from a kernel-owned native solid.
     ///
-    /// The caller supplies its already ordered, exact-trim faces. Synthetic
-    /// topology identities are assigned by that caller and never masquerade
-    /// as STEP source provenance.
+    /// The caller supplies its already ordered, exact-trim faces. Native
+    /// topology identities belong to the current native solid and never
+    /// masquerade as STEP source provenance.
     pub(crate) fn from_native_faces(solid_id: u64, faces: Vec<ReducedFace>) -> Self {
         let max_id = faces
             .iter()

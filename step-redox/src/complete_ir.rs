@@ -19,7 +19,6 @@ use crate::kernel_source_load::{
 use crate::kernel_topology::plan_source_coplanar_normalization_patch;
 use crate::kernel_topology::{
     SourceTopologyEditor, plan_source_boundary_feature_peel_from_entities,
-    plan_source_edge_treatment_transaction,
 };
 use crate::patterns::InstancePattern;
 use crate::planar_features::{
@@ -32,6 +31,8 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Exchange};
+
+mod treatment_layers;
 
 pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
 pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v18";
@@ -872,7 +873,7 @@ fn finish_native_boundary_feature_replay<
         let document = kernel.resolve_source_exchange(
             monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
         )?;
-        recognize_single_healed_host(document.as_ref())
+        recognize_single_healed_host(document.as_ref(), kernel)
     })?
     else {
         return Ok(None);
@@ -906,26 +907,19 @@ fn recover_kernel_topology_normalized_fragment<
     };
 
     let evidence = replayable_source_treatments(exchange, source)?;
-    let (patches, coupled_selectors) = if evidence.is_empty() {
-        (Vec::new(), Vec::new())
-    } else {
-        let planned =
-            plan_source_edge_treatment_transaction(exchange, source, &evidence, &provenance)
-                .context("construct inverse edge-treatment topology patch")?;
-        (vec![planned.patch], planned.coupled_selectors)
-    };
-    // Keep one exact kernel-owned source throughout both reduction stages.
-    // The source identity journal does not depend on temporary STEP numbers.
-    let mut edited = kernel
-        .edit_source_topology(document, source, &patches)
-        .context("apply inverse edge-treatment topology patch to source")?;
+    let treatment_layers::PeelOutcome {
+        mut edited,
+        layers,
+        stop,
+    } = treatment_layers::peel(kernel, document, source, &provenance, &evidence)
+        .context("peel dependency-ordered native edge treatments")?;
     if kernel.inspect_edited_source(&edited)?.faces == 0 {
         return Ok(None);
     }
     let same_domain_merges = kernel
         .normalize_edited_source(&mut edited)
         .context("normalize native source faces after inverse treatments")?;
-    let unchanged = patches.is_empty() && same_domain_merges == 0;
+    let unchanged = layers.is_empty() && same_domain_merges == 0;
     // Even an unedited source can have a native constructive representation
     // that the parser-only path did not recognize (e.g. an exact U-directed
     // rational spline extrusion). Do not needlessly serialize that source or
@@ -941,11 +935,14 @@ fn recover_kernel_topology_normalized_fragment<
                     monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?
                         .exchange,
                 )?;
-                recognize_single_healed_host(final_document.as_ref())
+                recognize_single_healed_host(final_document.as_ref(), kernel)
             },
             |fragment| Ok(Some(fragment)),
         )?
     }) else {
+        if let Some(reason) = stop {
+            bail!("inverse treatment fixed point: {reason}");
+        }
         return Ok(None);
     };
     // Synthetic edited-native identifiers are never original STEP provenance.
@@ -955,23 +952,13 @@ fn recover_kernel_topology_normalized_fragment<
             .map(|accepted| accepted.then_some(host));
     }
 
-    if evidence.is_empty() {
+    if layers.is_empty() {
         host.source = CadFragmentSource::SameDomainNormalized {
             solid_id: source.id,
         };
         return Ok(Some(host));
     }
-
-    let replay = evidence
-        .iter()
-        .filter_map(|item| {
-            replayable_edge_treatment(item).map(|(profile, edge)| (item, profile, edge))
-        })
-        .collect::<Vec<_>>();
-    if replay.len() != evidence.len() {
-        return Ok(None);
-    }
-    let fragment = replay_grouped_edge_treatments(host, source.id, replay, coupled_selectors)?;
+    let fragment = treatment_layers::replay(host, source.id, layers)?;
     kernel_replay_is_single_solid(kernel, &fragment).map(|accepted| accepted.then_some(fragment))
 }
 
@@ -993,7 +980,6 @@ fn replayable_source_treatments(
         ),
     );
     evidence.sort_by_key(|item| item.treatment_face_id);
-    evidence.dedup_by_key(|item| item.treatment_face_id);
     Ok(evidence)
 }
 
@@ -1028,7 +1014,10 @@ fn recognize_native_edited_host<K: SourceTopologyEditor>(
         .transpose()
 }
 
-fn recognize_single_healed_host(healed: &Exchange) -> Result<Option<CadFragment>> {
+fn recognize_single_healed_host<K: CadKernel>(
+    healed: &Exchange,
+    kernel: &K,
+) -> Result<Option<CadFragment>> {
     let [section] = healed.data.as_slice() else {
         return Ok(None);
     };
@@ -1069,10 +1058,16 @@ fn recognize_single_healed_host(healed: &Exchange) -> Result<Option<CadFragment>
     }
     let refs = candidates.iter().collect::<Vec<_>>();
     let selected = select_cheapest_whole_solid_fragments(&refs)?;
-    Ok(selected
+    if let Some(host) = selected
         .get(solid_id)
         .filter(|host| is_constructive_source(&host.source))
-        .map(|host| (*host).clone()))
+    {
+        return Ok(Some((*host).clone()));
+    }
+    // The edited solid may expose a piecewise-prismatic host rather than
+    // one extrusion or revolution. Reuse the same independently verified
+    // sectional recognizer on this one final native STEP snapshot.
+    crate::cad_recovery::sectional::recover(*solid_id, &section.entities, &index, kernel)
 }
 
 fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> Result<bool> {
@@ -1835,22 +1830,46 @@ fn replay_edge_treatments(
     replay_grouped_edge_treatments(fragment, solid_id, replay, Vec::new())
 }
 
-/// Every connected perimeter is one operation, not a sequence of
-/// independently replayed rounds that would destroy their common junctions.
+/// Owned forward operation. Geometry is captured in the inverse layer's
+/// current coordinate space, while provenance is independently mapped back
+/// to original STEP member identities.
+struct TreatmentReplayGroup {
+    face_ids: Vec<u64>,
+    profile: EdgeTreatmentProfile,
+    edges: Vec<EdgeTreatmentEdge>,
+    max_residual_mm: f64,
+}
+
 fn replay_grouped_edge_treatments(
-    mut fragment: CadFragment,
+    fragment: CadFragment,
     solid_id: u64,
     replay: Vec<ReplayTreatment<'_>>,
-    coupled_selectors: Vec<Vec<(u64, EdgeSelector)>>,
+    coupled_groups: Vec<crate::kernel_topology::CoupledTreatmentReplay>,
 ) -> Result<CadFragment> {
-    let mut remaining = replay
-        .into_iter()
-        .map(|item| (item.0.treatment_face_id, item))
-        .collect::<BTreeMap<_, _>>();
-    let treatment_face_ids = remaining.keys().copied().collect::<Vec<_>>();
-    let mut groups = Vec::<Vec<ReplayTreatment<'_>>>::new();
-    for selectors in coupled_selectors {
-        let group = selectors
+    apply_treatment_replay_groups(
+        fragment,
+        solid_id,
+        make_treatment_replay_groups(replay, coupled_groups)?,
+    )
+}
+
+/// Every connected perimeter is one operation, not a sequence of
+/// independently replayed rounds that would destroy their common junctions.
+fn make_treatment_replay_groups(
+    replay: Vec<ReplayTreatment<'_>>,
+    coupled_groups: Vec<crate::kernel_topology::CoupledTreatmentReplay>,
+) -> Result<Vec<TreatmentReplayGroup>> {
+    let mut remaining = BTreeMap::new();
+    for item in replay {
+        anyhow::ensure!(
+            remaining.insert(item.0.treatment_face_id, item).is_none(),
+            "multiple forward treatment interpretations for the same face"
+        );
+    }
+    let mut groups = Vec::<TreatmentReplayGroup>::new();
+    for planned in coupled_groups {
+        let mut group = planned
+            .selectors
             .into_iter()
             .map(|(id, selector)| {
                 let mut item = remaining
@@ -1861,42 +1880,90 @@ fn replay_grouped_edge_treatments(
             })
             .collect::<Result<Vec<_>>>()?;
         anyhow::ensure!(!group.is_empty(), "empty coupled replay group");
-        groups.push(group);
-    }
-    groups.extend(remaining.into_values().map(|item| vec![item]));
-    for group in &mut groups {
         group.sort_by_key(|(item, _, _)| item.treatment_face_id);
+        let mut prepared = prepare_treatment_replay_group(group)?;
+        if !planned.junction_faces.is_empty() {
+            prepared.max_residual_mm = prepared
+                .max_residual_mm
+                .max(crate::numeric::NUMERICAL_GEOMETRY_TOL_MM);
+        }
+        prepared.face_ids.extend(planned.junction_faces);
+        prepared.face_ids.sort_unstable();
+        anyhow::ensure!(
+            prepared.face_ids.windows(2).all(|pair| pair[0] != pair[1]),
+            "coupled treatment contains a duplicated junction"
+        );
+        groups.push(prepared);
     }
-    groups.sort_by_key(|group| group[0].0.treatment_face_id);
+    for item in remaining.into_values() {
+        groups.push(prepare_treatment_replay_group(vec![item])?);
+    }
+    groups.sort_by_key(|group| group.face_ids[0]);
+    Ok(groups)
+}
+
+fn prepare_treatment_replay_group(group: Vec<ReplayTreatment<'_>>) -> Result<TreatmentReplayGroup> {
+    let profile = group[0].1;
+    anyhow::ensure!(
+        group.iter().all(|(_, p, _)| *p == profile),
+        "one coupled treatment perimeter has mixed forward profiles"
+    );
+    let mut face_ids = Vec::with_capacity(group.len());
+    let mut max_residual_mm = 0.0_f64;
+    let mut edges = Vec::<EdgeTreatmentEdge>::new();
+    for (item, _, edge) in group {
+        face_ids.push(item.treatment_face_id);
+        max_residual_mm = max_residual_mm.max(item.max_boundary_residual_mm);
+        if let Some(existing) = edges
+            .iter()
+            .find(|existing| existing.selector == edge.selector)
+        {
+            anyhow::ensure!(
+                crate::numeric::near_imported_feature_mm(
+                    (existing.radius_mm - edge.radius_mm).abs()
+                ),
+                "split treatment has conflicting forward dimensions"
+            );
+        } else {
+            edges.push(edge);
+        }
+    }
+    Ok(TreatmentReplayGroup {
+        face_ids,
+        profile,
+        edges,
+        max_residual_mm,
+    })
+}
+
+fn apply_treatment_replay_groups(
+    mut fragment: CadFragment,
+    solid_id: u64,
+    groups: impl IntoIterator<Item = TreatmentReplayGroup>,
+) -> Result<CadFragment> {
+    let mut treatment_face_ids = BTreeSet::new();
     fragment.model.roots.clear();
     let mut root = fragment.root;
     for group in groups {
-        let profile = group[0].1;
-        anyhow::ensure!(
-            group.iter().all(|(_, p, _)| *p == profile),
-            "one coupled treatment perimeter has mixed forward profiles"
-        );
-        let mut source_entity_ids = vec![solid_id];
-        let mut max_residual = 0.0_f64;
-        let edges = group
-            .into_iter()
-            .map(|(item, _, edge)| {
-                source_entity_ids.push(item.treatment_face_id);
-                max_residual = max_residual.max(item.max_boundary_residual_mm);
-                edge
-            })
-            .collect();
+        for &id in &group.face_ids {
+            anyhow::ensure!(
+                treatment_face_ids.insert(id),
+                "source treatment replayed twice"
+            );
+        }
         root = fragment.model.add_node(CadNode::EdgeTreatment {
             child: root,
-            profile,
-            edges,
+            profile: group.profile,
+            edges: group.edges,
         });
+        let mut source_entity_ids = vec![solid_id];
+        source_entity_ids.extend(group.face_ids);
         fragment.model.set_provenance(
             root,
             Provenance {
                 source_entity_ids,
                 proof: ProofStatus::WithinTolerance,
-                max_residual_mm: Some(max_residual),
+                max_residual_mm: Some(group.max_residual_mm),
             },
         )?;
     }
@@ -1905,7 +1972,7 @@ fn replay_grouped_edge_treatments(
     if !treatment_face_ids.is_empty() {
         fragment.source = CadFragmentSource::EdgeTreatmentComposite {
             solid_id,
-            treatment_face_ids,
+            treatment_face_ids: treatment_face_ids.into_iter().collect(),
         };
     }
     fragment.model.validate()?;
@@ -1922,6 +1989,13 @@ fn select_replayable_treatments(
     evidence.retain(|item| replayable_edge_treatment(item).is_some());
     let profile_faces = crate::edge_treatments::reciprocal_planar_profile_faces(&evidence);
     evidence.retain(|item| !profile_faces.contains(&(item.solid_id, item.treatment_face_id)));
+    let mut counts = HashMap::new();
+    for item in &evidence {
+        *counts
+            .entry((item.solid_id, item.treatment_face_id))
+            .or_insert(0_usize) += 1;
+    }
+    evidence.retain(|item| counts[&(item.solid_id, item.treatment_face_id)] == 1);
     evidence
 }
 
@@ -3045,7 +3119,10 @@ mod tests {
             constructive_fragment(42, 1)?,
             42,
             replay,
-            vec![vec![(78, segment.clone()), (77, arc.clone())]],
+            vec![crate::kernel_topology::CoupledTreatmentReplay {
+                selectors: vec![(78, segment.clone()), (77, arc.clone())],
+                junction_faces: Vec::new(),
+            }],
         )?;
         let CadNode::EdgeTreatment { edges, profile, .. } = fragment.model.node(fragment.root)?
         else {
@@ -3561,12 +3638,35 @@ END-ISO-10303-21;
         )?;
         let healed_report = kernel.inspect_source_document(&healed_document)?;
         assert_eq!(healed_report.solids.len(), 1);
-        let host = recognize_single_healed_host(healed_document.as_ref())?
+        let host = recognize_single_healed_host(healed_document.as_ref(), &kernel)?
             .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
         assert!(matches!(
             host.source,
             CadFragmentSource::SolidExtrusion { .. }
         ));
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn healed_host_can_use_independently_proven_sectional_recovery() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_sectional_stepped_655821f7.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let host = recognize_single_healed_host(&exchange, &kernel)?
+            .context("no constructive healed sectional host")?;
+        assert!(matches!(
+            host.source,
+            CadFragmentSource::SectionalExtrusionUnion { slabs: 5, .. }
+                | CadFragmentSource::SectionalExtrusionTransitions { slabs: 5, .. }
+        ));
+        let evaluated = kernel.evaluate(&host.model, host.root)?;
+        assert!(crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &evaluated,
+            99,
+            &exchange.data[0].entities
+        )?);
         Ok(())
     }
 
@@ -4434,7 +4534,7 @@ END-ISO-10303-21;
             monstertruck_io::step::load::ParsedStepSource::parse(legacy_snapshot.as_bytes())?
                 .exchange,
         )?;
-        let legacy = recognize_single_healed_host(legacy_document.as_ref())?
+        let legacy = recognize_single_healed_host(legacy_document.as_ref(), &kernel)?
             .ok_or_else(|| anyhow::anyhow!("legacy STEP host was not constructively recovered"))?;
         assert!(kernel_replay_is_single_solid(&kernel, &native_fragment)?);
         assert_eq!(

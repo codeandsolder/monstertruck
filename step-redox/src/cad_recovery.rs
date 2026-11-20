@@ -10,7 +10,7 @@ use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use monstertruck_io::step::load::ParsedStepSource;
 use serde::Serialize;
 
-mod sectional;
+pub(crate) mod sectional;
 mod solid;
 pub use solid::{
     recover_open_rectangular_sweep_fragment, recover_open_rectangular_sweep_fragments,
