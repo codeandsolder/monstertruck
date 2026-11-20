@@ -1442,7 +1442,7 @@ fn angle_on_sweep(angle: f64, start: f64, end: f64) -> bool {
     }
 }
 
-const fn local_frame_transform(
+pub(super) const fn local_frame_transform(
     origin: [f64; 3],
     x_axis: [f64; 3],
     y_axis: [f64; 3],

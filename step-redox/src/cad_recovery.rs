@@ -10,6 +10,7 @@ use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use monstertruck_io::step::load::ParsedStepSource;
 use serde::Serialize;
 
+mod sectional;
 mod solid;
 pub use solid::{
     recover_open_rectangular_sweep_fragment, recover_open_rectangular_sweep_fragments,
@@ -66,6 +67,12 @@ pub enum CadFragmentSource {
     ExtrusionCoreUnion {
         solid_id: u64,
         cap_face_ids: Vec<[u64; 2]>,
+    },
+    /// Source-derived prisms from complete cross-sections between transverse stations.
+    SectionalExtrusionUnion {
+        solid_id: u64,
+        face_ids: Vec<u64>,
+        slabs: usize,
     },
     /// Exact ruled end caps added to an extrusion-core union.
     CapExtrusionRuledEnds {
@@ -654,7 +661,12 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
             return Ok(Some(fragment));
         }
     }
-    recover_auto_proven_partial_cap_ruled_ends_fragment(solid_id, entities, &index, kernel)
+    if let Some(fragment) =
+        recover_auto_proven_partial_cap_ruled_ends_fragment(solid_id, entities, &index, kernel)?
+    {
+        return Ok(Some(fragment));
+    }
+    sectional::recover(solid_id, entities, &index, kernel)
 }
 
 /// Recover a first-class fused periodic-chain IR fragment from a proven source partition.

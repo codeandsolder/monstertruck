@@ -1,5 +1,5 @@
 use crate::brep::{self, BSplineSupport, CurveSupport, SplineExtrusionSupport, SurfaceSupport};
-use crate::math3::{add, canonical_direction, cross, distance, dot, mul, norm, normalize, sub};
+use crate::math3::{add, cross, distance, dot, mul, norm, normalize, sub};
 use crate::step_graph::{build_index, entity_ref_value, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use num_traits::ToPrimitive;
@@ -1180,6 +1180,25 @@ fn boundary_surface_support(
     constructive
 }
 
+/// Choose the sign in the *same quantized space* used by the boundary
+/// signature. Raw floating-point dominant-component ties can flip the
+/// canonical direction of a 45-degree plane under an equivalent rechart.
+/// Keep the signed original vector for physical offset/axis calculations.
+fn canonical_boundary_direction(raw: [f64; 3]) -> Option<([f64; 3], [i64; 3])> {
+    let key = vector_key(raw, DIRECTION_Q)?;
+    let dominant = key
+        .iter()
+        .max_by_key(|component| component.unsigned_abs())?;
+    if *dominant == 0 {
+        return None;
+    }
+    if *dominant < 0 {
+        Some((mul(raw, -1.0), key.map(|component| -component)))
+    } else {
+        Some((raw, key))
+    }
+}
+
 fn oriented_support_key(
     face_id: u64,
     entities: &[EntityInstance],
@@ -1195,27 +1214,27 @@ fn oriented_support_key(
     match boundary_surface_support(surface_id, entities, index) {
         SurfaceSupport::Plane(plane) => {
             let raw_normal = normalize(plane.normal, 0.0)?;
-            let normal = canonical_direction(raw_normal);
+            let (normal, normal_key) = canonical_boundary_direction(raw_normal)?;
             let outward = if forward {
                 raw_normal
             } else {
                 mul(raw_normal, -1.0)
             };
             Some(OrientedSupportKey::Plane {
-                normal: vector_key(normal, DIRECTION_Q)?,
+                normal: normal_key,
                 offset_mm: quantize(dot(normal, plane.origin_mm), SCALAR_Q_MM)?,
                 outward_positive: dot(outward, normal) >= 0.0,
             })
         }
         SurfaceSupport::Cylinder(cylinder) => {
             let raw_axis = normalize(cylinder.axis, 0.0)?;
-            let axis = canonical_direction(raw_axis);
+            let (axis, axis_key) = canonical_boundary_direction(raw_axis)?;
             let closest = sub(
                 cylinder.axis_origin_mm,
                 mul(axis, dot(axis, cylinder.axis_origin_mm)),
             );
             Some(OrientedSupportKey::Cylinder {
-                axis: vector_key(axis, DIRECTION_Q)?,
+                axis: axis_key,
                 closest_mm: point_key(closest)?,
                 radius_mm: quantize(cylinder.radius_mm, SCALAR_Q_MM)?,
                 radial_outward: forward,
@@ -1223,7 +1242,7 @@ fn oriented_support_key(
         }
         SurfaceSupport::Cone(cone) => {
             let raw_axis = normalize(cone.axis, 0.0)?;
-            let axis = canonical_direction(raw_axis);
+            let (axis, axis_key) = canonical_boundary_direction(raw_axis)?;
             let slope = cone.semi_angle_rad.tan();
             if !slope.is_finite() || slope <= 0.0 {
                 return None;
@@ -1240,7 +1259,7 @@ fn oriented_support_key(
             }
             Some(OrientedSupportKey::Cone {
                 apex_mm: point_key(apex)?,
-                axis: vector_key(axis, DIRECTION_Q)?,
+                axis: axis_key,
                 slope: slope_key,
                 // The original STEP chart's positive axial direction selects
                 // the nappe; canonicalizing the axis must also update its sign.
@@ -1272,7 +1291,7 @@ fn spline_extrusion_cylinder_key(
         return None;
     }
     let raw_axis = normalize(surface.extrusion_mm, 0.0)?;
-    let axis = canonical_direction(raw_axis);
+    let (axis, axis_key) = canonical_boundary_direction(raw_axis)?;
     let (t0, t1) = bspline_domain(&surface.profile)?;
     let p0 = evaluate_bspline(&surface.profile, t0)?;
     let p1 = evaluate_bspline(&surface.profile, t1)?;
@@ -1326,7 +1345,7 @@ fn spline_extrusion_cylinder_key(
 
     let closest = sub(center, mul(axis, dot(axis, center)));
     Some(OrientedSupportKey::Cylinder {
-        axis: vector_key(axis, DIRECTION_Q)?,
+        axis: axis_key,
         closest_mm: point_key(closest)?,
         radius_mm: quantize(radius, SCALAR_Q_MM)?,
         radial_outward,
@@ -1626,6 +1645,24 @@ mod tests {
             offset_mm,
             outward_positive,
         }
+    }
+
+    #[test]
+    fn boundary_direction_sign_is_invariant_at_quantized_dominant_ties() {
+        let t = std::f64::consts::FRAC_1_SQRT_2;
+        // Equal analytic directions represented on opposite sides of a
+        // floating-point dominant-component tie; also reverse the chart.
+        let first = normalize([t, -t + f64::EPSILON, 0.0], 0.0).unwrap();
+        let second = normalize([t - f64::EPSILON, -t, 0.0], 0.0).unwrap();
+        let (a, a_key) = canonical_boundary_direction(first).unwrap();
+        let (b, b_key) = canonical_boundary_direction(second).unwrap();
+        let (reversed, reversed_key) = canonical_boundary_direction(mul(first, -1.0)).unwrap();
+        assert_eq!(a_key, b_key);
+        assert_eq!(a_key, reversed_key);
+        assert!(dot(a, b) > 1.0 - DIRECTION_Q);
+        assert!(dot(a, reversed) > 1.0 - DIRECTION_Q);
+        assert!(dot(a, first) * dot(reversed, mul(first, -1.0)) < 0.0);
+        assert!(canonical_boundary_direction([0.0; 3]).is_none());
     }
 
     #[test]
