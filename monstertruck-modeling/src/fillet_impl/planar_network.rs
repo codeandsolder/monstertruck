@@ -231,9 +231,7 @@ impl Corner {
             if normals[missing].dot(other.point() - point) >= -KERNEL_EPSILON {
                 return None;
             }
-            if line_axis(&source.edge).is_none() {
-                return None;
-            }
+            line_axis(&source.edge)?;
         }
         let center = point + intersection_displacement(normals, offsets)?;
         let mut contacts = Map::default();
