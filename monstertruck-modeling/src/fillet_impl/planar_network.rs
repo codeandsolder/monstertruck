@@ -241,8 +241,12 @@ impl Corner {
             _ => return None,
         };
         let point = vertex.point();
-        // All three carrier planes share the original vertex, and each
-        // incident line must point into the halfspace of the third plane.
+        // A spherical junction requires a convex trihedron. For one treated
+        // edge, the terminal plane can instead be a reentrant shoulder: the
+        // bevel/round enlarges its opening or fills its notch. The two
+        // retained edges must still point into the treated carrier halfspaces,
+        // and the later segment-trimming proof must keep their new endpoints
+        // inside their original finite spans.
         for id in incident {
             let source = &incidence.edges[id];
             let [a, b] = source.uses.as_slice() else {
@@ -259,7 +263,12 @@ impl Corner {
             let missing = faces
                 .iter()
                 .position(|&f| source.uses.iter().all(|u| u.face != f))?;
-            if normals[missing].dot(other.point() - point) >= -KERNEL_EPSILON {
+            let advance = normals[missing].dot(other.point() - point);
+            if offsets[missing] == 0.0 {
+                if advance.abs() <= KERNEL_EPSILON {
+                    return None;
+                }
+            } else if advance >= -KERNEL_EPSILON {
                 return None;
             }
             line_axis(&source.edge)?;

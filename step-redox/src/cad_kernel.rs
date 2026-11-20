@@ -2078,6 +2078,92 @@ pub mod monstertruck {
         }
 
         #[test]
+        fn evaluates_chamfers_at_reentrant_shoulder() -> Result<()> {
+            let mut model = CadModel::new();
+            let base = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [6.0, 5.0, 1.0],
+            }));
+            let upper = model.add_node(CadNode::Extrude {
+                profile: Profile2d::polygon(vec![[1.0, 1.0], [5.0, 1.0], [5.0, 4.0], [1.0, 4.0]])?,
+                vector_mm: [0.0, 0.0, 0.1],
+            });
+            let upper = model.add_node(CadNode::Transform {
+                transform: RigidTransform::translation_mm([0.0, 0.0, 1.0]),
+                child: upper,
+            });
+            let mut root = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children: vec![base, upper],
+            });
+            for [x, y] in [[1.0, 1.0], [5.0, 4.0]] {
+                root = model.add_node(CadNode::EdgeTreatment {
+                    child: root,
+                    profile: EdgeTreatmentProfile::Chamfer,
+                    edges: vec![EdgeTreatmentEdge {
+                        selector: EdgeSelector::Segment {
+                            start_mm: [x, y, 1.0],
+                            end_mm: [x, y, 1.1],
+                        },
+                        radius_mm: 0.25,
+                    }],
+                });
+            }
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            assert!(kernel.summarize(&evaluated).is_single_solid());
+            assert!(
+                evaluated
+                    .solid
+                    .face_iter()
+                    .all(|f| matches!(f.surface(), Surface::Plane(_)))
+            );
+            assert!(
+                evaluated
+                    .solid
+                    .edge_iter()
+                    .all(|e| matches!(e.curve(), Curve::Line(_)))
+            );
+            let mut reference = CadModel::new();
+            let base = reference.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [6.0, 5.0, 1.0],
+            }));
+            let upper = reference.add_node(CadNode::Extrude {
+                profile: Profile2d::polygon(vec![
+                    [1.25, 1.0],
+                    [5.0, 1.0],
+                    [5.0, 3.75],
+                    [4.75, 4.0],
+                    [1.0, 4.0],
+                    [1.0, 1.25],
+                ])?,
+                vector_mm: [0.0, 0.0, 0.1],
+            });
+            let upper = reference.add_node(CadNode::Transform {
+                transform: RigidTransform::translation_mm([0.0, 0.0, 1.0]),
+                child: upper,
+            });
+            let reference_root = reference.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children: vec![base, upper],
+            });
+            reference.add_root(reference_root)?;
+            let expected = kernel.evaluate(&reference, reference_root)?;
+            let points = |shape: &EvaluatedShape| {
+                shape
+                    .solid
+                    .vertex_iter()
+                    .map(|v| v.point())
+                    .collect::<Vec<_>>()
+            };
+            let actual = points(&evaluated);
+            let expected = points(&expected);
+            assert!(actual.iter().all(|p| expected.iter().any(|q| p.near(q))));
+            assert!(expected.iter().all(|p| actual.iter().any(|q| p.near(q))));
+            Ok(())
+        }
+
+        #[test]
         fn evaluates_asymmetric_chamfer_edge_treatment() -> Result<()> {
             box_edge_treatment(EdgeTreatmentProfile::AsymmetricChamfer {
                 first_setback_mm: 0.2,
