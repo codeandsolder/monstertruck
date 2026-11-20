@@ -308,7 +308,22 @@ mod tests {
         );
         assert_eq!(summary.boundary_shells, 1);
         assert_eq!(summary.faces, 309 - counts.iter().sum::<usize>());
-        assert!(counts.first().is_some_and(|count| *count >= 24));
+        // Native face-sense composition must permit the four radius-2
+        // vertical rounds of the reversed planar carrier shell to peel.
+        let removed = result
+            .layers
+            .iter()
+            .flat_map(|layer| &layer.groups)
+            .flat_map(|group| group.face_ids.iter().copied())
+            .collect::<std::collections::BTreeSet<_>>();
+        for id in [8019, 8047, 8075, 8102] {
+            assert!(
+                removed.contains(&id),
+                "reversed native carrier blocked treatment #{id}"
+            );
+        }
+        assert!(counts.first().is_some_and(|count| *count >= 64));
+        assert!(summary.faces <= 237);
         assert!(
             counts.len() >= 2,
             "TE must peel at least two native layers: {:?}",

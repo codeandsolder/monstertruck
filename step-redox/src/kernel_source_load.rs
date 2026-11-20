@@ -1172,7 +1172,11 @@ mod monstertruck_adapter {
                                 bound_id,
                                 loop_id,
                                 outer: wire_index == 0,
-                                orientation: true,
+                                // Compressed boundaries are already surface-local.
+                                // The STEP proof view composes bound orientation
+                                // with face sense to obtain this traversal. Encode
+                                // the identity composition for native coedges.
+                                orientation: face.orientation,
                                 edges,
                             }
                         })
