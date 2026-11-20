@@ -118,11 +118,16 @@ fn cap_partition(
     (has_interior && caps.contains(&true)).then_some(caps)
 }
 
+struct PartitionedRegions<C, S> {
+    retained: Vec<AltRegion<C, S>>,
+    contact: Vec<AltRegion<C, S>>,
+}
+
 fn regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid: &Solid<Point3, C, S>,
     caps: &[bool],
     offset: usize,
-) -> (Vec<AltRegion<C, S>>, Vec<AltRegion<C, S>>) {
+) -> PartitionedRegions<C, S> {
     let mut retained = Vec::new();
     let mut contact = Vec::new();
     let mapped: Solid<Point3, AltCurve<C, S>, S> =
@@ -141,7 +146,7 @@ fn regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             retained.push(region);
         }
     }
-    (retained, contact)
+    PartitionedRegions { retained, contact }
 }
 
 /// Try to construct the union using a proven separating plane. A successful
@@ -164,8 +169,14 @@ pub(in crate::transversal) fn union<
         let Some(right_caps) = cap_partition(&rhs_bounds, separator, -1.0, tol) else {
             continue;
         };
-        let (mut left, left_contact) = regions(lhs, &left_caps, 0);
-        let (right, right_contact) = regions(rhs, &right_caps, lhs_bounds.len());
+        let PartitionedRegions {
+            retained: mut left,
+            contact: left_contact,
+        } = regions(lhs, &left_caps, 0);
+        let PartitionedRegions {
+            retained: right,
+            contact: right_contact,
+        } = regions(rhs, &right_caps, lhs_bounds.len());
         // The two differences are independently computed on their own
         // oriented charts, so both exposed cap normals remain authoritative.
         for (positive, cutter) in [
