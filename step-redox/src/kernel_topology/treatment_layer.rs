@@ -369,7 +369,7 @@ mod tests {
         let first = endpoint_edit(1, true, [0.5, 0.0, 0.0]);
         let second = endpoint_edit(2, false, [1.5, 0.0, 0.0]);
         let (accepted, conflicts) = compatible_candidates(vec![first, second]);
-        assert!(conflicts.is_empty());
+        assert_eq!(conflicts, Vec::<String>::new());
         let combined =
             combine_treatment_transactions(accepted.into_iter().map(|c| c.plan).collect())?;
         assert_eq!(combined.patch.rewrite_edges.len(), 1);
