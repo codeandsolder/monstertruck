@@ -100,7 +100,7 @@ pub mod monstertruck {
         SearchNearestParameter, SearchParameter, Shell, Solid, Surface, SurfaceCurve, Vector3,
         Vector4, Wire, algo, builder, certify_analytic_curve_on_surface, primitive, profile,
     };
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     mod circular_selection;
 
@@ -995,6 +995,99 @@ pub mod monstertruck {
         }
     }
 
+    /// Extract a prism's generating profile and exact placement, without
+    /// evaluating a solid. A union of coextensive prisms distributively
+    /// equals extrusion of the union of their planar profiles.
+    fn placed_prism(model: &CadModel, mut id: NodeId) -> Option<(&Profile2d, f64, Matrix4)> {
+        let mut transform = rigid_matrix(&RigidTransform::identity());
+        let node = loop {
+            match model.node(id).ok()? {
+                CadNode::Transform {
+                    child,
+                    transform: local,
+                } => {
+                    transform = transform * rigid_matrix(local);
+                    id = *child;
+                }
+                node => break node,
+            }
+        };
+        let CadNode::Extrude {
+            profile,
+            vector_mm: [x, y, z],
+        } = node
+        else {
+            return None;
+        };
+        (*x == 0.0 && *y == 0.0 && z.is_finite() && *z != 0.0).then_some((profile, *z, transform))
+    }
+
+    fn coextensive_prism_union(
+        model: &CadModel,
+        children: &[NodeId],
+        policy: GeometryPolicy,
+    ) -> Result<Option<Solid>> {
+        if children.len() < 2 {
+            return Ok(None);
+        }
+        let mut pending = children.to_vec();
+        let mut seen = HashSet::new();
+        let mut prisms = Vec::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let CadNode::Boolean {
+                op: BooleanOp::Union,
+                children,
+            } = model.node(id)?
+            {
+                pending.extend(children.iter().copied());
+            } else if let Some(prism) = placed_prism(model, id) {
+                prisms.push(prism);
+            } else {
+                return Ok(None);
+            }
+        }
+        let Some(&(_, length, transform)) = prisms.first() else {
+            return Ok(None);
+        };
+        if prisms
+            .iter()
+            .any(|(_, l, t)| l.to_bits() != length.to_bits() || *t != transform)
+        {
+            return Ok(None);
+        }
+        let mut faces = Vec::with_capacity(prisms.len());
+        for (profile, _, _) in prisms {
+            let face: monstertruck_modeling::Face =
+                profile::attach_plane_normalized(profile_wires(profile)?)?;
+            let mut face = face;
+            let Surface::Plane(plane) = face.oriented_surface() else {
+                return Ok(None);
+            };
+            // A shared plane chart must have an unambiguous common sense.
+            // The final extrusion uses the same local positive/negative Z
+            // orientation contract as an individual prism.
+            if plane.normal().z * length < 0.0 {
+                face.invert();
+            }
+            faces.push(face);
+        }
+        let Some(united) =
+            monstertruck_solid::try_planar_profile_union(&faces, monstertruck_policy(policy))?
+        else {
+            return Ok(None);
+        };
+        let mut boundaries = Vec::new();
+        for face in &united {
+            let solid: Solid = builder::extrude(face, Vector3::new(0.0, 0.0, length));
+            boundaries.extend(solid.into_boundaries());
+        }
+        let joined = Solid::new(boundaries)?;
+        Ok(Some(builder::transformed(&joined, transform)))
+    }
+
     fn evaluate_boolean(
         model: &CadModel,
         op: BooleanOp,
@@ -1002,6 +1095,25 @@ pub mod monstertruck {
         policy: GeometryPolicy,
         cache: &mut EvaluationCache,
     ) -> Result<Solid> {
+        if op == BooleanOp::Union
+            && let Some(result) = coextensive_prism_union(model, children, policy)?
+        {
+            return Ok(result);
+        }
+        if op == BooleanOp::Union && children.len() > 2 {
+            let solids = children
+                .iter()
+                .map(|&id| evaluate_node(model, id, policy, cache))
+                .collect::<Result<Vec<_>>>()?;
+            let tools = solids[1..].iter().collect::<Vec<_>>();
+            if let Some(joined) = monstertruck_solid::try_planar_contact_union_many(
+                &solids[0],
+                &tools,
+                monstertruck_policy(policy),
+            )? {
+                return Ok(joined);
+            }
+        }
         let Some((&first, rest)) = children.split_first() else {
             bail!("boolean node needs at least one child");
         };
@@ -1010,7 +1122,15 @@ pub mod monstertruck {
             let rhs = evaluate_node(model, child, policy, cache)?;
             let kernel_policy = monstertruck_policy(policy);
             result = match op {
-                BooleanOp::Union => monstertruck_solid::or(&result, &rhs, kernel_policy)?,
+                BooleanOp::Union => {
+                    if let Some(joined) =
+                        monstertruck_solid::try_planar_contact_union(&result, &rhs, kernel_policy)?
+                    {
+                        joined
+                    } else {
+                        monstertruck_solid::or(&result, &rhs, kernel_policy)?
+                    }
+                }
                 BooleanOp::Intersection => monstertruck_solid::and(&result, &rhs, kernel_policy)?,
                 BooleanOp::Difference => {
                     monstertruck_solid::difference(&result, &rhs, kernel_policy)?
