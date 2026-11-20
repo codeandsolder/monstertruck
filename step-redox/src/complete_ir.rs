@@ -720,8 +720,7 @@ fn recover_kernel_boundary_feature_fragment<
             &index,
             &shells,
         );
-        let selected = crate::planar_features::leaf_feature_family_indices(&report.families)
-            .into_iter()
+        let selected = (0..report.families.len())
             .filter(|&i| {
                 targets
                     .solid_for_shell(report.families[i].shell_id)
@@ -1574,15 +1573,13 @@ fn recover_boundary_feature_pass(
         index,
         &target_shell_ids,
     );
-    let target_family_indices =
-        crate::planar_features::leaf_feature_family_indices(&report.families)
-            .into_iter()
-            .filter(|&candidate| {
-                targets
-                    .shell_to_solid
-                    .contains_key(&report.families[candidate].shell_id)
-            })
-            .collect::<Vec<_>>();
+    let target_family_indices = (0..report.families.len())
+        .filter(|&candidate| {
+            targets
+                .shell_to_solid
+                .contains_key(&report.families[candidate].shell_id)
+        })
+        .collect::<Vec<_>>();
     if target_family_indices.is_empty() {
         return Ok(false);
     }
@@ -1672,10 +1669,68 @@ fn prepare_boundary_feature_reduction(
         ));
         peelable_family_indices.push(family_index);
     }
+    let selected = select_closed_feature_families(&report.families, &peelable_family_indices);
+    let (family_indices, steps) = peelable_family_indices
+        .into_iter()
+        .zip(pending_steps)
+        .filter(|(index, _)| selected.contains(index))
+        .unzip();
     Ok(PreparedBoundaryReduction {
-        steps: pending_steps,
-        family_indices: peelable_family_indices,
+        steps,
+        family_indices,
     })
+}
+
+/// Closed constructive tools can already account for nested feature hypotheses.
+/// Only defer a parent if its dependent hypothesis extends outside its patch.
+fn select_closed_feature_families(
+    families: &[crate::planar_features::BoundaryFeatureFamilyEvidence],
+    proven: &[usize],
+) -> BTreeSet<usize> {
+    let faces = families
+        .iter()
+        .map(|family| {
+            family
+                .members
+                .iter()
+                .flat_map(|member| member.face_ids.iter().copied())
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    let hosts = families
+        .iter()
+        .map(|family| {
+            family
+                .host_face_ids
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut eligible = proven
+        .iter()
+        .copied()
+        .filter(|&i| {
+            families.iter().enumerate().all(|(j, _)| {
+                i == j || faces[i].is_disjoint(&hosts[j]) || faces[j].is_subset(&faces[i])
+            })
+        })
+        .collect::<Vec<_>>();
+    eligible.sort_by_key(|&i| (std::cmp::Reverse(faces[i].len()), i));
+    let mut selected = BTreeSet::new();
+    let mut removed = BTreeSet::new();
+    let mut retained = BTreeSet::new();
+    for i in eligible {
+        if faces[i].is_disjoint(&removed)
+            && faces[i].is_disjoint(&retained)
+            && hosts[i].is_disjoint(&removed)
+        {
+            removed.extend(&faces[i]);
+            retained.extend(&hosts[i]);
+            selected.insert(i);
+        }
+    }
+    selected
 }
 
 fn regularize_boundary_feature_tool(
@@ -3648,6 +3703,107 @@ END-ISO-10303-21;
             host.source,
             CadFragmentSource::SolidExtrusion { .. }
         ));
+        Ok(())
+    }
+
+    /// Relief-bearing manufacturer parts have hole boundaries that may also be
+    /// recognized as subordinate feature hypotheses. A closed extrusion tool
+    /// already accounts for these boundaries; do not strand the parent.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_shallow_relief_cohort_peels_complete_tools() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let fixtures: &[(&[u8], usize, usize)] = &[
+            (
+                include_bytes!("../validation/fixtures/native_relief_box_0b5fc9e7.step"),
+                230,
+                6,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_housing_0036d9d5.step"),
+                263,
+                30,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_housing_0112d499.step"),
+                264,
+                40,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_housing_0914dda4.step"),
+                385,
+                145,
+            ),
+        ];
+        for &(bytes, original_faces, healed_faces) in fixtures {
+            let document = kernel.resolve_source_exchange(
+                monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange,
+            )?;
+            let load = kernel.inspect_source_document(&document)?;
+            let [loaded] = load.solids.as_slice() else {
+                bail!("expected one native relief solid");
+            };
+            let provenance = loaded
+                .topology_provenance
+                .as_ref()
+                .context("relief source lacks native identity")?;
+            let section = &document.as_ref().data[loaded.source.data_section];
+            let index = crate::step_graph::build_index(&section.entities);
+            let original = crate::brep::solid_face_ids(loaded.source.id, &section.entities, &index)
+                .context("relief source has no faces")?;
+            assert_eq!(original.len(), original_faces);
+            let targets = LocalRecoveryTargets::from_solids(
+                &BTreeSet::from([loaded.source.id]),
+                &section.entities,
+                &index,
+            )?;
+            let shells = targets.shell_ids();
+            let report = crate::planar_features::diagnose_boundary_features_for_shells_with_index(
+                &section.entities,
+                &index,
+                &shells,
+            );
+            let prepared = prepare_boundary_feature_reduction(
+                &section.entities,
+                &index,
+                &targets,
+                &shells,
+                &report,
+                &(0..report.families.len()).collect::<Vec<_>>(),
+                0,
+            )?;
+            let (patch, plan) = plan_source_boundary_feature_peel_from_entities(
+                loaded.source,
+                &section.entities,
+                &index,
+                &report,
+                &prepared.family_indices,
+                provenance,
+            )?;
+            let edited = kernel.edit_source_topology(&document, loaded.source, &[patch])?;
+            let native = kernel.inspect_edited_source(&edited)?;
+            let mut projected = section.entities.clone();
+            crate::planar_features::apply_boundary_feature_peel_plan(
+                &mut projected,
+                &index,
+                &plan,
+            )?;
+            validate_native_peel_projection(
+                loaded.source,
+                &original,
+                &projected,
+                &index,
+                provenance,
+                loaded.boundaries.len(),
+                &native,
+            )?;
+            assert_eq!(native.faces, healed_faces);
+            let reduced = kernel.edited_source_reduced_brep(&edited)?;
+            assert!(reduced.validate_closed_topology().is_some());
+            if healed_faces == 6 {
+                assert!(recognize_native_edited_host(&kernel, &edited)?.is_some());
+            }
+        }
         Ok(())
     }
 
