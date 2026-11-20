@@ -4,8 +4,8 @@
 //! establish equivalence. Only a native whole-source boundary proof admits a
 //! recovered solid.
 use super::{
-    CadFragment, CadFragmentSource, compose_union_models, rebuilt_kernel_boundary_matches_source,
-    solid::recover_source_cap_extrusion_model,
+    CadFragment, CadFragmentSource,
+    cap_assembly::{AssemblyFrame, proven_cap_assembly},
 };
 use crate::cad_kernel::CadKernel;
 use crate::math3::{dot, sub};
@@ -145,24 +145,43 @@ pub(super) fn recover<K: CadKernel>(
     let Some(caps) = select_caps(caps, &witnesses) else {
         return Ok(None);
     };
-    let models = caps
-        .iter()
-        .map(recover_source_cap_extrusion_model)
-        .collect::<Result<Vec<_>>>()?;
-    let parts = models
-        .iter()
-        .map(|(model, root)| (model, *root))
-        .collect::<Vec<_>>();
-    let (mut model, root) = compose_union_models(&parts)?;
-    let Ok(shape) = kernel.evaluate(&model, root) else {
+    // For more than two components, assemble smaller features before the
+    // large host, in a shared local frame. This avoids repeatedly classifying
+    // the largest curved shell against small, nearly coincident attachments.
+    let mut compact = caps.clone();
+    compact.sort_by(|a, b| {
+        volume(a)
+            .unwrap_or(0.0)
+            .total_cmp(&volume(b).unwrap_or(0.0))
+            .then_with(|| a.cap_face_id.cmp(&b.cap_face_id))
+    });
+    let centered = AssemblyFrame::centered(
+        [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]],
+        witnesses.iter().copied(),
+    );
+    let mut proposals = Vec::new();
+    if caps.len() > 2
+        && let Some(frame) = centered
+    {
+        proposals.push((compact.as_slice(), Some(frame)));
+    }
+    proposals.push((caps.as_slice(), None));
+    if caps.len() == 2
+        && let Some(frame) = centered
+    {
+        proposals.push((compact.as_slice(), Some(frame)));
+    }
+    let mut admitted = None;
+    for (parts, frame) in proposals {
+        if let Some((model, root)) = proven_cap_assembly(parts, frame, solid_id, entities, kernel)?
+        {
+            admitted = Some((model, root, parts));
+            break;
+        }
+    }
+    let Some((mut model, root, caps)) = admitted else {
         return Ok(None);
     };
-    if !kernel.summarize(&shape).is_single_solid()
-        || !rebuilt_kernel_boundary_matches_source(kernel, &shape, solid_id, entities)
-            .unwrap_or(false)
-    {
-        return Ok(None);
-    }
     let face_ids = super::set_proven_source_boundary(&mut model, root, &solid)?;
     Ok(Some(CadFragment {
         source: CadFragmentSource::SourceCapExtrusionUnion {
@@ -180,44 +199,59 @@ mod tests {
     use super::*;
     use crate::cad_ir::CadNode;
     use crate::cad_kernel::monstertruck::MonstertruckKernel;
+    use crate::cad_recovery::rebuilt_kernel_boundary_matches_source;
 
     #[test]
-    fn source_cap_cover_recovers_nonconcentric_bent_sheet() -> Result<()> {
-        let bytes = include_bytes!("../../validation/fixtures/native_cap_cover_0712fbbd.step");
-        let kernel = MonstertruckKernel::project_standard();
-        let parsed = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
-        let entities = &parsed.data[0].entities;
-        let report = crate::complete_ir::recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
-        assert_eq!(report.body_count, 1);
-        assert_eq!(
-            report.constructively_recovered_solid_count, 1,
-            "{:?}",
-            report.kernel_recovery_failures
-        );
-        let [selected] = report.extrusion_core_unions.as_slice() else {
-            anyhow::bail!("expected one source-cap extrusion union");
-        };
-        let fragment = &selected.fragment;
-        assert!(
-            matches!(&fragment.source, CadFragmentSource::SourceCapExtrusionUnion { solid_id: 101, cap_face_ids, .. } if cap_face_ids.len() == 2),
-            "{:?}",
-            fragment.source
-        );
-        fragment.model.validate()?;
-        assert_eq!(
-            fragment
-                .model
-                .nodes
-                .iter()
-                .filter(|n| matches!(n, CadNode::Extrude { .. }))
-                .count(),
-            2
-        );
-        let shape = kernel.evaluate(&fragment.model, fragment.root)?;
-        assert!(kernel.summarize(&shape).is_single_solid());
-        assert!(rebuilt_kernel_boundary_matches_source(
-            &kernel, &shape, 101, entities
-        )?);
+    fn source_cap_cover_recovers_bent_sheets() -> Result<()> {
+        for (bytes, id, count) in [
+            (
+                include_bytes!("../../validation/fixtures/native_cap_cover_0712fbbd.step")
+                    .as_slice(),
+                101,
+                2,
+            ),
+            (
+                include_bytes!("../../validation/fixtures/native_centered_cap_1968bb53.step")
+                    .as_slice(),
+                115,
+                3,
+            ),
+        ] {
+            let kernel = MonstertruckKernel::project_standard();
+            let parsed = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+            let entities = &parsed.data[0].entities;
+            let report = crate::complete_ir::recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+            assert_eq!(report.body_count, 1);
+            assert_eq!(
+                report.constructively_recovered_solid_count, 1,
+                "{:?}",
+                report.kernel_recovery_failures
+            );
+            let [selected] = report.extrusion_core_unions.as_slice() else {
+                anyhow::bail!("expected one source-cap extrusion union");
+            };
+            let fragment = &selected.fragment;
+            assert!(
+                matches!(&fragment.source, CadFragmentSource::SourceCapExtrusionUnion { solid_id, cap_face_ids, .. } if *solid_id == id && cap_face_ids.len() == count),
+                "{:?}",
+                fragment.source
+            );
+            fragment.model.validate()?;
+            assert_eq!(
+                fragment
+                    .model
+                    .nodes
+                    .iter()
+                    .filter(|n| matches!(n, CadNode::Extrude { .. }))
+                    .count(),
+                count
+            );
+            let shape = kernel.evaluate(&fragment.model, fragment.root)?;
+            assert!(kernel.summarize(&shape).is_single_solid());
+            assert!(rebuilt_kernel_boundary_matches_source(
+                &kernel, &shape, id, entities
+            )?);
+        }
         Ok(())
     }
 }

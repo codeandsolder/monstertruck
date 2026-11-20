@@ -10,6 +10,7 @@ use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use monstertruck_io::step::load::ParsedStepSource;
 use serde::Serialize;
 
+mod cap_assembly;
 mod cap_cover;
 mod multi_axis_sheet;
 pub(crate) mod sectional;
