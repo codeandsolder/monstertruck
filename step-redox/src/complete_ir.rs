@@ -28,7 +28,7 @@ use crate::planar_features::{
 use crate::solid_revolutions::SolidSurfaceSignature;
 use anyhow::{Context, Result, bail};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Exchange};
@@ -95,7 +95,7 @@ pub struct SourceInstancePattern {
     pub pattern: InstancePattern,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelRecoveryFailure {
     pub source: SourceEntity,
     pub error: String,
