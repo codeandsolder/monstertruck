@@ -5,28 +5,33 @@
 
 #[cfg(feature = "cad-kernel-monstertruck")]
 mod survey {
-    use anyhow::{Context, Result};
+    use anyhow::{Context, Result, ensure};
     use clap::Parser;
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
-    use std::fs::File;
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::time::Instant;
-    use step_redox::cad_kernel::monstertruck::MonstertruckKernel;
     use step_redox::complete_ir::{CompleteIr, KernelRecoveryFailure};
+    use step_redox::{SourceEntity, cad_kernel::monstertruck::MonstertruckKernel};
+
+    mod journal;
+    const SCHEMA: &str = "step-redox.recovery-survey.v2";
 
     #[derive(Debug, Parser)]
     #[command(about = "Measure automatic constructive recovery across STEP inputs as JSON")]
     struct Cli {
         #[arg(long, value_name = "JSON")]
         output: Option<PathBuf>,
+        /// Resume an interrupted survey with identical binary and ordered inputs.
+        #[arg(long, requires = "output")]
+        resume: bool,
         #[arg(required = true, value_name = "STEP")]
         inputs: Vec<PathBuf>,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     enum Outcome {
         InputError,
@@ -37,14 +42,7 @@ mod survey {
         Unrecovered,
     }
 
-    #[derive(Debug, Serialize)]
-    struct SourceIdentity {
-        data_section: usize,
-        ordinal: usize,
-        id: u64,
-    }
-
-    #[derive(Debug, Serialize)]
+    #[derive(Debug, Serialize, Deserialize)]
     struct Case {
         input: String,
         input_bytes: Option<usize>,
@@ -55,8 +53,8 @@ mod survey {
         constructively_recovered: Option<usize>,
         semantically_recovered: Option<usize>,
         unrecovered: Option<usize>,
-        families: BTreeMap<&'static str, usize>,
-        unrecovered_sources: Vec<SourceIdentity>,
+        families: BTreeMap<String, usize>,
+        unrecovered_sources: Vec<SourceEntity>,
         kernel_failures: Vec<KernelRecoveryFailure>,
         error: Option<String>,
     }
@@ -79,6 +77,7 @@ mod survey {
     #[derive(Debug, Serialize)]
     struct Survey {
         schema: &'static str,
+        executable_sha256: String,
         /// Recovery counts are not independent proof of source-equivalent geometry.
         claim: &'static str,
         totals: Totals,
@@ -99,7 +98,7 @@ mod survey {
         }
     }
 
-    fn count_families(report: &CompleteIr) -> BTreeMap<&'static str, usize> {
+    fn count_families(report: &CompleteIr) -> BTreeMap<String, usize> {
         [
             ("extrusion", report.solid_extrusions.len()),
             ("loft", report.solid_lofts.len()),
@@ -126,6 +125,7 @@ mod survey {
         ]
         .into_iter()
         .filter(|(_, count)| *count > 0)
+        .map(|(family, count)| (family.to_owned(), count))
         .collect()
     }
 
@@ -168,11 +168,7 @@ mod survey {
                 entry.unrecovered_sources = report
                     .unrecovered_solids
                     .iter()
-                    .map(|solid| SourceIdentity {
-                        data_section: solid.source.data_section,
-                        ordinal: solid.source.ordinal,
-                        id: solid.source.id,
-                    })
+                    .map(|solid| solid.source)
                     .collect();
                 entry.kernel_failures = report.kernel_recovery_failures;
             }
@@ -201,47 +197,67 @@ mod survey {
         }
     }
 
-    fn run(cli: Cli) -> Result<()> {
+    fn run(cli: &Cli) -> Result<()> {
+        let inputs = cli
+            .inputs
+            .iter()
+            .map(std::path::absolute)
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let output = cli.output.as_ref().map(std::path::absolute).transpose()?;
+        let identity = journal::Header::current(&inputs)?;
+        let (mut journal, mut cases) = if let Some(output) = &output {
+            let checkpoint = output.with_extension("cases.jsonl");
+            ensure!(
+                output != &checkpoint,
+                "report and journal must have distinct paths"
+            );
+            ensure!(
+                !inputs
+                    .iter()
+                    .any(|input| input == output || input == &checkpoint),
+                "report or journal path is also a source input"
+            );
+            ensure!(
+                !output.try_exists()?,
+                "report already exists: {}",
+                output.display()
+            );
+            let (journal, cases) = journal::Journal::open(&checkpoint, &identity, cli.resume)?;
+            (Some(journal), cases)
+        } else {
+            (None, Vec::new())
+        };
         let kernel = MonstertruckKernel::project_standard();
         let mut totals = Totals::default();
-        // Persist each result before attempting the next potentially expensive
-        // solid. A failed later input cannot erase prior corpus evidence.
-        let mut journal = cli
-            .output
-            .as_ref()
-            .map(|output| {
-                let path = output.with_extension("cases.jsonl");
-                File::create(&path).with_context(|| format!("create {}", path.display()))
-            })
-            .transpose()?;
-        let mut cases = Vec::with_capacity(cli.inputs.len());
-        for path in &cli.inputs {
+        for entry in &cases {
+            totals.include(entry);
+        }
+        for path in inputs.iter().skip(cases.len()) {
             let entry = recover_case(path, &kernel);
             totals.include(&entry);
             if let Some(journal) = journal.as_mut() {
-                serde_json::to_writer(&mut *journal, &entry)?;
-                journal.write_all(b"\n")?;
-                journal.flush()?;
+                journal.append(&entry)?;
             }
             cases.push(entry);
         }
         let report = Survey {
-            schema: "step-redox.recovery-survey.v1",
+            schema: SCHEMA,
+            executable_sha256: identity.executable_sha256,
             claim: "automatic constructive IR selection; independent source-boundary equivalence not measured",
             totals,
             cases,
         };
         let mut bytes = serde_json::to_vec_pretty(&report)?;
         bytes.push(b'\n');
-        if let Some(output) = cli.output {
-            std::fs::write(&output, bytes).with_context(|| format!("write {}", output.display()))
+        if let Some(output) = output {
+            journal::write_report(&output, &bytes)
         } else {
             std::io::stdout().lock().write_all(&bytes)?;
             Ok(())
         }
     }
 
-    pub fn main() -> Result<()> { run(Cli::parse()) }
+    pub fn main() -> Result<()> { run(&Cli::parse()) }
 
     #[cfg(test)]
     mod tests {
@@ -254,6 +270,41 @@ mod survey {
             assert_eq!(classify(2, 1, 1), Outcome::PartialConstructive);
             assert_eq!(classify(2, 0, 1), Outcome::SemanticOnly);
             assert_eq!(classify(2, 0, 0), Outcome::Unrecovered);
+        }
+
+        #[test]
+        fn resumed_report_reuses_a_completed_real_source_case() -> Result<()> {
+            let dir = tempfile::tempdir()?;
+            let first = dir.path().join("loft.step");
+            let second = dir.path().join("missing.step");
+            let output = dir.path().join("report.json");
+            let checkpoint = output.with_extension("cases.jsonl");
+            std::fs::write(
+                &first,
+                include_bytes!("../../validation/fixtures/native_staged_rectangular_loft.step"),
+            )?;
+            let run_survey = |resume| {
+                run(&Cli {
+                    output: Some(output.clone()),
+                    resume,
+                    inputs: vec![first.clone(), second.clone()],
+                })
+            };
+            run_survey(false)?;
+            let original: serde_json::Value = serde_json::from_slice(&std::fs::read(&output)?)?;
+            assert_eq!(original["totals"]["fully_constructive_files"], 1);
+            assert_eq!(original["totals"]["inputs_with_errors"], 1);
+            assert!(run_survey(false).is_err());
+            std::fs::remove_file(&output)?;
+            let contents = std::fs::read_to_string(&checkpoint)?;
+            let prefix = contents.split_inclusive('\n').take(2).collect::<String>();
+            std::fs::write(&checkpoint, format!("{prefix}{{\"input\":"))?;
+            run_survey(true)?;
+            let resumed: serde_json::Value = serde_json::from_slice(&std::fs::read(&output)?)?;
+            assert_eq!(original["cases"][0], resumed["cases"][0]);
+            assert_eq!(original["totals"], resumed["totals"]);
+            assert_eq!(original["executable_sha256"], resumed["executable_sha256"]);
+            Ok(())
         }
 
         #[test]
