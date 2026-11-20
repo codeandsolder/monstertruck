@@ -600,14 +600,13 @@ fn group_physical_boundaries(
                 .push(arc),
             None => {
                 rejected.push(format!(
-                    "#{edge_id}: {} on {:?}",
+                    "#{edge_id}: {} on {loci:?}",
                     match &curve {
                         CurveSupport::Line(_) => "line",
                         CurveSupport::Circle(_) => "circle",
                         CurveSupport::BSpline(_) => "spline",
                         CurveSupport::Other { .. } => "other",
-                    },
-                    loci
+                    }
                 ));
             }
         }
