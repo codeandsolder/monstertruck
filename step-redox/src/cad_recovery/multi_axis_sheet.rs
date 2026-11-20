@@ -4,11 +4,11 @@
 //! analytic extrusion proposal for the group. All proposals remain subject to
 //! the independent whole-solid reconstruction proof.
 use super::{
-    CadFragment, CadFragmentSource, compose_union_models, rebuilt_kernel_boundary_matches_source,
-    solid::{local_frame_transform, recover_source_cap_extrusion_model},
+    CadFragment, CadFragmentSource,
+    cap_assembly::{AssemblyFrame, proven_cap_assembly},
 };
 use crate::brep::{CurveSupport, SurfaceSupport};
-use crate::cad_ir::{CadModel, CadNode, NodeId};
+
 use crate::cad_kernel::CadKernel;
 use crate::formed_sheet::{self, FormedSheetEvidence, SheetCylinderPair};
 use crate::math3::{add, cross, dot, mul, norm, normalize, sub};
@@ -220,25 +220,6 @@ fn recover_caps(
     Some(bend_caps)
 }
 
-#[derive(Clone, Copy, Debug)]
-struct AssemblyFrame {
-    origin: [f64; 3],
-    axes: [[f64; 3]; 3],
-}
-
-impl AssemblyFrame {
-    fn direction(self, v: [f64; 3]) -> [f64; 3] { self.axes.map(|axis| dot(v, axis)) }
-
-    fn cap(self, cap: &RecoveredSourceCapExtrusion) -> RecoveredSourceCapExtrusion {
-        let mut cap = cap.clone();
-        cap.origin_mm = self.direction(sub(cap.origin_mm, self.origin));
-        cap.x_axis = self.direction(cap.x_axis);
-        cap.y_axis = self.direction(cap.y_axis);
-        cap.z_axis = self.direction(cap.z_axis);
-        cap
-    }
-}
-
 /// A common assembly frame determined by the terminal and branch directions,
 /// not by world coordinate signs. Keep the original exact local sketches.
 fn assembly_frame(
@@ -263,56 +244,13 @@ fn assembly_frame(
     }
     let x = normalize(cross(y, z), DIRECTION)?;
     let y = cross(z, x);
-    let axes = [x, y, z];
-    let mut min = [f64::INFINITY; 3];
-    let mut max = [f64::NEG_INFINITY; 3];
-    for edge in solid.faces().flat_map(ReducedFace::loop_edges) {
-        for point in [edge.start_mm, edge.end_mm] {
-            for (i, axis) in axes.iter().enumerate() {
-                let value = dot(point, *axis);
-                min[i] = min[i].min(value);
-                max[i] = max[i].max(value);
-            }
-        }
-    }
-    let origin = axes
-        .into_iter()
-        .zip(min.into_iter().zip(max))
-        .fold([0.0; 3], |a, (axis, (lo, hi))| {
-            add(a, mul(axis, lo.midpoint(hi)))
-        });
-    Some(AssemblyFrame { origin, axes })
-}
-
-fn compose_caps(
-    caps: &[RecoveredSourceCapExtrusion],
-    frame: Option<AssemblyFrame>,
-) -> Result<(CadModel, NodeId)> {
-    let models = caps
-        .iter()
-        .map(|cap| {
-            frame.map_or_else(
-                || recover_source_cap_extrusion_model(cap),
-                |frame| recover_source_cap_extrusion_model(&frame.cap(cap)),
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let parts = models
-        .iter()
-        .map(|(model, root)| (model, *root))
-        .collect::<Vec<_>>();
-    let (mut model, mut root) = compose_union_models(&parts)?;
-    if let Some(frame) = frame {
-        let [x, y, z] = frame.axes;
-        root = model.add_node(CadNode::Transform {
-            child: root,
-            transform: local_frame_transform(frame.origin, x, y, z),
-        });
-        model.roots.clear();
-        model.add_root(root)?;
-    }
-    model.validate()?;
-    Ok((model, root))
+    AssemblyFrame::centered(
+        [x, y, z],
+        solid
+            .faces()
+            .flat_map(ReducedFace::loop_edges)
+            .flat_map(|edge| [edge.start_mm, edge.end_mm]),
+    )
 }
 
 pub(super) fn recover<K: CadKernel>(
@@ -340,13 +278,7 @@ pub(super) fn recover<K: CadKernel>(
     let frame = assembly_frame(&caps, &solid);
     let mut selected = None;
     for frame in std::iter::once(None).chain(frame.map(Some)) {
-        let (model, root) = compose_caps(&caps, frame)?;
-        let Ok(shape) = kernel.evaluate(&model, root) else {
-            continue;
-        };
-        if kernel.summarize(&shape).is_single_solid()
-            && rebuilt_kernel_boundary_matches_source(kernel, &shape, solid_id, entities)
-                .unwrap_or(false)
+        if let Some((model, root)) = proven_cap_assembly(&caps, frame, solid_id, entities, kernel)?
         {
             selected = Some((model, root));
             break;
@@ -369,6 +301,8 @@ pub(super) fn recover<K: CadKernel>(
 #[cfg(all(test, feature = "cad-kernel-monstertruck"))]
 mod tests {
     use super::*;
+    use crate::cad_ir::CadNode;
+    use crate::cad_recovery::rebuilt_kernel_boundary_matches_source;
     #[test]
     fn multi_axis_sheet_source_recovery() -> Result<()> {
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
