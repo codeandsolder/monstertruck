@@ -651,33 +651,30 @@ mod tests {
                 "{label}: {:?}",
                 report.kernel_recovery_failures
             );
-            let [selected] = report.extrusion_core_unions.as_slice() else {
-                anyhow::bail!("{label}: expected one source-derived cross-section union");
+            let selected = report.selected_fragments().collect::<Vec<_>>();
+            let [selected] = selected.as_slice() else {
+                anyhow::bail!("{label}: expected one selected complete model");
             };
             let fragment = &selected.fragment;
-            // The two recessed prisms may select a simpler earlier proof.
-            // The stepped source is the genuine new sectional admission.
-            if expected_id == 99 {
-                assert!(
-                    matches!(
-                        fragment.source,
-                        CadFragmentSource::SectionalExtrusionUnion { solid_id: 99, .. }
-                            | CadFragmentSource::SectionalExtrusionTransitions { solid_id: 99, .. }
-                    ),
-                    "{label}: {:?}",
-                    fragment.source
-                );
-            }
-            if expected_id == 146 {
-                assert!(
-                    matches!(
-                        fragment.source,
-                        CadFragmentSource::SectionalExtrusionTransitions { solid_id: 146, .. }
-                    ),
-                    "{label}: {:?}",
-                    fragment.source
-                );
-            }
+            // Sectional recovery must remain independently valid, but a
+            // cheaper independently proven treatment/core representation
+            // is a legitimate winner. Check the actual selected geometry.
+            assert_eq!(
+                report.source_boundary_verified_solids,
+                [selected.source_solid],
+                "{label}"
+            );
+            assert!(
+                fragment.model.complexity_score(fragment.root)?
+                    <= sectioned.model.complexity_score(sectioned.root)?,
+                "{label}: selected {:?} is more complex than independently proven sectional model",
+                fragment.source
+            );
+            eprintln!(
+                "{label}: selected {:?}, complexity {}",
+                fragment.source,
+                fragment.model.complexity_score(fragment.root)?
+            );
             fragment.model.validate()?;
             let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&evaluated).is_single_solid(), "{label}");

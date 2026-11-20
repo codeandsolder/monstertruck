@@ -136,6 +136,27 @@ pub struct CompleteIr {
     pub unrecovered_solid_count: usize,
 }
 
+impl CompleteIr {
+    /// All selected whole-solid fragments, regardless of semantic family.
+    /// The source ID belongs to its original DATA section.
+    pub fn selected_fragments(&self) -> impl Iterator<Item = &SourceCadFragment> {
+        [
+            self.solid_extrusions.as_slice(),
+            self.solid_lofts.as_slice(),
+            self.solid_revolutions.as_slice(),
+            self.radial_slot_revolutions.as_slice(),
+            self.solid_sweeps.as_slice(),
+            self.periodic_chains.as_slice(),
+            self.boundary_feature_composites.as_slice(),
+            self.edge_treatment_composites.as_slice(),
+            self.same_domain_normalized_solids.as_slice(),
+            self.extrusion_core_unions.as_slice(),
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RecoveredBoundaryFeatureFamily {
     pass_index: usize,
@@ -4448,21 +4469,7 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     fn selected_unique_source_fragment(report: &CompleteIr) -> Result<&CadFragment> {
-        let selected = [
-            report.solid_extrusions.as_slice(),
-            report.solid_lofts.as_slice(),
-            report.solid_revolutions.as_slice(),
-            report.radial_slot_revolutions.as_slice(),
-            report.solid_sweeps.as_slice(),
-            report.periodic_chains.as_slice(),
-            report.boundary_feature_composites.as_slice(),
-            report.edge_treatment_composites.as_slice(),
-            report.same_domain_normalized_solids.as_slice(),
-            report.extrusion_core_unions.as_slice(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+        let selected = report.selected_fragments().collect::<Vec<_>>();
         let [chosen] = selected.as_slice() else {
             bail!(
                 "expected exactly one selected source CAD model, got {}",

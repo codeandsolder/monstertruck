@@ -521,6 +521,7 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
         crate::solid_extrusions::partial_source_cap_extrusion_candidates_with_index(
             solid_id, entities, index,
         );
+    let mut best = CheapestProvenFragment::default();
     for cap in cap_candidates {
         // The source-witnessed shoulder must coincide with the extrusion's
         // end station; the terminal cap must extend *beyond* that station.
@@ -592,7 +593,7 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
             },
         )?;
         model.validate()?;
-        return Ok(Some(CadFragment {
+        best.consider(Ok(Some(CadFragment {
             source: CadFragmentSource::CapExtrusionRuledEnds {
                 solid_id,
                 cap_face_id,
@@ -600,9 +601,9 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
             },
             model,
             root,
-        }));
+        })))?;
     }
-    Ok(None)
+    best.finish()
 }
 
 /// Attach the original whole-solid provenance after successful source-boundary proof.
@@ -623,6 +624,40 @@ fn set_proven_source_boundary(
         },
     )?;
     Ok(face_ids)
+}
+
+/// Rank only candidates that have already passed independent boundary proof.
+/// An unsuccessful provider must not discard another provider's proven model.
+#[derive(Default)]
+struct CheapestProvenFragment {
+    best: Option<(u64, CadFragment)>,
+    first_error: Option<anyhow::Error>,
+}
+
+impl CheapestProvenFragment {
+    fn consider(&mut self, result: Result<Option<CadFragment>>) -> Result<()> {
+        match result {
+            Ok(Some(fragment)) => {
+                let score = fragment.model.complexity_score(fragment.root)?;
+                if self.best.as_ref().is_none_or(|(cost, _)| score < *cost) {
+                    self.best = Some((score, fragment));
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.first_error.get_or_insert(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Option<CadFragment>> {
+        match (self.best, self.first_error) {
+            (Some((_, fragment)), _) => Ok(Some(fragment)),
+            (None, Some(error)) => Err(error),
+            (None, None) => Ok(None),
+        }
+    }
 }
 
 /// Detect all source-derived extrusion cores, discard those that contradict
@@ -676,44 +711,38 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
             pairs.push(pair);
         }
     }
+    let mut best = CheapestProvenFragment::default();
     for &pair in &pairs {
-        // Failure of one candidate's tentative kernel evaluation does not
-        // imply the next independent candidate is invalid. Only the final
-        // comparison to the original source can admit semantic geometry.
-        if let Ok(Some(fragment)) = recover_proven_extrusion_core_union_fragment(
+        best.consider(recover_proven_extrusion_core_union_fragment(
             source_step,
             data_section,
             solid_id,
             &[pair],
             kernel,
-        ) {
-            return Ok(Some(fragment));
-        }
+        ))?;
     }
     if pairs.len() >= 2 {
         pairs.sort_unstable();
-        if let Ok(Some(fragment)) = recover_proven_extrusion_core_union_fragment(
+        best.consider(recover_proven_extrusion_core_union_fragment(
             source_step,
             data_section,
             solid_id,
             &pairs,
             kernel,
-        ) {
-            return Ok(Some(fragment));
-        }
+        ))?;
     }
-    if let Some(fragment) =
-        recover_auto_proven_partial_cap_ruled_ends_fragment(solid_id, entities, &index, kernel)?
-    {
-        return Ok(Some(fragment));
-    }
-    if let Some(fragment) = sectional::recover(solid_id, entities, &index, kernel)? {
-        return Ok(Some(fragment));
-    }
-    if let Some(fragment) = multi_axis_sheet::recover(solid_id, entities, &index, kernel)? {
-        return Ok(Some(fragment));
-    }
-    cap_cover::recover(solid_id, entities, &index, kernel)
+    // Discovery order is not a ranking criterion. In particular, a valid
+    // cap interpretation can be more expensive than a continuous section
+    // with a recess. Let every independent provider compete on IR complexity.
+    best.consider(recover_auto_proven_partial_cap_ruled_ends_fragment(
+        solid_id, entities, &index, kernel,
+    ))?;
+    best.consider(sectional::recover(solid_id, entities, &index, kernel))?;
+    best.consider(multi_axis_sheet::recover(
+        solid_id, entities, &index, kernel,
+    ))?;
+    best.consider(cap_cover::recover(solid_id, entities, &index, kernel))?;
+    best.finish()
 }
 
 /// Recover a first-class fused periodic-chain IR fragment from a proven source partition.
