@@ -2149,17 +2149,40 @@ pub mod monstertruck {
             });
             reference.add_root(reference_root)?;
             let expected = kernel.evaluate(&reference, reference_root)?;
-            let points = |shape: &EvaluatedShape| {
-                shape
-                    .solid
-                    .vertex_iter()
-                    .map(|v| v.point())
-                    .collect::<Vec<_>>()
+            let actual_step = kernel.to_step(&evaluated)?;
+            let expected_step = kernel.to_step(&expected)?;
+            let actual_exchange =
+                monstertruck_io::step::load::ParsedStepSource::parse(actual_step.as_bytes())?
+                    .exchange;
+            let expected_exchange =
+                monstertruck_io::step::load::ParsedStepSource::parse(expected_step.as_bytes())?
+                    .exchange;
+            let actual = &actual_exchange.data[0].entities;
+            let expected = &expected_exchange.data[0].entities;
+            let solid_id = |entities: &[step_p21::ast::EntityInstance]| -> Result<u64> {
+                let ids = entities
+                    .iter()
+                    .filter(|entity| {
+                        crate::step_graph::simple_record(entity)
+                            .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
+                    })
+                    .map(crate::step_graph::entity_id)
+                    .collect::<Vec<_>>();
+                let [id] = ids.as_slice() else {
+                    bail!("expected one solid")
+                };
+                Ok(*id)
             };
-            let actual = points(&evaluated);
-            let expected = points(&expected);
-            assert!(actual.iter().all(|p| expected.iter().any(|q| p.near(q))));
-            assert!(expected.iter().all(|p| actual.iter().any(|q| p.near(q))));
+            let comparison = crate::boundary_proof::compare_analytic_boundaries(
+                solid_id(actual)?,
+                actual,
+                solid_id(expected)?,
+                expected,
+            );
+            assert!(
+                comparison.equivalent,
+                "shoulder bevel differs from explicit clipped extrusion: {comparison:?}"
+            );
             Ok(())
         }
 
