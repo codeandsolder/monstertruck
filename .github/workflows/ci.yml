@@ -6,6 +6,12 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      wasm_only:
+        description: "Run only the wasm32 build (for dependency compatibility checks)"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -21,6 +27,7 @@ env:
 jobs:
   fmt:
     name: cargo fmt
+    if: ${{ !inputs.wasm_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -66,6 +73,7 @@ jobs:
 
   test:
     name: cargo test (cpu)
+    if: ${{ !inputs.wasm_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -82,10 +90,10 @@ jobs:
         with:
           rust-toolchain: "1.99.1"
           rustflags: "-D warnings"
-      - uses: taiki-e/install-action@e800962fea8b802cd1bd32c4e6f08fbda4bb0048 # nextest
+      - uses: taiki-e/install-action@d75f3433052800716ea4e9618494c31d16de4188 # nextest
       # Pinned: cargo-rdme's output is not stable across major versions, so an
       # unpinned `@latest` would fail `readme-check` the day it majors.
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: cargo-rdme@2.1.0
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
@@ -140,8 +148,11 @@ jobs:
 
   wasm-build:
     name: cargo build (wasm32)
-    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    # Keep ordinary PR CI lean. Allow an explicit wasm-only dispatch to test
+    # dependency upgrades before merging instead of discovering failures on tags.
+    if: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.wasm_only) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
