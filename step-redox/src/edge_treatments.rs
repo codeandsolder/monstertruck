@@ -284,6 +284,116 @@ fn mark_unique_carrier_pairs(out: &mut [EdgeTreatmentEvidence]) {
     }
 }
 
+/// Recognize closed, geometrically interchangeable rings of planar chamfer
+/// *candidates*. Every member must nominate its two actual reciprocal
+/// neighbors, with equal setbacks, carrier angle and axial interval. There is
+/// no preferred base polygon in such a ring; retaining all profile faces
+/// preserves the authored shape without inventing a feature history.
+///
+/// IDs are qualified by solid, and adjacency is verified by the exact shared
+/// source edges. Nonuniform rings and open chains are not suppressed.
+pub(crate) fn reciprocal_planar_profile_faces(
+    evidence: &[EdgeTreatmentEvidence],
+) -> HashSet<(u64, u64)> {
+    let candidates = evidence
+        .iter()
+        .filter(|item| item.kind == EdgeTreatmentKind::PlanarChamfer && item.carrier_pair_unique)
+        .map(|item| ((item.solid_id, item.treatment_face_id), item))
+        .collect::<HashMap<_, _>>();
+    let mut visited = HashSet::new();
+    let mut profile = HashSet::new();
+    for &start in candidates.keys() {
+        if !visited.insert(start) {
+            continue;
+        }
+        let mut component = vec![start];
+        let mut cursor = 0;
+        let mut closed = true;
+        while cursor < component.len() {
+            let key = component[cursor];
+            cursor += 1;
+            let item = candidates[&key];
+            for carrier in &item.carriers {
+                let neighbor_key = (key.0, carrier.face_id);
+                let reciprocal = candidates.get(&neighbor_key).is_some_and(|neighbor| {
+                    neighbor_key != key
+                        && neighbor.carriers.iter().any(|back| {
+                            back.face_id == key.1 && back.shared_edge_ids == carrier.shared_edge_ids
+                        })
+                        && interchangeable_planar_candidates(item, neighbor)
+                });
+                if reciprocal {
+                    if visited.insert(neighbor_key) {
+                        component.push(neighbor_key);
+                    }
+                } else {
+                    closed = false;
+                }
+            }
+            closed &= item.carriers[0].face_id != item.carriers[1].face_id;
+        }
+        if closed && component.len() >= 3 {
+            profile.extend(component);
+        }
+    }
+    profile
+}
+
+fn interchangeable_planar_candidates(
+    first: &EdgeTreatmentEvidence,
+    second: &EdgeTreatmentEvidence,
+) -> bool {
+    let (Some(first_setbacks), Some(second_setbacks)) =
+        (first.inferred_setbacks_mm, second.inferred_setbacks_mm)
+    else {
+        return false;
+    };
+    let all_setbacks = [first_setbacks, second_setbacks];
+    let values = all_setbacks.iter().flatten().copied();
+    let spread = values.clone().fold(f64::NEG_INFINITY, f64::max)
+        - values.clone().fold(f64::INFINITY, f64::min);
+    if !values
+        .clone()
+        .all(|value| value.is_finite() && value > GEOM_TOL_MM)
+        || spread > GEOM_TOL_MM
+        || !first.carrier_angle_rad.is_finite()
+        || !second.carrier_angle_rad.is_finite()
+        || (first.carrier_angle_rad - second.carrier_angle_rad).abs() > DIR_TOL
+    {
+        return false;
+    }
+    let (
+        EdgeTreatmentVirtualEdge::Segment {
+            start_mm: start,
+            end_mm: end,
+        },
+        EdgeTreatmentVirtualEdge::Segment {
+            start_mm: other_start,
+            end_mm: other_end,
+        },
+    ) = (&first.virtual_edge, &second.virtual_edge)
+    else {
+        return false;
+    };
+    let Some(axis) = normalize(sub(*end, *start), DIR_TOL) else {
+        return false;
+    };
+    let Some(other_axis) = normalize(sub(*other_end, *other_start), DIR_TOL) else {
+        return false;
+    };
+    if norm(cross(axis, other_axis)) > DIR_TOL {
+        return false;
+    }
+    let same_span = |origin, end, axis, other_start, other_end| {
+        let length = norm(sub(end, origin));
+        let a = dot(sub(other_start, origin), axis);
+        let b = dot(sub(other_end, origin), axis);
+        a.min(b).abs() <= GEOM_TOL_MM && (a.max(b) - length).abs() <= GEOM_TOL_MM
+    };
+    same_span(*start, *end, axis, *other_start, *other_end)
+        && same_span(*other_start, *other_end, other_axis, *start, *end)
+}
+
 fn neighbor_shared_edges(
     treatment_index: usize,
     faces: &[FaceInfo],

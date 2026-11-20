@@ -983,15 +983,13 @@ fn replayable_source_treatments(
         .ok_or_else(|| anyhow::anyhow!("missing DATA section {}", source.data_section))?;
     let index = crate::step_graph::build_index(&section.entities);
     let target = HashSet::from([source.id]);
-    let mut evidence =
+    let mut evidence = select_replayable_treatments(
         crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
             &section.entities,
             &index,
             &target,
-        )
-        .into_iter()
-        .filter(|item| replayable_edge_treatment(item).is_some())
-        .collect::<Vec<_>>();
+        ),
+    );
     evidence.sort_by_key(|item| item.treatment_face_id);
     evidence.dedup_by_key(|item| item.treatment_face_id);
     Ok(evidence)
@@ -1769,16 +1767,16 @@ fn recover_reduced_brep_fragments(
         return Ok(Vec::new());
     }
 
-    let evidence = crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
-        entities,
-        index,
-        &candidate_solid_ids,
+    let evidence = select_replayable_treatments(
+        crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
+            entities,
+            index,
+            &candidate_solid_ids,
+        ),
     );
     let mut by_solid = BTreeMap::<u64, Vec<_>>::new();
     for item in &evidence {
-        if replayable_edge_treatment(item).is_some() {
-            by_solid.entry(item.solid_id).or_default().push(item);
-        }
+        by_solid.entry(item.solid_id).or_default().push(item);
     }
 
     let mut out = Vec::new();
@@ -1862,6 +1860,19 @@ fn replay_edge_treatments(
     }
     fragment.model.validate()?;
     Ok(fragment)
+}
+
+/// Local analytic evidence is not proof that a face should be removed.
+/// A symmetric ring of mutually interchangeable planar candidates is a host
+/// profile, not a simultaneous batch of edge treatments. Keep its authored
+/// profile intact, rather than choosing alternating chamfers by source ID.
+fn select_replayable_treatments(
+    mut evidence: Vec<crate::edge_treatments::EdgeTreatmentEvidence>,
+) -> Vec<crate::edge_treatments::EdgeTreatmentEvidence> {
+    evidence.retain(|item| replayable_edge_treatment(item).is_some());
+    let profile_faces = crate::edge_treatments::reciprocal_planar_profile_faces(&evidence);
+    evidence.retain(|item| !profile_faces.contains(&(item.solid_id, item.treatment_face_id)));
+    evidence
 }
 
 fn replayable_edge_treatment(
@@ -2828,6 +2839,70 @@ mod tests {
             },
             max_boundary_residual_mm: 1.0e-8,
         }
+    }
+
+    fn reciprocal_chamfer_candidate_ring(
+        solid_id: u64,
+        count: u32,
+    ) -> Vec<crate::edge_treatments::EdgeTreatmentEvidence> {
+        use crate::edge_treatments::EdgeTreatmentVirtualEdge;
+        (0..count)
+            .map(|i| {
+                let mut item = test_treatment_evidence(solid_id, u64::from(i));
+                let previous = (i + count - 1) % count;
+                let next = (i + 1) % count;
+                item.carriers[0].face_id = u64::from(previous);
+                item.carriers[0].shared_edge_ids = vec![100 + u64::from(previous)];
+                item.carriers[1].face_id = u64::from(next);
+                item.carriers[1].shared_edge_ids = vec![100 + u64::from(i)];
+                let angle = std::f64::consts::TAU * f64::from(i) / f64::from(count);
+                let (sine, cosine) = angle.sin_cos();
+                item.virtual_edge = EdgeTreatmentVirtualEdge::Segment {
+                    start_mm: [cosine, sine, 0.0],
+                    end_mm: [cosine, sine, 1.0],
+                };
+                item
+            })
+            .collect()
+    }
+
+    #[test]
+    fn reciprocal_planar_profile_ring_retains_all_host_faces_not_arbitrary_chamfers() {
+        let mut candidates = reciprocal_chamfer_candidate_ring(42, 8);
+        let ordinary = test_treatment_evidence(42, 99);
+        candidates.push(ordinary.clone());
+        // Reused raw entity numbers in a different solid do not connect rings.
+        let other_solid = test_treatment_evidence(43, 2);
+        candidates.push(other_solid.clone());
+        assert_eq!(
+            select_replayable_treatments(candidates),
+            [ordinary, other_solid]
+        );
+    }
+
+    #[test]
+    fn reciprocal_planar_profile_ring_does_not_discard_nonuniform_or_open_chamfer_sets() {
+        let ring = reciprocal_chamfer_candidate_ring(42, 8);
+        let mut unequal = ring.clone();
+        unequal[0].inferred_setbacks_mm = Some([0.2, 0.2]);
+        assert_eq!(select_replayable_treatments(unequal.clone()), unequal);
+        let mut open = ring.clone();
+        open.pop();
+        assert_eq!(select_replayable_treatments(open.clone()), open);
+        let mut unrelated_edge = ring.clone();
+        unrelated_edge[0].carriers[0].shared_edge_ids = vec![999];
+        assert_eq!(
+            select_replayable_treatments(unrelated_edge.clone()),
+            unrelated_edge
+        );
+        let mut reverse = ring;
+        if let crate::edge_treatments::EdgeTreatmentVirtualEdge::Segment { start_mm, end_mm } =
+            &mut reverse[0].virtual_edge
+        {
+            std::mem::swap(start_mm, end_mm);
+        }
+        reverse.reverse();
+        assert!(select_replayable_treatments(reverse).is_empty());
     }
 
     #[test]

@@ -378,11 +378,13 @@ pub(crate) fn recover_treatment_healed_extrusion_core_from_cap_faces_with_index(
     );
     let mut reduced = ReducedSolid::from_step(solid_id, entities, index)?;
     let cap_set = cap_face_ids.into_iter().collect::<HashSet<_>>();
+    let profile_faces = crate::edge_treatments::reciprocal_planar_profile_faces(&evidence);
     let mut reductions = evidence
         .iter()
         .filter(|item| {
             item.solid_id == solid_id
                 && item.carrier_pair_unique
+                && !profile_faces.contains(&(item.solid_id, item.treatment_face_id))
                 && allowed_treatment_face_ids
                     .is_none_or(|allowed| allowed.contains(&item.treatment_face_id))
                 && item
