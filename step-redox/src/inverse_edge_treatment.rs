@@ -23,7 +23,10 @@ use std::collections::{BTreeMap, BTreeSet};
 const GEOM_TOL_MM: f64 = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.inverse_edge_treatment_direction;
 
+mod coupled;
 mod curved_segment;
+
+pub use coupled::{closed_components, plan_closed_perimeter};
 
 #[derive(Debug, Clone)]
 struct EndpointEdit {

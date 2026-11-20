@@ -26,6 +26,9 @@ monstertruck-topology = { workspace = true, optional = true }
 num-traits = "0.2.19"
 monstertruck-core = { workspace = true }
 
+[dev-dependencies]
+zip = { version = "9.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
 [lints.rust]
 unsafe_code = "forbid"
 unfulfilled_lint_expectations = "warn"

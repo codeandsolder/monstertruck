@@ -239,8 +239,20 @@ pub fn plan_source_edge_treatment_patches(
     let solid = source_reduced_solid(exchange, source)?;
     let mut ordered = evidence.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|item| item.treatment_face_id);
-    let families = crate::inverse_edge_treatment::edge_treatment_families(&solid, &ordered);
-    let patches = families
+    let (closed, remaining) = crate::inverse_edge_treatment::closed_components(&solid, &ordered);
+    let mut patches = closed
+        .into_iter()
+        .map(|group| {
+            crate::inverse_edge_treatment::plan_closed_perimeter(
+                &solid,
+                &group,
+                source.data_section,
+                provenance,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let families = crate::inverse_edge_treatment::edge_treatment_families(&solid, &remaining);
+    let independent = families
         .into_iter()
         .map(|family| {
             if family.len() == 1 {
@@ -260,6 +272,7 @@ pub fn plan_source_edge_treatment_patches(
             }
         })
         .collect::<Result<Vec<_>>>()?;
+    patches.extend(independent);
     merge_topology_patches(patches)
 }
 
