@@ -3896,6 +3896,89 @@ END-ISO-10303-21;
         Ok(&chosen.fragment)
     }
 
+    /// Representative previously unrecovered source bodies from the frozen
+    /// catalog census. Admit their whole editable solid, not just a candidate
+    /// with a valid topology. Both the loft and constructive union paths
+    /// must reproduce the original oriented analytic boundary.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_targeted_analytic_sources_are_automatically_recovered() -> Result<()> {
+        let samples: &[(&str, &[u8], u64, bool)] = &[
+            (
+                "42c4c451",
+                include_bytes!("../validation/fixtures/native_targeted_42c4c451.step"),
+                22,
+                true,
+            ),
+            (
+                "5c8c706c",
+                include_bytes!("../validation/fixtures/native_targeted_5c8c706c.step"),
+                50,
+                true,
+            ),
+            (
+                "66abf5fd",
+                include_bytes!("../validation/fixtures/native_targeted_66abf5fd.step"),
+                38,
+                true,
+            ),
+            (
+                "eb76f3ce",
+                include_bytes!("../validation/fixtures/native_targeted_eb76f3ce.step"),
+                20,
+                true,
+            ),
+            (
+                "58dd1537",
+                include_bytes!("../validation/fixtures/native_targeted_58dd1537.step"),
+                66,
+                false,
+            ),
+            (
+                "b13fc76c",
+                include_bytes!("../validation/fixtures/native_targeted_b13fc76c.step"),
+                54,
+                false,
+            ),
+        ];
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        for &(label, input, solid_id, loft) in samples {
+            let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+            let [section] = exchange.data.as_slice() else {
+                bail!("{label}: expected sole source DATA section");
+            };
+            let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+            assert_eq!(report.body_count, 1, "{label}");
+            assert_eq!(
+                report.constructively_recovered_solid_count, 1,
+                "{label}: {:?}",
+                report.kernel_recovery_failures
+            );
+            let fragment = selected_unique_source_fragment(&report)?;
+            assert!(
+                if loft {
+                    matches!(fragment.source, CadFragmentSource::SolidLoft { solid_id: id, .. } if id == solid_id)
+                } else {
+                    matches!(fragment.source, CadFragmentSource::ExtrusionCoreUnion { solid_id: id, .. } if id == solid_id)
+                },
+                "{label}: unexpected constructive family"
+            );
+            fragment.model.validate()?;
+            let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
+            assert!(kernel.summarize(&rebuilt).is_single_solid(), "{label}");
+            assert!(
+                rebuilt_kernel_boundary_matches_source(
+                    &kernel,
+                    &rebuilt,
+                    solid_id,
+                    &section.entities
+                )?,
+                "{label}: source boundary differs"
+            );
+        }
+        Ok(())
+    }
+
     /// Three distinct real JLCPCB solids with long source profiles (including
     /// three cylindrical side patches on one) were structurally recognized
     /// before the generic independent candidate-proof path existed. Their
