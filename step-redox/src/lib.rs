@@ -40,6 +40,9 @@ pub mod periodic_chains;
 pub mod periodic_resize;
 mod planar_features;
 pub use planar_features::{PlanarFeatureDiagnostics, PlanarHostDiagnostic};
+/// Opt-in proof-backed original STEP document reconstruction with healed edges.
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub mod full_source_hyperbola_healing;
 /// Source-topological vertices and coedge identities for separately healed analytic edges.
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub mod healed_edge_topology;
