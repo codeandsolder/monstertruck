@@ -85,7 +85,7 @@ mod survey {
         cases: Vec<Case>,
     }
 
-    fn classify(body_count: usize, constructive: usize, semantic: usize) -> Outcome {
+    const fn classify(body_count: usize, constructive: usize, semantic: usize) -> Outcome {
         if body_count == 0 {
             Outcome::NoSolids
         } else if constructive == body_count {
