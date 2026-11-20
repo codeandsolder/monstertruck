@@ -4346,6 +4346,12 @@ END-ISO-10303-21;
     fn real_low_face_analytic_sources_are_automatically_recovered() -> Result<()> {
         verify_targeted_analytic_sources(&[
             (
+                "9288385a",
+                include_bytes!("../validation/fixtures/native_targeted_9288385a.step"),
+                24,
+                TargetedFamily::Loft,
+            ),
+            (
                 "119a071d",
                 include_bytes!("../validation/fixtures/native_targeted_119a071d.step"),
                 40,
