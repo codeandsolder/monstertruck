@@ -1075,23 +1075,6 @@ mod rematch_tests {
     }
 
     #[test]
-    fn rematch_returns_every_nonoverlapping_descendant_in_parameter_order() {
-        let a = Point3::new(0.0, 0.0, 0.0);
-        let b = Point3::new(1.0, 0.0, 0.0);
-        let split = Point3::new(0.37, 0.0, 0.0);
-        let original = line(a, b);
-        // Store the later part first to check sorting, and reverse its curve
-        // orientation. Neither must affect which pieces are visited.
-        let (shell, ids) =
-            manifold_shell(&[(b, split, line(b, split)), (a, split, line(a, split))]);
-        let faces = build_edge_face_map(&shell);
-        assert_eq!(
-            rematch_selected_edge_ids(&shell, &original, &HashSet::new(), &faces),
-            Some(vec![ids[1], ids[0]]),
-        );
-    }
-
-    #[test]
     fn original_edge_snapshot_retains_selected_ids_after_topology_removal() {
         let a = Point3::new(0.0, 0.0, 0.0);
         let b = Point3::new(1.0, 0.0, 0.0);
@@ -1115,18 +1098,33 @@ mod rematch_tests {
     }
 
     #[test]
-    fn rematch_visits_both_survivors_after_an_intermediate_piece_was_removed() {
+    fn rematch_orders_all_fragments_with_gaps_and_reversed_orientation() {
         let a = Point3::new(0.0, 0.0, 0.0);
         let b = Point3::new(1.0, 0.0, 0.0);
-        let left = Point3::new(0.24, 0.0, 0.0);
-        let right = Point3::new(0.81, 0.0, 0.0);
         let original = line(a, b);
-        let (shell, ids) = manifold_shell(&[(right, b, line(right, b)), (a, left, line(a, left))]);
-        let faces = build_edge_face_map(&shell);
-        assert_eq!(
-            rematch_selected_edge_ids(&shell, &original, &HashSet::new(), &faces),
-            Some(vec![ids[1], ids[0]]),
-        );
+        // Both adjacent and disjoint fragments must be returned in their
+        // original parameter order. Test each with both curve orientations.
+        for (left_end, right_start) in [(0.37, 0.37), (0.24, 0.81)] {
+            let left = Point3::new(left_end, 0.0, 0.0);
+            let right = Point3::new(right_start, 0.0, 0.0);
+            for reverse_right in [false, true] {
+                // Deliberately insert the later fragment first, independently
+                // of its orientation, to catch any dependence on shell order.
+                let (start, end) = if reverse_right {
+                    (b, right)
+                } else {
+                    (right, b)
+                };
+                let (shell, ids) =
+                    manifold_shell(&[(start, end, line(start, end)), (a, left, line(a, left))]);
+                let faces = build_edge_face_map(&shell);
+                assert_eq!(
+                    rematch_selected_edge_ids(&shell, &original, &HashSet::new(), &faces),
+                    Some(vec![ids[1], ids[0]]),
+                    "left_end={left_end}, right_start={right_start}, reverse_right={reverse_right}",
+                );
+            }
+        }
     }
 
     #[test]
