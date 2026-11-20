@@ -1841,6 +1841,11 @@ fn regularize_boundary_feature_tool(
     else {
         return false;
     };
+    if family.polarity == FeaturePolarity::Additive {
+        // A closed positive tool already encodes the exact material to
+        // attach. Do not perturb its cap to force a volumetric Boolean.
+        return true;
+    }
     regularize_boundary_tool_for_boolean(tool, family.polarity, &host_outwards).is_ok()
 }
 
@@ -2366,6 +2371,7 @@ fn compose_boundary_feature_fragment(
     let host_offset = model.append_model(&host.model)?;
     let mut current = shifted_fragment_root(host.root, host_offset)?;
 
+    let mut batch = None::<FeatureReplayBatch>;
     for family in families.iter().rev() {
         let tool_offset = model.append_model(&family.tool.model)?;
         let tool_root = shifted_fragment_root(family.tool.root, tool_offset)?;
@@ -2416,31 +2422,32 @@ fn compose_boundary_feature_fragment(
             instance_roots.push(root);
         }
 
-        let mut children = Vec::with_capacity(instance_roots.len() + 1);
-        children.push(current);
-        children.extend(instance_roots);
         let op = match family.polarity {
             FeaturePolarity::Additive => BooleanOp::Union,
             FeaturePolarity::Subtractive => BooleanOp::Difference,
         };
-        current = model.add_node(CadNode::Boolean { op, children });
-        let mut sources = vec![source_solid_id];
-        for member in &family.members {
-            if family.original_source_ids {
+        if batch
+            .as_ref()
+            .is_some_and(|(pass, previous, _, _)| *pass != family.pass_index || *previous != op)
+        {
+            current = finish_feature_batch(&mut model, current, batch.take())?;
+        }
+        let (_, _, children, sources) = batch.get_or_insert_with(|| {
+            (
+                family.pass_index,
+                op,
+                Vec::new(),
+                BTreeSet::from([source_solid_id]),
+            )
+        });
+        children.extend(instance_roots);
+        if family.original_source_ids {
+            for member in &family.members {
                 sources.extend(feature_member_source_ids(source_solid_id, member));
             }
         }
-        sources.sort_unstable();
-        sources.dedup();
-        model.set_provenance(
-            current,
-            Provenance {
-                source_entity_ids: sources,
-                proof: ProofStatus::StructurallyProven,
-                max_residual_mm: None,
-            },
-        )?;
     }
+    current = finish_feature_batch(&mut model, current, batch)?;
 
     model.add_root(current)?;
     model.validate()?;
@@ -2459,6 +2466,29 @@ fn compose_boundary_feature_fragment(
         model,
         root: current,
     })
+}
+
+type FeatureReplayBatch = (usize, BooleanOp, Vec<NodeId>, BTreeSet<u64>);
+
+fn finish_feature_batch(
+    model: &mut CadModel,
+    host: NodeId,
+    batch: Option<FeatureReplayBatch>,
+) -> Result<NodeId> {
+    let Some((_, op, tools, sources)) = batch else {
+        return Ok(host);
+    };
+    let children = std::iter::once(host).chain(tools).collect();
+    let root = model.add_node(CadNode::Boolean { op, children });
+    model.set_provenance(
+        root,
+        Provenance {
+            source_entity_ids: sources.into_iter().collect(),
+            proof: ProofStatus::StructurallyProven,
+            max_residual_mm: None,
+        },
+    )?;
+    Ok(root)
 }
 
 fn shifted_fragment_root(root: NodeId, offset: usize) -> Result<NodeId> {
@@ -3956,6 +3986,79 @@ END-ISO-10303-21;
                 assert!(recognize_native_edited_host(&kernel, &edited)?.is_some());
             }
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_shallow_relief_replays_complete_source_cohort() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let fixtures: &[(&[u8], usize)] = &[
+            (
+                include_bytes!("../validation/fixtures/native_relief_box_0b5fc9e7.step"),
+                230,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_box_16147ee2.step"),
+                230,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_box_b974305f.step"),
+                230,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_box_587c2a36.step"),
+                234,
+            ),
+        ];
+        for &(bytes, faces) in fixtures {
+            let document = kernel.resolve_source_exchange(
+                monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange,
+            )?;
+            let load = kernel.inspect_source_document(&document)?;
+            let [source] = load.solids.as_slice() else {
+                bail!("expected one relief source")
+            };
+            let fragment =
+                recover_kernel_boundary_feature_fragment(source.source, &load, &document, &kernel)?
+                    .context("native relief did not reconstruct a whole body")?;
+            assert!(matches!(
+                fragment.source,
+                CadFragmentSource::BoundaryFeatureComposite {
+                    passes: 1,
+                    feature_families: 9,
+                    feature_instances: 13,
+                    ..
+                }
+            ));
+            let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.is_single_solid(), "{summary:?}");
+            assert_eq!(summary.faces, faces);
+            let exchange = monstertruck_io::step::load::ParsedStepSource::parse(
+                kernel.to_step(&evaluated)?.as_bytes(),
+            )?
+            .exchange;
+            let reimported = kernel.resolve_source_exchange(exchange)?;
+            let reloaded = kernel.inspect_source_document(&reimported)?;
+            assert_eq!(reloaded.solids.len(), 1);
+            assert!(reloaded.solids[0].failure.is_none());
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_shallow_relief_is_admitted_by_complete_ir() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let bytes = include_bytes!("../validation/fixtures/native_relief_box_0b5fc9e7.step");
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.unrecovered_solid_count, 0);
+        let [body] = report.boundary_feature_composites.as_slice() else {
+            bail!("complete IR did not retain the reconstructed relief composite");
+        };
+        assert!(kernel_replay_is_single_solid(&kernel, &body.fragment)?);
         Ok(())
     }
 

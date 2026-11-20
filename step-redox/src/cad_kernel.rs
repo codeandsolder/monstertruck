@@ -1100,6 +1100,20 @@ pub mod monstertruck {
         {
             return Ok(result);
         }
+        if op == BooleanOp::Union && children.len() > 2 {
+            let solids = children
+                .iter()
+                .map(|&id| evaluate_node(model, id, policy, cache))
+                .collect::<Result<Vec<_>>>()?;
+            let tools = solids[1..].iter().collect::<Vec<_>>();
+            if let Some(joined) = monstertruck_solid::try_planar_contact_union_many(
+                &solids[0],
+                &tools,
+                monstertruck_policy(policy),
+            )? {
+                return Ok(joined);
+            }
+        }
         let Some((&first, rest)) = children.split_first() else {
             bail!("boolean node needs at least one child");
         };
