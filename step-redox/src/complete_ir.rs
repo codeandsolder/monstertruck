@@ -873,7 +873,7 @@ fn finish_native_boundary_feature_replay<
         let document = kernel.resolve_source_exchange(
             monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
         )?;
-        recognize_single_healed_host(document.as_ref())
+        recognize_single_healed_host(document.as_ref(), kernel)
     })?
     else {
         return Ok(None);
@@ -935,7 +935,7 @@ fn recover_kernel_topology_normalized_fragment<
                     monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?
                         .exchange,
                 )?;
-                recognize_single_healed_host(final_document.as_ref())
+                recognize_single_healed_host(final_document.as_ref(), kernel)
             },
             |fragment| Ok(Some(fragment)),
         )?
@@ -1014,7 +1014,10 @@ fn recognize_native_edited_host<K: SourceTopologyEditor>(
         .transpose()
 }
 
-fn recognize_single_healed_host(healed: &Exchange) -> Result<Option<CadFragment>> {
+fn recognize_single_healed_host<K: CadKernel>(
+    healed: &Exchange,
+    kernel: &K,
+) -> Result<Option<CadFragment>> {
     let [section] = healed.data.as_slice() else {
         return Ok(None);
     };
@@ -1055,10 +1058,16 @@ fn recognize_single_healed_host(healed: &Exchange) -> Result<Option<CadFragment>
     }
     let refs = candidates.iter().collect::<Vec<_>>();
     let selected = select_cheapest_whole_solid_fragments(&refs)?;
-    Ok(selected
+    if let Some(host) = selected
         .get(solid_id)
         .filter(|host| is_constructive_source(&host.source))
-        .map(|host| (*host).clone()))
+    {
+        return Ok(Some((*host).clone()));
+    }
+    // The edited solid may expose a piecewise-prismatic host rather than
+    // one extrusion or revolution. Reuse the same independently verified
+    // sectional recognizer on this one final native STEP snapshot.
+    crate::cad_recovery::sectional::recover(*solid_id, &section.entities, &index, kernel)
 }
 
 fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> Result<bool> {
@@ -3629,12 +3638,35 @@ END-ISO-10303-21;
         )?;
         let healed_report = kernel.inspect_source_document(&healed_document)?;
         assert_eq!(healed_report.solids.len(), 1);
-        let host = recognize_single_healed_host(healed_document.as_ref())?
+        let host = recognize_single_healed_host(healed_document.as_ref(), &kernel)?
             .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
         assert!(matches!(
             host.source,
             CadFragmentSource::SolidExtrusion { .. }
         ));
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn healed_host_can_use_independently_proven_sectional_recovery() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_sectional_stepped_655821f7.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let host = recognize_single_healed_host(&exchange, &kernel)?
+            .context("no constructive healed sectional host")?;
+        assert!(matches!(
+            host.source,
+            CadFragmentSource::SectionalExtrusionUnion { slabs: 5, .. }
+                | CadFragmentSource::SectionalExtrusionTransitions { slabs: 5, .. }
+        ));
+        let evaluated = kernel.evaluate(&host.model, host.root)?;
+        assert!(crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &evaluated,
+            99,
+            &exchange.data[0].entities
+        )?);
         Ok(())
     }
 
@@ -4502,7 +4534,7 @@ END-ISO-10303-21;
             monstertruck_io::step::load::ParsedStepSource::parse(legacy_snapshot.as_bytes())?
                 .exchange,
         )?;
-        let legacy = recognize_single_healed_host(legacy_document.as_ref())?
+        let legacy = recognize_single_healed_host(legacy_document.as_ref(), &kernel)?
             .ok_or_else(|| anyhow::anyhow!("legacy STEP host was not constructively recovered"))?;
         assert!(kernel_replay_is_single_solid(&kernel, &native_fragment)?);
         assert_eq!(
