@@ -12,6 +12,7 @@ use super::{
 };
 use crate::{
     brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport},
+    cad_ir::EdgeSelector,
     edge_treatments::{
         EdgeTreatmentEvidence, EdgeTreatmentEvidenceStrength, EdgeTreatmentVirtualEdge,
     },
@@ -252,6 +253,7 @@ fn carrier_run(
 }
 
 struct DirectedChain {
+    selector: EdgeSelector,
     points: Vec<[f64; 3]>,
     edges: Vec<KernelNewEdge>,
     terminals: [u64; 2],
@@ -312,6 +314,10 @@ impl Treatment {
         let [a, b] = self.runs[0].ends;
         match &self.geometry {
             EdgeTreatmentVirtualEdge::Segment { .. } => Ok(DirectedChain {
+                selector: EdgeSelector::Segment {
+                    start_mm: a.point,
+                    end_mm: b.point,
+                },
                 points: vec![a.point, b.point],
                 edges: vec![KernelNewEdge {
                     vertices: (KernelPatchVertexRef::New(0), KernelPatchVertexRef::New(1)),
@@ -326,13 +332,20 @@ impl Treatment {
                 let increasing = self.runs[0]
                     .circular_increasing
                     .context("missing circular direction")?;
-                let (points, edges) = open_inverse_circle_arc(
-                    CircleFrame::from_edge(&self.geometry)?,
-                    a.point,
-                    b.point,
-                    increasing,
-                )?;
+                let frame = CircleFrame::from_edge(&self.geometry)?;
+                let (points, edges) = open_inverse_circle_arc(frame, a.point, b.point, increasing)?;
+                let start_mm = if increasing { a.point } else { b.point };
+                let end_mm = if increasing { b.point } else { a.point };
+                let sweep_rad = (frame.angle(end_mm)? - frame.angle(start_mm)?)
+                    .rem_euclid(std::f64::consts::TAU);
                 Ok(DirectedChain {
+                    selector: EdgeSelector::CircleArc {
+                        center_mm: frame.center,
+                        normal: frame.normal,
+                        radius_mm: frame.radius,
+                        start_mm,
+                        sweep_rad,
+                    },
                     points,
                     edges,
                     terminals: if increasing {
@@ -344,6 +357,13 @@ impl Treatment {
             }
         }
     }
+}
+
+struct AddedChain {
+    from: usize,
+    to: usize,
+    terminals: [u64; 2],
+    selector: EdgeSelector,
 }
 
 struct TerminalJoint {
@@ -415,8 +435,9 @@ impl Perimeter {
         Ok(result)
     }
 
-    fn add_chain(&mut self, treatment: &Treatment) -> Result<(usize, usize, [u64; 2])> {
+    fn add_chain(&mut self, treatment: &Treatment) -> Result<AddedChain> {
         let DirectedChain {
+            selector,
             points,
             edges,
             terminals,
@@ -449,7 +470,12 @@ impl Perimeter {
             edge.vertices = (remap(edge.vertices.0)?, remap(edge.vertices.1)?);
             self.new_edges.push(edge);
         }
-        Ok((from, self.new_edges.len(), terminals))
+        Ok(AddedChain {
+            from,
+            to: self.new_edges.len(),
+            terminals,
+            selector,
+        })
     }
 
     fn edit_neighbor(
@@ -496,8 +522,13 @@ impl Perimeter {
         treatment: &Treatment,
         section: usize,
         provenance: &KernelTopologyProvenance,
-    ) -> Result<()> {
-        let (from, to, terminals) = self.add_chain(treatment)?;
+    ) -> Result<EdgeSelector> {
+        let AddedChain {
+            from,
+            to,
+            terminals,
+            selector,
+        } = self.add_chain(treatment)?;
         let mut orientations = [false; 2];
         for (i, run) in treatment.runs.iter().enumerate() {
             let order = run.ends.map(|end| end.terminal);
@@ -546,8 +577,13 @@ impl Perimeter {
             orientations[0] != orientations[1],
             "coupled sharp edge lacks opposing shell uses"
         );
-        Ok(())
+        Ok(selector)
     }
+}
+
+pub struct PlannedPerimeter {
+    pub patch: KernelTopologyPatch,
+    pub selectors: Vec<(u64, EdgeSelector)>,
 }
 
 pub fn plan_closed_perimeter(
@@ -555,7 +591,7 @@ pub fn plan_closed_perimeter(
     group: &[&EdgeTreatmentEvidence],
     section: usize,
     provenance: &KernelTopologyProvenance,
-) -> Result<KernelTopologyPatch> {
+) -> Result<PlannedPerimeter> {
     let treatments = group
         .iter()
         .map(|e| {
@@ -564,15 +600,21 @@ pub fn plan_closed_perimeter(
         })
         .collect::<Result<Vec<_>>>()?;
     let mut perimeter = Perimeter::new(solid, &treatments)?;
-    for treatment in &treatments {
-        perimeter.add_treatment(treatment, section, provenance)?;
-    }
+    let selectors = treatments
+        .iter()
+        .map(|treatment| {
+            Ok((
+                treatment.id,
+                perimeter.add_treatment(treatment, section, provenance)?,
+            ))
+        })
+        .collect::<Result<_>>()?;
     // Internal source terminal edges belong to two removed faces.
     let removed_edges = treatments
         .iter()
         .flat_map(|t| t.all_edges.iter().copied())
         .collect::<BTreeSet<_>>();
-    Ok(KernelTopologyPatch {
+    let patch = KernelTopologyPatch {
         remove_faces: treatments
             .iter()
             .map(|t| topology_face(provenance, section, t.id))
@@ -583,7 +625,8 @@ pub fn plan_closed_perimeter(
         face_splices: perimeter.splices,
         face_boundary_replacements: Vec::new(),
         require_unused_edges: topology_edges(provenance, section, removed_edges)?,
-    })
+    };
+    Ok(PlannedPerimeter { patch, selectors })
 }
 
 #[cfg(all(test, feature = "cad-kernel-monstertruck"))]
@@ -591,7 +634,7 @@ mod tests {
     use super::*;
     use crate::cad_kernel::monstertruck::MonstertruckKernel;
     use crate::kernel_source_load::SourceStepLoadInspector;
-    use crate::kernel_topology::{SourceTopologyEditor, plan_source_edge_treatment_patches};
+    use crate::kernel_topology::{SourceTopologyEditor, plan_source_edge_treatment_transaction};
     use std::io::{Cursor, Read};
 
     #[test]
@@ -644,12 +687,31 @@ mod tests {
         // Prove all three perimeters in one transaction, independently of
         // candidate ordering. Larger-radius candidate carriers must survive.
         selected.reverse();
-        let patch = plan_source_edge_treatment_patches(
+        let planned = plan_source_edge_treatment_transaction(
             document.as_ref(),
             loaded.source,
             &selected,
             provenance,
         )?;
+        assert_eq!(planned.coupled_selectors.len(), 3);
+        for group in &planned.coupled_selectors {
+            assert_eq!(group.len(), 8);
+            assert_eq!(
+                group
+                    .iter()
+                    .filter(|(_, s)| matches!(s, EdgeSelector::CircleArc { .. }))
+                    .count(),
+                4
+            );
+            assert_eq!(
+                group
+                    .iter()
+                    .filter(|(_, s)| matches!(s, EdgeSelector::Segment { .. }))
+                    .count(),
+                4
+            );
+        }
+        let patch = planned.patch;
         assert_eq!(patch.remove_faces.len(), 24);
         let removed = patch.remove_faces.iter().copied().collect::<BTreeSet<_>>();
         let stable_faces = provenance

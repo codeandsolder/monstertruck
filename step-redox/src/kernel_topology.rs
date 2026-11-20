@@ -233,6 +233,23 @@ pub fn plan_source_edge_treatment_patches(
     evidence: &[crate::edge_treatments::EdgeTreatmentEvidence],
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
 ) -> Result<KernelTopologyPatch> {
+    Ok(plan_source_edge_treatment_transaction(exchange, source, evidence, provenance)?.patch)
+}
+
+/// Planned inverse topology and forward replay selectors from the same
+/// exact sharp chains. Each selector group represents a single connected
+/// treatment perimeter that must be replayed in one native operation.
+pub(crate) struct PlannedTreatmentTransaction {
+    pub patch: KernelTopologyPatch,
+    pub coupled_selectors: Vec<Vec<(u64, crate::cad_ir::EdgeSelector)>>,
+}
+
+pub(crate) fn plan_source_edge_treatment_transaction(
+    exchange: &step_p21::ast::Exchange,
+    source: SourceEntity,
+    evidence: &[crate::edge_treatments::EdgeTreatmentEvidence],
+    provenance: &KernelTopologyProvenance,
+) -> Result<PlannedTreatmentTransaction> {
     if evidence.is_empty() {
         bail!("edge-treatment patch batch cannot be empty");
     }
@@ -240,17 +257,18 @@ pub fn plan_source_edge_treatment_patches(
     let mut ordered = evidence.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|item| item.treatment_face_id);
     let (closed, remaining) = crate::inverse_edge_treatment::closed_components(&solid, &ordered);
-    let mut patches = closed
-        .into_iter()
-        .map(|group| {
-            crate::inverse_edge_treatment::plan_closed_perimeter(
-                &solid,
-                &group,
-                source.data_section,
-                provenance,
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut patches = Vec::new();
+    let mut coupled_selectors = Vec::new();
+    for group in closed {
+        let result = crate::inverse_edge_treatment::plan_closed_perimeter(
+            &solid,
+            &group,
+            source.data_section,
+            provenance,
+        )?;
+        patches.push(result.patch);
+        coupled_selectors.push(result.selectors);
+    }
     let families = crate::inverse_edge_treatment::edge_treatment_families(&solid, &remaining);
     let independent = families
         .into_iter()
@@ -273,7 +291,10 @@ pub fn plan_source_edge_treatment_patches(
         })
         .collect::<Result<Vec<_>>>()?;
     patches.extend(independent);
-    merge_topology_patches(patches)
+    Ok(PlannedTreatmentTransaction {
+        patch: merge_topology_patches(patches)?,
+        coupled_selectors,
+    })
 }
 
 /// Normalize representation-only coplanar partitions into one authoritative kernel topology edit.

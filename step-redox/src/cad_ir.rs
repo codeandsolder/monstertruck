@@ -638,6 +638,16 @@ pub enum EdgeSelector {
         normal: [f64; 3],
         radius_mm: f64,
     },
+    /// A proper circular arc directed positively around `normal`, from
+    /// `start_mm` through `sweep_rad` (strictly between zero and one turn).
+    /// The entire selected chain must be present, possibly split into edges.
+    CircleArc {
+        center_mm: [f64; 3],
+        normal: [f64; 3],
+        radius_mm: f64,
+        start_mm: [f64; 3],
+        sweep_rad: f64,
+    },
 }
 
 impl EdgeSelector {
@@ -660,6 +670,38 @@ impl EdgeSelector {
                     <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_zero_norm_squared
                 {
                     bail!("edge selector segment must have nonzero length");
+                }
+            }
+            Self::CircleArc {
+                center_mm,
+                normal,
+                radius_mm,
+                start_mm,
+                sweep_rad,
+            } => {
+                Self::Circle {
+                    center_mm: *center_mm,
+                    normal: *normal,
+                    radius_mm: *radius_mm,
+                }
+                .validate()?;
+                let unit = crate::math3::normalize(
+                    *normal,
+                    DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit,
+                )
+                .ok_or_else(|| anyhow::anyhow!("edge selector arc normal is invalid"))?;
+                let offset = crate::math3::sub(*start_mm, *center_mm);
+                let tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES.cad_edge_selector_mm;
+                if !start_mm.iter().all(|v| v.is_finite())
+                    || *radius_mm <= tolerance
+                    || !sweep_rad.is_finite()
+                    || *sweep_rad <= 0.0
+                    || *sweep_rad >= std::f64::consts::TAU
+                    || crate::math3::dot(offset, unit).abs() > tolerance
+                    || (crate::math3::norm(offset) - *radius_mm).abs() > tolerance
+                    || radius_mm * sweep_rad.min(std::f64::consts::TAU - sweep_rad) <= tolerance
+                {
+                    bail!("edge selector arc must be a finite proper bounded circle arc");
                 }
             }
             Self::Circle {
@@ -1222,6 +1264,31 @@ mod tests {
             .validate()
             .is_ok()
         );
+    }
+
+    #[test]
+    fn bounded_circle_edge_selector_requires_proper_finite_geometry() {
+        let arc = |start_mm, sweep_rad| EdgeSelector::CircleArc {
+            center_mm: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+            radius_mm: 2.0,
+            start_mm,
+            sweep_rad,
+        };
+        assert!(
+            arc([2.0, 0.0, 0.0], std::f64::consts::PI)
+                .validate()
+                .is_ok()
+        );
+        for selector in [
+            arc([0.0; 3], 1.0),
+            arc([2.0, 0.0, 0.1], 1.0),
+            arc([2.0, 0.0, 0.0], 0.0),
+            arc([2.0, 0.0, 0.0], std::f64::consts::TAU),
+            arc([2.0, 0.0, 0.0], f64::NAN),
+        ] {
+            assert!(selector.validate().is_err());
+        }
     }
 
     #[test]

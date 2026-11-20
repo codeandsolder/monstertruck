@@ -3,6 +3,9 @@
 //! Every rational spline knot interval is Bezierized; no sampled points can
 //! promote an off-carrier curve into geometric equality.
 
+mod circular;
+pub use circular::{CircularArcCoverage, CircularArcFrame, certify_circular_arc_coverage};
+
 use crate::analytic_bezier_partition::proof_bezier_spans;
 use crate::analytic_carrier::AnalyticSupport;
 use crate::prelude::*;

@@ -102,6 +102,8 @@ pub mod monstertruck {
     };
     use std::collections::HashMap;
 
+    mod circular_selection;
+
     #[derive(Debug, Clone, Copy)]
     pub struct MonstertruckKernel {
         policy: GeometryPolicy,
@@ -1179,6 +1181,15 @@ pub mod monstertruck {
                     anyhow::anyhow!("edge-treatment selector matched no edge")
                 })?])
             }
+            EdgeSelector::CircleArc {
+                center_mm,
+                normal,
+                radius_mm,
+                start_mm,
+                sweep_rad,
+            } => circular_selection::select_arc(
+                shell, *center_mm, *normal, *radius_mm, *start_mm, *sweep_rad,
+            ),
             EdgeSelector::Circle {
                 center_mm,
                 normal,
@@ -1935,6 +1946,121 @@ pub mod monstertruck {
                 first_setback_mm: 0.2,
                 second_setback_mm: 0.3,
             })
+        }
+
+        #[test]
+        fn bounded_circle_edge_selector_distinguishes_complements_and_split_arcs() -> Result<()> {
+            use std::f64::consts::{FRAC_PI_2, PI, TAU};
+            let profile = Profile2d {
+                loops: vec![ProfileLoop {
+                    curves: (0..4)
+                        .map(|i| Curve2d::CircleArc {
+                            center_mm: [0.0, 0.0],
+                            radius_mm: 2.0,
+                            start_angle_rad: f64::from(i) * FRAC_PI_2,
+                            end_angle_rad: f64::from(i + 1) * FRAC_PI_2,
+                        })
+                        .collect(),
+                }],
+            };
+            let solid = extrude_profile_z(&profile, 3.0)?;
+            let shell = &solid.boundaries()[0];
+            let arc = |normal, sweep_rad| EdgeSelector::CircleArc {
+                center_mm: [0.0, 0.0, 3.0],
+                normal,
+                radius_mm: 2.0,
+                start_mm: [2.0, 0.0, 3.0],
+                sweep_rad,
+            };
+            let short = select_edges(shell, &arc([0.0, 0.0, 1.0], FRAC_PI_2))?;
+            let long = select_edges(shell, &arc([0.0, 0.0, -1.0], 3.0 * FRAC_PI_2))?;
+            assert_eq!(short.len(), 1);
+            assert_eq!(long.len(), 3);
+            assert!(long.iter().all(|edge| edge.id() != short[0].id()));
+            assert_eq!(select_edges(shell, &arc([0.0, 0.0, 1.0], PI))?.len(), 2);
+            assert!(select_edges(shell, &arc([0.0, 0.0, 1.0], FRAC_PI_2 / 2.0)).is_err());
+            assert!(select_edges(shell, &arc([0.0, 0.0, 1.0], TAU)).is_err());
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_coupled_bounded_arc_and_line_perimeter() -> Result<()> {
+            use std::f64::consts::{FRAC_PI_2, PI};
+            let arc = |center_mm, start_angle_rad, end_angle_rad| Curve2d::CircleArc {
+                center_mm,
+                radius_mm: 1.0,
+                start_angle_rad,
+                end_angle_rad,
+            };
+            let profile = Profile2d {
+                loops: vec![ProfileLoop {
+                    curves: vec![
+                        Curve2d::Line {
+                            start_mm: [0.0, -1.0],
+                            end_mm: [4.0, -1.0],
+                        },
+                        arc([4.0, 0.0], -FRAC_PI_2, 0.0),
+                        arc([4.0, 0.0], 0.0, FRAC_PI_2),
+                        Curve2d::Line {
+                            start_mm: [4.0, 1.0],
+                            end_mm: [0.0, 1.0],
+                        },
+                        arc([0.0, 0.0], FRAC_PI_2, PI),
+                        arc([0.0, 0.0], PI, 3.0 * FRAC_PI_2),
+                    ],
+                }],
+            };
+            let end_arc = |x, y| EdgeSelector::CircleArc {
+                center_mm: [x, 0.0, 3.0],
+                normal: [0.0, 0.0, 1.0],
+                radius_mm: 1.0,
+                start_mm: [x, y, 3.0],
+                sweep_rad: PI,
+            };
+            let selectors = [
+                EdgeSelector::Segment {
+                    start_mm: [0.0, -1.0, 3.0],
+                    end_mm: [4.0, -1.0, 3.0],
+                },
+                end_arc(4.0, -1.0),
+                EdgeSelector::Segment {
+                    start_mm: [4.0, 1.0, 3.0],
+                    end_mm: [0.0, 1.0, 3.0],
+                },
+                end_arc(0.0, 1.0),
+            ];
+            let solid = extrude_profile_z(&profile, 3.0)?;
+            let shell = &solid.boundaries()[0];
+            let mut selected = Vec::new();
+            for selector in &selectors {
+                selected.extend(select_edges(shell, selector)?);
+            }
+            assert_eq!(selected.len(), 6);
+            let mut model = CadModel::new();
+            let child = model.add_node(CadNode::Extrude {
+                profile,
+                vector_mm: [0.0, 0.0, 3.0],
+            });
+            let root = model.add_node(CadNode::EdgeTreatment {
+                child,
+                profile: EdgeTreatmentProfile::Round,
+                edges: selectors
+                    .into_iter()
+                    .map(|selector| EdgeTreatmentEdge {
+                        selector,
+                        radius_mm: 0.15,
+                    })
+                    .collect(),
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.geometrically_consistent);
+            assert_eq!(summary.shells, 1);
+            assert_eq!(summary.faces, 14);
+            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
         }
 
         #[test]
