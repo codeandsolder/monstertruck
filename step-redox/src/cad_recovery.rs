@@ -400,19 +400,32 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     cap_face_ids: &[[u64; 2]],
     kernel: &K,
 ) -> Result<Option<CadFragment>> {
-    if solid_id == 0 || cap_face_ids.is_empty() {
-        bail!("extrusion-core construction admission needs a solid and at least one cap pair");
-    }
-
-    let canonical_pairs = normalize_extrusion_cap_pairs(cap_face_ids)?;
-
     let source = ParsedStepSource::parse(source_step)?.exchange;
     let Some(section) = source.data.get(data_section) else {
         bail!("extrusion-core union DATA section {data_section} does not exist");
     };
     let entities = &section.entities;
-    let index = build_index(entities);
-    let Some(source_face_ids) = crate::brep::solid_face_ids(solid_id, entities, &index) else {
+    recover_proven_extrusion_core_union_from_entities(
+        solid_id,
+        cap_face_ids,
+        entities,
+        &build_index(entities),
+        kernel,
+    )
+}
+
+fn recover_proven_extrusion_core_union_from_entities<K: CadKernel>(
+    solid_id: u64,
+    cap_face_ids: &[[u64; 2]],
+    entities: &[step_p21::ast::EntityInstance],
+    index: &std::collections::HashMap<u64, usize>,
+    kernel: &K,
+) -> Result<Option<CadFragment>> {
+    if solid_id == 0 || cap_face_ids.is_empty() {
+        bail!("extrusion-core construction admission needs a solid and at least one cap pair");
+    }
+    let canonical_pairs = normalize_extrusion_cap_pairs(cap_face_ids)?;
+    let Some(source_face_ids) = crate::brep::solid_face_ids(solid_id, entities, index) else {
         return Ok(None);
     };
 
@@ -422,7 +435,7 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     for &pair in &canonical_pairs {
         let Some(core) =
             crate::solid_extrusions::recover_any_extrusion_core_from_cap_faces_with_index(
-                solid_id, pair, entities, &index,
+                solid_id, pair, entities, index,
             )
         else {
             return Ok(None);
@@ -437,8 +450,7 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     // Each loft is built from a genuine terminal source cap, its four
     // incident planar walls and their exact shoulder vertices.
     let mut tips = Vec::new();
-    if let Some(reduced) = crate::reduced_brep::ReducedSolid::from_step(solid_id, entities, &index)
-    {
+    if let Some(reduced) = crate::reduced_brep::ReducedSolid::from_step(solid_id, entities, index) {
         for extension in crate::solid_lofts::detect_ruled_end_extensions(&reduced) {
             tips.push(extension.tip_face_id);
             axes.push(extension.axis);
@@ -649,14 +661,37 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
         bail!("automatic extrusion-core union DATA section {data_section} does not exist");
     };
     let entities = &section.entities;
-    let index = build_index(entities);
+    recover_auto_proven_extrusion_core_union_from_entities(
+        solid_id,
+        entities,
+        &build_index(entities),
+        kernel,
+    )
+}
+
+/// Apply the complete analytic material recognizer to a section-local solid,
+/// including an already parsed, topology-normalized native host.
+pub(crate) fn recover_auto_proven_extrusion_core_union_from_entities<K: CadKernel>(
+    solid_id: u64,
+    entities: &[step_p21::ast::EntityInstance],
+    index: &std::collections::HashMap<u64, usize>,
+    kernel: &K,
+) -> Result<Option<CadFragment>> {
+    // Every branch requires this signature for admission. Unsupported carriers
+    // cannot be made admissible by evaluating additional Boolean proposals.
+    if crate::boundary_proof::analytic_boundary_diagnostic(solid_id, entities)
+        .signature
+        .is_none()
+    {
+        return Ok(None);
+    }
     let proposed =
-        crate::solid_extrusions::detect_extrusion_core_candidates_with_index(entities, &index)
+        crate::solid_extrusions::detect_extrusion_core_candidates_with_index(entities, index)
             .into_iter()
             .filter(|candidate| candidate.solid_id == solid_id)
             .collect();
     let mut filtered = crate::solid_extrusions::discard_boundary_penetrating_extrusion_cores(
-        solid_id, proposed, entities, &index,
+        solid_id, proposed, entities, index,
     );
     // Prefer an independently source-proven full core (possibly with exact
     // ruled ends) to an overlapping union of redundant partial interpretations.
@@ -680,11 +715,11 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
         // Failure of one candidate's tentative kernel evaluation does not
         // imply the next independent candidate is invalid. Only the final
         // comparison to the original source can admit semantic geometry.
-        if let Ok(Some(fragment)) = recover_proven_extrusion_core_union_fragment(
-            source_step,
-            data_section,
+        if let Ok(Some(fragment)) = recover_proven_extrusion_core_union_from_entities(
             solid_id,
             &[pair],
+            entities,
+            index,
             kernel,
         ) {
             return Ok(Some(fragment));
@@ -692,28 +727,24 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
     }
     if pairs.len() >= 2 {
         pairs.sort_unstable();
-        if let Ok(Some(fragment)) = recover_proven_extrusion_core_union_fragment(
-            source_step,
-            data_section,
-            solid_id,
-            &pairs,
-            kernel,
+        if let Ok(Some(fragment)) = recover_proven_extrusion_core_union_from_entities(
+            solid_id, &pairs, entities, index, kernel,
         ) {
             return Ok(Some(fragment));
         }
     }
     if let Some(fragment) =
-        recover_auto_proven_partial_cap_ruled_ends_fragment(solid_id, entities, &index, kernel)?
+        recover_auto_proven_partial_cap_ruled_ends_fragment(solid_id, entities, index, kernel)?
     {
         return Ok(Some(fragment));
     }
-    if let Some(fragment) = sectional::recover(solid_id, entities, &index, kernel)? {
+    if let Some(fragment) = sectional::recover(solid_id, entities, index, kernel)? {
         return Ok(Some(fragment));
     }
-    if let Some(fragment) = multi_axis_sheet::recover(solid_id, entities, &index, kernel)? {
+    if let Some(fragment) = multi_axis_sheet::recover(solid_id, entities, index, kernel)? {
         return Ok(Some(fragment));
     }
-    cap_cover::recover(solid_id, entities, &index, kernel)
+    cap_cover::recover(solid_id, entities, index, kernel)
 }
 
 /// Recover a first-class fused periodic-chain IR fragment from a proven source partition.

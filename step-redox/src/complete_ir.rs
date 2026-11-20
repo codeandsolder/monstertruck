@@ -587,6 +587,12 @@ fn recover_verified_direct_constructive_fragment<K: CadKernel>(
         bail!("missing DATA section {}", source.data_section);
     };
     let entities = &section.entities;
+    if crate::boundary_proof::analytic_boundary_diagnostic(source.id, entities)
+        .signature
+        .is_none()
+    {
+        return Ok(None);
+    }
     let index = crate::step_graph::build_index(entities);
     let mut candidates = recover_constructive_fragments_from_entities_with_index(entities, &index)?
         .into_iter()
@@ -1065,10 +1071,14 @@ fn recognize_single_healed_host<K: CadKernel>(
     {
         return Ok(Some((*host).clone()));
     }
-    // The edited solid may expose a piecewise-prismatic host rather than
-    // one extrusion or revolution. Reuse the same independently verified
-    // sectional recognizer on this one final native STEP snapshot.
-    crate::cad_recovery::sectional::recover(*solid_id, &section.entities, &index, kernel)
+    // The edited solid may expose an entire family of source-exact material
+    // cores, not just a single extrusion or an axial sectional solid.
+    crate::cad_recovery::recover_auto_proven_extrusion_core_union_from_entities(
+        *solid_id,
+        &section.entities,
+        &index,
+        kernel,
+    )
 }
 
 fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> Result<bool> {
@@ -3928,6 +3938,29 @@ END-ISO-10303-21;
             &kernel,
             &evaluated,
             99,
+            &exchange.data[0].entities
+        )?);
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn healed_host_can_use_proven_material_core_union() -> Result<()> {
+        let bytes =
+            include_bytes!("../validation/fixtures/native_relief_healed_host_0036d9d5.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let host = recognize_single_healed_host(&exchange, &kernel)?
+            .context("no constructive healed union host")?;
+        assert!(matches!(
+            host.source,
+            CadFragmentSource::ExtrusionCoreUnion { solid_id: 16, .. }
+        ));
+        let evaluated = kernel.evaluate(&host.model, host.root)?;
+        assert!(crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &evaluated,
+            16,
             &exchange.data[0].entities
         )?);
         Ok(())
