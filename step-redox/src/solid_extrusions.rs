@@ -205,6 +205,26 @@ fn source_cap_generator_station(
         .then_some(height)
 }
 
+/// Recover a transverse face's oriented profile in an already established
+/// extrusion frame. Unlike a cap proposal, this deliberately retains its
+/// absolute in-plane location rather than choosing a new local origin.
+pub(crate) fn source_cap_loops_in_frame(
+    face_id: u64,
+    origin: [f64; 3],
+    axes: [[f64; 3]; 3],
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<Vec<Vec<RecoveredProfileCurve>>> {
+    let face = face_info(face_id, entities, index)?;
+    let [x, y, z] = axes;
+    let roles = cap_loop_roles(&face, z)?;
+    face.loops
+        .iter()
+        .zip(roles)
+        .map(|(loop_, outer)| canonical_profile_loop(&loop_.edges, origin, x, y, z, outer))
+        .collect()
+}
+
 /// Form a cap-derived extrusion proposal for an explicitly given axial station.
 ///
 /// This does not assert that the positive source solid occupies the candidate.
@@ -813,7 +833,7 @@ fn core_strictly_contains_source_boundary_point(
 /// rejects uncertain ray crossings, tangencies and boundary proximity rather
 /// than interpreting a numerical tie as inside. Spline profiles are not
 /// classified by this filter until their true trim interval is represented.
-fn strict_profile_contains(
+pub(crate) fn strict_profile_contains(
     loop_: &[RecoveredProfileCurve],
     point: [f64; 2],
     margin: f64,
@@ -953,7 +973,7 @@ fn circle_arc_ray_crossings(
     )
 }
 
-fn angle_on_arc(angle: f64, start: f64, end: f64, tolerance: f64) -> bool {
+pub(crate) fn angle_on_arc(angle: f64, start: f64, end: f64, tolerance: f64) -> bool {
     let sweep = end - start;
     if sweep >= 0.0 {
         (angle - start).rem_euclid(TAU) <= sweep + tolerance
@@ -2314,7 +2334,7 @@ impl TotalPointOrder for Option<[f64; 2]> {
     }
 }
 
-fn recovered_profile_curve(
+pub(crate) fn recovered_profile_curve(
     edge: &OrientedEdgeUse,
     origin_mm: [f64; 3],
     x_axis: [f64; 3],
@@ -2599,7 +2619,7 @@ pub(crate) fn analytic_extrusion_volume(core: &RecoveredSolidExtrusion) -> Optio
     (volume.is_finite() && volume > 0.0).then_some(volume)
 }
 
-fn signed_area_curves(curves: &[RecoveredProfileCurve]) -> f64 {
+pub(crate) fn signed_area_curves(curves: &[RecoveredProfileCurve]) -> f64 {
     curves
         .iter()
         .map(|curve| match curve {

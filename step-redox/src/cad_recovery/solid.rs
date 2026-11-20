@@ -1127,7 +1127,7 @@ fn recovered_extrusion_profile_loops(
     Profile2d { loops }
 }
 
-fn recovered_profile_curve_to_ir(curve: &RecoveredProfileCurve) -> Curve2d {
+pub(super) fn recovered_profile_curve_to_ir(curve: &RecoveredProfileCurve) -> Curve2d {
     match curve {
         RecoveredProfileCurve::Line {
             start_mm, end_mm, ..

@@ -74,6 +74,12 @@ pub enum CadFragmentSource {
         face_ids: Vec<u64>,
         slabs: usize,
     },
+    /// Continuous source section with additive/subtractive station transitions.
+    SectionalExtrusionTransitions {
+        solid_id: u64,
+        face_ids: Vec<u64>,
+        slabs: usize,
+    },
     /// Exact ruled end caps added to an extrusion-core union.
     CapExtrusionRuledEnds {
         solid_id: u64,
