@@ -121,9 +121,8 @@ pub(super) fn compare(
     }
     for chain in &mut remapped.chains {
         let supports = match chain {
-            BoundaryChainKey::Open { supports, .. } | BoundaryChainKey::Cycle { supports } => {
-                supports
-            }
+            BoundaryChainKey::Open { supports, .. }
+            | BoundaryChainKey::Circular { supports, .. } => supports,
         };
         for key in supports.iter_mut() {
             remap(key);
@@ -150,8 +149,9 @@ mod tests {
         let b = make_key(11);
         let signature = |key: &OrientedSupportKey| AnalyticBoundarySignature {
             supports: vec![key.clone()],
-            chains: vec![BoundaryChainKey::Cycle {
+            chains: vec![BoundaryChainKey::Open {
                 supports: [key.clone(), key.clone()],
+                endpoints_mm: [[0, 0, 0], [10, 0, 0]],
             }],
         };
         let sa = signature(&a);
