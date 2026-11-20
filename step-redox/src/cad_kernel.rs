@@ -1080,7 +1080,7 @@ pub mod monstertruck {
             return Ok(None);
         };
         let mut boundaries = Vec::new();
-        for face in united.iter() {
+        for face in &united {
             let solid: Solid = builder::extrude(face, Vector3::new(0.0, 0.0, length));
             boundaries.extend(solid.into_boundaries());
         }
