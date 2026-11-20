@@ -104,6 +104,22 @@ struct StepConeFrame {
 fn source_cone_step_frame(processor: &ConicalSurface) -> Option<StepConeFrame> {
     let revo = processor.entity();
     let transform = processor.transform();
+    // A STEP circular cone is affine geometry. Ignore neither perspective
+    // components nor the homogeneous divisor: both affect actual positions.
+    // Non-unit homogeneous weights are allowed because they describe the same
+    // affine map after dividing the linear vectors by w as well as points.
+    if [transform.x, transform.y, transform.z, transform.w]
+        .into_iter()
+        .flat_map(|column| [column.x, column.y, column.z, column.w])
+        .any(|value| !value.is_finite())
+        || transform.x.w != 0.0
+        || transform.y.w != 0.0
+        || transform.z.w != 0.0
+        || transform.w.w == 0.0
+    {
+        return None;
+    }
+    let homogeneous_weight = transform.w.w;
     let line = revo.entity_curve();
     let raw_axis = revo.axis();
     let axis_len = raw_axis.magnitude();
@@ -133,9 +149,9 @@ fn source_cone_step_frame(processor: &ConicalSurface) -> Option<StepConeFrame> {
         return None;
     }
 
-    let world_reference = transform.transform_vector(local_reference);
-    let world_tangent = transform.transform_vector(local_tangent);
-    let world_axis = transform.transform_vector(local_axis);
+    let world_reference = transform.transform_vector(local_reference) / homogeneous_weight;
+    let world_tangent = transform.transform_vector(local_tangent) / homogeneous_weight;
+    let world_axis = transform.transform_vector(local_axis) / homogeneous_weight;
     let rscale = world_reference.magnitude();
     let tscale = world_tangent.magnitude();
     let zscale = world_axis.magnitude();
@@ -158,7 +174,13 @@ fn source_cone_step_frame(processor: &ConicalSurface) -> Option<StepConeFrame> {
     let location = transform.transform_point(local_foot);
     let radius = local_radius * rscale;
     let semi_angle = (radial_slope * rscale / (axial_slope * zscale)).atan();
-    if !radius.is_finite() || radius <= 0.0 || !semi_angle.is_finite() {
+    if !radius.is_finite()
+        || radius <= 0.0
+        || !semi_angle.is_finite()
+        || [location.x, location.y, location.z]
+            .into_iter()
+            .any(|component| !component.is_finite())
+    {
         return None;
     }
     Some(StepConeFrame {
@@ -388,6 +410,47 @@ ENDSEC;\nEND-ISO-10303-21;\n"
         assert!((frame.radius - 0.03302).abs() < 1.0e-14);
         assert!((frame.semi_angle - 0.3_f64.atan()).abs() < 1.0e-14);
         assert!((frame.location.z - 0.08).abs() < 1.0e-14);
+    }
+
+    #[test]
+    fn cone_export_accepts_equivalent_nonunit_homogeneous_weight() {
+        let point = Point3::new(0.3302, 0.0, 0.4);
+        let generator = Vector3::new(0.6, 0.0, 1.0);
+        let mut transform = Matrix4::from_scale(0.1);
+        transform.w.x = 1.3;
+        transform.w.y = -0.4;
+        transform.w.z = 2.0;
+        let affine = cone(point, generator, transform);
+        let expected = source_cone_step_frame(&affine).expect("affine cone");
+        for homogeneous_scale in [2.0, -3.0] {
+            let equivalent = cone(point, generator, transform * homogeneous_scale);
+            let scaled = source_cone_step_frame(&equivalent).expect("same affine cone");
+            assert!((scaled.radius - expected.radius).abs() < 1.0e-14);
+            assert!((scaled.semi_angle - expected.semi_angle).abs() < 1.0e-14);
+            assert!((scaled.location - expected.location).magnitude() < 1.0e-14);
+            assert!((scaled.axis.normalize() - expected.axis.normalize()).magnitude() < 1.0e-14);
+            assert!(
+                (scaled.reference.normalize() - expected.reference.normalize()).magnitude()
+                    < 1.0e-14
+            );
+        }
+    }
+
+    #[test]
+    fn exact_cone_export_rejects_projective_and_nonfinite_matrices() {
+        let point = Point3::new(0.3302, 0.0, 0.4);
+        let generator = Vector3::new(0.6, 0.0, 1.0);
+        let mut projective = Matrix4::from_scale(1.0);
+        projective.x.w = 1.0e-14;
+        assert!(source_cone_step_frame(&cone(point, generator, projective)).is_none());
+
+        let mut nonfinite_translation = Matrix4::from_scale(1.0);
+        nonfinite_translation.w.x = f64::INFINITY;
+        assert!(source_cone_step_frame(&cone(point, generator, nonfinite_translation)).is_none());
+
+        let mut zero_weight = Matrix4::from_scale(1.0);
+        zero_weight.w.w = 0.0;
+        assert!(source_cone_step_frame(&cone(point, generator, zero_weight)).is_none());
     }
 
     #[test]
