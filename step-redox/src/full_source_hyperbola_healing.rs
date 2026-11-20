@@ -23,6 +23,9 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use step_p21::ast::{DataSection, EntityInstance, Name, Parameter};
 
+mod plane_boundary;
+pub use plane_boundary::PlaneBoundaryEvidence;
+
 /// A requested independently proven replacement of one source edge.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct FullSourceHyperbolaRepair {
@@ -56,6 +59,7 @@ pub struct FullSourceHyperbolaRepairEvidence {
     pub healed_curve_same_sense: bool,
     pub source_to_healed_locus_separation_lower_mm: f64,
     pub healed_source_plane_residual_upper_mm: f64,
+    pub replacement_plane_boundary: PlaneBoundaryEvidence,
 }
 
 /// Newly written STEP document plus machine-readable, source-distinct proof.
@@ -320,6 +324,7 @@ fn update_existing_source_topology(
 /// A proof prepared exclusively from the original input, before any edits.
 struct PreparedSourceRepair {
     candidate: crate::source_edge_healing::HyperbolaHealingCandidate,
+    replacement_plane_boundary: PlaneBoundaryEvidence,
     source_scale_mm: f64,
     original_plane: u64,
     original_cone: u64,
@@ -364,7 +369,24 @@ fn prepare_source_repair(
     named_local_id(&source.entities, &index, original_cone, "CONICAL_SURFACE")?;
     let (native, intersection_id, plane_id, cone_id) =
         analytic_geometry_with_local_refs(&candidate, scale)?;
+    let native_index = build_index(&native);
+    let brep::SurfaceSupport::Plane(replacement) =
+        brep::surface_support(plane_id, &native, &native_index)
+    else {
+        bail!("serialized replacement plane cannot be resolved");
+    };
+    let brep::SurfaceSupport::Plane(original) =
+        brep::surface_support(original_plane, &source.entities, &index)
+    else {
+        bail!("original source plane cannot be resolved");
+    };
+    if crate::math3::dot(original.normal, replacement.normal) <= 0.0 {
+        bail!("replacement plane reverses original face orientation");
+    }
+    let replacement_plane_boundary =
+        plane_boundary::certify(source, &index, request, &candidate, replacement, scale)?;
     Ok(PreparedSourceRepair {
+        replacement_plane_boundary,
         candidate,
         source_scale_mm: scale,
         original_plane,
@@ -382,6 +404,7 @@ fn apply_prepared_repair(
     prepared: PreparedSourceRepair,
 ) -> Result<FullSourceHyperbolaRepairEvidence> {
     let PreparedSourceRepair {
+        replacement_plane_boundary,
         candidate,
         source_scale_mm: scale,
         original_plane,
@@ -444,6 +467,7 @@ fn apply_prepared_repair(
         source_to_healed_locus_separation_lower_mm: candidate
             .evidence
             .minimum_source_to_healed_locus_separation_mm,
+        replacement_plane_boundary,
         healed_source_plane_residual_upper_mm: candidate
             .evidence
             .healed_source_plane_max_residual_mm,
@@ -456,12 +480,16 @@ fn apply_prepared_repair(
 /// mutation. New analytic curves and corrected planes are inserted into the
 /// same DATA section, while original edge IDs, vertices, coedge directions,
 /// surrounding shell/solid topology, old splines and metadata are retained.
+/// Every boundary of a replacement plane is certified in 3D against the
+/// source representation uncertainty, including untouched carrier loci and
+/// original vertices. This does not certify PCURVE consistency, loop-region
+/// validity, or whole-solid `BRep` equivalence.
 ///
 /// # Errors
 /// Rejects empty repair lists, duplicate/conflicting requested replacements,
 /// invalid or unsupported source solids, source unit/uncertainty mismatch,
 /// insufficient globally certified original-spline departure, invalid new
-/// analytic carrier geometry and malformed references.
+/// analytic carrier geometry, uncertified replacement-plane boundaries and malformed references.
 pub fn heal_step_document(
     bytes: &[u8],
     requests: &[FullSourceHyperbolaRepair],
@@ -664,8 +692,48 @@ mod tests {
                 assert!((curve.evaluate(a) - point(start)).magnitude() < 1.0e-8);
                 assert!((curve.evaluate(b) - point(end)).magnitude() < 1.0e-8);
                 assert!(detail.source_to_healed_locus_separation_lower_mm > 1.0e-5);
+                let boundary = &detail.replacement_plane_boundary;
+                assert_eq!(boundary.loop_count, 1);
+                assert_eq!(boundary.retained_edge_count, 17);
+                assert!(boundary.retained_max_residual_upper_mm <= boundary.source_tolerance_mm);
+                assert!(boundary.vertex_max_residual_upper_mm <= boundary.source_tolerance_mm);
+                assert!(boundary.healed_edge_residual_upper_mm <= boundary.source_tolerance_mm);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn full_document_rejects_a_retained_boundary_spline_interior_off_the_new_plane() -> Result<()> {
+        let mut source = ParsedStepSource::parse(fixture())?;
+        let section = &mut source.exchange.data[0];
+        let index = build_index(&section.entities);
+        // This is an interior control on retained edge #107829, not a
+        // vertex or control of the independently provable edge #93481.
+        let control_id = 51619;
+        let control = crate::step_entities::cartesian_point(control_id, &section.entities, &index)
+            .context("retained spline control is missing")?;
+        let brep::SurfaceSupport::Plane(plane) =
+            brep::surface_support(82429, &section.entities, &index)
+        else {
+            bail!("fixture plane is missing");
+        };
+        let changed = crate::math3::add(control, crate::math3::scale(plane.normal, 0.01));
+        let point = simple_parameters_mut(section, &index, control_id, "CARTESIAN_POINT")?;
+        point[1] = Parameter::List(changed.into_iter().map(Parameter::Real).collect());
+        let corrupted = write_exchange(&source.exchange)?;
+        let error = heal_step_document(corrupted.as_bytes(), &[request(93481)]).expect_err(
+            "the unchanged local hyperbola proof cannot admit an off-plane retained curve",
+        );
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains("replacement face #125603 retained edge #107829"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("boundary plane incidence not certified"),
+            "{diagnostic}"
+        );
         Ok(())
     }
 
