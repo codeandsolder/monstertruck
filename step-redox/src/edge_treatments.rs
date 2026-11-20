@@ -313,12 +313,14 @@ pub(crate) fn reciprocal_planar_profile_faces(
             let key = component[cursor];
             cursor += 1;
             let item = candidates[&key];
+            let (solid_id, treatment_face_id) = key;
             for carrier in &item.carriers {
-                let neighbor_key = (key.0, carrier.face_id);
+                let neighbor_key = (solid_id, carrier.face_id);
                 let reciprocal = candidates.get(&neighbor_key).is_some_and(|neighbor| {
                     neighbor_key != key
                         && neighbor.carriers.iter().any(|back| {
-                            back.face_id == key.1 && back.shared_edge_ids == carrier.shared_edge_ids
+                            back.face_id == treatment_face_id
+                                && back.shared_edge_ids == carrier.shared_edge_ids
                         })
                         && interchangeable_planar_candidates(item, neighbor)
                 });
