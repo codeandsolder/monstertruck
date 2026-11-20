@@ -15,7 +15,7 @@ use super::{AltCurve, AltRegion, ShapeOpsCurve, ShapeOpsSurface};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::PolylineCurve;
-use monstertruck_topology::{Edge, EdgeId, VertexId, Wire};
+use monstertruck_topology::{Edge, EdgeId, Face, Shell, VertexId, Wire};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::BTreeSet;
 
@@ -944,6 +944,116 @@ fn assemble_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     )
 }
 
+/// A topologically materializable planar region can still contain several
+/// disconnected positive contours. `Face::new` validates wires, not their
+/// planar nesting. Keep each exterior with its own holes before producing
+/// the final B-rep. This does not split or approximate any original curve.
+pub(super) fn split_disconnected_planar_region<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    region: &AltRegion<C, S>,
+    tol: f64,
+) -> Option<Vec<AltRegion<C, S>>> {
+    let surface = region.surface();
+    let groups = split_disconnected_planar_wires(region.absolute_boundaries(), &surface, tol)?;
+    let parts = groups
+        .into_iter()
+        .map(|wires| {
+            BooleanRegion::new(
+                wires,
+                surface.clone(),
+                region.orientation(),
+                region.key(),
+                region.source_face(),
+            )
+        })
+        .collect::<Vec<_>>();
+    parts
+        .iter()
+        .all(|part| part.try_face().is_some())
+        .then_some(parts)
+}
+
+fn split_disconnected_planar_wires<C, S>(
+    boundaries: &[Wire<Point3, C>],
+    surface: &S,
+    tol: f64,
+) -> Option<Vec<Vec<Wire<Point3, C>>>>
+where
+    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3> + Clone,
+    S: ShapeOpsSurface,
+{
+    if boundaries.len() < 2
+        || !matches!(
+            surface.try_into_analytic_surface_kind(),
+            Some(AnalyticSurfaceKind::Plane(_))
+        )
+    {
+        return None;
+    }
+    let mut samples = HashMap::default();
+    let mut outer = Vec::new();
+    let mut holes = Vec::new();
+    for wire in boundaries {
+        let mut poly =
+            create_parameter_boundary_on_surface(surface, wire, None, &mut samples, tol)?.0;
+        reconcile_local_wire_uv_closure(surface, None, wire.front_vertex()?.point(), &mut poly);
+        let area = signed_area(&poly);
+        if !area.is_finite() || area == 0.0 {
+            return None;
+        }
+        if area > 0.0 {
+            outer.push((vec![wire.clone()], poly));
+        } else {
+            holes.push((wire.clone(), poly));
+        }
+    }
+    if outer.len() < 2 {
+        return None;
+    }
+    for (hole, poly) in holes {
+        let point = *poly.first()?;
+        let parent = outer
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, candidate))| winding(candidate, point) != 0)
+            .min_by(|(_, a), (_, b)| signed_area(&a.1).total_cmp(&signed_area(&b.1)))
+            .map(|(i, _)| i)?;
+        outer[parent].0.push(hole);
+    }
+    Some(outer.into_iter().map(|(wires, _)| wires).collect())
+}
+
+/// Conversion and global topology repair can resolve an intermediate
+/// self-touching walk into multiple positive exterior wires. Reapply the
+/// same normalization to the final exact curves, after those repairs.
+pub(super) fn split_disconnected_planar_faces<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell: &Shell<Point3, C, S>,
+    tol: f64,
+) -> Shell<Point3, C, S> {
+    let mut faces = Vec::new();
+    for face in shell {
+        let surface = face.surface();
+        let parts = split_disconnected_planar_wires(face.absolute_boundaries(), &surface, tol)
+            .and_then(|groups| {
+                groups
+                    .into_iter()
+                    .map(|wires| {
+                        let mut part = Face::new(wires, surface.clone()).ok()?;
+                        if !face.orientation() {
+                            part.invert();
+                        }
+                        Some(part)
+                    })
+                    .collect::<Option<Vec<_>>>()
+            });
+        if let Some(parts) = parts {
+            faces.extend(parts);
+        } else {
+            faces.push(face.clone());
+        }
+    }
+    Shell::from(faces)
+}
+
 /// Union one source face's selected patches without changing exact edge curves.
 fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     source: &[AltRegion<C, S>],
@@ -1384,6 +1494,72 @@ mod tests {
                 source_face,
             )
         }
+    }
+
+    #[test]
+    fn disconnected_planar_region_preserves_each_positive_island_and_its_holes() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 4.0],
+            [0.0, 4.0],
+            [6.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 4.0],
+            [6.0, 4.0],
+            [1.0, 1.0],
+            [1.0, 3.0],
+            [3.0, 3.0],
+            [3.0, 1.0],
+            [7.0, 1.0],
+            [7.0, 3.0],
+            [9.0, 3.0],
+            [9.0, 1.0],
+        ]);
+        let wires = [
+            &[0, 1, 2, 3, 0][..],
+            &[4, 5, 6, 7, 4][..],
+            &[8, 9, 10, 11, 8][..],
+            &[12, 13, 14, 15, 12][..],
+        ]
+        .iter()
+        .map(|path| fixture.region(path).absolute_boundaries()[0].clone())
+        .collect::<Vec<_>>();
+        let region = BooleanRegion::new(wires.clone(), Surface::Plane(Plane::xy()), false, 0, 1);
+        assert!(
+            region.try_face().is_some(),
+            "topological constructor accepts multiple exterior contours"
+        );
+        let parts = split_disconnected_planar_region(&region, 1e-6).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert!(
+            parts
+                .iter()
+                .all(|part| part.absolute_boundaries().len() == 2 && !part.orientation())
+        );
+        let mut original_ids = wires
+            .iter()
+            .flat_map(|wire| wire.iter().map(Edge::id))
+            .collect::<Vec<_>>();
+        let mut output_ids = parts
+            .iter()
+            .flat_map(|part| part.absolute_boundaries())
+            .flat_map(|wire| wire.iter().map(Edge::id))
+            .collect::<Vec<_>>();
+        // Use equality rather than relying on stable allocation ordering of IDs.
+        assert_eq!(original_ids.len(), output_ids.len());
+        for id in original_ids.drain(..) {
+            let position = output_ids.iter().position(|other| *other == id).unwrap();
+            output_ids.swap_remove(position);
+        }
+        let annulus = BooleanRegion::new(
+            vec![wires[0].clone(), wires[2].clone()],
+            Surface::Plane(Plane::xy()),
+            true,
+            0,
+            1,
+        );
+        assert!(split_disconnected_planar_region(&annulus, 1e-6).is_none());
     }
 
     /// An analytic quadratic profile swept in x: every edge is an original

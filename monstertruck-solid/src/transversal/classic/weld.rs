@@ -418,7 +418,14 @@ pub(super) fn weld_coincident_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tolerances: BooleanTolerance,
 ) -> Option<AltCurveShell<C, S>> {
     let rebuilt_regions = node_selected_regions(regions, &[], tolerances)?;
-    faces_classification::materialize_regions(&rebuilt_regions)
+    let separated = rebuilt_regions
+        .into_iter()
+        .flat_map(|region| {
+            super::planar_union::split_disconnected_planar_region(&region, tolerances.length)
+                .unwrap_or_else(|| vec![region])
+        })
+        .collect::<Vec<_>>();
+    faces_classification::materialize_regions(&separated)
 }
 
 /// Reconcile duplicate edge references after converting temporary SSI leaders
