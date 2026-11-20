@@ -190,7 +190,62 @@ struct CurvedNeighbor {
     edge: OrientedEdgeUse,
     vertex: u64,
     original: [f64; 3],
-    conic: CylinderPlaneConic,
+    conic: Option<CylinderPlaneConic>,
+}
+
+/// Intersect a retained analytic line with the independently recovered
+/// inverse edge. Unlike a supplier's fitted spline, a LINE carrier never
+/// requires substitution with a different curve family.
+fn retained_line_intersection(
+    edge: &OrientedEdgeUse,
+    virtual_endpoint: [f64; 3],
+    virtual_direction: [f64; 3],
+) -> Result<[f64; 3]> {
+    let CurveSupport::Line(line) = edge.support else {
+        bail!("retained edge #{} is not a line", edge.edge_id);
+    };
+    let direction =
+        normalize(line.direction, DIR_TOL).context("retained line has degenerate direction")?;
+    ensure!(
+        [edge.start_mm, edge.end_mm]
+            .iter()
+            .all(|point| { norm(cross(sub(*point, line.origin_mm), direction)) <= GEOM_TOL_MM }),
+        "retained straight edge #{} does not lie on its imported line support",
+        edge.edge_id
+    );
+    let crossing = cross(direction, virtual_direction);
+    let denominator = dot(crossing, crossing);
+    let snapped = if denominator <= DIR_TOL * DIR_TOL {
+        // Coincident support lines are determined by the already proven
+        // virtual endpoint. A merely parallel displaced line is rejected.
+        virtual_endpoint
+    } else {
+        let displacement = sub(virtual_endpoint, line.origin_mm);
+        let parameter = dot(cross(displacement, virtual_direction), crossing) / denominator;
+        add(line.origin_mm, mul(direction, parameter))
+    };
+    let residual = norm(cross(sub(snapped, virtual_endpoint), virtual_direction));
+    let line_residual = norm(cross(sub(snapped, line.origin_mm), direction));
+    ensure!(
+        residual <= GEOM_TOL_MM && line_residual <= GEOM_TOL_MM,
+        "retained straight edge #{} and recovered virtual line do not intersect",
+        edge.edge_id
+    );
+    ensure!(
+        distance(snapped, virtual_endpoint) <= FIT_MM,
+        "inverse virtual endpoint is farther than the supplier fit from line #{}",
+        edge.edge_id
+    );
+    Ok(snapped)
+}
+
+impl CurvedNeighbor {
+    fn extend_to(&self, virtual_endpoint: [f64; 3], direction: [f64; 3]) -> Result<[f64; 3]> {
+        self.conic.map_or_else(
+            || retained_line_intersection(&self.edge, virtual_endpoint, direction),
+            |conic| conic.extend_to(virtual_endpoint, direction),
+        )
+    }
 }
 
 fn curved_neighbor(
@@ -205,43 +260,51 @@ fn curved_neighbor(
             planar_carrier.id
         );
     };
-    let CurveSupport::BSpline(ref spline) = edge.support else {
-        bail!(
-            "retained edge #{} is not a spline approximation",
-            edge.edge_id
-        );
-    };
-    let neighbor_id = edge_face_users(solid, edge.edge_id)
-        .into_iter()
-        .find(|&id| id != planar_carrier.id)
-        .context("retained spline has no other source face")?;
-    let SurfaceSupport::Cylinder(cylinder) = face(solid, neighbor_id)?.surface else {
-        bail!("retained spline is not shared by a cylindrical carrier");
-    };
-    let conic = CylinderPlaneConic::new(plane, cylinder)?;
-    conic.fitted_to_source(spline, plane)?;
     let (global_vertices, global_points) = global_edge_endpoints(&edge);
-    // The original trimmed B-spline must describe this entire source edge.
-    let first = crate::boundary_proof::evaluate_bspline(
-        spline,
-        crate::boundary_proof::bspline_domain(spline)
-            .context("retained spline has no domain")?
-            .0,
-    )
-    .context("invalid spline start")?;
-    let last = crate::boundary_proof::evaluate_bspline(
-        spline,
-        crate::boundary_proof::bspline_domain(spline)
-            .context("retained spline has no domain")?
-            .1,
-    )
-    .context("invalid spline end")?;
-    ensure!(
-        (distance(first, global_points[0]) <= FIT_MM && distance(last, global_points[1]) <= FIT_MM)
-            || (distance(first, global_points[1]) <= FIT_MM
-                && distance(last, global_points[0]) <= FIT_MM),
-        "retained curve is subtrimmed: cannot replace full source spline"
-    );
+    let conic = match &edge.support {
+        CurveSupport::Line(_) => {
+            let normal = normalize(plane.normal, DIR_TOL)
+                .context("retained line has degenerate planar carrier")?;
+            ensure!(
+                [edge.start_mm, edge.end_mm].iter().all(|point| {
+                    dot(normal, sub(*point, plane.origin_mm)).abs() <= GEOM_TOL_MM
+                }),
+                "retained line #{} does not belong to planar carrier #{}",
+                edge.edge_id,
+                planar_carrier.id
+            );
+            None
+        }
+        CurveSupport::BSpline(spline) => {
+            let neighbor_id = edge_face_users(solid, edge.edge_id)
+                .into_iter()
+                .find(|&id| id != planar_carrier.id)
+                .context("retained spline has no other source face")?;
+            let SurfaceSupport::Cylinder(cylinder) = face(solid, neighbor_id)?.surface else {
+                bail!("retained spline is not shared by a cylindrical carrier");
+            };
+            let conic = CylinderPlaneConic::new(plane, cylinder)?;
+            conic.fitted_to_source(spline, plane)?;
+            let (first, last) = crate::boundary_proof::bspline_domain(spline)
+                .context("retained spline has no domain")?;
+            let first = crate::boundary_proof::evaluate_bspline(spline, first)
+                .context("invalid spline start")?;
+            let last = crate::boundary_proof::evaluate_bspline(spline, last)
+                .context("invalid spline end")?;
+            ensure!(
+                (distance(first, global_points[0]) <= FIT_MM
+                    && distance(last, global_points[1]) <= FIT_MM)
+                    || (distance(first, global_points[1]) <= FIT_MM
+                        && distance(last, global_points[0]) <= FIT_MM),
+                "retained curve is subtrimmed: cannot replace full source spline"
+            );
+            Some(conic)
+        }
+        _ => bail!(
+            "retained edge #{} is not a line or fitted spline",
+            edge.edge_id
+        ),
+    };
     let (vertex, original) = if touched_at_end {
         (edge.end_vertex, edge.end_mm)
     } else {
@@ -316,10 +379,8 @@ fn plan_carrier(
         (1, 0)
     };
     let mut snapped = [[0.0; 3]; 2];
-    snapped[previous_target] = previous
-        .conic
-        .extend_to(virtual_ends[previous_target], direction)?;
-    snapped[next_target] = next.conic.extend_to(virtual_ends[next_target], direction)?;
+    snapped[previous_target] = previous.extend_to(virtual_ends[previous_target], direction)?;
+    snapped[next_target] = next.extend_to(virtual_ends[next_target], direction)?;
     Ok(CarrierConicPlan {
         face_id: face.id,
         shared,
@@ -345,7 +406,10 @@ fn curve_edit(
     } else {
         bail!("curved retained edge has no touched endpoint");
     };
-    let replacement_curve = Some(neighbor.conic.trimmed(front, back)?);
+    let replacement_curve = neighbor
+        .conic
+        .map(|conic| conic.trimmed(front, back))
+        .transpose()?;
     Ok(EndpointEdit {
         carrier_face_id,
         edge: neighbor.edge,
@@ -466,4 +530,57 @@ pub(super) fn plan_curved_segment_patch(
         face_boundary_replacements: Vec::new(),
         require_unused_edges: topology_edges(provenance, data_section, treatment_edges)?,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::brep::LineSupport;
+
+    fn line_edge(origin: [f64; 3], direction: [f64; 3]) -> OrientedEdgeUse {
+        OrientedEdgeUse {
+            oriented_edge_id: 7,
+            edge_id: 8,
+            curve_id: 9,
+            curve_same_sense: true,
+            parameter_forward: true,
+            start_vertex: 10,
+            end_vertex: 11,
+            start_mm: origin,
+            end_mm: add(origin, direction),
+            support: CurveSupport::Line(LineSupport {
+                origin_mm: origin,
+                direction,
+            }),
+        }
+    }
+
+    #[test]
+    fn mixed_conic_planner_uses_exact_line_support_for_its_straight_neighbor() -> Result<()> {
+        let edge = line_edge([0.0, -1.0, 0.0], [0.0, 1.0, 0.0]);
+        let point = retained_line_intersection(&edge, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])?;
+        assert_eq!(point, [0.0, 0.0, 0.0]);
+        // Original line orientation and non-unit parameterization are not relevant.
+        let reversed = line_edge([0.0, 1.0, 0.0], [0.0, -2.0, 0.0]);
+        assert_eq!(
+            retained_line_intersection(&reversed, [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0])?,
+            [0.0, 0.0, 0.0]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_conic_planner_rejects_displaced_parallel_skew_and_remote_lines() {
+        let parallel = line_edge([0.0, 0.5, 0.0], [1.0, 0.0, 0.0]);
+        assert!(retained_line_intersection(&parallel, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]).is_err());
+        let coincident = line_edge([-1.0, 0.0, 0.0], [2.0, 0.0, 0.0]);
+        assert_eq!(
+            retained_line_intersection(&coincident, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]).ok(),
+            Some([0.0, 0.0, 0.0])
+        );
+        let skew = line_edge([0.0, -1.0, 0.2], [0.0, 1.0, 0.0]);
+        assert!(retained_line_intersection(&skew, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]).is_err());
+        let remote = line_edge([0.1, -1.0, 0.0], [0.0, 1.0, 0.0]);
+        assert!(retained_line_intersection(&remote, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]).is_err());
+    }
 }
