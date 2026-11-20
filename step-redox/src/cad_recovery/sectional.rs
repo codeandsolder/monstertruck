@@ -343,8 +343,12 @@ fn sectional_model(
     let mut children = Vec::new();
     for (limits, profiles) in levels.windows(2).zip(sections) {
         let [a, b] = [limits[0], limits[1]];
-        for profile in profiles {
-            children.push(extrusion_node(&mut model, frame, a, b, profile.clone()));
+        let parts = profiles
+            .iter()
+            .map(|profile| extrusion_node(&mut model, frame, a, b, profile.clone()))
+            .collect::<Vec<_>>();
+        if !parts.is_empty() {
+            children.push(add_bounded_union_tree(&mut model, parts));
         }
     }
     if children.len() < 2 {
