@@ -85,10 +85,6 @@ enum PlanarTreatment {
     },
 }
 
-impl PlanarTreatment {
-    fn is_round(self) -> bool { matches!(self, Self::Round) }
-}
-
 /// For planar carriers, equal transverse setbacks are related to the
 /// auxiliary rolling-circle radius by setback = radius * tan(angle/2).
 fn chamfer_radius(normals: [Vector3; 2], setback: f64) -> Option<f64> {
@@ -725,16 +721,8 @@ fn planar_network(
         .iter()
         .map(|v| Some((v.id(), Corner::new(shell, &incidence, &selected, v)?)))
         .collect::<Option<Map<_, _>>>()?;
-    // The ordinary edge/wire implementation remains available for
-    // operations with no three-way corner.
-    let spherical = corners
-        .values()
-        .any(|c| matches!(c.kind, CornerKind::Sphere));
-    // Round junction support is a spherical patch; a three-bevel corner
-    // requires a separate planar junction construction.
-    if spherical != profile.is_round() {
-        return None;
-    }
+    // Both isolated straight rounds and trivalent rolling-ball networks use
+    // exactly the same cap/rail assembly; no length heuristic is needed.
     let rounds = selected
         .values()
         .map(|edge| {

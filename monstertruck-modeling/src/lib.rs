@@ -119,6 +119,8 @@ pub mod errors;
 mod geom_impls;
 mod mapped;
 mod multi_sweep;
+mod partition_normalization;
+pub use partition_normalization::normalize_planar_partitions;
 /// primitive shapes
 pub mod primitive;
 /// Planar profile normalization and solid construction from profiles.
