@@ -855,13 +855,27 @@ impl<P, C, S> Shell<P, C, S> {
         } else {
             let (wire0, idx0) = vec.pop()?;
             let (wire1, idx1) = vec.pop()?;
-            if !wire0[idx0].is_same(&wire1[(idx1 + 1) % wire1.len()])
-                || !wire0[(idx0 + 1) % wire0.len()].is_same(&wire1[idx1])
-            {
+            // Stored (absolute) face wires may use the same direction when
+            // their face orientations differ. Match the ordered pair in
+            // either direction, not the physical coedge sense.
+            let (a, b) = (&wire0[idx0], &wire0[(idx0 + 1) % wire0.len()]);
+            let (c, d) = (&wire1[idx1], &wire1[(idx1 + 1) % wire1.len()]);
+            let reverse = if a == c && b == d {
+                false
+            } else if *a == d.inverse() && *b == c.inverse() {
+                true
+            } else {
                 return None;
-            }
-            let edge = join(&wire0[idx0], &wire0[(idx0 + 1) % wire0.len()])?;
-            wire1.swap_subwire_into_edges(idx1, edge.inverse());
+            };
+            let edge = join(a, b)?;
+            wire1.swap_subwire_into_edges(
+                idx1,
+                if reverse {
+                    edge.inverse()
+                } else {
+                    edge.clone()
+                },
+            );
             wire0.swap_subwire_into_edges(idx0, edge.clone());
             Some(edge)
         }
