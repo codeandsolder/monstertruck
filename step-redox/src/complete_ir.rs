@@ -4216,53 +4216,44 @@ END-ISO-10303-21;
         Ok(&chosen.fragment)
     }
 
-    /// Representative previously unrecovered source bodies from the frozen
-    /// catalog census. Admit their whole editable solid, not just a candidate
-    /// with a valid topology. Both the loft and constructive union paths
-    /// must reproduce the original oriented analytic boundary.
     #[cfg(feature = "cad-kernel-monstertruck")]
-    #[test]
-    fn real_targeted_analytic_sources_are_automatically_recovered() -> Result<()> {
-        let samples: &[(&str, &[u8], u64, bool)] = &[
-            (
-                "42c4c451",
-                include_bytes!("../validation/fixtures/native_targeted_42c4c451.step"),
-                22,
-                true,
-            ),
-            (
-                "5c8c706c",
-                include_bytes!("../validation/fixtures/native_targeted_5c8c706c.step"),
-                50,
-                true,
-            ),
-            (
-                "66abf5fd",
-                include_bytes!("../validation/fixtures/native_targeted_66abf5fd.step"),
-                38,
-                true,
-            ),
-            (
-                "eb76f3ce",
-                include_bytes!("../validation/fixtures/native_targeted_eb76f3ce.step"),
-                20,
-                true,
-            ),
-            (
-                "58dd1537",
-                include_bytes!("../validation/fixtures/native_targeted_58dd1537.step"),
-                66,
-                false,
-            ),
-            (
-                "b13fc76c",
-                include_bytes!("../validation/fixtures/native_targeted_b13fc76c.step"),
-                54,
-                false,
-            ),
-        ];
+    #[derive(Clone, Copy)]
+    enum TargetedFamily {
+        Loft,
+        CoreUnion,
+        CoreRuledEnds,
+        CapRuledEnds,
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    impl TargetedFamily {
+        fn matches(self, source: &CadFragmentSource, solid_id: u64) -> bool {
+            source_solid_id(source) == solid_id
+                && matches!(
+                    (self, source),
+                    (Self::Loft, CadFragmentSource::SolidLoft { .. })
+                        | (
+                            Self::CoreUnion,
+                            CadFragmentSource::ExtrusionCoreUnion { .. }
+                        )
+                        | (
+                            Self::CoreRuledEnds,
+                            CadFragmentSource::ExtrusionCoreRuledEnds { .. }
+                        )
+                        | (
+                            Self::CapRuledEnds,
+                            CadFragmentSource::CapExtrusionRuledEnds { .. }
+                        )
+                )
+        }
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn verify_targeted_analytic_sources(
+        samples: &[(&str, &[u8], u64, TargetedFamily)],
+    ) -> Result<()> {
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
-        for &(label, input, solid_id, loft) in samples {
+        for &(label, input, solid_id, family) in samples {
             let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
             let [section] = exchange.data.as_slice() else {
                 bail!("{label}: expected sole source DATA section");
@@ -4276,11 +4267,7 @@ END-ISO-10303-21;
             );
             let fragment = selected_unique_source_fragment(&report)?;
             assert!(
-                if loft {
-                    matches!(fragment.source, CadFragmentSource::SolidLoft { solid_id: id, .. } if id == solid_id)
-                } else {
-                    matches!(fragment.source, CadFragmentSource::ExtrusionCoreUnion { solid_id: id, .. } if id == solid_id)
-                },
+                family.matches(&fragment.source, solid_id),
                 "{label}: unexpected constructive family"
             );
             fragment.model.validate()?;
@@ -4297,6 +4284,118 @@ END-ISO-10303-21;
             );
         }
         Ok(())
+    }
+
+    /// Representative previously unrecovered source bodies from the frozen
+    /// catalog census. Admit their whole editable solid, not just a candidate
+    /// with a valid topology. Both the loft and constructive union paths
+    /// must reproduce the original oriented analytic boundary.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_targeted_analytic_sources_are_automatically_recovered() -> Result<()> {
+        let samples: &[(&str, &[u8], u64, TargetedFamily)] = &[
+            (
+                "42c4c451",
+                include_bytes!("../validation/fixtures/native_targeted_42c4c451.step"),
+                22,
+                TargetedFamily::Loft,
+            ),
+            (
+                "5c8c706c",
+                include_bytes!("../validation/fixtures/native_targeted_5c8c706c.step"),
+                50,
+                TargetedFamily::Loft,
+            ),
+            (
+                "66abf5fd",
+                include_bytes!("../validation/fixtures/native_targeted_66abf5fd.step"),
+                38,
+                TargetedFamily::Loft,
+            ),
+            (
+                "eb76f3ce",
+                include_bytes!("../validation/fixtures/native_targeted_eb76f3ce.step"),
+                20,
+                TargetedFamily::Loft,
+            ),
+            (
+                "58dd1537",
+                include_bytes!("../validation/fixtures/native_targeted_58dd1537.step"),
+                66,
+                TargetedFamily::CoreUnion,
+            ),
+            (
+                "b13fc76c",
+                include_bytes!("../validation/fixtures/native_targeted_b13fc76c.step"),
+                54,
+                TargetedFamily::CoreUnion,
+            ),
+        ];
+        verify_targeted_analytic_sources(samples)
+    }
+
+    /// Nine additional historical failures, all now representable as exact
+    /// lofts or extrusions with source-witnessed ruled ends. Keep whole-source
+    /// equivalence as the acceptance condition rather than matching only caps.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_low_face_analytic_sources_are_automatically_recovered() -> Result<()> {
+        verify_targeted_analytic_sources(&[
+            (
+                "119a071d",
+                include_bytes!("../validation/fixtures/native_targeted_119a071d.step"),
+                40,
+                TargetedFamily::CoreRuledEnds,
+            ),
+            (
+                "14116ee2",
+                include_bytes!("../validation/fixtures/native_targeted_14116ee2.step"),
+                60,
+                TargetedFamily::CoreRuledEnds,
+            ),
+            (
+                "2b38a50f",
+                include_bytes!("../validation/fixtures/native_targeted_2b38a50f.step"),
+                6,
+                TargetedFamily::Loft,
+            ),
+            (
+                "3752a555",
+                include_bytes!("../validation/fixtures/native_targeted_3752a555.step"),
+                139,
+                TargetedFamily::CapRuledEnds,
+            ),
+            (
+                "49a2725d",
+                include_bytes!("../validation/fixtures/native_targeted_49a2725d.step"),
+                8,
+                TargetedFamily::Loft,
+            ),
+            (
+                "530c77f2",
+                include_bytes!("../validation/fixtures/native_targeted_530c77f2.step"),
+                38,
+                TargetedFamily::Loft,
+            ),
+            (
+                "7b59e66c",
+                include_bytes!("../validation/fixtures/native_targeted_7b59e66c.step"),
+                37,
+                TargetedFamily::CoreRuledEnds,
+            ),
+            (
+                "c146449c",
+                include_bytes!("../validation/fixtures/native_targeted_c146449c.step"),
+                53,
+                TargetedFamily::Loft,
+            ),
+            (
+                "ed8dbb8d",
+                include_bytes!("../validation/fixtures/native_targeted_ed8dbb8d.step"),
+                16,
+                TargetedFamily::Loft,
+            ),
+        ])
     }
 
     /// Three distinct real JLCPCB solids with long source profiles (including
