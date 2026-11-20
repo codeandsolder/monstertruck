@@ -953,6 +953,8 @@ struct CylindricalSurfaceData {
     axis: Vector3,
     ref_direction: Vector3,
     radius: f64,
+    /// Native parameter chart → right-handed STEP (azimuth, axial length).
+    uv: Matrix3,
 }
 
 impl StepFormat for CylindricalSurfaceData {
@@ -985,11 +987,7 @@ fn cylindrical_surface_from_revolution(
         return None;
     };
     let transform = surface.transform();
-    // A cylinder stays a cylinder only under a similarity (uniform scale).
-    let (_, scale, _) = transform.iwasawa_decomposition()?;
-    if !scale[0][0].near(&scale[1][1]) || !scale[1][1].near(&scale[2][2]) {
-        return None;
-    }
+    let scale = monstertruck_geometry::analytic_carrier::similarity_scale(*transform)?;
     let revolution = surface.entity();
     let axis = revolution.axis().normalize();
     let direction = profile.1 - profile.0;
@@ -1004,11 +1002,21 @@ fn cylindrical_surface_from_revolution(
     }
     let foot = revolution.origin() + axis * offset.dot(axis);
     let radial = transform.transform_vector(radial);
+    let angular_sign = transform.determinant().signum();
+    let axial = Vector3::new(0.0, direction.dot(axis) * scale, 0.0);
+    let angular = Vector3::new(angular_sign, 0.0, 0.0);
+    let (first, second) = if surface.orientation() {
+        (axial, angular)
+    } else {
+        (angular, axial)
+    };
+    let uv = Matrix3::from_cols(first, second, Vector3::unit_z());
     Some(CylindricalSurfaceData {
         location: transform.transform_point(foot),
         axis: transform.transform_vector(axis).normalize(),
         ref_direction: radial.normalize(),
         radius: radial.magnitude(),
+        uv,
     })
 }
 
@@ -1046,6 +1054,9 @@ impl StepFormat for ModelingSurface {
     }
     fn parameter_space_transform(&self) -> Option<Matrix3> {
         match self {
+            Self::Revolution(revolution) => {
+                cylindrical_surface_from_revolution(revolution).map(|cylinder| cylinder.uv)
+            }
             Self::Sphere(sphere) => sphere.parameter_space_transform(),
             Self::Torus(torus) => torus.parameter_space_transform(),
             _ => None,
@@ -1083,6 +1094,11 @@ impl StepLength for ModelingSurface {
 impl StepSurface for ModelingSurface {
     fn same_sense(&self) -> bool {
         match self {
+            // Cylinder placement always defines a right-handed outward
+            // STEP chart. Flipping its axis alone cannot invert its normal;
+            // the oriented chart determinant must propagate to ADVANCED_FACE.
+            Self::Revolution(revolution) => cylindrical_surface_from_revolution(revolution)
+                .is_none_or(|cylinder| cylinder.uv.determinant() > 0.0),
             Self::Sphere(sphere) if sphere_pose(sphere).is_some() => {
                 sphere.orientation() == (sphere.transform().determinant() > 0.0)
             }

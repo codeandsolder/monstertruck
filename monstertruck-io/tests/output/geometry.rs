@@ -418,3 +418,59 @@ fn native_round_surface_parameter_curves_preserve_world_locus() -> anyhow::Resul
     }
     Ok(())
 }
+
+#[test]
+fn cylinder_export_preserves_uv_and_oriented_normal() -> anyhow::Result<()> {
+    use monstertruck_io::step::load::{PcurveHolder, Table, step_geometry::StepParameterCurve};
+    use monstertruck_modeling::{
+        Curve as ModelCurve, Curve2D as ModelCurve2d, Surface as ModelSurface,
+    };
+    use step_p21::tables::EntityTable;
+    for axial_sign in [-1., 1.] {
+        let generator = Line(
+            Point3::new(3., 0., 2.),
+            Point3::new(3., 0., 2. + axial_sign * 4.),
+        );
+        for reflection in [-1., 1.] {
+            let transform = Matrix4::from_translation(Vector3::new(1., 5., 3.))
+                * Matrix4::from_nonuniform_scale(2., 2. * reflection, 2.);
+            for inverted in [false, true] {
+                let mut native_surface = Processor::new(RevolutionSurface::by_revolution(
+                    ModelCurve::Line(generator),
+                    Point3::origin(),
+                    Vector3::unit_z(),
+                ))
+                .transformed(transform);
+                if inverted {
+                    native_surface.invert();
+                }
+                let surface = ModelSurface::Revolution(native_surface);
+                let uv = Line(Point2::new(0.2, 0.3), Point2::new(0.7, 0.8));
+                let parameter_curve =
+                    ParameterCurve::new(ModelCurve2d::Line(uv), Box::new(surface.clone()));
+                let text = CompleteStepDisplay::new(
+                    StepDisplay::new(&parameter_curve, 1),
+                    Default::default(),
+                )
+                .to_string();
+                assert!(text.contains("CYLINDRICAL_SURFACE"));
+                let table = Table::from_step(&text)?;
+                let owned = EntityTable::<PcurveHolder>::get_owned(&table, 1)?;
+                let restored: StepParameterCurve = (&owned)
+                    .try_into()
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                for t in [0., 0.25, 0.5, 0.75, 1.] {
+                    let point = parameter_curve.evaluate(t);
+                    assert!(point.near(&restored.evaluate(t)));
+                    let radial = Vector3::new(point.x - 1., point.y - 5., 0.);
+                    let uv = uv.evaluate(t);
+                    assert_eq!(
+                        surface.normal(uv.x, uv.y).dot(radial) > 0.,
+                        surface.same_sense()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
