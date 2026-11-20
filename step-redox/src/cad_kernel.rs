@@ -1356,6 +1356,10 @@ pub mod monstertruck {
                 radii.push(treatment.radius_mm);
             }
         }
+        if profile == EdgeTreatmentProfile::Chamfer {
+            monstertruck_modeling::chamfer_planar_edges(shell, &selected, &radii)?;
+            return Ok(Solid::new(boundaries)?);
+        }
         let fillet_profile = match profile {
             EdgeTreatmentProfile::Round => FilletProfile::Round,
             EdgeTreatmentProfile::Chamfer => FilletProfile::Chamfer,
@@ -2044,6 +2048,33 @@ pub mod monstertruck {
         #[test]
         fn evaluates_chamfer_edge_treatment() -> Result<()> {
             box_edge_treatment(EdgeTreatmentProfile::Chamfer)
+        }
+
+        #[test]
+        fn evaluates_transverse_chamfer_on_thin_prism() -> Result<()> {
+            let mut model = CadModel::new();
+            let child = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [4.0, 3.0, 0.1],
+            }));
+            let root = model.add_node(CadNode::EdgeTreatment {
+                child,
+                profile: EdgeTreatmentProfile::Chamfer,
+                edges: vec![EdgeTreatmentEdge {
+                    selector: EdgeSelector::Segment {
+                        start_mm: [0.0, 0.0, 0.0],
+                        end_mm: [0.0, 0.0, 0.1],
+                    },
+                    radius_mm: 0.137,
+                }],
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.is_single_solid());
+            assert_eq!(summary.faces, 7);
+            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
         }
 
         #[test]

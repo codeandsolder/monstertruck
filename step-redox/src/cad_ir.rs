@@ -588,6 +588,7 @@ pub enum BooleanOp {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum EdgeTreatmentProfile {
     Round,
+    /// Equal transverse setback on both planar carriers (not rolling radius).
     Chamfer,
     AsymmetricChamfer {
         first_setback_mm: f64,
@@ -615,6 +616,7 @@ impl EdgeTreatmentProfile {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EdgeTreatmentEdge {
     pub selector: EdgeSelector,
+    /// Rolling radius for rounds; physical setback for symmetric planar chamfers.
     pub radius_mm: f64,
 }
 

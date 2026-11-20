@@ -39,6 +39,38 @@ pub fn fillet_edges(
     monstertruck_fillet::fillet_edges_generic(shell, edges, Some(options))
 }
 
+/// Form planar chamfers using physical, equal setbacks measured from the
+/// sharp seam on each carrier. The native graph edits only incident topology;
+/// unsupported corner topology may use the generic solver with the correctly
+/// converted auxiliary rolling radii.
+/// # Errors
+/// Returns an error for nonplanar or invalid selections, or failed construction.
+pub fn chamfer_planar_edges(
+    shell: &mut crate::Shell,
+    edges: &[crate::Edge],
+    setbacks: &[f64],
+) -> std::result::Result<(), monstertruck_fillet::FilletError> {
+    use monstertruck_fillet::{FilletError, FilletOptions, FilletProfile, RadiusSpec};
+    if let Some(rebuilt) = planar_network::try_chamfer_planar_network(shell, edges, setbacks) {
+        *shell = rebuilt;
+        return Ok(());
+    }
+    let radii = planar_network::planar_chamfer_radii(shell, edges, setbacks).ok_or(
+        FilletError::UnsupportedGeometry {
+            context: "chamfer requires certified straight seams and convex planar carriers",
+        },
+    )?;
+    fillet_edges(
+        shell,
+        edges,
+        Some(&FilletOptions {
+            radius: RadiusSpec::PerEdge(radii),
+            profile: FilletProfile::Chamfer,
+            ..FilletOptions::default()
+        }),
+    )
+}
+
 impl TryFrom<Surface> for NurbsSurface<Vector4> {
     type Error = ();
     fn try_from(surface: Surface) -> std::result::Result<Self, ()> {

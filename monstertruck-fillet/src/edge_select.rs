@@ -652,10 +652,10 @@ fn fillet_edges_in_place(
 
     let variable_radius_upper_bound = options.validated_radius_upper_bound()?;
 
-    // Reject edges that are too short for the requested rolling radius.
-    // Asymmetric chamfer setbacks are perpendicular to the seam and do not
-    // impose this along-edge radius bound.
-    if options.profile.uses_radius() {
+    // Chamfer setbacks lie transverse to the seam, so neither symmetric nor
+    // asymmetric bevels impose an along-edge radius bound. Their actual
+    // carrier trimming and connectivity must still succeed.
+    if options.profile.uses_radius() && !matches!(options.profile, FilletProfile::Chamfer) {
         for (i, &eid) in edge_ids.iter().enumerate() {
             let effective_radius = match &options.radius {
                 RadiusSpec::Constant(r) => *r,

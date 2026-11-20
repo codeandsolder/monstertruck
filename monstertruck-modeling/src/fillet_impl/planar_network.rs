@@ -6,7 +6,9 @@
 //! independent of source-edge iteration order and does not weld by proximity.
 
 use crate::{Curve, Edge, EdgeId, Face, Shell, Surface, Vertex, VertexId, Wire, builder};
-use monstertruck_geometry::{analytic_curve_incidence::CurveIncidence, prelude::*};
+use monstertruck_geometry::{
+    analytic_curve_incidence::CurveIncidence, analytic_line_segment::SegmentLocus, prelude::*,
+};
 use rustc_hash::{FxHashMap as Map, FxHashSet as Set};
 
 const ANGULAR: f64 = monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES.angular;
@@ -56,14 +58,13 @@ impl Incidence {
 }
 
 fn line_axis(edge: &Edge) -> Option<Vector3> {
-    let Curve::Line(line) = edge.curve() else {
-        return None;
-    };
-    let delta = edge.absolute_back().point() - edge.absolute_front().point();
+    let start = edge.absolute_front().point();
+    let end = edge.absolute_back().point();
+    let delta = end - start;
     (delta.magnitude() > KERNEL_EPSILON
-        && line.0.near(&edge.absolute_front().point())
-        && line.1.near(&edge.absolute_back().point()))
-    .then(|| delta.normalize())
+        && crate::certify_native_curve_segment_locus(&edge.curve(), start, end, KERNEL_EPSILON)
+            == SegmentLocus::WithinTolerance)
+        .then(|| delta.normalize())
 }
 
 fn normal(shell: &Shell, face: usize) -> Option<Vector3> {
@@ -72,6 +73,25 @@ fn normal(shell: &Shell, face: usize) -> Option<Vector3> {
     };
     let normal = p.normal();
     normal.magnitude().near(&1.0).then_some(normal)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlanarTreatment {
+    Round,
+    Chamfer,
+}
+
+/// For planar carriers, equal transverse setbacks are related to the
+/// auxiliary rolling-circle radius by setback = radius * tan(angle/2).
+fn chamfer_radius(normals: [Vector3; 2], setback: f64) -> Option<f64> {
+    let [a, b] = normals;
+    let sine = a.cross(b).magnitude();
+    let cosine = a.dot(b);
+    if sine <= ANGULAR || !setback.is_finite() || setback <= KERNEL_EPSILON {
+        return None;
+    }
+    let radius = setback * (1.0 + cosine) / sine;
+    (radius.is_finite() && radius > KERNEL_EPSILON).then_some(radius)
 }
 
 struct SelectedEdge {
@@ -83,8 +103,14 @@ struct SelectedEdge {
 }
 
 impl SelectedEdge {
-    fn new(shell: &Shell, incidence: &Incidence, edge_id: EdgeId, radius: f64) -> Option<Self> {
-        if !radius.is_finite() || radius <= KERNEL_EPSILON {
+    fn new(
+        shell: &Shell,
+        incidence: &Incidence,
+        edge_id: EdgeId,
+        size: f64,
+        profile: PlanarTreatment,
+    ) -> Option<Self> {
+        if !size.is_finite() || size <= KERNEL_EPSILON {
             return None;
         }
         let original = incidence.edges.get(&edge_id)?;
@@ -106,12 +132,17 @@ impl SelectedEdge {
         {
             return None;
         }
+        let normals = [na, nb];
+        let radius = match profile {
+            PlanarTreatment::Round => size,
+            PlanarTreatment::Chamfer => chamfer_radius(normals, size)?,
+        };
         Some(Self {
             id: edge_id,
             radius,
             axis,
             faces: [a, b],
-            normals: [na, nb],
+            normals,
         })
     }
 }
@@ -336,7 +367,7 @@ fn certify_generated_face(face: &Face) -> bool {
     })
 }
 
-struct RoundEdge {
+struct TreatedEdge {
     rails: [Edge; 2],
     seams: [Edge; 2],
     face: Face,
@@ -375,17 +406,44 @@ fn exact_cylinder(start: &Section, end: &Section, edge: &SelectedEdge) -> Option
     Some(surface)
 }
 
-impl RoundEdge {
-    fn new(edge: &SelectedEdge, original: &Edge, corners: &Map<VertexId, Corner>) -> Option<Self> {
+impl TreatedEdge {
+    fn new(
+        edge: &SelectedEdge,
+        original: &Edge,
+        corners: &Map<VertexId, Corner>,
+        profile: PlanarTreatment,
+    ) -> Option<Self> {
         let a = corners.get(&original.absolute_front().id())?;
         let b = corners.get(&original.absolute_back().id())?;
-        let start = Section::new(a, edge)?;
-        let end = Section::new(b, edge)?;
-        let surface = exact_cylinder(&start, &end, edge)?;
         let rails = edge
             .faces
             .map(|u| builder::line(&a.contacts[&u.face], &b.contacts[&u.face]));
-        let seams = [start.edge(a, edge)?, end.edge(b, edge)?];
+        let (seams, surface) = match profile {
+            PlanarTreatment::Round => {
+                let start = Section::new(a, edge)?;
+                let end = Section::new(b, edge)?;
+                (
+                    [start.edge(a, edge)?, end.edge(b, edge)?],
+                    Some(exact_cylinder(&start, &end, edge)?),
+                )
+            }
+            PlanarTreatment::Chamfer => {
+                // The bevel is a plane. Both rails must retain a positive
+                // axial interval even with oblique termination planes.
+                if rails.iter().any(|rail| {
+                    (rail.back().point() - rail.front().point()).dot(edge.axis) <= KERNEL_EPSILON
+                }) {
+                    return None;
+                }
+                let [first, second] = edge.faces.map(|u| u.face);
+                (
+                    [a, b].map(|corner| {
+                        builder::line(&corner.contacts[&first], &corner.contacts[&second])
+                    }),
+                    None,
+                )
+            }
+        };
         let wire = if edge.faces[0].forward {
             vec![
                 rails[0].inverse(),
@@ -401,7 +459,11 @@ impl RoundEdge {
                 seams[0].inverse(),
             ]
         };
-        let face = Face::new(vec![Wire::from(wire)], surface).ok()?;
+        let wire = Wire::from(wire);
+        let face = match surface {
+            Some(surface) => Face::new(vec![wire], surface).ok()?,
+            None => builder::try_attach_plane([wire]).ok()?,
+        };
         certify_generated_face(&face).then_some(Self { rails, seams, face })
     }
 }
@@ -469,7 +531,7 @@ fn shortened_edges(
 fn cap_seams(
     incidence: &Incidence,
     selected: &Map<EdgeId, SelectedEdge>,
-    rounds: &Map<EdgeId, RoundEdge>,
+    rounds: &Map<EdgeId, TreatedEdge>,
     corners: &Map<VertexId, Corner>,
 ) -> Option<Map<(VertexId, usize), Edge>> {
     let mut seams = Map::default();
@@ -493,7 +555,7 @@ fn cap_seams(
 
 struct ReplacementGeometry<'a> {
     selected: &'a Map<EdgeId, SelectedEdge>,
-    rounds: &'a Map<EdgeId, RoundEdge>,
+    rounds: &'a Map<EdgeId, TreatedEdge>,
     retained: &'a Map<EdgeId, Edge>,
     cap_seams: &'a Map<(VertexId, usize), Edge>,
 }
@@ -586,7 +648,12 @@ fn spherical_face(corner: &Corner, original: &Vertex, mut seams: Vec<Edge>) -> O
     certify_generated_face(&face).then_some(face)
 }
 
-fn round_planar_network(shell: &Shell, edges: &[Edge], radii: &[f64]) -> Option<Shell> {
+fn planar_network(
+    shell: &Shell,
+    edges: &[Edge],
+    radii: &[f64],
+    profile: PlanarTreatment,
+) -> Option<Shell> {
     if edges.len() != radii.len() || edges.is_empty() {
         return None;
     }
@@ -596,7 +663,7 @@ fn round_planar_network(shell: &Shell, edges: &[Edge], radii: &[f64]) -> Option<
     let mut seen = Set::default();
     for (edge, &radius) in edges.iter().zip(radii) {
         let id = edge.id();
-        let selected_edge = SelectedEdge::new(shell, &incidence, id, radius)?;
+        let selected_edge = SelectedEdge::new(shell, &incidence, id, radius, profile)?;
         if selected.insert(id, selected_edge).is_some() {
             return None;
         }
@@ -612,10 +679,12 @@ fn round_planar_network(shell: &Shell, edges: &[Edge], radii: &[f64]) -> Option<
         .collect::<Option<Map<_, _>>>()?;
     // The ordinary edge/wire implementation remains available for
     // operations with no three-way corner.
-    if !corners
+    let spherical = corners
         .values()
-        .any(|c| matches!(c.kind, CornerKind::Sphere))
-    {
+        .any(|c| matches!(c.kind, CornerKind::Sphere));
+    // Round junction support is a spherical patch; a three-bevel corner
+    // requires a separate planar junction construction.
+    if spherical != (profile == PlanarTreatment::Round) {
         return None;
     }
     let rounds = selected
@@ -623,7 +692,7 @@ fn round_planar_network(shell: &Shell, edges: &[Edge], radii: &[f64]) -> Option<
         .map(|edge| {
             Some((
                 edge.id,
-                RoundEdge::new(edge, &incidence.edges[&edge.id].edge, &corners)?,
+                TreatedEdge::new(edge, &incidence.edges[&edge.id].edge, &corners, profile)?,
             ))
         })
         .collect::<Option<Map<_, _>>>()?;
@@ -666,6 +735,44 @@ fn round_planar_network(shell: &Shell, edges: &[Edge], radii: &[f64]) -> Option<
     Some(result)
 }
 
+/// Construct an exact simultaneous convex planar three-way rolling-ball
+/// network, including oblique planar terminal caps. The input is never
+/// mutated and unsupported corner incidence is routed to the other solver.
+pub(super) fn try_round_planar_network(
+    shell: &Shell,
+    edges: &[Edge],
+    radii: &[f64],
+) -> Option<Shell> {
+    planar_network(shell, edges, radii, PlanarTreatment::Round)
+}
+
+pub(super) fn try_chamfer_planar_network(
+    shell: &Shell,
+    edges: &[Edge],
+    setbacks: &[f64],
+) -> Option<Shell> {
+    planar_network(shell, edges, setbacks, PlanarTreatment::Chamfer)
+}
+
+pub(super) fn planar_chamfer_radii(
+    shell: &Shell,
+    edges: &[Edge],
+    setbacks: &[f64],
+) -> Option<Vec<f64>> {
+    if edges.len() != setbacks.len() {
+        return None;
+    }
+    let incidence = Incidence::new(shell);
+    edges
+        .iter()
+        .zip(setbacks)
+        .map(|(edge, &size)| {
+            SelectedEdge::new(shell, &incidence, edge.id(), size, PlanarTreatment::Chamfer)
+                .map(|selected| selected.radius)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,17 +806,61 @@ mod tests {
     }
 
     #[test]
+    fn oblique_chamfers_use_physical_setback_and_compose() -> crate::Result<()> {
+        let (solid, edges) = oblique_prism()?;
+        let shell = &solid.boundaries()[0];
+        let vertical_at = |edge: &Edge, x: f64, y: f64| {
+            [edge.front().point(), edge.back().point()]
+                .iter()
+                .all(|p| (p.x - x).abs() < KERNEL_EPSILON && (p.y - y).abs() < KERNEL_EPSILON)
+        };
+        let edge = edges
+            .iter()
+            .find(|e| vertical_at(e, 5.0, 4.0))
+            .expect("first corner");
+        let setback = 0.25;
+        let first = try_chamfer_planar_network(shell, std::slice::from_ref(edge), &[setback])
+            .expect("native oblique chamfer");
+        assert_eq!(first.len(), 7);
+        first.check_solid_boundary()?;
+        assert!(first.is_geometric_consistent());
+        let bevel = first.last().expect("bevel face");
+        assert!(matches!(bevel.surface(), Surface::Plane(_)));
+        for vertex in bevel.vertex_iter() {
+            let p = vertex.point();
+            assert!(((p.x - 5.0).hypot(p.y - 4.0) - setback).abs() < KERNEL_EPSILON);
+        }
+        let second_edge = first
+            .edge_iter()
+            .find(|e| vertical_at(e, 0.0, 0.0))
+            .expect("second corner");
+        let second = try_chamfer_planar_network(&first, &[second_edge], &[setback])
+            .expect("second native chamfer");
+        assert_eq!(second.len(), 8);
+        second.check_solid_boundary()?;
+        assert!(second.is_geometric_consistent());
+        assert!(
+            second
+                .edge_iter()
+                .all(|e| matches!(e.curve(), Curve::Line(_)))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn oblique_round_network_is_closed_and_order_independent() -> crate::Result<()> {
         let (solid, mut edges) = oblique_prism()?;
         let shell = &solid.boundaries()[0];
         assert_eq!(edges.len(), 8);
         let radii = [0.25; 8];
-        let first = round_planar_network(shell, &edges, &radii).expect("analytic oblique network");
+        let first =
+            try_round_planar_network(shell, &edges, &radii).expect("analytic oblique network");
         assert_eq!(first.len(), 18);
         assert!(first.is_geometric_consistent());
         first.check_solid_boundary()?;
         edges.reverse();
-        let second = round_planar_network(shell, &edges, &radii).expect("reverse selected order");
+        let second =
+            try_round_planar_network(shell, &edges, &radii).expect("reverse selected order");
         second.check_solid_boundary()?;
         assert_eq!(second.len(), 18);
         let vertices = |shell: &Shell| {
@@ -728,23 +879,12 @@ mod tests {
                 .iter()
                 .all(|point| second_points.iter().any(|other| point.near(other)))
         );
-        assert!(round_planar_network(shell, &edges, &[4.0; 8]).is_none());
+        assert!(try_round_planar_network(shell, &edges, &[4.0; 8]).is_none());
         let mut incompatible = radii;
         incompatible[0] = 0.4;
-        assert!(round_planar_network(shell, &edges, &incompatible).is_none());
+        assert!(try_round_planar_network(shell, &edges, &incompatible).is_none());
         assert_eq!(shell.len(), 6);
         assert!(shell.is_geometric_consistent());
         Ok(())
     }
-}
-
-/// Construct an exact simultaneous convex planar three-way rolling-ball
-/// network, including oblique planar terminal caps. The input is never
-/// mutated and unsupported corner incidence is routed to the other solver.
-pub(super) fn try_round_planar_network(
-    shell: &Shell,
-    edges: &[Edge],
-    radii: &[f64],
-) -> Option<Shell> {
-    round_planar_network(shell, edges, radii)
 }
