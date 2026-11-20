@@ -86,7 +86,14 @@ For real manufacturer surveys, preserve input provenance and compare the
 reported SHA-256 to the pinned hashes in `validation/fixtures.json`.
 
 When `--output` is provided, a sibling `*.cases.jsonl` checkpoint journal is
-also written. Each complete case is flushed before the next source is
-attempted, so a long-running or interrupted survey retains preceding results;
-the final aggregate JSON appears only after all requested inputs are processed.
-The journal starts fresh on each invocation.
+also written. Each complete case is synchronized to disk before the next source is
+attempted. Fresh runs refuse to overwrite either an existing report or an
+existing journal. To resume an interrupted run, repeat the same command with
+`--resume`. The checkpoint header binds the ordered absolute input paths and
+the SHA-256 of the executable to the run; completed source files are rehashed
+before their checkpoint results are reused. Changed source bytes or an
+updated executable require a new output path. Only a torn, unterminated final
+journal record is discarded; complete corrupt records fail closed. A file lock
+prevents concurrent writers to the same journal. The aggregate report is
+published atomically without replacing an existing file after every input has
+a completed result. The journal format is identified by the v2 schema header.

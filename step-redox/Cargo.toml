@@ -7,7 +7,7 @@ rust-version = "1.99"
 
 [features]
 default = []
-cad-kernel-monstertruck = ["dep:monstertruck-geometry", "dep:monstertruck-modeling", "dep:monstertruck-solid", "dep:monstertruck-fillet", "dep:monstertruck-topology"]
+cad-kernel-monstertruck = ["dep:monstertruck-geometry", "dep:monstertruck-modeling", "dep:monstertruck-solid", "dep:monstertruck-fillet", "dep:monstertruck-topology", "dep:tempfile"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -17,6 +17,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11"
 hex = "0.4"
+tempfile = { version = "3.27", optional = true, default-features = false }
 monstertruck-geometry = { workspace = true, optional = true }
 monstertruck-modeling = { workspace = true, features = ["fillet"], optional = true }
 monstertruck-io = { workspace = true, features = ["step"] }
