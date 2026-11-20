@@ -7,7 +7,6 @@ use super::{
     CadFragment, CadFragmentSource, compose_union_models, rebuilt_kernel_boundary_matches_source,
     solid::recover_source_cap_extrusion_model,
 };
-use crate::cad_ir::{ProofStatus, Provenance};
 use crate::cad_kernel::CadKernel;
 use crate::math3::{dot, sub};
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
@@ -164,17 +163,7 @@ pub(super) fn recover<K: CadKernel>(
     {
         return Ok(None);
     }
-    let face_ids = solid.faces().map(|face| face.id).collect::<Vec<_>>();
-    let mut source_entity_ids = vec![solid_id];
-    source_entity_ids.extend(&face_ids);
-    model.set_provenance(
-        root,
-        Provenance {
-            source_entity_ids,
-            proof: ProofStatus::WithinTolerance,
-            max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
-        },
-    )?;
+    let face_ids = super::set_proven_source_boundary(&mut model, root, &solid)?;
     Ok(Some(CadFragment {
         source: CadFragmentSource::SourceCapExtrusionUnion {
             solid_id,
