@@ -237,13 +237,17 @@ fn tangent_axes(normal: Vector3) -> [Vector3; 2] {
 /// outward direction reaches infinity without crossing host material.
 fn local_cap_partition(
     host: &[FaceBounds],
-    tool: &[FaceBounds],
+    attachment: &[FaceBounds],
     separator: Separator,
     tol: f64,
 ) -> Option<(Vec<usize>, Vec<bool>)> {
-    let tool_caps = cap_partition(tool, separator, -1.0, tol)?;
+    let tool_caps = cap_partition(attachment, separator, -1.0, tol)?;
     let axes = tangent_axes(separator.normal);
-    let footprint = ProjectedBounds::of(tool.iter().flat_map(|face| &face.points), separator, axes);
+    let footprint = ProjectedBounds::of(
+        attachment.iter().flat_map(|face| &face.points),
+        separator,
+        axes,
+    );
     let mut host_caps = Vec::new();
     for (index, face) in host.iter().enumerate() {
         if ProjectedBounds::of(face.points.iter(), separator, axes).disjoint(footprint, tol) {
