@@ -2799,19 +2799,21 @@ pub mod monstertruck {
             );
         }
 
-        #[test]
-        fn one_shot_cache_only_retains_shared_geometry_until_last_use() -> Result<()> {
+        fn shared_tolerance_graph(
+            first_tolerance_mm: f64,
+            second_tolerance_mm: f64,
+        ) -> Result<(CadModel, NodeId, NodeId, NodeId)> {
             let mut model = CadModel::new();
             let shared = model.add_node(CadNode::Primitive(Primitive::Box {
                 size_mm: [1.0, 2.0, 3.0],
             }));
             let first = model.add_node(CadNode::SolverTolerance {
                 child: shared,
-                tolerance_mm: 0.01,
+                tolerance_mm: first_tolerance_mm,
             });
             let second = model.add_node(CadNode::SolverTolerance {
                 child: shared,
-                tolerance_mm: 0.01,
+                tolerance_mm: second_tolerance_mm,
             });
             let root = model.add_node(CadNode::Boolean {
                 op: BooleanOp::Union,
@@ -2819,6 +2821,12 @@ pub mod monstertruck {
             });
             model.add_root(root)?;
             model.validate()?;
+            Ok((model, first, second, root))
+        }
+
+        #[test]
+        fn one_shot_cache_only_retains_shared_geometry_until_last_use() -> Result<()> {
+            let (model, first, second, root) = shared_tolerance_graph(0.01, 0.01)?;
             let policy = GeometryPolicy::project_standard();
             let mut cache = EvaluationCache::single_root(&model, root, policy)?;
 
@@ -2848,24 +2856,7 @@ pub mod monstertruck {
 
         #[test]
         fn one_shot_cache_distinguishes_numerical_policy_and_drops_linear_nodes() -> Result<()> {
-            let mut model = CadModel::new();
-            let shared = model.add_node(CadNode::Primitive(Primitive::Box {
-                size_mm: [1.0, 2.0, 3.0],
-            }));
-            let first = model.add_node(CadNode::SolverTolerance {
-                child: shared,
-                tolerance_mm: 0.001,
-            });
-            let second = model.add_node(CadNode::SolverTolerance {
-                child: shared,
-                tolerance_mm: 0.01,
-            });
-            let root = model.add_node(CadNode::Boolean {
-                op: BooleanOp::Union,
-                children: vec![first, second],
-            });
-            model.add_root(root)?;
-            model.validate()?;
+            let (model, first, second, root) = shared_tolerance_graph(0.001, 0.01)?;
             let policy = GeometryPolicy::project_standard();
             let mut cache = EvaluationCache::single_root(&model, root, policy)?;
             for id in [first, second] {
