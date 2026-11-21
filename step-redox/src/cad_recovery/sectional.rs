@@ -359,7 +359,7 @@ fn sectional_model(
     Ok(Some((model, root)))
 }
 
-pub(crate) fn recover<K: CadKernel>(
+pub fn recover<K: CadKernel>(
     source: &SourceRecovery<'_, K>,
     ceiling: Option<u64>,
 ) -> Result<Option<CadFragment>> {

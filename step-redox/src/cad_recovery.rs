@@ -560,16 +560,18 @@ fn recover_proven_extrusion_core_union_from_entities<K: CadKernel>(
     model.validate()?;
 
     Ok(Some(CadFragment {
-        source: admitted_single.unwrap_or(if tips.is_empty() {
-            CadFragmentSource::ExtrusionCoreUnion {
-                solid_id,
-                cap_face_ids: canonical_pairs.to_vec(),
-            }
-        } else {
-            CadFragmentSource::ExtrusionCoreRuledEnds {
-                solid_id,
-                cap_face_ids: canonical_pairs.to_vec(),
-                tip_face_ids: tips,
+        source: admitted_single.unwrap_or_else(|| {
+            if tips.is_empty() {
+                CadFragmentSource::ExtrusionCoreUnion {
+                    solid_id,
+                    cap_face_ids: canonical_pairs.to_vec(),
+                }
+            } else {
+                CadFragmentSource::ExtrusionCoreRuledEnds {
+                    solid_id,
+                    cap_face_ids: canonical_pairs.to_vec(),
+                    tip_face_ids: tips,
+                }
             }
         }),
         model,
@@ -647,7 +649,11 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
         );
         let (mut model, root) = compose_union_models(&parts)?;
         if !source
-            .proves(&model, root, best.ceiling(ceiling))
+            .proves(
+                &model,
+                root,
+                best.ceiling(ceiling, MaterialFamily::CapRuledEnds),
+            )
             .unwrap_or(false)
         {
             continue;
@@ -672,15 +678,18 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
             },
         )?;
         model.validate()?;
-        best.consider(Ok(Some(CadFragment {
-            source: CadFragmentSource::CapExtrusionRuledEnds {
-                solid_id,
-                cap_face_id,
-                tip_face_ids,
-            },
-            model,
-            root,
-        })))?;
+        best.consider(
+            MaterialFamily::CapRuledEnds,
+            Ok(Some(CadFragment {
+                source: CadFragmentSource::CapExtrusionRuledEnds {
+                    solid_id,
+                    cap_face_id,
+                    tip_face_ids,
+                },
+                model,
+                root,
+            })),
+        )?;
     }
     best.finish()
 }
@@ -705,28 +714,64 @@ fn set_proven_source_boundary(
     Ok(face_ids)
 }
 
+/// Tie-break order is intentionally independent of evaluation scheduling.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MaterialFamily {
+    SingleCore,
+    JoinedCores,
+    CapRuledEnds,
+    Sectional,
+    FormedSheet,
+    CapCover,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CandidateRank {
+    cost: u64,
+    family: MaterialFamily,
+}
+
 /// Rank only candidates that have already passed independent boundary proof.
 /// An unsuccessful provider must not discard another provider's proven model.
 #[derive(Default)]
 struct CheapestProvenFragment {
-    best: Option<(u64, CadFragment)>,
+    best: Option<(CandidateRank, CadFragment)>,
     first_error: Option<anyhow::Error>,
 }
 
 impl CheapestProvenFragment {
-    fn ceiling(&self, outer: Option<u64>) -> Option<u64> {
-        self.best
-            .as_ref()
-            .map(|(cost, _)| outer.map_or(*cost, |limit| limit.min(*cost)))
-            .or(outer)
+    fn ceiling(&self, outer: Option<u64>, family: MaterialFamily) -> Option<u64> {
+        let local = self.best.as_ref().and_then(|(rank, _)| {
+            if family < rank.family {
+                // A preferred equal-score family is still competitive.
+                rank.cost.checked_add(1)
+            } else {
+                Some(rank.cost)
+            }
+        });
+        match (outer, local) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
-    fn consider(&mut self, result: Result<Option<CadFragment>>) -> Result<()> {
+    fn consider(
+        &mut self,
+        family: MaterialFamily,
+        result: Result<Option<CadFragment>>,
+    ) -> Result<()> {
         match result {
             Ok(Some(fragment)) => {
-                let score = fragment.model.complexity_score(fragment.root)?;
-                if self.best.as_ref().is_none_or(|(cost, _)| score < *cost) {
-                    self.best = Some((score, fragment));
+                let rank = CandidateRank {
+                    cost: fragment.model.complexity_score(fragment.root)?,
+                    family,
+                };
+                if self
+                    .best
+                    .as_ref()
+                    .is_none_or(|(incumbent, _)| rank < *incumbent)
+                {
+                    self.best = Some((rank, fragment));
                 }
             }
             Ok(None) => {}
@@ -811,30 +856,52 @@ pub(crate) fn recover_auto_proven_extrusion_core_union_from_entities<K: CadKerne
     }
     let mut best = CheapestProvenFragment::default();
     for &pair in &pairs {
-        best.consider(recover_proven_extrusion_core_union_from_entities(
-            &source,
-            &[pair],
-            best.ceiling(ceiling),
-        ))?;
+        let family = MaterialFamily::SingleCore;
+        best.consider(
+            family,
+            recover_proven_extrusion_core_union_from_entities(
+                &source,
+                &[pair],
+                best.ceiling(ceiling, family),
+            ),
+        )?;
     }
     // Discovery order is not a ranking criterion. Each provider only tests
-    // candidates that could improve the best already certified score.
-    best.consider(recover_auto_proven_partial_cap_ruled_ends_fragment(
-        &source,
-        best.ceiling(ceiling),
-    ))?;
-    best.consider(sectional::recover(&source, best.ceiling(ceiling)))?;
-    best.consider(multi_axis_sheet::recover(&source, best.ceiling(ceiling)))?;
-    best.consider(cap_cover::recover(&source, best.ceiling(ceiling)))?;
+    // candidates that might outrank the best already certified score.
+    let family = MaterialFamily::CapRuledEnds;
+    best.consider(
+        family,
+        recover_auto_proven_partial_cap_ruled_ends_fragment(&source, best.ceiling(ceiling, family)),
+    )?;
+    let family = MaterialFamily::Sectional;
+    best.consider(
+        family,
+        sectional::recover(&source, best.ceiling(ceiling, family)),
+    )?;
+    let family = MaterialFamily::FormedSheet;
+    best.consider(
+        family,
+        multi_axis_sheet::recover(&source, best.ceiling(ceiling, family)),
+    )?;
+    let family = MaterialFamily::CapCover;
+    best.consider(
+        family,
+        cap_cover::recover(&source, best.ceiling(ceiling, family)),
+    )?;
     // Aggregate unions are often the expensive fallback: only evaluate
     // them after cheaper complete cap/section proposals establish a bound.
+    // Keep the canonical earlier family on an equal complexity score.
     if pairs.len() >= 2 {
         pairs.sort_unstable();
-        best.consider(recover_proven_extrusion_core_union_from_entities(
-            &source,
-            &pairs,
-            best.ceiling(ceiling),
-        ))?;
+        let family = MaterialFamily::JoinedCores;
+        best.consider(
+            family,
+            recover_proven_extrusion_core_union_from_entities(
+                &source,
+                &pairs,
+                best.ceiling(ceiling, family),
+            ),
+        )?;
     }
     best.finish()
 }
@@ -1037,6 +1104,44 @@ mod tests {
         reason = "legacy test fixture code is allowed narrow lint exceptions; production paths remain strict"
     )]
     use super::*;
+
+    #[test]
+    fn material_family_priority_is_independent_of_evaluation_order() -> Result<()> {
+        let mut model = CadModel::new();
+        let root = model.add_node(CadNode::Primitive(crate::cad_ir::Primitive::Box {
+            size_mm: [1.0; 3],
+        }));
+        model.add_root(root)?;
+        let mut fragment = CadFragment {
+            source: CadFragmentSource::ExtrusionCoreUnion {
+                solid_id: 1,
+                cap_face_ids: vec![[2, 3]],
+            },
+            model,
+            root,
+        };
+        let earlier = fragment.clone();
+        fragment.source = CadFragmentSource::SourceCapExtrusionUnion {
+            solid_id: 1,
+            face_ids: vec![2, 3],
+            cap_face_ids: vec![2, 3],
+        };
+        let mut search = CheapestProvenFragment::default();
+        search.consider(MaterialFamily::CapCover, Ok(Some(fragment)))?;
+        let cost = earlier.model.complexity_score(earlier.root)?;
+        assert_eq!(
+            search.ceiling(None, MaterialFamily::JoinedCores),
+            Some(cost + 1)
+        );
+        assert_eq!(
+            search.ceiling(Some(cost), MaterialFamily::JoinedCores),
+            Some(cost)
+        );
+        assert_eq!(search.ceiling(None, MaterialFamily::CapCover), Some(cost));
+        search.consider(MaterialFamily::JoinedCores, Ok(Some(earlier.clone())))?;
+        assert_eq!(search.finish()?, Some(earlier));
+        Ok(())
+    }
 
     #[test]
     fn certified_complexity_ceiling_prevents_kernel_evaluation() -> Result<()> {
