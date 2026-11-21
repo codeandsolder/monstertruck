@@ -420,7 +420,80 @@ pub mod monstertruck {
         }
     }
 
-    type EvaluationCache = HashMap<(NodeId, PolicyKey), Solid>;
+    type EvaluationKey = (NodeId, PolicyKey);
+
+    /// A reusable session retains independent snapshots for future roots.
+    /// A one-shot evaluator retains only shared dependencies that still have
+    /// a possible future use, and moves the owned snapshot on the final use.
+    #[derive(Default)]
+    struct EvaluationCache {
+        solids: HashMap<EvaluationKey, Solid>,
+        remaining: Option<HashMap<EvaluationKey, usize>>,
+    }
+
+    impl EvaluationCache {
+        fn single_root(model: &CadModel, root: NodeId, policy: GeometryPolicy) -> Result<Self> {
+            let mut remaining = HashMap::new();
+            let mut pending = vec![(root, policy)];
+            while let Some((id, policy)) = pending.pop() {
+                let uses = remaining.entry((id, PolicyKey::from(policy))).or_insert(0);
+                *uses += 1;
+                // The first use builds this node; later uses read its
+                // independent snapshot. Count its evaluated dependencies once.
+                if *uses > 1 {
+                    continue;
+                }
+                match model.node(id)? {
+                    CadNode::SolverTolerance {
+                        child,
+                        tolerance_mm,
+                    } => {
+                        pending.push((*child, GeometryPolicy::standard_mm(*tolerance_mm)));
+                    }
+                    node => {
+                        pending.extend(node.children().into_iter().map(|child| (child, policy)))
+                    }
+                }
+            }
+            Ok(Self {
+                solids: HashMap::new(),
+                remaining: Some(remaining),
+            })
+        }
+
+        /// Decrement the bounded use count before evaluating the key. Native
+        /// fused fast paths may bypass some dependencies, so counts can
+        /// conservatively overestimate but never underestimate actual calls.
+        fn begin(&mut self, key: EvaluationKey) -> Result<(Option<Solid>, bool)> {
+            let retain = if let Some(remaining) = self.remaining.as_mut() {
+                let uses = remaining
+                    .get_mut(&key)
+                    .context("unplanned CAD evaluation dependency")?;
+                *uses = uses
+                    .checked_sub(1)
+                    .context("CAD evaluation dependency used too often")?;
+                *uses != 0
+            } else {
+                true
+            };
+            let value = if retain {
+                self.solids
+                    .get(&key)
+                    .map(|solid| solid.mapped(Clone::clone, Clone::clone, Clone::clone))
+            } else {
+                // Last consumer owns the cached mutable geometry exclusively.
+                self.solids.remove(&key)
+            };
+            Ok((value, retain))
+        }
+
+        fn remember(&mut self, key: EvaluationKey, solid: &Solid, retain: bool) {
+            if retain {
+                self.solids
+                    .insert(key, solid.mapped(Clone::clone, Clone::clone, Clone::clone));
+            }
+        }
+    }
 
     /// Evaluate several CAD roots without recomputing common geometry.
     ///
@@ -455,7 +528,7 @@ pub mod monstertruck {
             Ok(EvaluationSession {
                 model,
                 policy: self.policy,
-                cache: HashMap::new(),
+                cache: EvaluationCache::default(),
             })
         }
     }
@@ -1426,8 +1499,9 @@ pub mod monstertruck {
         cache: &mut EvaluationCache,
     ) -> Result<Solid> {
         let key = (root, PolicyKey::from(policy));
-        if let Some(solid) = cache.get(&key) {
-            return Ok(solid.mapped(Clone::clone, Clone::clone, Clone::clone));
+        let (cached, retain) = cache.begin(key)?;
+        if let Some(solid) = cached {
+            return Ok(solid);
         }
         let evaluated = match model.node(root)? {
             CadNode::Primitive(primitive) => primitive_solid(primitive),
@@ -1478,10 +1552,7 @@ pub mod monstertruck {
                 bail!("Monstertruck backend does not yet evaluate node {root:?}: {unsupported:?}")
             }
         }?;
-        cache.insert(
-            key,
-            evaluated.mapped(Clone::clone, Clone::clone, Clone::clone),
-        );
+        cache.remember(key, &evaluated, retain);
         Ok(evaluated)
     }
 
@@ -1489,7 +1560,11 @@ pub mod monstertruck {
         type Evaluated = EvaluatedShape;
 
         fn evaluate(&self, model: &CadModel, root: NodeId) -> Result<Self::Evaluated> {
-            self.session(model)?.evaluate(root)
+            model.validate()?;
+            let mut cache = EvaluationCache::single_root(model, root, self.policy)?;
+            Ok(EvaluatedShape {
+                solid: evaluate_node(model, root, self.policy, &mut cache)?,
+            })
         }
 
         fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary {
@@ -2724,6 +2799,77 @@ pub mod monstertruck {
             );
         }
 
+        fn shared_tolerance_graph(
+            first_tolerance_mm: f64,
+            second_tolerance_mm: f64,
+        ) -> Result<(CadModel, NodeId, NodeId, NodeId)> {
+            let mut model = CadModel::new();
+            let shared = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [1.0, 2.0, 3.0],
+            }));
+            let first = model.add_node(CadNode::SolverTolerance {
+                child: shared,
+                tolerance_mm: first_tolerance_mm,
+            });
+            let second = model.add_node(CadNode::SolverTolerance {
+                child: shared,
+                tolerance_mm: second_tolerance_mm,
+            });
+            let root = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children: vec![first, second],
+            });
+            model.add_root(root)?;
+            model.validate()?;
+            Ok((model, first, second, root))
+        }
+
+        #[test]
+        fn one_shot_cache_only_retains_shared_geometry_until_last_use() -> Result<()> {
+            let (model, first, second, root) = shared_tolerance_graph(0.01, 0.01)?;
+            let policy = GeometryPolicy::project_standard();
+            let mut cache = EvaluationCache::single_root(&model, root, policy)?;
+
+            let first_shape = evaluate_node(&model, first, policy, &mut cache)?;
+            assert_eq!(
+                cache.solids.len(),
+                1,
+                "only the shared descendant is retained"
+            );
+            let vertex = first_shape
+                .vertex_iter()
+                .next()
+                .context("box has no vertices")?;
+            let original = vertex.point();
+            vertex.set_point(Point3::new(100.0, 100.0, 100.0));
+            let second_shape = evaluate_node(&model, second, policy, &mut cache)?;
+            assert_eq!(
+                second_shape.vertex_iter().next().map(|v| v.point()),
+                Some(original)
+            );
+            assert!(
+                cache.solids.is_empty(),
+                "last consumer moves owned cached geometry"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn one_shot_cache_distinguishes_numerical_policy_and_drops_linear_nodes() -> Result<()> {
+            let (model, first, second, root) = shared_tolerance_graph(0.001, 0.01)?;
+            let policy = GeometryPolicy::project_standard();
+            let mut cache = EvaluationCache::single_root(&model, root, policy)?;
+            for id in [first, second] {
+                let evaluated = evaluate_node(&model, id, policy, &mut cache)?;
+                assert_eq!(evaluated.boundaries()[0].len(), 6);
+                assert!(
+                    cache.solids.is_empty(),
+                    "different policy keys are not shared"
+                );
+            }
+            Ok(())
+        }
+
         #[test]
         fn evaluation_session_memoizes_shared_nodes_per_numerical_policy() -> Result<()> {
             let mut model = CadModel::new();
@@ -2744,12 +2890,16 @@ pub mod monstertruck {
             let kernel = MonstertruckKernel::project_standard();
             let mut session = kernel.session(&model)?;
             assert_eq!(kernel.summarize(&session.evaluate(tight)?).faces, 6);
-            assert_eq!(session.cache.len(), 2);
+            assert_eq!(session.cache.solids.len(), 2);
             assert_eq!(kernel.summarize(&session.evaluate(tight)?).faces, 6);
-            assert_eq!(session.cache.len(), 2, "repeat must reuse both nodes");
+            assert_eq!(
+                session.cache.solids.len(),
+                2,
+                "repeat must reuse both nodes"
+            );
             assert_eq!(kernel.summarize(&session.evaluate(loose)?).faces, 6);
             assert_eq!(
-                session.cache.len(),
+                session.cache.solids.len(),
                 4,
                 "same child under a distinct SolverTolerance must be evaluated separately"
             );
