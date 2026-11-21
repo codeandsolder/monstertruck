@@ -185,6 +185,151 @@ fn disjoint_boxes(a: &([f64; 3], [f64; 3]), b: &([f64; 3], [f64; 3]), tol: f64) 
     (0..3).any(|axis| a.1[axis] + tol < b.0[axis] || b.1[axis] + tol < a.0[axis])
 }
 
+/// Tangential projection of a complete control hull. A disjoint projection
+/// proves that the entire outward ray column of a tool misses a host face,
+/// even when the host extends past the contact plane elsewhere.
+#[derive(Clone, Copy)]
+struct ProjectedBounds {
+    low: [f64; 2],
+    high: [f64; 2],
+}
+
+impl ProjectedBounds {
+    fn of<'a>(
+        points: impl Iterator<Item = &'a Point3>,
+        separation: Separator,
+        axes: [Vector3; 2],
+    ) -> Self {
+        let mut bounds = Self {
+            low: [f64::INFINITY; 2],
+            high: [f64::NEG_INFINITY; 2],
+        };
+        for p in points {
+            for (i, axis) in axes.iter().enumerate() {
+                let x = (*p - separation.origin).dot(*axis);
+                bounds.low[i] = bounds.low[i].min(x);
+                bounds.high[i] = bounds.high[i].max(x);
+            }
+        }
+        bounds
+    }
+
+    fn disjoint(self, other: Self, tol: f64) -> bool {
+        (0..2).any(|i| self.high[i] + tol < other.low[i] || other.high[i] + tol < self.low[i])
+    }
+}
+
+fn tangent_axes(normal: Vector3) -> [Vector3; 2] {
+    let base = if normal.x.abs() <= normal.y.abs() && normal.x.abs() <= normal.z.abs() {
+        Vector3::unit_x()
+    } else if normal.y.abs() <= normal.z.abs() {
+        Vector3::unit_y()
+    } else {
+        Vector3::unit_z()
+    };
+    let u = normal.cross(base).normalize();
+    [u, normal.cross(u)]
+}
+
+/// For each tool, find a plane whose outward half-space is empty within
+/// the tool's entire projected column. This is stronger than a finite
+/// AABB nonintersection test: every ray from a tool interior point in the
+/// outward direction reaches infinity without crossing host material.
+fn local_cap_partition(
+    host: &[FaceBounds],
+    tool: &[FaceBounds],
+    separator: Separator,
+    tol: f64,
+) -> Option<(Vec<usize>, Vec<bool>)> {
+    let tool_caps = cap_partition(tool, separator, -1.0, tol)?;
+    let axes = tangent_axes(separator.normal);
+    let footprint = ProjectedBounds::of(tool.iter().flat_map(|face| &face.points), separator, axes);
+    let mut host_caps = Vec::new();
+    for (index, face) in host.iter().enumerate() {
+        if ProjectedBounds::of(face.points.iter(), separator, axes).disjoint(footprint, tol) {
+            continue;
+        }
+        if face.points.iter().any(|&p| separator.height(p) > tol) {
+            return None;
+        }
+        if face
+            .points
+            .iter()
+            .all(|&p| separator.height(p).abs() <= tol)
+        {
+            let plane = face.outward_plane?;
+            if (plane.normal - separator.normal).magnitude() > BooleanTolerance::new(tol).angular
+                || separator.height(plane.origin).abs() > tol
+            {
+                return None;
+            }
+            host_caps.push(index);
+        }
+    }
+    (!host_caps.is_empty()).then_some((host_caps, tool_caps))
+}
+
+fn local_union<C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve, S: ShapeOpsSurface>(
+    lhs: &Solid<Point3, C, S>,
+    rhs: &[&Solid<Point3, C, S>],
+    lhs_bounds: &[FaceBounds],
+    rhs_bounds: &[Vec<FaceBounds>],
+    tol: f64,
+) -> Option<Solid<Point3, C, S>> {
+    let host = regions(lhs, &vec![false; lhs_bounds.len()], 0).retained;
+    let mut cutters = vec![Vec::new(); host.len()];
+    let mut retained = Vec::new();
+    let mut offset = lhs_bounds.len();
+    for (solid, bounds) in rhs.iter().zip(rhs_bounds) {
+        let (host_caps, tool_caps) = lhs_bounds
+            .iter()
+            .filter_map(|f| f.outward_plane)
+            .find_map(|plane| local_cap_partition(lhs_bounds, bounds, plane, tol))?;
+        let part = regions(solid, &tool_caps, offset);
+        offset += bounds.len();
+        let contact = host_caps
+            .iter()
+            .map(|&i| host[i].clone())
+            .collect::<Vec<_>>();
+        for cap in &part.contact {
+            retained.extend(overlay_planar_subtract(
+                std::slice::from_ref(cap),
+                &contact,
+                tol,
+            )?);
+        }
+        for i in host_caps {
+            cutters[i].extend(part.contact.iter().cloned());
+        }
+        retained.extend(part.retained);
+    }
+    for (region, cutter) in host.into_iter().zip(cutters) {
+        if cutter.is_empty() {
+            retained.push(region);
+        } else {
+            retained.extend(overlay_planar_subtract(
+                std::slice::from_ref(&region),
+                &cutter,
+                tol,
+            )?);
+        }
+    }
+    finish_union(&retained, tol)
+}
+
+fn finish_union<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    regions: &[AltRegion<C, S>],
+    tol: f64,
+) -> Option<Solid<Point3, C, S>> {
+    let result: Shell<Point3, C, S> =
+        weld_and_convert(regions, "planar contact union", BooleanTolerance::new(tol)).ok()?;
+    let components = result.connected_components();
+    if components.is_empty() || components.iter().any(|s| s.check_solid_boundary().is_err()) {
+        return None;
+    }
+    Solid::new(components).ok()
+}
+
 /// A separating plane between a host and disjoint attachment solids.
 /// Evaluate the complete contact arrangement only once.
 pub(in crate::transversal) fn union_many<
@@ -249,15 +394,9 @@ pub(in crate::transversal) fn union_many<
             }
         }
         left.extend(right);
-        let result: Shell<Point3, C, S> =
-            weld_and_convert(&left, "planar contact union", BooleanTolerance::new(tol)).ok()?;
-        let components = result.connected_components();
-        if components.is_empty() || components.iter().any(|s| s.check_solid_boundary().is_err()) {
-            return None;
-        }
-        return Solid::new(components).ok();
+        return finish_union(&left, tol);
     }
-    None
+    local_union(lhs, rhs, &lhs_bounds, &rhs_bounds, tol)
 }
 
 pub(in crate::transversal) fn union<
@@ -369,6 +508,23 @@ mod tests {
         let penetrating = box_at(Point3::new(3., 1., 1.9), Vector3::new(1., 1., 0.2));
         assert!(union_many(&host, &[&a, &penetrating], 1e-6).is_none());
         assert!(union_many(&host, &[], 1e-6).is_none());
+    }
+
+    #[test]
+    fn local_contact_handles_stepped_host_and_multiple_planes() {
+        let base = box_at(Point3::origin(), Vector3::new(5., 3., 2.));
+        let raised = box_at(Point3::new(3., 0., 2.), Vector3::new(2., 3., 1.));
+        let host = union(&base, &raised, 1e-6).expect("stepped host");
+        let a = box_at(Point3::new(0.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
+        let b = box_at(Point3::new(3.5, 0.5, 3.), Vector3::new(1., 1., 0.01));
+        let attached =
+            union_many(&host, &[&a, &b], 1e-6).expect("two distinct exposed contact planes");
+        assert_eq!(attached.boundaries().len(), 1);
+        assert!(attached.is_geometric_consistent());
+        let penetrating = box_at(Point3::new(2.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
+        assert!(union(&host, &penetrating, 1e-6).is_none());
+        let buried = box_at(Point3::new(3.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
+        assert!(union(&host, &buried, 1e-6).is_none());
     }
 
     #[test]
