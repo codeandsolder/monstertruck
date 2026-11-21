@@ -595,17 +595,40 @@ mod tests {
     }
 
     #[test]
-    fn planar_contact_batch_handles_disjoint_tools_and_refuses_interference() {
+    fn planar_contact_batches_certify_exact_material_and_refuse_interference() {
         let host = box_at(Point3::origin(), Vector3::new(5., 3., 2.));
-        let a = box_at(Point3::new(0.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
-        let b = box_at(Point3::new(3., 1., 2.), Vector3::new(1., 1., 0.01));
-        let result = union_many(&host, &[&a, &b], 1e-6).expect("disjoint contact batch");
-        assert_consistent_face_count(&result, 16);
+        let outside = box_at(Point3::new(0.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
+        let other_boss = box_at(Point3::new(3., 1., 2.), Vector3::new(1., 1., 0.01));
         let overlap = box_at(Point3::new(0.8, 0.8, 2.), Vector3::new(1., 1., 0.01));
-        assert!(union_many(&host, &[&a, &overlap], 1e-6).is_none());
         let penetrating = box_at(Point3::new(3., 1., 1.9), Vector3::new(1., 1., 0.2));
-        assert!(union_many(&host, &[&a, &penetrating], 1e-6).is_none());
-        assert!(union_many(&host, &[], 1e-6).is_none());
+        let blind = box_at(Point3::new(0.5, 0.5, 1.99), Vector3::new(1., 1., 0.01));
+        let through = box_at(Point3::new(3., 0.5, 0.), Vector3::new(1., 1., 2.));
+        let crossing = box_at(Point3::new(4.5, 0.5, 1.99), Vector3::new(1., 1., 0.01));
+        let buried = box_at(Point3::new(0.5, 0.5, 1.), Vector3::new(1., 1., 0.01));
+        let batch_cases = [
+            (
+                super::union_many::<Curve, Surface>
+                    as fn(&ModelSolid, &[&ModelSolid], f64) -> Option<ModelSolid>,
+                [&outside, &other_boss],
+                16,
+            ),
+            (
+                super::difference_many::<Curve, Surface>,
+                [&blind, &through],
+                15,
+            ),
+        ];
+        for (operation, tools, face_count) in batch_cases {
+            let result = operation(&host, &tools, 1e-6).expect("certified contact batch");
+            assert_consistent_face_count(&result, face_count);
+            assert!(operation(&host, &[], 1e-6).is_none());
+        }
+        for invalid in [&overlap, &penetrating] {
+            assert!(union_many(&host, &[&outside, invalid], 1e-6).is_none());
+        }
+        for invalid in [&outside, &crossing, &buried] {
+            assert!(difference_many(&host, &[invalid], 1e-6).is_none());
+        }
     }
 
     #[test]
@@ -623,22 +646,6 @@ mod tests {
         assert!(union(&host, &penetrating, 1e-6).is_none());
         let buried = box_at(Point3::new(3.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
         assert!(union(&host, &buried, 1e-6).is_none());
-    }
-
-    #[test]
-    fn local_difference_handles_blind_and_through_pockets() {
-        let host = box_at(Point3::origin(), Vector3::new(5., 3., 2.));
-        let blind = box_at(Point3::new(0.5, 0.5, 1.99), Vector3::new(1., 1., 0.01));
-        let through = box_at(Point3::new(3., 0.5, 0.), Vector3::new(1., 1., 2.));
-        let result = difference_many(&host, &[&blind, &through], 1e-6)
-            .expect("exact blind and through cuts");
-        assert_consistent_face_count(&result, 15);
-        let outside = box_at(Point3::new(0.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
-        let crossing = box_at(Point3::new(4.5, 0.5, 1.99), Vector3::new(1., 1., 0.01));
-        let buried = box_at(Point3::new(0.5, 0.5, 1.), Vector3::new(1., 1., 0.01));
-        assert!(difference_many(&host, &[&outside], 1e-6).is_none());
-        assert!(difference_many(&host, &[&crossing], 1e-6).is_none());
-        assert!(difference_many(&host, &[&buried], 1e-6).is_none());
     }
 
     #[test]
