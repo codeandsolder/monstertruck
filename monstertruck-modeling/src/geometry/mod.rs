@@ -55,4 +55,6 @@ pub use analytic_boundary_incidence::{
     NativeVertexIncidence, NativeWireIncidence, certify_native_analytic_boundary_incidence,
 };
 
+#[cfg(feature = "fillet")]
+pub(crate) use surface::analytic_carrier;
 pub use surface::{Surface, same_analytic_surface_domain};

@@ -91,7 +91,7 @@ pub mod monstertruck {
     use monstertruck_core::tolerance::{
         DEFAULT_NUMERICAL_TOLERANCES, DEFAULT_STEP_RECOVERY_TOLERANCES,
     };
-    use monstertruck_fillet::{FilletOptions, FilletProfile, RadiusSpec, fillet_edges_generic};
+    use monstertruck_fillet::{FilletOptions, FilletProfile, RadiusSpec};
     use monstertruck_geometry::analytic_curve_incidence::CurveIncidence;
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
     use monstertruck_modeling::{
@@ -100,7 +100,7 @@ pub mod monstertruck {
         SearchNearestParameter, SearchParameter, Shell, Solid, Surface, SurfaceCurve, Vector3,
         Vector4, Wire, algo, builder, certify_analytic_curve_on_surface, primitive, profile,
     };
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     mod circular_selection;
 
@@ -995,6 +995,99 @@ pub mod monstertruck {
         }
     }
 
+    /// Extract a prism's generating profile and exact placement, without
+    /// evaluating a solid. A union of coextensive prisms distributively
+    /// equals extrusion of the union of their planar profiles.
+    fn placed_prism(model: &CadModel, mut id: NodeId) -> Option<(&Profile2d, f64, Matrix4)> {
+        let mut transform = rigid_matrix(&RigidTransform::identity());
+        let node = loop {
+            match model.node(id).ok()? {
+                CadNode::Transform {
+                    child,
+                    transform: local,
+                } => {
+                    transform = transform * rigid_matrix(local);
+                    id = *child;
+                }
+                node => break node,
+            }
+        };
+        let CadNode::Extrude {
+            profile,
+            vector_mm: [x, y, z],
+        } = node
+        else {
+            return None;
+        };
+        (*x == 0.0 && *y == 0.0 && z.is_finite() && *z != 0.0).then_some((profile, *z, transform))
+    }
+
+    fn coextensive_prism_union(
+        model: &CadModel,
+        children: &[NodeId],
+        policy: GeometryPolicy,
+    ) -> Result<Option<Solid>> {
+        if children.len() < 2 {
+            return Ok(None);
+        }
+        let mut pending = children.to_vec();
+        let mut seen = HashSet::new();
+        let mut prisms = Vec::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let CadNode::Boolean {
+                op: BooleanOp::Union,
+                children,
+            } = model.node(id)?
+            {
+                pending.extend(children.iter().copied());
+            } else if let Some(prism) = placed_prism(model, id) {
+                prisms.push(prism);
+            } else {
+                return Ok(None);
+            }
+        }
+        let Some(&(_, length, transform)) = prisms.first() else {
+            return Ok(None);
+        };
+        if prisms
+            .iter()
+            .any(|(_, l, t)| l.to_bits() != length.to_bits() || *t != transform)
+        {
+            return Ok(None);
+        }
+        let mut faces = Vec::with_capacity(prisms.len());
+        for (profile, _, _) in prisms {
+            let face: monstertruck_modeling::Face =
+                profile::attach_plane_normalized(profile_wires(profile)?)?;
+            let mut face = face;
+            let Surface::Plane(plane) = face.oriented_surface() else {
+                return Ok(None);
+            };
+            // A shared plane chart must have an unambiguous common sense.
+            // The final extrusion uses the same local positive/negative Z
+            // orientation contract as an individual prism.
+            if plane.normal().z * length < 0.0 {
+                face.invert();
+            }
+            faces.push(face);
+        }
+        let Some(united) =
+            monstertruck_solid::try_planar_profile_union(&faces, monstertruck_policy(policy))?
+        else {
+            return Ok(None);
+        };
+        let mut boundaries = Vec::new();
+        for face in &united {
+            let solid: Solid = builder::extrude(face, Vector3::new(0.0, 0.0, length));
+            boundaries.extend(solid.into_boundaries());
+        }
+        let joined = Solid::new(boundaries)?;
+        Ok(Some(builder::transformed(&joined, transform)))
+    }
+
     fn evaluate_boolean(
         model: &CadModel,
         op: BooleanOp,
@@ -1002,6 +1095,11 @@ pub mod monstertruck {
         policy: GeometryPolicy,
         cache: &mut EvaluationCache,
     ) -> Result<Solid> {
+        if op == BooleanOp::Union
+            && let Some(result) = coextensive_prism_union(model, children, policy)?
+        {
+            return Ok(result);
+        }
         let Some((&first, rest)) = children.split_first() else {
             bail!("boolean node needs at least one child");
         };
@@ -1010,7 +1108,15 @@ pub mod monstertruck {
             let rhs = evaluate_node(model, child, policy, cache)?;
             let kernel_policy = monstertruck_policy(policy);
             result = match op {
-                BooleanOp::Union => monstertruck_solid::or(&result, &rhs, kernel_policy)?,
+                BooleanOp::Union => {
+                    if let Some(joined) =
+                        monstertruck_solid::try_planar_contact_union(&result, &rhs, kernel_policy)?
+                    {
+                        joined
+                    } else {
+                        monstertruck_solid::or(&result, &rhs, kernel_policy)?
+                    }
+                }
                 BooleanOp::Intersection => monstertruck_solid::and(&result, &rhs, kernel_policy)?,
                 BooleanOp::Difference => {
                     monstertruck_solid::difference(&result, &rhs, kernel_policy)?
@@ -1226,6 +1332,26 @@ pub mod monstertruck {
         }
     }
 
+    fn resolve_treatment_edges(
+        shell: &Shell,
+        edges: &[EdgeTreatmentEdge],
+    ) -> Result<(Vec<Edge>, Vec<f64>)> {
+        let mut selected = Vec::<Edge>::new();
+        let mut radii = Vec::new();
+        for treatment in edges {
+            for edge in select_edges(shell, &treatment.selector).with_context(|| {
+                format!("resolve edge treatment selector {:?}", treatment.selector)
+            })? {
+                if selected.iter().any(|existing| existing.id() == edge.id()) {
+                    bail!("edge-treatment selectors overlap on one topological edge");
+                }
+                selected.push(edge);
+                radii.push(treatment.radius_mm);
+            }
+        }
+        Ok((selected, radii))
+    }
+
     fn evaluate_edge_treatment(
         model: &CadModel,
         child: NodeId,
@@ -1239,20 +1365,42 @@ pub mod monstertruck {
         let [shell] = boundaries.as_mut_slice() else {
             bail!("edge treatment currently requires exactly one boundary shell");
         };
-        let mut selected = Vec::<Edge>::new();
-        let mut radii = Vec::new();
-        for treatment in edges {
-            for edge in select_edges(shell, &treatment.selector)? {
-                if selected.iter().any(|existing| existing.id() == edge.id()) {
-                    bail!("edge-treatment selectors overlap on one topological edge");
-                }
-                selected.push(edge);
-                radii.push(treatment.radius_mm);
+        let (selected, radii) = match resolve_treatment_edges(shell, edges) {
+            Ok(resolved) => resolved,
+            Err(original) => {
+                // An exact constructive seam may be partitioned by sectional
+                // Boolean interfaces. Normalize the same geometric shell,
+                // then retry the unchanged selector (not a wider tolerance).
+                let normalized = monstertruck_modeling::normalize_planar_partitions(shell)
+                    .with_context(|| {
+                        format!("normalize planar partitions after selector failure: {original:#}")
+                    })?;
+                let resolved = resolve_treatment_edges(&normalized, edges).with_context(|| {
+                    format!("selector remained unresolved after planar normalization: {original:#}")
+                })?;
+                *shell = normalized;
+                resolved
             }
-        }
+        };
         let fillet_profile = match profile {
+            EdgeTreatmentProfile::Chamfer => {
+                monstertruck_modeling::chamfer_planar_edges(shell, &selected, &radii)?;
+                return Ok(Solid::new(boundaries)?);
+            }
+            EdgeTreatmentProfile::CarrierChamfer {
+                first_carrier_normal: [x, y, z],
+                second_setback_mm,
+            } => {
+                monstertruck_modeling::chamfer_carrier_edges(
+                    shell,
+                    &selected,
+                    &radii,
+                    Vector3::new(x, y, z),
+                    second_setback_mm,
+                )?;
+                return Ok(Solid::new(boundaries)?);
+            }
             EdgeTreatmentProfile::Round => FilletProfile::Round,
-            EdgeTreatmentProfile::Chamfer => FilletProfile::Chamfer,
             EdgeTreatmentProfile::AsymmetricChamfer {
                 first_setback_mm,
                 second_setback_mm,
@@ -1266,8 +1414,9 @@ pub mod monstertruck {
             profile: fillet_profile,
             ..FilletOptions::default()
         };
-        fillet_edges_generic(shell, &selected, Some(&options))?;
-        Ok(Solid::new(boundaries)?)
+        monstertruck_modeling::fillet_edges(shell, &selected, Some(&options))
+            .context("native edge treatment construction")?;
+        Solid::new(boundaries).context("validate treated solid topology")
     }
 
     fn evaluate_node(
@@ -1941,6 +2090,233 @@ pub mod monstertruck {
         }
 
         #[test]
+        fn evaluates_transverse_chamfer_on_thin_prism() -> Result<()> {
+            let mut model = CadModel::new();
+            let child = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [4.0, 3.0, 0.1],
+            }));
+            let root = model.add_node(CadNode::EdgeTreatment {
+                child,
+                profile: EdgeTreatmentProfile::Chamfer,
+                edges: vec![EdgeTreatmentEdge {
+                    selector: EdgeSelector::Segment {
+                        start_mm: [0.0, 0.0, 0.0],
+                        end_mm: [0.0, 0.0, 0.1],
+                    },
+                    radius_mm: 0.137,
+                }],
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.is_single_solid());
+            assert_eq!(summary.faces, 7);
+            step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_chamfers_at_reentrant_shoulder() -> Result<()> {
+            let mut model = CadModel::new();
+            let base = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [6.0, 5.0, 1.0],
+            }));
+            let upper = model.add_node(CadNode::Extrude {
+                profile: Profile2d::polygon(vec![[1.0, 1.0], [5.0, 1.0], [5.0, 4.0], [1.0, 4.0]])?,
+                vector_mm: [0.0, 0.0, 0.1],
+            });
+            let upper = model.add_node(CadNode::Transform {
+                transform: RigidTransform::translation_mm([0.0, 0.0, 1.0]),
+                child: upper,
+            });
+            let mut root = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children: vec![base, upper],
+            });
+            // A later chamfer selects the exact seam generated by an unequal
+            // earlier bevel; the unoriented carrier normal fixes its role.
+            for ([x, y], profile, setback) in [
+                (
+                    [1.0, 1.0],
+                    EdgeTreatmentProfile::CarrierChamfer {
+                        first_carrier_normal: [0.0, -1.0, 0.0],
+                        second_setback_mm: 0.4,
+                    },
+                    0.25,
+                ),
+                ([1.25, 1.0], EdgeTreatmentProfile::Chamfer, 0.05),
+                ([5.0, 4.0], EdgeTreatmentProfile::Chamfer, 0.25),
+            ] {
+                root = model.add_node(CadNode::EdgeTreatment {
+                    child: root,
+                    profile,
+                    edges: vec![EdgeTreatmentEdge {
+                        selector: EdgeSelector::Segment {
+                            start_mm: [x, y, 1.0],
+                            end_mm: [x, y, 1.1],
+                        },
+                        radius_mm: setback,
+                    }],
+                });
+            }
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            assert!(kernel.summarize(&evaluated).is_single_solid());
+            assert!(
+                evaluated
+                    .solid
+                    .face_iter()
+                    .all(|f| matches!(f.surface(), Surface::Plane(_)))
+            );
+            assert!(
+                evaluated
+                    .solid
+                    .edge_iter()
+                    .all(|e| matches!(e.curve(), Curve::Line(_)))
+            );
+            let mut reference = CadModel::new();
+            let base = reference.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [6.0, 5.0, 1.0],
+            }));
+            let upper = reference.add_node(CadNode::Extrude {
+                profile: Profile2d::polygon(vec![
+                    [1.30, 1.0],
+                    [5.0, 1.0],
+                    [5.0, 3.75],
+                    [4.75, 4.0],
+                    [1.0, 4.0],
+                    [1.0, 1.4],
+                    [
+                        1.25 - 0.05 * 0.25 / 0.25_f64.hypot(0.4),
+                        1.0 + 0.05 * 0.4 / 0.25_f64.hypot(0.4),
+                    ],
+                ])?,
+                vector_mm: [0.0, 0.0, 0.1],
+            });
+            let upper = reference.add_node(CadNode::Transform {
+                transform: RigidTransform::translation_mm([0.0, 0.0, 1.0]),
+                child: upper,
+            });
+            let reference_root = reference.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children: vec![base, upper],
+            });
+            reference.add_root(reference_root)?;
+            let expected = kernel.evaluate(&reference, reference_root)?;
+            assert_same_analytic_boundary(&kernel, &evaluated, &expected)
+        }
+
+        fn assert_same_analytic_boundary(
+            kernel: &MonstertruckKernel,
+            evaluated: &EvaluatedShape,
+            expected: &EvaluatedShape,
+        ) -> Result<()> {
+            let actual_step = kernel.to_step(evaluated)?;
+            let expected_step = kernel.to_step(expected)?;
+            let actual_exchange =
+                monstertruck_io::step::load::ParsedStepSource::parse(actual_step.as_bytes())?
+                    .exchange;
+            let expected_exchange =
+                monstertruck_io::step::load::ParsedStepSource::parse(expected_step.as_bytes())?
+                    .exchange;
+            let actual = &actual_exchange.data[0].entities;
+            let expected = &expected_exchange.data[0].entities;
+            let solid_id = |entities: &[step_p21::ast::EntityInstance]| -> Result<u64> {
+                let ids = entities
+                    .iter()
+                    .filter(|entity| {
+                        crate::step_graph::simple_record(entity)
+                            .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
+                    })
+                    .map(crate::step_graph::entity_id)
+                    .collect::<Vec<_>>();
+                let [id] = ids.as_slice() else {
+                    bail!("expected one solid")
+                };
+                Ok(*id)
+            };
+            let comparison = crate::boundary_proof::compare_analytic_boundaries(
+                solid_id(actual)?,
+                actual,
+                solid_id(expected)?,
+                expected,
+            );
+            assert!(
+                comparison.equivalent,
+                "replayed solid differs from explicit reference: {comparison:?}"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_partitioned_longitudinal_round() -> Result<()> {
+            let mut model = CadModel::new();
+            let mut children = Vec::new();
+            for (z, height) in [(0.0, 0.125), (0.125, 0.125), (0.25, 0.25)] {
+                let child = model.add_node(CadNode::Primitive(Primitive::Box {
+                    size_mm: [4.0, 3.0, height],
+                }));
+                children.push(model.add_node(CadNode::Transform {
+                    transform: RigidTransform::translation_mm([0.0, 0.0, z]),
+                    child,
+                }));
+            }
+            let child = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children,
+            });
+            let kernel = MonstertruckKernel::project_standard();
+            let original = kernel.evaluate(&model, child)?;
+            let selector = EdgeSelector::Segment {
+                start_mm: [0.0, 0.0, 0.0],
+                end_mm: [0.0, 0.0, 0.5],
+            };
+            assert!(
+                select_edges(&original.solid.boundaries()[0], &selector).is_err(),
+                "fixture must contain partitioned seam"
+            );
+            let root = model.add_node(CadNode::EdgeTreatment {
+                child,
+                profile: EdgeTreatmentProfile::Round,
+                edges: vec![EdgeTreatmentEdge {
+                    selector,
+                    radius_mm: 0.75,
+                }],
+            });
+            model.add_root(root)?;
+            let evaluated = kernel.evaluate(&model, root)?;
+            assert!(kernel.summarize(&evaluated).is_single_solid());
+            assert_eq!(kernel.summarize(&evaluated).faces, 7);
+
+            let points = [[0.75, 0.0], [4.0, 0.0], [4.0, 3.0], [0.0, 3.0], [0.0, 0.75]];
+            let mut curves = points
+                .windows(2)
+                .map(|p| Curve2d::Line {
+                    start_mm: p[0],
+                    end_mm: p[1],
+                })
+                .collect::<Vec<_>>();
+            curves.push(Curve2d::CircleArc {
+                center_mm: [0.75, 0.75],
+                radius_mm: 0.75,
+                start_angle_rad: std::f64::consts::PI,
+                end_angle_rad: 3.0 * std::f64::consts::FRAC_PI_2,
+            });
+            let mut reference = CadModel::new();
+            let root = reference.add_node(CadNode::Extrude {
+                profile: Profile2d {
+                    loops: vec![crate::cad_ir::ProfileLoop { curves }],
+                },
+                vector_mm: [0.0, 0.0, 0.5],
+            });
+            reference.add_root(root)?;
+            let expected = kernel.evaluate(&reference, root)?;
+            assert_same_analytic_boundary(&kernel, &evaluated, &expected)
+        }
+
+        #[test]
         fn evaluates_asymmetric_chamfer_edge_treatment() -> Result<()> {
             box_edge_treatment(EdgeTreatmentProfile::AsymmetricChamfer {
                 first_setback_mm: 0.2,
@@ -2060,6 +2436,253 @@ pub mod monstertruck {
             assert_eq!(summary.shells, 1);
             assert_eq!(summary.faces, 14);
             step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
+            Ok(())
+        }
+
+        fn tangent_rim_box(model: &mut CadModel) -> NodeId {
+            let child = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [6.0, 5.0, 4.0],
+            }));
+            model.add_node(CadNode::EdgeTreatment {
+                child,
+                profile: EdgeTreatmentProfile::Round,
+                edges: [[0.0, 0.0], [6.0, 0.0], [6.0, 5.0], [0.0, 5.0]]
+                    .into_iter()
+                    .map(|[x, y]| EdgeTreatmentEdge {
+                        selector: EdgeSelector::Segment {
+                            start_mm: [x, y, 0.0],
+                            end_mm: [x, y, 4.0],
+                        },
+                        radius_mm: 1.0,
+                    })
+                    .collect(),
+            })
+        }
+
+        fn tangent_rim_selectors(z: f64, offset: [f64; 2]) -> Vec<EdgeTreatmentEdge> {
+            use std::f64::consts::FRAC_PI_2;
+            let points = [
+                [1.0, 0.0],
+                [5.0, 0.0],
+                [6.0, 1.0],
+                [6.0, 4.0],
+                [5.0, 5.0],
+                [1.0, 5.0],
+                [0.0, 4.0],
+                [0.0, 1.0],
+            ];
+            let centers = [[5.0, 1.0], [5.0, 4.0], [1.0, 4.0], [1.0, 1.0]];
+            let at_top = |[x, y]: [f64; 2]| [x + offset[0], y + offset[1], z];
+            let mut edges = Vec::new();
+            for i in 0..4 {
+                edges.push(EdgeTreatmentEdge {
+                    selector: EdgeSelector::Segment {
+                        start_mm: at_top(points[2 * i]),
+                        end_mm: at_top(points[2 * i + 1]),
+                    },
+                    radius_mm: 0.25,
+                });
+                edges.push(EdgeTreatmentEdge {
+                    selector: EdgeSelector::CircleArc {
+                        center_mm: at_top(centers[i]),
+                        normal: [0.0, 0.0, 1.0],
+                        radius_mm: 1.0,
+                        start_mm: at_top(points[2 * i + 1]),
+                        sweep_rad: FRAC_PI_2,
+                    },
+                    radius_mm: 0.25,
+                });
+            }
+            edges
+        }
+
+        #[test]
+        fn evaluates_native_mixed_tangent_rim() -> Result<()> {
+            let mut model = CadModel::new();
+            let core = tangent_rim_box(&mut model);
+            let mut edges = tangent_rim_selectors(4.0, [0.0; 2]);
+            let kernel = MonstertruckKernel::project_standard();
+            let root = model.add_node(CadNode::EdgeTreatment {
+                child: core,
+                profile: EdgeTreatmentProfile::Round,
+                edges: edges.clone(),
+            });
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.is_single_solid());
+            assert_eq!(summary.faces, 18);
+            let torus_count = evaluated
+                .solid
+                .face_iter()
+                .filter(|face| {
+                    if let Surface::Torus(torus) = face.surface() {
+                        assert!(
+                            (torus.entity().large_radius() - 0.75).abs()
+                                < crate::numeric::NUMERICAL_GEOMETRY_TOL_MM
+                        );
+                        assert!(
+                            (torus.entity().small_radius() - 0.25).abs()
+                                < crate::numeric::NUMERICAL_GEOMETRY_TOL_MM
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .count();
+            assert_eq!(torus_count, 4, "native analytic tori must survive");
+            edges.reverse();
+            let reversed = model.add_node(CadNode::EdgeTreatment {
+                child: core,
+                profile: EdgeTreatmentProfile::Round,
+                edges,
+            });
+            let expected = kernel.evaluate(&model, reversed)?;
+            // Exact native carrier incidence and deterministic complete
+            // exported topology are the order-invariance contract here.
+            // This also checks deterministic native serialization.
+            monstertruck_modeling::certify_native_analytic_boundary_incidence(
+                &evaluated.solid,
+                crate::numeric::NUMERICAL_GEOMETRY_TOL_MM,
+                DEFAULT_STEP_RECOVERY_TOLERANCES.edge_treatment_direction,
+            )
+            .map_err(|error| anyhow::anyhow!("native rim incidence: {error:?}"))?;
+            let first = monstertruck_io::step::load::ParsedStepSource::parse(
+                kernel.to_step(&evaluated)?.as_bytes(),
+            )?
+            .exchange;
+            let second = monstertruck_io::step::load::ParsedStepSource::parse(
+                kernel.to_step(&expected)?.as_bytes(),
+            )?
+            .exchange;
+            assert_eq!(first.data[0].entities, second.data[0].entities);
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_translated_reentrant_tangent_rim() -> Result<()> {
+            let mut model = CadModel::new();
+            let core = tangent_rim_box(&mut model);
+            let kernel = MonstertruckKernel::project_standard();
+            let base = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [10.0, 9.0, 1.0],
+            }));
+            let boss = model.add_node(CadNode::Transform {
+                transform: RigidTransform::translation_mm([2.0, 2.0, 1.0]),
+                child: core,
+            });
+            let shoulder = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Union,
+                children: vec![base, boss],
+            });
+            let round = model.add_node(CadNode::EdgeTreatment {
+                child: shoulder,
+                profile: EdgeTreatmentProfile::Round,
+                edges: tangent_rim_selectors(1.0, [2.0; 2]),
+            });
+            let reentrant = kernel.evaluate(&model, round)?;
+            assert!(
+                kernel.summarize(&reentrant).is_single_solid(),
+                "{:?}",
+                kernel.summarize(&reentrant)
+            );
+            let tori = reentrant
+                .solid
+                .face_iter()
+                .filter(|face| {
+                    if let Surface::Torus(torus) = face.oriented_surface() {
+                        assert!(
+                            (torus.entity().large_radius() - 1.25).abs()
+                                < crate::numeric::NUMERICAL_GEOMETRY_TOL_MM
+                        );
+                        assert!(
+                            (torus.entity().small_radius() - 0.25).abs()
+                                < crate::numeric::NUMERICAL_GEOMETRY_TOL_MM
+                        );
+                        assert!(!torus.orientation());
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .count();
+            assert_eq!(tori, 4, "reentrant rim must retain inverted analytic tori");
+            monstertruck_modeling::certify_native_analytic_boundary_incidence(
+                &reentrant.solid,
+                crate::numeric::NUMERICAL_GEOMETRY_TOL_MM,
+                DEFAULT_STEP_RECOVERY_TOLERANCES.edge_treatment_direction,
+            )
+            .map_err(|error| anyhow::anyhow!("native reentrant rim incidence: {error:?}"))?;
+            Ok(())
+        }
+
+        #[test]
+        fn evaluates_three_way_spherical_round_network() -> Result<()> {
+            use crate::brep::SurfaceSupport;
+            let mut model = CadModel::new();
+            let child = model.add_node(CadNode::Primitive(Primitive::Box {
+                size_mm: [6.0, 5.0, 4.0],
+            }));
+            let corners = [
+                [0.0, 0.0, 4.0],
+                [6.0, 0.0, 4.0],
+                [6.0, 5.0, 4.0],
+                [0.0, 5.0, 4.0],
+            ];
+            let mut edges = Vec::new();
+            for (index, point) in corners.iter().copied().enumerate() {
+                for end_mm in [corners[(index + 1) % 4], [point[0], point[1], 0.0]] {
+                    edges.push(EdgeTreatmentEdge {
+                        selector: EdgeSelector::Segment {
+                            start_mm: point,
+                            end_mm,
+                        },
+                        radius_mm: 0.5,
+                    });
+                }
+            }
+            let root = model.add_node(CadNode::EdgeTreatment {
+                child,
+                profile: EdgeTreatmentProfile::Round,
+                edges,
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.is_single_solid(), "{summary:?}");
+            assert_eq!(summary.faces, 18);
+            let step = kernel.to_step(&evaluated)?;
+            let exchange = step_p21::parser::parse(&step)?;
+            let section = &exchange.data[0];
+            let index = crate::step_graph::build_index(&section.entities);
+            let solid_id = section
+                .entities
+                .iter()
+                .find_map(|entity| {
+                    let record = crate::step_graph::simple_record(entity)?;
+                    (record.name == "MANIFOLD_SOLID_BREP")
+                        .then(|| crate::step_graph::entity_id(entity))
+                })
+                .context("missing rounded solid")?;
+            let solid =
+                crate::reduced_brep::ReducedSolid::from_step(solid_id, &section.entities, &index)
+                    .context("cannot resolve analytic rounded solid")?;
+            assert_eq!(
+                solid
+                    .faces()
+                    .filter(|face| matches!(face.surface, SurfaceSupport::Sphere(_)))
+                    .count(),
+                4
+            );
+            assert_eq!(
+                solid
+                    .faces()
+                    .filter(|face| matches!(face.surface, SurfaceSupport::Cylinder(_)))
+                    .count(),
+                8
+            );
+            assert!(solid.validate_closed_topology().is_some());
             Ok(())
         }
 

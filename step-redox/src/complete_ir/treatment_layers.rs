@@ -210,7 +210,8 @@ pub(super) fn replay(
 mod tests {
     use super::*;
     use crate::{
-        cad_kernel::monstertruck::MonstertruckKernel, kernel_source_load::SourceStepLoadInspector,
+        cad_kernel::{CadKernel, monstertruck::MonstertruckKernel},
+        kernel_source_load::SourceStepLoadInspector,
     };
 
     #[test]
@@ -275,6 +276,65 @@ mod tests {
         Ok(())
     }
 
+    fn assert_te_coupled_rounds(layers: &[ReplayLayer], stop: Option<&str>) -> Result<()> {
+        // Native face-sense composition must permit the four radius-2
+        // vertical rounds of the reversed planar carrier shell to peel.
+        let removed = layers
+            .iter()
+            .flat_map(|layer| &layer.groups)
+            .flat_map(|group| group.face_ids.iter().copied())
+            .collect::<std::collections::BTreeSet<_>>();
+        for id in [8019, 8047, 8075, 8102] {
+            assert!(
+                removed.contains(&id),
+                "reversed native carrier blocked treatment #{id}"
+            );
+        }
+        assert!(layers.first().is_some_and(|layer| {
+            layer
+                .groups
+                .iter()
+                .map(|group| group.face_ids.len())
+                .sum::<usize>()
+                >= 64
+        }));
+        // The last four spherical corner patches belong to the same
+        // eight-edge network as the surrounding cylindrical fillets.
+        for id in [
+            8430, 8459, 8487, 8513, 8527, 8554, 8581, 9149, 8472, 9160, 8567, 9171,
+        ] {
+            assert!(
+                removed.contains(&id),
+                "spherical round network retained #{id}: {:?}",
+                stop
+            );
+        }
+        let spherical_faces = std::collections::BTreeSet::from([
+            8430, 8459, 8487, 8513, 8527, 8554, 8581, 9149, 8472, 9160, 8567, 9171,
+        ]);
+        let network = layers
+            .iter()
+            .flat_map(|layer| &layer.groups)
+            .find(|group| {
+                group
+                    .face_ids
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    == spherical_faces
+            })
+            .context("spherical junctions must share one replay operation")?;
+        assert_eq!(network.edges.len(), 8);
+        assert_eq!(network.profile, crate::cad_ir::EdgeTreatmentProfile::Round);
+        assert!(
+            network
+                .edges
+                .iter()
+                .all(|edge| matches!(edge.selector, crate::cad_ir::EdgeSelector::Segment { .. }))
+        );
+        Ok(())
+    }
+
     #[test]
     fn native_treatment_layers_real_te_outer_layer() -> Result<()> {
         let bytes = crate::inverse_edge_treatment::te_treatment_fixture()?;
@@ -316,61 +376,139 @@ mod tests {
         );
         assert_eq!(summary.boundary_shells, 1);
         assert_eq!(summary.faces, 309 - counts.iter().sum::<usize>());
-        // Native face-sense composition must permit the four radius-2
-        // vertical rounds of the reversed planar carrier shell to peel.
-        let removed = result
-            .layers
-            .iter()
-            .flat_map(|layer| &layer.groups)
-            .flat_map(|group| group.face_ids.iter().copied())
-            .collect::<std::collections::BTreeSet<_>>();
-        for id in [8019, 8047, 8075, 8102] {
-            assert!(
-                removed.contains(&id),
-                "reversed native carrier blocked treatment #{id}"
-            );
-        }
-        assert!(counts.first().is_some_and(|count| *count >= 64));
-        // The last four spherical corner patches belong to the same
-        // eight-edge network as the surrounding cylindrical fillets.
-        for id in [
-            8430, 8459, 8487, 8513, 8527, 8554, 8581, 9149, 8472, 9160, 8567, 9171,
-        ] {
-            assert!(
-                removed.contains(&id),
-                "spherical round network retained #{id}: {:?}",
-                result.stop
-            );
-        }
-        let spherical_faces = std::collections::BTreeSet::from([
-            8430, 8459, 8487, 8513, 8527, 8554, 8581, 9149, 8472, 9160, 8567, 9171,
-        ]);
-        let network = result
-            .layers
-            .iter()
-            .flat_map(|layer| &layer.groups)
-            .find(|group| {
-                group
-                    .face_ids
-                    .iter()
-                    .copied()
-                    .collect::<std::collections::BTreeSet<_>>()
-                    == spherical_faces
-            })
-            .context("spherical junctions must share one replay operation")?;
-        assert_eq!(network.edges.len(), 8);
-        assert_eq!(network.profile, crate::cad_ir::EdgeTreatmentProfile::Round);
-        assert!(
-            network
-                .edges
-                .iter()
-                .all(|edge| matches!(edge.selector, crate::cad_ir::EdgeSelector::Segment { .. }))
-        );
+        assert_te_coupled_rounds(&result.layers, result.stop.as_deref())?;
         assert!(summary.faces <= 225);
         assert!(
             counts.len() >= 2,
             "TE must peel at least two native layers: {:?}",
             result.stop
+        );
+        // The same real fixture must now admit a constructive peeled host,
+        // not merely operate on its native face topology.
+        let mut edited = result.edited;
+        kernel.normalize_edited_source(&mut edited)?;
+        let snapshot = kernel.edited_source_to_step(&edited)?;
+        let exchange =
+            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange;
+        let host = super::super::recognize_single_healed_host(&exchange, &kernel)?
+            .context("normalized TE host did not pass analytic boundary proof")?;
+        assert!(matches!(
+            host.source,
+            crate::cad_recovery::CadFragmentSource::SectionalExtrusionUnion { .. }
+        ));
+        let rebuilt = kernel.evaluate(&host.model, host.root)?;
+        assert!(kernel.summarize(&rebuilt).is_single_solid());
+        let recovered = replay(host, source.id, result.layers)?;
+        let reconstructed = kernel.evaluate(&recovered.model, recovered.root)?;
+        let reconstructed_summary = kernel.summarize(&reconstructed);
+        assert!(
+            reconstructed_summary.is_single_solid(),
+            "{reconstructed_summary:?}"
+        );
+        assert_eq!(reconstructed_summary.faces, 309);
+        // Every reconstructed support, bounded edge locus, and oriented
+        // boundary chain must agree with the original, including the
+        // cylindrical, toroidal, and spherical treatment surfaces.
+        assert!(
+            crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
+                &kernel,
+                &reconstructed,
+                source.id,
+                &document.as_ref().data[source.data_section].entities,
+            )?,
+            "replayed TE differs from the original analytic boundary"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn real_te_is_automatically_admitted_with_source_boundary_proof() -> Result<()> {
+        let bytes = crate::inverse_edge_treatment::te_treatment_fixture()?;
+        let kernel = MonstertruckKernel::project_standard();
+        let report = crate::complete_ir::recover_complete_ir_with_kernel_bytes(&bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(
+            report.unrecovered_solid_count, 0,
+            "{:?}",
+            report.kernel_recovery_failures
+        );
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        let [selected] = report.edge_treatment_composites.as_slice() else {
+            anyhow::bail!(
+                "expected recovered treatment composite, failures: {:?}",
+                report.kernel_recovery_failures
+            );
+        };
+        assert_eq!(selected.source_solid.id, 9354);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [selected.source_solid]
+        );
+        let fragment = &selected.fragment;
+        fragment.model.validate()?;
+        let reconstructed = kernel.evaluate(&fragment.model, fragment.root)?;
+        let summary = kernel.summarize(&reconstructed);
+        assert!(summary.is_single_solid(), "{summary:?}");
+        let original = monstertruck_io::step::load::ParsedStepSource::parse(&bytes)?.exchange;
+        assert!(crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &reconstructed,
+            selected.source_solid.id,
+            &original.data[selected.source_solid.data_section].entities,
+        )?);
+        // An editable result must respond to a real parameter change, not
+        // just reproduce a fixed source snapshot. The terminal round has no
+        // downstream dependent selectors and can be reduced independently.
+        let mut edited = fragment.model.clone();
+        let Some(crate::cad_ir::CadNode::EdgeTreatment {
+            profile: crate::cad_ir::EdgeTreatmentProfile::Round,
+            edges,
+            ..
+        }) = edited.nodes.get_mut(fragment.root.0)
+        else {
+            anyhow::bail!("expected an editable terminal round");
+        };
+        ensure!(!edges.is_empty(), "terminal round has no selectors");
+        for edge in edges {
+            edge.radius_mm *= 0.75;
+        }
+        edited.provenance.remove(&fragment.root);
+        edited.validate()?;
+        let shape = kernel.evaluate(&edited, fragment.root)?;
+        let summary = kernel.summarize(&shape);
+        assert!(summary.is_single_solid(), "edited round: {summary:?}");
+        let step = kernel.to_step(&shape)?;
+        let exchange =
+            monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange;
+        let [section] = exchange.data.as_slice() else {
+            anyhow::bail!("edited round export must contain one DATA section");
+        };
+        let solids = section
+            .entities
+            .iter()
+            .filter_map(|entity| {
+                crate::step_graph::simple_record(entity)
+                    .is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
+                    .then_some(crate::step_graph::entity_id(entity))
+            })
+            .collect::<Vec<_>>();
+        let [id] = solids.as_slice() else {
+            anyhow::bail!("edited round export must contain one solid");
+        };
+        let comparison = crate::boundary_proof::compare_analytic_boundaries(
+            selected.source_solid.id,
+            &original.data[selected.source_solid.data_section].entities,
+            *id,
+            &section.entities,
+        );
+        assert!(
+            comparison.first.supported && comparison.second.supported,
+            "edited boundary must remain certifiable: {:?}",
+            comparison.second.reason
+        );
+        assert!(
+            !comparison.equivalent,
+            "radius edit must change the certified boundary"
         );
         Ok(())
     }

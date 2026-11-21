@@ -119,6 +119,8 @@ pub mod errors;
 mod geom_impls;
 mod mapped;
 mod multi_sweep;
+mod partition_normalization;
+pub use partition_normalization::normalize_planar_partitions;
 /// primitive shapes
 pub mod primitive;
 /// Planar profile normalization and solid construction from profiles.
@@ -128,6 +130,8 @@ mod topo_impls;
 
 #[cfg(feature = "fillet")]
 mod fillet_impl;
+#[cfg(feature = "fillet")]
+pub use fillet_impl::{chamfer_carrier_edges, chamfer_planar_edges, fillet_edges};
 
 /// Font outline ingestion and conversion to wires.
 ///
@@ -141,5 +145,4 @@ pub mod text;
 #[cfg(feature = "fillet")]
 pub use monstertruck_fillet::{
     FilletError, FilletIntersectionCurve, FilletOptions, FilletProfile, RadiusSpec,
-    fillet_edges_generic as fillet_edges,
 };

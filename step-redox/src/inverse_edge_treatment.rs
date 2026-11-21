@@ -2271,6 +2271,7 @@ mod tests {
             ],
             inferred_radius_mm: None,
             inferred_setbacks_mm: Some([0.5, 0.5]),
+            first_setback_carrier_normal: Some([1.0, 0.0, 0.0]),
             inferred_angle_rad: Some(std::f64::consts::FRAC_PI_4),
             carrier_angle_rad: std::f64::consts::FRAC_PI_2,
             virtual_edge: EdgeTreatmentVirtualEdge::Segment {
@@ -2501,6 +2502,7 @@ mod tests {
             ],
             inferred_radius_mm: Some(0.1),
             inferred_setbacks_mm: None,
+            first_setback_carrier_normal: None,
             inferred_angle_rad: None,
             carrier_angle_rad: std::f64::consts::FRAC_PI_2,
             virtual_edge: EdgeTreatmentVirtualEdge::Circle {

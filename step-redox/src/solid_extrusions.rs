@@ -112,29 +112,28 @@ pub(crate) fn detect_extrusion_core_candidates_with_index(
         if record.name != "MANIFOLD_SOLID_BREP" {
             continue;
         }
-        let solid_id = entity_id(entity);
-        out.extend(extrusion_core_candidates_for_solid(
-            solid_id, entities, index,
+        out.extend(detect_extrusion_core_candidates_for_solid_with_index(
+            entity_id(entity),
+            entities,
+            index,
         ));
     }
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "MANIFOLD_SOLID_BREP" {
-            continue;
-        }
-        let solid_id = entity_id(entity);
-        out.extend(open_cap_side_extrusion_candidates(
-            solid_id, entities, index,
-        ));
-    }
-    out.sort_by(|first, second| {
-        first
-            .solid_id
-            .cmp(&second.solid_id)
-            .then_with(|| candidate_order(first, second))
-    });
+    out.sort_by_key(|candidate| candidate.solid_id);
+    out
+}
+
+/// Discover only the cap hypotheses belonging to the target solid. Preserve
+/// the per-solid candidate ordering of the section-wide detector.
+pub(crate) fn detect_extrusion_core_candidates_for_solid_with_index(
+    solid_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<RecoveredSolidExtrusion> {
+    let mut out = extrusion_core_candidates_for_solid(solid_id, entities, index);
+    out.extend(open_cap_side_extrusion_candidates(
+        solid_id, entities, index,
+    ));
+    out.sort_by(candidate_order);
     out
 }
 

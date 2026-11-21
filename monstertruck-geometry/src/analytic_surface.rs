@@ -61,6 +61,16 @@ pub enum AnalyticSurfaceKind {
 pub trait TryIntoAnalyticSurfaceKind {
     /// Returns the recognized analytic kind.
     fn try_into_analytic_surface_kind(&self) -> Option<AnalyticSurfaceKind>;
+
+    /// For a bounded regular face on this carrier, every linear functional
+    /// attains its extrema on the trim boundary. Planes and straight-ruled
+    /// extrusions have this property, unlike a general curved surface.
+    fn has_boundary_linear_extrema(&self) -> bool {
+        matches!(
+            self.try_into_analytic_surface_kind(),
+            Some(AnalyticSurfaceKind::Plane(_) | AnalyticSurfaceKind::HomogeneousExtrusion(_))
+        )
+    }
 }
 
 impl TryIntoAnalyticSurfaceKind for Plane {

@@ -588,7 +588,14 @@ pub enum BooleanOp {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum EdgeTreatmentProfile {
     Round,
+    /// Equal transverse setback on both planar carriers (not rolling radius).
     Chamfer,
+    /// Unequal planar setbacks, with the first dimension attached to its
+    /// unoriented carrier normal. Edge `radius_mm` specifies the first setback.
+    CarrierChamfer {
+        first_carrier_normal: [f64; 3],
+        second_setback_mm: f64,
+    },
     AsymmetricChamfer {
         first_setback_mm: f64,
         second_setback_mm: f64,
@@ -597,6 +604,18 @@ pub enum EdgeTreatmentProfile {
 
 impl EdgeTreatmentProfile {
     fn validate(self) -> Result<()> {
+        if let Self::CarrierChamfer {
+            first_carrier_normal,
+            second_setback_mm,
+        } = self
+            && (!second_setback_mm.is_finite()
+                || second_setback_mm <= 0.0
+                || !first_carrier_normal.iter().all(|x| x.is_finite())
+                || (crate::math3::norm(first_carrier_normal) - 1.0).abs()
+                    > DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit)
+        {
+            bail!("invalid carrier-bound chamfer dimensions or normal");
+        }
         if let Self::AsymmetricChamfer {
             first_setback_mm,
             second_setback_mm,
@@ -615,6 +634,7 @@ impl EdgeTreatmentProfile {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EdgeTreatmentEdge {
     pub selector: EdgeSelector,
+    /// Rolling radius for rounds; first physical setback for planar chamfers.
     pub radius_mm: f64,
 }
 

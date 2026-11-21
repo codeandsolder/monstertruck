@@ -129,6 +129,28 @@ pub enum Curve2D {
     NurbsCurve(NurbsCurve<Vector3>),
 }
 
+impl Transformed<Matrix3> for Conic2D {
+    fn transform_by(&mut self, transform: Matrix3) {
+        match self {
+            Self::Ellipse(curve) => curve.transform_by(transform),
+            Self::Hyperbola(curve) => curve.transform_by(transform),
+            Self::Parabola(curve) => curve.transform_by(transform),
+        }
+    }
+}
+
+impl Transformed<Matrix3> for Curve2D {
+    fn transform_by(&mut self, transform: Matrix3) {
+        match self {
+            Self::Line(curve) => curve.transform_by(transform),
+            Self::Polyline(curve) => curve.transform_by(transform),
+            Self::Conic(curve) => curve.transform_by(transform),
+            Self::BsplineCurve(curve) => curve.transform_by(transform),
+            Self::NurbsCurve(curve) => curve.transform_by(transform),
+        }
+    }
+}
+
 macro_rules! derive_curve_method {
     ($curve: expr, $method: expr, $($ver: ident),*) => {
         match $curve {
