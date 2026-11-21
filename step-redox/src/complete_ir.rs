@@ -4,13 +4,15 @@ use crate::cad_ir::{
     ProofStatus, Provenance, RigidTransform,
 };
 use crate::cad_kernel::CadKernel;
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
+use crate::cad_recovery::recover_auto_proven_extrusion_core_union_fragment;
 use crate::cad_recovery::{
-    CadFragment, CadFragmentSource, rebuilt_kernel_boundary_matches_source,
-    recover_auto_proven_extrusion_core_union_fragment, recover_open_rectangular_sweep_fragments,
-    recover_periodic_chain_fragments, recover_radial_slot_revolution_fragments,
-    recover_revolved_round_tail_fragments, recover_round_sweep_fragments,
-    recover_solid_extrusion_fragment, recover_solid_extrusion_fragments,
-    recover_solid_revolution_fragments,
+    CadFragment, CadFragmentSource, SourceRecovery, rebuilt_kernel_boundary_matches_source,
+    recover_auto_proven_extrusion_core_union_from_entities,
+    recover_open_rectangular_sweep_fragments, recover_periodic_chain_fragments,
+    recover_radial_slot_revolution_fragments, recover_revolved_round_tail_fragments,
+    recover_round_sweep_fragments, recover_solid_extrusion_fragment,
+    recover_solid_extrusion_fragments, recover_solid_revolution_fragments,
 };
 use crate::kernel_source_load::{
     KernelSourceLoadEvidence, KernelTopologyProvenance, SourceStepLoadInspector,
@@ -613,12 +615,16 @@ fn recover_verified_direct_constructive_fragment<K: CadKernel>(
     source: SourceEntity,
     exchange: &Exchange,
     kernel: &K,
+    ceiling: Option<u64>,
 ) -> Result<Option<CadFragment>> {
     let Some(section) = exchange.data.get(source.data_section) else {
         bail!("missing DATA section {}", source.data_section);
     };
     let entities = &section.entities;
     let index = crate::step_graph::build_index(entities);
+    let Some(proof) = SourceRecovery::new(source.id, entities, &index, kernel) else {
+        return Ok(None);
+    };
     let mut candidates = recover_constructive_fragments_from_entities_with_index(entities, &index)?
         .into_iter()
         .filter(|fragment| {
@@ -628,14 +634,12 @@ fn recover_verified_direct_constructive_fragment<K: CadKernel>(
         .map(|fragment| Ok((fragment.model.complexity_score(fragment.root)?, fragment)))
         .collect::<Result<Vec<_>>>()?;
     candidates.sort_by_key(|(complexity, _)| *complexity);
-    for (_, fragment) in candidates {
-        let Ok(evaluated) = kernel.evaluate(&fragment.model, fragment.root) else {
-            continue;
-        };
-        if !kernel.summarize(&evaluated).is_single_solid() {
-            continue;
+    for (cost, fragment) in candidates {
+        if ceiling.is_some_and(|limit| cost >= limit) {
+            break;
         }
-        if rebuilt_kernel_boundary_matches_source(kernel, &evaluated, source.id, entities)
+        if proof
+            .proves(&fragment.model, fragment.root, None)
             .unwrap_or(false)
         {
             return Ok(Some(fragment));
@@ -668,7 +672,7 @@ pub fn recover_complete_ir_with_kernel_bytes<
     let source_load = kernel.inspect_source_document(&document)?;
     let mut failures = apply_kernel_recovery(
         &mut build.recovery,
-        |source| {
+        |source, _| {
             recover_kernel_boundary_feature_fragment(source, &source_load, &document, kernel)
                 .map(|candidate| candidate.map(KernelRecoveryCandidate::structural))
         },
@@ -676,7 +680,7 @@ pub fn recover_complete_ir_with_kernel_bytes<
     );
     failures.extend(apply_kernel_recovery(
         &mut build.recovery,
-        |source| {
+        |source, _| {
             recover_kernel_topology_normalized_fragment(&document, source, &source_load, kernel)
         },
         false,
@@ -684,12 +688,11 @@ pub fn recover_complete_ir_with_kernel_bytes<
     if kernel.supports_step_export() {
         failures.extend(apply_kernel_recovery(
             &mut build.recovery,
-            |source| {
-                recover_auto_proven_extrusion_core_union_fragment(
-                    input,
-                    source.data_section,
-                    source.id,
-                    kernel,
+            |source, ceiling| {
+                let entities = &document.as_ref().data[source.data_section].entities;
+                let index = crate::step_graph::build_index(entities);
+                recover_auto_proven_extrusion_core_union_from_entities(
+                    source.id, entities, &index, kernel, ceiling,
                 )
                 .map(|candidate| candidate.map(KernelRecoveryCandidate::verified))
             },
@@ -697,9 +700,14 @@ pub fn recover_complete_ir_with_kernel_bytes<
         ));
         failures.extend(apply_kernel_recovery(
             &mut build.recovery,
-            |source| {
-                recover_verified_direct_constructive_fragment(source, document.as_ref(), kernel)
-                    .map(|candidate| candidate.map(KernelRecoveryCandidate::verified))
+            |source, ceiling| {
+                recover_verified_direct_constructive_fragment(
+                    source,
+                    document.as_ref(),
+                    kernel,
+                    ceiling,
+                )
+                .map(|candidate| candidate.map(KernelRecoveryCandidate::verified))
             },
             true,
         ));
@@ -1118,7 +1126,10 @@ fn recognize_single_healed_host<K: CadKernel>(
     // The edited solid may expose a piecewise-prismatic host rather than
     // one extrusion or revolution. Reuse the same independently verified
     // sectional recognizer on this one final native STEP snapshot.
-    crate::cad_recovery::sectional::recover(*solid_id, &section.entities, &index, kernel)
+    let Some(source) = SourceRecovery::new(*solid_id, &section.entities, &index, kernel) else {
+        return Ok(None);
+    };
+    crate::cad_recovery::sectional::recover(&source, None)
 }
 
 fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> Result<bool> {
@@ -1156,7 +1167,7 @@ fn apply_kernel_recovery<F>(
     all_sources: bool,
 ) -> Vec<KernelRecoveryFailure>
 where
-    F: FnMut(SourceEntity) -> Result<Option<KernelRecoveryCandidate>>,
+    F: FnMut(SourceEntity, Option<u64>) -> Result<Option<KernelRecoveryCandidate>>,
 {
     let mut failures = Vec::new();
     // Independently proven material may replace a cheaper but merely
@@ -1168,7 +1179,16 @@ where
         recovery.semantically_unrecovered_sources()
     };
     for source in targets {
-        match recover(source) {
+        // Only a certified incumbent can bound an independently proven
+        // candidate. A structurally plausible cheap model must not prune proof.
+        let ceiling = recovery
+            .selected
+            .get(&source)
+            .filter(|selected| {
+                selected.boundary_verified && is_constructive_source(&selected.fragment.source)
+            })
+            .map(|selected| selected.complexity);
+        match recover(source, ceiling) {
             Ok(Some(KernelRecoveryCandidate { fragment, boundary_verified })) if source_solid_id(&fragment.source) == source.id => {
                 if let Err(error) = recovery.add_candidates_with_proof(
                     [SourceCadFragment {
@@ -2971,7 +2991,7 @@ mod tests {
         let mut build = build_state_with_unrecovered(solid_ids);
         let failures = apply_kernel_recovery(
             &mut build.recovery,
-            |source| {
+            |source, _| {
                 recover(source.id)
                     .map(|candidate| candidate.map(KernelRecoveryCandidate::structural))
             },
@@ -3550,7 +3570,13 @@ mod tests {
         state.add_candidates([qualified_fragment(constructive_fragment(7, 1)?)])?;
         let failures = apply_kernel_recovery(
             &mut state,
-            |_| Ok(Some(KernelRecoveryCandidate::verified(verified.clone()))),
+            |_, ceiling| {
+                assert_eq!(
+                    ceiling, None,
+                    "structural guess cannot prune certified evidence"
+                );
+                Ok(Some(KernelRecoveryCandidate::verified(verified.clone())))
+            },
             true,
         );
         assert!(failures.is_empty(), "{failures:?}");
@@ -3559,6 +3585,15 @@ mod tests {
             state.selected[&test_source(7)].complexity,
             expected_complexity
         );
+        let failures = apply_kernel_recovery(
+            &mut state,
+            |_, ceiling| {
+                assert_eq!(ceiling, Some(expected_complexity));
+                Ok(None)
+            },
+            true,
+        );
+        assert!(failures.is_empty(), "{failures:?}");
         // A later unverified shortcut cannot displace an exact proven body.
         state.add_candidates([qualified_fragment(constructive_fragment(7, 1)?)])?;
         assert_eq!(
@@ -4293,6 +4328,7 @@ END-ISO-10303-21;
                 report.body_scan.solids[0].source,
                 &source,
                 &kernel,
+                None,
             )?
             .is_some(),
             "the generic source-admission path must independently certify this JLC loft"
@@ -4483,7 +4519,7 @@ END-ISO-10303-21;
     #[derive(Clone, Copy)]
     enum TargetedFamily {
         Loft,
-        CoreUnion,
+        SourceCapUnion,
         CoreRuledEnds,
         CapRuledEnds,
     }
@@ -4496,8 +4532,8 @@ END-ISO-10303-21;
                     (self, source),
                     (Self::Loft, CadFragmentSource::SolidLoft { .. })
                         | (
-                            Self::CoreUnion,
-                            CadFragmentSource::ExtrusionCoreUnion { .. }
+                            Self::SourceCapUnion,
+                            CadFragmentSource::SourceCapExtrusionUnion { .. }
                         )
                         | (
                             Self::CoreRuledEnds,
@@ -4531,7 +4567,8 @@ END-ISO-10303-21;
             let fragment = selected_unique_source_fragment(&report)?;
             assert!(
                 family.matches(&fragment.source, solid_id),
-                "{label}: unexpected constructive family"
+                "{label}: unexpected constructive family {:?}",
+                fragment.source
             );
             fragment.model.validate()?;
             let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
@@ -4585,13 +4622,13 @@ END-ISO-10303-21;
                 "58dd1537",
                 include_bytes!("../validation/fixtures/native_targeted_58dd1537.step"),
                 66,
-                TargetedFamily::CoreUnion,
+                TargetedFamily::SourceCapUnion,
             ),
             (
                 "b13fc76c",
                 include_bytes!("../validation/fixtures/native_targeted_b13fc76c.step"),
                 54,
-                TargetedFamily::CoreUnion,
+                TargetedFamily::SourceCapUnion,
             ),
         ];
         verify_targeted_analytic_sources(samples)
@@ -4744,8 +4781,13 @@ END-ISO-10303-21;
             );
             let source_entity = report.body_scan.solids[0].source;
             assert!(
-                recover_verified_direct_constructive_fragment(source_entity, &exchange, &kernel)?
-                    .is_some(),
+                recover_verified_direct_constructive_fragment(
+                    source_entity,
+                    &exchange,
+                    &kernel,
+                    None
+                )?
+                .is_some(),
                 "{label}: the independent direct-candidate proof did not admit the source"
             );
         }
@@ -4819,13 +4861,33 @@ END-ISO-10303-21;
             "{:?}",
             report.kernel_recovery_failures
         );
-        assert_eq!(report.extrusion_core_unions.len(), 1);
-        let union = &report.extrusion_core_unions[0].fragment;
-        assert!(matches!(
-            union.source,
-            CadFragmentSource::ExtrusionCoreUnion { solid_id: 145, .. }
-        ));
-        union.model.validate()?;
+        let explicit = crate::cad_recovery::recover_proven_extrusion_core_union_fragment(
+            input,
+            0,
+            145,
+            &[[62, 128], [199, 317], [233, 287], [305, 362]],
+            &kernel,
+        )?
+        .context("source-order four-core SSI union stopped reproducing the source")?;
+        let selected = selected_unique_source_fragment(&report)?;
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        assert!(
+            selected.model.complexity_score(selected.root)?
+                < explicit.model.complexity_score(explicit.root)?
+        );
+        let original = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+        let shape = kernel.evaluate(&selected.model, selected.root)?;
+        assert!(kernel.summarize(&shape).is_single_solid());
+        assert!(rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &shape,
+            145,
+            &original.data[0].entities
+        )?);
         Ok(())
     }
 

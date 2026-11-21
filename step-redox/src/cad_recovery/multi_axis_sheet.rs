@@ -4,7 +4,7 @@
 //! analytic extrusion proposal for the group. All proposals remain subject to
 //! the independent whole-solid reconstruction proof.
 use super::{
-    CadFragment, CadFragmentSource,
+    CadFragment, CadFragmentSource, SourceRecovery,
     cap_assembly::{AssemblyFrame, proven_cap_assembly},
 };
 use crate::brep::{CurveSupport, SurfaceSupport};
@@ -254,11 +254,15 @@ fn assembly_frame(
 }
 
 pub(super) fn recover<K: CadKernel>(
-    solid_id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-    kernel: &K,
+    source: &SourceRecovery<'_, K>,
+    ceiling: Option<u64>,
 ) -> Result<Option<CadFragment>> {
+    let SourceRecovery {
+        solid_id,
+        entities,
+        index,
+        ..
+    } = *source;
     let Some(evidence) =
         formed_sheet::detect_formed_sheet_evidence_with_min_pairs(entities, index, 2, 1)
             .into_iter()
@@ -278,8 +282,7 @@ pub(super) fn recover<K: CadKernel>(
     let frame = assembly_frame(&caps, &solid);
     let mut selected = None;
     for frame in std::iter::once(None).chain(frame.map(Some)) {
-        if let Some((model, root)) = proven_cap_assembly(&caps, frame, solid_id, entities, kernel)?
-        {
+        if let Some((model, root)) = proven_cap_assembly(&caps, frame, source, ceiling)? {
             selected = Some((model, root));
             break;
         }

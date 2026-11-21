@@ -219,7 +219,23 @@ pub fn compare_analytic_boundaries(
 ) -> AnalyticBoundaryComparison {
     let first = analytic_boundary_diagnostic(first_solid_id, first_entities);
     let second = analytic_boundary_diagnostic(second_solid_id, second_entities);
-    let equivalent = match (&first.signature, &second.signature) {
+    let equivalent = compare_diagnostics(&first, first_entities, &second, second_entities);
+    AnalyticBoundaryComparison {
+        equivalent,
+        first,
+        second,
+    }
+}
+
+/// Compare diagnostics that were independently derived from these exact source
+/// entity sections. Reuse the original diagnostic across candidate replays.
+pub(crate) fn compare_diagnostics(
+    first: &AnalyticBoundaryDiagnostic,
+    first_entities: &[EntityInstance],
+    second: &AnalyticBoundaryDiagnostic,
+    second_entities: &[EntityInstance],
+) -> bool {
+    match (&first.signature, &second.signature) {
         (Some(a), Some(b)) if a == b => true,
         (Some(a), Some(b))
             if a.supports.len() == b.supports.len() && a.chains.len() == b.chains.len() =>
@@ -227,17 +243,12 @@ pub fn compare_analytic_boundaries(
             direction_cells::compare(
                 a,
                 b,
-                || direction_cells::plane_normals(first_solid_id, first_entities),
-                || direction_cells::plane_normals(second_solid_id, second_entities),
+                || direction_cells::plane_normals(first.solid_id, first_entities),
+                || direction_cells::plane_normals(second.solid_id, second_entities),
             )
             .unwrap_or(false)
         }
         _ => false,
-    };
-    AnalyticBoundaryComparison {
-        equivalent,
-        first,
-        second,
     }
 }
 

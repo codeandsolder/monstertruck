@@ -6,7 +6,7 @@
 //! faceting or arbitrary cap-pair subset enumeration is required.
 
 use super::{
-    CadFragment, CadFragmentSource, add_bounded_union_tree, rebuilt_kernel_boundary_matches_source,
+    CadFragment, CadFragmentSource, SourceRecovery, add_bounded_union_tree,
     solid::{local_frame_transform, recovered_profile_curve_to_ir},
 };
 use crate::brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport};
@@ -22,8 +22,7 @@ use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use crate::solid_extrusions::{profile_contains_with_rotated_ray, signed_area_curves};
 use anyhow::Result;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use std::collections::{BTreeMap, HashMap};
-use step_p21::ast::EntityInstance;
+use std::collections::BTreeMap;
 
 mod circular;
 mod transitions;
@@ -360,12 +359,16 @@ fn sectional_model(
     Ok(Some((model, root)))
 }
 
-pub fn recover<K: CadKernel>(
-    solid_id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-    kernel: &K,
+pub(crate) fn recover<K: CadKernel>(
+    source: &SourceRecovery<'_, K>,
+    ceiling: Option<u64>,
 ) -> Result<Option<CadFragment>> {
+    let SourceRecovery {
+        solid_id,
+        entities,
+        index,
+        ..
+    } = *source;
     let Some(solid) = ReducedSolid::from_step(solid_id, entities, index) else {
         return Ok(None);
     };
@@ -409,14 +412,11 @@ pub fn recover<K: CadKernel>(
         }
     }
     candidates.sort_by_key(|c| c.0);
-    for (_, mut model, root, slabs, transitions) in candidates {
-        let Ok(shape) = kernel.evaluate(&model, root) else {
-            continue;
-        };
-        if !kernel.summarize(&shape).is_single_solid()
-            || !rebuilt_kernel_boundary_matches_source(kernel, &shape, solid_id, entities)
-                .unwrap_or(false)
-        {
+    for (cost, mut model, root, slabs, transitions) in candidates {
+        if ceiling.is_some_and(|limit| cost >= limit) {
+            break;
+        }
+        if !source.proves(&model, root, None).unwrap_or(false) {
             continue;
         }
         let face_ids = super::set_proven_source_boundary(&mut model, root, &solid)?;
@@ -444,6 +444,10 @@ pub fn recover<K: CadKernel>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    use crate::cad_recovery::rebuilt_kernel_boundary_matches_source;
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    use anyhow::Context;
 
     fn rectangle(x: f64, y: f64, w: f64, h: f64) -> Vec<RecoveredProfileCurve> {
         let points = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
@@ -575,8 +579,12 @@ mod tests {
             let source = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
             let entities = &source.data[0].entities;
             let index = crate::step_graph::build_index(entities);
-            let fragment = recover(id, entities, &index, &kernel)?
-                .ok_or_else(|| anyhow::anyhow!("{label}: no sectional reconstruction"))?;
+            let fragment = recover(
+                &SourceRecovery::new(id, entities, &index, &kernel)
+                    .context("unsupported source boundary")?,
+                None,
+            )?
+            .ok_or_else(|| anyhow::anyhow!("{label}: no sectional reconstruction"))?;
             assert!(fragment.model.nodes.iter().any(|node|matches!(node,CadNode::Extrude {profile,..} if profile.loops.iter().flat_map(|l|&l.curves).any(|c|matches!(c,Curve2d::CircleArc {..})))));
             let report = crate::complete_ir::recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
             assert_eq!(report.body_count, 1);
@@ -636,9 +644,12 @@ mod tests {
             let index = crate::step_graph::build_index(entities);
             // The generic sectional path must independently produce the correct
             // body even when an earlier, simpler cap reconstruction now wins.
-            let sectioned = recover(expected_id, entities, &index, &kernel)?.ok_or_else(|| {
-                anyhow::anyhow!("{label}: no independently proven sectional union")
-            })?;
+            let sectioned = recover(
+                &SourceRecovery::new(expected_id, entities, &index, &kernel)
+                    .context("unsupported source boundary")?,
+                None,
+            )?
+            .ok_or_else(|| anyhow::anyhow!("{label}: no independently proven sectional union"))?;
             assert!(
                 matches!(sectioned.source,CadFragmentSource::SectionalExtrusionUnion {solid_id,slabs,..} | CadFragmentSource::SectionalExtrusionTransitions {solid_id,slabs,..} if solid_id==expected_id && slabs==expected_slabs),
                 "{label}: {:?}",

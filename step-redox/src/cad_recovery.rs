@@ -9,6 +9,8 @@ use anyhow::{Result, bail};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use monstertruck_io::step::load::ParsedStepSource;
 use serde::Serialize;
+use std::collections::HashMap;
+use step_p21::ast::EntityInstance;
 
 mod cap_assembly;
 mod cap_cover;
@@ -352,6 +354,20 @@ pub(crate) fn rebuilt_kernel_boundary_matches_source<K: CadKernel>(
     source_solid_id: u64,
     source_entities: &[step_p21::ast::EntityInstance],
 ) -> Result<bool> {
+    let source =
+        crate::boundary_proof::analytic_boundary_diagnostic(source_solid_id, source_entities);
+    rebuilt_kernel_boundary_matches_diagnostic(kernel, evaluated, &source, source_entities)
+}
+
+fn rebuilt_kernel_boundary_matches_diagnostic<K: CadKernel>(
+    kernel: &K,
+    evaluated: &K::Evaluated,
+    source: &crate::boundary_proof::AnalyticBoundaryDiagnostic,
+    source_entities: &[EntityInstance],
+) -> Result<bool> {
+    if !source.supported {
+        return Ok(false);
+    }
     let rebuilt_step = kernel.to_step(evaluated)?;
     let rebuilt = ParsedStepSource::parse(rebuilt_step.as_bytes())?.exchange;
     let [data] = rebuilt.data.as_slice() else {
@@ -369,13 +385,67 @@ pub(crate) fn rebuilt_kernel_boundary_matches_source<K: CadKernel>(
     let [rebuilt_solid_id] = rebuilt_solid_ids.as_slice() else {
         return Ok(false);
     };
-    Ok(crate::boundary_proof::compare_analytic_boundaries(
-        source_solid_id,
+    let diagnostic =
+        crate::boundary_proof::analytic_boundary_diagnostic(*rebuilt_solid_id, rebuilt_entities);
+    Ok(crate::boundary_proof::compare_diagnostics(
+        source,
         source_entities,
-        *rebuilt_solid_id,
+        &diagnostic,
         rebuilt_entities,
-    )
-    .equivalent)
+    ))
+}
+
+/// Immutable section-local evidence, shared by every material proposal. A
+/// complexity ceiling may only come from a previously certified candidate.
+pub(crate) struct SourceRecovery<'a, K> {
+    solid_id: u64,
+    entities: &'a [EntityInstance],
+    index: &'a HashMap<u64, usize>,
+    kernel: &'a K,
+    boundary: crate::boundary_proof::AnalyticBoundaryDiagnostic,
+}
+
+impl<'a, K: CadKernel> SourceRecovery<'a, K> {
+    pub(crate) fn new(
+        solid_id: u64,
+        entities: &'a [EntityInstance],
+        index: &'a HashMap<u64, usize>,
+        kernel: &'a K,
+    ) -> Option<Self> {
+        let boundary = crate::boundary_proof::analytic_boundary_diagnostic(solid_id, entities);
+        boundary.supported.then_some(Self {
+            solid_id,
+            entities,
+            index,
+            kernel,
+            boundary,
+        })
+    }
+
+    pub(crate) fn proves(
+        &self,
+        model: &CadModel,
+        root: NodeId,
+        ceiling: Option<u64>,
+    ) -> Result<bool> {
+        // This is the same exact DAG complexity used by whole-solid ranking;
+        // no estimated volume, face count or heuristic is used to prune.
+        if let Some(limit) = ceiling
+            && model.complexity_score(root)? >= limit
+        {
+            return Ok(false);
+        }
+        let evaluated = self.kernel.evaluate(model, root)?;
+        if !self.kernel.summarize(&evaluated).is_single_solid() {
+            return Ok(false);
+        }
+        rebuilt_kernel_boundary_matches_diagnostic(
+            self.kernel,
+            &evaluated,
+            &self.boundary,
+            self.entities,
+        )
+    }
 }
 
 /// Recover and admit a union of sharp extrusion cores only when an independent
@@ -405,24 +475,40 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     }
 
     let canonical_pairs = normalize_extrusion_cap_pairs(cap_face_ids)?;
-
     let source = ParsedStepSource::parse(source_step)?.exchange;
     let Some(section) = source.data.get(data_section) else {
         bail!("extrusion-core union DATA section {data_section} does not exist");
     };
     let entities = &section.entities;
     let index = build_index(entities);
-    let Some(source_face_ids) = crate::brep::solid_face_ids(solid_id, entities, &index) else {
+    let Some(source) = SourceRecovery::new(solid_id, entities, &index, kernel) else {
+        return Ok(None);
+    };
+    recover_proven_extrusion_core_union_from_entities(&source, &canonical_pairs, None)
+}
+
+fn recover_proven_extrusion_core_union_from_entities<K: CadKernel>(
+    source: &SourceRecovery<'_, K>,
+    canonical_pairs: &[[u64; 2]],
+    ceiling: Option<u64>,
+) -> Result<Option<CadFragment>> {
+    let SourceRecovery {
+        solid_id,
+        entities,
+        index,
+        ..
+    } = *source;
+    let Some(source_face_ids) = crate::brep::solid_face_ids(solid_id, entities, index) else {
         return Ok(None);
     };
 
     let mut fragments = Vec::with_capacity(canonical_pairs.len());
     let mut axes = Vec::with_capacity(canonical_pairs.len());
     let mut max_residual_mm = crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM;
-    for &pair in &canonical_pairs {
+    for &pair in canonical_pairs {
         let Some(core) =
             crate::solid_extrusions::recover_any_extrusion_core_from_cap_faces_with_index(
-                solid_id, pair, entities, &index,
+                solid_id, pair, entities, index,
             )
         else {
             return Ok(None);
@@ -437,8 +523,7 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     // Each loft is built from a genuine terminal source cap, its four
     // incident planar walls and their exact shoulder vertices.
     let mut tips = Vec::new();
-    if let Some(reduced) = crate::reduced_brep::ReducedSolid::from_step(solid_id, entities, &index)
-    {
+    if let Some(reduced) = crate::reduced_brep::ReducedSolid::from_step(solid_id, entities, index) {
         for extension in crate::solid_lofts::detect_ruled_end_extensions(&reduced) {
             tips.push(extension.tip_face_id);
             axes.push(extension.axis);
@@ -455,12 +540,7 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     } else {
         compose_extrusion_core_union_model(&fragments, &axes)?
     };
-    let evaluated = kernel.evaluate(&model, root)?;
-    let summary = kernel.summarize(&evaluated);
-    if !summary.geometrically_consistent || summary.shells != 1 {
-        return Ok(None);
-    }
-    if !rebuilt_kernel_boundary_matches_source(kernel, &evaluated, solid_id, entities)? {
+    if !source.proves(&model, root, ceiling)? {
         return Ok(None);
     }
 
@@ -483,12 +563,12 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
         source: admitted_single.unwrap_or(if tips.is_empty() {
             CadFragmentSource::ExtrusionCoreUnion {
                 solid_id,
-                cap_face_ids: canonical_pairs,
+                cap_face_ids: canonical_pairs.to_vec(),
             }
         } else {
             CadFragmentSource::ExtrusionCoreRuledEnds {
                 solid_id,
-                cap_face_ids: canonical_pairs,
+                cap_face_ids: canonical_pairs.to_vec(),
                 tip_face_ids: tips,
             }
         }),
@@ -504,11 +584,15 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
 /// partly occluded by ruled protrusions. The source cap, generator station and
 /// ruled carrier intersections are all derived from the STEP B-rep.
 fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
-    solid_id: u64,
-    entities: &[step_p21::ast::EntityInstance],
-    index: &std::collections::HashMap<u64, usize>,
-    kernel: &K,
+    source: &SourceRecovery<'_, K>,
+    ceiling: Option<u64>,
 ) -> Result<Option<CadFragment>> {
+    let SourceRecovery {
+        solid_id,
+        entities,
+        index,
+        ..
+    } = *source;
     let Some(reduced) = crate::reduced_brep::ReducedSolid::from_step(solid_id, entities, index)
     else {
         return Ok(None);
@@ -562,13 +646,8 @@ fn recover_auto_proven_partial_cap_ruled_ends_fragment<K: CadKernel>(
                 .map(|ext| (&ext.fragment.model, ext.fragment.root)),
         );
         let (mut model, root) = compose_union_models(&parts)?;
-        let Ok(shape) = kernel.evaluate(&model, root) else {
-            continue;
-        };
-        if !kernel.summarize(&shape).is_single_solid() {
-            continue;
-        }
-        if !rebuilt_kernel_boundary_matches_source(kernel, &shape, solid_id, entities)
+        if !source
+            .proves(&model, root, best.ceiling(ceiling))
             .unwrap_or(false)
         {
             continue;
@@ -635,6 +714,13 @@ struct CheapestProvenFragment {
 }
 
 impl CheapestProvenFragment {
+    fn ceiling(&self, outer: Option<u64>) -> Option<u64> {
+        self.best
+            .as_ref()
+            .map(|(cost, _)| outer.map_or(*cost, |limit| limit.min(*cost)))
+            .or(outer)
+    }
+
     fn consider(&mut self, result: Result<Option<CadFragment>>) -> Result<()> {
         match result {
             Ok(Some(fragment)) => {
@@ -685,13 +771,25 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
     };
     let entities = &section.entities;
     let index = build_index(entities);
-    let proposed =
-        crate::solid_extrusions::detect_extrusion_core_candidates_with_index(entities, &index)
-            .into_iter()
-            .filter(|candidate| candidate.solid_id == solid_id)
-            .collect();
+    recover_auto_proven_extrusion_core_union_from_entities(solid_id, entities, &index, kernel, None)
+}
+
+/// Use the same material discovery on an already parsed source section.
+pub(crate) fn recover_auto_proven_extrusion_core_union_from_entities<K: CadKernel>(
+    solid_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    kernel: &K,
+    ceiling: Option<u64>,
+) -> Result<Option<CadFragment>> {
+    let Some(source) = SourceRecovery::new(solid_id, entities, index, kernel) else {
+        return Ok(None);
+    };
+    let proposed = crate::solid_extrusions::detect_extrusion_core_candidates_for_solid_with_index(
+        solid_id, entities, index,
+    );
     let mut filtered = crate::solid_extrusions::discard_boundary_penetrating_extrusion_cores(
-        solid_id, proposed, entities, &index,
+        solid_id, proposed, entities, index,
     );
     // Prefer an independently source-proven full core (possibly with exact
     // ruled ends) to an overlapping union of redundant partial interpretations.
@@ -713,35 +811,31 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
     }
     let mut best = CheapestProvenFragment::default();
     for &pair in &pairs {
-        best.consider(recover_proven_extrusion_core_union_fragment(
-            source_step,
-            data_section,
-            solid_id,
+        best.consider(recover_proven_extrusion_core_union_from_entities(
+            &source,
             &[pair],
-            kernel,
+            best.ceiling(ceiling),
         ))?;
     }
+    // Discovery order is not a ranking criterion. Each provider only tests
+    // candidates that could improve the best already certified score.
+    best.consider(recover_auto_proven_partial_cap_ruled_ends_fragment(
+        &source,
+        best.ceiling(ceiling),
+    ))?;
+    best.consider(sectional::recover(&source, best.ceiling(ceiling)))?;
+    best.consider(multi_axis_sheet::recover(&source, best.ceiling(ceiling)))?;
+    best.consider(cap_cover::recover(&source, best.ceiling(ceiling)))?;
+    // Aggregate unions are often the expensive fallback: only evaluate
+    // them after cheaper complete cap/section proposals establish a bound.
     if pairs.len() >= 2 {
         pairs.sort_unstable();
-        best.consider(recover_proven_extrusion_core_union_fragment(
-            source_step,
-            data_section,
-            solid_id,
+        best.consider(recover_proven_extrusion_core_union_from_entities(
+            &source,
             &pairs,
-            kernel,
+            best.ceiling(ceiling),
         ))?;
     }
-    // Discovery order is not a ranking criterion. In particular, a valid
-    // cap interpretation can be more expensive than a continuous section
-    // with a recess. Let every independent provider compete on IR complexity.
-    best.consider(recover_auto_proven_partial_cap_ruled_ends_fragment(
-        solid_id, entities, &index, kernel,
-    ))?;
-    best.consider(sectional::recover(solid_id, entities, &index, kernel))?;
-    best.consider(multi_axis_sheet::recover(
-        solid_id, entities, &index, kernel,
-    ))?;
-    best.consider(cap_cover::recover(solid_id, entities, &index, kernel))?;
     best.finish()
 }
 
@@ -943,6 +1037,49 @@ mod tests {
         reason = "legacy test fixture code is allowed narrow lint exceptions; production paths remain strict"
     )]
     use super::*;
+
+    #[test]
+    fn certified_complexity_ceiling_prevents_kernel_evaluation() -> Result<()> {
+        use crate::cad_kernel::KernelSummary;
+        use std::cell::Cell;
+
+        struct CountingKernel(Cell<usize>);
+        impl CadKernel for CountingKernel {
+            type Evaluated = KernelSummary;
+            fn evaluate(&self, _: &CadModel, _: NodeId) -> Result<Self::Evaluated> {
+                self.0.set(self.0.get() + 1);
+                bail!("evaluation sentinel");
+            }
+            fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary { *evaluated }
+            fn supports_step_export(&self) -> bool { true }
+            fn to_step(&self, _: &Self::Evaluated) -> Result<String> {
+                bail!("evaluation sentinel must not export");
+            }
+        }
+
+        let bytes = include_bytes!("../validation/fixtures/coplanar_partitioned_extrusion.step");
+        let exchange = ParsedStepSource::parse(bytes)?.exchange;
+        let entities = &exchange.data[0].entities;
+        let index = build_index(entities);
+        let kernel = CountingKernel(Cell::new(0));
+        let source = SourceRecovery::new(16, entities, &index, &kernel)
+            .ok_or_else(|| anyhow::anyhow!("valid source boundary not certified"))?;
+        let mut model = CadModel::new();
+        let root = model.add_node(CadNode::Primitive(crate::cad_ir::Primitive::Box {
+            size_mm: [1.0; 3],
+        }));
+        model.add_root(root)?;
+        let cost = model.complexity_score(root)?;
+        assert!(!source.proves(&model, root, Some(cost))?);
+        assert!(!source.proves(&model, root, Some(0))?);
+        assert_eq!(kernel.0.get(), 0);
+        assert!(source.proves(&model, root, Some(cost + 1)).is_err());
+        assert!(source.proves(&model, root, None).is_err());
+        assert_eq!(kernel.0.get(), 2);
+        assert!(SourceRecovery::new(0, entities, &index, &kernel).is_none());
+        assert_eq!(kernel.0.get(), 2);
+        Ok(())
+    }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     fn mixed_source_cap_model(face: u64, height: f64) -> Result<(CadModel, NodeId)> {
