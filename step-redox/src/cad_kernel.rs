@@ -451,7 +451,7 @@ pub mod monstertruck {
                         pending.push((*child, GeometryPolicy::standard_mm(*tolerance_mm)));
                     }
                     node => {
-                        pending.extend(node.children().into_iter().map(|child| (child, policy)))
+                        pending.extend(node.children().into_iter().map(|child| (child, policy)));
                     }
                 }
             }
