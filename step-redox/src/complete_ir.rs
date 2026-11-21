@@ -3877,6 +3877,41 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn native_planar_contact_rebuilds_exact_relief_recesses() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        for (bytes, faces) in [
+            (
+                include_bytes!("../validation/fixtures/native_relief_recess_202872e8.step")
+                    .as_slice(),
+                246,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_recess_17a62594.step")
+                    .as_slice(),
+                250,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_recess_dc36f700.step")
+                    .as_slice(),
+                254,
+            ),
+        ] {
+            let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+            assert_eq!(report.body_count, 1);
+            assert_eq!(report.constructively_recovered_solid_count, 1);
+            let [body] = report.boundary_feature_composites.as_slice() else {
+                bail!("recess source must recover an executable feature composite");
+            };
+            let rebuilt = kernel.evaluate(&body.fragment.model, body.fragment.root)?;
+            let summary = kernel.summarize(&rebuilt);
+            assert!(summary.is_single_solid(), "{summary:?}");
+            assert_eq!(summary.faces, faces);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn healed_host_can_use_independently_proven_sectional_recovery() -> Result<()> {
         let bytes = include_bytes!("../validation/fixtures/native_sectional_stepped_655821f7.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
