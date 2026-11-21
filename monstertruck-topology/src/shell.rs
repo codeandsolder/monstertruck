@@ -815,6 +815,24 @@ impl<P, C, S> Shell<P, C, S> {
     where
         P: Debug,
         C: Concat<C, Point = P, Output = C> + Invertible + ParameterTransform, {
+        self.remove_vertex_by_join_edges(vertex_id, |a, b| a.concat(b).ok())
+    }
+
+    /// Remove a degree-two boundary vertex using a caller-supplied geometric join.
+    /// The join must preserve the two outer endpoint identities. All incident
+    /// coedges are replaced together; unsupported incidence leaves the shell intact.
+    pub fn remove_vertex_by_join_edges(
+        &mut self,
+        vertex_id: VertexId<P>,
+        join: impl FnOnce(&Edge<P, C>, &Edge<P, C>) -> Option<Edge<P, C>>,
+    ) -> Option<Edge<P, C>> {
+        let join = |a: &Edge<P, C>, b: &Edge<P, C>| {
+            if a.back() != b.front() || a.front() == b.back() {
+                return None;
+            }
+            let edge = join(a, b)?;
+            (edge.front() == a.front() && edge.back() == b.back()).then_some(edge)
+        };
         let mut vec: Vec<(&mut Wire<P, C>, usize)> = self
             .face_iter_mut()
             .flat_map(|face| &mut face.boundaries)
@@ -831,19 +849,33 @@ impl<P, C, S> Shell<P, C, S> {
             None
         } else if vec.len() == 1 {
             let (wire, idx) = vec.pop()?;
-            let edge = wire[idx].concat(&wire[(idx + 1) % wire.len()]).ok()?;
+            let edge = join(&wire[idx], &wire[(idx + 1) % wire.len()])?;
             wire.swap_subwire_into_edges(idx, edge.clone());
             Some(edge)
         } else {
             let (wire0, idx0) = vec.pop()?;
             let (wire1, idx1) = vec.pop()?;
-            if !wire0[idx0].is_same(&wire1[(idx1 + 1) % wire1.len()])
-                || !wire0[(idx0 + 1) % wire0.len()].is_same(&wire1[idx1])
-            {
+            // Stored (absolute) face wires may use the same direction when
+            // their face orientations differ. Match the ordered pair in
+            // either direction, not the physical coedge sense.
+            let (a, b) = (&wire0[idx0], &wire0[(idx0 + 1) % wire0.len()]);
+            let (c, d) = (&wire1[idx1], &wire1[(idx1 + 1) % wire1.len()]);
+            let reverse = if a == c && b == d {
+                false
+            } else if *a == d.inverse() && *b == c.inverse() {
+                true
+            } else {
                 return None;
-            }
-            let edge = wire0[idx0].concat(&wire0[(idx0 + 1) % wire0.len()]).ok()?;
-            wire1.swap_subwire_into_edges(idx1, edge.inverse());
+            };
+            let edge = join(a, b)?;
+            wire1.swap_subwire_into_edges(
+                idx1,
+                if reverse {
+                    edge.inverse()
+                } else {
+                    edge.clone()
+                },
+            );
             wire0.swap_subwire_into_edges(idx0, edge.clone());
             Some(edge)
         }

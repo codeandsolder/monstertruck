@@ -1,6 +1,6 @@
 //! Shared exact source-cap assembly in an optional common rigid frame.
 use super::{
-    compose_union_models,
+    SourceRecovery, compose_union_models,
     solid::{local_frame_transform, recover_source_cap_extrusion_model},
 };
 use crate::cad_ir::{CadModel, CadNode, NodeId};
@@ -89,18 +89,11 @@ fn compose_caps(
 pub(super) fn proven_cap_assembly<K: crate::cad_kernel::CadKernel>(
     caps: &[RecoveredSourceCapExtrusion],
     frame: Option<AssemblyFrame>,
-    solid_id: u64,
-    entities: &[step_p21::ast::EntityInstance],
-    kernel: &K,
+    source: &SourceRecovery<'_, K>,
+    ceiling: Option<u64>,
 ) -> Result<Option<(CadModel, NodeId)>> {
     let (model, root) = compose_caps(caps, frame)?;
-    let Ok(shape) = kernel.evaluate(&model, root) else {
-        return Ok(None);
-    };
-    if !kernel.summarize(&shape).is_single_solid()
-        || !super::rebuilt_kernel_boundary_matches_source(kernel, &shape, solid_id, entities)
-            .unwrap_or(false)
-    {
+    if !source.proves(&model, root, ceiling).unwrap_or(false) {
         return Ok(None);
     }
     Ok(Some((model, root)))

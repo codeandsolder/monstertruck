@@ -4,7 +4,7 @@
 //! establish equivalence. Only a native whole-source boundary proof admits a
 //! recovered solid.
 use super::{
-    CadFragment, CadFragmentSource,
+    CadFragment, CadFragmentSource, SourceRecovery,
     cap_assembly::{AssemblyFrame, proven_cap_assembly},
 };
 use crate::cad_kernel::CadKernel;
@@ -16,8 +16,7 @@ use crate::solid_extrusions::{
 };
 use anyhow::Result;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use std::collections::{HashMap, HashSet};
-use step_p21::ast::EntityInstance;
+use std::collections::HashSet;
 
 const LENGTH: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
 
@@ -119,11 +118,15 @@ fn select_caps(
 }
 
 pub(super) fn recover<K: CadKernel>(
-    solid_id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-    kernel: &K,
+    source: &SourceRecovery<'_, K>,
+    ceiling: Option<u64>,
 ) -> Result<Option<CadFragment>> {
+    let SourceRecovery {
+        solid_id,
+        entities,
+        index,
+        ..
+    } = *source;
     let Some(solid) = ReducedSolid::from_step(solid_id, entities, index) else {
         return Ok(None);
     };
@@ -173,8 +176,7 @@ pub(super) fn recover<K: CadKernel>(
     }
     let mut admitted = None;
     for (parts, frame) in proposals {
-        if let Some((model, root)) = proven_cap_assembly(parts, frame, solid_id, entities, kernel)?
-        {
+        if let Some((model, root)) = proven_cap_assembly(parts, frame, source, ceiling)? {
             admitted = Some((model, root, parts));
             break;
         }

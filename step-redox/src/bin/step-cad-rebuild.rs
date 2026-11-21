@@ -30,29 +30,14 @@ fn main() -> Result<()> {
         );
     }
 
-    let mut fragments = report
-        .solid_extrusions
-        .into_iter()
-        .chain(report.solid_lofts)
-        .chain(report.solid_revolutions)
-        .chain(report.radial_slot_revolutions)
-        .chain(report.solid_sweeps)
-        .chain(report.periodic_chains)
-        .chain(report.boundary_feature_composites)
-        .chain(report.edge_treatment_composites)
-        .chain(report.same_domain_normalized_solids)
-        .chain(report.extrusion_core_unions)
-        .map(|recovered| recovered.fragment)
-        .collect::<Vec<_>>();
-    if fragments.len() != 1 {
+    let fragments = report.selected_fragments().collect::<Vec<_>>();
+    let [selected] = fragments.as_slice() else {
         bail!(
             "expected exactly one selected constructive fragment, got {}",
             fragments.len()
         );
-    }
-    let fragment = fragments
-        .pop()
-        .context("selected fragment disappeared after cardinality check")?;
+    };
+    let fragment = &selected.fragment;
     let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
     let summary = kernel.summarize(&evaluated);
     if !summary.geometrically_consistent || summary.shells != 1 {
