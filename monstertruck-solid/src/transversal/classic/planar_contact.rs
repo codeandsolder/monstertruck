@@ -414,6 +414,97 @@ pub(in crate::transversal) fn union<
     union_many(lhs, &[rhs], tol)
 }
 
+/// Exact open pockets and through-holes. Each cutter must be one connected
+/// closed material component. Every host face which can intersect its full
+/// control hull must instead be an outward, matching planar cap. All opening
+/// footprints must be entirely covered by host caps; this proves that a
+/// connected cutter enters host material and cannot leave it through another
+/// boundary. Disjoint cutters may then be installed in a single arrangement.
+pub(in crate::transversal) fn difference_many<
+    C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve,
+    S: ShapeOpsSurface,
+>(
+    lhs: &Solid<Point3, C, S>,
+    rhs: &[&Solid<Point3, C, S>],
+    tol: f64,
+) -> Option<Solid<Point3, C, S>> {
+    if rhs.is_empty() {
+        return None;
+    }
+    let lhs_bounds = shell_bounds(lhs)?;
+    let rhs_bounds = rhs
+        .iter()
+        .map(|&solid| shell_bounds(solid))
+        .collect::<Option<Vec<_>>>()?;
+    let boxes = rhs_bounds
+        .iter()
+        .map(|b| bounds_box(b))
+        .collect::<Option<Vec<_>>>()?;
+    let host_boxes = lhs_bounds
+        .iter()
+        .map(|f| bounds_box(std::slice::from_ref(f)))
+        .collect::<Option<Vec<_>>>()?;
+    let host = regions(lhs, &vec![false; lhs_bounds.len()], 0).retained;
+    let mut cutters = vec![Vec::new(); host.len()];
+    let mut retained = Vec::new();
+    let mut offset = lhs_bounds.len();
+    for (i, (solid, bounds)) in rhs.iter().zip(&rhs_bounds).enumerate() {
+        if solid.boundaries().len() != 1
+            || boxes[..i]
+                .iter()
+                .any(|b| !disjoint_boxes(&boxes[i], b, tol))
+        {
+            return None;
+        }
+        let mut hosts_by_opening = vec![Vec::new(); bounds.len()];
+        for (h, face) in lhs_bounds.iter().enumerate() {
+            if disjoint_boxes(&host_boxes[h], &boxes[i], tol) {
+                continue;
+            }
+            let plane = face.outward_plane?;
+            let openings = cap_partition(bounds, plane, 1.0, tol)?;
+            for (j, is_opening) in openings.into_iter().enumerate() {
+                if is_opening {
+                    hosts_by_opening[j].push(h);
+                }
+            }
+        }
+        if hosts_by_opening.iter().all(Vec::is_empty) {
+            return None;
+        }
+        let part = regions(solid, &vec![false; bounds.len()], offset);
+        offset += bounds.len();
+        for (mut region, hosts) in part.retained.into_iter().zip(hosts_by_opening) {
+            if hosts.is_empty() {
+                region.invert();
+                retained.push(region);
+            } else {
+                let coverage = hosts.iter().map(|&h| host[h].clone()).collect::<Vec<_>>();
+                if !overlay_planar_subtract(std::slice::from_ref(&region), &coverage, tol)?
+                    .is_empty()
+                {
+                    return None;
+                }
+                for h in hosts {
+                    cutters[h].push(region.clone());
+                }
+            }
+        }
+    }
+    for (region, cutter) in host.into_iter().zip(cutters) {
+        if cutter.is_empty() {
+            retained.push(region);
+        } else {
+            retained.extend(overlay_planar_subtract(
+                std::slice::from_ref(&region),
+                &cutter,
+                tol,
+            )?);
+        }
+    }
+    finish_union(&retained, tol)
+}
+
 /// Union co-oriented planar material regions, including overlapping profiles
 /// and disjoint islands. Every boundary's complete curve hull must lie on
 /// the common plane. Use a fresh plane chart rather than extending the
@@ -529,6 +620,24 @@ mod tests {
         assert!(union(&host, &penetrating, 1e-6).is_none());
         let buried = box_at(Point3::new(3.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
         assert!(union(&host, &buried, 1e-6).is_none());
+    }
+
+    #[test]
+    fn local_difference_handles_blind_and_through_pockets() {
+        let host = box_at(Point3::origin(), Vector3::new(5., 3., 2.));
+        let blind = box_at(Point3::new(0.5, 0.5, 1.99), Vector3::new(1., 1., 0.01));
+        let through = box_at(Point3::new(3., 0.5, 0.), Vector3::new(1., 1., 2.));
+        let result = difference_many(&host, &[&blind, &through], 1e-6)
+            .expect("exact blind and through cuts");
+        assert_eq!(result.boundaries().len(), 1);
+        assert!(result.is_geometric_consistent());
+        assert_eq!(result.face_iter().count(), 15);
+        let outside = box_at(Point3::new(0.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
+        let crossing = box_at(Point3::new(4.5, 0.5, 1.99), Vector3::new(1., 1., 0.01));
+        let buried = box_at(Point3::new(0.5, 0.5, 1.), Vector3::new(1., 1., 0.01));
+        assert!(difference_many(&host, &[&outside], 1e-6).is_none());
+        assert!(difference_many(&host, &[&crossing], 1e-6).is_none());
+        assert!(difference_many(&host, &[&buried], 1e-6).is_none());
     }
 
     #[test]

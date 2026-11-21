@@ -1662,8 +1662,8 @@ fn prepare_boundary_feature_reduction(
         if !is_constructive_source(&tool.source) {
             continue;
         }
-        let mut tool = (*tool).clone();
-        if !regularize_boundary_feature_tool(&mut tool, family, source_entities, source_index) {
+        let tool = (*tool).clone();
+        if !validate_boundary_feature_tool(&tool, family, source_entities, source_index) {
             continue;
         }
         pending_steps.push((
@@ -1743,8 +1743,8 @@ fn select_closed_feature_families(
     selected
 }
 
-fn regularize_boundary_feature_tool(
-    tool: &mut CadFragment,
+fn validate_boundary_feature_tool(
+    tool: &CadFragment,
     family: &crate::planar_features::BoundaryFeatureFamilyEvidence,
     source_entities: &[EntityInstance],
     source_index: &HashMap<u64, usize>,
@@ -1757,12 +1757,7 @@ fn regularize_boundary_feature_tool(
     else {
         return false;
     };
-    if family.polarity == FeaturePolarity::Additive {
-        // A closed positive tool already encodes the exact material to
-        // attach. Do not perturb its cap to force a volumetric Boolean.
-        return true;
-    }
-    regularize_boundary_tool_for_boolean(tool, family.polarity, &host_outwards).is_ok()
+    validate_boundary_tool_for_boolean(tool, &host_outwards).is_ok()
 }
 
 fn recover_constructive_fragments_from_entities(
@@ -2156,86 +2151,40 @@ fn feature_host_outward_directions(
     (!out.is_empty()).then_some(out)
 }
 
-fn regularize_boundary_tool_for_boolean(
-    tool: &mut CadFragment,
-    polarity: FeaturePolarity,
+/// The healed host and the exact closed tool already describe the occupied
+/// material. Preserve both source cap stations; do not enlarge the tool just
+/// to force volumetric overlap.
+fn validate_boundary_tool_for_boolean(
+    tool: &CadFragment,
     host_outwards: &[[f64; 3]],
 ) -> Result<()> {
-    if !matches!(tool.source, CadFragmentSource::SolidExtrusion { .. }) {
-        bail!("boundary-feature Boolean tool is not an extrusion");
-    }
-    let (transform_index, body_index, z_axis) = match tool.model.node(tool.root)? {
-        CadNode::Transform { transform, child } => (
-            tool.root.0,
-            child.0,
-            [
-                transform.matrix[0][2],
-                transform.matrix[1][2],
-                transform.matrix[2][2],
-            ],
-        ),
-        _ => bail!("boundary-feature extrusion tool root is not a rigid transform"),
+    let CadNode::Transform { transform, child } = tool.model.node(tool.root)? else {
+        bail!("boundary-feature extrusion tool root is not a rigid transform");
     };
-    let z_norm = z_axis[2]
-        .mul_add(
-            z_axis[2],
-            z_axis[1].mul_add(z_axis[1], z_axis[0] * z_axis[0]),
-        )
-        .sqrt();
-    if !z_norm.is_finite()
-        || (z_norm - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_axis_unit
+    let z_axis = [
+        transform.matrix[0][2],
+        transform.matrix[1][2],
+        transform.matrix[2][2],
+    ];
+    let norm = crate::math3::norm(z_axis);
+    if !norm.is_finite()
+        || (norm - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_axis_unit
     {
         bail!("boundary-feature extrusion tool axis is not unit length");
     }
-
-    let max_residual = tool
-        .model
-        .provenance
-        .values()
-        .filter_map(|provenance| provenance.max_residual_mm)
-        .fold(0.0_f64, f64::max);
-    let margin_mm =
-        (10.0 * max_residual).max(DEFAULT_STEP_RECOVERY_TOLERANCES.periodic_geometry_mm);
-    let mut extend_negative = false;
-    let mut extend_positive = false;
-    for outward in host_outwards {
-        let outward_norm = outward[2]
-            .mul_add(
-                outward[2],
-                outward[1].mul_add(outward[1], outward[0] * outward[0]),
-            )
-            .sqrt();
-        if !outward_norm.is_finite() || outward_norm <= 0.0 {
+    for &outward in host_outwards {
+        let length = crate::math3::norm(outward);
+        if !length.is_finite() || length <= 0.0 {
             bail!("boundary-feature host normal is invalid");
         }
-        let alignment = outward[2].mul_add(
-            z_axis[2],
-            outward[1].mul_add(z_axis[1], outward[0] * z_axis[0]),
-        ) / outward_norm;
+        let alignment = crate::math3::dot(outward, z_axis) / length;
         if (alignment.abs() - 1.0).abs()
             > DEFAULT_STEP_RECOVERY_TOLERANCES.source_axis_direction_cosine
         {
             bail!("boundary-feature interface is not an extrusion end cap");
         }
-        match (polarity, alignment > 0.0) {
-            // A subtractive tool occupies source-solid material and opens at the
-            // carrier plane. Extend it outward, beyond the source solid.
-            (FeaturePolarity::Subtractive, true)
-            // An additive tool occupies material outside the source host and is
-            // attached at the carrier plane. Extend it inward, into material the
-            // host already occupies, so the union has volumetric overlap.
-            | (FeaturePolarity::Additive, false) => extend_positive = true,
-            (FeaturePolarity::Subtractive, false) | (FeaturePolarity::Additive, true) => {
-                extend_negative = true;
-            }
-        }
     }
-
-    let extension_count = u8::from(extend_negative) + u8::from(extend_positive);
-    if extension_count == 0 {
-        bail!("boundary-feature Boolean tool has no extendable interface");
-    }
-    let CadNode::Extrude { vector_mm, .. } = &mut tool.model.nodes[body_index] else {
+    let CadNode::Extrude { vector_mm, .. } = tool.model.node(*child)? else {
         bail!("boundary-feature tool transform does not wrap an extrusion");
     };
     if vector_mm[0].abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_transform
@@ -2245,24 +2194,7 @@ fn regularize_boundary_tool_for_boolean(
     {
         bail!("boundary-feature extrusion vector is not canonical +Z");
     }
-    vector_mm[2] = margin_mm.mul_add(f64::from(extension_count), vector_mm[2]);
-
-    if extend_negative {
-        let CadNode::Transform { transform, .. } = &mut tool.model.nodes[transform_index] else {
-            unreachable!("root shape checked above");
-        };
-        for (axis, axis_component) in z_axis.iter().copied().enumerate() {
-            transform.matrix[axis][3] =
-                (-margin_mm).mul_add(axis_component, transform.matrix[axis][3]);
-        }
-    }
-
-    for provenance in tool.model.provenance.values_mut() {
-        provenance.proof = ProofStatus::StructurallyProven;
-        provenance.max_residual_mm = None;
-    }
-    tool.model.validate()?;
-    Ok(())
+    tool.model.validate()
 }
 
 fn compose_boundary_feature_fragment(
