@@ -588,15 +588,19 @@ mod tests {
         assert!(union(&bottom, &gap, 1e-6).is_none());
     }
 
+    fn assert_consistent_face_count(solid: &ModelSolid, expected: usize) {
+        assert_eq!(solid.boundaries().len(), 1);
+        assert!(solid.is_geometric_consistent());
+        assert_eq!(solid.face_iter().count(), expected);
+    }
+
     #[test]
     fn planar_contact_batch_handles_disjoint_tools_and_refuses_interference() {
         let host = box_at(Point3::origin(), Vector3::new(5., 3., 2.));
         let a = box_at(Point3::new(0.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
         let b = box_at(Point3::new(3., 1., 2.), Vector3::new(1., 1., 0.01));
         let result = union_many(&host, &[&a, &b], 1e-6).expect("disjoint contact batch");
-        assert_eq!(result.boundaries().len(), 1);
-        assert!(result.is_geometric_consistent());
-        assert_eq!(result.face_iter().count(), 16);
+        assert_consistent_face_count(&result, 16);
         let overlap = box_at(Point3::new(0.8, 0.8, 2.), Vector3::new(1., 1., 0.01));
         assert!(union_many(&host, &[&a, &overlap], 1e-6).is_none());
         let penetrating = box_at(Point3::new(3., 1., 1.9), Vector3::new(1., 1., 0.2));
@@ -628,9 +632,7 @@ mod tests {
         let through = box_at(Point3::new(3., 0.5, 0.), Vector3::new(1., 1., 2.));
         let result = difference_many(&host, &[&blind, &through], 1e-6)
             .expect("exact blind and through cuts");
-        assert_eq!(result.boundaries().len(), 1);
-        assert!(result.is_geometric_consistent());
-        assert_eq!(result.face_iter().count(), 15);
+        assert_consistent_face_count(&result, 15);
         let outside = box_at(Point3::new(0.5, 0.5, 2.), Vector3::new(1., 1., 0.01));
         let crossing = box_at(Point3::new(4.5, 0.5, 1.99), Vector3::new(1., 1., 0.01));
         let buried = box_at(Point3::new(0.5, 0.5, 1.), Vector3::new(1., 1., 0.01));

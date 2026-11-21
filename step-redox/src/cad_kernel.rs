@@ -1108,19 +1108,19 @@ pub mod monstertruck {
                 .map(|&id| evaluate_node(model, id, policy, cache))
                 .collect::<Result<Vec<_>>>()?;
             let tools = solids[1..].iter().collect::<Vec<_>>();
-            let joined = match op {
-                BooleanOp::Union => monstertruck_solid::try_planar_contact_union_many(
-                    &solids[0],
-                    &tools,
-                    monstertruck_policy(policy),
-                )?,
-                BooleanOp::Difference => monstertruck_solid::try_planar_contact_difference_many(
-                    &solids[0],
-                    &tools,
-                    monstertruck_policy(policy),
-                )?,
-                BooleanOp::Intersection => None,
+            let contact_op = match op {
+                BooleanOp::Union => monstertruck_solid::PlanarContactOp::Union,
+                BooleanOp::Difference => monstertruck_solid::PlanarContactOp::Difference,
+                BooleanOp::Intersection => {
+                    unreachable!("contact arrangement requires union or difference")
+                }
             };
+            let joined = monstertruck_solid::try_planar_contact_many(
+                &solids[0],
+                &tools,
+                contact_op,
+                monstertruck_policy(policy),
+            )?;
             if let Some(result) = joined {
                 return Ok(result);
             }
