@@ -4064,6 +4064,29 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn native_local_contact_rebuilds_stepped_relief_sources() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_stepped_66eb641f.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_stepped_c7c4ea15.step").as_slice(),
+        ] {
+            let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+            assert_eq!(report.body_count, 1);
+            assert_eq!(report.constructively_recovered_solid_count, 1);
+            assert_eq!(report.unrecovered_solid_count, 0);
+            let [body] = report.boundary_feature_composites.as_slice() else {
+                bail!("stepped relief must recover an executable boundary feature composite");
+            };
+            let rebuilt = kernel.evaluate(&body.fragment.model, body.fragment.root)?;
+            let summary = kernel.summarize(&rebuilt);
+            assert!(summary.is_single_solid(), "{summary:?}");
+            assert_eq!(summary.faces, 238);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn healed_host_can_use_independently_proven_sectional_recovery() -> Result<()> {
         let bytes = include_bytes!("../validation/fixtures/native_sectional_stepped_655821f7.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
