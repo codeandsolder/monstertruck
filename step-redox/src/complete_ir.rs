@@ -4086,10 +4086,8 @@ END-ISO-10303-21;
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
         let host = recognize_single_healed_host(&exchange, &kernel)?
             .context("no constructive healed union host")?;
-        assert!(matches!(
-            host.source,
-            CadFragmentSource::ExtrusionCoreUnion { solid_id: 16, .. }
-        ));
+        assert!(is_constructive_source(&host.source), "{:?}", host.source);
+        assert_eq!(source_solid_id(&host.source), 16);
         let evaluated = kernel.evaluate(&host.model, host.root)?;
         assert!(crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
             &kernel,
