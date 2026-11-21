@@ -1123,13 +1123,15 @@ fn recognize_single_healed_host<K: CadKernel>(
     {
         return Ok(Some((*host).clone()));
     }
-    // The edited solid may expose a piecewise-prismatic host rather than
-    // one extrusion or revolution. Reuse the same independently verified
-    // sectional recognizer on this one final native STEP snapshot.
-    let Some(source) = SourceRecovery::new(*solid_id, &section.entities, &index, kernel) else {
-        return Ok(None);
-    };
-    crate::cad_recovery::sectional::recover(&source, None)
+    // Apply all independently certified material recognizers to this
+    // immutable final native snapshot, not just the sectional family.
+    recover_auto_proven_extrusion_core_union_from_entities(
+        *solid_id,
+        &section.entities,
+        &index,
+        kernel,
+        None,
+    )
 }
 
 fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> Result<bool> {
@@ -4103,6 +4105,29 @@ END-ISO-10303-21;
             &kernel,
             &evaluated,
             99,
+            &exchange.data[0].entities
+        )?);
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn healed_host_can_use_proven_material_core_union() -> Result<()> {
+        let bytes =
+            include_bytes!("../validation/fixtures/native_relief_healed_host_0036d9d5.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let host = recognize_single_healed_host(&exchange, &kernel)?
+            .context("no constructive healed union host")?;
+        assert!(matches!(
+            host.source,
+            CadFragmentSource::ExtrusionCoreUnion { solid_id: 16, .. }
+        ));
+        let evaluated = kernel.evaluate(&host.model, host.root)?;
+        assert!(crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &evaluated,
+            16,
             &exchange.data[0].entities
         )?);
         Ok(())
