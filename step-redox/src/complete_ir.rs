@@ -674,7 +674,6 @@ pub fn recover_complete_ir_with_kernel_bytes<
         &mut build.recovery,
         |source, _| {
             recover_kernel_boundary_feature_fragment(source, &source_load, &document, kernel)
-                .map(|candidate| candidate.map(KernelRecoveryCandidate::structural))
         },
         false,
     );
@@ -724,7 +723,7 @@ fn recover_kernel_boundary_feature_fragment<
     source_load: &KernelSourceLoadEvidence,
     source_document: &K::Document,
     kernel: &K,
-) -> Result<Option<CadFragment>> {
+) -> Result<Option<KernelRecoveryCandidate>> {
     let Some(load) = source_load.solids.iter().find(|item| item.source == source) else {
         return Ok(None);
     };
@@ -834,7 +833,7 @@ fn recover_kernel_boundary_feature_fragment<
     let Some(edited) = edited else {
         return Ok(None);
     };
-    finish_native_boundary_feature_replay(kernel, source, &edited, &replay)
+    finish_native_boundary_feature_replay(kernel, source, &edited, &replay, &section.entities)
 }
 
 /// Ensure projected shell membership exactly matches the retained native
@@ -910,7 +909,8 @@ fn finish_native_boundary_feature_replay<
     source: SourceEntity,
     edited: &K::EditedSource,
     replay: &[RecoveredBoundaryFeatureFamily],
-) -> Result<Option<CadFragment>> {
+    source_entities: &[EntityInstance],
+) -> Result<Option<KernelRecoveryCandidate>> {
     let Some(mut host) = recognize_edited_host_with_fallback(kernel, edited, || {
         // Rare non-native analytic families still use one final snapshot, not
         // a serialization/reimport on every feature-peeling round.
@@ -925,7 +925,21 @@ fn finish_native_boundary_feature_replay<
     };
     host.model.provenance.clear();
     let fragment = compose_boundary_feature_fragment(source.id, &host, replay)?;
-    kernel_replay_is_single_solid(kernel, &fragment).map(|accepted| accepted.then_some(fragment))
+    let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
+    if !kernel.summarize(&evaluated).is_single_solid() {
+        return Ok(None);
+    }
+    // Certify the entire evaluated result against the original, unpeeled
+    // source. Unsupported boundaries keep their existing structural status;
+    // successful proof also supplies the safe candidate-complexity ceiling.
+    let verified = kernel.supports_step_export()
+        && rebuilt_kernel_boundary_matches_source(kernel, &evaluated, source.id, source_entities)
+            .unwrap_or(false);
+    Ok(Some(if verified {
+        KernelRecoveryCandidate::verified(fragment)
+    } else {
+        KernelRecoveryCandidate::structural(fragment)
+    }))
 }
 
 fn recover_kernel_topology_normalized_fragment<
@@ -4004,6 +4018,25 @@ END-ISO-10303-21;
             *chosen, exact,
             "source-proof selection changed the admitted CAD"
         );
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_boss_replay_candidate_has_independent_original_boundary_proof() -> Result<()> {
+        let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange,
+        )?;
+        let load = kernel.inspect_source_document(&document)?;
+        let [solid] = load.solids.as_slice() else {
+            bail!("expected one solid");
+        };
+        let recovered =
+            recover_kernel_boundary_feature_fragment(solid.source, &load, &document, &kernel)?
+                .context("native boss recovery refused")?;
+        assert!(recovered.boundary_verified);
         Ok(())
     }
 
