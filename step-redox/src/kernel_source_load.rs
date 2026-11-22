@@ -301,9 +301,9 @@ mod monstertruck_adapter {
     };
     use crate::cad_kernel::monstertruck::MonstertruckKernel;
     use crate::kernel_topology::{
-        KernelEditedSourceEvidence, KernelFaceBoundaryReplacement, KernelFaceSplice,
-        KernelPatchCurve, KernelPatchEdgeRef, KernelPatchVertexRef, KernelTopologyPatch,
-        SourceTopologyEditor,
+        KernelEditedSourceEvidence, KernelEditedSourceProjection, KernelFaceBoundaryReplacement,
+        KernelFaceSplice, KernelPatchCurve, KernelPatchEdgeRef, KernelPatchVertexRef,
+        KernelTopologyPatch, SourceTopologyEditor,
     };
     use crate::reduced_brep::{ReducedFace, ReducedSolid};
     use crate::step_document::StepSection;
@@ -313,7 +313,6 @@ mod monstertruck_adapter {
     use monstertruck_geometry::analytic_line_segment::{
         SegmentLocus, certify_bspline_segment_locus, certify_nurbs_segment_locus,
     };
-    #[cfg(test)]
     use monstertruck_io::step::load::ParsedStepSource;
     use monstertruck_io::step::load::convert::StepCompressedTrimmedSolid;
     use monstertruck_io::step::load::step_geometry::{
@@ -1248,6 +1247,87 @@ mod monstertruck_adapter {
                         .cloned()
                         .collect(),
                 },
+            })
+        }
+
+        fn edited_source_step_projection(
+            &self,
+            edited: &Self::EditedSource,
+        ) -> Result<KernelEditedSourceProjection> {
+            let solid = &edited.imported.solid;
+            validate_native_semantic_ids(solid)?;
+            let model = save::StepModel::from(solid);
+            let layout = model.topology_entity_ids();
+            let text =
+                CompleteStepDisplay::new(model, save::StepHeaderDescriptor::default()).to_string();
+            let exchange = ParsedStepSource::parse(text.as_bytes())?.exchange;
+            let [section] = exchange.data.as_slice() else {
+                anyhow::bail!("native STEP projection must contain exactly one DATA section");
+            };
+            let index = step_graph::build_index(&section.entities);
+            let view = StepSection::new(0, &section.entities, &index);
+            let entity = |id: usize| -> Result<SourceEntity> {
+                view.entity(u64::try_from(id)?)
+                    .map(crate::step_document::StepEntity::source)
+                    .context("native projection omitted a scheduled STEP entity")
+            };
+            let mut topology = KernelTopologyProvenance {
+                vertices: Vec::new(),
+                edges: Vec::new(),
+                faces: Vec::new(),
+            };
+            anyhow::ensure!(
+                layout.shells.len() == solid.boundaries.len(),
+                "native projection lost a boundary shell"
+            );
+            for (ids, shell) in layout.shells.into_iter().zip(&solid.boundaries) {
+                let mapped = |indices: std::ops::Range<usize>,
+                              stable: Option<&[StableId]>|
+                 -> Result<Vec<KernelTopologyEntityProvenance>> {
+                    let stable = stable
+                        .context("native projection requires assigned topology identities")?;
+                    anyhow::ensure!(
+                        indices.len() == stable.len(),
+                        "native projection element count mismatch"
+                    );
+                    indices
+                        .zip(stable)
+                        .map(|(id, stable)| {
+                            Ok(KernelTopologyEntityProvenance {
+                                source: entity(id)?,
+                                topology_id: KernelTopologyId::from_raw(stable.raw()),
+                            })
+                        })
+                        .collect()
+                };
+                topology
+                    .vertices
+                    .extend(mapped(ids.vertices, shell.vertex_stable_ids.as_deref())?);
+                topology
+                    .edges
+                    .extend(mapped(ids.edges, shell.edge_stable_ids.as_deref())?);
+                let stable = shell
+                    .face_stable_ids
+                    .as_deref()
+                    .context("native projection requires assigned face identities")?;
+                anyhow::ensure!(
+                    ids.faces.len() == stable.len(),
+                    "native projection face count mismatch"
+                );
+                for (id, stable) in ids.faces.into_iter().zip(stable) {
+                    let source = entity(id)?;
+                    topology.faces.push(KernelFaceTopologyProvenance {
+                        source: Some(source),
+                        shell_member: Some(source),
+                        topology_id: KernelTopologyId::from_raw(stable.raw()),
+                    });
+                }
+            }
+            let source = entity(layout.root)?;
+            Ok(KernelEditedSourceProjection {
+                exchange,
+                source,
+                topology,
             })
         }
 

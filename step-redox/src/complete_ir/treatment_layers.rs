@@ -56,7 +56,9 @@ impl ReplayLayer {
     }
 }
 
-fn original_face_ids(provenance: &KernelTopologyProvenance) -> Result<BTreeMap<u64, u64>> {
+pub(super) fn original_face_ids(
+    provenance: &KernelTopologyProvenance,
+) -> Result<BTreeMap<u64, u64>> {
     let mut ids = BTreeMap::new();
     for face in &provenance.faces {
         let Some(source) = face.shell_member.or(face.source) else {

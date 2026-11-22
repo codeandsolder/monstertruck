@@ -463,6 +463,24 @@ impl Display for StepReal {
     }
 }
 
+/// STEP entity numbers assigned to the elements of a compressed shell,
+/// in the same order as its vertex, edge and face arrays.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepShellEntityIds {
+    pub shell: usize,
+    pub vertices: std::ops::Range<usize>,
+    pub edges: std::ops::Range<usize>,
+    pub faces: Vec<usize>,
+}
+
+/// Exact export layout. Entity numbers belong to this emitted model only;
+/// they can be joined to external topology identity journals by array index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepModelEntityIds {
+    pub root: usize,
+    pub shells: Vec<StepShellEntityIds>,
+}
+
 /// Display model with configurations
 pub struct StepModel<'a, P, C, S>(PreStepModel<'a, P, C, S>, StepMeasurementContext);
 

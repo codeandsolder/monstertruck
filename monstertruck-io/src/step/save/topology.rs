@@ -2,7 +2,8 @@ use super::{
     BooleanDisplay, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell,
     CompressedSolid, CompressedTrimmedShell, CompressedTrimmedSolid, Display, Formatter,
     IndexSliceDisplay, Result, StepCurve, StepDisplay, StepFormat, StepLength,
-    StepMeasurementContext, StepModel, StepModels, StepSurface,
+    StepMeasurementContext, StepModel, StepModelEntityIds, StepModels, StepShellEntityIds,
+    StepSurface,
 };
 trait StepAssociatedEntity {
     fn fmt(&self, idx: usize, formatter: &mut Formatter<'_>) -> Result;
@@ -839,6 +840,30 @@ where
 {
     fn from(solid: &'a CompressedTrimmedSolid<P, C, S, T>) -> Self {
         Self(solid.into(), StepMeasurementContext::default())
+    }
+}
+
+impl<P, C, S> StepModel<'_, P, C, S> {
+    /// Obtain the same entity indices that the formatter will emit, rather
+    /// than reconstructing them from geometric equality or reimport order.
+    #[must_use]
+    pub fn topology_entity_ids(&self) -> StepModelEntityIds {
+        let (root, shells) = match &self.0 {
+            PreStepModel::Shell(shell) => (16, std::slice::from_ref(shell)),
+            PreStepModel::Solid(solid) => (solid.idx, solid.boundaries.as_slice()),
+        };
+        StepModelEntityIds {
+            root,
+            shells: shells
+                .iter()
+                .map(|shell| StepShellEntityIds {
+                    shell: shell.idx,
+                    vertices: shell.ep_vertices..shell.ep_vertices + shell.vertices.len(),
+                    edges: shell.ep_edges..shell.ep_edges + shell.edges.len(),
+                    faces: shell.face_indices.clone(),
+                })
+                .collect(),
+        }
     }
 }
 
