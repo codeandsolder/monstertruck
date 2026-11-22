@@ -615,7 +615,7 @@ impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
             .map(|core| canonical_core_pair(core))
             .collect::<Vec<_>>();
         Ok(Some(CadFragment {
-            source: admitted_single.unwrap_or_else(|| {
+            source: admitted_single.unwrap_or({
                 if tips.is_empty() {
                     CadFragmentSource::ExtrusionCoreUnion {
                         solid_id,
