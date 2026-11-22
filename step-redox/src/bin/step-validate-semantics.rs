@@ -543,6 +543,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn semantic_report_preserves_binary64_roundtrip() -> Result<()> {
+        // Actual TE fixture coverage was decoded one ULP high by the default
+        // fast JSON parser, even though the CLI had emitted the right value.
+        let decimal = "0.9267461669505963";
+        let decoded: f64 = serde_json::from_str(decimal)?;
+        let expected = decimal.parse::<f64>()?;
+        assert_eq!(decoded.to_bits(), expected.to_bits());
+        let encoded = serde_json::to_string(&decoded)?;
+        assert_eq!(
+            serde_json::from_str::<f64>(&encoded)?.to_bits(),
+            expected.to_bits()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn patterns_require_consistent_pitch_and_exact_step_dimensions() -> Result<()> {
         let expected: PatternExpectation = serde_json::from_value(json!({
             "linear_patterns": 1, "instances_per_pattern": 2,
