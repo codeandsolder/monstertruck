@@ -4234,6 +4234,14 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn native_relief_limiting_hollow_analytic_loft_is_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_mixed_cda28227.step"
+        ))
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn native_relief_mixed_sectional_host_is_source_verified() -> Result<()> {
         assert_source_verified_relief(include_bytes!(
             "../validation/fixtures/native_relief_mixed_65712a81.step"
