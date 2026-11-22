@@ -4,6 +4,8 @@ use crate::cad_ir::{
 use crate::cad_kernel::CadKernel;
 use crate::math3::dot;
 use crate::periodic_chains::PeriodicChainPattern;
+use crate::solid_extrusions::RecoveredSolidExtrusion;
+use crate::solid_lofts::RuledEndExtension;
 use crate::step_graph::{build_index, entity_id, simple_record};
 use anyhow::{Result, bail};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
@@ -508,99 +510,129 @@ pub fn recover_proven_extrusion_core_union_fragment<K: CadKernel>(
     let Some(source) = SourceRecovery::new(solid_id, entities, &index, kernel) else {
         return Ok(None);
     };
-    recover_proven_extrusion_core_union_from_entities(&source, &canonical_pairs, None)
+    let discovered =
+        crate::solid_extrusions::discover_extrusion_core_candidates(solid_id, entities, &index);
+    let Some(cores) = canonical_pairs
+        .iter()
+        .map(|pair| {
+            discovered
+                .iter()
+                .find(|core| canonical_core_pair(core) == *pair)
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Ok(None);
+    };
+    let Some(evidence) = CoreUnionEvidence::new(&source) else {
+        return Ok(None);
+    };
+    evidence.prove(&cores, None)
 }
 
-fn recover_proven_extrusion_core_union_from_entities<K: CadKernel>(
-    source: &SourceRecovery<'_, K>,
-    canonical_pairs: &[[u64; 2]],
-    ceiling: Option<u64>,
-) -> Result<Option<CadFragment>> {
-    let SourceRecovery {
-        solid_id,
-        entities,
-        index,
-        ..
-    } = *source;
-    let Some(source_face_ids) = crate::brep::solid_face_ids(solid_id, entities, index) else {
-        return Ok(None);
-    };
+fn canonical_core_pair(core: &RecoveredSolidExtrusion) -> [u64; 2] {
+    let mut pair = core.cap_face_ids;
+    pair.sort_unstable();
+    pair
+}
 
-    let mut fragments = Vec::with_capacity(canonical_pairs.len());
-    let mut axes = Vec::with_capacity(canonical_pairs.len());
-    let mut max_residual_mm = crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM;
-    for &pair in canonical_pairs {
-        let Some(core) =
-            crate::solid_extrusions::recover_any_extrusion_core_from_cap_faces_with_index(
-                solid_id, pair, entities, index,
-            )
-        else {
-            return Ok(None);
-        };
-        max_residual_mm = max_residual_mm.max(core.max_residual_mm);
-        axes.push(core.z_axis);
-        fragments.push(recover_solid_extrusion_fragment(&core)?);
+/// The source-derived union context is invariant for all core combinations.
+/// In particular, build and recognize terminal extensions only once.
+struct CoreUnionEvidence<'a, 's, K> {
+    source: &'a SourceRecovery<'s, K>,
+    face_ids: Vec<u64>,
+    extensions: Vec<RuledEndExtension>,
+}
+
+impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
+    fn new(source: &'a SourceRecovery<'s, K>) -> Option<Self> {
+        let SourceRecovery {
+            solid_id,
+            entities,
+            index,
+            ..
+        } = *source;
+        let face_ids = crate::brep::solid_face_ids(solid_id, entities, index)?;
+        let extensions = crate::reduced_brep::ReducedSolid::from_step(solid_id, entities, index)
+            .map_or_else(Vec::new, |solid| {
+                crate::solid_lofts::detect_ruled_end_extensions(&solid)
+            });
+        Some(Self {
+            source,
+            face_ids,
+            extensions,
+        })
     }
 
-    // Source-exact planar end treatments can extend beyond every constant
-    // section without being separate translated-cap extrusion candidates.
-    // Each loft is built from a genuine terminal source cap, its four
-    // incident planar walls and their exact shoulder vertices.
-    let mut tips = Vec::new();
-    if let Some(reduced) = crate::reduced_brep::ReducedSolid::from_step(solid_id, entities, index) {
-        for extension in crate::solid_lofts::detect_ruled_end_extensions(&reduced) {
+    fn prove(
+        &self,
+        cores: &[&RecoveredSolidExtrusion],
+        ceiling: Option<u64>,
+    ) -> Result<Option<CadFragment>> {
+        let solid_id = self.source.solid_id;
+        let mut fragments = Vec::with_capacity(cores.len() + self.extensions.len());
+        let mut axes = Vec::with_capacity(fragments.capacity());
+        let mut max_residual_mm = crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM;
+        for core in cores {
+            max_residual_mm = max_residual_mm.max(core.max_residual_mm);
+            axes.push(core.z_axis);
+            fragments.push(recover_solid_extrusion_fragment(core)?);
+        }
+        let mut tips = Vec::with_capacity(self.extensions.len());
+        for extension in &self.extensions {
             tips.push(extension.tip_face_id);
             axes.push(extension.axis);
-            fragments.push(extension.fragment);
+            fragments.push(extension.fragment.clone());
         }
-    }
-    tips.sort_unstable();
-    let admitted_single = (fragments.len() == 1).then(|| fragments[0].source.clone());
-    let (mut model, root) = if fragments.len() == 1 {
-        let one = fragments
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("missing core"))?;
-        (one.model, one.root)
-    } else {
-        compose_extrusion_core_union_model(&fragments, &axes)?
-    };
-    if !source.proves(&model, root, ceiling)? {
-        return Ok(None);
-    }
+        tips.sort_unstable();
+        let admitted_single = (fragments.len() == 1).then(|| fragments[0].source.clone());
+        let (mut model, root) = if fragments.len() == 1 {
+            let one = fragments
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("missing core"))?;
+            (one.model, one.root)
+        } else {
+            compose_extrusion_core_union_model(&fragments, &axes)?
+        };
+        if !self.source.proves(&model, root, ceiling)? {
+            return Ok(None);
+        }
 
-    let mut source_entity_ids = Vec::with_capacity(source_face_ids.len() + 1);
-    source_entity_ids.push(solid_id);
-    source_entity_ids.extend(source_face_ids);
-    source_entity_ids.sort_unstable();
-    source_entity_ids.dedup();
-    model.set_provenance(
-        root,
-        Provenance {
-            source_entity_ids,
-            proof: ProofStatus::WithinTolerance,
-            max_residual_mm: Some(max_residual_mm),
-        },
-    )?;
-    model.validate()?;
-
-    Ok(Some(CadFragment {
-        source: admitted_single.unwrap_or_else(|| {
-            if tips.is_empty() {
-                CadFragmentSource::ExtrusionCoreUnion {
-                    solid_id,
-                    cap_face_ids: canonical_pairs.to_vec(),
+        let mut source_entity_ids = vec![solid_id];
+        source_entity_ids.extend(&self.face_ids);
+        source_entity_ids.sort_unstable();
+        source_entity_ids.dedup();
+        model.set_provenance(
+            root,
+            Provenance {
+                source_entity_ids,
+                proof: ProofStatus::WithinTolerance,
+                max_residual_mm: Some(max_residual_mm),
+            },
+        )?;
+        model.validate()?;
+        let cap_face_ids = cores
+            .iter()
+            .map(|core| canonical_core_pair(core))
+            .collect::<Vec<_>>();
+        Ok(Some(CadFragment {
+            source: admitted_single.unwrap_or_else(|| {
+                if tips.is_empty() {
+                    CadFragmentSource::ExtrusionCoreUnion {
+                        solid_id,
+                        cap_face_ids,
+                    }
+                } else {
+                    CadFragmentSource::ExtrusionCoreRuledEnds {
+                        solid_id,
+                        cap_face_ids,
+                        tip_face_ids: tips,
+                    }
                 }
-            } else {
-                CadFragmentSource::ExtrusionCoreRuledEnds {
-                    solid_id,
-                    cap_face_ids: canonical_pairs.to_vec(),
-                    tip_face_ids: tips,
-                }
-            }
-        }),
-        model,
-        root,
-    }))
+            }),
+            model,
+            root,
+        }))
+    }
 }
 
 /// Propose a partial extrusion from each actual source cap, together with all
@@ -873,26 +905,27 @@ pub(crate) fn recover_proven_material_fragment<K: CadKernel>(
             .total_cmp(&crate::solid_extrusions::analytic_extrusion_volume(a).unwrap_or(0.0))
             .then_with(|| a.cap_face_ids.cmp(&b.cap_face_ids))
     });
+    let evidence = if filtered.is_empty() {
+        None
+    } else {
+        CoreUnionEvidence::new(source)
+    };
     let mut seen = std::collections::HashSet::new();
-    let mut pairs = Vec::new();
-    for candidate in filtered {
-        let mut pair = candidate.cap_face_ids;
-        pair.sort_unstable();
-        if seen.insert(pair) {
-            pairs.push(pair);
-        }
-    }
+    let mut cores = Vec::new();
     let mut best = CheapestProvenFragment::default();
-    for &pair in &pairs {
-        let family = MaterialFamily::SingleCore;
-        best.consider(
-            family,
-            recover_proven_extrusion_core_union_from_entities(
-                source,
-                &[pair],
-                best.ceiling(ceiling, family),
-            ),
-        )?;
+    if let Some(evidence) = &evidence {
+        for core in &filtered {
+            if seen.insert(canonical_core_pair(core)) {
+                cores.push(core);
+            }
+            // Retain the actual filtered proposal. Re-discovering by pair
+            // could resurrect a different, rejected hypothesis.
+            let family = MaterialFamily::SingleCore;
+            best.consider(
+                family,
+                evidence.prove(&[core], best.ceiling(ceiling, family)),
+            )?;
+        }
     }
     // Discovery order is not a ranking criterion. Each provider only tests
     // candidates that might outrank the best already certified score.
@@ -919,16 +952,14 @@ pub(crate) fn recover_proven_material_fragment<K: CadKernel>(
     // Aggregate unions are often the expensive fallback: only evaluate
     // them after cheaper complete cap/section proposals establish a bound.
     // Keep the canonical earlier family on an equal complexity score.
-    if pairs.len() >= 2 {
-        pairs.sort_unstable();
+    if let Some(evidence) = &evidence
+        && cores.len() >= 2
+    {
+        cores.sort_by_key(|core| canonical_core_pair(core));
         let family = MaterialFamily::JoinedCores;
         best.consider(
             family,
-            recover_proven_extrusion_core_union_from_entities(
-                source,
-                &pairs,
-                best.ceiling(ceiling, family),
-            ),
+            evidence.prove(&cores, best.ceiling(ceiling, family)),
         )?;
     }
     best.finish()
