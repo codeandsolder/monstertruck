@@ -1194,17 +1194,35 @@ pub mod monstertruck {
                 contact_op,
                 monstertruck_policy(policy),
             )?;
-            if let Some(result) = joined {
-                return Ok(result);
-            }
+            // Contact certification borrows, rather than consumes, the
+            // operands. If it cannot prove contact, fold those same owned
+            // solids; reevaluating would consume DAG dependencies twice.
+            return if let Some(result) = joined {
+                Ok(result)
+            } else {
+                fold_boolean(op, solids.into_iter().map(Ok), policy)
+            };
         }
-        let Some((&first, rest)) = children.split_first() else {
-            bail!("boolean node needs at least one child");
-        };
-        let mut result = evaluate_node(model, first, policy, cache)?;
-        for &child in rest {
-            let rhs = evaluate_node(model, child, policy, cache)?;
-            let kernel_policy = monstertruck_policy(policy);
+        fold_boolean(
+            op,
+            children
+                .iter()
+                .map(|&id| evaluate_node(model, id, policy, cache)),
+            policy,
+        )
+    }
+
+    fn fold_boolean(
+        op: BooleanOp,
+        mut operands: impl Iterator<Item = Result<Solid>>,
+        policy: GeometryPolicy,
+    ) -> Result<Solid> {
+        let mut result = operands
+            .next()
+            .context("boolean node needs at least one child")??;
+        let kernel_policy = monstertruck_policy(policy);
+        for rhs in operands {
+            let rhs = rhs?;
             result = match op {
                 BooleanOp::Union => {
                     if let Some(joined) =
