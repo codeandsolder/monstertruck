@@ -311,6 +311,31 @@ mod tests {
         kernel_source_load::SourceStepLoadInspector,
     };
 
+    fn peel_single_source<K: SourceTopologyEditor>(
+        kernel: &K,
+        document: &K::Document,
+    ) -> Result<(
+        SourceEntity,
+        KernelTopologyProvenance,
+        treatment_layers::PeelOutcome<K::EditedSource>,
+    )> {
+        let load = kernel.inspect_source_document(document)?;
+        let [solid] = load.solids.as_slice() else {
+            anyhow::bail!("expected one source body");
+        };
+        let source = solid.source;
+        let provenance = solid
+            .topology_provenance
+            .clone()
+            .context("missing original identity journal")?;
+        let section = &document.as_ref().data[source.data_section];
+        let index = crate::step_graph::build_index(&section.entities);
+        let evidence =
+            super::super::replayable_source_treatments(&section.entities, &index, source.id);
+        let outcome = treatment_layers::peel(kernel, document, source, &provenance, &evidence)?;
+        Ok((source, provenance, outcome))
+    }
+
     #[test]
     fn drafted_round_host_peels_nonconvex_planar_recesses() -> Result<()> {
         let bytes =
@@ -319,24 +344,15 @@ mod tests {
         let document = kernel.resolve_source_exchange(
             monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange,
         )?;
-        let load = kernel.inspect_source_document(&document)?;
-        let [solid] = load.solids.as_slice() else {
-            anyhow::bail!("expected one body");
-        };
-        let source = solid.source;
-        let provenance = solid
-            .topology_provenance
-            .as_ref()
-            .context("missing provenance")?;
-        let section = &document.as_ref().data[source.data_section];
-        let index = crate::step_graph::build_index(&section.entities);
-        let evidence =
-            super::super::replayable_source_treatments(&section.entities, &index, source.id);
-        let treatment_layers::PeelOutcome {
-            mut edited,
-            layers,
-            stop,
-        } = treatment_layers::peel(&kernel, &document, source, provenance, &evidence)?;
+        let (
+            _,
+            provenance,
+            treatment_layers::PeelOutcome {
+                mut edited,
+                layers,
+                stop,
+            },
+        ) = peel_single_source(&kernel, &document)?;
         assert_eq!(layers.len(), 2);
         assert!(stop.is_none(), "{stop:?}");
         kernel.normalize_edited_source(&mut edited)?;
@@ -370,7 +386,7 @@ mod tests {
                 proven.insert(id);
             }
         }
-        let families = peel_projected_features(&kernel, &mut edited, provenance, 0)?;
+        let families = peel_projected_features(&kernel, &mut edited, &provenance, 0)?;
         let faces = kernel.inspect_edited_source(&edited)?.faces;
         eprintln!(
             "strict tool proofs={}, peeled families={}, remaining faces={faces}",
@@ -433,24 +449,15 @@ mod tests {
         let document = kernel.resolve_source_exchange(
             monstertruck_io::step::load::ParsedStepSource::parse(text.as_bytes())?.exchange,
         )?;
-        let load = kernel.inspect_source_document(&document)?;
-        let [solid] = load.solids.as_slice() else {
-            anyhow::bail!("expected exactly one treated boss");
-        };
-        let source = solid.source;
-        let provenance = solid
-            .topology_provenance
-            .as_ref()
-            .context("missing original identity journal")?;
-        let section = &document.as_ref().data[source.data_section];
-        let index = crate::step_graph::build_index(&section.entities);
-        let evidence =
-            super::super::replayable_source_treatments(&section.entities, &index, source.id);
-        let treatment_layers::PeelOutcome {
-            mut edited,
-            layers,
-            stop,
-        } = treatment_layers::peel(&kernel, &document, source, provenance, &evidence)?;
+        let (
+            source,
+            provenance,
+            treatment_layers::PeelOutcome {
+                mut edited,
+                layers,
+                stop,
+            },
+        ) = peel_single_source(&kernel, &document)?;
         assert!(!layers.is_empty(), "treatment inversion stop: {stop:?}");
         let projection = kernel.edited_source_step_projection(&edited)?;
         assert!(
@@ -462,8 +469,8 @@ mod tests {
             }),
             "inverse-created edges must receive their current native identities in the projection"
         );
-        let expected_original = treatment_layers::original_face_ids(provenance)?;
-        let families = peel_projected_features(&kernel, &mut edited, provenance, 0)?;
+        let expected_original = treatment_layers::original_face_ids(&provenance)?;
+        let families = peel_projected_features(&kernel, &mut edited, &provenance, 0)?;
         assert_eq!(families.len(), 1, "expected a single restored boss family");
         assert!(families[0].members.iter().all(|member| {
             member.interface_bound_ids.is_empty()
@@ -484,6 +491,8 @@ mod tests {
             candidate.model.node(candidate.root)?,
             CadNode::EdgeTreatment { .. }
         ));
+        let section = &document.as_ref().data[source.data_section];
+        let index = crate::step_graph::build_index(&section.entities);
         let proof = SourceRecovery::new(source.id, &section.entities, &index, &kernel)
             .context("treated boss has no source proof")?;
         let rebuilt = kernel.evaluate(&candidate.model, candidate.root)?;
