@@ -4248,6 +4248,14 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn native_turning_spline_relief_is_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_turning_09b26184.step"
+        ))
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn native_relief_partitioned_spline_caps_are_source_verified() -> Result<()> {
         for bytes in [
             include_bytes!("../validation/fixtures/native_relief_partitioned_63d50d37.step")
