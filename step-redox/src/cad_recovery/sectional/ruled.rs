@@ -1,16 +1,19 @@
-//! Planar swept slabs with linearly changing sections. Within consecutive
+//! Analytic swept slabs with linearly changing planar edges and fixed arcs. Within consecutive
 //! vertex stations, each finite face intersects a slice in the same ordered
 //! intervals. The mid-slice graph supplies correspondence; the actual
 //! original crossing edges supply both end profiles, including collapsed
-//! corner transitions. Independent full-source proof remains mandatory.
+//! corner transitions. Axis-parallel cylinders have invariant section arcs. Independent full-source proof remains mandatory.
 use super::{
-    DIRECTION, Frame, LENGTH, extrusion_node, section_groups, slice_rings, station_levels,
-    valid_line, valid_planar_face,
+    DIRECTION, Frame, LENGTH, circular::CylinderTrim, extrusion_node, section_groups, slice_rings,
+    station_levels, valid_planar_face,
 };
 use crate::{
     brep::{OrientedEdgeUse, SurfaceSupport},
     cad_ir::{CadModel, CadNode, Curve2d, LoftSection, NodeId, Profile2d, ProfileLoop},
-    cad_recovery::{add_bounded_union_tree, solid::local_frame_transform},
+    cad_recovery::{
+        add_bounded_union_tree,
+        solid::{local_frame_transform, recovered_profile_curve_to_ir},
+    },
     math2::distance as distance2,
     math3::{add, cross, dot, mul, norm, normalize, sub},
     profile_curves::RecoveredProfileCurve,
@@ -19,24 +22,26 @@ use crate::{
 use anyhow::Result;
 use std::collections::BTreeMap;
 
-struct PlanarSweep<'a> {
+struct RuledSweep<'a> {
     edges: BTreeMap<u64, &'a OrientedEdgeUse>,
     levels: Vec<f64>,
 }
 
-impl<'a> PlanarSweep<'a> {
+impl<'a> RuledSweep<'a> {
     fn new(solid: &'a ReducedSolid, frame: Frame) -> Option<Self> {
         let mut inclined = false;
         for face in solid.faces() {
-            let SurfaceSupport::Plane(plane) = face.surface else {
-                return None;
-            };
-            let normal = normalize(plane.normal, DIRECTION)?;
-            inclined |= norm(cross(normal, frame.axis)) > DIRECTION
-                && dot(normal, frame.axis).abs() > DIRECTION;
-            valid_planar_face(face, frame, true)?;
-            if face.loop_edges().any(|edge| !valid_line(edge)) {
-                return None;
+            match face.surface {
+                SurfaceSupport::Plane(plane) => {
+                    let normal = normalize(plane.normal, DIRECTION)?;
+                    inclined |= norm(cross(normal, frame.axis)) > DIRECTION
+                        && dot(normal, frame.axis).abs() > DIRECTION;
+                    valid_planar_face(face, frame, true)?;
+                }
+                SurfaceSupport::Cylinder(_) => {
+                    CylinderTrim::new(face, frame)?;
+                }
+                _ => return None,
             }
         }
         if !inclined {
@@ -80,29 +85,47 @@ impl<'a> PlanarSweep<'a> {
         let loops = group
             .iter()
             .map(|&index| {
-                let mut points = rings[index]
+                let ring = &rings[index];
+                let mut points = ring
                     .iter()
-                    .map(|curve| {
-                        let RecoveredProfileCurve::Line {
+                    .map(|curve| match curve {
+                        RecoveredProfileCurve::Line {
                             source_edge_ids, ..
-                        } = curve
-                        else {
-                            return None;
-                        };
-                        let [start, _] = source_edge_ids.as_slice() else {
-                            return None;
-                        };
-                        self.point(*start, frame, level)
+                        } => {
+                            let [start, _] = source_edge_ids.as_slice() else {
+                                return None;
+                            };
+                            self.point(*start, frame, level)
+                        }
+                        RecoveredProfileCurve::CircleArc { .. } => curve.start_point(),
+                        _ => None,
                     })
                     .collect::<Option<Vec<_>>>()?;
-                canonicalize_collapsed_corners(&mut points)?;
-                Some(ProfileLoop {
-                    curves: points
-                        .iter()
-                        .zip(points.iter().cycle().skip(1))
-                        .map(|(&start_mm, &end_mm)| Curve2d::Line { start_mm, end_mm })
-                        .collect(),
-                })
+                if points.len() >= 3 {
+                    canonicalize_collapsed_corners(&mut points)?;
+                }
+                let curves = ring
+                    .iter()
+                    .zip(points.iter().zip(points.iter().cycle().skip(1)))
+                    .map(|(curve, (&start_mm, &end_mm))| match curve {
+                        RecoveredProfileCurve::Line {
+                            source_edge_ids, ..
+                        } => {
+                            let [_, end] = source_edge_ids.as_slice() else {
+                                return None;
+                            };
+                            (distance2(end_mm, self.point(*end, frame, level)?) <= LENGTH)
+                                .then_some(Curve2d::Line { start_mm, end_mm })
+                        }
+                        RecoveredProfileCurve::CircleArc { .. } => {
+                            (distance2(start_mm, curve.start_point()?) <= LENGTH
+                                && distance2(end_mm, curve.end_point()?) <= LENGTH)
+                                .then(|| recovered_profile_curve_to_ir(curve))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(ProfileLoop { curves })
             })
             .collect::<Option<Vec<_>>>()?;
         Some(Profile2d { loops })
@@ -144,7 +167,7 @@ fn canonicalize_collapsed_corners(points: &mut [[f64; 2]]) -> Option<()> {
 
 fn slab_nodes(
     model: &mut CadModel,
-    sweep: &PlanarSweep<'_>,
+    sweep: &RuledSweep<'_>,
     solid: &ReducedSolid,
     frame: Frame,
     lo: f64,
@@ -187,33 +210,35 @@ fn slab_nodes(
 }
 
 fn same_profiles(a: &Profile2d, b: &Profile2d) -> bool {
-    a.loops.iter().zip(&b.loops).all(|(a, b)| {
-        a.curves.iter().zip(&b.curves).all(|(a, b)| {
-            let (
-                Curve2d::Line {
-                    start_mm: a,
-                    end_mm: ae,
-                },
-                Curve2d::Line {
-                    start_mm: b,
-                    end_mm: be,
-                },
-            ) = (a, b)
-            else {
-                return false;
-            };
-            distance2(*a, *b) <= LENGTH
-                && distance2(*ae, *be) <= LENGTH
-                && distance2(*a, *ae) > LENGTH
+    a.loops.len() == b.loops.len()
+        && a.loops.iter().zip(&b.loops).all(|(a, b)| {
+            a.curves.len() == b.curves.len()
+                && a.curves.iter().zip(&b.curves).all(|(a, b)| match (a, b) {
+                    (
+                        Curve2d::Line {
+                            start_mm: a,
+                            end_mm: ae,
+                        },
+                        Curve2d::Line {
+                            start_mm: b,
+                            end_mm: be,
+                        },
+                    ) => {
+                        distance2(*a, *b) <= LENGTH
+                            && distance2(*ae, *be) <= LENGTH
+                            && distance2(*a, *ae) > LENGTH
+                    }
+                    (Curve2d::CircleArc { .. }, Curve2d::CircleArc { .. }) => a == b,
+                    _ => false,
+                })
         })
-    })
 }
 
 pub(super) fn model(
     solid: &ReducedSolid,
     frame: Frame,
 ) -> Result<Option<(CadModel, NodeId, usize)>> {
-    let Some(sweep) = PlanarSweep::new(solid, frame) else {
+    let Some(sweep) = RuledSweep::new(solid, frame) else {
         return Ok(None);
     };
     let mut model = CadModel::new();
