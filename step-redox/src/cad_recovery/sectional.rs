@@ -133,7 +133,7 @@ fn stations(solid: &ReducedSolid, frame: Frame) -> Option<Vec<f64>> {
             _ => return None,
         }
     }
-    station_levels(solid, frame)
+    station_levels(solid, frame).filter(|levels| levels.len() >= 3)
 }
 
 fn station_levels(solid: &ReducedSolid, frame: Frame) -> Option<Vec<f64>> {
@@ -144,7 +144,7 @@ fn station_levels(solid: &ReducedSolid, frame: Frame) -> Option<Vec<f64>> {
         .collect::<Vec<_>>();
     levels.sort_by(f64::total_cmp);
     levels.dedup_by(|a, b| (*a - *b).abs() <= LENGTH);
-    (levels.len() >= 3
+    (levels.len() >= 2
         && levels
             .windows(2)
             .all(|pair| pair[1] - pair[0] > 2.0 * LENGTH))

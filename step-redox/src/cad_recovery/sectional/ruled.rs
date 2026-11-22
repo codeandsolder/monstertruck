@@ -1,200 +1,271 @@
-//! Piecewise ruled reconstruction of planar polyhedra.
-//!
-//! Between consecutive vertex stations true source edges cross the whole slab.
-//! Their identities give a one-to-one correspondence of section vertices; the
-//! same planar source face bounds each ruled edge at both slice endpoints.
-
+//! Planar swept slabs with linearly changing sections. Within consecutive
+//! vertex stations, each finite face intersects a slice in the same ordered
+//! intervals. The mid-slice graph supplies correspondence; the actual
+//! original crossing edges supply both end profiles, including collapsed
+//! corner transitions. Independent full-source proof remains mandatory.
 use super::{
-    DIRECTION, Frame, LENGTH, add_bounded_union_tree, extrusion_node, local_frame_transform,
-    section_groups, slice_rings, station_levels, valid_planar_face,
+    DIRECTION, Frame, LENGTH, extrusion_node, section_groups, slice_rings, station_levels,
+    valid_line, valid_planar_face,
 };
-use crate::brep::{OrientedEdgeUse, SurfaceSupport};
-use crate::cad_ir::{BooleanOp, CadModel, CadNode, LoftSection, NodeId, Profile2d};
-use crate::math2::distance;
-use crate::math3::{add, cross, dot, mul, norm, normalize, sub};
-use crate::profile_curves::RecoveredProfileCurve;
-use crate::reduced_brep::{ReducedFace, ReducedSolid};
+use crate::{
+    brep::{OrientedEdgeUse, SurfaceSupport},
+    cad_ir::{CadModel, CadNode, Curve2d, LoftSection, NodeId, Profile2d, ProfileLoop},
+    cad_recovery::{add_bounded_union_tree, solid::local_frame_transform},
+    math2::distance as distance2,
+    math3::{add, cross, dot, mul, norm, normalize, sub},
+    profile_curves::RecoveredProfileCurve,
+    reduced_brep::{ReducedFace, ReducedSolid},
+};
 use anyhow::Result;
 use std::collections::BTreeMap;
 
-fn point_at(edge: &OrientedEdgeUse, frame: Frame, level: f64) -> Option<[f64; 2]> {
-    let a = frame.axial(edge.start_mm);
-    let b = frame.axial(edge.end_mm);
-    if level < a.min(b) - LENGTH || level > a.max(b) + LENGTH || (a - b).abs() <= LENGTH {
-        return None;
-    }
-    let t = (level - a) / (b - a);
-    Some(frame.project(add(edge.start_mm, mul(sub(edge.end_mm, edge.start_mm), t))))
+struct PlanarSweep<'a> {
+    edges: BTreeMap<u64, &'a OrientedEdgeUse>,
+    levels: Vec<f64>,
 }
 
-fn section_points(
-    ring: &[RecoveredProfileCurve],
-    edges: &BTreeMap<u64, &OrientedEdgeUse>,
-    frame: Frame,
-    level: f64,
-) -> Option<Vec<[f64; 2]>> {
-    let points = ring
-        .iter()
-        .map(|curve| {
-            let RecoveredProfileCurve::Line {
-                source_edge_ids, ..
-            } = curve
-            else {
+impl<'a> PlanarSweep<'a> {
+    fn new(solid: &'a ReducedSolid, frame: Frame) -> Option<Self> {
+        let mut inclined = false;
+        for face in solid.faces() {
+            let SurfaceSupport::Plane(plane) = face.surface else {
                 return None;
             };
-            let [start, _] = source_edge_ids.as_slice() else {
+            let normal = normalize(plane.normal, DIRECTION)?;
+            inclined |= norm(cross(normal, frame.axis)) > DIRECTION
+                && dot(normal, frame.axis).abs() > DIRECTION;
+            valid_planar_face(face, frame, true)?;
+            if face.loop_edges().any(|edge| !valid_line(edge)) {
                 return None;
-            };
-            point_at(edges.get(start)?, frame, level)
-        })
-        .collect::<Option<Vec<_>>>()?;
-    points
-        .iter()
-        .zip(points.iter().cycle().skip(1))
-        .all(|(&a, &b)| distance(a, b) > LENGTH)
-        .then_some(points)
-}
-
-struct RuledProfile {
-    bottom: Vec<[f64; 2]>,
-    top: Vec<[f64; 2]>,
-}
-
-impl RuledProfile {
-    fn node(self, model: &mut CadModel, frame: Frame, limits: [f64; 2]) -> Result<NodeId> {
-        let [a, b] = limits;
-        if self
-            .bottom
-            .iter()
-            .zip(&self.top)
-            .all(|(&lo, &hi)| distance(lo, hi) <= LENGTH)
-        {
-            return Ok(extrusion_node(
-                model,
-                frame,
-                a,
-                b,
-                Profile2d::polygon(self.bottom)?,
-            ));
+            }
         }
-        let sections = [self.bottom, self.top]
-            .into_iter()
-            .zip(limits)
-            .map(|(points, level)| {
-                Ok(LoftSection {
-                    profile: Profile2d::polygon(points)?,
-                    transform: local_frame_transform(
-                        add(frame.origin, mul(frame.axis, level)),
-                        frame.x,
-                        frame.y,
-                        frame.axis,
-                    ),
+        if !inclined {
+            return None;
+        }
+        let levels = station_levels(solid, frame)?;
+        let edges = solid
+            .faces()
+            .flat_map(ReducedFace::loop_edges)
+            .map(|edge| (edge.edge_id, edge))
+            .collect();
+        Some(Self { edges, levels })
+    }
+
+    fn point(&self, id: u64, frame: Frame, level: f64) -> Option<[f64; 2]> {
+        let edge = self.edges.get(&id)?;
+        let [a, b] = [edge.start_mm, edge.end_mm].map(|p| frame.axial(p));
+        if (a - b).abs() <= LENGTH || level < a.min(b) - LENGTH || level > a.max(b) + LENGTH {
+            return None;
+        }
+        let point = if (a - level).abs() <= LENGTH {
+            edge.start_mm
+        } else if (b - level).abs() <= LENGTH {
+            edge.end_mm
+        } else {
+            add(
+                edge.start_mm,
+                mul(sub(edge.end_mm, edge.start_mm), (level - a) / (b - a)),
+            )
+        };
+        Some(frame.project(point))
+    }
+
+    fn profile(
+        &self,
+        rings: &[Vec<RecoveredProfileCurve>],
+        group: &[usize],
+        frame: Frame,
+        level: f64,
+    ) -> Option<Profile2d> {
+        let loops = group
+            .iter()
+            .map(|&index| {
+                let mut points = rings[index]
+                    .iter()
+                    .map(|curve| {
+                        let RecoveredProfileCurve::Line {
+                            source_edge_ids, ..
+                        } = curve
+                        else {
+                            return None;
+                        };
+                        let [start, _] = source_edge_ids.as_slice() else {
+                            return None;
+                        };
+                        self.point(*start, frame, level)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                canonicalize_collapsed_corners(&mut points)?;
+                Some(ProfileLoop {
+                    curves: points
+                        .iter()
+                        .zip(points.iter().cycle().skip(1))
+                        .map(|(&start_mm, &end_mm)| Curve2d::Line { start_mm, end_mm })
+                        .collect(),
                 })
             })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(model.add_node(CadNode::Loft { sections }))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Profile2d { loops })
     }
 }
 
-fn slab(
+/// Canonicalize contiguous limiting corners, using the original point
+/// distances rather than the progressively modified coordinates. Every
+/// displacement must fit the existing length budget, even along a chain
+/// of individually close points.
+fn canonicalize_collapsed_corners(points: &mut [[f64; 2]]) -> Option<()> {
+    let count = points.len();
+    if count < 3 {
+        return None;
+    }
+    let offset = (0..count)
+        .find(|&i| distance2(points[i], points[(i + 1) % count]) > LENGTH)
+        .map_or(0, |i| (i + 1) % count);
+    points.rotate_left(offset);
+    let mut start = 0;
+    while start < count {
+        let mut end = start + 1;
+        while end < count && distance2(points[end - 1], points[end]) <= LENGTH {
+            end += 1;
+        }
+        let group = &mut points[start..end];
+        let canonical = *group
+            .iter()
+            .min_by(|a, b| a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])))?;
+        if group.iter().any(|&p| distance2(p, canonical) > LENGTH) {
+            return None;
+        }
+        group.fill(canonical);
+        start = end;
+    }
+    points.rotate_right(offset);
+    Some(())
+}
+
+fn slab_nodes(
+    model: &mut CadModel,
+    sweep: &PlanarSweep<'_>,
     solid: &ReducedSolid,
-    edges: &BTreeMap<u64, &OrientedEdgeUse>,
     frame: Frame,
-    limits: [f64; 2],
-) -> Option<Vec<Vec<RuledProfile>>> {
-    let rings = slice_rings(solid, frame, limits[0].midpoint(limits[1]))?;
-    section_groups(&rings)?
-        .into_iter()
+    lo: f64,
+    hi: f64,
+) -> Option<Vec<NodeId>> {
+    let rings = slice_rings(solid, frame, lo.midpoint(hi))?;
+    if rings.is_empty() {
+        return Some(Vec::new());
+    }
+    let groups = section_groups(&rings)?;
+    groups
+        .iter()
         .map(|group| {
-            group
-                .into_iter()
-                .enumerate()
-                .map(|(i, index)| {
-                    let mut bottom = section_points(&rings[index], edges, frame, limits[0])?;
-                    let mut top = section_points(&rings[index], edges, frame, limits[1])?;
-                    // Hole rings become positive cutter profiles, with matching vertex order.
-                    if i != 0 {
-                        bottom.reverse();
-                        top.reverse();
-                    }
-                    Some(RuledProfile { bottom, top })
-                })
-                .collect()
+            let start = sweep.profile(&rings, group, frame, lo)?;
+            let end = sweep.profile(&rings, group, frame, hi)?;
+            // Constant slabs stay ordinary compact extrusions. Preserve
+            // authored cyclic correspondence even when vertex ordering differs
+            // from the section's geometric bounding box.
+            if same_profiles(&start, &end) {
+                return Some(extrusion_node(model, frame, lo, hi, start));
+            }
+            Some(
+                model.add_node(CadNode::Loft {
+                    sections: [(lo, start), (hi, end)]
+                        .into_iter()
+                        .map(|(at, profile)| LoftSection {
+                            profile,
+                            transform: local_frame_transform(
+                                add(frame.origin, mul(frame.axis, at)),
+                                frame.x,
+                                frame.y,
+                                frame.axis,
+                            ),
+                        })
+                        .collect(),
+                }),
+            )
         })
         .collect()
+}
+
+fn same_profiles(a: &Profile2d, b: &Profile2d) -> bool {
+    a.loops.iter().zip(&b.loops).all(|(a, b)| {
+        a.curves.iter().zip(&b.curves).all(|(a, b)| {
+            let (
+                Curve2d::Line {
+                    start_mm: a,
+                    end_mm: ae,
+                },
+                Curve2d::Line {
+                    start_mm: b,
+                    end_mm: be,
+                },
+            ) = (a, b)
+            else {
+                return false;
+            };
+            distance2(*a, *b) <= LENGTH
+                && distance2(*ae, *be) <= LENGTH
+                && distance2(*a, *ae) > LENGTH
+        })
+    })
 }
 
 pub(super) fn model(
     solid: &ReducedSolid,
     frame: Frame,
 ) -> Result<Option<(CadModel, NodeId, usize)>> {
-    let mut inclined = false;
-    let mut transverse = 0;
-    for face in solid.faces() {
-        let SurfaceSupport::Plane(plane) = face.surface else {
-            return Ok(None);
-        };
-        let Some(normal) = normalize(plane.normal, DIRECTION) else {
-            return Ok(None);
-        };
-        if norm(cross(normal, frame.axis)) <= DIRECTION {
-            transverse += 1;
-        } else if dot(normal, frame.axis).abs() > DIRECTION {
-            inclined = true;
-        }
-        if valid_planar_face(face, frame, true).is_none() {
-            return Ok(None);
-        }
-        // The ruled construction has only straight generators and section edges.
-        if face.loop_edges().any(|edge| !super::valid_line(edge)) {
-            return Ok(None);
-        }
-    }
-    if !inclined || transverse < 2 {
-        return Ok(None);
-    }
-    let Some(levels) = station_levels(solid, frame) else {
+    let Some(sweep) = PlanarSweep::new(solid, frame) else {
         return Ok(None);
     };
-    let edges = solid
-        .faces()
-        .flat_map(ReducedFace::loop_edges)
-        .map(|edge| (edge.edge_id, edge))
-        .collect::<BTreeMap<_, _>>();
     let mut model = CadModel::new();
     let mut children = Vec::new();
-    for pair in levels.windows(2) {
-        let limits = [pair[0], pair[1]];
-        let Some(groups) = slab(solid, &edges, frame, limits) else {
+    for ab in sweep.levels.windows(2) {
+        let Some(parts) = slab_nodes(&mut model, &sweep, solid, frame, ab[0], ab[1]) else {
             return Ok(None);
         };
-        let parts = groups
-            .into_iter()
-            .map(|group| {
-                let mut nodes = group
-                    .into_iter()
-                    .map(|profile| profile.node(&mut model, frame, limits))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(if nodes.len() == 1 {
-                    nodes.remove(0)
-                } else {
-                    model.add_node(CadNode::Boolean {
-                        op: BooleanOp::Difference,
-                        children: nodes,
-                    })
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        children.push(add_bounded_union_tree(&mut model, parts));
+        if !parts.is_empty() {
+            children.push(add_bounded_union_tree(&mut model, parts));
+        }
+    }
+    if children.is_empty() {
+        return Ok(None);
     }
     let root = add_bounded_union_tree(&mut model, children);
     model.add_root(root)?;
     model.validate()?;
-    Ok(Some((model, root, levels.len() - 1)))
+    Ok(Some((model, root, sweep.levels.len() - 1)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collapsed_corners_preserve_cyclic_correspondence() -> Result<()> {
+        let mut points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [LENGTH * 0.2, 0.0]];
+        anyhow::Context::context(
+            canonicalize_collapsed_corners(&mut points),
+            "valid cyclic collapse",
+        )?;
+        assert!(distance2(points[0], points[3]) <= f64::EPSILON);
+        assert!(distance2(points[1], [2.0, 0.0]) <= f64::EPSILON);
+        assert!(distance2(points[2], [2.0, 2.0]) <= f64::EPSILON);
+        Ok(())
+    }
+
+    #[test]
+    fn collapsed_corners_reject_transitive_displacement() {
+        let mut points = [
+            [0.0, 0.0],
+            [0.75 * LENGTH, 0.0],
+            [1.5 * LENGTH, 0.0],
+            [2.0, 2.0],
+        ];
+        assert!(canonicalize_collapsed_corners(&mut points).is_none());
+    }
 }
 
 #[cfg(all(test, feature = "cad-kernel-monstertruck"))]
-mod tests {
+mod native_tests {
     use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
     use crate::complete_ir::recover_complete_ir_with_kernel_bytes;
     use anyhow::Result;

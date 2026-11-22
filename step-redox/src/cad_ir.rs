@@ -433,7 +433,21 @@ impl Profile2d {
         if self.loops.len() != 1 {
             return None;
         }
-        let curves = &self.loops[0].curves;
+        self.loops[0].polygon_points()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProfileLoop {
+    pub curves: Vec<Curve2d>,
+}
+
+impl ProfileLoop {
+    /// Closed polygon in the authored correspondence order. Repeated
+    /// consecutive points are meaningful only to a ruled loft.
+    #[must_use]
+    pub fn polygon_points(&self) -> Option<Vec<[f64; 2]>> {
+        let curves = &self.curves;
         if curves.len() < 3 {
             return None;
         }
@@ -458,11 +472,6 @@ impl Profile2d {
         }
         Some(points)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ProfileLoop {
-    pub curves: Vec<Curve2d>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

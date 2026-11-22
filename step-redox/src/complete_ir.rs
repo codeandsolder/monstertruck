@@ -38,7 +38,7 @@ use step_p21::ast::{EntityInstance, Exchange};
 mod treatment_layers;
 
 pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
-pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v19";
+pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v20";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReducedBrepMutationMode {
@@ -544,8 +544,8 @@ impl CompleteIrBuildState {
                     source,
                     CadFragmentSource::ExtrusionCoreUnion { .. }
                         | CadFragmentSource::SectionalExtrusionUnion { .. }
-                        | CadFragmentSource::SectionalLoftUnion { .. }
                         | CadFragmentSource::SectionalExtrusionTransitions { .. }
+                        | CadFragmentSource::SectionalLoftUnion { .. }
                         | CadFragmentSource::FormedSheetExtrusionUnion { .. }
                         | CadFragmentSource::SourceCapExtrusionUnion { .. }
                         | CadFragmentSource::ExtrusionCoreRuledEnds { .. }
@@ -2612,8 +2612,8 @@ const fn source_solid_id(source: &CadFragmentSource) -> u64 {
         | CadFragmentSource::PeriodicChain { solid_id, .. }
         | CadFragmentSource::ExtrusionCoreUnion { solid_id, .. }
         | CadFragmentSource::SectionalExtrusionUnion { solid_id, .. }
-        | CadFragmentSource::SectionalLoftUnion { solid_id, .. }
         | CadFragmentSource::SectionalExtrusionTransitions { solid_id, .. }
+        | CadFragmentSource::SectionalLoftUnion { solid_id, .. }
         | CadFragmentSource::FormedSheetExtrusionUnion { solid_id, .. }
         | CadFragmentSource::SourceCapExtrusionUnion { solid_id, .. }
         | CadFragmentSource::ExtrusionCoreRuledEnds { solid_id, .. }
@@ -4199,6 +4199,20 @@ END-ISO-10303-21;
         assert_source_verified_relief(include_bytes!(
             "../validation/fixtures/native_relief_boolean_host_22bfe2fc.step"
         ))
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_tapered_hosts_are_source_verified() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_tapered_4eef029b.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_tapered_a9bc1938.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_tapered_6a408847.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_tapered_e43d7cca.step").as_slice(),
+        ] {
+            assert_source_verified_relief(bytes)?;
+        }
+        Ok(())
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
