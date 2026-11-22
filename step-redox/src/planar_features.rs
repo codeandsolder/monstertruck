@@ -2136,6 +2136,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn indexed_feature_interfaces_match_exhaustive_face_incidence() {
+        let faces = vec![1, 2, 3, 4, 5, 6];
+        let edge_faces = HashMap::from([
+            (10, vec![1, 2]),
+            (11, vec![1, 2, 3]),
+            (12, vec![2, 4]),
+            (13, vec![3, 4]),
+            (14, vec![4, 5]),
+            (15, vec![5]),
+            (16, vec![6]),
+        ]);
+        let face_edges = faces
+            .iter()
+            .copied()
+            .map(|face| {
+                let edges = edge_faces
+                    .iter()
+                    .filter_map(|(&edge, incident)| incident.contains(&face).then_some(edge))
+                    .collect();
+                (face, edges)
+            })
+            .collect();
+        let topology = ShellTopology {
+            faces,
+            face_edges,
+            edge_faces,
+            adjacency: HashMap::new(),
+        };
+        for mut assignment in 0..3_usize.pow(6) {
+            let mut component = HashSet::new();
+            let mut hosts = HashSet::new();
+            for &face in &topology.faces {
+                match assignment % 3 {
+                    1 => {
+                        component.insert(face);
+                    }
+                    2 => {
+                        hosts.insert(face);
+                    }
+                    _ => {}
+                }
+                assignment /= 3;
+            }
+            let expected = hosts
+                .iter()
+                .filter_map(|&host| {
+                    let edges = component
+                        .iter()
+                        .flat_map(|face| topology.face_edges[face].iter().copied())
+                        .filter(|edge| topology.edge_faces[edge].contains(&host))
+                        .collect::<HashSet<_>>();
+                    (!edges.is_empty()).then_some((host, edges))
+                })
+                .collect::<HashMap<_, _>>();
+            assert_eq!(topology.component_interfaces(&component, &hosts), expected);
+        }
+    }
+
+    #[test]
     fn blind_relief_tools_are_closed_oriented_extrusions() -> Result<()> {
         use crate::brep::solid_face_ids;
         use crate::solid_extrusions::detect_solid_extrusions_with_index;
