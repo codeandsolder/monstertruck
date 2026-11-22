@@ -2,6 +2,7 @@ mod paired_volume;
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
+use num_traits::ToPrimitive;
 use occt_wasm::{OcctKernel, ShapeHandle};
 use sha2::{Digest, Sha256};
 use std::{
@@ -37,6 +38,11 @@ fn load(kernel: &mut OcctKernel, path: &Path) -> Result<ShapeHandle> {
 }
 
 fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<String> {
+    let scale = quantum.recip();
+    ensure!(
+        quantum.is_finite() && quantum > 0.0 && scale.is_finite(),
+        "invalid mesh hash quantum"
+    );
     let triangles = coordinates.as_chunks::<9>();
     ensure!(triangles.1.is_empty(), "incomplete triangle data");
     let mut tris = Vec::with_capacity(triangles.0.len());
@@ -45,21 +51,12 @@ fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<String> {
         for (point, coords) in points.iter_mut().zip(triangle.chunks_exact(3)) {
             for (value, &coordinate) in point.iter_mut().zip(coords) {
                 // Reject instead of saturating an unrepresentable hash coordinate.
-                let scaled = (coordinate / quantum).round_ties_even();
-                ensure!(
-                    scaled.is_finite()
-                        && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0)
-                            .contains(&scaled),
-                    "mesh coordinate exceeds hash range"
-                );
-                // The finite rounded value has just been checked against i64's range.
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "quantization is intentional and range checked"
-                )]
-                {
-                    *value = scaled as i64;
-                }
+                // Match the reference oracle: multiply by the reciprocal
+                // before rounding rather than dividing each coordinate.
+                *value = (coordinate * scale)
+                    .round_ties_even()
+                    .to_i64()
+                    .context("mesh coordinate exceeds hash range")?;
             }
         }
         points.sort_unstable();
@@ -128,7 +125,7 @@ fn main() -> Result<ExitCode> {
 mod tests {
     use super::*;
     #[test]
-    fn hash_is_order_independent_but_retains_nm_coordinates() -> Result<()> {
+    fn hash_is_order_independent_but_retains_picometer_coordinates() -> Result<()> {
         let triangles = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let reversed = [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
         assert_eq!(
@@ -143,6 +140,7 @@ mod tests {
         );
         assert!(strict_mesh_hash(&[f64::INFINITY; 9], 1e-9).is_err());
         assert!(strict_mesh_hash(&[0.0; 8], 1e-9).is_err());
+        assert!(strict_mesh_hash(&triangles, 0.0).is_err());
         Ok(())
     }
 }

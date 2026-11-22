@@ -28,3 +28,24 @@ The GitHub installation cannot create an upstream fork (403). Until a fork
 is available, keep this small upstream patch here; the workflow produces a
 tested packaged crate suitable for an isolated path-based Cargo patch.
 The active geometry oracle remains unchanged until numerical parity passes.
+
+The validator's new commands (with the rebuilt crate selected) are:
+
+```sh
+step-redox-occt-wasm-validator analyze source.step
+step-redox-occt-wasm-validator paired-volume source.step candidate.step --absolute-tolerance 1e-10
+```
+
+Paired volume prints the complete shared-reference report and returns nonzero
+if either the volume delta or the quadrature drift exceeds tolerance.
+The four reference locations are the midpoint and three positive-axis box
+faces. Each reference is evaluated at 1e-12 and 1e-13. Signed per-face terms
+are summed by a non-overlapping expansion with final nearest-even rounding.
+The strict mesh hash retains the native oracle's 1e-9 mm (one picometer)
+quantization, winding/order independence, and SHA-256 byte packing.
+
+Run hostile or malformed fixture inputs under the existing runtime-limits
+wrapper with the explicitly exported executable, e.g.
+`validate-occt-wasm.sh /path/to/validator 180 6291456 analyze source.step`.
+This keeps runtime limits separate from compilation and avoids reusing an
+arbitrarily stale executable in a local target directory.

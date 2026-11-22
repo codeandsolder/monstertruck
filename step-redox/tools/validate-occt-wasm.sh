@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CRATE="$ROOT/tools/occt-wasm-validator"
-BIN="$CRATE/target/release/step-redox-occt-wasm-validator"
-
-if [[ ! -x "$BIN" ]]; then
-    cargo build --release --manifest-path "$CRATE/Cargo.toml"
+# Runtime limits apply only to the built validator, never its compiler.
+# Explicit executable path supports managed ephemeral Cargo artifact export.
+if (( $# < 4 )); then
+    echo "Usage: $0 VALIDATOR TIMEOUT_SECONDS VM_KIB COMMAND [ARGS...]" >&2
+    exit 2
 fi
-
-# Keep malformed input from turning parser bugs into host-wide resource exhaustion.
-# WASM already contains memory corruption; these caps contain CPU/RSS failure modes.
-VM_KIB="${STEP_REDOX_OCCT_VM_KIB:-6291456}"
-TIMEOUT="${STEP_REDOX_OCCT_TIMEOUT:-180}"
-ulimit -v "$VM_KIB"
-exec timeout --signal=KILL "$TIMEOUT" "$BIN" "$@"
+validator=$(realpath -- "$1")
+seconds=$2
+vm_kib=$3
+shift 3
+[[ -x "$validator" && "$seconds" =~ ^[1-9][0-9]*$ && "$vm_kib" =~ ^[1-9][0-9]*$ ]]
+ulimit -v "$vm_kib"
+exec timeout --signal=KILL "$seconds" "$validator" "$@"
