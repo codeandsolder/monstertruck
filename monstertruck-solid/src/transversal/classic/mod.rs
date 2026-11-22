@@ -954,18 +954,18 @@ fn combine_solids<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let Some(first_left) = left.next() else {
         return Ok(match mode {
             PairMode::AndOr(PartitionOutput::Union) => solid1.clone(),
-            _ => Solid::empty(),
+            PairMode::AndOr(PartitionOutput::Intersection) | PairMode::Difference => Solid::empty(),
         });
     };
     let Some(first_right) = right.next() else {
         return Ok(match mode {
             PairMode::AndOr(PartitionOutput::Intersection) => Solid::empty(),
-            _ => solid0.clone(),
+            PairMode::AndOr(PartitionOutput::Union) | PairMode::Difference => solid0.clone(),
         });
     };
     let left_mode = match mode {
         PairMode::Difference => PairMode::AndOr(PartitionOutput::Intersection),
-        _ => mode,
+        PairMode::AndOr(_) => mode,
     };
     let initial = process_one_pair_of_shells(first_left, first_right, tol, mode)?;
     let combined = left
