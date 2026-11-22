@@ -1,8 +1,3 @@
-#![expect(
-    clippy::similar_names,
-    reason = "paired U/V range and basis names mirror standard NURBS surface notation"
-)]
-
 #[cfg(test)]
 use super::presearch_grid::{
     CachedPresearchGrid, MAX_PRESEARCH_GRIDS_PER_THREAD, PRESEARCH_BUILDS, PRESEARCH_GRIDS,
