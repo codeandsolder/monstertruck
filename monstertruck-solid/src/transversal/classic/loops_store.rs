@@ -2272,7 +2272,7 @@ where
         [geom_shell0, geom_shell1].map(|shell| shell.iter().map(Face::surface).collect::<Vec<_>>());
     let sampled_meshes =
         [poly_shell0, poly_shell1].map(|shell| shell.iter().map(Face::surface).collect::<Vec<_>>());
-    let planar = polygons
+    let planar = sampled_meshes
         .each_ref()
         .map(|meshes| PlanarMesh::from_polygons(meshes, coplanar_tol));
     let coplanar =
@@ -2361,7 +2361,7 @@ where
 
     materialize_interface_loops(
         [operand0, operand1],
-        [&polygons[0], &polygons[1]],
+        [&sampled_meshes[0], &sampled_meshes[1]],
         boolean_tolerance,
         &coplanar,
         has_shared_ruled,
