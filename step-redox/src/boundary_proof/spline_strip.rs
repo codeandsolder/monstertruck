@@ -579,14 +579,13 @@ fn full_trim(
     Some(())
 }
 
-pub(super) fn oriented_key(
-    face_id: u64,
+fn canonical_strip(
     surface_id: u64,
     forward: bool,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
     cells: &mut CellWitnesses,
-) -> Option<OrientedSupportKey> {
+) -> Option<([SplineCurveKey; 2], bool)> {
     let (profiles, swapped) =
         crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index)?;
     let [(a, u_forward), (b, other_forward)] = embedded_translated_profiles(&profiles, cells)?;
@@ -598,7 +597,19 @@ pub(super) fn oriented_key(
     if !v_forward {
         profiles.reverse();
     }
-    let outward_positive = forward ^ swapped ^ !u_forward ^ !v_forward;
+    Some((profiles, forward ^ swapped ^ !u_forward ^ !v_forward))
+}
+
+pub(super) fn oriented_key(
+    face_id: u64,
+    surface_id: u64,
+    forward: bool,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    cells: &mut CellWitnesses,
+) -> Option<OrientedSupportKey> {
+    let (profiles, outward_positive) =
+        canonical_strip(surface_id, forward, entities, index, cells)?;
     full_trim(
         &profiles,
         outward_positive,
@@ -608,6 +619,33 @@ pub(super) fn oriented_key(
         strip: Box::new(SplineStripKey { profiles }),
         outward_positive,
     })
+}
+
+/// Check that an already-authored complete trim traverses an embedded strip
+/// in exactly the opposite sense to its declared `FACE_SURFACE.same_sense`.
+/// This does not by itself establish an oriented closed shell; callers must
+/// separately validate the entire reconciled boundary, including coedges.
+pub(super) fn reversed_face_sense_is_proven(
+    face_id: u64,
+    surface_id: u64,
+    forward: bool,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> bool {
+    let Some((profiles, outward_positive)) = canonical_strip(
+        surface_id,
+        forward,
+        entities,
+        index,
+        &mut CellWitnesses::default(),
+    ) else {
+        return false;
+    };
+    let Some(loops) = brep::face_loops(face_id, entities, index) else {
+        return false;
+    };
+    full_trim(&profiles, outward_positive, &loops).is_none()
+        && full_trim(&profiles, !outward_positive, &loops).is_some()
 }
 
 pub(super) fn line_on_strip(line: brep::LineSupport, strip: &SplineStripKey) -> bool {

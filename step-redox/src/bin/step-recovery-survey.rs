@@ -13,11 +13,13 @@ mod survey {
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::time::Instant;
-    use step_redox::complete_ir::{CompleteIr, KernelRecoveryFailure};
+    use step_redox::complete_ir::{
+        CompleteIr, KernelRecoveryFailure, SourceOrientationReconciliation,
+    };
     use step_redox::{SourceEntity, cad_kernel::monstertruck::MonstertruckKernel};
 
     mod journal;
-    const SCHEMA: &str = "step-redox.recovery-survey.v3";
+    const SCHEMA: &str = "step-redox.recovery-survey.v4";
 
     #[derive(Debug, Parser)]
     #[command(about = "Measure automatic constructive recovery across STEP inputs as JSON")]
@@ -55,6 +57,7 @@ mod survey {
         unrecovered: Option<usize>,
         families: BTreeMap<String, usize>,
         source_boundary_verified_sources: Vec<SourceEntity>,
+        source_orientation_reconciled_sources: Vec<SourceOrientationReconciliation>,
         unrecovered_sources: Vec<SourceEntity>,
         kernel_failures: Vec<KernelRecoveryFailure>,
         error: Option<String>,
@@ -73,6 +76,7 @@ mod survey {
         source_solids: usize,
         constructively_recovered_solids: usize,
         source_boundary_verified_solids: usize,
+        source_orientation_reconciled_solids: usize,
         semantically_recovered_solids: usize,
         unrecovered_solids: usize,
     }
@@ -146,6 +150,7 @@ mod survey {
             unrecovered: None,
             families: BTreeMap::new(),
             source_boundary_verified_sources: Vec::new(),
+            source_orientation_reconciled_sources: Vec::new(),
             unrecovered_sources: Vec::new(),
             kernel_failures: Vec::new(),
             error: None,
@@ -175,6 +180,8 @@ mod survey {
                     .map(|solid| solid.source)
                     .collect();
                 entry.source_boundary_verified_sources = report.source_boundary_verified_solids;
+                entry.source_orientation_reconciled_sources =
+                    report.source_orientation_reconciled_solids;
                 entry.kernel_failures = report.kernel_recovery_failures;
             }
             Err(error) => entry.error = Some(format!("{error:#}")),
@@ -196,6 +203,8 @@ mod survey {
             }
             let verified = entry.source_boundary_verified_sources.len();
             self.source_boundary_verified_solids += verified;
+            self.source_orientation_reconciled_solids +=
+                entry.source_orientation_reconciled_sources.len();
             if verified > 0 && entry.body_count == Some(verified) {
                 self.fully_source_boundary_verified_files += 1;
             }
@@ -253,7 +262,7 @@ mod survey {
         let report = Survey {
             schema: SCHEMA,
             executable_sha256: identity.executable_sha256,
-            claim: "automatic constructive IR selection; source-boundary verified IDs are explicit independent analytic equivalence certificates",
+            claim: "automatic constructive IR selection; original and orientation-reconciled source equivalence certificates are reported separately",
             totals,
             cases,
         };
