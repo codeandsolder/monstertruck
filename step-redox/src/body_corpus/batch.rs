@@ -580,35 +580,73 @@ mod tests {
         Ok(())
     }
 
+    struct TestCorpus {
+        temp: tempfile::TempDir,
+        manifest: String,
+        corpus: String,
+        cache: String,
+    }
+
+    impl TestCorpus {
+        fn new(bytes: &[u8]) -> Result<Self> {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path();
+            fs::write(root.join("part A.step"), bytes)?;
+            fs::write(root.join("part B.step"), bytes)?;
+            let manifest = root.join("sources.tsv");
+            fs::write(
+                &manifest,
+                "uuid\tpath\textra\nB\t\"part B.step\"\t1\nA\t\"part A.step\"\t2\n",
+            )?;
+            let as_string = |p: PathBuf| {
+                p.into_os_string()
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("non-UTF-8 test path"))
+            };
+            Ok(Self {
+                manifest: as_string(manifest)?,
+                corpus: as_string(root.join("corpus"))?,
+                cache: as_string(root.join("cache"))?,
+                temp,
+            })
+        }
+
+        fn build(&self, out: &str, options: &[&str]) -> Result<bool> {
+            let mut args = vec![
+                "build",
+                "--manifest",
+                &self.manifest,
+                "--out",
+                out,
+                "--cache",
+                &self.cache,
+            ];
+            args.extend_from_slice(options);
+            execute(&args)
+        }
+
+        fn build_and_validate(&self, jobs: &str) -> Result<Summary> {
+            assert!(self.build(&self.corpus, &["--jobs", jobs])?);
+            assert!(execute(&[
+                "validate",
+                "--corpus",
+                &self.corpus,
+                "--jobs",
+                "2"
+            ])?);
+            Ok(serde_json::from_reader(File::open(
+                Path::new(&self.corpus).join("summary.json"),
+            )?)?)
+        }
+    }
+
     #[test]
     fn corpus_build_validate_and_detect_tampering() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
-        fs::write(root.join("part A.step"), BOX)?;
-        fs::write(root.join("part B.step"), BOX)?;
-        let manifest = root.join("sources.tsv");
-        fs::write(
-            &manifest,
-            "uuid\tpath\textra\nB\t\"part B.step\"\t1\nA\t\"part A.step\"\t2\n",
-        )?;
-        let corpus = root.join("corpus");
-        let cache = root.join("cache");
-        let m = manifest.to_str().context("manifest path not UTF-8")?;
-        let c = corpus.to_str().context("corpus path not UTF-8")?;
-        let k = cache.to_str().context("cache path not UTF-8")?;
-        assert!(execute(&[
-            "build",
-            "--manifest",
-            m,
-            "--out",
-            c,
-            "--cache",
-            k,
-            "--jobs",
-            "1"
-        ])?);
-        assert!(execute(&["validate", "--corpus", c, "--jobs", "2"])?);
-        let summary: Summary = serde_json::from_reader(File::open(corpus.join("summary.json"))?)?;
+        let fixture = TestCorpus::new(BOX)?;
+        let summary = fixture.build_and_validate("1")?;
+        let root = fixture.temp.path();
+        let corpus = Path::new(&fixture.corpus);
+        let c = fixture.corpus.as_str();
         assert_eq!(summary.totals.analyzed_solids, 2);
         assert_eq!(summary.totals.cache_hits, 1);
         assert_eq!(summary.extractable_bodies, summary.unique_bodies);
@@ -620,7 +658,7 @@ mod tests {
             .context("missing body")??;
         assert_eq!(body.representative.source.uuid, "A");
         assert_eq!(body.occurrences, 2);
-        assert!(execute(&["build", "--manifest", m, "--out", c, "--cache", k]).is_err());
+        assert!(fixture.build(c, &[]).is_err());
         let bodies = corpus.join("bodies.jsonl");
         let original = fs::read(&bodies)?;
         fs::write(&bodies, b"")?;
@@ -641,18 +679,7 @@ mod tests {
         assert!(!execute(&["validate", "--corpus", c, "--jobs", "1"])?);
         let metadata = root.join("metadata");
         let md = metadata.to_str().context("metadata path not UTF-8")?;
-        assert!(execute(&[
-            "build",
-            "--manifest",
-            m,
-            "--out",
-            md,
-            "--cache",
-            k,
-            "--no-extract",
-            "--jobs",
-            "2"
-        ])?);
+        assert!(fixture.build(md, &["--no-extract", "--jobs", "2"])?);
         assert!(execute(&["validate", "--corpus", md])?);
         assert!(!metadata.join("objects").exists());
         Ok(())
@@ -660,46 +687,15 @@ mod tests {
 
     #[test]
     fn fallback_bodies_remain_source_local() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
-        fs::write(root.join("a.step"), FRUSTUM)?;
-        fs::write(root.join("b.step"), FRUSTUM)?;
-        let manifest = root.join("sources.tsv");
-        fs::write(&manifest, "uuid\tpath\na\ta.step\nb\tb.step\n")?;
-        let corpus = root.join("corpus");
-        let cache = root.join("cache");
-        let m = manifest.to_str().context("manifest path not UTF-8")?;
-        let c = corpus.to_str().context("corpus path not UTF-8")?;
-        let k = cache.to_str().context("cache path not UTF-8")?;
-        assert!(execute(&[
-            "build",
-            "--manifest",
-            m,
-            "--out",
-            c,
-            "--cache",
-            k,
-            "--jobs",
-            "2"
-        ])?);
-        assert!(execute(&["validate", "--corpus", c, "--jobs", "2"])?);
-        let summary: Summary = serde_json::from_reader(File::open(corpus.join("summary.json"))?)?;
+        let fixture = TestCorpus::new(FRUSTUM)?;
+        let summary = fixture.build_and_validate("2")?;
+        let root = fixture.temp.path();
         assert_eq!(summary.totals.fallback_identity_solids, 2);
         assert_eq!(summary.unique_bodies, 2);
         assert_eq!(summary.totals.cache_hits, 1);
         let strict = root.join("strict");
         let t = strict.to_str().context("strict path not UTF-8")?;
-        assert!(!execute(&[
-            "build",
-            "--manifest",
-            m,
-            "--out",
-            t,
-            "--cache",
-            k,
-            "--require-canonical",
-            "--no-extract"
-        ])?);
+        assert!(!fixture.build(t, &["--require-canonical", "--no-extract"])?);
         assert!(strict.join("FAILED").is_file());
         assert!(!strict.join("COMPLETE").exists());
         Ok(())
