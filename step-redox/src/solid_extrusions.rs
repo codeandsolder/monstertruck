@@ -129,11 +129,23 @@ pub(crate) fn detect_extrusion_core_candidates_for_solid_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredSolidExtrusion> {
+    let mut out = discover_extrusion_core_candidates(solid_id, entities, index);
+    out.sort_by(candidate_order);
+    out
+}
+
+/// Discovery order retains two-cap cores before open-cap alternatives.
+/// Each caller consumes these actual hypotheses rather than reopening a
+/// cap pair and repeating global edge-treatment recognition.
+pub(crate) fn discover_extrusion_core_candidates(
+    solid_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Vec<RecoveredSolidExtrusion> {
     let mut out = extrusion_core_candidates_for_solid(solid_id, entities, index);
     out.extend(open_cap_side_extrusion_candidates(
         solid_id, entities, index,
     ));
-    out.sort_by(candidate_order);
     out
 }
 
@@ -674,23 +686,6 @@ fn open_cap_side_extrusion_candidate(
                 .fold(0.0_f64, f64::max),
         ),
     })
-}
-
-pub(crate) fn recover_any_extrusion_core_from_cap_faces_with_index(
-    solid_id: u64,
-    pair: [u64; 2],
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<RecoveredSolidExtrusion> {
-    recover_extrusion_core_from_cap_faces_with_index(solid_id, pair, entities, index).or_else(
-        || {
-            open_cap_side_extrusion_candidates(solid_id, entities, index)
-                .into_iter()
-                .find(|candidate| {
-                    candidate.cap_face_ids == pair || candidate.cap_face_ids == [pair[1], pair[0]]
-                })
-        },
-    )
 }
 
 /// The source B-rep boundary cannot pass through the *strict interior* of

@@ -4169,6 +4169,31 @@ END-ISO-10303-21;
         Ok(())
     }
 
+    // Real high-face-count relief housing, formerly timing out in repeated
+    // core recognition. Require complete independent original-boundary proof,
+    // not any particular reconstruction family or operation count.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_large_relief_housing_recovery_is_source_verified() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let bytes = include_bytes!("../validation/fixtures/native_relief_housing_271239a1.step");
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(report.unrecovered_solid_count, 0);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        let fragments = report.selected_fragments().collect::<Vec<_>>();
+        assert_eq!(fragments.len(), 1);
+        assert!(kernel_replay_is_single_solid(
+            &kernel,
+            &fragments[0].fragment
+        )?);
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn native_local_contact_rebuilds_stepped_relief_sources() -> Result<()> {
