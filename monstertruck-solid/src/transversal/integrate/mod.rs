@@ -46,8 +46,17 @@ impl<S> ShapeOpsSurface for S where S: ParametricSurface3D
 {
 }
 
-/// Only solids consisting of edges whose curve is implemented this trait can be used for set operations.
-pub trait ShapeOpsCurve<S: ShapeOpsSurface>:
+// Keep the capability requirements of the public trait and blanket
+// implementation identical, including when another primitive is required.
+macro_rules! shape_ops_curve {
+    ($($bounds:tt)+) => {
+        /// Curves supporting all solid Boolean operations.
+        pub trait ShapeOpsCurve<S: ShapeOpsSurface>: $($bounds)+ {}
+        impl<C, S: ShapeOpsSurface> ShapeOpsCurve<S> for C where C: $($bounds)+ {}
+    };
+}
+
+shape_ops_curve! {
     ParametricCurve3D
     + ParameterDivision1D<Point = Point3>
     + ParameterBoundary2D<S>
@@ -76,38 +85,7 @@ pub trait ShapeOpsCurve<S: ShapeOpsSurface>:
     + SearchNearestParameter<CurveParameter, Point = Point3>
     + SnapCurveEndpoints
     + Send
-    + Sync {
-}
-impl<C, S: ShapeOpsSurface> ShapeOpsCurve<S> for C where C: ParametricCurve3D
-        + ParameterDivision1D<Point = Point3>
-        + ParameterBoundary2D<S>
-        + Cut
-        + Clone
-        + From<Line<Point3>>
-        + TryFrom<ParameterCurve<Line<Point2>, S>>
-        + Invertible
-        + From<
-            SurfaceCurve<
-                BsplineCurve<Point3>,
-                S,
-                S,
-                ParameterCurve<BoundaryCurve2D, S>,
-                ParameterCurve<BoundaryCurve2D, S>,
-            >,
-        > + From<
-            SurfaceCurve<
-                NurbsCurve<Vector4>,
-                S,
-                S,
-                ParameterCurve<BoundaryCurve2D, S>,
-                ParameterCurve<BoundaryCurve2D, S>,
-            >,
-        > + SearchParameter<CurveParameter, Point = Point3>
-        + SearchNearestParameter<CurveParameter, Point = Point3>
-        + SnapCurveEndpoints
-        + Send
-        + Sync
-{
+    + Sync
 }
 
 /// Internal extension for boolean stages that preserve exact face-local trims.
