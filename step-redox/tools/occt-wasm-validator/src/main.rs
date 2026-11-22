@@ -1,65 +1,148 @@
-use occt_wasm::OcctKernel;
-use sha2::{Digest, Sha256};
-use std::{env, fmt::Write as _, fs, io};
+mod paired_volume;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = env::args()
-        .nth(1)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing STEP path argument"))?;
-    let bytes = fs::read(&path)?;
-    let text = String::from_utf8(bytes)?;
-    let mut kernel = OcctKernel::new()?;
-    let shape = kernel.import_step(&text)?;
-    let bbox = kernel.get_bounding_box(shape, true)?;
-    let volume = kernel.get_volume(shape)?;
-    let area = kernel.get_surface_area(shape)?;
-    let faces = kernel.get_sub_shapes(shape, "face")?.len();
-    let edges = kernel.get_sub_shapes(shape, "edge")?.len();
-    let vertices = kernel.get_sub_shapes(shape, "vertex")?.len();
-    let mesh = kernel.tessellate(shape, 0.002, 0.2)?;
-    let mut tris: Vec<[[i64; 3]; 3]> = Vec::with_capacity(mesh.indices.len() / 3);
-    let quantize = |value: f32| (f64::from(value) * 1e9).round() as i64;
-    for tri in mesh.indices.chunks_exact(3) {
+use anyhow::{Context, Result, ensure};
+use clap::{Parser, Subcommand};
+use occt_wasm::{OcctKernel, ShapeHandle};
+use sha2::{Digest, Sha256};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
+
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Report independent OCCT geometry metrics and exact triangle hash.
+    Analyze { input: PathBuf },
+    /// Compare signed face integrals at two quadrature tolerances and four references.
+    PairedVolume {
+        reference: PathBuf,
+        candidate: PathBuf,
+        #[arg(long)]
+        absolute_tolerance: f64,
+    },
+}
+
+fn load(kernel: &mut OcctKernel, path: &Path) -> Result<ShapeHandle> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    kernel
+        .import_step_bytes(&bytes)
+        .with_context(|| format!("import {}", path.display()))
+}
+
+fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<String> {
+    let triangles = coordinates.as_chunks::<9>();
+    ensure!(triangles.1.is_empty(), "incomplete triangle data");
+    let mut tris = Vec::with_capacity(triangles.0.len());
+    for triangle in triangles.0 {
         let mut points = [[0_i64; 3]; 3];
-        for index in 0..3 {
-            let vertex_index = tri[index] as usize * 3;
-            points[index] = [
-                quantize(mesh.positions[vertex_index]),
-                quantize(mesh.positions[vertex_index + 1]),
-                quantize(mesh.positions[vertex_index + 2]),
-            ];
+        for (point, coords) in points.iter_mut().zip(triangle.chunks_exact(3)) {
+            for (value, &coordinate) in point.iter_mut().zip(coords) {
+                // Reject instead of saturating an unrepresentable hash coordinate.
+                let scaled = (coordinate / quantum).round_ties_even();
+                ensure!(
+                    scaled.is_finite()
+                        && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0)
+                            .contains(&scaled),
+                    "mesh coordinate exceeds hash range"
+                );
+                // The finite rounded value has just been checked against i64's range.
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "quantization is intentional and range checked"
+                )]
+                {
+                    *value = scaled as i64;
+                }
+            }
         }
-        points.sort();
+        points.sort_unstable();
         tris.push(points);
     }
-    tris.sort();
+    tris.sort_unstable();
     let mut hasher = Sha256::new();
-    for tri in &tris {
+    for tri in tris {
         for point in tri {
             for value in point {
                 hasher.update(value.to_le_bytes());
             }
         }
     }
-    let digest = hasher.finalize();
-    let mut digest_hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        write!(&mut digest_hex, "{byte:02x}")?;
-    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
 
-    println!("path={path}");
+fn analyze(kernel: &mut OcctKernel, path: &Path) -> Result<()> {
+    let shape = load(kernel, path)?;
+    let bbox = kernel.get_bounding_box_loose(shape, true)?;
+    let volume = kernel.get_volume(shape)?;
+    let area = kernel.get_surface_area(shape)?;
+    let faces = kernel.sub_shape_occurrence_count(shape, "face")?;
+    let edges = kernel.sub_shape_occurrence_count(shape, "edge")?;
+    let vertices = kernel.sub_shape_occurrence_count(shape, "vertex")?;
+    let triangles = kernel.tessellate_triangles64(shape, 0.002, 0.2)?;
+    let mesh_hash = strict_mesh_hash(&triangles, 1e-9)?;
+    println!("path={}", path.display());
     println!(
         "bbox={:.12},{:.12},{:.12},{:.12},{:.12},{:.12}",
         bbox.min.x, bbox.min.y, bbox.min.z, bbox.max.x, bbox.max.y, bbox.max.z
     );
-    println!("volume={volume:.15}");
-    println!("area={area:.15}");
+    println!("volume={volume:.15}\narea={area:.15}");
     println!("faces={faces} edges={edges} vertices={vertices}");
-    println!(
-        "mesh_vertices={} triangles={}",
-        mesh.positions.len() / 3,
-        mesh.indices.len() / 3
-    );
-    println!("mesh_hash={digest_hex}");
+    println!("triangles={}\nmesh_hash={mesh_hash}", triangles.len() / 9);
     Ok(())
+}
+
+fn main() -> Result<ExitCode> {
+    let cli = Cli::parse();
+    let mut kernel = OcctKernel::new()?;
+    match cli.command {
+        Command::Analyze { input } => {
+            analyze(&mut kernel, &input)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::PairedVolume {
+            reference,
+            candidate,
+            absolute_tolerance,
+        } => {
+            let a = load(&mut kernel, &reference)?;
+            let b = load(&mut kernel, &candidate)?;
+            let report = paired_volume::paired_volume(&mut kernel, a, b, absolute_tolerance)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(if report.within_absolute_tolerance {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn hash_is_order_independent_but_retains_nm_coordinates() -> Result<()> {
+        let triangles = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let reversed = [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        assert_eq!(
+            strict_mesh_hash(&triangles, 1e-9)?,
+            strict_mesh_hash(&reversed, 1e-9)?
+        );
+        let mut changed = triangles;
+        changed[3] += 2e-9;
+        assert_ne!(
+            strict_mesh_hash(&triangles, 1e-9)?,
+            strict_mesh_hash(&changed, 1e-9)?
+        );
+        assert!(strict_mesh_hash(&[f64::INFINITY; 9], 1e-9).is_err());
+        assert!(strict_mesh_hash(&[0.0; 8], 1e-9).is_err());
+        Ok(())
+    }
 }

@@ -1,9 +1,9 @@
 diff --git a/crate/tests/validation_bindings.rs b/crate/tests/validation_bindings.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..9ac82b4a54a7968746c4659aa1c28cc2cb932ab9
+index 0000000000000000000000000000000000000000..d766eb076aff7b94cab7fa08e1acbb0e435911cd
 --- /dev/null
 +++ b/crate/tests/validation_bindings.rs
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,127 @@
 +//! Strict regressions for the validation facade. No placeholder/debug skips.
 +use occt_wasm::{
 +    OcctKernel, ShapeHandle,
@@ -102,11 +102,40 @@ index 0000000000000000000000000000000000000000..9ac82b4a54a7968746c4659aa1c28cc2
 +    );
 +    Ok(())
 +}
++
++#[test]
++fn validation_tessellation_retains_f64_world_coordinates() -> Result<(), Box<dyn std::error::Error>>
++{
++    let mut kernel = kernel()?;
++    let shape = kernel.make_box(2., 3., 4.)?;
++    let origin = 1_000_000.001;
++    let moved = kernel.translate(shape, origin, 0., 0.)?;
++    let triangles = kernel.tessellate_triangles64(moved, 0.002, 0.2)?;
++    assert_eq!(triangles.len(), 12 * 9);
++    let x_min = triangles
++        .chunks_exact(3)
++        .map(|p| p[0])
++        .fold(f64::INFINITY, f64::min);
++    assert!((x_min - origin).abs() < 1e-9);
++    assert!(kernel.tessellate_triangles64(moved, 0., 0.2).is_err());
++    Ok(())
++}
++
++#[test]
++fn validation_step_byte_import_roundtrips() -> Result<(), Box<dyn std::error::Error>> {
++    let mut kernel = kernel()?;
++    let shape = kernel.make_box(2., 3., 4.)?;
++    let step = kernel.export_step(shape)?;
++    let imported = kernel.import_step_bytes(step.as_bytes())?;
++    assert!((kernel.get_volume(imported)? - 24.).abs() < 1e-10);
++    assert!(kernel.import_step_bytes(b"not STEP\xff").is_err());
++    Ok(())
++}
 diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
-index d42d67b6796db3f6362cf60d78de858a3e29a85a..bd0c1f6695346b85c6e187ab9a06106108bab199 100644
+index d42d67b6796db3f6362cf60d78de858a3e29a85a..314591fe663ebea04cf5bcf8c92b95e86e4b37b3 100644
 --- a/facade/include/occt_kernel.h
 +++ b/facade/include/occt_kernel.h
-@@ -15,6 +15,13 @@
+@@ -15,6 +15,16 @@
  #include <TopoDS_Shape.hxx>
  #include <UnitsMethods_LengthUnit.hxx>
  
@@ -114,13 +143,16 @@ index d42d67b6796db3f6362cf60d78de858a3e29a85a..bd0c1f6695346b85c6e187ab9a061061
 +
 +class gp_Pnt;
 +
++TopoDS_Shape readStepShape(const std::string& data);
++
 +TopAbs_ShapeEnum parseShapeType(const std::string& type);
++std::vector<double> tessellateTriangleCoordinates(const TopoDS_Shape& shape, double linearDeflection, double angularDeflection);
 +std::vector<double> signedFaceVolumeIntegrals(const TopoDS_Shape& shape, const gp_Pnt& reference, double epsilon);
 +
  class BRepOffsetAPI_ThruSections;
  class Bnd_Box;
  class BRepTools_History;
-@@ -438,6 +445,8 @@ class OcctKernel {
+@@ -438,6 +448,8 @@ class OcctKernel {
      // --- Topology query ---
      std::string getShapeType(uint32_t id);
      std::vector<uint32_t> getSubShapes(uint32_t id, const std::string& shapeType);
@@ -129,7 +161,24 @@ index d42d67b6796db3f6362cf60d78de858a3e29a85a..bd0c1f6695346b85c6e187ab9a061061
      int subShapeCount(uint32_t id, const std::string& shapeType);
      std::vector<int> subShapeHashes(uint32_t id, const std::string& shapeType, int hashUpperBound);
      uint32_t downcast(uint32_t id, const std::string& targetType);
-@@ -481,6 +490,11 @@ class OcctKernel {
+@@ -453,6 +465,8 @@ class OcctKernel {
+     std::vector<int> edgeToFaceMap(uint32_t id, int hashUpperBound);
+ 
+     // --- Tessellation / Mesh ---
++    // Exact triangle coordinates (nine f64 scalars per triangle, in world space).
++    std::vector<double> tessellateTriangles64(uint32_t id, double linearDeflection, double angularDeflection);
+     MeshData tessellate(uint32_t id, double linearDeflection, double angularDeflection);
+     MeshData tessellateRelative(uint32_t id, double linearDeflection, double angularDeflection);
+     EdgeData wireframe(uint32_t id, double deflection, int source);
+@@ -463,6 +477,7 @@ class OcctKernel {
+ 
+     // --- I/O ---
+     uint32_t importStep(const std::string& data);
++    uint32_t importStepBytes(const std::string& data);
+     std::string exportStep(uint32_t id);
+     std::string exportStepWithUnit(uint32_t id, const std::string& unit);
+     std::string exportStepWithOptions(uint32_t id, const std::string& unit,
+@@ -481,6 +496,11 @@ class OcctKernel {
      // --- Query / Measure ---
      BBoxData getBoundingBox(uint32_t id, bool useTriangulation);
      BBoxData getBoundingBoxLoose(uint32_t id, bool useTriangulation);
@@ -142,7 +191,7 @@ index d42d67b6796db3f6362cf60d78de858a3e29a85a..bd0c1f6695346b85c6e187ab9a061061
      double getSurfaceArea(uint32_t id);
      double getLength(uint32_t id);
 diff --git a/facade/src/kernel.cpp b/facade/src/kernel.cpp
-index 9fb807973f791e8077f6ef9886888c5dccc677de..1aaac243e9722262088a5c89eb62c7fa563fe351 100644
+index 9fb807973f791e8077f6ef9886888c5dccc677de..8aa2e9d42ccb795bc48e414b54459285c2aed276 100644
 --- a/facade/src/kernel.cpp
 +++ b/facade/src/kernel.cpp
 @@ -1,3 +1,5 @@
@@ -151,7 +200,15 @@ index 9fb807973f791e8077f6ef9886888c5dccc677de..1aaac243e9722262088a5c89eb62c7fa
  #include "occt_kernel.h"
  
  #include <BRepAdaptor_Curve.hxx>
-@@ -1533,3 +1535,75 @@ int EdgeData::getPointsPtr() const {
+@@ -36,6 +38,7 @@
+ #include <Geom_Curve.hxx>
+ #include <Geom_Surface.hxx>
+ #include <IFSelect_ReturnStatus.hxx>
++#include <STEPControl_Reader.hxx>
+ #include <Message_ProgressRange.hxx>
+ #include <NCollection_Array1.hxx>
+ #include <NCollection_Array2.hxx>
+@@ -1533,3 +1536,134 @@ int EdgeData::getPointsPtr() const {
  int EdgeData::getEdgeGroupsPtr() const {
      return static_cast<int>(reinterpret_cast<uintptr_t>(edgeGroups));
  }
@@ -227,8 +284,67 @@ index 9fb807973f791e8077f6ef9886888c5dccc677de..1aaac243e9722262088a5c89eb62c7fa
 +    }
 +    return result;
 +}
++
++// Keep OCCT's double-precision triangle coordinates for strict geometry
++// certification; graphics MeshData intentionally stores float32 positions.
++std::vector<double> tessellateTriangleCoordinates(const TopoDS_Shape& shape,
++                                                  double linearDeflection,
++                                                  double angularDeflection) {
++    if (!(linearDeflection > 0.0) || !std::isfinite(linearDeflection) ||
++        !(angularDeflection > 0.0) || !std::isfinite(angularDeflection)) {
++        throw std::runtime_error("tessellateTriangles64: invalid deflection");
++    }
++    BRepMesh_IncrementalMesh mesher(shape, linearDeflection, false, angularDeflection, false);
++    if (!mesher.IsDone()) {
++        throw std::runtime_error("tessellateTriangles64: meshing failed");
++    }
++    std::vector<double> coordinates;
++    for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
++        TopLoc_Location location;
++        const auto triangulation = BRep_Tool::Triangulation(TopoDS::Face(ex.Current()), location);
++        if (triangulation.IsNull()) {
++            continue;
++        }
++        const auto& transform = location.Transformation();
++        const size_t triangleCount = static_cast<size_t>(triangulation->NbTriangles());
++        // The generated C ABI returns a signed 32-bit element count.
++        if (triangleCount > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) -
++                             coordinates.size()) / 9) {
++            throw std::runtime_error("tessellateTriangles64: triangle buffer exceeds ABI limit");
++        }
++        for (int i = 1; i <= triangulation->NbTriangles(); ++i) {
++            int a, b, c;
++            triangulation->Triangle(i).Get(a, b, c);
++            for (int index : {a, b, c}) {
++                const gp_Pnt point = triangulation->Node(index).Transformed(transform);
++                if (!std::isfinite(point.X()) || !std::isfinite(point.Y()) ||
++                    !std::isfinite(point.Z())) {
++                    throw std::runtime_error("tessellateTriangles64: nonfinite triangle coordinate");
++                }
++                coordinates.push_back(point.X());
++                coordinates.push_back(point.Y());
++                coordinates.push_back(point.Z());
++            }
++        }
++    }
++    return coordinates;
++}
++
++// STEP Part 21 streams are byte sequences, not necessarily UTF-8.
++TopoDS_Shape readStepShape(const std::string& data) {
++    STEPControl_Reader reader;
++    std::istringstream stream(data, std::ios::binary);
++    if (reader.ReadStream("import.step", stream) != IFSelect_RetDone) {
++        throw std::runtime_error("importStep: failed to read STEP data");
++    }
++    reader.TransferRoots();
++    if (reader.NbShapes() == 0) {
++        throw std::runtime_error("importStep: no shapes found in STEP data");
++    }
++    return reader.OneShape();
++}
 diff --git a/xtask/src/codegen/config.rs b/xtask/src/codegen/config.rs
-index 905615aed45608aae368acd75b9fa866ec6b202f..ade24255ff6c845dc345704428446c9cfba2990f 100644
+index 905615aed45608aae368acd75b9fa866ec6b202f..2296a6da2b866ecefeba1be4f7531bba21ad2491 100644
 --- a/xtask/src/codegen/config.rs
 +++ b/xtask/src/codegen/config.rs
 @@ -2809,18 +2809,7 @@ default: return \"shape\";
@@ -394,4 +510,64 @@ index 905615aed45608aae368acd75b9fa866ec6b202f..ade24255ff6c845dc345704428446c9c
 +    },
      MethodSpec {
          name: "getVolume",
+         kind: MethodKind::CustomBody,
+@@ -5023,24 +5110,22 @@ return store(fixer.Shape());",
+         occt_class: "",
+         ctor_args: "",
+         setup_code: "\
+-STEPControl_Reader reader;
+-// Streams, not files: the standalone WASI build the crate embeds has no filesystem.
+-std::istringstream iss(data);
+-IFSelect_ReturnStatus status = reader.ReadStream(\"import.step\", iss);
+-if (status != IFSelect_RetDone) {
+-    throw std::runtime_error(\"importStep: failed to read STEP data\");
+-}
+-
+-reader.TransferRoots();
+-if (reader.NbShapes() == 0) {
+-    throw std::runtime_error(\"importStep: no shapes found in STEP data\");
+-}
+-
+-return store(reader.OneShape());",
++return store(readStepShape(data));",
+         includes: &["IFSelect_ReturnStatus.hxx", "STEPControl_Reader.hxx"],
+         category: "io",
+         return_type: ReturnType::ShapeId,
+     },
++    MethodSpec {
++        name: "importStepBytes",
++        kind: MethodKind::CustomBody,
++        params: &[FacadeParam::Bytes("data")],
++        occt_class: "",
++        ctor_args: "",
++        setup_code: "return store(readStepShape(data));",
++        includes: &[],
++        category: "io",
++        return_type: ReturnType::ShapeId,
++    },
+     MethodSpec {
+         name: "exportStep",
+         kind: MethodKind::CustomBody,
+@@ -6207,6 +6292,22 @@ return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);"
+         category: "tessellate",
+         return_type: ReturnType::MeshData,
+     },
++    MethodSpec {
++        name: "tessellateTriangles64",
++        kind: MethodKind::CustomBody,
++        params: &[
++            FacadeParam::ShapeId("id"),
++            FacadeParam::Double("linearDeflection"),
++            FacadeParam::Double("angularDeflection"),
++        ],
++        occt_class: "",
++        ctor_args: "",
++        setup_code: "\
++return tessellateTriangleCoordinates(get(id), linearDeflection, angularDeflection);",
++        includes: &[],
++        category: "tessellate",
++        return_type: ReturnType::VectorDouble,
++    },
+     MethodSpec {
+         name: "tessellateRelative",
          kind: MethodKind::CustomBody,

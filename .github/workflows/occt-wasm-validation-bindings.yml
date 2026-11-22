@@ -3,7 +3,7 @@ name: OCCT WASM validation bindings
 on:
   pull_request:
     paths:
-      - step-redox/tools/occt-wasm-validator/patches/**
+      - step-redox/tools/occt-wasm-validator/**
       - .github/workflows/occt-wasm-validation-bindings.yml
   workflow_dispatch:
 
@@ -63,6 +63,14 @@ jobs:
       - name: Exercise mandatory kernel integration tests
         working-directory: occt-wasm-source
         run: cargo +1.95 test --locked --release -p occt-wasm --test validation_bindings
+      - name: Test the patched crate through Cargo in the STEP validator
+        run: |
+          set -euo pipefail
+          validator=step-redox/tools/occt-wasm-validator
+          cp occt-wasm-source/Cargo.lock "$validator/Cargo.lock"
+          cargo +1.95 test --release --manifest-path "$validator/Cargo.toml" \
+            --target-dir "$PWD/occt-wasm-source/target" \
+            --config "patch.crates-io.occt-wasm.path=\"$PWD/occt-wasm-source/crate\""
       - name: Package standalone patched crate
         working-directory: occt-wasm-source
         run: |

@@ -15,7 +15,9 @@ validation facade.
   Valid, closed, single-solid input is required; failed/nonfinite quadrature
   is an error, not a zero contribution.
 - Point classification preserves OUT/IN/ON/UNKNOWN as 0/1/2/3 respectively.
-- Strict kernel integration tests exercise all five new bindings.
+- Double-precision triangle coordinates preserve the native mesh hash quantum.
+- Binary-safe STEP import does not require UTF-8 transcoding.
+- Strict kernel integration tests exercise all seven new bindings.
 
 The upstream binding generator owns the C++, WASI and Rust glue. Run the
 dedicated pinned-builder workflow to regenerate the embedded Brotli WASM
