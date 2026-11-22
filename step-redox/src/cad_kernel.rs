@@ -738,8 +738,13 @@ pub mod monstertruck {
         };
         let a = radial(*start);
         let b = radial(*end);
-        if a.cross(b).magnitude() > length * DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
-            || a.dot(b) < -DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm.powi(2)
+        // An endpoint within the axis-locus tolerance is the pole, even
+        // if a sweep rotation has moved it a few ulps past the axis.
+        // A dot-product threshold in squared units incorrectly scales
+        // that endpoint tolerance by the radius of the opposite endpoint.
+        let axis_locus = DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm;
+        if a.cross(b).magnitude() > length * axis_locus
+            || (a.magnitude() > axis_locus && b.magnitude() > axis_locus && a.dot(b) < 0.0)
         {
             return None;
         }
@@ -3251,6 +3256,42 @@ pub mod monstertruck {
             let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&rebuilt).geometrically_consistent);
             step_p21::parser::parse(&kernel.to_step(&rebuilt)?)?;
+            Ok(())
+        }
+
+        #[test]
+        fn translated_axis_touching_revolution_has_four_affine_caps() -> Result<()> {
+            let transform = RigidTransform {
+                matrix: [
+                    [1.0, 0.0, 0.0, -4.320_200_609_541_287],
+                    [0.0, 0.0, -1.0, -4.357_399_428_961_643],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            };
+            let axis = Axis3 {
+                origin_mm: [0.0, 0.0, 0.0],
+                direction: [0.0, 1.0, 0.0],
+            };
+            for radius in [0.25, 0.307_387_402_856_017_73, 1.0, 10.0] {
+                let profile = Profile2d::polygon(vec![
+                    [0.0, 0.829],
+                    [radius, 0.829],
+                    [radius, 0.83],
+                    [0.0, 0.83],
+                ])?;
+                let solid =
+                    revolve_profile_transformed(&profile, axis, std::f64::consts::TAU, &transform)?;
+                assert!(solid.is_geometric_consistent());
+                assert_eq!(
+                    solid
+                        .face_iter()
+                        .filter(|face| matches!(face.surface(), Surface::Plane(_)))
+                        .count(),
+                    4,
+                    "radius {radius}",
+                );
+            }
             Ok(())
         }
 
