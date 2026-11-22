@@ -825,13 +825,6 @@ fn selected_boundary_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     Some(boundary)
 }
 
-fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    arrangement: &PlanarArrangement<C, S>,
-) -> Option<Vec<ProjectedEdge<AltCurve<C, S>>>> {
-    selected_boundary_with(arrangement, |point| covered(&arrangement.polygons, point))
-        .filter(|boundary| !boundary.is_empty())
-}
-
 /// Reconstruct exact-edge loops by choosing clockwise exits at junctions.
 fn trace_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     mut boundary: Vec<ProjectedEdge<AltCurve<C, S>>>,
@@ -933,15 +926,6 @@ fn validates_occupancy_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 membership(left_probe) == traced(left_probe)
                     && membership(right_probe) == traced(right_probe)
             })
-    })
-}
-
-fn validates_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    arrangement: &PlanarArrangement<C, S>,
-    loops: &[OverlayLoop<C, S>],
-) -> bool {
-    validates_occupancy_with(arrangement, loops, |point| {
-        covered(&arrangement.polygons, point)
     })
 }
 
@@ -1093,31 +1077,56 @@ pub(super) fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     source: &[AltRegion<C, S>],
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
+    let regions = overlay_occupancy(source, tol, false, covered)?;
+    (!regions.is_empty()).then_some(regions)
+}
+
+/// Select bounded cells from a shared exact-curve arrangement. The caller
+/// supplies occupancy over the ordered input regions; noding and validation
+/// are independent of the material operation.
+fn overlay_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    tol: f64,
+    certified_curved: bool,
+    select: impl Fn(&[Vec<Vec<Point2>>], Point2) -> bool,
+) -> Option<Vec<AltRegion<C, S>>> {
     let reference = source.first()?;
-    // Separate STEP faces may encode coincident curves with independent IDs.
-    // Canonicalize their exact geometric edge identities before computing
-    // occupancy; otherwise two independently encoded copies would be emitted
-    // as two exterior boundaries rather than one filled face.
-    let canonical_regions = node_selected_regions(source, &[], BooleanTolerance::new(tol))?;
-    let initial = project_source(&canonical_regions, tol, false)?;
+    let canonical = node_selected_regions(source, &[], BooleanTolerance::new(tol))?;
+    let initial = project_source(&canonical, tol, certified_curved)?;
     let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
         let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical_regions, &points, BooleanTolerance::new(tol))?;
-        project_source(&noded, tol, false)?
+        let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol))?;
+        project_source(&noded, tol, certified_curved)?
     } else {
         initial
     };
-    let boundary = selected_boundary(&arrangement)?;
-    // Crossings between edges entirely inside the union do not affect the
-    // extracted boundary. Reject only unresolved noding on surviving edges.
+    let membership = |point| select(&arrangement.polygons, point);
+    let boundary = selected_boundary_with(&arrangement, membership)?;
     if needs_exact_noding(&boundary, arrangement.span, tol) {
         return None;
     }
+    if boundary.is_empty() {
+        return validates_occupancy_with(&arrangement, &[], membership).then_some(Vec::new());
+    }
     let loops = trace_boundary(boundary)?;
-    if !validates_occupancy(&arrangement, &loops) {
+    if !validates_occupancy_with(&arrangement, &loops, membership) {
         return None;
     }
     assemble_regions(loops, reference, &arrangement.surface)
+}
+
+pub(super) fn overlay_profile_selection<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    tol: f64,
+    select: impl Fn(&[bool]) -> bool,
+) -> Option<Vec<AltRegion<C, S>>> {
+    overlay_occupancy(source, tol, false, |polygons, point| {
+        let occupied = polygons
+            .iter()
+            .map(|region| covered(std::slice::from_ref(region), point))
+            .collect::<Vec<_>>();
+        select(&occupied)
+    })
 }
 
 /// Verify coplanarity over the actual trimmed geometry, not just at a plane
@@ -1326,32 +1335,10 @@ pub(super) fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
     let joined = positive.iter().chain(cutter).cloned().collect::<Vec<_>>();
-    let canonical = node_selected_regions(&joined, &[], BooleanTolerance::new(tol))?;
-    let initial = project_source(&canonical, tol, true)?;
-    let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
-        let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol))?;
-        project_source(&noded, tol, true)?
-    } else {
-        initial
-    };
     let positive_count = positive.len();
-    let membership = |point| {
-        covered(&arrangement.polygons[..positive_count], point)
-            && !covered(&arrangement.polygons[positive_count..], point)
-    };
-    let boundary = selected_boundary_with(&arrangement, membership)?;
-    if needs_exact_noding(&boundary, arrangement.span, tol) {
-        return None;
-    }
-    if boundary.is_empty() {
-        return validates_occupancy_with(&arrangement, &[], membership).then_some(Vec::new());
-    }
-    let loops = trace_boundary(boundary)?;
-    if !validates_occupancy_with(&arrangement, &loops, membership) {
-        return None;
-    }
-    assemble_regions(loops, &positive[0], &arrangement.surface)
+    overlay_occupancy(&joined, tol, true, |polygons, point| {
+        covered(&polygons[..positive_count], point) && !covered(&polygons[positive_count..], point)
+    })
 }
 
 /// Remove selected cutter patches that share a plane and *original outward
