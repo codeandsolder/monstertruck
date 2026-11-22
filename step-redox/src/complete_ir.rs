@@ -4216,6 +4216,22 @@ END-ISO-10303-21;
         Ok(())
     }
 
+    // A translated full disk can acquire a few ulps of axis displacement
+    // on its second semicircle. Require complete original-source proof
+    // for circular recesses with differing radius and depth.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_with_translated_revolution_caps_is_source_verified() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_curved_a7efbe91.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_curved_e319f3f9.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_curved_0036d9d5.step").as_slice(),
+        ] {
+            assert_source_verified_relief(bytes)?;
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn native_relief_tapered_hosts_are_source_verified() -> Result<()> {
