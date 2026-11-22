@@ -557,6 +557,10 @@ mod tests {
         curve: CurveSupport,
     ) -> EdgeGeometry {
         EdgeGeometry {
+            points_mm: [
+                decode(start).expect("test point"),
+                decode(end).expect("test point"),
+            ],
             start,
             end,
             start_vertex: 1,

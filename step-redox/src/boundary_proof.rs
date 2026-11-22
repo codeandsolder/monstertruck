@@ -187,6 +187,7 @@ struct FaceInfo {
 
 #[derive(Debug, Clone)]
 struct EdgeGeometry {
+    points_mm: [[f64; 3]; 2],
     start: PointKey,
     end: PointKey,
     start_vertex: u64,
@@ -491,6 +492,7 @@ fn collect_boundary_graph(
                     effective_forward: effective_coedge_forward(edge, boundary.orientation),
                 });
                 let geometry = EdgeGeometry {
+                    points_mm: [edge.start_mm, edge.end_mm],
                     start: point_key(edge.start_mm)
                         .ok_or_else(|| format!("edge #{} has non-finite start", edge.edge_id))?,
                     end: point_key(edge.end_mm)
@@ -2036,6 +2038,7 @@ mod tests {
     fn zero_length_topological_edge_requires_real_full_circle_carrier() {
         let point = point_key([1.0, 0.0, 0.0]).expect("finite test point");
         let mut edge = EdgeGeometry {
+            points_mm: [[1., 0., 0.]; 2],
             start: point,
             end: point,
             start_vertex: 17,

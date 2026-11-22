@@ -2,7 +2,8 @@
 //! Partition vertices are parameter proposals; complete homogeneous
 //! coefficient comparison and ordered coverage are the geometric evidence.
 use super::{
-    BernsteinSpanKey, CurveEvidence, POINT_Q_MM, PointKey, SplineCurveKey, TOL, decode, point_key,
+    BernsteinSpanKey, CurveEvidence, POINT_Q_MM, PointKey, SplineCurveKey, TOL, TrimEndpoint,
+    decode, point_key,
 };
 use crate::math3::{distance, dot, mul, normalize, sub};
 use monstertruck_geometry::prelude::Vector4;
@@ -209,7 +210,7 @@ fn restricted_span(
 fn restriction_in_order(
     parent: &SplineCurveKey,
     piece: &CurveEvidence,
-    ends: [PointKey; 2],
+    ends: [TrimEndpoint; 2],
 ) -> Option<[ProfilePosition; 2]> {
     let mut interval: Option<[ProfilePosition; 2]> = None;
     for (j, (span, actual)) in piece.key.spans.iter().zip(&piece.controls).enumerate() {
@@ -217,12 +218,12 @@ fn restriction_in_order(
             if j == 0 {
                 ends[0]
             } else {
-                *span.points_mm.first()?
+                TrimEndpoint::new(projected(*actual.first()?))?
             },
             if j + 1 == piece.key.spans.len() {
                 ends[1]
             } else {
-                *span.points_mm.last()?
+                TrimEndpoint::new(projected(*actual.last()?))?
             },
         ];
         let mut matches = parent
@@ -238,19 +239,18 @@ fn restriction_in_order(
                 // trim's evaluated endpoints, but must still be on the
                 // parent at their certified parameter position.
                 let expected = [*span.points_mm.first()?, *span.points_mm.last()?];
-                if points != expected {
+                if points.map(|point| point.key) != expected {
                     let controls = span_controls(candidate)?;
                     for (t, point) in [lo, hi].into_iter().zip(points) {
-                        let error =
-                            distance(projected(blossom(&controls, t, t, 0)), decode(point)?);
-                        if error + POINT_Q_MM * 3.0_f64.sqrt() / 2. > TOL {
+                        let error = distance(projected(blossom(&controls, t, t, 0)), point.mm);
+                        if !error.is_finite() || error > TOL {
                             return None;
                         }
                     }
                 }
                 Some([
-                    ProfilePosition::new(i, lo, points[0]),
-                    ProfilePosition::new(i, hi, points[1]),
+                    ProfilePosition::new(i, lo, points[0].key),
+                    ProfilePosition::new(i, hi, points[1].key),
                 ])
             });
         let range = matches.next()?;
@@ -280,9 +280,9 @@ fn full_profile_interval(parent: &SplineCurveKey) -> Option<[ProfilePosition; 2]
 pub(super) fn profile_piece(
     parent: &SplineCurveKey,
     piece: &CurveEvidence,
-    mut ends: [PointKey; 2],
+    mut ends: [TrimEndpoint; 2],
 ) -> Option<[ProfilePosition; 2]> {
-    if *parent == piece.key && parent.ends()? == ends {
+    if *parent == piece.key && parent.ends()? == ends.map(|point| point.key) {
         return full_profile_interval(parent);
     }
     if let Some(interval) = restriction_in_order(parent, piece, ends) {
@@ -298,6 +298,46 @@ pub(super) fn profile_piece(
     }
     ends.reverse();
     restriction_in_order(parent, &reversed, ends)
+}
+
+/// Check actual carrier incidence without charging a fictitious rounding
+/// error for vertices whose original coordinates remain available.
+pub(super) fn raw_parent_incidence(
+    parent: &CurveEvidence,
+    interval: [ProfilePosition; 2],
+    mut ends: [TrimEndpoint; 2],
+) -> Option<()> {
+    if interval[0].point != ends[0].key {
+        ends.reverse();
+    }
+    for (position, endpoint) in interval.into_iter().zip(ends) {
+        if position.point != endpoint.key {
+            return None;
+        }
+        let (span, t) = if position.span == parent.controls.len() {
+            (parent.controls.last()?, 1.)
+        } else {
+            (
+                parent.controls.get(position.span)?,
+                f64::from_bits(position.fraction),
+            )
+        };
+        let weight_max = span.iter().map(|p| p.w).fold(0., f64::max);
+        let weight_min = span.iter().map(|p| p.w / weight_max).fold(1., f64::min);
+        let order = span.len().to_f64()?;
+        let coordinate_scale = span
+            .iter()
+            .map(|&p| crate::math3::norm(projected(p)))
+            .fold(1., f64::max);
+        let arithmetic = 32. * order * order * f64::EPSILON * coordinate_scale / weight_min.powi(2);
+        let error = distance(projected(blossom(span, t, t, 0)), endpoint.mm)
+            + arithmetic
+            + parent.extraction_error_mm;
+        if !error.is_finite() || error > TOL {
+            return None;
+        }
+    }
+    Some(())
 }
 
 /// Exact, ordered coverage of the complete canonical parent. Each
@@ -356,6 +396,44 @@ mod tests {
     }
 
     #[test]
+    fn raw_trim_incidence_keeps_the_actual_geometric_budget() -> Result<()> {
+        let original = BSplineSupport {
+            degree: 3,
+            control_points_mm: vec![
+                [0., 0., 0.],
+                [0.25, 0.25, 0.],
+                [0.75, 0.25, 0.],
+                [1., 0., 0.],
+            ],
+            knots: vec![0., 0., 0., 0., 1., 1., 1., 1.],
+            weights: None,
+        };
+        let parent = curve_evidence(&original).context("parent")?;
+        let child = curve_evidence(&restricted(&parent.controls[0], 0., 0.5)).context("child")?;
+        let start = TrimEndpoint::new(projected(child.controls[0][0])).context("start")?;
+        let mut split = projected(*child.controls[0].last().context("split")?);
+        // The authored point remains within the tolerance, but the old
+        // reconstructed-coordinate + half-cell-diagonal bound rejects it.
+        split[2] = 0.9 * TOL;
+        let end = TrimEndpoint::new(split).context("end")?;
+        let reconstructed = decode(end.key).context("rounded point")?;
+        assert!(
+            distance(
+                reconstructed,
+                projected(*child.controls[0].last().context("split")?)
+            ) + POINT_Q_MM * 3.0_f64.sqrt() / 2.
+                > TOL
+        );
+        let interval = profile_piece(&parent.key, &child, [start, end]).context("raw incidence")?;
+        assert!(raw_parent_incidence(&parent, interval, [start, end]).is_some());
+        split[2] = 1.05 * TOL;
+        let outside = TrimEndpoint::new(split).context("outside")?;
+        assert!(profile_piece(&parent.key, &child, [start, outside]).is_none());
+        assert!(raw_parent_incidence(&parent, interval, [start, outside]).is_none());
+        Ok(())
+    }
+
+    #[test]
     fn rational_multi_span_partitions_cover_once_and_refuse_wrong_interior() -> Result<()> {
         let original = BSplineSupport {
             degree: 2,
@@ -371,7 +449,14 @@ mod tests {
             .collect::<Vec<_>>();
         let interval = |curve: &BSplineSupport| {
             let piece = curve_evidence(curve)?;
-            profile_piece(&parent.key, &piece, piece.key.ends()?)
+            profile_piece(
+                &parent.key,
+                &piece,
+                [
+                    TrimEndpoint::new(projected(*piece.controls.first()?.first()?))?,
+                    TrimEndpoint::new(projected(*piece.controls.last()?.last()?))?,
+                ],
+            )
         };
         let pieces = children
             .iter()
