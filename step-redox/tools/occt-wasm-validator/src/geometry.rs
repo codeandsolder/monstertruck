@@ -1,9 +1,10 @@
 use anyhow::{Result, ensure};
 use occt_wasm::{BoundingBox, OcctKernel, ShapeHandle, StepImport};
-use serde::Serialize;
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+pub mod compare;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Bounds {
     bbox: [f64; 6],
     bbox_center: [f64; 3],
@@ -28,7 +29,7 @@ impl Bounds {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct Topology {
     faces: u32,
     edges: u32,
@@ -45,7 +46,7 @@ impl Topology {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Solid {
     volume: f64,
     area: f64,
@@ -55,9 +56,9 @@ struct Solid {
     topology: Topology,
 }
 
-#[derive(Debug, Serialize)]
-pub struct GeometryReport<'a> {
-    path: &'a Path,
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GeometryReport {
+    path: PathBuf,
     bytes: usize,
     roots: u32,
     transferred: u32,
@@ -78,12 +79,12 @@ pub struct GeometryReport<'a> {
     solid_inventory: Vec<Solid>,
 }
 
-pub fn analyze<'a>(
+pub fn analyze(
     kernel: &mut OcctKernel,
-    path: &'a Path,
+    path: &Path,
     bytes: usize,
     import: StepImport,
-) -> Result<GeometryReport<'a>> {
+) -> Result<GeometryReport> {
     let shape = import.shape;
     let props = kernel.get_b_rep_properties(shape)?;
     let bounds = Bounds::new(&kernel.get_bounding_box_loose(shape, true)?)?;
@@ -108,7 +109,7 @@ pub fn analyze<'a>(
         "solid occurrence mismatch"
     );
     Ok(GeometryReport {
-        path,
+        path: path.to_path_buf(),
         bytes,
         roots: import.roots,
         transferred: import.transferred,

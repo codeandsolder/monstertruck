@@ -22,6 +22,15 @@ struct Cli {
 enum Command {
     /// Report independent OCCT geometry metrics in the native oracle schema.
     Analyze { input: PathBuf },
+    /// Compare saved native or WASM reports, without initializing OCCT.
+    CompareMetrics {
+        reference: PathBuf,
+        candidate: PathBuf,
+        #[arg(long)]
+        thresholds: PathBuf,
+        #[arg(long, value_enum, default_value = "identity")]
+        alignment: geometry::compare::Alignment,
+    },
     /// Hash the strict world-coordinate tessellation at 1e-9 mm precision.
     MeshHash { input: PathBuf },
     /// Compare signed face integrals at two quadrature tolerances and four references.
@@ -80,15 +89,34 @@ fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<String> {
 
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
-    let mut kernel = OcctKernel::new()?;
     match cli.command {
+        Command::CompareMetrics {
+            reference,
+            candidate,
+            thresholds,
+            alignment,
+        } => {
+            let reference = serde_json::from_reader(fs::File::open(reference)?)?;
+            let candidate = serde_json::from_reader(fs::File::open(candidate)?)?;
+            let thresholds = serde_json::from_reader(fs::File::open(thresholds)?)?;
+            let report =
+                geometry::compare::compare(&reference, &candidate, alignment, &thresholds)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(if report.metrics_pass {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
         Command::Analyze { input } => {
+            let mut kernel = OcctKernel::new()?;
             let (import, bytes) = load(&mut kernel, &input)?;
             let report = geometry::analyze(&mut kernel, &input, bytes, import)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(ExitCode::SUCCESS)
         }
         Command::MeshHash { input } => {
+            let mut kernel = OcctKernel::new()?;
             let (import, _) = load(&mut kernel, &input)?;
             let triangles = kernel.tessellate_triangles64(import.shape, 0.002, 0.2)?;
             println!("{}", strict_mesh_hash(&triangles, 1e-9)?);
@@ -99,6 +127,7 @@ fn main() -> Result<ExitCode> {
             candidate,
             absolute_tolerance,
         } => {
+            let mut kernel = OcctKernel::new()?;
             let (a, _) = load(&mut kernel, &reference)?;
             let (b, _) = load(&mut kernel, &candidate)?;
             let report =
