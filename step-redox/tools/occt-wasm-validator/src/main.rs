@@ -80,7 +80,7 @@ fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<String> {
     let mut tris = Vec::with_capacity(triangles.0.len());
     for triangle in triangles.0 {
         let mut points = [[0_i64; 3]; 3];
-        for (point, coords) in points.iter_mut().zip(triangle.chunks_exact(3)) {
+        for (point, coords) in points.iter_mut().zip(triangle.as_chunks::<3>().0) {
             for (value, &coordinate) in point.iter_mut().zip(coords) {
                 // Reject instead of saturating an unrepresentable hash coordinate.
                 // Match the reference oracle: multiply by the reciprocal
