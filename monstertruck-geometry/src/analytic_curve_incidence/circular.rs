@@ -150,6 +150,36 @@ pub fn certify_circular_arc_coverage(
     }) {
         return None;
     }
+    angular_coverage(rational, frame)
+}
+
+/// Prove continuous, single-turn angular coverage on a cylinder.
+///
+/// The frame
+/// defines the transverse circle and the cylinder axis through its center.
+/// Unlike the circular certificate this makes no claim about axial height:
+/// an oblique planar ellipse additionally requires whole-curve plane incidence.
+#[must_use]
+pub fn certify_cylindrical_arc_coverage(
+    rational: &NurbsCurve<Vector4>,
+    frame: CircularArcFrame,
+) -> Option<CircularArcCoverage> {
+    let cylinder = AnalyticSupport::Cylinder {
+        origin: frame.center,
+        axis: frame.normal,
+        radius: frame.radius,
+    };
+    if certify_nurbs_curve_on_support(rational, cylinder, frame.tolerance) != CurveIncidence::Proven
+    {
+        return None;
+    }
+    angular_coverage(rational, frame)
+}
+
+fn angular_coverage(
+    rational: &NurbsCurve<Vector4>,
+    frame: CircularArcFrame,
+) -> Option<CircularArcCoverage> {
     let spans = proof_bezier_spans(rational.non_rationalized())?;
     let tolerance = frame.angle_tolerance();
     let mut total: f64 = 0.0;
