@@ -22,6 +22,7 @@
 mod classification;
 mod conversion;
 mod curve_equivalence;
+mod curve_refinement;
 mod divide_face;
 mod faces_classification;
 mod intersection_curve;

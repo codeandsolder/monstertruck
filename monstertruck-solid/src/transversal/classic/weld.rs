@@ -239,6 +239,7 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
             curve
                 .search_parameter(point, None, 100)
                 .or_else(|| curve.search_nearest_parameter(point, None, 100))
+                .and_then(|seed| super::curve_refinement::point_parameter(curve, point, seed))
                 .filter(|&parameter| {
                     parameter.is_finite()
                         && curve.evaluate(parameter).distance(point) <= self.tolerances.length
@@ -361,6 +362,9 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                 remaining
                     .search_parameter(point, None, 100)
                     .or_else(|| remaining.search_nearest_parameter(point, None, 100))
+                    .and_then(|seed| {
+                        super::curve_refinement::point_parameter(&remaining, point, seed)
+                    })
                     .filter(|&t| on_remaining(t))?
             };
             let later = remaining.cut(parameter);

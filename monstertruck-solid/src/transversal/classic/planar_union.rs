@@ -334,38 +334,13 @@ fn exact_curve_crossing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> Option<Point3> {
     let lhs_curve = lhs.edge.oriented_curve();
     let rhs_curve = rhs.edge.oriented_curve();
-    let (lhs_min, lhs_max) = lhs_curve.range_tuple();
-    let (rhs_min, rhs_max) = rhs_curve.range_tuple();
-    let mut lhs_parameter = lhs_curve.search_nearest_parameter(approximate, None, 100)?;
-    let mut rhs_parameter = rhs_curve.search_nearest_parameter(approximate, None, 100)?;
-    for _ in 0..32 {
-        let (lhs_point, rhs_point) = (
-            lhs_curve.evaluate(lhs_parameter),
-            rhs_curve.evaluate(rhs_parameter),
-        );
-        let gap = lhs_point - rhs_point;
-        if gap.magnitude() <= tol {
-            return Some(lhs_point.midpoint(rhs_point));
-        }
-        let (lhs_derivative, rhs_derivative) = (
-            lhs_curve.derivative(lhs_parameter),
-            rhs_curve.derivative(rhs_parameter),
-        );
-        let diagonal0 = lhs_derivative.dot(lhs_derivative);
-        let diagonal1 = rhs_derivative.dot(rhs_derivative);
-        let mixed = -lhs_derivative.dot(rhs_derivative);
-        let determinant = diagonal0.mul_add(diagonal1, -(mixed * mixed));
-        if !determinant.is_finite() || determinant <= f64::EPSILON * diagonal0 * diagonal1 {
-            return None;
-        }
-        let gradient0 = -lhs_derivative.dot(gap);
-        let gradient1 = rhs_derivative.dot(gap);
-        let step0 = gradient0.mul_add(diagonal1, -(gradient1 * mixed)) / determinant;
-        let step1 = diagonal0.mul_add(gradient1, -(mixed * gradient0)) / determinant;
-        lhs_parameter = (lhs_parameter + step0).clamp(lhs_min, lhs_max);
-        rhs_parameter = (rhs_parameter + step1).clamp(rhs_min, rhs_max);
-    }
-    None
+    let seeds = [
+        lhs_curve.search_nearest_parameter(approximate, None, 100)?,
+        rhs_curve.search_nearest_parameter(approximate, None, 100)?,
+    ];
+    let [u, v] = super::curve_refinement::crossing_parameters(&lhs_curve, &rhs_curve, seeds)?;
+    let (a, b) = (lhs_curve.evaluate(u), rhs_curve.evaluate(v));
+    (a.distance(b) <= tol).then(|| a.midpoint(b))
 }
 
 /// Gather real curve intersections and existing endpoints lying in another
@@ -2479,6 +2454,60 @@ mod tests {
         )
         .unwrap();
         assert!((signed_area(&poly.0) - 7.0).abs() < 1.0e-8);
+    }
+
+    #[test]
+    fn cubic_crossings_retain_exact_curve_endpoints_after_welding() {
+        let mut fixture = PlanarFixture::new(&[
+            [0., 0.],
+            [3., 2.],
+            [0., 2.],
+            [1., -1.],
+            [2., -1.],
+            [2., 3.],
+            [1., 3.],
+        ]);
+        // The cubic's x-coordinate is exactly 3t. Its crossing
+        // ordinates at x=1 and x=2 are 8/27 and 28/27.
+        let curve = Curve::BsplineCurve(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(3),
+            vec![
+                Point3::new(0., 0., 0.),
+                Point3::new(1., 0., 0.),
+                Point3::new(2., 1., 0.),
+                Point3::new(3., 2., 0.),
+            ],
+        ));
+        let edge = Edge::new_unchecked(
+            &fixture.vertices[0],
+            &fixture.vertices[1],
+            Alternative::FirstType(curve),
+        );
+        fixture.edges.insert((0, 1), edge);
+        let left = fixture.region(&[0, 1, 2, 0]);
+        let vertical = fixture.region(&[3, 4, 5, 6, 3]);
+        let regions = overlay_source_regions(vec![left, vertical], 1.0e-6);
+        assert_eq!(regions.len(), 1);
+        let edges = regions[0]
+            .absolute_boundaries()
+            .iter()
+            .flat_map(|wire| wire.iter());
+        let expected = [
+            Point3::new(1., 8. / 27., 0.),
+            Point3::new(2., 28. / 27., 0.),
+        ];
+        let mut found = [false; 2];
+        for edge in edges {
+            let curve = edge.oriented_curve();
+            let front = edge.front().point();
+            let back = edge.back().point();
+            assert!(front.distance(curve.front()) < 1.0e-12);
+            assert!(back.distance(curve.back()) < 1.0e-12);
+            for (flag, expected) in found.iter_mut().zip(expected) {
+                *flag |= front.distance(expected) < 1.0e-12 || back.distance(expected) < 1.0e-12;
+            }
+        }
+        assert!(found.into_iter().all(|flag| flag));
     }
 
     #[test]
