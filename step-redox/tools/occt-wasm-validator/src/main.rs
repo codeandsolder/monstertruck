@@ -33,6 +33,8 @@ enum Command {
     FetchFixtures(manifest::FixtureArgs),
     /// Verify independent Boolean material occupancy at supplied or sampled witnesses.
     Occupancy(occupancy::OccupancyArgs),
+    /// Report common volume and both directed cuts for matched solid occurrences.
+    BooleanResiduals(geometry::boolean::BooleanArgs),
     /// Report independent OCCT geometry metrics in the native oracle schema.
     Analyze {
         input: PathBuf,
@@ -229,6 +231,7 @@ fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
         Command::Occupancy(args) => occupancy::run(&args),
+        Command::BooleanResiduals(args) => geometry::boolean::run(&args),
         Command::FetchFixtures(args) => {
             manifest::fetch(&args)?;
             Ok(ExitCode::SUCCESS)

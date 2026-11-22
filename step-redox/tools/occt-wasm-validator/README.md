@@ -68,3 +68,17 @@ kernel initialization and repeat `--case NAME` to select a subset.
 
 For explicitly bounded execution, see
 `step-redox/tools/validate-occt-wasm.sh`.
+
+For per-solid Boolean volume diagnostics, use:
+
+```sh
+step-redox-occt-wasm-validator boolean-residuals reference.step candidate.step \
+  --absolute-tolerance 1e-9
+```
+
+This reports both directed cut volumes and the missing volume relative to
+the common intersection for each matched solid occurrence. Matching uses
+the same deterministic geometry metric correspondence as the release
+validator, without truncating uneven inventories. The report identifies
+both occurrence indices. These are diagnostics, not an exact boundary
+certificate or a proof of globally optimal material correspondence.

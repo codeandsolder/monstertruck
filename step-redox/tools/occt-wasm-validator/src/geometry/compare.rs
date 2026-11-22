@@ -124,8 +124,8 @@ fn max_abs(values: impl IntoIterator<Item = f64>) -> f64 {
 fn rel_error(a: f64, b: f64) -> f64 { (a - b).abs() / a.abs().max(b.abs()).max(1e-30) }
 
 #[derive(Debug)]
-struct Match {
-    index: usize,
+pub(super) struct Match {
+    pub(super) index: usize,
     topology_same: bool,
     center: f64,
     extent: f64,
@@ -168,6 +168,48 @@ fn append_measures(
     Ok(())
 }
 
+pub(super) fn match_solids(
+    reference: &[Solid],
+    candidate: &[Solid],
+    shift: [f64; 3],
+) -> Result<Vec<(usize, Match)>> {
+    ensure!(
+        reference.len() == candidate.len(),
+        "solid inventory count mismatch"
+    );
+    // Stable sort and candidate-index tie breaking retain the manifest oracle's
+    // deterministic correspondence; this is metric matching, not a material proof.
+    let mut order: Vec<_> = (0..reference.len()).collect();
+    order.sort_by(|&a, &b| {
+        let a = &reference[a];
+        let b = &reference[b];
+        b.topology
+            .faces
+            .cmp(&a.topology.faces)
+            .then_with(|| b.volume.total_cmp(&a.volume))
+            .then_with(|| b.area.total_cmp(&a.area))
+    });
+    let mut matched = vec![false; candidate.len()];
+    let mut pairs = Vec::with_capacity(reference.len());
+    for index in order {
+        let best = candidate
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !matched[*i])
+            .map(|(i, solid)| Match::new(&reference[index], solid, i, shift))
+            .min_by(|a, b| {
+                a.score()
+                    .total_cmp(&b.score())
+                    .then_with(|| a.index.cmp(&b.index))
+            })
+            .ok_or_else(|| anyhow::anyhow!("solid inventory matcher exhausted candidates"))?;
+        ensure!(best.score().is_finite(), "nonfinite solid match score");
+        matched[best.index] = true;
+        pairs.push((index, best));
+    }
+    Ok(pairs)
+}
+
 fn solid_checks(
     reference: &[Solid],
     candidate: &[Solid],
@@ -195,33 +237,9 @@ fn solid_checks(
         ));
         return Ok(());
     }
-    // Stable sort preserves source order for indistinguishable references,
-    // while the candidate index breaks equal-score ties exactly as the oracle.
-    let mut order: Vec<_> = reference.iter().collect();
-    order.sort_by(|a, b| {
-        b.topology
-            .faces
-            .cmp(&a.topology.faces)
-            .then_with(|| b.volume.total_cmp(&a.volume))
-            .then_with(|| b.area.total_cmp(&a.area))
-    });
-    let mut matched = vec![false; candidate.len()];
     let (mut center, mut extent, mut volume, mut area) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
     let mut mismatches = 0_i64;
-    for reference in order {
-        let best = candidate
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !matched[*i])
-            .map(|(i, candidate)| Match::new(reference, candidate, i, shift))
-            .min_by(|a, b| {
-                a.score()
-                    .total_cmp(&b.score())
-                    .then_with(|| a.index.cmp(&b.index))
-            })
-            .ok_or_else(|| anyhow::anyhow!("solid inventory matcher exhausted candidates"))?;
-        ensure!(best.score().is_finite(), "nonfinite solid match score");
-        matched[best.index] = true;
+    for (_, best) in match_solids(reference, candidate, shift)? {
         mismatches += i64::from(!best.topology_same);
         center = center.max(best.center);
         extent = extent.max(best.extent);

@@ -2,6 +2,7 @@ use anyhow::{Result, ensure};
 use occt_wasm::{BoundingBox, OcctKernel, ShapeHandle, StepImport};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+pub mod boolean;
 pub mod compare;
 pub mod render;
 
@@ -57,6 +58,20 @@ struct Solid {
     topology: Topology,
 }
 
+impl Solid {
+    fn measure(kernel: &mut OcctKernel, shape: ShapeHandle) -> Result<Self> {
+        let props = kernel.get_b_rep_properties(shape)?;
+        let bounds = Bounds::new(&kernel.get_bounding_box_loose(shape, true)?)?;
+        Ok(Self {
+            volume: props.volume,
+            area: props.area,
+            bbox_center: bounds.bbox_center,
+            bbox_extent: bounds.bbox_extent,
+            topology: Topology::measure(kernel, shape)?,
+        })
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GeometryReport {
     path: PathBuf,
@@ -93,15 +108,7 @@ pub fn analyze(
     let solids = kernel.get_sub_shape_occurrences(shape, "solid")?;
     let mut inventory = Vec::with_capacity(solids.len());
     for solid in solids {
-        let props = kernel.get_b_rep_properties(solid)?;
-        let bounds = Bounds::new(&kernel.get_bounding_box_loose(solid, true)?)?;
-        inventory.push(Solid {
-            volume: props.volume,
-            area: props.area,
-            bbox_center: bounds.bbox_center,
-            bbox_extent: bounds.bbox_extent,
-            topology: Topology::measure(kernel, solid)?,
-        });
+        inventory.push(Solid::measure(kernel, solid)?);
         kernel.release(solid)?;
     }
     let solid_count = u32::try_from(kernel.sub_shape_occurrence_count(shape, "solid")?)?;
