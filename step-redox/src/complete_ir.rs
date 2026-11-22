@@ -38,7 +38,7 @@ use step_p21::ast::{EntityInstance, Exchange};
 mod treatment_layers;
 
 pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
-pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v19";
+pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v20";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReducedBrepMutationMode {
@@ -545,6 +545,7 @@ impl CompleteIrBuildState {
                     CadFragmentSource::ExtrusionCoreUnion { .. }
                         | CadFragmentSource::SectionalExtrusionUnion { .. }
                         | CadFragmentSource::SectionalExtrusionTransitions { .. }
+                        | CadFragmentSource::SectionalLoftUnion { .. }
                         | CadFragmentSource::FormedSheetExtrusionUnion { .. }
                         | CadFragmentSource::SourceCapExtrusionUnion { .. }
                         | CadFragmentSource::ExtrusionCoreRuledEnds { .. }
@@ -2612,6 +2613,7 @@ const fn source_solid_id(source: &CadFragmentSource) -> u64 {
         | CadFragmentSource::ExtrusionCoreUnion { solid_id, .. }
         | CadFragmentSource::SectionalExtrusionUnion { solid_id, .. }
         | CadFragmentSource::SectionalExtrusionTransitions { solid_id, .. }
+        | CadFragmentSource::SectionalLoftUnion { solid_id, .. }
         | CadFragmentSource::FormedSheetExtrusionUnion { solid_id, .. }
         | CadFragmentSource::SourceCapExtrusionUnion { solid_id, .. }
         | CadFragmentSource::ExtrusionCoreRuledEnds { solid_id, .. }

@@ -103,6 +103,7 @@ pub mod monstertruck {
     use std::collections::{HashMap, HashSet};
 
     mod circular_selection;
+    mod planar_loft;
 
     #[derive(Debug, Clone, Copy)]
     pub struct MonstertruckKernel {
@@ -638,6 +639,9 @@ pub mod monstertruck {
     fn loft_sections(sections: &[LoftSection]) -> Result<Solid> {
         if sections.len() < 2 {
             bail!("loft needs at least two sections");
+        }
+        if let Some(solid) = planar_loft::build_if_needed(sections)? {
+            return Ok(solid);
         }
         let mut wires = sections
             .iter()

@@ -25,6 +25,7 @@ use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use std::collections::BTreeMap;
 
 mod circular;
+mod ruled;
 mod transitions;
 
 const LENGTH: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
@@ -252,7 +253,7 @@ impl SliceGraph {
     }
 }
 
-fn section_profiles(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Profile2d>> {
+fn section_ring_groups(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Vec<usize>>> {
     let areas = rings
         .iter()
         .map(|ring| signed_area_curves(ring))
@@ -264,16 +265,9 @@ fn section_profiles(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Profile2
         return None;
     }
     let mut outers = BTreeMap::new();
-    for (i, ring) in rings.iter().enumerate() {
+    for i in 0..rings.len() {
         if areas[i] > 0.0 {
-            outers.insert(
-                i,
-                Profile2d {
-                    loops: vec![ProfileLoop {
-                        curves: ring.iter().map(recovered_profile_curve_to_ir).collect(),
-                    }],
-                },
-            );
+            outers.insert(i, vec![i]);
         }
     }
     for (i, ring) in rings.iter().enumerate() {
@@ -294,11 +288,25 @@ fn section_profiles(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Profile2
         let parent = parents
             .into_iter()
             .min_by(|&a, &b| areas[a].total_cmp(&areas[b]))?;
-        outers.get_mut(&parent)?.loops.push(ProfileLoop {
-            curves: ring.iter().map(recovered_profile_curve_to_ir).collect(),
-        });
+        outers.get_mut(&parent)?.push(i);
     }
     (!outers.is_empty()).then(|| outers.into_values().collect())
+}
+
+fn section_profiles(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Profile2d>> {
+    Some(
+        section_ring_groups(rings)?
+            .into_iter()
+            .map(|group| Profile2d {
+                loops: group
+                    .into_iter()
+                    .map(|i| ProfileLoop {
+                        curves: rings[i].iter().map(recovered_profile_curve_to_ir).collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    )
 }
 
 fn slab_profiles(solid: &ReducedSolid, frame: Frame, level: f64) -> Option<Vec<Profile2d>> {
@@ -359,6 +367,12 @@ fn sectional_model(
     Ok(Some((model, root)))
 }
 
+enum SectionalFamily {
+    Extrusions,
+    Transitions,
+    Ruled,
+}
+
 pub fn recover<K: CadKernel>(
     source: &SourceRecovery<'_, K>,
     ceiling: Option<u64>,
@@ -389,6 +403,15 @@ pub fn recover<K: CadKernel>(
             continue;
         };
         let Some(levels) = stations(&solid, frame) else {
+            if let Some((model, root, slabs)) = ruled::model(&solid, frame)? {
+                candidates.push((
+                    model.complexity_score(root)?,
+                    model,
+                    root,
+                    slabs,
+                    SectionalFamily::Ruled,
+                ));
+            }
             continue;
         };
         let Some(sections) = levels
@@ -405,14 +428,26 @@ pub fn recover<K: CadKernel>(
         if let Some((model, root)) =
             transitions::model(&solid, frame, &levels, &sections[0], entities, index)?
         {
-            candidates.push((model.complexity_score(root)?, model, root, slabs, true));
+            candidates.push((
+                model.complexity_score(root)?,
+                model,
+                root,
+                slabs,
+                SectionalFamily::Transitions,
+            ));
         }
         if let Some((model, root)) = sectional_model(frame, &levels, &sections)? {
-            candidates.push((model.complexity_score(root)?, model, root, slabs, false));
+            candidates.push((
+                model.complexity_score(root)?,
+                model,
+                root,
+                slabs,
+                SectionalFamily::Extrusions,
+            ));
         }
     }
     candidates.sort_by_key(|c| c.0);
-    for (cost, mut model, root, slabs, transitions) in candidates {
+    for (cost, mut model, root, slabs, family) in candidates {
         if ceiling.is_some_and(|limit| cost >= limit) {
             break;
         }
@@ -421,18 +456,22 @@ pub fn recover<K: CadKernel>(
         }
         let face_ids = super::set_proven_source_boundary(&mut model, root, &solid)?;
         return Ok(Some(CadFragment {
-            source: if transitions {
-                CadFragmentSource::SectionalExtrusionTransitions {
+            source: match family {
+                SectionalFamily::Transitions => CadFragmentSource::SectionalExtrusionTransitions {
                     solid_id,
                     face_ids,
                     slabs,
-                }
-            } else {
-                CadFragmentSource::SectionalExtrusionUnion {
+                },
+                SectionalFamily::Extrusions => CadFragmentSource::SectionalExtrusionUnion {
                     solid_id,
                     face_ids,
                     slabs,
-                }
+                },
+                SectionalFamily::Ruled => CadFragmentSource::SectionalLoftUnion {
+                    solid_id,
+                    face_ids,
+                    slabs,
+                },
             },
             model,
             root,
