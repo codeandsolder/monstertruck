@@ -42,8 +42,8 @@ use crate::alternative::Alternative;
 #[cfg(test)]
 use classification::sample_points_on_face;
 use classification::{
-    FaceRelation, classify_face_relation, classify_points_inside, classify_points_relation,
-    classify_unknown_face, planar_partition_same_facing,
+    FaceRelation, WindingClassifier, classify_face_relation, classify_points_inside,
+    classify_points_relation, classify_unknown_face, planar_partition_same_facing,
 };
 use conversion::altshell_to_shell;
 use monstertruck_geometry::prelude::*;
@@ -72,6 +72,8 @@ struct PairAnalysis<C, S> {
     tolerance: f64,
     poly_shell0: PolyShell,
     poly_shell1: PolyShell,
+    winding0: WindingClassifier,
+    winding1: WindingClassifier,
     cls0: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
     cls1: faces_classification::FacesClassification<Point3, AltCurve<C, S>, S>,
     coplanar_overlap: bool,
@@ -110,6 +112,8 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .ok_or(ShapeOpsError::DivideFacesFailed { shell_index: 1 })?;
     Ok(PairAnalysis {
         tolerance: tol,
+        winding0: WindingClassifier::new(&poly_shell0),
+        winding1: WindingClassifier::new(&poly_shell1),
         poly_shell0,
         poly_shell1,
         cls0,
@@ -119,7 +123,7 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 }
 
 fn classify_unknown<C, S>(
-    poly_shell: &PolyShell,
+    winding: &WindingClassifier,
     region: &faces_classification::BooleanRegion<Point3, C, S>,
     tol: f64,
     shell_index: usize,
@@ -133,13 +137,13 @@ where
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     if let Some(face) = region.try_face() {
-        return classify_unknown_face(poly_shell, &face, tol)
+        return classify_unknown_face(winding, &face, tol)
             .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index });
     }
     let points =
         divide_face::sample_points_on_region(region.absolute_boundaries(), &region.surface(), tol)
             .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
-    classify_points_inside(poly_shell, points)
+    classify_points_inside(winding, points)
         .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
 }
 
@@ -154,7 +158,7 @@ enum DifferenceContactSide {
 }
 
 fn classify_difference_unknown<C, S>(
-    poly_shell: &PolyShell,
+    winding: &WindingClassifier,
     region: &faces_classification::BooleanRegion<Point3, C, S>,
     tol: f64,
     shell_index: usize,
@@ -168,7 +172,7 @@ where
         + SearchParameter<SurfaceParameter, Point = Point3>
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    if let Ok(label) = classify_unknown(poly_shell, region, tol, shell_index) {
+    if let Ok(label) = classify_unknown(winding, region, tol, shell_index) {
         return Ok(label);
     }
     let points = region
@@ -185,7 +189,7 @@ where
         )
         .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })?;
     let [exterior, interior] = classification::unanimous_boundary_contact_sides(
-        poly_shell,
+        winding,
         &points,
         &region.surface(),
         region.orientation(),
@@ -207,7 +211,7 @@ where
 /// Mixed samples, boundary contacts, and zero-area regions are NOT evidence
 /// for either label and must never be force-classified.
 fn unanimous_region_containment<C, S>(
-    poly_shell: &PolyShell,
+    winding: &WindingClassifier,
     region: &faces_classification::BooleanRegion<Point3, C, S>,
     tol: f64,
 ) -> Option<bool>
@@ -226,7 +230,7 @@ where
     };
     let surface = region.surface();
     let classify = |point: Point3| -> Option<bool> {
-        let verdict = classification::classify_inside_with_polyshell(poly_shell, point)?;
+        let verdict = winding.inside(point)?;
         // A point on the other solid's boundary can receive a misleading
         // signed-winding verdict. Both small physical displacements normal to
         // this face must agree with the point's label; a coincident/tangent
@@ -240,9 +244,7 @@ where
             return None;
         }
         let offset = normal / length * BooleanTolerance::new(tol).classifier_offset;
-        (classification::classify_inside_with_polyshell(poly_shell, point + offset)? == verdict
-            && classification::classify_inside_with_polyshell(poly_shell, point - offset)?
-                == verdict)
+        (winding.inside(point + offset)? == verdict && winding.inside(point - offset)? == verdict)
             .then_some(verdict)
     };
     let mut samples = samples.into_iter();
@@ -253,7 +255,7 @@ where
 }
 
 fn classify_relation<C, S>(
-    poly_shell: &PolyShell,
+    winding: &WindingClassifier,
     region: &faces_classification::BooleanRegion<Point3, C, S>,
     tol: f64,
     shell_index: usize,
@@ -268,7 +270,7 @@ where
         + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     if let Some(face) = region.try_face() {
-        return classify_face_relation(poly_shell, &face, tol)
+        return classify_face_relation(winding, &face, tol)
             .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index });
     }
     let points =
@@ -278,7 +280,7 @@ where
     if !region.orientation() {
         surface.invert();
     }
-    classify_points_relation(poly_shell, points, &surface, tol)
+    classify_points_relation(winding, points, &surface, tol)
         .ok_or(ShapeOpsError::UnknownClassificationFailed { shell_index })
 }
 
@@ -321,7 +323,7 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // the fallback reconstruction must make identical contact decisions.
     let source_inside_cutter = |region: &AltRegion<C, S>| {
         classify_difference_unknown(
-            &analysis.poly_shell1,
+            &analysis.winding1,
             region,
             tol,
             0,
@@ -330,7 +332,7 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     };
     let cutter_exterior_inside_source = |region: &AltRegion<C, S>| {
         classify_difference_unknown(
-            &analysis.poly_shell0,
+            &analysis.winding0,
             region,
             tol,
             1,
@@ -348,12 +350,12 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     // existing status; never fabricate an interior for zero-area regions.
     let mut difference0 = Vec::new();
     for region in known_and0 {
-        if unanimous_region_containment(&analysis.poly_shell1, &region, tol) == Some(false) {
+        if unanimous_region_containment(&analysis.winding1, &region, tol) == Some(false) {
             difference0.push(region);
         }
     }
     for region in known_or0 {
-        if unanimous_region_containment(&analysis.poly_shell1, &region, tol) != Some(true) {
+        if unanimous_region_containment(&analysis.winding1, &region, tol) != Some(true) {
             difference0.push(region);
         }
     }
@@ -432,7 +434,7 @@ fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     analysis.cls1.integrate_by_component();
     let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
     for region in unknown0 {
-        if classify_unknown(&analysis.poly_shell1, &region, tol, 0)? {
+        if classify_unknown(&analysis.winding1, &region, tol, 0)? {
             and0.push(region);
         } else {
             or0.push(region);
@@ -440,7 +442,7 @@ fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
     for region in unknown1 {
-        if classify_unknown(&analysis.poly_shell0, &region, tol, 1)? {
+        if classify_unknown(&analysis.winding0, &region, tol, 1)? {
             and1.push(region);
         } else {
             or1.push(region);
@@ -559,7 +561,7 @@ fn classify_complete_label_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
     for region in unknown0 {
         for region in positive_region_components(&region, tol) {
-            match classify_relation(&analysis.poly_shell1, &region, tol, 0)? {
+            match classify_relation(&analysis.winding1, &region, tol, 0)? {
                 FaceRelation::Inside => and0.push(region),
                 FaceRelation::Outside | FaceRelation::CoincidentSameFacing => or0.push(region),
             }
@@ -568,7 +570,7 @@ fn classify_complete_label_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
     for region in unknown1 {
         for region in positive_region_components(&region, tol) {
-            match classify_relation(&analysis.poly_shell0, &region, tol, 1)? {
+            match classify_relation(&analysis.winding0, &region, tol, 1)? {
                 FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
                 FaceRelation::Outside => or1.push(region),
             }
@@ -634,7 +636,7 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             let relation = if coincident {
                 FaceRelation::CoincidentSameFacing
             } else {
-                classify_relation(&analysis.poly_shell1, &region, tol, 0)?
+                classify_relation(&analysis.winding1, &region, tol, 0)?
             };
             match relation {
                 FaceRelation::Inside => and0.push(region),
@@ -660,7 +662,7 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             let relation = if coincident {
                 FaceRelation::CoincidentSameFacing
             } else {
-                classify_relation(&analysis.poly_shell0, &region, tol, 1)?
+                classify_relation(&analysis.winding0, &region, tol, 1)?
             };
             match relation {
                 FaceRelation::Inside | FaceRelation::CoincidentSameFacing => and1.push(region),
@@ -1015,7 +1017,6 @@ pub fn symmetric_difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 
 #[cfg(test)]
 mod structural_classification_tests {
-    use super::classification::classify_inside_with_polyshell;
     use super::*;
     use monstertruck_modeling::{Curve, Surface, builder};
 
@@ -1030,6 +1031,7 @@ mod structural_classification_tests {
     fn preclassified_difference_regions_require_unanimous_geometric_corroboration() {
         let solid = unit_cube();
         let poly_shell = solid.boundaries()[0].triangulation(0.01);
+        let winding = WindingClassifier::new(&poly_shell);
         let flat_region = |xlo: f64, xhi: f64, z: f64, key: usize| {
             let points = [
                 Point3::new(xlo, 0.25, z),
@@ -1064,17 +1066,17 @@ mod structural_classification_tests {
         let inside = flat_region(0.25, 0.75, 0.5, 2);
         let crossing = flat_region(-0.3, 0.3, 0.5, 3);
         assert_eq!(
-            unanimous_region_containment(&poly_shell, &outside, 1.0e-5),
+            unanimous_region_containment(&winding, &outside, 1.0e-5),
             Some(false),
             "confident outside evidence must recover a region incorrectly marked And"
         );
         assert_eq!(
-            unanimous_region_containment(&poly_shell, &inside, 1.0e-5),
+            unanimous_region_containment(&winding, &inside, 1.0e-5),
             Some(true),
             "confident inside evidence must reject a region incorrectly marked Or"
         );
         assert_eq!(
-            unanimous_region_containment(&poly_shell, &crossing, 1.0e-5),
+            unanimous_region_containment(&winding, &crossing, 1.0e-5),
             None,
             "a region straddling the other shell cannot inherit either label"
         );
@@ -1110,7 +1112,7 @@ mod structural_classification_tests {
             )
         };
         assert_eq!(
-            unanimous_region_containment(&poly_shell, &boundary_contact, 1.0e-5),
+            unanimous_region_containment(&winding, &boundary_contact, 1.0e-5),
             None,
             "an exact coincident boundary cannot certify inside or outside from the surface itself"
         );
@@ -1136,7 +1138,7 @@ mod structural_classification_tests {
             .collect();
         let zero_area = AltRegion::new(vec![retraced], Surface::Plane(Plane::xy()), true, 4, 4);
         assert_eq!(
-            unanimous_region_containment(&poly_shell, &zero_area, 1.0e-5),
+            unanimous_region_containment(&winding, &zero_area, 1.0e-5),
             None,
             "zero-area retraces must not gain an invented interior witness"
         );
@@ -1266,7 +1268,7 @@ mod structural_classification_tests {
         let shell: Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>> =
             Shell::from(vec![Face::new_unchecked(Vec::new(), Some(reversed))]);
         assert_eq!(
-            classify_inside_with_polyshell(&shell, Point3::new(0.1, 0.1, 0.1)),
+            WindingClassifier::new(&shell).inside(Point3::new(0.1, 0.1, 0.1)),
             Some(false)
         );
     }
@@ -1278,7 +1280,7 @@ mod structural_classification_tests {
         let shell: Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>> =
             Shell::from(vec![face]);
         assert_eq!(
-            classify_inside_with_polyshell(&shell, Point3::new(0.1, 0.1, 0.1)),
+            WindingClassifier::new(&shell).inside(Point3::new(0.1, 0.1, 0.1)),
             Some(false)
         );
     }
@@ -1386,11 +1388,11 @@ mod structural_classification_tests {
         ]);
 
         assert_eq!(
-            classify_inside_with_polyshell(&shell, Point3::new(0.25, 0.25, 0.25)),
+            WindingClassifier::new(&shell).inside(Point3::new(0.25, 0.25, 0.25)),
             Some(true)
         );
         assert_eq!(
-            classify_inside_with_polyshell(&shell, Point3::new(0.6, 0.6, 0.6)),
+            WindingClassifier::new(&shell).inside(Point3::new(0.6, 0.6, 0.6)),
             Some(false)
         );
     }
