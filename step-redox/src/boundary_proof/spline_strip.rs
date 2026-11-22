@@ -622,7 +622,7 @@ pub(super) fn oriented_key(
 }
 
 /// Check that an already-authored complete trim traverses an embedded strip
-/// in exactly the opposite sense to its declared FACE_SURFACE.same_sense.
+/// in exactly the opposite sense to its declared `FACE_SURFACE.same_sense`.
 /// This does not by itself establish an oriented closed shell; callers must
 /// separately validate the entire reconciled boundary, including coedges.
 pub(super) fn reversed_face_sense_is_proven(

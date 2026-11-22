@@ -108,6 +108,7 @@ pub struct KernelRecoveryFailure {
 
 /// A candidate verified against a source proof view in which only uniquely
 /// contradictory, fully proven spline-strip face-sense flags were reversed.
+///
 /// This is deliberately distinct from verification of the authored source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceOrientationReconciliation {
@@ -418,13 +419,13 @@ impl WholeSolidRecoveryState {
 
     fn add_candidates<I>(&mut self, candidates: I) -> Result<usize>
     where I: IntoIterator<Item = SourceCadFragment> {
-        self.add_candidates_with_proof(candidates, BoundaryVerification::Structural)
+        self.add_candidates_with_proof(candidates, &BoundaryVerification::Structural)
     }
 
     fn add_candidates_with_proof<I>(
         &mut self,
         candidates: I,
-        boundary_verification: BoundaryVerification,
+        boundary_verification: &BoundaryVerification,
     ) -> Result<usize>
     where
         I: IntoIterator<Item = SourceCadFragment>,
@@ -1324,7 +1325,7 @@ impl WholeSolidRecoveryState {
                         source_solid: source,
                         fragment,
                     }],
-                    boundary_verification,
+                    &boundary_verification,
                 )
                 .map(|_| ()),
             Ok(Some(KernelRecoveryCandidate { fragment, .. })) => Err(anyhow::anyhow!(

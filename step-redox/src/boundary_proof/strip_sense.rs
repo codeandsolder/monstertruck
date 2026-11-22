@@ -21,7 +21,7 @@ pub struct StripFaceSenseRepair {
     pub reconciled_same_sense: bool,
 }
 
-pub(crate) struct ReconciledStripBoundary {
+pub struct ReconciledStripBoundary {
     pub entities: Vec<EntityInstance>,
     pub diagnostic: AnalyticBoundaryDiagnostic,
     pub repairs: Vec<StripFaceSenseRepair>,
@@ -31,7 +31,7 @@ pub(crate) struct ReconciledStripBoundary {
 /// uniquely reversed spline-strip trim certificate; every other face retains
 /// its original semantics. The final complete boundary proof is mandatory.
 /// An empty repair plan is not an orientation-reconciled certificate.
-pub(crate) fn reconcile_strip_face_senses(
+pub fn reconcile_strip_face_senses(
     solid_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
@@ -86,12 +86,12 @@ pub(crate) fn reconcile_strip_face_senses(
         if sense != if repair.original_same_sense { "T" } else { "F" } {
             return None;
         }
-        *sense = if repair.reconciled_same_sense {
+        if repair.reconciled_same_sense {
             "T"
         } else {
             "F"
         }
-        .to_owned();
+        .clone_into(sense);
     }
     let diagnostic = analytic_boundary_diagnostic(solid_id, &reconciled, index);
     diagnostic.supported.then_some(ReconciledStripBoundary {
@@ -137,7 +137,7 @@ mod tests {
                 anyhow::bail!("invalid source face parameter list");
             };
             assert_ne!(original_params[3], revised_params[3]);
-            revised_params[3] = original_params[3].clone();
+            revised_params[3].clone_from(&original_params[3]);
         }
         assert_eq!(
             crate::write_exchange(&source)?,
