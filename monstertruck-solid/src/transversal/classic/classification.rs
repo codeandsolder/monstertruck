@@ -1,54 +1,46 @@
 //! Geometric inside/outside and coincident-face classification.
 
 use super::{
-    AltRegion, BooleanTolerance, EuclideanSpace, Face, IncludingPointInDomain, InnerSpace,
-    Invertible, MeshableShape, MeshableSurface, MetricSpace, ParametricSurface3D, Point3,
-    PolyShell, PolygonMesh, PolylineCurve, PolylineableCurve, SearchNearestParameter,
-    SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SurfaceParameter, Vector3, divide_face,
-    hash, loops_store,
+    AltRegion, BooleanTolerance, EuclideanSpace, Face, InnerSpace, Invertible, MeshableShape,
+    MeshableSurface, MetricSpace, ParametricSurface3D, Point3, PolyShell, PolygonMesh,
+    PolylineableCurve, SearchNearestParameter, SearchParameter, ShapeOpsCurve, ShapeOpsSurface,
+    Shell, SignedRayIndex, SurfaceParameter, Vector3, divide_face, hash, loops_store,
 };
 
-/// Classify a tessellated shell point using the signed winding convention shared
-/// with [`IncludingPointInDomain`], with several deterministic ray directions to
-/// avoid a single degenerate ray deciding the result.
-pub(super) fn classify_inside_with_polyshell(
-    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
-    point: Point3,
-) -> Option<bool> {
-    let offsets = [
-        Vector3::new(0.0, 0.0, 0.0),
-        Vector3::new(0.613, -0.271, 0.149),
-        Vector3::new(-0.347, 0.509, -0.221),
-        Vector3::new(0.193, 0.401, 0.577),
-        Vector3::new(-0.433, -0.127, 0.389),
-    ];
-    let (inside_votes, outside_votes) = offsets
-        .into_iter()
-        .map(|offset| hash::take_one_unit(point + offset))
-        .try_fold((0usize, 0usize), |(inside, outside), direction| {
-            let count = poly_shell.iter().try_fold(0isize, |count, face| {
-                // Tessellation stores each polygon in the underlying surface's
-                // orientation and represents topological reversal on the Face.
-                // Apply that orientation to the signed crossing contribution;
-                // cloning and inverting the whole polygon per ray is unnecessary.
-                let polygon = face.surface()?;
-                let crossing = polygon.signed_crossing_faces(point, direction);
-                Some(
-                    count
-                        + if face.orientation() {
-                            crossing
-                        } else {
-                            -crossing
-                        },
-                )
-            })?;
-            if count >= 1 {
-                Some((inside + 1, outside))
-            } else {
-                Some((inside, outside + 1))
-            }
-        })?;
-    Some(inside_votes > outside_votes)
+/// Snapshot the tessellated operand once for every repeated ray query.
+#[derive(Clone, Debug)]
+pub(super) struct WindingClassifier(Option<SignedRayIndex>);
+
+impl WindingClassifier {
+    pub(super) fn new(poly_shell: &PolyShell) -> Self {
+        // Retain failure on any missing polygon, as in the exhaustive scan.
+        let meshes = poly_shell
+            .iter()
+            .map(|face| Some((face.surface()?, face.orientation())))
+            .collect::<Option<Vec<_>>>();
+        Self(meshes.map(SignedRayIndex::new))
+    }
+
+    /// Several deterministic ray directions avoid a single degenerate ray
+    /// deciding the classification, preserving signed material winding.
+    pub(super) fn inside(&self, point: Point3) -> Option<bool> {
+        let index = self.0.as_ref()?;
+        let offsets = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.613, -0.271, 0.149),
+            Vector3::new(-0.347, 0.509, -0.221),
+            Vector3::new(0.193, 0.401, 0.577),
+            Vector3::new(-0.433, -0.127, 0.389),
+        ];
+        let inside = offsets
+            .into_iter()
+            .filter(|offset| {
+                let direction = hash::take_one_unit(point + *offset);
+                index.signed_crossing_faces(point, direction) >= 1
+            })
+            .count();
+        Some(inside > offsets.len() / 2)
+    }
 }
 
 pub(super) fn sample_points_on_face<C, S>(
@@ -121,14 +113,14 @@ fn strict_majority(inside: usize, outside: usize) -> Option<bool> {
 }
 
 pub(super) fn classify_points_inside(
-    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    winding: &WindingClassifier,
     points: impl IntoIterator<Item = Point3>,
 ) -> Option<bool> {
     let (inside, outside) =
         points
             .into_iter()
             .try_fold((0usize, 0usize), |(inside, outside), point| {
-                if classify_inside_with_polyshell(poly_shell, point)? {
+                if winding.inside(point)? {
                     Some((inside + 1, outside))
                 } else {
                     Some((inside, outside + 1))
@@ -144,7 +136,7 @@ pub(super) fn classify_points_inside(
 /// remains inconclusive when its witnesses have different side relations.
 /// The returned pair is (source exterior, source interior).
 pub(super) fn unanimous_boundary_contact_sides<S>(
-    poly_shell: &PolyShell,
+    winding: &WindingClassifier,
     points: &[Point3],
     surface: &S,
     orientation: bool,
@@ -176,8 +168,8 @@ where
         let classify_pair = |scale| {
             let delta = outward * (shift * scale);
             Some([
-                classify_inside_with_polyshell(poly_shell, point + delta)?,
-                classify_inside_with_polyshell(poly_shell, point - delta)?,
+                winding.inside(point + delta)?,
+                winding.inside(point - delta)?,
             ])
         };
         let first = classify_pair(1.0)?;
@@ -202,7 +194,7 @@ fn unanimous_opposing_sides(
 }
 
 pub(super) fn classify_unknown_face<C, S>(
-    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    winding: &WindingClassifier,
     face: &Face<Point3, C, S>,
     tol: f64,
 ) -> Option<bool>
@@ -210,7 +202,7 @@ where
     C: PolylineableCurve + Clone,
     S: MeshableSurface + Clone + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    classify_points_inside(poly_shell, sample_points_on_face(face, tol)?)
+    classify_points_inside(winding, sample_points_on_face(face, tol)?)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,7 +229,7 @@ fn unique_relation(inside: usize, outside: usize, coincident: usize) -> Option<F
 }
 
 pub(super) fn classify_points_relation<S>(
-    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    winding: &WindingClassifier,
     points: impl IntoIterator<Item = Point3>,
     surface: &S,
     tol: f64,
@@ -255,7 +247,7 @@ where
                 .search_parameter(point, None, 100)
                 .or_else(|| surface.search_nearest_parameter(point, None, 100));
             let Some((u, v)) = parameter else {
-                let is_inside = classify_inside_with_polyshell(poly_shell, point)?;
+                let is_inside = winding.inside(point)?;
                 return Some((
                     inside + usize::from(is_inside),
                     outside + usize::from(!is_inside),
@@ -263,10 +255,8 @@ where
                 ));
             };
             let normal = surface.normal(u, v);
-            let outward_inside =
-                classify_inside_with_polyshell(poly_shell, point + normal * offset)?;
-            let inward_inside =
-                classify_inside_with_polyshell(poly_shell, point - normal * offset)?;
+            let outward_inside = winding.inside(point + normal * offset)?;
+            let inward_inside = winding.inside(point - normal * offset)?;
             if outward_inside {
                 Some((inside + 1, outside, coincident))
             } else if inward_inside {
@@ -280,7 +270,7 @@ where
 }
 
 pub(super) fn classify_face_relation<C, S>(
-    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    winding: &WindingClassifier,
     face: &Face<Point3, C, S>,
     tol: f64,
 ) -> Option<FaceRelation>
@@ -295,7 +285,7 @@ where
 {
     let points = sample_points_on_face(face, tol)?;
     let surface = face.oriented_surface();
-    classify_points_relation(poly_shell, points, &surface, tol)
+    classify_points_relation(winding, points, &surface, tol)
 }
 
 pub(super) fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(

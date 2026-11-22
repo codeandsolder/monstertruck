@@ -26,19 +26,74 @@ impl Display for BooleanDisplay {
     }
 }
 
-/// display float number to step file
+/// A STEP REAL literal that round-trips every finite binary64 value.
+///
+/// Scientific notation is a presentation choice only: it never reduces the
+/// number of significant digits. STEP requires an uppercase exponent and
+/// a decimal point even when a mantissa is integral.
 #[derive(Clone, Copy, Debug)]
 pub struct FloatDisplay(pub f64);
 
 impl Display for FloatDisplay {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        const SCIENTIFIC_NOTATION_BELOW: f64 = 0.01;
         let Self(x) = *self;
-        if f64::abs(x) < DEFAULT_NUMERICAL_TOLERANCES.step_output_scientific_notation_threshold
-            && x != 0.0
-        {
-            f.write_fmt(format_args!("{x:.10E}"))
+        let text = if x != 0.0 && x.abs() < SCIENTIFIC_NOTATION_BELOW {
+            format!("{x:E}")
         } else {
-            f.write_fmt(format_args!("{x:?}"))
+            format!("{x:?}")
+        };
+        let Some((mantissa, exponent)) = text.split_once(['E', 'e']) else {
+            return f.write_str(&text);
+        };
+        f.write_str(mantissa)?;
+        if !mantissa.contains('.') {
+            f.write_str(".0")?;
+        }
+        f.write_fmt(format_args!("E{exponent}"))
+    }
+}
+
+#[cfg(test)]
+mod real_format_tests {
+    use super::FloatDisplay;
+
+    #[test]
+    fn step_real_roundtrips_binary64_without_losing_small_coordinates() {
+        let test = |value: f64| {
+            let text = FloatDisplay(value).to_string();
+            assert!(text.contains('.') && !text.contains('e'), "{text}");
+            assert_eq!(
+                text.parse::<f64>().expect("STEP REAL").to_bits(),
+                value.to_bits(),
+                "{value:?} -> {text}"
+            );
+        };
+        for value in [
+            0.,
+            -0.,
+            1.,
+            -1.,
+            0.009_876_543_210_987_654,
+            -0.001_234_567_890_123_456_7,
+            1e-6,
+            5e-4,
+            f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            f64::MAX,
+            f64::MIN,
+        ] {
+            test(value);
+        }
+        // Deterministic bit-pattern coverage spans subnormals, tiny/huge
+        // exponents, both signs, and arbitrary significands.
+        let mut bits = 0x1234_5678_9abc_def0_u64;
+        for _ in 0..10_000 {
+            bits = bits.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let value = f64::from_bits(bits);
+            if value.is_finite() {
+                test(value);
+            }
         }
     }
 }
@@ -440,26 +495,8 @@ impl Default for StepMeasurementContext {
 
 impl StepMeasurementContext {
     /// STEP `REAL` literal for the distance accuracy value.
-    pub(super) const fn accuracy(&self) -> StepReal { StepReal(self.distance_accuracy_value) }
-}
-
-/// Formats an `f64` as a STEP `REAL` literal: shortest round-tripping form with
-/// an uppercase exponent and a mantissa that always carries a decimal point.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct StepReal(pub f64);
-
-impl Display for StepReal {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        let text = format!("{:E}", self.0);
-        let (mantissa, exponent) = match text.split_once('E') {
-            Some((mantissa, exponent)) => (mantissa, Some(exponent)),
-            None => (text.as_str(), None),
-        };
-        f.write_str(mantissa)?;
-        if !mantissa.contains('.') {
-            f.write_str(".0")?;
-        }
-        exponent.map_or(Ok(()), |exponent| f.write_fmt(format_args!("E{exponent}")))
+    pub(super) const fn accuracy(&self) -> FloatDisplay {
+        FloatDisplay(self.distance_accuracy_value)
     }
 }
 
