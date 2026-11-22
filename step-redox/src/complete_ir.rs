@@ -3970,6 +3970,12 @@ END-ISO-10303-21;
             let fragment =
                 recover_kernel_boundary_feature_fragment(source.source, &load, &document, &kernel)?
                     .context("native relief did not reconstruct a whole body")?;
+            assert!(
+                fragment.boundary_verified,
+                "native source proof refused for {:?}",
+                source.source
+            );
+            let fragment = fragment.fragment;
             assert!(matches!(
                 fragment.source,
                 CadFragmentSource::BoundaryFeatureComposite {
@@ -4003,6 +4009,10 @@ END-ISO-10303-21;
         let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
         assert_eq!(report.body_count, 1);
         assert_eq!(report.unrecovered_solid_count, 0);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
         let [body] = report.boundary_feature_composites.as_slice() else {
             bail!("complete IR did not retain the reconstructed relief composite");
         };
@@ -4022,6 +4032,10 @@ END-ISO-10303-21;
             assert_eq!(report.body_count, 1);
             assert_eq!(report.constructively_recovered_solid_count, 1);
             assert_eq!(report.unrecovered_solid_count, 0);
+            assert_eq!(
+                report.source_boundary_verified_solids,
+                [report.body_scan.solids[0].source]
+            );
             let [body] = report.boundary_feature_composites.as_slice() else {
                 bail!("stepped relief must recover an executable boundary feature composite");
             };
@@ -4057,6 +4071,11 @@ END-ISO-10303-21;
             let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
             assert_eq!(report.body_count, 1);
             assert_eq!(report.constructively_recovered_solid_count, 1);
+            assert_eq!(
+                report.source_boundary_verified_solids,
+                [report.body_scan.solids[0].source],
+                "recess original source proof failed ({faces} faces)"
+            );
             let [body] = report.boundary_feature_composites.as_slice() else {
                 bail!("recess source must recover an executable feature composite");
             };
@@ -4124,16 +4143,26 @@ END-ISO-10303-21;
             Vec::<KernelRecoveryFailure>::new()
         );
         assert_eq!(report.unrecovered_solid_count, 0);
-        // Source-boundary verified simple CAD now outranks the more expensive
-        // native boss peel; the native transaction itself has a separate
-        // dedicated test above, so don't pin the Complete IR to history.
         let exact = recover_auto_proven_extrusion_core_union_fragment(input, 0, 16, &kernel)?
-            .ok_or_else(|| anyhow::anyhow!("square boss has no exact simple CAD"))?;
+            .context("square boss has no exact simple material model")?;
         let chosen = selected_unique_source_fragment(&report)?;
         assert_eq!(
-            *chosen, exact,
-            "source-proof selection changed the admitted CAD"
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
         );
+        assert!(
+            chosen.model.complexity_score(chosen.root)?
+                <= exact.model.complexity_score(exact.root)?
+        );
+        let source = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+        let shape = kernel.evaluate(&chosen.model, chosen.root)?;
+        assert!(kernel.summarize(&shape).is_single_solid());
+        assert!(rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &shape,
+            16,
+            &source.data[0].entities
+        )?);
         Ok(())
     }
 

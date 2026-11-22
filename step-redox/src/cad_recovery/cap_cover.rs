@@ -229,15 +229,39 @@ mod tests {
                 "{:?}",
                 report.kernel_recovery_failures
             );
-            let [selected] = report.extrusion_core_unions.as_slice() else {
-                anyhow::bail!("expected one source-cap extrusion union");
-            };
-            let fragment = &selected.fragment;
+            // Exercise cap coverage independently of competing exact families.
+            let index = crate::step_graph::build_index(entities);
+            let source = SourceRecovery::new(id, entities, &index, &kernel)
+                .ok_or_else(|| anyhow::anyhow!("source boundary unsupported"))?;
+            let fragment = recover(&source, None)?
+                .ok_or_else(|| anyhow::anyhow!("cap cover failed for source #{id}"))?;
             assert!(
-                matches!(&fragment.source, CadFragmentSource::SourceCapExtrusionUnion { solid_id, cap_face_ids, .. } if *solid_id == id && cap_face_ids.len() == count),
-                "{:?}",
-                fragment.source
+                matches!(&fragment.source, CadFragmentSource::SourceCapExtrusionUnion { solid_id, cap_face_ids, .. } if *solid_id == id && cap_face_ids.len() == count)
             );
+            let selected = report.selected_fragments().collect::<Vec<_>>();
+            let [winner] = selected.as_slice() else {
+                anyhow::bail!("expected one selected source fragment");
+            };
+            let winner = &winner.fragment;
+            eprintln!(
+                "source #{id}: cap cover cost {}, selected {:?} cost {}",
+                fragment.model.complexity_score(fragment.root)?,
+                winner.source,
+                winner.model.complexity_score(winner.root)?
+            );
+            assert_eq!(
+                report.source_boundary_verified_solids,
+                [report.body_scan.solids[0].source]
+            );
+            assert!(
+                winner.model.complexity_score(winner.root)?
+                    <= fragment.model.complexity_score(fragment.root)?
+            );
+            let shape = kernel.evaluate(&winner.model, winner.root)?;
+            assert!(kernel.summarize(&shape).is_single_solid());
+            assert!(rebuilt_kernel_boundary_matches_source(
+                &kernel, &shape, id, entities
+            )?);
             fragment.model.validate()?;
             assert_eq!(
                 fragment
