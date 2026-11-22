@@ -237,7 +237,7 @@ struct CurveEvidence {
 
 fn curve_evidence(spline: &BSplineSupport) -> Option<CurveEvidence> {
     well_conditioned(spline)?;
-    let rational = bounded::rational(spline)?;
+    let rational = spline.rational_curve()?;
     let mut spans = proof_bezier_spans(rational.non_rationalized())?;
     let start = point_key(*spline.control_points_mm.first()?)?;
     let end = point_key(*spline.control_points_mm.last()?)?;
@@ -477,7 +477,7 @@ fn generator_piece(parent: [PointKey; 2], edge: &EdgeGeometry) -> Option<()> {
                 .then_some(())
         }
         CurveSupport::BSpline(spline) => {
-            let rational = bounded::rational(spline)?;
+            let rational = spline.rational_curve()?;
             if certify_nurbs_segment_locus(
                 &rational,
                 Point3::new(start[0], start[1], start[2]),

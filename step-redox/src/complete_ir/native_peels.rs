@@ -312,6 +312,91 @@ mod tests {
     };
 
     #[test]
+    fn drafted_round_host_peels_nonconvex_planar_recesses() -> Result<()> {
+        let bytes =
+            include_bytes!("../../validation/fixtures/native_drafted_round_network_0b5a3544.step");
+        let kernel = MonstertruckKernel::project_standard();
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange,
+        )?;
+        let load = kernel.inspect_source_document(&document)?;
+        let [solid] = load.solids.as_slice() else {
+            anyhow::bail!("expected one body");
+        };
+        let source = solid.source;
+        let provenance = solid
+            .topology_provenance
+            .as_ref()
+            .context("missing provenance")?;
+        let section = &document.as_ref().data[source.data_section];
+        let index = crate::step_graph::build_index(&section.entities);
+        let evidence =
+            super::super::replayable_source_treatments(&section.entities, &index, source.id);
+        let treatment_layers::PeelOutcome {
+            mut edited,
+            layers,
+            stop,
+        } = treatment_layers::peel(&kernel, &document, source, provenance, &evidence)?;
+        assert_eq!(layers.len(), 2);
+        assert!(stop.is_none(), "{stop:?}");
+        kernel.normalize_edited_source(&mut edited)?;
+        // Independently prove the materialized tool witnesses against
+        // evaluated CAD, without treating the unsupported source solid as
+        // a successful recovery.
+        let projection = kernel.edited_source_step_projection(&edited)?;
+        let mut exchange = projection.exchange;
+        let entities = &mut exchange.data[0].entities;
+        let index = crate::step_graph::build_index(entities);
+        let report = crate::planar_features::diagnose_boundary_features(entities);
+        let tools = crate::planar_features::materialize_boundary_feature_tools_from_report(
+            entities, &index, &report, 1,
+        )?;
+        let index = crate::step_graph::build_index(entities);
+        let ids = tools.iter().map(|tool| tool.solid_id).collect::<Vec<_>>();
+        let tolerances =
+            crate::solid_revolutions::source_tolerance_by_representation_item(entities, &index);
+        let candidates = super::super::recover_constructive_fragments_with_tolerances(
+            entities,
+            &index,
+            &tolerances,
+            &ids,
+        )?;
+        let mut proven = BTreeSet::new();
+        for candidate in &candidates {
+            let id = super::super::source_solid_id(&candidate.source);
+            if let Some(proof) = SourceRecovery::new(id, entities, &index, &kernel)
+                && proof.proves(&candidate.model, candidate.root, None)?
+            {
+                proven.insert(id);
+            }
+        }
+        let families = peel_projected_features(&kernel, &mut edited, provenance, 0)?;
+        let faces = kernel.inspect_edited_source(&edited)?.faces;
+        eprintln!(
+            "strict tool proofs={}, peeled families={}, remaining faces={faces}",
+            proven.len(),
+            families.len()
+        );
+        assert!(
+            proven.len() >= 2,
+            "expected strictly proven materialized tools"
+        );
+        assert!(
+            families.len() >= 5,
+            "families={}, faces={faces}",
+            families.len()
+        );
+        assert!(
+            faces < 136,
+            "the previously unrecognized planar tools must be removed"
+        );
+        // The remaining topology must still be exportable, even though
+        // full-source reconstruction is not established.
+        kernel.edited_source_step_projection(&edited)?;
+        Ok(())
+    }
+
+    #[test]
     fn native_treatment_inversion_exposes_mapped_boundary_feature() -> Result<()> {
         let kernel = MonstertruckKernel::project_standard();
         let mut model = CadModel::new();

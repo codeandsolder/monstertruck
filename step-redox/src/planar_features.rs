@@ -710,7 +710,7 @@ fn coplanar_feature_cap_holes(
             return None;
         };
         let record = simple_record(&entities[*index.get(bound_id)?])?;
-        if record.name != "FACE_OUTER_BOUND" {
+        if !matches!(record.name.as_str(), "FACE_OUTER_BOUND" | "FACE_BOUND") {
             return None;
         }
         let Parameter::List(params) = &record.parameter else {

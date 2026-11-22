@@ -16,10 +16,7 @@ use monstertruck_geometry::{
         certify_cylindrical_arc_coverage, certify_nurbs_curve_on_support,
     },
     analytic_line_segment::{SegmentLocus, certify_nurbs_segment_locus},
-    prelude::{
-        BoundedCurve, BsplineCurve, KnotVector, NurbsCurve, ParametricCurve, Point3, Vector3,
-        Vector4,
-    },
+    prelude::{BoundedCurve, NurbsCurve, ParametricCurve, Point3, Vector3, Vector4},
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
@@ -29,27 +26,6 @@ const TOL: f64 = ANALYTIC_BOUNDARY_PROOF_TOL_MM;
 const fn point(p: [f64; 3]) -> Point3 { Point3::new(p[0], p[1], p[2]) }
 const fn vector(v: [f64; 3]) -> Vector3 { Vector3::new(v[0], v[1], v[2]) }
 fn decode(p: PointKey) -> Option<[f64; 3]> { dequantize_vector(p, POINT_Q_MM) }
-
-pub(super) fn rational(spline: &BSplineSupport) -> Option<NurbsCurve<Vector4>> {
-    bspline_domain(spline)?;
-    let weights = spline.weights.as_ref();
-    if weights.is_some_and(|w| w.len() != spline.control_points_mm.len()) {
-        return None;
-    }
-    let controls = spline
-        .control_points_mm
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let w = weights.map_or(1., |weights| weights[i]);
-            (w.is_finite() && w > 0. && p.iter().all(|v| v.is_finite()))
-                .then(|| Vector4::new(p[0] * w, p[1] * w, p[2] * w, w))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let knots = KnotVector::try_from(spline.knots.clone()).ok()?;
-    let spline = BsplineCurve::new(knots, controls).ok()?;
-    Some(NurbsCurve::new(spline))
-}
 
 fn sphere_or_torus(support: &SupportLocusKey) -> Option<AnalyticSupport> {
     match support {
@@ -96,7 +72,7 @@ fn full_circle(circle: brep::CircleSupport) -> Option<NurbsCurve<Vector4>> {
         ));
     }
     controls.push(add(circle.center_mm, mul(x, circle.radius_mm)));
-    rational(&BSplineSupport {
+    BSplineSupport {
         degree: 2,
         control_points_mm: controls,
         knots: vec![0., 0., 0., 1., 1., 2., 2., 3., 3., 4., 4., 4.],
@@ -111,7 +87,8 @@ fn full_circle(circle: brep::CircleSupport) -> Option<NurbsCurve<Vector4>> {
                 })
                 .collect(),
         ),
-    })
+    }
+    .rational_curve()
 }
 
 /// Exact range of distance from every point of a circle to a sphere center.
@@ -513,7 +490,7 @@ pub(super) fn certify_flagged_cylinder_section(
     };
     let chart = CylinderSectionChart::new(loci)?;
     chart
-        .certify(edge, &rational(spline)?)
+        .certify(edge, &spline.rational_curve()?)
         .map(BoundedEdge::CylinderSection)
 }
 
@@ -530,7 +507,7 @@ pub(super) fn classify(
         CurveSupport::Line(line) => line_incidence(edge, *line, loci).then_some(BoundedEdge::Line),
         CurveSupport::Circle(circle) => circle_arc(edge, *circle, None, loci, cells),
         CurveSupport::BSpline(spline) => {
-            let rational = rational(spline)?;
+            let rational = spline.rational_curve()?;
             if let Some(line) = bspline_line_support(spline)
                 && line_incidence(edge, line, loci)
                 && certify_nurbs_segment_locus(
