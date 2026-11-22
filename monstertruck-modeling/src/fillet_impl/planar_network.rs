@@ -635,11 +635,11 @@ fn collapsed_vertex_aliases(
     let mut aliases = Map::default();
     let mut seen = Set::default();
     for neighbors in adjacent.values() {
-        let seed = neighbors.first()?;
-        if !seen.insert(seed.id()) {
+        let initial = neighbors.first()?;
+        if !seen.insert(initial.id()) {
             continue;
         }
-        let mut component = vec![seed.clone()];
+        let mut component = vec![initial.clone()];
         let mut cursor = 0;
         while cursor < component.len() {
             for neighbor in adjacent.get(&component[cursor].id())? {
