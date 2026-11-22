@@ -889,9 +889,9 @@ type IntersectionTuple<S> = (Polyline, IntersectionCurve<Polyline, S, S>);
 /// tessellated polygon meshes. Returns, per intersection branch, the raw
 /// interference polyline and the cleaned polyline intersection curve.
 pub(super) fn intersection_curves<S>(
-    surface0: S,
+    surface0: &S,
     polygon0: &PolygonMesh,
-    surface1: S,
+    surface1: &S,
     polygon1: &PolygonMesh,
     tolerances: BooleanTolerance,
     certified_planes: (Option<Plane>, Option<Plane>),
@@ -963,7 +963,7 @@ where
                         .or_else(|| surface.search_nearest_parameter(*after, None, 100));
                     uv.is_some_and(|(u, v)| surface.evaluate(u, v).distance(*after) <= support_tol)
                 };
-                on(&surface0) && on(&surface1)
+                on(surface0) && on(surface1)
             });
             valid.then_some(corrected)
         })
@@ -974,17 +974,17 @@ where
     let validation_tolerance = tolerances.fragment_residual();
     let polylines = stitch_validated_linear_intersection_fragments(
         exact_fragments,
-        &surface0,
+        surface0,
         polygon0,
-        &surface1,
+        surface1,
         polygon1,
         validation_tolerance,
         support_tol,
     );
     let polylines =
-        stitch_validated_curved_intersection_fragments(polylines, &surface0, &surface1, tolerances);
+        stitch_validated_curved_intersection_fragments(polylines, surface0, surface1, tolerances);
     let polylines =
-        stitch_overlapping_intersection_fragments(polylines, &surface0, &surface1, tolerances);
+        stitch_overlapping_intersection_fragments(polylines, surface0, surface1, tolerances);
     polylines
         .into_iter()
         // Mesh interference can contain isolated point contacts. They do not
@@ -1099,9 +1099,9 @@ mod tests {
         let carrier0 = certified_plane(&s0, net0.as_ref());
         let carrier1 = certified_plane(&s1, net1.as_ref());
         let curves = intersection_curves(
-            s0,
+            &s0,
             &disconnected_xy_mesh(0.01),
-            s1,
+            &s1,
             &zx_mesh(-1.0, 1.0),
             BooleanTolerance::new(1.0e-5),
             (carrier0, carrier1),

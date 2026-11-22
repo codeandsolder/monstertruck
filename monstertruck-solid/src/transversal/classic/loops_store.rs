@@ -2041,49 +2041,39 @@ where C: BoundedCurve<Point = Point3> {
 /// Cache exact planar supports and pairs with algebraically certified
 /// identical rational ruled carriers before the face-pair SSI sweep.
 fn certify_face_pair_supports<C, S>(
-    geom_shell0: &Shell<Point3, C, S>,
-    geom_shell1: &Shell<Point3, C, S>,
+    shells: [&Shell<Point3, C, S>; 2],
+    surfaces: &[Vec<S>; 2],
 ) -> FacePairSupports
 where
     C: BoundedCurve<Point = Point3>,
-    S: Clone + TryIntoHomogeneousBsplineSurface + TryIntoAnalyticSurfaceKind,
+    S: TryIntoHomogeneousBsplineSurface + TryIntoAnalyticSurfaceKind,
 {
     // Proof-first common-carrier discovery: identical rational profile control
     // nets with collinear affine sweep rows describe the same ruled support.
     // Cached once per input face; sampling never authorizes surface identity.
-    let net0 = geom_shell0
-        .iter()
-        .map(|f| f.surface().try_into_homogeneous_bspline_surface())
-        .collect::<Vec<_>>();
-    let net1 = geom_shell1
-        .iter()
-        .map(|f| f.surface().try_into_homogeneous_bspline_surface())
-        .collect::<Vec<_>>();
-    // Full carrier recognition/control-net certification is done once per
-    // face, not once for every O(F0*F1) candidate pair.
-    let planes0 = geom_shell0
-        .iter()
-        .zip(net0.iter())
-        .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
-        .collect::<Vec<_>>();
-    let planes1 = geom_shell1
-        .iter()
-        .zip(net1.iter())
-        .map(|(face, net)| intersection_curve::certified_plane(&face.surface(), net.as_ref()))
-        .collect::<Vec<_>>();
-    let certified_bounds0 = geom_shell0
-        .iter()
-        .zip(planes0.iter())
-        .map(|(face, plane)| plane.and_then(|_| certified_planar_trim_bounds(face)))
-        .collect();
-    let certified_bounds1 = geom_shell1
-        .iter()
-        .zip(planes1.iter())
-        .map(|(face, plane)| plane.and_then(|_| certified_planar_trim_bounds(face)))
-        .collect();
+    let nets = surfaces.each_ref().map(|surfaces| {
+        surfaces
+            .iter()
+            .map(TryIntoHomogeneousBsplineSurface::try_into_homogeneous_bspline_surface)
+            .collect::<Vec<_>>()
+    });
+    let planes = std::array::from_fn(|operand| {
+        surfaces[operand]
+            .iter()
+            .zip(&nets[operand])
+            .map(|(surface, net)| intersection_curve::certified_plane(surface, net.as_ref()))
+            .collect::<Vec<_>>()
+    });
+    let certified_trim_bounds = std::array::from_fn(|operand| {
+        shells[operand]
+            .iter()
+            .zip(&planes[operand])
+            .map(|(face, plane)| plane.and_then(|_| certified_planar_trim_bounds(face)))
+            .collect()
+    });
     let mut shared_ruled_pairs = HashSet::default();
-    for (i, left) in net0.iter().enumerate() {
-        for (j, right) in net1.iter().enumerate() {
+    for (i, left) in nets[0].iter().enumerate() {
+        for (j, right) in nets[1].iter().enumerate() {
             if let (Some(a), Some(b)) = (left, right)
                 && (ruled::common_ruled_extrusion_strip(a, b)
                     || ruled::common_circular_extrusion_cylinder(a, b))
@@ -2093,8 +2083,8 @@ where
         }
     }
     FacePairSupports {
-        planes: [planes0, planes1],
-        certified_trim_bounds: [certified_bounds0, certified_bounds1],
+        planes,
+        certified_trim_bounds,
         shared_ruled_pairs,
     }
 }
@@ -2277,7 +2267,14 @@ where
     let boundary_search_tolerance = boolean_tolerance.mesh_seed;
     let coplanar =
         analyze_coplanar_interfaces(poly_shell0, poly_shell1, coplanar_tol, imprint_coplanar)?;
-    let supports = certify_face_pair_supports(geom_shell0, geom_shell1);
+    // The pair sweep and branch attachment never modify source surface or
+    // mesh geometry. Snapshot each once rather than deep-cloning both for
+    // every Cartesian pair (including pairs with no intersection).
+    let surfaces =
+        [geom_shell0, geom_shell1].map(|shell| shell.iter().map(Face::surface).collect::<Vec<_>>());
+    let polygons =
+        [poly_shell0, poly_shell1].map(|shell| shell.iter().map(Face::surface).collect::<Vec<_>>());
+    let supports = certify_face_pair_supports([geom_shell0, geom_shell1], &surfaces);
     let mut endpoint_registry = Vec::<(Vertex<Point3>, Vertex<Point3>)>::new();
     let has_shared_ruled = !supports.shared_ruled_pairs.is_empty();
     // Surface/surface intersections read only the immutable input shells.
@@ -2297,10 +2294,8 @@ where
                 if coplanar.full_interface_adjacency.is_some() {
                     return Some((face_index0, face_index1, Vec::new()));
                 }
-                let surface0 = geom_shell0[face_index0].surface();
-                let surface1 = geom_shell1[face_index1].surface();
-                let polygon0 = poly_shell0[face_index0].surface()?;
-                let polygon1 = poly_shell1[face_index1].surface()?;
+                let polygon0 = polygons[0][face_index0].as_ref()?;
+                let polygon1 = polygons[1][face_index1].as_ref()?;
                 // A certified common ruled carrier also has no transverse SSI.
                 if supports
                     .shared_ruled_pairs
@@ -2308,18 +2303,18 @@ where
                     || supports.has_common_planar_support(
                         face_index0,
                         face_index1,
-                        &polygon0,
-                        &polygon1,
+                        polygon0,
+                        polygon1,
                     )
-                    || planar_polygons_same_trimmed_face(&polygon0, &polygon1, coplanar_tol)
+                    || planar_polygons_same_trimmed_face(polygon0, polygon1, coplanar_tol)
                 {
                     return Some((face_index0, face_index1, Vec::new()));
                 }
                 let curves = intersection_curve::intersection_curves(
-                    surface0,
-                    &polygon0,
-                    surface1,
-                    &polygon1,
+                    &surfaces[0][face_index0],
+                    polygon0,
+                    &surfaces[1][face_index1],
+                    polygon1,
                     boolean_tolerance,
                     (
                         supports.planes[0][face_index0],
@@ -2333,14 +2328,14 @@ where
         // Mutating an operand while another pair is evaluated would be wrong;
         // no mutation is performed until the entire batch has finished.
         for (face_index0, face_index1, curves) in batch? {
+            if curves.is_empty() {
+                continue;
+            }
             let mut context = BranchContext {
                 operand0: &mut operand0,
                 operand1: &mut operand1,
                 face_indices: [face_index0, face_index1],
-                surfaces: [
-                    &geom_shell0[face_index0].surface(),
-                    &geom_shell1[face_index1].surface(),
-                ],
+                surfaces: [&surfaces[0][face_index0], &surfaces[1][face_index1]],
                 nearest_tolerance: boundary_search_tolerance,
                 tolerances: boolean_tolerance,
                 reuse_coincident: coplanar.partial_overlap,
