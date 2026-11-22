@@ -363,8 +363,8 @@ fn planar_intersection_box(curve: &Curve) -> Option<BoundingBox<Point3>> {
             points.extend([p, orthogonal, projected]);
         }
     }
-    let (front, back) = intersection.endpoint_anchors();
-    points.extend([front, back].into_iter().flatten());
+    let anchors: [Option<Point3>; 2] = intersection.endpoint_anchors().into();
+    points.extend(anchors.into_iter().flatten());
     let bounds = hull_box(&points)?;
     let pad = Vector3::new(budget, budget, budget);
     Some(BoundingBox::from_iter([
