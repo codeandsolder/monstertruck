@@ -4194,6 +4194,29 @@ END-ISO-10303-21;
         Ok(())
     }
 
+    // The host itself requires intersecting planar Booleans. Their rebuilt
+    // transverse edges must retain certified finite bounds for the next
+    // shallow contact batch.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_on_boolean_host_is_source_verified() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let bytes =
+            include_bytes!("../validation/fixtures/native_relief_boolean_host_22bfe2fc.step");
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.unrecovered_solid_count, 0);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        let [body] = report.boundary_feature_composites.as_slice() else {
+            bail!("complete IR did not retain the reconstructed relief composite");
+        };
+        assert!(kernel_replay_is_single_solid(&kernel, &body.fragment)?);
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn native_local_contact_rebuilds_stepped_relief_sources() -> Result<()> {

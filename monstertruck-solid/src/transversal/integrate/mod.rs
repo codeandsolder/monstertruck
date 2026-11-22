@@ -53,6 +53,7 @@ pub trait ShapeOpsCurve<S: ShapeOpsSurface>:
     + ParameterBoundary2D<S>
     + Cut
     + Clone
+    + From<Line<Point3>>
     + TryFrom<ParameterCurve<Line<Point2>, S>>
     + Invertible
     + From<
@@ -82,6 +83,7 @@ impl<C, S: ShapeOpsSurface> ShapeOpsCurve<S> for C where C: ParametricCurve3D
         + ParameterBoundary2D<S>
         + Cut
         + Clone
+        + From<Line<Point3>>
         + TryFrom<ParameterCurve<Line<Point2>, S>>
         + Invertible
         + From<

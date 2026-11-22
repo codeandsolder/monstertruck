@@ -3,9 +3,9 @@
 use super::tolerance::BooleanTolerance;
 use super::{
     AltCurveShell, Alternative, BoundaryCurve2D, BoundedCurve, BoundedSurface, BsplineCurve, Cut,
-    InnerSpace, IntersectionCurve, Invertible, KnotVector, MetricSpace, NurbsCurve, ParameterCurve,
-    ParametricCurve, Point3, PolylineCurve, SearchNearestParameter, ShapeOpsCurve, ShapeOpsSurface,
-    Shell, SurfaceCurve, Vector4,
+    InnerSpace, IntersectionCurve, Invertible, KnotVector, Line, MetricSpace, NurbsCurve,
+    ParameterCurve, ParametricCurve, Point3, PolylineCurve, SearchNearestParameter, ShapeOpsCurve,
+    ShapeOpsSurface, Shell, SurfaceCurve, Vector4,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;
@@ -395,13 +395,106 @@ pub(super) fn exact_iso_leader<S: ShapeOpsSurface>(
     None
 }
 
+/// Replace the branch of two certified transverse planar carriers by its
+/// finite topological segment. The polyline is a piecewise-affine guide:
+/// each span's entire image lies in the convex hull of its two endpoints.
+/// Projection along the span's tangent onto the carrier intersection is
+/// affine as well. Check both images, not a finite sampling of a curved SSI.
+fn certified_planar_segment<S: ShapeOpsSurface>(
+    intersection: &IntersectionCurve<PolylineCurve<Point3>, S, S>,
+    start: Point3,
+    end: Point3,
+    tolerances: BooleanTolerance,
+) -> Option<Line<Point3>> {
+    let policy = DEFAULT_NUMERICAL_TOLERANCES;
+    let certify = |surface: &S| {
+        let net = surface.try_into_homogeneous_bspline_surface()?;
+        let plane = super::intersection_curve::certified_plane(surface, Some(&net))?;
+        let error = net
+            .control_points()
+            .iter()
+            .flatten()
+            .map(|control| {
+                let point = Point3::new(
+                    control.x / control.w,
+                    control.y / control.w,
+                    control.z / control.w,
+                );
+                plane.normal().dot(point - plane.origin()).abs()
+            })
+            .fold(0.0_f64, f64::max);
+        Some((plane, error))
+    };
+    let (first, first_error) = certify(intersection.surface0())?;
+    let (second, second_error) = certify(intersection.surface1())?;
+    let n0 = first.normal();
+    let n1 = second.normal();
+    let cross = n0.cross(n1);
+    let sine = cross.magnitude();
+    if !sine.is_finite() || sine <= tolerances.angular {
+        return None;
+    }
+    let direction = cross / sine;
+    let delta = end - start;
+    let length = delta.magnitude();
+    let guide = intersection.leader();
+    let scale = guide
+        .iter()
+        .chain([&start, &end, &first.origin(), &second.origin()])
+        .map(|point| point.distance(Point3::new(0.0, 0.0, 0.0)))
+        .fold(1.0_f64, f64::max);
+    let budget = tolerances.length.min(policy.parameter_projection);
+    let roundoff = policy.structural * scale;
+    // A near-parallel pair magnifies any carrier error. Never admit a
+    // straight replacement merely because the two planes are nearly parallel.
+    let carrier_error = (first_error + second_error + roundoff) / sine;
+    if !length.is_finite() || length <= budget || carrier_error >= budget || guide.len() < 2 {
+        return None;
+    }
+    let axis = delta / length;
+    let r0 = n0.dot(first.origin() - start);
+    let r1 = n1.dot(second.origin() - start);
+    let base = start + (n1.cross(cross) * r0 + cross.cross(n0) * r1) / (sine * sine);
+    let residual = |point: Point3| {
+        let along = axis.dot(point - start).clamp(0.0, length);
+        point.distance(start + axis * along)
+    };
+    if guide.front().distance(start) > budget || guide.back().distance(end) > budget {
+        return None;
+    }
+    for span in guide.windows(2) {
+        let step = span[1] - span[0];
+        let step_length = step.magnitude();
+        if !step_length.is_finite() || step_length <= roundoff || step.dot(axis) <= 0.0 {
+            return None;
+        }
+        let tangent = step / step_length;
+        let cosine = tangent.dot(direction);
+        if cosine.abs() <= tolerances.angular {
+            return None;
+        }
+        // A common point of the two planar supports remains within carrier_error
+        // of the common line. The guide's normal-section projection
+        // magnifies this uncertainty by at most the reciprocal cosine.
+        let margin = carrier_error * (1.0 + 1.0 / cosine.abs());
+        for &point in span {
+            let projected = base + direction * (tangent.dot(point - base) / cosine);
+            if !(residual(point) + margin <= budget && residual(projected) + margin <= budget) {
+                return None;
+            }
+        }
+    }
+    Some(Line(start, end))
+}
+
 /// Convert an Alternative-curve shell back to the target curve type.
 ///
-/// Surface intersection curves already carry a cleaned marching leader. When
+/// Surface intersection curves already carry a cleaned marching leader.
+/// Certified transverse planar branches become finite native segments. When
 /// that leader is provably an iso-parameter curve of either exact carrier,
 /// replace the mesh-derived polyline by the exact homogeneous section before
 /// serialization. Otherwise keep the leader exactly as a degree-1 B-spline.
-/// `SurfaceCurve` still carries both supporting surfaces in either case.
+/// The remaining `SurfaceCurve` branches retain both supporting surfaces.
 pub(super) fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     altshell: &AltCurveShell<C, S>,
     tolerances: BooleanTolerance,
@@ -447,6 +540,11 @@ pub(super) fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 };
                 let start = target.absolute_front().point();
                 let end = target.absolute_back().point();
+                if let Some(line) = certified_planar_segment(&intersection, start, end, tolerances)
+                {
+                    target.set_curve(line.into());
+                    continue;
+                }
                 let on_carrier = |surface: &S, point: Point3| {
                     surface
                         .search_parameter(point, None, 100)
@@ -479,6 +577,49 @@ pub(super) fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transverse_planar_segments_require_the_whole_ordered_guide() {
+        use monstertruck_geometry::prelude::Plane;
+        let start = Point3::new(2.0, 3.0, 4.0);
+        let end = Point3::new(5.0, 6.0, 4.0);
+        let midpoint = start + (end - start) * 0.5;
+        let first = Plane::new(start, end, Point3::new(3.0, 2.0, 4.0));
+        let second = Plane::new(start, end, Point3::new(2.0, 3.0, 5.0));
+        let certify = |points: Vec<Point3>| {
+            let curve = IntersectionCurve::new(first, second, PolylineCurve::from(points));
+            certified_planar_segment(&curve, start, end, BooleanTolerance::new(1e-6))
+        };
+        assert_eq!(certify(vec![start, midpoint, end]), Some(Line(start, end)));
+        assert!(certify(vec![start, end, midpoint, end]).is_none());
+        assert!(certify(vec![start, Point3::new(3.5, 4.5, 4.0001), end]).is_none());
+        let reversed = IntersectionCurve::new(
+            second,
+            first,
+            PolylineCurve::from(vec![end, midpoint, start]),
+        );
+        assert_eq!(
+            certified_planar_segment(&reversed, end, start, BooleanTolerance::new(1e-6)),
+            Some(Line(end, start))
+        );
+        let coincident =
+            IntersectionCurve::new(first, first, PolylineCurve::from(vec![start, end]));
+        assert!(
+            certified_planar_segment(&coincident, start, end, BooleanTolerance::new(1e-6))
+                .is_none()
+        );
+        let off_carrier =
+            IntersectionCurve::new(first, second, PolylineCurve::from(vec![start, end]));
+        assert!(
+            certified_planar_segment(
+                &off_carrier,
+                start,
+                Point3::new(5.0, 6.0, 4.001),
+                BooleanTolerance::new(1e-6)
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn tiny_native_knot_domain_remains_trimmable() {
