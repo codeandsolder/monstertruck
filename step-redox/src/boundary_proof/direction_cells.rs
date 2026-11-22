@@ -122,7 +122,8 @@ pub(super) fn compare(
     for chain in &mut remapped.chains {
         let supports = match chain {
             BoundaryChainKey::Open { supports, .. }
-            | BoundaryChainKey::Circular { supports, .. } => supports,
+            | BoundaryChainKey::Circular { supports, .. }
+            | BoundaryChainKey::Spline { supports, .. } => supports,
         };
         for key in supports.iter_mut() {
             remap(key);

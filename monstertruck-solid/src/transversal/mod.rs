@@ -9,8 +9,9 @@ mod integrate;
 #[cfg(feature = "marching-ssi")]
 mod polyline_construction;
 pub use integrate::{
-    PlaneCut, ShapeOpsCurve, ShapeOpsError, ShapeOpsSurface, ShellOrientationHints, and,
-    and_with_orientation_hints, clip_half_space_z, difference, or, plane_cut, symmetric_difference,
-    try_planar_contact_union, try_planar_profile_union,
+    PlanarContactOp, PlaneCut, ShapeOpsCurve, ShapeOpsError, ShapeOpsSurface,
+    ShellOrientationHints, and, and_with_orientation_hints, clip_half_space_z, difference, or,
+    plane_cut, symmetric_difference, try_planar_contact_many, try_planar_contact_union,
+    try_planar_profile_union,
 };
 pub use monstertruck_traits::SnapCurveEndpoints;

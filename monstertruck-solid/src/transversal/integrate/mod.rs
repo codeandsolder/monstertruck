@@ -769,6 +769,42 @@ pub fn try_planar_contact_union<
     }
 }
 
+/// Material operation performed by a certified planar-contact arrangement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlanarContactOp {
+    Union,
+    Difference,
+}
+
+/// Try an exact contact arrangement with pairwise disjoint attachments or cutters.
+/// Returns `None` when contact or containment cannot be certified.
+///
+/// # Errors
+/// Returns an error for an invalid geometry policy.
+pub fn try_planar_contact_many<
+    C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve,
+    S: ShapeOpsSurface,
+>(
+    lhs: &Solid<Point3, C, S>,
+    rhs: &[&Solid<Point3, C, S>],
+    op: PlanarContactOp,
+    policy: GeometryPolicy,
+) -> ShapeOpsResult<Option<Solid<Point3, C, S>>> {
+    let tol = classic_boolean_tolerance(policy, "planar contact arrangement")?;
+    #[cfg(feature = "marching-ssi")]
+    {
+        Ok(match op {
+            PlanarContactOp::Union => classic::planar_contact::union_many(lhs, rhs, tol),
+            PlanarContactOp::Difference => classic::planar_contact::difference_many(lhs, rhs, tol),
+        })
+    }
+    #[cfg(not(feature = "marching-ssi"))]
+    {
+        let _ = (lhs, rhs, op, tol);
+        Ok(None)
+    }
+}
+
 /// Union bounded coplanar material faces in one shared analytic plane.
 /// Disconnected regions remain separate faces, with their original line
 /// and curve edges. A refused arrangement returns `None`.

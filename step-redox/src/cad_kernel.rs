@@ -1173,13 +1173,52 @@ pub mod monstertruck {
         {
             return Ok(result);
         }
-        let Some((&first, rest)) = children.split_first() else {
-            bail!("boolean node needs at least one child");
-        };
-        let mut result = evaluate_node(model, first, policy, cache)?;
-        for &child in rest {
-            let rhs = evaluate_node(model, child, policy, cache)?;
-            let kernel_policy = monstertruck_policy(policy);
+        if (op == BooleanOp::Union && children.len() > 2)
+            || (op == BooleanOp::Difference && children.len() >= 2)
+        {
+            let solids = children
+                .iter()
+                .map(|&id| evaluate_node(model, id, policy, cache))
+                .collect::<Result<Vec<_>>>()?;
+            let tools = solids[1..].iter().collect::<Vec<_>>();
+            let contact_op = match op {
+                BooleanOp::Union => monstertruck_solid::PlanarContactOp::Union,
+                BooleanOp::Difference => monstertruck_solid::PlanarContactOp::Difference,
+                BooleanOp::Intersection => {
+                    unreachable!("contact arrangement requires union or difference")
+                }
+            };
+            let joined = monstertruck_solid::try_planar_contact_many(
+                &solids[0],
+                &tools,
+                contact_op,
+                monstertruck_policy(policy),
+            )?;
+            // Contact certification borrows, rather than consumes, the
+            // operands. If it cannot prove contact, fold those same owned
+            // solids; reevaluating would consume DAG dependencies twice.
+            return joined.map_or_else(|| fold_boolean(op, solids.into_iter().map(Ok), policy), Ok);
+        }
+        fold_boolean(
+            op,
+            children
+                .iter()
+                .map(|&id| evaluate_node(model, id, policy, cache)),
+            policy,
+        )
+    }
+
+    fn fold_boolean(
+        op: BooleanOp,
+        mut operands: impl Iterator<Item = Result<Solid>>,
+        policy: GeometryPolicy,
+    ) -> Result<Solid> {
+        let mut result = operands
+            .next()
+            .context("boolean node needs at least one child")??;
+        let kernel_policy = monstertruck_policy(policy);
+        for rhs in operands {
+            let rhs = rhs?;
             result = match op {
                 BooleanOp::Union => {
                     if let Some(joined) =
