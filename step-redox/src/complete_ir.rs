@@ -4024,9 +4024,11 @@ END-ISO-10303-21;
                 40,
             ),
             (
+                // The correctly oriented subtractive tools now remove 55
+                // additional faces in this first native transaction.
                 include_bytes!("../validation/fixtures/native_relief_housing_0914dda4.step"),
                 385,
-                145,
+                90,
             ),
         ];
         for &(bytes, original_faces, healed_faces) in fixtures {
