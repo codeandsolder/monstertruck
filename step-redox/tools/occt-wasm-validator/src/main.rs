@@ -34,11 +34,18 @@ enum Command {
     /// Verify independent Boolean material occupancy at supplied or sampled witnesses.
     Occupancy(occupancy::OccupancyArgs),
     /// Report independent OCCT geometry metrics in the native oracle schema.
-    Analyze { input: PathBuf },
+    Analyze {
+        input: PathBuf,
+        #[arg(long)]
+        mesh: bool,
+    },
     /// Analyze multiple STEP files with one compiled WASM module and isolated instances.
     AnalyzeBatch {
         #[arg(required = true, num_args = 1..)]
         inputs: Vec<PathBuf>,
+        /// Include a strict tessellation digest and triangle count.
+        #[arg(long)]
+        mesh: bool,
     },
     /// Compare independent geometry, renderings, and optional strict mesh hashes.
     Compare {
@@ -81,7 +88,13 @@ fn load(kernel: &mut OcctKernel, path: &Path) -> Result<(StepImport, usize)> {
     Ok((import, bytes.len()))
 }
 
-fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<String> {
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MeshDigest {
+    sha256: String,
+    triangles: usize,
+}
+
+fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<MeshDigest> {
     let scale = quantum.recip();
     ensure!(
         quantum.is_finite() && quantum > 0.0 && scale.is_finite(),
@@ -115,20 +128,38 @@ fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<String> {
             }
         }
     }
-    Ok(hex::encode(hasher.finalize()))
+    Ok(MeshDigest {
+        sha256: hex::encode(hasher.finalize()),
+        triangles: triangles.0.len(),
+    })
 }
 
-fn analyze_path(kernel: &mut OcctKernel, input: &Path) -> Result<geometry::GeometryReport> {
+#[derive(Serialize)]
+struct Analysis {
+    #[serde(flatten)]
+    geometry: geometry::GeometryReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mesh: Option<MeshDigest>,
+}
+
+fn mesh_digest(kernel: &mut OcctKernel, shape: occt_wasm::ShapeHandle) -> Result<MeshDigest> {
+    strict_mesh_hash(&kernel.tessellate_triangles64(shape, 0.002, 0.2)?, 1e-9)
+}
+
+fn analyze_path(kernel: &mut OcctKernel, input: &Path, include_mesh: bool) -> Result<Analysis> {
     let (import, bytes) = load(kernel, input)?;
-    let report = geometry::analyze(kernel, input, bytes, import)?;
+    let geometry = geometry::analyze(kernel, input, bytes, import)?;
+    let mesh = include_mesh
+        .then(|| mesh_digest(kernel, import.shape))
+        .transpose()?;
     kernel.release(import.shape)?;
-    Ok(report)
+    Ok(Analysis { geometry, mesh })
 }
 
 #[derive(Serialize)]
 struct MeshComparison {
-    reference: String,
-    candidate: String,
+    reference: MeshDigest,
+    candidate: MeshDigest,
     pass: bool,
 }
 
@@ -170,10 +201,8 @@ fn compare_steps(
         &out.join("renders"),
     )?;
     let strict_mesh_hash = if thresholds.strict_mesh_hash {
-        let reference =
-            strict_mesh_hash(&kernel.tessellate_triangles64(a.shape, 0.002, 0.2)?, 1e-9)?;
-        let candidate =
-            strict_mesh_hash(&kernel.tessellate_triangles64(b.shape, 0.002, 0.2)?, 1e-9)?;
+        let reference = mesh_digest(&mut kernel, a.shape)?;
+        let candidate = mesh_digest(&mut kernel, b.shape)?;
         Some(MeshComparison {
             pass: reference == candidate,
             reference,
@@ -227,20 +256,20 @@ fn main() -> Result<ExitCode> {
                 ExitCode::FAILURE
             })
         }
-        Command::Analyze { input } => {
+        Command::Analyze { input, mesh } => {
             let mut kernel = OcctKernel::new()?;
-            let report = analyze_path(&mut kernel, &input)?;
+            let report = analyze_path(&mut kernel, &input, mesh)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(ExitCode::SUCCESS)
         }
-        Command::AnalyzeBatch { inputs } => {
+        Command::AnalyzeBatch { inputs, mesh } => {
             let engine = Engine::new(&OcctKernel::engine_config())?;
             let module = OcctKernel::compile(&engine)?;
             let reports = inputs
                 .iter()
                 .map(|path| {
                     let mut kernel = OcctKernel::from_module(&module)?;
-                    analyze_path(&mut kernel, path)
+                    analyze_path(&mut kernel, path, mesh)
                 })
                 .collect::<Result<Vec<_>>>()?;
             println!("{}", serde_json::to_string_pretty(&reports)?);
@@ -278,8 +307,10 @@ fn main() -> Result<ExitCode> {
         Command::MeshHash { input } => {
             let mut kernel = OcctKernel::new()?;
             let (import, _) = load(&mut kernel, &input)?;
-            let triangles = kernel.tessellate_triangles64(import.shape, 0.002, 0.2)?;
-            println!("{}", strict_mesh_hash(&triangles, 1e-9)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&mesh_digest(&mut kernel, import.shape)?)?
+            );
             Ok(ExitCode::SUCCESS)
         }
         Command::PairedVolume {
@@ -320,6 +351,22 @@ fn test_kernel() -> Result<OcctKernel> {
 mod tests {
     use super::*;
     #[test]
+    fn mesh_analysis_uses_identical_strict_digest() -> Result<()> {
+        let mut kernel = test_kernel()?;
+        let shape = kernel.make_box(2.0, 3.0, 4.0)?;
+        let step = kernel.export_step(shape)?;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("box.step");
+        fs::write(&path, step)?;
+        let imported = load(&mut kernel, &path)?.0;
+        let expected = mesh_digest(&mut kernel, imported.shape)?;
+        assert_eq!(expected.triangles, 12);
+        let report = analyze_path(&mut kernel, &path, true)?;
+        assert_eq!(report.mesh.as_ref(), Some(&expected));
+        assert!(analyze_path(&mut kernel, &path, false)?.mesh.is_none());
+        Ok(())
+    }
+    #[test]
     fn hash_is_order_independent_but_retains_picometer_coordinates() -> Result<()> {
         let triangles = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let reversed = [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
@@ -333,6 +380,7 @@ mod tests {
             strict_mesh_hash(&triangles, 1e-9)?,
             strict_mesh_hash(&changed, 1e-9)?
         );
+        assert_eq!(strict_mesh_hash(&triangles, 1e-9)?.triangles, 1);
         assert!(strict_mesh_hash(&[f64::INFINITY; 9], 1e-9).is_err());
         assert!(strict_mesh_hash(&[0.0; 8], 1e-9).is_err());
         assert!(strict_mesh_hash(&triangles, 0.0).is_err());

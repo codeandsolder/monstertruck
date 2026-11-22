@@ -19,7 +19,7 @@ Use the resulting `step-redox-occt-wasm-validator` executable:
 
 ```sh
 step-redox-occt-wasm-validator analyze source.step
-step-redox-occt-wasm-validator analyze-batch source1.step source2.step
+step-redox-occt-wasm-validator analyze-batch --mesh source1.step source2.step
 step-redox-occt-wasm-validator compare-metrics reference.json candidate.json --thresholds thresholds.json
 step-redox-occt-wasm-validator compare reference.step candidate.step --thresholds thresholds.json --out comparison
 step-redox-occt-wasm-validator mesh-hash source.step
@@ -38,7 +38,9 @@ as the manifest. It produces eight reference, candidate and difference
 views, a contact sheet, and per-view image metrics. The Rust software rasterizer
 does not guarantee bit-identical Pillow pixels. Strict mesh hashing uses
 double-precision world-space triangles and nearest-even quantization at
-1e-9 mm. Paired volume integrates signed faces at two quadrature targets
+1e-9 mm. The digest report includes the original triangle count and SHA-256.
+Enable the same measurement in analyze or analyze-batch with --mesh.
+Paired volume integrates signed faces at two quadrature targets
 and four common references.
 
 For independent Boolean occupancy:
