@@ -62,7 +62,7 @@ type SourceEdgeId<C, S> = EdgeId<AltCurve<C, S>>;
 type SourceVertexId = VertexId<Point3>;
 type SourceVertex = (SourceVertexId, Point3);
 type SourceEdgeEvidence = (SourceVertexId, Point3);
-type RebuiltEdgeCache<C, S> = HashMap<(SourceEdgeId<C, S>, bool), Vec<AltEdge<C, S>>>;
+type RebuiltEdgeCache<C, S> = HashMap<SourceEdgeId<C, S>, (bool, Vec<AltEdge<C, S>>)>;
 
 // Weld representatives are geometric, not HashMap/EdgeId insertion-order
 // choices. A full ordering is necessary near tolerance-cell boundaries.
@@ -371,13 +371,20 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
     }
 
     fn rebuild_edge(&mut self, edge: &AltEdge<C, S>) -> Option<Vec<AltEdge<C, S>>> {
-        let key = (edge.id(), edge.orientation());
-        if let Some(rebuilt) = self.rebuilt_edges.get(&key) {
-            return Some(rebuilt.clone());
+        let key = edge.id();
+        let orientation = edge.orientation();
+        if !self.rebuilt_edges.contains_key(&key) {
+            // Preserve the traversal in which the edge is first admitted to
+            // the weld. Subsequent uses must share the resulting topology.
+            let rebuilt = self.rebuild_edge_uncached(edge)?;
+            self.rebuilt_edges.insert(key, (orientation, rebuilt));
         }
-        let rebuilt = self.rebuild_edge_uncached(edge)?;
-        self.rebuilt_edges.insert(key, rebuilt.clone());
-        Some(rebuilt)
+        let (first_orientation, rebuilt) = self.rebuilt_edges.get(&key)?;
+        Some(if orientation == *first_orientation {
+            rebuilt.clone()
+        } else {
+            rebuilt.iter().rev().map(Edge::inverse).collect()
+        })
     }
 
     fn rebuild_edge_uncached(&mut self, edge: &AltEdge<C, S>) -> Option<Vec<AltEdge<C, S>>> {
@@ -645,7 +652,7 @@ mod weld_tests {
     }
 
     #[test]
-    fn repeated_source_edge_reuses_exact_canonical_segments_per_orientation() {
+    fn source_edge_has_one_subdivision_for_both_orientations() {
         let endpoints =
             Vertex::from_points([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
         let original = Edge::new_unchecked(
@@ -657,19 +664,20 @@ mod weld_tests {
             WeldContext::new(&[], BooleanTolerance::new(1.0e-6))
                 .expect("empty input has a valid welding context");
         context.additional_nodes.push(Point3::new(0.5, 0.0, 0.0));
-        let first = context.rebuild_edge(&original).expect("exact split");
-        let second = context.rebuild_edge(&original).expect("cached split");
-        assert_eq!(first.len(), 2);
-        assert_eq!(
-            first.iter().map(Edge::id).collect::<Vec<_>>(),
-            second.iter().map(Edge::id).collect::<Vec<_>>()
-        );
-        assert_eq!(context.rebuilt_edges.len(), 1);
+        // Exercise reverse-first visitation too: both incident faces
+        // must share the same subdivision and edge identities.
         let reversed = context
             .rebuild_edge(&original.inverse())
             .expect("inverse split");
-        assert_eq!(reversed.len(), 2);
-        assert_eq!(context.rebuilt_edges.len(), 2);
+        let first = context.rebuild_edge(&original).expect("exact split");
+        let second = context.rebuild_edge(&original).expect("cached split");
+        assert_eq!(first.len(), 2);
+        assert_eq!(first, second);
+        assert_eq!(context.rebuilt_edges.len(), 1);
+        assert_eq!(
+            reversed,
+            first.iter().rev().map(Edge::inverse).collect::<Vec<_>>()
+        );
         assert_eq!(first[0].front().point(), reversed[1].back().point());
         assert_eq!(first[1].back().point(), reversed[0].front().point());
     }
