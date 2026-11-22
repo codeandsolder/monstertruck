@@ -1,0 +1,397 @@
+diff --git a/crate/tests/validation_bindings.rs b/crate/tests/validation_bindings.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..9ac82b4a54a7968746c4659aa1c28cc2cb932ab9
+--- /dev/null
++++ b/crate/tests/validation_bindings.rs
+@@ -0,0 +1,98 @@
++//! Strict regressions for the validation facade. No placeholder/debug skips.
++use occt_wasm::{
++    OcctKernel, ShapeHandle,
++    wasmtime::{Engine, Module},
++};
++use std::sync::OnceLock;
++
++fn kernel() -> Result<OcctKernel, Box<dyn std::error::Error>> {
++    static MODULE: OnceLock<Result<Module, String>> = OnceLock::new();
++    let module = MODULE.get_or_init(|| {
++        let engine = Engine::new(&OcctKernel::engine_config()).map_err(|e| e.to_string())?;
++        OcctKernel::compile(&engine).map_err(|e| e.to_string())
++    });
++    Ok(OcctKernel::from_module(
++        module.as_ref().map_err(String::as_str)?,
++    )?)
++}
++
++fn volume_at(
++    kernel: &mut OcctKernel,
++    shape: ShapeHandle,
++    point: [f64; 3],
++    epsilon: f64,
++) -> Result<f64, Box<dyn std::error::Error>> {
++    let [x, y, z] = point;
++    let values = kernel.get_signed_face_volume_integrals(shape, x, y, z, epsilon)?;
++    assert_eq!(values.len(), 12, "six face mass/error pairs");
++    assert!(values.iter().all(|value| value.is_finite()));
++    assert!(values.chunks_exact(2).all(|pair| pair[1] >= 0.0));
++    Ok(values.chunks_exact(2).map(|pair| pair[0]).sum())
++}
++
++#[test]
++fn validation_occurrences_preserve_topology_multiplicity() -> Result<(), Box<dyn std::error::Error>>
++{
++    let mut kernel = kernel()?;
++    let shape = kernel.make_box(2., 3., 4.)?;
++    assert_eq!(kernel.sub_shape_count(shape, "edge")?, 12);
++    assert_eq!(kernel.sub_shape_occurrence_count(shape, "edge")?, 24);
++    assert_eq!(kernel.sub_shape_occurrence_count(shape, "vertex")?, 48);
++    assert_eq!(kernel.sub_shape_occurrence_count(shape, "solid")?, 1);
++    let edges = kernel.get_sub_shape_occurrences(shape, "edge")?;
++    assert_eq!(edges.len(), 24);
++    for edge in edges {
++        kernel.release(edge)?;
++    }
++    assert!(kernel.sub_shape_occurrence_count(shape, "invalid").is_err());
++    Ok(())
++}
++
++#[test]
++fn validation_signed_volume_and_bounds_are_reference_independent()
++-> Result<(), Box<dyn std::error::Error>> {
++    let mut kernel = kernel()?;
++    let shape = kernel.make_box(2., 3., 4.)?;
++    let moved = kernel.translate(shape, 1000., -2000., 3000.)?;
++    for (solid, origin) in [(shape, [0., 0., 0.]), (moved, [1000., -2000., 3000.])] {
++        let bbox = kernel.get_optimal_bounds(solid, false, false)?;
++        assert!((bbox.min.x - origin[0]).abs() < 1e-10);
++        assert!((bbox.max.x - origin[0] - 2.).abs() < 1e-10);
++        for point in [
++            [0., 0., 0.],
++            origin,
++            [origin[0] + 1., origin[1] + 1.5, origin[2] + 2.],
++        ] {
++            for epsilon in [1e-12, 1e-13] {
++                assert!((volume_at(&mut kernel, solid, point, epsilon)? - 24.).abs() < 1e-8);
++            }
++        }
++    }
++    assert!(
++        kernel
++            .get_signed_face_volume_integrals(shape, 0., 0., 0., 0.)
++            .is_err()
++    );
++    let compound = kernel.make_compound(&[shape, moved])?;
++    assert!(
++        kernel
++            .get_signed_face_volume_integrals(compound, 0., 0., 0., 1e-12)
++            .is_err()
++    );
++    Ok(())
++}
++
++#[test]
++fn validation_classifier_does_not_coerce_boundary() -> Result<(), Box<dyn std::error::Error>> {
++    let mut kernel = kernel()?;
++    let shape = kernel.make_box(2., 3., 4.)?;
++    assert_eq!(kernel.classify_solid_point(shape, 1., 1., 1., 1e-8)?, 1);
++    assert_eq!(kernel.classify_solid_point(shape, 10., 10., 10., 1e-8)?, 0);
++    assert_eq!(kernel.classify_solid_point(shape, 0., 1., 1., 1e-8)?, 2);
++    assert!(
++        kernel
++            .classify_solid_point(shape, f64::NAN, 0., 0., 1e-8)
++            .is_err()
++    );
++    Ok(())
++}
+diff --git a/facade/include/occt_kernel.h b/facade/include/occt_kernel.h
+index d42d67b6796db3f6362cf60d78de858a3e29a85a..bd0c1f6695346b85c6e187ab9a06106108bab199 100644
+--- a/facade/include/occt_kernel.h
++++ b/facade/include/occt_kernel.h
+@@ -15,6 +15,13 @@
+ #include <TopoDS_Shape.hxx>
+ #include <UnitsMethods_LengthUnit.hxx>
+ 
++#include <TopAbs_ShapeEnum.hxx>
++
++class gp_Pnt;
++
++TopAbs_ShapeEnum parseShapeType(const std::string& type);
++std::vector<double> signedFaceVolumeIntegrals(const TopoDS_Shape& shape, const gp_Pnt& reference, double epsilon);
++
+ class BRepOffsetAPI_ThruSections;
+ class Bnd_Box;
+ class BRepTools_History;
+@@ -438,6 +445,8 @@ class OcctKernel {
+     // --- Topology query ---
+     std::string getShapeType(uint32_t id);
+     std::vector<uint32_t> getSubShapes(uint32_t id, const std::string& shapeType);
++    std::vector<uint32_t> getSubShapeOccurrences(uint32_t id, const std::string& shapeType);
++    int subShapeOccurrenceCount(uint32_t id, const std::string& shapeType);
+     int subShapeCount(uint32_t id, const std::string& shapeType);
+     std::vector<int> subShapeHashes(uint32_t id, const std::string& shapeType, int hashUpperBound);
+     uint32_t downcast(uint32_t id, const std::string& targetType);
+@@ -481,6 +490,11 @@ class OcctKernel {
+     // --- Query / Measure ---
+     BBoxData getBoundingBox(uint32_t id, bool useTriangulation);
+     BBoxData getBoundingBoxLoose(uint32_t id, bool useTriangulation);
++    BBoxData getOptimalBounds(uint32_t id, bool useTriangulation, bool useShapeTolerance);
++    // Alternating signed face mass and achieved relative integration error.
++    std::vector<double> getSignedFaceVolumeIntegrals(uint32_t id, double x, double y, double z, double epsilon);
++    // 0=outside, 1=inside, 2=boundary, 3=unknown.
++    int classifySolidPoint(uint32_t id, double x, double y, double z, double tolerance);
+     double getVolume(uint32_t id);
+     double getSurfaceArea(uint32_t id);
+     double getLength(uint32_t id);
+diff --git a/facade/src/kernel.cpp b/facade/src/kernel.cpp
+index 9fb807973f791e8077f6ef9886888c5dccc677de..1aaac243e9722262088a5c89eb62c7fa563fe351 100644
+--- a/facade/src/kernel.cpp
++++ b/facade/src/kernel.cpp
+@@ -1,3 +1,5 @@
++#include <BRepGProp_VinertGK.hxx>
++#include <BRepCheck_Analyzer.hxx>
+ #include "occt_kernel.h"
+ 
+ #include <BRepAdaptor_Curve.hxx>
+@@ -1533,3 +1535,75 @@ int EdgeData::getPointsPtr() const {
+ int EdgeData::getEdgeGroupsPtr() const {
+     return static_cast<int>(reinterpret_cast<uintptr_t>(edgeGroups));
+ }
++
++// Independent CAD validation needs topological occurrences, not the unique
++// shape identities returned by getSubShapes.
++TopAbs_ShapeEnum parseShapeType(const std::string& type) {
++    if (type == "vertex") return TopAbs_VERTEX;
++    if (type == "edge") return TopAbs_EDGE;
++    if (type == "wire") return TopAbs_WIRE;
++    if (type == "face") return TopAbs_FACE;
++    if (type == "shell") return TopAbs_SHELL;
++    if (type == "solid") return TopAbs_SOLID;
++    if (type == "compsolid") return TopAbs_COMPSOLID;
++    if (type == "compound") return TopAbs_COMPOUND;
++    throw std::runtime_error("Unknown shape type: " + type);
++}
++
++std::vector<double> signedFaceVolumeIntegrals(const TopoDS_Shape& shape,
++                                             const gp_Pnt& reference,
++                                             double epsilon) {
++    if (!std::isfinite(reference.X()) || !std::isfinite(reference.Y()) ||
++        !std::isfinite(reference.Z()) || !std::isfinite(epsilon) ||
++        epsilon <= 0.0 || epsilon >= 1.0) {
++        throw std::runtime_error("getSignedFaceVolumeIntegrals: invalid reference or epsilon");
++    }
++    TopExp_Explorer solids(shape, TopAbs_SOLID);
++    if (!solids.More() || !BRepCheck_Analyzer(shape).IsValid()) {
++        throw std::runtime_error("getSignedFaceVolumeIntegrals: valid solid required");
++    }
++    const TopoDS_Shape solid = solids.Current();
++    solids.Next();
++    if (solids.More()) {
++        throw std::runtime_error("getSignedFaceVolumeIntegrals: exactly one solid required");
++    }
++    BRepGProp_VinertGK integrator;
++    integrator.SetLocation(reference);
++    // Split integration spans on B-spline faces, as in the native oracle.
++    BRepGProp_Face surface(true);
++    BRepGProp_Domain domain;
++    std::vector<double> result;
++    for (TopExp_Explorer shells(solid, TopAbs_SHELL); shells.More(); shells.Next()) {
++        const auto& shell = shells.Current();
++        if (!BRep_Tool::IsClosed(shell)) {
++            throw std::runtime_error("getSignedFaceVolumeIntegrals: open shell");
++        }
++        for (TopExp_Explorer faces(shell, TopAbs_FACE); faces.More(); faces.Next()) {
++            const TopoDS_Face face = TopoDS::Face(faces.Current());
++            if (face.Orientation() != TopAbs_FORWARD && face.Orientation() != TopAbs_REVERSED) {
++                continue;
++            }
++            if (BRep_Tool::Surface(face).IsNull()) {
++                throw std::runtime_error("getSignedFaceVolumeIntegrals: missing exact surface");
++            }
++            surface.Load(face);
++            double error;
++            if (face.NbChildren() != 0) {
++                domain.Init(face);
++                error = integrator.Perform(surface, domain, epsilon, false, false);
++            } else {
++                error = integrator.Perform(surface, epsilon, false, false);
++            }
++            const double mass = integrator.Mass();
++            if (error < 0.0 || !std::isfinite(error) || !std::isfinite(mass)) {
++                throw std::runtime_error("getSignedFaceVolumeIntegrals: face integration failed");
++            }
++            result.push_back(mass);
++            result.push_back(error);
++        }
++    }
++    if (result.empty()) {
++        throw std::runtime_error("getSignedFaceVolumeIntegrals: no oriented surface faces");
++    }
++    return result;
++}
+diff --git a/xtask/src/codegen/config.rs b/xtask/src/codegen/config.rs
+index 905615aed45608aae368acd75b9fa866ec6b202f..ade24255ff6c845dc345704428446c9cfba2990f 100644
+--- a/xtask/src/codegen/config.rs
++++ b/xtask/src/codegen/config.rs
+@@ -2809,18 +2809,7 @@ default: return \"shape\";
+         occt_class: "",
+         ctor_args: "",
+         setup_code: "\
+-auto parseType = [](const std::string& t) -> TopAbs_ShapeEnum {
+-    if (t == \"vertex\") return TopAbs_VERTEX;
+-    if (t == \"edge\") return TopAbs_EDGE;
+-    if (t == \"wire\") return TopAbs_WIRE;
+-    if (t == \"face\") return TopAbs_FACE;
+-    if (t == \"shell\") return TopAbs_SHELL;
+-    if (t == \"solid\") return TopAbs_SOLID;
+-    if (t == \"compsolid\") return TopAbs_COMPSOLID;
+-    if (t == \"compound\") return TopAbs_COMPOUND;
+-    throw std::runtime_error(\"Unknown shape type: \" + t);
+-};
+-TopAbs_ShapeEnum toExplore = parseType(shapeType);
++TopAbs_ShapeEnum toExplore = parseShapeType(shapeType);
+ NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> map;
+ TopExp::MapShapes(get(id), toExplore, map);
+ BatchScope result(*this, static_cast<size_t>(map.Extent()));
+@@ -2842,19 +2831,8 @@ return result.take();",
+         occt_class: "",
+         ctor_args: "",
+         setup_code: "\
+-auto parseType = [](const std::string& t) -> TopAbs_ShapeEnum {
+-    if (t == \"vertex\") return TopAbs_VERTEX;
+-    if (t == \"edge\") return TopAbs_EDGE;
+-    if (t == \"wire\") return TopAbs_WIRE;
+-    if (t == \"face\") return TopAbs_FACE;
+-    if (t == \"shell\") return TopAbs_SHELL;
+-    if (t == \"solid\") return TopAbs_SOLID;
+-    if (t == \"compsolid\") return TopAbs_COMPSOLID;
+-    if (t == \"compound\") return TopAbs_COMPOUND;
+-    throw std::runtime_error(\"Unknown shape type: \" + t);
+-};
+ NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> map;
+-TopExp::MapShapes(get(id), parseType(shapeType), map);
++TopExp::MapShapes(get(id), parseShapeType(shapeType), map);
+ return map.Extent();",
+         includes: &[
+             "TopAbs_ShapeEnum.hxx", "TopExp.hxx",
+@@ -2863,6 +2841,44 @@ return map.Extent();",
+         category: "topology",
+         return_type: ReturnType::Int,
+     },
++    MethodSpec {
++        name: "getSubShapeOccurrences",
++        kind: MethodKind::CustomBody,
++        params: &[FacadeParam::ShapeId("id"), FacadeParam::String("shapeType")],
++        occt_class: "",
++        ctor_args: "",
++        setup_code: "\
++TopAbs_ShapeEnum type = parseShapeType(shapeType);
++const auto& shape = get(id);
++BatchScope result(*this, 0);
++for (TopExp_Explorer ex(shape, type); ex.More(); ex.Next()) {
++    result.add(ex.Current());
++}
++return result.take();",
++        includes: &["TopExp_Explorer.hxx"],
++        category: "topology",
++        return_type: ReturnType::VectorShapeIds,
++    },
++    MethodSpec {
++        name: "subShapeOccurrenceCount",
++        kind: MethodKind::CustomBody,
++        params: &[FacadeParam::ShapeId("id"), FacadeParam::String("shapeType")],
++        occt_class: "",
++        ctor_args: "",
++        setup_code: "\
++TopAbs_ShapeEnum type = parseShapeType(shapeType);
++int count = 0;
++for (TopExp_Explorer ex(get(id), type); ex.More(); ex.Next()) {
++    if (count == std::numeric_limits<int>::max()) {
++        throw std::runtime_error(\"subShapeOccurrenceCount: count overflow\");
++    }
++    ++count;
++}
++return count;",
++        includes: &["TopExp_Explorer.hxx", "limits"],
++        category: "topology",
++        return_type: ReturnType::Int,
++    },
+     MethodSpec {
+         name: "subShapeHashes",
+         kind: MethodKind::CustomBody,
+@@ -3174,6 +3190,77 @@ return result;",
+         category: "query",
+         return_type: ReturnType::BBoxData,
+     },
++    MethodSpec {
++        name: "getOptimalBounds",
++        kind: MethodKind::CustomBody,
++        params: &[
++            FacadeParam::ShapeId("id"),
++            FacadeParam::Bool("useTriangulation"),
++            FacadeParam::Bool("useShapeTolerance"),
++        ],
++        occt_class: "",
++        ctor_args: "",
++        setup_code: "\
++Bnd_Box box;
++BRepBndLib::AddOptimal(get(id), box, useTriangulation, useShapeTolerance);
++if (box.IsVoid() || box.IsOpen()) {
++    throw std::runtime_error(\"getOptimalBounds: shape has no finite bounds\");
++}
++BBoxData result{};
++box.Get(result.xmin, result.ymin, result.zmin, result.xmax, result.ymax, result.zmax);
++return result;",
++        includes: &["BRepBndLib.hxx", "Bnd_Box.hxx"],
++        category: "query",
++        return_type: ReturnType::BBoxData,
++    },
++    MethodSpec {
++        name: "getSignedFaceVolumeIntegrals",
++        kind: MethodKind::CustomBody,
++        params: &[
++            FacadeParam::ShapeId("id"),
++            FacadeParam::Double("x"),
++            FacadeParam::Double("y"),
++            FacadeParam::Double("z"),
++            FacadeParam::Double("epsilon"),
++        ],
++        occt_class: "",
++        ctor_args: "",
++        setup_code: "\
++return signedFaceVolumeIntegrals(get(id), gp_Pnt(x, y, z), epsilon);",
++        includes: &["gp_Pnt.hxx"],
++        category: "query",
++        return_type: ReturnType::VectorDouble,
++    },
++    MethodSpec {
++        name: "classifySolidPoint",
++        kind: MethodKind::CustomBody,
++        params: &[
++            FacadeParam::ShapeId("id"),
++            FacadeParam::Double("x"),
++            FacadeParam::Double("y"),
++            FacadeParam::Double("z"),
++            FacadeParam::Double("tolerance"),
++        ],
++        occt_class: "",
++        ctor_args: "",
++        setup_code: "\
++const auto& shape = get(id);
++if (shape.ShapeType() != TopAbs_SOLID || !std::isfinite(x) || !std::isfinite(y) ||
++    !std::isfinite(z) || !std::isfinite(tolerance) || tolerance < 0.0) {
++    throw std::runtime_error(\"classifySolidPoint: invalid solid or coordinates/tolerance\");
++}
++BRepClass3d_SolidClassifier classifier(shape);
++classifier.Perform(gp_Pnt(x, y, z), tolerance);
++switch (classifier.State()) {
++    case TopAbs_OUT: return 0;
++    case TopAbs_IN: return 1;
++    case TopAbs_ON: return 2;
++    default: return 3;
++}",
++        includes: &["BRepClass3d_SolidClassifier.hxx", "gp_Pnt.hxx", "TopAbs_State.hxx", "cmath"],
++        category: "query",
++        return_type: ReturnType::Int,
++    },
+     MethodSpec {
+         name: "getVolume",
+         kind: MethodKind::CustomBody,

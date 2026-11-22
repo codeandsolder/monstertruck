@@ -13,9 +13,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bbox = kernel.get_bounding_box(shape, true)?;
     let volume = kernel.get_volume(shape)?;
     let area = kernel.get_surface_area(shape)?;
-    let faces = kernel.get_sub_shapes(shape, "Face")?.len();
-    let edges = kernel.get_sub_shapes(shape, "Edge")?.len();
-    let vertices = kernel.get_sub_shapes(shape, "Vertex")?.len();
+    let faces = kernel.get_sub_shapes(shape, "face")?.len();
+    let edges = kernel.get_sub_shapes(shape, "edge")?.len();
+    let vertices = kernel.get_sub_shapes(shape, "vertex")?.len();
     let mesh = kernel.tessellate(shape, 0.002, 0.2)?;
     let mut tris: Vec<[[i64; 3]; 3]> = Vec::with_capacity(mesh.indices.len() / 3);
     let quantize = |value: f32| (f64::from(value) * 1e9).round() as i64;
