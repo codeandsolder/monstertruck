@@ -8,10 +8,10 @@
 
 use super::{
     BoundedCurve, Cdt, EuclideanSpace, ExactParameterBoundary2D, ExactTrimBoundary2D,
-    FixedVertexHandle, HashGen, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools,
-    MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D, Point2,
-    Point3, PolylineCurve, PreMeshableSurface, SP, SPoint2, Tolerance, Triangulation, Vector2,
-    algo, env, mesh, resample_boundary, simplify_parameter_boundary,
+    FixedVertexHandle, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools, MetricSpace,
+    Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D, Point2, Point3,
+    PolylineCurve, PreMeshableSurface, SP, SPoint2, Tolerance, Triangulation, algo, env, mesh,
+    resample_boundary, simplify_parameter_boundary,
 };
 
 mod loops;

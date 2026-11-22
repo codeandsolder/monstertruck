@@ -6,17 +6,16 @@
 //! is unchanged.
 
 use super::{
-    Cdt, FixedVertexHandle, HashGen, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools,
-    MetricSpace, Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SPoint2,
-    SurfacePoint, Tolerance, Triangulation, UvKey, Vector2, align_full_period_open_pair,
-    align_periodic_open_pair, close_open_periodic_curve_to_singular, compact_periodic_closed_loop,
-    connect_edges, mesh, native_boundary_slack, normalize_range, open_periodic_closed_loop,
-    periodic_axis_full_span, periodic_open_axis_full_span, polyline_on_surface,
-    surface_point_with_cache,
+    Cdt, FixedVertexHandle, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools, MetricSpace,
+    Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SPoint2, SurfacePoint,
+    Tolerance, Triangulation, UvKey, align_full_period_open_pair, align_periodic_open_pair,
+    close_open_periodic_curve_to_singular, compact_periodic_closed_loop, connect_edges, mesh,
+    native_boundary_slack, normalize_range, open_periodic_closed_loop, periodic_axis_full_span,
+    periodic_open_axis_full_span, polyline_on_surface, surface_point_with_cache,
 };
 use mesh::spade_round;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
-use std::{f64::consts::TAU, iter, mem};
+use std::{iter, mem};
 
 const ISOPARAM_BOUNDARY_SEARCH_ITERATIONS: usize = 32;
 
@@ -380,33 +379,51 @@ impl PolyBoundary {
     /// Whether `c` is included in the domain with boundary = `self`.
     pub(in crate::tessellation::triangulation) fn include(&self, c: Point2) -> bool {
         // AABB early reject.
-        if c.x < self.uv_min.x || c.x > self.uv_max.x || c.y < self.uv_min.y || c.y > self.uv_max.y
+        if !c.x.is_finite()
+            || !c.y.is_finite()
+            || c.x < self.uv_min.x
+            || c.x > self.uv_max.x
+            || c.y < self.uv_min.y
+            || c.y > self.uv_max.y
         {
             return false;
         }
-        let t = TAU * HashGen::hash1(c);
-        let r = Vector2::new(f64::cos(t), f64::sin(t));
-        self.loops
+        // Half-open horizontal crossings avoid double-counting a vertex.
+        // The adaptive exact orientation predicate is the same predicate
+        // used by the constrained Delaunay triangulation. A nonzero
+        // interior distance in native UV is not a modeling error: rejecting
+        // a fixed-width band could erase an entire valid thin face.
+        let query = robust::Coord { x: c.x, y: c.y };
+        let mut winding = 0_i64;
+        for (front, back) in self
+            .loops
             .iter()
-            .flat_map(|vec| vec.iter().circular_tuple_windows())
-            .try_fold(0_i32, move |counter, (p0, p1)| {
-                let a = **p0 - c;
-                let b = **p1 - c;
-                let s0 = r.y.mul_add(-a.x, r.x * a.y); // v times a.
-                let s1 = r.y.mul_add(-b.x, r.x * b.y); // v times b.
-                let s2 = a.y.mul_add(-b.x, a.x * b.y); // a times b.
-                let x = s2 / (s1 - s0);
-                if x.so_small() && s0 * s1 < 0.0 {
-                    None
-                } else if x > 0.0 && s0 <= 0.0 && s1 > 0.0 {
-                    Some(counter + 1)
-                } else if x > 0.0 && s0 >= 0.0 && s1 < 0.0 {
-                    Some(counter - 1)
-                } else {
-                    Some(counter)
-                }
-            })
-            .is_some_and(|counter| counter > 0)
+            .flat_map(|wire| wire.iter().circular_tuple_windows())
+        {
+            if c.y < front.y.min(back.y) || c.y > front.y.max(back.y) {
+                continue;
+            }
+            let determinant = robust::orient2d(
+                robust::Coord {
+                    x: front.x,
+                    y: front.y,
+                },
+                robust::Coord {
+                    x: back.x,
+                    y: back.y,
+                },
+                query,
+            );
+            if determinant == 0.0 && c.x >= front.x.min(back.x) && c.x <= front.x.max(back.x) {
+                return false;
+            }
+            if front.y <= c.y && c.y < back.y && determinant > 0.0 {
+                winding += 1;
+            } else if back.y <= c.y && c.y < front.y && determinant < 0.0 {
+                winding -= 1;
+            }
+        }
+        winding > 0
     }
 
     pub(in crate::tessellation::triangulation) fn isoparametric_curves<S: PreMeshableSurface>(
