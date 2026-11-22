@@ -31,7 +31,6 @@ struct Section {
 fn plane_quad(face: &ReducedFace) -> bool {
     matches!(face.surface, SurfaceSupport::Plane(_))
         && face.loops.len() == 1
-        && face.loops[0].outer
         && face.loops[0].edges.len() == 4
         && face.loops[0]
             .edges
@@ -246,7 +245,7 @@ fn candidate(
             groups.push((level, vec![vertex]));
         }
     }
-    if groups.len() < 3 || groups.iter().any(|(_, group)| group.len() != 4) {
+    if groups.len() < 2 || groups.iter().any(|(_, group)| group.len() != 4) {
         return None;
     }
     let sections = groups
@@ -930,6 +929,59 @@ mod terminal_extension_tests {
     use super::*;
     use crate::step_graph::build_index;
     use monstertruck_io::step::load::ParsedStepSource;
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn two_section_drafted_rectangle_with_unlabelled_bounds_is_exact() -> anyhow::Result<()> {
+        use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+        let kernel = MonstertruckKernel::project_standard();
+        let mut model = CadModel::new();
+        let root = model.add_node(CadNode::Loft {
+            sections: vec![
+                LoftSection {
+                    profile: Profile2d::polygon(vec![
+                        [-0.75, 0.0],
+                        [0.75, 0.0],
+                        [0.75, 0.9],
+                        [-0.75, 0.9],
+                    ])?,
+                    transform: RigidTransform::identity(),
+                },
+                LoftSection {
+                    profile: Profile2d::polygon(vec![
+                        [-0.738, 0.012],
+                        [0.738, 0.012],
+                        [0.738, 0.888],
+                        [-0.738, 0.888],
+                    ])?,
+                    transform: RigidTransform::translation_mm([0.0, 0.0, 1.35]),
+                },
+            ],
+        });
+        model.add_root(root)?;
+        let authored = kernel.evaluate(&model, root)?;
+        let step = kernel
+            .to_step(&authored)?
+            .replace("FACE_OUTER_BOUND(", "FACE_BOUND(");
+        let exchange = ParsedStepSource::parse(step.as_bytes())?.exchange;
+        let entities = &exchange.data[0].entities;
+        let index = build_index(entities);
+        let ids = crate::brep::manifold_solid_ids(entities);
+        let [id] = ids.as_slice() else {
+            anyhow::bail!("drafted rectangle must export exactly one solid");
+        };
+        let reduced = ReducedSolid::from_step(*id, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("no source B-rep"))?;
+        let recovered = detect_sectioned_planar_loft(&reduced)
+            .ok_or_else(|| anyhow::anyhow!("two-section taper not recognized"))?;
+        assert!(
+            matches!(recovered.model.node(recovered.root)?, CadNode::Loft { sections } if sections.len() == 2)
+        );
+        let proof = crate::cad_recovery::SourceRecovery::new(*id, entities, &index, &kernel)
+            .ok_or_else(|| anyhow::anyhow!("no original boundary certificate"))?;
+        assert!(proof.proves(&recovered.model, recovered.root, None)?);
+        Ok(())
+    }
 
     #[test]
     fn four_section_beveled_bar_is_an_exact_editable_loft() -> anyhow::Result<()> {
