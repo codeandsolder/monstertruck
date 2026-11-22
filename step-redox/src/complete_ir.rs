@@ -1392,10 +1392,34 @@ fn recover_complete_ir_build_state<'a>(
 
     let surface_signature_summaries = signatures;
     let instance_pattern_diagnostics = patterns;
-    let (recovery, direct_candidates) = if mutation_mode == ReducedBrepMutationMode::KernelOwned {
+    let (recovery, direct_candidates) = recover_and_retain_direct_candidates(
+        &recovery_sections,
+        &body_scan,
+        direct_candidates,
+        mutation_mode,
+    )?;
+
+    Ok(CompleteIrBuildState {
+        surface_signature_summaries,
+        instance_pattern_diagnostics,
+        body_scan,
+        recovery,
+        direct_candidates,
+    })
+}
+
+type DirectCandidatesBySource = BTreeMap<SourceEntity, Vec<CadFragment>>;
+
+fn recover_and_retain_direct_candidates(
+    recovery_sections: &[RecoverySection<'_>],
+    body_scan: &[SourceSolidSummary],
+    direct_candidates: Vec<SourceCadFragment>,
+    mutation_mode: ReducedBrepMutationMode,
+) -> Result<(WholeSolidRecoveryState, DirectCandidatesBySource)> {
+    let result = if mutation_mode == ReducedBrepMutationMode::KernelOwned {
         let recovery = recover_whole_solids(
-            &recovery_sections,
-            &body_scan,
+            recovery_sections,
+            body_scan,
             direct_candidates.iter().cloned(),
             mutation_mode,
         )?;
@@ -1412,8 +1436,8 @@ fn recover_complete_ir_build_state<'a>(
     } else {
         (
             recover_whole_solids(
-                &recovery_sections,
-                &body_scan,
+                recovery_sections,
+                body_scan,
                 direct_candidates,
                 mutation_mode,
             )?,
@@ -1421,13 +1445,7 @@ fn recover_complete_ir_build_state<'a>(
         )
     };
 
-    Ok(CompleteIrBuildState {
-        surface_signature_summaries,
-        instance_pattern_diagnostics,
-        body_scan,
-        recovery,
-        direct_candidates,
-    })
+    Ok(result)
 }
 
 fn recover_whole_solids(
