@@ -4,8 +4,10 @@ import argparse
 import json
 import math
 import re
+from dataclasses import asdict
 from pathlib import Path
 
+from occt_paired_volume import paired_volume
 from OCP.Bnd import Bnd_Box
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
 from OCP.BRepBndLib import BRepBndLib
@@ -216,7 +218,13 @@ def compare_solid(a, b):
 parser = argparse.ArgumentParser()
 parser.add_argument("a")
 parser.add_argument("b")
-parser.add_argument(
+single_mode = parser.add_mutually_exclusive_group()
+single_mode.add_argument(
+    "--single-solid",
+    action="store_true",
+    help="Compare entire single-solid STEP files, allowing different face subdivisions.",
+)
+single_mode.add_argument(
     "--a-entity-id",
     type=int,
     help=(
@@ -226,8 +234,11 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-if args.a_entity_id is not None:
-    a_shape, a_entity_rank = load_entity_id(args.a, args.a_entity_id)
+if args.a_entity_id is not None or args.single_solid:
+    if args.a_entity_id is not None:
+        a_shape, a_entity_rank = load_entity_id(args.a, args.a_entity_id)
+    else:
+        a_shape, a_entity_rank = load(args.a), None
     b_shape = load(args.b)
     a_solids = solids_from_shape(a_shape)
     b_solids = solids_from_shape(b_shape)
@@ -254,6 +265,12 @@ if args.a_entity_id is not None:
     # reliable equivalence certificate for approximate STEP intersection
     # curves. Classic fixed-quadrature volumes are only reported.
     adaptive = adaptive_volume_agreement(a_shape, b_shape)
+    # Report a strict absolute diagnostic without replacing or loosening the
+    # existing adaptive-volume / Boolean validation decision.
+    try:
+        paired = asdict(paired_volume(a_shape, b_shape, ABS_VOLUME_TOL))
+    except (ValueError, Standard_Failure) as exc:
+        paired = {"within_absolute_tolerance": False, "error": str(exc)}
     geometry_equal = (
         adaptive["consistent"]
         and a_solid["brep_valid"]
@@ -272,6 +289,7 @@ if args.a_entity_id is not None:
                 "b": b_solid,
                 "geometry_equal": geometry_equal,
                 "adaptive_volume": adaptive,
+                "paired_absolute_volume": paired,
                 "errors": {
                     "volume": volume_error,
                     "area": area_error,
