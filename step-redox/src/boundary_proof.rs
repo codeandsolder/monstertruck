@@ -18,7 +18,10 @@ mod bounded;
 mod cell_correspondence;
 use cell_correspondence::{CellKind, CellWitnesses};
 mod spline_strip;
+mod strip_sense;
 pub use spline_strip::{SplineCurveKey, SplineStripKey};
+pub use strip_sense::StripFaceSenseRepair;
+pub(crate) use strip_sense::{ReconciledStripBoundary, reconcile_strip_face_senses};
 
 type PointKey = [i64; 3];
 type GroupedBoundarySegments = BTreeMap<[OrientedSupportKey; 2], Vec<(PointKey, PointKey)>>;
