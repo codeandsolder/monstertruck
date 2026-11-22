@@ -35,6 +35,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Exchange};
 
+mod loft_reuse;
 mod treatment_layers;
 
 pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
@@ -956,6 +957,21 @@ fn finish_native_boundary_feature_replay<
     };
     host.model.provenance.clear();
     let fragment = compose_boundary_feature_fragment(source.id, &host, replay)?;
+    if let Some(proof) = proof
+        && let Some(model) = loft_reuse::candidate(&fragment.model)
+        && proof
+            .proves(
+                &model,
+                fragment.root,
+                Some(fragment.model.complexity_score(fragment.root)?),
+            )
+            .unwrap_or(false)
+    {
+        return Ok(Some(KernelRecoveryCandidate::verified(CadFragment {
+            model,
+            ..fragment
+        })));
+    }
     let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
     if !kernel.summarize(&evaluated).is_single_solid() {
         return Ok(None);
