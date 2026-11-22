@@ -178,10 +178,9 @@ fn nonplanar_control_net(points: &[[f64; 3]]) -> bool {
     let (na, nb) = (norm(a), norm(b));
     vectors.iter().any(|&c| {
         let nc = norm(c);
-        let bound = e * (na * nb + na * nc + nb * nc)
-            + e * e * (na + nb + nc)
-            + e.powi(3)
-            + 32. * f64::EPSILON * na * nb * nc;
+        let pairwise = nb.mul_add(nc, na.mul_add(nc, na * nb));
+        let bound = (e * e).mul_add(na + nb + nc, e.mul_add(pairwise, e.powi(3)));
+        let bound = (32. * f64::EPSILON * na * nb).mul_add(nc, bound);
         let determinant = dot(normal, c).abs();
         determinant.is_finite() && determinant > bound
     })
