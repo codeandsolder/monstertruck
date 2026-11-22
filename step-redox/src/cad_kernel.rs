@@ -397,7 +397,30 @@ pub mod monstertruck {
         if let Some(error) = first_error.into_inner() {
             return Err(error).context("STEP intersection geometry conversion failed");
         }
-        exported.context("STEP export could not reconstruct original solid topology")
+        let exported =
+            exported.context("STEP export could not reconstruct original solid topology")?;
+        // A spherical analytic carrier has a different chart from its
+        // rational meridian. Rechart only faces with independently certified
+        // spatial edges; projected/parameter curves retain their own carrier.
+        // try_mapped created detached face geometry, so this cannot modify
+        // the evaluated CAD solid or its original trim data.
+        let tolerance = tolerance.min(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM);
+        for face in exported.face_iter() {
+            let Surface::Revolution(revolution) = face.surface() else {
+                continue;
+            };
+            let Some(sphere) = revolution.try_certified_sphere(tolerance) else {
+                continue;
+            };
+            let surface = Surface::Sphere(sphere);
+            if face.edge_iter().all(|edge| {
+                certify_analytic_curve_on_surface(&edge.curve(), &surface, tolerance)
+                    == CurveIncidence::Proven
+            }) {
+                face.set_surface(surface);
+            }
+        }
+        Ok(exported)
     }
 
     /// Opaque wrapper: Monstertruck topology does not escape the backend module.

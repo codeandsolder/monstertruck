@@ -4486,6 +4486,28 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn native_spherical_bosses_and_blind_recesses_are_source_verified() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_relief_blind_636f2bd5.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        let [body] = report.boundary_feature_composites.as_slice() else {
+            bail!("expected editable subtractive and spherical feature composite");
+        };
+        let rebuilt = kernel.evaluate(&body.fragment.model, body.fragment.root)?;
+        let summary = kernel.summarize(&rebuilt);
+        assert!(summary.is_single_solid(), "{summary:?}");
+        assert_eq!(summary.faces, 84);
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn healed_host_can_use_independently_proven_sectional_recovery() -> Result<()> {
         let bytes = include_bytes!("../validation/fixtures/native_sectional_stepped_655821f7.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
