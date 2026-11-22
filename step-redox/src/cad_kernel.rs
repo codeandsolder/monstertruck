@@ -1173,31 +1173,18 @@ pub mod monstertruck {
         if let Some(result) = parallel_prisms::evaluate(model, op, children, policy)? {
             return Ok(result);
         }
-        if matches!(op, BooleanOp::Union | BooleanOp::Difference) && children.len() > 2 {
-            let solids = children
+        if children.len() > 2
+            && let Some(contact_op) = planar_contact_op(op)
+        {
+            let mut solids = children
                 .iter()
-                .map(|&id| evaluate_node(model, id, policy, cache))
-                .collect::<Result<Vec<_>>>()?;
-            let tools = solids[1..].iter().collect::<Vec<_>>();
-            let contact_op = match op {
-                BooleanOp::Union => monstertruck_solid::PlanarContactOp::Union,
-                BooleanOp::Difference => monstertruck_solid::PlanarContactOp::Difference,
-                BooleanOp::Intersection => {
-                    unreachable!("contact arrangement requires union or difference")
-                }
-            };
-            let joined = monstertruck_solid::try_planar_contact_many(
-                &solids[0],
-                &tools,
-                contact_op,
-                monstertruck_policy(policy),
-            )?;
-            // Contact certification borrows, rather than consumes, the
-            // operands. If it cannot prove contact, fold those same owned
-            // solids, certifying each pair independently before general
-            // intersection. One non-contact tool must not disable exact
-            // contact for every other tool in the batch.
-            return joined.map_or_else(|| fold_boolean(op, solids.into_iter().map(Ok), policy), Ok);
+                .map(|&id| evaluate_node(model, id, policy, cache));
+            let host = solids
+                .next()
+                .context("boolean node needs at least one child")??;
+            let tools = solids.collect::<Result<Vec<_>>>()?;
+            let tools = tools.iter().collect::<Vec<_>>();
+            return apply_contact_batch(host, &tools, contact_op, monstertruck_policy(policy));
         }
         fold_boolean(
             op,
@@ -1206,6 +1193,44 @@ pub mod monstertruck {
                 .map(|&id| evaluate_node(model, id, policy, cache)),
             policy,
         )
+    }
+
+    const fn planar_contact_op(op: BooleanOp) -> Option<monstertruck_solid::PlanarContactOp> {
+        use monstertruck_solid::PlanarContactOp;
+        match op {
+            BooleanOp::Union => Some(PlanarContactOp::Union),
+            BooleanOp::Difference => Some(PlanarContactOp::Difference),
+            BooleanOp::Intersection => None,
+        }
+    }
+
+    /// Certify the largest contiguous group before falling back to smaller groups.
+    /// A failed arrangement does not invalidate other exact contact unions or
+    /// cuts. Preserve original operand order and require the same certification
+    /// for each resulting group, evaluating its actual intermediate host.
+    fn apply_contact_batch(
+        host: Solid,
+        tools: &[&Solid],
+        op: monstertruck_solid::PlanarContactOp,
+        policy: monstertruck_solid::GeometryPolicy,
+    ) -> Result<Solid> {
+        use monstertruck_solid::PlanarContactOp;
+        if tools.is_empty() {
+            return Ok(host);
+        }
+        if let Some(result) = monstertruck_solid::try_planar_contact_many(&host, tools, op, policy)?
+        {
+            return Ok(result);
+        }
+        if let [tool] = tools {
+            return Ok(match op {
+                PlanarContactOp::Union => monstertruck_solid::or(&host, tool, policy)?,
+                PlanarContactOp::Difference => monstertruck_solid::difference(&host, tool, policy)?,
+            });
+        }
+        let (first, rest) = tools.split_at(tools.len() / 2);
+        let host = apply_contact_batch(host, first, op, policy)?;
+        apply_contact_batch(host, rest, op, policy)
     }
 
     fn fold_boolean(
@@ -1219,29 +1244,10 @@ pub mod monstertruck {
         let kernel_policy = monstertruck_policy(policy);
         for rhs in operands {
             let rhs = rhs?;
-            result = match op {
-                BooleanOp::Union => {
-                    if let Some(joined) =
-                        monstertruck_solid::try_planar_contact_union(&result, &rhs, kernel_policy)?
-                    {
-                        joined
-                    } else {
-                        monstertruck_solid::or(&result, &rhs, kernel_policy)?
-                    }
-                }
-                BooleanOp::Intersection => monstertruck_solid::and(&result, &rhs, kernel_policy)?,
-                BooleanOp::Difference => {
-                    if let Some(joined) = monstertruck_solid::try_planar_contact_many(
-                        &result,
-                        &[&rhs],
-                        monstertruck_solid::PlanarContactOp::Difference,
-                        kernel_policy,
-                    )? {
-                        joined
-                    } else {
-                        monstertruck_solid::difference(&result, &rhs, kernel_policy)?
-                    }
-                }
+            result = if let Some(contact_op) = planar_contact_op(op) {
+                apply_contact_batch(result, &[&rhs], contact_op, kernel_policy)?
+            } else {
+                monstertruck_solid::and(&result, &rhs, kernel_policy)?
             };
         }
         Ok(result)
@@ -3104,6 +3110,8 @@ pub mod monstertruck {
                 })?,
                 Vector3::new(1.0, 1.0, 1.99),
             );
+            let second_blind = builder::translated(&blind, Vector3::new(2.0, 0.0, 0.0));
+            let third_blind = builder::translated(&blind, Vector3::new(0.0, 3.0, 0.0));
             let through = builder::translated(
                 &primitive_solid(&Primitive::Box {
                     size_mm: [1.0, 1.0, 4.0],
@@ -3115,20 +3123,26 @@ pub mod monstertruck {
             assert!(
                 monstertruck_solid::try_planar_contact_many(
                     &host,
-                    &[&blind, &through],
+                    &[&blind, &second_blind, &third_blind, &through],
                     op,
                     policy
                 )?
                 .is_none()
             );
             assert!(
-                monstertruck_solid::try_planar_contact_many(&host, &[&blind], op, policy)?
-                    .is_some()
+                monstertruck_solid::try_planar_contact_many(
+                    &host,
+                    &[&blind, &second_blind],
+                    op,
+                    policy
+                )?
+                .is_some()
             );
-            let solid = fold_boolean(
-                BooleanOp::Difference,
-                [Ok(host), Ok(blind), Ok(through)].into_iter(),
-                kernel.policy,
+            let solid = apply_contact_batch(
+                host,
+                &[&blind, &second_blind, &third_blind, &through],
+                op,
+                policy,
             )?;
             let actual = EvaluatedShape { solid };
             assert!(kernel.summarize(&actual).is_single_solid());
@@ -3137,11 +3151,17 @@ pub mod monstertruck {
             // through-hole; the upper section has the same hole plus a pocket.
             let outer = Profile2d::polygon(vec![[0.0, 0.0], [10.0, 0.0], [10.0, 6.0], [0.0, 6.0]])?;
             let hole = Profile2d::polygon(vec![[6.0, 2.0], [6.0, 3.0], [7.0, 3.0], [7.0, 2.0]])?;
-            let pocket = Profile2d::polygon(vec![[1.0, 1.0], [1.0, 2.0], [2.0, 2.0], [2.0, 1.0]])?;
+            let pockets = [
+                Profile2d::polygon(vec![[1.0, 1.0], [1.0, 2.0], [2.0, 2.0], [2.0, 1.0]])?,
+                Profile2d::polygon(vec![[3.0, 1.0], [3.0, 2.0], [4.0, 2.0], [4.0, 1.0]])?,
+                Profile2d::polygon(vec![[1.0, 4.0], [1.0, 5.0], [2.0, 5.0], [2.0, 4.0]])?,
+            ];
             let mut lower = outer;
             lower.loops.extend(hole.loops);
             let mut upper = lower.clone();
-            upper.loops.extend(pocket.loops);
+            upper
+                .loops
+                .extend(pockets.into_iter().flat_map(|profile| profile.loops));
             let bottom = extrude_profile_z(&lower, 1.99)?;
             let top = builder::translated(
                 &extrude_profile_z(&upper, 0.01)?,
