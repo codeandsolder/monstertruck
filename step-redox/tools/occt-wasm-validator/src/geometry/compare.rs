@@ -101,7 +101,7 @@ impl Check {
 #[derive(Debug, Serialize)]
 pub struct Comparison {
     alignment: Alignment,
-    alignment_translation_mm: [f64; 3],
+    pub alignment_translation_mm: [f64; 3],
     checks: Vec<Check>,
     pub metrics_pass: bool,
     deferred_checks: Vec<&'static str>,

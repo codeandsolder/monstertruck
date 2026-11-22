@@ -3,6 +3,7 @@ use occt_wasm::{BoundingBox, OcctKernel, ShapeHandle, StepImport};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 pub mod compare;
+pub mod render;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Bounds {
