@@ -2,6 +2,8 @@
 
 **Scope:** source-derived six-stage `4a6356` CAD IR fixture on Asus, Rust 1.99.1, active PR104 parent `e3e682d9`. This is an **experiment branch**. Do not merge runtime `MT_EXPERIMENT_*` environment overrides into production without an explicit accuracy/conditioning policy.
 
+**Historical reproduction only:** these production geometry overrides have been removed. To reproduce this experiment use the archived commit `a088db97` (and its associated historical lock/toolchain), not the current master. Production always uses the explicit caller sampling tolerance and central numerical length. The following measurements and commands describe the historical experiment, not supported runtime configuration.
+
 ## Independent controls
 
 - `MT_EXPERIMENT_CURVE_SAMPLE_FLOOR_MM` raises *adaptive modeled-curve chord sampling* floor. It is not a topology-equality tolerance.
