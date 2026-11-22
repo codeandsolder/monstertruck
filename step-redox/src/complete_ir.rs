@@ -4155,13 +4155,15 @@ END-ISO-10303-21;
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
         assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
         assert_eq!(report.unrecovered_solid_count, 0);
         assert_eq!(
             report.source_boundary_verified_solids,
             [report.body_scan.solids[0].source]
         );
-        let [body] = report.boundary_feature_composites.as_slice() else {
-            bail!("complete IR did not retain the reconstructed relief composite");
+        let fragments = report.selected_fragments().collect::<Vec<_>>();
+        let [body] = fragments.as_slice() else {
+            bail!("expected exactly one selected whole-source reconstruction");
         };
         assert!(kernel_replay_is_single_solid(&kernel, &body.fragment)?);
         Ok(())
@@ -4181,23 +4183,9 @@ END-ISO-10303-21;
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn native_large_relief_housing_recovery_is_source_verified() -> Result<()> {
-        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
-        let bytes = include_bytes!("../validation/fixtures/native_relief_housing_271239a1.step");
-        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
-        assert_eq!(report.body_count, 1);
-        assert_eq!(report.constructively_recovered_solid_count, 1);
-        assert_eq!(report.unrecovered_solid_count, 0);
-        assert_eq!(
-            report.source_boundary_verified_solids,
-            [report.body_scan.solids[0].source]
-        );
-        let fragments = report.selected_fragments().collect::<Vec<_>>();
-        assert_eq!(fragments.len(), 1);
-        assert!(kernel_replay_is_single_solid(
-            &kernel,
-            &fragments[0].fragment
-        )?);
-        Ok(())
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_housing_271239a1.step"
+        ))
     }
 
     // The host itself requires intersecting planar Booleans. Their rebuilt
@@ -4209,6 +4197,20 @@ END-ISO-10303-21;
         assert_source_verified_relief(include_bytes!(
             "../validation/fixtures/native_relief_boolean_host_22bfe2fc.step"
         ))
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_partitioned_spline_caps_are_source_verified() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_partitioned_63d50d37.step")
+                .as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_partitioned_67cf7259.step")
+                .as_slice(),
+        ] {
+            assert_source_verified_relief(bytes)?;
+        }
+        Ok(())
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
