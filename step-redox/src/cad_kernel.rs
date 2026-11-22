@@ -1177,9 +1177,7 @@ pub mod monstertruck {
         {
             return Ok(result);
         }
-        if (op == BooleanOp::Union && children.len() > 2)
-            || (op == BooleanOp::Difference && children.len() >= 2)
-        {
+        if matches!(op, BooleanOp::Union | BooleanOp::Difference) && children.len() > 2 {
             let solids = children
                 .iter()
                 .map(|&id| evaluate_node(model, id, policy, cache))
@@ -1200,7 +1198,9 @@ pub mod monstertruck {
             )?;
             // Contact certification borrows, rather than consumes, the
             // operands. If it cannot prove contact, fold those same owned
-            // solids; reevaluating would consume DAG dependencies twice.
+            // solids, certifying each pair independently before general
+            // intersection. One non-contact tool must not disable exact
+            // contact for every other tool in the batch.
             return joined.map_or_else(|| fold_boolean(op, solids.into_iter().map(Ok), policy), Ok);
         }
         fold_boolean(
@@ -1235,7 +1235,16 @@ pub mod monstertruck {
                 }
                 BooleanOp::Intersection => monstertruck_solid::and(&result, &rhs, kernel_policy)?,
                 BooleanOp::Difference => {
-                    monstertruck_solid::difference(&result, &rhs, kernel_policy)?
+                    if let Some(joined) = monstertruck_solid::try_planar_contact_many(
+                        &result,
+                        &[&rhs],
+                        monstertruck_solid::PlanarContactOp::Difference,
+                        kernel_policy,
+                    )? {
+                        joined
+                    } else {
+                        monstertruck_solid::difference(&result, &rhs, kernel_policy)?
+                    }
                 }
             };
         }
@@ -3085,6 +3094,68 @@ pub mod monstertruck {
             assert!(summary.faces >= 8);
             step_p21::parser::parse(&kernel.to_step(&evaluated)?)?;
             Ok(())
+        }
+
+        #[test]
+        fn mixed_difference_batch_preserves_certified_contact() -> Result<()> {
+            let kernel = MonstertruckKernel::project_standard();
+            let host = primitive_solid(&Primitive::Box {
+                size_mm: [10.0, 6.0, 2.0],
+            })?;
+            let blind = builder::translated(
+                &primitive_solid(&Primitive::Box {
+                    size_mm: [1.0, 1.0, 0.01],
+                })?,
+                Vector3::new(1.0, 1.0, 1.99),
+            );
+            let through = builder::translated(
+                &primitive_solid(&Primitive::Box {
+                    size_mm: [1.0, 1.0, 4.0],
+                })?,
+                Vector3::new(6.0, 2.0, -1.0),
+            );
+            let policy = monstertruck_policy(kernel.policy);
+            let op = monstertruck_solid::PlanarContactOp::Difference;
+            assert!(
+                monstertruck_solid::try_planar_contact_many(
+                    &host,
+                    &[&blind, &through],
+                    op,
+                    policy
+                )?
+                .is_none()
+            );
+            assert!(
+                monstertruck_solid::try_planar_contact_many(&host, &[&blind], op, policy)?
+                    .is_some()
+            );
+            let solid = fold_boolean(
+                BooleanOp::Difference,
+                [Ok(host), Ok(blind), Ok(through)].into_iter(),
+                kernel.policy,
+            )?;
+            let actual = EvaluatedShape { solid };
+            assert!(kernel.summarize(&actual).is_single_solid());
+
+            // Independent sectional construction: the lower section has a
+            // through-hole; the upper section has the same hole plus a pocket.
+            let outer = Profile2d::polygon(vec![[0.0, 0.0], [10.0, 0.0], [10.0, 6.0], [0.0, 6.0]])?;
+            let hole = Profile2d::polygon(vec![[6.0, 2.0], [6.0, 3.0], [7.0, 3.0], [7.0, 2.0]])?;
+            let pocket = Profile2d::polygon(vec![[1.0, 1.0], [1.0, 2.0], [2.0, 2.0], [2.0, 1.0]])?;
+            let mut lower = outer;
+            lower.loops.extend(hole.loops);
+            let mut upper = lower.clone();
+            upper.loops.extend(pocket.loops);
+            let bottom = extrude_profile_z(&lower, 1.99)?;
+            let top = builder::translated(
+                &extrude_profile_z(&upper, 0.01)?,
+                Vector3::new(0.0, 0.0, 1.99),
+            );
+            let expected = EvaluatedShape {
+                solid: monstertruck_solid::try_planar_contact_union(&bottom, &top, policy)?
+                    .context("sectional reference must have certified planar contact")?,
+            };
+            assert_same_analytic_boundary(&kernel, &actual, &expected)
         }
 
         #[test]
