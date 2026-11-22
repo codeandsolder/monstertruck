@@ -38,7 +38,7 @@ use planar::{
     shells_have_positive_aabb_overlap,
 };
 pub(in crate::transversal::classic) use planar::{
-    direct_planar_face_match, single_face_matches_planar_partition,
+    PlanarMesh, direct_planar_face_match, single_face_matches_planar_partition,
 };
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -1987,8 +1987,8 @@ struct CoplanarInterfaceAnalysis {
 }
 
 fn analyze_coplanar_interfaces(
-    poly_shell0: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
-    poly_shell1: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    poly_shell0: &[Option<PlanarMesh<'_>>],
+    poly_shell1: &[Option<PlanarMesh<'_>>],
     tolerance: f64,
     imprint_coplanar: bool,
 ) -> Option<CoplanarInterfaceAnalysis> {
@@ -2119,7 +2119,7 @@ impl FacePairSupports {
 /// Coplanar edge imprint precedes sampled/analytic wire synchronization.
 fn materialize_interface_loops<C>(
     [mut operand0, mut operand1]: [OperandLoopStores<C>; 2],
-    [poly_shell0, poly_shell1]: [&Shell<Point3, PolylineCurve, Option<PolygonMesh>>; 2],
+    [polygons0, polygons1]: [&[Option<PolygonMesh>]; 2],
     tolerances: BooleanTolerance,
     coplanar: &CoplanarInterfaceAnalysis,
     has_shared_ruled: bool,
@@ -2144,8 +2144,8 @@ where
     if coplanar.partial_overlap || has_shared_ruled {
         let source0 = operand0.geom.clone();
         let source1 = operand1.geom.clone();
-        imprint_edges_on_faces(&source1, poly_shell0, &mut operand0.geom, tol)?;
-        imprint_edges_on_faces(&source0, poly_shell1, &mut operand1.geom, tol)?;
+        imprint_edges_on_faces(&source1, polygons0, &mut operand0.geom, tol)?;
+        imprint_edges_on_faces(&source0, polygons1, &mut operand1.geom, tol)?;
     }
 
     let sampled0 = (!(coplanar.partial_overlap || has_shared_ruled)
@@ -2265,8 +2265,6 @@ where
     let coplanar_tol =
         DEFAULT_NUMERICAL_TOLERANCES.boolean_coplanar_scale * boolean_tolerance.length;
     let boundary_search_tolerance = boolean_tolerance.mesh_seed;
-    let coplanar =
-        analyze_coplanar_interfaces(poly_shell0, poly_shell1, coplanar_tol, imprint_coplanar)?;
     // The pair sweep and branch attachment never modify source surface or
     // mesh geometry. Snapshot each once rather than deep-cloning both for
     // every Cartesian pair (including pairs with no intersection).
@@ -2274,6 +2272,11 @@ where
         [geom_shell0, geom_shell1].map(|shell| shell.iter().map(Face::surface).collect::<Vec<_>>());
     let sampled_meshes =
         [poly_shell0, poly_shell1].map(|shell| shell.iter().map(Face::surface).collect::<Vec<_>>());
+    let planar = sampled_meshes
+        .each_ref()
+        .map(|meshes| PlanarMesh::from_polygons(meshes, coplanar_tol));
+    let coplanar =
+        analyze_coplanar_interfaces(&planar[0], &planar[1], coplanar_tol, imprint_coplanar)?;
     let supports = certify_face_pair_supports([geom_shell0, geom_shell1], &surfaces);
     let mut endpoint_registry = Vec::<(Vertex<Point3>, Vertex<Point3>)>::new();
     let has_shared_ruled = !supports.shared_ruled_pairs.is_empty();
@@ -2306,7 +2309,11 @@ where
                         polygon0,
                         polygon1,
                     )
-                    || planar_polygons_same_trimmed_face(polygon0, polygon1, coplanar_tol)
+                    || planar_polygons_same_trimmed_face(
+                        planar[0][face_index0].as_ref()?,
+                        planar[1][face_index1].as_ref()?,
+                        coplanar_tol,
+                    )
                 {
                     return Some((face_index0, face_index1, Vec::new()));
                 }
@@ -2354,7 +2361,7 @@ where
 
     materialize_interface_loops(
         [operand0, operand1],
-        [poly_shell0, poly_shell1],
+        [&sampled_meshes[0], &sampled_meshes[1]],
         boolean_tolerance,
         &coplanar,
         has_shared_ruled,
@@ -3334,18 +3341,23 @@ mod projection_tests {
         }
 
         let target = rectangle(0.0, 2.0);
-        let fragments: Shell<Point3, PolylineCurve, Option<PolygonMesh>> = Shell::from(vec![
-            Face::new_unchecked(Vec::new(), Some(rectangle(0.0, 1.0))),
-            Face::new_unchecked(Vec::new(), Some(rectangle(1.0, 2.0))),
+        let polygons = [
+            Some(rectangle(0.0, 1.0)),
+            Some(rectangle(1.0, 2.0)),
             // This face shares x=2 with the target but contributes no target area.
-            Face::new_unchecked(Vec::new(), Some(rectangle(2.0, 3.0))),
-        ]);
+            Some(rectangle(2.0, 3.0)),
+        ];
+        let fragments = PlanarMesh::from_polygons(&polygons, 1.0e-6);
 
         assert!(
-            single_face_matches_planar_partition(&target, &fragments, 1.0e-6)
-                .ok()
-                .flatten()
-                .is_some()
+            single_face_matches_planar_partition(
+                &PlanarMesh::new(&target, 1.0e-6),
+                &fragments,
+                1.0e-6
+            )
+            .ok()
+            .flatten()
+            .is_some()
         );
     }
 

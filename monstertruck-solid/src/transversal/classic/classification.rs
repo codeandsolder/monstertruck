@@ -2,9 +2,9 @@
 
 use super::{
     AltRegion, BooleanTolerance, EuclideanSpace, Face, InnerSpace, Invertible, MeshableShape,
-    MeshableSurface, MetricSpace, ParametricSurface3D, Point3, PolyShell, PolygonMesh,
-    PolylineableCurve, SearchNearestParameter, SearchParameter, ShapeOpsCurve, ShapeOpsSurface,
-    Shell, SignedRayIndex, SurfaceParameter, Vector3, divide_face, hash, loops_store,
+    MeshableSurface, MetricSpace, ParametricSurface3D, Point3, PolyShell, PolylineableCurve,
+    SearchNearestParameter, SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SignedRayIndex,
+    SurfaceParameter, Vector3, divide_face, hash, loops_store,
 };
 
 /// Snapshot the tessellated operand once for every repeated ray query.
@@ -290,9 +290,9 @@ where
 
 pub(super) fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     region: &AltRegion<C, S>,
-    candidate: &PolygonMesh,
+    candidate: &loops_store::PlanarMesh<'_>,
     other_regions: &[AltRegion<C, S>],
-    other_poly: &PolyShell,
+    other_poly: &[Option<loops_store::PlanarMesh<'_>>],
     tol: f64,
 ) -> Option<bool> {
     let representative =
