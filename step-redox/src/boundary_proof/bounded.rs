@@ -284,7 +284,7 @@ pub(super) struct Arc {
 pub(super) enum BoundedEdge {
     Line,
     Circle(CircleLocusKey, Arc),
-    Spline(Box<super::SplineCurveKey>),
+    Spline(super::spline_strip::ProfilePiece),
 }
 
 fn circle_arc(
@@ -396,7 +396,7 @@ pub(super) fn classify(
                 return Some(BoundedEdge::Line);
             }
             if let Some(key) = super::spline_strip::certified_edge(edge, spline, loci) {
-                return Some(BoundedEdge::Spline(Box::new(key)));
+                return Some(BoundedEdge::Spline(key));
             }
             let proposed = circle_section_of_plane_and_support(&loci[0], &loci[1])
                 .or_else(|| circle_section_of_plane_and_support(&loci[1], &loci[0]))

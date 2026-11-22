@@ -12,13 +12,17 @@ use crate::{
 };
 use monstertruck_geometry::{
     analytic_line_segment::{SegmentLocus, certify_nurbs_segment_locus},
-    prelude::Point3,
+    prelude::{Point3, Vector4},
     proof_bezier_spans,
 };
 use num_traits::ToPrimitive;
 use serde::Serialize;
 use std::collections::HashMap;
 use step_p21::ast::EntityInstance;
+
+mod restriction;
+pub(super) use restriction::{ProfilePosition, complete_profile_cover};
+use restriction::{complete_directed_cover, profile_piece};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 struct BernsteinSpanKey {
@@ -108,7 +112,14 @@ fn well_conditioned(spline: &BSplineSupport) -> Option<()> {
 /// Canonicalize the whole curve, allowing affine reversal and different
 /// knot interval lengths. Each positive span retains every homogeneous
 /// Bernstein coefficient, with its own common weight scale removed.
-fn curve_key(spline: &BSplineSupport) -> Option<(SplineCurveKey, bool)> {
+#[derive(Clone)]
+struct CurveEvidence {
+    key: SplineCurveKey,
+    forward: bool,
+    controls: Vec<Vec<Vector4>>,
+}
+
+fn curve_evidence(spline: &BSplineSupport) -> Option<CurveEvidence> {
     well_conditioned(spline)?;
     let rational = bounded::rational(spline)?;
     let mut spans = proof_bezier_spans(rational.non_rationalized())?;
@@ -128,6 +139,15 @@ fn curve_key(spline: &BSplineSupport) -> Option<(SplineCurveKey, bool)> {
         .weights
         .as_ref()
         .is_none_or(|weights| weights.iter().all(|w| w.to_bits() == weights[0].to_bits()));
+    let controls = spans
+        .iter()
+        .map(|span| {
+            span.controls
+                .iter()
+                .map(|p| Vector4::new(p[0], p[1], p[2], p[3]))
+                .collect()
+        })
+        .collect();
     let spans = spans
         .into_iter()
         .map(|span| {
@@ -156,7 +176,11 @@ fn curve_key(spline: &BSplineSupport) -> Option<(SplineCurveKey, bool)> {
     {
         return None;
     }
-    Some((key, forward))
+    Some(CurveEvidence {
+        key,
+        forward,
+        controls,
+    })
 }
 
 /// Establish monotonicity of the canonical Bernstein locus, not of an arbitrary
@@ -223,7 +247,8 @@ fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfil
         *first.control_points_mm.first()?,
     );
     let candidates = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], chord];
-    let keys = [curve_key(first)?, curve_key(second)?];
+    let keys = [curve_evidence(first)?, curve_evidence(second)?]
+        .map(|evidence| (evidence.key, evidence.forward));
     candidates
         .into_iter()
         .filter_map(|e| normalize(sub(e, mul(axis, dot(axis, e))), TOL))
@@ -232,33 +257,93 @@ fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfil
         .then_some(keys)
 }
 
-fn curve_matches_edge(spline: &BSplineSupport, edge: &EdgeGeometry) -> Option<SplineCurveKey> {
-    let (key, forward) = curve_key(spline)?;
-    let [start, end] = key.ends()?;
-    let actual = if edge.parameter_forward == forward {
+/// The topological trim vertices are shared by the incident faces and
+/// adjacent pieces. The spline's endpoint evaluations may straddle a
+/// coordinate-key cell boundary despite being within the proof budget.
+fn curve_matches_edge(
+    spline: &BSplineSupport,
+    edge: &EdgeGeometry,
+) -> Option<(CurveEvidence, [PointKey; 2])> {
+    let evidence = curve_evidence(spline)?;
+    let actual = if edge.parameter_forward == evidence.forward {
         [edge.start, edge.end]
     } else {
         [edge.end, edge.start]
     };
-    (actual == [start, end]).then_some(key)
+    let mut expected = [
+        *spline.control_points_mm.first()?,
+        *spline.control_points_mm.last()?,
+    ];
+    if !evidence.forward {
+        expected.reverse();
+    }
+    let expected_keys = evidence.key.ends()?;
+    let bound = |point: PointKey, end: [f64; 3]| {
+        decode(point)
+            .is_some_and(|point| distance(point, end) + POINT_Q_MM * 3.0_f64.sqrt() / 2. <= TOL)
+    };
+    if actual[0] == actual[1] || !bound(actual[0], expected[0]) || !bound(actual[1], expected[1]) {
+        return None;
+    }
+    // Preserve the authored curve sense. If quantized endpoints do not
+    // identify the direction exactly and both matches are plausible, refuse.
+    if actual != expected_keys && bound(actual[0], expected[1]) && bound(actual[1], expected[0]) {
+        return None;
+    }
+    Some((evidence, actual))
 }
 
-fn segment_matches_edge(curve: &CurveSupport, ends: [PointKey; 2]) -> Option<()> {
-    let [a, b] = ends.map(decode);
+/// Coverage of an independently certified restriction of a canonical cap.
+#[derive(Debug, Clone)]
+pub(super) struct ProfilePiece {
+    pub profile: Box<SplineCurveKey>,
+    pub interval: [ProfilePosition; 2],
+}
+
+fn generator_piece(parent: [PointKey; 2], edge: &EdgeGeometry) -> Option<()> {
+    let [a, b] = parent.map(decode);
     let (a, b) = (a?, b?);
-    match curve {
+    let delta = sub(b, a);
+    let direction = normalize(delta, TOL)?;
+    let [start, end] = [decode(edge.start)?, decode(edge.end)?];
+    let line = brep::LineSupport {
+        origin_mm: a,
+        direction,
+    };
+    if !bounded::on_line(start, line) || !bounded::on_line(end, line) {
+        return None;
+    }
+    let lo = dot(sub(start, a), direction);
+    let hi = dot(sub(end, a), direction);
+    if lo < -TOL || hi > crate::math3::norm(delta) + TOL || lo >= hi {
+        return None;
+    }
+    match &edge.support {
         CurveSupport::Line(line) => {
-            (bounded::on_line(a, *line) && bounded::on_line(b, *line)).then_some(())
+            let directed = dot(sub(end, start), line.direction);
+            (bounded::on_line(start, *line)
+                && bounded::on_line(end, *line)
+                && (directed > 0.) == edge.parameter_forward)
+                .then_some(())
         }
         CurveSupport::BSpline(spline) => {
             let rational = bounded::rational(spline)?;
-            (certify_nurbs_segment_locus(
+            if certify_nurbs_segment_locus(
                 &rational,
-                Point3::new(a[0], a[1], a[2]),
-                Point3::new(b[0], b[1], b[2]),
+                Point3::new(start[0], start[1], start[2]),
+                Point3::new(end[0], end[1], end[2]),
                 TOL,
-            ) == SegmentLocus::WithinTolerance)
-                .then_some(())
+            ) != SegmentLocus::WithinTolerance
+            {
+                return None;
+            }
+            let (evidence, ends) = curve_matches_edge(spline, edge)?;
+            let direction = if ends[0] == edge.start {
+                direction
+            } else {
+                mul(direction, -1.)
+            };
+            monotone_profile(&evidence.key, direction).then_some(())
         }
         _ => None,
     }
@@ -276,50 +361,72 @@ fn full_trim(
     let [boundary] = loops else {
         return None;
     };
-    if boundary.edges.len() != 4 {
-        return None;
-    }
     let [first_start, first_end] = profiles[0].ends()?;
     let [second_start, second_end] = profiles[1].ends()?;
-    let mut expected = [
-        [first_start, first_end],
-        [first_end, second_end],
-        [second_end, second_start],
-        [second_start, first_start],
+    let mut generators = [[first_end, second_end], [second_start, first_start]];
+    let cap_forward = [
+        forward == boundary.orientation,
+        forward != boundary.orientation,
     ];
     if forward != boundary.orientation {
-        for ends in &mut expected {
+        for ends in &mut generators {
             ends.reverse();
         }
     }
-    let mut seen = [false; 4];
+    let mut generator_covers = [Vec::new(), Vec::new()];
+    let mut covers = [Vec::new(), Vec::new()];
     for edge in &boundary.edges {
         let ends = [point_key(edge.start_mm)?, point_key(edge.end_mm)?];
-        let i = expected.iter().position(|e| *e == ends)?;
-        if std::mem::replace(&mut seen[i], true) {
-            return None;
-        }
-        if i % 2 == 1 {
-            segment_matches_edge(&edge.support, ends)?;
-        } else {
-            let CurveSupport::BSpline(spline) = &edge.support else {
-                return None;
-            };
-            let geometry = EdgeGeometry {
-                start: ends[0],
-                end: ends[1],
-                start_vertex: edge.start_vertex,
-                end_vertex: edge.end_vertex,
-                parameter_forward: edge.parameter_forward,
-                curve_id: edge.curve_id,
-                support: edge.support.clone(),
-            };
-            if curve_matches_edge(spline, &geometry)? != profiles[i / 2] {
-                return None;
+        let geometry = EdgeGeometry {
+            start: ends[0],
+            end: ends[1],
+            start_vertex: edge.start_vertex,
+            end_vertex: edge.end_vertex,
+            parameter_forward: edge.parameter_forward,
+            curve_id: edge.curve_id,
+            support: edge.support.clone(),
+        };
+        let matching_generators = generators
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &generator)| generator_piece(generator, &geometry).map(|()| i))
+            .collect::<Vec<_>>();
+        match matching_generators.as_slice() {
+            [i] => {
+                generator_covers[*i].push(ends);
+                continue;
             }
+            [] => {}
+            _ => return None,
         }
+        let CurveSupport::BSpline(spline) = &geometry.support else {
+            return None;
+        };
+        let (key, actual) = curve_matches_edge(spline, &geometry)?;
+        let matches = profiles
+            .iter()
+            .enumerate()
+            .filter_map(|(i, parent)| {
+                let interval = profile_piece(parent, &key, actual)?;
+                let mut directed = interval.map(|position| position.point);
+                if !cap_forward[i] {
+                    directed.reverse();
+                }
+                (directed == ends).then_some((i, interval))
+            })
+            .collect::<Vec<_>>();
+        let [(i, interval)] = matches.as_slice() else {
+            return None;
+        };
+        covers[*i].push(*interval);
     }
-    seen.into_iter().all(|s| s).then_some(())
+    for (generator, cover) in generators.into_iter().zip(&generator_covers) {
+        complete_directed_cover(generator, cover)?;
+    }
+    for (parent, cover) in profiles.iter().zip(&covers) {
+        complete_profile_cover(parent, cover)?;
+    }
+    Some(())
 }
 
 pub(super) fn oriented_key(
@@ -369,21 +476,41 @@ pub(super) fn certified_edge(
     edge: &EdgeGeometry,
     spline: &BSplineSupport,
     loci: &[SupportLocusKey; 2],
-) -> Option<SplineCurveKey> {
+) -> Option<ProfilePiece> {
     if !loci
         .iter()
         .any(|locus| matches!(locus, SupportLocusKey::SplineStrip { .. }))
     {
         return None;
     }
-    let key = curve_matches_edge(spline, edge)?;
+    let (key, actual) = curve_matches_edge(spline, edge)?;
+    let mut selected: Option<ProfilePiece> = None;
     for locus in loci {
         match locus {
-            SupportLocusKey::SplineStrip { strip } if strip.profiles.contains(&key) => {}
+            SupportLocusKey::SplineStrip { strip } => {
+                let matches = strip
+                    .profiles
+                    .iter()
+                    .filter_map(|parent| {
+                        Some(ProfilePiece {
+                            profile: Box::new(parent.clone()),
+                            interval: profile_piece(parent, &key, actual)?,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let [piece] = matches.as_slice() else {
+                    return None;
+                };
+                if selected.as_ref().is_some_and(|other| {
+                    other.profile != piece.profile || other.interval != piece.interval
+                }) {
+                    return None;
+                }
+                selected = Some(piece.clone());
+            }
             SupportLocusKey::Plane { normal, offset_mm } => {
                 let normal = dequantize_vector(*normal, DIRECTION_Q)?;
                 let offset = dequantize_scalar(*offset_mm)?;
-                // The whole positive-weight control hull lies in the plane.
                 if spline
                     .control_points_mm
                     .iter()
@@ -395,7 +522,7 @@ pub(super) fn certified_edge(
             _ => return None,
         }
     }
-    Some(key)
+    selected
 }
 
 #[cfg(test)]
@@ -446,7 +573,7 @@ mod tests {
     #[test]
     fn full_curve_key_retains_all_spans_and_is_reversal_invariant() -> Result<()> {
         let original = profile(0.);
-        let (key, forward) = curve_key(&original).context("original")?;
+        let CurveEvidence { key, forward, .. } = curve_evidence(&original).context("original")?;
         assert!(forward);
         assert_eq!(key.spans.len(), 2);
         let mut reversed = original.clone();
@@ -455,12 +582,16 @@ mod tests {
         for k in &mut reversed.knots {
             *k = 16. - 4. * *k;
         }
-        let (other, forward) = curve_key(&reversed).context("reversed and recharted")?;
+        let CurveEvidence {
+            key: other,
+            forward,
+            ..
+        } = curve_evidence(&reversed).context("reversed and recharted")?;
         assert!(!forward);
         assert_eq!(key, other);
         let mut changed = original;
         changed.control_points_mm[1][1] += 0.001;
-        let (changed, _) = curve_key(&changed).context("changed curvature")?;
+        let changed = curve_evidence(&changed).context("changed curvature")?.key;
         assert_ne!(changed, key);
         assert_eq!(changed.ends(), key.ends());
         Ok(())
@@ -536,8 +667,8 @@ mod tests {
         let low = profile(0.);
         let high = profile(0.01);
         let keys = [
-            curve_key(&low).context("low")?.0,
-            curve_key(&high).context("high")?.0,
+            curve_evidence(&low).context("low")?.key,
+            curve_evidence(&high).context("high")?.key,
         ];
         let a = low.control_points_mm[0];
         let b = *low.control_points_mm.last().context("end")?;
@@ -562,6 +693,19 @@ mod tests {
             ],
         };
         assert!(full_trim(&keys, true, std::slice::from_ref(&boundary)).is_some());
+        let unpartitioned = boundary.clone();
+        let midpoint = [b[0], b[1], f64::midpoint(b[2], d[2])];
+        boundary.edges.splice(
+            1..2,
+            [
+                edge(b, midpoint, line(b), true, 2),
+                edge(midpoint, d, line(b), true, 5),
+            ],
+        );
+        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary)).is_some());
+        boundary.edges[2].start_mm = b;
+        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary)).is_none());
+        boundary = unpartitioned;
         assert!(full_trim(&keys, false, std::slice::from_ref(&boundary)).is_none());
         assert!(full_trim(&keys, true, &[boundary.clone(), boundary.clone()]).is_none());
         boundary.edges[0].parameter_forward = false;

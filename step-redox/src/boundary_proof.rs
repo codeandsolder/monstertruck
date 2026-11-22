@@ -24,11 +24,16 @@ type GroupedBoundarySegments = BTreeMap<[OrientedSupportKey; 2], Vec<(PointKey, 
 type GroupedCircularSegments =
     BTreeMap<([OrientedSupportKey; 2], CircleLocusKey), Vec<bounded::Arc>>;
 
+type GroupedSplineSegments = BTreeMap<
+    ([OrientedSupportKey; 2], Box<SplineCurveKey>),
+    Vec<[spline_strip::ProfilePosition; 2]>,
+>;
+
 #[derive(Default)]
 struct PhysicalBoundaryGroups {
     linear: GroupedBoundarySegments,
     circular: GroupedCircularSegments,
-    splines: Vec<BoundaryChainKey>,
+    splines: GroupedSplineSegments,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -392,7 +397,12 @@ fn analytic_boundary_signature(
     let groups =
         group_physical_boundaries(&graph, &mut union_find, &component_support, entities, index)?;
 
-    let mut chains = groups.splines;
+    let mut chains = Vec::new();
+    for ((supports, curve), pieces) in groups.splines {
+        spline_strip::complete_profile_cover(&curve, &pieces)
+            .ok_or("incomplete or overlapping spline boundary coverage")?;
+        chains.push(BoundaryChainKey::Spline { supports, curve });
+    }
     for (supports, segments) in groups.linear {
         chains.extend(normalize_linear_chains(&supports, &segments)?);
     }
@@ -651,9 +661,11 @@ fn group_physical_boundaries(
                 .entry((supports, locus))
                 .or_insert_with(Vec::new)
                 .push(arc),
-            Some(bounded::BoundedEdge::Spline(curve)) => groups
+            Some(bounded::BoundedEdge::Spline(piece)) => groups
                 .splines
-                .push(BoundaryChainKey::Spline { supports, curve }),
+                .entry((supports, piece.profile))
+                .or_default()
+                .push(piece.interval),
             None => {
                 rejected.push(format!(
                     "#{edge_id}: {} on {loci:?}",
