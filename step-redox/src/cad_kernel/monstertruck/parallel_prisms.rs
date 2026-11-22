@@ -238,6 +238,7 @@ pub(super) fn evaluate(
     if matches!(policy, GeometryPolicy::Equivalent) {
         return Ok(None);
     }
+    monstertruck_policy(policy).validate()?;
     let mut program = Program::default();
     let identity = rigid_matrix(&RigidTransform::identity());
     let Some(children) = children
@@ -386,6 +387,10 @@ mod tests {
             monstertruck_policy(policy),
         )?
         .context("reference contact union failed")?;
+        assert_same_boundary(actual, expected)
+    }
+
+    fn assert_same_boundary(actual: Solid, expected: Solid) -> Result<()> {
         let kernel = MonstertruckKernel::project_standard();
         let reference = kernel.to_step(&EvaluatedShape { solid: expected })?;
         let actual = EvaluatedShape { solid: actual };
@@ -412,6 +417,61 @@ mod tests {
         Ok(())
     }
 
+    fn u_profile(extension: f64) -> Profile2d {
+        let line = |start_mm, end_mm| Curve2d::Line { start_mm, end_mm };
+        let arc = |radius_mm, start_angle_rad, end_angle_rad| Curve2d::CircleArc {
+            center_mm: [4., 2.5],
+            radius_mm,
+            start_angle_rad,
+            end_angle_rad,
+        };
+        let quarter = std::f64::consts::FRAC_PI_2;
+        Profile2d {
+            loops: vec![ProfileLoop {
+                curves: vec![
+                    line([extension, 0.], [4., 0.]),
+                    arc(2.5, -quarter, quarter),
+                    line([4., 5.], [extension, 5.]),
+                    line([extension, 5.], [extension, 4.]),
+                    line([extension, 4.], [4., 4.]),
+                    arc(1.5, quarter, -quarter),
+                    line([4., 1.], [extension, 1.]),
+                    line([extension, 1.], [extension, 0.]),
+                ],
+            }],
+        }
+    }
+
+    #[test]
+    fn parallel_prism_connects_disjoint_rails_and_cancels_coincident_profile() -> Result<()> {
+        let mut model = CadModel::new();
+        let lower = rectangle([-4., 0.], [0., 1.])?;
+        let upper = rectangle([-4., 4.], [0., 5.])?;
+        let a = prism(&mut model, lower.clone(), [0., 0., 0.], 10.);
+        let b = prism(&mut model, upper.clone(), [0., 0., 0.], 10.);
+        let bridge = prism(&mut model, u_profile(0.), [0., 0., 2.], 8.);
+        let joined = boolean(&mut model, BooleanOp::Union, &[a, b, bridge]);
+        let cutter = prism(&mut model, u_profile(0.), [0., 0., 7.], 3.);
+        let policy = GeometryPolicy::project_standard();
+        let actual = evaluate(&model, BooleanOp::Difference, &[joined, cutter], policy)?
+            .context("parallel rail and bridge arrangement refused")?;
+        let middle = reference_section(&u_profile(-4.), 2., 7.)?;
+        let expected = [
+            reference_section(&lower, 0., 2.)?,
+            reference_section(&upper, 0., 2.)?,
+            reference_section(&lower, 7., 10.)?,
+            reference_section(&upper, 7., 10.)?,
+        ];
+        let expected = monstertruck_solid::try_planar_contact_many(
+            &middle,
+            &expected.iter().collect::<Vec<_>>(),
+            monstertruck_solid::PlanarContactOp::Union,
+            monstertruck_policy(policy),
+        )?
+        .context("reference rail and bridge contact union failed")?;
+        assert_same_boundary(actual, expected)
+    }
+
     #[test]
     fn parallel_prism_intersection_and_empty_difference() -> Result<()> {
         let mut model = CadModel::new();
@@ -427,6 +487,17 @@ mod tests {
         let empty = evaluate(&model, BooleanOp::Difference, &[a, a], policy)?
             .context("coincident difference fast path refused")?;
         assert!(empty.is_empty());
+        let invalid = GeometryPolicy::standard_mm(-1.);
+        assert!(evaluate(&model, BooleanOp::Difference, &[a, a], invalid).is_err());
+        assert!(
+            evaluate(
+                &model,
+                BooleanOp::Difference,
+                &[a, a],
+                GeometryPolicy::Equivalent
+            )?
+            .is_none()
+        );
         Ok(())
     }
 }
