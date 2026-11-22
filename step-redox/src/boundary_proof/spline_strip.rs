@@ -23,7 +23,7 @@ use step_p21::ast::EntityInstance;
 mod embedding;
 mod restriction;
 pub(super) use restriction::{ProfilePosition, complete_profile_cover};
-use restriction::{complete_directed_cover, profile_piece};
+use restriction::{complete_directed_cover, profile_piece, raw_parent_incidence};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 struct BernsteinSpanKey {
@@ -76,7 +76,7 @@ fn weight_ratios(weights: &[f64]) -> Option<Vec<u64>> {
 /// interpolation fraction; two reciprocal minimum relative weights bound
 /// dehomogenization and rational evaluation. Reject rather than claim a
 /// sub-quantum geometric certificate for very ill-conditioned input.
-fn well_conditioned(spline: &BSplineSupport) -> Option<()> {
+fn extraction_error_bound(spline: &BSplineSupport) -> Option<f64> {
     let (lo, hi) = super::bspline_domain(spline)?;
     let n = spline.control_points_mm.len();
     let order = spline.degree.checked_add(1)?;
@@ -107,7 +107,7 @@ fn well_conditioned(spline: &BSplineSupport) -> Option<()> {
     };
     let operation_error = 16. * order.to_f64()? * f64::EPSILON / min_span;
     let error_mm = 2. * coordinate_scale * operation_error / weight_ratio.powi(2);
-    (error_mm.is_finite() && error_mm <= POINT_Q_MM / 4.).then_some(())
+    (error_mm.is_finite() && error_mm <= POINT_Q_MM / 4.).then_some(error_mm)
 }
 
 /// Canonicalize the whole curve, allowing affine reversal and different
@@ -118,10 +118,11 @@ struct CurveEvidence {
     key: SplineCurveKey,
     forward: bool,
     controls: Vec<Vec<Vector4>>,
+    extraction_error_mm: f64,
 }
 
 fn curve_evidence(spline: &BSplineSupport) -> Option<CurveEvidence> {
-    well_conditioned(spline)?;
+    let extraction_error_mm = extraction_error_bound(spline)?;
     let rational = bounded::rational(spline)?;
     let mut spans = proof_bezier_spans(rational.non_rationalized())?;
     let start = point_key(*spline.control_points_mm.first()?)?;
@@ -181,6 +182,7 @@ fn curve_evidence(spline: &BSplineSupport) -> Option<CurveEvidence> {
         key,
         forward,
         controls,
+        extraction_error_mm,
     })
 }
 
@@ -210,11 +212,9 @@ fn monotone_profile(key: &SplineCurveKey, direction: [f64; 3]) -> bool {
     })
 }
 
-type DirectedProfile = (SplineCurveKey, bool);
-
 fn translated_geometry(
     profiles: &[BSplineSupport; 2],
-) -> Option<([DirectedProfile; 2], [f64; 3], [f64; 3])> {
+) -> Option<([CurveEvidence; 2], [f64; 3], [f64; 3])> {
     let [first, second] = profiles;
     if first.degree != second.degree
         || first.knots != second.knots
@@ -249,31 +249,48 @@ fn translated_geometry(
         *first.control_points_mm.last()?,
         *first.control_points_mm.first()?,
     );
-    let keys = [curve_evidence(first)?, curve_evidence(second)?]
-        .map(|evidence| (evidence.key, evidence.forward));
+    let keys = [curve_evidence(first)?, curve_evidence(second)?];
     Some((keys, axis, chord))
 }
 
-fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfile; 2]> {
+fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[CurveEvidence; 2]> {
     let (keys, axis, chord) = translated_geometry(profiles)?;
     [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], chord]
         .into_iter()
         .filter_map(|e| normalize(sub(e, mul(axis, dot(axis, e))), TOL))
         .flat_map(|d| [d, mul(d, -1.)])
-        .any(|d| keys.iter().all(|(key, _)| monotone_profile(key, d)))
+        .any(|d| {
+            keys.iter()
+                .all(|evidence| monotone_profile(&evidence.key, d))
+        })
         .then_some(keys)
 }
 
 /// The global monotonicity check is a cheap certificate for most profiles.
 /// For turning profiles prove each span injective and every projected
 /// span pair separated, rather than weakening the monotonicity inequalities.
-fn embedded_translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfile; 2]> {
+fn embedded_translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[CurveEvidence; 2]> {
     translated_profiles(profiles).or_else(|| {
         let (keys, axis, _) = translated_geometry(profiles)?;
         keys.iter()
-            .all(|(key, _)| embedding::is_embedded(key, axis))
+            .all(|evidence| embedding::is_embedded(&evidence.key, axis))
             .then_some(keys)
     })
+}
+
+#[derive(Clone, Copy)]
+struct TrimEndpoint {
+    key: PointKey,
+    mm: [f64; 3],
+}
+
+impl TrimEndpoint {
+    fn new(mm: [f64; 3]) -> Option<Self> {
+        Some(Self {
+            key: point_key(mm)?,
+            mm,
+        })
+    }
 }
 
 /// The topological trim vertices are shared by the incident faces and
@@ -282,13 +299,15 @@ fn embedded_translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[Direc
 fn curve_matches_edge(
     spline: &BSplineSupport,
     edge: &EdgeGeometry,
-) -> Option<(CurveEvidence, [PointKey; 2])> {
+) -> Option<(CurveEvidence, [TrimEndpoint; 2])> {
     let evidence = curve_evidence(spline)?;
-    let actual = if edge.parameter_forward == evidence.forward {
-        [edge.start, edge.end]
-    } else {
-        [edge.end, edge.start]
-    };
+    let mut actual = [
+        TrimEndpoint::new(edge.points_mm[0])?,
+        TrimEndpoint::new(edge.points_mm[1])?,
+    ];
+    if edge.parameter_forward != evidence.forward {
+        actual.reverse();
+    }
     let mut expected = [
         *spline.control_points_mm.first()?,
         *spline.control_points_mm.last()?,
@@ -297,16 +316,19 @@ fn curve_matches_edge(
         expected.reverse();
     }
     let expected_keys = evidence.key.ends()?;
-    let bound = |point: PointKey, end: [f64; 3]| {
-        decode(point)
-            .is_some_and(|point| distance(point, end) + POINT_Q_MM * 3.0_f64.sqrt() / 2. <= TOL)
-    };
-    if actual[0] == actual[1] || !bound(actual[0], expected[0]) || !bound(actual[1], expected[1]) {
+    let bound = |point: TrimEndpoint, end: [f64; 3]| distance(point.mm, end) <= TOL;
+    if actual[0].key == actual[1].key
+        || !bound(actual[0], expected[0])
+        || !bound(actual[1], expected[1])
+    {
         return None;
     }
     // Preserve the authored curve sense. If quantized endpoints do not
     // identify the direction exactly and both matches are plausible, refuse.
-    if actual != expected_keys && bound(actual[0], expected[1]) && bound(actual[1], expected[0]) {
+    if actual.map(|point| point.key) != expected_keys
+        && bound(actual[0], expected[1])
+        && bound(actual[1], expected[0])
+    {
         return None;
     }
     Some((evidence, actual))
@@ -357,7 +379,7 @@ fn generator_piece(parent: [PointKey; 2], edge: &EdgeGeometry) -> Option<()> {
                 return None;
             }
             let (evidence, ends) = curve_matches_edge(spline, edge)?;
-            let direction = if ends[0] == edge.start {
+            let direction = if ends[0].key == edge.start {
                 direction
             } else {
                 mul(direction, -1.)
@@ -372,16 +394,12 @@ fn generator_piece(parent: [PointKey; 2], edge: &EdgeGeometry) -> Option<()> {
 /// must traverse both complete cap curves and both end generators exactly
 /// once in the sense of its oriented surface; holes, partial trims, and
 /// unrelated curves sharing only endpoints cannot establish this certificate.
-fn full_trim(
-    profiles: &[SplineCurveKey; 2],
-    forward: bool,
-    loops: &[brep::FaceLoop],
-) -> Option<()> {
+fn full_trim(profiles: &[CurveEvidence; 2], forward: bool, loops: &[brep::FaceLoop]) -> Option<()> {
     let [boundary] = loops else {
         return None;
     };
-    let [first_start, first_end] = profiles[0].ends()?;
-    let [second_start, second_end] = profiles[1].ends()?;
+    let [first_start, first_end] = profiles[0].key.ends()?;
+    let [second_start, second_end] = profiles[1].key.ends()?;
     let mut generators = [[first_end, second_end], [second_start, first_start]];
     let cap_forward = [
         forward == boundary.orientation,
@@ -397,6 +415,7 @@ fn full_trim(
     for edge in &boundary.edges {
         let ends = [point_key(edge.start_mm)?, point_key(edge.end_mm)?];
         let geometry = EdgeGeometry {
+            points_mm: [edge.start_mm, edge.end_mm],
             start: ends[0],
             end: ends[1],
             start_vertex: edge.start_vertex,
@@ -426,7 +445,8 @@ fn full_trim(
             .iter()
             .enumerate()
             .filter_map(|(i, parent)| {
-                let interval = profile_piece(parent, &key, actual)?;
+                let interval = profile_piece(&parent.key, &key, actual)?;
+                raw_parent_incidence(parent, interval, actual)?;
                 let mut directed = interval.map(|position| position.point);
                 if !cap_forward[i] {
                     directed.reverse();
@@ -443,7 +463,7 @@ fn full_trim(
         complete_directed_cover(generator, cover)?;
     }
     for (parent, cover) in profiles.iter().zip(&covers) {
-        complete_profile_cover(parent, cover)?;
+        complete_profile_cover(&parent.key, cover)?;
     }
     Some(())
 }
@@ -457,12 +477,13 @@ pub(super) fn oriented_key(
 ) -> Option<OrientedSupportKey> {
     let (profiles, swapped) =
         crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index)?;
-    let [(a, u_forward), (b, other_forward)] = embedded_translated_profiles(&profiles)?;
-    if u_forward != other_forward || a == b {
+    let [a, b] = embedded_translated_profiles(&profiles)?;
+    let u_forward = a.forward;
+    if u_forward != b.forward || a.key == b.key {
         return None;
     }
     let mut profiles = [a, b];
-    let v_forward = profiles[0] < profiles[1];
+    let v_forward = profiles[0].key < profiles[1].key;
     if !v_forward {
         profiles.reverse();
     }
@@ -473,7 +494,9 @@ pub(super) fn oriented_key(
         &brep::face_loops(face_id, entities, index)?,
     )?;
     Some(OrientedSupportKey::SplineStrip {
-        strip: Box::new(SplineStripKey { profiles }),
+        strip: Box::new(SplineStripKey {
+            profiles: profiles.map(|evidence| evidence.key),
+        }),
         outward_positive,
     })
 }
@@ -686,8 +709,8 @@ mod tests {
         let low = profile(0.);
         let high = profile(0.01);
         let keys = [
-            curve_evidence(&low).context("low")?.key,
-            curve_evidence(&high).context("high")?.key,
+            curve_evidence(&low).context("low")?,
+            curve_evidence(&high).context("high")?,
         ];
         let a = low.control_points_mm[0];
         let b = *low.control_points_mm.last().context("end")?;
