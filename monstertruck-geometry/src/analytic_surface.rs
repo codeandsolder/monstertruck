@@ -512,7 +512,7 @@ mod tests {
         for reflected in [false, true] {
             let transform = Matrix4::from_translation(Vector3::new(1.0, 2.0, 3.0))
                 * Matrix4::from_nonuniform_scale(if reflected { -2.0 } else { 2.0 }, 2.0, 2.0);
-            let mut surface = Processor::with_transform(revolution.clone(), transform);
+            let mut surface = Processor::with_transform(revolution, transform);
             for inverted in [false, true] {
                 if inverted {
                     surface.invert();
