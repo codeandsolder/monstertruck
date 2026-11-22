@@ -77,13 +77,14 @@ pub(super) fn matching_curve(a: &Curve2d, b: &Curve2d) -> bool {
                 end_mm: be,
             },
         ) => distance(*a, *b) <= LENGTH && distance(*ae, *be) <= LENGTH,
+        (Curve2d::CircleArc { .. }, Curve2d::CircleArc { .. }) => a == b,
         _ => false,
     }
 }
 
 fn cyclic_offset(a: &ProfileLoop, b: &ProfileLoop) -> Option<usize> {
     let n = a.curves.len();
-    if n != b.curves.len() || n < 3 {
+    if n != b.curves.len() || n == 0 {
         return None;
     }
     let mut matches = (0..n).filter(|&offset| {

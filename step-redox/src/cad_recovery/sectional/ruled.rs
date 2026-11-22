@@ -1,16 +1,16 @@
-//! Planar swept slabs with linearly changing sections. Within consecutive
+//! Analytic swept slabs with linearly changing planar edges and fixed arcs. Within consecutive
 //! vertex stations, each finite face intersects a slice in the same ordered
 //! intervals. The mid-slice graph supplies correspondence; the actual
 //! original crossing edges supply both end profiles, including collapsed
-//! corner transitions. Independent full-source proof remains mandatory.
+//! corner transitions. Axis-parallel cylinders have invariant section arcs. Independent full-source proof remains mandatory.
 use super::{
-    DIRECTION, Frame, LENGTH, section_groups, slice_rings, station_levels, valid_line,
+    DIRECTION, Frame, LENGTH, circular::CylinderTrim, section_groups, slice_rings, station_levels,
     valid_planar_face,
 };
 use crate::{
     brep::{OrientedEdgeUse, SurfaceSupport},
     cad_ir::{CadModel, Curve2d, NodeId, Profile2d, ProfileLoop},
-    cad_recovery::add_bounded_union_tree,
+    cad_recovery::{add_bounded_union_tree, solid::recovered_profile_curve_to_ir},
     math2::distance as distance2,
     math3::{add, cross, dot, mul, norm, normalize, sub},
     profile_curves::RecoveredProfileCurve,
@@ -21,24 +21,26 @@ use std::collections::BTreeMap;
 
 mod chains;
 
-struct PlanarSweep<'a> {
+struct RuledSweep<'a> {
     edges: BTreeMap<u64, &'a OrientedEdgeUse>,
     levels: Vec<f64>,
 }
 
-impl<'a> PlanarSweep<'a> {
+impl<'a> RuledSweep<'a> {
     fn new(solid: &'a ReducedSolid, frame: Frame) -> Option<Self> {
         let mut inclined = false;
         for face in solid.faces() {
-            let SurfaceSupport::Plane(plane) = face.surface else {
-                return None;
-            };
-            let normal = normalize(plane.normal, DIRECTION)?;
-            inclined |= norm(cross(normal, frame.axis)) > DIRECTION
-                && dot(normal, frame.axis).abs() > DIRECTION;
-            valid_planar_face(face, frame, true)?;
-            if face.loop_edges().any(|edge| !valid_line(edge)) {
-                return None;
+            match face.surface {
+                SurfaceSupport::Plane(plane) => {
+                    let normal = normalize(plane.normal, DIRECTION)?;
+                    inclined |= norm(cross(normal, frame.axis)) > DIRECTION
+                        && dot(normal, frame.axis).abs() > DIRECTION;
+                    valid_planar_face(face, frame, true)?;
+                }
+                SurfaceSupport::Cylinder(_) => {
+                    CylinderTrim::new(face, frame)?;
+                }
+                _ => return None,
             }
         }
         if !inclined {
@@ -72,22 +74,50 @@ impl<'a> PlanarSweep<'a> {
         Some(frame.project(point))
     }
 
-    fn profile(&self, rings: &SectionKey, frame: Frame, level: f64) -> Option<Profile2d> {
+    fn profile(&self, rings: &Section, frame: Frame, level: f64) -> Option<Profile2d> {
         let loops = rings
             .iter()
             .map(|ring| {
                 let mut points = ring
                     .iter()
-                    .map(|&edge| self.point(edge, frame, level))
+                    .map(|curve| match curve {
+                        RecoveredProfileCurve::Line {
+                            source_edge_ids, ..
+                        } => {
+                            let [start, _] = source_edge_ids.as_slice() else {
+                                return None;
+                            };
+                            self.point(*start, frame, level)
+                        }
+                        RecoveredProfileCurve::CircleArc { .. } => curve.start_point(),
+                        _ => None,
+                    })
                     .collect::<Option<Vec<_>>>()?;
-                canonicalize_collapsed_corners(&mut points)?;
-                Some(ProfileLoop {
-                    curves: points
-                        .iter()
-                        .zip(points.iter().cycle().skip(1))
-                        .map(|(&start_mm, &end_mm)| Curve2d::Line { start_mm, end_mm })
-                        .collect(),
-                })
+                if points.len() >= 3 {
+                    canonicalize_collapsed_corners(&mut points)?;
+                }
+                let curves = ring
+                    .iter()
+                    .zip(points.iter().zip(points.iter().cycle().skip(1)))
+                    .map(|(curve, (&start_mm, &end_mm))| match curve {
+                        RecoveredProfileCurve::Line {
+                            source_edge_ids, ..
+                        } => {
+                            let [_, end] = source_edge_ids.as_slice() else {
+                                return None;
+                            };
+                            (distance2(end_mm, self.point(*end, frame, level)?) <= LENGTH)
+                                .then_some(Curve2d::Line { start_mm, end_mm })
+                        }
+                        RecoveredProfileCurve::CircleArc { .. } => {
+                            (distance2(start_mm, curve.start_point()?) <= LENGTH
+                                && distance2(end_mm, curve.end_point()?) <= LENGTH)
+                                .then(|| recovered_profile_curve_to_ir(curve))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(ProfileLoop { curves })
             })
             .collect::<Option<Vec<_>>>()?;
         Some(Profile2d { loops })
@@ -131,9 +161,52 @@ fn canonicalize_collapsed_corners(points: &mut [[f64; 2]]) -> Option<()> {
 /// holes. An unchanged key across source stations establishes identical
 /// affine generators throughout the interval; no profile fitting or
 /// near-coordinate matching is needed.
-type SectionKey = Vec<Vec<u64>>;
+type Section = Vec<Vec<RecoveredProfileCurve>>;
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum CurveKey {
+    Line([u64; 2]),
+    Arc {
+        source_edges: Vec<u64>,
+        center: [u64; 2],
+        radius: u64,
+        angles: [u64; 2],
+    },
+}
 
-fn slab_sections(solid: &ReducedSolid, frame: Frame, limits: [f64; 2]) -> Option<Vec<SectionKey>> {
+impl CurveKey {
+    fn new(curve: &RecoveredProfileCurve) -> Option<Self> {
+        match curve {
+            RecoveredProfileCurve::Line {
+                source_edge_ids, ..
+            } => {
+                let [start, end] = source_edge_ids.as_slice() else {
+                    return None;
+                };
+                Some(Self::Line([*start, *end]))
+            }
+            RecoveredProfileCurve::CircleArc {
+                source_edge_ids,
+                center_mm,
+                radius_mm,
+                start_angle_rad,
+                end_angle_rad,
+            } => Some(Self::Arc {
+                source_edges: source_edge_ids.clone(),
+                center: center_mm.map(f64::to_bits),
+                radius: radius_mm.to_bits(),
+                angles: [start_angle_rad.to_bits(), end_angle_rad.to_bits()],
+            }),
+            _ => None,
+        }
+    }
+}
+type SectionKey = Vec<Vec<CurveKey>>;
+
+fn slab_sections(
+    solid: &ReducedSolid,
+    frame: Frame,
+    limits: [f64; 2],
+) -> Option<Vec<(SectionKey, Section)>> {
     let rings = slice_rings(solid, frame, limits[0].midpoint(limits[1]))?;
     if rings.is_empty() {
         return Some(Vec::new());
@@ -141,26 +214,12 @@ fn slab_sections(solid: &ReducedSolid, frame: Frame, limits: [f64; 2]) -> Option
     section_groups(&rings)?
         .iter()
         .map(|group| {
-            group
+            let section: Section = group.iter().map(|&i| rings[i].clone()).collect();
+            let key = section
                 .iter()
-                .map(|&index| {
-                    rings[index]
-                        .iter()
-                        .map(|curve| {
-                            let RecoveredProfileCurve::Line {
-                                source_edge_ids, ..
-                            } = curve
-                            else {
-                                return None;
-                            };
-                            let [start, _] = source_edge_ids.as_slice() else {
-                                return None;
-                            };
-                            Some(*start)
-                        })
-                        .collect()
-                })
-                .collect()
+                .map(|ring| ring.iter().map(CurveKey::new).collect())
+                .collect::<Option<_>>()?;
+            Some((key, section))
         })
         .collect()
 }
@@ -201,24 +260,25 @@ impl SectionRuns {
 fn same_profiles(a: &Profile2d, b: &Profile2d) -> bool {
     a.loops.len() == b.loops.len() && a.loops.iter().zip(&b.loops).all(|(a, b)| {
         a.curves.len() == b.curves.len() && a.curves.iter().zip(&b.curves).all(|(a,b)| {
-            matches!(a, Curve2d::Line { start_mm, end_mm } if distance2(*start_mm, *end_mm) > LENGTH)
+            !matches!(a, Curve2d::Line { start_mm, end_mm } if distance2(*start_mm,*end_mm) <= LENGTH)
                 && chains::matching_curve(a,b)
         })
     })
 }
 
 fn section_spans(
-    sweep: &PlanarSweep<'_>,
+    sweep: &RuledSweep<'_>,
     frame: Frame,
     intervals: Vec<(usize, usize, SectionKey)>,
+    sections: &BTreeMap<SectionKey, Section>,
 ) -> Option<Vec<chains::Span>> {
     intervals
         .into_iter()
         .map(|(lo, hi, section)| {
             Some(chains::Span {
                 limits: [lo, hi],
-                start: sweep.profile(&section, frame, sweep.levels[lo])?,
-                end: sweep.profile(&section, frame, sweep.levels[hi])?,
+                start: sweep.profile(sections.get(&section)?, frame, sweep.levels[lo])?,
+                end: sweep.profile(sections.get(&section)?, frame, sweep.levels[hi])?,
             })
         })
         .collect()
@@ -253,15 +313,23 @@ fn emit_model(
 /// independently certified candidate ranking, not a heuristic preference
 /// for loft chains, decides whether a compact alternative wins.
 pub(super) fn models(solid: &ReducedSolid, frame: Frame) -> Result<Vec<(CadModel, NodeId, usize)>> {
-    let Some(sweep) = PlanarSweep::new(solid, frame) else {
+    let Some(sweep) = RuledSweep::new(solid, frame) else {
         return Ok(Vec::new());
     };
     let mut runs = SectionRuns::default();
     let mut slabs = Vec::new();
+    let mut section_table = BTreeMap::new();
     for (station, ab) in sweep.levels.windows(2).enumerate() {
-        let Some(sections) = slab_sections(solid, frame, [ab[0], ab[1]]) else {
+        let Some(regions) = slab_sections(solid, frame, [ab[0], ab[1]]) else {
             return Ok(Vec::new());
         };
+        let sections = regions
+            .into_iter()
+            .map(|(key, section)| {
+                section_table.entry(key.clone()).or_insert(section);
+                key
+            })
+            .collect::<Vec<_>>();
         slabs.extend(
             sections
                 .iter()
@@ -272,7 +340,7 @@ pub(super) fn models(solid: &ReducedSolid, frame: Frame) -> Result<Vec<(CadModel
     }
     let coalesced = runs.finish(sweep.levels.len() - 1);
     let distinct = coalesced.len() < slabs.len();
-    let Some(baseline) = section_spans(&sweep, frame, slabs) else {
+    let Some(baseline) = section_spans(&sweep, frame, slabs, &section_table) else {
         return Ok(Vec::new());
     };
     let mut models = Vec::new();
@@ -284,7 +352,7 @@ pub(super) fn models(solid: &ReducedSolid, frame: Frame) -> Result<Vec<(CadModel
         models.push(model);
     }
     let spans = if distinct {
-        let Some(spans) = section_spans(&sweep, frame, coalesced) else {
+        let Some(spans) = section_spans(&sweep, frame, coalesced, &section_table) else {
             return Ok(models);
         };
         if let Some(model) = emit_model(
@@ -314,8 +382,17 @@ mod tests {
 
     #[test]
     fn unrelated_stations_do_not_split_unchanged_sections() {
-        let first = vec![vec![1, 2, 3, 4]];
-        let second = vec![vec![5, 6, 7]];
+        let first = vec![vec![
+            CurveKey::Line([1, 2]),
+            CurveKey::Line([2, 3]),
+            CurveKey::Line([3, 4]),
+            CurveKey::Line([4, 1]),
+        ]];
+        let second = vec![vec![
+            CurveKey::Line([5, 6]),
+            CurveKey::Line([6, 7]),
+            CurveKey::Line([7, 5]),
+        ]];
         let mut runs = SectionRuns::default();
         runs.advance(0, vec![first.clone()]);
         runs.advance(1, vec![first.clone(), second.clone()]);
