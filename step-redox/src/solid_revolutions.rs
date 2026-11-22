@@ -461,7 +461,12 @@ pub(crate) fn detect_solid_revolutions_with_index(
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredSolidRevolution> {
     let source_tolerances = source_tolerance_by_representation_item(entities, index);
-    detect_solid_revolutions_with_tolerances(entities, index, &source_tolerances)
+    detect_solid_revolutions_with_tolerances(
+        entities,
+        index,
+        &source_tolerances,
+        &brep::manifold_solid_ids(entities),
+    )
 }
 
 /// Preserve source uncertainty semantics while allowing compound analyses to
@@ -470,16 +475,10 @@ pub(crate) fn detect_solid_revolutions_with_tolerances(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
     source_tolerances: &HashMap<u64, f64>,
+    solid_ids: &[u64],
 ) -> Vec<RecoveredSolidRevolution> {
     let mut out = Vec::new();
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "MANIFOLD_SOLID_BREP" {
-            continue;
-        }
-        let solid_id = entity_id(entity);
+    for &solid_id in solid_ids {
         let source_tolerance_mm = source_tolerances
             .get(&solid_id)
             .copied()
@@ -505,23 +504,22 @@ pub(crate) fn detect_radial_slot_revolutions_with_index(
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredRadialSlotRevolution> {
     let source_tolerances = source_tolerance_by_representation_item(entities, index);
-    detect_radial_slot_revolutions_with_tolerances(entities, index, &source_tolerances)
+    detect_radial_slot_revolutions_with_tolerances(
+        entities,
+        index,
+        &source_tolerances,
+        &brep::manifold_solid_ids(entities),
+    )
 }
 
 pub(crate) fn detect_radial_slot_revolutions_with_tolerances(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
     source_tolerances: &HashMap<u64, f64>,
+    solid_ids: &[u64],
 ) -> Vec<RecoveredRadialSlotRevolution> {
     let mut out = Vec::new();
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "MANIFOLD_SOLID_BREP" {
-            continue;
-        }
-        let solid_id = entity_id(entity);
+    for &solid_id in solid_ids {
         let source_tolerance_mm = source_tolerances
             .get(&solid_id)
             .copied()

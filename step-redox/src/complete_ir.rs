@@ -39,7 +39,7 @@ mod native_peels;
 mod treatment_layers;
 
 pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
-pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v20";
+pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v21";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReducedBrepMutationMode {
@@ -106,6 +106,16 @@ pub struct KernelRecoveryFailure {
     pub error: String,
 }
 
+/// A candidate verified against a source proof view in which only uniquely
+/// contradictory, fully proven spline-strip face-sense flags were reversed.
+///
+/// This is deliberately distinct from verification of the authored source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceOrientationReconciliation {
+    pub source: SourceEntity,
+    pub repairs: Vec<crate::boundary_proof::StripFaceSenseRepair>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CompleteIr {
     pub schema: &'static str,
@@ -135,6 +145,8 @@ pub struct CompleteIr {
     /// analytic source boundaries, not merely structurally reconstructed.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub source_boundary_verified_solids: Vec<SourceEntity>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source_orientation_reconciled_solids: Vec<SourceOrientationReconciliation>,
     pub constructively_recovered_solid_count: usize,
     pub semantically_recovered_solid_count: usize,
     pub unrecovered_solid_count: usize,
@@ -359,13 +371,34 @@ struct PreparedBoundaryReduction {
     family_indices: Vec<usize>,
 }
 
+/// Stronger evidence takes precedence over structural ranking. Original
+/// proof is never reported for a metadata-reconciled source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BoundaryVerification {
+    Structural,
+    Reconciled(Vec<crate::boundary_proof::StripFaceSenseRepair>),
+    Original,
+}
+
+impl BoundaryVerification {
+    const fn rank(&self) -> u8 {
+        match self {
+            Self::Structural => 0,
+            Self::Reconciled(_) => 1,
+            Self::Original => 2,
+        }
+    }
+
+    const fn is_certified(&self) -> bool { !matches!(self, Self::Structural) }
+}
+
 #[derive(Debug)]
 struct SelectedWholeSolid {
     fragment: CadFragment,
     complexity: u64,
     /// This candidate passed the independent, oriented source-boundary check,
     /// not only a source-topology pattern recognizer.
-    boundary_verified: bool,
+    boundary_verification: BoundaryVerification,
 }
 
 #[derive(Debug)]
@@ -386,13 +419,13 @@ impl WholeSolidRecoveryState {
 
     fn add_candidates<I>(&mut self, candidates: I) -> Result<usize>
     where I: IntoIterator<Item = SourceCadFragment> {
-        self.add_candidates_with_proof(candidates, false)
+        self.add_candidates_with_proof(candidates, &BoundaryVerification::Structural)
     }
 
     fn add_candidates_with_proof<I>(
         &mut self,
         candidates: I,
-        boundary_verified: bool,
+        boundary_verification: &BoundaryVerification,
     ) -> Result<usize>
     where
         I: IntoIterator<Item = SourceCadFragment>,
@@ -420,7 +453,7 @@ impl WholeSolidRecoveryState {
             }
             let complexity = fragment.model.complexity_score(fragment.root)?;
             let replace = self.selected.get(&source).is_none_or(|existing| {
-                if boundary_verified == existing.boundary_verified {
+                if boundary_verification.rank() == existing.boundary_verification.rank() {
                     whole_solid_candidate_is_preferred(
                         &existing.fragment.source,
                         existing.complexity,
@@ -428,7 +461,7 @@ impl WholeSolidRecoveryState {
                         complexity,
                     )
                 } else {
-                    boundary_verified
+                    boundary_verification.rank() > existing.boundary_verification.rank()
                 }
             });
             if replace {
@@ -437,7 +470,7 @@ impl WholeSolidRecoveryState {
                     SelectedWholeSolid {
                         fragment,
                         complexity,
-                        boundary_verified,
+                        boundary_verification: boundary_verification.clone(),
                     },
                 );
                 self.revision += 1;
@@ -561,7 +594,28 @@ impl CompleteIrBuildState {
                 .recovery
                 .selected
                 .iter()
-                .filter_map(|(&source, selected)| selected.boundary_verified.then_some(source))
+                .filter_map(|(&source, selected)| {
+                    matches!(
+                        selected.boundary_verification,
+                        BoundaryVerification::Original
+                    )
+                    .then_some(source)
+                })
+                .collect(),
+            source_orientation_reconciled_solids: self
+                .recovery
+                .selected
+                .iter()
+                .filter_map(|(&source, selected)| {
+                    let BoundaryVerification::Reconciled(repairs) = &selected.boundary_verification
+                    else {
+                        return None;
+                    };
+                    Some(SourceOrientationReconciliation {
+                        source,
+                        repairs: repairs.clone(),
+                    })
+                })
                 .collect(),
             constructively_recovered_solid_count,
             semantically_recovered_solid_count: selected.len(),
@@ -692,14 +746,17 @@ pub fn recover_complete_ir_with_kernel_bytes<
     let source_load = kernel.inspect_source_document(&document)?;
     let mut failures = Vec::new();
     let export = kernel.supports_step_export();
-    // All candidates for one source share the original immutable proof.
+    // All candidates for one source share immutable boundary evidence.
+    // A proof-only orientation reconciliation retains its own provenance.
     // Drop it before proceeding to the next solid: do not retain the full
     // assembly's spline signatures merely to reuse the evidence later.
     for source in build.recovery.source_solids.clone() {
         let entities = &exchange.data[source.data_section].entities;
         let index = &indexes[source.data_section];
         let proof = if export {
-            SourceRecovery::new(source.id, entities, index, kernel)
+            SourceRecovery::new(source.id, entities, index, kernel).or_else(|| {
+                SourceRecovery::reconcile_strip_senses(source.id, entities, index, kernel)
+            })
         } else {
             None
         };
@@ -730,15 +787,20 @@ pub fn recover_complete_ir_with_kernel_bytes<
             continue;
         };
         let candidate =
-            recover_proven_material_fragment(&proof, build.recovery.certified_ceiling(source))
-                .map(|candidate| candidate.map(KernelRecoveryCandidate::verified));
+            recover_proven_material_fragment(&proof, build.recovery.certified_ceiling(source)).map(
+                |candidate| {
+                    candidate.map(|fragment| KernelRecoveryCandidate::certified(fragment, &proof))
+                },
+            );
         failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
         let candidate = recover_verified_direct_constructive_fragment(
             &proof,
             candidates,
             build.recovery.certified_ceiling(source),
         )
-        .map(|candidate| candidate.map(KernelRecoveryCandidate::verified));
+        .map(|candidate| {
+            candidate.map(|fragment| KernelRecoveryCandidate::certified(fragment, &proof))
+        });
         failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
     }
     Ok(build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, Some(source_load)))
@@ -865,7 +927,7 @@ fn prepare_native_boundary_pass(
         return Ok(None);
     }
     let prepared = prepare_boundary_feature_reduction(
-        entities, index, &targets, &shells, &report, &selected, pass_index,
+        entities, index, &targets, &report, &selected, pass_index,
     )?;
     if prepared.family_indices.is_empty() {
         return Ok(None);
@@ -986,15 +1048,15 @@ fn finish_native_boundary_feature_replay<
     // Certify the entire evaluated result against the original, unpeeled
     // source. Unsupported boundaries keep their existing structural status;
     // successful proof also supplies the safe candidate-complexity ceiling.
-    let verified = proof.is_some_and(|proof| {
-        proof
-            .matches_evaluated_boundary(&evaluated)
-            .unwrap_or(false)
-    });
-    Ok(Some(if verified {
-        KernelRecoveryCandidate::verified(fragment)
-    } else {
-        KernelRecoveryCandidate::structural(fragment)
+    Ok(Some(match proof {
+        Some(proof)
+            if proof
+                .matches_evaluated_boundary(&evaluated)
+                .unwrap_or(false) =>
+        {
+            KernelRecoveryCandidate::certified(fragment, proof)
+        }
+        _ => KernelRecoveryCandidate::structural(fragment),
     }))
 }
 
@@ -1089,13 +1151,13 @@ fn recover_kernel_topology_normalized_fragment<
     // A closed replay is only a candidate. Export-capable kernels must
     // certify the reconstructed occupied boundary against the original,
     // not merely the intermediate peeled host.
-    let matches = proof.map_or(Ok(false), |proof| {
-        proof.matches_evaluated_boundary(&evaluated)
-    })?;
-    if !matches {
-        bail!("native edge-treatment replay did not prove original-source boundary equivalence");
+    let Some(proof) = proof else {
+        bail!("native edge-treatment replay lacks a supported source boundary proof");
+    };
+    if !proof.matches_evaluated_boundary(&evaluated)? {
+        bail!("native edge-treatment replay did not prove source boundary equivalence");
     }
-    Ok(Some(KernelRecoveryCandidate::verified(fragment)))
+    Ok(Some(KernelRecoveryCandidate::certified(fragment, proof)))
 }
 
 fn replayable_source_treatments(
@@ -1212,21 +1274,27 @@ fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragmen
 /// an independent source-boundary comparison, or return a structural host.
 struct KernelRecoveryCandidate {
     fragment: CadFragment,
-    boundary_verified: bool,
+    boundary_verification: BoundaryVerification,
 }
 
 impl KernelRecoveryCandidate {
     const fn structural(fragment: CadFragment) -> Self {
         Self {
             fragment,
-            boundary_verified: false,
+            boundary_verification: BoundaryVerification::Structural,
         }
     }
 
-    const fn verified(fragment: CadFragment) -> Self {
+    fn certified<K: CadKernel>(fragment: CadFragment, proof: &SourceRecovery<'_, K>) -> Self {
+        let repairs = proof.strip_face_sense_repairs();
+        let boundary_verification = if repairs.is_empty() {
+            BoundaryVerification::Original
+        } else {
+            BoundaryVerification::Reconciled(repairs.to_vec())
+        };
         Self {
             fragment,
-            boundary_verified: true,
+            boundary_verification,
         }
     }
 }
@@ -1236,7 +1304,8 @@ impl WholeSolidRecoveryState {
         self.selected
             .get(&source)
             .filter(|selected| {
-                selected.boundary_verified && is_constructive_source(&selected.fragment.source)
+                selected.boundary_verification.is_certified()
+                    && is_constructive_source(&selected.fragment.source)
             })
             .map(|selected| selected.complexity)
     }
@@ -1249,14 +1318,14 @@ impl WholeSolidRecoveryState {
         let result = match candidate {
             Ok(Some(KernelRecoveryCandidate {
                 fragment,
-                boundary_verified,
+                boundary_verification,
             })) if source_solid_id(&fragment.source) == source.id => self
                 .add_candidates_with_proof(
                     [SourceCadFragment {
                         source_solid: source,
                         fragment,
                     }],
-                    boundary_verified,
+                    &boundary_verification,
                 )
                 .map(|_| ()),
             Ok(Some(KernelRecoveryCandidate { fragment, .. })) => Err(anyhow::anyhow!(
@@ -1379,6 +1448,7 @@ fn recover_complete_ir_build_state<'a>(
                 recovery_section.entities,
                 &recovery_section.index,
                 context.source_tolerances,
+                &crate::brep::manifold_solid_ids(recovery_section.entities),
             )?
         } else {
             recover_constructive_fragments_from_entities_with_index(
@@ -1798,7 +1868,6 @@ fn recover_boundary_feature_pass(
         current,
         index,
         targets,
-        &target_shell_ids,
         &report,
         &target_family_indices,
         pass_index,
@@ -1819,7 +1888,6 @@ fn prepare_boundary_feature_reduction(
     source_entities: &[EntityInstance],
     source_index: &HashMap<u64, usize>,
     targets: &LocalRecoveryTargets,
-    target_shell_ids: &HashSet<u64>,
     report: &crate::planar_features::BoundaryFeatureDiagnostics,
     target_family_indices: &[usize],
     pass_index: usize,
@@ -1827,16 +1895,27 @@ fn prepare_boundary_feature_reduction(
     // This clone is the disposable proof-only tool materialization. The source
     // is immutable, and neither consumer receives a mutable topology owner.
     let mut tool_entities = source_entities.to_vec();
-    let (tool_report, materialized) =
-        crate::planar_features::materialize_boundary_feature_tools_for_analysis_for_shells(
-            &mut tool_entities,
-            1,
-            target_shell_ids,
-        )?;
-    if tool_report.families.len() != report.families.len() {
-        bail!("boundary-feature tool materialization changed family indexing");
-    }
-    let tool_candidates = recover_constructive_fragments_from_entities(&tool_entities)?;
+    let materialized = crate::planar_features::materialize_boundary_feature_tools_from_report(
+        &mut tool_entities,
+        source_index,
+        report,
+        1,
+    )?;
+    let tool_ids = materialized
+        .iter()
+        .map(|tool| tool.solid_id)
+        .collect::<Vec<_>>();
+    let tool_index = crate::step_graph::build_index(&tool_entities);
+    let tolerances = crate::solid_revolutions::source_tolerance_by_representation_item(
+        &tool_entities,
+        &tool_index,
+    );
+    let tool_candidates = recover_constructive_fragments_with_tolerances(
+        &tool_entities,
+        &tool_index,
+        &tolerances,
+        &tool_ids,
+    )?;
     let tool_refs = tool_candidates.iter().collect::<Vec<_>>();
     let selected_tools = select_cheapest_whole_solid_fragments(&tool_refs)?;
     let mut peelable_family_indices = Vec::new();
@@ -1960,46 +2039,50 @@ fn validate_boundary_feature_tool(
     validate_boundary_tool_for_boolean(tool, &host_outwards).is_ok()
 }
 
-fn recover_constructive_fragments_from_entities(
-    entities: &[EntityInstance],
-) -> Result<Vec<CadFragment>> {
-    let index = crate::step_graph::build_index(entities);
-    recover_constructive_fragments_from_entities_with_index(entities, &index)
-}
-
 fn recover_constructive_fragments_from_entities_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Result<Vec<CadFragment>> {
     let source_tolerances =
         crate::solid_revolutions::source_tolerance_by_representation_item(entities, index);
-    recover_constructive_fragments_with_tolerances(entities, index, &source_tolerances)
+    recover_constructive_fragments_with_tolerances(
+        entities,
+        index,
+        &source_tolerances,
+        &crate::brep::manifold_solid_ids(entities),
+    )
 }
 
 fn recover_constructive_fragments_with_tolerances(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
     source_tolerances: &HashMap<u64, f64>,
+    solid_ids: &[u64],
 ) -> Result<Vec<CadFragment>> {
-    let extrusions = crate::solid_extrusions::detect_solid_extrusions_with_index(entities, index);
+    let extrusions =
+        crate::solid_extrusions::detect_solid_extrusions_with_index(entities, index, solid_ids);
     let revolutions = crate::solid_revolutions::detect_solid_revolutions_with_tolerances(
         entities,
         index,
         source_tolerances,
+        solid_ids,
     );
     let radial_slots = crate::solid_revolutions::detect_radial_slot_revolutions_with_tolerances(
         entities,
         index,
         source_tolerances,
+        solid_ids,
     );
-    let closed_sweeps = crate::solid_sweeps::detect_round_sweeps(entities, index);
-    let revolved_round_tails = crate::solid_sweeps::detect_revolved_round_tails(entities, index);
-    let open_sweeps = crate::solid_sweeps::sheet::detect_open_rectangular_sweeps(entities, index);
+    let closed_sweeps = crate::solid_sweeps::detect_round_sweeps(entities, index, solid_ids);
+    let revolved_round_tails =
+        crate::solid_sweeps::detect_revolved_round_tails(entities, index, solid_ids);
+    let open_sweeps =
+        crate::solid_sweeps::sheet::detect_open_rectangular_sweeps(entities, index, solid_ids);
 
     let mut out = recover_solid_extrusion_fragments(&extrusions)?;
     out.extend(recover_solid_revolution_fragments(&revolutions)?);
     out.extend(crate::solid_lofts::detect_sectioned_planar_lofts(
-        entities, index,
+        entities, index, solid_ids,
     ));
     out.extend(recover_radial_slot_revolution_fragments(&radial_slots)?);
     out.extend(recover_round_sweep_fragments(&closed_sweeps)?);
@@ -2996,6 +3079,53 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn explicitly_scoped_tool_recognition_matches_full_section_candidates() -> Result<()> {
+        // Include both authored and newly materialized bodies, preserving the
+        // original representation contexts and every geometry reference.
+        let bytes = include_bytes!("../validation/fixtures/native_relief_blind_636f2bd5.step");
+        let mut parsed = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let entities = &mut parsed.data[0].entities;
+        let original_index = crate::step_graph::build_index(entities);
+        let original_ids = crate::brep::manifold_solid_ids(entities);
+        let report = crate::planar_features::diagnose_boundary_features(entities);
+        let tools = crate::planar_features::materialize_boundary_feature_tools_from_report(
+            entities,
+            &original_index,
+            &report,
+            1,
+        )?;
+        let tool_ids = tools.iter().map(|tool| tool.solid_id).collect::<Vec<_>>();
+        assert!(!tool_ids.is_empty());
+        assert!(tool_ids.iter().all(|id| !original_ids.contains(id)));
+        let index = crate::step_graph::build_index(entities);
+        let tolerances =
+            crate::solid_revolutions::source_tolerance_by_representation_item(entities, &index);
+        let full = recover_constructive_fragments_with_tolerances(
+            entities,
+            &index,
+            &tolerances,
+            &crate::brep::manifold_solid_ids(entities),
+        )?;
+        let scoped = recover_constructive_fragments_with_tolerances(
+            entities,
+            &index,
+            &tolerances,
+            &tool_ids,
+        )?;
+        let expected = full
+            .into_iter()
+            .filter(|fragment| tool_ids.contains(&source_solid_id(&fragment.source)))
+            .collect::<Vec<_>>();
+        assert!(!expected.is_empty());
+        assert_eq!(scoped, expected);
+        assert_eq!(
+            recover_constructive_fragments_with_tolerances(entities, &index, &tolerances, &[])?,
+            []
+        );
+        Ok(())
+    }
+
     const fn test_source_in(data_section: usize, solid_id: u64) -> SourceEntity {
         SourceEntity {
             data_section,
@@ -3047,6 +3177,7 @@ mod tests {
             body_scan: BodyScanSummary { solids },
             body_count: solid_ids.len(),
             source_boundary_verified_solids: Vec::new(),
+            source_orientation_reconciled_solids: Vec::new(),
             constructively_recovered_solid_count: 0,
             semantically_recovered_solid_count: 0,
             unrecovered_solid_count: solid_ids.len(),
@@ -3655,12 +3786,18 @@ mod tests {
                     ceiling, None,
                     "structural guess cannot prune certified evidence"
                 );
-                Ok(Some(KernelRecoveryCandidate::verified(verified.clone())))
+                Ok(Some(KernelRecoveryCandidate {
+                    fragment: verified.clone(),
+                    boundary_verification: BoundaryVerification::Original,
+                }))
             },
             true,
         );
         assert!(failures.is_empty(), "{failures:?}");
-        assert!(state.selected[&test_source(7)].boundary_verified);
+        assert!(matches!(
+            state.selected[&test_source(7)].boundary_verification,
+            BoundaryVerification::Original
+        ));
         assert_eq!(
             state.selected[&test_source(7)].complexity,
             expected_complexity
@@ -3947,7 +4084,6 @@ END-ISO-10303-21;
             &section.entities,
             &index,
             &targets,
-            &HashSet::from([shell]),
             &report,
             &selected,
             0,
@@ -4063,7 +4199,6 @@ END-ISO-10303-21;
                 &section.entities,
                 &index,
                 &targets,
-                &shells,
                 &report,
                 &(0..report.families.len()).collect::<Vec<_>>(),
                 0,
@@ -4146,7 +4281,10 @@ END-ISO-10303-21;
             )?
             .context("native relief did not reconstruct a whole body")?;
             assert!(
-                fragment.boundary_verified,
+                matches!(
+                    fragment.boundary_verification,
+                    BoundaryVerification::Original
+                ),
                 "native source proof refused for {:?}",
                 source.source
             );
@@ -4480,6 +4618,25 @@ END-ISO-10303-21;
         assert_eq!(report.body_count, 1);
         assert_eq!(report.constructively_recovered_solid_count, 1);
         assert_eq!(report.unrecovered_solid_count, 0);
+        assert!(report.source_boundary_verified_solids.is_empty());
+        let [reconciliation] = report.source_orientation_reconciled_solids.as_slice() else {
+            bail!("expected an independently verified orientation reconciliation");
+        };
+        assert_eq!(reconciliation.source, report.body_scan.solids[0].source);
+        assert_eq!(
+            reconciliation
+                .repairs
+                .iter()
+                .map(|r| r.face_id)
+                .collect::<Vec<_>>(),
+            [530, 729, 845, 1686]
+        );
+        assert!(
+            reconciliation
+                .repairs
+                .iter()
+                .all(|r| !r.original_same_sense && r.reconciled_same_sense)
+        );
         assert!(kernel_replay_is_single_solid(&kernel, &body.fragment)?);
         Ok(())
     }
@@ -4503,6 +4660,36 @@ END-ISO-10303-21;
         let summary = kernel.summarize(&rebuilt);
         assert!(summary.is_single_solid(), "{summary:?}");
         assert_eq!(summary.faces, 84);
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_housing_reconciles_only_certified_strip_face_senses() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_relief_housing_0914dda4.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert!(report.source_boundary_verified_solids.is_empty());
+        let [reconciliation] = report.source_orientation_reconciled_solids.as_slice() else {
+            bail!("expected a distinct orientation-reconciled recovery certificate");
+        };
+        assert_eq!(reconciliation.source, report.body_scan.solids[0].source);
+        assert_eq!(
+            reconciliation
+                .repairs
+                .iter()
+                .map(|r| r.face_id)
+                .collect::<Vec<_>>(),
+            [799, 1682, 2395, 3004, 3833, 4324, 4496, 4755, 6122, 8592]
+        );
+        assert!(
+            reconciliation
+                .repairs
+                .iter()
+                .all(|r| r.original_same_sense != r.reconciled_same_sense)
+        );
         Ok(())
     }
 
@@ -4633,7 +4820,10 @@ END-ISO-10303-21;
             proof.as_ref(),
         )?
         .context("native boundary-feature recovery refused")?;
-        assert!(recovered.boundary_verified);
+        assert!(matches!(
+            recovered.boundary_verification,
+            BoundaryVerification::Original
+        ));
         Ok(recovered)
     }
 

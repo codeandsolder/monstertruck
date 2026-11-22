@@ -13,7 +13,6 @@ use crate::math3::{
 use crate::solid_revolutions::{
     RecoveredSolidRevolution, recover_axisymmetric_subbody_with_circular_cap,
 };
-use crate::step_graph::{entity_id, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -99,17 +98,11 @@ struct ClosedRoundSupports {
 pub(crate) fn detect_round_sweeps(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    solid_ids: &[u64],
 ) -> Vec<RecoveredRoundSweep> {
     let mut out = Vec::new();
 
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "MANIFOLD_SOLID_BREP" {
-            continue;
-        }
-        let solid_id = entity_id(entity);
+    for &solid_id in solid_ids {
         if let Some(sweep) = detect_one_closed_round_sweep(solid_id, entities, index)
             .or_else(|| detect_one_open_round_sweep(solid_id, entities, index))
         {
@@ -125,16 +118,10 @@ pub(crate) fn detect_round_sweeps(
 pub(crate) fn detect_revolved_round_tails(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    solid_ids: &[u64],
 ) -> Vec<RecoveredRevolvedRoundTail> {
     let mut out = Vec::new();
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "MANIFOLD_SOLID_BREP" {
-            continue;
-        }
-        let solid_id = entity_id(entity);
+    for &solid_id in solid_ids {
         if let Some(candidate) = detect_one_revolved_round_tail(solid_id, entities, index) {
             out.push(candidate);
         }
@@ -153,14 +140,13 @@ fn detect_one_closed_round_sweep(
         return None;
     }
     face_ids.sort_unstable();
-    prove_closed_source_topology(&face_ids, entities, index)?;
-
     let ClosedRoundSupports {
         cylinders,
         tori,
         profile_radius_mm,
         corner_radius_mm,
     } = collect_closed_round_supports(&face_ids, entities, index)?;
+    prove_closed_source_topology(&face_ids, entities, index)?;
 
     let plane_normal = tori.first()?.axis;
     if tori
@@ -348,7 +334,6 @@ fn detect_one_open_round_sweep(
         return None;
     }
     face_ids.sort_unstable();
-    prove_closed_manifold_source_topology(&face_ids, entities, index)?;
     let mut cylinders = Vec::<CylinderRun>::new();
     let mut tori = Vec::<TorusBend>::new();
     let mut plane_faces = Vec::new();
@@ -383,6 +368,7 @@ fn detect_one_open_round_sweep(
     if tori.is_empty() || plane_faces.len() != 2 || cylinders.len() != tori.len() + 1 {
         return None;
     }
+    prove_closed_manifold_source_topology(&face_ids, entities, index)?;
     let radius = common_value(&radius_samples)?;
     if radius <= GEOM_TOL_MM {
         return None;
@@ -576,7 +562,6 @@ fn detect_one_revolved_round_tail(
         return None;
     }
     face_ids.sort_unstable();
-    prove_closed_manifold_source_topology(&face_ids, entities, index)?;
 
     let mut cylinders = Vec::<CylinderRun>::new();
     let mut tori = Vec::<TorusBend>::new();
@@ -627,6 +612,11 @@ fn detect_one_revolved_round_tail(
             _ => {}
         }
     }
+
+    if tori.is_empty() || spheres.is_empty() || cylinders.len() < 2 {
+        return None;
+    }
+    prove_closed_manifold_source_topology(&face_ids, entities, index)?;
 
     for bend in &tori {
         let radius = bend.minor_radius_mm;

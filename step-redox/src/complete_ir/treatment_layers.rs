@@ -439,6 +439,33 @@ mod tests {
     }
 
     #[test]
+    fn original_spherical_round_treatments_reconstruct_and_prove_the_whole_body() -> Result<()> {
+        let bytes =
+            include_bytes!("../../validation/fixtures/native_round_treatment_abda7f6d.step");
+        let kernel = MonstertruckKernel::project_standard();
+        let report = crate::complete_ir::recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        let [selected] = report.edge_treatment_composites.as_slice() else {
+            anyhow::bail!("expected fully editable treatment composite");
+        };
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [selected.source_solid]
+        );
+        assert_eq!(report.source_orientation_reconciled_solids, []);
+        let fragment = &selected.fragment;
+        assert!(
+            matches!(&fragment.source, crate::cad_recovery::CadFragmentSource::EdgeTreatmentComposite { treatment_face_ids, .. } if treatment_face_ids.len() == 22)
+        );
+        let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
+        let summary = kernel.summarize(&evaluated);
+        assert!(summary.is_single_solid(), "{summary:?}");
+        assert_eq!(summary.faces, 30);
+        Ok(())
+    }
+
+    #[test]
     fn real_te_is_automatically_admitted_with_source_boundary_proof() -> Result<()> {
         let bytes = crate::inverse_edge_treatment::te_treatment_fixture()?;
         let kernel = MonstertruckKernel::project_standard();

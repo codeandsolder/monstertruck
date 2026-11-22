@@ -913,13 +913,11 @@ fn intersect_three_planes(
 pub fn detect_sectioned_planar_lofts(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    solid_ids: &[u64],
 ) -> Vec<CadFragment> {
-    entities
+    solid_ids
         .iter()
-        .filter_map(|e| {
-            let record = crate::step_graph::simple_record(e)?;
-            (record.name == "MANIFOLD_SOLID_BREP").then_some(crate::step_graph::entity_id(e))
-        })
+        .copied()
         .filter_map(|id| {
             let reduced = ReducedSolid::from_step(id, entities, index)?;
             detect_sectioned_planar_loft(&reduced)

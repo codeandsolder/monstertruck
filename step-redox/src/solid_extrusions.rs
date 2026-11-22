@@ -83,7 +83,7 @@ struct CanonicalProfile {
 #[must_use]
 pub fn detect_solid_extrusions(entities: &[EntityInstance]) -> Vec<RecoveredSolidExtrusion> {
     let index = build_index(entities);
-    detect_solid_extrusions_with_index(entities, &index)
+    detect_solid_extrusions_with_index(entities, &index, &brep::manifold_solid_ids(entities))
 }
 
 /// Detect sharp extrusion cores implied by translated planar cap pairs.
@@ -1203,17 +1203,11 @@ fn extrusion_core_candidate(
 pub(crate) fn detect_solid_extrusions_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    solid_ids: &[u64],
 ) -> Vec<RecoveredSolidExtrusion> {
     let mut out = Vec::new();
 
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "MANIFOLD_SOLID_BREP" {
-            continue;
-        }
-        let solid_id = entity_id(entity);
+    for &solid_id in solid_ids {
         if let Some(candidate) = detect_one_solid(solid_id, entities, index) {
             out.push(candidate);
         }

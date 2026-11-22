@@ -456,6 +456,8 @@ pub(crate) struct SourceRecovery<'a, K> {
     index: &'a HashMap<u64, usize>,
     kernel: &'a K,
     boundary: crate::boundary_proof::AnalyticBoundaryDiagnostic,
+    reconciled_entities: Option<Vec<EntityInstance>>,
+    strip_face_sense_repairs: Vec<crate::boundary_proof::StripFaceSenseRepair>,
     boundary_vertices: Vec<[f64; 3]>,
 }
 
@@ -468,6 +470,50 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
     ) -> Option<Self> {
         let boundary =
             crate::boundary_proof::analytic_boundary_diagnostic(solid_id, entities, index);
+        Self::from_evidence(
+            solid_id,
+            entities,
+            index,
+            kernel,
+            boundary,
+            None,
+            Vec::new(),
+        )
+    }
+
+    /// Use a distinct, metadata-only proof view when the strictly authored
+    /// source is unsupported. Geometry proposals still read original entities.
+    pub(crate) fn reconcile_strip_senses(
+        solid_id: u64,
+        entities: &'a [EntityInstance],
+        index: &'a HashMap<u64, usize>,
+        kernel: &'a K,
+    ) -> Option<Self> {
+        let crate::boundary_proof::ReconciledStripBoundary {
+            entities: reconciled,
+            diagnostic,
+            repairs,
+        } = crate::boundary_proof::reconcile_strip_face_senses(solid_id, entities, index)?;
+        Self::from_evidence(
+            solid_id,
+            entities,
+            index,
+            kernel,
+            diagnostic,
+            Some(reconciled),
+            repairs,
+        )
+    }
+
+    fn from_evidence(
+        solid_id: u64,
+        entities: &'a [EntityInstance],
+        index: &'a HashMap<u64, usize>,
+        kernel: &'a K,
+        boundary: crate::boundary_proof::AnalyticBoundaryDiagnostic,
+        reconciled_entities: Option<Vec<EntityInstance>>,
+        strip_face_sense_repairs: Vec<crate::boundary_proof::StripFaceSenseRepair>,
+    ) -> Option<Self> {
         let boundary_vertices = boundary.signature.as_ref()?.boundary_vertices();
         boundary.supported.then_some(Self {
             solid_id,
@@ -475,8 +521,16 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
             index,
             kernel,
             boundary,
+            reconciled_entities,
+            strip_face_sense_repairs,
             boundary_vertices,
         })
+    }
+
+    pub(crate) fn strip_face_sense_repairs(
+        &self,
+    ) -> &[crate::boundary_proof::StripFaceSenseRepair] {
+        &self.strip_face_sense_repairs
     }
 
     pub(crate) fn proves(
@@ -512,7 +566,7 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
             self.kernel,
             evaluated,
             &self.boundary,
-            self.entities,
+            self.reconciled_entities.as_deref().unwrap_or(self.entities),
         )
     }
 }
@@ -1233,7 +1287,7 @@ fn validate_periodic_chain(chain: &PeriodicChainPattern) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
 #[path = "cad_recovery/mixed_fixture_models.rs"]
 pub(crate) mod mixed_fixture_models;
 
