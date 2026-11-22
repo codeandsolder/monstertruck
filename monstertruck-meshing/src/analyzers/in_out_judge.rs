@@ -178,7 +178,7 @@ impl SignedRayIndex {
         }
         let mut nodes = Vec::new();
         let root = if finite && !entries.is_empty() {
-            Some(Self::build(&mut entries, 0, &mut nodes))
+            Self::build(&mut entries, 0, &mut nodes)
         } else {
             None
         };
@@ -189,34 +189,35 @@ impl SignedRayIndex {
         }
     }
 
-    fn build(entries: &mut [OrientedTriangle], offset: usize, nodes: &mut Vec<Node>) -> usize {
+    fn build(
+        entries: &mut [OrientedTriangle],
+        offset: usize,
+        nodes: &mut Vec<Node>,
+    ) -> Option<usize> {
         const LEAF_TRIANGLES: usize = 8;
         let bounds = entries
             .iter()
             .map(|entry| entry.bounds)
-            .reduce(RayBounds::union)
-            .expect("nonempty node");
+            .reduce(RayBounds::union)?;
         let kind = if entries.len() <= LEAF_TRIANGLES {
             NodeKind::Leaf(offset..offset + entries.len())
         } else {
-            let axis = (0..3)
-                .max_by(|&a, &b| {
-                    (bounds.high[a] - bounds.low[a]).total_cmp(&(bounds.high[b] - bounds.low[b]))
-                })
-                .expect("three axes");
+            let axis = (0..3).max_by(|&a, &b| {
+                (bounds.high[a] - bounds.low[a]).total_cmp(&(bounds.high[b] - bounds.low[b]))
+            })?;
             let middle = entries.len() / 2;
             let center =
                 |entry: &OrientedTriangle| entry.bounds.low[axis].midpoint(entry.bounds.high[axis]);
             entries.select_nth_unstable_by(middle, |a, b| center(a).total_cmp(&center(b)));
             let (left, right) = entries.split_at_mut(middle);
             NodeKind::Branch([
-                Self::build(left, offset, nodes),
-                Self::build(right, offset + middle, nodes),
+                Self::build(left, offset, nodes)?,
+                Self::build(right, offset + middle, nodes)?,
             ])
         };
         let id = nodes.len();
         nodes.push(Node { bounds, kind });
-        id
+        Some(id)
     }
 
     fn sum_triangles(entries: &[OrientedTriangle], ray: Ray) -> isize {
