@@ -4263,29 +4263,9 @@ END-ISO-10303-21;
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn native_boundary_feature_peel_exposes_treated_host() -> Result<()> {
-        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let bytes =
             include_bytes!("../validation/fixtures/native_relief_oblique_fillet_ba0460c9.step");
-        let document = kernel.resolve_source_exchange(
-            monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange,
-        )?;
-        let load = kernel.inspect_source_document(&document)?;
-        let [solid] = load.solids.as_slice() else {
-            bail!("expected one relieved solid");
-        };
-        let entities = &document.as_ref().data[solid.source.data_section].entities;
-        let index = crate::step_graph::build_index(entities);
-        let proof = SourceRecovery::new(solid.source.id, entities, &index, &kernel);
-        let recovered = recover_kernel_boundary_feature_fragment(
-            solid.source,
-            &load,
-            &document,
-            &kernel,
-            &index,
-            proof.as_ref(),
-        )?
-        .context("native boundary-feature and treatment composition refused")?;
-        assert!(recovered.boundary_verified);
+        let recovered = verified_native_boundary_feature_candidate(bytes)?;
         assert!(matches!(
             recovered.fragment.source,
             CadFragmentSource::BoundaryFeatureComposite { .. }
@@ -4572,14 +4552,21 @@ END-ISO-10303-21;
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn native_boss_replay_candidate_has_independent_original_boundary_proof() -> Result<()> {
-        let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
+        verified_native_boundary_feature_candidate(include_bytes!(
+            "../validation/fixtures/boundary_boss_extrusion.step"
+        ))?;
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn verified_native_boundary_feature_candidate(input: &[u8]) -> Result<KernelRecoveryCandidate> {
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let document = kernel.resolve_source_exchange(
             monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange,
         )?;
         let load = kernel.inspect_source_document(&document)?;
         let [solid] = load.solids.as_slice() else {
-            bail!("expected one solid");
+            bail!("expected exactly one source solid");
         };
         let entities = &document.as_ref().data[solid.source.data_section].entities;
         let index = crate::step_graph::build_index(entities);
@@ -4592,9 +4579,9 @@ END-ISO-10303-21;
             &index,
             proof.as_ref(),
         )?
-        .context("native boss recovery refused")?;
+        .context("native boundary-feature recovery refused")?;
         assert!(recovered.boundary_verified);
-        Ok(())
+        Ok(recovered)
     }
 
     /// Exact kernel adapter for native-peeling tests: any intermediate or final
