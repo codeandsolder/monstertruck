@@ -19,7 +19,7 @@ step-body-tool corpus build --manifest sources.tsv --out corpus-v3 \
   --cache scan-cache --jobs 4
 step-body-tool corpus validate --corpus corpus-v3 --jobs 4
 step-body-tool corpus census --manifest sources.tsv --out supports.jsonl \
-  --face-count 6 --contains-support PLANE --jobs 4
+  --face-count 6 --contains-support plane --jobs 4
 step-body-tool corpus find-gap --manifest sources.tsv --start 0 --jobs 4
 ```
 
