@@ -1197,11 +1197,7 @@ pub mod monstertruck {
             // Contact certification borrows, rather than consumes, the
             // operands. If it cannot prove contact, fold those same owned
             // solids; reevaluating would consume DAG dependencies twice.
-            return if let Some(result) = joined {
-                Ok(result)
-            } else {
-                fold_boolean(op, solids.into_iter().map(Ok), policy)
-            };
+            return joined.map_or_else(|| fold_boolean(op, solids.into_iter().map(Ok), policy), Ok);
         }
         fold_boolean(
             op,
