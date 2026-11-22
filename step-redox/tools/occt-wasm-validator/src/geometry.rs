@@ -38,9 +38,9 @@ struct Topology {
 impl Topology {
     fn measure(kernel: &mut OcctKernel, shape: ShapeHandle) -> Result<Self> {
         Ok(Self {
-            faces: kernel.sub_shape_occurrence_count(shape, "face")?,
-            edges: kernel.sub_shape_occurrence_count(shape, "edge")?,
-            vertices: kernel.sub_shape_occurrence_count(shape, "vertex")?,
+            faces: u32::try_from(kernel.sub_shape_occurrence_count(shape, "face")?)?,
+            edges: u32::try_from(kernel.sub_shape_occurrence_count(shape, "edge")?)?,
+            vertices: u32::try_from(kernel.sub_shape_occurrence_count(shape, "vertex")?)?,
         })
     }
 }
@@ -102,7 +102,7 @@ pub fn analyze<'a>(
         });
         kernel.release(solid)?;
     }
-    let solid_count = kernel.sub_shape_occurrence_count(shape, "solid")?;
+    let solid_count = u32::try_from(kernel.sub_shape_occurrence_count(shape, "solid")?)?;
     ensure!(
         usize::try_from(solid_count)? == inventory.len(),
         "solid occurrence mismatch"
@@ -121,7 +121,7 @@ pub fn analyze<'a>(
         bounds,
         topology,
         solids: solid_count,
-        shells: kernel.sub_shape_occurrence_count(shape, "shell")?,
+        shells: u32::try_from(kernel.sub_shape_occurrence_count(shape, "shell")?)?,
         solid_volume_sum: inventory.iter().map(|solid| solid.volume).sum(),
         solid_area_sum: inventory.iter().map(|solid| solid.area).sum(),
         solid_inventory: inventory,
