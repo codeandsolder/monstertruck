@@ -157,41 +157,54 @@ pub(super) fn peel<K: SourceTopologyEditor>(
         }
     }
     if !layers.is_empty() {
-        let original = original_face_ids(provenance)?;
-        loop {
-            let faces = kernel.inspect_edited_source(&edited)?.faces;
-            let current = kernel.edited_source_reduced_brep(&edited)?;
-            let evidence = select_replayable_treatments(detect_native_edge_treatments(&current));
-            let lookup = NativeTreatmentTopology::new(&current);
-            let next = plan_treatment_layer(&current, source.data_section, &evidence, &lookup)
-                .and_then(|planned| {
-                    apply_layer(kernel, &mut edited, planned, |id| {
-                        original.get(&id).copied().with_context(|| {
-                            format!("native treatment face #{id} has no original STEP provenance")
-                        })
-                    })
-                });
-            match next {
-                Ok(Some(layer)) => {
-                    ensure!(
-                        kernel.inspect_edited_source(&edited)?.faces < faces,
-                        "native inverse treatment layer did not decrease face count"
-                    );
-                    layers.push(layer);
-                }
-                Ok(None) => break,
-                Err(error) => {
-                    stop = Some(format!("{error:#}"));
-                    break;
-                }
-            }
-        }
+        let (additional, reason) =
+            peel_native(kernel, &mut edited, source.data_section, provenance)?;
+        layers.extend(additional);
+        stop = reason;
     }
     Ok(PeelOutcome {
         edited,
         layers,
         stop,
     })
+}
+
+/// Continue treatment inversion on an already edited native solid. Its
+/// retained source identities still address the original STEP provenance,
+/// regardless of which outer feature was removed to expose the treatments.
+pub(super) fn peel_native<K: SourceTopologyEditor>(
+    kernel: &K,
+    edited: &mut K::EditedSource,
+    section: usize,
+    provenance: &KernelTopologyProvenance,
+) -> Result<(Vec<ReplayLayer>, Option<String>)> {
+    let original = original_face_ids(provenance)?;
+    let mut layers = Vec::new();
+    loop {
+        let faces = kernel.inspect_edited_source(edited)?.faces;
+        let current = kernel.edited_source_reduced_brep(edited)?;
+        let evidence = select_replayable_treatments(detect_native_edge_treatments(&current));
+        let lookup = NativeTreatmentTopology::new(&current);
+        let next =
+            plan_treatment_layer(&current, section, &evidence, &lookup).and_then(|planned| {
+                apply_layer(kernel, edited, planned, |id| {
+                    original.get(&id).copied().with_context(|| {
+                        format!("native treatment face #{id} has no original STEP provenance")
+                    })
+                })
+            });
+        match next {
+            Ok(Some(layer)) => {
+                ensure!(
+                    kernel.inspect_edited_source(edited)?.faces < faces,
+                    "native inverse treatment layer did not decrease face count"
+                );
+                layers.push(layer);
+            }
+            Ok(None) => return Ok((layers, None)),
+            Err(error) => return Ok((layers, Some(format!("{error:#}")))),
+        }
+    }
 }
 
 pub(super) fn replay(

@@ -864,7 +864,7 @@ fn recover_kernel_boundary_feature_fragment<
     let Some(edited) = edited else {
         return Ok(None);
     };
-    finish_native_boundary_feature_replay(kernel, source, &edited, &replay, proof)
+    finish_native_boundary_feature_replay(kernel, source, edited, provenance, &replay, proof)
 }
 
 /// Ensure projected shell membership exactly matches the retained native
@@ -938,23 +938,15 @@ fn finish_native_boundary_feature_replay<
 >(
     kernel: &K,
     source: SourceEntity,
-    edited: &K::EditedSource,
+    mut edited: K::EditedSource,
+    provenance: &KernelTopologyProvenance,
     replay: &[RecoveredBoundaryFeatureFamily],
     proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
-    let Some(mut host) = recognize_edited_host_with_fallback(kernel, edited, || {
-        // Rare non-native analytic families still use one final snapshot, not
-        // a serialization/reimport on every feature-peeling round.
-        let snapshot = kernel.edited_source_to_step(edited)?;
-        let document = kernel.resolve_source_exchange(
-            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
-        )?;
-        recognize_single_healed_host(document.as_ref(), kernel)
-    })?
+    let Some(host) = recognize_boundary_feature_host(kernel, &mut edited, source, provenance)?
     else {
         return Ok(None);
     };
-    host.model.provenance.clear();
     let fragment = compose_boundary_feature_fragment(source.id, &host, replay)?;
     let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
     if !kernel.summarize(&evaluated).is_single_solid() {
@@ -973,6 +965,44 @@ fn finish_native_boundary_feature_replay<
     } else {
         KernelRecoveryCandidate::structural(fragment)
     }))
+}
+
+/// A boundary feature can hide a more elementary treated host. Continue
+/// on the same native topology when direct recognition cannot consume it;
+/// the treatment replay must precede reapplication of the outer features.
+fn recognize_boundary_feature_host<K: CadKernel + SourceTopologyEditor>(
+    kernel: &K,
+    edited: &mut K::EditedSource,
+    source: SourceEntity,
+    provenance: &KernelTopologyProvenance,
+) -> Result<Option<CadFragment>> {
+    let recognize = |edited: &K::EditedSource| {
+        recognize_edited_host_with_fallback(kernel, edited, || {
+            let snapshot = kernel.edited_source_to_step(edited)?;
+            let document = kernel.resolve_source_exchange(
+                monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
+            )?;
+            recognize_single_healed_host(document.as_ref(), kernel)
+        })
+    };
+    if let Some(mut host) = recognize(edited)? {
+        host.model.provenance.clear();
+        return Ok(Some(host));
+    }
+    let (layers, stop) =
+        treatment_layers::peel_native(kernel, edited, source.data_section, provenance)?;
+    if layers.is_empty() {
+        return Ok(None);
+    }
+    kernel.normalize_edited_source(edited)?;
+    let Some(mut host) = recognize(edited)? else {
+        if let Some(reason) = stop {
+            bail!("inverse treatment fixed point after boundary-feature peel: {reason}");
+        }
+        return Ok(None);
+    };
+    host.model.provenance.clear();
+    treatment_layers::replay(host, source.id, layers).map(Some)
 }
 
 fn recover_kernel_topology_normalized_fragment<
@@ -4226,6 +4256,49 @@ END-ISO-10303-21;
         let evaluated = kernel.evaluate(&model, root)?;
         let source = kernel.to_step(&evaluated)?;
         assert_source_verified_relief(source.as_bytes())
+    }
+
+    /// A real relief-bearing host with a limiting oblique fillet. Check
+    /// the composed provider itself, independently of candidate ranking.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_boundary_feature_peel_exposes_treated_host() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let bytes =
+            include_bytes!("../validation/fixtures/native_relief_oblique_fillet_ba0460c9.step");
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange,
+        )?;
+        let load = kernel.inspect_source_document(&document)?;
+        let [solid] = load.solids.as_slice() else {
+            bail!("expected one relieved solid");
+        };
+        let entities = &document.as_ref().data[solid.source.data_section].entities;
+        let index = crate::step_graph::build_index(entities);
+        let proof = SourceRecovery::new(solid.source.id, entities, &index, &kernel);
+        let recovered = recover_kernel_boundary_feature_fragment(
+            solid.source,
+            &load,
+            &document,
+            &kernel,
+            &index,
+            proof.as_ref(),
+        )?
+        .context("native boundary-feature and treatment composition refused")?;
+        assert!(recovered.boundary_verified);
+        assert!(matches!(
+            recovered.fragment.source,
+            CadFragmentSource::BoundaryFeatureComposite { .. }
+        ));
+        assert!(
+            recovered
+                .fragment
+                .model
+                .nodes
+                .iter()
+                .any(|node| matches!(node, CadNode::EdgeTreatment { .. }))
+        );
+        Ok(())
     }
 
     // Real high-face-count relief housing, formerly timing out in repeated
