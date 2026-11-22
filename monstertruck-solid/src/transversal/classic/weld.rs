@@ -10,7 +10,10 @@ use super::{
     ShapeOpsCurve, ShapeOpsSurface, Shell, SnapCurveEndpoints, Vector4, Vertex, VertexId, Wire,
     conversion, faces_classification,
 };
-use monstertruck_core::{cgmath64::MetricSpace, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
+use monstertruck_core::{
+    cgmath64::{InnerSpace, MetricSpace},
+    tolerance::DEFAULT_NUMERICAL_TOLERANCES,
+};
 use std::{cmp::Ordering, collections::BTreeMap};
 
 fn certified_homogeneous_curve_box(curve: &NurbsCurve<Vector4>) -> Option<BoundingBox<Point3>> {
@@ -54,6 +57,52 @@ pub(super) fn point_inside_padded_box(
     let min = bounds.min();
     let max = bounds.max();
     (0..3).all(|axis| point[axis] >= min[axis] - pad && point[axis] <= max[axis] + pad)
+}
+
+/// Improve an already admitted curve parameter without modifying the
+/// curve or jumping to a different nearby parameter branch. The geometric
+/// tolerance is an acceptance bound, not a stopping residual.
+fn refine_accepted_parameter<
+    C: BoundedCurve<Point = Point3, Vector = monstertruck_core::cgmath64::Vector3>,
+>(
+    curve: &C,
+    point: Point3,
+    parameter: f64,
+    tol: f64,
+) -> Option<f64> {
+    let (lo, hi) = curve.range_tuple();
+    if !parameter.is_finite() || parameter < lo || parameter > hi {
+        return None;
+    }
+    let anchor = curve.evaluate(parameter);
+    let mut residual = anchor.distance(point);
+    if !residual.is_finite() || residual > tol {
+        return None;
+    }
+    let mut best = parameter;
+    for _ in 0..32 {
+        if residual <= f64::MIN_POSITIVE {
+            break;
+        }
+        let derivative = curve.derivative(best);
+        let norm = derivative.dot(derivative);
+        if !norm.is_finite() || norm <= f64::MIN_POSITIVE {
+            break;
+        }
+        let step = derivative.dot(point - curve.evaluate(best)) / norm;
+        let candidate = (best + step).clamp(lo, hi);
+        if !candidate.is_finite() {
+            break;
+        }
+        let evaluated = curve.evaluate(candidate);
+        let next = evaluated.distance(point);
+        if !next.is_finite() || next >= residual || evaluated.distance(anchor) > tol {
+            break;
+        }
+        best = candidate;
+        residual = next;
+    }
+    Some(best)
 }
 
 type AltEdge<C, S> = Edge<Point3, AltCurve<C, S>>;
@@ -239,9 +288,8 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
             curve
                 .search_parameter(point, None, 100)
                 .or_else(|| curve.search_nearest_parameter(point, None, 100))
-                .filter(|&parameter| {
-                    parameter.is_finite()
-                        && curve.evaluate(parameter).distance(point) <= self.tolerances.length
+                .and_then(|parameter| {
+                    refine_accepted_parameter(curve, point, parameter, self.tolerances.length)
                 })
         };
         let projection_pad =
@@ -356,13 +404,29 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                     && remaining.evaluate(t).distance(point) <= self.tolerances.length
             };
             let parameter = if on_remaining(original_parameter) {
-                original_parameter
+                refine_accepted_parameter(
+                    &remaining,
+                    point,
+                    original_parameter,
+                    self.tolerances.length,
+                )?
             } else {
                 remaining
                     .search_parameter(point, None, 100)
                     .or_else(|| remaining.search_nearest_parameter(point, None, 100))
-                    .filter(|&t| on_remaining(t))?
+                    .filter(|&t| on_remaining(t))
+                    .and_then(|parameter| {
+                        refine_accepted_parameter(
+                            &remaining,
+                            point,
+                            parameter,
+                            self.tolerances.length,
+                        )
+                    })?
             };
+            if !on_remaining(parameter) {
+                return None;
+            }
             let later = remaining.cut(parameter);
             if remaining.back().distance(point) > self.tolerances.length
                 || later.front().distance(point) > self.tolerances.length
