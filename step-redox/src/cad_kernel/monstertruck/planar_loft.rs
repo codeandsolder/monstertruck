@@ -521,7 +521,7 @@ mod tests {
             2
         );
         assert!(
-            shell.iter().flat_map(|f| f.edge_iter()).all(|e| e
+            shell.iter().flat_map(Face::edge_iter).all(|e| e
                 .front()
                 .point()
                 .distance(e.back().point())
@@ -568,10 +568,11 @@ mod tests {
             2
         );
         assert!(
-            shell
-                .iter()
-                .flat_map(|face| face.edge_iter())
-                .all(|edge| edge.front().point().distance(edge.back().point()) > 0.)
+            shell.iter().flat_map(Face::edge_iter).all(|edge| edge
+                .front()
+                .point()
+                .distance(edge.back().point())
+                > 0.)
         );
         Ok(())
     }
