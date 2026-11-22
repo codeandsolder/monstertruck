@@ -426,6 +426,46 @@ impl PolyBoundary {
         winding > 0
     }
 
+    /// Generated grid vertices must not compete with the shared boundary
+    /// polyline. This is a sampling clearance, not a domain-membership test:
+    /// constrained triangles in a thin region must still be retained.
+    pub(in crate::tessellation::triangulation) fn include_grid_sample(
+        &self,
+        point: Point2,
+    ) -> bool {
+        let relative = DEFAULT_NUMERICAL_TOLERANCES.mesh_projection_parameter_relative;
+        let Some(u_slack) = native_boundary_slack((self.uv_min.x, self.uv_max.x), relative) else {
+            return false;
+        };
+        let Some(v_slack) = native_boundary_slack((self.uv_min.y, self.uv_max.y), relative) else {
+            return false;
+        };
+        if !self.include(point) {
+            return false;
+        }
+        self.loops
+            .iter()
+            .flat_map(|wire| wire.iter().circular_tuple_windows())
+            .all(|(front, back)| {
+                // Normalize each coordinate by its native-domain clearance.
+                // The nearest point on the segment then has distance > 1 iff
+                // it is safely separated in this anisotropic UV metric.
+                let scaled = |uv: Point2| {
+                    Point2::new((uv.x - point.x) / u_slack, (uv.y - point.y) / v_slack)
+                };
+                let start = scaled(**front) - Point2::new(0.0, 0.0);
+                let end = scaled(**back) - Point2::new(0.0, 0.0);
+                let segment = end - start;
+                let squared = segment.magnitude2();
+                let fraction = if squared > 0.0 {
+                    (-start.dot(segment) / squared).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (start + segment * fraction).magnitude2() > 1.0
+            })
+    }
+
     pub(in crate::tessellation::triangulation) fn isoparametric_curves<S: PreMeshableSurface>(
         &self,
         surface: &S,
