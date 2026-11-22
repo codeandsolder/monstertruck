@@ -79,9 +79,24 @@ fn face_bounds<C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve, S: ShapeOps
             return None;
         }
         for edge in face.edge_iter() {
-            let curve = edge.curve().try_into_homogeneous_bspline_curve()?;
-            for &control in curve.control_points() {
-                push(control)?;
+            let curve = edge.curve();
+            if let Some(net) = curve.try_into_homogeneous_bspline_curve() {
+                for &control in net.control_points() {
+                    push(control)?;
+                }
+            } else {
+                // Composite curves can have structural enclosures without
+                // admitting exact homogeneous conversion. Keep every corner
+                // of the proven box, not sampled guide points.
+                let bounds = curve.certified_spatial_bounds()?;
+                let (low, high) = (bounds.min(), bounds.max());
+                for x in [low.x, high.x] {
+                    for y in [low.y, high.y] {
+                        for z in [low.z, high.z] {
+                            push(Vector4::new(x, y, z, 1.0))?;
+                        }
+                    }
+                }
             }
         }
     }
