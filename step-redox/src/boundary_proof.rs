@@ -280,7 +280,7 @@ pub(crate) fn compare_diagnostics(
 }
 
 #[must_use]
-pub fn analytic_boundary_diagnostic(
+pub(crate) fn analytic_boundary_diagnostic(
     solid_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
