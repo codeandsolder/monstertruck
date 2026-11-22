@@ -456,12 +456,18 @@ fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     ])
 }
 
+struct PartitionEvidence<C, S> {
+    regions: Vec<AltRegion<C, S>>,
+    polygons: Vec<Option<PolygonMesh>>,
+    by_key: HashMap<usize, usize>,
+}
+
 fn partition_evidence<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     regions: &[AltRegion<C, S>],
     mesh_tol: f64,
-) -> (Vec<AltRegion<C, S>>, PolyShell, HashMap<usize, PolygonMesh>) {
+) -> PartitionEvidence<C, S> {
     let mut valid_regions = Vec::new();
-    let mut poly_faces = Vec::new();
+    let mut polygons = Vec::new();
     let mut by_key = HashMap::new();
     for region in regions {
         let Some(face) = region.try_face() else {
@@ -474,11 +480,15 @@ fn partition_evidence<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let Some(polygon) = poly_face.surface() else {
             continue;
         };
-        by_key.insert(region.key(), polygon);
+        by_key.insert(region.key(), polygons.len());
         valid_regions.push(region.clone());
-        poly_faces.push(poly_face.clone());
+        polygons.push(Some(polygon));
     }
-    (valid_regions, Shell::from(poly_faces), by_key)
+    PartitionEvidence {
+        regions: valid_regions,
+        polygons,
+        by_key,
+    }
 }
 
 /// Bounding containment is necessary (but not sufficient) for a Boolean
@@ -616,23 +626,29 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let partition_tolerance = BooleanTolerance::new(tol);
     let partition_geom_tol = partition_tolerance.length;
     let partition_mesh_tol = partition_tolerance.mesh_seed;
-    let (valid0, poly0, candidate0) = partition_evidence(&all0, partition_mesh_tol);
-    let (valid1, poly1, candidate1) = partition_evidence(&all1, partition_mesh_tol);
+    let evidence0 = partition_evidence(&all0, partition_mesh_tol);
+    let evidence1 = partition_evidence(&all1, partition_mesh_tol);
+    let planar0 = loops_store::PlanarMesh::from_polygons(&evidence0.polygons, partition_geom_tol);
+    let planar1 = loops_store::PlanarMesh::from_polygons(&evidence1.polygons, partition_geom_tol);
 
     let [and0_labeled, or0_labeled, unknown0] = analysis.cls0.and_or_unknown();
     let mut and0 = Vec::new();
     let mut or0 = Vec::new();
     for region in and0_labeled.into_iter().chain(or0_labeled).chain(unknown0) {
         for region in positive_region_components(&region, tol) {
-            let coincident = candidate0.get(&region.key()).is_some_and(|candidate| {
-                planar_partition_same_facing(
-                    &region,
-                    candidate,
-                    &valid1,
-                    &poly1,
-                    partition_geom_tol,
-                ) == Some(true)
-            });
+            let coincident = evidence0
+                .by_key
+                .get(&region.key())
+                .and_then(|&index| planar0[index].as_ref())
+                .is_some_and(|candidate| {
+                    planar_partition_same_facing(
+                        &region,
+                        candidate,
+                        &evidence1.regions,
+                        &planar1,
+                        partition_geom_tol,
+                    ) == Some(true)
+                });
             let relation = if coincident {
                 FaceRelation::CoincidentSameFacing
             } else {
@@ -650,15 +666,19 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let mut or1 = Vec::new();
     for region in and1_labeled.into_iter().chain(or1_labeled).chain(unknown1) {
         for region in positive_region_components(&region, tol) {
-            let coincident = candidate1.get(&region.key()).is_some_and(|candidate| {
-                planar_partition_same_facing(
-                    &region,
-                    candidate,
-                    &valid0,
-                    &poly0,
-                    partition_geom_tol,
-                ) == Some(true)
-            });
+            let coincident = evidence1
+                .by_key
+                .get(&region.key())
+                .and_then(|&index| planar1[index].as_ref())
+                .is_some_and(|candidate| {
+                    planar_partition_same_facing(
+                        &region,
+                        candidate,
+                        &evidence0.regions,
+                        &planar0,
+                        partition_geom_tol,
+                    ) == Some(true)
+                });
             let relation = if coincident {
                 FaceRelation::CoincidentSameFacing
             } else {
