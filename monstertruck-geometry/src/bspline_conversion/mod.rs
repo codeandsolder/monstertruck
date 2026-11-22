@@ -725,6 +725,20 @@ where C: TryIntoHomogeneousBsplineCurve
     }
 }
 
+// Curve and surface nets expose the same homogeneous control iterator. Apply
+// the matrix before reversing the net's chart, without dehomogenizing weights.
+macro_rules! pose_homogeneous_net {
+    ($processor:expr, $net:expr) => {{
+        let mut net = $net;
+        net.control_points_mut()
+            .for_each(|point| *point = *$processor.transform() * *point);
+        if !$processor.orientation() {
+            net.invert();
+        }
+        net
+    }};
+}
+
 impl<E> TryIntoHomogeneousBsplineSurface for Processor<E, Matrix4>
 where E: TryIntoHomogeneousBsplineSurface
 {
@@ -735,14 +749,10 @@ where E: TryIntoHomogeneousBsplineSurface
 
     #[inline]
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
-        let mut surface = self.entity().try_into_homogeneous_bspline_surface()?;
-        surface
-            .control_points_mut()
-            .for_each(|point| *point = *self.transform() * *point);
-        if !self.orientation() {
-            surface.invert();
-        }
-        Some(surface)
+        Some(pose_homogeneous_net!(
+            self,
+            self.entity().try_into_homogeneous_bspline_surface()?
+        ))
     }
 
     /// An inverted processor SWAPS the `(u, v)` axes (see the `ParametricSurface`
@@ -762,18 +772,15 @@ where E: TryIntoHomogeneousBsplineSurface
             }
         });
         let HomogeneousSurfaceConversion {
-            mut surface,
+            surface,
             surface_frame_axes,
         } = self
             .entity()
             .try_into_homogeneous_bspline_surface_over(entity_range)?;
-        surface
-            .control_points_mut()
-            .for_each(|point| *point = *self.transform() * *point);
+        let surface = pose_homogeneous_net!(self, surface);
         let surface_frame_axes = if self.orientation() {
             surface_frame_axes
         } else {
-            surface.invert();
             (surface_frame_axes.1, surface_frame_axes.0)
         };
         Some(HomogeneousSurfaceConversion {
@@ -800,14 +807,10 @@ where E: TryIntoHomogeneousBsplineCurve
 
     #[inline]
     fn try_into_homogeneous_bspline_curve(&self) -> Option<BsplineCurve<Vector4>> {
-        let mut curve = self.entity().try_into_homogeneous_bspline_curve()?;
-        curve
-            .control_points_mut()
-            .for_each(|point| *point = *self.transform() * *point);
-        if !self.orientation() {
-            curve.invert();
-        }
-        Some(curve)
+        Some(pose_homogeneous_net!(
+            self,
+            self.entity().try_into_homogeneous_bspline_curve()?
+        ))
     }
 }
 
