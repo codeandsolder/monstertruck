@@ -140,6 +140,44 @@ fn intersection_curve_exposes_its_structural_certified_bound() {
     }
 }
 
+#[test]
+fn transverse_native_planes_bound_the_intersection_without_changing_its_curve_type() {
+    use crate::{ParametricCurve, Plane};
+    let start = Point3::new(2.0, 3.0, 4.0);
+    let end = Point3::new(5.0, 6.0, 4.0);
+    let first = Plane::new(start, end, Point3::new(3.0, 2.0, 4.0));
+    let second = Plane::new(start, end, Point3::new(2.0, 3.0, 5.0));
+    let make = |other, leader| {
+        Curve::Intersection(SurfaceCurve::with_boundaries(
+            Box::new(Surface::Plane(first)),
+            Box::new(Surface::Plane(other)),
+            Box::new(Curve::Line(leader)),
+            None,
+            None,
+        ))
+    };
+    let curve = make(second, Line(start, end));
+    let bounds = curve
+        .certified_spatial_bounds()
+        .expect("transverse affine SSI");
+    for i in 0..=20 {
+        assert!(bounds.contains(curve.evaluate(f64::from(i) / 20.0)));
+    }
+    assert!(matches!(curve, Curve::Intersection(_)));
+    assert!(bounds.diagonal().z < 1e-8);
+    assert!(
+        make(first, Line(start, end))
+            .certified_spatial_bounds()
+            .is_none()
+    );
+    let shift = Vector3::new(0., 0., 0.01);
+    assert!(
+        make(second, Line(start + shift, end + shift))
+            .certified_spatial_bounds()
+            .is_none()
+    );
+}
+
 /// A non-positive weight voids the rational convex-hull property, so the
 /// bound refuses rather than inventing one.
 #[test]

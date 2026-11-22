@@ -4151,10 +4151,8 @@ END-ISO-10303-21;
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
-    #[test]
-    fn native_shallow_relief_is_admitted_by_complete_ir() -> Result<()> {
+    fn assert_source_verified_relief(bytes: &[u8]) -> Result<()> {
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
-        let bytes = include_bytes!("../validation/fixtures/native_relief_box_0b5fc9e7.step");
         let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
         assert_eq!(report.body_count, 1);
         assert_eq!(report.unrecovered_solid_count, 0);
@@ -4167,6 +4165,14 @@ END-ISO-10303-21;
         };
         assert!(kernel_replay_is_single_solid(&kernel, &body.fragment)?);
         Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_shallow_relief_is_admitted_by_complete_ir() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_box_0b5fc9e7.step"
+        ))
     }
 
     // Real high-face-count relief housing, formerly timing out in repeated
@@ -4192,6 +4198,17 @@ END-ISO-10303-21;
             &fragments[0].fragment
         )?);
         Ok(())
+    }
+
+    // The host itself requires intersecting planar Booleans. Their rebuilt
+    // transverse edges must retain certified finite bounds for the next
+    // shallow contact batch.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_on_boolean_host_is_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_boolean_host_22bfe2fc.step"
+        ))
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
