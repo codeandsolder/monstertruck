@@ -4234,6 +4234,14 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn native_relief_mixed_sectional_host_is_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_mixed_65712a81.step"
+        ))
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn native_relief_tapered_hosts_are_source_verified() -> Result<()> {
         for bytes in [
             include_bytes!("../validation/fixtures/native_relief_tapered_4eef029b.step").as_slice(),
