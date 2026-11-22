@@ -15,79 +15,24 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  rebuild:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 60
-    container:
-      # Immutable amd64 builder for OCCT c7f60ff; prebuilt OCCT static libraries.
-      image: ghcr.io/andymai/occt-wasm-builder@sha256:8fd87a3e12ef671b9196d5891b2dfcccd416ed36f55b6f2130ee74edcd2fc89a
-    defaults:
-      run:
-        shell: bash
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: andymai/occt-wasm
-          ref: eb94d1ad3b5f57ad90a671386f4ff804b34c3bd5
-          path: occt-wasm-source
-          persist-credentials: false
-      - name: Apply exact-release binding patch
-        working-directory: occt-wasm-source
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD:occt)" = c7f60ffe85f28c67358d1771454044f0521f2fdd
-          git apply --check ../step-redox/tools/occt-wasm-validator/patches/validation-bindings.patch
-          git apply ../step-redox/tools/occt-wasm-validator/patches/validation-bindings.patch
-          git diff --check
-          rmdir occt
-          ln -s /workspace/occt occt
-          test -d occt/build/include/opencascade
-          ln -s /workspace/3rdparty 3rdparty
-          rustup toolchain install 1.95 --profile minimal
-          rustup run 1.95 rustc --version
+      - name: Resolve the repository compiler
+        run: rustup show active-toolchain
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@532137869abfb0e0b3d6c8f80346e9240ef9cf51 # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@e3c936399ed6a5a497aa4b07bbc3427bf12c7dc4 # main
         with:
-          rust-toolchain: '1.95'
-          repository-path: occt-wasm-source
+          repository-path: step-redox/tools/occt-wasm-validator
           cache-scope: occt-wasm-validation-bindings
-      - name: Regenerate bindings and build actual WASI kernel
-        working-directory: occt-wasm-source
-        run: |
-          set -euo pipefail
-          cargo +1.95 xtask codegen
-          cargo +1.95 xtask build-wasi --release
-      - name: Exercise mandatory kernel integration tests
-        working-directory: occt-wasm-source
-        run: cargo +1.95 test --locked --release -p occt-wasm --test validation_bindings
-      - name: Test the patched crate through Cargo in the STEP validator
-        run: |
-          set -euo pipefail
-          validator=step-redox/tools/occt-wasm-validator
-          cp occt-wasm-source/Cargo.lock "$validator/Cargo.lock"
-          cargo +1.95 test --release --manifest-path "$validator/Cargo.toml" \
-            --target-dir "$PWD/occt-wasm-source/target" \
-            --config "patch.crates-io.occt-wasm.path=\"$PWD/occt-wasm-source/crate\""
-      - name: Package standalone patched crate
-        working-directory: occt-wasm-source
-        run: |
-          set -euo pipefail
-          cargo +1.95 package --locked --allow-dirty --no-verify -p occt-wasm
-          mkdir -p ../occt-wasm-package
-          cp target/package/occt-wasm-7.2.2.crate ../occt-wasm-package/
-          cp LICENSE LICENSE-MIT LICENSE-APACHE ../occt-wasm-package/
-          sha256sum ../step-redox/tools/occt-wasm-validator/patches/validation-bindings.patch
-          cd ../occt-wasm-package
-          sha256sum occt-wasm-7.2.2.crate > SHA256SUMS
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: patched-occt-wasm-crate
-          path: occt-wasm-package/
-          if-no-files-found: error
-          retention-days: 14
+      - name: Exercise the fork's embedded kernel directly
+        run: cargo test --locked --release --manifest-path step-redox/tools/occt-wasm-validator/Cargo.toml
+      - name: Lint the standalone validator
+        run: cargo clippy --locked --release --all-targets --manifest-path step-redox/tools/occt-wasm-validator/Cargo.toml -- -D warnings
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@532137869abfb0e0b3d6c8f80346e9240ef9cf51 # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@e3c936399ed6a5a497aa4b07bbc3427bf12c7dc4 # main

@@ -1,9 +1,10 @@
+mod geometry;
 mod paired_volume;
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use num_traits::ToPrimitive;
-use occt_wasm::{OcctKernel, ShapeHandle};
+use occt_wasm::{OcctKernel, StepImport};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -19,8 +20,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Report independent OCCT geometry metrics and exact triangle hash.
+    /// Report independent OCCT geometry metrics in the native oracle schema.
     Analyze { input: PathBuf },
+    /// Hash the strict world-coordinate tessellation at 1e-9 mm precision.
+    MeshHash { input: PathBuf },
     /// Compare signed face integrals at two quadrature tolerances and four references.
     PairedVolume {
         reference: PathBuf,
@@ -30,11 +33,12 @@ enum Command {
     },
 }
 
-fn load(kernel: &mut OcctKernel, path: &Path) -> Result<ShapeHandle> {
+fn load(kernel: &mut OcctKernel, path: &Path) -> Result<(StepImport, usize)> {
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    kernel
+    let import = kernel
         .import_step_bytes(&bytes)
-        .with_context(|| format!("import {}", path.display()))
+        .with_context(|| format!("import {}", path.display()))?;
+    Ok((import, bytes.len()))
 }
 
 fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<String> {
@@ -74,33 +78,20 @@ fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn analyze(kernel: &mut OcctKernel, path: &Path) -> Result<()> {
-    let shape = load(kernel, path)?;
-    let bbox = kernel.get_bounding_box_loose(shape, true)?;
-    let volume = kernel.get_volume(shape)?;
-    let area = kernel.get_surface_area(shape)?;
-    let faces = kernel.sub_shape_occurrence_count(shape, "face")?;
-    let edges = kernel.sub_shape_occurrence_count(shape, "edge")?;
-    let vertices = kernel.sub_shape_occurrence_count(shape, "vertex")?;
-    let triangles = kernel.tessellate_triangles64(shape, 0.002, 0.2)?;
-    let mesh_hash = strict_mesh_hash(&triangles, 1e-9)?;
-    println!("path={}", path.display());
-    println!(
-        "bbox={:.12},{:.12},{:.12},{:.12},{:.12},{:.12}",
-        bbox.min.x, bbox.min.y, bbox.min.z, bbox.max.x, bbox.max.y, bbox.max.z
-    );
-    println!("volume={volume:.15}\narea={area:.15}");
-    println!("faces={faces} edges={edges} vertices={vertices}");
-    println!("triangles={}\nmesh_hash={mesh_hash}", triangles.len() / 9);
-    Ok(())
-}
-
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     let mut kernel = OcctKernel::new()?;
     match cli.command {
         Command::Analyze { input } => {
-            analyze(&mut kernel, &input)?;
+            let (import, bytes) = load(&mut kernel, &input)?;
+            let report = geometry::analyze(&mut kernel, &input, bytes, import)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::MeshHash { input } => {
+            let (import, _) = load(&mut kernel, &input)?;
+            let triangles = kernel.tessellate_triangles64(import.shape, 0.002, 0.2)?;
+            println!("{}", strict_mesh_hash(&triangles, 1e-9)?);
             Ok(ExitCode::SUCCESS)
         }
         Command::PairedVolume {
@@ -108,9 +99,10 @@ fn main() -> Result<ExitCode> {
             candidate,
             absolute_tolerance,
         } => {
-            let a = load(&mut kernel, &reference)?;
-            let b = load(&mut kernel, &candidate)?;
-            let report = paired_volume::paired_volume(&mut kernel, a, b, absolute_tolerance)?;
+            let (a, _) = load(&mut kernel, &reference)?;
+            let (b, _) = load(&mut kernel, &candidate)?;
+            let report =
+                paired_volume::paired_volume(&mut kernel, a.shape, b.shape, absolute_tolerance)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(if report.within_absolute_tolerance {
                 ExitCode::SUCCESS

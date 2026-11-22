@@ -10,8 +10,8 @@ clap = { version = "4", features = ["derive"] }
 hex = "0.4"
 num-traits = "0.2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-occt-wasm = "=7.2.2"
+serde_json = { version = "1", features = ["float_roundtrip"] }
+occt-wasm = { git = "https://github.com/codeandsolder/occt-wasm-truck.git", rev = "cfea225919cec3465edac39a4ed81e4ffb49485a" }
 sha2 = "0.11"
 
 # Dedicated nightly / external-OCCT toolchain outside production workspace.
