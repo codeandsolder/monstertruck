@@ -213,6 +213,13 @@ where
     T: TryIntoHomogeneousBsplineSurface,
     U: TryIntoHomogeneousBsplineSurface,
 {
+    fn homogeneous_net_covers_domain(&self) -> bool {
+        match self {
+            Self::FirstType(entity) => entity.homogeneous_net_covers_domain(),
+            Self::SecondType(entity) => entity.homogeneous_net_covers_domain(),
+        }
+    }
+
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
         match self {
             Self::FirstType(entity) => entity.try_into_homogeneous_bspline_surface(),
@@ -266,6 +273,13 @@ where
     T: TryIntoHomogeneousBsplineCurve,
     U: TryIntoHomogeneousBsplineCurve,
 {
+    fn homogeneous_net_covers_domain(&self) -> bool {
+        match self {
+            Self::FirstType(entity) => entity.homogeneous_net_covers_domain(),
+            Self::SecondType(entity) => entity.homogeneous_net_covers_domain(),
+        }
+    }
+
     fn try_into_homogeneous_bspline_curve(&self) -> Option<BsplineCurve<Vector4>> {
         match self {
             Self::FirstType(entity) => entity.try_into_homogeneous_bspline_curve(),

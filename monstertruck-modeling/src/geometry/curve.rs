@@ -506,6 +506,15 @@ impl SnapCurveEndpoints for Curve {
 }
 
 impl TryIntoHomogeneousBsplineCurve for Curve {
+    fn homogeneous_net_covers_domain(&self) -> bool {
+        match self {
+            Self::Line(curve) => curve.homogeneous_net_covers_domain(),
+            Self::BsplineCurve(curve) => curve.homogeneous_net_covers_domain(),
+            Self::NurbsCurve(curve) => curve.homogeneous_net_covers_domain(),
+            Self::ParameterCurve(_) | Self::Intersection(_) => false,
+        }
+    }
+
     fn try_into_homogeneous_bspline_curve(&self) -> Option<BsplineCurve<Vector4>> {
         match self {
             Self::Line(curve) => curve.try_into_homogeneous_bspline_curve(),

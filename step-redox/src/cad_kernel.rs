@@ -3155,6 +3155,60 @@ pub mod monstertruck {
         }
 
         #[test]
+        fn bounded_revolution_bosses_use_certified_planar_contact() -> Result<()> {
+            use crate::cad_ir::ProfileLoop;
+            let profile = Profile2d {
+                loops: vec![ProfileLoop {
+                    curves: vec![
+                        Curve2d::Line {
+                            start_mm: [0.0, 0.0],
+                            end_mm: [0.0, -0.2],
+                        },
+                        Curve2d::CircleArc {
+                            center_mm: [0.0, -0.075],
+                            radius_mm: 0.125,
+                            start_angle_rad: -std::f64::consts::FRAC_PI_2,
+                            end_angle_rad: 0.75_f64.atan(),
+                        },
+                        Curve2d::Line {
+                            start_mm: [0.1, 0.0],
+                            end_mm: [0.0, 0.0],
+                        },
+                    ],
+                }],
+            };
+            let cap = revolve_profile(
+                &profile,
+                Axis3 {
+                    origin_mm: [0.; 3],
+                    direction: [0., 1., 0.],
+                },
+                std::f64::consts::TAU,
+            )?;
+            let host = primitive_solid(&Primitive::Box {
+                size_mm: [2., 1., 2.],
+            })?;
+            let first = builder::translated(&cap, Vector3::new(0.5, 0., 0.5));
+            let second = builder::translated(&cap, Vector3::new(1.5, 0., 1.5));
+            let policy = monstertruck_policy(GeometryPolicy::project_standard());
+            let joined = monstertruck_solid::try_planar_contact_many(
+                &host,
+                &[&first, &second],
+                monstertruck_solid::PlanarContactOp::Union,
+                policy,
+            )?
+            .context("bounded analytic revolutions must use planar contact")?;
+            assert_eq!(joined.boundaries().len(), 1);
+            assert!(joined.is_geometric_consistent());
+            let penetrating = builder::translated(&first, Vector3::new(0., 0.01, 0.));
+            assert!(
+                monstertruck_solid::try_planar_contact_union(&host, &penetrating, policy)?
+                    .is_none()
+            );
+            Ok(())
+        }
+
+        #[test]
         fn evaluates_full_profile_revolution() -> Result<()> {
             let mut model = CadModel::new();
             let profile =

@@ -65,9 +65,9 @@ fn face_bounds<C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve, S: ShapeOps
         points.push(p);
         Some(())
     };
-    if surface.supports_exact_patch_domains() {
-        // Unlike an unbounded analytic surface's incidental profile range,
-        // a spline's intrinsic knot domain encloses the entire trimmed face.
+    if surface.homogeneous_net_covers_domain() {
+        // The complete geometric net encloses the entire trimmed face;
+        // its knot chart need not be the native surface chart.
         let net = surface.try_into_homogeneous_bspline_surface()?;
         for row in net.control_points() {
             for &control in row {
