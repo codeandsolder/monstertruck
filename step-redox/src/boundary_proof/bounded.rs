@@ -117,7 +117,7 @@ fn full_circle(circle: brep::CircleSupport) -> Option<NurbsCurve<Vector4>> {
 /// Exact range of distance from every point of a circle to a sphere center.
 /// A nonconcentric circular section is allowed; endpoint samples alone
 /// cannot determine the radial extremum.
-fn circle_on_sphere(circle: brep::CircleSupport, center: [f64; 3], radius: f64) -> bool {
+pub(super) fn circle_on_sphere(circle: brep::CircleSupport, center: [f64; 3], radius: f64) -> bool {
     let delta = sub(circle.center_mm, center);
     let height = dot(delta, circle.normal);
     let radial = norm(sub(delta, mul(circle.normal, height)));

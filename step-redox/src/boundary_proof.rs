@@ -17,7 +17,11 @@ pub(crate) const ANALYTIC_BOUNDARY_PROOF_TOL_MM: f64 = 4.0 * SCALAR_Q_MM;
 mod bounded;
 mod cell_correspondence;
 use cell_correspondence::{CellKind, CellWitnesses};
+mod sphere_chart;
 mod spline_strip;
+pub use sphere_chart::{
+    SphereChartAudit, SphereChartChange, SphereChartManifest, audit_sphere_charts,
+};
 mod strip_sense;
 pub use spline_strip::{SplineCurveKey, SplineStripKey};
 pub use strip_sense::StripFaceSenseRepair;
