@@ -353,7 +353,9 @@ mod tests {
             .as_ref()
             .context("missing provenance")?;
         let source = solid.source;
-        let initial = super::super::replayable_source_treatments(document.as_ref(), source)?;
+        let entities = &document.as_ref().data[source.data_section].entities;
+        let index = crate::step_graph::build_index(entities);
+        let initial = super::super::replayable_source_treatments(entities, &index, source.id);
         let result = peel(&kernel, &document, source, provenance, &initial)?;
         let summary = kernel.inspect_edited_source(&result.edited)?;
         let original = original_face_ids(provenance)?;

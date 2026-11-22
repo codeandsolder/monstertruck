@@ -239,8 +239,13 @@ pub fn compare_analytic_boundaries(
     second_solid_id: u64,
     second_entities: &[EntityInstance],
 ) -> AnalyticBoundaryComparison {
-    let first = analytic_boundary_diagnostic(first_solid_id, first_entities);
-    let second = analytic_boundary_diagnostic(second_solid_id, second_entities);
+    let first =
+        analytic_boundary_diagnostic(first_solid_id, first_entities, &build_index(first_entities));
+    let second = analytic_boundary_diagnostic(
+        second_solid_id,
+        second_entities,
+        &build_index(second_entities),
+    );
     let equivalent = compare_diagnostics(&first, first_entities, &second, second_entities);
     AnalyticBoundaryComparison {
         equivalent,
@@ -278,8 +283,9 @@ pub(crate) fn compare_diagnostics(
 pub fn analytic_boundary_diagnostic(
     solid_id: u64,
     entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
 ) -> AnalyticBoundaryDiagnostic {
-    match analytic_boundary_signature(solid_id, entities) {
+    match analytic_boundary_signature(solid_id, entities, index) {
         Ok(signature) => AnalyticBoundaryDiagnostic {
             solid_id,
             supported: true,
@@ -359,19 +365,14 @@ fn strict_closed_shell_faces(
 fn analytic_boundary_signature(
     solid_id: u64,
     entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
 ) -> Result<AnalyticBoundarySignature, String> {
-    let index = build_index(entities);
-    let face_ids = strict_closed_shell_faces(solid_id, entities, &index)?;
+    let face_ids = strict_closed_shell_faces(solid_id, entities, index)?;
 
-    let graph = collect_boundary_graph(&face_ids, entities, &index)?;
+    let graph = collect_boundary_graph(&face_ids, entities, index)?;
     let (mut union_find, component_support) = merge_support_components(&graph)?;
-    let groups = group_physical_boundaries(
-        &graph,
-        &mut union_find,
-        &component_support,
-        entities,
-        &index,
-    )?;
+    let groups =
+        group_physical_boundaries(&graph, &mut union_find, &component_support, entities, index)?;
 
     let mut chains = groups.splines;
     for (supports, segments) in groups.linear {
@@ -1978,7 +1979,11 @@ mod tests {
             let [section] = exchange.data.as_slice() else {
                 anyhow::bail!("{name}: expected one DATA section");
             };
-            let diagnostic = analytic_boundary_diagnostic(15, &section.entities);
+            let diagnostic = analytic_boundary_diagnostic(
+                15,
+                &section.entities,
+                &build_index(&section.entities),
+            );
             assert!(diagnostic.supported, "{name}: {diagnostic:?}");
             assert!(
                 diagnostic.signature.as_ref().is_some_and(|sig| {
