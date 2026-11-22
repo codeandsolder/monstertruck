@@ -110,6 +110,100 @@ fn well_conditioned(spline: &BSplineSupport) -> Option<()> {
     (error_mm.is_finite() && error_mm <= POINT_Q_MM / 4.).then_some(())
 }
 
+/// A finite union of planes and elliptic cylinders cannot contain an
+/// open nonplanar polynomial surface patch. Substituting its polynomial
+/// parameterization into a carrier's implicit equation must give the
+/// zero polynomial on an open set. For an elliptic cylinder, the sum of
+/// squares of two transverse coordinate polynomials would be constant,
+/// forcing both to be constant and the patch to have rank at most one.
+/// For a plane, every Bernstein control point must be coplanar.
+fn nonplanar_polynomial_profiles(profiles: &[BSplineSupport; 2]) -> bool {
+    if profiles.iter().any(|profile| {
+        profile.weights.as_ref().is_some_and(|weights| {
+            weights.first().is_none_or(|first| {
+                !first.is_finite()
+                    || *first <= 0.
+                    || weights.iter().any(|w| w.to_bits() != first.to_bits())
+            })
+        })
+    }) {
+        return false;
+    }
+    // Constant weights on each row also permit a common rational linear
+    // reparameterization in the sweep direction; the geometric patch
+    // remains the polynomial homotopy of the two profile rows.
+    let Some(a) = curve_evidence(&profiles[0]) else {
+        return false;
+    };
+    let Some(b) = curve_evidence(&profiles[1]) else {
+        return false;
+    };
+    if a.forward != b.forward || a.controls.len() != b.controls.len() {
+        return false;
+    }
+    a.controls.iter().zip(&b.controls).any(|(first, second)| {
+        let points = first
+            .iter()
+            .chain(second)
+            .map(|p| [p.x / p.w, p.y / p.w, p.z / p.w])
+            .collect::<Vec<_>>();
+        nonplanar_control_net(&points)
+    })
+}
+
+fn nonplanar_control_net(points: &[[f64; 3]]) -> bool {
+    let Some(&origin) = points.first() else {
+        return false;
+    };
+    let vectors = points.iter().map(|&p| sub(p, origin)).collect::<Vec<_>>();
+    let norm = crate::math3::norm;
+    let cross = crate::math3::cross;
+    let Some(&a) = vectors
+        .iter()
+        .max_by(|&&a, &&b| norm(a).total_cmp(&norm(b)))
+    else {
+        return false;
+    };
+    let Some(&b) = vectors
+        .iter()
+        .max_by(|&&b, &&c| norm(cross(a, b)).total_cmp(&norm(cross(a, c))))
+    else {
+        return false;
+    };
+    let normal = cross(a, b);
+    // Reserve the existing source proof length for each control point.
+    // Differences can have twice that error. Bound all terms of the
+    // perturbed scalar triple product, including arithmetic roundoff.
+    let e = 2. * TOL;
+    let (na, nb) = (norm(a), norm(b));
+    vectors.iter().any(|&c| {
+        let nc = norm(c);
+        let bound = e * (na * nb + na * nc + nb * nc)
+            + e * e * (na + nb + nc)
+            + e.powi(3)
+            + 32. * f64::EPSILON * na * nb * nc;
+        let determinant = dot(normal, c).abs();
+        determinant.is_finite() && determinant > bound
+    })
+}
+
+/// Require a complete certified strip, not just a nonplanar untrimmed
+/// carrier which could have been trimmed to one of its planar spans.
+pub(super) fn has_nonplanar_polynomial_patch(
+    face_id: u64,
+    surface_id: u64,
+    forward: bool,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> bool {
+    crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index).is_some_and(
+        |(profiles, _)| {
+            nonplanar_polynomial_profiles(&profiles)
+                && oriented_key(face_id, surface_id, forward, entities, index).is_some()
+        },
+    )
+}
+
 /// Canonicalize the whole curve, allowing affine reversal and different
 /// knot interval lengths. Each positive span retains every homogeneous
 /// Bernstein coefficient, with its own common weight scale removed.
@@ -587,6 +681,39 @@ mod tests {
             knots: vec![0., 0., 0., 0.5, 1., 1., 1.],
             weights: None,
         }
+    }
+
+    #[test]
+    fn polynomial_exclusion_requires_a_single_nonplanar_full_span() {
+        let mut profiles = [profile(0.), profile(0.01)];
+        assert!(nonplanar_polynomial_profiles(&profiles));
+        // Different common weights in the two sweep rows only rechart v.
+        profiles[0].weights = Some(vec![1.; 4]);
+        profiles[1].weights = Some(vec![2.; 4]);
+        assert!(nonplanar_polynomial_profiles(&profiles));
+        // A rational arc is not ruled out by polynomial algebra.
+        profiles[0].weights = Some(vec![1., 0.8, 0.8, 1.]);
+        profiles[1].weights = Some(vec![2., 1.6, 1.6, 2.]);
+        assert!(!nonplanar_polynomial_profiles(&profiles));
+
+        // A bent piecewise-linear profile has a nonplanar complete
+        // control net but each individual swept span is a plane.
+        let bent = |z| BSplineSupport {
+            degree: 1,
+            control_points_mm: vec![[0., 0., z], [1., 1., z], [2., 0., z]],
+            knots: vec![0., 0., 0.5, 1., 1.],
+            weights: None,
+        };
+        assert!(!nonplanar_polynomial_profiles(&[bent(0.), bent(1.)]));
+
+        // A degree-elevated line remains planar.
+        let mut profiles = [profile(0.), profile(0.01)];
+        for p in &mut profiles {
+            for point in &mut p.control_points_mm {
+                point[1] = 0.;
+            }
+        }
+        assert!(!nonplanar_polynomial_profiles(&profiles));
     }
 
     #[test]

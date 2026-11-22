@@ -1389,6 +1389,27 @@ fn canonical_boundary_direction(raw: [f64; 3]) -> Option<([f64; 3], [i64; 3])> {
     }
 }
 
+/// A complete nonplanar polynomial patch cannot be obtained by trimming
+/// and combining only planes and elliptic cylinders. This is negative
+/// evidence for analytic-only material candidates, never admission proof.
+pub(crate) fn requires_nonplanar_polynomial_carrier(
+    face_ids: &[u64],
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> bool {
+    face_ids.iter().any(|&face_id| {
+        let Some(surface_id) = brep::face_surface(face_id, entities, index) else {
+            return false;
+        };
+        let forward = match brep::face_sense(face_id, entities, index).as_deref() {
+            Some("T") => true,
+            Some("F") => false,
+            _ => return false,
+        };
+        spline_strip::has_nonplanar_polynomial_patch(face_id, surface_id, forward, entities, index)
+    })
+}
+
 fn oriented_support_key(
     face_id: u64,
     entities: &[EntityInstance],
