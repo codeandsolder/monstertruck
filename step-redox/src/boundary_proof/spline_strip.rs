@@ -34,7 +34,7 @@ pub struct SplineCurveKey {
 }
 
 impl SplineCurveKey {
-    fn ends(&self) -> Option<[PointKey; 2]> {
+    pub(super) fn ends(&self) -> Option<[PointKey; 2]> {
         Some([
             *self.spans.first()?.points_mm.first()?,
             *self.spans.last()?.points_mm.last()?,

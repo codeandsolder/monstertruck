@@ -31,7 +31,7 @@ fn certified_homogeneous_curve_box(curve: &NurbsCurve<Vector4>) -> Option<Boundi
     any.then_some(bounds)
 }
 
-fn certified_alt_curve_box<C, S>(
+pub(super) fn certified_alt_curve_box<C, S>(
     curve: &AltCurve<C, S>,
     tolerances: BooleanTolerance,
 ) -> Option<BoundingBox<Point3>>
@@ -46,7 +46,11 @@ where
     }
 }
 
-fn point_inside_padded_box(bounds: BoundingBox<Point3>, point: Point3, pad: f64) -> bool {
+pub(super) fn point_inside_padded_box(
+    bounds: BoundingBox<Point3>,
+    point: Point3,
+    pad: f64,
+) -> bool {
     let min = bounds.min();
     let max = bounds.max();
     (0..3).all(|axis| point[axis] >= min[axis] - pad && point[axis] <= max[axis] + pad)

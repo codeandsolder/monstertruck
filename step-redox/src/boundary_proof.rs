@@ -142,6 +142,24 @@ pub struct AnalyticBoundarySignature {
     pub chains: Vec<BoundaryChainKey>,
 }
 
+impl AnalyticBoundarySignature {
+    /// Endpoints of physical boundary chains, already proven on the source.
+    pub(crate) fn boundary_vertices(&self) -> Vec<[f64; 3]> {
+        self.chains
+            .iter()
+            .filter_map(|chain| match chain {
+                BoundaryChainKey::Open { endpoints_mm, .. } => Some(*endpoints_mm),
+                BoundaryChainKey::Circular { endpoints_mm, .. } => *endpoints_mm,
+                BoundaryChainKey::Spline { curve, .. } => curve.ends(),
+            })
+            .flatten()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|p| dequantize_vector(p, POINT_Q_MM))
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AnalyticBoundaryDiagnostic {
     pub solid_id: u64,

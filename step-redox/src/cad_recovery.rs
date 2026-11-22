@@ -15,6 +15,7 @@ use step_p21::ast::EntityInstance;
 mod cap_assembly;
 mod cap_cover;
 mod multi_axis_sheet;
+mod proposal_extent;
 pub(crate) mod sectional;
 mod solid;
 pub use solid::{
@@ -410,6 +411,7 @@ pub(crate) struct SourceRecovery<'a, K> {
     index: &'a HashMap<u64, usize>,
     kernel: &'a K,
     boundary: crate::boundary_proof::AnalyticBoundaryDiagnostic,
+    boundary_vertices: Vec<[f64; 3]>,
 }
 
 impl<'a, K: CadKernel> SourceRecovery<'a, K> {
@@ -421,12 +423,14 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
     ) -> Option<Self> {
         let boundary =
             crate::boundary_proof::analytic_boundary_diagnostic(solid_id, entities, index);
+        let boundary_vertices = boundary.signature.as_ref()?.boundary_vertices();
         boundary.supported.then_some(Self {
             solid_id,
             entities,
             index,
             kernel,
             boundary,
+            boundary_vertices,
         })
     }
 
@@ -441,6 +445,12 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
         if let Some(limit) = ceiling
             && model.complexity_score(root)? >= limit
         {
+            return Ok(false);
+        }
+        // A deliberately loose rejection margin, not an admission tolerance.
+        // The exact source signature is still mandatory for every survivor.
+        let pad = crate::cad_kernel::GeometryPolicy::PROJECT_STANDARD_TOLERANCE_MM;
+        if !proposal_extent::covers_witnesses(model, root, &self.boundary_vertices, pad) {
             return Ok(false);
         }
         let evaluated = self.kernel.evaluate(model, root)?;
@@ -1189,12 +1199,19 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("valid source boundary not certified"))?;
         let mut model = CadModel::new();
         let root = model.add_node(CadNode::Primitive(crate::cad_ir::Primitive::Box {
-            size_mm: [1.0; 3],
+            size_mm: [2.0, 1.0, 1.0],
         }));
         model.add_root(root)?;
         let cost = model.complexity_score(root)?;
         assert!(!source.proves(&model, root, Some(cost))?);
         assert!(!source.proves(&model, root, Some(0))?);
+        assert_eq!(kernel.0.get(), 0);
+        let mut undersized = CadModel::new();
+        let short = undersized.add_node(CadNode::Primitive(crate::cad_ir::Primitive::Box {
+            size_mm: [1.0; 3],
+        }));
+        undersized.add_root(short)?;
+        assert!(!source.proves(&undersized, short, None)?);
         assert_eq!(kernel.0.get(), 0);
         assert!(source.proves(&model, root, Some(cost + 1)).is_err());
         assert!(source.proves(&model, root, None).is_err());
