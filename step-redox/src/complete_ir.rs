@@ -35,6 +35,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Exchange};
 
+mod native_peels;
 mod treatment_layers;
 
 pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
@@ -779,51 +780,16 @@ fn recover_kernel_boundary_feature_fragment<
     let mut replay = Vec::<RecoveredBoundaryFeatureFamily>::new();
 
     for pass in 0..MAX_LOCAL_REDUCTION_ROUNDS {
-        let targets = LocalRecoveryTargets::from_solids(
-            &BTreeSet::from([source.id]),
-            &projected_entities,
-            index,
-        )?;
-        if targets.is_empty() {
+        let Some(native_pass) =
+            prepare_native_boundary_pass(source, &projected_entities, index, provenance, pass)?
+        else {
             break;
-        }
-
-        let shells = targets.shell_ids();
-        let report = crate::planar_features::diagnose_boundary_features_for_shells_with_index(
-            &projected_entities,
-            index,
-            &shells,
-        );
-        let selected = (0..report.families.len())
-            .filter(|&i| {
-                targets
-                    .solid_for_shell(report.families[i].shell_id)
-                    .is_some()
-            })
-            .collect::<Vec<_>>();
-        if selected.is_empty() {
-            break;
-        }
-        let prepared = prepare_boundary_feature_reduction(
-            &projected_entities,
-            index,
-            &targets,
-            &shells,
-            &report,
-            &selected,
-            pass,
-        )?;
-        if prepared.family_indices.is_empty() {
-            break;
-        }
-        let (patch, plan) = plan_source_boundary_feature_peel_from_entities(
-            source,
-            &projected_entities,
-            index,
-            &report,
-            &prepared.family_indices,
-            provenance,
-        )?;
+        };
+        let NativeBoundaryPass {
+            patch,
+            plan,
+            families,
+        } = native_pass;
         // The native geometry transaction commits first. Then update only
         // shell membership and FACE_BOUND references in the disposable source
         // projection. Its preflight is atomic, and we never clone/reimport a
@@ -853,10 +819,10 @@ fn recover_kernel_boundary_feature_fragment<
 
         // Advance semantic replay only after the authoritative native
         // transaction has passed the source-identity consistency check.
-        for (_, LocalReductionStep::BoundaryFeature(mut feature)) in prepared.steps {
+        replay.extend(families.into_iter().map(|mut feature| {
             feature.original_source_ids = pass == 0;
-            replay.push(feature);
-        }
+            feature
+        }));
         if pass + 1 == MAX_LOCAL_REDUCTION_ROUNDS {
             bail!("kernel boundary-feature peeling did not reach a fixed point");
         }
@@ -864,7 +830,64 @@ fn recover_kernel_boundary_feature_fragment<
     let Some(edited) = edited else {
         return Ok(None);
     };
-    finish_native_boundary_feature_replay(kernel, source, edited, provenance, &replay, proof)
+    finish_native_boundary_feature_replay(kernel, source, edited, provenance, replay, proof)
+}
+
+struct NativeBoundaryPass {
+    patch: crate::kernel_topology::KernelTopologyPatch,
+    plan: BoundaryFeaturePeelPlan,
+    families: Vec<RecoveredBoundaryFeatureFamily>,
+}
+
+fn prepare_native_boundary_pass(
+    source: SourceEntity,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    provenance: &KernelTopologyProvenance,
+    pass_index: usize,
+) -> Result<Option<NativeBoundaryPass>> {
+    let targets = LocalRecoveryTargets::from_solids(&BTreeSet::from([source.id]), entities, index)?;
+    if targets.is_empty() {
+        return Ok(None);
+    }
+    let shells = targets.shell_ids();
+    let report = crate::planar_features::diagnose_boundary_features_for_shells_with_index(
+        entities, index, &shells,
+    );
+    let selected = (0..report.families.len())
+        .filter(|&i| {
+            targets
+                .solid_for_shell(report.families[i].shell_id)
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Ok(None);
+    }
+    let prepared = prepare_boundary_feature_reduction(
+        entities, index, &targets, &shells, &report, &selected, pass_index,
+    )?;
+    if prepared.family_indices.is_empty() {
+        return Ok(None);
+    }
+    let (patch, plan) = plan_source_boundary_feature_peel_from_entities(
+        source,
+        entities,
+        index,
+        &report,
+        &prepared.family_indices,
+        provenance,
+    )?;
+    let families = prepared
+        .steps
+        .into_iter()
+        .map(|(_, LocalReductionStep::BoundaryFeature(feature))| feature)
+        .collect();
+    Ok(Some(NativeBoundaryPass {
+        patch,
+        plan,
+        families,
+    }))
 }
 
 /// Ensure projected shell membership exactly matches the retained native
@@ -940,14 +963,22 @@ fn finish_native_boundary_feature_replay<
     source: SourceEntity,
     mut edited: K::EditedSource,
     provenance: &KernelTopologyProvenance,
-    replay: &[RecoveredBoundaryFeatureFamily],
+    replay: Vec<RecoveredBoundaryFeatureFamily>,
     proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
-    let Some(host) = recognize_boundary_feature_host(kernel, &mut edited, source, provenance)?
+    let mut journal = native_peels::Journal::default();
+    journal.boundary(replay);
+    let Some(fragment) = journal.finish(
+        kernel,
+        &mut edited,
+        source,
+        provenance,
+        native_peels::NextPeel::Treatment,
+        None,
+    )?
     else {
         return Ok(None);
     };
-    let fragment = compose_boundary_feature_fragment(source.id, &host, replay)?;
     let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
     if !kernel.summarize(&evaluated).is_single_solid() {
         return Ok(None);
@@ -965,44 +996,6 @@ fn finish_native_boundary_feature_replay<
     } else {
         KernelRecoveryCandidate::structural(fragment)
     }))
-}
-
-/// A boundary feature can hide a more elementary treated host. Continue
-/// on the same native topology when direct recognition cannot consume it;
-/// the treatment replay must precede reapplication of the outer features.
-fn recognize_boundary_feature_host<K: CadKernel + SourceTopologyEditor>(
-    kernel: &K,
-    edited: &mut K::EditedSource,
-    source: SourceEntity,
-    provenance: &KernelTopologyProvenance,
-) -> Result<Option<CadFragment>> {
-    let recognize = |edited: &K::EditedSource| {
-        recognize_edited_host_with_fallback(kernel, edited, || {
-            let snapshot = kernel.edited_source_to_step(edited)?;
-            let document = kernel.resolve_source_exchange(
-                monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
-            )?;
-            recognize_single_healed_host(document.as_ref(), kernel)
-        })
-    };
-    if let Some(mut host) = recognize(edited)? {
-        host.model.provenance.clear();
-        return Ok(Some(host));
-    }
-    let (layers, stop) =
-        treatment_layers::peel_native(kernel, edited, source.data_section, provenance)?;
-    if layers.is_empty() {
-        return Ok(None);
-    }
-    kernel.normalize_edited_source(edited)?;
-    let Some(mut host) = recognize(edited)? else {
-        if let Some(reason) = stop {
-            bail!("inverse treatment fixed point after boundary-feature peel: {reason}");
-        }
-        return Ok(None);
-    };
-    host.model.provenance.clear();
-    treatment_layers::replay(host, source.id, layers).map(Some)
 }
 
 fn recover_kernel_topology_normalized_fragment<
@@ -1052,41 +1045,40 @@ fn recover_kernel_topology_normalized_fragment<
     // that the parser-only path did not recognize (e.g. an exact U-directed
     // rational spline extrusion). Do not needlessly serialize that source or
     // mislabel direct recovery as a topology-normalization operation.
-    let native = recognize_native_edited_host(kernel, &edited)?;
-    let Some(mut host) = (if unchanged {
-        native
-    } else {
-        native.map_or_else(
-            || {
-                let snapshot = kernel.edited_source_to_step(&edited)?;
-                let final_document = kernel.resolve_source_exchange(
-                    monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?
-                        .exchange,
-                )?;
-                recognize_single_healed_host(final_document.as_ref(), kernel)
-            },
-            |fragment| Ok(Some(fragment)),
-        )?
-    }) else {
-        if let Some(reason) = stop {
-            bail!("inverse treatment fixed point: {reason}");
-        }
-        return Ok(None);
-    };
-    // Synthetic edited-native identifiers are never original STEP provenance.
-    host.model.provenance.clear();
     if unchanged {
+        let Some(mut host) = recognize_native_edited_host(kernel, &edited)? else {
+            if let Some(reason) = stop {
+                bail!("inverse treatment fixed point: {reason}");
+            }
+            return Ok(None);
+        };
+        host.model.provenance.clear();
         return kernel_replay_is_single_solid(kernel, &host)
             .map(|accepted| accepted.then(|| KernelRecoveryCandidate::structural(host)));
     }
-
-    if layers.is_empty() {
-        host.source = CadFragmentSource::SameDomainNormalized {
+    let mut journal = native_peels::Journal::default();
+    journal.treatment(layers);
+    let Some(mut fragment) = journal.finish(
+        kernel,
+        &mut edited,
+        source,
+        &provenance,
+        native_peels::NextPeel::Boundary,
+        stop,
+    )?
+    else {
+        return Ok(None);
+    };
+    if !matches!(
+        fragment.source,
+        CadFragmentSource::EdgeTreatmentComposite { .. }
+            | CadFragmentSource::BoundaryFeatureComposite { .. }
+    ) {
+        fragment.source = CadFragmentSource::SameDomainNormalized {
             solid_id: source.id,
         };
-        return Ok(Some(KernelRecoveryCandidate::structural(host)));
+        return Ok(Some(KernelRecoveryCandidate::structural(fragment)));
     }
-    let fragment = treatment_layers::replay(host, source.id, layers)?;
     let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
     if !kernel.summarize(&evaluated).is_single_solid() {
         return Ok(None);
@@ -4662,6 +4654,13 @@ END-ISO-10303-21;
             edited: &Self::EditedSource,
         ) -> Result<crate::kernel_topology::KernelEditedSourceEvidence> {
             self.0.inspect_edited_source(edited)
+        }
+
+        fn edited_source_step_projection(
+            &self,
+            _: &Self::EditedSource,
+        ) -> Result<crate::kernel_topology::KernelEditedSourceProjection> {
+            bail!("native feature peeling must not export an intermediate STEP projection")
         }
 
         fn edited_source_to_step(&self, _: &Self::EditedSource) -> Result<String> {

@@ -1342,7 +1342,10 @@ fn grouped_boundary_features_with_index(
         for (host_face, frame, bounds) in &hosts {
             let host_set = HashSet::from([*host_face]);
             let frames = HashMap::from([(*host_face, frame.clone())]);
-            let lookups = HashMap::from([(*host_face, host_bound_lookup(bounds, entities, index))]);
+            let lookups = HashMap::from([(
+                *host_face,
+                host_bound_lookup(*host_face, bounds, entities, index),
+            )]);
             for component in topology.components_without_hosts(&host_set) {
                 let Some(candidate) = boundary_feature_candidate(
                     &context, component, &host_set, &frames, &lookups, &topology, entities, index,
@@ -1367,7 +1370,7 @@ fn grouped_boundary_features_with_index(
                 .collect::<HashMap<_, _>>();
             let lookups = hosts
                 .iter()
-                .map(|(face, _, bounds)| (*face, host_bound_lookup(bounds, entities, index)))
+                .map(|(face, _, bounds)| (*face, host_bound_lookup(*face, bounds, entities, index)))
                 .collect::<HashMap<_, _>>();
 
             for component in topology.components_without_hosts(&host_set) {
@@ -1629,7 +1632,7 @@ pub fn diagnose_planar_features(entities: &[EntityInstance]) -> PlanarFeatureDia
             let Some(host_bounds) = ref_list_param(host_face, 1, entities, &index) else {
                 continue;
             };
-            let bound_lookup = host_bound_lookup(&host_bounds, entities, &index);
+            let bound_lookup = host_bound_lookup(host_face, &host_bounds, entities, &index);
             let host_set = HashSet::from([host_face]);
             let components = topology.components_without_hosts(&host_set);
             let mut host = PlanarHostDiagnostic {
@@ -1728,9 +1731,12 @@ fn collect_shell_contexts(
         let Some(record) = simple_record(entity) else {
             continue;
         };
-        if record.name != "ADVANCED_BREP_SHAPE_REPRESENTATION"
-            && record.name != "MANIFOLD_SURFACE_SHAPE_REPRESENTATION"
-        {
+        if !matches!(
+            record.name.as_str(),
+            "SHAPE_REPRESENTATION"
+                | "ADVANCED_BREP_SHAPE_REPRESENTATION"
+                | "MANIFOLD_SURFACE_SHAPE_REPRESENTATION"
+        ) {
             continue;
         }
         let representation_id = entity_id(entity);
@@ -1797,12 +1803,41 @@ fn is_closed_shell(
 }
 
 fn host_bound_lookup(
+    host_face: u64,
     bounds: &[u64],
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> HashMap<Vec<u64>, Vec<(u64, u64, String)>> {
     let mut out = HashMap::<Vec<u64>, Vec<(u64, u64, String)>>::new();
+    if bounds.len() < 2 {
+        return out;
+    }
+    let explicit = bounds
+        .iter()
+        .copied()
+        .filter(|bound| {
+            index
+                .get(bound)
+                .and_then(|idx| simple_record(&entities[*idx]))
+                .is_some_and(|record| record.name == "FACE_OUTER_BOUND")
+        })
+        .collect::<Vec<_>>();
+    let outer = match explicit.as_slice() {
+        [outer] => *outer,
+        [] => {
+            let Some(outer) =
+                crate::solid_extrusions::unlabelled_planar_outer_bound(host_face, entities, index)
+            else {
+                return out;
+            };
+            outer
+        }
+        _ => return out,
+    };
     for &bound in bounds {
+        if bound == outer {
+            continue;
+        }
         let Some(record) = index
             .get(&bound)
             .and_then(|idx| simple_record(&entities[*idx]))
@@ -2176,7 +2211,7 @@ mod tests {
         assert_eq!(frame.outward, [0.0, 0.0, 1.0]);
         let bounds = ref_list_param(host_face, 1, entities, &index)
             .ok_or_else(|| anyhow::anyhow!("missing boss host bounds"))?;
-        let lookup = host_bound_lookup(&bounds, entities, &index);
+        let lookup = host_bound_lookup(host_face, &bounds, entities, &index);
         let hosts = HashSet::from([host_face]);
         let components = topology.components_without_hosts(&hosts);
         assert_eq!(components.len(), 2);
@@ -2210,6 +2245,52 @@ mod tests {
             boss_candidates += usize::from(candidate.is_some());
         }
         assert_eq!(boss_candidates, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn generic_bounds_preserve_outer_wire_independent_of_order() -> Result<()> {
+        let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
+        let mut exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+        let entities = &mut exchange.data[0].entities;
+        let index = build_index(entities);
+        let host_face = 53;
+        let bounds = ref_list_param(host_face, 1, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing boss host bounds"))?;
+        let expected = host_bound_lookup(host_face, &bounds, entities, &index);
+        assert_eq!(expected.len(), 1);
+        for entity in entities.iter_mut() {
+            if let Some(record) = simple_record_mut(entity)
+                && record.name == "FACE_OUTER_BOUND"
+            {
+                record.name = "FACE_BOUND".to_string();
+            }
+        }
+        let face = simple_record_mut(&mut entities[index[&host_face]])
+            .ok_or_else(|| anyhow::anyhow!("missing host face record"))?;
+        let Parameter::List(params) = &mut face.parameter else {
+            bail!("missing face parameters");
+        };
+        let Some(Parameter::List(bound_list)) = params.get_mut(1) else {
+            bail!("missing face bound list");
+        };
+        bound_list.reverse();
+        let reordered = ref_list_param(host_face, 1, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing reordered host bounds"))?;
+        assert_eq!(
+            host_bound_lookup(host_face, &reordered, entities, &index),
+            expected
+        );
+        // Every one-wire face is an outer boundary, despite the generic tag.
+        for entity in entities.iter() {
+            let face_id = entity_id(entity);
+            if let Some(bounds) = ref_list_param(face_id, 1, entities, &index)
+                && simple_record(entity).is_some_and(|record| record.name == "ADVANCED_FACE")
+                && bounds.len() == 1
+            {
+                assert!(host_bound_lookup(face_id, &bounds, entities, &index).is_empty());
+            }
+        }
         Ok(())
     }
 

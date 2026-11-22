@@ -1702,6 +1702,50 @@ fn cap_loop_roles(face: &FaceInfo, z_axis: [f64; 3]) -> Option<Vec<bool>> {
     convex_polygon_outer_roles(&loops)
 }
 
+/// Recover the outer bound of an unlabelled planar face without assuming
+/// that STEP bound-list order conveys topology.
+pub(crate) fn unlabelled_planar_outer_bound(
+    face_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<u64> {
+    let face = face_info(face_id, entities, index)?;
+    let SurfaceSupport::Plane(plane) = face.surface else {
+        return None;
+    };
+    if !face_lies_on_plane(&face, plane)
+        || face
+            .loops
+            .iter()
+            .any(|loop_| !raw_loop_is_continuous(&loop_.edges))
+    {
+        return None;
+    }
+    let outward = mul(plane.normal, if face.surface_forward { 1.0 } else { -1.0 });
+    let curves = projected_cap_loops(&face, outward)?;
+    let roles = convex_polygon_outer_roles(&curves).or_else(|| {
+        // On an oriented planar face, the outer wire has positive area
+        // relative to the face normal and every hole has negative area.
+        // Do not use the partial area integral for spline curves.
+        let roles = curves
+            .iter()
+            .zip(&face.loops)
+            .map(|(curves, wire)| {
+                if curves.iter().any(RecoveredProfileCurve::is_spline) {
+                    return None;
+                }
+                let area = signed_area_curves(curves) * if wire.orientation { 1.0 } else { -1.0 };
+                (area.is_finite() && area.abs() > GEOM_TOL_MM * GEOM_TOL_MM).then_some(area > 0.0)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (roles.iter().filter(|&&outer| outer).count() == 1).then_some(roles)
+    })?;
+    face.loops
+        .iter()
+        .zip(roles)
+        .find_map(|(wire, outer)| outer.then_some(wire.bound_id))
+}
+
 fn projected_cap_loops(
     face: &FaceInfo,
     z_axis: [f64; 3],
