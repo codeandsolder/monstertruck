@@ -153,7 +153,9 @@ pub fn certify_circular_arc_coverage(
     angular_coverage(rational, frame)
 }
 
-/// Prove continuous, single-turn angular coverage on a cylinder. The frame
+/// Prove continuous, single-turn angular coverage on a cylinder.
+///
+/// The frame
 /// defines the transverse circle and the cylinder axis through its center.
 /// Unlike the circular certificate this makes no claim about axial height:
 /// an oblique planar ellipse additionally requires whole-curve plane incidence.
