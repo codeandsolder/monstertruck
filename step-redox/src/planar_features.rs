@@ -654,14 +654,7 @@ fn open_chain_run(
     }
 }
 
-/// Materialize one closed canonical tool solid per recovered boundary-feature
-/// family without changing the source solid.
-///
-/// This is an analysis aid for recursive decomposition. The generated tool
-/// solid reuses the canonical feature's source faces and closes each planar
-/// carrier interface with a synthetic cap. Additive tools need the interface
-/// cap normal opposite the source host's outward normal; subtractive tools
-/// need it aligned with the host outward normal.
+/// Fold coplanar islands into the synthetic interface cap as holes.
 fn coplanar_feature_cap_holes(
     member: &BoundaryFeatureInstanceEvidence,
     host_frame: &PlaneFrame,
@@ -699,6 +692,62 @@ fn coplanar_feature_cap_holes(
     Some(out)
 }
 
+/// Reverse a tool's retained source face without modifying the source shell.
+/// STEP bound traversal is relative to the face normal, so both flags invert.
+/// The carrier, edge loops, and exact trim geometry remain shared.
+fn reversed_tool_face(
+    face: u64,
+    entities: &mut Vec<EntityInstance>,
+    index: &HashMap<u64, usize>,
+    next_id: &mut u64,
+) -> Result<u64> {
+    let record = index
+        .get(&face)
+        .and_then(|&position| entities.get(position))
+        .filter(|entity| entity_id(entity) == face)
+        .and_then(simple_record)
+        .ok_or_else(|| anyhow::anyhow!("invalid tool face #{face}"))?
+        .clone();
+    let Parameter::List(mut params) = record.parameter else {
+        bail!("malformed tool face #{face}");
+    };
+    let Some(Parameter::List(bounds)) = params.get_mut(1) else {
+        bail!("missing tool face bounds #{face}");
+    };
+    for bound_ref in bounds {
+        let bound = entity_ref_value(bound_ref)
+            .ok_or_else(|| anyhow::anyhow!("invalid bound reference on tool face #{face}"))?;
+        let record = index
+            .get(&bound)
+            .and_then(|&position| entities.get(position))
+            .filter(|entity| entity_id(entity) == bound)
+            .and_then(simple_record)
+            .ok_or_else(|| anyhow::anyhow!("invalid tool bound #{bound}"))?
+            .clone();
+        let Parameter::List(mut bound_params) = record.parameter else {
+            bail!("malformed tool bound #{bound}");
+        };
+        reverse_orientation(&mut bound_params, 2)?;
+        *bound_ref = entity_ref(push_simple(entities, next_id, &record.name, bound_params));
+    }
+    reverse_orientation(&mut params, 3)?;
+    Ok(push_simple(entities, next_id, &record.name, params))
+}
+
+fn reverse_orientation(params: &mut [Parameter], position: usize) -> Result<()> {
+    let Some(Parameter::Enumeration(value)) = params.get_mut(position) else {
+        bail!("missing STEP orientation");
+    };
+    if !matches!(value.as_str(), "T" | "F") {
+        bail!("invalid STEP orientation {value}");
+    }
+    *value = toggle_tf(value);
+    Ok(())
+}
+
+/// Materialize closed canonical tool solids without modifying the source
+/// shell. Additive caps face opposite the host; subtractive caps face with
+/// the host and the retained pocket faces are reversed into cutter walls.
 pub fn materialize_boundary_feature_tools_for_analysis(
     entities: &mut Vec<EntityInstance>,
     min_instances: usize,
@@ -816,7 +865,7 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
                 bail!("feature interface bound #{bound_id} has invalid orientation");
             };
 
-            let flip = family.polarity == FeaturePolarity::Additive;
+            let additive = family.polarity == FeaturePolarity::Additive;
             let cap_bound = push_simple(
                 entities,
                 &mut next_id,
@@ -824,10 +873,12 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
                 vec![
                     Parameter::String("NONE".to_string()),
                     entity_ref(loop_id),
-                    Parameter::Enumeration(if flip {
-                        toggle_tf(&bound_orientation)
-                    } else {
+                    // A cap shares the original host traversal for a boss,
+                    // but reverses it for an inverted pocket wall.
+                    Parameter::Enumeration(if additive {
                         bound_orientation
+                    } else {
+                        toggle_tf(&bound_orientation)
                     }),
                 ],
             );
@@ -845,7 +896,11 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
                         vec![
                             Parameter::String("NONE".to_string()),
                             entity_ref(hole_loop_id),
-                            Parameter::Enumeration(hole_orientation),
+                            Parameter::Enumeration(if additive {
+                                hole_orientation
+                            } else {
+                                toggle_tf(&hole_orientation)
+                            }),
                         ],
                     );
                     cap_bounds.push(entity_ref(hole_bound));
@@ -859,7 +914,7 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
                     Parameter::String("NONE".to_string()),
                     Parameter::List(cap_bounds),
                     entity_ref(frame.surface_id),
-                    Parameter::Enumeration(if flip {
+                    Parameter::Enumeration(if additive {
                         toggle_tf(&frame.sense)
                     } else {
                         frame.sense
@@ -874,8 +929,14 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
             .iter()
             .copied()
             .filter(|face_id| !folded_cap_faces.contains(face_id))
-            .map(entity_ref)
-            .collect::<Vec<_>>();
+            .map(|face| {
+                if family.polarity == FeaturePolarity::Subtractive {
+                    reversed_tool_face(face, entities, index, &mut next_id).map(entity_ref)
+                } else {
+                    Ok(entity_ref(face))
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
         closed_faces.extend(cap_faces.iter().copied().map(entity_ref));
         let tool_shell = push_simple(
             entities,
@@ -2027,6 +2088,71 @@ pub fn rigid_translation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blind_relief_tools_are_closed_oriented_extrusions() -> Result<()> {
+        use crate::brep::solid_face_ids;
+        use crate::solid_extrusions::detect_solid_extrusions_with_index;
+        use monstertruck_io::step::load::ParsedStepSource;
+
+        let fixtures = [
+            include_bytes!("../validation/fixtures/native_relief_blind_254dc55c.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_blind_636f2bd5.step").as_slice(),
+        ];
+        for bytes in fixtures {
+            let mut exchange = ParsedStepSource::parse(bytes)?.exchange;
+            let entities = &mut exchange.data[0].entities;
+            let original = entities.clone();
+            let (_, tools) = materialize_boundary_feature_tools_for_analysis(entities, 1)?;
+            let index = build_index(entities);
+            let extrusions = detect_solid_extrusions_with_index(entities, &index);
+            let cutters = tools
+                .iter()
+                .filter(|tool| tool.polarity == FeaturePolarity::Subtractive)
+                .collect::<Vec<_>>();
+            assert!(cutters.len() >= 5);
+            for tool in cutters {
+                assert!(
+                    extrusions
+                        .iter()
+                        .any(|extrusion| extrusion.solid_id == tool.solid_id)
+                );
+                let faces = solid_face_ids(tool.solid_id, entities, &index)
+                    .ok_or_else(|| anyhow::anyhow!("missing cutter shell"))?;
+                let mut coedges = BTreeMap::<u64, Vec<bool>>::new();
+                for face in faces {
+                    let loops = face_loops(face, entities, &index)
+                        .ok_or_else(|| anyhow::anyhow!("missing cutter face loops"))?;
+                    for boundary in loops {
+                        for edge in boundary.edges {
+                            coedges.entry(edge.edge_id).or_default().push(
+                                (edge.parameter_forward == edge.curve_same_sense)
+                                    == boundary.orientation,
+                            );
+                        }
+                    }
+                }
+                assert!(
+                    coedges
+                        .values()
+                        .all(|uses| matches!(uses.as_slice(), [a, b] if a != b))
+                );
+            }
+            // The only original record changed by materialization is the
+            // representation's item list, never a face or face bound.
+            for (before, after) in original.iter().zip(entities.iter()) {
+                if simple_record(before).is_some_and(|record| {
+                    matches!(
+                        record.name.as_str(),
+                        "ADVANCED_FACE" | "FACE_SURFACE" | "FACE_BOUND" | "FACE_OUTER_BOUND"
+                    )
+                }) {
+                    assert_eq!(before, after);
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn feature_dependency_selection_is_leaf_first() {
