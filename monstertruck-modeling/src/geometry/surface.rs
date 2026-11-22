@@ -511,6 +511,18 @@ impl TryIntoBsplineSurface for Surface {
 }
 
 impl TryIntoHomogeneousBsplineSurface for Surface {
+    fn homogeneous_net_covers_domain(&self) -> bool {
+        match self {
+            Self::Plane(surface) => surface.homogeneous_net_covers_domain(),
+            Self::BsplineSurface(surface) => surface.homogeneous_net_covers_domain(),
+            Self::NurbsSurface(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Revolution(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Sphere(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Torus(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Tspline(_) => false,
+        }
+    }
+
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
         match self {
             Self::Plane(p) => p.try_into_homogeneous_bspline_surface(),

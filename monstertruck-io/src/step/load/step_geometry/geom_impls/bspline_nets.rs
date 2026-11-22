@@ -10,6 +10,8 @@ use super::{
 };
 
 impl TryIntoHomogeneousBsplineSurface for Sphere {
+    fn homogeneous_net_covers_domain(&self) -> bool { self.0.homogeneous_net_covers_domain() }
+
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
         self.0.try_into_homogeneous_bspline_surface()
     }
@@ -30,6 +32,20 @@ impl TryIntoBsplineSurface for Sphere {
 }
 
 impl TryIntoHomogeneousBsplineCurve for Curve3D {
+    fn homogeneous_net_covers_domain(&self) -> bool {
+        match self {
+            Self::Line(curve) => curve.homogeneous_net_covers_domain(),
+            Self::Conic(Conic3D::Ellipse(curve)) => curve.homogeneous_net_covers_domain(),
+            Self::BsplineCurve(curve) => curve.homogeneous_net_covers_domain(),
+            Self::NurbsCurve(curve) => curve.homogeneous_net_covers_domain(),
+            Self::SurfaceCurve(curve) => curve.leader().homogeneous_net_covers_domain(),
+            Self::Conic(_)
+            | Self::ParameterCurve(_)
+            | Self::Polyline(_)
+            | Self::IntersectionCurve(_) => false,
+        }
+    }
+
     fn try_into_homogeneous_bspline_curve(&self) -> Option<BsplineCurve<Vector4>> {
         match self {
             Self::Line(line) => line.try_into_homogeneous_bspline_curve(),
@@ -89,6 +105,32 @@ impl TryIntoBsplineSurface for Surface {
 }
 
 impl TryIntoHomogeneousBsplineSurface for Surface {
+    fn homogeneous_net_covers_domain(&self) -> bool {
+        match self {
+            Self::Elementary(ElementarySurface::Plane(surface)) => {
+                surface.homogeneous_net_covers_domain()
+            }
+            Self::Elementary(ElementarySurface::Sphere(surface)) => {
+                surface.homogeneous_net_covers_domain()
+            }
+            Self::Elementary(
+                ElementarySurface::CylindricalSurface(surface)
+                | ElementarySurface::ConicalSurface(surface),
+            ) => surface.homogeneous_net_covers_domain(),
+            Self::Elementary(ElementarySurface::ToroidalSurface(surface)) => {
+                surface.homogeneous_net_covers_domain()
+            }
+            Self::Sweep(SweepSurface::ExtrusionSurface(surface)) => {
+                surface.homogeneous_net_covers_domain()
+            }
+            Self::Sweep(SweepSurface::RevolutionSurface(surface)) => {
+                surface.homogeneous_net_covers_domain()
+            }
+            Self::Bspline(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Nurbs(surface) => surface.homogeneous_net_covers_domain(),
+        }
+    }
+
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
         match self {
             Self::Elementary(ElementarySurface::Plane(surface)) => {
