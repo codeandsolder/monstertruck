@@ -205,10 +205,8 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
                 self.derivative_v(u, v),
             );
         }
-        let u0 = ku.bspline_basis_functions_unchecked(degree_u, 0, u);
-        let u1 = ku.bspline_basis_functions_unchecked(degree_u, 1, u);
-        let v0 = kv.bspline_basis_functions_unchecked(degree_v, 0, v);
-        let v1 = kv.bspline_basis_functions_unchecked(degree_v, 1, v);
+        let [u0, u1] = ku.bspline_basis_jet(degree_u, u);
+        let [v0, v1] = kv.bspline_basis_jet(degree_v, v);
         (
             P::from_vec(self.combine_basis(&u0, &v0)),
             self.combine_basis(&u1, &v0),
@@ -234,15 +232,10 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
                 self.derivative_vv(u, v),
             );
         }
-        // Every U/V derivative window is evaluated once per Newton iteration.
-        // Each tensor-product contraction retains the original summation order
-        // and is exactly equal to the individual derivative_mn call.
-        let u0 = ku.bspline_basis_functions_unchecked(degree_u, 0, u);
-        let u1 = ku.bspline_basis_functions_unchecked(degree_u, 1, u);
-        let u2 = ku.bspline_basis_functions_unchecked(degree_u, 2, u);
-        let v0 = kv.bspline_basis_functions_unchecked(degree_v, 0, v);
-        let v1 = kv.bspline_basis_functions_unchecked(degree_v, 1, v);
-        let v2 = kv.bspline_basis_functions_unchecked(degree_v, 2, v);
+        // Reuse the recurrence prefixes for all ranks in each knot direction.
+        // Every tensor-product contraction retains its original summation order.
+        let [u0, u1, u2] = ku.bspline_basis_jet(degree_u, u);
+        let [v0, v1, v2] = kv.bspline_basis_jet(degree_v, v);
         (
             P::from_vec(self.combine_basis(&u0, &v0)),
             self.combine_basis(&u1, &v0),
