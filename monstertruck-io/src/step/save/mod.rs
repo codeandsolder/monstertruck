@@ -36,8 +36,8 @@ pub struct FloatDisplay(pub f64);
 
 impl Display for FloatDisplay {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        let Self(x) = *self;
         const SCIENTIFIC_NOTATION_BELOW: f64 = 0.01;
+        let Self(x) = *self;
         let text = if x != 0.0 && x.abs() < SCIENTIFIC_NOTATION_BELOW {
             format!("{x:E}")
         } else {
