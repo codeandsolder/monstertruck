@@ -1,12 +1,12 @@
 //! Physical line and circular-arc coverage, independent of edge subdivision.
 //! Samples propose a circle; whole-domain rational certificates prove it.
 use super::{
-    ANALYTIC_BOUNDARY_PROOF_TOL_MM, BSplineSupport, BoundaryChainKey, CircleLocusKey, CurveSupport,
-    DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM, PointKey, SCALAR_Q_MM,
-    SupportLocusKey, brep, bspline_domain, bspline_line_support, canonical_boundary_direction,
-    circle_lies_on_support, circle_section_of_plane_and_support, dequantize_scalar,
-    dequantize_vector, evaluate_bspline, line_lies_on_support, line_segment_lies_on_cone,
-    point_key, quantize, support_locus_key, support_pair_can_intersect,
+    ANALYTIC_BOUNDARY_PROOF_TOL_MM, BSplineSupport, BoundaryChainKey, CellKind, CellWitnesses,
+    CircleLocusKey, CurveSupport, DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM,
+    PointKey, SupportLocusKey, brep, bspline_domain, bspline_line_support,
+    canonical_boundary_direction, circle_lies_on_support, circle_section_of_plane_and_support,
+    dequantize_scalar, dequantize_vector, evaluate_bspline, line_lies_on_support,
+    line_segment_lies_on_cone, support_locus_key, support_pair_can_intersect,
 };
 use crate::math3::{add, cross, distance, dot, mul, norm, normalize, sub};
 use monstertruck_geometry::{
@@ -296,6 +296,7 @@ fn circle_arc(
     circle: brep::CircleSupport,
     spline: Option<&NurbsCurve<Vector4>>,
     loci: &[SupportLocusKey; 2],
+    cells: &mut CellWitnesses,
 ) -> Option<BoundedEdge> {
     if !circle.radius_mm.is_finite() || circle.radius_mm <= TOL {
         return None;
@@ -360,9 +361,10 @@ fn circle_arc(
     {
         return None;
     }
+    cells.record_direction(normal_key, normal);
     let locus = CircleLocusKey {
-        center_mm: point_key(circle.center_mm)?,
-        radius_mm: quantize(circle.radius_mm, SCALAR_Q_MM)?,
+        center_mm: cells.point(circle.center_mm)?,
+        radius_mm: cells.scalar(CellKind::Radius, circle.radius_mm)?,
         normal: normal_key,
     };
     Some(BoundedEdge::Circle(
@@ -519,13 +521,14 @@ pub(super) fn classify(
     edge: &EdgeGeometry,
     curve: &CurveSupport,
     loci: &[SupportLocusKey; 2],
+    cells: &mut CellWitnesses,
 ) -> Option<BoundedEdge> {
     if !support_pair_can_intersect(loci) {
         return None;
     }
     match curve {
         CurveSupport::Line(line) => line_incidence(edge, *line, loci).then_some(BoundedEdge::Line),
-        CurveSupport::Circle(circle) => circle_arc(edge, *circle, None, loci),
+        CurveSupport::Circle(circle) => circle_arc(edge, *circle, None, loci, cells),
         CurveSupport::BSpline(spline) => {
             let rational = rational(spline)?;
             if let Some(line) = bspline_line_support(spline)
@@ -558,8 +561,8 @@ pub(super) fn classify(
                     })
                 });
             proposed
-                .and_then(|circle| circle_arc(edge, circle, Some(&rational), loci))
-                .or_else(|| circle_arc(edge, fit_circle(spline)?, Some(&rational), loci))
+                .and_then(|circle| circle_arc(edge, circle, Some(&rational), loci, cells))
+                .or_else(|| circle_arc(edge, fit_circle(spline)?, Some(&rational), loci, cells))
         }
         CurveSupport::Other { .. } => None,
     }
@@ -707,6 +710,7 @@ fn normalize_angular_chains(
 
 #[cfg(test)]
 mod tests {
+    use super::super::point_key;
     use super::*;
     use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI};
     const Z: [i64; 3] = [0, 0, 10_000_000_000];
@@ -754,7 +758,9 @@ mod tests {
         let curve = CurveSupport::Circle(unit_circle());
         let edge = edge(start, end, forward, curve.clone());
         let loci = [support_locus_key(&plane()), support_locus_key(&sphere())];
-        let Some(BoundedEdge::Circle(locus, arc)) = classify(&edge, &curve, &loci) else {
+        let Some(BoundedEdge::Circle(locus, arc)) =
+            classify(&edge, &curve, &loci, &mut CellWitnesses::default())
+        else {
             anyhow::bail!("expected certified circular arc")
         };
         Ok((locus, arc))
@@ -872,7 +878,7 @@ mod tests {
                 curve.clone(),
             );
             edge.end_vertex = edge.start_vertex;
-            match classify(&edge, &curve, &loci) {
+            match classify(&edge, &curve, &loci, &mut CellWitnesses::default()) {
                 Some(BoundedEdge::Circle(key, _)) => Some(key),
                 _ => None,
             }
@@ -939,6 +945,7 @@ mod tests {
             &e,
             &curve,
             &oblique_supports().each_ref().map(support_locus_key),
+            &mut CellWitnesses::default(),
         ) else {
             anyhow::bail!("exact oblique ellipse rejected");
         };
@@ -1031,14 +1038,38 @@ mod tests {
         );
         let mut off_plane = spline.clone();
         off_plane.control_points_mm[1][2] += 0.001;
-        assert!(classify(&e, &CurveSupport::BSpline(off_plane), &loci).is_none());
+        assert!(
+            classify(
+                &e,
+                &CurveSupport::BSpline(off_plane),
+                &loci,
+                &mut CellWitnesses::default()
+            )
+            .is_none()
+        );
         let mut off_cylinder = spline.clone();
         off_cylinder.control_points_mm[1][0] += 0.001;
         off_cylinder.control_points_mm[1][2] += 0.001;
-        assert!(classify(&e, &CurveSupport::BSpline(off_cylinder), &loci).is_none());
+        assert!(
+            classify(
+                &e,
+                &CurveSupport::BSpline(off_cylinder),
+                &loci,
+                &mut CellWitnesses::default()
+            )
+            .is_none()
+        );
         let mut wrong = e;
         wrong.end = [-R, 0, -R];
-        assert!(classify(&wrong, &CurveSupport::BSpline(spline), &loci).is_none());
+        assert!(
+            classify(
+                &wrong,
+                &CurveSupport::BSpline(spline),
+                &loci,
+                &mut CellWitnesses::default()
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1053,7 +1084,9 @@ mod tests {
         };
         let exact = CurveSupport::BSpline(curve.clone());
         let edge = edge([R, 0, 0], [0, R, 0], true, exact.clone());
-        let Some(BoundedEdge::Circle(locus, certified)) = classify(&edge, &exact, &loci) else {
+        let Some(BoundedEdge::Circle(locus, certified)) =
+            classify(&edge, &exact, &loci, &mut CellWitnesses::default())
+        else {
             anyhow::bail!("exact rational circle refused")
         };
         let (reference_locus, reference) = arc([R, 0, 0], [0, R, 0], true)?;
@@ -1064,10 +1097,18 @@ mod tests {
         );
         let mut bumped = curve;
         bumped.control_points_mm[1][0] += 0.001;
-        assert!(classify(&edge, &CurveSupport::BSpline(bumped), &loci).is_none());
+        assert!(
+            classify(
+                &edge,
+                &CurveSupport::BSpline(bumped),
+                &loci,
+                &mut CellWitnesses::default()
+            )
+            .is_none()
+        );
         let mut wrong = edge;
         wrong.end = [-R, 0, 0];
-        assert!(classify(&wrong, &exact, &loci).is_none());
+        assert!(classify(&wrong, &exact, &loci, &mut CellWitnesses::default()).is_none());
         assert!((certified.sweep - PI / 2.).abs() < TOL);
         Ok(())
     }

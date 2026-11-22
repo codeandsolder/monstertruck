@@ -2,9 +2,9 @@
 //! matching endpoint pairs establishes a curved edge. Retain complete positive-
 //! weight rational Bernstein control nets, ordered spans, and actual trims.
 use super::{
-    ANALYTIC_BOUNDARY_PROOF_TOL_MM as TOL, BSplineSupport, CurveSupport, DIRECTION_Q, EdgeGeometry,
-    OrientedSupportKey, POINT_Q_MM, PointKey, SupportLocusKey, bounded, dequantize_scalar,
-    dequantize_vector, point_key,
+    ANALYTIC_BOUNDARY_PROOF_TOL_MM as TOL, BSplineSupport, CellWitnesses, CurveSupport,
+    DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM, PointKey, SupportLocusKey, bounded,
+    dequantize_scalar, dequantize_vector, point_key,
 };
 use crate::{
     brep,
@@ -39,6 +39,12 @@ pub struct SplineCurveKey {
 }
 
 impl SplineCurveKey {
+    pub(super) fn map_points(&mut self, mut map: impl FnMut(&mut PointKey)) {
+        for point in self.spans.iter_mut().flat_map(|span| &mut span.points_mm) {
+            map(point);
+        }
+    }
+
     pub(super) fn ends(&self) -> Option<[PointKey; 2]> {
         Some([
             *self.spans.first()?.points_mm.first()?,
@@ -50,6 +56,14 @@ impl SplineCurveKey {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct SplineStripKey {
     profiles: [SplineCurveKey; 2],
+}
+
+impl SplineStripKey {
+    pub(super) fn map_points(&mut self, mut map: impl FnMut(&mut PointKey)) {
+        for profile in &mut self.profiles {
+            profile.map_points(&mut map);
+        }
+    }
 }
 
 fn decode(p: PointKey) -> Option<[f64; 3]> { dequantize_vector(p, POINT_Q_MM) }
@@ -198,7 +212,15 @@ pub(super) fn has_nonplanar_polynomial_patch(
     crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index).is_some_and(
         |(profiles, _)| {
             nonplanar_polynomial_profiles(&profiles)
-                && oriented_key(face_id, surface_id, forward, entities, index).is_some()
+                && oriented_key(
+                    face_id,
+                    surface_id,
+                    forward,
+                    entities,
+                    index,
+                    &mut CellWitnesses::default(),
+                )
+                .is_some()
         },
     )
 }
@@ -307,6 +329,7 @@ type DirectedProfile = (SplineCurveKey, bool);
 
 fn translated_geometry(
     profiles: &[BSplineSupport; 2],
+    cells: &mut CellWitnesses,
 ) -> Option<([DirectedProfile; 2], [f64; 3], [f64; 3])> {
     let [first, second] = profiles;
     if first.degree != second.degree
@@ -342,13 +365,25 @@ fn translated_geometry(
         *first.control_points_mm.last()?,
         *first.control_points_mm.first()?,
     );
-    let keys = [curve_evidence(first)?, curve_evidence(second)?]
-        .map(|evidence| (evidence.key, evidence.forward));
+    let evidence = [curve_evidence(first)?, curve_evidence(second)?];
+    if cells.enabled() {
+        for profile in &evidence {
+            for (span, controls) in profile.key.spans.iter().zip(&profile.controls) {
+                for (&key, p) in span.points_mm.iter().zip(controls) {
+                    cells.record_point(key, [p.x / p.w, p.y / p.w, p.z / p.w]);
+                }
+            }
+        }
+    }
+    let keys = evidence.map(|evidence| (evidence.key, evidence.forward));
     Some((keys, axis, chord))
 }
 
-fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfile; 2]> {
-    let (keys, axis, chord) = translated_geometry(profiles)?;
+fn translated_profiles(
+    profiles: &[BSplineSupport; 2],
+    cells: &mut CellWitnesses,
+) -> Option<[DirectedProfile; 2]> {
+    let (keys, axis, chord) = translated_geometry(profiles, cells)?;
     [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], chord]
         .into_iter()
         .filter_map(|e| normalize(sub(e, mul(axis, dot(axis, e))), TOL))
@@ -360,9 +395,12 @@ fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfil
 /// The global monotonicity check is a cheap certificate for most profiles.
 /// For turning profiles prove each span injective and every projected
 /// span pair separated, rather than weakening the monotonicity inequalities.
-fn embedded_translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfile; 2]> {
-    translated_profiles(profiles).or_else(|| {
-        let (keys, axis, _) = translated_geometry(profiles)?;
+fn embedded_translated_profiles(
+    profiles: &[BSplineSupport; 2],
+    cells: &mut CellWitnesses,
+) -> Option<[DirectedProfile; 2]> {
+    translated_profiles(profiles, cells).or_else(|| {
+        let (keys, axis, _) = translated_geometry(profiles, cells)?;
         keys.iter()
             .all(|(key, _)| embedding::is_embedded(key, axis))
             .then_some(keys)
@@ -547,10 +585,11 @@ pub(super) fn oriented_key(
     forward: bool,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    cells: &mut CellWitnesses,
 ) -> Option<OrientedSupportKey> {
     let (profiles, swapped) =
         crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index)?;
-    let [(a, u_forward), (b, other_forward)] = embedded_translated_profiles(&profiles)?;
+    let [(a, u_forward), (b, other_forward)] = embedded_translated_profiles(&profiles, cells)?;
     if u_forward != other_forward || a == b {
         return None;
     }
@@ -745,20 +784,20 @@ mod tests {
     #[test]
     fn strip_requires_translated_positive_weight_monotone_profiles() {
         let mut profiles = [profile(0.), profile(0.01)];
-        assert!(translated_profiles(&profiles).is_some());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_some());
         profiles[0].weights = Some(vec![1., 2., 2., 1.]);
         profiles[1].weights = Some(vec![2., 4., 4., 2.]);
-        assert!(translated_profiles(&profiles).is_some());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_some());
         profiles[1].weights = Some(vec![2., 4., 3., 2.]);
-        assert!(translated_profiles(&profiles).is_none());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
         profiles[1].weights = Some(vec![2., 4., 4., 2.]);
         profiles[1].control_points_mm[1][2] += 0.001;
-        assert!(translated_profiles(&profiles).is_none());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
         for p in &mut profiles {
             p.control_points_mm[1] = [2., 0., p.control_points_mm[0][2]];
             p.control_points_mm[2] = [-1., 0., p.control_points_mm[0][2]];
         }
-        assert!(translated_profiles(&profiles).is_none());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
     }
 
     #[test]
@@ -778,12 +817,12 @@ mod tests {
             weights: None,
         };
         let mut profiles = [profile(0.), profile(0.01)];
-        assert!(translated_profiles(&profiles).is_some());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_some());
         for p in &mut profiles {
             p.control_points_mm[1][1] = -0.0001;
             p.control_points_mm[5][1] = 1.0001;
         }
-        assert!(translated_profiles(&profiles).is_none());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
     }
 
     fn edge(

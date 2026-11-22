@@ -4375,6 +4375,16 @@ END-ISO-10303-21;
         ))
     }
 
+    // Adjacent canonical cells occur simultaneously in plane direction,
+    // plane offset, and the spline/endpoint coordinates of this original.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_mixed_boundary_cells_are_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_mixed_cells_30821d92.step"
+        ))
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn native_relief_partitioned_spline_caps_are_source_verified() -> Result<()> {
