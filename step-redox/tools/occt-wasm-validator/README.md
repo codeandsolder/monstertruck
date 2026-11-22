@@ -40,6 +40,9 @@ does not guarantee bit-identical Pillow pixels. Strict mesh hashing uses
 double-precision world-space triangles and nearest-even quantization at
 1e-9 mm. The digest report includes the original triangle count and SHA-256.
 Enable the same measurement in analyze or analyze-batch with --mesh.
+Exact digests are kernel-version-specific: native and WASM builds may produce
+different coordinates at identical triangle counts. Compare these digests only
+within the same kernel build and tessellation settings.
 Paired volume integrates signed faces at two quadrature targets
 and four common references.
 
