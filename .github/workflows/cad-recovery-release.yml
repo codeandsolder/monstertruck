@@ -38,6 +38,9 @@ jobs:
           cargo +1.99.1 run -p step-redox --bin step-chain-resize -- --help >/dev/null
       - name: Resolve OCCT validation dependencies
         run: uv sync --frozen --project .github/ci/step-redox
+      - name: Check paired-volume integration invariants
+        working-directory: .github/ci/step-redox
+        run: uv run --frozen python -B -m unittest -v test_occt_paired_volume
       - name: Check real-model geometry and semantics
         working-directory: step-redox
         run: |
