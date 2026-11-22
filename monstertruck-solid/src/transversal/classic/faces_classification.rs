@@ -5,7 +5,7 @@
 //! explicit private type until ownership is known; only the final selected
 //! regions are welded/repaired into valid topology.
 
-use super::loops_store::ShapesOpStatus;
+use super::{PartitionOutput, loops_store::ShapesOpStatus};
 use monstertruck_topology::{
     Edge, EdgeId, Face, Shell, Vertex, VertexId, Wire,
     compress::{CompressedEdge, CompressedEdgeIndex, CompressedFace, CompressedShell},
@@ -328,6 +328,21 @@ impl<P, C, S> FacesClassification<P, C, S> {
             }
         }
         [and, or, unknown]
+    }
+
+    /// Consume only the requested known partition and its unresolved regions.
+    pub(super) fn into_selected(self, output: PartitionOutput) -> [Vec<BooleanRegion<P, C, S>>; 2] {
+        let wanted = output.select([ShapesOpStatus::And, ShapesOpStatus::Or]);
+        let mut selected = Vec::new();
+        let mut unknown = Vec::new();
+        for (region, status) in self.regions.into_iter().zip(self.status) {
+            if status == wanted {
+                selected.push(region);
+            } else if status == ShapesOpStatus::Unknown {
+                unknown.push(region);
+            }
+        }
+        [selected, unknown]
     }
 
     pub(super) fn all_regions(&self) -> Vec<BooleanRegion<P, C, S>>
