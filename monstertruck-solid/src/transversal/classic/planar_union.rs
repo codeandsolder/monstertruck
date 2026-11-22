@@ -10,7 +10,9 @@ use super::loops_store::{
     certified_circular_cylinder, common_circular_extrusion_cylinder, common_ruled_extrusion_strip,
 };
 use super::tolerance::BooleanTolerance;
-use super::weld::{node_selected_regions, point_lex_cmp};
+use super::weld::{
+    certified_alt_curve_box, node_selected_regions, point_inside_padded_box, point_lex_cmp,
+};
 use super::{AltCurve, AltRegion, ShapeOpsCurve, ShapeOpsSurface};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::*;
@@ -373,15 +375,55 @@ fn exact_node_points<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     arrangement: &PlanarArrangement<C, S>,
     tol: f64,
 ) -> Option<Vec<Point3>> {
+    let tolerances = BooleanTolerance::new(tol);
+    // Cache exact spatial enclosures before the pairwise search. The
+    // tessellated UV traces alone are not exclusion evidence.
+    let bounds: Vec<_> = arrangement
+        .edges
+        .iter()
+        .map(|edge| {
+            let mut bounds = certified_alt_curve_box(&edge.edge.oriented_curve(), tolerances)?;
+            bounds.push(edge.edge.front().point());
+            bounds.push(edge.edge.back().point());
+            Some(bounds)
+        })
+        .collect();
+    let pad = DEFAULT_NUMERICAL_TOLERANCES.boolean_weld_projection_factor * tol;
     let mut nodes = Vec::<Point3>::new();
     for (index, lhs) in arrangement.edges.iter().enumerate() {
-        for rhs in arrangement.edges.iter().skip(index + 1) {
-            for (point, curve) in [
-                (lhs.edge.front().point(), rhs.edge.oriented_curve()),
-                (lhs.edge.back().point(), rhs.edge.oriented_curve()),
-                (rhs.edge.front().point(), lhs.edge.oriented_curve()),
-                (rhs.edge.back().point(), lhs.edge.oriented_curve()),
+        for (other, rhs) in arrangement.edges.iter().enumerate().skip(index + 1) {
+            if let (Some(a), Some(b)) = (bounds[index], bounds[other])
+                && (0..3).any(|axis| {
+                    a.max()[axis] + pad < b.min()[axis] || b.max()[axis] + pad < a.min()[axis]
+                })
+            {
+                continue;
+            }
+            for (point, curve, enclosure) in [
+                (
+                    lhs.edge.front().point(),
+                    rhs.edge.oriented_curve(),
+                    bounds[other],
+                ),
+                (
+                    lhs.edge.back().point(),
+                    rhs.edge.oriented_curve(),
+                    bounds[other],
+                ),
+                (
+                    rhs.edge.front().point(),
+                    lhs.edge.oriented_curve(),
+                    bounds[index],
+                ),
+                (
+                    rhs.edge.back().point(),
+                    lhs.edge.oriented_curve(),
+                    bounds[index],
+                ),
             ] {
+                if enclosure.is_some_and(|b| !point_inside_padded_box(b, point, pad)) {
+                    continue;
+                }
                 let on_curve = curve
                     .search_parameter(point, None, 100)
                     .or_else(|| curve.search_nearest_parameter(point, None, 100))
