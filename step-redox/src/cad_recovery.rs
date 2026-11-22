@@ -348,14 +348,18 @@ fn normalize_extrusion_cap_pairs(cap_face_ids: &[[u64; 2]]) -> Result<Vec<[u64; 
     Ok(pairs)
 }
 
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
 pub(crate) fn rebuilt_kernel_boundary_matches_source<K: CadKernel>(
     kernel: &K,
     evaluated: &K::Evaluated,
     source_solid_id: u64,
     source_entities: &[step_p21::ast::EntityInstance],
 ) -> Result<bool> {
-    let source =
-        crate::boundary_proof::analytic_boundary_diagnostic(source_solid_id, source_entities);
+    let source = crate::boundary_proof::analytic_boundary_diagnostic(
+        source_solid_id,
+        source_entities,
+        &build_index(source_entities),
+    );
     rebuilt_kernel_boundary_matches_diagnostic(kernel, evaluated, &source, source_entities)
 }
 
@@ -385,8 +389,11 @@ fn rebuilt_kernel_boundary_matches_diagnostic<K: CadKernel>(
     let [rebuilt_solid_id] = rebuilt_solid_ids.as_slice() else {
         return Ok(false);
     };
-    let diagnostic =
-        crate::boundary_proof::analytic_boundary_diagnostic(*rebuilt_solid_id, rebuilt_entities);
+    let diagnostic = crate::boundary_proof::analytic_boundary_diagnostic(
+        *rebuilt_solid_id,
+        rebuilt_entities,
+        &build_index(rebuilt_entities),
+    );
     Ok(crate::boundary_proof::compare_diagnostics(
         source,
         source_entities,
@@ -412,7 +419,8 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
         index: &'a HashMap<u64, usize>,
         kernel: &'a K,
     ) -> Option<Self> {
-        let boundary = crate::boundary_proof::analytic_boundary_diagnostic(solid_id, entities);
+        let boundary =
+            crate::boundary_proof::analytic_boundary_diagnostic(solid_id, entities, index);
         boundary.supported.then_some(Self {
             solid_id,
             entities,
@@ -439,9 +447,15 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
         if !self.kernel.summarize(&evaluated).is_single_solid() {
             return Ok(false);
         }
+        self.matches_evaluated_boundary(&evaluated)
+    }
+
+    /// Compare an already evaluated single-solid candidate without repeating
+    /// either its kernel replay or the original boundary analysis.
+    pub(crate) fn matches_evaluated_boundary(&self, evaluated: &K::Evaluated) -> Result<bool> {
         rebuilt_kernel_boundary_matches_diagnostic(
             self.kernel,
-            &evaluated,
+            evaluated,
             &self.boundary,
             self.entities,
         )
@@ -816,20 +830,24 @@ pub fn recover_auto_proven_extrusion_core_union_fragment<K: CadKernel>(
     };
     let entities = &section.entities;
     let index = build_index(entities);
-    recover_auto_proven_extrusion_core_union_from_entities(solid_id, entities, &index, kernel, None)
-}
-
-/// Use the same material discovery on an already parsed source section.
-pub(crate) fn recover_auto_proven_extrusion_core_union_from_entities<K: CadKernel>(
-    solid_id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-    kernel: &K,
-    ceiling: Option<u64>,
-) -> Result<Option<CadFragment>> {
-    let Some(source) = SourceRecovery::new(solid_id, entities, index, kernel) else {
+    let Some(source) = SourceRecovery::new(solid_id, entities, &index, kernel) else {
         return Ok(None);
     };
+    recover_proven_material_fragment(&source, None)
+}
+
+/// Discover all supported material families against one immutable source
+/// proof context. Callers share this context with direct/native candidates.
+pub(crate) fn recover_proven_material_fragment<K: CadKernel>(
+    source: &SourceRecovery<'_, K>,
+    ceiling: Option<u64>,
+) -> Result<Option<CadFragment>> {
+    let SourceRecovery {
+        solid_id,
+        entities,
+        index,
+        ..
+    } = *source;
     let proposed = crate::solid_extrusions::detect_extrusion_core_candidates_for_solid_with_index(
         solid_id, entities, index,
     );
@@ -860,7 +878,7 @@ pub(crate) fn recover_auto_proven_extrusion_core_union_from_entities<K: CadKerne
         best.consider(
             family,
             recover_proven_extrusion_core_union_from_entities(
-                &source,
+                source,
                 &[pair],
                 best.ceiling(ceiling, family),
             ),
@@ -871,22 +889,22 @@ pub(crate) fn recover_auto_proven_extrusion_core_union_from_entities<K: CadKerne
     let family = MaterialFamily::CapRuledEnds;
     best.consider(
         family,
-        recover_auto_proven_partial_cap_ruled_ends_fragment(&source, best.ceiling(ceiling, family)),
+        recover_auto_proven_partial_cap_ruled_ends_fragment(source, best.ceiling(ceiling, family)),
     )?;
     let family = MaterialFamily::Sectional;
     best.consider(
         family,
-        sectional::recover(&source, best.ceiling(ceiling, family)),
+        sectional::recover(source, best.ceiling(ceiling, family)),
     )?;
     let family = MaterialFamily::FormedSheet;
     best.consider(
         family,
-        multi_axis_sheet::recover(&source, best.ceiling(ceiling, family)),
+        multi_axis_sheet::recover(source, best.ceiling(ceiling, family)),
     )?;
     let family = MaterialFamily::CapCover;
     best.consider(
         family,
-        cap_cover::recover(&source, best.ceiling(ceiling, family)),
+        cap_cover::recover(source, best.ceiling(ceiling, family)),
     )?;
     // Aggregate unions are often the expensive fallback: only evaluate
     // them after cheaper complete cap/section proposals establish a bound.
@@ -897,7 +915,7 @@ pub(crate) fn recover_auto_proven_extrusion_core_union_from_entities<K: CadKerne
         best.consider(
             family,
             recover_proven_extrusion_core_union_from_entities(
-                &source,
+                source,
                 &pairs,
                 best.ceiling(ceiling, family),
             ),

@@ -4,15 +4,16 @@ use crate::cad_ir::{
     ProofStatus, Provenance, RigidTransform,
 };
 use crate::cad_kernel::CadKernel;
-#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
-use crate::cad_recovery::recover_auto_proven_extrusion_core_union_fragment;
 use crate::cad_recovery::{
-    CadFragment, CadFragmentSource, SourceRecovery, rebuilt_kernel_boundary_matches_source,
-    recover_auto_proven_extrusion_core_union_from_entities,
-    recover_open_rectangular_sweep_fragments, recover_periodic_chain_fragments,
+    CadFragment, CadFragmentSource, SourceRecovery, recover_open_rectangular_sweep_fragments,
+    recover_periodic_chain_fragments, recover_proven_material_fragment,
     recover_radial_slot_revolution_fragments, recover_revolved_round_tail_fragments,
     recover_round_sweep_fragments, recover_solid_extrusion_fragment,
     recover_solid_extrusion_fragments, recover_solid_revolution_fragments,
+};
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
+use crate::cad_recovery::{
+    rebuilt_kernel_boundary_matches_source, recover_auto_proven_extrusion_core_union_fragment,
 };
 use crate::kernel_source_load::{
     KernelSourceLoadEvidence, KernelTopologyProvenance, SourceStepLoadInspector,
@@ -457,6 +458,7 @@ impl WholeSolidRecoveryState {
             .collect()
     }
 
+    #[cfg(test)]
     fn semantically_unrecovered_sources(&self) -> BTreeSet<SourceEntity> {
         self.source_solids
             .iter()
@@ -479,6 +481,7 @@ struct CompleteIrBuildState {
     instance_pattern_diagnostics: Vec<SourceInstancePattern>,
     body_scan: Vec<SourceSolidSummary>,
     recovery: WholeSolidRecoveryState,
+    direct_candidates: BTreeMap<SourceEntity, Vec<CadFragment>>,
 }
 
 impl CompleteIrBuildState {
@@ -612,25 +615,12 @@ pub fn recover_complete_ir_bytes(input: &[u8]) -> Result<CompleteIr> {
 /// a proposal, not proof of occupied material; rejected candidates do not
 /// prevent another valid representation of the same source solid from winning.
 fn recover_verified_direct_constructive_fragment<K: CadKernel>(
-    source: SourceEntity,
-    exchange: &Exchange,
-    kernel: &K,
+    proof: &SourceRecovery<'_, K>,
+    candidates: Vec<CadFragment>,
     ceiling: Option<u64>,
 ) -> Result<Option<CadFragment>> {
-    let Some(section) = exchange.data.get(source.data_section) else {
-        bail!("missing DATA section {}", source.data_section);
-    };
-    let entities = &section.entities;
-    let index = crate::step_graph::build_index(entities);
-    let Some(proof) = SourceRecovery::new(source.id, entities, &index, kernel) else {
-        return Ok(None);
-    };
-    let mut candidates = recover_constructive_fragments_from_entities_with_index(entities, &index)?
+    let mut candidates = candidates
         .into_iter()
-        .filter(|fragment| {
-            source_solid_id(&fragment.source) == source.id
-                && is_constructive_source(&fragment.source)
-        })
         .map(|fragment| Ok((fragment.model.complexity_score(fragment.root)?, fragment)))
         .collect::<Result<Vec<_>>>()?;
     candidates.sort_by_key(|(complexity, _)| *complexity);
@@ -664,52 +654,90 @@ pub fn recover_complete_ir_with_kernel_bytes<
 ) -> Result<CompleteIr> {
     let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
     let document = kernel.resolve_source_exchange(exchange)?;
+    let exchange = document.as_ref();
+    // Reuse the same section-local evidence for the initial parser proposal
+    // pass and every independent proof provider, including multi-DATA inputs.
+    let indexes: Vec<_> = exchange
+        .data
+        .iter()
+        .map(|section| crate::step_graph::build_index(&section.entities))
+        .collect();
+    let source_tolerances: Vec<_> = exchange
+        .data
+        .iter()
+        .zip(&indexes)
+        .map(|(section, index)| {
+            crate::solid_revolutions::source_tolerance_by_representation_item(
+                &section.entities,
+                index,
+            )
+        })
+        .collect();
+    let sections: Vec<_> = indexes
+        .iter()
+        .zip(&source_tolerances)
+        .map(|(index, source_tolerances)| SectionEvidence {
+            index,
+            source_tolerances,
+            surface_signatures: None,
+        })
+        .collect();
     let mut build = recover_complete_ir_build_state(
-        document.as_ref(),
+        exchange,
         ReducedBrepMutationMode::KernelOwned,
-        None,
+        Some(&sections),
     )?;
     let source_load = kernel.inspect_source_document(&document)?;
-    let mut failures = apply_kernel_recovery(
-        &mut build.recovery,
-        |source, _| {
-            recover_kernel_boundary_feature_fragment(source, &source_load, &document, kernel)
-        },
-        false,
-    );
-    failures.extend(apply_kernel_recovery(
-        &mut build.recovery,
-        |source, _| {
-            recover_kernel_topology_normalized_fragment(&document, source, &source_load, kernel)
-        },
-        false,
-    ));
-    if kernel.supports_step_export() {
-        failures.extend(apply_kernel_recovery(
-            &mut build.recovery,
-            |source, ceiling| {
-                let entities = &document.as_ref().data[source.data_section].entities;
-                let index = crate::step_graph::build_index(entities);
-                recover_auto_proven_extrusion_core_union_from_entities(
-                    source.id, entities, &index, kernel, ceiling,
-                )
-                .map(|candidate| candidate.map(KernelRecoveryCandidate::verified))
-            },
-            true,
-        ));
-        failures.extend(apply_kernel_recovery(
-            &mut build.recovery,
-            |source, ceiling| {
-                recover_verified_direct_constructive_fragment(
-                    source,
-                    document.as_ref(),
-                    kernel,
-                    ceiling,
-                )
-                .map(|candidate| candidate.map(KernelRecoveryCandidate::verified))
-            },
-            true,
-        ));
+    let mut failures = Vec::new();
+    let export = kernel.supports_step_export();
+    // All candidates for one source share the original immutable proof.
+    // Drop it before proceeding to the next solid: do not retain the full
+    // assembly's spline signatures merely to reuse the evidence later.
+    for source in build.recovery.source_solids.clone() {
+        let entities = &exchange.data[source.data_section].entities;
+        let index = &indexes[source.data_section];
+        let proof = if export {
+            SourceRecovery::new(source.id, entities, index, kernel)
+        } else {
+            None
+        };
+        if !build.recovery.selected.contains_key(&source) {
+            let candidate = recover_kernel_boundary_feature_fragment(
+                source,
+                &source_load,
+                &document,
+                kernel,
+                index,
+                proof.as_ref(),
+            );
+            failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
+        }
+        if !build.recovery.selected.contains_key(&source) {
+            let candidate = recover_kernel_topology_normalized_fragment(
+                &document,
+                source,
+                &source_load,
+                kernel,
+                index,
+                proof.as_ref(),
+            );
+            failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
+        }
+        let candidates = build.direct_candidates.remove(&source).unwrap_or_default();
+        let Some(proof) = proof else {
+            continue;
+        };
+        let candidate =
+            recover_proven_material_fragment(&proof, build.recovery.certified_ceiling(source))
+                .map(|candidate| candidate.map(KernelRecoveryCandidate::verified));
+        failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
+        let candidate = recover_verified_direct_constructive_fragment(
+            &proof,
+            candidates,
+            build.recovery.certified_ceiling(source),
+        )
+        .map(|candidate| candidate.map(KernelRecoveryCandidate::verified));
+        failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
     }
     Ok(build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, Some(source_load)))
 }
@@ -723,6 +751,8 @@ fn recover_kernel_boundary_feature_fragment<
     source_load: &KernelSourceLoadEvidence,
     source_document: &K::Document,
     kernel: &K,
+    index: &HashMap<u64, usize>,
+    proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
     let Some(load) = source_load.solids.iter().find(|item| item.source == source) else {
         return Ok(None);
@@ -741,9 +771,9 @@ fn recover_kernel_boundary_feature_fragment<
     let mut projected_entities = section.entities.clone();
     // Only shell membership and host FACE_BOUND references are ever changed
     // in this semantic projection; the original entity index stays valid.
-    let index = crate::step_graph::build_index(&projected_entities);
-    let original_outer_faces = crate::brep::solid_face_ids(source.id, &projected_entities, &index)
-        .ok_or_else(|| anyhow::anyhow!("source solid has no readable outer-shell faces"))?;
+    let original_outer_faces =
+        crate::brep::solid_face_ids(source.id, &projected_entities, index)
+            .ok_or_else(|| anyhow::anyhow!("source solid has no readable outer-shell faces"))?;
     let mut edited = None::<K::EditedSource>;
     let mut replay = Vec::<RecoveredBoundaryFeatureFamily>::new();
 
@@ -751,7 +781,7 @@ fn recover_kernel_boundary_feature_fragment<
         let targets = LocalRecoveryTargets::from_solids(
             &BTreeSet::from([source.id]),
             &projected_entities,
-            &index,
+            index,
         )?;
         if targets.is_empty() {
             break;
@@ -760,7 +790,7 @@ fn recover_kernel_boundary_feature_fragment<
         let shells = targets.shell_ids();
         let report = crate::planar_features::diagnose_boundary_features_for_shells_with_index(
             &projected_entities,
-            &index,
+            index,
             &shells,
         );
         let selected = (0..report.families.len())
@@ -775,7 +805,7 @@ fn recover_kernel_boundary_feature_fragment<
         }
         let prepared = prepare_boundary_feature_reduction(
             &projected_entities,
-            &index,
+            index,
             &targets,
             &shells,
             &report,
@@ -788,7 +818,7 @@ fn recover_kernel_boundary_feature_fragment<
         let (patch, plan) = plan_source_boundary_feature_peel_from_entities(
             source,
             &projected_entities,
-            &index,
+            index,
             &report,
             &prepared.family_indices,
             provenance,
@@ -804,7 +834,7 @@ fn recover_kernel_boundary_feature_fragment<
         }
         crate::planar_features::apply_boundary_feature_peel_plan(
             &mut projected_entities,
-            &index,
+            index,
             &plan,
         )?;
         let current = edited
@@ -814,7 +844,7 @@ fn recover_kernel_boundary_feature_fragment<
             source,
             &original_outer_faces,
             &projected_entities,
-            &index,
+            index,
             provenance,
             load.boundaries.len(),
             &kernel.inspect_edited_source(current)?,
@@ -833,7 +863,7 @@ fn recover_kernel_boundary_feature_fragment<
     let Some(edited) = edited else {
         return Ok(None);
     };
-    finish_native_boundary_feature_replay(kernel, source, &edited, &replay, &section.entities)
+    finish_native_boundary_feature_replay(kernel, source, &edited, &replay, proof)
 }
 
 /// Ensure projected shell membership exactly matches the retained native
@@ -909,7 +939,7 @@ fn finish_native_boundary_feature_replay<
     source: SourceEntity,
     edited: &K::EditedSource,
     replay: &[RecoveredBoundaryFeatureFamily],
-    source_entities: &[EntityInstance],
+    proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
     let Some(mut host) = recognize_edited_host_with_fallback(kernel, edited, || {
         // Rare non-native analytic families still use one final snapshot, not
@@ -932,9 +962,11 @@ fn finish_native_boundary_feature_replay<
     // Certify the entire evaluated result against the original, unpeeled
     // source. Unsupported boundaries keep their existing structural status;
     // successful proof also supplies the safe candidate-complexity ceiling.
-    let verified = kernel.supports_step_export()
-        && rebuilt_kernel_boundary_matches_source(kernel, &evaluated, source.id, source_entities)
-            .unwrap_or(false);
+    let verified = proof.is_some_and(|proof| {
+        proof
+            .matches_evaluated_boundary(&evaluated)
+            .unwrap_or(false)
+    });
     Ok(Some(if verified {
         KernelRecoveryCandidate::verified(fragment)
     } else {
@@ -949,6 +981,8 @@ fn recover_kernel_topology_normalized_fragment<
     source: SourceEntity,
     source_load: &KernelSourceLoadEvidence,
     kernel: &K,
+    index: &HashMap<u64, usize>,
+    proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
     let exchange = document.as_ref();
     let Some(load) = source_load
@@ -965,7 +999,11 @@ fn recover_kernel_topology_normalized_fragment<
         return Ok(None);
     };
 
-    let evidence = replayable_source_treatments(exchange, source)?;
+    let evidence = replayable_source_treatments(
+        &exchange.data[source.data_section].entities,
+        index,
+        source.id,
+    );
     let treatment_layers::PeelOutcome {
         mut edited,
         layers,
@@ -1025,35 +1063,31 @@ fn recover_kernel_topology_normalized_fragment<
     if !kernel.supports_step_export() {
         return Ok(Some(KernelRecoveryCandidate::structural(fragment)));
     }
-    let entities = &exchange.data[source.data_section].entities;
     // A closed replay is only a candidate. Export-capable kernels must
     // certify the reconstructed occupied boundary against the original,
     // not merely the intermediate peeled host.
-    if !rebuilt_kernel_boundary_matches_source(kernel, &evaluated, source.id, entities)? {
+    let matches = proof.map_or(Ok(false), |proof| {
+        proof.matches_evaluated_boundary(&evaluated)
+    })?;
+    if !matches {
         bail!("native edge-treatment replay did not prove original-source boundary equivalence");
     }
     Ok(Some(KernelRecoveryCandidate::verified(fragment)))
 }
 
 fn replayable_source_treatments(
-    exchange: &Exchange,
-    source: SourceEntity,
-) -> Result<Vec<crate::edge_treatments::EdgeTreatmentEvidence>> {
-    let section = exchange
-        .data
-        .get(source.data_section)
-        .ok_or_else(|| anyhow::anyhow!("missing DATA section {}", source.data_section))?;
-    let index = crate::step_graph::build_index(&section.entities);
-    let target = HashSet::from([source.id]);
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    solid_id: u64,
+) -> Vec<crate::edge_treatments::EdgeTreatmentEvidence> {
+    let target = HashSet::from([solid_id]);
     let mut evidence = select_replayable_treatments(
         crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
-            &section.entities,
-            &index,
-            &target,
+            entities, index, &target,
         ),
     );
     evidence.sort_by_key(|item| item.treatment_face_id);
-    Ok(evidence)
+    evidence
 }
 
 /// Prefer native exact-trim semantic recognition while retaining the general
@@ -1139,13 +1173,10 @@ fn recognize_single_healed_host<K: CadKernel>(
     }
     // Apply all independently certified material recognizers to this
     // immutable final native snapshot, not just the sectional family.
-    recover_auto_proven_extrusion_core_union_from_entities(
-        *solid_id,
-        &section.entities,
-        &index,
-        kernel,
-        None,
-    )
+    let Some(proof) = SourceRecovery::new(*solid_id, &section.entities, &index, kernel) else {
+        return Ok(None);
+    };
+    recover_proven_material_fragment(&proof, None)
 }
 
 fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> Result<bool> {
@@ -1177,6 +1208,51 @@ impl KernelRecoveryCandidate {
     }
 }
 
+impl WholeSolidRecoveryState {
+    fn certified_ceiling(&self, source: SourceEntity) -> Option<u64> {
+        self.selected
+            .get(&source)
+            .filter(|selected| {
+                selected.boundary_verified && is_constructive_source(&selected.fragment.source)
+            })
+            .map(|selected| selected.complexity)
+    }
+
+    fn admit_kernel_candidate(
+        &mut self,
+        source: SourceEntity,
+        candidate: Result<Option<KernelRecoveryCandidate>>,
+    ) -> Option<KernelRecoveryFailure> {
+        let result = match candidate {
+            Ok(Some(KernelRecoveryCandidate {
+                fragment,
+                boundary_verified,
+            })) if source_solid_id(&fragment.source) == source.id => self
+                .add_candidates_with_proof(
+                    [SourceCadFragment {
+                        source_solid: source,
+                        fragment,
+                    }],
+                    boundary_verified,
+                )
+                .map(|_| ()),
+            Ok(Some(KernelRecoveryCandidate { fragment, .. })) => Err(anyhow::anyhow!(
+                "kernel recovery returned local solid #{} while recovering DATA section {:?} solid #{}",
+                source_solid_id(&fragment.source),
+                source.data_section,
+                source.id
+            )),
+            Ok(None) => Ok(()),
+            Err(error) => Err(error),
+        };
+        result.err().map(|error| KernelRecoveryFailure {
+            source,
+            error: format!("{error:#}"),
+        })
+    }
+}
+
+#[cfg(test)]
 fn apply_kernel_recovery<F>(
     recovery: &mut WholeSolidRecoveryState,
     mut recover: F,
@@ -1185,55 +1261,15 @@ fn apply_kernel_recovery<F>(
 where
     F: FnMut(SourceEntity, Option<u64>) -> Result<Option<KernelRecoveryCandidate>>,
 {
-    let mut failures = Vec::new();
-    // Independently proven material may replace a cheaper but merely
-    // structurally inferred source candidate. Otherwise previously selected
-    // candidates would prevent the kernel-backed source proof from ever running.
     let targets = if all_sources {
         recovery.source_solids.clone()
     } else {
         recovery.semantically_unrecovered_sources()
     };
+    let mut failures = Vec::new();
     for source in targets {
-        // Only a certified incumbent can bound an independently proven
-        // candidate. A structurally plausible cheap model must not prune proof.
-        let ceiling = recovery
-            .selected
-            .get(&source)
-            .filter(|selected| {
-                selected.boundary_verified && is_constructive_source(&selected.fragment.source)
-            })
-            .map(|selected| selected.complexity);
-        match recover(source, ceiling) {
-            Ok(Some(KernelRecoveryCandidate { fragment, boundary_verified })) if source_solid_id(&fragment.source) == source.id => {
-                if let Err(error) = recovery.add_candidates_with_proof(
-                    [SourceCadFragment {
-                        source_solid: source,
-                        fragment,
-                    }],
-                    boundary_verified,
-                ) {
-                    failures.push(KernelRecoveryFailure {
-                        source,
-                        error: error.to_string(),
-                    });
-                }
-            }
-            Ok(Some(KernelRecoveryCandidate { fragment, .. })) => failures.push(KernelRecoveryFailure {
-                source,
-                error: format!(
-                    "kernel recovery returned local solid #{} while recovering DATA section {:?} solid #{}",
-                    source_solid_id(&fragment.source),
-                    source.data_section,
-                    source.id
-                ),
-            }),
-            Ok(None) => {}
-            Err(error) => failures.push(KernelRecoveryFailure {
-                source,
-                error: format!("{error:#}"),
-            }),
-        }
+        let candidate = recover(source, recovery.certified_ceiling(source));
+        failures.extend(recovery.admit_kernel_candidate(source, candidate));
     }
     failures
 }
@@ -1356,7 +1392,7 @@ fn recover_complete_ir_build_state<'a>(
 
     let surface_signature_summaries = signatures;
     let instance_pattern_diagnostics = patterns;
-    let recovery = recover_whole_solids(
+    let (recovery, direct_candidates) = recover_and_retain_direct_candidates(
         &recovery_sections,
         &body_scan,
         direct_candidates,
@@ -1368,13 +1404,54 @@ fn recover_complete_ir_build_state<'a>(
         instance_pattern_diagnostics,
         body_scan,
         recovery,
+        direct_candidates,
     })
+}
+
+type DirectCandidatesBySource = BTreeMap<SourceEntity, Vec<CadFragment>>;
+
+fn recover_and_retain_direct_candidates(
+    recovery_sections: &[RecoverySection<'_>],
+    body_scan: &[SourceSolidSummary],
+    direct_candidates: Vec<SourceCadFragment>,
+    mutation_mode: ReducedBrepMutationMode,
+) -> Result<(WholeSolidRecoveryState, DirectCandidatesBySource)> {
+    let result = if mutation_mode == ReducedBrepMutationMode::KernelOwned {
+        let recovery = recover_whole_solids(
+            recovery_sections,
+            body_scan,
+            direct_candidates.iter().cloned(),
+            mutation_mode,
+        )?;
+        let mut by_source = BTreeMap::<SourceEntity, Vec<CadFragment>>::new();
+        for candidate in direct_candidates {
+            if is_constructive_source(&candidate.fragment.source) {
+                by_source
+                    .entry(candidate.source_solid)
+                    .or_default()
+                    .push(candidate.fragment);
+            }
+        }
+        (recovery, by_source)
+    } else {
+        (
+            recover_whole_solids(
+                recovery_sections,
+                body_scan,
+                direct_candidates,
+                mutation_mode,
+            )?,
+            BTreeMap::new(),
+        )
+    };
+
+    Ok(result)
 }
 
 fn recover_whole_solids(
     sections: &[RecoverySection<'_>],
     body_scan: &[SourceSolidSummary],
-    direct_candidates: Vec<SourceCadFragment>,
+    direct_candidates: impl IntoIterator<Item = SourceCadFragment>,
     mutation_mode: ReducedBrepMutationMode,
 ) -> Result<WholeSolidRecoveryState> {
     let mut recovery = WholeSolidRecoveryState::new(body_scan);
@@ -2961,6 +3038,7 @@ mod tests {
             instance_pattern_diagnostics: report.instance_pattern_diagnostics,
             body_scan,
             recovery,
+            direct_candidates: BTreeMap::new(),
         }
     }
 
@@ -3713,6 +3791,68 @@ END-ISO-10303-21;
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn kernel_reuses_qualified_direct_candidates_for_distinct_complete_data_sections() -> Result<()>
+    {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let box_exchange = |size_mm| -> Result<Exchange> {
+            let mut model = CadModel::new();
+            let root = model.add_node(CadNode::Primitive(Primitive::Box { size_mm }));
+            model.add_root(root)?;
+            let step = kernel.to_step(&kernel.evaluate(&model, root)?)?;
+            Ok(monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange)
+        };
+        let mut exchange = box_exchange([2.0, 3.0, 4.0])?;
+        exchange.data.extend(box_exchange([5.0, 7.0, 8.0])?.data);
+        let build =
+            recover_complete_ir_build_state(&exchange, ReducedBrepMutationMode::KernelOwned, None)?;
+        let sources = build
+            .recovery
+            .source_solids
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let [first, second] = sources.as_slice() else {
+            bail!("expected two source boxes")
+        };
+        assert_eq!(first.id, second.id);
+        assert_ne!(first.data_section, second.data_section);
+        for source in &sources {
+            let entities = &exchange.data[source.data_section].entities;
+            let index = crate::step_graph::build_index(entities);
+            let direct = recover_constructive_fragments_from_entities_with_index(entities, &index)?;
+            assert_eq!(build.direct_candidates[source], direct);
+            assert!(!direct.is_empty());
+        }
+        let report = recover_complete_ir_with_kernel_bytes(
+            crate::write_exchange(&exchange)?.as_bytes(),
+            &kernel,
+        )?;
+        assert_eq!(report.source_boundary_verified_solids, sources);
+        assert_eq!(report.constructively_recovered_solid_count, 2);
+        let fragments = report.selected_fragments().collect::<Vec<_>>();
+        assert_eq!(fragments.len(), 2);
+        for selected in fragments {
+            let shape = kernel.evaluate(&selected.fragment.model, selected.fragment.root)?;
+            let own = selected.source_solid;
+            let other = if own == *first { *second } else { *first };
+            assert!(rebuilt_kernel_boundary_matches_source(
+                &kernel,
+                &shape,
+                own.id,
+                &exchange.data[own.data_section].entities
+            )?);
+            assert!(!rebuilt_kernel_boundary_matches_source(
+                &kernel,
+                &shape,
+                other.id,
+                &exchange.data[other.data_section].entities
+            )?);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
     fn assert_boss_native_edit(
         document: &monstertruck_io::step::load::ResolvedStepDocument,
         source: SourceEntity,
@@ -3967,9 +4107,18 @@ END-ISO-10303-21;
             let [source] = load.solids.as_slice() else {
                 bail!("expected one relief source")
             };
-            let fragment =
-                recover_kernel_boundary_feature_fragment(source.source, &load, &document, &kernel)?
-                    .context("native relief did not reconstruct a whole body")?;
+            let entities = &document.as_ref().data[source.source.data_section].entities;
+            let index = crate::step_graph::build_index(entities);
+            let proof = SourceRecovery::new(source.source.id, entities, &index, &kernel);
+            let fragment = recover_kernel_boundary_feature_fragment(
+                source.source,
+                &load,
+                &document,
+                &kernel,
+                &index,
+                proof.as_ref(),
+            )?
+            .context("native relief did not reconstruct a whole body")?;
             assert!(
                 fragment.boundary_verified,
                 "native source proof refused for {:?}",
@@ -4132,6 +4281,23 @@ END-ISO-10303-21;
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
+    fn prove_direct_fixture<K: CadKernel>(
+        source: SourceEntity,
+        exchange: &Exchange,
+        kernel: &K,
+    ) -> Result<Option<CadFragment>> {
+        let entities = &exchange.data[source.data_section].entities;
+        let index = crate::step_graph::build_index(entities);
+        let Some(proof) = SourceRecovery::new(source.id, entities, &index, kernel) else {
+            return Ok(None);
+        };
+        let mut build =
+            recover_complete_ir_build_state(exchange, ReducedBrepMutationMode::KernelOwned, None)?;
+        let candidates = build.direct_candidates.remove(&source).unwrap_or_default();
+        recover_verified_direct_constructive_fragment(&proof, candidates, None)
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn kernel_v15_replays_square_boss_through_complete_ir() -> Result<()> {
         let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
@@ -4178,9 +4344,18 @@ END-ISO-10303-21;
         let [solid] = load.solids.as_slice() else {
             bail!("expected one solid");
         };
-        let recovered =
-            recover_kernel_boundary_feature_fragment(solid.source, &load, &document, &kernel)?
-                .context("native boss recovery refused")?;
+        let entities = &document.as_ref().data[solid.source.data_section].entities;
+        let index = crate::step_graph::build_index(entities);
+        let proof = SourceRecovery::new(solid.source.id, entities, &index, &kernel);
+        let recovered = recover_kernel_boundary_feature_fragment(
+            solid.source,
+            &load,
+            &document,
+            &kernel,
+            &index,
+            proof.as_ref(),
+        )?
+        .context("native boss recovery refused")?;
         assert!(recovered.boundary_verified);
         Ok(())
     }
@@ -4502,13 +4677,7 @@ END-ISO-10303-21;
             "automatically recovered JLC staged loft must match its complete oriented source boundary"
         );
         assert!(
-            recover_verified_direct_constructive_fragment(
-                report.body_scan.solids[0].source,
-                &source,
-                &kernel,
-                None,
-            )?
-            .is_some(),
+            prove_direct_fixture(report.body_scan.solids[0].source, &source, &kernel)?.is_some(),
             "the generic source-admission path must independently certify this JLC loft"
         );
         Ok(())
@@ -4959,13 +5128,7 @@ END-ISO-10303-21;
             );
             let source_entity = report.body_scan.solids[0].source;
             assert!(
-                recover_verified_direct_constructive_fragment(
-                    source_entity,
-                    &exchange,
-                    &kernel,
-                    None
-                )?
-                .is_some(),
+                prove_direct_fixture(source_entity, &exchange, &kernel)?.is_some(),
                 "{label}: the independent direct-candidate proof did not admit the source"
             );
         }

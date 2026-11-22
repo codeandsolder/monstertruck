@@ -407,8 +407,11 @@ mod tests {
     fn original_relief_box_has_certified_spline_strips() -> Result<()> {
         let input = include_bytes!("../../validation/fixtures/native_relief_box_0b5fc9e7.step");
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
-        let diagnostic =
-            super::super::analytic_boundary_diagnostic(1202, &exchange.data[0].entities);
+        let diagnostic = super::super::analytic_boundary_diagnostic(
+            1202,
+            &exchange.data[0].entities,
+            &crate::step_graph::build_index(&exchange.data[0].entities),
+        );
         let signature = diagnostic
             .signature
             .with_context(|| format!("source refused: {:?}", diagnostic.reason))?;
