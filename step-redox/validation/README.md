@@ -45,6 +45,16 @@ Local invocation:
       --step-redox target/release/step-redox \
       --step-count-resize target/release/step-count-resize
 
+After the geometry harness populates the checksum-verified cache, use the native
+semantic probe from the step-redox directory:
+
+    ../target/debug/step-validate-semantics --manifest validation/fixtures.json \
+      --cache .cache/step-redox-validation --out validation/out/semantic-probes \
+      --step-redox ../target/debug/step-redox
+
+It checks the cached fixture hashes independently before testing periodic-chain
+topology, CAD proof provenance, instance patterns, and formed-sheet metadata.
+
 CI uploads validation/out as an artifact, including report.json, summary.md, and
 the reference/candidate/difference image triplets for every camera.
 

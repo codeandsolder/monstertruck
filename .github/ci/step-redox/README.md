@@ -3,7 +3,7 @@
 This directory is CI-only Python tooling, not a geometry implementation or
 runtime dependency. It uses uv with the local pyproject.toml and uv.lock.
 
-- harness.py and semantic_probe.py validate the committed STEP fixtures.
+- harness.py validates committed STEP geometry fixtures. The Rust step-validate-semantics binary independently validates CLI JSON expectations.
 - occt_* utilities provide independent OpenCascade geometry comparisons and
   corpus diagnostics. They do not participate in constructive recovery.
 - Core STEP parsing, feature detection, geometry and topology belong to Rust.
