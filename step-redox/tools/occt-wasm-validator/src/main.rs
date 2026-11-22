@@ -1,10 +1,16 @@
+mod fixtures;
 mod geometry;
+mod manifest;
+mod occupancy;
 mod paired_volume;
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use num_traits::ToPrimitive;
-use occt_wasm::{OcctKernel, StepImport, wasmtime::Engine};
+use occt_wasm::{
+    OcctKernel, StepImport,
+    wasmtime::{Engine, Module},
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -21,6 +27,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run the fixture manifest with a single compiled OCCT kernel module.
+    Run(manifest::RunArgs),
+    /// Acquire and verify all selected manifest fixtures without initializing OCCT.
+    FetchFixtures(manifest::FixtureArgs),
+    /// Verify independent Boolean material occupancy at supplied or sampled witnesses.
+    Occupancy(occupancy::OccupancyArgs),
     /// Report independent OCCT geometry metrics in the native oracle schema.
     Analyze { input: PathBuf },
     /// Analyze multiple STEP files with one compiled WASM module and isolated instances.
@@ -132,6 +144,7 @@ struct FullComparison {
 }
 
 fn compare_steps(
+    module: &Module,
     reference: &Path,
     candidate: &Path,
     thresholds: &geometry::compare::Thresholds,
@@ -139,12 +152,13 @@ fn compare_steps(
     views: &[geometry::render::View],
     out: &Path,
 ) -> Result<FullComparison> {
-    let mut kernel = OcctKernel::new()?;
+    let mut kernel = OcctKernel::from_module(module)?;
     let (a, a_bytes) = load(&mut kernel, reference)?;
     let (b, b_bytes) = load(&mut kernel, candidate)?;
     let ref_report = geometry::analyze(&mut kernel, reference, a_bytes, a)?;
     let cand_report = geometry::analyze(&mut kernel, candidate, b_bytes, b)?;
-    let geometry = geometry::compare::compare(&ref_report, &cand_report, alignment, thresholds)?;
+    let mut geometry =
+        geometry::compare::compare(&ref_report, &cand_report, alignment, thresholds)?;
     let ref_tris = kernel.tessellate_triangles64(a.shape, 0.03, 0.3)?;
     let cand_tris = kernel.tessellate_triangles64(b.shape, 0.03, 0.3)?;
     let renders = geometry::render::compare(
@@ -168,6 +182,7 @@ fn compare_steps(
     } else {
         None
     };
+    geometry.deferred_checks.clear();
     let pass = geometry.metrics_pass
         && renders.iter().all(|r| r.pass)
         && strict_mesh_hash.as_ref().is_none_or(|r| r.pass);
@@ -184,6 +199,16 @@ fn compare_steps(
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Occupancy(args) => occupancy::run(&args),
+        Command::FetchFixtures(args) => {
+            manifest::fetch(&args)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Run(args) => Ok(if manifest::run(&args)? {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        }),
         Command::CompareMetrics {
             reference,
             candidate,
@@ -230,8 +255,17 @@ fn main() -> Result<ExitCode> {
             out,
         } => {
             let thresholds = serde_json::from_reader(fs::File::open(thresholds)?)?;
-            let report =
-                compare_steps(&reference, &candidate, &thresholds, alignment, &views, &out)?;
+            let engine = Engine::new(&OcctKernel::engine_config())?;
+            let module = OcctKernel::compile(&engine)?;
+            let report = compare_steps(
+                &module,
+                &reference,
+                &candidate,
+                &thresholds,
+                alignment,
+                &views,
+                &out,
+            )?;
             let json = serde_json::to_string_pretty(&report)?;
             fs::write(out.join("report.json"), &json)?;
             println!("{json}");
@@ -266,6 +300,20 @@ fn main() -> Result<ExitCode> {
             })
         }
     }
+}
+
+#[cfg(test)]
+fn test_kernel() -> Result<OcctKernel> {
+    static MODULE: std::sync::OnceLock<Result<Module, String>> = std::sync::OnceLock::new();
+    let module = MODULE
+        .get_or_init(|| {
+            let engine =
+                Engine::new(&OcctKernel::engine_config()).map_err(|error| error.to_string())?;
+            OcctKernel::compile(&engine).map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    Ok(OcctKernel::from_module(module)?)
 }
 
 #[cfg(test)]

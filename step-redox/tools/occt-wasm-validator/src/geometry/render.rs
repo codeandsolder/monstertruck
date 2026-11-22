@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use clap::ValueEnum;
 use image::{GrayImage, Luma, imageops};
 use num_traits::ToPrimitive;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 type Point = [f64; 3];
@@ -13,7 +13,7 @@ const SIZE: u32 = 320;
 const SUPERSAMPLE: u32 = 2;
 const MARGIN: f64 = 0.06;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 #[value(rename_all = "snake_case")]
 pub enum View {

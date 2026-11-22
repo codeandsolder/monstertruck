@@ -3,15 +3,16 @@ use anyhow::{Result, ensure};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ValueEnum, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Alignment {
+    #[default]
     Identity,
     BboxCenter,
     CenterOfMass,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Thresholds {
     topology_exact: bool,
@@ -104,7 +105,8 @@ pub struct Comparison {
     pub alignment_translation_mm: [f64; 3],
     checks: Vec<Check>,
     pub metrics_pass: bool,
-    deferred_checks: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) deferred_checks: Vec<&'static str>,
 }
 
 fn difference<const N: usize>(a: [f64; N], b: [f64; N]) -> [f64; N] {

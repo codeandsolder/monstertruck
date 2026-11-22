@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn shared_reference_gate_preserves_signed_volume() -> Result<()> {
-        let mut kernel = OcctKernel::new()?;
+        let mut kernel = crate::test_kernel()?;
         let whole = kernel.make_box(2.0, 3.0, 4.0)?;
         let left = kernel.make_box(1.0, 3.0, 4.0)?;
         let right = kernel.translate(left, 1.0, 0.0, 0.0)?;
