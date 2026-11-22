@@ -3,6 +3,7 @@
 //! Construct triangular limiting walls and reuse every actual topological
 //! edge between walls and caps.
 use super::{Edge, LoftSection, Point3, Shell, Solid, Wire, builder, profile, rigid_matrix};
+use crate::cad_ir::ProfileLoop;
 use anyhow::{Context, Result, ensure};
 use monstertruck_modeling::{InnerSpace, Vector3, Vertex};
 use std::collections::HashMap;
@@ -178,7 +179,7 @@ pub(super) fn build_if_needed(sections: &[LoftSection]) -> Result<Option<Solid>>
             s.profile
                 .loops
                 .iter()
-                .map(|r| r.polygon_points())
+                .map(ProfileLoop::polygon_points)
                 .collect::<Option<Vec<_>>>()
         })
         .collect::<Option<Vec<_>>>()
@@ -217,4 +218,70 @@ pub(super) fn build_if_needed(sections: &[LoftSection]) -> Result<Option<Solid>>
         false,
     )?;
     Ok(Some(Solid::new(vec![shell])?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cad_ir::{Profile2d, RigidTransform};
+    use monstertruck_modeling::MetricSpace;
+
+    fn section(profile: Profile2d, z: f64) -> LoftSection {
+        LoftSection {
+            profile,
+            transform: RigidTransform::translation_mm([0.0, 0.0, z]),
+        }
+    }
+
+    #[test]
+    fn limiting_planar_loft_builds_triangular_walls() -> Result<()> {
+        let base = Profile2d::polygon(vec![[0., 0.], [4., 0.], [3., 2.], [1., 2.]])?;
+        let tip = Profile2d::polygon(vec![[0., 0.], [4., 0.], [2., 4.], [2., 4.]])?;
+        let solid = build_if_needed(&[section(base, 0.0), section(tip, 2.0)])?
+            .context("limiting loft expected")?;
+        let [shell] = solid.boundaries() else {
+            anyhow::bail!("expected one shell");
+        };
+        assert!(solid.is_geometric_consistent());
+        assert_eq!(shell.len(), 6);
+        assert_eq!(
+            shell
+                .iter()
+                .filter(|f| f.boundaries()[0].len() == 3)
+                .count(),
+            2
+        );
+        assert!(
+            shell.iter().flat_map(|f| f.edge_iter()).all(|e| e
+                .front()
+                .point()
+                .distance(e.back().point())
+                > 0.0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn planar_loft_keeps_tapered_hole_in_both_caps() -> Result<()> {
+        let base = Profile2d::polygon(vec![[-3., -3.], [3., -3.], [3., 3.], [-3., 3.]])?;
+        let hollow = |r: f64| -> Result<Profile2d> {
+            let mut profile = base.clone();
+            profile
+                .loops
+                .extend(Profile2d::polygon(vec![[-r, -r], [-r, r], [r, r], [r, -r]])?.loops);
+            Ok(profile)
+        };
+        let solid = build_if_needed(&[section(hollow(1.0)?, 0.), section(hollow(0.5)?, 2.)])?
+            .context("hollow loft expected")?;
+        let [shell] = solid.boundaries() else {
+            anyhow::bail!("expected single connected shell");
+        };
+        assert!(solid.is_geometric_consistent());
+        assert_eq!(shell.len(), 10);
+        assert_eq!(
+            shell.iter().filter(|f| f.boundaries().len() == 2).count(),
+            2
+        );
+        Ok(())
+    }
 }
