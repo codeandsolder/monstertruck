@@ -71,7 +71,7 @@ fn strict_mesh_hash(coordinates: &[f64], quantum: f64) -> Result<String> {
             }
         }
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn analyze(kernel: &mut OcctKernel, path: &Path) -> Result<()> {
