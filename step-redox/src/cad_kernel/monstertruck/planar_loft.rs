@@ -226,7 +226,7 @@ mod tests {
     use crate::cad_ir::{Profile2d, RigidTransform};
     use monstertruck_modeling::MetricSpace;
 
-    fn section(profile: Profile2d, z: f64) -> LoftSection {
+    const fn section(profile: Profile2d, z: f64) -> LoftSection {
         LoftSection {
             profile,
             transform: RigidTransform::translation_mm([0.0, 0.0, z]),
@@ -239,7 +239,8 @@ mod tests {
         let tip = Profile2d::polygon(vec![[0., 0.], [4., 0.], [2., 4.], [2., 4.]])?;
         let solid = build_if_needed(&[section(base, 0.0), section(tip, 2.0)])?
             .context("limiting loft expected")?;
-        let [shell] = solid.boundaries() else {
+        let shells = solid.boundaries();
+        let [shell] = shells.as_slice() else {
             anyhow::bail!("expected one shell");
         };
         assert!(solid.is_geometric_consistent());
@@ -273,7 +274,8 @@ mod tests {
         };
         let solid = build_if_needed(&[section(hollow(1.0)?, 0.), section(hollow(0.5)?, 2.)])?
             .context("hollow loft expected")?;
-        let [shell] = solid.boundaries() else {
+        let shells = solid.boundaries();
+        let [shell] = shells.as_slice() else {
             anyhow::bail!("expected single connected shell");
         };
         assert!(solid.is_geometric_consistent());
