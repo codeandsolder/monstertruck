@@ -106,9 +106,7 @@ fn file_digest(path: &Path) -> Result<String> {
     Ok(hex::encode(hash.finalize()))
 }
 
-fn executable_digest() -> Result<String> {
-    file_digest(&std::env::current_exe()?)
-}
+fn executable_digest() -> Result<String> { file_digest(&std::env::current_exe()?) }
 
 fn parent(path: &Path) -> &Path {
     path.parent()
@@ -371,9 +369,7 @@ impl Body {
             .join(format!("{}.step", self.fingerprint))
     }
 
-    const fn extractable(&self) -> bool {
-        self.representative.solid.has_shape_representation
-    }
+    const fn extractable(&self) -> bool { self.representative.solid.has_shape_representation }
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

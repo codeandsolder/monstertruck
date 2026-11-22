@@ -48,9 +48,7 @@ impl SolidScan {
     }
 }
 
-fn digest(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
-}
+fn digest(bytes: &[u8]) -> String { hex::encode(Sha256::digest(bytes)) }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExtractedBody {
@@ -70,15 +68,11 @@ enum IdentityKind {
 struct Fnv64(u64);
 
 impl Fnv64 {
-    const fn seeded(seed: u64) -> Self {
-        Self(seed)
-    }
+    const fn seeded(seed: u64) -> Self { Self(seed) }
 }
 
 impl Hasher for Fnv64 {
-    fn finish(&self) -> u64 {
-        self.0
-    }
+    fn finish(&self) -> u64 { self.0 }
 
     fn write(&mut self, bytes: &[u8]) {
         for &byte in bytes {
@@ -140,9 +134,7 @@ fn fingerprint(value: &shape_identity::ShapeKey) -> String {
     format!("{:016x}{:016x}", hashers[0].finish(), hashers[1].finish())
 }
 
-fn parse_exchange(bytes: &[u8]) -> Result<Exchange> {
-    Ok(ParsedStepSource::parse(bytes)?.exchange)
-}
+fn parse_exchange(bytes: &[u8]) -> Result<Exchange> { Ok(ParsedStepSource::parse(bytes)?.exchange) }
 
 fn representation_ownership(entities: &[EntityInstance]) -> HashMap<u64, (u64, u64)> {
     let mut owners = HashMap::new();
