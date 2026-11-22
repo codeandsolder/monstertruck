@@ -4559,6 +4559,25 @@ END-ISO-10303-21;
         assert_eq!(report.body_count, 1);
         assert_eq!(report.constructively_recovered_solid_count, 1);
         assert_eq!(report.unrecovered_solid_count, 0);
+        assert!(report.source_boundary_verified_solids.is_empty());
+        let [reconciliation] = report.source_orientation_reconciled_solids.as_slice() else {
+            bail!("expected an independently verified orientation reconciliation");
+        };
+        assert_eq!(reconciliation.source, report.body_scan.solids[0].source);
+        assert_eq!(
+            reconciliation
+                .repairs
+                .iter()
+                .map(|r| r.face_id)
+                .collect::<Vec<_>>(),
+            [530, 729, 845, 1686]
+        );
+        assert!(
+            reconciliation
+                .repairs
+                .iter()
+                .all(|r| !r.original_same_sense && r.reconciled_same_sense)
+        );
         assert!(kernel_replay_is_single_solid(&kernel, &body.fragment)?);
         Ok(())
     }
