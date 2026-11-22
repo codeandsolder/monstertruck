@@ -2272,7 +2272,7 @@ where
     // every Cartesian pair (including pairs with no intersection).
     let surfaces =
         [geom_shell0, geom_shell1].map(|shell| shell.iter().map(Face::surface).collect::<Vec<_>>());
-    let polygons =
+    let sampled_meshes =
         [poly_shell0, poly_shell1].map(|shell| shell.iter().map(Face::surface).collect::<Vec<_>>());
     let supports = certify_face_pair_supports([geom_shell0, geom_shell1], &surfaces);
     let mut endpoint_registry = Vec::<(Vertex<Point3>, Vertex<Point3>)>::new();
@@ -2294,8 +2294,8 @@ where
                 if coplanar.full_interface_adjacency.is_some() {
                     return Some((face_index0, face_index1, Vec::new()));
                 }
-                let polygon0 = polygons[0][face_index0].as_ref()?;
-                let polygon1 = polygons[1][face_index1].as_ref()?;
+                let polygon0 = sampled_meshes[0][face_index0].as_ref()?;
+                let polygon1 = sampled_meshes[1][face_index1].as_ref()?;
                 // A certified common ruled carrier also has no transverse SSI.
                 if supports
                     .shared_ruled_pairs
