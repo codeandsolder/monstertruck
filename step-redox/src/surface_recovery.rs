@@ -610,7 +610,7 @@ pub fn analyze_v_extrusion_surface(
 /// Return both actual boundary control polygons of a linear tensor-product
 /// strip. Proof may normalize knot intervals because it checks the original
 /// full trim; a swapped U/V chart reverses the surface normal.
-pub(crate) fn boundary_strip_profiles(
+pub fn boundary_strip_profiles(
     surface_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,

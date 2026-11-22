@@ -279,9 +279,14 @@ fn full_trim(
     if boundary.edges.len() != 4 {
         return None;
     }
-    let [a, b] = profiles[0].ends()?;
-    let [c, d] = profiles[1].ends()?;
-    let mut expected = [[a, b], [b, d], [d, c], [c, a]];
+    let [first_start, first_end] = profiles[0].ends()?;
+    let [second_start, second_end] = profiles[1].ends()?;
+    let mut expected = [
+        [first_start, first_end],
+        [first_end, second_end],
+        [second_end, second_start],
+        [second_start, first_start],
+    ];
     if forward != boundary.orientation {
         for ends in &mut expected {
             ends.reverse();

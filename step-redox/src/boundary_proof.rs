@@ -1152,10 +1152,18 @@ fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
         | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cone { .. })
         | (SupportLocusKey::Cylinder { .. }, SupportLocusKey::Cone { .. })
         | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cylinder { .. })
-        | (SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. }, _)
-        | (_, SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. })
-        | (SupportLocusKey::SplineStrip { .. }, _)
-        | (_, SupportLocusKey::SplineStrip { .. }) => loci[0] != loci[1],
+        | (
+            SupportLocusKey::Sphere { .. }
+            | SupportLocusKey::Torus { .. }
+            | SupportLocusKey::SplineStrip { .. },
+            _,
+        )
+        | (
+            _,
+            SupportLocusKey::Sphere { .. }
+            | SupportLocusKey::Torus { .. }
+            | SupportLocusKey::SplineStrip { .. },
+        ) => loci[0] != loci[1],
     }
 }
 
@@ -1422,7 +1430,7 @@ fn oriented_support_key(
         SurfaceSupport::Other { .. } => {
             spline_strip::oriented_key(face_id, surface_id, forward, entities, index)
         }
-        _ => None,
+        SurfaceSupport::Revolution(_) => None,
     }
 }
 
