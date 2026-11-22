@@ -4,13 +4,13 @@
 //! original crossing edges supply both end profiles, including collapsed
 //! corner transitions. Independent full-source proof remains mandatory.
 use super::{
-    DIRECTION, Frame, LENGTH, extrusion_node, section_groups, slice_rings, station_levels,
-    valid_line, valid_planar_face,
+    DIRECTION, Frame, LENGTH, section_groups, slice_rings, station_levels, valid_line,
+    valid_planar_face,
 };
 use crate::{
     brep::{OrientedEdgeUse, SurfaceSupport},
-    cad_ir::{CadModel, CadNode, Curve2d, LoftSection, NodeId, Profile2d, ProfileLoop},
-    cad_recovery::{add_bounded_union_tree, solid::local_frame_transform},
+    cad_ir::{CadModel, Curve2d, NodeId, Profile2d, ProfileLoop},
+    cad_recovery::add_bounded_union_tree,
     math2::distance as distance2,
     math3::{add, cross, dot, mul, norm, normalize, sub},
     profile_curves::RecoveredProfileCurve,
@@ -18,6 +18,8 @@ use crate::{
 };
 use anyhow::Result;
 use std::collections::BTreeMap;
+
+mod chains;
 
 struct PlanarSweep<'a> {
     edges: BTreeMap<u64, &'a OrientedEdgeUse>,
@@ -70,30 +72,13 @@ impl<'a> PlanarSweep<'a> {
         Some(frame.project(point))
     }
 
-    fn profile(
-        &self,
-        rings: &[Vec<RecoveredProfileCurve>],
-        group: &[usize],
-        frame: Frame,
-        level: f64,
-    ) -> Option<Profile2d> {
-        let loops = group
+    fn profile(&self, rings: &SectionKey, frame: Frame, level: f64) -> Option<Profile2d> {
+        let loops = rings
             .iter()
-            .map(|&index| {
-                let mut points = rings[index]
+            .map(|ring| {
+                let mut points = ring
                     .iter()
-                    .map(|curve| {
-                        let RecoveredProfileCurve::Line {
-                            source_edge_ids, ..
-                        } = curve
-                        else {
-                            return None;
-                        };
-                        let [start, _] = source_edge_ids.as_slice() else {
-                            return None;
-                        };
-                        self.point(*start, frame, level)
-                    })
+                    .map(|&edge| self.point(edge, frame, level))
                     .collect::<Option<Vec<_>>>()?;
                 canonicalize_collapsed_corners(&mut points)?;
                 Some(ProfileLoop {
@@ -142,102 +127,205 @@ fn canonicalize_collapsed_corners(points: &mut [[f64; 2]]) -> Option<()> {
     Some(())
 }
 
-fn slab_nodes(
-    model: &mut CadModel,
-    sweep: &PlanarSweep<'_>,
-    solid: &ReducedSolid,
-    frame: Frame,
-    lo: f64,
-    hi: f64,
-) -> Option<Vec<NodeId>> {
-    let rings = slice_rings(solid, frame, lo.midpoint(hi))?;
+/// Complete ordered crossing-edge correspondence of an outer ring and its
+/// holes. An unchanged key across source stations establishes identical
+/// affine generators throughout the interval; no profile fitting or
+/// near-coordinate matching is needed.
+type SectionKey = Vec<Vec<u64>>;
+
+fn slab_sections(solid: &ReducedSolid, frame: Frame, limits: [f64; 2]) -> Option<Vec<SectionKey>> {
+    let rings = slice_rings(solid, frame, limits[0].midpoint(limits[1]))?;
     if rings.is_empty() {
         return Some(Vec::new());
     }
-    let groups = section_groups(&rings)?;
-    groups
+    section_groups(&rings)?
         .iter()
         .map(|group| {
-            let start = sweep.profile(&rings, group, frame, lo)?;
-            let end = sweep.profile(&rings, group, frame, hi)?;
-            // Constant slabs stay ordinary compact extrusions. Preserve
-            // authored cyclic correspondence even when vertex ordering differs
-            // from the section's geometric bounding box.
-            if same_profiles(&start, &end) {
-                return Some(extrusion_node(model, frame, lo, hi, start));
-            }
-            Some(
-                model.add_node(CadNode::Loft {
-                    sections: [(lo, start), (hi, end)]
-                        .into_iter()
-                        .map(|(at, profile)| LoftSection {
-                            profile,
-                            transform: local_frame_transform(
-                                add(frame.origin, mul(frame.axis, at)),
-                                frame.x,
-                                frame.y,
-                                frame.axis,
-                            ),
+            group
+                .iter()
+                .map(|&index| {
+                    rings[index]
+                        .iter()
+                        .map(|curve| {
+                            let RecoveredProfileCurve::Line {
+                                source_edge_ids, ..
+                            } = curve
+                            else {
+                                return None;
+                            };
+                            let [start, _] = source_edge_ids.as_slice() else {
+                                return None;
+                            };
+                            Some(*start)
                         })
-                        .collect(),
-                }),
-            )
+                        .collect()
+                })
+                .collect()
         })
         .collect()
 }
 
+/// Maintain maximal contiguous station intervals for each unchanged
+/// connected section. A different island can start, stop or change shape
+/// without splitting unaffected material into additional Boolean operands.
+#[derive(Default)]
+struct SectionRuns {
+    active: BTreeMap<SectionKey, usize>,
+    completed: Vec<(usize, usize, SectionKey)>,
+}
+
+impl SectionRuns {
+    fn advance(&mut self, station: usize, sections: Vec<SectionKey>) {
+        let next = sections
+            .into_iter()
+            .map(|section| {
+                let start = self.active.remove(&section).unwrap_or(station);
+                (section, start)
+            })
+            .collect();
+        self.completed.extend(
+            std::mem::take(&mut self.active)
+                .into_iter()
+                .map(|(section, start)| (start, station, section)),
+        );
+        self.active = next;
+    }
+
+    fn finish(mut self, station: usize) -> Vec<(usize, usize, SectionKey)> {
+        self.advance(station, Vec::new());
+        self.completed.sort_unstable();
+        self.completed
+    }
+}
+
 fn same_profiles(a: &Profile2d, b: &Profile2d) -> bool {
-    a.loops.iter().zip(&b.loops).all(|(a, b)| {
-        a.curves.iter().zip(&b.curves).all(|(a, b)| {
-            let (
-                Curve2d::Line {
-                    start_mm: a,
-                    end_mm: ae,
-                },
-                Curve2d::Line {
-                    start_mm: b,
-                    end_mm: be,
-                },
-            ) = (a, b)
-            else {
-                return false;
-            };
-            distance2(*a, *b) <= LENGTH
-                && distance2(*ae, *be) <= LENGTH
-                && distance2(*a, *ae) > LENGTH
+    a.loops.len() == b.loops.len() && a.loops.iter().zip(&b.loops).all(|(a, b)| {
+        a.curves.len() == b.curves.len() && a.curves.iter().zip(&b.curves).all(|(a,b)| {
+            matches!(a, Curve2d::Line { start_mm, end_mm } if distance2(*start_mm, *end_mm) > LENGTH)
+                && chains::matching_curve(a,b)
         })
     })
 }
 
-pub(super) fn model(
-    solid: &ReducedSolid,
+fn section_spans(
+    sweep: &PlanarSweep<'_>,
     frame: Frame,
+    intervals: Vec<(usize, usize, SectionKey)>,
+) -> Option<Vec<chains::Span>> {
+    intervals
+        .into_iter()
+        .map(|(lo, hi, section)| {
+            Some(chains::Span {
+                limits: [lo, hi],
+                start: sweep.profile(&section, frame, sweep.levels[lo])?,
+                end: sweep.profile(&section, frame, sweep.levels[hi])?,
+            })
+        })
+        .collect()
+}
+
+fn emit_model(
+    chains: Vec<chains::Chain>,
+    frame: Frame,
+    levels: &[f64],
 ) -> Result<Option<(CadModel, NodeId, usize)>> {
-    let Some(sweep) = PlanarSweep::new(solid, frame) else {
-        return Ok(None);
-    };
     let mut model = CadModel::new();
-    let mut children = Vec::new();
-    for ab in sweep.levels.windows(2) {
-        let Some(parts) = slab_nodes(&mut model, &sweep, solid, frame, ab[0], ab[1]) else {
-            return Ok(None);
-        };
-        if !parts.is_empty() {
-            children.push(add_bounded_union_tree(&mut model, parts));
-        }
+    let mut grouped = BTreeMap::<usize, Vec<NodeId>>::new();
+    for chain in chains {
+        let lo = chain.first_station();
+        let node = chain.into_node(&mut model, frame, levels);
+        grouped.entry(lo).or_default().push(node);
     }
+    let children = grouped
+        .into_values()
+        .map(|parts| add_bounded_union_tree(&mut model, parts))
+        .collect::<Vec<_>>();
     if children.is_empty() {
         return Ok(None);
     }
     let root = add_bounded_union_tree(&mut model, children);
     model.add_root(root)?;
     model.validate()?;
-    Ok(Some((model, root, sweep.levels.len() - 1)))
+    Ok(Some((model, root, levels.len() - 1)))
+}
+
+/// Keep the original slab construction eligible for selection. The
+/// independently certified candidate ranking, not a heuristic preference
+/// for loft chains, decides whether a compact alternative wins.
+pub(super) fn models(solid: &ReducedSolid, frame: Frame) -> Result<Vec<(CadModel, NodeId, usize)>> {
+    let Some(sweep) = PlanarSweep::new(solid, frame) else {
+        return Ok(Vec::new());
+    };
+    let mut runs = SectionRuns::default();
+    let mut slabs = Vec::new();
+    for (station, ab) in sweep.levels.windows(2).enumerate() {
+        let Some(sections) = slab_sections(solid, frame, [ab[0], ab[1]]) else {
+            return Ok(Vec::new());
+        };
+        slabs.extend(
+            sections
+                .iter()
+                .cloned()
+                .map(|section| (station, station + 1, section)),
+        );
+        runs.advance(station, sections);
+    }
+    let coalesced = runs.finish(sweep.levels.len() - 1);
+    let distinct = coalesced.len() < slabs.len();
+    let Some(baseline) = section_spans(&sweep, frame, slabs) else {
+        return Ok(Vec::new());
+    };
+    let mut models = Vec::new();
+    if let Some(model) = emit_model(
+        baseline.iter().cloned().map(chains::Chain::new).collect(),
+        frame,
+        &sweep.levels,
+    )? {
+        models.push(model);
+    }
+    let spans = if distinct {
+        let Some(spans) = section_spans(&sweep, frame, coalesced) else {
+            return Ok(models);
+        };
+        if let Some(model) = emit_model(
+            spans.iter().cloned().map(chains::Chain::new).collect(),
+            frame,
+            &sweep.levels,
+        )? {
+            models.push(model);
+        }
+        spans
+    } else {
+        baseline
+    };
+    let count = spans.len();
+    let joined = chains::join(spans);
+    if joined.len() < count {
+        if let Some(model) = emit_model(joined, frame, &sweep.levels)? {
+            models.push(model);
+        }
+    }
+    Ok(models)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unrelated_stations_do_not_split_unchanged_sections() {
+        let first = vec![vec![1, 2, 3, 4]];
+        let second = vec![vec![5, 6, 7]];
+        let mut runs = SectionRuns::default();
+        runs.advance(0, vec![first.clone()]);
+        runs.advance(1, vec![first.clone(), second.clone()]);
+        runs.advance(2, vec![second.clone()]);
+        runs.advance(3, vec![first.clone(), second.clone()]);
+        assert_eq!(
+            runs.finish(4),
+            vec![(0, 2, first.clone()), (1, 4, second), (3, 4, first)]
+        );
+    }
 
     #[test]
     fn collapsed_corners_preserve_cyclic_correspondence() -> Result<()> {
@@ -269,6 +357,29 @@ mod native_tests {
     use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
     use crate::complete_ir::recover_complete_ir_with_kernel_bytes;
     use anyhow::Result;
+
+    #[test]
+    fn tapered_host_prefers_a_certified_multistation_loft() -> Result<()> {
+        let kernel = MonstertruckKernel::project_standard();
+        let bytes =
+            include_bytes!("../../../validation/fixtures/native_peeled_tapered_host_6629a4db.step");
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        let fragments = report.selected_fragments().collect::<Vec<_>>();
+        assert_eq!(fragments.len(), 1);
+        let fragment = &fragments[0].fragment;
+        // Measured original independently certified slab cost: 526.
+        assert!(fragment.model.complexity_score(fragment.root)? < 526);
+        assert!(fragment.model.nodes.iter().any(
+            |node| matches!(node, crate::cad_ir::CadNode::Loft { sections } if sections.len() > 2)
+        ));
+        Ok(())
+    }
 
     #[test]
     fn inclined_relief_host_recovery_is_source_verified() -> Result<()> {
