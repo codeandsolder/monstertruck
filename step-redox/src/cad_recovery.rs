@@ -1287,7 +1287,7 @@ fn validate_periodic_chain(chain: &PeriodicChainPattern) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
 #[path = "cad_recovery/mixed_fixture_models.rs"]
 pub(crate) mod mixed_fixture_models;
 
