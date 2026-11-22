@@ -68,11 +68,13 @@ struct SkinTangent {
 pub fn detect_open_rectangular_sweeps(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    solid_ids: &[u64],
 ) -> Vec<RecoveredOpenRectangularSweep> {
-    let mut out = formed_sheet::detect_formed_sheet_evidence_with_min_pairs(entities, index, 1, 1)
-        .iter()
-        .filter_map(|evidence| detect_one(evidence, entities, index))
-        .collect::<Vec<_>>();
+    let mut out =
+        formed_sheet::detect_formed_sheet_evidence_with_min_pairs(entities, index, 1, 1, solid_ids)
+            .iter()
+            .filter_map(|evidence| detect_one(evidence, entities, index))
+            .collect::<Vec<_>>();
     out.sort_by_key(|sweep| sweep.solid_id);
     out
 }

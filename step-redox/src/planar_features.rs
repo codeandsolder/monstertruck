@@ -755,47 +755,32 @@ pub fn materialize_boundary_feature_tools_for_analysis(
     BoundaryFeatureDiagnostics,
     Vec<BoundaryFeatureToolMaterialization>,
 )> {
-    materialize_boundary_feature_tools_for_analysis_filtered(entities, min_instances, None)
+    let index = build_index(entities);
+    let report = diagnose_boundary_features_with_index_filtered(entities, &index, None);
+    let tools =
+        materialize_boundary_feature_tools_from_report(entities, &index, &report, min_instances)?;
+    Ok((report, tools))
 }
 
-pub fn materialize_boundary_feature_tools_for_analysis_for_shells(
-    entities: &mut Vec<EntityInstance>,
-    min_instances: usize,
-    target_shells: &HashSet<u64>,
-) -> Result<(
-    BoundaryFeatureDiagnostics,
-    Vec<BoundaryFeatureToolMaterialization>,
-)> {
-    materialize_boundary_feature_tools_for_analysis_filtered(
-        entities,
-        min_instances,
-        Some(target_shells),
-    )
-}
-
+/// Materialize from the exact immutable source evidence already obtained by
+/// the recovery pass. The caller must supply the unchanged source and index.
 #[expect(
     clippy::too_many_lines,
     reason = "boundary-tool materialization keeps proof, emission, and provenance bookkeeping transactional"
 )]
-fn materialize_boundary_feature_tools_for_analysis_filtered(
+pub fn materialize_boundary_feature_tools_from_report(
     entities: &mut Vec<EntityInstance>,
+    initial_index: &HashMap<u64, usize>,
+    report: &BoundaryFeatureDiagnostics,
     min_instances: usize,
-    target_shells: Option<&HashSet<u64>>,
-) -> Result<(
-    BoundaryFeatureDiagnostics,
-    Vec<BoundaryFeatureToolMaterialization>,
-)> {
+) -> Result<Vec<BoundaryFeatureToolMaterialization>> {
     if min_instances == 0 {
         bail!("boundary feature tool materialization requires min_instances > 0");
     }
-
-    let initial_index = build_index(entities);
-    let representation_by_shell = collect_shell_contexts(entities, &initial_index)
+    let representation_by_shell = collect_shell_contexts(entities, initial_index)
         .into_iter()
         .map(|context| (context.shell_id, context.representation_id))
         .collect::<HashMap<_, _>>();
-    let report =
-        diagnose_boundary_features_with_index_filtered(entities, &initial_index, target_shells);
     let mut next_id = entities
         .iter()
         .map(entity_id)
@@ -812,7 +797,7 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
             continue;
         };
 
-        let index = &initial_index;
+        let index = initial_index;
         let mut bound_owner = HashMap::<u64, u64>::new();
         for &host in &family.host_face_ids {
             let Some(bounds) = ref_list_param(host, 1, entities, index) else {
@@ -885,7 +870,7 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
             let mut cap_bounds = vec![entity_ref(cap_bound)];
             if member.interface_bound_ids.len() == 1
                 && let Some(holes) =
-                    coplanar_feature_cap_holes(member, &frame, entities, &initial_index)
+                    coplanar_feature_cap_holes(member, &frame, entities, initial_index)
             {
                 for (face_id, hole_loop_id, hole_orientation) in holes {
                     folded_cap_faces.insert(face_id);
@@ -984,7 +969,7 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
         });
     }
 
-    Ok((report, materialized))
+    Ok(materialized)
 }
 
 /// Remove proven leaf boundary-feature patches from shell topology so the
@@ -2140,7 +2125,11 @@ mod tests {
             let original = entities.clone();
             let (_, tools) = materialize_boundary_feature_tools_for_analysis(entities, 1)?;
             let index = build_index(entities);
-            let extrusions = detect_solid_extrusions_with_index(entities, &index);
+            let extrusions = detect_solid_extrusions_with_index(
+                entities,
+                &index,
+                &crate::brep::manifold_solid_ids(entities),
+            );
             let cutters = tools
                 .iter()
                 .filter(|tool| tool.polarity == FeaturePolarity::Subtractive)

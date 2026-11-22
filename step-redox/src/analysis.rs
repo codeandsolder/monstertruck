@@ -144,6 +144,7 @@ impl AnalysisSession {
                     entities,
                     index,
                     cache.source_tolerances(entities),
+                    &crate::brep::manifold_solid_ids(entities),
                 )
             })
             .collect()
@@ -157,6 +158,7 @@ impl AnalysisSession {
                     entities,
                     index,
                     cache.source_tolerances(entities),
+                    &crate::brep::manifold_solid_ids(entities),
                 )
             })
             .collect()
@@ -166,7 +168,11 @@ impl AnalysisSession {
     pub fn solid_extrusions(&self) -> Vec<solid_extrusions::RecoveredSolidExtrusion> {
         self.indexed_sections()
             .flat_map(|(entities, index, _)| {
-                solid_extrusions::detect_solid_extrusions_with_index(entities, index)
+                solid_extrusions::detect_solid_extrusions_with_index(
+                    entities,
+                    index,
+                    &crate::brep::manifold_solid_ids(entities),
+                )
             })
             .collect()
     }

@@ -5,7 +5,7 @@ use crate::math3::{
 use crate::step_entities::{
     cartesian_point, direction_components as direction, number as numeric_value,
 };
-use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
+use crate::step_graph::{build_index, entity_ref_value, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -138,6 +138,7 @@ pub(crate) fn detect_formed_sheet_evidence_with_index(
         index,
         MIN_COAXIAL_PAIRS,
         MIN_PARALLEL_PLANE_PAIRS,
+        &crate::brep::manifold_solid_ids(entities),
     )
 }
 
@@ -160,20 +161,14 @@ pub(crate) fn detect_formed_sheet_evidence_with_min_pairs(
     index: &HashMap<u64, usize>,
     min_coaxial_pairs: usize,
     min_parallel_plane_pairs: usize,
+    solid_ids: &[u64],
 ) -> Vec<FormedSheetEvidence> {
     if min_coaxial_pairs == 0 || min_parallel_plane_pairs == 0 {
         return Vec::new();
     }
     let mut out = Vec::new();
 
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "MANIFOLD_SOLID_BREP" {
-            continue;
-        }
-        let solid_id = entity_id(entity);
+    for &solid_id in solid_ids {
         let Some(face_ids) = solid_faces(solid_id, entities, index) else {
             continue;
         };
