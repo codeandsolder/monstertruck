@@ -768,7 +768,7 @@ pub fn materialize_boundary_feature_tools_for_analysis(
     clippy::too_many_lines,
     reason = "boundary-tool materialization keeps proof, emission, and provenance bookkeeping transactional"
 )]
-pub(crate) fn materialize_boundary_feature_tools_from_report(
+pub fn materialize_boundary_feature_tools_from_report(
     entities: &mut Vec<EntityInstance>,
     initial_index: &HashMap<u64, usize>,
     report: &BoundaryFeatureDiagnostics,
