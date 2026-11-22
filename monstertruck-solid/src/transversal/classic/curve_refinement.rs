@@ -47,6 +47,15 @@ fn improve<const N: usize>(
                     .mul_add(scale, parameters[i])
                     .clamp(ranges[i].0, ranges[i].1)
             });
+            // Once the step rounds to the current parameters, smaller
+            // trials cannot improve the residual either.
+            if trial
+                .iter()
+                .zip(parameters)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+            {
+                break;
+            }
             let trial_gap = residual(trial);
             let trial_error = trial_gap.magnitude2();
             if trial_error < error {
