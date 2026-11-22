@@ -348,6 +348,92 @@ fn finish_union<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     Solid::new(components).ok()
 }
 
+/// Every pair of operands must have disjoint certified boxes or a common
+/// separating cap plane. Different pairs may use different planes.
+/// Collect all opposite cap incidences before any overlay, then remove
+/// the internal interfaces and weld just once. No global host/root solid
+/// is required to be adjacent to every attachment.
+fn separated_union<C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve, S: ShapeOpsSurface>(
+    lhs: &Solid<Point3, C, S>,
+    rhs: &[&Solid<Point3, C, S>],
+    lhs_bounds: &[FaceBounds],
+    rhs_bounds: &[Vec<FaceBounds>],
+    tol: f64,
+) -> Option<Solid<Point3, C, S>> {
+    let solids = std::iter::once(lhs)
+        .chain(rhs.iter().copied())
+        .collect::<Vec<_>>();
+    let bounds = std::iter::once(lhs_bounds)
+        .chain(rhs_bounds.iter().map(Vec::as_slice))
+        .collect::<Vec<_>>();
+    let boxes = bounds
+        .iter()
+        .map(|b| bounds_box(b))
+        .collect::<Option<Vec<_>>>()?;
+    let mut offsets = Vec::with_capacity(bounds.len());
+    let mut count = 0;
+    for b in &bounds {
+        offsets.push(count);
+        count += b.len();
+    }
+    let mut contacts = vec![Vec::new(); count];
+    for (i, a) in bounds.iter().enumerate() {
+        for (j, b) in bounds[..i].iter().enumerate() {
+            if disjoint_boxes(&boxes[i], &boxes[j], tol) {
+                continue;
+            }
+            let (a_caps, b_caps) =
+                a.iter()
+                    .filter_map(|face| face.outward_plane)
+                    .find_map(|plane| {
+                        Some((
+                            cap_partition(a, plane, 1., tol)?,
+                            cap_partition(b, plane, -1., tol)?,
+                        ))
+                    })?;
+            for (ai, &acap) in a_caps.iter().enumerate() {
+                if !acap {
+                    continue;
+                }
+                let ai = offsets[i] + ai;
+                for (bi, &bcap) in b_caps.iter().enumerate() {
+                    if !bcap {
+                        continue;
+                    }
+                    let bi = offsets[j] + bi;
+                    contacts[ai].push(bi);
+                    contacts[bi].push(ai);
+                }
+            }
+        }
+    }
+    let all = solids
+        .iter()
+        .zip(&bounds)
+        .zip(offsets)
+        .flat_map(|((&solid, bounds), offset)| {
+            regions(solid, &vec![false; bounds.len()], offset).retained
+        })
+        .collect::<Vec<_>>();
+    let mut retained = Vec::new();
+    for (region, opposites) in all.iter().zip(contacts) {
+        if opposites.is_empty() {
+            retained.push(region.clone());
+        } else {
+            let cutters = opposites
+                .into_iter()
+                .map(|i| all[i].clone())
+                .collect::<Vec<_>>();
+            retained.extend(overlay_planar_subtract(
+                std::slice::from_ref(region),
+                &cutters,
+                tol,
+            )?);
+        }
+    }
+    finish_union(&retained, tol)
+}
+
 /// A separating plane between a host and disjoint attachment solids.
 /// Evaluate the complete contact arrangement only once.
 pub(in crate::transversal) fn union_many<
@@ -372,7 +458,7 @@ pub(in crate::transversal) fn union_many<
         .collect::<Option<Vec<_>>>()?;
     for (i, a) in boxes.iter().enumerate() {
         if boxes[..i].iter().any(|b| !disjoint_boxes(a, b, tol)) {
-            return None;
+            return separated_union(lhs, rhs, &lhs_bounds, &rhs_bounds, tol);
         }
     }
     for separator in lhs_bounds.iter().filter_map(|face| face.outward_plane) {
@@ -414,7 +500,11 @@ pub(in crate::transversal) fn union_many<
         left.extend(right);
         return finish_union(&left, tol);
     }
-    local_union(lhs, rhs, &lhs_bounds, &rhs_bounds, tol)
+    local_union(lhs, rhs, &lhs_bounds, &rhs_bounds, tol).or_else(|| {
+        (rhs.len() > 1)
+            .then(|| separated_union(lhs, rhs, &lhs_bounds, &rhs_bounds, tol))
+            .flatten()
+    })
 }
 
 pub(in crate::transversal) fn union<
@@ -607,6 +697,23 @@ mod tests {
         assert_eq!(solid.boundaries().len(), 1);
         assert!(solid.is_geometric_consistent());
         assert_eq!(solid.face_iter().count(), expected);
+    }
+
+    #[test]
+    fn planar_contact_graph_joins_multiple_interfaces_without_common_host_plane() {
+        let unit = Vector3::new(1., 1., 1.);
+        let first = box_at(Point3::origin(), unit);
+        let second = box_at(Point3::new(0., 0., 1.), unit);
+        let third = box_at(Point3::new(1., 0., 1.), unit);
+        let fourth = box_at(Point3::new(1., 0., 2.), unit);
+        let joined = union_many(&first, &[&second, &third, &fourth], 1e-6)
+            .expect("complete separated contact graph");
+        assert_consistent_face_count(&joined, 18);
+        let reversed =
+            union_many(&fourth, &[&third, &first, &second], 1e-6).expect("different root");
+        assert_consistent_face_count(&reversed, 18);
+        let overlapping = box_at(Point3::new(0.5, 0., 1.), unit);
+        assert!(union_many(&first, &[&second, &third, &overlapping], 1e-6).is_none());
     }
 
     #[test]
