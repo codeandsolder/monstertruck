@@ -4024,9 +4024,11 @@ END-ISO-10303-21;
                 40,
             ),
             (
+                // The correctly oriented subtractive tools now remove 55
+                // additional faces in this first native transaction.
                 include_bytes!("../validation/fixtures/native_relief_housing_0914dda4.step"),
                 385,
-                145,
+                90,
             ),
         ];
         for &(bytes, original_faces, healed_faces) in fixtures {
@@ -4463,6 +4465,22 @@ END-ISO-10303-21;
             assert!(summary.is_single_solid(), "{summary:?}");
             assert_eq!(summary.faces, faces);
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_blind_spline_recesses_reconstruct_whole_body() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_relief_blind_254dc55c.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        let [body] = report.boundary_feature_composites.as_slice() else {
+            bail!("blind spline recesses must recover one editable feature composite");
+        };
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(report.unrecovered_solid_count, 0);
+        assert!(kernel_replay_is_single_solid(&kernel, &body.fragment)?);
         Ok(())
     }
 
