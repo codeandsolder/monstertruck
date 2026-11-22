@@ -4203,6 +4203,20 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn native_relief_tapered_hosts_are_source_verified() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_tapered_4eef029b.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_tapered_a9bc1938.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_tapered_6a408847.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_tapered_e43d7cca.step").as_slice(),
+        ] {
+            assert_source_verified_relief(bytes)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn native_relief_partitioned_spline_caps_are_source_verified() -> Result<()> {
         for bytes in [
             include_bytes!("../validation/fixtures/native_relief_partitioned_63d50d37.step")

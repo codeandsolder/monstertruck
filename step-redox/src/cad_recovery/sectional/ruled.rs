@@ -94,34 +94,7 @@ impl<'a> PlanarSweep<'a> {
                         self.point(*source_edge_ids.first()?, frame, level)
                     })
                     .collect::<Option<Vec<_>>>()?;
-                // Multiple source edges can converge to one section vertex.
-                // Preserve each correspondence slot but give coincident corners
-                // one exact coordinate, never create a zero-length B-rep edge.
-                let count = points.len();
-                for _ in 0..count {
-                    let mut changed = false;
-                    for i in 0..count {
-                        let j = (i + 1) % count;
-                        if distance2(points[i], points[j]) <= LENGTH {
-                            let canonical = if points[i][0]
-                                .total_cmp(&points[j][0])
-                                .then_with(|| points[i][1].total_cmp(&points[j][1]))
-                                .is_lt()
-                            {
-                                points[i]
-                            } else {
-                                points[j]
-                            };
-                            changed |= distance2(points[i], canonical) > 0.
-                                || distance2(points[j], canonical) > 0.;
-                            points[i] = canonical;
-                            points[j] = canonical;
-                        }
-                    }
-                    if !changed {
-                        break;
-                    }
-                }
+                canonicalize_collapsed_corners(&mut points)?;
                 Some(ProfileLoop {
                     curves: points
                         .iter()
@@ -133,6 +106,39 @@ impl<'a> PlanarSweep<'a> {
             .collect::<Option<Vec<_>>>()?;
         Some(Profile2d { loops })
     }
+}
+
+/// Canonicalize contiguous limiting corners, using the original point
+/// distances rather than the progressively modified coordinates. Every
+/// displacement must fit the existing length budget, even along a chain
+/// of individually close points.
+fn canonicalize_collapsed_corners(points: &mut [[f64; 2]]) -> Option<()> {
+    let count = points.len();
+    if count < 3 {
+        return None;
+    }
+    let offset = (0..count)
+        .find(|&i| distance2(points[i], points[(i + 1) % count]) > LENGTH)
+        .map_or(0, |i| (i + 1) % count);
+    points.rotate_left(offset);
+    let mut start = 0;
+    while start < count {
+        let mut end = start + 1;
+        while end < count && distance2(points[end - 1], points[end]) <= LENGTH {
+            end += 1;
+        }
+        let group = &mut points[start..end];
+        let canonical = *group
+            .iter()
+            .min_by(|a, b| a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])))?;
+        if group.iter().any(|&p| distance2(p, canonical) > LENGTH) {
+            return None;
+        }
+        group.fill(canonical);
+        start = end;
+    }
+    points.rotate_right(offset);
+    Some(())
 }
 
 fn slab_nodes(
@@ -230,4 +236,29 @@ pub(super) fn model(
     model.add_root(root)?;
     model.validate()?;
     Ok(Some((model, root, sweep.levels.len() - 1)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collapsed_corners_preserve_cyclic_correspondence() {
+        let mut points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [LENGTH * 0.2, 0.0]];
+        canonicalize_collapsed_corners(&mut points).unwrap();
+        assert!(distance2(points[0], points[3]) <= f64::EPSILON);
+        assert!(distance2(points[1], [2.0, 0.0]) <= f64::EPSILON);
+        assert!(distance2(points[2], [2.0, 2.0]) <= f64::EPSILON);
+    }
+
+    #[test]
+    fn collapsed_corners_reject_transitive_displacement() {
+        let mut points = [
+            [0.0, 0.0],
+            [0.75 * LENGTH, 0.0],
+            [1.5 * LENGTH, 0.0],
+            [2.0, 2.0],
+        ];
+        assert!(canonicalize_collapsed_corners(&mut points).is_none());
+    }
 }
