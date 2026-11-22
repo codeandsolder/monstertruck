@@ -115,6 +115,7 @@ pub mod decorators;
 pub mod t_spline;
 
 mod analytic_bezier_partition;
+pub use analytic_bezier_partition::{ProofBezierSpan, proof_bezier_spans};
 mod analytic_bezier_refinement;
 /// Checked geometric identities and orientation for analytic surface carriers.
 pub mod analytic_carrier;

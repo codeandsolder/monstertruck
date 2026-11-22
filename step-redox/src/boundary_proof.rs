@@ -16,11 +16,20 @@ pub(crate) const ANALYTIC_BOUNDARY_PROOF_TOL_MM: f64 = 4.0 * SCALAR_Q_MM;
 
 mod bounded;
 mod direction_cells;
+mod spline_strip;
+pub use spline_strip::{SplineCurveKey, SplineStripKey};
 
 type PointKey = [i64; 3];
 type GroupedBoundarySegments = BTreeMap<[OrientedSupportKey; 2], Vec<(PointKey, PointKey)>>;
 type GroupedCircularSegments =
     BTreeMap<([OrientedSupportKey; 2], CircleLocusKey), Vec<bounded::Arc>>;
+
+#[derive(Default)]
+struct PhysicalBoundaryGroups {
+    linear: GroupedBoundarySegments,
+    circular: GroupedCircularSegments,
+    splines: Vec<BoundaryChainKey>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -57,6 +66,11 @@ pub enum OrientedSupportKey {
         minor_radius_mm: i64,
         radial_outward: bool,
     },
+    /// Complete bounded spline wall, including its two actual profile curves.
+    SplineStrip {
+        strip: Box<SplineStripKey>,
+        outward_positive: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -86,6 +100,9 @@ enum SupportLocusKey {
         major_radius_mm: i64,
         minor_radius_mm: i64,
     },
+    SplineStrip {
+        strip: Box<SplineStripKey>,
+    },
 }
 
 /// Parameterization-independent circle carrier for a bounded physical chain.
@@ -109,6 +126,11 @@ pub enum BoundaryChainKey {
         supports: [OrientedSupportKey; 2],
         locus: CircleLocusKey,
         endpoints_mm: Option<[PointKey; 2]>,
+    },
+    /// Complete bounded rational spline, certified on both incident carriers.
+    Spline {
+        supports: [OrientedSupportKey; 2],
+        curve: Box<SplineCurveKey>,
     },
 }
 
@@ -343,7 +365,7 @@ fn analytic_boundary_signature(
 
     let graph = collect_boundary_graph(&face_ids, entities, &index)?;
     let (mut union_find, component_support) = merge_support_components(&graph)?;
-    let (grouped_segments, circular_segments) = group_physical_boundaries(
+    let groups = group_physical_boundaries(
         &graph,
         &mut union_find,
         &component_support,
@@ -351,11 +373,11 @@ fn analytic_boundary_signature(
         &index,
     )?;
 
-    let mut chains = Vec::new();
-    for (supports, segments) in grouped_segments {
+    let mut chains = groups.splines;
+    for (supports, segments) in groups.linear {
         chains.extend(normalize_linear_chains(&supports, &segments)?);
     }
-    for ((supports, locus), arcs) in circular_segments {
+    for ((supports, locus), arcs) in groups.circular {
         chains.extend(
             bounded::normalize_arcs(&supports, &locus, &arcs)
                 .map_err(|reason| format!("{reason}: {supports:?}, {locus:?}, {arcs:?}"))?,
@@ -554,10 +576,9 @@ fn group_physical_boundaries(
     component_support: &HashMap<usize, OrientedSupportKey>,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-) -> Result<(GroupedBoundarySegments, GroupedCircularSegments), String> {
+) -> Result<PhysicalBoundaryGroups, String> {
     let mut rejected = Vec::new();
-    let mut grouped_segments = BTreeMap::new();
-    let mut circular_segments = BTreeMap::new();
+    let mut groups = PhysicalBoundaryGroups::default();
     let mut edge_uses = graph.edge_uses.iter().collect::<Vec<_>>();
     edge_uses.sort_unstable_by_key(|(id, _)| **id);
     for (edge_id, attached) in edge_uses {
@@ -601,14 +622,19 @@ fn group_physical_boundaries(
             continue;
         };
         match bounded::classify(geometry, &curve, &loci) {
-            Some(bounded::BoundedEdge::Line) => grouped_segments
+            Some(bounded::BoundedEdge::Line) => groups
+                .linear
                 .entry(supports)
                 .or_insert_with(Vec::new)
                 .push((geometry.start, geometry.end)),
-            Some(bounded::BoundedEdge::Circle(locus, arc)) => circular_segments
+            Some(bounded::BoundedEdge::Circle(locus, arc)) => groups
+                .circular
                 .entry((supports, locus))
                 .or_insert_with(Vec::new)
                 .push(arc),
+            Some(bounded::BoundedEdge::Spline(curve)) => groups
+                .splines
+                .push(BoundaryChainKey::Spline { supports, curve }),
             None => {
                 rejected.push(format!(
                     "#{edge_id}: {} on {loci:?}",
@@ -634,7 +660,7 @@ fn group_physical_boundaries(
                 .join("; ")
         ));
     }
-    Ok((grouped_segments, circular_segments))
+    Ok(groups)
 }
 
 fn prove_all_supports_are_bounded(
@@ -645,7 +671,8 @@ fn prove_all_supports_are_bounded(
         .iter()
         .flat_map(|chain| match chain {
             BoundaryChainKey::Open { supports, .. }
-            | BoundaryChainKey::Circular { supports, .. } => supports.iter(),
+            | BoundaryChainKey::Circular { supports, .. }
+            | BoundaryChainKey::Spline { supports, .. } => supports.iter(),
         })
         .cloned()
         .collect::<BTreeSet<_>>();
@@ -749,7 +776,7 @@ fn normalize_linear_chains(
     Ok(result)
 }
 
-const fn support_locus_key(support: &OrientedSupportKey) -> SupportLocusKey {
+fn support_locus_key(support: &OrientedSupportKey) -> SupportLocusKey {
     match support {
         OrientedSupportKey::Plane {
             normal, offset_mm, ..
@@ -798,6 +825,9 @@ const fn support_locus_key(support: &OrientedSupportKey) -> SupportLocusKey {
             axis: *axis,
             major_radius_mm: *major_radius_mm,
             minor_radius_mm: *minor_radius_mm,
+        },
+        OrientedSupportKey::SplineStrip { strip, .. } => SupportLocusKey::SplineStrip {
+            strip: strip.clone(),
         },
     }
 }
@@ -982,7 +1012,8 @@ fn circle_section_of_plane_and_support(
         }
         SupportLocusKey::Plane { .. }
         | SupportLocusKey::Sphere { .. }
-        | SupportLocusKey::Torus { .. } => None,
+        | SupportLocusKey::Torus { .. }
+        | SupportLocusKey::SplineStrip { .. } => None,
     }
 }
 
@@ -1122,7 +1153,9 @@ fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
         | (SupportLocusKey::Cylinder { .. }, SupportLocusKey::Cone { .. })
         | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cylinder { .. })
         | (SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. }, _)
-        | (_, SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. }) => loci[0] != loci[1],
+        | (_, SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. })
+        | (SupportLocusKey::SplineStrip { .. }, _)
+        | (_, SupportLocusKey::SplineStrip { .. }) => loci[0] != loci[1],
     }
 }
 
@@ -1162,6 +1195,7 @@ fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey) -> b
             norm(cross(direction, axis)) <= ANGULAR_TOLERANCE
                 && (norm(radial) - radius).abs() <= LOCUS_TOLERANCE_MM
         }
+        SupportLocusKey::SplineStrip { strip } => spline_strip::line_on_strip(line, strip),
         SupportLocusKey::Cone { .. }
         | SupportLocusKey::Sphere { .. }
         | SupportLocusKey::Torus { .. } => false,
@@ -1229,6 +1263,7 @@ fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey
         SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. } => {
             bounded::circle_on_curved_support(circle, support)
         }
+        SupportLocusKey::SplineStrip { .. } => false,
     }
 }
 
@@ -1380,7 +1415,12 @@ fn oriented_support_key(
             )
         }
         SurfaceSupport::SplineExtrusion(surface) => {
-            spline_extrusion_cylinder_key(&surface, forward)
+            spline_extrusion_cylinder_key(&surface, forward).or_else(|| {
+                spline_strip::oriented_key(face_id, surface_id, forward, entities, index)
+            })
+        }
+        SurfaceSupport::Other { .. } => {
+            spline_strip::oriented_key(face_id, surface_id, forward, entities, index)
         }
         _ => None,
     }

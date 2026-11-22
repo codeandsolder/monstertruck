@@ -27,7 +27,7 @@ const fn point(p: [f64; 3]) -> Point3 { Point3::new(p[0], p[1], p[2]) }
 const fn vector(v: [f64; 3]) -> Vector3 { Vector3::new(v[0], v[1], v[2]) }
 fn decode(p: PointKey) -> Option<[f64; 3]> { dequantize_vector(p, POINT_Q_MM) }
 
-fn rational(spline: &BSplineSupport) -> Option<NurbsCurve<Vector4>> {
+pub(super) fn rational(spline: &BSplineSupport) -> Option<NurbsCurve<Vector4>> {
     bspline_domain(spline)?;
     let weights = spline.weights.as_ref();
     if weights.is_some_and(|w| w.len() != spline.control_points_mm.len()) {
@@ -215,7 +215,7 @@ fn on_circle(p: [f64; 3], circle: brep::CircleSupport) -> bool {
     let delta = sub(p, circle.center_mm);
     dot(delta, circle.normal).abs() <= TOL && (norm(delta) - circle.radius_mm).abs() <= TOL
 }
-fn on_line(p: [f64; 3], line: brep::LineSupport) -> bool {
+pub(super) fn on_line(p: [f64; 3], line: brep::LineSupport) -> bool {
     normalize(line.direction, 0.)
         .is_some_and(|direction| norm(cross(sub(p, line.origin_mm), direction)) <= TOL)
 }
@@ -284,6 +284,7 @@ pub(super) struct Arc {
 pub(super) enum BoundedEdge {
     Line,
     Circle(CircleLocusKey, Arc),
+    Spline(Box<super::SplineCurveKey>),
 }
 
 fn circle_arc(
@@ -393,6 +394,9 @@ pub(super) fn classify(
                 ) == SegmentLocus::WithinTolerance
             {
                 return Some(BoundedEdge::Line);
+            }
+            if let Some(key) = super::spline_strip::certified_edge(edge, spline, loci) {
+                return Some(BoundedEdge::Spline(Box::new(key)));
             }
             let proposed = circle_section_of_plane_and_support(&loci[0], &loci[1])
                 .or_else(|| circle_section_of_plane_and_support(&loci[1], &loci[0]))

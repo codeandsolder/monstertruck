@@ -14,8 +14,11 @@ const MAX_BLOSSOM_STEPS: usize = 32_000_000;
 
 /// Original positive-length knot span and its homogeneous Bernstein controls.
 pub struct ProofBezierSpan {
+    /// Inclusive start parameter of this positive-length span.
     pub start: f64,
+    /// Inclusive end parameter of this positive-length span.
     pub end: f64,
+    /// Homogeneous Bernstein control coefficients in parameter order.
     pub controls: Vec<[f64; 4]>,
 }
 
