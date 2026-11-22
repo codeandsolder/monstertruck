@@ -805,14 +805,19 @@ pub fn try_planar_contact_many<
     }
 }
 
-/// Union bounded coplanar material faces in one shared analytic plane.
+/// Evaluate a bounded Boolean expression in one shared analytic plane.
+///
+/// The predicate receives one occupancy flag per input face. It must be
+/// false outside every face; an empty selected region returns an empty
+/// shell rather than a refused arrangement.
 /// Disconnected regions remain separate faces, with their original line
 /// and curve edges. A refused arrangement returns `None`.
 ///
 /// # Errors
 /// Returns an error for an invalid or unsupported geometry policy.
-pub fn try_planar_profile_union<C, S>(
+pub fn try_planar_profile_boolean<C, S>(
     faces: &[Face<Point3, C, S>],
+    select: impl Fn(&[bool]) -> bool,
     policy: GeometryPolicy,
 ) -> ShapeOpsResult<Option<Shell<Point3, C, S>>>
 where
@@ -820,14 +825,14 @@ where
     S: ShapeOpsSurface,
     Plane: ToSameGeometry<S>,
 {
-    let tol = classic_boolean_tolerance(policy, "planar profile union")?;
+    let tol = classic_boolean_tolerance(policy, "planar profile Boolean")?;
     #[cfg(feature = "marching-ssi")]
     {
-        Ok(classic::planar_contact::profiles(faces, tol))
+        Ok(classic::planar_contact::profiles(faces, tol, select))
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
-        let _ = (faces, tol);
+        let _ = (faces, tol, select);
         Ok(None)
     }
 }
