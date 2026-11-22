@@ -20,6 +20,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use step_p21::ast::EntityInstance;
 
+mod embedding;
 mod restriction;
 pub(super) use restriction::{ProfilePosition, complete_profile_cover};
 use restriction::{complete_directed_cover, profile_piece};
@@ -211,7 +212,9 @@ fn monotone_profile(key: &SplineCurveKey, direction: [f64; 3]) -> bool {
 
 type DirectedProfile = (SplineCurveKey, bool);
 
-fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfile; 2]> {
+fn translated_geometry(
+    profiles: &[BSplineSupport; 2],
+) -> Option<([DirectedProfile; 2], [f64; 3], [f64; 3])> {
     let [first, second] = profiles;
     if first.degree != second.degree
         || first.knots != second.knots
@@ -246,15 +249,31 @@ fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfil
         *first.control_points_mm.last()?,
         *first.control_points_mm.first()?,
     );
-    let candidates = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], chord];
     let keys = [curve_evidence(first)?, curve_evidence(second)?]
         .map(|evidence| (evidence.key, evidence.forward));
-    candidates
+    Some((keys, axis, chord))
+}
+
+fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfile; 2]> {
+    let (keys, axis, chord) = translated_geometry(profiles)?;
+    [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], chord]
         .into_iter()
         .filter_map(|e| normalize(sub(e, mul(axis, dot(axis, e))), TOL))
         .flat_map(|d| [d, mul(d, -1.)])
         .any(|d| keys.iter().all(|(key, _)| monotone_profile(key, d)))
         .then_some(keys)
+}
+
+/// The global monotonicity check is a cheap certificate for most profiles.
+/// For turning profiles prove each span injective and every projected
+/// span pair separated, rather than weakening the monotonicity inequalities.
+fn embedded_translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfile; 2]> {
+    translated_profiles(profiles).or_else(|| {
+        let (keys, axis, _) = translated_geometry(profiles)?;
+        keys.iter()
+            .all(|(key, _)| embedding::is_embedded(key, axis))
+            .then_some(keys)
+    })
 }
 
 /// The topological trim vertices are shared by the incident faces and
@@ -438,7 +457,7 @@ pub(super) fn oriented_key(
 ) -> Option<OrientedSupportKey> {
     let (profiles, swapped) =
         crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index)?;
-    let [(a, u_forward), (b, other_forward)] = translated_profiles(&profiles)?;
+    let [(a, u_forward), (b, other_forward)] = embedded_translated_profiles(&profiles)?;
     if u_forward != other_forward || a == b {
         return None;
     }
