@@ -309,6 +309,7 @@ mod curve_inclusion;
 mod knot_vector;
 mod nurbs_curve;
 mod nurbs_surface;
+mod presearch_grid;
 mod presearch_trace;
 mod seed_index;
 

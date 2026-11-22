@@ -3,66 +3,25 @@
     reason = "paired U/V range and basis names mirror standard NURBS surface notation"
 )]
 
-use super::{
-    BasisWindow, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve, BsplineSurface,
-    ControlPoint, Error, EuclideanSpace, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve,
-    InnerSpace, Invertible, KERNEL_EPSILON_SQUARED, KnotVector, MetricSpace, NurbsCurve,
-    NurbsSurface, PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve,
-    ParametricSurface, ParametricSurface3D, Point3, Result, SearchNearestParameter,
-    SearchParameter, SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance,
-    Transformed, Vector3, Vector4, Zero, algo, multi_rational_derivative, rational_derivative,
+#[cfg(test)]
+use super::presearch_grid::{
+    CachedPresearchGrid, MAX_PRESEARCH_GRIDS_PER_THREAD, PRESEARCH_BUILDS, PRESEARCH_GRIDS,
+    SPATIAL_INDEX_MIN_QUERIES,
 };
-use super::{curve_inclusion, presearch_trace, seed_index::SeedSpatialIndex};
+use super::{
+    Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve, BsplineSurface, ControlPoint,
+    Error, EuclideanSpace, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace,
+    Invertible, KERNEL_EPSILON_SQUARED, KnotVector, MetricSpace, NurbsCurve, NurbsSurface,
+    PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface,
+    ParametricSurface3D, Point3, Result, SearchNearestParameter, SearchParameter,
+    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance, Transformed,
+    Vector3, Vector4, Zero, algo, multi_rational_derivative, rational_derivative,
+};
+use super::{curve_inclusion, presearch_trace};
 #[cfg(test)]
 use crate::prelude::Vector2;
 use algo::surface::{SearchNearestParameterVector, SearchParameterVector};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
-use std::sync::OnceLock;
-use std::{
-    any::Any,
-    cell::{Cell, RefCell},
-};
-
-/// Immutable surface samples that can be shared across inverse searches.
-///
-/// The complete control net and knot vectors are retained for value equality,
-/// not merely a geometry address: a surface edited in place must rebuild the
-/// grid. The lookup bounds each thread to eight entries.
-struct CachedPresearchGrid<V: Homogeneous<Scalar = f64>> {
-    surface: BsplineSurface<V>,
-    range: SurfaceParameterRange,
-    division: usize,
-    samples: Vec<(f64, f64, V::Point)>,
-    seen: Cell<usize>,
-    index: RefCell<Option<SeedSpatialIndex>>,
-}
-
-const MAX_PRESEARCH_GRIDS_PER_THREAD: usize = 8;
-/// Defer building the index until its cost is likely to be recovered by reuse.
-const SPATIAL_INDEX_MIN_QUERIES: usize = 128;
-
-fn spatial_index_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("MONSTERTRUCK_PRESEARCH_LINEAR").is_none())
-}
-
-thread_local! {
-    static PRESEARCH_GRIDS: RefCell<Vec<Box<dyn Any>>> = RefCell::new(Vec::new());
-}
-#[cfg(test)]
-thread_local! {
-    static PRESEARCH_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-const fn identical_parameter_ranges(
-    lhs: SurfaceParameterRange,
-    rhs: SurfaceParameterRange,
-) -> bool {
-    lhs.0.0.to_bits() == rhs.0.0.to_bits()
-        && lhs.0.1.to_bits() == rhs.0.1.to_bits()
-        && lhs.1.0.to_bits() == rhs.1.0.to_bits()
-        && lhs.1.1.to_bits() == rhs.1.1.to_bits()
-}
 
 impl<V> NurbsSurface<V> {
     /// constructor
@@ -563,125 +522,20 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Clone + Partia
     NurbsSurface<V>
 where V::Point: MetricSpace<Metric = f64> + Bounded<Scalar = f64> + Copy + 'static
 {
-    /// Separable-basis presearch: bit-identical to [`algo::surface::presearch`]
-    /// for this surface, but computes each grid row's `u`-direction basis window
-    /// and each grid column's `v`-direction basis window exactly once and reuses
-    /// them across the whole `(division + 1) x (division + 1)` grid. The
-    /// tensor-product B-spline basis is separable, so the generic scan's
-    /// per-point re-evaluation of both bases repeats each window `division + 1`
-    /// times; this hoists that redundant work out of the inner loop.
-    ///
-    /// Everything that affects the result is unchanged: the same grid nodes
-    /// (`u`, `v` computed by the identical expressions), the same evaluation
-    /// kernel ([`BsplineSurface::combine_basis`] + [`Homogeneous::to_point`]),
-    /// the same `distance2` metric, and the same strict-`<` first-minimum
-    /// tie-break. The returned `(u, v)` -- and therefore every downstream Newton
-    /// seed -- is byte-for-byte identical to the generic presearch.
     fn presearch_separable(
         &self,
         point: V::Point,
-        (urange, vrange): SurfaceParameterRange,
+        range: SurfaceParameterRange,
         division: usize,
     ) -> (f64, f64) {
-        let started = presearch_trace::begin();
-        let bsp = &self.0;
-        let (degree0, degree1) = bsp.degrees();
-        let (knot_u, knot_v) = &bsp.knot_vecs;
-        // The separable kernel reproduces only the non-degenerate branch of
-        // `derivative_mn`; defer any zero-range surface to the generic scan so
-        // the degenerate corner cases stay byte-for-byte unchanged.
-        if knot_u.range_length().is_zero() || knot_v.range_length().is_zero() {
-            return algo::surface::presearch(self, point, (urange, vrange), division);
-        }
-        // Spec 014 W3: the separable fast path scans the SAME grid as
-        // `algo::surface::presearch`, so it charges the same nodes -- otherwise
-        // the unit would read lower purely because a surface took the fast path.
-        // (The degenerate early return above delegates and is charged there.)
-        algo::surface::charge_presearch_nodes(algo::surface::presearch_nodes(division));
-        // Preserve the original u-major/v-minor traversal and strict-<
-        // first-minimum rule, including ties and NaNs.
-        let nearest = |samples: &[(f64, f64, V::Point)]| {
-            let mut res = (0.0, 0.0);
-            let mut min = f64::INFINITY;
-            for &(u, v, position) in samples {
-                let dist = position.distance2(point);
-                if dist < min {
-                    min = dist;
-                    res = (u, v);
-                }
-            }
-            res
-        };
-        if let Some((result, indexed, built)) = PRESEARCH_GRIDS.with(|grids| {
-            grids.borrow().iter().rev().find_map(|entry| {
-                let entry = entry.downcast_ref::<CachedPresearchGrid<V>>()?;
-                (entry.division == division
-                    && identical_parameter_ranges(entry.range, (urange, vrange))
-                    && entry.surface == self.0)
-                    .then(|| {
-                        let count = entry.seen.get().saturating_add(1);
-                        entry.seen.set(count);
-                        let built = count == SPATIAL_INDEX_MIN_QUERIES && spatial_index_enabled();
-                        if built {
-                            *entry.index.borrow_mut() = SeedSpatialIndex::build(&entry.samples);
-                        }
-                        let index = entry
-                            .index
-                            .borrow()
-                            .as_ref()
-                            .and_then(|tree| tree.nearest(&entry.samples, point));
-                        let indexed = index.is_some();
-                        let result = index.map_or_else(
-                            || nearest(&entry.samples),
-                            |i| (entry.samples[i].0, entry.samples[i].1),
-                        );
-                        (result, indexed, built)
-                    })
-            })
-        }) {
-            presearch_trace::seed(true, indexed, built, started);
-            return result;
-        }
-
-        let ((u0, u1), (v0, v1)) = (urange, vrange);
-        let vbasis: Vec<BasisWindow> = (0..=division)
-            .map(|j| {
-                let q = crate::usize_to_f64(j) / crate::usize_to_f64(division);
-                let v = f64::mul_add(v1, q, v0 * (1.0 - q));
-                knot_v.bspline_basis_functions_unchecked(degree1, 0, v)
-            })
-            .collect();
-        let mut samples = Vec::new();
-        for i in 0..=division {
-            let p = crate::usize_to_f64(i) / crate::usize_to_f64(division);
-            let u = f64::mul_add(u1, p, u0 * (1.0 - p));
-            let ubasis = knot_u.bspline_basis_functions_unchecked(degree0, 0, u);
-            for (j, vb) in vbasis.iter().enumerate() {
-                let q = crate::usize_to_f64(j) / crate::usize_to_f64(division);
-                let v = f64::mul_add(v1, q, v0 * (1.0 - q));
-                let position = V::from_vec(bsp.combine_basis(&ubasis, vb)).to_point();
-                samples.push((u, v, position));
-            }
-        }
-        let result = nearest(&samples);
-        #[cfg(test)]
-        PRESEARCH_BUILDS.with(|count| count.set(count.get() + 1));
-        PRESEARCH_GRIDS.with(|grids| {
-            let mut grids = grids.borrow_mut();
-            if grids.len() == MAX_PRESEARCH_GRIDS_PER_THREAD {
-                grids.remove(0);
-            }
-            grids.push(Box::new(CachedPresearchGrid::<V> {
-                surface: self.0.clone(),
-                range: (urange, vrange),
-                division,
-                samples,
-                seen: Cell::new(1),
-                index: RefCell::new(None),
-            }));
-        });
-        presearch_trace::seed(false, false, false, started);
-        result
+        super::presearch_grid::presearch::<_, _, true>(
+            self,
+            &self.0,
+            point,
+            range,
+            division,
+            Homogeneous::to_point,
+        )
     }
 }
 
@@ -1282,13 +1136,15 @@ fn adaptive_index_keeps_exact_generic_presearch_minimum_after_hot_cache_threshol
             "index must reproduce the generic f64 seed and first-minimum tie order",
         );
     }
-    if spatial_index_enabled() {
+    {
         PRESEARCH_GRIDS.with(|grids| {
             let grids = grids.borrow();
             let entry = grids
                 .iter()
                 .rev()
-                .filter_map(|value| value.downcast_ref::<CachedPresearchGrid<Vector4>>())
+                .filter_map(|value| {
+                    value.downcast_ref::<CachedPresearchGrid<Vector4, Point3, true>>()
+                })
                 .find(|value| value.surface == surface.0 && value.range == range)
                 .expect("the same surface remains in the bounded cache");
             assert!(
