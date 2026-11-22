@@ -240,6 +240,10 @@ mod tests {
         let left = kernel.make_box(1.0, 3.0, 4.0)?;
         let right = kernel.translate(left, 1.0, 0.0, 0.0)?;
         let split = kernel.fuse(left, right)?;
+        assert!(
+            kernel.sub_shape_occurrence_count(split, "face")?
+                > kernel.sub_shape_occurrence_count(whole, "face")?
+        );
         let tolerance = 1e-10;
         let forward = paired_volume(&mut kernel, whole, split, tolerance)?;
         let reverse = paired_volume(&mut kernel, split, whole, tolerance)?;

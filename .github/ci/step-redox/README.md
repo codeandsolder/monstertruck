@@ -6,9 +6,9 @@ and [validator CLI](../../../step-redox/tools/occt-wasm-validator/README.md).
 
 The remaining native OCP scripts are diagnostic and differential-oracle
 utilities, not release dependencies or geometry implementations. They use
-uv with the local pyproject.toml and uv.lock. The native harness is retained
-during qualification of the migrated release gate. Independent Boolean
-occupancy is provided by the Rust validator's occupancy subcommand.
+uv with the local pyproject.toml and uv.lock. The retired Python release
+harness remains available in Git history for independent differential replay.
+Boolean occupancy and paired-volume regressions use the Rust validator.
 
 Do not relax repository-wide strict Python policy for these tools.
 
@@ -45,6 +45,7 @@ alone cannot detect equal-volume changes to shape or placement.
 Focused analytic/subdivision/cavity/negative tests:
 
 ```sh
-cd .github/ci/step-redox
-uv run --frozen python -m unittest -v test_occt_paired_volume
+cargo test --locked --release \
+  --manifest-path step-redox/tools/occt-wasm-validator/Cargo.toml \
+  paired_volume::tests
 ```

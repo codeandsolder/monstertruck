@@ -277,16 +277,12 @@ source = { virtual = "." }
 dependencies = [
     { name = "cadquery-ocp" },
     { name = "cadquery-ocp-stubs" },
-    { name = "numpy" },
-    { name = "pillow" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "cadquery-ocp", specifier = "==8.0.1.1.0" },
     { name = "cadquery-ocp-stubs", specifier = "==8.0.1.1.0" },
-    { name = "numpy", specifier = ">=2.0,<3" },
-    { name = "pillow", specifier = ">=13,<14" },
 ]
 
 [[package]]
