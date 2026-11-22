@@ -82,7 +82,7 @@ pub enum CadFragmentSource {
         face_ids: Vec<u64>,
         slabs: usize,
     },
-    /// Complete source-derived planar slabs with linearly varying profiles.
+    /// Source-derived ruled slabs whose planar sections vary between stations.
     SectionalLoftUnion {
         solid_id: u64,
         face_ids: Vec<u64>,

@@ -95,13 +95,13 @@ fn valid_line(edge: &OrientedEdgeUse) -> bool {
         })
 }
 
-fn valid_planar_face(face: &ReducedFace, frame: Frame) -> Option<()> {
+fn valid_planar_face(face: &ReducedFace, frame: Frame, allow_inclined: bool) -> Option<()> {
     let SurfaceSupport::Plane(plane) = face.surface else {
         return None;
     };
     let normal = normalize(plane.normal, DIRECTION)?;
     let transverse = norm(cross(normal, frame.axis)) <= DIRECTION;
-    if !transverse && dot(normal, frame.axis).abs() > DIRECTION {
+    if !allow_inclined && !transverse && dot(normal, frame.axis).abs() > DIRECTION {
         return None;
     }
     for edge in face.loop_edges() {
@@ -128,11 +128,15 @@ fn valid_planar_face(face: &ReducedFace, frame: Frame) -> Option<()> {
 fn stations(solid: &ReducedSolid, frame: Frame) -> Option<Vec<f64>> {
     for face in solid.faces() {
         match face.surface {
-            SurfaceSupport::Plane(_) => valid_planar_face(face, frame)?,
+            SurfaceSupport::Plane(_) => valid_planar_face(face, frame, false)?,
             SurfaceSupport::Cylinder(_) => circular::CylinderTrim::new(face, frame).map(|_| ())?,
             _ => return None,
         }
     }
+    station_levels(solid, frame).filter(|levels| levels.len() >= 3)
+}
+
+fn station_levels(solid: &ReducedSolid, frame: Frame) -> Option<Vec<f64>> {
     let mut levels = solid
         .faces()
         .flat_map(ReducedFace::loop_edges)
@@ -140,7 +144,7 @@ fn stations(solid: &ReducedSolid, frame: Frame) -> Option<Vec<f64>> {
         .collect::<Vec<_>>();
     levels.sort_by(f64::total_cmp);
     levels.dedup_by(|a, b| (*a - *b).abs() <= LENGTH);
-    (levels.len() >= 3
+    (levels.len() >= 2
         && levels
             .windows(2)
             .all(|pair| pair[1] - pair[0] > 2.0 * LENGTH))
@@ -253,7 +257,7 @@ impl SliceGraph {
     }
 }
 
-fn section_ring_groups(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Vec<usize>>> {
+fn section_groups(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Vec<usize>>> {
     let areas = rings
         .iter()
         .map(|ring| signed_area_curves(ring))
@@ -265,8 +269,8 @@ fn section_ring_groups(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Vec<u
         return None;
     }
     let mut outers = BTreeMap::new();
-    for i in 0..rings.len() {
-        if areas[i] > 0.0 {
+    for (i, area) in areas.iter().enumerate() {
+        if *area > 0.0 {
             outers.insert(i, vec![i]);
         }
     }
@@ -295,13 +299,16 @@ fn section_ring_groups(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Vec<u
 
 fn section_profiles(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Profile2d>> {
     Some(
-        section_ring_groups(rings)?
+        section_groups(rings)?
             .into_iter()
             .map(|group| Profile2d {
                 loops: group
                     .into_iter()
-                    .map(|i| ProfileLoop {
-                        curves: rings[i].iter().map(recovered_profile_curve_to_ir).collect(),
+                    .map(|index| ProfileLoop {
+                        curves: rings[index]
+                            .iter()
+                            .map(recovered_profile_curve_to_ir)
+                            .collect(),
                     })
                     .collect(),
             })
@@ -309,7 +316,11 @@ fn section_profiles(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Profile2
     )
 }
 
-fn slab_profiles(solid: &ReducedSolid, frame: Frame, level: f64) -> Option<Vec<Profile2d>> {
+fn slice_rings(
+    solid: &ReducedSolid,
+    frame: Frame,
+    level: f64,
+) -> Option<Vec<Vec<RecoveredProfileCurve>>> {
     let mut graph = SliceGraph::default();
     for face in solid.faces() {
         match face.surface {
@@ -320,7 +331,11 @@ fn slab_profiles(solid: &ReducedSolid, frame: Frame, level: f64) -> Option<Vec<P
             _ => return None,
         }
     }
-    section_profiles(&graph.rings()?)
+    graph.rings()
+}
+
+fn slab_profiles(solid: &ReducedSolid, frame: Frame, level: f64) -> Option<Vec<Profile2d>> {
+    section_profiles(&slice_rings(solid, frame, level)?)
 }
 
 fn extrusion_node(
@@ -367,12 +382,6 @@ fn sectional_model(
     Ok(Some((model, root)))
 }
 
-enum SectionalFamily {
-    Extrusions,
-    Transitions,
-    Ruled,
-}
-
 pub fn recover<K: CadKernel>(
     source: &SourceRecovery<'_, K>,
     ceiling: Option<u64>,
@@ -397,6 +406,7 @@ pub fn recover<K: CadKernel>(
     else {
         return Ok(None);
     };
+    let face_ids = || solid.faces().map(|face| face.id).collect::<Vec<_>>();
     let mut candidates = Vec::new();
     for axis in axes {
         let Some(frame) = Frame::new(origin, axis) else {
@@ -408,8 +418,11 @@ pub fn recover<K: CadKernel>(
                     model.complexity_score(root)?,
                     model,
                     root,
-                    slabs,
-                    SectionalFamily::Ruled,
+                    CadFragmentSource::SectionalLoftUnion {
+                        solid_id,
+                        face_ids: face_ids(),
+                        slabs,
+                    },
                 ));
             }
             continue;
@@ -432,8 +445,11 @@ pub fn recover<K: CadKernel>(
                 model.complexity_score(root)?,
                 model,
                 root,
-                slabs,
-                SectionalFamily::Transitions,
+                CadFragmentSource::SectionalExtrusionTransitions {
+                    solid_id,
+                    face_ids: face_ids(),
+                    slabs,
+                },
             ));
         }
         if let Some((model, root)) = sectional_model(frame, &levels, &sections)? {
@@ -441,38 +457,25 @@ pub fn recover<K: CadKernel>(
                 model.complexity_score(root)?,
                 model,
                 root,
-                slabs,
-                SectionalFamily::Extrusions,
+                CadFragmentSource::SectionalExtrusionUnion {
+                    solid_id,
+                    face_ids: face_ids(),
+                    slabs,
+                },
             ));
         }
     }
     candidates.sort_by_key(|c| c.0);
-    for (cost, mut model, root, slabs, family) in candidates {
+    for (cost, mut model, root, candidate_source) in candidates {
         if ceiling.is_some_and(|limit| cost >= limit) {
             break;
         }
         if !source.proves(&model, root, None).unwrap_or(false) {
             continue;
         }
-        let face_ids = super::set_proven_source_boundary(&mut model, root, &solid)?;
+        super::set_proven_source_boundary(&mut model, root, &solid)?;
         return Ok(Some(CadFragment {
-            source: match family {
-                SectionalFamily::Transitions => CadFragmentSource::SectionalExtrusionTransitions {
-                    solid_id,
-                    face_ids,
-                    slabs,
-                },
-                SectionalFamily::Extrusions => CadFragmentSource::SectionalExtrusionUnion {
-                    solid_id,
-                    face_ids,
-                    slabs,
-                },
-                SectionalFamily::Ruled => CadFragmentSource::SectionalLoftUnion {
-                    solid_id,
-                    face_ids,
-                    slabs,
-                },
-            },
+            source: candidate_source,
             model,
             root,
         }));

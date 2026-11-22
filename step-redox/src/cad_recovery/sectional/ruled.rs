@@ -4,7 +4,8 @@
 //! original crossing edges supply both end profiles, including collapsed
 //! corner transitions. Independent full-source proof remains mandatory.
 use super::{
-    DIRECTION, Frame, LENGTH, SliceGraph, extrusion_node, section_ring_groups, valid_line,
+    DIRECTION, Frame, LENGTH, extrusion_node, section_groups, slice_rings, station_levels,
+    valid_line, valid_planar_face,
 };
 use crate::{
     brep::{OrientedEdgeUse, SurfaceSupport},
@@ -13,7 +14,7 @@ use crate::{
     math2::distance as distance2,
     math3::{add, cross, dot, mul, norm, normalize, sub},
     profile_curves::RecoveredProfileCurve,
-    reduced_brep::ReducedSolid,
+    reduced_brep::{ReducedFace, ReducedSolid},
 };
 use anyhow::Result;
 use std::collections::BTreeMap;
@@ -25,32 +26,29 @@ struct PlanarSweep<'a> {
 
 impl<'a> PlanarSweep<'a> {
     fn new(solid: &'a ReducedSolid, frame: Frame) -> Option<Self> {
-        let mut edges = BTreeMap::new();
-        let mut levels = Vec::new();
-        let mut tilted = false;
+        let mut inclined = false;
         for face in solid.faces() {
             let SurfaceSupport::Plane(plane) = face.surface else {
                 return None;
             };
             let normal = normalize(plane.normal, DIRECTION)?;
-            tilted |= norm(cross(normal, frame.axis)) > DIRECTION
+            inclined |= norm(cross(normal, frame.axis)) > DIRECTION
                 && dot(normal, frame.axis).abs() > DIRECTION;
-            for edge in face.loop_edges() {
-                if !valid_line(edge)
-                    || [edge.start_mm, edge.end_mm]
-                        .into_iter()
-                        .any(|point| dot(sub(point, plane.origin_mm), normal).abs() > LENGTH)
-                {
-                    return None;
-                }
-                edges.entry(edge.edge_id).or_insert(edge);
-                levels.extend([frame.axial(edge.start_mm), frame.axial(edge.end_mm)]);
+            valid_planar_face(face, frame, true)?;
+            if face.loop_edges().any(|edge| !valid_line(edge)) {
+                return None;
             }
         }
-        levels.sort_by(f64::total_cmp);
-        levels.dedup_by(|a, b| (*a - *b).abs() <= LENGTH);
-        (tilted && levels.len() >= 2 && levels.windows(2).all(|ab| ab[1] - ab[0] > 2. * LENGTH))
-            .then_some(Self { edges, levels })
+        if !inclined {
+            return None;
+        }
+        let levels = station_levels(solid, frame)?;
+        let edges = solid
+            .faces()
+            .flat_map(ReducedFace::loop_edges)
+            .map(|edge| (edge.edge_id, edge))
+            .collect();
+        Some(Self { edges, levels })
     }
 
     fn point(&self, id: u64, frame: Frame, level: f64) -> Option<[f64; 2]> {
@@ -91,7 +89,10 @@ impl<'a> PlanarSweep<'a> {
                         else {
                             return None;
                         };
-                        self.point(*source_edge_ids.first()?, frame, level)
+                        let [start, _] = source_edge_ids.as_slice() else {
+                            return None;
+                        };
+                        self.point(*start, frame, level)
                     })
                     .collect::<Option<Vec<_>>>()?;
                 canonicalize_collapsed_corners(&mut points)?;
@@ -149,15 +150,11 @@ fn slab_nodes(
     lo: f64,
     hi: f64,
 ) -> Option<Vec<NodeId>> {
-    let mut graph = SliceGraph::default();
-    for face in solid.faces() {
-        graph.add_plane(face, frame, lo.midpoint(hi))?;
-    }
-    let rings = graph.rings()?;
+    let rings = slice_rings(solid, frame, lo.midpoint(hi))?;
     if rings.is_empty() {
         return Some(Vec::new());
     }
-    let groups = section_ring_groups(&rings)?;
+    let groups = section_groups(&rings)?;
     groups
         .iter()
         .map(|group| {
@@ -243,12 +240,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn collapsed_corners_preserve_cyclic_correspondence() {
+    fn collapsed_corners_preserve_cyclic_correspondence() -> Result<()> {
         let mut points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [LENGTH * 0.2, 0.0]];
-        canonicalize_collapsed_corners(&mut points).unwrap();
+        anyhow::Context::context(
+            canonicalize_collapsed_corners(&mut points),
+            "valid cyclic collapse",
+        )?;
         assert!(distance2(points[0], points[3]) <= f64::EPSILON);
         assert!(distance2(points[1], [2.0, 0.0]) <= f64::EPSILON);
         assert!(distance2(points[2], [2.0, 2.0]) <= f64::EPSILON);
+        Ok(())
     }
 
     #[test]
@@ -260,5 +261,35 @@ mod tests {
             [2.0, 2.0],
         ];
         assert!(canonicalize_collapsed_corners(&mut points).is_none());
+    }
+}
+
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
+mod native_tests {
+    use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+    use crate::complete_ir::recover_complete_ir_with_kernel_bytes;
+    use anyhow::Result;
+
+    #[test]
+    fn inclined_relief_host_recovery_is_source_verified() -> Result<()> {
+        let kernel = MonstertruckKernel::project_standard();
+        let bytes =
+            include_bytes!("../../../validation/fixtures/native_relief_oblique_8ddfec04.step");
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(report.unrecovered_solid_count, 0);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        let fragments = report.selected_fragments().collect::<Vec<_>>();
+        assert_eq!(fragments.len(), 1);
+        let fragment = &fragments[0].fragment;
+        let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
+        let summary = kernel.summarize(&evaluated);
+        assert!(summary.geometrically_consistent);
+        assert_eq!(summary.shells, 1);
+        Ok(())
     }
 }
