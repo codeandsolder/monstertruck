@@ -104,7 +104,7 @@ fn affine(matrix: Matrix4) -> bool {
         && matrix.x.w == 0.0
         && matrix.y.w == 0.0
         && matrix.z.w == 0.0
-        && matrix.w.w == 1.0
+        && matrix.w.w.to_bits() == 1.0_f64.to_bits()
 }
 
 /// The common chart must preserve the complete axial direction and cap
@@ -153,7 +153,7 @@ fn place_profiles(prisms: &[Prism<'_>], frame: Matrix4) -> Result<Option<Vec<Pla
     for (prism, mut chart) in prisms.iter().zip(charts) {
         let start = chart.w.z;
         let end = chart.z.z.mul_add(prism.length, start);
-        if !end.is_finite() || start == end {
+        if !end.is_finite() || end - start == 0.0 {
             return Ok(None);
         }
         chart.w.z = 0.0;
@@ -259,7 +259,7 @@ pub(super) fn evaluate(
         .flat_map(|profile| [profile.low, profile.high])
         .collect::<Vec<_>>();
     levels.sort_by(f64::total_cmp);
-    levels.dedup_by(|a, b| *a == *b);
+    levels.dedup_by(|a, b| *a - *b == 0.0);
     let mut slabs = Vec::new();
     for limits in levels.windows(2) {
         let Some(slab) = section(&program, &profiles, limits[0], limits[1], policy)? else {
