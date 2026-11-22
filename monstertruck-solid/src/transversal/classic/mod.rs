@@ -61,8 +61,32 @@ type AltRegion<C, S> = faces_classification::BooleanRegion<Point3, AltCurve<C, S
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PairMode {
-    AndOr,
+    AndOr(PartitionOutput),
     Difference,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PartitionOutput {
+    Intersection,
+    Union,
+}
+
+impl PartitionOutput {
+    const fn operation(self) -> &'static str {
+        match self {
+            Self::Intersection => "and",
+            Self::Union => "or",
+        }
+    }
+
+    const fn includes_inside(self) -> bool { matches!(self, Self::Intersection) }
+
+    fn select<T>(self, [intersection, union]: [T; 2]) -> T {
+        match self {
+            Self::Intersection => intersection,
+            Self::Union => union,
+        }
+    }
 }
 
 type PolyShell = Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>;
@@ -103,7 +127,7 @@ fn analyze_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         &altshell1,
         &poly_shell1,
         tol,
-        mode == PairMode::AndOr,
+        matches!(mode, PairMode::AndOr(_)),
     )
     .ok_or(ShapeOpsError::InterfaceAnalysisFailed)?;
     let cls0 = divide_face::divide_faces(&altshell0, &loops_store0, sampled_store0.as_ref(), tol)
@@ -313,7 +337,7 @@ fn shell_is_valid<P, C, S>(shell: &Shell<P, C, S>) -> bool {
 
 fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     mut analysis: PairAnalysis<C, S>,
-) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
+) -> ClassicResult<Shell<Point3, C, S>> {
     let tol = analysis.tolerance;
     analysis.cls0.integrate_by_component();
     analysis.cls1.integrate_by_component();
@@ -393,7 +417,7 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         .iter()
         .all(|component| component.check_solid_boundary().is_ok())
     {
-        return Ok([label_shell, Shell::default()]);
+        return Ok(label_shell);
     }
 
     let [and0, or0, unknown0] = analysis.cls0.and_or_unknown();
@@ -421,39 +445,38 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     .ok_or(ShapeOpsError::RegionMaterializationFailed {
         operation: "difference_planar_overlay",
     })?;
-    let fallback_shell =
-        weld_and_convert(&fallback_regions, "difference", BooleanTolerance::new(tol))?;
-    Ok([fallback_shell, Shell::default()])
+    weld_and_convert(&fallback_regions, "difference", BooleanTolerance::new(tol))
 }
 
 fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     mut analysis: PairAnalysis<C, S>,
-) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
+    output: PartitionOutput,
+) -> ClassicResult<Shell<Point3, C, S>> {
     let tol = analysis.tolerance;
     analysis.cls0.integrate_by_component();
     analysis.cls1.integrate_by_component();
-    let [mut and0, mut or0, unknown0] = analysis.cls0.and_or_unknown();
-    for region in unknown0 {
-        if classify_unknown(&analysis.winding1, &region, tol, 0)? {
-            and0.push(region);
-        } else {
-            or0.push(region);
+    let mut selected = Vec::new();
+    for (operand, (classification, opposing_winding)) in [
+        (analysis.cls0, &analysis.winding1),
+        (analysis.cls1, &analysis.winding0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let [known, unknown] = classification.into_selected(output);
+        // Match the original known-first, then unknown, operand traversal.
+        selected.extend(known);
+        for region in unknown {
+            if classify_unknown(opposing_winding, &region, tol, operand)?
+                == output.includes_inside()
+            {
+                selected.push(region);
+            }
         }
     }
-    let [mut and1, mut or1, unknown1] = analysis.cls1.and_or_unknown();
-    for region in unknown1 {
-        if classify_unknown(&analysis.winding0, &region, tol, 1)? {
-            and1.push(region);
-        } else {
-            or1.push(region);
-        }
-    }
-    and0.append(&mut and1);
-    or0.append(&mut or1);
-    Ok([
-        weld_and_convert(&and0, "and", BooleanTolerance::new(tol))?,
-        weld_and_convert(&or0, "or", BooleanTolerance::new(tol))?,
-    ])
+    // The complementary partition is not a prerequisite for materializing
+    // this operation. Coplanar label-only proofs are handled separately.
+    weld_and_convert(&selected, output.operation(), BooleanTolerance::new(tol))
 }
 
 struct PartitionEvidence<C, S> {
@@ -607,13 +630,16 @@ fn classify_complete_label_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 
 fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     mut analysis: PairAnalysis<C, S>,
-) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
+    output: PartitionOutput,
+) -> ClassicResult<Shell<Point3, C, S>> {
     let tol = analysis.tolerance;
     analysis.cls0.integrate_by_component();
     analysis.cls1.integrate_by_component();
 
     if let Some(shells) = classify_complete_label_shells(&analysis)? {
-        return Ok(shells);
+        // The complete-label shortcut requires both complementary shells as
+        // evidence that no input material was lost. Retain that proof.
+        return Ok(output.select(shells));
     }
 
     // A topologically valid set of classified faces need not cover the input
@@ -690,16 +716,12 @@ fn process_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             }
         }
     }
-    let mut and0 = planar_union::overlay_source_regions(and0, tol);
-    let mut and1 = planar_union::overlay_source_regions(and1, tol);
-    let mut or0 = planar_union::overlay_source_regions(or0, tol);
-    let mut or1 = planar_union::overlay_source_regions(or1, tol);
-    and0.append(&mut and1);
-    or0.append(&mut or1);
-    Ok([
-        weld_and_convert(&and0, "and", BooleanTolerance::new(tol))?,
-        weld_and_convert(&or0, "or", BooleanTolerance::new(tol))?,
-    ])
+    let mut selected = planar_union::overlay_source_regions(output.select([and0, or0]), tol);
+    selected.extend(planar_union::overlay_source_regions(
+        output.select([and1, or1]),
+        tol,
+    ));
+    weld_and_convert(&selected, output.operation(), BooleanTolerance::new(tol))
 }
 
 fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
@@ -707,12 +729,14 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell1: &Shell<Point3, C, S>,
     tol: f64,
     mode: PairMode,
-) -> ClassicResult<[Shell<Point3, C, S>; 2]> {
+) -> ClassicResult<Shell<Point3, C, S>> {
     let analysis = analyze_pair(shell0, shell1, tol, mode)?;
     match mode {
         PairMode::Difference => process_difference_analysis(analysis),
-        PairMode::AndOr if analysis.coplanar_overlap => process_coplanar_analysis(analysis),
-        PairMode::AndOr => process_non_coplanar_analysis(analysis),
+        PairMode::AndOr(output) if analysis.coplanar_overlap => {
+            process_coplanar_analysis(analysis, output)
+        }
+        PairMode::AndOr(output) => process_non_coplanar_analysis(analysis, output),
     }
 }
 
@@ -925,7 +949,7 @@ fn and_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> ClassicResult<Solid<Point3, C, S>> {
     let operation = "and";
     let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
+        process_one_pair_of_shells(a, b, tol, PairMode::AndOr(PartitionOutput::Intersection))
     };
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
@@ -935,13 +959,13 @@ fn and_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let Some(shell1) = iter1.next() else {
         return Ok(Solid::empty());
     };
-    let [mut and_shell, _] = pair(shell0, shell1)?;
+    let mut and_shell = pair(shell0, shell1)?;
     for shell in iter0 {
-        let [res, _] = pair(&and_shell, shell)?;
+        let res = pair(&and_shell, shell)?;
         and_shell = res;
     }
     for shell in iter1 {
-        let [res, _] = pair(&and_shell, shell)?;
+        let res = pair(&and_shell, shell)?;
         and_shell = res;
     }
     finalize(operation, and_shell, tol)
@@ -966,7 +990,7 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     validate_tolerance(tol)?;
     let operation = "or";
     let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
+        process_one_pair_of_shells(a, b, tol, PairMode::AndOr(PartitionOutput::Union))
     };
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
@@ -976,13 +1000,13 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let Some(shell1) = iter1.next() else {
         return Ok(solid0.clone());
     };
-    let [_, mut or_shell] = pair(shell0, shell1)?;
+    let mut or_shell = pair(shell0, shell1)?;
     for shell in iter0 {
-        let [_, res] = pair(&or_shell, shell)?;
+        let res = pair(&or_shell, shell)?;
         or_shell = res;
     }
     for shell in iter1 {
-        let [_, res] = pair(&or_shell, shell)?;
+        let res = pair(&or_shell, shell)?;
         or_shell = res;
     }
     finalize(operation, or_shell, tol)
@@ -1000,7 +1024,7 @@ pub fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         process_one_pair_of_shells(a, b, tol, PairMode::Difference)
     };
     let and_pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::AndOr)
+        process_one_pair_of_shells(a, b, tol, PairMode::AndOr(PartitionOutput::Intersection))
     };
 
     let mut iter0 = solid0.boundaries().iter();
@@ -1011,14 +1035,14 @@ pub fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let Some(shell1) = iter1.next() else {
         return Ok(solid0.clone());
     };
-    let [mut difference_shell, _] = difference_pair(shell0, shell1)?;
+    let mut difference_shell = difference_pair(shell0, shell1)?;
 
     for shell in iter0 {
-        let [res, _] = and_pair(&difference_shell, shell)?;
+        let res = and_pair(&difference_shell, shell)?;
         difference_shell = res;
     }
     for shell in iter1 {
-        let [res, _] = difference_pair(&difference_shell, shell)?;
+        let res = difference_pair(&difference_shell, shell)?;
         difference_shell = res;
     }
     finalize(operation, difference_shell, tol)
