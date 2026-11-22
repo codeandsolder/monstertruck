@@ -517,6 +517,24 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Clone + Partia
     NurbsSurface<V>
 where V::Point: MetricSpace<Metric = f64> + Bounded<Scalar = f64> + Copy + 'static
 {
+    fn search_with_hint(
+        &self,
+        point: V::Point,
+        hint: SearchParameterHint2D,
+        trials: usize,
+        refine: impl FnOnce(&Self, V::Point, (f64, f64), usize) -> Option<(f64, f64)>,
+    ) -> Option<(f64, f64)> {
+        let hint = super::presearch_grid::resolve_hint(
+            hint,
+            || self.range_tuple(),
+            |range| self.presearch_separable(point, range, PRESEARCH_DIVISION),
+        );
+        let started = presearch_trace::begin();
+        let result = refine(self, point, hint, trials);
+        presearch_trace::refine(started);
+        result
+    }
+
     fn presearch_separable(
         &self,
         point: V::Point,
@@ -570,15 +588,12 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        let hint = super::presearch_grid::resolve_hint(
+        self.search_with_hint(
+            point,
             hint.into(),
-            || self.range_tuple(),
-            |range| self.presearch_separable(point, range, PRESEARCH_DIVISION),
-        );
-        let started = presearch_trace::begin();
-        let result = algo::surface::search_nearest_parameter(self, point, hint, trials);
-        presearch_trace::refine(started);
-        result
+            trials,
+            algo::surface::search_nearest_parameter,
+        )
     }
 }
 
@@ -1015,15 +1030,7 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        let hint = super::presearch_grid::resolve_hint(
-            hint.into(),
-            || self.range_tuple(),
-            |range| self.presearch_separable(point, range, PRESEARCH_DIVISION),
-        );
-        let started = presearch_trace::begin();
-        let result = algo::surface::search_parameter(self, point, hint, trials);
-        presearch_trace::refine(started);
-        result
+        self.search_with_hint(point, hint.into(), trials, algo::surface::search_parameter)
     }
 }
 
