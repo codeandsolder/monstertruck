@@ -4468,6 +4468,22 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
+    fn native_blind_spline_recesses_reconstruct_whole_body() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_relief_blind_254dc55c.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        let [body] = report.boundary_feature_composites.as_slice() else {
+            bail!("blind spline recesses must recover one editable feature composite");
+        };
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(report.unrecovered_solid_count, 0);
+        assert!(kernel_replay_is_single_solid(&kernel, &body.fragment)?);
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
     fn healed_host_can_use_independently_proven_sectional_recovery() -> Result<()> {
         let bytes = include_bytes!("../validation/fixtures/native_sectional_stepped_655821f7.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
