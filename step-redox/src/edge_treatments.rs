@@ -249,6 +249,12 @@ fn detect_face_treatments(solid_id: u64, faces: &[FaceInfo]) -> Vec<EdgeTreatmen
                         second,
                         second_edges,
                         &edge_geometry,
+                        strip_terminal_planes(
+                            treatment,
+                            faces,
+                            &entries,
+                            [first_index, second_index],
+                        ),
                     ),
                     SurfaceSupport::Plane(plane) => prove_planar_chamfer(
                         solid_id,
@@ -459,6 +465,7 @@ fn prove_cylindrical_fillet(
     second: &FaceInfo,
     second_edges: &[u64],
     edge_geometry: &HashMap<u64, brep::OrientedEdgeUse>,
+    terminal_planes: Option<[brep::PlaneSupport; 2]>,
 ) -> Option<EdgeTreatmentEvidence> {
     let (SurfaceSupport::Plane(first_plane), SurfaceSupport::Plane(second_plane)) =
         (&first.surface, &second.surface)
@@ -512,15 +519,19 @@ fn prove_cylindrical_fillet(
     if !crate::numeric::near_imported_feature_mm(max_boundary_residual_mm) {
         return None;
     }
-    let virtual_edge = plane_intersection_segment(
-        *first_plane,
-        *second_plane,
-        axis,
-        cylinder.axis_origin_mm,
-        first_edges,
-        second_edges,
-        edge_geometry,
-    )?;
+    let virtual_edge = if let Some(terminals) = terminal_planes {
+        terminal_plane_segment(*first_plane, *second_plane, axis, terminals)?
+    } else {
+        plane_intersection_segment(
+            *first_plane,
+            *second_plane,
+            axis,
+            cylinder.axis_origin_mm,
+            first_edges,
+            second_edges,
+            edge_geometry,
+        )?
+    };
 
     Some(evidence(
         solid_id,
@@ -536,6 +547,104 @@ fn prove_cylindrical_fillet(
         virtual_edge,
         max_boundary_residual_mm,
     ))
+}
+
+/// Recognize the four complete boundary runs of a treatment strip. Each
+/// terminal plane must own one entire run between the two carrier runs;
+/// a plane touching only a corner does not determine a treatment endpoint.
+fn strip_terminal_planes(
+    treatment: &FaceInfo,
+    faces: &[FaceInfo],
+    neighbors: &[(usize, Vec<u64>)],
+    carriers: [usize; 2],
+) -> Option<[brep::PlaneSupport; 2]> {
+    let [boundary] = treatment.loops.as_slice() else {
+        return None;
+    };
+    if neighbors.len() != 4 || boundary.edges.len() < 4 {
+        return None;
+    }
+    let states = boundary
+        .edges
+        .iter()
+        .map(|edge| {
+            neighbors
+                .iter()
+                .position(|(_, edges)| edges.contains(&edge.edge_id))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let runs = (0..states.len())
+        .filter(|&i| states[i] != states[(i + states.len() - 1) % states.len()])
+        .map(|i| states[i])
+        .collect::<Vec<_>>();
+    let [a, b, c, d] = runs.as_slice() else {
+        return None;
+    };
+    if runs.iter().copied().collect::<HashSet<_>>().len() != 4 {
+        return None;
+    }
+    let terminals = if carriers.contains(a) && carriers.contains(c) {
+        [*b, *d]
+    } else if carriers.contains(b) && carriers.contains(d) {
+        [*a, *c]
+    } else {
+        return None;
+    };
+    let plane = |index: usize| {
+        let (face_index, edges) = &neighbors[index];
+        let SurfaceSupport::Plane(plane) = faces[*face_index].surface else {
+            return None;
+        };
+        let normal = normalize(plane.normal, DIR_TOL)?;
+        for edge in boundary
+            .edges
+            .iter()
+            .filter(|edge| edges.contains(&edge.edge_id))
+        {
+            for point in [edge.start_mm, edge.end_mm] {
+                if dot(normal, sub(point, plane.origin_mm)).abs() > GEOM_TOL_MM {
+                    return None;
+                }
+            }
+        }
+        Some(plane)
+    };
+    Some([plane(terminals[0])?, plane(terminals[1])?])
+}
+
+/// The sharp edge is the intersection of the tangent planes, bounded by
+/// the actual terminal planes (which need not be normal to the edge).
+fn terminal_plane_segment(
+    first: brep::PlaneSupport,
+    second: brep::PlaneSupport,
+    direction: [f64; 3],
+    terminals: [brep::PlaneSupport; 2],
+) -> Option<EdgeTreatmentVirtualEdge> {
+    let first_normal = normalize(first.normal, DIR_TOL)?;
+    let second_normal = normalize(second.normal, DIR_TOL)?;
+    let direction = canonical_direction(normalize(direction, DIR_TOL)?);
+    let endpoint = |terminal: brep::PlaneSupport| {
+        let normal = normalize(terminal.normal, DIR_TOL)?;
+        three_plane_intersection(
+            first_normal,
+            dot(first_normal, first.origin_mm),
+            second_normal,
+            dot(second_normal, second.origin_mm),
+            normal,
+            dot(normal, terminal.origin_mm),
+        )
+    };
+    let mut start_mm = endpoint(terminals[0])?;
+    let mut end_mm = endpoint(terminals[1])?;
+    if dot(direction, sub(end_mm, start_mm)) < 0.0 {
+        std::mem::swap(&mut start_mm, &mut end_mm);
+    }
+    if !start_mm.into_iter().chain(end_mm).all(f64::is_finite)
+        || norm(sub(end_mm, start_mm)) <= GEOM_TOL_MM
+    {
+        return None;
+    }
+    Some(EdgeTreatmentVirtualEdge::Segment { start_mm, end_mm })
 }
 
 /// A whole planar face can be removed as one edge chamfer only when its
@@ -1266,6 +1375,87 @@ mod tests {
             Some((2.0, 3.0))
         );
         assert!((meridian_line_angle(plane, cylinder) - std::f64::consts::FRAC_PI_2).abs() < 1e-15);
+    }
+
+    #[test]
+    fn oblique_terminal_planes_bound_the_sharp_edge() -> anyhow::Result<()> {
+        let plane = |origin_mm, normal| brep::PlaneSupport {
+            origin_mm,
+            normal,
+            max_residual_mm: 0.0,
+        };
+        let first = plane([1., 0., 0.], [1., 0., 0.]);
+        let second = plane([0., 2., 0.], [0., 1., 0.]);
+        let low = plane([0., 0., -1.], [0., 0., 1.]);
+        let high = plane([0., 0., 4.], [-1., -1., 1.]);
+        let Some(EdgeTreatmentVirtualEdge::Segment { start_mm, end_mm }) =
+            terminal_plane_segment(first, second, [0., 0., 1.], [high, low])
+        else {
+            anyhow::bail!("nonparallel terminal planes must bound an edge");
+        };
+        assert!(norm(sub(start_mm, [1., 2., -1.])) < 1e-12);
+        assert!(norm(sub(end_mm, [1., 2., 7.])) < 1e-12);
+        assert!(terminal_plane_segment(first, second, [0., 0., 1.], [first, low]).is_none());
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn obliquely_terminated_native_fillet_recovers_sharp_edge() -> anyhow::Result<()> {
+        use crate::cad_ir::{
+            CadModel, CadNode, EdgeSelector, EdgeTreatmentEdge, EdgeTreatmentProfile, Profile2d,
+            RigidTransform,
+        };
+        use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+
+        let mut model = CadModel::new();
+        let wedge = model.add_node(CadNode::Extrude {
+            profile: Profile2d::polygon(vec![[0., 0.], [4., 0.], [4., 3.6], [0., 2.4]])?,
+            vector_mm: [0., 0., 3.],
+        });
+        let child = model.add_node(CadNode::Transform {
+            child: wedge,
+            transform: RigidTransform {
+                matrix: [
+                    [1., 0., 0., 0.],
+                    [0., 0., -1., 3.],
+                    [0., 1., 0., 0.],
+                    [0., 0., 0., 1.],
+                ],
+            },
+        });
+        let start = [0., 0., 0.];
+        let end = [0., 0., 2.4];
+        let root = model.add_node(CadNode::EdgeTreatment {
+            child,
+            profile: EdgeTreatmentProfile::Round,
+            edges: vec![EdgeTreatmentEdge {
+                selector: EdgeSelector::Segment {
+                    start_mm: start,
+                    end_mm: end,
+                },
+                radius_mm: 0.25,
+            }],
+        });
+        model.add_root(root)?;
+        let kernel = MonstertruckKernel::project_standard();
+        let evaluated = kernel.evaluate(&model, root)?;
+        let source = kernel.to_step(&evaluated)?;
+        let evidence = crate::detect_edge_treatment_evidence_bytes(source.as_bytes())?;
+        let evidence = evidence
+            .iter()
+            .filter(|item| item.kind == EdgeTreatmentKind::CylindricalFillet)
+            .collect::<Vec<_>>();
+        let [fillet] = evidence.as_slice() else {
+            anyhow::bail!("expected one cylindrical treatment, got {evidence:?}");
+        };
+        assert!(fillet.carrier_pair_unique);
+        let EdgeTreatmentVirtualEdge::Segment { start_mm, end_mm } = fillet.virtual_edge else {
+            anyhow::bail!("expected a sharp segment");
+        };
+        assert!(norm(sub(start_mm, start)) <= GEOM_TOL_MM);
+        assert!(norm(sub(end_mm, end)) <= GEOM_TOL_MM);
+        Ok(())
     }
 
     #[test]
