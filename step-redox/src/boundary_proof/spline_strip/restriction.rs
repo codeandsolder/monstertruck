@@ -20,7 +20,7 @@ pub(in crate::boundary_proof) struct ProfilePosition {
 }
 
 impl ProfilePosition {
-    fn new(span: usize, fraction: f64, point: PointKey) -> Self {
+    const fn new(span: usize, fraction: f64, point: PointKey) -> Self {
         if fraction.to_bits() == 1.0_f64.to_bits() {
             Self {
                 span: span + 1,
