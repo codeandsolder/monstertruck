@@ -42,3 +42,30 @@ proptest! {
         prop_assert_near!(msolid.center_of_gravity().to_point(), trans.transform_point(grav));
     }
 }
+
+#[test]
+fn translated_thin_triangle_prism_centroid() {
+    let p = [
+        Point3::new(14.312221632287216, -16.566792291698775, -0.05),
+        Point3::new(36.44493336734719, -28.610611536655092, -0.05),
+        Point3::new(-99.97206319143964, 45.623631436639286, -0.05),
+    ];
+    let v = Vertex::from_points(p);
+    let edge = array![i => builder::line(&v[i], &v[(i + 1) % 3]); 3];
+    let face = builder::try_attach_plane(&[edge.to_vec().into()]).unwrap();
+    let solid: Solid = builder::extrude(&face, 0.1 * Vector3::unit_z());
+    let solid = builder::transformed(
+        &solid,
+        Matrix4::from_translation(Vector3::new(0., 0., 4.414880353919416)),
+    );
+    let msolid = solid.triangulation(0.05).collect_option().unwrap();
+    assert!(
+        msolid
+            .face_iter()
+            .all(|face| face.surface().faces().triangle_iter().next().is_some())
+    );
+    assert_near!(
+        msolid.center_of_gravity().to_point(),
+        Point3::new(-16.404969397268417, 0.14874253609513843, 4.414880353919416)
+    );
+}

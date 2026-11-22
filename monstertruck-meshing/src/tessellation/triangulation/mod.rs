@@ -1,13 +1,8 @@
-#![expect(
-    clippy::many_single_char_names,
-    reason = "triangulation formulas conventionally use compact geometric variable names"
-)]
-
 use super::{
     BoundedCurve, CdtEdge, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace,
     CompressedShell, CompressedShellTessellation, CompressedTrimmedFace, CompressedTrimmedShell,
     ConstrainedDelaunayTriangulation, CurveParameter, Edge, EuclideanSpace,
-    ExactParameterBoundary2D, Face, Faces, HashGen, InnerFaceIterator, InnerSpace, Invertible,
+    ExactParameterBoundary2D, Face, Faces, InnerFaceIterator, InnerSpace, Invertible,
     IsoparametricCurveOptions, KERNEL_EPSILON, MIN_ALLOWED_VALUE, MeshableSurface, MetricSpace,
     Origin, Parallelizable, ParameterBoundary2D, ParameterDivision1D, ParametricCurve2D,
     ParametricCurve3D, ParametricSurface3D, Point3, PolygonMesh, PolylineCurve, PolylineableCurve,
