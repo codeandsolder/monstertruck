@@ -4364,6 +4364,17 @@ END-ISO-10303-21;
         ))
     }
 
+    // The host requires parallel extrusion transition algebra. Replayed
+    // spline contact intersections must converge beyond the weld radius;
+    // competing analytic-only cores cannot cover its polynomial strips.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_polynomial_crossings_and_core_exclusion_are_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_polynomial_622f6bfb.step"
+        ))
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn native_relief_partitioned_spline_caps_are_source_verified() -> Result<()> {

@@ -381,13 +381,36 @@ fn rebuilt_kernel_boundary_matches_diagnostic<K: CadKernel>(
     if !source.supported {
         return Ok(false);
     }
-    let rebuilt_step = kernel.to_step(evaluated)?;
-    let rebuilt = ParsedStepSource::parse(rebuilt_step.as_bytes())?.exchange;
-    let [data] = rebuilt.data.as_slice() else {
+    let Some((id, entities)) = evaluated_step_solid(kernel, evaluated)? else {
         return Ok(false);
     };
-    let rebuilt_entities = &data.entities;
-    let rebuilt_solid_ids = rebuilt_entities
+    let diagnostic =
+        crate::boundary_proof::analytic_boundary_diagnostic(id, &entities, &build_index(&entities));
+    Ok(crate::boundary_proof::compare_diagnostics(
+        source,
+        source_entities,
+        &diagnostic,
+        &entities,
+    ))
+}
+
+/// Parse an actual emitted single STEP solid once for callers needing
+/// either full boundary proof or only its exact authored carrier types.
+fn evaluated_step_solid<K: CadKernel>(
+    kernel: &K,
+    evaluated: &K::Evaluated,
+) -> Result<Option<(u64, Vec<EntityInstance>)>> {
+    let rebuilt_step = kernel.to_step(evaluated)?;
+    let rebuilt = ParsedStepSource::parse(rebuilt_step.as_bytes())?.exchange;
+    let mut sections = rebuilt.data.into_iter();
+    let Some(data) = sections.next() else {
+        return Ok(None);
+    };
+    if sections.next().is_some() {
+        return Ok(None);
+    }
+    let ids = data
+        .entities
         .iter()
         .filter_map(|entity| {
             simple_record(entity)
@@ -395,20 +418,34 @@ fn rebuilt_kernel_boundary_matches_diagnostic<K: CadKernel>(
                 .then_some(entity_id(entity))
         })
         .collect::<Vec<_>>();
-    let [rebuilt_solid_id] = rebuilt_solid_ids.as_slice() else {
-        return Ok(false);
+    let [id] = ids.as_slice() else {
+        return Ok(None);
     };
-    let diagnostic = crate::boundary_proof::analytic_boundary_diagnostic(
-        *rebuilt_solid_id,
-        rebuilt_entities,
-        &build_index(rebuilt_entities),
-    );
-    Ok(crate::boundary_proof::compare_diagnostics(
-        source,
-        source_entities,
-        &diagnostic,
-        rebuilt_entities,
-    ))
+    Ok(Some((*id, data.entities)))
+}
+
+fn has_only_planar_cylindrical_carriers<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> bool {
+    let Ok(evaluated) = kernel.evaluate(&fragment.model, fragment.root) else {
+        return false;
+    };
+    if !kernel.summarize(&evaluated).is_single_solid() {
+        return false;
+    }
+    let Ok(Some((id, entities))) = evaluated_step_solid(kernel, &evaluated) else {
+        return false;
+    };
+    let index = build_index(&entities);
+    // Only explicitly emitted analytic surfaces count here. A merely
+    // near-planar or near-circular spline fit is not this exclusion proof.
+    crate::brep::solid_face_ids(id, &entities, &index).is_some_and(|faces| {
+        !faces.is_empty()
+            && faces.iter().all(|&face| {
+                crate::brep::face_surface(face, &entities, &index)
+                    .and_then(|id| index.get(&id))
+                    .and_then(|&i| simple_record(&entities[i]))
+                    .is_some_and(|r| matches!(r.name.as_str(), "PLANE" | "CYLINDRICAL_SURFACE"))
+            })
+    })
 }
 
 /// Immutable section-local evidence, shared by every material proposal. A
@@ -547,6 +584,8 @@ struct CoreUnionEvidence<'a, 's, K> {
     source: &'a SourceRecovery<'s, K>,
     face_ids: Vec<u64>,
     extensions: Vec<RuledEndExtension>,
+    requires_polynomial_carrier: bool,
+    analytic_extensions: std::cell::OnceCell<bool>,
 }
 
 impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
@@ -562,10 +601,23 @@ impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
             .map_or_else(Vec::new, |solid| {
                 crate::solid_lofts::detect_ruled_end_extensions(&solid)
             });
+        let requires_polynomial_carrier =
+            source.boundary.signature.as_ref().is_some_and(|signature| {
+                signature.supports.iter().any(|key| {
+                    matches!(
+                        key,
+                        crate::boundary_proof::OrientedSupportKey::SplineStrip { .. }
+                    )
+                })
+            }) && crate::boundary_proof::requires_nonplanar_polynomial_carrier(
+                &face_ids, entities, index,
+            );
         Some(Self {
             source,
             face_ids,
             extensions,
+            requires_polynomial_carrier,
+            analytic_extensions: std::cell::OnceCell::new(),
         })
     }
 
@@ -574,6 +626,29 @@ impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
         cores: &[&RecoveredSolidExtrusion],
         ceiling: Option<u64>,
     ) -> Result<Option<CadFragment>> {
+        // Boolean union can only trim or remove operand boundary
+        // carriers. A line/circular-arc extrusion has only planar and
+        // affine elliptic-cylinder carriers; verify any auxiliary ruled
+        // ends on their actual evaluated geometry once. Unknown geometry
+        // keeps the proposal eligible for the full source proof.
+        if self.requires_polynomial_carrier
+            && cores.iter().all(|core| {
+                core.profile_loops().flatten().all(|curve| {
+                    matches!(
+                        curve,
+                        crate::profile_curves::RecoveredProfileCurve::Line { .. }
+                            | crate::profile_curves::RecoveredProfileCurve::CircleArc { .. }
+                    )
+                })
+            })
+            && *self.analytic_extensions.get_or_init(|| {
+                self.extensions.iter().all(|extension| {
+                    has_only_planar_cylindrical_carriers(self.source.kernel, &extension.fragment)
+                })
+            })
+        {
+            return Ok(None);
+        }
         let solid_id = self.source.solid_id;
         let mut fragments = Vec::with_capacity(cores.len() + self.extensions.len());
         let mut axes = Vec::with_capacity(fragments.capacity());
