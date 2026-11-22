@@ -4,7 +4,7 @@ use std::slice::SliceIndex;
 use std::vec::Vec;
 
 mod basis_recurrence;
-use basis_recurrence::BasisRecurrence;
+use basis_recurrence::{BasisJet, BasisRecurrence};
 
 #[inline]
 fn inv_or_zero_strict(delta: f64) -> f64 { if delta.is_zero() { 0.0 } else { 1.0 / delta } }
@@ -286,11 +286,7 @@ impl KnotVector {
     }
 
     /// Evaluates consecutive derivative ranks from zero using shared polynomial recurrence prefixes.
-    pub(super) fn bspline_basis_jet<const N: usize>(
-        &self,
-        degree: usize,
-        t: f64,
-    ) -> [BasisWindow; N] {
+    pub(super) fn bspline_basis_jet<const N: usize>(&self, degree: usize, t: f64) -> BasisJet<N> {
         BasisRecurrence::new(self, degree, t).jet()
     }
 

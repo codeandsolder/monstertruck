@@ -1,9 +1,39 @@
 //! Common recurrence for one B-spline basis window or a complete derivative jet.
 
 use super::{BasisWindow, KnotVector, inv_or_zero_strict};
+use crate::nurbs::BasisSlice;
 use smallvec::SmallVec;
 
 type Values = SmallVec<[f64; 32]>;
+
+/// All nonzero derivative ranks in one coefficient buffer. Each row retains
+/// its recurrence sentinel, while active slices expose only valid basis values.
+pub(in crate::nurbs) struct BasisJet<const N: usize> {
+    coefficients: Values,
+    stride: usize,
+    active_ranks: usize,
+    start: usize,
+    len: usize,
+}
+
+impl<const N: usize> BasisJet<N> {
+    pub(in crate::nurbs) fn windows(&self) -> [BasisSlice<'_>; N] {
+        std::array::from_fn(|rank| {
+            if rank >= self.active_ranks {
+                BasisSlice {
+                    start: 0,
+                    values: &[],
+                }
+            } else {
+                let offset = rank * self.stride;
+                BasisSlice {
+                    start: self.start,
+                    values: &self.coefficients[offset..offset + self.len],
+                }
+            }
+        })
+    }
+}
 
 pub(super) struct BasisRecurrence<'a> {
     knots: &'a KnotVector,
@@ -91,31 +121,40 @@ impl<'a> BasisRecurrence<'a> {
         self.finish(values)
     }
 
-    pub(super) fn jet<const N: usize>(&self) -> [BasisWindow; N] {
+    pub(super) fn jet<const N: usize>(&self) -> BasisJet<N> {
         // Derivative rank r shares the first degree-r polynomial steps of
-        // every lower-order derivative. Visit ranks in descending order and
-        // extend this prefix in place. The remaining derivative recurrence
-        // uses a private copy, so no arithmetic or summation order changes.
-        let mut windows = std::array::from_fn(|_| BasisWindow::empty(self.last - self.degree));
-        let mut prefix = self.initial();
+        // every lower-order derivative. Each row becomes the next prefix
+        // before its own derivative steps overwrite it. This allocates one
+        // coefficient block even when a high-degree jet spills to the heap.
+        let stride = self.degree + 2;
+        let active_ranks = N.min(self.degree + 1);
+        let mut coefficients: Values = smallvec::smallvec![0.0; stride * active_ranks];
         let mut completed = 0;
-        for (derivative, window) in windows.iter_mut().enumerate().take(self.degree + 1).rev() {
+        if active_ranks != 0 {
+            coefficients[(active_ranks - 1) * stride + self.span - self.start] = 1.0;
+        }
+        for derivative in (0..active_ranks).rev() {
+            let offset = derivative * stride;
+            let end = offset + stride;
             let polynomial_rank = self.degree - derivative;
             for rank in completed + 1..=polynomial_rank {
-                self.polynomial_step(rank, &mut prefix);
+                self.polynomial_step(rank, &mut coefficients[offset..end]);
             }
             completed = polynomial_rank;
-            let mut values = if derivative == 0 {
-                std::mem::take(&mut prefix)
-            } else {
-                prefix.clone()
-            };
-            for rank in polynomial_rank + 1..=self.degree {
-                self.derivative_step(rank, &mut values);
+            if derivative != 0 {
+                coefficients.copy_within(offset..end, offset - stride);
             }
-            *window = self.finish(values);
+            for rank in polynomial_rank + 1..=self.degree {
+                self.derivative_step(rank, &mut coefficients[offset..end]);
+            }
         }
-        windows
+        BasisJet {
+            coefficients,
+            stride,
+            active_ranks,
+            start: self.start,
+            len: (self.degree + 1).min(self.last - self.degree - self.start),
+        }
     }
 }
 
@@ -138,13 +177,12 @@ mod tests {
         ] {
             for parameter in [-0.1, 0., 0.125, 0.25, 0.5, 0.75, 0.999, 1., 1.1] {
                 let jet = knots.bspline_basis_jet::<5>(degree, parameter);
-                for (rank, window) in jet.iter().enumerate() {
+                for (rank, window) in jet.windows().iter().enumerate() {
                     let single = knots.bspline_basis_functions_unchecked(degree, rank, parameter);
-                    assert_eq!(window.start_index(), single.start_index());
-                    assert_eq!(window.total_length(), single.total_length());
+                    assert_eq!(window.start, single.start_index());
                     assert!(
                         window
-                            .values()
+                            .values
                             .iter()
                             .map(|v| v.to_bits())
                             .eq(single.values().iter().map(|v| v.to_bits()))
