@@ -6,17 +6,20 @@ use super::{
     SupportLocusKey, brep, bspline_domain, bspline_line_support, canonical_boundary_direction,
     circle_lies_on_support, circle_section_of_plane_and_support, dequantize_scalar,
     dequantize_vector, evaluate_bspline, line_lies_on_support, line_segment_lies_on_cone,
-    point_key, quantize, support_pair_can_intersect,
+    point_key, quantize, support_locus_key, support_pair_can_intersect,
 };
 use crate::math3::{add, cross, distance, dot, mul, norm, normalize, sub};
 use monstertruck_geometry::{
     analytic_carrier::AnalyticSupport,
     analytic_curve_incidence::{
         CircularArcFrame, CurveIncidence, certify_circular_arc_coverage,
-        certify_nurbs_curve_on_support,
+        certify_cylindrical_arc_coverage, certify_nurbs_curve_on_support,
     },
     analytic_line_segment::{SegmentLocus, certify_nurbs_segment_locus},
-    prelude::{BsplineCurve, KnotVector, NurbsCurve, Point3, Vector3, Vector4},
+    prelude::{
+        BoundedCurve, BsplineCurve, KnotVector, NurbsCurve, ParametricCurve, Point3, Vector3,
+        Vector4,
+    },
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
@@ -284,6 +287,7 @@ pub(super) struct Arc {
 pub(super) enum BoundedEdge {
     Line,
     Circle(CircleLocusKey, Arc),
+    CylinderSection(Arc),
     Spline(super::spline_strip::ProfilePiece),
 }
 
@@ -371,6 +375,146 @@ fn circle_arc(
     ))
 }
 
+/// The axial projection of a nonparallel plane/cylinder intersection
+/// is bijective onto its circle. Establish full physical plane incidence
+/// and full cylindrical/angular coverage independently. Bernstein control
+/// rays are measured in the transverse chart of the actual rational curve,
+/// without sampling, refitting or allocating a projected curve.
+struct CylinderSectionChart {
+    origin: [f64; 3],
+    axis: [f64; 3],
+    radius: f64,
+    plane_origin: [f64; 3],
+    plane_normal: [f64; 3],
+}
+
+impl CylinderSectionChart {
+    fn new(loci: &[SupportLocusKey; 2]) -> Option<Self> {
+        let (normal, offset, axis, closest, radius) = match (&loci[0], &loci[1]) {
+            (
+                SupportLocusKey::Plane { normal, offset_mm },
+                SupportLocusKey::Cylinder {
+                    axis,
+                    closest_mm,
+                    radius_mm,
+                },
+            )
+            | (
+                SupportLocusKey::Cylinder {
+                    axis,
+                    closest_mm,
+                    radius_mm,
+                },
+                SupportLocusKey::Plane { normal, offset_mm },
+            ) => (*normal, *offset_mm, *axis, *closest_mm, *radius_mm),
+            _ => return None,
+        };
+        let plane = dequantize_vector(normal, DIRECTION_Q)?;
+        let plane_normal = normalize(plane, 0.)?;
+        let axis = normalize(dequantize_vector(axis, DIRECTION_Q)?, 0.)?;
+        // Transverse sections already have a true circle certificate;
+        // axial planes can intersect the cylinder in one or two lines.
+        if dot(plane_normal, axis).abs() <= 4. * DIRECTION_Q
+            || norm(cross(plane_normal, axis)) <= 4. * DIRECTION_Q
+        {
+            return None;
+        }
+        let radius = dequantize_scalar(radius)?;
+        if radius <= TOL {
+            return None;
+        }
+        Some(Self {
+            origin: decode(closest)?,
+            axis,
+            radius,
+            plane_origin: mul(plane, dequantize_scalar(offset)? / dot(plane, plane)),
+            plane_normal,
+        })
+    }
+
+    fn project(&self, p: [f64; 3]) -> [f64; 3] {
+        let delta = sub(p, self.origin);
+        sub(delta, mul(self.axis, dot(delta, self.axis)))
+    }
+
+    fn on_section(&self, p: [f64; 3]) -> bool {
+        dot(sub(p, self.plane_origin), self.plane_normal).abs() <= TOL
+            && (norm(self.project(p)) - self.radius).abs() <= TOL
+    }
+
+    fn certify(&self, edge: &EdgeGeometry, curve: &NurbsCurve<Vector4>) -> Option<Arc> {
+        let plane = AnalyticSupport::Plane {
+            origin: point(self.plane_origin),
+            normal: vector(self.plane_normal),
+        };
+        if certify_nurbs_curve_on_support(curve, plane, TOL) != CurveIncidence::Proven {
+            return None;
+        }
+        let start = decode(edge.start)?;
+        let end = decode(edge.end)?;
+        if !self.on_section(start) || !self.on_section(end) {
+            return None;
+        }
+        let (lo, hi) = curve.range_tuple();
+        let near = |p: Point3, q: [f64; 3]| distance([p.x, p.y, p.z], q) <= TOL;
+        let a = curve.evaluate(lo);
+        let b = curve.evaluate(hi);
+        if !((near(a, start) && near(b, end)) || (near(a, end) && near(b, start))) {
+            return None;
+        }
+        let projected_start = add(self.origin, self.project(start));
+        let projected_end = add(self.origin, self.project(end));
+        let frame = CircularArcFrame::new(
+            point(self.origin),
+            vector(self.axis),
+            self.radius,
+            point(projected_start),
+            TOL,
+        )?;
+        let cover = certify_cylindrical_arc_coverage(curve, frame)?;
+        let from = frame.point(cover.start_rad);
+        let to = frame.point(cover.start_rad + cover.sweep_rad);
+        let ends = if near(from, projected_start) && near(to, projected_end) {
+            [edge.start, edge.end]
+        } else if near(from, projected_end) && near(to, projected_start) {
+            [edge.end, edge.start]
+        } else {
+            return None;
+        };
+        let tol = TOL / self.radius;
+        let sweep = cover.sweep_rad;
+        if !sweep.is_finite()
+            || sweep <= tol
+            || sweep > TAU + tol
+            || (ends[0] == ends[1]) != ((sweep - TAU).abs() <= tol)
+            || (ends[0] == ends[1] && edge.start_vertex != edge.end_vertex)
+        {
+            return None;
+        }
+        Some(Arc {
+            start: ends[0],
+            end: ends[1],
+            sweep,
+        })
+    }
+}
+
+/// A declared nonsimple curve may still be proved to traverse this
+/// ellipse exactly once. No general curve recognition relies on this path.
+pub(super) fn certify_flagged_cylinder_section(
+    edge: &EdgeGeometry,
+    curve: &CurveSupport,
+    loci: &[SupportLocusKey; 2],
+) -> Option<BoundedEdge> {
+    let CurveSupport::BSpline(spline) = curve else {
+        return None;
+    };
+    let chart = CylinderSectionChart::new(loci)?;
+    chart
+        .certify(edge, &rational(spline)?)
+        .map(BoundedEdge::CylinderSection)
+}
+
 pub(super) fn classify(
     edge: &EdgeGeometry,
     curve: &CurveSupport,
@@ -394,6 +538,11 @@ pub(super) fn classify(
                 ) == SegmentLocus::WithinTolerance
             {
                 return Some(BoundedEdge::Line);
+            }
+            if let Some(arc) =
+                CylinderSectionChart::new(loci).and_then(|chart| chart.certify(edge, &rational))
+            {
+                return Some(BoundedEdge::CylinderSection(arc));
             }
             if let Some(key) = super::spline_strip::certified_edge(edge, spline, loci) {
                 return Some(BoundedEdge::Spline(key));
@@ -431,6 +580,46 @@ pub(super) fn normalize_arcs(
         0.,
     )
     .ok_or("invalid circle direction")?;
+    normalize_angular_chains(arcs, tol, normal, |p| sub(p, center)).map(|chains| {
+        chains
+            .into_iter()
+            .map(|endpoints_mm| BoundaryChainKey::Circular {
+                supports: supports.clone(),
+                locus: locus.clone(),
+                endpoints_mm,
+            })
+            .collect()
+    })
+}
+
+pub(super) fn normalize_cylinder_sections(
+    supports: &[OrientedSupportKey; 2],
+    arcs: &[Arc],
+) -> Result<Vec<BoundaryChainKey>, String> {
+    let chart = CylinderSectionChart::new(&supports.each_ref().map(support_locus_key))
+        .ok_or("invalid oblique cylinder section")?;
+    normalize_angular_chains(arcs, TOL / chart.radius, chart.axis, |p| chart.project(p)).map(
+        |chains| {
+            chains
+                .into_iter()
+                .map(|endpoints_mm| BoundaryChainKey::CylinderSection {
+                    supports: supports.clone(),
+                    endpoints_mm,
+                })
+                .collect()
+        },
+    )
+}
+
+/// Chain topology stays in physical 3-D coordinates; only angular coverage
+/// is evaluated in a transverse chart. This preserves actual boundary
+/// vertices and rejects repeated coverage regardless of curve subdivision.
+fn normalize_angular_chains(
+    arcs: &[Arc],
+    tol: f64,
+    normal: [f64; 3],
+    radial: impl Fn([f64; 3]) -> [f64; 3],
+) -> Result<Vec<Option<[PointKey; 2]>>, String> {
     let mut outgoing = BTreeMap::new();
     let mut incoming = BTreeSet::new();
     for (i, arc) in arcs.iter().enumerate() {
@@ -479,8 +668,8 @@ pub(super) fn normalize_arcs(
             None
         } else {
             let expected = positive_angle(
-                sub(decode(start).ok_or("invalid arc start")?, center),
-                sub(decode(end).ok_or("invalid arc end")?, center),
+                radial(decode(start).ok_or("invalid arc start")?),
+                radial(decode(end).ok_or("invalid arc end")?),
                 normal,
             );
             if (total - expected).abs() > tol {
@@ -494,8 +683,8 @@ pub(super) fn normalize_arcs(
             intervals.push((0.0, TAU));
         } else {
             let mut from = positive_angle(
-                sub(angle_origin, center),
-                sub(decode(start).ok_or("invalid arc start")?, center),
+                radial(angle_origin),
+                radial(decode(start).ok_or("invalid arc start")?),
                 normal,
             );
             if TAU - from <= tol {
@@ -507,11 +696,7 @@ pub(super) fn normalize_arcs(
                 intervals.push((0.0, to - TAU));
             }
         }
-        result.push(BoundaryChainKey::Circular {
-            supports: supports.clone(),
-            locus: locus.clone(),
-            endpoints_mm,
-        });
+        result.push(endpoints_mm);
     }
     intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
     if intervals.windows(2).any(|pair| pair[0].1 > pair[1].0 + tol) {
@@ -523,7 +708,6 @@ pub(super) fn normalize_arcs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary_proof::support_locus_key;
     use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI};
     const Z: [i64; 3] = [0, 0, 10_000_000_000];
     const R: i64 = 10_000_000;
@@ -697,6 +881,164 @@ mod tests {
         let second = classify_circle(outer);
         assert!(first.is_some() && second.is_some());
         assert_ne!(first, second);
+    }
+
+    fn oblique_supports() -> [OrientedSupportKey; 2] {
+        [
+            OrientedSupportKey::Plane {
+                normal: [-7_071_067_812, 0, 7_071_067_812],
+                offset_mm: 0,
+                outward_positive: true,
+            },
+            OrientedSupportKey::Cylinder {
+                axis: Z,
+                closest_mm: [0; 3],
+                radius_mm: R,
+                radial_outward: true,
+            },
+        ]
+    }
+
+    fn ellipse_arc(lo: f64, hi: f64) -> BSplineSupport {
+        let point = |a: f64, r: f64| {
+            let x = r * a.cos();
+            [x, r * a.sin(), x]
+        };
+        let w = ((hi - lo) * 0.5).cos();
+        BSplineSupport {
+            degree: 2,
+            control_points_mm: vec![
+                point(lo, 1.),
+                point(lo.midpoint(hi), w.recip()),
+                point(hi, 1.),
+            ],
+            knots: vec![0., 0., 0., 1., 1., 1.],
+            weights: Some(vec![1., w, 1.]),
+        }
+    }
+
+    fn oblique_arc(lo: f64, hi: f64) -> anyhow::Result<Arc> {
+        let spline = ellipse_arc(lo, hi);
+        let start = point_key(
+            *spline
+                .control_points_mm
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("no start"))?,
+        )
+        .ok_or_else(|| anyhow::anyhow!("invalid start"))?;
+        let end = point_key(
+            *spline
+                .control_points_mm
+                .last()
+                .ok_or_else(|| anyhow::anyhow!("no end"))?,
+        )
+        .ok_or_else(|| anyhow::anyhow!("invalid end"))?;
+        let curve = CurveSupport::BSpline(spline);
+        let e = edge(start, end, true, curve.clone());
+        let Some(BoundedEdge::CylinderSection(arc)) = classify(
+            &e,
+            &curve,
+            &oblique_supports().each_ref().map(support_locus_key),
+        ) else {
+            anyhow::bail!("exact oblique ellipse rejected");
+        };
+        Ok(arc)
+    }
+
+    #[test]
+    fn oblique_ellipse_coverage_is_partition_independent() -> anyhow::Result<()> {
+        let supports = oblique_supports();
+        let whole = oblique_arc(0., FRAC_PI_2)?;
+        let first = oblique_arc(0., FRAC_PI_2 * 0.5)?;
+        let second = oblique_arc(FRAC_PI_2 * 0.5, FRAC_PI_2)?;
+        let reversed = oblique_arc(FRAC_PI_2, 0.)?;
+        let signature = normalize_cylinder_sections(&supports, &[whole]);
+        assert_eq!(
+            signature,
+            normalize_cylinder_sections(&supports, &[second, first])
+        );
+        assert_eq!(
+            signature,
+            normalize_cylinder_sections(&supports, &[reversed])
+        );
+        assert!(signature.is_ok());
+        assert!(normalize_cylinder_sections(&supports, &[whole, first, second]).is_err());
+        assert!(matches!(
+            signature.map_err(anyhow::Error::msg)?.as_slice(),
+            [BoundaryChainKey::CylinderSection {
+                endpoints_mm: Some([[R, 0, R], [0, R, 0]]),
+                ..
+            }]
+        ));
+        let rest = [
+            oblique_arc(FRAC_PI_2, PI)?,
+            oblique_arc(PI, PI + FRAC_PI_2)?,
+            oblique_arc(PI + FRAC_PI_2, TAU)?,
+        ];
+        assert!(matches!(
+            normalize_cylinder_sections(&supports, &[whole, rest[0], rest[1], rest[2]])
+                .map_err(anyhow::Error::msg)?
+                .as_slice(),
+            [BoundaryChainKey::CylinderSection {
+                endpoints_mm: None,
+                ..
+            }]
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn declared_self_intersection_does_not_override_complete_ellipse_proof() -> anyhow::Result<()> {
+        let input = "ISO-10303-21;HEADER;FILE_DESCRIPTION(('x'),'1');FILE_NAME('a','b',(''),(''),'x','y','');FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));ENDSEC;DATA;
+        #1=CARTESIAN_POINT('',(1.,0.,1.));
+        #2=CARTESIAN_POINT('',(1.,1.,1.));
+        #3=CARTESIAN_POINT('',(0.,1.,0.));
+        #4=(BOUNDED_CURVE()B_SPLINE_CURVE(2,(#1,#2,#3),.UNSPECIFIED.,.F.,.T.)B_SPLINE_CURVE_WITH_KNOTS((3,3),(0.,1.),.UNSPECIFIED.)CURVE()GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_CURVE((1.,0.7071067811865476,1.))REPRESENTATION_ITEM(''));
+        #5=INTERSECTION_CURVE('',#4,(),.CURVE_3D.);
+        ENDSEC;END-ISO-10303-21;";
+        let exchange = step_p21::parser::parse(input)?;
+        let entities = &exchange.data[0].entities;
+        let index = crate::step_graph::build_index(entities);
+        let ordinary = brep::curve_support(5, entities, &index);
+        assert!(matches!(ordinary, CurveSupport::Other { .. }));
+        let explicit = brep::curve_geometry_for_incidence_proof(5, entities, &index);
+        let e = edge([R, 0, R], [0, R, 0], true, ordinary);
+        let loci = oblique_supports().each_ref().map(support_locus_key);
+        assert!(matches!(
+            certify_flagged_cylinder_section(&e, &explicit, &loci),
+            Some(BoundedEdge::CylinderSection(_))
+        ));
+        let CurveSupport::BSpline(mut wrong) = explicit else {
+            anyhow::bail!("expected rational input");
+        };
+        wrong.control_points_mm[1][2] += 0.01;
+        assert!(
+            certify_flagged_cylinder_section(&e, &CurveSupport::BSpline(wrong), &loci).is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn oblique_ellipse_requires_entire_plane_and_cylinder_incidence() {
+        let supports = oblique_supports();
+        let loci = supports.each_ref().map(support_locus_key);
+        let spline = ellipse_arc(0., FRAC_PI_2);
+        let e = edge(
+            [R, 0, R],
+            [0, R, 0],
+            true,
+            CurveSupport::BSpline(spline.clone()),
+        );
+        let mut off_plane = spline.clone();
+        off_plane.control_points_mm[1][2] += 0.001;
+        assert!(classify(&e, &CurveSupport::BSpline(off_plane), &loci).is_none());
+        let mut off_cylinder = spline.clone();
+        off_cylinder.control_points_mm[1][0] += 0.001;
+        off_cylinder.control_points_mm[1][2] += 0.001;
+        assert!(classify(&e, &CurveSupport::BSpline(off_cylinder), &loci).is_none());
+        let mut wrong = e;
+        wrong.end = [-R, 0, -R];
+        assert!(classify(&wrong, &CurveSupport::BSpline(spline), &loci).is_none());
     }
 
     #[test]
