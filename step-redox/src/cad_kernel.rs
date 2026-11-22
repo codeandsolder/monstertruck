@@ -1173,6 +1173,31 @@ pub mod monstertruck {
         {
             return Ok(result);
         }
+        if (op == BooleanOp::Union && children.len() > 2)
+            || (op == BooleanOp::Difference && children.len() >= 2)
+        {
+            let solids = children
+                .iter()
+                .map(|&id| evaluate_node(model, id, policy, cache))
+                .collect::<Result<Vec<_>>>()?;
+            let tools = solids[1..].iter().collect::<Vec<_>>();
+            let contact_op = match op {
+                BooleanOp::Union => monstertruck_solid::PlanarContactOp::Union,
+                BooleanOp::Difference => monstertruck_solid::PlanarContactOp::Difference,
+                BooleanOp::Intersection => {
+                    unreachable!("contact arrangement requires union or difference")
+                }
+            };
+            let joined = monstertruck_solid::try_planar_contact_many(
+                &solids[0],
+                &tools,
+                contact_op,
+                monstertruck_policy(policy),
+            )?;
+            if let Some(result) = joined {
+                return Ok(result);
+            }
+        }
         let Some((&first, rest)) = children.split_first() else {
             bail!("boolean node needs at least one child");
         };
