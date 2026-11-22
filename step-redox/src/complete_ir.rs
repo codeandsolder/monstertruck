@@ -4179,6 +4179,55 @@ END-ISO-10303-21;
         ))
     }
 
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_round_at_terminal_shoulder_limit_recovers_exactly() -> Result<()> {
+        use crate::cad_ir::{
+            CadModel, CadNode, EdgeSelector, EdgeTreatmentEdge, EdgeTreatmentProfile, Profile2d,
+            RigidTransform,
+        };
+        use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+
+        let mut model = CadModel::new();
+        let section = model.add_node(CadNode::Extrude {
+            profile: Profile2d::polygon(vec![
+                [0., 0.],
+                [1., 0.],
+                [1., 4.9],
+                [0.4, 5.5],
+                [0., 5.5],
+            ])?,
+            vector_mm: [0., 0., 6.65],
+        });
+        let child = model.add_node(CadNode::Transform {
+            child: section,
+            transform: RigidTransform {
+                matrix: [
+                    [0., 0., 1., 0.],
+                    [1., 0., 0., 0.],
+                    [0., 1., 0., 0.],
+                    [0., 0., 0., 1.],
+                ],
+            },
+        });
+        let root = model.add_node(CadNode::EdgeTreatment {
+            child,
+            profile: EdgeTreatmentProfile::Round,
+            edges: vec![EdgeTreatmentEdge {
+                selector: EdgeSelector::Segment {
+                    start_mm: [6.65, 0., 5.5],
+                    end_mm: [6.65, 0.4, 5.5],
+                },
+                radius_mm: 0.6,
+            }],
+        });
+        model.add_root(root)?;
+        let kernel = MonstertruckKernel::project_standard();
+        let evaluated = kernel.evaluate(&model, root)?;
+        let source = kernel.to_step(&evaluated)?;
+        assert_source_verified_relief(source.as_bytes())
+    }
+
     // Real high-face-count relief housing, formerly timing out in repeated
     // core recognition. Require complete independent original-boundary proof,
     // not any particular reconstruction family or operation count.
