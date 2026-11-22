@@ -4211,6 +4211,21 @@ END-ISO-10303-21;
         ))
     }
 
+    // A native revolution cutter must retain affine planar caps so that
+    // the contact interface can be rebuilt before the lettering is replayed.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_with_circular_recesses_is_source_verified() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_curved_1c75cccd.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_curved_7a4544b3.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_curved_224fa2f0.step").as_slice(),
+        ] {
+            assert_source_verified_relief(bytes)?;
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn native_local_contact_rebuilds_stepped_relief_sources() -> Result<()> {

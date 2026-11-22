@@ -703,6 +703,91 @@ pub mod monstertruck {
         revolve_wires(wires, transform_axis(axis, transform), angle_rad)
     }
 
+    /// A generated straight radial profile sweeps an affine planar cap.
+    /// Retain its exact, already connected boundary curves, but give the
+    /// newly built face a regular affine chart rather than the polar chart
+    /// (which is singular at the rotation axis and unsuitable for overlay).
+    /// Only native swept structural lines are considered; imported pcurves
+    /// and general revolutions are never reparameterized here.
+    fn affine_revolution_cap(
+        face: &monstertruck_modeling::Face,
+    ) -> Option<monstertruck_modeling::Face> {
+        use monstertruck_modeling::{Line, Plane};
+        let Surface::Revolution(surface) = face.oriented_surface() else {
+            return None;
+        };
+        let revolution = surface.entity();
+        let Curve::Line(Line(start, end)) = revolution.entity_curve() else {
+            return None;
+        };
+        let generator = *end - *start;
+        let axis = revolution.axis();
+        let length = generator.magnitude();
+        if !length.is_finite()
+            || length <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+            || generator.dot(axis).abs()
+                > length * DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_frame_orthogonality
+        {
+            return None;
+        }
+        // The revolved profile must lie on one radial half-line. Its
+        // supporting planar face is regular away from the optional pole.
+        let radial = |p: Point3| {
+            let relative = p - revolution.origin();
+            relative - axis * relative.dot(axis)
+        };
+        let a = radial(*start);
+        let b = radial(*end);
+        if a.cross(b).magnitude() > length * DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
+            || a.dot(b) < -DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm.powi(2)
+        {
+            return None;
+        }
+        let (u_range, v_range) = surface.try_range_tuple();
+        let (u0, u1) = u_range?;
+        let (v0, v1) = v_range?;
+        let u = f64::midpoint(u0, u1);
+        let v = f64::midpoint(v0, v1);
+        let point = surface.evaluate(u, v);
+        let normal = surface.normal(u, v);
+        let tangent = surface.derivative_u(u, v).normalize();
+        let bitangent = normal.cross(tangent).normalize();
+        if ![
+            normal.x,
+            normal.y,
+            normal.z,
+            tangent.x,
+            tangent.y,
+            tangent.z,
+            bitangent.x,
+            bitangent.y,
+            bitangent.z,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
+        {
+            return None;
+        }
+        let plane = Plane::new(point, point + tangent, point + bitangent);
+        let cap =
+            monstertruck_modeling::Face::new(face.boundaries(), Surface::Plane(plane)).ok()?;
+        cap.is_geometric_consistent().then_some(cap)
+    }
+
+    fn regularize_generated_revolution_caps(solid: Solid) -> Result<Solid> {
+        let shells = solid
+            .into_boundaries()
+            .into_iter()
+            .map(|shell| {
+                shell
+                    .into_iter()
+                    .map(|face| affine_revolution_cap(&face).unwrap_or(face))
+                    .collect::<Shell>()
+            })
+            .collect::<Vec<_>>();
+        Ok(Solid::new(shells)?)
+    }
+
     fn revolve_wires(mut wires: Vec<Wire>, axis: Axis3, angle_rad: f64) -> Result<Solid> {
         if !angle_rad.is_finite() || angle_rad == 0.0 {
             bail!("revolution angle must be finite and nonzero");
@@ -799,11 +884,11 @@ pub mod monstertruck {
             }
             let shell =
                 builder::revolve_wire(&wire, origin, direction, builder::SweepAngle::Closed, 2)?;
-            return Ok(Solid::new(vec![shell])?);
+            return regularize_generated_revolution_caps(Solid::new(vec![shell])?);
         }
 
         let face = profile::attach_plane_normalized(wires)?;
-        Ok(builder::revolve(
+        regularize_generated_revolution_caps(builder::revolve(
             &face,
             origin,
             direction,
