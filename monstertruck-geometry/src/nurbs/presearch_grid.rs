@@ -9,7 +9,8 @@
 )]
 use super::{
     BasisWindow, Bounded, BsplineSurface, ControlPoint, MetricSpace, ParametricSurface,
-    SurfaceParameterRange, Zero, algo, presearch_trace, seed_index::SeedSpatialIndex,
+    SearchParameterHint2D, SurfaceParameterRange, Zero, algo, presearch_trace,
+    seed_index::SeedSpatialIndex,
 };
 use std::{
     any::Any,
@@ -50,6 +51,19 @@ const fn identical_parameter_ranges(
         && lhs.0.1.to_bits() == rhs.0.1.to_bits()
         && lhs.1.0.to_bits() == rhs.1.0.to_bits()
         && lhs.1.1.to_bits() == rhs.1.1.to_bits()
+}
+
+/// Resolve a search hint without scanning when a parameter is already known.
+pub(super) fn resolve_hint(
+    hint: SearchParameterHint2D,
+    full_range: impl FnOnce() -> SurfaceParameterRange,
+    search: impl FnOnce(SurfaceParameterRange) -> (f64, f64),
+) -> (f64, f64) {
+    match hint {
+        SearchParameterHint2D::Parameter(u, v) => (u, v),
+        SearchParameterHint2D::Range(u, v) => search((u, v)),
+        SearchParameterHint2D::None => search(full_range()),
+    }
 }
 
 /// Return the same discrete seed as the uniform generic scan. The const

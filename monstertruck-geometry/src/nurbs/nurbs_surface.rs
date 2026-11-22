@@ -570,15 +570,11 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        let hint = match hint.into() {
-            SearchParameterHint2D::Parameter(x, y) => (x, y),
-            SearchParameterHint2D::Range(range0, range1) => {
-                self.presearch_separable(point, (range0, range1), PRESEARCH_DIVISION)
-            }
-            SearchParameterHint2D::None => {
-                self.presearch_separable(point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
+        let hint = super::presearch_grid::resolve_hint(
+            hint.into(),
+            || self.range_tuple(),
+            |range| self.presearch_separable(point, range, PRESEARCH_DIVISION),
+        );
         let started = presearch_trace::begin();
         let result = algo::surface::search_nearest_parameter(self, point, hint, trials);
         presearch_trace::refine(started);
@@ -1019,15 +1015,11 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        let hint = match hint.into() {
-            SearchParameterHint2D::Parameter(x, y) => (x, y),
-            SearchParameterHint2D::Range(range0, range1) => {
-                self.presearch_separable(point, (range0, range1), PRESEARCH_DIVISION)
-            }
-            SearchParameterHint2D::None => {
-                self.presearch_separable(point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
+        let hint = super::presearch_grid::resolve_hint(
+            hint.into(),
+            || self.range_tuple(),
+            |range| self.presearch_separable(point, range, PRESEARCH_DIVISION),
+        );
         let started = presearch_trace::begin();
         let result = algo::surface::search_parameter(self, point, hint, trials);
         presearch_trace::refine(started);

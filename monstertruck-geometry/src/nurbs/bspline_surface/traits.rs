@@ -184,13 +184,11 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        let hint = match hint.into() {
-            SearchParameterHint2D::Parameter(x, y) => (x, y),
-            SearchParameterHint2D::Range(range0, range1) => {
-                self.presearch_separable(point, (range0, range1))
-            }
-            SearchParameterHint2D::None => self.presearch_separable(point, self.range_tuple()),
-        };
+        let hint = super::super::presearch_grid::resolve_hint(
+            hint.into(),
+            || self.range_tuple(),
+            |range| self.presearch_separable(point, range),
+        );
         algo::surface::search_parameter(self, point, hint, trials)
     }
 }
@@ -211,13 +209,11 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        let hint = match hint.into() {
-            SearchParameterHint2D::Parameter(x, y) => (x, y),
-            SearchParameterHint2D::Range(range0, range1) => {
-                self.presearch_separable(point, (range0, range1))
-            }
-            SearchParameterHint2D::None => self.presearch_separable(point, self.range_tuple()),
-        };
+        let hint = super::super::presearch_grid::resolve_hint(
+            hint.into(),
+            || self.range_tuple(),
+            |range| self.presearch_separable(point, range),
+        );
         algo::surface::search_nearest_parameter(self, point, hint, trials)
     }
 }
