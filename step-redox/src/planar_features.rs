@@ -121,6 +121,40 @@ impl ShellTopology {
     fn interface_edges(&self, component: &HashSet<u64>, host: u64) -> HashSet<u64> {
         component_interface_edges(component, host, &self.face_edges, &self.edge_faces)
     }
+
+    /// Compute all actual interfaces in one incidence traversal. A single
+    /// requested host needs only its own indexed boundary edges.
+    fn component_interfaces(
+        &self,
+        component: &HashSet<u64>,
+        hosts: &HashSet<u64>,
+    ) -> HashMap<u64, HashSet<u64>> {
+        if hosts.len() == 1
+            && let Some(&host) = hosts.iter().next()
+        {
+            let edges = self.interface_edges(component, host);
+            return if edges.is_empty() {
+                HashMap::new()
+            } else {
+                HashMap::from([(host, edges)])
+            };
+        }
+        let mut interfaces = HashMap::<u64, HashSet<u64>>::new();
+        let mut visited = HashSet::new();
+        for face in component {
+            for &edge in self.face_edges.get(face).into_iter().flatten() {
+                if !visited.insert(edge) {
+                    continue;
+                }
+                for &host in self.edge_faces.get(&edge).into_iter().flatten() {
+                    if hosts.contains(&host) {
+                        interfaces.entry(host).or_default().insert(edge);
+                    }
+                }
+            }
+        }
+        interfaces
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1385,13 +1419,19 @@ fn grouped_boundary_features_with_index(
             .collect::<Vec<_>>();
         report.planar_hosts += hosts.len();
 
-        for (host_face, frame, bounds) in &hosts {
+        let frames = hosts
+            .iter()
+            .map(|(face, frame, _)| (*face, frame.clone()))
+            .collect::<HashMap<_, _>>();
+        let lookups = hosts
+            .iter()
+            .map(|(face, _, bounds)| (*face, host_bound_lookup(*face, bounds, entities, index)))
+            .collect::<HashMap<_, _>>();
+        for (host_face, _, _) in &hosts {
+            if lookups[host_face].is_empty() {
+                continue;
+            }
             let host_set = HashSet::from([*host_face]);
-            let frames = HashMap::from([(*host_face, frame.clone())]);
-            let lookups = HashMap::from([(
-                *host_face,
-                host_bound_lookup(*host_face, bounds, entities, index),
-            )]);
             for component in topology.components_without_hosts(&host_set) {
                 let Some(candidate) = boundary_feature_candidate(
                     &context, component, &host_set, &frames, &lookups, &topology, entities, index,
@@ -1410,14 +1450,6 @@ fn grouped_boundary_features_with_index(
                 .iter()
                 .map(|(face, _, _)| *face)
                 .collect::<HashSet<_>>();
-            let frames = hosts
-                .iter()
-                .map(|(face, frame, _)| (*face, frame.clone()))
-                .collect::<HashMap<_, _>>();
-            let lookups = hosts
-                .iter()
-                .map(|(face, _, bounds)| (*face, host_bound_lookup(*face, bounds, entities, index)))
-                .collect::<HashMap<_, _>>();
 
             for component in topology.components_without_hosts(&host_set) {
                 let Some(candidate) = boundary_feature_candidate(
@@ -1522,36 +1554,31 @@ fn boundary_feature_candidate(
     if component.is_empty() || component.len() > MAX_BOUNDARY_FEATURE_FACES {
         return None;
     }
-    if !topology.component_is_two_manifold_with_hosts(&component, requested_hosts) {
-        return None;
-    }
-
     let mut interfaces = Vec::new();
-    let mut sides = Vec::new();
-    let vertices = component_vertex_points(&component, &topology.face_edges, entities, index)?;
-    for &host in requested_hosts {
-        let interface_edges = topology.interface_edges(&component, host);
-        if interface_edges.is_empty() {
-            continue;
-        }
+    for (host, interface_edges) in topology.component_interfaces(&component, requested_hosts) {
         let matches = bound_lookups
             .get(&host)?
             .get(&edge_set_key(&interface_edges))?;
-        if matches.len() != 1 {
+        let [(bound_id, loop_id, bound_orientation)] = matches.as_slice() else {
             return None;
-        }
-        let (bound_id, loop_id, bound_orientation) = &matches[0];
+        };
         interfaces.push(FeatureInterface {
             host_face_id: host,
             bound_id: *bound_id,
             loop_id: *loop_id,
             bound_orientation: bound_orientation.clone(),
         });
-        sides.push(plane_side(&vertices, frames.get(&host)?));
     }
-    if interfaces.is_empty() {
+    if interfaces.is_empty()
+        || !topology.component_is_two_manifold_with_hosts(&component, requested_hosts)
+    {
         return None;
     }
+    let vertices = component_vertex_points(&component, &topology.face_edges, entities, index)?;
+    let sides = interfaces
+        .iter()
+        .map(|interface| Some(plane_side(&vertices, frames.get(&interface.host_face_id)?)))
+        .collect::<Option<Vec<_>>>()?;
 
     let polarity = if sides.iter().all(|side| *side == PlaneSide::Positive) {
         FeaturePolarity::Additive
@@ -1925,18 +1952,17 @@ fn component_interface_edges(
     face_edges: &HashMap<u64, HashSet<u64>>,
     edge_faces: &HashMap<u64, Vec<u64>>,
 ) -> HashSet<u64> {
-    let mut out = HashSet::new();
-    for face in component {
-        for edge in face_edges.get(face).into_iter().flatten() {
-            if edge_faces
+    face_edges
+        .get(&host)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|edge| {
+            edge_faces
                 .get(edge)
-                .is_some_and(|faces| faces.contains(&host))
-            {
-                out.insert(*edge);
-            }
-        }
-    }
-    out
+                .is_some_and(|faces| faces.iter().any(|face| component.contains(face)))
+        })
+        .collect()
 }
 
 fn component_vertex_points(
