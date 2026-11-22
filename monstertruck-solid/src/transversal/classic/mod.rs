@@ -941,34 +941,44 @@ fn finalize<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     Solid::new(boundaries).map_err(|source| ShapeOpsError::InvalidOutputShell { operation, source })
 }
 
-/// AND operation between two solids (classic backend).
-fn and_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+/// Fold shells in source order, retaining the left-hand cavity semantics of difference.
+fn combine_solids<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
+    mode: PairMode,
 ) -> ClassicResult<Solid<Point3, C, S>> {
-    let operation = "and";
-    let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::AndOr(PartitionOutput::Intersection))
+    validate_tolerance(tol)?;
+    let mut left = solid0.boundaries().iter();
+    let mut right = solid1.boundaries().iter();
+    let Some(first_left) = left.next() else {
+        return Ok(match mode {
+            PairMode::AndOr(PartitionOutput::Union) => solid1.clone(),
+            _ => Solid::empty(),
+        });
     };
-    let mut iter0 = solid0.boundaries().iter();
-    let mut iter1 = solid1.boundaries().iter();
-    let Some(shell0) = iter0.next() else {
-        return Ok(Solid::empty());
+    let Some(first_right) = right.next() else {
+        return Ok(match mode {
+            PairMode::AndOr(PartitionOutput::Intersection) => Solid::empty(),
+            _ => solid0.clone(),
+        });
     };
-    let Some(shell1) = iter1.next() else {
-        return Ok(Solid::empty());
+    let left_mode = match mode {
+        PairMode::Difference => PairMode::AndOr(PartitionOutput::Intersection),
+        _ => mode,
     };
-    let mut and_shell = pair(shell0, shell1)?;
-    for shell in iter0 {
-        let res = pair(&and_shell, shell)?;
-        and_shell = res;
-    }
-    for shell in iter1 {
-        let res = pair(&and_shell, shell)?;
-        and_shell = res;
-    }
-    finalize(operation, and_shell, tol)
+    let initial = process_one_pair_of_shells(first_left, first_right, tol, mode)?;
+    let combined = left
+        .map(|shell| (shell, left_mode))
+        .chain(right.map(|shell| (shell, mode)))
+        .try_fold(initial, |acc, (shell, pair_mode)| {
+            process_one_pair_of_shells(&acc, shell, tol, pair_mode)
+        })?;
+    let operation = match mode {
+        PairMode::AndOr(output) => output.operation(),
+        PairMode::Difference => "difference",
+    };
+    finalize(operation, combined, tol)
 }
 
 /// AND operation between two solids (classic backend).
@@ -977,8 +987,12 @@ pub fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
-    validate_tolerance(tol)?;
-    and_shells(solid0, solid1, tol)
+    combine_solids(
+        solid0,
+        solid1,
+        tol,
+        PairMode::AndOr(PartitionOutput::Intersection),
+    )
 }
 
 /// OR operation between two solids (classic backend).
@@ -987,29 +1001,7 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
-    validate_tolerance(tol)?;
-    let operation = "or";
-    let pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::AndOr(PartitionOutput::Union))
-    };
-    let mut iter0 = solid0.boundaries().iter();
-    let mut iter1 = solid1.boundaries().iter();
-    let Some(shell0) = iter0.next() else {
-        return Ok(solid1.clone());
-    };
-    let Some(shell1) = iter1.next() else {
-        return Ok(solid0.clone());
-    };
-    let mut or_shell = pair(shell0, shell1)?;
-    for shell in iter0 {
-        let res = pair(&or_shell, shell)?;
-        or_shell = res;
-    }
-    for shell in iter1 {
-        let res = pair(&or_shell, shell)?;
-        or_shell = res;
-    }
-    finalize(operation, or_shell, tol)
+    combine_solids(solid0, solid1, tol, PairMode::AndOr(PartitionOutput::Union))
 }
 
 /// Difference: the region inside `solid0` but outside `solid1` (classic backend).
@@ -1018,34 +1010,7 @@ pub fn difference<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> ClassicResult<Solid<Point3, C, S>> {
-    validate_tolerance(tol)?;
-    let operation = "difference";
-    let difference_pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::Difference)
-    };
-    let and_pair = |a: &Shell<Point3, C, S>, b: &Shell<Point3, C, S>| {
-        process_one_pair_of_shells(a, b, tol, PairMode::AndOr(PartitionOutput::Intersection))
-    };
-
-    let mut iter0 = solid0.boundaries().iter();
-    let mut iter1 = solid1.boundaries().iter();
-    let Some(shell0) = iter0.next() else {
-        return Ok(Solid::empty());
-    };
-    let Some(shell1) = iter1.next() else {
-        return Ok(solid0.clone());
-    };
-    let mut difference_shell = difference_pair(shell0, shell1)?;
-
-    for shell in iter0 {
-        let res = and_pair(&difference_shell, shell)?;
-        difference_shell = res;
-    }
-    for shell in iter1 {
-        let res = difference_pair(&difference_shell, shell)?;
-        difference_shell = res;
-    }
-    finalize(operation, difference_shell, tol)
+    combine_solids(solid0, solid1, tol, PairMode::Difference)
 }
 
 /// Symmetric difference (XOR): the region inside exactly one solid (classic backend).
