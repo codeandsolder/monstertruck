@@ -745,7 +745,11 @@ pub fn detect_round_sweeps_bytes(input: &[u8]) -> Result<Vec<solid_sweeps::Recov
         .iter()
         .flat_map(|section| {
             let index = step_graph::build_index(&section.entities);
-            solid_sweeps::detect_round_sweeps(&section.entities, &index)
+            solid_sweeps::detect_round_sweeps(
+                &section.entities,
+                &index,
+                &brep::manifold_solid_ids(&section.entities),
+            )
         })
         .collect())
 }
@@ -768,7 +772,11 @@ pub fn detect_revolved_round_tails_bytes(
         .iter()
         .flat_map(|section| {
             let index = step_graph::build_index(&section.entities);
-            solid_sweeps::detect_revolved_round_tails(&section.entities, &index)
+            solid_sweeps::detect_revolved_round_tails(
+                &section.entities,
+                &index,
+                &brep::manifold_solid_ids(&section.entities),
+            )
         })
         .collect())
 }
@@ -791,7 +799,11 @@ pub fn detect_open_rectangular_sweeps_bytes(
         .iter()
         .flat_map(|section| {
             let index = step_graph::build_index(&section.entities);
-            solid_sweeps::sheet::detect_open_rectangular_sweeps(&section.entities, &index)
+            solid_sweeps::sheet::detect_open_rectangular_sweeps(
+                &section.entities,
+                &index,
+                &brep::manifold_solid_ids(&section.entities),
+            )
         })
         .collect())
 }

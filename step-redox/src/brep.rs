@@ -134,6 +134,17 @@ pub struct FaceLoop {
     pub edges: Vec<OrientedEdgeUse>,
 }
 
+/// Enumerate eligible manifold bodies once in source entity order.
+pub(crate) fn manifold_solid_ids(entities: &[EntityInstance]) -> Vec<u64> {
+    entities
+        .iter()
+        .filter_map(|entity| {
+            let record = simple_record(entity)?;
+            (record.name == "MANIFOLD_SOLID_BREP").then_some(crate::step_graph::entity_id(entity))
+        })
+        .collect()
+}
+
 pub fn solid_face_ids(
     solid_id: u64,
     entities: &[EntityInstance],

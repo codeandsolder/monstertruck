@@ -927,7 +927,7 @@ fn prepare_native_boundary_pass(
         return Ok(None);
     }
     let prepared = prepare_boundary_feature_reduction(
-        entities, index, &targets, &shells, &report, &selected, pass_index,
+        entities, index, &targets, &report, &selected, pass_index,
     )?;
     if prepared.family_indices.is_empty() {
         return Ok(None);
@@ -1448,6 +1448,7 @@ fn recover_complete_ir_build_state<'a>(
                 recovery_section.entities,
                 &recovery_section.index,
                 context.source_tolerances,
+                &crate::brep::manifold_solid_ids(recovery_section.entities),
             )?
         } else {
             recover_constructive_fragments_from_entities_with_index(
@@ -1867,7 +1868,6 @@ fn recover_boundary_feature_pass(
         current,
         index,
         targets,
-        &target_shell_ids,
         &report,
         &target_family_indices,
         pass_index,
@@ -1888,7 +1888,6 @@ fn prepare_boundary_feature_reduction(
     source_entities: &[EntityInstance],
     source_index: &HashMap<u64, usize>,
     targets: &LocalRecoveryTargets,
-    target_shell_ids: &HashSet<u64>,
     report: &crate::planar_features::BoundaryFeatureDiagnostics,
     target_family_indices: &[usize],
     pass_index: usize,
@@ -1896,16 +1895,27 @@ fn prepare_boundary_feature_reduction(
     // This clone is the disposable proof-only tool materialization. The source
     // is immutable, and neither consumer receives a mutable topology owner.
     let mut tool_entities = source_entities.to_vec();
-    let (tool_report, materialized) =
-        crate::planar_features::materialize_boundary_feature_tools_for_analysis_for_shells(
-            &mut tool_entities,
-            1,
-            target_shell_ids,
-        )?;
-    if tool_report.families.len() != report.families.len() {
-        bail!("boundary-feature tool materialization changed family indexing");
-    }
-    let tool_candidates = recover_constructive_fragments_from_entities(&tool_entities)?;
+    let materialized = crate::planar_features::materialize_boundary_feature_tools_from_report(
+        &mut tool_entities,
+        source_index,
+        report,
+        1,
+    )?;
+    let tool_ids = materialized
+        .iter()
+        .map(|tool| tool.solid_id)
+        .collect::<Vec<_>>();
+    let tool_index = crate::step_graph::build_index(&tool_entities);
+    let tolerances = crate::solid_revolutions::source_tolerance_by_representation_item(
+        &tool_entities,
+        &tool_index,
+    );
+    let tool_candidates = recover_constructive_fragments_with_tolerances(
+        &tool_entities,
+        &tool_index,
+        &tolerances,
+        &tool_ids,
+    )?;
     let tool_refs = tool_candidates.iter().collect::<Vec<_>>();
     let selected_tools = select_cheapest_whole_solid_fragments(&tool_refs)?;
     let mut peelable_family_indices = Vec::new();
@@ -2029,46 +2039,50 @@ fn validate_boundary_feature_tool(
     validate_boundary_tool_for_boolean(tool, &host_outwards).is_ok()
 }
 
-fn recover_constructive_fragments_from_entities(
-    entities: &[EntityInstance],
-) -> Result<Vec<CadFragment>> {
-    let index = crate::step_graph::build_index(entities);
-    recover_constructive_fragments_from_entities_with_index(entities, &index)
-}
-
 fn recover_constructive_fragments_from_entities_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Result<Vec<CadFragment>> {
     let source_tolerances =
         crate::solid_revolutions::source_tolerance_by_representation_item(entities, index);
-    recover_constructive_fragments_with_tolerances(entities, index, &source_tolerances)
+    recover_constructive_fragments_with_tolerances(
+        entities,
+        index,
+        &source_tolerances,
+        &crate::brep::manifold_solid_ids(entities),
+    )
 }
 
 fn recover_constructive_fragments_with_tolerances(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
     source_tolerances: &HashMap<u64, f64>,
+    solid_ids: &[u64],
 ) -> Result<Vec<CadFragment>> {
-    let extrusions = crate::solid_extrusions::detect_solid_extrusions_with_index(entities, index);
+    let extrusions =
+        crate::solid_extrusions::detect_solid_extrusions_with_index(entities, index, solid_ids);
     let revolutions = crate::solid_revolutions::detect_solid_revolutions_with_tolerances(
         entities,
         index,
         source_tolerances,
+        solid_ids,
     );
     let radial_slots = crate::solid_revolutions::detect_radial_slot_revolutions_with_tolerances(
         entities,
         index,
         source_tolerances,
+        solid_ids,
     );
-    let closed_sweeps = crate::solid_sweeps::detect_round_sweeps(entities, index);
-    let revolved_round_tails = crate::solid_sweeps::detect_revolved_round_tails(entities, index);
-    let open_sweeps = crate::solid_sweeps::sheet::detect_open_rectangular_sweeps(entities, index);
+    let closed_sweeps = crate::solid_sweeps::detect_round_sweeps(entities, index, solid_ids);
+    let revolved_round_tails =
+        crate::solid_sweeps::detect_revolved_round_tails(entities, index, solid_ids);
+    let open_sweeps =
+        crate::solid_sweeps::sheet::detect_open_rectangular_sweeps(entities, index, solid_ids);
 
     let mut out = recover_solid_extrusion_fragments(&extrusions)?;
     out.extend(recover_solid_revolution_fragments(&revolutions)?);
     out.extend(crate::solid_lofts::detect_sectioned_planar_lofts(
-        entities, index,
+        entities, index, solid_ids,
     ));
     out.extend(recover_radial_slot_revolution_fragments(&radial_slots)?);
     out.extend(recover_round_sweep_fragments(&closed_sweeps)?);
@@ -3065,6 +3079,53 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn explicitly_scoped_tool_recognition_matches_full_section_candidates() -> Result<()> {
+        // Include both authored and newly materialized bodies, preserving the
+        // original representation contexts and every geometry reference.
+        let bytes = include_bytes!("../validation/fixtures/native_relief_blind_636f2bd5.step");
+        let mut parsed = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let entities = &mut parsed.data[0].entities;
+        let original_index = crate::step_graph::build_index(entities);
+        let original_ids = crate::brep::manifold_solid_ids(entities);
+        let report = crate::planar_features::diagnose_boundary_features(entities);
+        let tools = crate::planar_features::materialize_boundary_feature_tools_from_report(
+            entities,
+            &original_index,
+            &report,
+            1,
+        )?;
+        let tool_ids = tools.iter().map(|tool| tool.solid_id).collect::<Vec<_>>();
+        assert!(!tool_ids.is_empty());
+        assert!(tool_ids.iter().all(|id| !original_ids.contains(id)));
+        let index = crate::step_graph::build_index(entities);
+        let tolerances =
+            crate::solid_revolutions::source_tolerance_by_representation_item(entities, &index);
+        let full = recover_constructive_fragments_with_tolerances(
+            entities,
+            &index,
+            &tolerances,
+            &crate::brep::manifold_solid_ids(entities),
+        )?;
+        let scoped = recover_constructive_fragments_with_tolerances(
+            entities,
+            &index,
+            &tolerances,
+            &tool_ids,
+        )?;
+        let expected = full
+            .into_iter()
+            .filter(|fragment| tool_ids.contains(&source_solid_id(&fragment.source)))
+            .collect::<Vec<_>>();
+        assert!(!expected.is_empty());
+        assert_eq!(scoped, expected);
+        assert_eq!(
+            recover_constructive_fragments_with_tolerances(entities, &index, &tolerances, &[])?,
+            []
+        );
+        Ok(())
+    }
+
     const fn test_source_in(data_section: usize, solid_id: u64) -> SourceEntity {
         SourceEntity {
             data_section,
@@ -4023,7 +4084,6 @@ END-ISO-10303-21;
             &section.entities,
             &index,
             &targets,
-            &HashSet::from([shell]),
             &report,
             &selected,
             0,
@@ -4139,7 +4199,6 @@ END-ISO-10303-21;
                 &section.entities,
                 &index,
                 &targets,
-                &shells,
                 &report,
                 &(0..report.families.len()).collect::<Vec<_>>(),
                 0,
