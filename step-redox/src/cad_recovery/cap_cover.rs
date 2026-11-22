@@ -16,7 +16,7 @@ use crate::solid_extrusions::{
 };
 use anyhow::Result;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const LENGTH: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
 
@@ -60,9 +60,41 @@ struct Candidate {
     witnesses: Vec<usize>,
 }
 
+#[derive(Clone, Copy)]
+struct WeightedWitness {
+    point: [f64; 3],
+    count: usize,
+}
+
+/// A source vertex can occur on several boundary edges. Query its exact
+/// coordinates only once, but retain the full occurrence weight when ranking
+/// coverage. Bit keys intentionally keep signed zero and distinct rounded
+/// locations separate; this is not geometric merging or quantization.
+fn weighted_witnesses(points: &[[f64; 3]]) -> Vec<WeightedWitness> {
+    let mut positions = HashMap::new();
+    let mut unique = Vec::<WeightedWitness>::new();
+    for &point in points {
+        let key = point.map(f64::to_bits);
+        let slot = *positions.entry(key).or_insert_with(|| {
+            let index = unique.len();
+            unique.push(WeightedWitness { point, count: 0 });
+            index
+        });
+        unique[slot].count += 1;
+    }
+    unique
+}
+
 fn select_caps(
     caps: Vec<RecoveredSourceCapExtrusion>,
     witnesses: &[[f64; 3]],
+) -> Option<Vec<RecoveredSourceCapExtrusion>> {
+    select_weighted_caps(caps, &weighted_witnesses(witnesses))
+}
+
+fn select_weighted_caps(
+    caps: Vec<RecoveredSourceCapExtrusion>,
+    witnesses: &[WeightedWitness],
 ) -> Option<Vec<RecoveredSourceCapExtrusion>> {
     if witnesses.is_empty() {
         return None;
@@ -71,13 +103,16 @@ fn select_caps(
         .into_iter()
         .filter_map(|cap| {
             let volume = volume(&cap)?;
-            if witnesses.iter().any(|&p| strict_contains(&cap, p)) {
+            if witnesses
+                .iter()
+                .any(|witness| strict_contains(&cap, witness.point))
+            {
                 return None;
             }
             let covered = witnesses
                 .iter()
                 .enumerate()
-                .filter_map(|(i, &p)| cap_contains(&cap, p).then_some(i))
+                .filter_map(|(i, witness)| cap_contains(&cap, witness.point).then_some(i))
                 .collect::<Vec<_>>();
             (!covered.is_empty()).then_some(Candidate {
                 cap,
@@ -87,13 +122,21 @@ fn select_caps(
         })
         .collect::<Vec<_>>();
     let mut uncovered = vec![true; witnesses.len()];
-    let mut remaining = witnesses.len();
+    let mut remaining = witnesses.iter().map(|witness| witness.count).sum::<usize>();
     let mut selected = Vec::new();
     while remaining > 0 {
         let (index, gain) = candidates
             .iter()
             .enumerate()
-            .map(|(i, c)| (i, c.witnesses.iter().filter(|&&j| uncovered[j]).count()))
+            .map(|(i, c)| {
+                let gain = c
+                    .witnesses
+                    .iter()
+                    .filter(|&&j| uncovered[j])
+                    .map(|&j| witnesses[j].count)
+                    .sum::<usize>();
+                (i, gain)
+            })
             .max_by(|(i, a), (j, b)| {
                 a.cmp(b)
                     .then_with(|| candidates[*i].volume.total_cmp(&candidates[*j].volume))
@@ -202,6 +245,60 @@ mod tests {
     use crate::cad_ir::CadNode;
     use crate::cad_kernel::monstertruck::MonstertruckKernel;
     use crate::cad_recovery::rebuilt_kernel_boundary_matches_source;
+
+    #[test]
+    fn weighted_cover_preserves_duplicate_witness_ranking() -> Result<()> {
+        use crate::profile_curves::RecoveredProfileCurve;
+        let make_cap = |id, x| {
+            let corners = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+            let profile_curves = corners
+                .iter()
+                .copied()
+                .zip(corners.iter().copied().cycle().skip(1))
+                .map(|(start_mm, end_mm)| RecoveredProfileCurve::Line {
+                    source_edge_ids: Vec::new(),
+                    start_mm,
+                    end_mm,
+                })
+                .collect();
+            RecoveredSourceCapExtrusion {
+                solid_id: 1,
+                cap_face_id: id,
+                profile_curves,
+                inner_profile_loops: Vec::new(),
+                origin_mm: [x, 0.0, 0.0],
+                x_axis: [1.0, 0.0, 0.0],
+                y_axis: [0.0, 1.0, 0.0],
+                z_axis: [0.0, 0.0, 1.0],
+                height_mm: 1.0,
+                max_residual_mm: 0.0,
+            }
+        };
+        let caps = vec![make_cap(1, 0.0), make_cap(2, 1.0)];
+        let left = [0.25, 0.25, 0.0];
+        let right = [1.75, 0.25, 0.0];
+        let points = [left, right, left, left];
+        let grouped = weighted_witnesses(&points);
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0].count, 3);
+        assert_eq!(grouped[1].count, 1);
+        let expanded = points.map(|point| WeightedWitness { point, count: 1 });
+        let ids = |selected: Option<Vec<RecoveredSourceCapExtrusion>>| -> Result<Vec<u64>> {
+            Ok(selected
+                .ok_or_else(|| anyhow::anyhow!("no complete cover"))?
+                .iter()
+                .map(|cap| cap.cap_face_id)
+                .collect())
+        };
+        assert_eq!(ids(select_caps(caps.clone(), &points))?, vec![1, 2]);
+        assert_eq!(
+            ids(select_weighted_caps(caps.clone(), &expanded))?,
+            vec![1, 2]
+        );
+        assert_eq!(ids(select_caps(caps, &[left, right]))?, vec![2, 1]);
+        assert_eq!(weighted_witnesses(&[[0.0; 3], [-0.0; 3]]).len(), 2);
+        Ok(())
+    }
 
     #[test]
     fn source_cap_cover_recovers_bent_sheets() -> Result<()> {
