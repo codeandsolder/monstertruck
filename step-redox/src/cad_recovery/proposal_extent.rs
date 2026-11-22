@@ -30,7 +30,9 @@ impl Extent {
 
     fn transformed(self, transform: &RigidTransform) -> Option<Self> {
         let m = &transform.matrix;
-        if m[3] != [0., 0., 0., 1.] || m.iter().flatten().any(|x| !x.is_finite()) {
+        if m[3].map(f64::to_bits) != [0, 0, 0, 1.0f64.to_bits()]
+            || m.iter().flatten().any(|x| !x.is_finite())
+        {
             return None;
         }
         let mut min = [0.; 3];
