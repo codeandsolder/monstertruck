@@ -693,3 +693,110 @@ fn normal_rotation_requires_distinct_center_incident_interfaces() {
         }
     }
 }
+
+fn faceted_conical_wall(bottom_radius: f64, top_radius: f64, sectors: usize) -> PolygonMesh {
+    let mut vertices = Vec::with_capacity(2 * sectors);
+    for z in [0.0, 2.0] {
+        let radius = if z == 0.0 { bottom_radius } else { top_radius };
+        for index in 0..sectors {
+            let phi = std::f64::consts::TAU * index as f64 / sectors as f64;
+            vertices.push([radius * phi.cos(), radius * phi.sin(), z]);
+        }
+    }
+    let mut triangles = Vec::with_capacity(2 * sectors);
+    for index in 0..sectors {
+        let next = (index + 1) % sectors;
+        triangles.push([index, next, sectors + next]);
+        triangles.push([index, sectors + next, sectors + index]);
+    }
+    make_mesh(&vertices, &triangles)
+}
+
+#[test]
+fn global_curvature_tracks_recover_full_cylindrical_normal_ring() {
+    let mesh = faceted_conical_wall(1.0, 1.0, 32);
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
+    let ring = tracks
+        .iter()
+        .find(|track| {
+            track.support_indices.len() >= 30
+                && track.seed_axis.dot(Vector3::unit_z()).abs() > 0.9999
+                && track.normal_axis_projection_spread < 1.0e-6
+        })
+        .unwrap_or_else(|| panic!("no full cylindrical normal ring in {} tracks", tracks.len()));
+    assert!(ring.closed);
+    assert_eq!(ring.distinct_support_count, 32);
+    assert_eq!(ring.support_indices.first(), ring.support_indices.last());
+    assert_eq!(ring.interface_indices.len() + 1, ring.support_indices.len());
+    assert!((ring.accumulated_normal_turn_radians - std::f64::consts::TAU).abs() < 1.0e-4);
+    assert!(ring.mean_normal_axis_projection.abs() < 1.0e-6);
+    assert!(ring.max_seed_axis_error_radians < 1.0e-4);
+}
+
+#[test]
+fn normal_space_axis_tracks_conical_surfaces_without_cylinder_assumption() {
+    let mesh = faceted_conical_wall(1.0, 0.5, 24);
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
+    let ring = tracks
+        .iter()
+        .find(|track| {
+            track.support_indices.len() >= 24
+                && track.seed_axis.dot(Vector3::unit_z()).abs() > 0.9999
+                && track.normal_axis_projection_spread < 1.0e-5
+        })
+        .unwrap_or_else(|| panic!("no conical ring in {} tracks", tracks.len()));
+    assert!(ring.closed);
+    assert_eq!(ring.distinct_support_count, 24);
+    assert!(ring.mean_normal_axis_projection.abs() > 0.05);
+    assert!(ring.max_seed_axis_error_radians < 1.0e-4);
+}
+
+#[test]
+fn normal_space_tracks_validate_options_and_do_not_fuse_ambiguous_source_contacts() {
+    let source = make_mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        &[[0, 1, 2], [1, 0, 3], [0, 1, 4]],
+    );
+    let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default()).unwrap();
+    assert_eq!(evidence.non_manifold_edge_count, 1);
+    assert!(
+        trace_curvature_tracks(&evidence, CurvatureTrackOptions::default())
+            .unwrap()
+            .is_empty()
+    );
+    for bad_options in [
+        CurvatureTrackOptions {
+            min_normal_turn_radians: f64::NAN,
+            ..Default::default()
+        },
+        CurvatureTrackOptions {
+            min_normal_axis_strength: -1.0,
+            ..Default::default()
+        },
+        CurvatureTrackOptions {
+            max_seed_axis_error_radians: std::f64::consts::PI,
+            ..Default::default()
+        },
+        CurvatureTrackOptions {
+            max_normal_axis_projection_spread: f64::INFINITY,
+            ..Default::default()
+        },
+        CurvatureTrackOptions {
+            min_distinct_supports: 2,
+            ..Default::default()
+        },
+    ] {
+        assert!(matches!(
+            trace_curvature_tracks(&evidence, bad_options),
+            Err(MeshRecoveryError::InvalidEvidenceOptions)
+        ));
+    }
+}

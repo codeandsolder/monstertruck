@@ -12,7 +12,9 @@ use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use std::collections::{HashMap, HashSet};
 
+mod curvature;
 mod support;
+pub use curvature::{CurvatureTrack, CurvatureTrackOptions, trace_curvature_tracks};
 use support::build_support_interfaces;
 pub use support::{SupportBoundaryTopology, SupportInterface};
 
@@ -200,6 +202,19 @@ pub struct SupportNormalRotationEvidence {
     pub max_interface_seed_line_offset: f64,
     /// Largest undirected source segment angular spread from either seed.
     pub max_interface_segment_spread_radians: f64,
+    /// Candidate normal-space rotation axis inferred from the differences
+    /// of all three consecutive source support normals. Unlike an interface
+    /// tangent this can identify conical as well as cylindrical normal cones.
+    /// None means the differences are rank-deficient: the axis is not
+    /// identifiable from this triplet.
+    pub normal_space_axis: Option<Vector3>,
+    /// Sine of the angle between the two successive normal-difference vectors.
+    /// Near zero means an ill-conditioned normal-space axis.
+    pub normal_space_axis_strength: f64,
+    /// Maximum undirected angular divergence between the inferred axis and
+    /// the two observed boundary segment seed directions; None if the
+    /// normal-space axis is unidentifiable.
+    pub normal_space_axis_to_boundaries_radians: Option<f64>,
 }
 
 /// Reusable primitive-free geometric evidence for a source mesh.
@@ -302,6 +317,32 @@ impl MeshEvidence {
         let turn_radians = [normal_angle(left, middle), normal_angle(middle, right)];
         let signed_first = axis.dot(left.cross(middle));
         let signed_second = axis.dot(middle.cross(right));
+        let first_difference = middle - left;
+        let second_difference = right - middle;
+        let normal_cross = first_difference.cross(second_difference);
+        let normal_strength = normal_cross.magnitude();
+        let normal_difference_scale = first_difference.magnitude() * second_difference.magnitude();
+        let normal_space_axis_strength = if normal_difference_scale > 0.0 {
+            (normal_strength / normal_difference_scale).min(1.0)
+        } else {
+            0.0
+        };
+        // Two collinear normal-difference vectors cannot locate a unique
+        // normal-space rotation axis. Do not invent one by selecting a
+        // coordinate direction or using the interface tangent as a fallback.
+        let normal_space_axis =
+            (normal_space_axis_strength > 1.0e-12).then(|| canonical_unit(normal_cross));
+        let normal_space_axis_to_boundaries_radians = normal_space_axis.map(|candidate| {
+            [axis, second_axis]
+                .iter()
+                .map(|&direction| {
+                    candidate
+                        .cross(direction)
+                        .magnitude()
+                        .atan2(candidate.dot(direction).abs())
+                })
+                .fold(0.0_f64, f64::max)
+        });
         let reference_origin = self.positions[*a.source_edges.first()?.first()?];
         let second_origin = self.positions[*b.source_edges.first()?.first()?];
         Some(SupportNormalRotationEvidence {
@@ -323,6 +364,9 @@ impl MeshEvidence {
             max_interface_segment_spread_radians: a
                 .max_seed_direction_spread_radians
                 .max(b.max_seed_direction_spread_radians),
+            normal_space_axis,
+            normal_space_axis_strength,
+            normal_space_axis_to_boundaries_radians,
         })
     }
 

@@ -6,7 +6,8 @@
 
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_modeling::mesh_recovery::{
-    EvidenceOptions, FeatureEdgeKind, MeshEvidence, analyze_mesh_evidence,
+    CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence,
+    analyze_mesh_evidence, trace_curvature_tracks,
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -55,6 +56,9 @@ struct NativeFaceLabels {
     polygon_face_ids: Vec<usize>,
     /// Original surface family for each CAD face.
     surface_types: Vec<String>,
+    /// Independently recorded exact original STEP axis, when meaningful:
+    /// Cylinders, cones and toroids. Source labels are only benchmark truth.
+    analytic_axes: Vec<Option<[f64; 3]>>,
 }
 
 fn support_interface_summary(evidence: &MeshEvidence) -> Value {
@@ -261,6 +265,231 @@ fn native_normal_rotation_reference(evidence: &MeshEvidence, labels: &[usize]) -
     })
 }
 
+/// Reference only: compare whole recovered geometric tracks against source
+/// native CAD-face labels without ever giving the labels to track discovery.
+fn native_curvature_track_reference(
+    evidence: &MeshEvidence,
+    tracks: &[CurvatureTrack],
+    labels: &[usize],
+    kinds: &[String],
+) -> Value {
+    let mut pure = 0;
+    let mut mixed = 0;
+    let mut native_kind = std::collections::BTreeMap::<String, [usize; 2]>::new();
+    let mut long_face_ids = std::collections::BTreeSet::<usize>::new();
+    let mut longest_pure = 0;
+    let minimum_distinct_supports = [4, 6, 8, 12, 16, 24];
+    // All tracks / pure within one native STEP face / crossed native faces.
+    let mut length_bins = [[0_usize; 3]; 6];
+    for track in tracks {
+        let distinct_supports = track.distinct_support_count;
+        for (minimum, counts) in minimum_distinct_supports.iter().zip(&mut length_bins) {
+            if distinct_supports >= *minimum {
+                counts[0] += 1;
+            }
+        }
+        let native = track
+            .support_indices
+            .iter()
+            .try_fold(None, |face, &support| {
+                let region = &evidence.planar_supports[support];
+                region
+                    .source_face_indices
+                    .iter()
+                    .try_fold(face, |id, &source_face| {
+                        let native = labels[source_face];
+                        if id.is_none_or(|id| id == native) {
+                            Some(Some(native))
+                        } else {
+                            None
+                        }
+                    })
+            });
+        let Some(Some(face)) = native else {
+            mixed += 1;
+            for (minimum, counts) in minimum_distinct_supports.iter().zip(&mut length_bins) {
+                if distinct_supports >= *minimum {
+                    counts[2] += 1;
+                }
+            }
+            continue;
+        };
+        pure += 1;
+        for (minimum, counts) in minimum_distinct_supports.iter().zip(&mut length_bins) {
+            if distinct_supports >= *minimum {
+                counts[1] += 1;
+            }
+        }
+        if distinct_supports >= 8 {
+            long_face_ids.insert(face);
+        }
+        longest_pure = longest_pure.max(distinct_supports);
+        let counts = native_kind.entry(kinds[face].clone()).or_default();
+        counts[0] += 1;
+        counts[1] += distinct_supports;
+    }
+    let top_track_native = tracks
+        .iter()
+        .take(8)
+        .map(|track| {
+            let mut source_faces = std::collections::BTreeSet::<usize>::new();
+            for &support in &track.support_indices {
+                for &polygon in &evidence.planar_supports[support].source_face_indices {
+                    source_faces.insert(labels[polygon]);
+                }
+            }
+            let mut types = std::collections::BTreeMap::<String, usize>::new();
+            for &face in &source_faces {
+                *types.entry(kinds[face].clone()).or_default() += 1;
+            }
+            json!({"native_face_count":source_faces.len(),"source_type_face_counts":types})
+        })
+        .collect::<Vec<_>>();
+    let length_bins = minimum_distinct_supports
+        .iter()
+        .zip(length_bins)
+        .map(|(&minimum, counts)| {
+            json!({
+                "min_distinct_supports": minimum,
+                "all": counts[0],
+                "pure_native_face": counts[1],
+                "crossing_or_mixed": counts[2],
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "track_count": tracks.len(),
+        "purity_by_minimum_length": length_bins,
+        "top_track_native": top_track_native,
+        "unique_native_faces_in_pure_long_tracks": long_face_ids.len(),
+        "pure_native_face": pure,
+        "crossing_or_mixed_native_faces": mixed,
+        "longest_pure_track_supports": longest_pure,
+        "native_kinds": native_kind,
+    })
+}
+
+fn curvature_track_summary(tracks: &[CurvatureTrack], elapsed: f64) -> Value {
+    let long = tracks
+        .iter()
+        .filter(|track| track.distinct_support_count >= 8)
+        .count();
+    let closed = tracks.iter().filter(|track| track.closed).count();
+    json!({
+        "track_count": tracks.len(),
+        "at_least_8_supports": long,
+        "closed_tracks": closed,
+        "discovery_seconds": elapsed,
+        "top_tracks": tracks.iter().take(8).map(|track| {
+            json!({
+                "supports": track.support_indices.len(),
+                "distinct_supports": track.distinct_support_count,
+                "interfaces": track.interface_indices.len(),
+                "closed": track.closed,
+                "seed_axis": [track.seed_axis.x, track.seed_axis.y, track.seed_axis.z],
+                "max_axis_deviation_degrees": track.max_seed_axis_error_radians.to_degrees(),
+                "normal_projection_range": track.normal_axis_projection_spread,
+                "normal_axis_projection_mean": track.mean_normal_axis_projection,
+                "accumulated_normal_turn_degrees": track.accumulated_normal_turn_radians.to_degrees(),
+                "max_step_turn_mismatch_degrees": track.max_adjacent_turn_mismatch_radians.to_degrees(),
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+/// Compare a recovered geometric normal-space axis with independently
+/// observed native STEP analytic axes, including across distinct CAD faces.
+/// Source labels are used only after all tracks have been discovered.
+fn native_curvature_axis_reference(
+    evidence: &MeshEvidence,
+    tracks: &[CurvatureTrack],
+    labels: &[usize],
+    kinds: &[String],
+    native_axes: &[Option<[f64; 3]>],
+) -> Value {
+    let length_thresholds = [4, 6, 8, 12, 16, 24];
+    // Total tracks / native analytic-axis evaluable / source axes consistent
+    // / inferred axis agrees with every relevant source analytic axis.
+    let mut counts = [[0_usize; 4]; 6];
+    let mut by_type = std::collections::BTreeMap::<String, [usize; 2]>::new();
+    let mut multi_face_axis_matches = 0;
+    let mut source_axis_disagreement = 0;
+    let mut max_matching_track = 0;
+    let threshold = 2_f64.to_radians();
+    for track in tracks {
+        let distinct = track.distinct_support_count;
+        let mut native_ids = std::collections::BTreeSet::<usize>::new();
+        for &support in &track.support_indices {
+            for &polygon in &evidence.planar_supports[support].source_face_indices {
+                native_ids.insert(labels[polygon]);
+            }
+        }
+        let axes = native_ids
+            .iter()
+            .map(|&id| native_axes[id])
+            .collect::<Option<Vec<_>>>();
+        let evaluable = axes.as_ref().is_some_and(|axes| !axes.is_empty());
+        let [mut consistent, mut matching] = [false, false];
+        if let Some(axes) = &axes
+            && let Some(&reference) = axes.first()
+        {
+            let angle = |a: [f64; 3], b: [f64; 3]| {
+                let dot = a.iter().zip(b).map(|(&x, y)| x * y).sum::<f64>().abs();
+                dot.clamp(0.0, 1.0).acos()
+            };
+            consistent = axes.iter().all(|&axis| angle(reference, axis) <= threshold);
+            let inferred = [track.seed_axis.x, track.seed_axis.y, track.seed_axis.z];
+            matching = axes.iter().all(|&axis| angle(inferred, axis) <= threshold);
+            if matching && native_ids.len() > 1 {
+                multi_face_axis_matches += 1;
+            }
+            if !consistent {
+                source_axis_disagreement += 1;
+            }
+            if matching {
+                max_matching_track = max_matching_track.max(distinct);
+            }
+            let native_kinds = native_ids
+                .iter()
+                .map(|&id| kinds[id].as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            if native_kinds.len() == 1
+                && let Some(&kind) = native_kinds.first()
+            {
+                let entry = by_type.entry(kind.to_owned()).or_default();
+                entry[0] += 1;
+                entry[1] += usize::from(matching);
+            }
+        }
+        for (&minimum, bin) in length_thresholds.iter().zip(&mut counts) {
+            if distinct >= minimum {
+                bin[0] += 1;
+                bin[1] += usize::from(evaluable);
+                bin[2] += usize::from(consistent);
+                bin[3] += usize::from(matching);
+            }
+        }
+    }
+    json!({
+        "axis_error_threshold_degrees": 2.0,
+        "by_minimum_distinct_supports": length_thresholds
+            .iter()
+            .zip(counts)
+            .map(|(&minimum, bin)| json!({
+                "minimum": minimum,
+                "total_tracks": bin[0],
+                "analytic_axes_evaluable": bin[1],
+                "original_axes_mutually_consistent": bin[2],
+                "inferred_axis_matches_all_original_axes": bin[3],
+            }))
+            .collect::<Vec<_>>(),
+        "by_single_source_surface_family": by_type,
+        "matching_axis_across_multiple_native_faces": multi_face_axis_matches,
+        "inconsistent_source_analytic_axes": source_axis_disagreement,
+        "longest_track_with_original_axis_match": max_matching_track,
+    })
+}
+
 /// Load independently supplied CAD face identities; missing sidecars mean
 /// the caller is analyzing an ordinary unlabeled mesh.
 fn read_native_labels(
@@ -291,9 +520,10 @@ fn read_native_labels(
         &fs::read_to_string(&surfaces_path).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    let kinds = surfaces
+    let native_surfaces = surfaces
         .as_array()
-        .ok_or("surfaces.json must be an array")?
+        .ok_or("surfaces.json must be an array")?;
+    let kinds = native_surfaces
         .iter()
         .map(|surface| {
             surface
@@ -306,9 +536,37 @@ fn read_native_labels(
     if labels.iter().any(|&label| label >= kinds.len()) {
         return Err("out-of-bounds source surface label".to_owned());
     }
+    let analytic_axes = native_surfaces
+        .iter()
+        .map(|surface| -> Result<Option<[f64; 3]>, String> {
+            let Some(value) = surface.get("axis") else {
+                return Ok(None);
+            };
+            let coordinates = value
+                .as_array()
+                .ok_or_else(|| "native surface axis must be an array".to_owned())?;
+            let [x, y, z] = coordinates.as_slice() else {
+                return Err("native surface axis must have exactly three components".to_owned());
+            };
+            let axis = [
+                x.as_f64()
+                    .ok_or_else(|| "native axis must be a number".to_owned())?,
+                y.as_f64()
+                    .ok_or_else(|| "native axis must be a number".to_owned())?,
+                z.as_f64()
+                    .ok_or_else(|| "native axis must be a number".to_owned())?,
+            ];
+            let norm_sq = axis.iter().map(|x| x * x).sum::<f64>();
+            if !norm_sq.is_finite() || norm_sq <= 0.0 {
+                return Err("native axis must have finite nonzero length".to_owned());
+            }
+            Ok(Some(axis.map(|x| x / norm_sq.sqrt())))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Some(NativeFaceLabels {
         polygon_face_ids: labels,
         surface_types: kinds,
+        analytic_axes,
     }))
 }
 
@@ -318,10 +576,12 @@ fn read_native_labels(
 fn evaluate_native_face_labels(
     path: &Path,
     evidence: &MeshEvidence,
+    tracks: &[CurvatureTrack],
 ) -> Result<Option<Value>, String> {
     let Some(NativeFaceLabels {
         polygon_face_ids: labels,
         surface_types: kinds,
+        analytic_axes,
     }) = read_native_labels(path, evidence.source_planar_support.len())?
     else {
         return Ok(None);
@@ -393,6 +653,10 @@ fn evaluate_native_face_labels(
         "angle_baselines": baseline,
         "false_candidate_interface_examples": native_interface_error_examples(evidence, &labels),
         "normal_rotation_reference": native_normal_rotation_reference(evidence, &labels),
+        "curvature_track_reference": native_curvature_track_reference(evidence, tracks, &labels, &kinds),
+        "curvature_axis_reference": native_curvature_axis_reference(
+            evidence, tracks, &labels, &kinds, &analytic_axes,
+        ),
         "planar_or_30_degree_union": {
             "selected": union[0],
             "true_native": union[1],
@@ -427,6 +691,21 @@ fn planar_candidate_counts(evidence: &MeshEvidence) -> [usize; 3] {
         bilateral_plane_candidates,
         supported_region_internal_edges,
     ]
+}
+
+/// Keep source-independent curvature-track discovery distinct from the
+/// optional original CAD-face reference evaluation.
+fn discover_and_evaluate_curvature(
+    path: &Path,
+    evidence: &MeshEvidence,
+) -> Result<(Value, Option<Value>), (&'static str, String)> {
+    let started = Instant::now();
+    let tracks = trace_curvature_tracks(evidence, CurvatureTrackOptions::default())
+        .map_err(|error| ("curvature", error.to_string()))?;
+    let summary = curvature_track_summary(&tracks, started.elapsed().as_secs_f64());
+    let ground_truth = evaluate_native_face_labels(path, evidence, &tracks)
+        .map_err(|error| ("ground_truth", error))?;
+    Ok((summary, ground_truth))
 }
 
 fn analyze_file(path: &Path) -> Value {
@@ -475,13 +754,13 @@ fn analyze_file(path: &Path) -> Value {
                 bilateral_plane_candidates,
                 supported_region_internal_edges,
             ] = planar_candidate_counts(&evidence);
-            let ground_truth = match evaluate_native_face_labels(path, &evidence) {
-                Ok(truth) => truth,
-                Err(error) => {
-                    return json!({"source": base, "stage": "ground_truth",
-                        "error": error});
-                }
-            };
+            let (track_summary, ground_truth) =
+                match discover_and_evaluate_curvature(path, &evidence) {
+                    Ok(result) => result,
+                    Err((stage, error)) => {
+                        return json!({"source": base, "stage": stage, "error": error});
+                    }
+                };
             json!({
                 "source": base,
                 "stage": "ok",
@@ -499,6 +778,7 @@ fn analyze_file(path: &Path) -> Value {
                 "chain_segment_total": total_segments,
                 "parallel_groups": evidence.parallel_bundles.len(),
                 "support_interfaces": support_interface_summary(&evidence),
+                "curvature_tracks": track_summary,
                 "planar_regions": evidence.planar_supports.len(),
                 "planar_regions_multi_facet": evidence
                     .planar_supports.iter().filter(|region| region.source_face_indices.len() >= 3).count(),

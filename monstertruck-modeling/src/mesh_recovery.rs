@@ -43,9 +43,10 @@ pub use through_hole::{RecoveredCylindricalThroughHole, recover_cylindrical_thro
 mod evidence;
 mod seams;
 pub use evidence::{
-    ChainPairEvidence, CollinearChain, EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence,
-    ParallelBundle, ParallelPlacement, PlanarSupport, SupportBoundaryTopology, SupportInterface,
-    SupportNormalRotationEvidence, analyze_mesh_evidence,
+    ChainPairEvidence, CollinearChain, CurvatureTrack, CurvatureTrackOptions, EvidenceOptions,
+    FeatureEdge, FeatureEdgeKind, MeshEvidence, ParallelBundle, ParallelPlacement, PlanarSupport,
+    SupportBoundaryTopology, SupportInterface, SupportNormalRotationEvidence,
+    analyze_mesh_evidence, trace_curvature_tracks,
 };
 
 /// Source evidence for one reconstructed planar face.
