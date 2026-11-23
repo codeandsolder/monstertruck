@@ -269,7 +269,7 @@ mod tests {
         let rows = [curve(0.0), curve(1.0)];
         let face = complete_face();
         assert!(complete_ruled_face_trim(
-            &[face.clone()],
+            std::slice::from_ref(&face),
             &rows,
             [1, 4],
             1.0e-7
