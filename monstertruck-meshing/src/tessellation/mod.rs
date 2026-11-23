@@ -135,6 +135,9 @@ impl<S: MeshableSurface + SearchNearestParameter<SurfaceParameter, Point = Point
 
 type PolylineCurve = monstertruck_mesh::PolylineCurve<Point3>;
 
+/// Compressed polyline shell with optional tessellated face meshes.
+pub type TriangulatedCompressedShell = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
+
 /// Options for optional isoparametric curve output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IsoparametricCurveOptions {
@@ -157,7 +160,7 @@ impl Default for IsoparametricCurveOptions {
 #[derive(Clone, Debug)]
 pub struct CompressedShellTessellation {
     /// Tessellated shell geometry.
-    pub shell: CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    pub shell: TriangulatedCompressedShell,
     /// Isoparametric polylines grouped by face.
     pub face_isoparams: Vec<Vec<Vec<Point3>>>,
 }
@@ -341,7 +344,7 @@ impl MeshedShape for CompressedShell<Point3, PolylineCurve, PolygonMesh> {
     }
 }
 
-impl MeshedShape for CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>> {
+impl MeshedShape for TriangulatedCompressedShell {
     fn to_polygon(&self) -> PolygonMesh {
         let mut polygon = PolygonMesh::default();
         for face in &self.faces {
@@ -545,7 +548,7 @@ pub fn cshell_triangulation_with<
 >(
     shell: &CompressedShell<Point3, C, S>,
     options: TessellationOptions,
-) -> CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>> {
+) -> TriangulatedCompressedShell {
     nonpositive_tolerance!(options.tolerance);
     let sp = triangulation::search_parameter_sp::<S>(options.search_trials);
     triangulation::cshell_tessellation(shell, options.tolerance, sp, options.primitive)
@@ -559,7 +562,7 @@ pub fn robust_cshell_triangulation_with<
 >(
     shell: &CompressedShell<Point3, C, S>,
     options: TessellationOptions,
-) -> CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>> {
+) -> TriangulatedCompressedShell {
     nonpositive_tolerance!(options.tolerance);
     let sp = triangulation::search_nearest_parameter_sp::<S>(options.search_trials);
     triangulation::cshell_tessellation(shell, options.tolerance, sp, options.primitive)
@@ -578,7 +581,7 @@ pub fn trimmed_cshell_triangulation_with<
     shell: &CompressedTrimmedShell<Point3, C, S, T>,
     options: TessellationOptions,
     search_parameter: impl Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> + Parallelizable,
-) -> CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>
+) -> TriangulatedCompressedShell
 where
     <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
 {
@@ -684,7 +687,7 @@ impl<C: PolylineableCurve, S: RobustMeshableSurface> RobustMeshableShape for Sol
 impl<C: PolylineableCurve + ParameterBoundary2D<S>, S: MeshableSurface> MeshableShape
     for CompressedShell<Point3, C, S>
 {
-    type MeshedShape = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
+    type MeshedShape = TriangulatedCompressedShell;
     fn triangulation(&self, tolerance: f64) -> Self::MeshedShape {
         cshell_triangulation_with(
             self,
@@ -699,7 +702,7 @@ impl<C: PolylineableCurve + ParameterBoundary2D<S>, S: MeshableSurface> Meshable
 impl<C: PolylineableCurve + ParameterBoundary2D<S>, S: RobustMeshableSurface> RobustMeshableShape
     for CompressedShell<Point3, C, S>
 {
-    type MeshedShape = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
+    type MeshedShape = TriangulatedCompressedShell;
     fn robust_triangulation(&self, tolerance: f64) -> Self::MeshedShape {
         robust_cshell_triangulation_with(
             self,
@@ -716,7 +719,7 @@ fn default_trimmed_cshell_triangulation<C, S, T, F, SP>(
     shell: &CompressedTrimmedShell<Point3, C, S, T>,
     tolerance: f64,
     search_factory: F,
-) -> CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>
+) -> TriangulatedCompressedShell
 where
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
     S: PreMeshableSurface,
@@ -738,7 +741,7 @@ where
     T: ExactTrimBoundary2D + Parallelizable,
     <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
 {
-    type MeshedShape = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
+    type MeshedShape = TriangulatedCompressedShell;
     fn triangulation(&self, tolerance: f64) -> Self::MeshedShape {
         default_trimmed_cshell_triangulation(
             self,
@@ -755,7 +758,7 @@ where
     T: ExactTrimBoundary2D + Parallelizable,
     <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
 {
-    type MeshedShape = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
+    type MeshedShape = TriangulatedCompressedShell;
     fn robust_triangulation(&self, tolerance: f64) -> Self::MeshedShape {
         default_trimmed_cshell_triangulation(
             self,
