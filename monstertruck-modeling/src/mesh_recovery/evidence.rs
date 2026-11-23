@@ -4,7 +4,9 @@
 //! Dihedral selection and parallel groups are hypotheses with explicit
 //! thresholds; they must not alter the source vertices or edge graph.
 
-use super::{InputPolygon, MeshRecoveryError, edge_incidence, positions_and_polygons, seams};
+use super::{
+    InputPolygon, MeshRecoveryError, positions_and_polygons, seams, source_edge_incidence,
+};
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use std::collections::{HashMap, HashSet};
@@ -34,9 +36,15 @@ impl Default for EvidenceOptions {
 pub enum FeatureEdgeKind {
     /// Source surface boundary (one incident polygon).
     Boundary,
-    /// Two polygons have measurably different normals. This is not yet
-    /// evidence of a designed sharp edge: it can be smooth tessellation.
+    /// Two oppositely oriented polygon edge uses have different normals.
+    /// This may simply be a triangulated smooth surface.
     Dihedral,
+    /// Two source polygon uses traverse the same edge in the same direction.
+    /// The evidence remains observable but is not manifold B-rep topology.
+    WindingConflict,
+    /// More than two polygon uses coincide on a source edge. Frequently
+    /// occurs where independent CAD bodies share geometrical contacts.
+    NonManifoldJunction,
 }
 
 /// Source edge with canonical positions and original polygon provenance.
@@ -44,9 +52,11 @@ pub enum FeatureEdgeKind {
 pub struct FeatureEdge {
     /// Undirected canonical source position indices.
     pub vertices: [usize; 2],
-    /// Source polygon indices on each side of the edge.
+    /// Original source polygon indices, retaining multi-use junctions.
     pub source_face_indices: Vec<usize>,
-    /// Boundary or measurable dihedral.
+    /// Whether each source polygon traverses this canonical edge forward.
+    pub source_forward_winding: Vec<bool>,
+    /// Boundary, dihedral, or ambiguous source incidence.
     pub kind: FeatureEdgeKind,
     /// Dihedral angle in radians; none for source boundaries.
     pub dihedral_angle_radians: Option<f64>,
@@ -139,6 +149,10 @@ pub struct MeshEvidence {
     pub parallel_bundles: Vec<ParallelBundle>,
     /// Locally coplanar triangulation edges not included as features.
     pub suppressed_interior_edge_count: usize,
+    /// Retained edges used by more than two source polygons.
+    pub non_manifold_edge_count: usize,
+    /// Retained two-face edges whose oriented source uses conflict.
+    pub inconsistent_winding_edge_count: usize,
 }
 
 impl MeshEvidence {
@@ -184,120 +198,167 @@ impl MeshEvidence {
     }
 }
 
-fn select_edges(
-    polygons: &[InputPolygon],
-    options: EvidenceOptions,
-) -> Result<(Vec<FeatureEdge>, usize), MeshRecoveryError> {
-    let (incidence, _) = edge_incidence(polygons)?;
+/// Feature selection is descriptive rather than constructive: even a polygon
+/// soup with overlapping bodies keeps its source edge incidence as evidence.
+struct EdgeSelection {
+    edges: Vec<FeatureEdge>,
+    suppressed_coplanar: usize,
+    non_manifold: usize,
+    winding_conflicts: usize,
+}
+
+fn select_edges(polygons: &[InputPolygon], options: EvidenceOptions) -> EdgeSelection {
+    let incidence = source_edge_incidence(polygons);
     let mut keys = incidence.keys().copied().collect::<Vec<_>>();
     keys.sort_unstable();
     let mut edges = Vec::new();
-    let mut suppressed = 0;
+    let mut suppressed_coplanar = 0;
+    let mut non_manifold = 0;
+    let mut winding_conflicts = 0;
     for key in keys {
         let uses = &incidence[&key];
         let (kind, angle) = match uses.as_slice() {
             [(_face, _)] => (Some(FeatureEdgeKind::Boundary), None),
-            [(left, _), (right, _)] => {
+            [(left, l_forward), (right, r_forward)] => {
                 let a = polygons[*left].normal;
                 let b = polygons[*right].normal;
                 let angle = a.cross(b).magnitude().atan2(a.dot(b));
-                if angle > options.min_dihedral_angle_radians {
+                if l_forward == r_forward {
+                    winding_conflicts += 1;
+                    (Some(FeatureEdgeKind::WindingConflict), Some(angle))
+                } else if angle > options.min_dihedral_angle_radians {
                     (Some(FeatureEdgeKind::Dihedral), Some(angle))
                 } else {
-                    suppressed += 1;
+                    suppressed_coplanar += 1;
                     (None, None)
                 }
             }
-            _ => return Err(MeshRecoveryError::NonManifoldEdge(key)),
+            [_, _, _, ..] => {
+                non_manifold += 1;
+                (Some(FeatureEdgeKind::NonManifoldJunction), None)
+            }
+            [] => continue,
         };
         if let Some(kind) = kind {
             edges.push(FeatureEdge {
                 vertices: key,
                 source_face_indices: uses.iter().map(|(face, _)| *face).collect(),
+                source_forward_winding: uses.iter().map(|(_, forward)| *forward).collect(),
                 kind,
                 dihedral_angle_radians: angle,
             });
         }
     }
-    Ok((edges, suppressed))
+    EdgeSelection {
+        edges,
+        suppressed_coplanar,
+        non_manifold,
+        winding_conflicts,
+    }
 }
 
-/// Require a degree-two feature vertex, same edge category, and the vertex
-/// strictly between both other endpoints on one exact source line.
-fn straight_through(positions: &[Point3], edges: &[FeatureEdge]) -> (Vec<Vec<usize>>, Vec<bool>) {
-    let mut incident = vec![Vec::new(); positions.len()];
-    for (id, edge) in edges.iter().enumerate() {
+const fn opposite_vertex(edge: &FeatureEdge, vertex: usize) -> usize {
+    if edge.vertices[0] == vertex {
+        edge.vertices[1]
+    } else {
+        edge.vertices[0]
+    }
+}
+
+const fn endpoint_slot(edge: &FeatureEdge, vertex: usize) -> usize {
+    if edge.vertices[0] == vertex { 0 } else { 1 }
+}
+
+/// Pair an incoming edge with its only exact straight-through continuation,
+/// even when other unrelated source edges meet at that vertex. Both incoming
+/// and outgoing rays must uniquely choose *each other*; overlapping or branched
+/// collinear tracks remain separate rather than hiding a real ambiguity.
+fn straight_continuations(positions: &[Point3], edges: &[FeatureEdge]) -> Vec<[Option<usize>; 2]> {
+    let mut incidence = vec![Vec::new(); positions.len()];
+    for (edge_id, edge) in edges.iter().enumerate() {
         for &vertex in &edge.vertices {
-            incident[vertex].push(id);
+            incidence[vertex].push(edge_id);
         }
     }
-    let through = incident
-        .iter()
-        .enumerate()
-        .map(|(vertex, neighbors)| {
-            let [a, b] = neighbors.as_slice() else {
-                return false;
-            };
-            if edges[*a].kind != edges[*b].kind {
-                return false;
-            }
-            let other = |edge: &FeatureEdge| {
-                if edge.vertices[0] == vertex {
-                    edge.vertices[1]
-                } else {
-                    edge.vertices[0]
+    let mut continuation = vec![[None; 2]; edges.len()];
+    for (vertex, adjacent) in incidence.iter().enumerate() {
+        let mut candidates = vec![Vec::new(); adjacent.len()];
+        for (i, &first_id) in adjacent.iter().enumerate() {
+            let first = &edges[first_id];
+            let opposite_first = positions[opposite_vertex(first, vertex)];
+            let toward_first = opposite_first - positions[vertex];
+            for (j, &second_id) in adjacent.iter().enumerate().skip(i + 1) {
+                let second = &edges[second_id];
+                if first.kind != second.kind {
+                    continue;
                 }
+                let opposite_second = positions[opposite_vertex(second, vertex)];
+                if toward_first.dot(opposite_second - positions[vertex]) > 0.0 {
+                    continue;
+                }
+                if seams::on_segment(opposite_first, opposite_second, positions[vertex]).is_some() {
+                    candidates[i].push(j);
+                    candidates[j].push(i);
+                }
+            }
+        }
+        for (i, options) in candidates.iter().enumerate() {
+            let [j] = options.as_slice() else {
+                continue;
             };
-            seams::on_segment(
-                positions[other(&edges[*a])],
-                positions[other(&edges[*b])],
-                positions[vertex],
-            )
-            .is_some()
-        })
-        .collect();
-    (incident, through)
+            if candidates[*j].as_slice() == [i] {
+                let edge_id = adjacent[i];
+                continuation[edge_id][endpoint_slot(&edges[edge_id], vertex)] = Some(adjacent[*j]);
+            }
+        }
+    }
+    continuation
 }
 
 fn trace_chains(positions: &[Point3], edges: &[FeatureEdge]) -> Vec<CollinearChain> {
-    let (incident, through) = straight_through(positions, edges);
+    let continuation = straight_continuations(positions, edges);
     let mut visited = vec![false; edges.len()];
     let mut chains = Vec::new();
-    for (first_id, edge) in edges.iter().enumerate() {
+    for (first_id, first_edge) in edges.iter().enumerate() {
         if visited[first_id] {
             continue;
         }
-        let [a, b] = edge.vertices;
-        let start = if through[a] && !through[b] { b } else { a };
-        let mut vertices = vec![start];
+        // Rewind along the unique exact line to its first unvisited anchor.
+        // The bounded loop is defensive against malformed cyclic source
+        // topology (a geometrically valid straight finite cycle cannot exist).
+        let mut start_edge = first_id;
+        let mut start_vertex = first_edge.vertices[0];
+        for _ in 0..edges.len() {
+            let Some(previous) =
+                continuation[start_edge][endpoint_slot(&edges[start_edge], start_vertex)]
+            else {
+                break;
+            };
+            if previous == first_id || visited[previous] {
+                break;
+            }
+            start_vertex = opposite_vertex(&edges[previous], start_vertex);
+            start_edge = previous;
+        }
+        let mut vertices = vec![start_vertex];
         let mut ids = Vec::new();
-        let mut current = start;
-        let mut next_id = first_id;
+        let mut current = start_vertex;
+        let mut next_id = start_edge;
         loop {
             if visited[next_id] {
                 break;
             }
             visited[next_id] = true;
             ids.push(next_id);
-            let segment = edges[next_id].vertices;
-            current = if segment[0] == current {
-                segment[1]
-            } else {
-                segment[0]
-            };
+            current = opposite_vertex(&edges[next_id], current);
             vertices.push(current);
-            if !through[current] {
-                break;
-            }
-            let Some(&candidate) = incident[current]
-                .iter()
-                .find(|&&id| id != next_id && !visited[id])
-            else {
+            let Some(next) = continuation[next_id][endpoint_slot(&edges[next_id], current)] else {
                 break;
             };
-            next_id = candidate;
+            next_id = next;
         }
-        // Certify the entire chord, not only locally straight junctions.
+        // Do not rely on merely pairwise straightness: prove every
+        // intermediate vertex lies on the final full endpoint chord.
         let first = positions[vertices[0]];
         let last = positions[vertices[vertices.len() - 1]];
         let exact = first != last
@@ -308,7 +369,7 @@ fn trace_chains(positions: &[Point3], edges: &[FeatureEdge]) -> Vec<CollinearCha
             chains.push(CollinearChain {
                 vertices,
                 edge_indices: ids,
-                kind: edge.kind,
+                kind: first_edge.kind,
             });
         } else {
             for id in ids {
@@ -443,7 +504,9 @@ fn parallel_bundles(
 ///
 /// # Errors
 /// Returns [`MeshRecoveryError`] for invalid thresholds or invalid source
-/// geometry, orientation or manifold edge incidence.
+/// geometry. Non-manifold and inconsistent-winding edge uses remain
+/// observable as explicitly flagged features rather than invalidating all
+/// local geometric evidence.
 pub fn analyze_mesh_evidence(
     mesh: &PolygonMesh,
     options: EvidenceOptions,
@@ -457,7 +520,12 @@ pub fn analyze_mesh_evidence(
     }
     let (positions, mut polygons) = positions_and_polygons(mesh, KERNEL_EPSILON)?;
     seams::split_source_t_junctions(&positions, &mut polygons);
-    let (edges, suppressed_interior_edge_count) = select_edges(&polygons, options)?;
+    let EdgeSelection {
+        edges,
+        suppressed_coplanar,
+        non_manifold,
+        winding_conflicts,
+    } = select_edges(&polygons, options);
     let chains = trace_chains(&positions, &edges);
     let parallel_bundles = parallel_bundles(&positions, &chains, options);
     Ok(MeshEvidence {
@@ -465,7 +533,9 @@ pub fn analyze_mesh_evidence(
         edges,
         chains,
         parallel_bundles,
-        suppressed_interior_edge_count,
+        suppressed_interior_edge_count: suppressed_coplanar,
+        non_manifold_edge_count: non_manifold,
+        inconsistent_winding_edge_count: winding_conflicts,
     })
 }
 

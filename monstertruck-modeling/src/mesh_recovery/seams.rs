@@ -41,8 +41,11 @@ pub(super) fn on_segment(a: Point3, b: Point3, p: Point3) -> Option<f64> {
 /// Input mesh polygons may share a geometric seam with different subdivisions.
 /// Insert existing vertices on longer edges, preserving winding and geometry.
 ///
-/// Sorting by the longest coordinate axis allows range queries of candidate
-/// points without scanning all mesh positions for each source edge.
+/// Three pre-sorted axes provide exact segment bounding-box range queries.
+/// Select the sparsest nonzero coordinate interval, then reject candidates
+/// outside the other two exact coordinate bounds before robust predicates.
+/// This preserves exact T-junction detection while avoiding a quadratic scan
+/// of unrelated vertices on densely tessellated CAD surfaces.
 pub(super) fn split_source_t_junctions(positions: &[Point3], polygons: &mut [InputPolygon]) {
     let mut used = vec![false; positions.len()];
     let mut spokes = vec![Vec::new(); positions.len()];
@@ -82,24 +85,36 @@ pub(super) fn split_source_t_junctions(positions: &[Point3], polygons: &mut [Inp
             split.push(a);
 
             let vector = positions[b] - positions[a];
-            let axis = (0..3)
-                .max_by(|&x, &y| vector[x].abs().total_cmp(&vector[y].abs()))
-                .unwrap_or(0);
-            let first = positions[a][axis].min(positions[b][axis]);
-            let last = positions[a][axis].max(positions[b][axis]);
-            let candidates = &sorted[axis];
-            let begin = candidates.partition_point(|&p| positions[p][axis] <= first);
-            let end = candidates.partition_point(|&p| positions[p][axis] < last);
-            let mut inner = candidates[begin..end]
+            let nearest = (0..3)
+                .filter(|&axis| vector[axis] != 0.0)
+                .map(|axis| {
+                    let first = positions[a][axis].min(positions[b][axis]);
+                    let last = positions[a][axis].max(positions[b][axis]);
+                    let candidates = &sorted[axis];
+                    let begin = candidates.partition_point(|&id| positions[id][axis] <= first);
+                    let end = candidates.partition_point(|&id| positions[id][axis] < last);
+                    (axis, begin, end)
+                })
+                .min_by_key(|&(axis, begin, end)| (end - begin, axis));
+            let Some((axis, begin, end)) = nearest else {
+                continue;
+            };
+            let mut inner = sorted[axis][begin..end]
                 .iter()
-                .filter(|&&id| {
+                .filter_map(|&id| {
+                    let point = positions[id];
+                    if (0..3).any(|coordinate| {
+                        point[coordinate] < positions[a][coordinate].min(positions[b][coordinate])
+                            || point[coordinate]
+                                > positions[a][coordinate].max(positions[b][coordinate])
+                    }) {
+                        return None;
+                    }
+                    let parameter = on_segment(positions[a], positions[b], point)?;
                     spokes[id]
                         .iter()
                         .any(|&neighbor| on_line(positions[a], positions[b], positions[neighbor]))
-                })
-                .filter_map(|&id| {
-                    on_segment(positions[a], positions[b], positions[id])
-                        .map(|position| (position, id))
+                        .then_some((parameter, id))
                 })
                 .collect::<Vec<_>>();
             inner.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));

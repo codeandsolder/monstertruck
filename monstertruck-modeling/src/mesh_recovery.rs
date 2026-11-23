@@ -258,9 +258,10 @@ fn positions_and_polygons(
     Ok((positions, polygons))
 }
 
-fn edge_incidence(
-    polygons: &[InputPolygon],
-) -> Result<(EdgeIncidence, PolygonNeighbors), MeshRecoveryError> {
+/// Collect every original oriented polygon use without enforcing manifoldness.
+/// The evidence frontend must preserve ambiguous connections and report them,
+/// while B-rep construction calls the strict validator below.
+fn source_edge_incidence(polygons: &[InputPolygon]) -> EdgeIncidence {
     let mut incidence = HashMap::<EdgeKey, Vec<EdgeUse>>::default();
     for (polygon_id, polygon) in polygons.iter().enumerate() {
         for i in 0..polygon.vertices.len() {
@@ -273,6 +274,13 @@ fn edge_incidence(
                 .push((polygon_id, forward));
         }
     }
+    incidence
+}
+
+fn edge_incidence(
+    polygons: &[InputPolygon],
+) -> Result<(EdgeIncidence, PolygonNeighbors), MeshRecoveryError> {
+    let incidence = source_edge_incidence(polygons);
     let mut neighbors = vec![Vec::new(); polygons.len()];
     for (&key, uses) in &incidence {
         match uses.as_slice() {

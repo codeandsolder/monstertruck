@@ -344,3 +344,125 @@ fn distant_world_offset_preserves_pairwise_line_relationships() {
     assert!((relation.supporting_line_distance - 1.0).abs() < 1.0e-12);
     assert_chain_cover_is_exact(&evidence);
 }
+
+#[test]
+fn ambiguous_multiple_body_incidence_is_preserved_without_brep_certification() {
+    let source = make_mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        &[[0, 1, 2], [1, 0, 3], [0, 1, 4]],
+    );
+    let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default()).unwrap();
+    assert_eq!(evidence.non_manifold_edge_count, 1);
+    assert_eq!(evidence.inconsistent_winding_edge_count, 0);
+    let junction = evidence
+        .edges
+        .iter()
+        .find(|edge| edge.kind == FeatureEdgeKind::NonManifoldJunction)
+        .unwrap();
+    assert_eq!(junction.vertices, [0, 1]);
+    assert_eq!(junction.source_face_indices, [0, 1, 2]);
+    assert_eq!(junction.source_forward_winding, [true, false, true]);
+    assert_chain_cover_is_exact(&evidence);
+    assert!(matches!(
+        super::super::recover_planar_mesh(&source, super::super::PlanarRecoveryOptions::default()),
+        Err(MeshRecoveryError::NonManifoldEdge(_))
+    ));
+}
+
+#[test]
+fn conflicting_mesh_windings_are_descriptive_not_implicitly_corrected() {
+    let source = make_mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        &[[0, 1, 2], [0, 1, 3]],
+    );
+    let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default()).unwrap();
+    assert_eq!(evidence.non_manifold_edge_count, 0);
+    assert_eq!(evidence.inconsistent_winding_edge_count, 1);
+    let conflict = evidence
+        .edges
+        .iter()
+        .find(|edge| edge.kind == FeatureEdgeKind::WindingConflict)
+        .unwrap();
+    assert_eq!(conflict.vertices, [0, 1]);
+    assert_eq!(conflict.source_forward_winding, [true, true]);
+    assert!(matches!(
+        super::super::recover_planar_mesh(&source, super::super::PlanarRecoveryOptions::default()),
+        Err(MeshRecoveryError::InconsistentWinding(_))
+    ));
+}
+
+fn observed_test_edge(a: usize, b: usize) -> FeatureEdge {
+    FeatureEdge {
+        vertices: [a.min(b), a.max(b)],
+        source_face_indices: vec![],
+        source_forward_winding: vec![],
+        kind: FeatureEdgeKind::Dihedral,
+        dihedral_angle_radians: Some(std::f64::consts::FRAC_PI_2),
+    }
+}
+
+#[test]
+fn collinear_tracks_continue_through_high_degree_mesh_vertices() {
+    let positions = [
+        Point3::new(-1.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, -1.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+    ];
+    // Two geometrically independent lines cross at a topological branch.
+    let edges = [
+        observed_test_edge(0, 1),
+        observed_test_edge(1, 2),
+        observed_test_edge(3, 1),
+        observed_test_edge(1, 4),
+    ];
+    let chains = trace_chains(&positions, &edges);
+    assert_eq!(chains.len(), 2);
+    assert!(chains.iter().all(|c| c.edge_indices.len() == 2));
+    let mut covered = chains
+        .iter()
+        .flat_map(|chain| chain.edge_indices.iter().copied())
+        .collect::<Vec<_>>();
+    covered.sort_unstable();
+    assert_eq!(covered, [0, 1, 2, 3]);
+    assert!(
+        chains
+            .iter()
+            .any(|c| c.vertices.contains(&0) && c.vertices.contains(&2))
+    );
+    assert!(
+        chains
+            .iter()
+            .any(|c| c.vertices.contains(&3) && c.vertices.contains(&4))
+    );
+}
+
+#[test]
+fn overlapping_collinear_ambiguity_prevents_unjustified_continuation() {
+    let positions = [
+        Point3::new(-1.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(2.0, 0.0, 0.0),
+    ];
+    let edges = [
+        observed_test_edge(0, 1),
+        observed_test_edge(1, 2),
+        observed_test_edge(1, 3),
+    ];
+    let chains = trace_chains(&positions, &edges);
+    assert_eq!(chains.len(), 3);
+    assert!(chains.iter().all(|c| c.edge_indices.len() == 1));
+}
