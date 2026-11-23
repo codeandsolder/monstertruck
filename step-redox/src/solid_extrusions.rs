@@ -1332,8 +1332,6 @@ struct SideProof {
 }
 
 struct SideProofContext<'a> {
-    bottom: &'a FaceInfo,
-    top: &'a FaceInfo,
     bottom_edges: &'a HashSet<u64>,
     top_edges: &'a HashSet<u64>,
     extrusion: [f64; 3],
@@ -1571,13 +1569,7 @@ fn prove_extrusion_sides(
     let side_indices = (0..faces.len())
         .filter(|&index| index != pair.bottom_index && index != pair.top_index)
         .collect::<Vec<_>>();
-    if side_indices.len() != pair.bottom.loop_edges.len() {
-        return None;
-    }
-
     let context = SideProofContext {
-        bottom: pair.bottom,
-        top: pair.top,
         bottom_edges: &bottom_edges,
         top_edges: &top_edges,
         extrusion: pair.extrusion,
@@ -1619,6 +1611,64 @@ fn prove_extrusion_sides(
     })
 }
 
+/// One side wire consists of two cap-edge chains and two full-height
+/// connectors. A carrier may cover several consecutive cap edges (for
+/// example a cylinder whose circular cap trim was split at a seam).
+struct SideRuns<'a> {
+    bottom: Vec<&'a OrientedEdgeUse>,
+    top: Vec<&'a OrientedEdgeUse>,
+    connectors: [&'a OrientedEdgeUse; 2],
+}
+
+fn side_cap_runs<'a>(side: &'a FaceInfo, context: &SideProofContext<'_>) -> Option<SideRuns<'a>> {
+    if side.loops.len() != 1 || !raw_loop_is_continuous(&side.loop_edges) {
+        return None;
+    }
+    let edges = &side.loop_edges;
+    let connectors = edges
+        .iter()
+        .enumerate()
+        .filter_map(|(i, edge)| {
+            (!context.bottom_edges.contains(&edge.edge_id)
+                && !context.top_edges.contains(&edge.edge_id))
+            .then_some(i)
+        })
+        .collect::<Vec<_>>();
+    let [first, second] = connectors.as_slice() else {
+        return None;
+    };
+    let mut runs = [
+        edges[first + 1..*second].iter().collect::<Vec<_>>(),
+        edges[second + 1..]
+            .iter()
+            .chain(&edges[..*first])
+            .collect::<Vec<_>>(),
+    ];
+    if runs[0]
+        .first()
+        .is_some_and(|edge| context.top_edges.contains(&edge.edge_id))
+    {
+        runs.swap(0, 1);
+    }
+    let [bottom, top] = runs;
+    if bottom.is_empty()
+        || bottom.len() != top.len()
+        || !bottom
+            .iter()
+            .all(|edge| context.bottom_edges.contains(&edge.edge_id))
+        || !top
+            .iter()
+            .all(|edge| context.top_edges.contains(&edge.edge_id))
+    {
+        return None;
+    }
+    Some(SideRuns {
+        bottom,
+        top,
+        connectors: [&edges[*first], &edges[*second]],
+    })
+}
+
 fn prove_side_face(
     side: &FaceInfo,
     context: &SideProofContext<'_>,
@@ -1626,63 +1676,33 @@ fn prove_side_face(
     used_top_edges: &mut HashSet<u64>,
     translated_edges: &mut HashMap<u64, u64>,
 ) -> Option<f64> {
-    if side.loops.len() != 1 || side.loop_edges.len() != 4 {
-        return None;
-    }
-    let side_edge_ids = side
-        .loop_edges
-        .iter()
-        .map(|edge| edge.edge_id)
-        .collect::<HashSet<_>>();
-    let shared_bottom = side_edge_ids
-        .intersection(context.bottom_edges)
-        .copied()
-        .collect::<Vec<_>>();
-    let shared_top = side_edge_ids
-        .intersection(context.top_edges)
-        .copied()
-        .collect::<Vec<_>>();
-    if shared_bottom.len() != 1 || shared_top.len() != 1 {
-        return None;
-    }
-    let bottom_edge_id = shared_bottom[0];
-    let top_edge_id = shared_top[0];
-    if !used_bottom_edges.insert(bottom_edge_id)
-        || !used_top_edges.insert(top_edge_id)
-        || translated_edges
-            .insert(bottom_edge_id, top_edge_id)
-            .is_some()
-    {
-        return None;
+    let runs = side_cap_runs(side, context)?;
+    let mut max_residual_mm = 0.0_f64;
+    // The two cap chains traverse the same material section in opposite
+    // directions around the ruled side. Check the full ordered matching,
+    // including each intermediate split vertex, rather than pairing only
+    // unordered endpoint sets or a representative circle.
+    for (bottom, top) in runs.bottom.iter().zip(runs.top.iter().rev()) {
+        let directed = distance(add(bottom.start_mm, context.extrusion), top.end_mm).max(distance(
+            add(bottom.end_mm, context.extrusion),
+            top.start_mm,
+        ));
+        let profile_residual = translated_profile_edge_residual(bottom, top, context.extrusion)?;
+        let side_residual = side_support_residual(side, bottom, context.extrusion)?;
+        let residual = directed.max(profile_residual).max(side_residual);
+        if residual > GEOM_TOL_MM
+            || !used_bottom_edges.insert(bottom.edge_id)
+            || !used_top_edges.insert(top.edge_id)
+            || translated_edges
+                .insert(bottom.edge_id, top.edge_id)
+                .is_some()
+        {
+            return None;
+        }
+        max_residual_mm = max_residual_mm.max(residual);
     }
 
-    let bottom_edge = context
-        .bottom
-        .loop_edges
-        .iter()
-        .find(|edge| edge.edge_id == bottom_edge_id)?;
-    let top_edge = context
-        .top
-        .loop_edges
-        .iter()
-        .find(|edge| edge.edge_id == top_edge_id)?;
-    let profile_residual =
-        translated_profile_edge_residual(bottom_edge, top_edge, context.extrusion)?;
-    let side_residual = side_support_residual(side, bottom_edge, context.extrusion)?;
-    if profile_residual > GEOM_TOL_MM || side_residual > GEOM_TOL_MM {
-        return None;
-    }
-
-    let mut max_residual_mm = profile_residual.max(side_residual);
-    let lateral_edges = side
-        .loop_edges
-        .iter()
-        .filter(|edge| edge.edge_id != bottom_edge_id && edge.edge_id != top_edge_id)
-        .collect::<Vec<_>>();
-    if lateral_edges.len() != 2 {
-        return None;
-    }
-    for lateral in lateral_edges {
+    for lateral in runs.connectors {
         let residual = connector_residual(lateral, context.extrusion)?;
         if residual > GEOM_TOL_MM {
             return None;
@@ -2115,8 +2135,21 @@ fn translated_profile_edge_residual(
             if (bottom_sweep.abs() - top_sweep.abs()).abs() > ANGLE_TOL_RAD {
                 return None;
             }
+            // Equal endpoints and sweep magnitude do not suffice for a
+            // semicircle: its complementary half has those same values.
+            // Compare the endpoint correspondence selected by the physical
+            // angular orientation (the authored circle axes may be reversed).
+            let same_direction =
+                dot(bottom_circle.normal, top_circle.normal) * bottom_sweep * top_sweep > 0.0;
+            let (top_start, top_end) = if same_direction {
+                (top.start_mm, top.end_mm)
+            } else {
+                (top.end_mm, top.start_mm)
+            };
+            let directed_residual = distance(add(bottom.start_mm, extrusion), top_start)
+                .max(distance(add(bottom.end_mm, extrusion), top_end));
             Some(
-                endpoint_residual
+                directed_residual
                     .max(distance(
                         add(bottom_circle.center_mm, extrusion),
                         top_circle.center_mm,
@@ -3156,6 +3189,109 @@ mod tests {
             translated_profile_edge_residual(&bottom, &top, [0.0, 0.0, 3.0]),
             Some(0.0)
         );
+    }
+
+    #[test]
+    fn translated_semicircles_must_cover_the_same_half() -> anyhow::Result<()> {
+        let mut bottom = line_edge(1, 10, 11, [1., 0., 0.], [-1., 0., 0.]);
+        bottom.support = CurveSupport::Circle(CircleSupport {
+            center_mm: [0., 0., 0.],
+            normal: [0., 0., 1.],
+            x_direction: [1., 0., 0.],
+            radius_mm: 1.,
+        });
+        let extrusion = [0., 0., 1.];
+        let mut top = line_edge(2, 20, 21, [-1., 0., 1.], [1., 0., 1.]);
+        top.support = CurveSupport::Circle(CircleSupport {
+            center_mm: extrusion,
+            normal: [0., 0., 1.],
+            x_direction: [1., 0., 0.],
+            radius_mm: 1.,
+        });
+        top.parameter_forward = false;
+        assert!(
+            translated_profile_edge_residual(&bottom, &top, extrusion)
+                .is_some_and(|residual| residual <= GEOM_TOL_MM)
+        );
+        top.parameter_forward = true;
+        assert!(
+            translated_profile_edge_residual(&bottom, &top, extrusion)
+                .is_none_or(|residual| residual > GEOM_TOL_MM)
+        );
+        let CurveSupport::Circle(circle) = &mut top.support else {
+            anyhow::bail!("missing test circle");
+        };
+        circle.normal = [0., 0., -1.];
+        assert!(
+            translated_profile_edge_residual(&bottom, &top, extrusion)
+                .is_some_and(|residual| residual <= GEOM_TOL_MM)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn split_wall_proves_both_cap_chains_in_cyclic_order() -> anyhow::Result<()> {
+        let points = [
+            [0., 0., 0.],
+            [0.5, 0., 0.],
+            [1., 0., 0.],
+            [1., 0., 1.],
+            [0.5, 0., 1.],
+            [0., 0., 1.],
+        ];
+        let edges = (0..points.len())
+            .map(|i| {
+                let j = (i + 1) % points.len();
+                line_edge(
+                    i as u64 + 1,
+                    i as u64 + 10,
+                    j as u64 + 10,
+                    points[i],
+                    points[j],
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut side = FaceInfo {
+            id: 1,
+            surface: SurfaceSupport::Plane(PlaneSupport {
+                origin_mm: [0., 0., 0.],
+                normal: [0., 1., 0.],
+                max_residual_mm: 0.,
+            }),
+            surface_forward: true,
+            loops: vec![brep::FaceLoop {
+                bound_id: 1,
+                loop_id: 2,
+                outer: true,
+                orientation: true,
+                edges: edges.clone(),
+            }],
+            loop_edges: edges,
+        };
+        let bottom = HashSet::from([1, 2]);
+        let top = HashSet::from([4, 5]);
+        let context = SideProofContext {
+            bottom_edges: &bottom,
+            top_edges: &top,
+            extrusion: [0., 0., 1.],
+        };
+        for _ in 0..points.len() {
+            let mut mapping = HashMap::new();
+            let residual = prove_side_face(
+                &side,
+                &context,
+                &mut HashSet::new(),
+                &mut HashSet::new(),
+                &mut mapping,
+            )
+            .ok_or_else(|| anyhow::anyhow!("valid split wall rejected"))?;
+            assert!(residual <= GEOM_TOL_MM);
+            assert_eq!(mapping, HashMap::from([(1, 5), (2, 4)]));
+            side.loop_edges.rotate_left(1);
+        }
+        side.loop_edges.swap(0, 1);
+        assert!(side_cap_runs(&side, &context).is_none());
+        Ok(())
     }
 
     #[test]
