@@ -5,7 +5,7 @@
 //! here rather than treating an off-trim excursion as a real edge witness.
 //! The geometric comparison is independent of knot/parameter correspondence.
 
-use crate::brep::{self, CurveSupport};
+use crate::brep::{self, BSplineSupport, CurveSupport, LineSupport};
 use crate::step_entities::{named_entity_parameters, vertex_point};
 use crate::step_graph::{build_index, entity_ref_value};
 use anyhow::{Context, Result, anyhow, bail};
@@ -119,6 +119,49 @@ fn has_strict_chord_progress(
         previous = Some(progress);
     }
     true
+}
+
+/// Canonical straight-edge support for recognizers, not a source-file edit.
+/// Besides the finite locus certificate, require one unambiguous traversal
+/// between the authored endpoints. A collinear but retracing spline must
+/// not silently turn into an ordinary oriented edge of a feature.
+pub(crate) fn certified_straight_spline(
+    spline: &BSplineSupport,
+    start: [f64; 3],
+    end: [f64; 3],
+    tolerance: f64,
+) -> Option<LineSupport> {
+    use monstertruck_geometry::analytic_line_segment::{SegmentLocus, certify_nurbs_segment_locus};
+    let first = *spline.control_points_mm.first()?;
+    let last = *spline.control_points_mm.last()?;
+    let point = |p: [f64; 3]| Point3::new(p[0], p[1], p[2]);
+    let unit_weights;
+    let weights = if let Some(weights) = &spline.weights {
+        weights.as_slice()
+    } else {
+        unit_weights = vec![1.0; spline.control_points_mm.len()];
+        &unit_weights
+    };
+    if !has_strict_chord_progress(
+        &spline.control_points_mm,
+        weights,
+        spline.degree,
+        &spline.knots,
+        point(first),
+        point(last),
+    ) {
+        return None;
+    }
+    let rational = spline.rational_curve()?;
+    if certify_nurbs_segment_locus(&rational, point(start), point(end), tolerance)
+        != SegmentLocus::WithinTolerance
+    {
+        return None;
+    }
+    Some(LineSupport {
+        origin_mm: start,
+        direction: crate::math3::normalize(crate::math3::sub(end, start), tolerance)?,
+    })
 }
 
 /// Validate that the geometric B-spline's complete active parameter range
@@ -344,6 +387,26 @@ mod tests {
             Point3::new(0.0, 0.0, 0.0),
             Point3::new(1.0, 0.0, 0.0),
         ));
+    }
+
+    #[test]
+    fn straight_spline_certificate_requires_complete_directed_segment() {
+        let mut spline = BSplineSupport {
+            control_points_mm: vec![[0., 0., 0.], [0.2, 0., 0.], [0.7, 0., 0.], [1., 0., 0.]],
+            degree: 3,
+            knots: vec![0., 0., 0., 0., 1., 1., 1., 1.],
+            weights: Some(vec![1., 2., 0.5, 1.]),
+        };
+        let a = [0., 0., 0.];
+        let b = [1., 0., 0.];
+        let tolerance = 1.0e-7;
+        assert!(certified_straight_spline(&spline, a, b, tolerance).is_some());
+        assert!(certified_straight_spline(&spline, b, a, tolerance).is_some());
+        assert!(certified_straight_spline(&spline, a, [0.9, 0., 0.], tolerance).is_none());
+        spline.control_points_mm[1][1] = 0.001;
+        assert!(certified_straight_spline(&spline, a, b, tolerance).is_none());
+        spline.control_points_mm[1] = [0.8, 0., 0.];
+        assert!(certified_straight_spline(&spline, a, b, tolerance).is_none());
     }
 
     #[test]

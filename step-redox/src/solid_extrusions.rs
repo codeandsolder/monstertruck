@@ -19,6 +19,8 @@ use std::collections::{HashMap, HashSet};
 use std::f64::consts::{PI, TAU};
 use step_p21::ast::EntityInstance;
 
+mod loop_containment;
+
 const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 const ANGLE_TOL_RAD: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_extrusion_angle_rad;
@@ -489,6 +491,24 @@ fn unreadable_parallel_plane_may_intervene(pair: &CapPairProof<'_>, plane: Plane
     offset > GEOM_TOL_MM && offset < pair.height_mm - GEOM_TOL_MM
 }
 
+/// Both native and STEP-backed recognition consume the same canonical
+/// edge geometry. Keep the original B-rep untouched for boundary proof.
+fn normalize_extrusion_loops(mut loops: Vec<brep::FaceLoop>) -> Vec<brep::FaceLoop> {
+    for edge in loops.iter_mut().flat_map(|wire| &mut wire.edges) {
+        if let CurveSupport::BSpline(spline) = &edge.support
+            && let Some(line) = crate::source_edge_locus::certified_straight_spline(
+                spline,
+                edge.start_mm,
+                edge.end_mm,
+                GEOM_TOL_MM,
+            )
+        {
+            edge.support = CurveSupport::Line(line);
+        }
+    }
+    loops
+}
+
 fn face_info_from_reduced(face: &ReducedFace) -> Option<FaceInfo> {
     if matches!(face.surface, SurfaceSupport::Other { .. })
         || face.loops.is_empty()
@@ -502,12 +522,17 @@ fn face_info_from_reduced(face: &ReducedFace) -> Option<FaceInfo> {
     {
         return None;
     }
+    let loops = normalize_extrusion_loops(face.loops.clone());
+    let loop_edges = loops
+        .iter()
+        .flat_map(|wire| wire.edges.iter().cloned())
+        .collect();
     Some(FaceInfo {
         id: face.id,
         surface: face.surface.clone(),
         surface_forward: face.surface_forward,
-        loops: face.loops.clone(),
-        loop_edges: face.loop_edges().cloned().collect(),
+        loops,
+        loop_edges,
     })
 }
 
@@ -1694,6 +1719,7 @@ fn cap_loop_roles(face: &FaceInfo, z_axis: [f64; 3]) -> Option<Vec<bool>> {
     // when the geometry itself proves one unambiguous outer loop.
     let loops = projected_cap_loops(face, z_axis)?;
     convex_polygon_outer_roles(&loops)
+        .or_else(|| loop_containment::prove_loop_roles(&loops, GEOM_TOL_MM))
 }
 
 /// Recover the outer bound of an unlabelled planar face without assuming
@@ -1717,23 +1743,8 @@ pub(crate) fn unlabelled_planar_outer_bound(
     }
     let outward = mul(plane.normal, if face.surface_forward { 1.0 } else { -1.0 });
     let curves = projected_cap_loops(&face, outward)?;
-    let roles = convex_polygon_outer_roles(&curves).or_else(|| {
-        // On an oriented planar face, the outer wire has positive area
-        // relative to the face normal and every hole has negative area.
-        // Do not use the partial area integral for spline curves.
-        let roles = curves
-            .iter()
-            .zip(&face.loops)
-            .map(|(curves, wire)| {
-                if curves.iter().any(RecoveredProfileCurve::is_spline) {
-                    return None;
-                }
-                let area = signed_area_curves(curves) * if wire.orientation { 1.0 } else { -1.0 };
-                (area.is_finite() && area.abs() > GEOM_TOL_MM * GEOM_TOL_MM).then_some(area > 0.0)
-            })
-            .collect::<Option<Vec<_>>>()?;
-        (roles.iter().filter(|&&outer| outer).count() == 1).then_some(roles)
-    })?;
+    let roles = convex_polygon_outer_roles(&curves)
+        .or_else(|| loop_containment::prove_loop_roles(&curves, GEOM_TOL_MM))?;
     face.loops
         .iter()
         .zip(roles)
@@ -2026,7 +2037,7 @@ fn face_info(
         return None;
     }
 
-    let loops = brep::face_loops(face_id, entities, index)?;
+    let loops = normalize_extrusion_loops(brep::face_loops(face_id, entities, index)?);
     if loops.is_empty()
         || loops.iter().any(|loop_| {
             loop_.edges.is_empty()

@@ -48,7 +48,8 @@ type Controls = Vec<[f64; 4]>;
 type Split = (Controls, Controls);
 
 /// Homogeneous de Casteljau subdivision at the exact parameter midpoint.
-fn subdivide(controls: &[[f64; 4]]) -> Option<Split> {
+#[must_use]
+pub fn subdivide_homogeneous_bezier(controls: &[[f64; 4]]) -> Option<Split> {
     let mut row = controls.to_vec();
     let mut left = Vec::with_capacity(row.len());
     let mut right = Vec::with_capacity(row.len());
@@ -113,7 +114,7 @@ pub fn refine_maximum(
         }
         let previous = nodes.pop()?;
         let depth = previous.depth + 1;
-        let (left, right) = subdivide(&previous.controls)?;
+        let (left, right) = subdivide_homogeneous_bezier(&previous.controls)?;
         let children: [Controls; 2] = (left, right).into();
         for controls in children {
             let (witness, upper) = evaluate(&controls)?;
