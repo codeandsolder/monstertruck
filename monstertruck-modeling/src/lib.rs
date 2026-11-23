@@ -118,6 +118,8 @@ mod closed_sweep;
 pub mod errors;
 mod geom_impls;
 mod mapped;
+/// Recover native analytic CAD geometry from polygon meshes.
+pub mod mesh_recovery;
 mod multi_sweep;
 mod partition_normalization;
 pub use partition_normalization::normalize_planar_partitions;
