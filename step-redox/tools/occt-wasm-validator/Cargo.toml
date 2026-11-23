@@ -11,7 +11,7 @@ flate2 = "1"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 num-traits = "0.2"
-rand_chacha = { version = "0.9", default-features = false }
+rand_chacha = { version = "0.10", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 occt-wasm = { git = "https://github.com/codeandsolder/occt-wasm-truck.git", rev = "b160cc637a155eeaed67a36fb1433f921702399a" }
