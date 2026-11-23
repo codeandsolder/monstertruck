@@ -58,6 +58,8 @@ fn nonconforming_stl_cube_recovers_analytic_step_solid() {
     );
     let solid = Solid::new(vec![recovery.shell]).unwrap();
     let compressed = solid.compress_with_parameter_curves(1.0e-6);
+    assert_eq!(compressed.boundaries[0].vertices.len(), 8);
+    assert_eq!(compressed.boundaries[0].edges.len(), 12);
     let step =
         CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string();
     assert!(step.contains("MANIFOLD_SOLID_BREP"));
@@ -65,6 +67,8 @@ fn nonconforming_stl_cube_recovers_analytic_step_solid() {
     let table = Table::from_step(&step).unwrap();
     let shell = table.shell.values().next().expect("STEP shell exists");
     let roundtrip = table.to_compressed_trimmed_shell(shell).unwrap();
+    assert_eq!(roundtrip.vertices.len(), 8);
+    assert_eq!(roundtrip.edges.len(), 12);
     assert_eq!(roundtrip.faces.len(), 6);
     assert!(roundtrip.faces.iter().all(|face| matches!(
         face.surface,
