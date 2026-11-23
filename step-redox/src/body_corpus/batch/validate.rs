@@ -3,7 +3,7 @@ use super::{
     ScanOutcome, ScanRecord, Summary, Totals, build::insert_body, digest, fingerprint, read_jsonl,
     valid_digest, valid_scan,
 };
-use crate::body_corpus::{ExtractedBody, scan_bytes};
+use crate::body_corpus::{ExtractedBody, scan_isolated_object};
 use anyhow::{Context, Result, ensure};
 use clap::Args;
 use rayon::prelude::*;
@@ -144,7 +144,7 @@ fn validate_object(directory: &Path, body: &Body, object: &ExtractedBody) -> Res
         bytes.len() == object.bytes && digest(&bytes) == object.sha256,
         "object byte digest changed"
     );
-    let report = scan_bytes(&bytes)?;
+    let report = scan_isolated_object(&bytes)?;
     ensure!(valid_scan(&report), "invalid extracted scan");
     ensure!(
         report.manifold_solids == 1 && report.analyzed_solids == 1,

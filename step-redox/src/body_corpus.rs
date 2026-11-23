@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::Hasher;
 use std::path::Path;
-use step_p21::ast::{DataSection, EntityInstance, Exchange, Parameter};
+use step_p21::ast::{DataSection, EntityInstance, Exchange, Parameter, Record};
 
 pub mod batch;
 
@@ -183,6 +183,86 @@ fn shape_definition_root_for_representation(
     })
 }
 
+/// Each isolated body is a new standalone product, regardless of how (or
+/// whether) the source's representation was linked to a product definition.
+///
+/// Reusing source product roots can silently leave instance representations
+/// orphaned: a product may point at an assembly representation containing a
+/// separate instance, while the actual source solid is owned by a different
+/// ADVANCED_BREP_SHAPE_REPRESENTATION. OCCT then transfers zero roots.
+fn isolated_product_root(representation_id: u64, first_id: u64) -> Vec<EntityInstance> {
+    let reference = step_entities::entity_ref;
+    let make = |offset: u64, name: &str, parameters: Vec<Parameter>| EntityInstance::Simple {
+        id: first_id + offset,
+        record: Record {
+            name: name.into(),
+            parameter: Parameter::List(parameters),
+        },
+    };
+    let string = |value: &str| Parameter::String(value.into());
+    vec![
+        make(0, "APPLICATION_CONTEXT", vec![string("mechanical design")]),
+        make(
+            1,
+            "PRODUCT_CONTEXT",
+            vec![
+                string("part definition"),
+                reference(first_id),
+                string("mechanical"),
+            ],
+        ),
+        make(
+            2,
+            "PRODUCT",
+            vec![
+                string("isolated body"),
+                string("isolated body"),
+                string(""),
+                Parameter::List(vec![reference(first_id + 1)]),
+            ],
+        ),
+        make(
+            3,
+            "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE",
+            vec![
+                string(""),
+                string(""),
+                reference(first_id + 2),
+                Parameter::Enumeration("NOT_KNOWN".into()),
+            ],
+        ),
+        make(
+            4,
+            "PRODUCT_DEFINITION_CONTEXT",
+            vec![
+                string("part definition"),
+                reference(first_id),
+                string("design"),
+            ],
+        ),
+        make(
+            5,
+            "PRODUCT_DEFINITION",
+            vec![
+                string("isolated body"),
+                string(""),
+                reference(first_id + 3),
+                reference(first_id + 4),
+            ],
+        ),
+        make(
+            6,
+            "PRODUCT_DEFINITION_SHAPE",
+            vec![string(""), string(""), reference(first_id + 5)],
+        ),
+        make(
+            7,
+            "SHAPE_DEFINITION_REPRESENTATION",
+            vec![reference(first_id + 6), reference(representation_id)],
+        ),
+    ]
+}
+
 fn representation_length_scale_mm(context_id: u64, section: &StepSection<'_>) -> Option<f64> {
     let params = section
         .entity(context_id)?
@@ -253,6 +333,10 @@ pub fn scan(path: &Path) -> Result<ScanReport> {
 
 fn scan_bytes(bytes: &[u8]) -> Result<ScanReport> {
     let exchange = parse_exchange(bytes)?;
+    scan_exchange(&exchange)
+}
+
+fn scan_exchange(exchange: &Exchange) -> Result<ScanReport> {
     let mut solids = Vec::new();
     let mut manifold_solids = 0usize;
     let mut skipped_solids = 0usize;
@@ -355,6 +439,43 @@ struct Selection {
     fingerprint: String,
 }
 
+/// Scan an isolated output with one parse, and require a real product root.
+/// A bare shape representation is parseable STEP but not transferable as an
+/// independent model by OCCT and other product-oriented STEP importers.
+fn scan_isolated_object(bytes: &[u8]) -> Result<ScanReport> {
+    let exchange = parse_exchange(bytes)?;
+    let report = scan_exchange(&exchange)?;
+    ensure!(
+        report.manifold_solids == 1 && report.analyzed_solids == 1,
+        "expected exactly one analyzable isolated solid"
+    );
+    let solid = &report.solids[0];
+    let section = exchange
+        .data
+        .get(solid.data_section)
+        .context("missing isolated DATA section")?;
+    let ownership = representation_ownership(&section.entities);
+    let (representation_id, _) = ownership
+        .get(&solid.solid_id)
+        .copied()
+        .context("isolated solid missing shape representation")?;
+    let (_, definition_id) =
+        shape_definition_root_for_representation(representation_id, &section.entities)
+            .context("isolated solid lacks a transferable product root")?;
+    let index = step_graph::build_index(&section.entities);
+    ensure!(
+        step_entities::named_entity_parameters(
+            definition_id,
+            "PRODUCT_DEFINITION_SHAPE",
+            &section.entities,
+            &index
+        )
+        .is_some(),
+        "isolated solid product root has no PRODUCT_DEFINITION_SHAPE"
+    );
+    Ok(report)
+}
+
 fn parse_selection(raw: &str) -> Result<Selection> {
     let mut parts = raw.splitn(3, ':');
     let section = parts
@@ -446,21 +567,6 @@ fn extract_one(
     ));
     keep.insert(representation_id);
 
-    // A bare ADVANCED_BREP_SHAPE_REPRESENTATION is valid exchange data but is
-    // not a standalone product root for importers such as OpenCascade. Preserve
-    // the smallest original product-definition chain that points at this
-    // representation so an extracted body is independently loadable.
-    if let Some((shape_definition_id, product_shape_id)) =
-        shape_definition_root_for_representation(representation_id, &section.entities)
-    {
-        keep.insert(shape_definition_id);
-        keep.extend(step_entities::closure_from(
-            product_shape_id,
-            &section.entities,
-            index,
-        ));
-    }
-
     let mut entities = Vec::with_capacity(keep.len());
     for entity in &section.entities {
         let id = step_graph::entity_id(entity);
@@ -476,6 +582,21 @@ fn extract_one(
         }
         entities.push(cloned);
     }
+
+    // Reserve eight fresh, collision-free STEP IDs before adding a self-contained
+    // product-definition root for this extracted representation.
+    let first_id = section
+        .entities
+        .iter()
+        .map(step_graph::entity_id)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .context("STEP entity IDs exhausted")?;
+    first_id
+        .checked_add(7)
+        .context("STEP entity IDs exhausted")?;
+    entities.extend(isolated_product_root(representation_id, first_id));
 
     let output = Exchange {
         header: exchange.header.clone(),
@@ -572,4 +693,87 @@ pub fn extract_selected(
         .collect::<Result<Vec<_>>>()?;
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     extract(&bytes, out_dir, &parsed)
+}
+
+#[cfg(test)]
+mod isolated_root_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    const BOX: &[u8] = include_bytes!("../validation/fixtures/native_body_corpus_box.step");
+
+    #[test]
+    fn every_isolated_body_receives_one_transferable_product_root() -> Result<()> {
+        let source = parse_exchange(BOX)?;
+        let mut orphaned = source.clone();
+        for section in &mut orphaned.data {
+            section.entities.retain(|entity| {
+                step_graph::simple_record(entity)
+                    .is_none_or(|record| record.name != "SHAPE_DEFINITION_REPRESENTATION")
+            });
+        }
+        let orphaned = crate::write_exchange(&orphaned)?.into_bytes();
+        // The original body scan succeeds even when OpenCascade has no product
+        // to transfer. The extractor must supply the missing root.
+        assert!(scan_isolated_object(&orphaned).is_err());
+        for input in [BOX, orphaned.as_slice()] {
+            let scan = scan_bytes(input)?;
+            let solid = scan.solids.first().context("source fixture has no solid")?;
+            assert_eq!(scan.analyzed_solids, 1);
+            assert!(solid.has_shape_representation);
+            let temp = tempfile::tempdir()?;
+            let selection = Selection {
+                section: solid.data_section,
+                solid_id: solid.solid_id,
+                fingerprint: "0123456789abcdef".into(),
+            };
+            let out = temp.path().join("objects");
+            let artifacts = extract(input, &out, &[selection])?;
+            assert_eq!(artifacts.len(), 1);
+            let saved = fs::read(out.join("01/0123456789abcdef.step"))?;
+            assert_eq!(artifacts[0].sha256, digest(&saved));
+            let exchange = parse_exchange(&saved)?;
+            assert_eq!(exchange.data.len(), 1);
+            let section = &exchange.data[0];
+            let ownership = representation_ownership(&section.entities);
+            let output_scan = scan_isolated_object(&saved)?;
+            assert_eq!(output_scan.manifold_solids, 1);
+            let output_solid = output_scan.solids.first().context("missing output solid")?;
+            let (representation_id, _) = ownership
+                .get(&output_solid.solid_id)
+                .copied()
+                .context("isolated representation not found")?;
+            let (root, definition) =
+                shape_definition_root_for_representation(representation_id, &section.entities)
+                    .context("isolated solid lacks a product root")?;
+            let index = step_graph::build_index(&section.entities);
+            let roots: Vec<_> = section
+                .entities
+                .iter()
+                .filter_map(step_graph::simple_record)
+                .filter(|record| record.name == "SHAPE_DEFINITION_REPRESENTATION")
+                .collect();
+            assert_eq!(roots.len(), 1);
+            assert!(index.contains_key(&root));
+            let closure = step_entities::closure_from(definition, &section.entities, &index);
+            let types: HashSet<_> = closure
+                .iter()
+                .filter_map(|id| index.get(id))
+                .filter_map(|&index| step_graph::simple_record(&section.entities[index]))
+                .map(|record| record.name.as_str())
+                .collect();
+            for kind in [
+                "PRODUCT_DEFINITION_SHAPE",
+                "PRODUCT_DEFINITION",
+                "PRODUCT_DEFINITION_CONTEXT",
+                "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE",
+                "PRODUCT",
+                "PRODUCT_CONTEXT",
+                "APPLICATION_CONTEXT",
+            ] {
+                assert!(types.contains(kind), "missing {kind}");
+            }
+        }
+        Ok(())
+    }
 }
