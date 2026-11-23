@@ -235,7 +235,7 @@ fn exactly_same_bspline(a: &BSplineSupport, b: &BSplineSupport) -> bool {
     a.knots
         .iter()
         .zip(b.knots.iter().rev())
-        .all(|(&x, &y)| x == (start + end) - y)
+        .all(|(&x, &y)| x.to_bits() == ((start + end) - y).to_bits())
 }
 
 /// A two-sided full-domain Hausdorff *upper bound*, at a user-supplied source
