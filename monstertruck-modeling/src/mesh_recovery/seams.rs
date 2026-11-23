@@ -13,7 +13,7 @@ use std::collections::HashSet;
 /// The three projected 2D orientation tests certify collinearity in 3D
 /// using adaptive exact predicates for the *stored f64 input coordinates*.
 /// A fitted near-line is intentionally not a shared topological edge.
-fn on_line(a: Point3, b: Point3, p: Point3) -> bool {
+pub(super) fn on_line(a: Point3, b: Point3, p: Point3) -> bool {
     use robust::{Coord, orient2d};
     let xy = |v: Point3| Coord { x: v.x, y: v.y };
     let xz = |v: Point3| Coord { x: v.x, y: v.z };
@@ -25,7 +25,7 @@ fn on_line(a: Point3, b: Point3, p: Point3) -> bool {
 
 /// Returns the coordinate along the directed segment only for a strictly
 /// interior vertex exactly collinear with the source f64 endpoints.
-fn on_segment(a: Point3, b: Point3, p: Point3) -> Option<f64> {
+pub(super) fn on_segment(a: Point3, b: Point3, p: Point3) -> Option<f64> {
     if !on_line(a, b, p) {
         return None;
     }

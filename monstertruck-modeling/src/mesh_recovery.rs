@@ -40,7 +40,12 @@ mod cylinder;
 mod through_hole;
 pub use cylinder::{CylinderRecoveryOptions, RecoveredCylinder, recover_cylindrical_solid};
 pub use through_hole::{RecoveredCylindricalThroughHole, recover_cylindrical_through_hole};
+mod evidence;
 mod seams;
+pub use evidence::{
+    ChainPairEvidence, CollinearChain, EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence,
+    ParallelBundle, ParallelPlacement, analyze_mesh_evidence,
+};
 
 /// Source evidence for one reconstructed planar face.
 #[derive(Clone, Debug)]
@@ -103,6 +108,11 @@ pub enum MeshRecoveryError {
     /// Unsupported or non-finite cylinder recovery tolerance.
     #[error("cylinder tolerances must be finite and nonnegative, with at least six ring samples")]
     InvalidCylinderOptions,
+    /// Feature detection or direction clustering thresholds are invalid.
+    #[error(
+        "evidence thresholds must be finite, with dihedral angle in [0,pi) and parallel angle in [0,pi/2)"
+    )]
+    InvalidEvidenceOptions,
     /// A patch would require nontrivial projection to become a valid B-rep face.
     #[error(
         "planar patch {patch} has source-to-plane residual {residual}, exceeding the kernel tolerance"
