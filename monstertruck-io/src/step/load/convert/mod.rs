@@ -1289,7 +1289,7 @@ impl Table {
     ///
     /// Returns `None` if the holder cannot be resolved or yields no curves.
     /// Silently skips points and curves that fail conversion.
-    #[must_use]
+    #[must_use = "The converted representation is returned; ignoring it discards the conversion."]
     pub fn to_curve3d_set(&self, gcs: &GeometricCurveSetHolder) -> Option<Vec<Curve3D>> {
         let owned = gcs.clone().into_owned(self).ok()?;
         let curves: Vec<Curve3D> = owned
@@ -1526,7 +1526,7 @@ impl Table {
     /// the two routes agree node for node, and the id route reaches the same
     /// 832 of 832 and 254 of 254 solids.** A disagreement would be a finding,
     /// not a rounding error, and that pin is where it would surface.
-    #[must_use]
+    #[must_use = "The optional shape representation of node outcome must be inspected to distinguish a value from absence."]
     pub fn shape_representation_of_node(&self, node: &ProductEntity) -> Option<u64> {
         node.attrs
             .shape_representation
@@ -1560,7 +1560,7 @@ impl Table {
     ///
     /// `items` that are not all entity references cannot match anything, because
     /// `ProductEntity::shape` only exists when every item was one.
-    #[must_use]
+    #[must_use = "The optional shape representation of items outcome must be inspected to distinguish a value from absence."]
     pub fn shape_representation_of_items(&self, items: &[u64]) -> Option<u64> {
         let mut best: Option<u64> = None;
         for (&id, representation) in &self.shape_representation {
@@ -1664,7 +1664,7 @@ impl Table {
     /// # Ok(())
     /// # }
     /// ```
-    #[must_use]
+    #[must_use = "The relationship's solid IDs and loss report are returned together for verification."]
     pub fn solids_via_shape_relationship(
         &self,
         shape_representation: u64,

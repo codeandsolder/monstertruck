@@ -85,7 +85,7 @@ pub(crate) const fn narrow_f64_to_f32(value: f64) -> f32 { value as f32 }
 /// The conversion intentionally uses Rust's floating-point narrowing semantics:
 /// finite out-of-range values become infinities and NaNs remain NaNs.
 #[inline]
-#[must_use]
+#[must_use = "The converted f32 matrix must be supplied to the GPU; the original is unchanged."]
 pub fn matrix4_to_raw_f32(matrix: Matrix4) -> [[f32; 4]; 4] {
     [
         matrix.x.map(narrow_f64_to_f32).into(),

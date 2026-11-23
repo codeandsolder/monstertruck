@@ -81,7 +81,7 @@ async fn init_default_device(
 impl DeviceHandler {
     /// constructor
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(adapter: Adapter, device: Device, queue: Queue) -> Self {
         Self {
             adapter,
@@ -91,15 +91,15 @@ impl DeviceHandler {
     }
     /// Returns the reference of the adapter.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the adapter."]
     pub const fn adapter(&self) -> &Adapter { &self.adapter }
     /// Returns the reference of the device.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the device."]
     pub const fn device(&self) -> &Device { &self.device }
     /// Returns the reference of the queue.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the queue."]
     pub const fn queue(&self) -> &Queue { &self.queue }
 
     /// Creates default device handler.
@@ -145,7 +145,7 @@ impl Default for RenderTextureConfig {
 impl RenderTextureConfig {
     /// Returns compatible `SurfaceConfiguration`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards compatible `SurfaceConfiguration`."]
     pub const fn compatible_surface_config(self) -> SurfaceConfiguration {
         SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
@@ -175,7 +175,7 @@ impl SceneDescriptor {
     /// ```
     /// Returns `None` when the camera transform is singular.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed `UNIFORM` buffer of camera is returned rather than stored."]
     pub fn camera_buffer(&self, device: &Device) -> Option<BufferHandler> {
         let (width, height) = self.render_texture.canvas_size;
         let as_rat = f64::from(width) / f64::from(height);
@@ -396,7 +396,7 @@ impl Scene {
     // About `scene_desc`, entity is better than reference for the performance.
     // This is reference because only for as wgpu is.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn new(device_handler: DeviceHandler, scene_desc: &SceneDescriptor) -> Self {
         let device = device_handler.device();
         let (forward_depth, sampling_buffer) = scene_desc.backend_buffers(device);
@@ -430,7 +430,7 @@ impl Scene {
     /// # Remarks
     /// The usage of texture is `TextureUsages::RENDER_ATTACHMENT | TetureUsages::COPY_SRC`.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed compatible texture for render attachment is returned rather than stored."]
     pub fn compatible_texture(&self) -> Texture {
         let config = self.descriptor.render_texture;
         self.device().create_texture(&TextureDescriptor {
@@ -451,32 +451,32 @@ impl Scene {
 
     /// Returns the reference of its own `DeviceHandler`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of its own `DeviceHandler`."]
     pub const fn device_handler(&self) -> &DeviceHandler { &self.device_handler }
 
     /// Returns the reference of the adapter.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the adapter."]
     pub const fn dapter(&self) -> &Adapter { &self.device_handler.adapter }
 
     /// Returns the reference of the device.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the device."]
     pub const fn device(&self) -> &Device { &self.device_handler.device }
 
     /// Returns the reference of the queue.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the queue."]
     pub const fn queue(&self) -> &Queue { &self.device_handler.queue }
 
     /// Returns the elapsed time since the scene was created.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the elapsed time since the scene was created."]
     pub fn elapsed(&self) -> std::time::Duration { self.clock.elapsed() }
 
     /// Returns the reference of the descriptor.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the descriptor."]
     pub const fn descriptor(&self) -> &SceneDescriptor { &self.descriptor }
 
     /// Returns the mutable reference of the descriptor.
@@ -490,7 +490,7 @@ impl Scene {
 
     /// Returns the reference of the studio configuration.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the studio configuration."]
     pub const fn studio_config(&self) -> &StudioConfig { &self.descriptor.studio }
 
     /// Returns the mutable reference of the studio configuration.
@@ -499,7 +499,7 @@ impl Scene {
 
     /// Returns the bind group layout in the scene.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the bind group layout in the scene."]
     pub const fn bind_group_layout(&self) -> &BindGroupLayout { &self.bind_group_layout }
 
     /// Creates a `UNIFORM` buffer of the camera.
@@ -515,7 +515,7 @@ impl Scene {
     /// ```
     /// Returns `None` when the camera transform is singular.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed `UNIFORM` buffer of the camera is returned rather than stored."]
     pub fn camera_buffer(&self) -> Option<BufferHandler> {
         self.descriptor.camera_buffer(self.device())
     }
@@ -537,7 +537,7 @@ impl Scene {
     /// };
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed `STORAGE` buffer of all lights is returned rather than stored."]
     pub fn lights_buffer(&self) -> BufferHandler { self.descriptor.lights_buffer(self.device()) }
 
     /// Creates a `UNIFORM` buffer of the scene status.
@@ -681,7 +681,7 @@ impl Scene {
 
     /// Returns the number of the render objects in the scene.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the number of the render objects in the scene."]
     pub const fn number_of_objects(&self) -> usize { self.objects.len() }
 
     /// Synchronizes the information of vertices of `object` in the CPU memory
@@ -980,11 +980,11 @@ impl WindowScene {
     }
     /// Get the reference of initializing window.
     #[inline]
-    #[must_use]
+    #[must_use = "The window accessor exposes its value only through the returned reference."]
     pub const fn window(&self) -> &Arc<Window> { &self.window_handler.window }
     /// Get the reference of surface.
     #[inline]
-    #[must_use]
+    #[must_use = "The surface accessor exposes its value only through the returned reference."]
     pub const fn surface(&self) -> &Arc<Surface<'_>> { &self.window_handler.surface }
     /// Adjusts the size of the backend buffers (depth or sampling buffer) to the size of the window.
     pub fn size_alignment(&mut self) {
