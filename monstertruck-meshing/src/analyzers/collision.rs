@@ -1,6 +1,8 @@
+#[cfg(test)]
+use super::EuclideanSpace;
 use super::{
-    BoundingBox, EuclideanSpace, InnerSpace, KERNEL_EPSILON_SQUARED, MetricSpace, Origin, Point3,
-    PolygonMesh, StandardVertex, Vector3, hash,
+    BoundingBox, InnerSpace, KERNEL_EPSILON_SQUARED, MetricSpace, Origin, Point3, PolygonMesh,
+    StandardVertex, Vector3, compare_sweep_coordinate, hash, triangle_projection_interval,
 };
 use array_macro::array;
 
@@ -45,7 +47,7 @@ enum EndPointType {
     Back,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct EndPoint {
     entity: f64,
     r#type: EndPointType,
@@ -72,13 +74,6 @@ impl EndPoint {
     }
 }
 
-fn tri_to_seg(tri: [Point3; 3], unit: Vector3) -> (f64, f64) {
-    let a = tri[0].to_vec().dot(unit);
-    let b = tri[1].to_vec().dot(unit);
-    let c = tri[2].to_vec().dot(unit);
-    (f64::min(f64::min(a, b), c), f64::max(f64::max(a, b), c))
-}
-
 fn sorted_endpoints<I, J>(first_triangles: I, second_triangles: J, unit: Vector3) -> Vec<EndPoint>
 where
     I: IntoIterator<Item = [Point3; 3]>,
@@ -87,16 +82,23 @@ where
         .into_iter()
         .enumerate()
         .filter(|(_, tri)| !(tri[1] - tri[0]).cross(tri[2] - tri[0]).so_small())
-        .flat_map(|(i, tri)| EndPoint::from_seg(tri_to_seg(tri, unit), 0, i))
+        .flat_map(|(i, tri)| EndPoint::from_seg(triangle_projection_interval(tri, unit, 0.0), 0, i))
         .chain(
             second_triangles
                 .into_iter()
                 .enumerate()
                 .filter(|(_, tri)| !(tri[1] - tri[0]).cross(tri[2] - tri[0]).so_small())
-                .flat_map(|(i, tri)| EndPoint::from_seg(tri_to_seg(tri, unit), 1, i)),
+                .flat_map(|(i, tri)| {
+                    EndPoint::from_seg(triangle_projection_interval(tri, unit, 0.0), 1, i)
+                }),
         )
         .collect();
-    res.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
+    res.sort_by(|a, b| {
+        compare_sweep_coordinate(a.entity, b.entity)
+            .then_with(|| a.r#type.cmp(&b.r#type))
+            .then_with(|| a.segnum.cmp(&b.segnum))
+            .then_with(|| a.index.cmp(&b.index))
+    });
     res
 }
 
