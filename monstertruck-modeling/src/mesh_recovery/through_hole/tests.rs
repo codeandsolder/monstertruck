@@ -1,4 +1,5 @@
 use super::*;
+use crate::mesh_recovery::signed_source_volume;
 use crate::{ParametricSurface, ParametricSurface3D, Surface};
 use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
 use monstertruck_topology::shell::ShellCondition;
@@ -67,6 +68,7 @@ fn thirty_two_sided_source_hole_becomes_shared_circular_analytic_trim() {
         .expect("single cylindrical through-hole must be reconstructible");
     assert!((recovered.radius - 1.0).abs() < 1.0e-9);
     assert!((recovered.height - 4.0).abs() < 1.0e-9);
+    assert!(recovered.source_signed_volume > 0.0);
     assert!(recovered.max_radial_residual < 1.0e-8);
     assert!(recovered.max_surface_deviation < 0.05);
     assert_eq!(recovered.cylindrical_source_face_indices.len(), 64);
@@ -234,4 +236,26 @@ fn three_level_wall_with_intermediate_ring_still_recovers_as_one_carrier() {
     assert_eq!(recovered.cylindrical_source_face_indices.len(), samples * 4);
     assert_eq!(recovered.solid.boundaries()[0].len(), 8);
     assert!(recovered.solid.is_geometric_consistent());
+}
+
+#[test]
+fn signed_mesh_volume_detects_globally_inverted_material_and_is_translation_stable() {
+    let source = perforated_prism(32, 1.0, 3.0, 4.0);
+    let (positions, polygons) = positions_and_polygons(&source, KERNEL_EPSILON).unwrap();
+    let signed = signed_source_volume(&positions, &polygons).unwrap();
+    let expected_hole_area = 16.0 * (std::f64::consts::TAU / 32.0).sin();
+    let expected_material_volume = (36.0 - expected_hole_area) * 4.0;
+    assert!((signed - expected_material_volume).abs() < 1.0e-8);
+    let offset = positions
+        .iter()
+        .map(|p| *p + Vector3::new(1.0e9, -1.0e9, 1.0e9))
+        .collect::<Vec<_>>();
+    let translated = signed_source_volume(&offset, &polygons).unwrap();
+    assert!((translated - signed).abs() < 1.0e-4);
+    let mut reversed = polygons;
+    for polygon in &mut reversed {
+        polygon.vertices.reverse();
+    }
+    let inverted_volume = signed_source_volume(&positions, &reversed).unwrap();
+    assert!((inverted_volume + signed).abs() < 1.0e-8);
 }

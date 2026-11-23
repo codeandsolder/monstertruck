@@ -5,7 +5,7 @@
 
 use super::{
     InputPolygon, MeshRecoveryError, PlanarPatch, PlanarRecoveryOptions, positions_and_polygons,
-    recover_planar_mesh,
+    positive_source_volume, recover_planar_mesh,
 };
 use crate::{Face, InnerSpace, Point3, Shell, Solid, Vector3, builder};
 use monstertruck_mesh::PolygonMesh;
@@ -50,6 +50,9 @@ pub struct RecoveredCylinder {
     pub radius: f64,
     /// Axial distance between fitted cap centers.
     pub height: f64,
+    /// Source polyhedral signed material volume before analytical fitting.
+    /// Positive sign is checked, but does not prove source self-intersection-free.
+    pub source_signed_volume: f64,
     /// Maximum sample radial fit error.
     pub max_radial_residual: f64,
     /// Bound on deviation from original faceted source surface.
@@ -385,6 +388,9 @@ pub fn recover_cylindrical_solid(
     let (original_positions, polygons) =
         positions_and_polygons(mesh, options.planar.distance_tolerance)?;
     debug_assert_eq!(original_positions, *positions);
+    let Some(source_signed_volume) = positive_source_volume(positions, &polygons) else {
+        return Ok(None);
+    };
     let source = CylindricalSource {
         positions,
         caps: [first_cap, second_cap],
@@ -415,6 +421,7 @@ pub fn recover_cylindrical_solid(
         axis,
         radius,
         height,
+        source_signed_volume,
         max_radial_residual: max_residual,
         max_surface_deviation: deviation,
         cap_source_face_indices: [

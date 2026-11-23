@@ -128,6 +128,7 @@ fn recovers_true_analytic_cylinder_from_128_triangles_with_cap_center_vertices()
         .expect("closed faceted cylinder should fit");
     assert!((result.radius - 3.0).abs() < 1.0e-9);
     assert!((result.height - 7.0).abs() < 1.0e-9);
+    assert!(result.source_signed_volume > 0.0);
     assert!(result.max_radial_residual < 1.0e-9);
     assert!(result.max_surface_deviation > 0.0);
     assert!(result.max_surface_deviation < 0.05);

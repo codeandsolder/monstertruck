@@ -137,6 +137,40 @@ fn signed_plane_distance(point: Point3, origin: Point3, normal: Vector3) -> f64 
     (point - origin).dot(normal)
 }
 
+/// Integrate signed polyhedral volume by a fan triangulation of each source
+/// polygon. All coordinates are relative to one source vertex, so translating
+/// a small mechanical part far from the world origin does not unnecessarily
+/// destroy precision. This certifies global winding *sign* only for an already
+/// validated closed mesh; it does not certify non-self-intersection.
+///
+/// Compensated summation protects thin solids with cancelling oriented faces.
+fn signed_source_volume(positions: &[Point3], polygons: &[InputPolygon]) -> Option<f64> {
+    let first = polygons.first()?.vertices.first()?;
+    let origin = positions[*first];
+    let mut six_volume = 0.0_f64;
+    let mut compensation = 0.0_f64;
+    for polygon in polygons {
+        let a = positions[polygon.vertices[0]] - origin;
+        for i in 1..polygon.vertices.len() - 1 {
+            let b = positions[polygon.vertices[i]] - origin;
+            let c = positions[polygon.vertices[i + 1]] - origin;
+            let term = a.dot(b.cross(c));
+            let corrected = term - compensation;
+            let next = six_volume + corrected;
+            compensation = (next - six_volume) - corrected;
+            six_volume = next;
+        }
+    }
+    let volume = six_volume / 6.0;
+    volume.is_finite().then_some(volume)
+}
+
+/// Positive material-volume orientation for a previously proven closed source
+/// mesh. Does not imply a global non-self-intersection certificate.
+fn positive_source_volume(positions: &[Point3], polygons: &[InputPolygon]) -> Option<f64> {
+    signed_source_volume(positions, polygons).filter(|volume| *volume > 0.0)
+}
+
 fn positions_and_polygons(
     mesh: &PolygonMesh,
     tolerance: f64,

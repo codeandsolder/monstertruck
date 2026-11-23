@@ -9,7 +9,7 @@
 use super::cylinder::{CylinderRecoveryOptions, build_cylinder_side, fit_circle, ring_max_step};
 use super::{
     HashMap, InputPolygon, MeshRecoveryError, PlanarPatch, RecoveredPlanarMesh, edge_incidence,
-    edge_key, positions_and_polygons, recover_planar_mesh, seams,
+    edge_key, positions_and_polygons, positive_source_volume, recover_planar_mesh, seams,
 };
 use crate::{Face, InnerSpace, KERNEL_EPSILON, Point3, Shell, Solid, Vector3, Wire};
 use monstertruck_mesh::PolygonMesh;
@@ -29,6 +29,9 @@ pub struct RecoveredCylindricalThroughHole {
     pub radius: f64,
     /// End-cap separation.
     pub height: f64,
+    /// Source polyhedral signed material volume before analytical fitting.
+    /// Positive sign is checked, but does not prove source self-intersection-free.
+    pub source_signed_volume: f64,
     /// Max radial deviation of all source wall vertices from the fitted carrier.
     pub max_radial_residual: f64,
     /// Bound on faceted wall and trim deviation from the smooth circle.
@@ -405,6 +408,9 @@ pub fn recover_cylindrical_through_hole(
     let positions = &planar.canonical_positions;
     let (original, polygons) = positions_and_polygons(mesh, options.planar.distance_tolerance)?;
     debug_assert_eq!(original, *positions);
+    let Some(source_signed_volume) = positive_source_volume(positions, &polygons) else {
+        return Ok(None);
+    };
     let wall = HoleWall {
         positions,
         polygons: &polygons,
@@ -444,6 +450,7 @@ pub fn recover_cylindrical_through_hole(
         axis,
         radius,
         height,
+        source_signed_volume,
         max_radial_residual: evidence.max_radial_residual,
         max_surface_deviation: evidence.max_surface_deviation,
         cap_source_face_indices: [
