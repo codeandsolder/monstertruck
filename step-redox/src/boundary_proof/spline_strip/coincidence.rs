@@ -345,6 +345,7 @@ pub enum SplineCapPrecisionGapReason {
     CapNotProven { surface_row: usize },
     CapAmbiguous { surface_row: usize },
     SameCapEdgeUsedTwice,
+    IncompleteFaceTrim,
 }
 
 #[cfg(feature = "cad-kernel-monstertruck")]
@@ -412,6 +413,14 @@ fn verify_source_strip_cap_rows(
     if first.source_edge_id == second.source_edge_id {
         return Err(Gap::SameCapEdgeUsedTwice);
     }
+    if !super::cap_trim::complete_ruled_face_trim(
+        &loops,
+        rows,
+        [first.source_edge_id, second.source_edge_id],
+        coordinate_tolerance,
+    ) {
+        return Err(Gap::IncompleteFaceTrim);
+    }
     Ok([first, second])
 }
 
@@ -442,8 +451,8 @@ pub fn audit_source_spline_cap_precision(
         .context("missing STEP DATA section")?
         .entities;
     let index = build_index(entities);
-    let faces = brep::solid_face_ids(solid_id, entities, &index)
-        .context("missing source manifold solid")?;
+    let faces = super::super::strict_closed_shell_faces(solid_id, entities, &index)
+        .map_err(anyhow::Error::msg)?;
     let declared = crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
         entities, &index,
     );

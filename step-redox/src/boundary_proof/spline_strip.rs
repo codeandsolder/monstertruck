@@ -20,6 +20,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use step_p21::ast::EntityInstance;
 
+#[cfg(feature = "cad-kernel-monstertruck")]
+mod cap_trim;
 #[cfg(any(test, feature = "cad-kernel-monstertruck"))]
 pub(super) mod coincidence;
 mod embedding;
