@@ -243,12 +243,11 @@ fn identify_rechart_cap_candidates(
         }
         if let Some((other_face, other_surface, other_row, _)) = candidates.get(&cap.source_edge_id)
         {
+            let edge_id = cap.source_edge_id;
+            let face_id = cap.face_id;
             ensure!(
                 *other_surface == cap.surface_id && *other_row == cap.surface_row,
-                "ambiguous surface rows for edge #{} (faces #{} and #{})",
-                cap.source_edge_id,
-                other_face,
-                cap.face_id
+                "ambiguous surface rows for edge #{edge_id} (faces #{other_face} and #{face_id})"
             );
             continue;
         }
