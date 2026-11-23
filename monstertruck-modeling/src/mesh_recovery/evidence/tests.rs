@@ -466,3 +466,122 @@ fn overlapping_collinear_ambiguity_prevents_unjustified_continuation() {
     assert_eq!(chains.len(), 3);
     assert!(chains.iter().all(|c| c.edge_indices.len() == 1));
 }
+
+#[test]
+fn connected_planar_supports_recover_cube_planes_with_measured_area() {
+    let source = unit_box_mesh();
+    let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default()).unwrap();
+    assert_eq!(evidence.source_planar_support.len(), 12);
+    assert_eq!(evidence.planar_supports.len(), 6);
+    for support in &evidence.planar_supports {
+        assert_eq!(support.source_face_indices.len(), 2);
+        assert!((support.area - 1.0).abs() < 1.0e-12);
+        assert!(support.max_vertex_plane_residual < 1.0e-12);
+        assert!(support.max_normal_angle_radians < 1.0e-12);
+    }
+    for (index, _) in evidence.edges.iter().enumerate() {
+        let [a, b] = evidence.edge_planar_support_pair(index).unwrap();
+        assert_ne!(a, b);
+    }
+}
+
+#[test]
+fn planar_supports_do_not_depend_on_dihedral_feature_selection() {
+    let source = unit_box_mesh();
+    let full = analyze_mesh_evidence(&source, EvidenceOptions::default()).unwrap();
+    let fewer_features = analyze_mesh_evidence(
+        &source,
+        EvidenceOptions {
+            min_dihedral_angle_radians: 1.75,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        full.planar_supports.len(),
+        fewer_features.planar_supports.len()
+    );
+    assert_eq!(
+        full.source_planar_support,
+        fewer_features.source_planar_support
+    );
+    assert_eq!(fewer_features.edges.len(), 0);
+}
+
+#[test]
+fn partial_or_ambiguous_incidence_does_not_fuse_planar_supports() {
+    let source = make_mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, -1.0, 0.0],
+            [1.0, 0.0, 1.0],
+        ],
+        &[[0, 1, 2], [1, 0, 3], [0, 1, 4]],
+    );
+    let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default()).unwrap();
+    assert_eq!(evidence.non_manifold_edge_count, 1);
+    assert_eq!(evidence.planar_supports.len(), 3);
+    assert_eq!(evidence.source_planar_support.len(), 3);
+    assert!(evidence.edges.iter().enumerate().any(|(id, edge)| {
+        edge.kind == FeatureEdgeKind::NonManifoldJunction
+            && evidence.edge_planar_support_pair(id).is_none()
+    }));
+}
+
+#[test]
+fn rejects_invalid_independent_planar_support_bounds() {
+    let mesh = unit_box_mesh();
+    for options in [
+        PlanarRecoveryOptions {
+            distance_tolerance: f64::NAN,
+            ..Default::default()
+        },
+        PlanarRecoveryOptions {
+            angular_tolerance_radians: f64::INFINITY,
+            ..Default::default()
+        },
+        PlanarRecoveryOptions {
+            distance_tolerance: -1.0,
+            ..Default::default()
+        },
+    ] {
+        assert!(matches!(
+            analyze_mesh_evidence(
+                &mesh,
+                EvidenceOptions {
+                    planar_support: options,
+                    ..Default::default()
+                }
+            ),
+            Err(MeshRecoveryError::InvalidEvidenceOptions)
+        ));
+    }
+}
+
+#[test]
+fn concave_polygon_support_uses_oriented_area_not_absolute_fan_triangles() {
+    let coordinates = [
+        [0.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [2.0, 2.0, 0.0],
+        [1.0, 0.5, 0.0],
+        [0.0, 2.0, 0.0],
+    ]
+    .map(|[x, y, z]| Point3::new(x, y, z))
+    .to_vec();
+    let source = PolygonMesh::new(
+        StandardAttributes {
+            positions: coordinates,
+            ..Default::default()
+        },
+        Faces::from_iter([vec![0, 1, 2, 3, 4]]),
+    )
+    .unwrap();
+    let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default()).unwrap();
+    assert_eq!(evidence.source_planar_support, [0]);
+    assert_eq!(evidence.planar_supports.len(), 1);
+    assert!((evidence.planar_supports[0].area - 2.5).abs() < 1.0e-12);
+    assert_eq!(evidence.edges.len(), 5);
+}

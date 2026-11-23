@@ -44,7 +44,7 @@ mod evidence;
 mod seams;
 pub use evidence::{
     ChainPairEvidence, CollinearChain, EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence,
-    ParallelBundle, ParallelPlacement, analyze_mesh_evidence,
+    ParallelBundle, ParallelPlacement, PlanarSupport, analyze_mesh_evidence,
 };
 
 /// Source evidence for one reconstructed planar face.

@@ -5,7 +5,8 @@
 //! thresholds; they must not alter the source vertices or edge graph.
 
 use super::{
-    InputPolygon, MeshRecoveryError, positions_and_polygons, seams, source_edge_incidence,
+    EdgeIncidence, InputPolygon, MeshRecoveryError, PlanarRecoveryOptions, positions_and_polygons,
+    seams, segment_patches, signed_plane_distance, source_edge_incidence,
 };
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::PolygonMesh;
@@ -20,6 +21,9 @@ pub struct EvidenceOptions {
     /// Undirected straight chains differing by at most this angle in radians
     /// may join a candidate parallel direction group.
     pub max_parallel_angle_radians: f64,
+    /// Seed-anchored angle and position bounds for connected planar supports.
+    /// A one-triangle planar support is still evidence, not a CAD plane proof.
+    pub planar_support: PlanarRecoveryOptions,
 }
 
 impl Default for EvidenceOptions {
@@ -27,6 +31,7 @@ impl Default for EvidenceOptions {
         Self {
             min_dihedral_angle_radians: 1.0e-6,
             max_parallel_angle_radians: 1.0e-6,
+            planar_support: PlanarRecoveryOptions::default(),
         }
     }
 }
@@ -136,6 +141,27 @@ pub struct ChainPairEvidence {
     pub reference_transverse_distance: f64,
 }
 
+/// Connected seed-anchored approximately planar source facets.
+///
+/// This is an observed local polygonal support, not proof that the design
+/// intended an analytic plane: a faceted cylinder also contains small planar
+/// chord strips. Preserve small/isolated supports for later global fitting.
+#[derive(Clone, Debug)]
+pub struct PlanarSupport {
+    /// Indices into the original source polygon sequence.
+    pub source_face_indices: Vec<usize>,
+    /// Oriented normal of the fixed seed polygon.
+    pub normal: Vector3,
+    /// Seed origin in the source coordinate frame.
+    pub origin: Point3,
+    /// Total original polygonal area in mesh coordinate units squared.
+    pub area: f64,
+    /// Maximum point-to-seed-plane residual among member vertices.
+    pub max_vertex_plane_residual: f64,
+    /// Maximum angular deviation from the fixed seed normal in radians.
+    pub max_normal_angle_radians: f64,
+}
+
 /// Reusable primitive-free geometric evidence for a source mesh.
 #[derive(Debug)]
 pub struct MeshEvidence {
@@ -147,6 +173,10 @@ pub struct MeshEvidence {
     pub chains: Vec<CollinearChain>,
     /// Approximate direction groups with measured spatial relationships.
     pub parallel_bundles: Vec<ParallelBundle>,
+    /// Connected seed-anchored planar facet supports, including singletons.
+    pub planar_supports: Vec<PlanarSupport>,
+    /// Index into the planar-support list for each original source polygon.
+    pub source_planar_support: Vec<usize>,
     /// Locally coplanar triangulation edges not included as features.
     pub suppressed_interior_edge_count: usize,
     /// Retained edges used by more than two source polygons.
@@ -156,6 +186,25 @@ pub struct MeshEvidence {
 }
 
 impl MeshEvidence {
+    /// Planar-support region IDs on the two sides of a regular manifold edge.
+    ///
+    /// This does not certify a sharp CAD seam: regions may be chord facets of
+    /// a curved surface. Returns None for open or ambiguous source incidence.
+    #[must_use]
+    pub fn edge_planar_support_pair(&self, edge_index: usize) -> Option<[usize; 2]> {
+        let edge = self.edges.get(edge_index)?;
+        if edge.kind != FeatureEdgeKind::Dihedral {
+            return None;
+        }
+        let &[first, second] = edge.source_face_indices.as_slice() else {
+            return None;
+        };
+        Some([
+            *self.source_planar_support.get(first)?,
+            *self.source_planar_support.get(second)?,
+        ])
+    }
+
     /// Compare the infinite support lines of any two recovered feature
     /// chains, computing geometric relations lazily rather than materializing
     /// a quadratic matrix of all chain pairs.
@@ -207,8 +256,11 @@ struct EdgeSelection {
     winding_conflicts: usize,
 }
 
-fn select_edges(polygons: &[InputPolygon], options: EvidenceOptions) -> EdgeSelection {
-    let incidence = source_edge_incidence(polygons);
+fn select_edges(
+    polygons: &[InputPolygon],
+    incidence: &EdgeIncidence,
+    options: EvidenceOptions,
+) -> EdgeSelection {
     let mut keys = incidence.keys().copied().collect::<Vec<_>>();
     keys.sort_unstable();
     let mut edges = Vec::new();
@@ -493,6 +545,69 @@ fn parallel_bundles(
     bundles
 }
 
+/// Build approximate planar supports without assuming valid global manifold
+/// topology: only oppositely oriented regular two-face edges connect regions.
+/// This leaves multi-body contact and non-manifold junctions as boundaries.
+fn planar_supports(
+    polygons: &[InputPolygon],
+    positions: &[Point3],
+    incidence: &EdgeIncidence,
+    options: PlanarRecoveryOptions,
+) -> (Vec<usize>, Vec<PlanarSupport>) {
+    let mut neighbors = vec![Vec::new(); polygons.len()];
+    for uses in incidence.values() {
+        if let [(first, first_forward), (second, second_forward)] = uses.as_slice()
+            && first_forward != second_forward
+        {
+            neighbors[*first].push(*second);
+            neighbors[*second].push(*first);
+        }
+    }
+    let (membership, groups) = segment_patches(polygons, positions, &neighbors, options);
+    let supports = groups
+        .into_iter()
+        .map(|source_face_indices| {
+            let seed = &polygons[source_face_indices[0]];
+            let mut area = 0.0;
+            let mut max_vertex_plane_residual = 0.0_f64;
+            let mut max_normal_angle_radians = 0.0_f64;
+            for &face_id in &source_face_indices {
+                let face = &polygons[face_id];
+                let reference = positions[face.vertices[0]];
+                // Signed fan contributions cancel for concave polygons;
+                // summing triangle magnitudes would overestimate their area.
+                let mut signed_twice_area = 0.0;
+                for vertex in face.vertices.windows(2).skip(1) {
+                    let first = positions[vertex[0]] - reference;
+                    let second = positions[vertex[1]] - reference;
+                    signed_twice_area += first.cross(second).dot(face.normal);
+                }
+                area = signed_twice_area.abs().mul_add(0.5, area);
+                max_vertex_plane_residual = face
+                    .vertices
+                    .iter()
+                    .map(|&id| signed_plane_distance(positions[id], seed.origin, seed.normal).abs())
+                    .fold(max_vertex_plane_residual, f64::max);
+                let angular = face
+                    .normal
+                    .cross(seed.normal)
+                    .magnitude()
+                    .atan2(face.normal.dot(seed.normal));
+                max_normal_angle_radians = max_normal_angle_radians.max(angular);
+            }
+            PlanarSupport {
+                source_face_indices,
+                normal: seed.normal,
+                origin: seed.origin,
+                area,
+                max_vertex_plane_residual,
+                max_normal_angle_radians,
+            }
+        })
+        .collect();
+    (membership, supports)
+}
+
 /// Extract maximal exact straight feature chains and candidate parallel
 /// spatial arrangements without presupposing any analytic CAD primitive.
 ///
@@ -515,17 +630,25 @@ pub fn analyze_mesh_evidence(
         || !(0.0..std::f64::consts::PI).contains(&options.min_dihedral_angle_radians)
         || !options.max_parallel_angle_radians.is_finite()
         || !(0.0..std::f64::consts::FRAC_PI_2).contains(&options.max_parallel_angle_radians)
+        || !options.planar_support.distance_tolerance.is_finite()
+        || options.planar_support.distance_tolerance < 0.0
+        || !options.planar_support.angular_tolerance_radians.is_finite()
+        || !(0.0..std::f64::consts::FRAC_PI_2)
+            .contains(&options.planar_support.angular_tolerance_radians)
     {
         return Err(MeshRecoveryError::InvalidEvidenceOptions);
     }
     let (positions, mut polygons) = positions_and_polygons(mesh, KERNEL_EPSILON)?;
     seams::split_source_t_junctions(&positions, &mut polygons);
+    let incidence = source_edge_incidence(&polygons);
     let EdgeSelection {
         edges,
         suppressed_coplanar,
         non_manifold,
         winding_conflicts,
-    } = select_edges(&polygons, options);
+    } = select_edges(&polygons, &incidence, options);
+    let (source_planar_support, planar_supports) =
+        planar_supports(&polygons, &positions, &incidence, options.planar_support);
     let chains = trace_chains(&positions, &edges);
     let parallel_bundles = parallel_bundles(&positions, &chains, options);
     Ok(MeshEvidence {
@@ -533,6 +656,8 @@ pub fn analyze_mesh_evidence(
         edges,
         chains,
         parallel_bundles,
+        planar_supports,
+        source_planar_support,
         suppressed_interior_edge_count: suppressed_coplanar,
         non_manifold_edge_count: non_manifold,
         inconsistent_winding_edge_count: winding_conflicts,
