@@ -711,6 +711,26 @@ impl<C: PolylineableCurve + ParameterBoundary2D<S>, S: RobustMeshableSurface> Ro
     }
 }
 
+/// Use the same default tessellation configuration for exact and robust searches.
+fn default_trimmed_cshell_triangulation<C, S, T, F, SP>(
+    shell: &CompressedTrimmedShell<Point3, C, S, T>,
+    tolerance: f64,
+    search_factory: F,
+) -> CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>
+where
+    C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
+    S: PreMeshableSurface,
+    T: ExactTrimBoundary2D + Parallelizable,
+    F: FnOnce(usize) -> SP,
+    SP: Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> + Parallelizable,
+    <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
+{
+    let options = TessellationOptions {
+        tolerance,
+        ..Default::default()
+    };
+    trimmed_cshell_triangulation_with(shell, options, search_factory(options.search_trials))
+}
 impl<C, S, T> MeshableShape for CompressedTrimmedShell<Point3, C, S, T>
 where
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
@@ -720,14 +740,10 @@ where
 {
     type MeshedShape = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
     fn triangulation(&self, tolerance: f64) -> Self::MeshedShape {
-        let options = TessellationOptions {
-            tolerance,
-            ..Default::default()
-        };
-        trimmed_cshell_triangulation_with(
+        default_trimmed_cshell_triangulation(
             self,
-            options,
-            triangulation::search_parameter_sp::<S>(options.search_trials),
+            tolerance,
+            triangulation::search_parameter_sp::<S>,
         )
     }
 }
@@ -741,14 +757,10 @@ where
 {
     type MeshedShape = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
     fn robust_triangulation(&self, tolerance: f64) -> Self::MeshedShape {
-        let options = TessellationOptions {
-            tolerance,
-            ..Default::default()
-        };
-        trimmed_cshell_triangulation_with(
+        default_trimmed_cshell_triangulation(
             self,
-            options,
-            triangulation::search_nearest_parameter_sp::<S>(options.search_trials),
+            tolerance,
+            triangulation::search_nearest_parameter_sp::<S>,
         )
     }
 }
