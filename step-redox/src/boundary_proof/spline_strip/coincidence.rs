@@ -255,7 +255,7 @@ fn exactly_same_bspline(a: &BSplineSupport, b: &BSplineSupport) -> bool {
 ///
 /// This certificate proves proximity, **not exact identity** or equivalent
 /// occupied material. Keep it separate from strict boundary signatures.
-#[must_use]
+#[must_use = "The optional certified coincident spline loci outcome must be inspected to distinguish a value from absence."]
 pub fn certified_coincident_spline_loci(
     a: &BSplineSupport,
     b: &BSplineSupport,

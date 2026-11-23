@@ -64,7 +64,7 @@ struct SkinTangent {
     straight_length_mm: f64,
 }
 
-#[must_use]
+#[must_use = "The computed detect open rectangular sweeps collection is returned and must be retained or inspected."]
 pub fn detect_open_rectangular_sweeps(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,

@@ -17,7 +17,7 @@ pub struct CadModel {
 }
 
 impl CadModel {
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new() -> Self {
         Self {
             nodes: Vec::new(),
@@ -285,7 +285,7 @@ pub enum CadNode {
 }
 
 impl CadNode {
-    #[must_use]
+    #[must_use = "The computed children collection is returned and must be retained or inspected."]
     pub fn children(&self) -> Vec<NodeId> {
         match self {
             Self::Boolean { children, .. } | Self::Assembly { children } => children.clone(),
@@ -428,7 +428,7 @@ impl Profile2d {
             .sum()
     }
 
-    #[must_use]
+    #[must_use = "The optional single polygon points outcome must be inspected to distinguish a value from absence."]
     pub fn single_polygon_points(&self) -> Option<Vec<[f64; 2]>> {
         if self.loops.len() != 1 {
             return None;
@@ -445,7 +445,7 @@ pub struct ProfileLoop {
 impl ProfileLoop {
     /// Closed polygon in the authored correspondence order. Repeated
     /// consecutive points are meaningful only to a ruled loft.
-    #[must_use]
+    #[must_use = "The optional polygon points outcome must be inspected to distinguish a value from absence."]
     pub fn polygon_points(&self) -> Option<Vec<[f64; 2]>> {
         let curves = &self.curves;
         if curves.len() < 3 {
@@ -767,7 +767,7 @@ pub struct RigidTransform {
 }
 
 impl RigidTransform {
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn identity() -> Self {
         Self {
             matrix: [
@@ -779,7 +779,7 @@ impl RigidTransform {
         }
     }
 
-    #[must_use]
+    #[must_use = "The translation transform in millimeters is returned rather than applied to geometry."]
     pub const fn translation_mm(xyz: [f64; 3]) -> Self {
         let mut result = Self::identity();
         result.matrix[0][3] = xyz[0];
