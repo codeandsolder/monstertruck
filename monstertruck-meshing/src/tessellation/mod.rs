@@ -565,87 +565,53 @@ pub fn robust_cshell_triangulation_with<
     triangulation::cshell_tessellation(shell, options.tolerance, sp, options.primitive)
 }
 
-/// Tessellates a [`CompressedTrimmedShell`] with a [`TessellationOptions`].
+/// Tessellates a compressed trimmed shell using the supplied parameter search.
+///
+/// The search callback selects exact or nearest-point behavior without
+/// duplicating the tessellation pipeline for different surface capabilities.
 #[must_use = "use the tessellated trimmed shell rather than the parametric input"]
 pub fn trimmed_cshell_triangulation_with<
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
-    S: MeshableSurface,
+    S: PreMeshableSurface,
     T: ExactTrimBoundary2D + Parallelizable,
 >(
     shell: &CompressedTrimmedShell<Point3, C, S, T>,
     options: TessellationOptions,
+    search_parameter: impl Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> + Parallelizable,
 ) -> CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>
 where
     <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
 {
     nonpositive_tolerance!(options.tolerance);
-    let sp = triangulation::search_parameter_sp::<S>(options.search_trials);
-    triangulation::trimmed_cshell_tessellation(shell, options.tolerance, sp, options.primitive)
-}
-
-/// Tessellates a [`CompressedTrimmedShell`] and emits trim-aware isoparametric curves.
-#[must_use = "retain both the trimmed-shell mesh and generated isoparametric curves"]
-pub fn compressed_trimmed_shell_triangulation_with_isoparams<
-    C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
-    S: MeshableSurface,
-    T: ExactTrimBoundary2D + Parallelizable,
->(
-    shell: &CompressedTrimmedShell<Point3, C, S, T>,
-    options: TessellationOptions,
-    isoparametric_options: IsoparametricCurveOptions,
-) -> CompressedShellTessellation
-where
-    <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
-{
-    nonpositive_tolerance!(options.tolerance);
-    let sp = triangulation::search_parameter_sp::<S>(options.search_trials);
-    triangulation::compressed_trimmed_shell_tessellation_with_isoparams(
+    triangulation::trimmed_cshell_tessellation(
         shell,
         options.tolerance,
-        sp,
+        search_parameter,
         options.primitive,
-        Some(isoparametric_options),
     )
 }
 
-/// Tessellates a [`CompressedTrimmedShell`] with robust parameter search and a [`TessellationOptions`].
-#[must_use = "use the robustly tessellated trimmed shell for downstream meshing"]
-pub fn robust_trimmed_cshell_triangulation_with<
+/// Tessellates a compressed trimmed shell and emits trim-aware isoparametric
+/// curves using the supplied exact or nearest-point parameter search.
+#[must_use = "retain both the trimmed-shell mesh and generated isoparametric curves"]
+pub fn compressed_trimmed_shell_triangulation_with_isoparams<
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
-    S: RobustMeshableSurface,
-    T: ExactTrimBoundary2D + Parallelizable,
->(
-    shell: &CompressedTrimmedShell<Point3, C, S, T>,
-    options: TessellationOptions,
-) -> CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>
-where
-    <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
-{
-    nonpositive_tolerance!(options.tolerance);
-    let sp = triangulation::search_nearest_parameter_sp::<S>(options.search_trials);
-    triangulation::trimmed_cshell_tessellation(shell, options.tolerance, sp, options.primitive)
-}
-
-/// Robustly tessellates a [`CompressedTrimmedShell`] and emits trim-aware isoparametric curves.
-#[must_use = "retain both the robust trimmed-shell mesh and its isoparametric curves"]
-pub fn robust_compressed_trimmed_shell_triangulation_with_isoparams<
-    C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
-    S: RobustMeshableSurface,
+    S: PreMeshableSurface,
     T: ExactTrimBoundary2D + Parallelizable,
 >(
     shell: &CompressedTrimmedShell<Point3, C, S, T>,
     options: TessellationOptions,
     isoparametric_options: IsoparametricCurveOptions,
+    search_parameter: impl Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> + Parallelizable,
 ) -> CompressedShellTessellation
 where
     <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
 {
     nonpositive_tolerance!(options.tolerance);
-    let sp = triangulation::search_nearest_parameter_sp::<S>(options.search_trials);
     triangulation::compressed_trimmed_shell_tessellation_with_isoparams(
         shell,
         options.tolerance,
-        sp,
+        search_parameter,
         options.primitive,
         Some(isoparametric_options),
     )
@@ -754,12 +720,14 @@ where
 {
     type MeshedShape = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
     fn triangulation(&self, tolerance: f64) -> Self::MeshedShape {
+        let options = TessellationOptions {
+            tolerance,
+            ..Default::default()
+        };
         trimmed_cshell_triangulation_with(
             self,
-            TessellationOptions {
-                tolerance,
-                ..Default::default()
-            },
+            options,
+            triangulation::search_parameter_sp::<S>(options.search_trials),
         )
     }
 }
@@ -773,12 +741,14 @@ where
 {
     type MeshedShape = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
     fn robust_triangulation(&self, tolerance: f64) -> Self::MeshedShape {
-        robust_trimmed_cshell_triangulation_with(
+        let options = TessellationOptions {
+            tolerance,
+            ..Default::default()
+        };
+        trimmed_cshell_triangulation_with(
             self,
-            TessellationOptions {
-                tolerance,
-                ..Default::default()
-            },
+            options,
+            triangulation::search_nearest_parameter_sp::<S>(options.search_trials),
         )
     }
 }
