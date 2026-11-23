@@ -7,7 +7,7 @@
 //! Subdivision tightens the bound and has a finite fail-closed work budget.
 //! This does not establish exact source equivalence or repair any STEP entity.
 
-use super::{BSplineSupport, well_conditioned};
+use super::{BSplineSupport, certified_bspline_extraction_error_mm};
 use crate::math3::{add, distance, dot, mul, norm, normalize, sub};
 use monstertruck_geometry::{proof_bezier_spans, subdivide_homogeneous_bezier};
 
@@ -20,6 +20,7 @@ struct Span {
     lo: f64,
     hi: f64,
     floor: f64,
+    extraction_error_mm: f64,
     depth: usize,
 }
 
@@ -29,7 +30,7 @@ fn cartesian(control: &[f64; 4]) -> Option<[f64; 3]> {
     (w > 0.0 && result.iter().all(|v| v.is_finite())).then_some(result)
 }
 
-fn roundoff_floor(controls: &[[f64; 4]], depth: usize) -> Option<f64> {
+fn roundoff_floor(controls: &[[f64; 4]], depth: usize, extraction_error_mm: f64) -> Option<f64> {
     let mut smallest = f64::INFINITY;
     let mut largest = 0.0_f64;
     let mut scale = 1.0_f64;
@@ -42,20 +43,24 @@ fn roundoff_floor(controls: &[[f64; 4]], depth: usize) -> Option<f64> {
     let n = f64::from(u32::try_from(controls.len()).ok()?);
     let depth = f64::from(u32::try_from(depth + 1).ok()?);
     let ratio = largest / smallest;
-    // The span extractor separately certifies at most one quarter of the
-    // original boundary proof quantum of coordinate error. Carry that
-    // certificate through every subdivision, not just fresh f64 roundoff.
+    // Retain the input-specific, fully certified NURBS extraction bound
+    // through every subdivision rather than reserving an entire quantum.
     let arithmetic = 2048.0 * f64::EPSILON * scale * ratio.powi(2) * n.powi(3);
-    let floor = arithmetic.mul_add(depth, super::POINT_Q_MM / 4.0);
+    let floor = arithmetic.mul_add(depth, extraction_error_mm);
     floor.is_finite().then_some(floor)
 }
 
 impl Span {
-    fn new(controls: Vec<[f64; 4]>, axis: [f64; 3], depth: usize) -> Option<Self> {
+    fn new(
+        controls: Vec<[f64; 4]>,
+        axis: [f64; 3],
+        depth: usize,
+        extraction_error_mm: f64,
+    ) -> Option<Self> {
         if controls.len() < 2 || depth > MAX_DEPTH {
             return None;
         }
-        let floor = roundoff_floor(&controls, depth)?;
+        let floor = roundoff_floor(&controls, depth, extraction_error_mm)?;
         // A rational curve lies in the convex hull of its positive-weight
         // Cartesian controls, regardless of knot parameterization, control
         // projection order or local backtracking. Every possible matching
@@ -75,6 +80,7 @@ impl Span {
             lo,
             hi,
             floor,
+            extraction_error_mm,
             depth,
         })
     }
@@ -82,8 +88,8 @@ impl Span {
     fn split(&self, axis: [f64; 3]) -> Option<[Self; 2]> {
         let (a, b) = subdivide_homogeneous_bezier(&self.controls)?;
         Some([
-            Self::new(a, axis, self.depth + 1)?,
-            Self::new(b, axis, self.depth + 1)?,
+            Self::new(a, axis, self.depth + 1, self.extraction_error_mm)?,
+            Self::new(b, axis, self.depth + 1, self.extraction_error_mm)?,
         ])
     }
 
@@ -97,12 +103,12 @@ impl Span {
 }
 
 fn spans(spline: &BSplineSupport, axis: [f64; 3]) -> Option<Vec<Span>> {
-    well_conditioned(spline)?;
+    let extraction_error_mm = certified_bspline_extraction_error_mm(spline)?;
     let rational = spline.rational_curve()?;
     let pieces = proof_bezier_spans(rational.non_rationalized())?;
     let spans = pieces
         .into_iter()
-        .map(|piece| Span::new(piece.controls, axis, 0))
+        .map(|piece| Span::new(piece.controls, axis, 0, extraction_error_mm))
         .collect::<Option<Vec<_>>>()?;
     for pair in spans.windows(2) {
         if distance(pair[0].end(false)?, pair[1].end(true)?) > pair[0].floor + pair[1].floor {
@@ -119,15 +125,20 @@ fn reverse(mut spans: Vec<Span>, axis: [f64; 3]) -> Option<Vec<Span>> {
         .map(|span| {
             let mut controls = span.controls;
             controls.reverse();
-            Span::new(controls, axis, span.depth)
+            Span::new(controls, axis, span.depth, span.extraction_error_mm)
         })
         .collect()
 }
 
-fn extension(endpoint: [f64; 3], step: f64, axis: [f64; 3]) -> Option<Span> {
+fn extension(
+    endpoint: [f64; 3],
+    step: f64,
+    axis: [f64; 3],
+    extraction_error_mm: f64,
+) -> Option<Span> {
     let other = add(endpoint, mul(axis, step));
     let controls = [endpoint, other].map(|p| [p[0], p[1], p[2], 1.0]);
-    Span::new(controls.to_vec(), axis, 0)
+    Span::new(controls.to_vec(), axis, 0, extraction_error_mm)
 }
 
 /// All rational controls have positive weights. Under any affine map, their
@@ -299,16 +310,37 @@ pub fn certified_coincident_spline_loci(
         return None;
     }
     if za[0] > zlo {
-        aa.insert(0, extension(a_start, zlo - za[0], axis)?);
+        aa.insert(
+            0,
+            extension(a_start, zlo - za[0], axis, aa.first()?.extraction_error_mm)?,
+        );
     }
     if zb[0] > zlo {
-        bb.insert(0, extension(bb.first()?.end(true)?, zlo - zb[0], axis)?);
+        bb.insert(
+            0,
+            extension(
+                bb.first()?.end(true)?,
+                zlo - zb[0],
+                axis,
+                bb.first()?.extraction_error_mm,
+            )?,
+        );
     }
     if za[1] < zhi {
-        aa.push(extension(a_end, zhi - za[1], axis)?);
+        aa.push(extension(
+            a_end,
+            zhi - za[1],
+            axis,
+            aa.last()?.extraction_error_mm,
+        )?);
     }
     if zb[1] < zhi {
-        bb.push(extension(bb.last()?.end(false)?, zhi - zb[1], axis)?);
+        bb.push(extension(
+            bb.last()?.end(false)?,
+            zhi - zb[1],
+            axis,
+            bb.last()?.extraction_error_mm,
+        )?);
     }
     let mut work = MAX_COMPARISONS;
     let mut bound = 0.0_f64;
@@ -363,6 +395,7 @@ pub struct SplineCapPrecisionGap {
 pub struct SplineCapPrecisionAudit {
     pub solid_id: u64,
     pub authored_uncertainty_mm: f64,
+    pub target_bound_mm: f64,
     pub strip_faces: usize,
     pub fully_certified_strip_faces: usize,
     pub cap_witnesses: Vec<SplineCapPrecisionWitness>,
@@ -439,6 +472,7 @@ pub fn audit_source_spline_cap_precision(
     source_step: &[u8],
     data_section: usize,
     solid_id: u64,
+    requested_bound_mm: Option<f64>,
 ) -> anyhow::Result<SplineCapPrecisionAudit> {
     use crate::{brep, step_graph::build_index};
     use anyhow::{Context, ensure};
@@ -459,8 +493,15 @@ pub fn audit_source_spline_cap_precision(
     let authored_uncertainty_mm = *declared
         .get(&solid_id)
         .context("missing trusted source-declared precision")?;
+    let target_bound_mm = requested_bound_mm.unwrap_or(authored_uncertainty_mm);
+    ensure!(
+        target_bound_mm.is_finite()
+            && target_bound_mm > 0.0
+            && target_bound_mm <= authored_uncertainty_mm,
+        "requested bound must be positive and no larger than author-declared STEP uncertainty",
+    );
     let mm_per_unit = crate::source_edge_locus::source_solid_length_scale_mm(solid_id, entities)?;
-    let coordinate_tolerance = authored_uncertainty_mm / mm_per_unit;
+    let coordinate_tolerance = target_bound_mm / mm_per_unit;
     ensure!(
         coordinate_tolerance.is_finite() && coordinate_tolerance > 0.0,
         "invalid source units/precision"
@@ -468,6 +509,7 @@ pub fn audit_source_spline_cap_precision(
     let mut audit = SplineCapPrecisionAudit {
         solid_id,
         authored_uncertainty_mm,
+        target_bound_mm,
         strip_faces: 0,
         fully_certified_strip_faces: 0,
         cap_witnesses: Vec::new(),
@@ -589,7 +631,7 @@ mod tests {
         let [solid] = solids.as_slice() else {
             anyhow::bail!("expected a single source solid");
         };
-        let report = audit_source_spline_cap_precision(original, 0, *solid)?;
+        let report = audit_source_spline_cap_precision(original, 0, *solid, None)?;
         assert_eq!(report.strip_faces, 13);
         assert_eq!(report.fully_certified_strip_faces, 13);
         assert_eq!(report.cap_witnesses.len(), 26);
@@ -606,11 +648,50 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing precision evidence"))?;
         assert!(maximum <= report.authored_uncertainty_mm);
 
+        let strict =
+            audit_source_spline_cap_precision(original, 0, *solid, Some(super::super::TOL))?;
+        eprintln!(
+            "strict boundary quantum={} mm, certified={}/{} caps={}, worst={} mm",
+            super::super::TOL,
+            strict.fully_certified_strip_faces,
+            strict.strip_faces,
+            strict.cap_witnesses.len(),
+            strict
+                .cap_witnesses
+                .iter()
+                .map(|w| w.bound_mm)
+                .fold(0.0_f64, f64::max),
+        );
+        assert_eq!(strict.fully_certified_strip_faces, 13);
+        assert_eq!(strict.cap_witnesses.len(), 26);
+        assert!(
+            strict
+                .cap_witnesses
+                .iter()
+                .all(|cap| cap.bound_mm <= super::super::TOL)
+        );
+        // The bound must be meaningful, not a tolerance-independent
+        // acceptance of every author-declared STEP curve mismatch.
+        let sub_angstrom = audit_source_spline_cap_precision(original, 0, *solid, Some(1.0e-10))?;
+        assert_eq!(sub_angstrom.strip_faces, 13);
+        assert!(sub_angstrom.fully_certified_strip_faces < strict.fully_certified_strip_faces);
+        assert!(audit_source_spline_cap_precision(original, 0, *solid, Some(0.0)).is_err());
+        assert!(
+            audit_source_spline_cap_precision(
+                original,
+                0,
+                *solid,
+                Some(2.0 * report.authored_uncertainty_mm)
+            )
+            .is_err()
+        );
+
         let original_utf8 = std::str::from_utf8(original)?;
         let micron_precision =
             original_utf8.replacen("LENGTH_MEASURE(0.00001)", "LENGTH_MEASURE(0.000000001)", 1);
         assert_ne!(micron_precision, original_utf8);
-        let narrow = audit_source_spline_cap_precision(micron_precision.as_bytes(), 0, *solid)?;
+        let narrow =
+            audit_source_spline_cap_precision(micron_precision.as_bytes(), 0, *solid, None)?;
         assert_eq!(narrow.authored_uncertainty_mm, 1.0e-9);
         assert!(narrow.fully_certified_strip_faces < report.fully_certified_strip_faces);
         assert_eq!(
@@ -622,16 +703,18 @@ mod tests {
             "NOT_AN_UNCERTAINTY_CONTEXT",
             1,
         );
-        assert!(audit_source_spline_cap_precision(absent_context.as_bytes(), 0, *solid).is_err());
+        assert!(
+            audit_source_spline_cap_precision(absent_context.as_bytes(), 0, *solid, None).is_err()
+        );
         let housing =
             include_bytes!("../../../validation/fixtures/native_relief_housing_0914dda4.step");
-        let independent = audit_source_spline_cap_precision(housing, 0, 4138)?;
+        let independent = audit_source_spline_cap_precision(housing, 0, 4138, None)?;
         assert_eq!(independent.strip_faces, 112);
         assert_eq!(independent.fully_certified_strip_faces, 112);
         assert!(independent.unresolved_strip_faces.is_empty());
         let oblique =
             include_bytes!("../../../validation/fixtures/native_relief_oblique_8ddfec04.step");
-        let independent_oblique = audit_source_spline_cap_precision(oblique, 0, 5442)?;
+        let independent_oblique = audit_source_spline_cap_precision(oblique, 0, 5442, None)?;
         assert_eq!(independent_oblique.strip_faces, 98);
         assert_eq!(independent_oblique.fully_certified_strip_faces, 98);
         assert!(independent_oblique.unresolved_strip_faces.is_empty());

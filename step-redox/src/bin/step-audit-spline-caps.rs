@@ -14,6 +14,9 @@ struct Cli {
     solid_id: u64,
     #[arg(long, default_value_t = 0)]
     data_section: usize,
+    /// Stricter geometric bound in mm, never above the source-declared uncertainty.
+    #[arg(long)]
+    target_bound_mm: Option<f64>,
     /// Fail if at least one source spline-strip face lacks both certified caps.
     #[arg(long)]
     require_complete: bool,
@@ -23,7 +26,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let bytes = std::fs::read(&cli.input)
         .with_context(|| format!("read source STEP {}", cli.input.display()))?;
-    let audit = audit_source_spline_cap_precision(&bytes, cli.data_section, cli.solid_id)?;
+    let audit = audit_source_spline_cap_precision(
+        &bytes,
+        cli.data_section,
+        cli.solid_id,
+        cli.target_bound_mm,
+    )?;
     serde_json::to_writer_pretty(std::io::stdout().lock(), &audit)?;
     println!();
     if cli.require_complete {
@@ -51,10 +59,13 @@ mod tests {
             "--data-section",
             "1",
             "--require-complete",
+            "--target-bound-mm",
+            "0.0000004",
         ])?;
         assert_eq!(parsed.solid_id, 100);
         assert_eq!(parsed.data_section, 1);
         assert!(parsed.require_complete);
+        assert_eq!(parsed.target_bound_mm, Some(4.0e-7));
         Ok(())
     }
 }
