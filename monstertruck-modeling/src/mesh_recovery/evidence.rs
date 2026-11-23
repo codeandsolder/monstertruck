@@ -12,6 +12,10 @@ use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use std::collections::{HashMap, HashSet};
 
+mod support;
+use support::build_support_interfaces;
+pub use support::{SupportBoundaryTopology, SupportInterface};
+
 /// Thresholds only for feature discovery and direction clustering.
 #[derive(Clone, Copy, Debug)]
 pub struct EvidenceOptions {
@@ -162,6 +166,42 @@ pub struct PlanarSupport {
     pub max_normal_angle_radians: f64,
 }
 
+/// Three observed planar supports whose central support touches both
+/// neighbors along two source boundary components.
+///
+/// These measurements are useful for finding a smoothly rotating normal
+/// sequence (for example a polygonal chord approximation of a curved surface)
+/// without assuming a cylinder, torus or other source primitive.
+#[derive(Clone, Debug)]
+pub struct SupportNormalRotationEvidence {
+    /// Middle support and its two neighbors, in the requested interface order.
+    pub center_support: usize,
+    pub neighbor_supports: [usize; 2],
+    /// The two interface component IDs used by this local observation.
+    pub interface_indices: [usize; 2],
+    /// Canonical reference direction from the first interface's longest edge.
+    pub reference_direction: Vector3,
+    /// Difference between the two interfaces' undirected seed directions.
+    pub interface_axis_residual_radians: f64,
+    /// Actual source normal-turn angles across both interfaces.
+    pub turn_radians: [f64; 2],
+    /// Absolute mismatch between successive source-normal turn magnitudes.
+    pub turn_magnitude_mismatch_radians: f64,
+    /// Both normal rotations have the same signed sense around the reference
+    /// axis, independent of the order in which the two interfaces are supplied.
+    pub coherent_rotation: bool,
+    /// Largest absolute dot product between reference axis and the normals
+    /// of the three support seed planes; zero means all are transverse.
+    pub max_normal_axis_dot: f64,
+    /// Perpendicular distance from the second interface's first point to
+    /// the first seed line; not the global distance for nonparallel axes.
+    pub transverse_interface_separation: f64,
+    /// Largest absolute departure from the seed line across both boundaries.
+    pub max_interface_seed_line_offset: f64,
+    /// Largest undirected source segment angular spread from either seed.
+    pub max_interface_segment_spread_radians: f64,
+}
+
 /// Reusable primitive-free geometric evidence for a source mesh.
 #[derive(Debug)]
 pub struct MeshEvidence {
@@ -177,6 +217,12 @@ pub struct MeshEvidence {
     pub planar_supports: Vec<PlanarSupport>,
     /// Index into the planar-support list for each original source polygon.
     pub source_planar_support: Vec<usize>,
+    /// Connected interfaces between different planar-support regions.
+    /// These are source topology facts and measurements, not designed seams.
+    pub support_interfaces: Vec<SupportInterface>,
+    /// Interface IDs incident to each region, retaining disconnected
+    /// interfaces between the same pair as distinct boundary components.
+    pub support_interface_indices: Vec<Vec<usize>>,
     /// Locally coplanar triangulation edges not included as features.
     pub suppressed_interior_edge_count: usize,
     /// Retained edges used by more than two source polygons.
@@ -203,6 +249,81 @@ impl MeshEvidence {
             *self.source_planar_support.get(first)?,
             *self.source_planar_support.get(second)?,
         ])
+    }
+
+    /// Measure a potential smooth normal-rotation continuation through a
+    /// central support, using two distinct adjacent source interfaces.
+    ///
+    /// This is a lazy local relation rather than a quadratic matrix of
+    /// candidate surface tracks. A match is not evidence that the original
+    /// designer used an analytic curved surface: it can also describe a
+    /// deliberately faceted design.
+    #[must_use]
+    pub fn support_normal_rotation(
+        &self,
+        center: usize,
+        first: usize,
+        second: usize,
+    ) -> Option<SupportNormalRotationEvidence> {
+        if first == second || self.planar_supports.get(center).is_none() {
+            return None;
+        }
+        let [a, b] = [
+            self.support_interfaces.get(first)?,
+            self.support_interfaces.get(second)?,
+        ];
+        let neighbor_of = |interface: &SupportInterface| {
+            if interface.supports[0] == center {
+                Some(interface.supports[1])
+            } else if interface.supports[1] == center {
+                Some(interface.supports[0])
+            } else {
+                None
+            }
+        };
+        let [neighbor_a, neighbor_b] = [neighbor_of(a)?, neighbor_of(b)?];
+        if neighbor_a == neighbor_b {
+            return None;
+        }
+        let axis = a.seed_direction;
+        let second_axis = b.seed_direction;
+        let interface_axis_residual_radians = axis
+            .cross(second_axis)
+            .magnitude()
+            .atan2(axis.dot(second_axis).abs());
+        let [left, middle, right] = [
+            self.planar_supports.get(neighbor_a)?.normal,
+            self.planar_supports.get(center)?.normal,
+            self.planar_supports.get(neighbor_b)?.normal,
+        ];
+        let normal_angle = |first: Vector3, second: Vector3| {
+            first.cross(second).magnitude().atan2(first.dot(second))
+        };
+        let turn_radians = [normal_angle(left, middle), normal_angle(middle, right)];
+        let signed_first = axis.dot(left.cross(middle));
+        let signed_second = axis.dot(middle.cross(right));
+        let reference_origin = self.positions[*a.source_edges.first()?.first()?];
+        let second_origin = self.positions[*b.source_edges.first()?.first()?];
+        Some(SupportNormalRotationEvidence {
+            center_support: center,
+            neighbor_supports: [neighbor_a, neighbor_b],
+            interface_indices: [first, second],
+            reference_direction: axis,
+            interface_axis_residual_radians,
+            turn_radians,
+            turn_magnitude_mismatch_radians: (turn_radians[0] - turn_radians[1]).abs(),
+            coherent_rotation: signed_first * signed_second > 0.0,
+            max_normal_axis_dot: [left, middle, right]
+                .into_iter()
+                .map(|normal| axis.dot(normal).abs())
+                .fold(0.0_f64, f64::max),
+            transverse_interface_separation: ((second_origin - reference_origin).cross(axis))
+                .magnitude(),
+            max_interface_seed_line_offset: a.max_seed_line_offset.max(b.max_seed_line_offset),
+            max_interface_segment_spread_radians: a
+                .max_seed_direction_spread_radians
+                .max(b.max_seed_direction_spread_radians),
+        })
     }
 
     /// Compare the infinite support lines of any two recovered feature
@@ -563,6 +684,9 @@ fn planar_supports(
             neighbors[*second].push(*first);
         }
     }
+    for adjacent in &mut neighbors {
+        adjacent.sort_unstable();
+    }
     let (membership, groups) = segment_patches(polygons, positions, &neighbors, options);
     let supports = groups
         .into_iter()
@@ -649,6 +773,13 @@ pub fn analyze_mesh_evidence(
     } = select_edges(&polygons, &incidence, options);
     let (source_planar_support, planar_supports) =
         planar_supports(&polygons, &positions, &incidence, options.planar_support);
+    let (support_interfaces, support_interface_indices) = build_support_interfaces(
+        &positions,
+        &polygons,
+        &incidence,
+        &source_planar_support,
+        planar_supports.len(),
+    );
     let chains = trace_chains(&positions, &edges);
     let parallel_bundles = parallel_bundles(&positions, &chains, options);
     Ok(MeshEvidence {
@@ -658,6 +789,8 @@ pub fn analyze_mesh_evidence(
         parallel_bundles,
         planar_supports,
         source_planar_support,
+        support_interfaces,
+        support_interface_indices,
         suppressed_interior_edge_count: suppressed_coplanar,
         non_manifold_edge_count: non_manifold,
         inconsistent_winding_edge_count: winding_conflicts,

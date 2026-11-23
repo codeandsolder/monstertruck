@@ -585,3 +585,111 @@ fn concave_polygon_support_uses_oriented_area_not_absolute_fan_triangles() {
     assert!((evidence.planar_supports[0].area - 2.5).abs() < 1.0e-12);
     assert_eq!(evidence.edges.len(), 5);
 }
+
+#[test]
+fn cube_support_interfaces_form_exact_original_shared_edges() {
+    let mesh = unit_box_mesh();
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    assert_eq!(evidence.planar_supports.len(), 6);
+    assert_eq!(evidence.support_interfaces.len(), 12);
+    assert_eq!(evidence.support_interface_indices.len(), 6);
+    let mut seen = std::collections::HashSet::new();
+    for interface in &evidence.support_interfaces {
+        assert!(interface.supports[0] < interface.supports[1]);
+        assert_eq!(interface.topology, SupportBoundaryTopology::OpenPath);
+        assert_eq!(interface.source_edges.len(), 1);
+        assert_eq!(interface.source_polygon_pairs.len(), 1);
+        assert!(seen.insert(interface.source_edges[0]));
+        assert!((interface.boundary_length - 1.0).abs() < 1.0e-12);
+        assert!((interface.mean_turn_radians - std::f64::consts::FRAC_PI_2).abs() < 1.0e-12);
+        assert!(interface.max_seed_line_offset < 1.0e-12);
+        assert!(interface.max_seed_direction_spread_radians < 1.0e-12);
+        for (region, &polygon) in interface
+            .supports
+            .iter()
+            .zip(&interface.source_polygon_pairs[0])
+        {
+            assert_eq!(evidence.source_planar_support[polygon], *region);
+        }
+    }
+    assert!(
+        evidence
+            .support_interface_indices
+            .iter()
+            .all(|ids| ids.len() == 4)
+    );
+}
+
+#[test]
+fn ambiguous_source_edge_incidence_does_not_produce_fake_interfaces() {
+    let source = make_mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        &[[0, 1, 2], [1, 0, 3], [0, 1, 4]],
+    );
+    let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default()).unwrap();
+    assert_eq!(evidence.non_manifold_edge_count, 1);
+    assert!(evidence.support_interfaces.is_empty());
+    assert!(evidence.support_interface_indices.iter().all(Vec::is_empty));
+}
+
+#[test]
+fn cylinder_wall_reveals_repeated_coherent_normal_rotation_without_primitive_fitting() {
+    let source = monstertruck_mesh::stl::read(
+        &include_bytes!(
+            "../../../../monstertruck-io/tests/fixtures/mesh-recovery/through-hole-32.stl"
+        )[..],
+        monstertruck_mesh::stl::StlType::Automatic,
+    )
+    .unwrap();
+    let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default()).unwrap();
+    let mut coherent_axial = 0;
+    for (center, interfaces) in evidence.support_interface_indices.iter().enumerate() {
+        for (i, &first) in interfaces.iter().enumerate() {
+            for &second in &interfaces[i + 1..] {
+                let Some(observation) = evidence.support_normal_rotation(center, first, second)
+                else {
+                    continue;
+                };
+                let z = observation.reference_direction.dot(Vector3::unit_z()).abs();
+                if z < 0.99999 || !observation.coherent_rotation {
+                    continue;
+                }
+                if observation.interface_axis_residual_radians > 1.0e-4
+                    || observation.max_normal_axis_dot > 1.0e-4
+                    || observation.turn_magnitude_mismatch_radians > 1.0e-4
+                {
+                    continue;
+                }
+                let expected_turn = std::f64::consts::TAU / 32.0;
+                if (observation.turn_radians[0] - expected_turn).abs() < 1.0e-3
+                    && (observation.turn_radians[1] - expected_turn).abs() < 1.0e-3
+                {
+                    coherent_axial += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        coherent_axial >= 24,
+        "found {coherent_axial} coherent wall strips"
+    );
+}
+
+#[test]
+fn normal_rotation_requires_distinct_center_incident_interfaces() {
+    let evidence = analyze_mesh_evidence(&unit_box_mesh(), EvidenceOptions::default()).unwrap();
+    assert!(evidence.support_normal_rotation(0, 0, 0).is_none());
+    assert!(evidence.support_normal_rotation(usize::MAX, 0, 1).is_none());
+    assert!(evidence.support_normal_rotation(0, usize::MAX, 1).is_none());
+    for (index, interface) in evidence.support_interfaces.iter().enumerate() {
+        if !interface.supports.contains(&0) {
+            assert!(evidence.support_normal_rotation(0, index, 0).is_none());
+        }
+    }
+}

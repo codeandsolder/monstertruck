@@ -9,6 +9,7 @@ use monstertruck_modeling::mesh_recovery::{
     EvidenceOptions, FeatureEdgeKind, MeshEvidence, analyze_mesh_evidence,
 };
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::{self, BufReader, Write};
@@ -54,6 +55,210 @@ struct NativeFaceLabels {
     polygon_face_ids: Vec<usize>,
     /// Original surface family for each CAD face.
     surface_types: Vec<String>,
+}
+
+fn support_interface_summary(evidence: &MeshEvidence) -> Value {
+    let mut paths = 0;
+    let mut loops = 0;
+    let mut branches = 0;
+    let mut source_edge_count = 0;
+    let mut curved_multi_segment_interfaces = 0;
+    for interface in &evidence.support_interfaces {
+        match interface.topology {
+            monstertruck_modeling::mesh_recovery::SupportBoundaryTopology::OpenPath => paths += 1,
+            monstertruck_modeling::mesh_recovery::SupportBoundaryTopology::ClosedLoop => loops += 1,
+            monstertruck_modeling::mesh_recovery::SupportBoundaryTopology::Branched => {
+                branches += 1
+            }
+        }
+        source_edge_count += interface.source_edges.len();
+        if interface.source_edges.len() >= 3 && interface.max_seed_direction_spread_radians > 1.0e-4
+        {
+            curved_multi_segment_interfaces += 1;
+        }
+    }
+    json!({
+        "connected_components": evidence.support_interfaces.len(),
+        "source_contact_edges": source_edge_count,
+        "open_paths": paths,
+        "closed_loops": loops,
+        "branches": branches,
+        "curved_multi_segment_interfaces": curved_multi_segment_interfaces,
+        "max_region_contact_degree": evidence.support_interface_indices
+            .iter().map(Vec::len).max().unwrap_or(0),
+        "regions_degree_2_to_8": evidence.support_interface_indices
+            .iter().filter(|ids| (2..=8).contains(&ids.len())).count(),
+        "regions_degree_over_16": evidence.support_interface_indices
+            .iter().filter(|ids| ids.len() > 16).count(),
+        "regions_degree_over_64": evidence.support_interface_indices
+            .iter().filter(|ids| ids.len() > 64).count(),
+    })
+}
+
+/// Evaluate native-face disagreement for source-interface components without
+/// assuming a primitive surface or consuming truth during region extraction.
+fn native_interface_error_examples(evidence: &MeshEvidence, labels: &[usize]) -> Vec<Value> {
+    let selected_edges = evidence
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == FeatureEdgeKind::Dihedral)
+        .map(|edge| edge.vertices)
+        .collect::<HashSet<_>>();
+    let mut examples = Vec::new();
+    for interface in &evidence.support_interfaces {
+        let [a, b] = interface.supports;
+        let region_a = &evidence.planar_supports[a];
+        let region_b = &evidence.planar_supports[b];
+        if region_a.source_face_indices.len() < 3 && region_b.source_face_indices.len() < 3 {
+            continue;
+        }
+        let mut false_edges = 0;
+        let mut true_edges = 0;
+        for (&edge, &[left, right]) in interface
+            .source_edges
+            .iter()
+            .zip(&interface.source_polygon_pairs)
+        {
+            if !selected_edges.contains(&edge) {
+                continue;
+            }
+            if labels[left] == labels[right] {
+                false_edges += 1;
+            } else {
+                true_edges += 1;
+            }
+        }
+        if false_edges == 0 {
+            continue;
+        }
+        examples.push(json!({
+            "false_edges": false_edges,
+            "true_edges": true_edges,
+            "support_sizes": [region_a.source_face_indices.len(), region_b.source_face_indices.len()],
+            "support_areas": [region_a.area, region_b.area],
+            "boundary_length": interface.boundary_length,
+            "turn_mean_degrees": interface.mean_turn_radians.to_degrees(),
+            "turn_min_degrees": interface.min_turn_radians.to_degrees(),
+            "turn_max_degrees": interface.max_turn_radians.to_degrees(),
+            "max_line_offset": interface.max_seed_line_offset,
+            "max_tangent_spread_degrees": interface.max_seed_direction_spread_radians.to_degrees(),
+            "source_segment_count": interface.source_edges.len(),
+            "topology": format!("{:?}", interface.topology),
+        }));
+    }
+    examples.sort_unstable_by(|a, b| {
+        b["false_edges"]
+            .as_u64()
+            .cmp(&a["false_edges"].as_u64())
+            .then_with(|| {
+                b["source_segment_count"]
+                    .as_u64()
+                    .cmp(&a["source_segment_count"].as_u64())
+            })
+    });
+    examples.truncate(12);
+    examples
+}
+
+/// Compare geometric normal-rotation hypotheses with independent native CAD
+/// face IDs. The geometry code never sees the labels or these study thresholds.
+fn native_normal_rotation_reference(evidence: &MeshEvidence, labels: &[usize]) -> Value {
+    let native_per_support = evidence
+        .planar_supports
+        .iter()
+        .map(|support| {
+            let first = support
+                .source_face_indices
+                .first()
+                .map(|&face| labels[face])?;
+            support
+                .source_face_indices
+                .iter()
+                .all(|&face| labels[face] == first)
+                .then_some(first)
+        })
+        .collect::<Vec<_>>();
+    let mut compared = 0_usize;
+    let mut all_reference = [0_usize; 3]; // Same source face / other faces / mixed.
+    let mut aligned = 0;
+    let mut coherent = 0;
+    let mut rotating = [0_usize; 3]; // All / same CAD face / different CAD faces.
+    let mut small_turn = [0_usize; 3];
+    for (center, interfaces) in evidence.support_interface_indices.iter().enumerate() {
+        for (i, &first) in interfaces.iter().enumerate() {
+            for &second in &interfaces[i + 1..] {
+                let Some(measured) = evidence.support_normal_rotation(center, first, second) else {
+                    continue;
+                };
+                compared += 1;
+                let triplet = [
+                    native_per_support[center],
+                    native_per_support[measured.neighbor_supports[0]],
+                    native_per_support[measured.neighbor_supports[1]],
+                ];
+                let valid = triplet.iter().all(Option::is_some);
+                let same_source = valid && triplet[0] == triplet[1] && triplet[1] == triplet[2];
+                if same_source {
+                    all_reference[0] += 1;
+                } else if valid {
+                    all_reference[1] += 1;
+                } else {
+                    all_reference[2] += 1;
+                }
+                if measured.interface_axis_residual_radians > 1_f64.to_radians()
+                    || measured.max_interface_segment_spread_radians > 1_f64.to_radians()
+                {
+                    continue;
+                }
+                aligned += 1;
+                if !measured.coherent_rotation {
+                    continue;
+                }
+                coherent += 1;
+                let max_turn = measured.turn_radians[0].max(measured.turn_radians[1]);
+                if max_turn < 1.0e-6
+                    || measured.turn_magnitude_mismatch_radians > max_turn * 0.2
+                    || measured.max_normal_axis_dot > 0.1
+                {
+                    continue;
+                }
+                rotating[0] += 1;
+                if same_source {
+                    rotating[1] += 1;
+                } else if valid {
+                    rotating[2] += 1;
+                }
+                if max_turn < 30_f64.to_radians() {
+                    small_turn[0] += 1;
+                    if same_source {
+                        small_turn[1] += 1;
+                    } else if valid {
+                        small_turn[2] += 1;
+                    }
+                }
+            }
+        }
+    }
+    json!({
+        "all_local_pairs": compared,
+        "all_native_reference": {
+            "within_one_native_face": all_reference[0],
+            "crossing_native_faces": all_reference[1],
+            "mixed_source_region_labels": all_reference[2],
+        },
+        "near_parallel_interface_pairs": aligned,
+        "aligned_coherent_rotation_pairs": coherent,
+        "near_parallel_equal_normal_turn": {
+            "all": rotating[0], "within_one_native_face": rotating[1],
+            "crossing_native_faces": rotating[2],
+            "mixed_source_region_labels": rotating[0] - rotating[1] - rotating[2],
+        },
+        "same_but_turn_below_30_deg": {
+            "all": small_turn[0], "within_one_native_face": small_turn[1],
+            "crossing_native_faces": small_turn[2],
+            "mixed_source_region_labels": small_turn[0] - small_turn[1] - small_turn[2],
+        },
+    })
 }
 
 /// Load independently supplied CAD face identities; missing sidecars mean
@@ -186,6 +391,8 @@ fn evaluate_native_face_labels(
         "candidate_false_native": supported_candidates - candidates_on_native,
         "candidate_true_surface_type": candidates_on_changed_type,
         "angle_baselines": baseline,
+        "false_candidate_interface_examples": native_interface_error_examples(evidence, &labels),
+        "normal_rotation_reference": native_normal_rotation_reference(evidence, &labels),
         "planar_or_30_degree_union": {
             "selected": union[0],
             "true_native": union[1],
@@ -291,6 +498,7 @@ fn analyze_file(path: &Path) -> Value {
                 "chains": evidence.chains.len(),
                 "chain_segment_total": total_segments,
                 "parallel_groups": evidence.parallel_bundles.len(),
+                "support_interfaces": support_interface_summary(&evidence),
                 "planar_regions": evidence.planar_supports.len(),
                 "planar_regions_multi_facet": evidence
                     .planar_supports.iter().filter(|region| region.source_face_indices.len() >= 3).count(),
