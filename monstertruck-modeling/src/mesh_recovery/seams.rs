@@ -10,55 +10,32 @@ use crate::{InnerSpace, Point3};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 
-/// Numerical roundoff bound for an already-existing vertex on a line.
-///
-/// Deliberately depends on floating-point resolution and coordinate scale,
-/// not the user fitting tolerance. Replacing a slightly curved edge by a
-/// line based on an approximate fit would change the input solid.
-fn line_roundoff(a: Point3, b: Point3, p: Point3) -> f64 {
-    let scale = [
-        a.x.abs(),
-        a.y.abs(),
-        a.z.abs(),
-        b.x.abs(),
-        b.y.abs(),
-        b.z.abs(),
-        p.x.abs(),
-        p.y.abs(),
-        p.z.abs(),
-        (b - a).magnitude(),
-        (p - a).magnitude(),
-    ]
-    .into_iter()
-    .fold(0.0_f64, f64::max);
-    8.0 * f64::EPSILON * scale
-}
-
-/// Returns the coordinate along the directed segment if the point is strictly
-/// interior and geometrically on it to arithmetic roundoff.
-fn on_segment(a: Point3, b: Point3, p: Point3) -> Option<f64> {
-    let delta = b - a;
-    let length_squared = delta.magnitude2();
-    if length_squared <= 0.0 || !length_squared.is_finite() {
-        return None;
-    }
-    let along = (p - a).dot(delta) / length_squared;
-    if !(0.0..1.0).contains(&along) {
-        return None;
-    }
-    on_line(a, b, p).then_some(along)
-}
-
-/// Only a vertex with a collinear incident polygon edge can split another
-/// polygon edge. An isolated point contact is not a shared mesh seam.
+/// The three projected 2D orientation tests certify collinearity in 3D
+/// using adaptive exact predicates for the *stored f64 input coordinates*.
+/// A fitted near-line is intentionally not a shared topological edge.
 fn on_line(a: Point3, b: Point3, p: Point3) -> bool {
+    use robust::{Coord, orient2d};
+    let xy = |v: Point3| Coord { x: v.x, y: v.y };
+    let xz = |v: Point3| Coord { x: v.x, y: v.z };
+    let yz = |v: Point3| Coord { x: v.y, y: v.z };
+    orient2d(xy(a), xy(b), xy(p)) == 0.0
+        && orient2d(xz(a), xz(b), xz(p)) == 0.0
+        && orient2d(yz(a), yz(b), yz(p)) == 0.0
+}
+
+/// Returns the coordinate along the directed segment only for a strictly
+/// interior vertex exactly collinear with the source f64 endpoints.
+fn on_segment(a: Point3, b: Point3, p: Point3) -> Option<f64> {
+    if !on_line(a, b, p) {
+        return None;
+    }
     let delta = b - a;
     let length_squared = delta.magnitude2();
     if length_squared <= 0.0 || !length_squared.is_finite() {
-        return false;
+        return None;
     }
     let along = (p - a).dot(delta) / length_squared;
-    (p - a - delta * along).magnitude() <= line_roundoff(a, b, p)
+    (0.0..1.0).contains(&along).then_some(along)
 }
 
 /// Input mesh polygons may share a geometric seam with different subdivisions.

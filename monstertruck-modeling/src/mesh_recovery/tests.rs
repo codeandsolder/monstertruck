@@ -494,3 +494,30 @@ fn point_only_contact_on_an_edge_does_not_create_a_false_seam() {
             .all(|p| p.boundary_loops[0].len() == 3)
     );
 }
+
+#[test]
+fn large_coordinate_offsets_do_not_turn_a_nearby_parallel_edge_into_a_seam() {
+    // At 1e12, a naive 8*epsilon*coordinate tolerance is about 0.0018:
+    // larger than this genuine 0.0009765625 gap. Exact orientation predicates
+    // must distinguish it even though the coordinates themselves are large.
+    let base = 1.0e12;
+    let source = mesh(
+        &[
+            [base, base, 0.0],
+            [base + 1.0, base, 0.0],
+            [base, base + 1.0, 0.0],
+            [base + 0.5, base - 0.001, 0.0],
+            [base + 0.75, base - 0.001, 0.0],
+            [base + 0.5, base - 0.5, 0.0],
+        ],
+        &[[0, 1, 2], [3, 5, 4]],
+    );
+    let recovered = recover_planar_mesh(&source, PlanarRecoveryOptions::default()).unwrap();
+    assert_eq!(recovered.patches.len(), 2);
+    assert!(
+        recovered
+            .patches
+            .iter()
+            .all(|p| p.boundary_loops[0].len() == 3)
+    );
+}

@@ -19,6 +19,7 @@ font = ["dep:ttf-parser"]
 derive_more = { workspace = true }
 itertools = { workspace = true }
 rustc-hash = { workspace = true }
+robust = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
