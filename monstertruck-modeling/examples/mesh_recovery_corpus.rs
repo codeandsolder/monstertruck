@@ -587,7 +587,7 @@ fn native_vector3(surface: &Value, field: &str) -> Result<Option<[f64; 3]>, Stri
     let [x, y, z] = numbers.as_slice() else {
         return Err(format!("native {field} must contain exactly three numbers"));
     };
-    let coordinates = [x, y, z].map(|value| value.as_f64());
+    let coordinates = [x, y, z].map(Value::as_f64);
     let [Some(x), Some(y), Some(z)] = coordinates else {
         return Err(format!("native {field} must contain numbers"));
     };
@@ -618,14 +618,30 @@ fn native_cylinder_spatial_error(
         let dz = fit.axis_origin.z - cz;
         // A point-to-original-axis distance: invariant to the arbitrary
         // longitudinal location of the fitted axis origin.
-        let distance = ((dy * az - dz * ay).powi(2)
-            + (dz * ax - dx * az).powi(2)
-            + (dx * ay - dy * ax).powi(2))
-        .sqrt();
+        let cross_x = dz.mul_add(-ay, dy * az);
+        let cross_y = dx.mul_add(-az, dz * ax);
+        let cross_z = dy.mul_add(-ax, dx * ay);
+        let distance = cross_x.hypot(cross_y).hypot(cross_z);
         max_axis_line_error = max_axis_line_error.max(distance / radius);
         max_radius_error = max_radius_error.max((fit.mean_sample_radius - radius).abs() / radius);
     }
     Some((max_axis_line_error, max_radius_error))
+}
+
+/// CAD surface-family provenance of an entire original source-support track.
+/// Identical original families can still represent different actual faces.
+fn native_track_surface_family(
+    native_ids: &std::collections::BTreeSet<usize>,
+    families: &[String],
+) -> String {
+    let Some(&first) = native_ids.first() else {
+        return "EmptyNativeSource".to_owned();
+    };
+    if native_ids.iter().all(|&id| families[id] == families[first]) {
+        families[first].clone()
+    } else {
+        "MixedNativeSurfaceFamilies".to_owned()
+    }
 }
 
 /// Native-CAD-only reference checks and deliberately exploratory filtering
@@ -650,15 +666,7 @@ fn native_spatial_track_reference(
             continue;
         };
         let native = track_native_face_ids(evidence, track, &native_labels.polygon_face_ids);
-        let kinds = native
-            .iter()
-            .map(|&id| native_labels.surface_types[id].as_str())
-            .collect::<std::collections::BTreeSet<_>>();
-        let kind = if kinds.len() == 1 {
-            kinds.first().copied().unwrap_or("Unknown").to_owned()
-        } else {
-            "MixedNativeSurfaceFamilies".to_owned()
-        };
+        let kind = native_track_surface_family(&native, &native_labels.surface_types);
         let radial_consistent = fit.relative_max_sample_radial_residual <= 0.01;
         let plane_consistent =
             fit.max_support_plane_offset_residual / fit.mean_sample_radius <= 0.01;
