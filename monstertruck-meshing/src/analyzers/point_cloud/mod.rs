@@ -1,4 +1,5 @@
 use crate::common::point_segment_distance2;
+use array_macro::array;
 
 use super::{
     BoundingBox, EuclideanSpace, InnerSpace, KERNEL_EPSILON, MetricSpace, Origin, Point3,
@@ -56,7 +57,14 @@ impl WithPointCloud for PolygonMesh {
         let Some(point_cloud) = HashedPointCloud::from_points(point_cloud, tol * 2.0) else {
             return false;
         };
-        point_cloud.distance2(&self) < tol * tol
+        // Covering every face is equivalent to the maximum of their nearest
+        // distances being below tolerance, but permits early rejection.
+        let mut triangles = self.faces().triangle_iter().peekable();
+        triangles.peek().is_some()
+            && triangles.all(|tri| {
+                let triangle = array![i => self.positions()[tri[i].pos]; 3];
+                point_cloud.distance2(&triangle) < tol * tol
+            })
     }
     #[inline]
     fn collide_with_neighborhood_of(&self, point_cloud: &[Point3], tol: f64) -> bool {
