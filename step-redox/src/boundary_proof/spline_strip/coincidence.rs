@@ -353,6 +353,7 @@ mod tests {
         assert_eq!(report.strip_faces, 13);
         assert_eq!(report.fully_certified_strip_faces, 13);
         assert_eq!(report.cap_witnesses.len(), 26);
+        assert!(report.unresolved_strip_faces.is_empty());
         assert_eq!(
             report.authored_uncertainty_mm.to_bits(),
             1.0e-5_f64.to_bits()
@@ -372,6 +373,23 @@ mod tests {
         let narrow = audit_source_spline_cap_precision(micron_precision.as_bytes(), 0, *solid)?;
         assert_eq!(narrow.authored_uncertainty_mm, 1.0e-9);
         assert!(narrow.fully_certified_strip_faces < report.fully_certified_strip_faces);
+        assert_eq!(
+            narrow.unresolved_strip_faces.len(),
+            narrow.strip_faces - narrow.fully_certified_strip_faces
+        );
+        let absent_context = original_utf8.replacen(
+            "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT",
+            "NOT_AN_UNCERTAINTY_CONTEXT",
+            1,
+        );
+        assert!(audit_source_spline_cap_precision(absent_context.as_bytes(), 0, *solid).is_err());
+        let housing =
+            include_bytes!("../../../validation/fixtures/native_relief_housing_0914dda4.step");
+        let independent = audit_source_spline_cap_precision(housing, 0, 4138)?;
+        assert_eq!(independent.strip_faces, 112);
+        assert_eq!(independent.fully_certified_strip_faces, 110);
+        assert_eq!(independent.unresolved_strip_faces.len(), 2);
+
         eprintln!(
             "manufacturer: {} source strip faces, {} independently bounded caps, max certified {} mm / source {} mm",
             report.fully_certified_strip_faces,
@@ -395,6 +413,26 @@ pub struct SplineCapPrecisionWitness {
     pub bound_mm: f64,
 }
 
+/// Why a particular original source spline face has no two-cap certificate.
+/// No failure is converted into a guessed cap or an implicit tolerance increase.
+#[cfg(feature = "cad-kernel-monstertruck")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SplineCapPrecisionGapReason {
+    FaceLoopsUnavailable,
+    CapNotProven { surface_row: usize },
+    CapAmbiguous { surface_row: usize },
+    SameCapEdgeUsedTwice,
+}
+
+#[cfg(feature = "cad-kernel-monstertruck")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SplineCapPrecisionGap {
+    pub face_id: u64,
+    pub surface_id: u64,
+    pub reason: SplineCapPrecisionGapReason,
+}
+
 /// Every recorded row is complete and unique within its source face; omitted
 /// faces have no independently established dual-cap coincidence certificate.
 #[cfg(feature = "cad-kernel-monstertruck")]
@@ -405,6 +443,54 @@ pub struct SplineCapPrecisionAudit {
     pub strip_faces: usize,
     pub fully_certified_strip_faces: usize,
     pub cap_witnesses: Vec<SplineCapPrecisionWitness>,
+    pub unresolved_strip_faces: Vec<SplineCapPrecisionGap>,
+}
+
+#[cfg(feature = "cad-kernel-monstertruck")]
+fn verify_source_strip_cap_rows(
+    face_id: u64,
+    surface_id: u64,
+    rows: &[BSplineSupport; 2],
+    entities: &[step_p21::ast::EntityInstance],
+    index: &std::collections::HashMap<u64, usize>,
+    coordinate_tolerance: f64,
+    mm_per_unit: f64,
+) -> Result<[SplineCapPrecisionWitness; 2], SplineCapPrecisionGapReason> {
+    use crate::brep;
+    use SplineCapPrecisionGapReason as Gap;
+
+    let loops = brep::face_loops(face_id, entities, index).ok_or(Gap::FaceLoopsUnavailable)?;
+    let mut witnesses = Vec::with_capacity(2);
+    for (surface_row, profile) in rows.iter().enumerate() {
+        let mut matches = loops
+            .iter()
+            .flat_map(|wire| &wire.edges)
+            .filter_map(|edge| {
+                let brep::CurveSupport::BSpline(curve) = &edge.support else {
+                    return None;
+                };
+                let bound = certified_coincident_spline_loci(profile, curve, coordinate_tolerance)?;
+                Some(SplineCapPrecisionWitness {
+                    face_id,
+                    surface_id,
+                    source_edge_id: edge.edge_id,
+                    surface_row,
+                    bound_mm: bound * mm_per_unit,
+                })
+            });
+        let witness = matches.next().ok_or(Gap::CapNotProven { surface_row })?;
+        if matches.next().is_some() {
+            return Err(Gap::CapAmbiguous { surface_row });
+        }
+        witnesses.push(witness);
+    }
+    let [first, second] = witnesses
+        .try_into()
+        .map_err(|_| Gap::FaceLoopsUnavailable)?;
+    if first.source_edge_id == second.source_edge_id {
+        return Err(Gap::SameCapEdgeUsedTwice);
+    }
+    Ok([first, second])
 }
 
 /// Read-only STEP/source-context precision audit for complete B-spline strips.
@@ -453,6 +539,7 @@ pub fn audit_source_spline_cap_precision(
         strip_faces: 0,
         fully_certified_strip_faces: 0,
         cap_witnesses: Vec::new(),
+        unresolved_strip_faces: Vec::new(),
     };
     for face_id in faces {
         let Some(surface_id) = brep::face_surface(face_id, entities, &index) else {
@@ -464,40 +551,31 @@ pub fn audit_source_spline_cap_precision(
             continue;
         };
         audit.strip_faces += 1;
-        let Some(loops) = brep::face_loops(face_id, entities, &index) else {
-            continue;
-        };
-        let mut witnesses = Vec::new();
-        for (surface_row, profile) in rows.iter().enumerate() {
-            let mut matches = loops
-                .iter()
-                .flat_map(|wire| &wire.edges)
-                .filter_map(|edge| {
-                    let brep::CurveSupport::BSpline(curve) = &edge.support else {
-                        return None;
-                    };
-                    let bound =
-                        certified_coincident_spline_loci(profile, curve, coordinate_tolerance)?;
-                    Some(SplineCapPrecisionWitness {
-                        face_id,
-                        surface_id,
-                        source_edge_id: edge.edge_id,
-                        surface_row,
-                        bound_mm: bound * mm_per_unit,
-                    })
-                });
-            let Some(witness) = matches.next() else {
-                break;
-            };
-            if matches.next().is_some() {
-                break;
+        match verify_source_strip_cap_rows(
+            face_id,
+            surface_id,
+            &rows,
+            entities,
+            &index,
+            coordinate_tolerance,
+            mm_per_unit,
+        ) {
+            Ok([first, second]) => {
+                audit.fully_certified_strip_faces += 1;
+                audit.cap_witnesses.extend([first, second]);
             }
-            witnesses.push(witness);
-        }
-        if witnesses.len() == 2 && witnesses[0].source_edge_id != witnesses[1].source_edge_id {
-            audit.fully_certified_strip_faces += 1;
-            audit.cap_witnesses.extend(witnesses);
+            Err(reason) => audit.unresolved_strip_faces.push(SplineCapPrecisionGap {
+                face_id,
+                surface_id,
+                reason,
+            }),
         }
     }
+    audit
+        .cap_witnesses
+        .sort_unstable_by_key(|w| (w.face_id, w.surface_row));
+    audit
+        .unresolved_strip_faces
+        .sort_unstable_by_key(|gap| gap.face_id);
     Ok(audit)
 }

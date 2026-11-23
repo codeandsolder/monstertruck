@@ -24,7 +24,8 @@ pub use sphere_chart::{
 };
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub use spline_strip::coincidence::{
-    SplineCapPrecisionAudit, SplineCapPrecisionWitness, audit_source_spline_cap_precision,
+    SplineCapPrecisionAudit, SplineCapPrecisionGap, SplineCapPrecisionGapReason,
+    SplineCapPrecisionWitness, audit_source_spline_cap_precision,
 };
 mod strip_sense;
 pub use spline_strip::{SplineCurveKey, SplineStripKey};
