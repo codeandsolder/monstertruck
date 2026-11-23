@@ -31,11 +31,11 @@ pub enum GeometryPolicy {
 
 impl GeometryPolicy {
     /// Constructs the Standard modeling-tolerance policy in current model units.
-    #[must_use]
+    #[must_use = "apply the constructed modeling tolerance policy to operations"]
     pub const fn standard(tolerance: f64) -> Self { Self::Standard { tolerance } }
 
     /// Returns the modeling tolerance, or [`None`] for [`Self::Equivalent`].
-    #[must_use]
+    #[must_use = "handle the absence of a numeric tolerance under equivalence policy"]
     pub const fn tolerance(self) -> Option<f64> {
         match self {
             Self::Equivalent => None,

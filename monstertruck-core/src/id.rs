@@ -7,7 +7,7 @@ pub struct Id<T>(usize, PhantomData<T>);
 
 impl<T> Id<T> {
     /// Creates the `Id` from a raw pointer.
-    #[must_use]
+    #[must_use = "retain the identity derived from the source pointer"]
     #[inline]
     pub fn new(ptr: *const T) -> Self { Self(ptr as usize, PhantomData) }
 }
@@ -57,15 +57,15 @@ impl StableId {
     pub const UNASSIGNED: Self = Self(0);
 
     /// Create a new `StableId`. Zero denotes [`Self::UNASSIGNED`].
-    #[must_use]
+    #[must_use = "retain the constructed stable identity"]
     pub const fn new(val: u64) -> Self { Self(val) }
 
     /// Get the raw u64 value.
-    #[must_use]
+    #[must_use = "use the raw stable ID when serializing identity"]
     pub const fn raw(self) -> u64 { self.0 }
 
     /// Whether this ID has been assigned.
-    #[must_use]
+    #[must_use = "check whether this stable identity has been assigned"]
     pub const fn is_assigned(self) -> bool { self.0 != 0 }
 }
 
@@ -101,7 +101,7 @@ pub struct StableIdAllocator {
 
 impl StableIdAllocator {
     /// Create a new allocator starting at 1.
-    #[must_use]
+    #[must_use = "retain the allocator for subsequent stable ID generation"]
     pub const fn new() -> Self { Self { next: 1 } }
 
     /// Allocates the next [`StableId`].
@@ -150,7 +150,7 @@ impl StableIdAllocator {
     }
 
     /// Current counter value (next ID that will be allocated).
-    #[must_use]
+    #[must_use = "inspect the next unallocated ID when computing allocation bounds"]
     pub const fn peek(&self) -> u64 { self.next }
 }
 
