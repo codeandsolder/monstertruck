@@ -1080,9 +1080,22 @@ fn exec_conical_surface(
     let p = Point3::from(org_coord);
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
-    let v = z.cross(ref_dir);
-    let y = if v.so_small() { return } else { v.normalize() };
-    let x = y.cross(z).normalize();
+    // Near-parallel reference directions do not define a stable angular
+    // origin. The STEP placement may choose an arbitrary fallback frame;
+    // still verify the cone's intrinsic geometry in this case.
+    let projected = ref_dir - ref_dir.dot(z) * z;
+    let frame = if projected.magnitude2().so_small() {
+        None
+    } else {
+        let y = z.cross(ref_dir).normalize();
+        let x = y.cross(z).normalize();
+        Some(Matrix4::from_cols(
+            x.extend(0.0),
+            y.extend(0.0),
+            z.extend(0.0),
+            p.to_vec().extend(1.0),
+        ))
+    };
     let step_str = format!(
         "DATA;
 #1 = CONICAL_SURFACE('', #2, {radius}, {semi_angle});
@@ -1104,27 +1117,33 @@ fn exec_conical_surface(
         .try_into()
         .expect("a conical surface must convert");
 
-    let mat = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        p.to_vec().extend(1.0),
-    );
     (0..=10)
         .flat_map(move |i| (0..=10).map(move |j| (i, j)))
         .for_each(|(i, j)| {
             let u = 2.0 * PI * f64::from(i) / 10.0;
             let v = f64::from(j) / 10.0;
-            let tan = f64::tan(semi_angle);
             let res = conical.evaluate(u, v);
             let res1 = conical1.evaluate(u, v);
-            let ans = mat.transform_point(Point3::new(
-                v.mul_add(tan, radius) * f64::cos(u),
-                v.mul_add(tan, radius) * f64::sin(u),
-                v,
-            ));
-            assert_near!(res, ans, "u:{u} v:{v} res:{res:?} ans:{ans:?}");
-            assert_near!(res1, ans, "u:{u} v:{v} res:{res1:?} ans:{ans:?}");
+            assert_near!(res, res1, "roundtrip at u:{u} v:{v}");
+            if let Some(mat) = frame.as_ref() {
+                let ans = mat.transform_point(Point3::new(
+                    v.mul_add(f64::tan(semi_angle), radius) * f64::cos(u),
+                    v.mul_add(f64::tan(semi_angle), radius) * f64::sin(u),
+                    v,
+                ));
+                assert_near!(res, ans, "u:{u} v:{v} res:{res:?} ans:{ans:?}");
+            } else {
+                // Fallback fixes no seam angle, only axis and radial distance.
+                let from_origin = res - p;
+                let axial = from_origin.dot(z);
+                let radial = from_origin - axial * z;
+                assert_near!(axial, v, "cone axial distance at u:{u} v:{v}");
+                assert_near!(
+                    radial.magnitude(),
+                    v.mul_add(f64::tan(semi_angle), radius),
+                    "cone radius at u:{u} v:{v}",
+                );
+            }
         });
 }
 
@@ -1139,6 +1158,17 @@ proptest! {
     ) {
         exec_conical_surface(org_coord, dir_array, ref_dir_array, radius, semi_angle);
     }
+}
+
+#[test]
+fn conical_surface_near_antiparallel_reference_uses_valid_fallback_frame() {
+    exec_conical_surface(
+        [0.0, 0.0, 0.0],
+        [0.7876648096415111, 0.8135818999952834],
+        [0.2876552205890308, 0.18680033574742938],
+        0.01,
+        0.0,
+    );
 }
 
 fn coords_to_points(
