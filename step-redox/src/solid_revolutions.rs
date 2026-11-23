@@ -354,7 +354,7 @@ fn uncertainty_measure_mm(
     else {
         return None;
     };
-    if keyword != "LENGTH_MEASURE" || name != "distance_accuracy_value" {
+    if keyword.as_ref() != "LENGTH_MEASURE" || name != "distance_accuracy_value" {
         return None;
     }
     let value = parameter_number(parameter)?;
