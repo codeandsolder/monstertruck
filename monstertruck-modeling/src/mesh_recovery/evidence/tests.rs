@@ -694,18 +694,17 @@ fn normal_rotation_requires_distinct_center_incident_interfaces() {
     }
 }
 
-fn faceted_conical_wall(
-    bottom_radius: f64,
-    top_radius: f64,
+fn faceted_radial_profile(
+    axial_rings: &[(f64, f64)],
     sectors: usize,
     xy_scale: [f64; 2],
     shift: [f64; 3],
 ) -> PolygonMesh {
-    let mut vertices = Vec::with_capacity(2 * sectors);
-    for z in [0.0, 2.0] {
-        let radius = if z == 0.0 { bottom_radius } else { top_radius };
+    let mut vertices = Vec::with_capacity(axial_rings.len() * sectors);
+    for &(z, radius) in axial_rings {
         for index in 0..sectors {
-            let phi = std::f64::consts::TAU * index as f64 / sectors as f64;
+            let phi =
+                std::f64::consts::TAU * crate::usize_to_f64(index) / crate::usize_to_f64(sectors);
             vertices.push([
                 radius.mul_add(xy_scale[0] * phi.cos(), shift[0]),
                 radius.mul_add(xy_scale[1] * phi.sin(), shift[1]),
@@ -713,54 +712,66 @@ fn faceted_conical_wall(
             ]);
         }
     }
-    let mut triangles = Vec::with_capacity(2 * sectors);
-    for index in 0..sectors {
-        let next = (index + 1) % sectors;
-        triangles.push([index, next, sectors + next]);
-        triangles.push([index, sectors + next, sectors + index]);
+    let mut triangles = Vec::with_capacity(2 * sectors * (axial_rings.len() - 1));
+    for band in 0..axial_rings.len() - 1 {
+        let offset = band * sectors;
+        for index in 0..sectors {
+            let next = (index + 1) % sectors;
+            triangles.push([offset + index, offset + next, offset + sectors + next]);
+            triangles.push([
+                offset + index,
+                offset + sectors + next,
+                offset + sectors + index,
+            ]);
+        }
     }
     make_mesh(&vertices, &triangles)
 }
 
-#[test]
-fn global_curvature_tracks_recover_full_cylindrical_normal_ring() {
-    let mesh = faceted_conical_wall(1.0, 1.0, 32, [1.0, 1.0], [0.0; 3]);
-    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+/// Check a complete normal-space ring independently of the original wall
+/// profile; cylinder/cone distinction comes from axial normal projection.
+fn find_closed_normal_ring(mesh: &PolygonMesh, sectors: usize) -> CurvatureTrack {
+    let evidence = analyze_mesh_evidence(mesh, EvidenceOptions::default()).unwrap();
     let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
     let ring = tracks
-        .iter()
+        .into_iter()
         .find(|track| {
-            track.support_indices.len() >= 30
+            track.closed
+                && track.distinct_support_count == sectors
                 && track.seed_axis.dot(Vector3::unit_z()).abs() > 0.9999
-                && track.normal_axis_projection_spread < 1.0e-6
+                && track.normal_axis_projection_spread < 1.0e-5
         })
-        .unwrap_or_else(|| panic!("no full cylindrical normal ring in {} tracks", tracks.len()));
-    assert!(ring.closed);
-    assert_eq!(ring.distinct_support_count, 32);
+        .unwrap_or_else(|| panic!("no {sectors}-sector closed normal ring"));
     assert_eq!(ring.support_indices.first(), ring.support_indices.last());
     assert_eq!(ring.interface_indices.len() + 1, ring.support_indices.len());
-    assert!((ring.accumulated_normal_turn_radians - std::f64::consts::TAU).abs() < 1.0e-4);
-    assert!(ring.mean_normal_axis_projection.abs() < 1.0e-6);
+    // A conical normal traces a latitude on the unit sphere. The sum
+    // of *3D* adjacent normal angles is smaller than 2π unless the
+    // axial normal projection is zero (cylindrical equator).
+    let transverse = ring
+        .mean_normal_axis_projection
+        .mul_add(-ring.mean_normal_axis_projection, 1.0)
+        .sqrt();
+    let sector_angle = std::f64::consts::PI / crate::usize_to_f64(sectors);
+    let expected_turn =
+        2.0 * crate::usize_to_f64(sectors) * (transverse * sector_angle.sin()).asin();
+    assert!((ring.accumulated_normal_turn_radians - expected_turn).abs() < 1.0e-4);
     assert!(ring.max_seed_axis_error_radians < 1.0e-4);
+    ring
+}
+
+#[test]
+fn global_curvature_tracks_recover_full_cylindrical_normal_ring() {
+    let mesh = faceted_radial_profile(&[(0.0, 1.0), (2.0, 1.0)], 32, [1.0, 1.0], [0.0; 3]);
+    let ring = find_closed_normal_ring(&mesh, 32);
+    assert!(ring.mean_normal_axis_projection.abs() < 1.0e-6);
+    assert!(ring.normal_axis_projection_spread < 1.0e-6);
 }
 
 #[test]
 fn normal_space_axis_tracks_conical_surfaces_without_cylinder_assumption() {
-    let mesh = faceted_conical_wall(1.0, 0.5, 24, [1.0, 1.0], [0.0; 3]);
-    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
-    let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
-    let ring = tracks
-        .iter()
-        .find(|track| {
-            track.support_indices.len() >= 24
-                && track.seed_axis.dot(Vector3::unit_z()).abs() > 0.9999
-                && track.normal_axis_projection_spread < 1.0e-5
-        })
-        .unwrap_or_else(|| panic!("no conical ring in {} tracks", tracks.len()));
-    assert!(ring.closed);
-    assert_eq!(ring.distinct_support_count, 24);
+    let mesh = faceted_radial_profile(&[(0.0, 1.0), (2.0, 0.5)], 24, [1.0, 1.0], [0.0; 3]);
+    let ring = find_closed_normal_ring(&mesh, 24);
     assert!(ring.mean_normal_axis_projection.abs() > 0.05);
-    assert!(ring.max_seed_axis_error_radians < 1.0e-4);
 }
 
 #[test]
@@ -825,7 +836,7 @@ fn original_source_polygon_positions_are_available_without_mesh_reparsing() {
 #[test]
 fn spatial_evidence_fits_shifted_cylinder_using_both_source_planes_and_vertices() {
     let shift = [1.0e7, -2.0e7, 3.0e7];
-    let mesh = faceted_conical_wall(1.0, 1.0, 32, [1.0, 1.0], shift);
+    let mesh = faceted_radial_profile(&[(0.0, 1.0), (2.0, 1.0)], 32, [1.0, 1.0], shift);
     let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
     let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
     let ring = tracks
@@ -851,7 +862,7 @@ fn spatial_evidence_fits_shifted_cylinder_using_both_source_planes_and_vertices(
 
 #[test]
 fn spatial_evidence_fits_cone_slope_independently_from_observed_normals() {
-    let mesh = faceted_conical_wall(1.0, 0.5, 24, [1.0, 1.0], [12.0, -7.0, 3.0]);
+    let mesh = faceted_radial_profile(&[(0.0, 1.0), (2.0, 0.5)], 24, [1.0, 1.0], [12.0, -7.0, 3.0]);
     let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
     let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
     let ring = tracks
@@ -884,7 +895,7 @@ fn spatial_evidence_fits_cone_slope_independently_from_observed_normals() {
 fn spatial_evidence_refutes_axis_coherent_elliptical_extrusion_as_a_cylinder() {
     // The normals still turn monotonically through 360 degrees around Z,
     // but no cylinder axis and fixed radius can explain the source vertices.
-    let mesh = faceted_conical_wall(1.0, 1.0, 48, [1.6, 1.0], [0.0; 3]);
+    let mesh = faceted_radial_profile(&[(0.0, 1.0), (2.0, 1.0)], 48, [1.6, 1.0], [0.0; 3]);
     let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
     let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
     let ring = tracks
@@ -899,4 +910,77 @@ fn spatial_evidence_refutes_axis_coherent_elliptical_extrusion_as_a_cylinder() {
     assert!(spatial.transverse_normal_rank_ratio > 0.1);
     assert!(spatial.relative_max_sample_radial_residual > 0.1);
     assert!(spatial.max_support_plane_offset_residual > 0.1);
+}
+
+#[test]
+fn joined_source_tracks_refit_all_original_cylinder_vertices_under_one_axis() {
+    let mesh = faceted_radial_profile(&[(0.0, 1.0), (2.0, 1.0)], 32, [1.0, 1.0], [0.0; 3]);
+    let ring = find_closed_normal_ring(&mesh, 32);
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let mut first = ring.clone();
+    first.support_indices = ring.support_indices[..17].to_vec();
+    first.closed = false;
+    let mut second = ring;
+    second.support_indices = second.support_indices[16..].to_vec();
+    second.closed = false;
+    let joined = measure_curvature_spatial_join(&evidence, &first, &second).unwrap();
+    assert_eq!(joined.shared_support_count, 2);
+    assert!(joined.connecting_interface_count > 0);
+    assert_eq!(joined.union_support_count, 32);
+    assert!(joined.axis_angle_radians < 1.0e-8);
+    assert!(joined.axis_line_separation < 1.0e-8);
+    assert_eq!(joined.combined.unique_source_vertex_count, 64);
+    assert!(joined.combined.max_sample_radial_residual < 1.0e-8);
+    assert!(joined.combined.max_support_plane_offset_residual < 1.0e-8);
+}
+
+#[test]
+fn geometrically_close_but_source_disconnected_support_paths_do_not_merge() {
+    let mesh = faceted_radial_profile(&[(0.0, 1.0), (2.0, 1.0)], 32, [1.0, 1.0], [0.0; 3]);
+    let ring = find_closed_normal_ring(&mesh, 32);
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let mut first = ring.clone();
+    first.support_indices = ring.support_indices[..6].to_vec();
+    first.closed = false;
+    let mut second = ring;
+    second.support_indices = second.support_indices[12..18].to_vec();
+    second.closed = false;
+    assert!(measure_curvature_spatial_join(&evidence, &first, &second).is_none());
+}
+
+#[test]
+fn axially_joining_radius_kink_exposes_incompatible_local_surface_profiles() {
+    // Both bands have a coherent full circular normal ring and each may be
+    // represented locally by a cylinder or cone. Their shared original mesh
+    // edge does not imply that *one* radial profile explains all three rings.
+    let mesh = faceted_radial_profile(
+        &[(0.0, 1.0), (1.0, 1.0), (2.0, 1.3)],
+        32,
+        [1.0, 1.0],
+        [0.0; 3],
+    );
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
+    let rings = tracks
+        .iter()
+        .filter(|track| track.closed && track.distinct_support_count == 32)
+        .collect::<Vec<_>>();
+    let joined = rings
+        .iter()
+        .enumerate()
+        .find_map(|(i, first)| {
+            rings.iter().skip(i + 1).find_map(|second| {
+                measure_curvature_spatial_join(&evidence, first, second)
+                    .filter(|joined| joined.combined.axial_stations.len() >= 3)
+            })
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing axial contact between {} complete normal rings",
+                rings.len()
+            )
+        });
+    assert!(joined.axis_angle_radians < 1.0e-6);
+    assert!(joined.combined.max_sample_radial_residual > 0.04);
+    assert!(joined.combined.max_meridian_slope_change.unwrap() > 0.1);
 }

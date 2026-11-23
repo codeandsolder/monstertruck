@@ -45,9 +45,9 @@ mod seams;
 pub use evidence::{
     AxialRadialStation, ChainPairEvidence, CollinearChain, CurvatureTrack, CurvatureTrackOptions,
     EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence, ParallelBundle, ParallelPlacement,
-    PlanarSupport, SpatialTrackEvidence, SupportBoundaryTopology, SupportInterface,
-    SupportNormalRotationEvidence, analyze_mesh_evidence, measure_curvature_spatial,
-    trace_curvature_tracks,
+    PlanarSupport, SpatialTrackEvidence, SpatialTrackJoinEvidence, SupportBoundaryTopology,
+    SupportInterface, SupportNormalRotationEvidence, analyze_mesh_evidence,
+    measure_curvature_spatial, measure_curvature_spatial_join, trace_curvature_tracks,
 };
 
 /// Source evidence for one reconstructed planar face.

@@ -7,7 +7,8 @@
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_modeling::mesh_recovery::{
     CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence,
-    SpatialTrackEvidence, analyze_mesh_evidence, measure_curvature_spatial, trace_curvature_tracks,
+    SpatialTrackEvidence, analyze_mesh_evidence, measure_curvature_spatial,
+    measure_curvature_spatial_join, trace_curvature_tracks,
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -628,6 +629,76 @@ fn native_cylinder_spatial_error(
     Some((max_axis_line_error, max_radius_error))
 }
 
+/// Compare local-geometry-only joint fits on rare held-out mixed-source
+/// candidate tracks which are spatially plausible over a narrow source strip.
+/// Native CAD labels select *diagnostic cases*, never influence geometry fits.
+fn diagnose_mixed_surface_track_expansions(
+    evidence: &MeshEvidence,
+    tracks: &[CurvatureTrack],
+    fits: &[Option<SpatialTrackEvidence>],
+    truth: &NativeFaceLabels,
+) -> Value {
+    let mut cases = Vec::new();
+    for (id, (track, maybe_fit)) in tracks.iter().zip(fits).enumerate() {
+        let Some(fit) = maybe_fit else {
+            continue;
+        };
+        let native = track_native_face_ids(evidence, track, &truth.polygon_face_ids);
+        if native_track_surface_family(&native, &truth.surface_types)
+            != "MixedNativeSurfaceFamilies"
+            || fit.relative_max_sample_radial_residual > 0.01
+            || fit.max_support_plane_offset_residual / fit.mean_sample_radius > 0.01
+        {
+            continue;
+        }
+        let mut source_connected = 0;
+        let mut genuinely_larger = 0;
+        let mut joint_within_one_percent = 0;
+        let mut smallest_joint_radial_error = f64::INFINITY;
+        let mut smallest_joint_plane_error = f64::INFINITY;
+        let mut longest_union_supports = track.distinct_support_count;
+        for (other_id, neighbor) in tracks.iter().enumerate() {
+            if id == other_id || neighbor.distinct_support_count < 8 {
+                continue;
+            }
+            let Some(joint) = measure_curvature_spatial_join(evidence, track, neighbor) else {
+                continue;
+            };
+            source_connected += 1;
+            if joint.union_support_count <= track.distinct_support_count {
+                continue;
+            }
+            genuinely_larger += 1;
+            longest_union_supports = longest_union_supports.max(joint.union_support_count);
+            let relative_plane = joint.combined.max_support_plane_offset_residual
+                / joint.combined.mean_sample_radius;
+            let relative_radial = joint.combined.relative_max_sample_radial_residual;
+            smallest_joint_radial_error = smallest_joint_radial_error.min(relative_radial);
+            smallest_joint_plane_error = smallest_joint_plane_error.min(relative_plane);
+            joint_within_one_percent +=
+                usize::from(relative_radial <= 0.01 && relative_plane <= 0.01);
+        }
+        cases.push(json!({
+            "source_original_faces":native.iter().copied().collect::<Vec<_>>(),
+            "source_distinct_supports":track.distinct_support_count,
+            "source_vertex_count":fit.unique_source_vertex_count,
+            "source_axial_stations":fit.axial_stations.len(),
+            "source_relative_radial_error":fit.relative_max_sample_radial_residual,
+            "source_relative_plane_error":
+                fit.max_support_plane_offset_residual / fit.mean_sample_radius,
+            "adjacent_candidate_tracks":source_connected,
+            "adjacent_joins_adding_original_supports":genuinely_larger,
+            "joint_extensions_with_both_errors_below_one_percent":joint_within_one_percent,
+            "smallest_extended_radial_error":smallest_joint_radial_error.is_finite()
+                .then_some(smallest_joint_radial_error),
+            "smallest_extended_plane_error":smallest_joint_plane_error.is_finite()
+                .then_some(smallest_joint_plane_error),
+            "largest_extended_original_support_count":longest_union_supports,
+        }));
+    }
+    json!(cases)
+}
+
 /// CAD surface-family provenance of an entire original source-support track.
 /// Identical original families can still represent different actual faces.
 fn native_track_surface_family(
@@ -642,6 +713,84 @@ fn native_track_surface_family(
     } else {
         "MixedNativeSurfaceFamilies".to_owned()
     }
+}
+
+/// Inspect the rare cross-family candidate whose *local* spatial errors
+/// are small, so we can test its source-connected neighboring geometry.
+fn mixed_spatial_counterexample(
+    track: &CurvatureTrack,
+    fit: &SpatialTrackEvidence,
+    native: &std::collections::BTreeSet<usize>,
+    kinds: &[String],
+) -> Value {
+    json!({
+        "distinct_supports": track.distinct_support_count,
+        "original_native_face_count": native.len(),
+        "original_native_faces": native.iter().copied().collect::<Vec<_>>(),
+        "original_surface_families": native.iter().map(|&id| &kinds[id])
+            .collect::<std::collections::BTreeSet<_>>(),
+        "mean_radius":fit.mean_sample_radius,
+        "axial_span":fit.axial_coordinate_span,
+        "axial_stations":fit.axial_stations.len(),
+        "seed_axis":[fit.axis.x,fit.axis.y,fit.axis.z],
+        "axis_origin":[fit.axis_origin.x,fit.axis_origin.y,fit.axis_origin.z],
+        "max_plane_offset_error_relative":
+            fit.max_support_plane_offset_residual / fit.mean_sample_radius,
+        "max_source_radius_error_relative":fit.relative_max_sample_radial_residual,
+        "max_meridian_slope_change":fit.max_meridian_slope_change,
+        "source_polygon_vertices":fit.unique_source_vertex_count,
+    })
+}
+
+/// Record resolved meridional slope-change thresholds per original native
+/// source family. Three distinct axial stations are necessary for this cue.
+fn count_native_meridian_slope_bins(
+    histogram: &mut std::collections::BTreeMap<String, [usize; 7]>,
+    family: &str,
+    change: Option<f64>,
+    thresholds: &[f64; 7],
+) {
+    if let Some(change) = change {
+        let counts = histogram.entry(family.to_owned()).or_default();
+        for (&threshold, total) in thresholds.iter().zip(counts) {
+            *total += usize::from(change <= threshold);
+        }
+    }
+}
+
+/// Format source-native family summaries separately from counting fitted
+/// evidence so the benchmark keeps numeric comparisons independently testable.
+fn native_family_metric_report(
+    groups: std::collections::BTreeMap<String, [usize; 4]>,
+    slope_histogram: &std::collections::BTreeMap<String, [usize; 7]>,
+    thresholds: &[f64; 7],
+) -> std::collections::BTreeMap<String, Value> {
+    groups
+        .into_iter()
+        .map(|(kind, counts)| {
+            let bounded = slope_histogram.get(&kind).copied().unwrap_or_default();
+            let curvature_bins = thresholds
+                .iter()
+                .zip(bounded)
+                .map(|(&threshold, count)| {
+                    json!({
+                        "maximum_meridian_slope_change":threshold,
+                        "count_at_or_below":count,
+                    })
+                })
+                .collect::<Vec<_>>();
+            (
+                kind,
+                json!({
+                    "measured":counts[0],
+                    "radial_within_1pct":counts[1],
+                    "radial_and_support_planes_within_1pct":counts[2],
+                    "at_least_three_axial_stations":counts[3],
+                    "meridian_slope_change_histogram":curvature_bins,
+                }),
+            )
+        })
+        .collect()
 }
 
 /// Native-CAD-only reference checks and deliberately exploratory filtering
@@ -661,6 +810,7 @@ fn native_spatial_track_reference(
     let mut cylinder_jointly_matched = 0;
     let mut original_cylinder_cross_face = 0;
     let mut cylinder_error_examples = Vec::<Value>::new();
+    let mut passing_mixed_surface_examples = Vec::<Value>::new();
     for (track, evidence_fit) in tracks.iter().zip(fits) {
         let Some(fit) = evidence_fit else {
             continue;
@@ -675,12 +825,20 @@ fn native_spatial_track_reference(
         row[1] += usize::from(radial_consistent);
         row[2] += usize::from(radial_consistent && plane_consistent);
         row[3] += usize::from(fit.axial_stations.len() >= 3);
-        if let Some(change) = fit.max_meridian_slope_change {
-            let bucket = slope_change_bounded.entry(kind.clone()).or_default();
-            for (&threshold, total) in slope_change_thresholds.iter().zip(bucket) {
-                *total += usize::from(change <= threshold);
-            }
+        if kind == "MixedNativeSurfaceFamilies" && radial_consistent && plane_consistent {
+            passing_mixed_surface_examples.push(mixed_spatial_counterexample(
+                track,
+                fit,
+                &native,
+                &native_labels.surface_types,
+            ));
         }
+        count_native_meridian_slope_bins(
+            &mut slope_change_bounded,
+            &kind,
+            fit.max_meridian_slope_change,
+            &slope_change_thresholds,
+        );
         if kind != "Cylinder" {
             continue;
         }
@@ -712,31 +870,8 @@ fn native_spatial_track_reference(
             }));
         }
     }
-    let family_report = groups
-        .into_iter()
-        .map(|(kind, counts)| {
-            let bounded = slope_change_bounded.get(&kind).copied().unwrap_or_default();
-            let curvature_bins = slope_change_thresholds
-                .iter()
-                .zip(bounded)
-                .map(|(&threshold, count)| {
-                    json!({
-                        "maximum_meridian_slope_change":threshold, "count_at_or_below":count,
-                    })
-                })
-                .collect::<Vec<_>>();
-            (
-                kind,
-                json!({
-                    "measured":counts[0],
-                    "radial_within_1pct":counts[1],
-                    "radial_and_support_planes_within_1pct":counts[2],
-                    "at_least_three_axial_stations":counts[3],
-                    "meridian_slope_change_histogram":curvature_bins,
-                }),
-            )
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
+    let family_report =
+        native_family_metric_report(groups, &slope_change_bounded, &slope_change_thresholds);
     json!({
         "minimum_distinct_supports_measured":8,
         "exploratory_relative_residual_threshold":0.01,
@@ -747,6 +882,7 @@ fn native_spatial_track_reference(
         "cylinder_joint_axis_and_radius_matches":cylinder_jointly_matched,
         "cylinder_joint_matches_across_multiple_native_faces":original_cylinder_cross_face,
         "sample_source_cylinder_fit_errors":cylinder_error_examples,
+        "mixed_surface_tracks_with_small_spatial_error":passing_mixed_surface_examples,
     })
 }
 
@@ -850,6 +986,8 @@ fn evaluate_native_face_labels(
         return Ok(None);
     };
     let spatial_reference = native_spatial_track_reference(evidence, tracks, spatial, &native);
+    let suspicious_joint_expansions =
+        diagnose_mixed_surface_track_expansions(evidence, tracks, spatial, &native);
     let NativeFaceLabels {
         polygon_face_ids: labels,
         surface_types: kinds,
@@ -929,6 +1067,7 @@ fn evaluate_native_face_labels(
             evidence, tracks, &labels, &kinds, &analytic_axes,
         ),
         "spatial_track_reference": spatial_reference,
+        "suspicious_joint_expansions": suspicious_joint_expansions,
         "planar_or_30_degree_union": {
             "selected": union[0],
             "true_native": union[1],

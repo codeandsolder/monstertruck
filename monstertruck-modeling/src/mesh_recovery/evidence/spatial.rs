@@ -342,22 +342,19 @@ fn fit_source_vertex_radial_profile(
 /// returns actual source geometry fit residuals, not a yes/no primitive
 /// classification. Low fit rank or insufficient axial sample span is
 /// explicitly reported, never replaced by an assumed center or cone slope.
-#[must_use]
-pub fn measure_curvature_spatial(
+pub(super) fn fit_spatial_support_set(
     evidence: &MeshEvidence,
-    track: &CurvatureTrack,
+    supports: &[usize],
+    axis: Vector3,
+    angular_uncertainty: f64,
 ) -> Option<SpatialTrackEvidence> {
-    let mut supports = track.support_indices.clone();
-    supports.sort_unstable();
-    supports.dedup();
-    let axis = track.seed_axis;
-    let plane = fit_support_plane_placement(evidence, &supports, axis)?;
+    let plane = fit_support_plane_placement(evidence, supports, axis)?;
     let samples = fit_source_vertex_radial_profile(
         evidence,
-        &supports,
+        supports,
         plane.origin,
         axis,
-        track.max_seed_axis_error_radians,
+        angular_uncertainty,
     )?;
     let axial_projection = supports
         .iter()
@@ -403,6 +400,24 @@ pub fn measure_curvature_spatial(
         normal_implied_radius_slope: normal_slope,
         radius_slope_disagreement: disagreement,
     })
+}
+
+/// Independently fit complete source geometry of one connected curvature
+/// track; original native STEP face IDs and primitive types are never used.
+#[must_use]
+pub fn measure_curvature_spatial(
+    evidence: &MeshEvidence,
+    track: &CurvatureTrack,
+) -> Option<SpatialTrackEvidence> {
+    let mut supports = track.support_indices.clone();
+    supports.sort_unstable();
+    supports.dedup();
+    fit_spatial_support_set(
+        evidence,
+        &supports,
+        track.seed_axis,
+        track.max_seed_axis_error_radians,
+    )
 }
 
 #[cfg(test)]

@@ -13,9 +13,11 @@ use monstertruck_mesh::PolygonMesh;
 use std::collections::{HashMap, HashSet};
 
 mod curvature;
+mod join;
 mod spatial;
 mod support;
 pub use curvature::{CurvatureTrack, CurvatureTrackOptions, trace_curvature_tracks};
+pub use join::{SpatialTrackJoinEvidence, measure_curvature_spatial_join};
 pub use spatial::{AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial};
 use support::build_support_interfaces;
 pub use support::{SupportBoundaryTopology, SupportInterface};
