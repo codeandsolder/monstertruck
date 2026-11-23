@@ -21,17 +21,17 @@ pub trait Bounded:
     #[doc(hidden)]
     fn neg_infinity() -> Self;
     #[doc(hidden)]
-    #[must_use]
+    #[must_use = "use the componentwise maximum when updating the bounding extent"]
     fn max(self, other: Self) -> Self;
     #[doc(hidden)]
-    #[must_use]
+    #[must_use = "use the componentwise minimum when updating the bounding extent"]
     fn min(self, other: Self) -> Self;
     #[doc(hidden)]
     fn max_component(one: Self::Vector) -> Self::Scalar;
     #[doc(hidden)]
     fn diagonal(self, other: Self) -> Self::Vector;
     #[doc(hidden)]
-    #[must_use]
+    #[must_use = "use the midpoint when subdividing the bounding extent"]
     fn mid(self, other: Self) -> Self;
     #[doc(hidden)]
     fn dimension(self) -> usize;
@@ -106,7 +106,7 @@ impl<V: Bounded> Default for BoundingBox<V> {
 impl<V: Bounded> BoundingBox<V> {
     /// Creates an empty bounding box
     #[inline]
-    #[must_use]
+    #[must_use = "retain the empty bounding box before extending it with points"]
     pub fn new() -> Self { Self::default() }
     /// Adds a point to the bounding box.
     /// # Examples
