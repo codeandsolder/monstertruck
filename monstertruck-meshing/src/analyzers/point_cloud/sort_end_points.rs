@@ -4,6 +4,8 @@ use super::{
 };
 use array_macro::array;
 
+use super::super::{compare_sweep_coordinate, triangle_projection_interval};
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum EndPointType {
@@ -12,7 +14,7 @@ enum EndPointType {
     Back,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct EndPoint {
     entity: f64,
     r#type: EndPointType,
@@ -37,16 +39,6 @@ impl EndPoint {
     }
 }
 
-fn tri_to_seg(tri: [Point3; 3], unit: Vector3, tol: f64) -> (f64, f64) {
-    let a = tri[0].to_vec().dot(unit);
-    let b = tri[1].to_vec().dot(unit);
-    let c = tri[2].to_vec().dot(unit);
-    (
-        f64::min(f64::min(a, b), c) - tol,
-        f64::max(f64::max(a, b), c) + tol,
-    )
-}
-
 fn sorted_endpoints<'a, I, J>(iter0: I, iter1: J, unit: Vector3, tol: f64) -> Vec<EndPoint>
 where
     I: IntoIterator<Item = [Point3; 3]>,
@@ -55,7 +47,7 @@ where
         .into_iter()
         .enumerate()
         .filter(|(_, tri)| !(tri[1] - tri[0]).cross(tri[2] - tri[0]).so_small())
-        .flat_map(|(i, tri)| EndPoint::from_seg(tri_to_seg(tri, unit, tol), i))
+        .flat_map(|(i, tri)| EndPoint::from_seg(triangle_projection_interval(tri, unit, tol), i))
         .chain(
             iter1
                 .into_iter()
@@ -63,7 +55,11 @@ where
                 .map(|(i, point)| EndPoint::new(point.to_vec().dot(unit), EndPointType::Middle, i)),
         )
         .collect();
-    res.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
+    res.sort_by(|a, b| {
+        compare_sweep_coordinate(a.entity, b.entity)
+            .then_with(|| a.r#type.cmp(&b.r#type))
+            .then_with(|| a.index.cmp(&b.index))
+    });
     res
 }
 
