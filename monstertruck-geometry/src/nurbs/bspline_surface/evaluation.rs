@@ -32,7 +32,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     ///     }
     /// }
     /// ```
-    #[must_use]
+    #[must_use = "The surface derivative in the U direction is returned as a new spline."]
     pub fn uderivation(&self) -> BsplineSurface<P::Diff> {
         let n0 = self.control_points.len();
         let n1 = self.control_points[0].len();
@@ -81,7 +81,7 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     ///     }
     /// }
     /// ```
-    #[must_use]
+    #[must_use = "The surface derivative in the V direction is returned as a new spline."]
     pub fn vderivation(&self) -> BsplineSurface<P::Diff> {
         let n0 = self.control_points.len();
         let n1 = self.control_points[0].len();

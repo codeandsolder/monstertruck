@@ -32,7 +32,7 @@ pub struct OrientedHyperbolaTrim {
 }
 
 impl OrientedHyperbolaTrim {
-    #[must_use]
+    #[must_use = "The returned direction flag identifies increasing hyperbola trim parameters."]
     pub fn forward(self) -> bool { self.start_parameter < self.end_parameter }
 }
 
@@ -52,7 +52,7 @@ impl AxisParallelPlaneConeHyperbola {
     /// The source plane is parallel to the cone axis within a reported
     /// floating-point misalignment, and must not contain that axis. Other
     /// intersection regimes are rejected; there is no silent healing.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn from_carriers(
         plane_origin: Point3,
         plane_normal: Vector3,
@@ -120,7 +120,7 @@ impl AxisParallelPlaneConeHyperbola {
     }
 
     /// Evaluate the analytic hyperbola, including its smooth vertex at t=0.
-    #[must_use]
+    #[must_use = "The evaluated analytic hyperbola point is returned if the parameter is valid."]
     pub fn evaluate(self, t: f64) -> Option<Point3> {
         if !t.is_finite() {
             return None;
@@ -137,7 +137,7 @@ impl AxisParallelPlaneConeHyperbola {
 
     /// Invert an original source topological vertex; reject any off-branch
     /// point rather than projecting it onto an unrelated nearby conic.
-    #[must_use]
+    #[must_use = "The optional parameter at vertex outcome must be inspected to distinguish a value from absence."]
     pub fn parameter_at_vertex(self, point: Point3, tolerance: f64) -> Option<(f64, f64)> {
         if !valid_point(point) || !tolerance.is_finite() || tolerance < 0.0 {
             return None;
@@ -151,7 +151,7 @@ impl AxisParallelPlaneConeHyperbola {
 
     /// Maintain source edge start/end direction, including decreasing conic
     /// parameters across the vertex; no periodic wrapping is permitted.
-    #[must_use]
+    #[must_use = "The optional oriented trim outcome must be inspected to distinguish a value from absence."]
     pub fn oriented_trim(
         self,
         start: Point3,
@@ -178,7 +178,7 @@ impl AxisParallelPlaneConeHyperbola {
     ///
     /// The source cubic is not reused and is not claimed equivalent. The
     /// returned trim retains the original directed endpoint order.
-    #[must_use]
+    #[must_use = "The native modeling curve is returned and must be retained for geometry construction."]
     pub fn modeling_curve(
         self,
         trim: OrientedHyperbolaTrim,
@@ -212,7 +212,7 @@ impl AxisParallelPlaneConeHyperbola {
     /// point transverse-frame nonorthogonality and small source plane tilt.
     /// A finite-f64 arithmetic allowance is added; this is not formally
     /// outward-rounded IEEE interval arithmetic.
-    #[must_use]
+    #[must_use = "The optional source plane residual upper outcome must be inspected to distinguish a value from absence."]
     pub fn source_plane_residual_upper(
         self,
         original_plane_origin: Point3,
@@ -261,17 +261,17 @@ impl AxisParallelPlaneConeHyperbola {
         upper.is_finite().then_some(upper)
     }
 
-    #[must_use]
+    #[must_use = "The cone reference origin is returned; ignoring it discards its placement."]
     pub const fn reference_origin(self) -> Point3 { self.origin }
-    #[must_use]
+    #[must_use = "The computed signed plane offset quantity is reported through this return value."]
     pub const fn signed_plane_offset(self) -> f64 { self.offset }
-    #[must_use]
+    #[must_use = "The computed reference radius quantity is reported through this return value."]
     pub const fn reference_radius(self) -> f64 { self.radius }
-    #[must_use]
+    #[must_use = "The computed slope quantity is reported through this return value."]
     pub const fn slope(self) -> f64 { self.slope }
-    #[must_use]
+    #[must_use = "The source plane normal is returned; ignoring it loses the orientation."]
     pub const fn plane_normal(self) -> Vector3 { self.plane_normal }
-    #[must_use]
+    #[must_use = "The source cone axis is returned; ignoring it loses the orientation."]
     pub const fn cone_axis(self) -> Vector3 { self.axis }
 }
 

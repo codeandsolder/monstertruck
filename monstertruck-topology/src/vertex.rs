@@ -35,7 +35,7 @@ impl<P> Vertex<P> {
 
     /// Returns the stable persistent identifier of this vertex.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the stable persistent identifier of this vertex."]
     pub const fn stable_id(&self) -> StableId { self.stable_id }
 
     /// Sets the stable persistent identifier of this vertex.
@@ -58,7 +58,7 @@ impl<P> Vertex<P> {
 
     /// Returns the point of vertex.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the point of vertex."]
     pub fn point(&self) -> P
     where P: Clone {
         self.point.lock().clone()
@@ -120,7 +120,7 @@ impl<P> Vertex<P> {
 
     /// Returns the id of the vertex.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the id of the vertex."]
     pub fn id(&self) -> VertexId<P> { Id::new(Arc::as_ptr(&self.point)) }
 
     /// Returns how many same vertices.
@@ -143,7 +143,7 @@ impl<P> Vertex<P> {
     /// assert_eq!(v0.count(), 1);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards how many same vertices."]
     pub fn count(&self) -> usize { Arc::strong_count(&self.point) }
 
     /// Create display struct for debugging the vertex.
@@ -170,7 +170,7 @@ impl<P> Vertex<P> {
     /// );
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed display struct for debugging the vertex is returned rather than stored."]
     pub const fn display(
         &self,
         format: VertexDisplayFormat,

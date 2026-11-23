@@ -213,7 +213,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// assert!(!bspsurface0.near_as_surface(&bspsurface1));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `near_as_surface` must be observed to use the predicate."]
     pub fn near_as_surface(&self, other: &Self) -> bool {
         self.sub_near_as_surface(other, 1, monstertruck_core::tolerance::Tolerance::near)
     }
@@ -241,7 +241,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// assert!(!bspsurface0.near2_as_surface(&bspsurface1));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `near2_as_surface` must be observed to use the predicate."]
     pub fn near2_as_surface(&self, other: &Self) -> bool {
         self.sub_near_as_surface(other, 1, monstertruck_core::tolerance::Tolerance::near2)
     }

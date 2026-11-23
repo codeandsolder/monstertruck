@@ -49,7 +49,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     }
     /// }
     /// ```
-    #[must_use]
+    #[must_use = "The other segment of the cut is returned separately from the mutated original."]
     pub fn cut_u(&mut self, mut u: f64) -> Self {
         let degree = self.udegree();
         let u_start = self.knot_vector_u()[0];
@@ -152,7 +152,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     }
     /// }
     /// ```
-    #[must_use]
+    #[must_use = "The other segment of the cut is returned separately from the mutated original."]
     pub fn cut_v(&mut self, v: f64) -> Self {
         self.swap_axes();
         let mut res = self.cut_u(v);
@@ -193,7 +193,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     assert_near2!(pt[2], pt[0] * pt[0] + pt[1] * pt[1]);
     /// }
     /// ```
-    #[must_use]
+    #[must_use = "The constructed sectional curve with normalized knot vector from the parameter `p` to the is returned rather than stored."]
     pub fn sectional_curve(&self, bnd_box: BoundingBox<Vector2>) -> Option<BsplineCurve<P>> {
         let p = bnd_box.min();
         let q = bnd_box.max();
@@ -278,7 +278,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     &vec![Vector2::new(1.0, 0.0), Vector2::new(0.5, -1.0), Vector2::new(0.0, 0.0)],
     /// );
     /// ```
-    #[must_use]
+    #[must_use = "The split boundary curves are returned; ignoring them discards their topology."]
     pub fn splitted_boundary(&self) -> [BsplineCurve<P>; 4] {
         let (knot_vector_u, knot_vector_v) = self.knot_vecs.clone();
         let control_points0 = self.control_points.iter().map(|x| x[0]).collect();
@@ -299,7 +299,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     }
 
     /// Extracts the boundary of surface
-    #[must_use]
+    #[must_use = "The recovered surface boundary is returned if it can be constructed."]
     pub fn boundary(&self) -> Option<BsplineCurve<P>> {
         let (knot_vector_u, knot_vector_v) = self.knot_vecs.clone();
         let (range0, range1) = (knot_vector_u.range_length(), knot_vector_v.range_length());

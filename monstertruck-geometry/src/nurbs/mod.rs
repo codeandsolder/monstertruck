@@ -51,7 +51,7 @@ impl BasisWindow {
     /// `start_index() .. start_index() + len()` may be non-zero; all others
     /// are exactly zero.
     #[inline]
-    #[must_use]
+    #[must_use = "The computed start index quantity is reported through this return value."]
     pub const fn start_index(&self) -> usize { self.start }
 
     /// Number of basis functions whose values are stored.
@@ -59,24 +59,24 @@ impl BasisWindow {
     /// Equals `degree + 1` for a non-degenerate evaluation; equals `0` for
     /// the empty window produced when `degree < der_rank`.
     #[inline]
-    #[must_use]
+    #[must_use = "The computed len quantity is reported through this return value."]
     pub fn len(&self) -> usize { self.values.len() }
 
     /// True when the window stores no values.
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `is_empty` must be observed to use the predicate."]
     pub fn is_empty(&self) -> bool { self.values.is_empty() }
 
     /// Stored basis-function values, ordered by ascending basis-function index.
     #[inline]
-    #[must_use]
+    #[must_use = "The values accessor exposes its value only through the returned reference."]
     pub fn values(&self) -> &[f64] { &self.values }
 
     /// Total length of the (sparse) basis-function vector this window was extracted from.
     ///
     /// Equal to the number of control points along the corresponding axis.
     #[inline]
-    #[must_use]
+    #[must_use = "The computed total length quantity is reported through this return value."]
     pub const fn total_length(&self) -> usize { self.total_length }
 
     /// Reconstructs the full basis-function vector with zeros outside the window.
@@ -85,7 +85,7 @@ impl BasisWindow {
     /// still want the dense layout; production curve and surface evaluation
     /// should consume [`start_index`](Self::start_index) and
     /// [`values`](Self::values) directly.
-    #[must_use]
+    #[must_use = "The converted representation is returned; ignoring it discards the conversion."]
     pub fn to_full_values(&self) -> Vec<f64> {
         let mut full = vec![0.0; self.total_length];
         full[self.start..self.start + self.values.len()].copy_from_slice(&self.values);
@@ -315,7 +315,7 @@ mod seed_index;
 
 #[doc(hidden)]
 #[inline]
-#[must_use]
+#[must_use = "The computed inv or zero quantity is reported through this return value."]
 pub const fn inv_or_zero(delta: f64) -> f64 {
     if delta.abs() <= KERNEL_EPSILON {
         0.0
