@@ -299,7 +299,7 @@ fn compare(kernel: &mut OcctKernel, a: Selected, b: Selected) -> Result<Report> 
     })
 }
 
-pub fn run(args: &Args) -> Result<ExitCode> {
+pub fn run(args: &SolidArgs) -> Result<ExitCode> {
     let mut kernel = OcctKernel::new()?;
     let a = load_selected(&mut kernel, &args.reference, args.reference_entity_id)?;
     let b = load_selected(&mut kernel, &args.candidate, args.candidate_entity_id)?;
