@@ -62,6 +62,16 @@ but failing build publishes `FAILED`, whereas successful builds publish
 - `objects/<prefix>/<fingerprint>.step`: one object per extractable identity
   (absent for metadata-only builds).
 
+Every isolated STEP body is published as a new standalone product with its
+own standard product-definition graph referencing its actual isolated shape
+representation. This matters for input assemblies with orphan instance
+representations: a geometrically complete STEP entity closure can parse
+successfully while OCCT still transfers **zero** product roots. The validator
+requires a root-linked product definition for every materialized object and
+rejects older unrooted output. Regenerate the affected new corpus rather than
+modifying it in place; the source-content scan cache remains reusable through
+its scanner-executable revision namespace.
+
 The validator rebuilds the identity/representative inventory from saved scans,
 checks its correspondence with occurrence and body manifests, checks markers
 and counts, and rescans materialized objects after verifying their exact byte
