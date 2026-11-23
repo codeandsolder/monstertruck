@@ -78,7 +78,7 @@ fn fit_circle(points: &[Point3], ids: &[usize], axis: Vector3) -> Option<(Point3
             (delta.dot(xaxis), delta.dot(yaxis))
         })
         .collect::<Vec<_>>();
-    let n = samples.len() as f64;
+    let n = crate::usize_to_f64(samples.len());
     let mx = samples.iter().map(|&(x, _)| x).sum::<f64>() / n;
     let my = samples.iter().map(|&(_, y)| y).sum::<f64>() / n;
     let mqq = samples
@@ -91,11 +91,11 @@ fn fit_circle(points: &[Point3], ids: &[usize], axis: Vector3) -> Option<(Point3
         let dx = x - mx;
         let dy = y - my;
         let dq = x.mul_add(x, y * y) - mqq;
-        xx += dx * dx;
-        xy += dx * dy;
-        yy += dy * dy;
-        qx += dx * dq * 0.5;
-        qy += dy * dq * 0.5;
+        xx = dx.mul_add(dx, xx);
+        xy = dx.mul_add(dy, xy);
+        yy = dy.mul_add(dy, yy);
+        qx = (dx * 0.5).mul_add(dq, qx);
+        qy = (dy * 0.5).mul_add(dq, qy);
     }
     let det = xx.mul_add(yy, -(xy * xy));
     if !det.is_finite() || det <= f64::EPSILON * (xx + yy).powi(2) {
@@ -121,7 +121,7 @@ fn ring_max_step(
 ) -> Option<f64> {
     let mut total = 0.0;
     let mut max_step: f64 = 0.0;
-    let mut sense = 0.0;
+    let mut sense = false;
     for i in 0..ids.len() {
         let a = positions[ids[i]] - center;
         let b = positions[ids[(i + 1) % ids.len()]] - center;
@@ -132,8 +132,8 @@ fn ring_max_step(
             return None;
         }
         if i == 0 {
-            sense = step.signum();
-        } else if step.signum() != sense {
+            sense = step.is_sign_positive();
+        } else if step.is_sign_positive() != sense {
             return None;
         }
         total += step;
@@ -168,6 +168,129 @@ fn build_cylinder_solid(
     Solid::new(vec![shell]).map_err(MeshRecoveryError::Topology)
 }
 
+/// Shared geometry and acceptance constraints for checking a complete source
+/// mesh. Keeping cap and lateral checks in one place prevents them from using
+/// inconsistent cylinder axis, radius, or error budgets.
+struct CylindricalSource<'a> {
+    positions: &'a [Point3],
+    caps: [&'a PlanarPatch; 2],
+    centers: [Point3; 2],
+    axis: Vector3,
+    radius: f64,
+    height: f64,
+    options: CylinderRecoveryOptions,
+}
+
+impl CylindricalSource<'_> {
+    fn radial_distance(&self, position: Point3) -> f64 {
+        let delta = position - self.centers[0];
+        (delta - self.axis * delta.dot(self.axis)).magnitude()
+    }
+
+    /// Validate source facet geometry and provide original face provenance,
+    /// maximum sample error, and conservative faceting error bound.
+    fn validate(
+        &self,
+        polygons: &[InputPolygon],
+        mut widest_angle: f64,
+    ) -> Option<(Vec<usize>, f64, f64)> {
+        let [bottom, upper] = self.caps.map(|cap| &cap.boundary_loops[0]);
+        let lower_set: HashSet<usize> = bottom.iter().copied().collect();
+        let upper_set: HashSet<usize> = upper.iter().copied().collect();
+        if !lower_set.is_disjoint(&upper_set) {
+            return None;
+        }
+        let mut max_residual = bottom
+            .iter()
+            .chain(upper.iter())
+            .map(|&v| (self.radial_distance(self.positions[v]) - self.radius).abs())
+            .fold(0.0_f64, f64::max);
+        if !max_residual.is_finite() || max_residual > self.options.max_radial_residual {
+            return None;
+        }
+        // Cap samples inside a polygonal disk remain inside the reconstructed
+        // circle; explicit axial/radial bounds prevent lost protrusions.
+        let mut cap_deviation = 0.0_f64;
+        for (cap, center) in self.caps.iter().zip(self.centers) {
+            for &face_id in &cap.source_face_indices {
+                for &vertex in &polygons[face_id].vertices {
+                    let delta = self.positions[vertex] - center;
+                    let axial = delta.dot(self.axis).abs();
+                    let transverse = (delta - self.axis * delta.dot(self.axis)).magnitude();
+                    let overhang = (transverse - self.radius).max(0.0);
+                    if axial > self.options.planar.distance_tolerance
+                        || overhang > self.options.max_radial_residual
+                    {
+                        return None;
+                    }
+                    cap_deviation = cap_deviation.max(axial + overhang);
+                }
+            }
+        }
+        let cap_faces: HashSet<usize> = self
+            .caps
+            .iter()
+            .flat_map(|cap| cap.source_face_indices.iter().copied())
+            .collect();
+        let mut lateral = Vec::new();
+        for (face_id, polygon) in polygons.iter().enumerate() {
+            if cap_faces.contains(&face_id) {
+                continue;
+            }
+            // Intermediate axial rings are legal, but every lateral vertex
+            // must lie between caps and within the same common radial fit.
+            for &v in &polygon.vertices {
+                let delta = self.positions[v] - self.centers[0];
+                let axial = delta.dot(self.axis);
+                if axial < -self.options.max_radial_residual
+                    || axial > self.height + self.options.max_radial_residual
+                {
+                    return None;
+                }
+                max_residual =
+                    max_residual.max((self.radial_distance(self.positions[v]) - self.radius).abs());
+            }
+            if max_residual > self.options.max_radial_residual {
+                return None;
+            }
+            let centroid = polygon
+                .vertices
+                .iter()
+                .map(|&v| self.positions[v] - self.centers[0])
+                .fold(Vector3::new(0.0, 0.0, 0.0), |a, p| a + p)
+                / crate::usize_to_f64(polygon.vertices.len());
+            let outward = centroid - self.axis * centroid.dot(self.axis);
+            if polygon.normal.dot(outward) <= 0.0 {
+                return None;
+            }
+            for i in 0..polygon.vertices.len() {
+                let a = self.positions[polygon.vertices[i]] - self.centers[0];
+                let b = self.positions[polygon.vertices[(i + 1) % polygon.vertices.len()]]
+                    - self.centers[0];
+                let ra = a - self.axis * a.dot(self.axis);
+                let rb = b - self.axis * b.dot(self.axis);
+                let angle = self.axis.dot(ra.cross(rb)).atan2(ra.dot(rb)).abs();
+                if !angle.is_finite() || angle >= FRAC_PI_2 {
+                    return None;
+                }
+                widest_angle = widest_angle.max(angle);
+            }
+            lateral.push(face_id);
+        }
+        if lateral.is_empty() {
+            return None;
+        }
+        // Facet chord sagitta bounds wall and omitted cap ring arcs. Additional
+        // cap offset terms cover tilt, off-axis caps and disk overhang.
+        let sagitta = self.radius * (1.0 - (widest_angle * 0.5).cos());
+        let centers_delta = self.centers[1] - self.centers[0];
+        let lateral_deviation = max_residual + sagitta;
+        let cap_deviation =
+            cap_deviation + sagitta + (centers_delta - self.axis * self.height).magnitude();
+        Some((lateral, max_residual, lateral_deviation.max(cap_deviation)))
+    }
+}
+
 /// Hypothesize a smooth right circular cylinder from an oriented, closed,
 /// two-ring mesh, retaining quantitative approximation evidence.
 ///
@@ -177,7 +300,7 @@ fn build_cylinder_solid(
 /// original intended surface. The chord error bound makes the inferred
 /// smooth-surface replacement an explicit geometric choice.
 ///
-/// Returns Ok(None) if the valid mesh does not meet the supplied constraints.
+/// Returns `Ok(None)` if the valid mesh does not meet the supplied constraints.
 ///
 /// # Errors
 /// Rejects invalid tolerances, malformed input geometry, or native topology
@@ -234,105 +357,30 @@ pub fn recover_cylindrical_solid(
         return Ok(None);
     }
 
-    let radius = 0.5 * (radius0 + radius1);
-    let radial = |p: Point3| {
-        let d = p - center0;
-        (d - axis * d.dot(axis)).magnitude()
-    };
-    let mut max_residual = bottom
-        .iter()
-        .chain(upper.iter())
-        .map(|&v| (radial(positions[v]) - radius).abs())
-        .fold(0.0_f64, f64::max);
-    if !max_residual.is_finite() || max_residual > options.max_radial_residual {
-        return Ok(None);
-    }
+    let radius = f64::midpoint(radius0, radius1);
     let Some(lower_step) = ring_max_step(positions, bottom, center0, axis) else {
         return Ok(None);
     };
     let Some(upper_step) = ring_max_step(positions, upper, center1, axis) else {
         return Ok(None);
     };
-    let mut widest = lower_step.max(upper_step);
-    let lower_set: HashSet<usize> = bottom.iter().copied().collect();
-    let upper_set: HashSet<usize> = upper.iter().copied().collect();
-    if lower_set.intersection(&upper_set).next().is_some() {
-        return Ok(None);
-    }
     let (original_positions, polygons) =
         positions_and_polygons(mesh, options.planar.distance_tolerance)?;
     debug_assert_eq!(original_positions, *positions);
-    // The cap interior may contain triangulation centers, but every source
-    // cap triangle must remain in the reconstructed circular disk. Otherwise
-    // the fitted disk silently deletes protruding source geometry.
-    for (cap, center) in [(first_cap, center0), (second_cap, center1)] {
-        for &face_id in &cap.source_face_indices {
-            for &vertex in &polygons[face_id].vertices {
-                let delta = positions[vertex] - center;
-                let axial = delta.dot(axis);
-                let transverse = (delta - axis * axial).magnitude();
-                if axial.abs() > options.planar.distance_tolerance
-                    || transverse > radius + options.max_radial_residual
-                {
-                    return Ok(None);
-                }
-            }
-        }
-    }
-    let cap_faces: HashSet<usize> = first_cap
-        .source_face_indices
-        .iter()
-        .chain(&second_cap.source_face_indices)
-        .copied()
-        .collect();
-    let mut lateral = Vec::new();
-    for (face_id, polygon) in polygons.iter().enumerate() {
-        if cap_faces.contains(&face_id) {
-            continue;
-        }
-        // Intermediate tessellation rings are legal: a side vertex needs only
-        // to lie on the same cylinder and between the two cap planes.
-        for &v in &polygon.vertices {
-            let delta = positions[v] - center0;
-            let axial = delta.dot(axis);
-            if axial < -options.max_radial_residual || axial > height + options.max_radial_residual
-            {
-                return Ok(None);
-            }
-            max_residual = max_residual.max((radial(positions[v]) - radius).abs());
-        }
-        if max_residual > options.max_radial_residual {
-            return Ok(None);
-        }
-        let centroid = polygon
-            .vertices
-            .iter()
-            .map(|&v| positions[v] - center0)
-            .fold(Vector3::new(0.0, 0.0, 0.0), |acc, p| acc + p)
-            / polygon.vertices.len() as f64;
-        let outward = centroid - axis * centroid.dot(axis);
-        if polygon.normal.dot(outward) <= 0.0 {
-            return Ok(None);
-        }
-        for i in 0..polygon.vertices.len() {
-            let a = positions[polygon.vertices[i]];
-            let b = positions[polygon.vertices[(i + 1) % polygon.vertices.len()]];
-            let da = a - center0;
-            let db = b - center0;
-            let ra = da - axis * da.dot(axis);
-            let rb = db - axis * db.dot(axis);
-            let angle = axis.dot(ra.cross(rb)).atan2(ra.dot(rb)).abs();
-            if !angle.is_finite() || angle >= FRAC_PI_2 {
-                return Ok(None);
-            }
-            widest = widest.max(angle);
-        }
-        lateral.push(face_id);
-    }
-    if lateral.is_empty() {
+    let source = CylindricalSource {
+        positions,
+        caps: [first_cap, second_cap],
+        centers: [center0, center1],
+        axis,
+        radius,
+        height,
+        options,
+    };
+    let Some((lateral, max_residual, deviation)) =
+        source.validate(&polygons, lower_step.max(upper_step))
+    else {
         return Ok(None);
-    }
-    let deviation = max_residual + radius * (1.0 - (widest / 2.0).cos());
+    };
     if deviation > options.max_surface_deviation {
         return Ok(None);
     }
