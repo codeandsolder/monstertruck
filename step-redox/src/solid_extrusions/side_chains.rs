@@ -504,8 +504,58 @@ mod tests {
             assert_eq!(used_bottom, HashSet::from([1, 2]));
             assert_eq!(used_top, HashSet::from([5]));
             assert!(context.complete());
+            // A face must never be admitted twice to cover the same cap
+            // chain, regardless of cyclic edge order.
+            assert!(
+                prove_side_face(&side, &mut context, &mut used_bottom, &mut used_top).is_none()
+            );
             side.loop_edges.rotate_left(1);
         }
+        let mut swapped_role = SideProofContext::new(
+            &bottom,
+            &top,
+            &bottom_ids,
+            &top_ids,
+            [0., 0., 1.],
+            &[true],
+            &[false],
+        )
+        .unwrap_or_else(|| panic!("cap mapping"));
+        assert!(
+            prove_side_face(
+                &side,
+                &mut swapped_role,
+                &mut HashSet::new(),
+                &mut HashSet::new()
+            )
+            .is_none(),
+            "an outer boundary cannot map onto a hole"
+        );
+
+        let mut retracing = side.clone();
+        retracing.loop_edges[2] = line(7, [1., 0., 0.], [1., 0., 1.2]);
+        retracing.loop_edges[3] = line(8, [1., 0., 1.2], [1., 0., 1.]);
+        let mut retraced_context = SideProofContext::new(
+            &bottom,
+            &top,
+            &bottom_ids,
+            &top_ids,
+            [0., 0., 1.],
+            &[true],
+            &[true],
+        )
+        .unwrap_or_else(|| panic!("cap mapping"));
+        assert!(
+            prove_side_face(
+                &retracing,
+                &mut retraced_context,
+                &mut HashSet::new(),
+                &mut HashSet::new()
+            )
+            .is_none(),
+            "a generator must not overshoot and retrace the extrusion"
+        );
+
         side.loop_edges[0].end_mm[1] += 0.0001;
         let mut context = SideProofContext::new(
             &bottom,
