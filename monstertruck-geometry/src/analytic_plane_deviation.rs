@@ -27,12 +27,12 @@ pub struct PlaneDeviationBounds {
 }
 
 impl PlaneDeviationBounds {
-    #[must_use]
+    #[must_use = "The boolean result of `within` must be observed to use the predicate."]
     pub fn within(self, tolerance: f64) -> bool {
         tolerance.is_finite() && tolerance >= 0.0 && self.upper <= tolerance
     }
 
-    #[must_use]
+    #[must_use = "The boolean result of `exceeds` must be observed to use the predicate."]
     pub fn exceeds(self, tolerance: f64) -> bool {
         tolerance.is_finite() && tolerance >= 0.0 && self.lower > tolerance
     }
@@ -87,7 +87,7 @@ fn arithmetic_margin(
 /// before the arithmetic margin. If work/depth limits are reached, the best
 /// still-valid (possibly wider) bracket is returned. A missing bracket means
 /// malformed geometry, a non-unit normal, or numerically invalid arithmetic.
-#[must_use]
+#[must_use = "Ignoring this result discards a global bracket on maximum whole-curve plane distance."]
 pub fn bound_nurbs_plane_deviation(
     curve: &NurbsCurve<Vector4>,
     origin: Point3,
@@ -153,7 +153,7 @@ pub struct PlaneDirectedSeparationBounds {
 /// need not have an exact planar representation. Both splines are checked over
 /// their entire active knot domains by the same Bernstein partitioner.
 /// This does not establish B-rep topology, edge trim, or face orientation.
-#[must_use]
+#[must_use = "The optional bound nurbs curves separation by plane outcome must be inspected to distinguish a value from absence."]
 pub fn bound_nurbs_curves_separation_by_plane(
     source: &NurbsCurve<Vector4>,
     target: &NurbsCurve<Vector4>,
@@ -172,7 +172,7 @@ pub fn bound_nurbs_curves_separation_by_plane(
 }
 
 /// Polynomial B-spline specialization using positive unit weights.
-#[must_use]
+#[must_use = "The optional bound bspline plane deviation outcome must be inspected to distinguish a value from absence."]
 pub fn bound_bspline_plane_deviation(
     curve: &BsplineCurve<Point3>,
     origin: Point3,

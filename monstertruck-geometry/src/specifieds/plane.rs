@@ -9,7 +9,7 @@ use super::{
 impl Plane {
     /// Creates a new plane from three points.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(origin: Point3, one: Point3, another: Point3) -> Self {
         Self {
             o: origin,
@@ -19,15 +19,15 @@ impl Plane {
     }
     /// Returns the origin
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the origin."]
     pub const fn origin(&self) -> Point3 { self.o }
     /// Returns the u-axis
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the u-axis."]
     pub fn axis_u(&self) -> Vector3 { self.p - self.o }
     /// Returns the v-axis
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the v-axis."]
     pub fn axis_v(&self) -> Vector3 { self.q - self.o }
     /// Returns the normal
     /// # Examples
@@ -41,7 +41,7 @@ impl Plane {
     /// assert_near!(plane.normal(), Vector3::unit_z());
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the normal."]
     pub fn normal(&self) -> Vector3 { self.axis_u().cross(self.axis_v()).normalize() }
     /// Gets the parameter of `pt` in plane's matrix.
     /// # Examples
@@ -62,7 +62,7 @@ impl Plane {
     /// assert_near!(pt, rev);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The optional parameter outcome must be inspected to distinguish a value from absence."]
     pub fn parameter(&self, pt: Point3) -> Option<Vector3> {
         let a = self.axis_u();
         let b = self.axis_v();
@@ -73,7 +73,7 @@ impl Plane {
     }
     /// xy-plane
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed XY-aligned plane is returned rather than installed elsewhere."]
     pub const fn xy() -> Self {
         Self {
             o: Point3::new(0.0, 0.0, 0.0),
@@ -83,7 +83,7 @@ impl Plane {
     }
     /// yz-plane
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed YZ-aligned plane is returned rather than installed elsewhere."]
     pub const fn yz() -> Self {
         Self {
             o: Point3::new(0.0, 0.0, 0.0),
@@ -93,7 +93,7 @@ impl Plane {
     }
     /// zx-plane
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed ZX-aligned plane is returned rather than installed elsewhere."]
     pub const fn zx() -> Self {
         Self {
             o: Point3::new(0.0, 0.0, 0.0),

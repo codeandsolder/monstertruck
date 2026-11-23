@@ -38,12 +38,12 @@ pub struct ConeDeviationBounds {
 }
 
 impl ConeDeviationBounds {
-    #[must_use]
+    #[must_use = "The boolean result of `within` must be observed to use the predicate."]
     pub fn within(self, tolerance: f64) -> bool {
         tolerance.is_finite() && tolerance >= 0.0 && self.upper <= tolerance
     }
 
-    #[must_use]
+    #[must_use = "The boolean result of `exceeds` must be observed to use the predicate."]
     pub fn exceeds(self, tolerance: f64) -> bool {
         tolerance.is_finite() && tolerance >= 0.0 && self.lower > tolerance
     }
@@ -181,7 +181,7 @@ fn arithmetic_margin(
 ///
 /// The tolerance itself is NOT an input: callers apply independently sourced
 /// geometric uncertainty to these bounds rather than altering tolerances.
-#[must_use]
+#[must_use = "The optional bound nurbs cone deviation outcome must be inspected to distinguish a value from absence."]
 pub fn bound_nurbs_cone_deviation(
     curve: &NurbsCurve<Vector4>,
     reference_origin: Point3,
