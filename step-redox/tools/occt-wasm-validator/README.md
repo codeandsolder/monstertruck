@@ -119,4 +119,7 @@ equality is deliberately not required. Exit status 0 indicates equality,
 1 a measured mismatch, and an execution error fails with an error message.
 The tolerances and adaptive integration targets retain the previous native
 oracle's definitions; the new implementation uses the independently built
-WASM kernel without native Python/OCP.
+WASM kernel without native Python/OCP. For assemblies where exact source-entity
+selection is unnecessary, use `analyze-batch` to inspect per-solid inventories
+or `boolean-residuals` for corresponding material cuts. Use the manifest-backed
+`run` command for release acceptance, including independently checked renders.

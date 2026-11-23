@@ -259,7 +259,10 @@ The aggressive output is byte-idempotent under a second cleanup pass.
 
 ### OpenCascade validation
 
-The mapped-item path is independently tested with OpenCascade 8 via the validation scripts under `.github/ci/step-redox/`.
+The mapped-item path is independently tested using the pinned OpenCascade
+kernel embedded in our [OCCT-WASM fork](tools/occt-wasm-validator/README.md).
+The Rust validator provides the per-solid metric, material-cut, and exact
+STEP-entity diagnostics without a native OCP/Python installation.
 
 For both QFN and SOP examples, STEP import succeeds; solid count and topology counts are preserved; individual solid volume, surface area, center of mass, and bounding box match; matched-solid boolean overlap is complete to floating-point noise; and bidirectional boolean cuts leave no measurable residual geometry.
 
