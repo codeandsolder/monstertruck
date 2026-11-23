@@ -159,7 +159,7 @@ pub struct SignedRayIndex {
 impl SignedRayIndex {
     /// Build an owned index from oriented meshes. A false orientation
     /// subtracts that mesh's original winding contribution.
-    #[must_use]
+    #[must_use = "retain the spatial ray index before querying signed mesh crossings"]
     pub fn new<M: Borrow<PolygonMesh>>(meshes: impl IntoIterator<Item = (M, bool)>) -> Self {
         let mut entries = Vec::new();
         let mut finite = true;
@@ -240,7 +240,7 @@ impl SignedRayIndex {
 
     /// Count signed crossings of a positive ray. Nonfinite input uses the
     /// exhaustive narrow phase instead of unsafe spatial rejection.
-    #[must_use]
+    #[must_use = "use the signed crossing count when classifying a point against the mesh"]
     pub fn signed_crossing_faces(&self, point: Point3, ray_direction: Vector3) -> isize {
         let ray = Ray {
             origin: point,

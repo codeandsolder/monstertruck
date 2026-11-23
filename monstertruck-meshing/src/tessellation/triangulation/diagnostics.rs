@@ -45,7 +45,7 @@ pub enum FaceDropReason {
 
 impl FaceDropReason {
     /// Stable machine-readable tag for census parsing and structured log fields.
-    #[must_use]
+    #[must_use = "record the stable diagnostic tag when reporting dropped tessellated faces"]
     pub const fn tag(self) -> &'static str {
         match self {
             Self::UnboundedDomain => "unbounded-domain",

@@ -498,7 +498,7 @@ pub trait RobustMeshableShape {
 }
 
 /// Tessellates a [`Shell`] with a [`TessellationOptions`].
-#[must_use]
+#[must_use = "use the tessellated shell produced from the requested search options"]
 pub fn triangulation_with<C: PolylineableCurve, S: MeshableSurface>(
     shell: &Shell<Point3, C, S>,
     options: TessellationOptions,
@@ -518,7 +518,7 @@ pub fn triangulation_with<C: PolylineableCurve, S: MeshableSurface>(
 }
 
 /// Tessellates a [`Shell`] with robust parameter search and a [`TessellationOptions`].
-#[must_use]
+#[must_use = "use the robustly tessellated shell instead of the original parametric shell"]
 pub fn robust_triangulation_with<C: PolylineableCurve, S: RobustMeshableSurface>(
     shell: &Shell<Point3, C, S>,
     options: TessellationOptions,
@@ -538,7 +538,7 @@ pub fn robust_triangulation_with<C: PolylineableCurve, S: RobustMeshableSurface>
 }
 
 /// Tessellates a [`CompressedShell`] with a [`TessellationOptions`].
-#[must_use]
+#[must_use = "use the tessellated compressed shell when constructing polygon geometry"]
 pub fn cshell_triangulation_with<
     C: PolylineableCurve + ParameterBoundary2D<S>,
     S: MeshableSurface,
@@ -552,7 +552,7 @@ pub fn cshell_triangulation_with<
 }
 
 /// Tessellates a [`CompressedShell`] with robust parameter search and a [`TessellationOptions`].
-#[must_use]
+#[must_use = "use the robustly tessellated compressed shell in downstream geometry"]
 pub fn robust_cshell_triangulation_with<
     C: PolylineableCurve + ParameterBoundary2D<S>,
     S: RobustMeshableSurface,
@@ -566,7 +566,7 @@ pub fn robust_cshell_triangulation_with<
 }
 
 /// Tessellates a [`CompressedTrimmedShell`] with a [`TessellationOptions`].
-#[must_use]
+#[must_use = "use the tessellated trimmed shell rather than the parametric input"]
 pub fn trimmed_cshell_triangulation_with<
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
     S: MeshableSurface,
@@ -584,7 +584,7 @@ where
 }
 
 /// Tessellates a [`CompressedTrimmedShell`] and emits trim-aware isoparametric curves.
-#[must_use]
+#[must_use = "retain both the trimmed-shell mesh and generated isoparametric curves"]
 pub fn compressed_trimmed_shell_triangulation_with_isoparams<
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
     S: MeshableSurface,
@@ -609,7 +609,7 @@ where
 }
 
 /// Tessellates a [`CompressedTrimmedShell`] with robust parameter search and a [`TessellationOptions`].
-#[must_use]
+#[must_use = "use the robustly tessellated trimmed shell for downstream meshing"]
 pub fn robust_trimmed_cshell_triangulation_with<
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
     S: RobustMeshableSurface,
@@ -627,7 +627,7 @@ where
 }
 
 /// Robustly tessellates a [`CompressedTrimmedShell`] and emits trim-aware isoparametric curves.
-#[must_use]
+#[must_use = "retain both the robust trimmed-shell mesh and its isoparametric curves"]
 pub fn robust_compressed_trimmed_shell_triangulation_with_isoparams<
     C: PolylineableCurve + ParameterBoundary2D<S> + ExactParameterBoundary2D<S>,
     S: RobustMeshableSurface,
