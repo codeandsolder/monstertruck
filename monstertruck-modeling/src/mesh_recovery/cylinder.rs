@@ -62,7 +62,7 @@ pub struct RecoveredCylinder {
 
 /// Least-squares circle in a known plane. The relative frame avoids
 /// cancellation for large world offsets.
-fn fit_circle(points: &[Point3], ids: &[usize], axis: Vector3) -> Option<(Point3, f64)> {
+pub(super) fn fit_circle(points: &[Point3], ids: &[usize], axis: Vector3) -> Option<(Point3, f64)> {
     let start = points[*ids.first()?];
     let delta = points[*ids.get(1)?] - start;
     let projected = delta - axis * delta.dot(axis);
@@ -114,7 +114,7 @@ fn fit_circle(points: &[Point3], ids: &[usize], axis: Vector3) -> Option<(Point3
 }
 
 /// Require a one-turn ordered circumference with no angular reversal.
-fn ring_max_step(
+pub(super) fn ring_max_step(
     positions: &[Point3],
     ids: &[usize],
     center: Point3,
@@ -143,6 +143,28 @@ fn ring_max_step(
     ((total.abs() - TAU).abs() <= 1.0e-6).then_some(max_step)
 }
 
+/// Revolve a generatrix into two exact analytic cylindrical faces, sharing
+/// their circular and longitudinal edges. Flip the generatrix for a hole
+/// carrier so its normals point inward toward the void, not outside material.
+pub(super) fn build_cylinder_side(
+    cap_center: Point3,
+    axis: Vector3,
+    radial_start: Vector3,
+    radius: f64,
+    height: f64,
+    outward: bool,
+) -> Result<Shell, MeshRecoveryError> {
+    let bottom = builder::vertex(cap_center + radial_start * radius);
+    let top = builder::vertex(bottom.point() + axis * height);
+    let profile = if outward {
+        builder::line(&top, &bottom)
+    } else {
+        builder::line(&bottom, &top)
+    };
+    builder::revolve(&profile, cap_center, axis, builder::SweepAngle::Closed, 2)
+        .map_err(|_| MeshRecoveryError::CylinderConstruction)
+}
+
 /// Construct a true analytical cylinder without retaining polygon seams.
 fn build_cylinder_solid(
     cap_center: Point3,
@@ -151,12 +173,7 @@ fn build_cylinder_solid(
     radius: f64,
     height: f64,
 ) -> Result<Solid, MeshRecoveryError> {
-    let bottom = builder::vertex(cap_center + radial_start * radius);
-    let top = builder::vertex(bottom.point() + axis * height);
-    let profile = builder::line(&top, &bottom);
-    let mut shell: Shell =
-        builder::revolve(&profile, cap_center, axis, builder::SweepAngle::Closed, 2)
-            .map_err(|_| MeshRecoveryError::CylinderConstruction)?;
+    let mut shell = build_cylinder_side(cap_center, axis, radial_start, radius, height, true)?;
     let boundaries = shell.extract_boundaries();
     if boundaries.len() != 2 {
         return Err(MeshRecoveryError::CylinderConstruction);

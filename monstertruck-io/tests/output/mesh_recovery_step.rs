@@ -154,3 +154,67 @@ fn sampled_cylindrical_stl_roundtrips_as_analytic_step_cylinders() {
     }
     assert_eq!((planes, cylinders), (2, 2));
 }
+
+#[test]
+fn faceted_through_hole_stl_roundtrips_as_mixed_planar_cylindrical_step() {
+    use monstertruck_modeling::mesh_recovery::{
+        CylinderRecoveryOptions, recover_cylindrical_through_hole,
+    };
+    // A checked-in binary STL fixture is used here rather than generating
+    // the mesh from the recovery code under test or linking synthetic CAD.
+    // 256 triangles: two triangulated annular caps, four outer planar sides,
+    // and a 32-segment faceted cylindrical hole.
+    let source = stl::read(
+        &include_bytes!("../fixtures/mesh-recovery/through-hole-32.stl")[..],
+        StlType::Automatic,
+    )
+    .unwrap();
+    let recovered = recover_cylindrical_through_hole(&source, CylinderRecoveryOptions::default())
+        .unwrap()
+        .expect("circular STL hole must recover a true analytic through-hole");
+    assert!((recovered.radius - 1.0).abs() < 1.0e-5);
+    assert!((recovered.height - 4.0).abs() < 1.0e-5);
+    assert!(recovered.max_surface_deviation < 0.05);
+    assert_eq!(recovered.cylindrical_source_face_indices.len(), 64);
+    assert!(recovered.solid.is_geometric_consistent());
+    assert_eq!(
+        recovered.solid.boundaries()[0].shell_condition(),
+        ShellCondition::Closed
+    );
+
+    let compressed = recovered.solid.compress_with_parameter_curves(1.0e-6);
+    assert_eq!(compressed.boundaries[0].faces.len(), 8);
+    let step =
+        CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string();
+    assert!(step.contains("MANIFOLD_SOLID_BREP"));
+    assert!(step.contains("CYLINDRICAL_SURFACE("));
+    assert!(!step.contains("B_SPLINE_SURFACE"));
+    let parsed = Table::from_step(&step).unwrap();
+    let native_shell = parsed.shell.values().next().unwrap();
+    let reloaded = parsed.to_compressed_trimmed_shell(native_shell).unwrap();
+    assert_eq!(reloaded.faces.len(), 8);
+    assert_eq!(
+        reloaded
+            .faces
+            .iter()
+            .filter(|f| f.boundaries.len() == 2)
+            .count(),
+        2
+    );
+    let (mut planes, mut cylinders) = (0, 0);
+    for face in &reloaded.faces {
+        match &face.surface {
+            step_geometry::Surface::Elementary(step_geometry::ElementarySurface::Plane(_)) => {
+                planes += 1;
+            }
+            step_geometry::Surface::Elementary(
+                step_geometry::ElementarySurface::CylindricalSurface(_),
+            ) => {
+                cylinders += 1;
+                assert_eq!(face.boundaries.len(), 1);
+            }
+            other => panic!("unexpected recovered STEP face surface: {other:?}"),
+        }
+    }
+    assert_eq!((planes, cylinders), (6, 2));
+}

@@ -37,7 +37,9 @@ impl Default for PlanarRecoveryOptions {
 }
 
 mod cylinder;
+mod through_hole;
 pub use cylinder::{CylinderRecoveryOptions, RecoveredCylinder, recover_cylindrical_solid};
+pub use through_hole::{RecoveredCylindricalThroughHole, recover_cylindrical_through_hole};
 mod seams;
 
 /// Source evidence for one reconstructed planar face.
