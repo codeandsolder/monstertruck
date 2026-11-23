@@ -189,7 +189,7 @@ fn shape_definition_root_for_representation(
 /// Reusing source product roots can silently leave instance representations
 /// orphaned: a product may point at an assembly representation containing a
 /// separate instance, while the actual source solid is owned by a different
-/// ADVANCED_BREP_SHAPE_REPRESENTATION. OCCT then transfers zero roots.
+/// `ADVANCED_BREP_SHAPE_REPRESENTATION`. OCCT then transfers zero roots.
 fn isolated_product_root(representation_id: u64, first_id: u64) -> Vec<EntityInstance> {
     let reference = step_entities::entity_ref;
     let make = |offset: u64, name: &str, parameters: Vec<Parameter>| EntityInstance::Simple {
@@ -333,10 +333,10 @@ pub fn scan(path: &Path) -> Result<ScanReport> {
 
 fn scan_bytes(bytes: &[u8]) -> Result<ScanReport> {
     let exchange = parse_exchange(bytes)?;
-    scan_exchange(&exchange)
+    Ok(scan_exchange(&exchange))
 }
 
-fn scan_exchange(exchange: &Exchange) -> Result<ScanReport> {
+fn scan_exchange(exchange: &Exchange) -> ScanReport {
     let mut solids = Vec::new();
     let mut manifold_solids = 0usize;
     let mut skipped_solids = 0usize;
@@ -422,14 +422,14 @@ fn scan_exchange(exchange: &Exchange) -> Result<ScanReport> {
         }
     }
     solids.sort_by_key(|row| (row.data_section, row.solid_id));
-    Ok(ScanReport {
+    ScanReport {
         manifold_solids,
         analyzed_solids: solids.len(),
         skipped_solids,
         fallback_identity_solids,
         solids_without_shape_representation,
         solids,
-    })
+    }
 }
 
 #[derive(Debug)]
@@ -444,7 +444,7 @@ struct Selection {
 /// independent model by OCCT and other product-oriented STEP importers.
 fn scan_isolated_object(bytes: &[u8]) -> Result<ScanReport> {
     let exchange = parse_exchange(bytes)?;
-    let report = scan_exchange(&exchange)?;
+    let report = scan_exchange(&exchange);
     ensure!(
         report.manifold_solids == 1 && report.analyzed_solids == 1,
         "expected exactly one analyzable isolated solid"
