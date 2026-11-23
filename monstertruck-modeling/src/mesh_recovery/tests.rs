@@ -336,7 +336,7 @@ fn rejects_loose_surface_fit_that_would_break_brep_incidence() {
 
 #[test]
 fn dense_planar_grid_collapses_without_losing_boundary_segments() {
-    const N: usize = 12;
+    const N: usize = 64;
     let mut positions = Vec::new();
     for y in 0..=N {
         for x in 0..=N {
@@ -357,5 +357,140 @@ fn dense_planar_grid_collapses_without_losing_boundary_segments() {
     let recovered = recover_planar_mesh(&source, PlanarRecoveryOptions::default()).unwrap();
     assert_eq!(recovered.patches.len(), 1);
     assert_eq!(recovered.patches[0].source_face_indices.len(), 2 * N * N);
-    assert_eq!(recovered.patches[0].boundary_loops[0].len(), 4 * N);
+    assert_eq!(recovered.patches[0].boundary_loops[0].len(), 4);
+}
+
+#[test]
+fn geometric_t_junction_in_cube_is_split_and_then_globally_simplified() {
+    // The upper face has a midpoint on a seam; the adjoining side uses
+    // the original unsplit long edge. The patch topology must agree.
+    let source = mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [0.5, 0.0, 1.0],
+        ],
+        &[
+            [0, 2, 1],
+            [0, 3, 2],
+            [4, 8, 6],
+            [8, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, 6],
+            [3, 0, 4],
+            [3, 4, 7],
+        ],
+    );
+    let recovered = recover_planar_mesh(&source, PlanarRecoveryOptions::default()).unwrap();
+    assert_eq!(recovered.patches.len(), 6);
+    assert_eq!(recovered.shell.shell_condition(), ShellCondition::Closed);
+    assert!(
+        recovered
+            .patches
+            .iter()
+            .all(|patch| { patch.boundary_loops.len() == 1 && patch.boundary_loops[0].len() == 4 })
+    );
+    // No orphaned half-edge or T-junction survives as a B-rep edge.
+    for face in recovered.shell.face_iter() {
+        assert_eq!(face.boundaries()[0].len(), 4);
+    }
+    assert!(Solid::new(vec![recovered.shell]).is_ok());
+}
+
+#[test]
+fn near_but_not_incident_vertex_does_not_weld_to_a_seam() {
+    // A vertex 1e-8 above the plane must remain separate, despite the
+    // default 1e-6 fitting tolerance for coplanar facet classification.
+    let source = mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.5, 0.0, 1e-8],
+            [0.5, 0.0, 1.0],
+            [0.5, 1.0, 1e-8],
+        ],
+        &[[0, 1, 2], [3, 4, 5]],
+    );
+    let recovered = recover_planar_mesh(&source, PlanarRecoveryOptions::default()).unwrap();
+    assert_eq!(recovered.patches.len(), 2);
+    assert!(
+        recovered
+            .patches
+            .iter()
+            .all(|p| p.boundary_loops[0].len() == 3)
+    );
+}
+
+#[test]
+fn a_nearly_straight_real_boundary_feature_is_not_erased() {
+    let source = mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [0.5, 1.0e-8, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        &[[0, 1, 3], [1, 2, 3]],
+    );
+    let recovered = recover_planar_mesh(&source, PlanarRecoveryOptions::default()).unwrap();
+    assert_eq!(recovered.patches.len(), 1);
+    assert_eq!(recovered.patches[0].boundary_loops[0].len(), 4);
+    assert!(recovered.patches[0].boundary_loops[0].contains(&1));
+}
+
+#[test]
+fn t_junction_repair_rejects_a_third_incident_polygon() {
+    let source = mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [2.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+        ],
+        &[[0, 1, 2], [1, 0, 3], [0, 4, 5]],
+    );
+    assert!(matches!(
+        recover_planar_mesh(&source, PlanarRecoveryOptions::default()),
+        Err(MeshRecoveryError::NonManifoldEdge(_)),
+    ));
+}
+
+#[test]
+fn point_only_contact_on_an_edge_does_not_create_a_false_seam() {
+    // Another triangle has a vertex exactly in the middle of an edge but
+    // its incident edges leave that carrier line. This is a point contact,
+    // not the overlapping collinear subedges of a genuine T-junction.
+    let source = mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.5, 0.0, 0.0],
+            [0.5, 0.0, 1.0],
+            [0.5, 1.0, 1.0],
+        ],
+        &[[0, 1, 2], [3, 4, 5]],
+    );
+    let recovered = recover_planar_mesh(&source, PlanarRecoveryOptions::default()).unwrap();
+    assert_eq!(recovered.patches.len(), 2);
+    assert!(
+        recovered
+            .patches
+            .iter()
+            .all(|p| p.boundary_loops[0].len() == 3)
+    );
 }

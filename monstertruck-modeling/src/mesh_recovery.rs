@@ -36,13 +36,15 @@ impl Default for PlanarRecoveryOptions {
     }
 }
 
+mod seams;
+
 /// Source evidence for one reconstructed planar face.
 #[derive(Clone, Debug)]
 pub struct PlanarPatch {
     /// Source polygon indices in mesh.faces().face_iter() order.
     pub source_face_indices: Vec<usize>,
     /// Winding-preserving loops of welded position indices, outer first,
-    /// followed by holes. Collinear boundary vertices are retained.
+    /// followed by holes. Collinear seam segments are simplified globally.
     pub boundary_loops: Vec<Vec<usize>>,
     /// Oriented normal of the seed polygon.
     pub normal: Vector3,
@@ -52,7 +54,7 @@ pub struct PlanarPatch {
 
 /// Reconstructed planar faces with common topological vertices and edges.
 ///
-/// The shell may be open. Even a Closed shell condition alone does not
+/// The shell may be open. Even a `Closed` shell condition alone does not
 /// certify positive material volume or absence of self-intersections.
 #[derive(Debug)]
 pub struct RecoveredPlanarMesh {
@@ -113,7 +115,7 @@ type EdgeUse = (usize, bool);
 type EdgeIncidence = HashMap<EdgeKey, Vec<EdgeUse>>;
 type PolygonNeighbors = Vec<Vec<usize>>;
 
-fn edge_key(a: usize, b: usize) -> (EdgeKey, bool) {
+const fn edge_key(a: usize, b: usize) -> (EdgeKey, bool) {
     if a < b {
         ([a, b], true)
     } else {
@@ -405,10 +407,12 @@ fn build_face(
 /// same exact geometric edge. The function validates source orientation,
 /// boundary manifoldness, and planar residuals, but deliberately does not
 /// merge short collinear boundary edges: doing so independently on neighboring
-/// patches would create T-junctions. The caller can check shell_condition()
-/// and validate solid geometry separately.
+/// patches would create T-junctions. Existing geometric T-junctions are split
+/// before incidence is built, then globally collinear seam chains are simplified
+/// on both sides at once. The caller can check `shell_condition()` and validate
+/// solid geometry separately.
 ///
-/// The distance_tolerance is a maximum fitting residual, not a request to
+/// The `distance_tolerance` is a maximum fitting residual, not a request to
 /// weld nearby vertices. Resulting analytic faces can approximate the input
 /// within that residual; exact reproduction is only guaranteed for coplanar
 /// source polygons.
@@ -427,19 +431,17 @@ pub fn recover_planar_mesh(
     {
         return Err(MeshRecoveryError::InvalidTolerance);
     }
-    let (positions, polygons) = positions_and_polygons(mesh, options.distance_tolerance)?;
+    let (positions, mut polygons) = positions_and_polygons(mesh, options.distance_tolerance)?;
+    seams::split_source_t_junctions(&positions, &mut polygons);
     let (incidence, neighbors) = edge_incidence(&polygons)?;
     let (membership, regions) = segment_patches(&polygons, &positions, &neighbors, options);
-    let vertices = Vertex::from_points(&positions);
-    let mut edges = HashMap::default();
-    let mut faces = Vec::with_capacity(regions.len());
     let mut patches = Vec::with_capacity(regions.len());
 
-    for (patch_id, member_faces) in regions.into_iter().enumerate() {
+    for (patch_id, member_faces) in regions.iter().enumerate() {
         let seed = &polygons[member_faces[0]];
         let loops = boundary_loops(
             patch_id,
-            &member_faces,
+            member_faces,
             &membership,
             &polygons,
             &incidence,
@@ -457,13 +459,26 @@ pub fn recover_planar_mesh(
                 residual: max_planar_residual,
             });
         }
-        faces.push(build_face(&loops, seed, &positions, &vertices, &mut edges)?);
         patches.push(PlanarPatch {
-            source_face_indices: member_faces,
+            source_face_indices: member_faces.clone(),
             boundary_loops: loops,
             normal: seed.normal,
             max_planar_residual,
         });
+    }
+    seams::simplify_shared_seams(&mut patches, &positions, &incidence, &membership)?;
+    let vertices = Vertex::from_points(&positions);
+    let mut edges = HashMap::default();
+    let mut faces = Vec::with_capacity(patches.len());
+    for (patch, member_faces) in patches.iter().zip(&regions) {
+        let seed = &polygons[member_faces[0]];
+        faces.push(build_face(
+            &patch.boundary_loops,
+            seed,
+            &positions,
+            &vertices,
+            &mut edges,
+        )?);
     }
     Ok(RecoveredPlanarMesh {
         canonical_positions: positions,
