@@ -36,12 +36,14 @@ impl Default for PlanarRecoveryOptions {
     }
 }
 
+mod cylinder;
+pub use cylinder::{CylinderRecoveryOptions, RecoveredCylinder, recover_cylindrical_solid};
 mod seams;
 
 /// Source evidence for one reconstructed planar face.
 #[derive(Clone, Debug)]
 pub struct PlanarPatch {
-    /// Source polygon indices in mesh.faces().face_iter() order.
+    /// Source polygon indices in `mesh.face_iter()` order.
     pub source_face_indices: Vec<usize>,
     /// Winding-preserving loops of welded position indices, outer first,
     /// followed by holes. Collinear seam segments are simplified globally.
@@ -93,6 +95,12 @@ pub enum MeshRecoveryError {
     /// Patch boundary is pinched, branched, open, or has ambiguous orientation.
     #[error("planar patch {0} has ambiguous boundary loops")]
     InvalidPatchBoundary(usize),
+    /// The native cylinder builder could not produce valid shared trims.
+    #[error("native analytic cylinder construction failed")]
+    CylinderConstruction,
+    /// Unsupported or non-finite cylinder recovery tolerance.
+    #[error("cylinder tolerances must be finite and nonnegative, with at least six ring samples")]
+    InvalidCylinderOptions,
     /// A patch would require nontrivial projection to become a valid B-rep face.
     #[error(
         "planar patch {patch} has source-to-plane residual {residual}, exceeding the kernel tolerance"

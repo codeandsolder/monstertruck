@@ -75,3 +75,82 @@ fn nonconforming_stl_cube_recovers_analytic_step_solid() {
         step_geometry::Surface::Elementary(step_geometry::ElementarySurface::Plane(_))
     )));
 }
+
+#[test]
+fn sampled_cylindrical_stl_roundtrips_as_analytic_step_cylinders() {
+    use monstertruck_modeling::mesh_recovery::{
+        CylinderRecoveryOptions, recover_cylindrical_solid,
+    };
+    use monstertruck_modeling::{InnerSpace, ParametricSurface, Vector3};
+    let sides = 32;
+    let rings = (0..2)
+        .flat_map(|level| {
+            (0..sides).map(move |i| {
+                let angle = std::f32::consts::TAU * i as f32 / sides as f32;
+                [2.0 * angle.cos(), 2.0 * angle.sin(), 3.0 * level as f32]
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut triangles = Vec::new();
+    for i in 0..sides {
+        let j = (i + 1) % sides;
+        let bottom = [0.0; 3];
+        let top = [0.0, 0.0, 3.0];
+        triangles.extend([
+            [bottom, rings[j], rings[i]],
+            [top, rings[sides + i], rings[sides + j]],
+            [rings[i], rings[j], rings[sides + j]],
+            [rings[i], rings[sides + j], rings[sides + i]],
+        ]);
+    }
+    let facets = triangles
+        .into_iter()
+        .map(|vertices| StlFace {
+            normal: [0.0; 3],
+            vertices,
+        })
+        .collect::<Vec<_>>();
+    let mut encoded = Vec::new();
+    stl::write(facets, &mut encoded, StlType::Binary).unwrap();
+    let source = stl::read(encoded.as_slice(), StlType::Automatic).unwrap();
+    let recovered = recover_cylindrical_solid(&source, CylinderRecoveryOptions::default())
+        .unwrap()
+        .expect("STL cylinder should fit with bounded chord deviation");
+    assert!((recovered.radius - 2.0).abs() < 1.0e-5);
+    assert!((recovered.height - 3.0).abs() < 1.0e-5);
+    assert!(recovered.max_surface_deviation < 0.05);
+    assert_eq!(recovered.lateral_source_face_indices.len(), 64);
+    let compressed = recovered.solid.compress_with_parameter_curves(1.0e-6);
+    let step =
+        CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string();
+    assert!(step.contains("MANIFOLD_SOLID_BREP"));
+    assert!(step.contains("CYLINDRICAL_SURFACE("));
+    assert!(!step.contains("B_SPLINE_SURFACE"));
+    let table = Table::from_step(&step).unwrap();
+    let shell = table.shell.values().next().unwrap();
+    let reloaded = table.to_compressed_trimmed_shell(shell).unwrap();
+    assert_eq!(reloaded.faces.len(), 4);
+    let mut planes = 0;
+    let mut cylinders = 0;
+    for face in &reloaded.faces {
+        match &face.surface {
+            step_geometry::Surface::Elementary(step_geometry::ElementarySurface::Plane(_)) => {
+                planes += 1;
+            }
+            step_geometry::Surface::Elementary(
+                step_geometry::ElementarySurface::CylindricalSurface(cylinder),
+            ) => {
+                cylinders += 1;
+                for axial in [0.0, 0.5, 1.0] {
+                    for angle in [0.0, 1.0, 2.0] {
+                        let p = cylinder.evaluate(axial, angle);
+                        let radial = Vector3::new(p.x, p.y, 0.0);
+                        assert!((radial.magnitude() - 2.0).abs() < 1.0e-5);
+                    }
+                }
+            }
+            other => panic!("unexpected STEP surface: {other:?}"),
+        }
+    }
+    assert_eq!((planes, cylinders), (2, 2));
+}
