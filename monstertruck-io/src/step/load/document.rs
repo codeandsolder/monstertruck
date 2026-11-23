@@ -41,7 +41,7 @@ impl ParsedStepSource {
     }
 
     /// Consume the parsed exchange and build a typed CAD source document.
-    #[must_use]
+    #[must_use = "The resolved typed STEP document is returned; the parsed exchange is consumed."]
     pub fn resolve(self) -> ResolvedStepDocument {
         ResolvedStepDocument::from_exchange(self.exchange)
     }
@@ -52,7 +52,7 @@ impl ParsedStepSource {
 /// Part 21 geometry is ASCII; byte-encoding differences occur in metadata.
 /// A non-UTF8/GBK byte sequence is preserved as ISO-8859-1 so loading does
 /// not fail solely because the exporter emitted legacy name strings.
-#[must_use]
+#[must_use = "The decoded STEP text and its encoding are returned together for parsing."]
 pub fn decode_step_input(input: &[u8]) -> (Cow<'_, str>, &'static str) {
     if let Ok(text) = std::str::from_utf8(input) {
         return (Cow::Borrowed(text), "utf-8");
@@ -78,7 +78,7 @@ pub struct ResolvedStepDocument {
 
 impl ResolvedStepDocument {
     /// Resolve every DATA section exactly once.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn from_exchange(exchange: Exchange) -> Self {
         let tables: Vec<Table> = exchange.data.iter().map(Table::from_data_section).collect();
         let imports = tables
@@ -99,11 +99,11 @@ impl ResolvedStepDocument {
     }
 
     /// The original STEP AST, including its DATA-section namespaces.
-    #[must_use]
+    #[must_use = "The exchange accessor exposes its value only through the returned reference."]
     pub const fn exchange(&self) -> &Exchange { &self.exchange }
 
     /// The typed resolver for one DATA section, if present.
-    #[must_use]
+    #[must_use = "The optional table outcome must be inspected to distinguish a value from absence."]
     pub fn table(&self, data_section: usize) -> Option<&Table> { self.tables.get(data_section) }
 
     /// Import a source solid at most once, keeping its retained stable IDs and
@@ -145,11 +145,11 @@ impl ResolvedStepDocument {
     }
 
     /// Number of resolved STEP DATA sections.
-    #[must_use]
+    #[must_use = "The computed len quantity is reported through this return value."]
     pub const fn len(&self) -> usize { self.tables.len() }
 
     /// Whether the document contains no DATA sections.
-    #[must_use]
+    #[must_use = "The boolean result of `is_empty` must be observed to use the predicate."]
     pub const fn is_empty(&self) -> bool { self.tables.is_empty() }
 }
 

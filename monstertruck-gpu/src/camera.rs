@@ -18,22 +18,22 @@ pub const OPENGL_TO_WGPU_MATRIX: Matrix4 = Matrix4::new(
 impl Ray {
     /// Returns the origin of the ray
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the origin of the ray."]
     pub const fn origin(&self) -> Point3 { self.origin }
     /// Returns the (normalized) direction of the ray
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the (normalized) direction of the ray."]
     pub const fn direction(&self) -> Vector3 { self.direction }
 }
 
 impl ProjectionMethod {
     /// Returns `ProjectionMethod::Perspective { fov }`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards `ProjectionMethod::Perspective { fov }`."]
     pub const fn perspective(fov: Rad<f64>) -> Self { Self::Perspective { fov } }
     /// Returns `ProjectionMethod::Parallel { screen_size }`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards `ProjectionMethod::Parallel { screen_size }`."]
     pub const fn parallel(screen_size: f64) -> Self { Self::Parallel { screen_size } }
 }
 
@@ -50,7 +50,7 @@ impl Camera {
     /// assert_eq!(camera.position(), Point3::new(1.0, 2.0, 3.0));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the position of camera, the forth column of the camera matrix."]
     pub fn position(&self) -> Point3 { Point3::from_vec(self.matrix[3].truncate()) }
 
     /// Returns the eye direction of camera.
@@ -69,7 +69,7 @@ impl Camera {
     /// assert!(camera.eye_direction().near(&-Vector3::unit_x()));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the eye direction of camera."]
     pub fn eye_direction(&self) -> Vector3 { -self.matrix[2].truncate() }
 
     /// Returns the direction of the head vector, the y-axis of the camera matrix.
@@ -86,7 +86,7 @@ impl Camera {
     /// assert!(camera.head_direction().near(&Vector3::unit_z()));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the direction of the head vector, the y-axis of the camera matrix."]
     pub fn head_direction(&self) -> Vector3 { self.matrix[1].truncate() }
 
     /// Returns the projection matrix into the normalized view volume.
@@ -168,7 +168,7 @@ impl Camera {
     /// ```
     /// Returns the projection matrix, or `None` when the public camera matrix is singular.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the projection matrix into the normalized view volume."]
     pub fn projection(&self, aspect: f64) -> Option<Matrix4> {
         let (near, far) = (self.near_clip, self.far_clip);
         let normal_projection = match self.method {
@@ -205,7 +205,7 @@ impl Camera {
     /// ```
     /// Returns `None` when the camera transform is singular and no projection can be formed.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed `UNIFORM` buffer of camera is returned rather than stored."]
     pub fn buffer(&self, aspect: f64, device: &Device) -> Option<BufferHandler> {
         Some(BufferHandler::from_slice(
             &[self.camera_info(aspect)?],
@@ -286,7 +286,7 @@ impl Camera {
     /// // the direction of the ray is eye direction.
     /// assert_near!(ray.direction(), camera.eye_direction());
     /// ```
-    #[must_use]
+    #[must_use = "Ignoring this result discards the ray from camera with aspect-ratio = 1.0."]
     pub fn ray(&self, coord: Point2) -> Option<Ray> {
         match self.method {
             ProjectionMethod::Perspective { .. } => {
@@ -355,7 +355,7 @@ impl Camera {
     ///     assert!(0.0 <= n.z && n.z <= 1.0);
     /// });
     /// ```
-    #[must_use]
+    #[must_use = "The constructed parallel projection camera that fits the point cloud perfectly into the view is returned rather than stored."]
     pub fn parallel_view_fitting(
         direction: Matrix3,
         aspect: f64,
@@ -428,7 +428,7 @@ impl Camera {
     /// ```
     /// # Remarks
     /// Depending on the arrangement of the point cloud, `near_clip` may take a negative value.
-    #[must_use]
+    #[must_use = "The constructed perspective projection camera that fits the point cloud perfectly into the view is returned rather than stored."]
     pub fn perspective_view_fitting(
         direction: Matrix3,
         aspect: f64,
