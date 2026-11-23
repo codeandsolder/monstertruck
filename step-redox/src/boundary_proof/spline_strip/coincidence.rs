@@ -665,6 +665,18 @@ mod tests {
         assert_eq!(strict.fully_certified_strip_faces, 13);
         assert_eq!(strict.cap_witnesses.len(), 26);
         assert!(
+            strict
+                .cap_witnesses
+                .iter()
+                .all(|cap| cap.bound_mm <= super::super::TOL)
+        );
+        // The bound must be meaningful, not a tolerance-independent
+        // acceptance of every author-declared STEP curve mismatch.
+        let sub_angstrom = audit_source_spline_cap_precision(original, 0, *solid, Some(1.0e-10))?;
+        assert_eq!(sub_angstrom.strip_faces, 13);
+        assert!(sub_angstrom.fully_certified_strip_faces < strict.fully_certified_strip_faces);
+        assert!(audit_source_spline_cap_precision(original, 0, *solid, Some(0.0)).is_err());
+        assert!(
             audit_source_spline_cap_precision(
                 original,
                 0,
