@@ -2,7 +2,7 @@
 //! known CAD primitive shapes. Emits one JSON record per input path.
 //!
 //! Run using managed Cargo, for example:
-//! cargo run -p monstertruck-modeling --example mesh_recovery_corpus -- mesh.obj
+//! `cargo run -p monstertruck-modeling --example mesh_recovery_corpus -- mesh.obj`
 
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_modeling::mesh_recovery::{
