@@ -45,8 +45,8 @@ fn roundoff_floor(controls: &[[f64; 4]], depth: usize) -> Option<f64> {
     // The span extractor separately certifies at most one quarter of the
     // original boundary proof quantum of coordinate error. Carry that
     // certificate through every subdivision, not just fresh f64 roundoff.
-    let floor =
-        2048.0 * f64::EPSILON * scale * ratio.powi(2) * n.powi(3) * depth + super::POINT_Q_MM / 4.0;
+    let arithmetic = 2048.0 * f64::EPSILON * scale * ratio.powi(2) * n.powi(3);
+    let floor = arithmetic.mul_add(depth, super::POINT_Q_MM / 4.0);
     floor.is_finite().then_some(floor)
 }
 
@@ -171,8 +171,8 @@ fn pair_bound(a: &Span, b: &Span, axis: [f64; 3]) -> Option<f64> {
 }
 
 fn certify_pair(
-    a: Span,
-    b: Span,
+    a: &Span,
+    b: &Span,
     axis: [f64; 3],
     limit: f64,
     work: &mut usize,
@@ -185,21 +185,57 @@ fn certify_pair(
     if end + a.floor + b.floor < begin {
         return Some(());
     }
-    let upper = pair_bound(&a, &b, axis)?;
+    let upper = pair_bound(a, b, axis)?;
     if upper <= limit {
         *proven = proven.max(upper);
         return Some(());
     }
     if (a.hi - a.lo) >= (b.hi - b.lo) {
         for child in a.split(axis)? {
-            certify_pair(child, b.clone(), axis, limit, work, proven)?;
+            certify_pair(&child, b, axis, limit, work, proven)?;
         }
     } else {
         for child in b.split(axis)? {
-            certify_pair(a.clone(), child, axis, limit, work, proven)?;
+            certify_pair(a, &child, axis, limit, work, proven)?;
         }
     }
     Some(())
+}
+
+/// Complete authored NURBS with the same control net, knots and rational
+/// weights represent the same mathematical locus (independent of evaluation
+/// rounding). Check the exact coefficients before expensive interval
+/// subdivision, including the only equally exact alternative: reversing
+/// every coefficient and reflecting the full authored knot vector.
+fn exactly_same_bspline(a: &BSplineSupport, b: &BSplineSupport) -> bool {
+    if a == b {
+        return true;
+    }
+    if a.degree != b.degree
+        || a.control_points_mm.len() != b.control_points_mm.len()
+        || a.knots.len() != b.knots.len()
+        || !a
+            .control_points_mm
+            .iter()
+            .eq(b.control_points_mm.iter().rev())
+    {
+        return false;
+    }
+    let weights_reversed = match (&a.weights, &b.weights) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.iter().eq(b.iter().rev()),
+        _ => false,
+    };
+    if !weights_reversed {
+        return false;
+    }
+    let (Some(&start), Some(&end)) = (a.knots.first(), a.knots.last()) else {
+        return false;
+    };
+    a.knots
+        .iter()
+        .zip(b.knots.iter().rev())
+        .all(|(&x, &y)| x == (start + end) - y)
 }
 
 /// A two-sided full-domain Hausdorff *upper bound*, at a user-supplied source
@@ -209,7 +245,7 @@ fn certify_pair(
 /// This certificate proves proximity, **not exact identity** or equivalent
 /// occupied material. Keep it separate from strict boundary signatures.
 #[must_use]
-pub(crate) fn certified_coincident_spline_loci(
+pub fn certified_coincident_spline_loci(
     a: &BSplineSupport,
     b: &BSplineSupport,
     precision_mm: f64,
@@ -222,6 +258,9 @@ pub(crate) fn certified_coincident_spline_loci(
     let axis = normalize(sub(end_a, start_a), precision_mm)?;
     let mut aa = spans(a, axis)?;
     let mut bb = spans(b, axis)?;
+    if exactly_same_bspline(a, b) {
+        return Some(0.0);
+    }
     let a_start = aa.first()?.end(true)?;
     let a_end = aa.last()?.end(false)?;
     let b_start = bb.first()?.end(true)?;
@@ -278,127 +317,10 @@ pub(crate) fn certified_coincident_spline_loci(
             if b.lo > a.hi + a.floor + b.floor || a.lo > b.hi + a.floor + b.floor {
                 continue;
             }
-            certify_pair(
-                a.clone(),
-                b.clone(),
-                axis,
-                precision_mm - margin,
-                &mut work,
-                &mut bound,
-            )?;
+            certify_pair(a, b, axis, precision_mm - margin, &mut work, &mut bound)?;
         }
     }
     Some(bound + margin)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::brep;
-    use monstertruck_io::step::load::ParsedStepSource;
-
-    fn curve(points: &[[f64; 3]], degree: usize, weights: Option<Vec<f64>>) -> BSplineSupport {
-        BSplineSupport {
-            degree,
-            control_points_mm: points.to_vec(),
-            knots: std::iter::repeat_n(0.0, degree + 1)
-                .chain(std::iter::repeat_n(1.0, degree + 1))
-                .collect(),
-            weights,
-        }
-    }
-
-    #[test]
-    fn independent_degree_and_rational_speed_preserve_straight_locus() {
-        let a = curve(
-            &[[0., 0., 0.], [0.2, 0., 0.], [0.7, 0., 0.], [1., 0., 0.]],
-            3,
-            None,
-        );
-        let mut b = curve(
-            &[[0., 0., 0.], [0.7, 0., 0.], [1., 0., 0.]],
-            2,
-            Some(vec![1., 0.2, 1.]),
-        );
-        let proven = certified_coincident_spline_loci(&a, &b, 1.0e-5);
-        assert!(proven.is_some_and(|bound| bound <= 1.0e-5), "{proven:?}");
-        b.control_points_mm.reverse();
-        b.weights
-            .as_mut()
-            .unwrap_or_else(|| panic!("weights missing"))
-            .reverse();
-        assert!(certified_coincident_spline_loci(&a, &b, 1.0e-5).is_some());
-        b.control_points_mm[1][1] = 0.001;
-        assert!(certified_coincident_spline_loci(&a, &b, 1.0e-5).is_none());
-        b.control_points_mm[1][1] = 0.0;
-        b.control_points_mm[1][0] = -0.5;
-        assert!(certified_coincident_spline_loci(&a, &b, 1.0e-5).is_none());
-    }
-
-    #[cfg(feature = "cad-kernel-monstertruck")]
-    #[test]
-    fn original_round_network_precision_qualified_spline_caps() -> anyhow::Result<()> {
-        let original = include_bytes!(
-            "../../../validation/fixtures/native_drafted_round_network_0b5a3544.step"
-        );
-        let source = ParsedStepSource::parse(original)?.exchange;
-        let [section] = source.data.as_slice() else {
-            anyhow::bail!("expected one STEP data section");
-        };
-        let solids = brep::manifold_solid_ids(&section.entities);
-        let [solid] = solids.as_slice() else {
-            anyhow::bail!("expected a single source solid");
-        };
-        let report = audit_source_spline_cap_precision(original, 0, *solid)?;
-        assert_eq!(report.strip_faces, 13);
-        assert_eq!(report.fully_certified_strip_faces, 13);
-        assert_eq!(report.cap_witnesses.len(), 26);
-        assert!(report.unresolved_strip_faces.is_empty());
-        assert_eq!(
-            report.authored_uncertainty_mm.to_bits(),
-            1.0e-5_f64.to_bits()
-        );
-        let maximum = report
-            .cap_witnesses
-            .iter()
-            .map(|e| e.bound_mm)
-            .reduce(f64::max)
-            .ok_or_else(|| anyhow::anyhow!("missing precision evidence"))?;
-        assert!(maximum <= report.authored_uncertainty_mm);
-
-        let original_utf8 = std::str::from_utf8(original)?;
-        let micron_precision =
-            original_utf8.replacen("LENGTH_MEASURE(0.00001)", "LENGTH_MEASURE(0.000000001)", 1);
-        assert_ne!(micron_precision, original_utf8);
-        let narrow = audit_source_spline_cap_precision(micron_precision.as_bytes(), 0, *solid)?;
-        assert_eq!(narrow.authored_uncertainty_mm, 1.0e-9);
-        assert!(narrow.fully_certified_strip_faces < report.fully_certified_strip_faces);
-        assert_eq!(
-            narrow.unresolved_strip_faces.len(),
-            narrow.strip_faces - narrow.fully_certified_strip_faces
-        );
-        let absent_context = original_utf8.replacen(
-            "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT",
-            "NOT_AN_UNCERTAINTY_CONTEXT",
-            1,
-        );
-        assert!(audit_source_spline_cap_precision(absent_context.as_bytes(), 0, *solid).is_err());
-        let housing =
-            include_bytes!("../../../validation/fixtures/native_relief_housing_0914dda4.step");
-        let independent = audit_source_spline_cap_precision(housing, 0, 4138)?;
-        assert_eq!(independent.strip_faces, 112);
-        assert_eq!(independent.fully_certified_strip_faces, 110);
-        assert_eq!(independent.unresolved_strip_faces.len(), 2);
-
-        eprintln!(
-            "manufacturer: {} source strip faces, {} independently bounded caps, max certified {} mm / source {} mm",
-            report.fully_certified_strip_faces,
-            report.cap_witnesses.len(),
-            maximum,
-            report.authored_uncertainty_mm
-        );
-        Ok(())
-    }
 }
 
 /// Independent finite-precision evidence for one *authored* STEP trim. This
@@ -494,6 +416,7 @@ fn verify_source_strip_cap_rows(
 }
 
 /// Read-only STEP/source-context precision audit for complete B-spline strips.
+///
 /// Cap curves are independently bounded against the two source surface rows.
 /// Source uncertainty must be explicit, unit-correct, and subject to the
 /// existing revolution uncertainty ceiling; no default precision is assumed.
@@ -578,4 +501,139 @@ pub fn audit_source_spline_cap_precision(
         .unresolved_strip_faces
         .sort_unstable_by_key(|gap| gap.face_id);
     Ok(audit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::brep;
+    use monstertruck_io::step::load::ParsedStepSource;
+
+    fn curve(points: &[[f64; 3]], degree: usize, weights: Option<Vec<f64>>) -> BSplineSupport {
+        BSplineSupport {
+            degree,
+            control_points_mm: points.to_vec(),
+            knots: std::iter::repeat_n(0.0, degree + 1)
+                .chain(std::iter::repeat_n(1.0, degree + 1))
+                .collect(),
+            weights,
+        }
+    }
+
+    #[test]
+    fn independent_degree_and_rational_speed_preserve_straight_locus() {
+        let a = curve(
+            &[[0., 0., 0.], [0.2, 0., 0.], [0.7, 0., 0.], [1., 0., 0.]],
+            3,
+            None,
+        );
+        let mut b = curve(
+            &[[0., 0., 0.], [0.7, 0., 0.], [1., 0., 0.]],
+            2,
+            Some(vec![1., 0.2, 1.]),
+        );
+        let proven = certified_coincident_spline_loci(&a, &b, 1.0e-5);
+        assert!(proven.is_some_and(|bound| bound <= 1.0e-5), "{proven:?}");
+        b.control_points_mm.reverse();
+        b.weights = b.weights.map(|mut weights| {
+            weights.reverse();
+            weights
+        });
+        assert!(certified_coincident_spline_loci(&a, &b, 1.0e-5).is_some());
+        b.control_points_mm[1][1] = 0.001;
+        assert!(certified_coincident_spline_loci(&a, &b, 1.0e-5).is_none());
+        b.control_points_mm[1][1] = 0.0;
+        b.control_points_mm[1][0] = -0.5;
+        assert!(certified_coincident_spline_loci(&a, &b, 1.0e-5).is_none());
+    }
+
+    #[test]
+    fn exact_authored_spline_with_reversed_knots_is_identical_without_subdivision() {
+        let a = curve(
+            &[[0., 0., 0.], [0.25, 0.5, 0.], [0.75, 0.5, 0.], [1., 0., 0.]],
+            3,
+            Some(vec![1., 2., 2., 1.]),
+        );
+        let mut b = a.clone();
+        assert_eq!(certified_coincident_spline_loci(&a, &b, 1.0e-9), Some(0.0));
+        b.control_points_mm.reverse();
+        b.weights = b.weights.map(|mut weights| {
+            weights.reverse();
+            weights
+        });
+        assert_eq!(certified_coincident_spline_loci(&a, &b, 1.0e-9), Some(0.0));
+        b.control_points_mm[1][1] += 0.01;
+        assert!(certified_coincident_spline_loci(&a, &b, 1.0e-6).is_none());
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn original_round_network_precision_qualified_spline_caps() -> anyhow::Result<()> {
+        let original = include_bytes!(
+            "../../../validation/fixtures/native_drafted_round_network_0b5a3544.step"
+        );
+        let source = ParsedStepSource::parse(original)?.exchange;
+        let [section] = source.data.as_slice() else {
+            anyhow::bail!("expected one STEP data section");
+        };
+        let solids = brep::manifold_solid_ids(&section.entities);
+        let [solid] = solids.as_slice() else {
+            anyhow::bail!("expected a single source solid");
+        };
+        let report = audit_source_spline_cap_precision(original, 0, *solid)?;
+        assert_eq!(report.strip_faces, 13);
+        assert_eq!(report.fully_certified_strip_faces, 13);
+        assert_eq!(report.cap_witnesses.len(), 26);
+        assert_eq!(report.unresolved_strip_faces.len(), 0);
+        assert_eq!(
+            report.authored_uncertainty_mm.to_bits(),
+            1.0e-5_f64.to_bits()
+        );
+        let maximum = report
+            .cap_witnesses
+            .iter()
+            .map(|e| e.bound_mm)
+            .reduce(f64::max)
+            .ok_or_else(|| anyhow::anyhow!("missing precision evidence"))?;
+        assert!(maximum <= report.authored_uncertainty_mm);
+
+        let original_utf8 = std::str::from_utf8(original)?;
+        let micron_precision =
+            original_utf8.replacen("LENGTH_MEASURE(0.00001)", "LENGTH_MEASURE(0.000000001)", 1);
+        assert_ne!(micron_precision, original_utf8);
+        let narrow = audit_source_spline_cap_precision(micron_precision.as_bytes(), 0, *solid)?;
+        assert_eq!(narrow.authored_uncertainty_mm, 1.0e-9);
+        assert!(narrow.fully_certified_strip_faces < report.fully_certified_strip_faces);
+        assert_eq!(
+            narrow.unresolved_strip_faces.len(),
+            narrow.strip_faces - narrow.fully_certified_strip_faces
+        );
+        let absent_context = original_utf8.replacen(
+            "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT",
+            "NOT_AN_UNCERTAINTY_CONTEXT",
+            1,
+        );
+        assert!(audit_source_spline_cap_precision(absent_context.as_bytes(), 0, *solid).is_err());
+        let housing =
+            include_bytes!("../../../validation/fixtures/native_relief_housing_0914dda4.step");
+        let independent = audit_source_spline_cap_precision(housing, 0, 4138)?;
+        assert_eq!(independent.strip_faces, 112);
+        assert_eq!(independent.fully_certified_strip_faces, 112);
+        assert!(independent.unresolved_strip_faces.is_empty());
+        let oblique =
+            include_bytes!("../../../validation/fixtures/native_relief_oblique_8ddfec04.step");
+        let independent_oblique = audit_source_spline_cap_precision(oblique, 0, 5442)?;
+        assert_eq!(independent_oblique.strip_faces, 98);
+        assert_eq!(independent_oblique.fully_certified_strip_faces, 98);
+        assert!(independent_oblique.unresolved_strip_faces.is_empty());
+
+        eprintln!(
+            "manufacturer: {} source strip faces, {} independently bounded caps, max certified {} mm / source {} mm",
+            report.fully_certified_strip_faces,
+            report.cap_witnesses.len(),
+            maximum,
+            report.authored_uncertainty_mm
+        );
+        Ok(())
+    }
 }
