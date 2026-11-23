@@ -85,3 +85,38 @@ the same deterministic geometry metric correspondence as the release
 validator, without truncating uneven inventories. The report identifies
 both occurrence indices. These are diagnostics, not an exact boundary
 certificate or a proof of globally optimal material correspondence.
+
+## Exact single-solid diagnostic comparison
+
+Compare the same individual solid across independently exported STEP files,
+including reconstructed solids with different face subdivisions:
+
+```sh
+step-redox-occt-wasm-validator solid-diagnostics source.step candidate.step
+```
+
+For a source containing repeated or overlapping solids, select the exact
+Part 21 textual entity number (the `#123` label, **not** OCCT's model rank):
+
+```sh
+step-redox-occt-wasm-validator solid-diagnostics full-source.step recovered.step \
+  --reference-entity-id 123
+```
+
+`--candidate-entity-id` selects a source entity in the other operand
+independently. Without these options, each entire file must transfer to
+exactly one solid. Entity selection uses OCCT's parsed STEP model, rejecting
+missing, ambiguous, or nontransferable identifiers.
+
+The JSON includes signed default BRep properties, topology, center/bounds,
+native whole-solid adaptive Gauss–Kronrod volumes and relative error
+estimates, both directed Boolean cut volumes, and the shared-reference
+paired absolute face-integral diagnostic. `geometry_equal` requires both
+valid solids, consistent adaptive volumes, and both material cuts below
+the existing absolute/relative policy. The stricter paired-volume result is
+reported **separately**, not used to override that decision. Face-count
+equality is deliberately not required. Exit status 0 indicates equality,
+1 a measured mismatch, and an execution error fails with an error message.
+The tolerances and adaptive integration targets retain the previous native
+oracle's definitions; the new implementation uses the independently built
+WASM kernel without native Python/OCP.

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 pub mod boolean;
 pub mod compare;
 pub mod render;
+pub mod solid_diagnostics;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Bounds {
