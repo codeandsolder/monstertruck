@@ -68,7 +68,7 @@ fn support_interface_summary(evidence: &MeshEvidence) -> Value {
             monstertruck_modeling::mesh_recovery::SupportBoundaryTopology::OpenPath => paths += 1,
             monstertruck_modeling::mesh_recovery::SupportBoundaryTopology::ClosedLoop => loops += 1,
             monstertruck_modeling::mesh_recovery::SupportBoundaryTopology::Branched => {
-                branches += 1
+                branches += 1;
             }
         }
         source_edge_count += interface.source_edges.len();
