@@ -276,9 +276,30 @@ impl<'ctx, 'data> ProfileSegmentContext<'ctx, 'data> {
     }
 }
 
+/// Effective recovery tolerance: an authored uncertainty smaller than the
+/// kernel's geometric proof quantum does not tighten the existing source
+/// construction path. Do not use this floored value as a claim about what
+/// the file itself declares.
 pub(crate) fn source_tolerance_by_representation_item(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+) -> HashMap<u64, f64> {
+    source_uncertainty_by_representation_item(entities, index, GEOM_TOL_MM)
+}
+
+/// Literal author-declared length uncertainty (including unit conversion),
+/// without any fallback to the kernel's own recovery geometry tolerance.
+pub(crate) fn declared_source_uncertainty_by_representation_item(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> HashMap<u64, f64> {
+    source_uncertainty_by_representation_item(entities, index, 0.0)
+}
+
+fn source_uncertainty_by_representation_item(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    floor_mm: f64,
 ) -> HashMap<u64, f64> {
     let mut context_cache = HashMap::<u64, Option<f64>>::new();
     let mut out = HashMap::<u64, f64>::new();
@@ -299,6 +320,7 @@ pub(crate) fn source_tolerance_by_representation_item(
         let Some(tolerance) = tolerance else {
             continue;
         };
+        let tolerance = tolerance.max(floor_mm);
 
         for item in items {
             out.entry(item)
@@ -332,7 +354,7 @@ fn representation_context_length_uncertainty_mm(
     if !value.is_finite() || value <= 0.0 || value > MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM {
         return None;
     }
-    Some(value.max(GEOM_TOL_MM))
+    Some(value)
 }
 
 fn uncertainty_measure_mm(
@@ -354,7 +376,7 @@ fn uncertainty_measure_mm(
     else {
         return None;
     };
-    if keyword != "LENGTH_MEASURE" || name != "distance_accuracy_value" {
+    if keyword.as_ref() != "LENGTH_MEASURE" || name != "distance_accuracy_value" {
         return None;
     }
     let value = parameter_number(parameter)?;

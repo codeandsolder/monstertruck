@@ -70,6 +70,38 @@ pub struct BSplineSupport {
     pub weights: Option<Vec<f64>>,
 }
 
+impl BSplineSupport {
+    /// Construct the positive-weight homogeneous form used by full-domain
+    /// geometric certificates. Never change the authored control net or knots.
+    pub(crate) fn rational_curve(
+        &self,
+    ) -> Option<monstertruck_geometry::prelude::NurbsCurve<monstertruck_geometry::prelude::Vector4>>
+    {
+        use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, NurbsCurve, Vector4};
+        let count = self.control_points_mm.len();
+        if self.degree == 0
+            || self.degree >= count
+            || self.knots.len() != count.checked_add(self.degree)?.checked_add(1)?
+            || self.knots[self.degree] >= self.knots[count]
+            || self.weights.as_ref().is_some_and(|w| w.len() != count)
+        {
+            return None;
+        }
+        let controls = self
+            .control_points_mm
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let w = self.weights.as_ref().map_or(1.0, |weights| weights[i]);
+                (w.is_finite() && w > 0.0 && p.iter().all(|v| v.is_finite()))
+                    .then(|| Vector4::new(p[0] * w, p[1] * w, p[2] * w, w))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let knots = KnotVector::try_from(self.knots.clone()).ok()?;
+        Some(NurbsCurve::new(BsplineCurve::new(knots, controls).ok()?))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SplineExtrusionSupport {
     pub profile: BSplineSupport,

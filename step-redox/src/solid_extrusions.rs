@@ -19,6 +19,9 @@ use std::collections::{HashMap, HashSet};
 use std::f64::consts::{PI, TAU};
 use step_p21::ast::EntityInstance;
 
+mod loop_containment;
+mod side_chains;
+
 const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 const ANGLE_TOL_RAD: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_extrusion_angle_rad;
@@ -489,6 +492,24 @@ fn unreadable_parallel_plane_may_intervene(pair: &CapPairProof<'_>, plane: Plane
     offset > GEOM_TOL_MM && offset < pair.height_mm - GEOM_TOL_MM
 }
 
+/// Both native and STEP-backed recognition consume the same canonical
+/// edge geometry. Keep the original B-rep untouched for boundary proof.
+fn normalize_extrusion_loops(mut loops: Vec<brep::FaceLoop>) -> Vec<brep::FaceLoop> {
+    for edge in loops.iter_mut().flat_map(|wire| &mut wire.edges) {
+        if let CurveSupport::BSpline(spline) = &edge.support
+            && let Some(line) = crate::source_edge_locus::certified_straight_spline(
+                spline,
+                edge.start_mm,
+                edge.end_mm,
+                GEOM_TOL_MM,
+            )
+        {
+            edge.support = CurveSupport::Line(line);
+        }
+    }
+    loops
+}
+
 fn face_info_from_reduced(face: &ReducedFace) -> Option<FaceInfo> {
     if matches!(face.surface, SurfaceSupport::Other { .. })
         || face.loops.is_empty()
@@ -502,12 +523,17 @@ fn face_info_from_reduced(face: &ReducedFace) -> Option<FaceInfo> {
     {
         return None;
     }
+    let loops = normalize_extrusion_loops(face.loops.clone());
+    let loop_edges = loops
+        .iter()
+        .flat_map(|wire| wire.edges.iter().cloned())
+        .collect();
     Some(FaceInfo {
         id: face.id,
         surface: face.surface.clone(),
         surface_forward: face.surface_forward,
-        loops: face.loops.clone(),
-        loop_edges: face.loop_edges().cloned().collect(),
+        loops,
+        loop_edges,
     })
 }
 
@@ -1306,14 +1332,6 @@ struct SideProof {
     max_residual_mm: f64,
 }
 
-struct SideProofContext<'a> {
-    bottom: &'a FaceInfo,
-    top: &'a FaceInfo,
-    bottom_edges: &'a HashSet<u64>,
-    top_edges: &'a HashSet<u64>,
-    extrusion: [f64; 3],
-}
-
 fn cap_pair_candidate(
     solid_id: u64,
     first_index: usize,
@@ -1546,41 +1564,31 @@ fn prove_extrusion_sides(
     let side_indices = (0..faces.len())
         .filter(|&index| index != pair.bottom_index && index != pair.top_index)
         .collect::<Vec<_>>();
-    if side_indices.len() != pair.bottom.loop_edges.len() {
-        return None;
-    }
-
-    let context = SideProofContext {
-        bottom: pair.bottom,
-        top: pair.top,
-        bottom_edges: &bottom_edges,
-        top_edges: &top_edges,
-        extrusion: pair.extrusion,
-    };
+    let mut context = side_chains::SideProofContext::new(
+        pair.bottom,
+        pair.top,
+        &bottom_edges,
+        &top_edges,
+        pair.extrusion,
+        &pair.bottom_loop_roles,
+        &pair.top_loop_roles,
+    )?;
     let mut used_bottom_edges = HashSet::new();
     let mut used_top_edges = HashSet::new();
-    let mut translated_edges = HashMap::new();
     let mut max_residual_mm = pair.max_residual_mm;
     for &side_index in &side_indices {
-        let residual = prove_side_face(
+        let residual = side_chains::prove_side_face(
             &faces[side_index],
-            &context,
+            &mut context,
             &mut used_bottom_edges,
             &mut used_top_edges,
-            &mut translated_edges,
         )?;
         max_residual_mm = max_residual_mm.max(residual);
     }
 
     if used_bottom_edges != bottom_edges
         || used_top_edges != top_edges
-        || !translated_cap_loops_match(
-            pair.bottom,
-            pair.top,
-            &translated_edges,
-            &pair.bottom_loop_roles,
-            &pair.top_loop_roles,
-        )
+        || !context.complete()
         || edge_faces.iter().any(|(edge, attached)| {
             (bottom_edges.contains(edge) || top_edges.contains(edge)) && attached.len() != 2
         })
@@ -1592,79 +1600,6 @@ fn prove_extrusion_sides(
         side_indices,
         max_residual_mm,
     })
-}
-
-fn prove_side_face(
-    side: &FaceInfo,
-    context: &SideProofContext<'_>,
-    used_bottom_edges: &mut HashSet<u64>,
-    used_top_edges: &mut HashSet<u64>,
-    translated_edges: &mut HashMap<u64, u64>,
-) -> Option<f64> {
-    if side.loops.len() != 1 || side.loop_edges.len() != 4 {
-        return None;
-    }
-    let side_edge_ids = side
-        .loop_edges
-        .iter()
-        .map(|edge| edge.edge_id)
-        .collect::<HashSet<_>>();
-    let shared_bottom = side_edge_ids
-        .intersection(context.bottom_edges)
-        .copied()
-        .collect::<Vec<_>>();
-    let shared_top = side_edge_ids
-        .intersection(context.top_edges)
-        .copied()
-        .collect::<Vec<_>>();
-    if shared_bottom.len() != 1 || shared_top.len() != 1 {
-        return None;
-    }
-    let bottom_edge_id = shared_bottom[0];
-    let top_edge_id = shared_top[0];
-    if !used_bottom_edges.insert(bottom_edge_id)
-        || !used_top_edges.insert(top_edge_id)
-        || translated_edges
-            .insert(bottom_edge_id, top_edge_id)
-            .is_some()
-    {
-        return None;
-    }
-
-    let bottom_edge = context
-        .bottom
-        .loop_edges
-        .iter()
-        .find(|edge| edge.edge_id == bottom_edge_id)?;
-    let top_edge = context
-        .top
-        .loop_edges
-        .iter()
-        .find(|edge| edge.edge_id == top_edge_id)?;
-    let profile_residual =
-        translated_profile_edge_residual(bottom_edge, top_edge, context.extrusion)?;
-    let side_residual = side_support_residual(side, bottom_edge, context.extrusion)?;
-    if profile_residual > GEOM_TOL_MM || side_residual > GEOM_TOL_MM {
-        return None;
-    }
-
-    let mut max_residual_mm = profile_residual.max(side_residual);
-    let lateral_edges = side
-        .loop_edges
-        .iter()
-        .filter(|edge| edge.edge_id != bottom_edge_id && edge.edge_id != top_edge_id)
-        .collect::<Vec<_>>();
-    if lateral_edges.len() != 2 {
-        return None;
-    }
-    for lateral in lateral_edges {
-        let residual = connector_residual(lateral, context.extrusion)?;
-        if residual > GEOM_TOL_MM {
-            return None;
-        }
-        max_residual_mm = max_residual_mm.max(residual);
-    }
-    Some(max_residual_mm)
 }
 
 fn cap_loop_roles(face: &FaceInfo, z_axis: [f64; 3]) -> Option<Vec<bool>> {
@@ -1694,6 +1629,7 @@ fn cap_loop_roles(face: &FaceInfo, z_axis: [f64; 3]) -> Option<Vec<bool>> {
     // when the geometry itself proves one unambiguous outer loop.
     let loops = projected_cap_loops(face, z_axis)?;
     convex_polygon_outer_roles(&loops)
+        .or_else(|| loop_containment::prove_loop_roles(&loops, GEOM_TOL_MM))
 }
 
 /// Recover the outer bound of an unlabelled planar face without assuming
@@ -1717,23 +1653,8 @@ pub(crate) fn unlabelled_planar_outer_bound(
     }
     let outward = mul(plane.normal, if face.surface_forward { 1.0 } else { -1.0 });
     let curves = projected_cap_loops(&face, outward)?;
-    let roles = convex_polygon_outer_roles(&curves).or_else(|| {
-        // On an oriented planar face, the outer wire has positive area
-        // relative to the face normal and every hole has negative area.
-        // Do not use the partial area integral for spline curves.
-        let roles = curves
-            .iter()
-            .zip(&face.loops)
-            .map(|(curves, wire)| {
-                if curves.iter().any(RecoveredProfileCurve::is_spline) {
-                    return None;
-                }
-                let area = signed_area_curves(curves) * if wire.orientation { 1.0 } else { -1.0 };
-                (area.is_finite() && area.abs() > GEOM_TOL_MM * GEOM_TOL_MM).then_some(area > 0.0)
-            })
-            .collect::<Option<Vec<_>>>()?;
-        (roles.iter().filter(|&&outer| outer).count() == 1).then_some(roles)
-    })?;
+    let roles = convex_polygon_outer_roles(&curves)
+        .or_else(|| loop_containment::prove_loop_roles(&curves, GEOM_TOL_MM))?;
     face.loops
         .iter()
         .zip(roles)
@@ -2026,7 +1947,7 @@ fn face_info(
         return None;
     }
 
-    let loops = brep::face_loops(face_id, entities, index)?;
+    let loops = normalize_extrusion_loops(brep::face_loops(face_id, entities, index)?);
     if loops.is_empty()
         || loops.iter().any(|loop_| {
             loop_.edges.is_empty()
@@ -2104,8 +2025,21 @@ fn translated_profile_edge_residual(
             if (bottom_sweep.abs() - top_sweep.abs()).abs() > ANGLE_TOL_RAD {
                 return None;
             }
+            // Equal endpoints and sweep magnitude do not suffice for a
+            // semicircle: its complementary half has those same values.
+            // Compare the endpoint correspondence selected by the physical
+            // angular orientation (the authored circle axes may be reversed).
+            let same_direction =
+                dot(bottom_circle.normal, top_circle.normal) * bottom_sweep * top_sweep > 0.0;
+            let (top_start, top_end) = if same_direction {
+                (top.start_mm, top.end_mm)
+            } else {
+                (top.end_mm, top.start_mm)
+            };
+            let directed_residual = distance(add(bottom.start_mm, extrusion), top_start)
+                .max(distance(add(bottom.end_mm, extrusion), top_end));
             Some(
-                endpoint_residual
+                directed_residual
                     .max(distance(
                         add(bottom_circle.center_mm, extrusion),
                         top_circle.center_mm,
@@ -2266,15 +2200,6 @@ fn side_support_residual(
         }
         _ => None,
     }
-}
-
-fn connector_residual(edge: &OrientedEdgeUse, extrusion: [f64; 3]) -> Option<f64> {
-    if !matches!(&edge.support, CurveSupport::Line(_)) {
-        return None;
-    }
-    let forward = distance(sub(edge.end_mm, edge.start_mm), extrusion);
-    let reverse = distance(sub(edge.start_mm, edge.end_mm), extrusion);
-    Some(forward.min(reverse))
 }
 
 fn canonical_profile(
@@ -3145,6 +3070,44 @@ mod tests {
             translated_profile_edge_residual(&bottom, &top, [0.0, 0.0, 3.0]),
             Some(0.0)
         );
+    }
+
+    #[test]
+    fn translated_semicircles_must_cover_the_same_half() -> anyhow::Result<()> {
+        let mut bottom = line_edge(1, 10, 11, [1., 0., 0.], [-1., 0., 0.]);
+        bottom.support = CurveSupport::Circle(CircleSupport {
+            center_mm: [0., 0., 0.],
+            normal: [0., 0., 1.],
+            x_direction: [1., 0., 0.],
+            radius_mm: 1.,
+        });
+        let extrusion = [0., 0., 1.];
+        let mut top = line_edge(2, 20, 21, [-1., 0., 1.], [1., 0., 1.]);
+        top.support = CurveSupport::Circle(CircleSupport {
+            center_mm: extrusion,
+            normal: [0., 0., 1.],
+            x_direction: [1., 0., 0.],
+            radius_mm: 1.,
+        });
+        top.parameter_forward = false;
+        assert!(
+            translated_profile_edge_residual(&bottom, &top, extrusion)
+                .is_some_and(|residual| residual <= GEOM_TOL_MM)
+        );
+        top.parameter_forward = true;
+        assert!(
+            translated_profile_edge_residual(&bottom, &top, extrusion)
+                .is_none_or(|residual| residual > GEOM_TOL_MM)
+        );
+        let CurveSupport::Circle(circle) = &mut top.support else {
+            anyhow::bail!("missing test circle");
+        };
+        circle.normal = [0., 0., -1.];
+        assert!(
+            translated_profile_edge_residual(&bottom, &top, extrusion)
+                .is_some_and(|residual| residual <= GEOM_TOL_MM)
+        );
+        Ok(())
     }
 
     #[test]

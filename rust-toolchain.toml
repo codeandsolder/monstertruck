@@ -1,11 +1,6 @@
-# Rust 1.100 is the project compiler/tooling baseline.
-#
-# Formatting is the one explicit exception: rustfmt.toml uses unstable rustfmt
-# options, so formatting must be invoked as `cargo +nightly fmt`. The justfile
-# and CI do that explicitly; nightly is not used to compile, lint, or test the
-# project. Keeping rustfmt out of the default toolchain also makes an accidental
-# plain `cargo fmt` fail instead of silently ignoring the unstable options.
+# Pinned nightly for step-p21-fast's portable SIMD and unstable rustfmt options.
+# Use this compiler consistently across native tests, Clippy, and wasm builds.
 [toolchain]
-channel = "1.100.0"
-components = ["clippy"]
+channel = "nightly-2026-11-22"
+components = ["clippy", "rustfmt"]
 targets = ["wasm32-unknown-unknown"]

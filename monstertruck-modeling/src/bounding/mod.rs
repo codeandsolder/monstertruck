@@ -102,7 +102,7 @@ pub const ANALYTIC_SPHERE_LOOSENESS: f64 = 6.0 / std::f64::consts::PI;
 /// The ratio of the certified box's volume to the enclosed ball's volume, for a
 /// ball of any radius: exactly [`ANALYTIC_SPHERE_LOOSENESS`].
 #[inline]
-#[must_use]
+#[must_use = "use the volume ratio when assessing the looseness of an analytic sphere bound"]
 pub const fn analytic_sphere_looseness() -> f64 { ANALYTIC_SPHERE_LOOSENESS }
 
 /// A certified axis-aligned box containing every point of `solid`, or [`None`]
@@ -112,7 +112,7 @@ pub const fn analytic_sphere_looseness() -> f64 { ANALYTIC_SPHERE_LOOSENESS }
 /// The box contains the solid's SURFACE and therefore -- the surface being a
 /// closed boundary -- the solid. See the module note for the per-class
 /// arguments and for how loose the result is.
-#[must_use]
+#[must_use = "handle uncertifiable solids rather than treating their bounding box as complete"]
 pub fn certified_solid_bounding_box(solid: &Solid) -> Option<BoundingBox<Point3>> {
     let mut result = BoundingBox::<Point3>::new();
     let mut any = false;
@@ -126,7 +126,7 @@ pub fn certified_solid_bounding_box(solid: &Solid) -> Option<BoundingBox<Point3>
 }
 
 /// A certified axis-aligned box containing every point of `face`, or [`None`].
-#[must_use]
+#[must_use = "handle unsupported face classes when using certified bounds"]
 pub fn certified_face_bounding_box(face: &Face) -> Option<BoundingBox<Point3>> {
     let surface = face.surface();
     let hull = face_boundary_hull(face);
@@ -209,7 +209,7 @@ pub fn certified_surface_bounding_box(
 /// Diagnosis, not certification: an empty result means every face was bounded.
 /// A caller staring at a `None` needs to know WHICH class it tripped over, and
 /// guessing is how instruments start lying.
-#[must_use]
+#[must_use = "inspect uncertifiable face classes when explaining missing solid bounds"]
 pub fn uncertifiable_face_classes(solid: &Solid) -> Vec<String> {
     let mut classes: Vec<String> = Vec::new();
     for shell in solid.boundaries() {
@@ -269,7 +269,7 @@ const fn curve_class_name(curve: &Curve) -> &'static str {
 
 /// Points whose convex hull encloses every boundary wire of `face`, or [`None`]
 /// when some edge carries a curve with no cheap enclosure.
-#[must_use]
+#[must_use = "handle boundary curves without a certified convex enclosure"]
 pub fn face_boundary_hull(face: &Face) -> Option<Vec<Point3>> {
     let mut points = Vec::new();
     for edge in face.edge_iter() {

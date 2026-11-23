@@ -58,7 +58,6 @@ pub mod solid_revolutions;
 pub mod solid_sweeps;
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub mod source_edge_healing;
-#[cfg(feature = "cad-kernel-monstertruck")]
 pub mod source_edge_locus;
 mod spherical_caps;
 mod step_document;

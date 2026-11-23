@@ -53,7 +53,7 @@ jobs:
           "$validator" run --manifest "$RUNNER_TEMP/smoke-manifest.json" --cache "$RUNNER_TEMP/step-fixtures" --out "$RUNNER_TEMP/step-compare" --step-redox /bin/cp
           jq -e 'length == 1 and .[0].pass and (.[0].comparison.renders | length == 8)' "$RUNNER_TEMP/step-compare/report.json"
       - name: Retain the qualified validator for fixture differential testing
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: occt-wasm-validator-linux
           path: ${{ runner.temp }}/occt-validator/release/step-redox-occt-wasm-validator
