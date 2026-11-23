@@ -62,7 +62,7 @@ jobs:
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ee029fa0cc496176a773aa66258ff8fb248b49a4 # main
         with:
-          rust-toolchain: "nightly-2026-11-22"
+          rust-toolchain: "nightly-2026-11-23"
           rustflags: "-D warnings"
       - run: cargo clippy --all-targets -- -D warnings
       - name: Finalize mandatory sccache
@@ -89,7 +89,7 @@ jobs:
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ee029fa0cc496176a773aa66258ff8fb248b49a4 # main
         with:
-          rust-toolchain: "nightly-2026-11-22"
+          rust-toolchain: "nightly-2026-11-23"
           rustflags: "-D warnings"
       - uses: taiki-e/install-action@2b545d4fd42fdd72ed2a44eab8fedd1850e8f731 # nextest
       # Pinned: cargo-rdme's output is not stable across major versions, so an
@@ -119,7 +119,7 @@ jobs:
       command: |
         git submodule update --init resources
         cargo test --workspace --lib
-      rust-toolchain: "nightly-2026-11-22"
+      rust-toolchain: "nightly-2026-11-23"
       rustflags: "-D warnings -C target-cpu=x86-64-v2"
 
   meshing-features:
@@ -140,7 +140,7 @@ jobs:
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ee029fa0cc496176a773aa66258ff8fb248b49a4 # main
         with:
-          rust-toolchain: "nightly-2026-11-22"
+          rust-toolchain: "nightly-2026-11-23"
           rustflags: "-D warnings"
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just meshing-features
@@ -171,7 +171,7 @@ jobs:
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@ee029fa0cc496176a773aa66258ff8fb248b49a4 # main
         with:
-          rust-toolchain: "nightly-2026-11-22"
+          rust-toolchain: "nightly-2026-11-23"
           rustflags: "-D warnings"
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just wasm-build
