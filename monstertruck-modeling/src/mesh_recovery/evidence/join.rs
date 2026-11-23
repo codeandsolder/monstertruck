@@ -63,7 +63,7 @@ fn source_contact_count(
     interfaces.len()
 }
 
-fn line_distance(
+pub(super) fn line_distance(
     left_origin: Point3,
     left_axis: Vector3,
     right_origin: Point3,

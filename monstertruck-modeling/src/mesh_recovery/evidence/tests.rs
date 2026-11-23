@@ -984,3 +984,116 @@ fn axially_joining_radius_kink_exposes_incompatible_local_surface_profiles() {
     assert!(joined.combined.max_sample_radial_residual > 0.04);
     assert!(joined.combined.max_meridian_slope_change.unwrap() > 0.1);
 }
+
+#[test]
+fn globally_grown_curvature_reuses_one_placed_axis_across_compatible_bands() {
+    let mesh = faceted_radial_profile(
+        &[(0.0, 1.0), (1.0, 1.0001), (2.0, 1.0)],
+        32,
+        [1.0, 1.0],
+        [0.0; 3],
+    );
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
+    let index =
+        CurvatureGrowthIndex::new(&evidence, &tracks, CurvatureGrowthOptions::default()).unwrap();
+    assert!(index.eligible_track_count() >= 2);
+    let grown = tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(seed, _)| index.grow(seed))
+        .max_by_key(|region| region.support_indices.len())
+        .unwrap();
+    assert!(grown.track_indices.len() >= 2);
+    assert!(grown.support_indices.len() >= 64);
+    assert!(grown.steps.iter().all(|step| step.new_supports > 0));
+    assert!(grown.spatial.relative_max_sample_radial_residual < 0.01);
+    assert!(
+        grown.spatial.max_support_plane_offset_residual / grown.spatial.mean_sample_radius < 0.01
+    );
+    assert_eq!(grown.source_polygon_count, 128);
+}
+
+#[test]
+fn cumulative_spatial_growth_does_not_accept_nontransitive_axial_kink_chain() {
+    // Every individual band is a perfect faceted cylinder/cone. Each pair
+    // of neighboring bands fits a common profile within 0.4%, while all
+    // three bands have >0.4% radial error under a *single* linear profile.
+    let mesh = faceted_radial_profile(
+        &[(0.0, 1.0), (1.0, 1.0), (2.0, 1.01), (3.0, 1.03)],
+        32,
+        [1.0, 1.0],
+        [0.0; 3],
+    );
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
+    let budget = CurvatureGrowthOptions {
+        max_relative_vertex_radial_residual: 0.004,
+        max_relative_support_plane_residual: 0.02,
+        ..Default::default()
+    };
+    let index = CurvatureGrowthIndex::new(&evidence, &tracks, budget).unwrap();
+    let grown = tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(seed, _)| index.grow(seed))
+        .collect::<Vec<_>>();
+    assert!(index.eligible_track_count() >= 3);
+    assert!(grown.iter().any(|region| region.track_indices.len() >= 2));
+    assert!(grown.iter().all(|region| region.support_indices.len() < 96));
+    assert!(grown.iter().all(|region| {
+        region.spatial.relative_max_sample_radial_residual
+            <= budget.max_relative_vertex_radial_residual
+            && region.spatial.max_support_plane_offset_residual / region.spatial.mean_sample_radius
+                <= budget.max_relative_support_plane_residual
+    }));
+}
+
+#[test]
+fn growth_rejects_disconnected_source_tracks_and_invalid_limits() {
+    let mesh = faceted_radial_profile(&[(0.0, 1.0), (2.0, 1.0)], 32, [1.0, 1.0], [0.0; 3]);
+    let ring = find_closed_normal_ring(&mesh, 32);
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let mut first = ring.clone();
+    first.support_indices = ring.support_indices[..6].to_vec();
+    first.closed = false;
+    let mut second = ring;
+    second.support_indices = second.support_indices[12..18].to_vec();
+    second.closed = false;
+    let tracks = [first, second];
+    let options = CurvatureGrowthOptions {
+        min_track_supports: 6,
+        ..Default::default()
+    };
+    let index = CurvatureGrowthIndex::new(&evidence, &tracks, options).unwrap();
+    assert_eq!(index.eligible_track_count(), 2);
+    let first = index.grow(0).unwrap();
+    let second = index.grow(1).unwrap();
+    assert_eq!(first.track_indices, [0]);
+    assert_eq!(second.track_indices, [1]);
+    assert!(index.grow(2).is_none());
+    for invalid in [
+        CurvatureGrowthOptions {
+            min_track_supports: 2,
+            ..options
+        },
+        CurvatureGrowthOptions {
+            min_added_supports: 0,
+            ..options
+        },
+        CurvatureGrowthOptions {
+            max_seed_axis_angle_radians: f64::NAN,
+            ..options
+        },
+        CurvatureGrowthOptions {
+            max_relative_axis_line_separation: -1.0,
+            ..options
+        },
+        CurvatureGrowthOptions {
+            max_relative_vertex_radial_residual: f64::INFINITY,
+            ..options
+        },
+    ] {
+        assert!(CurvatureGrowthIndex::new(&evidence, &tracks, invalid).is_err());
+    }
+}

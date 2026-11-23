@@ -6,9 +6,9 @@
 
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_modeling::mesh_recovery::{
-    CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence,
-    SpatialTrackEvidence, analyze_mesh_evidence, measure_curvature_spatial,
-    measure_curvature_spatial_join, trace_curvature_tracks,
+    CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureTrack, CurvatureTrackOptions,
+    EvidenceOptions, FeatureEdgeKind, MeshEvidence, SpatialTrackEvidence, analyze_mesh_evidence,
+    measure_curvature_spatial, measure_curvature_spatial_join, trace_curvature_tracks,
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -486,6 +486,87 @@ fn spatial_track_summary(
         "exploratory_residual_thresholds":bounded,
         "top_tracks":top,
     })
+}
+
+/// Grow representative source-connected candidates without original native
+/// labels. One seed is one competing observation, not a CAD face hypothesis
+/// selected by comparison against the original source STEP surface classes.
+fn growth_track_summary(
+    evidence: &MeshEvidence,
+    tracks: &[CurvatureTrack],
+) -> Result<Value, String> {
+    let start = Instant::now();
+    let index = CurvatureGrowthIndex::new(evidence, tracks, CurvatureGrowthOptions::default())
+        .map_err(|error| error.to_string())?;
+    let indexed_seconds = start.elapsed().as_secs_f64();
+    let mut seed_ids = (0..tracks.len()).collect::<Vec<_>>();
+    seed_ids.sort_unstable_by_key(|&id| (std::cmp::Reverse(tracks[id].distinct_support_count), id));
+    let mut grown = seed_ids
+        .into_iter()
+        .filter_map(|id| index.grow(id))
+        .take(12)
+        .collect::<Vec<_>>();
+    let sampled_seed_count = grown.len();
+    let expanded_seeds = grown
+        .iter()
+        .filter(|hypothesis| !hypothesis.steps.is_empty())
+        .count();
+    let maximum_source_supports = grown
+        .iter()
+        .map(|hypothesis| hypothesis.support_indices.len())
+        .max()
+        .unwrap_or(0);
+    let maximum_tracks_merged = grown
+        .iter()
+        .map(|hypothesis| hypothesis.track_indices.len())
+        .max()
+        .unwrap_or(0);
+    let maximum_source_polygons = grown
+        .iter()
+        .map(|hypothesis| hypothesis.source_polygon_count)
+        .max()
+        .unwrap_or(0);
+    grown.sort_unstable_by_key(|h| std::cmp::Reverse(h.support_indices.len()));
+    let top = grown
+        .iter()
+        .take(6)
+        .map(|h| {
+            json!({
+                "seed_track_index":h.seed_track_index,
+                "seed_support_count":tracks[h.seed_track_index].distinct_support_count,
+                "source_track_ids":h.track_indices,
+                "source_supports":h.support_indices.len(),
+                "source_polygons":h.source_polygon_count,
+                "source_vertex_count":h.spatial.unique_source_vertex_count,
+                "radial_relative_error":h.spatial.relative_max_sample_radial_residual,
+                "support_plane_relative_error":
+                    h.spatial.max_support_plane_offset_residual / h.spatial.mean_sample_radius,
+                "meridian_stations":h.spatial.axial_stations.len(),
+                "meridian_max_slope_change":h.spatial.max_meridian_slope_change,
+                "maximum_seed_axis_deviation_radians":h.max_seed_axis_deviation_radians,
+                "maximum_relative_axis_line_separation":h.max_relative_input_axis_separation,
+                "growth_steps":h.steps.iter().map(|s| json!({
+                    "track_id":s.track_index,
+                    "new_supports":s.new_supports,
+                    "cumulative_supports":s.cumulative_supports,
+                    "cumulative_radial_relative_error":s.cumulative_relative_radial_residual,
+                    "cumulative_support_plane_relative_error":s.cumulative_relative_plane_residual,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "eligible_source_tracks":index.eligible_track_count(),
+        "sampled_independent_seed_count":sampled_seed_count,
+        "seed_policy":"up to 12 locally identifiable seeds, descending original support count, no original STEP metadata",
+        "expanded_seed_count":expanded_seeds,
+        "maximum_source_support_count":maximum_source_supports,
+        "maximum_tracks_in_one_region":maximum_tracks_merged,
+        "maximum_original_polygons_in_one_region":maximum_source_polygons,
+        "index_seconds":indexed_seconds,
+        "index_and_sample_growth_seconds":start.elapsed().as_secs_f64(),
+        "samples":top,
+    }))
 }
 
 /// Compare a recovered geometric normal-space axis with independently
@@ -1104,12 +1185,20 @@ fn planar_candidate_counts(evidence: &MeshEvidence) -> [usize; 3] {
     ]
 }
 
+/// Primitive-independent evidence plus optional original CAD benchmark truth.
+struct CorpusCurvatureAnalysis {
+    tracks: Value,
+    spatial: Value,
+    growth: Value,
+    native_ground_truth: Option<Value>,
+}
+
 /// Keep source-independent curvature-track discovery distinct from the
 /// optional original CAD-face reference evaluation.
 fn discover_and_evaluate_curvature(
     path: &Path,
     evidence: &MeshEvidence,
-) -> Result<(Value, Value, Option<Value>), (&'static str, String)> {
+) -> Result<CorpusCurvatureAnalysis, (&'static str, String)> {
     let started = Instant::now();
     let tracks = trace_curvature_tracks(evidence, CurvatureTrackOptions::default())
         .map_err(|error| ("curvature", error.to_string()))?;
@@ -1127,9 +1216,15 @@ fn discover_and_evaluate_curvature(
         .collect::<Vec<_>>();
     let spatial_summary =
         spatial_track_summary(&tracks, &spatial, spatial_start.elapsed().as_secs_f64());
+    let growth = growth_track_summary(evidence, &tracks).map_err(|error| ("growth", error))?;
     let ground_truth = evaluate_native_face_labels(path, evidence, &tracks, &spatial)
         .map_err(|error| ("ground_truth", error))?;
-    Ok((summary, spatial_summary, ground_truth))
+    Ok(CorpusCurvatureAnalysis {
+        tracks: summary,
+        spatial: spatial_summary,
+        growth,
+        native_ground_truth: ground_truth,
+    })
 }
 
 fn analyze_file(path: &Path) -> Value {
@@ -1178,17 +1273,16 @@ fn analyze_file(path: &Path) -> Value {
                 bilateral_plane_candidates,
                 supported_region_internal_edges,
             ] = planar_candidate_counts(&evidence);
-            let (track_summary, spatial_summary, ground_truth) =
-                match discover_and_evaluate_curvature(path, &evidence) {
-                    Ok(result) => result,
-                    Err((stage, error)) => {
-                        return json!({"source": base, "stage": stage, "error": error});
-                    }
-                };
+            let analysis = match discover_and_evaluate_curvature(path, &evidence) {
+                Ok(result) => result,
+                Err((stage, error)) => {
+                    return json!({"source": base, "stage": stage, "error": error});
+                }
+            };
             json!({
                 "source": base,
                 "stage": "ok",
-                "ground_truth": ground_truth,
+                "ground_truth": analysis.native_ground_truth,
                 "source_faces": faces,
                 "source_vertices": vertices,
                 "canonical_vertices": evidence.positions.len(),
@@ -1202,8 +1296,9 @@ fn analyze_file(path: &Path) -> Value {
                 "chain_segment_total": total_segments,
                 "parallel_groups": evidence.parallel_bundles.len(),
                 "support_interfaces": support_interface_summary(&evidence),
-                "curvature_tracks": track_summary,
-                "spatial_tracks": spatial_summary,
+                "curvature_tracks": analysis.tracks,
+                "spatial_tracks": analysis.spatial,
+                "spatial_growth": analysis.growth,
                 "planar_regions": evidence.planar_supports.len(),
                 "planar_regions_multi_facet": evidence
                     .planar_supports.iter().filter(|region| region.source_face_indices.len() >= 3).count(),

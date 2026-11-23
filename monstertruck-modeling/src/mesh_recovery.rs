@@ -43,11 +43,13 @@ pub use through_hole::{RecoveredCylindricalThroughHole, recover_cylindrical_thro
 mod evidence;
 mod seams;
 pub use evidence::{
-    AxialRadialStation, ChainPairEvidence, CollinearChain, CurvatureTrack, CurvatureTrackOptions,
-    EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence, ParallelBundle, ParallelPlacement,
-    PlanarSupport, SpatialTrackEvidence, SpatialTrackJoinEvidence, SupportBoundaryTopology,
-    SupportInterface, SupportNormalRotationEvidence, analyze_mesh_evidence,
-    measure_curvature_spatial, measure_curvature_spatial_join, trace_curvature_tracks,
+    AxialRadialStation, ChainPairEvidence, CollinearChain, CurvatureGrowthHypothesis,
+    CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack,
+    CurvatureTrackOptions, EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence,
+    ParallelBundle, ParallelPlacement, PlanarSupport, SpatialTrackEvidence,
+    SpatialTrackJoinEvidence, SupportBoundaryTopology, SupportInterface,
+    SupportNormalRotationEvidence, analyze_mesh_evidence, measure_curvature_spatial,
+    measure_curvature_spatial_join, trace_curvature_tracks,
 };
 
 /// Source evidence for one reconstructed planar face.
