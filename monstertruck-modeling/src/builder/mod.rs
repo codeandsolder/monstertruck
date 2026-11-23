@@ -100,7 +100,7 @@ pub fn vertices<P: Into<Point3>>(points: impl IntoIterator<Item = P>) -> Vec<Ver
 /// #     assert!(curve.evaluate(t).near2(&(pt0 + t * (pt1 - pt0))));
 /// # }
 /// ```
-#[must_use]
+#[must_use = "retain the line edge connecting the input vertices"]
 pub fn line<C>(vertex0: &Vertex, vertex1: &Vertex) -> Edge<C>
 where Line<Point3>: ToSameGeometry<C> {
     let pt0 = vertex0.point();
@@ -250,7 +250,7 @@ where
 /// #       assert!(curve.evaluate(t).near(&pt));
 /// # }
 /// ```
-#[must_use]
+#[must_use = "retain the Bezier edge interpolating the requested control points"]
 pub fn bezier<C>(vertex0: &Vertex, vertex1: &Vertex, mut inter_points: Vec<Point3>) -> Edge<C>
 where BsplineCurve<Point3>: ToSameGeometry<C> {
     let pt0 = vertex0.point();
@@ -287,7 +287,7 @@ where BsplineCurve<Point3>: ToSameGeometry<C> {
 /// #       }
 /// # }
 /// ```
-#[must_use]
+#[must_use = "retain the homotopy face interpolated between input edges"]
 pub fn homotopy<C, S>(edge0: &Edge<C>, edge1: &Edge<C>) -> Face<C, S>
 where
     C: Invertible,
