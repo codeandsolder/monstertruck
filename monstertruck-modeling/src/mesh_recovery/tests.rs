@@ -27,6 +27,18 @@ fn square_vertices() -> [[f64; 3]; 4] {
     ]
 }
 
+fn assert_separate_triangle_regions(positions: &[[f64; 3]; 6]) {
+    let source = mesh(positions, &[[0, 1, 2], [3, 4, 5]]);
+    let recovered = recover_planar_mesh(&source, PlanarRecoveryOptions::default()).unwrap();
+    assert_eq!(recovered.patches.len(), 2);
+    assert!(
+        recovered
+            .patches
+            .iter()
+            .all(|p| p.boundary_loops[0].len() == 3)
+    );
+}
+
 #[test]
 fn two_coplanar_triangles_become_one_planar_brep_face() {
     let source = mesh(&square_vertices(), &[[0, 1, 2], [0, 2, 3]]);
@@ -410,27 +422,15 @@ fn geometric_t_junction_in_cube_is_split_and_then_globally_simplified() {
 
 #[test]
 fn near_but_not_incident_vertex_does_not_weld_to_a_seam() {
-    // A vertex 1e-8 above the plane must remain separate, despite the
-    // default 1e-6 fitting tolerance for coplanar facet classification.
-    let source = mesh(
-        &[
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.5, 0.0, 1e-8],
-            [0.5, 0.0, 1.0],
-            [0.5, 1.0, 1e-8],
-        ],
-        &[[0, 1, 2], [3, 4, 5]],
-    );
-    let recovered = recover_planar_mesh(&source, PlanarRecoveryOptions::default()).unwrap();
-    assert_eq!(recovered.patches.len(), 2);
-    assert!(
-        recovered
-            .patches
-            .iter()
-            .all(|p| p.boundary_loops[0].len() == 3)
-    );
+    // This point is 1e-8 above the plane, not connected to its carrier edge.
+    assert_separate_triangle_regions(&[
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.5, 0.0, 1e-8],
+        [0.5, 0.0, 1.0],
+        [0.5, 1.0, 1e-8],
+    ]);
 }
 
 #[test]
@@ -471,53 +471,28 @@ fn t_junction_repair_rejects_a_third_incident_polygon() {
 
 #[test]
 fn point_only_contact_on_an_edge_does_not_create_a_false_seam() {
-    // Another triangle has a vertex exactly in the middle of an edge but
-    // its incident edges leave that carrier line. This is a point contact,
-    // not the overlapping collinear subedges of a genuine T-junction.
-    let source = mesh(
-        &[
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.5, 0.0, 0.0],
-            [0.5, 0.0, 1.0],
-            [0.5, 1.0, 1.0],
-        ],
-        &[[0, 1, 2], [3, 4, 5]],
-    );
-    let recovered = recover_planar_mesh(&source, PlanarRecoveryOptions::default()).unwrap();
-    assert_eq!(recovered.patches.len(), 2);
-    assert!(
-        recovered
-            .patches
-            .iter()
-            .all(|p| p.boundary_loops[0].len() == 3)
-    );
+    // A vertex on the edge with only transverse spokes is a point contact,
+    // not a T-junction with overlapping collinear source edges.
+    assert_separate_triangle_regions(&[
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.5, 0.0, 0.0],
+        [0.5, 0.0, 1.0],
+        [0.5, 1.0, 1.0],
+    ]);
 }
 
 #[test]
 fn large_coordinate_offsets_do_not_turn_a_nearby_parallel_edge_into_a_seam() {
-    // At 1e12, a naive 8*epsilon*coordinate tolerance is about 0.0018:
-    // larger than this genuine 0.0009765625 gap. Exact orientation predicates
-    // must distinguish it even though the coordinates themselves are large.
+    // At 1e12, 8*epsilon*coordinate is 0.0018: larger than this real gap.
     let base = 1.0e12;
-    let source = mesh(
-        &[
-            [base, base, 0.0],
-            [base + 1.0, base, 0.0],
-            [base, base + 1.0, 0.0],
-            [base + 0.5, base - 0.001, 0.0],
-            [base + 0.75, base - 0.001, 0.0],
-            [base + 0.5, base - 0.5, 0.0],
-        ],
-        &[[0, 1, 2], [3, 5, 4]],
-    );
-    let recovered = recover_planar_mesh(&source, PlanarRecoveryOptions::default()).unwrap();
-    assert_eq!(recovered.patches.len(), 2);
-    assert!(
-        recovered
-            .patches
-            .iter()
-            .all(|p| p.boundary_loops[0].len() == 3)
-    );
+    assert_separate_triangle_regions(&[
+        [base, base, 0.0],
+        [base + 1.0, base, 0.0],
+        [base, base + 1.0, 0.0],
+        [base + 0.5, base - 0.001, 0.0],
+        [base + 0.5, base - 0.5, 0.0],
+        [base + 0.75, base - 0.001, 0.0],
+    ]);
 }
