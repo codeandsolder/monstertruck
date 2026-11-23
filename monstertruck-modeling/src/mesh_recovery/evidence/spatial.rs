@@ -351,12 +351,21 @@ fn fit_source_vertex_radial_profile(
 /// returns actual source geometry fit residuals, not a yes/no primitive
 /// classification. Low fit rank or insufficient axial sample span is
 /// explicitly reported, never replaced by an assumed center or cone slope.
-pub(super) fn fit_spatial_support_set(
+/// The support IDs must be strictly increasing (unique), the axis must be
+/// a finite unit vector, and angular uncertainty must lie in `[0, pi/2]`.
+#[must_use = "the spatial fit contains the measured source residuals"]
+pub fn measure_spatial_support_set(
     evidence: &MeshEvidence,
     supports: &[usize],
     axis: Vector3,
     angular_uncertainty: f64,
 ) -> Option<SpatialTrackEvidence> {
+    if supports.windows(2).any(|pair| pair[0] >= pair[1])
+        || !(0.0..=64.0 * f64::EPSILON).contains(&(axis.magnitude2() - 1.0).abs())
+        || !(0.0..=std::f64::consts::FRAC_PI_2).contains(&angular_uncertainty)
+    {
+        return None;
+    }
     let plane = fit_support_plane_placement(evidence, supports, axis)?;
     let samples = fit_source_vertex_radial_profile(
         evidence,
@@ -427,7 +436,7 @@ pub fn measure_curvature_spatial(
     let mut supports = track.support_indices.clone();
     supports.sort_unstable();
     supports.dedup();
-    fit_spatial_support_set(
+    measure_spatial_support_set(
         evidence,
         &supports,
         track.seed_axis,

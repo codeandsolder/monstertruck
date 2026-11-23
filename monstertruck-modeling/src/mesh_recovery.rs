@@ -41,15 +41,18 @@ mod through_hole;
 pub use cylinder::{CylinderRecoveryOptions, RecoveredCylinder, recover_cylindrical_solid};
 pub use through_hole::{RecoveredCylindricalThroughHole, recover_cylindrical_through_hole};
 mod evidence;
+mod sample_fit;
 mod seams;
 pub use evidence::{
-    AxialRadialStation, ChainPairEvidence, CollinearChain, CurvatureGrowthHypothesis,
-    CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack,
-    CurvatureTrackOptions, EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence,
-    ParallelBundle, ParallelPlacement, PlanarSupport, SpatialTrackEvidence,
+    AxialRadialStation, ChainPairEvidence, CollinearChain, ContactCircleEvidence,
+    ContactCurveEvidence, ContactLineEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
+    CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions,
+    EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence, ParallelBundle, ParallelPlacement,
+    PlanarSupport, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
+    RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SpatialTrackEvidence,
     SpatialTrackJoinEvidence, SupportBoundaryTopology, SupportInterface,
     SupportNormalRotationEvidence, analyze_mesh_evidence, measure_curvature_spatial,
-    measure_curvature_spatial_join, trace_curvature_tracks,
+    measure_curvature_spatial_join, measure_spatial_support_set, trace_curvature_tracks,
 };
 
 /// Source evidence for one reconstructed planar face.
@@ -266,12 +269,12 @@ fn positions_and_polygons(
 /// Collect every original oriented polygon use without enforcing manifoldness.
 /// The evidence frontend must preserve ambiguous connections and report them,
 /// while B-rep construction calls the strict validator below.
-fn source_edge_incidence(polygons: &[InputPolygon]) -> EdgeIncidence {
+fn source_edge_incidence<'a>(polygons: impl IntoIterator<Item = &'a [usize]>) -> EdgeIncidence {
     let mut incidence = HashMap::<EdgeKey, Vec<EdgeUse>>::default();
-    for (polygon_id, polygon) in polygons.iter().enumerate() {
-        for i in 0..polygon.vertices.len() {
-            let a = polygon.vertices[i];
-            let b = polygon.vertices[(i + 1) % polygon.vertices.len()];
+    for (polygon_id, vertices) in polygons.into_iter().enumerate() {
+        for i in 0..vertices.len() {
+            let a = vertices[i];
+            let b = vertices[(i + 1) % vertices.len()];
             let (key, forward) = edge_key(a, b);
             incidence
                 .entry(key)
@@ -285,7 +288,7 @@ fn source_edge_incidence(polygons: &[InputPolygon]) -> EdgeIncidence {
 fn edge_incidence(
     polygons: &[InputPolygon],
 ) -> Result<(EdgeIncidence, PolygonNeighbors), MeshRecoveryError> {
-    let incidence = source_edge_incidence(polygons);
+    let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
     let mut neighbors = vec![Vec::new(); polygons.len()];
     for (&key, uses) in &incidence {
         match uses.as_slice() {
@@ -347,6 +350,33 @@ fn segment_patches(
     (membership, patches)
 }
 
+/// Decompose a one-successor source edge graph into deterministic oriented
+/// cycles. No planar geometry or outer/inner classification is assumed.
+fn trace_oriented_boundary_cycles(mut next: HashMap<usize, usize>) -> Option<Vec<Vec<usize>>> {
+    let mut starts = next.keys().copied().collect::<Vec<_>>();
+    starts.sort_unstable();
+    let mut loops = Vec::new();
+    for start in starts {
+        if !next.contains_key(&start) {
+            continue;
+        }
+        let mut cycle = Vec::new();
+        let mut current = start;
+        loop {
+            cycle.push(current);
+            current = next.remove(&current)?;
+            if current == start {
+                break;
+            }
+        }
+        if cycle.len() < 3 {
+            return None;
+        }
+        loops.push(cycle);
+    }
+    Some(loops)
+}
+
 fn boundary_loops(
     patch_id: usize,
     member_faces: &[usize],
@@ -376,31 +406,8 @@ fn boundary_loops(
     if next.is_empty() || next.len() != incoming.len() {
         return Err(MeshRecoveryError::InvalidPatchBoundary(patch_id));
     }
-    let mut loops = Vec::new();
-    while !next.is_empty() {
-        let Some(&start) = next.keys().min() else {
-            return Err(MeshRecoveryError::InvalidPatchBoundary(patch_id));
-        };
-        let mut cycle = Vec::new();
-        let mut current = start;
-        loop {
-            cycle.push(current);
-            let Some(other) = next.remove(&current) else {
-                return Err(MeshRecoveryError::InvalidPatchBoundary(patch_id));
-            };
-            if other == start {
-                break;
-            }
-            if cycle.len() > incoming.len() || !incoming.contains_key(&other) {
-                return Err(MeshRecoveryError::InvalidPatchBoundary(patch_id));
-            }
-            current = other;
-        }
-        if cycle.len() < 3 {
-            return Err(MeshRecoveryError::InvalidPatchBoundary(patch_id));
-        }
-        loops.push(cycle);
-    }
+    let mut loops = trace_oriented_boundary_cycles(next)
+        .ok_or(MeshRecoveryError::InvalidPatchBoundary(patch_id))?;
     // The winding of an orientable planar patch gives one positive outer loop
     // and zero or more negative inner loops.
     let signed_area = |cycle: &[usize]| -> f64 {

@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 mod curvature;
 mod growth;
 mod join;
+mod region_boundary;
 mod spatial;
 mod support;
 pub use curvature::{CurvatureTrack, CurvatureTrackOptions, trace_curvature_tracks};
@@ -22,7 +23,15 @@ pub use growth::{
     CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureGrowthStep,
 };
 pub use join::{SpatialTrackJoinEvidence, measure_curvature_spatial_join};
-pub use spatial::{AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial};
+pub use region_boundary::{
+    ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence, RegionBoundary,
+    RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex,
+    RegionContactGraph, RegionContactPath,
+};
+pub use spatial::{
+    AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,
+    measure_spatial_support_set,
+};
 use support::build_support_interfaces;
 pub use support::{SupportBoundaryTopology, SupportInterface};
 
@@ -832,7 +841,7 @@ pub fn analyze_mesh_evidence(
     }
     let (positions, mut polygons) = positions_and_polygons(mesh, KERNEL_EPSILON)?;
     seams::split_source_t_junctions(&positions, &mut polygons);
-    let incidence = source_edge_incidence(&polygons);
+    let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
     let EdgeSelection {
         edges,
         suppressed_coplanar,

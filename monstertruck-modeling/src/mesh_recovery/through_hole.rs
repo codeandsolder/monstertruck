@@ -6,7 +6,8 @@
 //! and the remaining planar exterior. All face/edge reconstruction uses native
 //! Monstertruck topology, with circular trims shared by both carriers.
 
-use super::cylinder::{CylinderRecoveryOptions, build_cylinder_side, fit_circle, ring_max_step};
+use super::cylinder::{CylinderRecoveryOptions, build_cylinder_side, ring_max_step};
+use super::sample_fit::fit_circle;
 use super::{
     HashMap, InputPolygon, MeshRecoveryError, PlanarPatch, RecoveredPlanarMesh, edge_incidence,
     edge_key, positions_and_polygons, positive_source_volume, recover_planar_mesh, seams,
