@@ -204,12 +204,12 @@ impl<NE, EE> Default for Dag<NE, EE> {
 impl<NE, EE> Dag<NE, EE> {
     /// Constructor
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new() -> Self { Self { nodes: Vec::new() } }
 
     /// Constructs a new dag with capacity for `n` values pre-allocated.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn with_capacity(n: usize) -> Self {
         Self {
             nodes: Vec::with_capacity(n),
@@ -218,7 +218,7 @@ impl<NE, EE> Dag<NE, EE> {
 
     /// Returns `true` if the graph contains no nodes.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the collection contains no elements."]
     pub const fn is_empty(&self) -> bool { self.nodes.is_empty() }
 
     /// Returns the number of the nodes.
@@ -230,7 +230,7 @@ impl<NE, EE> Dag<NE, EE> {
     /// assert_eq!(dag.len(), 5);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the number of the nodes."]
     pub const fn len(&self) -> usize { self.nodes.len() }
 
     /// Returns an iterator over all node indices.
@@ -498,7 +498,7 @@ impl<NE, EE> Dag<NE, EE> {
     /// Returns the node corresponding to `index`, or `None` if the index is
     /// out of range (for example, an index obtained from a larger graph).
     #[inline]
-    #[must_use]
+    #[must_use = "The returned optional node distinguishes a valid index from one outside the graph."]
     pub fn node(&self, index: NodeIndex) -> Option<Node<'_, NE, EE>> {
         self.nodes.get(index.0).map(|data| Node { index, data })
     }
@@ -708,7 +708,7 @@ impl<NE, EE> Dag<NE, EE> {
     /// assert!(dag.has_path(a[0], a[4]));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether a path exists between the nodes."]
     pub fn has_path(&self, from: NodeIndex, to: NodeIndex) -> bool {
         if self.node(from).is_none() || self.node(to).is_none() {
             return false;
@@ -1093,18 +1093,18 @@ fn sub_has_cycle(
 impl<'a, NE, EE> Node<'a, NE, EE> {
     /// Returns node index
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards node index."]
     pub const fn index(self) -> NodeIndex { self.index }
     /// Returns entity of node.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards entity of node."]
     pub const fn entity(self) -> &'a NE { &self.data.entity }
     /// Returns the `index`th edge.
     ///
     ///
     /// Returns `None` when `index` is outside the node's edge list.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the `index`th edge."]
     pub fn edge(self, index: usize) -> Option<Edge<'a, EE>> {
         Some(edge_closure(self.index)(self.data.edges.get(index)?))
     }
@@ -1121,7 +1121,7 @@ impl<'a, NE, EE> Node<'a, NE, EE> {
     }
     /// Returns parents from `self`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards parents from `self`."]
     pub const fn parents(self) -> &'a BTreeSet<NodeIndex> { &self.data.parents }
 
     /// Returns `true` if `self` has no parents.
@@ -1135,7 +1135,7 @@ impl<'a, NE, EE> Node<'a, NE, EE> {
     /// assert!(dag.node(a[1]).is_some_and(|node| !node.is_top()));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the node has no parents."]
     pub fn is_top(self) -> bool { self.data.parents.is_empty() }
 
     /// Returns `true` if `self` has no child.
@@ -1149,14 +1149,14 @@ impl<'a, NE, EE> Node<'a, NE, EE> {
     /// assert!(dag.node(a[0]).is_some_and(|node| !node.is_terminal()));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the node has no children."]
     pub const fn is_terminal(self) -> bool { self.data.edges.is_empty() }
 }
 
 impl<'a, NE, EE> NodeMut<'a, NE, EE> {
     /// Returns node index
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards node index."]
     pub const fn index(&self) -> NodeIndex { self.index }
     /// Returns entity of node.
     #[inline]
@@ -1198,17 +1198,17 @@ impl<'a, NE, EE> NodeMut<'a, NE, EE> {
     }
     /// Returns parents from `self`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards parents from `self`."]
     pub const fn parents(&'a self) -> &'a BTreeSet<NodeIndex> { &self.data.parents }
 
     /// Returns `true` if `self` has no parents.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the node has no parents."]
     pub fn is_top(&self) -> bool { self.data.parents.is_empty() }
 
     /// Returns `true` if `self` has no child.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the node has no children."]
     pub const fn is_terminal(&self) -> bool { self.data.edges.is_empty() }
 }
 
@@ -1224,7 +1224,7 @@ impl<'a, EE> Edge<'a, EE> {
     /// assert_eq!(edge.nodes(), (a[0], a[1]));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards end nodes."]
     pub const fn nodes(self) -> (NodeIndex, NodeIndex) { self.nodes }
     /// Returns entity
     /// # Examples
@@ -1237,7 +1237,7 @@ impl<'a, EE> Edge<'a, EE> {
     /// assert_eq!(edge.entity(), &3);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards entity."]
     pub const fn entity(self) -> &'a EE { self.entity }
 }
 
@@ -1254,7 +1254,7 @@ impl<'a, EE> EdgeMut<'a, EE> {
     /// assert_eq!(edge.nodes(), (a[0], a[1]));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards end nodes."]
     pub const fn nodes(&self) -> (NodeIndex, NodeIndex) { self.nodes }
     /// Returns entity
     /// # Examples
@@ -1282,7 +1282,7 @@ impl<'a, EE> EdgeMut<'a, EE> {
 impl<'a, NE, EE> Path<'a, NE, EE> {
     /// Returns nodes of path.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards nodes of path."]
     pub fn nodes(&self) -> &[Node<'a, NE, EE>] { &self.nodes }
     /// Returns an iterator of node indices.
     #[inline]
@@ -1291,11 +1291,11 @@ impl<'a, NE, EE> Path<'a, NE, EE> {
     }
     /// Returns nodes of path.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards nodes of path."]
     pub fn edges(&self) -> &[Edge<'a, EE>] { &self.edges }
     /// Returns the terminal node
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the terminal node."]
     pub fn terminal_node(&'a self) -> Option<Node<'a, NE, EE>> { self.nodes.last().copied() }
 }
 
