@@ -4,7 +4,8 @@
 //! precursor. The recovered analytic candidate carries radial and chord errors.
 
 use super::{
-    MeshRecoveryError, PlanarRecoveryOptions, positions_and_polygons, recover_planar_mesh,
+    InputPolygon, MeshRecoveryError, PlanarPatch, PlanarRecoveryOptions, positions_and_polygons,
+    recover_planar_mesh,
 };
 use crate::{Face, InnerSpace, Point3, Shell, Solid, Vector3, builder};
 use monstertruck_mesh::PolygonMesh;
