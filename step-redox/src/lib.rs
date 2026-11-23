@@ -70,6 +70,11 @@ use monstertruck_io::step::load::ParsedStepSource;
 use normalization::{dense_renumber, intern_section};
 pub use step_io::write_exchange;
 mod surface_recovery;
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub use surface_recovery::{
+    SourceCapPrecisionPatch, SourceCapRechartManifest, SourceCapRechartProposal,
+    propose_source_cap_rechart,
+};
 mod surface_replicas;
 mod units;
 
