@@ -48,12 +48,20 @@ fn best_axes(evidence: &MeshEvidence) -> Vec<Value> {
         .collect()
 }
 
+/// Optional independent labels used for evaluation, never geometry extraction.
+struct NativeFaceLabels {
+    /// Source CAD face index for each input polygon.
+    polygon_face_ids: Vec<usize>,
+    /// Original surface family for each CAD face.
+    surface_types: Vec<String>,
+}
+
 /// Load independently supplied CAD face identities; missing sidecars mean
 /// the caller is analyzing an ordinary unlabeled mesh.
 fn read_native_labels(
     path: &Path,
     polygon_count: usize,
-) -> Result<Option<(Vec<usize>, Vec<String>)>, String> {
+) -> Result<Option<NativeFaceLabels>, String> {
     let labels_path = path.with_extension("labels");
     if !labels_path.exists() {
         return Ok(None);
@@ -93,7 +101,10 @@ fn read_native_labels(
     if labels.iter().any(|&label| label >= kinds.len()) {
         return Err("out-of-bounds source surface label".to_owned());
     }
-    Ok(Some((labels, kinds)))
+    Ok(Some(NativeFaceLabels {
+        polygon_face_ids: labels,
+        surface_types: kinds,
+    }))
 }
 
 /// Compare a candidate geometry observation with optional independent native
@@ -103,7 +114,10 @@ fn evaluate_native_face_labels(
     path: &Path,
     evidence: &MeshEvidence,
 ) -> Result<Option<Value>, String> {
-    let Some((labels, kinds)) = read_native_labels(path, evidence.source_planar_support.len())?
+    let Some(NativeFaceLabels {
+        polygon_face_ids: labels,
+        surface_types: kinds,
+    }) = read_native_labels(path, evidence.source_planar_support.len())?
     else {
         return Ok(None);
     };
