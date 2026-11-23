@@ -3,7 +3,7 @@ use crate::{
     step_document::{StepEntity, StepSection, StepValue},
     step_entities, step_graph, units,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use monstertruck_io::step::load::ParsedStepSource;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
