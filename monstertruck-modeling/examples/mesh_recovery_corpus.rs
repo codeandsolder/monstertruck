@@ -6,9 +6,10 @@
 
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_modeling::mesh_recovery::{
-    CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureTrack, CurvatureTrackOptions,
-    EvidenceOptions, FeatureEdgeKind, MeshEvidence, SpatialTrackEvidence, analyze_mesh_evidence,
-    measure_curvature_spatial, measure_curvature_spatial_join, trace_curvature_tracks,
+    CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureTrack,
+    CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence, SpatialTrackEvidence,
+    analyze_mesh_evidence, measure_curvature_spatial, measure_curvature_spatial_join,
+    trace_curvature_tracks,
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -494,7 +495,7 @@ fn spatial_track_summary(
 fn growth_track_summary(
     evidence: &MeshEvidence,
     tracks: &[CurvatureTrack],
-) -> Result<Value, String> {
+) -> Result<(Value, Vec<CurvatureGrowthHypothesis>), String> {
     let start = Instant::now();
     let index = CurvatureGrowthIndex::new(evidence, tracks, CurvatureGrowthOptions::default())
         .map_err(|error| error.to_string())?;
@@ -555,7 +556,7 @@ fn growth_track_summary(
             })
         })
         .collect::<Vec<_>>();
-    Ok(json!({
+    let summary = json!({
         "eligible_source_tracks":index.eligible_track_count(),
         "sampled_independent_seed_count":sampled_seed_count,
         "seed_policy":"up to 12 locally identifiable seeds, descending original support count, no original STEP metadata",
@@ -566,7 +567,8 @@ fn growth_track_summary(
         "index_seconds":indexed_seconds,
         "index_and_sample_growth_seconds":start.elapsed().as_secs_f64(),
         "samples":top,
-    }))
+    });
+    Ok((summary, grown))
 }
 
 /// Compare a recovered geometric normal-space axis with independently
@@ -778,6 +780,60 @@ fn diagnose_mixed_surface_track_expansions(
         }));
     }
     json!(cases)
+}
+
+/// Native STEP labels are evaluated only after seeded geometric region
+/// growth. These diagnostics never influence source frontier or global fit.
+fn native_curvature_growth_reference(
+    evidence: &MeshEvidence,
+    grown: &[CurvatureGrowthHypothesis],
+    truth: &NativeFaceLabels,
+) -> Value {
+    let mut expanded_seed_count = 0_usize;
+    let mut expanded_crossing_native_face_ids = 0_usize;
+    let mut expanded_mixed_surface_families = 0_usize;
+    let rows = grown
+        .iter()
+        .map(|hypothesis| {
+            let native_face_ids = hypothesis
+                .support_indices
+                .iter()
+                .flat_map(|&id| {
+                    evidence.planar_supports[id]
+                        .source_face_indices
+                        .iter()
+                        .map(|&polygon| truth.polygon_face_ids[polygon])
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            let surface_families = native_face_ids
+                .iter()
+                .map(|&id| truth.surface_types[id].as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let expanded = !hypothesis.steps.is_empty();
+            expanded_seed_count += usize::from(expanded);
+            expanded_crossing_native_face_ids += usize::from(expanded && native_face_ids.len() > 1);
+            expanded_mixed_surface_families += usize::from(expanded && surface_families.len() > 1);
+            json!({
+                "seed_track":hypothesis.seed_track_index,
+                "source_track_count":hypothesis.track_indices.len(),
+                "source_support_count":hypothesis.support_indices.len(),
+                "source_native_face_count":native_face_ids.len(),
+                "original_native_faces":native_face_ids.into_iter().collect::<Vec<_>>(),
+                "original_surface_families":surface_families.into_iter().collect::<Vec<_>>(),
+                "whole_source_radial_error":hypothesis.spatial.relative_max_sample_radial_residual,
+                "whole_source_plane_error":hypothesis.spatial.max_support_plane_offset_residual
+                    / hypothesis.spatial.mean_sample_radius,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "sampled_independent_seed_count":grown.len(),
+        "expanded_seed_count":expanded_seed_count,
+        "expanded_across_multiple_original_native_faces":expanded_crossing_native_face_ids,
+        "expanded_across_multiple_original_native_surface_families":expanded_mixed_surface_families,
+        "source_native_labels_are_post_recognition_only":true,
+        "seed_cases":rows,
+    })
 }
 
 /// CAD surface-family provenance of an entire original source-support track.
@@ -1062,11 +1118,13 @@ fn evaluate_native_face_labels(
     evidence: &MeshEvidence,
     tracks: &[CurvatureTrack],
     spatial: &[Option<SpatialTrackEvidence>],
+    grown: &[CurvatureGrowthHypothesis],
 ) -> Result<Option<Value>, String> {
     let Some(native) = read_native_labels(path, evidence.source_planar_support.len())? else {
         return Ok(None);
     };
     let spatial_reference = native_spatial_track_reference(evidence, tracks, spatial, &native);
+    let growth_reference = native_curvature_growth_reference(evidence, grown, &native);
     let suspicious_joint_expansions =
         diagnose_mixed_surface_track_expansions(evidence, tracks, spatial, &native);
     let NativeFaceLabels {
@@ -1148,6 +1206,7 @@ fn evaluate_native_face_labels(
             evidence, tracks, &labels, &kinds, &analytic_axes,
         ),
         "spatial_track_reference": spatial_reference,
+        "curvature_growth_reference":growth_reference,
         "suspicious_joint_expansions": suspicious_joint_expansions,
         "planar_or_30_degree_union": {
             "selected": union[0],
@@ -1216,8 +1275,9 @@ fn discover_and_evaluate_curvature(
         .collect::<Vec<_>>();
     let spatial_summary =
         spatial_track_summary(&tracks, &spatial, spatial_start.elapsed().as_secs_f64());
-    let growth = growth_track_summary(evidence, &tracks).map_err(|error| ("growth", error))?;
-    let ground_truth = evaluate_native_face_labels(path, evidence, &tracks, &spatial)
+    let (growth, grown) =
+        growth_track_summary(evidence, &tracks).map_err(|error| ("growth", error))?;
+    let ground_truth = evaluate_native_face_labels(path, evidence, &tracks, &spatial, &grown)
         .map_err(|error| ("ground_truth", error))?;
     Ok(CorpusCurvatureAnalysis {
         tracks: summary,
