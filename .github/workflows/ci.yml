@@ -39,7 +39,7 @@ jobs:
       # Use the exact pinned nightly so unstable rustfmt options are enforced.
       - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
-          toolchain: nightly-2026-11-22
+          toolchain: nightly-2026-11-23
           components: rustfmt
       - run: cargo fmt --all -- --check
 
@@ -57,7 +57,7 @@ jobs:
       - run: git submodule update --init resources
       - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
-          toolchain: nightly-2026-11-22
+          toolchain: nightly-2026-11-23
           components: clippy
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
@@ -85,7 +85,7 @@ jobs:
       - run: git submodule update --init resources
       - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
-          toolchain: nightly-2026-11-22
+          toolchain: nightly-2026-11-23
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
         with:
@@ -136,7 +136,7 @@ jobs:
       - run: git submodule update --init resources
       - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
-          toolchain: nightly-2026-11-22
+          toolchain: nightly-2026-11-23
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
         with:
@@ -166,7 +166,7 @@ jobs:
       - run: git submodule update --init resources
       - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
-          toolchain: nightly-2026-11-22
+          toolchain: nightly-2026-11-23
           targets: wasm32-unknown-unknown
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
