@@ -261,7 +261,7 @@ impl LocalRecoveryTargets {
         })
     }
 
-    fn is_empty(&self) -> bool { self.solid_ids.is_empty() }
+    const fn is_empty(&self) -> bool { self.solid_ids.is_empty() }
 
     fn shell_ids(&self) -> HashSet<u64> { self.shell_to_solid.keys().copied().collect() }
 
