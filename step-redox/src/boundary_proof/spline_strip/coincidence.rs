@@ -648,10 +648,11 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing precision evidence"))?;
         assert!(maximum <= report.authored_uncertainty_mm);
 
-        let strict = audit_source_spline_cap_precision(original, 0, *solid, Some(super::TOL))?;
+        let strict =
+            audit_source_spline_cap_precision(original, 0, *solid, Some(super::super::TOL))?;
         eprintln!(
             "strict boundary quantum={} mm, certified={}/{} caps={}, worst={} mm",
-            super::TOL,
+            super::super::TOL,
             strict.fully_certified_strip_faces,
             strict.strip_faces,
             strict.cap_witnesses.len(),
