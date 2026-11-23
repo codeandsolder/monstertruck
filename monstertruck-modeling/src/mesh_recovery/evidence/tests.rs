@@ -694,13 +694,23 @@ fn normal_rotation_requires_distinct_center_incident_interfaces() {
     }
 }
 
-fn faceted_conical_wall(bottom_radius: f64, top_radius: f64, sectors: usize) -> PolygonMesh {
+fn faceted_conical_wall(
+    bottom_radius: f64,
+    top_radius: f64,
+    sectors: usize,
+    xy_scale: [f64; 2],
+    shift: [f64; 3],
+) -> PolygonMesh {
     let mut vertices = Vec::with_capacity(2 * sectors);
     for z in [0.0, 2.0] {
         let radius = if z == 0.0 { bottom_radius } else { top_radius };
         for index in 0..sectors {
             let phi = std::f64::consts::TAU * index as f64 / sectors as f64;
-            vertices.push([radius * phi.cos(), radius * phi.sin(), z]);
+            vertices.push([
+                radius.mul_add(xy_scale[0] * phi.cos(), shift[0]),
+                radius.mul_add(xy_scale[1] * phi.sin(), shift[1]),
+                z + shift[2],
+            ]);
         }
     }
     let mut triangles = Vec::with_capacity(2 * sectors);
@@ -714,7 +724,7 @@ fn faceted_conical_wall(bottom_radius: f64, top_radius: f64, sectors: usize) -> 
 
 #[test]
 fn global_curvature_tracks_recover_full_cylindrical_normal_ring() {
-    let mesh = faceted_conical_wall(1.0, 1.0, 32);
+    let mesh = faceted_conical_wall(1.0, 1.0, 32, [1.0, 1.0], [0.0; 3]);
     let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
     let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
     let ring = tracks
@@ -736,7 +746,7 @@ fn global_curvature_tracks_recover_full_cylindrical_normal_ring() {
 
 #[test]
 fn normal_space_axis_tracks_conical_surfaces_without_cylinder_assumption() {
-    let mesh = faceted_conical_wall(1.0, 0.5, 24);
+    let mesh = faceted_conical_wall(1.0, 0.5, 24, [1.0, 1.0], [0.0; 3]);
     let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
     let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
     let ring = tracks
@@ -799,4 +809,94 @@ fn normal_space_tracks_validate_options_and_do_not_fuse_ambiguous_source_contact
             Err(MeshRecoveryError::InvalidEvidenceOptions)
         ));
     }
+}
+
+#[test]
+fn original_source_polygon_positions_are_available_without_mesh_reparsing() {
+    let evidence = analyze_mesh_evidence(&unit_box_mesh(), EvidenceOptions::default()).unwrap();
+    assert_eq!(evidence.source_polygon_vertex_offsets.len(), 13);
+    assert_eq!(evidence.source_polygon_vertex_indices.len(), 36);
+    assert_eq!(evidence.source_polygon_vertices(0).unwrap().len(), 3);
+    assert_eq!(evidence.source_polygon_vertices(11).unwrap().len(), 3);
+    assert!(evidence.source_polygon_vertices(12).is_none());
+    assert!(evidence.source_polygon_vertices(usize::MAX).is_none());
+}
+
+#[test]
+fn spatial_evidence_fits_shifted_cylinder_using_both_source_planes_and_vertices() {
+    let shift = [1.0e7, -2.0e7, 3.0e7];
+    let mesh = faceted_conical_wall(1.0, 1.0, 32, [1.0, 1.0], shift);
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
+    let ring = tracks
+        .iter()
+        .find(|track| track.closed && track.distinct_support_count == 32)
+        .unwrap();
+    let spatial = measure_curvature_spatial(&evidence, ring).unwrap();
+    assert_eq!(spatial.unique_source_vertex_count, 64);
+    assert_eq!(spatial.axial_stations.len(), 2);
+    assert!(spatial.max_meridian_slope_change.is_none());
+    assert!(spatial.transverse_normal_rank_ratio > 0.9);
+    assert!((spatial.axis_origin.x - shift[0]).abs() < 1.0e-7);
+    assert!((spatial.axis_origin.y - shift[1]).abs() < 1.0e-7);
+    assert!((spatial.mean_sample_radius - 1.0).abs() < 1.0e-7);
+    assert!(spatial.max_support_plane_offset_residual < 1.0e-7);
+    assert!(spatial.max_sample_radial_residual < 1.0e-7);
+    assert!(spatial.relative_max_sample_radial_residual < 1.0e-7);
+    assert!(spatial.fitted_sample_radius_slope.unwrap().abs() < 1.0e-7);
+    assert!(spatial.normal_implied_radius_slope.unwrap().abs() < 1.0e-7);
+    let apothem = (std::f64::consts::PI / 32.0).cos();
+    assert!((spatial.signed_support_plane_offset.abs() - apothem).abs() < 1.0e-7);
+}
+
+#[test]
+fn spatial_evidence_fits_cone_slope_independently_from_observed_normals() {
+    let mesh = faceted_conical_wall(1.0, 0.5, 24, [1.0, 1.0], [12.0, -7.0, 3.0]);
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
+    let ring = tracks
+        .iter()
+        .find(|track| track.closed && track.distinct_support_count == 24)
+        .unwrap();
+    let spatial = measure_curvature_spatial(&evidence, ring).unwrap();
+    assert_eq!(spatial.unique_source_vertex_count, 48);
+    assert_eq!(spatial.axial_stations.len(), 2);
+    assert!(spatial.max_meridian_slope_change.is_none());
+    assert!(spatial.transverse_normal_rank_ratio > 0.9);
+    assert!(spatial.max_support_plane_offset_residual < 1.0e-9);
+    assert!(spatial.max_sample_radial_residual < 1.0e-9);
+    assert!((spatial.fitted_sample_radius_slope.unwrap().abs() - 0.25).abs() < 1.0e-9);
+    // The facet plane describes the apothem, not the original circumradius.
+    // Their expected slopes differ by cos(half a polygon segment angle);
+    // this is a measurable faceting effect, not a bad conical fit.
+    let polygon_apothem_factor = (std::f64::consts::PI / 24.0).cos();
+    assert!(
+        (spatial.normal_implied_radius_slope.unwrap().abs() - 0.25 * polygon_apothem_factor).abs()
+            < 1.0e-9
+    );
+    assert!(
+        (spatial.radius_slope_disagreement.unwrap() - 0.25 * (1.0 - polygon_apothem_factor)).abs()
+            < 1.0e-9
+    );
+}
+
+#[test]
+fn spatial_evidence_refutes_axis_coherent_elliptical_extrusion_as_a_cylinder() {
+    // The normals still turn monotonically through 360 degrees around Z,
+    // but no cylinder axis and fixed radius can explain the source vertices.
+    let mesh = faceted_conical_wall(1.0, 1.0, 48, [1.6, 1.0], [0.0; 3]);
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
+    let ring = tracks
+        .iter()
+        .find(|track| track.closed && track.distinct_support_count == 48)
+        .unwrap();
+    assert!(ring.max_seed_axis_error_radians < 1.0e-8);
+    let spatial = measure_curvature_spatial(&evidence, ring).unwrap();
+    assert_eq!(spatial.unique_source_vertex_count, 96);
+    assert_eq!(spatial.axial_stations.len(), 2);
+    assert!(spatial.max_meridian_slope_change.is_none());
+    assert!(spatial.transverse_normal_rank_ratio > 0.1);
+    assert!(spatial.relative_max_sample_radial_residual > 0.1);
+    assert!(spatial.max_support_plane_offset_residual > 0.1);
 }

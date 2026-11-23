@@ -13,8 +13,10 @@ use monstertruck_mesh::PolygonMesh;
 use std::collections::{HashMap, HashSet};
 
 mod curvature;
+mod spatial;
 mod support;
 pub use curvature::{CurvatureTrack, CurvatureTrackOptions, trace_curvature_tracks};
+pub use spatial::{AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial};
 use support::build_support_interfaces;
 pub use support::{SupportBoundaryTopology, SupportInterface};
 
@@ -232,6 +234,13 @@ pub struct MeshEvidence {
     pub planar_supports: Vec<PlanarSupport>,
     /// Index into the planar-support list for each original source polygon.
     pub source_planar_support: Vec<usize>,
+    /// Compressed source polygon positions after exact welding and T-junction
+    /// insertion. Complete polygon vertices remain available for spatial
+    /// verification, not just vertices on neighboring support interfaces.
+    /// Offsets have one entry more than the source polygon count.
+    pub source_polygon_vertex_offsets: Vec<usize>,
+    /// Flattened canonical source-position IDs, indexed by the offsets.
+    pub source_polygon_vertex_indices: Vec<usize>,
     /// Connected interfaces between different planar-support regions.
     /// These are source topology facts and measurements, not designed seams.
     pub support_interfaces: Vec<SupportInterface>,
@@ -247,6 +256,15 @@ pub struct MeshEvidence {
 }
 
 impl MeshEvidence {
+    /// Exact canonical source vertex IDs of an input polygon, including any
+    /// collinear points inserted to resolve original T-junctions.
+    #[must_use]
+    pub fn source_polygon_vertices(&self, source_polygon: usize) -> Option<&[usize]> {
+        let begin = *self.source_polygon_vertex_offsets.get(source_polygon)?;
+        let end = *self.source_polygon_vertex_offsets.get(source_polygon + 1)?;
+        self.source_polygon_vertex_indices.get(begin..end)
+    }
+
     /// Planar-support region IDs on the two sides of a regular manifold edge.
     ///
     /// This does not certify a sharp CAD seam: regions may be chord facets of
@@ -826,6 +844,13 @@ pub fn analyze_mesh_evidence(
     );
     let chains = trace_chains(&positions, &edges);
     let parallel_bundles = parallel_bundles(&positions, &chains, options);
+    let mut source_polygon_vertex_offsets = Vec::with_capacity(polygons.len() + 1);
+    let mut source_polygon_vertex_indices = Vec::new();
+    for polygon in &polygons {
+        source_polygon_vertex_offsets.push(source_polygon_vertex_indices.len());
+        source_polygon_vertex_indices.extend_from_slice(&polygon.vertices);
+    }
+    source_polygon_vertex_offsets.push(source_polygon_vertex_indices.len());
     Ok(MeshEvidence {
         positions,
         edges,
@@ -833,6 +858,8 @@ pub fn analyze_mesh_evidence(
         parallel_bundles,
         planar_supports,
         source_planar_support,
+        source_polygon_vertex_offsets,
+        source_polygon_vertex_indices,
         support_interfaces,
         support_interface_indices,
         suppressed_interior_edge_count: suppressed_coplanar,

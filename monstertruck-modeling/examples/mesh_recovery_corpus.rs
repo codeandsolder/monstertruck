@@ -7,7 +7,7 @@
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_modeling::mesh_recovery::{
     CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence,
-    analyze_mesh_evidence, trace_curvature_tracks,
+    SpatialTrackEvidence, analyze_mesh_evidence, measure_curvature_spatial, trace_curvature_tracks,
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -59,6 +59,9 @@ struct NativeFaceLabels {
     /// Independently recorded exact original STEP axis, when meaningful:
     /// Cylinders, cones and toroids. Source labels are only benchmark truth.
     analytic_axes: Vec<Option<[f64; 3]>>,
+    /// Original centers/axis locations and radii, never used for inference.
+    analytic_centers: Vec<Option<[f64; 3]>>,
+    native_radii: Vec<Option<f64>>,
 }
 
 fn support_interface_summary(evidence: &MeshEvidence) -> Value {
@@ -265,6 +268,25 @@ fn native_normal_rotation_reference(evidence: &MeshEvidence, labels: &[usize]) -
     })
 }
 
+/// Original source CAD identities touched by a geometry-only track,
+/// collected exclusively in the independent native-CAD benchmark path.
+fn track_native_face_ids(
+    evidence: &MeshEvidence,
+    track: &CurvatureTrack,
+    labels: &[usize],
+) -> std::collections::BTreeSet<usize> {
+    track
+        .support_indices
+        .iter()
+        .flat_map(|&support| {
+            evidence.planar_supports[support]
+                .source_face_indices
+                .iter()
+                .map(|&polygon| labels[polygon])
+        })
+        .collect()
+}
+
 /// Reference only: compare whole recovered geometric tracks against source
 /// native CAD-face labels without ever giving the labels to track discovery.
 fn native_curvature_track_reference(
@@ -332,12 +354,7 @@ fn native_curvature_track_reference(
         .iter()
         .take(8)
         .map(|track| {
-            let mut source_faces = std::collections::BTreeSet::<usize>::new();
-            for &support in &track.support_indices {
-                for &polygon in &evidence.planar_supports[support].source_face_indices {
-                    source_faces.insert(labels[polygon]);
-                }
-            }
+            let source_faces = track_native_face_ids(evidence, track, labels);
             let mut types = std::collections::BTreeMap::<String, usize>::new();
             for &face in &source_faces {
                 *types.entry(kinds[face].clone()).or_default() += 1;
@@ -397,6 +414,79 @@ fn curvature_track_summary(tracks: &[CurvatureTrack], elapsed: f64) -> Value {
     })
 }
 
+/// Summarize source-only independent spatial evidence on longer tracks.
+/// Shorter hypotheses are still retained in the production track graph.
+fn spatial_track_summary(
+    tracks: &[CurvatureTrack],
+    fits: &[Option<SpatialTrackEvidence>],
+    elapsed: f64,
+) -> Value {
+    let candidate_count = tracks
+        .iter()
+        .filter(|track| track.distinct_support_count >= 8)
+        .count();
+    let measured = fits.iter().filter(|fit| fit.is_some()).count();
+    let three_station = fits
+        .iter()
+        .flatten()
+        .filter(|fit| fit.axial_stations.len() >= 3)
+        .count();
+    let thresholds = [0.01_f64, 0.02, 0.05, 0.1];
+    let bounded = thresholds
+        .iter()
+        .map(|&threshold| {
+            let radial = fits
+                .iter()
+                .flatten()
+                .filter(|fit| fit.relative_max_sample_radial_residual <= threshold)
+                .count();
+            let radial_and_planes = fits
+                .iter()
+                .flatten()
+                .filter(|fit| {
+                    fit.relative_max_sample_radial_residual <= threshold
+                        && fit.max_support_plane_offset_residual / fit.mean_sample_radius
+                            <= threshold
+                })
+                .count();
+            json!({"maximum_relative_residual":threshold,
+            "radial_bounded":radial,
+            "radial_and_support_planes_bounded":radial_and_planes})
+        })
+        .collect::<Vec<_>>();
+    let top = fits.iter().take(8).map(|fit| fit.as_ref().map(|fit| {
+        json!({
+            "transverse_normal_rank_ratio":fit.transverse_normal_rank_ratio,
+            "source_vertices":fit.unique_source_vertex_count,
+            "axis_origin":[fit.axis_origin.x,fit.axis_origin.y,fit.axis_origin.z],
+            "signed_plane_offset":fit.signed_support_plane_offset,
+            "max_plane_offset_error":fit.max_support_plane_offset_residual,
+            "relative_plane_offset_error":fit.max_support_plane_offset_residual / fit.mean_sample_radius,
+            "axial_span":fit.axial_coordinate_span,
+            "axial_station_count":fit.axial_stations.len(),
+            "axial_station_resolution":fit.axial_station_resolution,
+            "maximum_meridian_slope_change":fit.max_meridian_slope_change,
+            "mean_vertex_radius":fit.mean_sample_radius,
+            "vertex_radius_at_origin":fit.fitted_sample_radius_at_origin,
+            "vertex_radius_slope":fit.fitted_sample_radius_slope,
+            "normal_implied_radius_slope":fit.normal_implied_radius_slope,
+            "max_vertex_radial_error":fit.max_sample_radial_residual,
+            "rms_vertex_radial_error":fit.rms_sample_radial_residual,
+            "relative_vertex_radial_error":fit.relative_max_sample_radial_residual,
+        })
+    })).collect::<Vec<_>>();
+    json!({
+        "candidates_at_least_8_supports":candidate_count,
+        "spatially_identifiable":measured,
+        "unidentifiable":candidate_count-measured,
+        "spatial_fit_with_three_or_more_resolved_axial_stations":three_station,
+        "spatial_fit_with_fewer_than_three_axial_stations":measured-three_station,
+        "measurement_seconds":elapsed,
+        "exploratory_residual_thresholds":bounded,
+        "top_tracks":top,
+    })
+}
+
 /// Compare a recovered geometric normal-space axis with independently
 /// observed native STEP analytic axes, including across distinct CAD faces.
 /// Source labels are used only after all tracks have been discovered.
@@ -418,12 +508,7 @@ fn native_curvature_axis_reference(
     let threshold = 2_f64.to_radians();
     for track in tracks {
         let distinct = track.distinct_support_count;
-        let mut native_ids = std::collections::BTreeSet::<usize>::new();
-        for &support in &track.support_indices {
-            for &polygon in &evidence.planar_supports[support].source_face_indices {
-                native_ids.insert(labels[polygon]);
-            }
-        }
+        let native_ids = track_native_face_ids(evidence, track, labels);
         let axes = native_ids
             .iter()
             .map(|&id| native_axes[id])
@@ -490,6 +575,173 @@ fn native_curvature_axis_reference(
     })
 }
 
+/// Decode original STEP analytic-vector reference metadata, used only by
+/// the native-CAD benchmark evaluator.
+fn native_vector3(surface: &Value, field: &str) -> Result<Option<[f64; 3]>, String> {
+    let Some(value) = surface.get(field) else {
+        return Ok(None);
+    };
+    let numbers = value
+        .as_array()
+        .ok_or_else(|| format!("native {field} must be an array"))?;
+    let [x, y, z] = numbers.as_slice() else {
+        return Err(format!("native {field} must contain exactly three numbers"));
+    };
+    let coordinates = [x, y, z].map(|value| value.as_f64());
+    let [Some(x), Some(y), Some(z)] = coordinates else {
+        return Err(format!("native {field} must contain numbers"));
+    };
+    if ![x, y, z].into_iter().all(f64::is_finite) {
+        return Err(format!("native {field} must contain finite numbers"));
+    }
+    Ok(Some([x, y, z]))
+}
+
+/// Check whether a geometry-only candidate supported by *original cylindrical
+/// STEP faces* independently matches the actual native CAD cylinder axes and
+/// radii. Original source face truth is never available in production.
+fn native_cylinder_spatial_error(
+    fit: &SpatialTrackEvidence,
+    native_face_ids: &std::collections::BTreeSet<usize>,
+    centers: &[Option<[f64; 3]>],
+    axes: &[Option<[f64; 3]>],
+    radii: &[Option<f64>],
+) -> Option<(f64, f64)> {
+    let mut max_axis_line_error = 0.0_f64;
+    let mut max_radius_error = 0.0_f64;
+    for &native in native_face_ids {
+        let [cx, cy, cz] = centers[native]?;
+        let [ax, ay, az] = axes[native]?;
+        let radius = radii[native]?;
+        let dx = fit.axis_origin.x - cx;
+        let dy = fit.axis_origin.y - cy;
+        let dz = fit.axis_origin.z - cz;
+        // A point-to-original-axis distance: invariant to the arbitrary
+        // longitudinal location of the fitted axis origin.
+        let distance = ((dy * az - dz * ay).powi(2)
+            + (dz * ax - dx * az).powi(2)
+            + (dx * ay - dy * ax).powi(2))
+        .sqrt();
+        max_axis_line_error = max_axis_line_error.max(distance / radius);
+        max_radius_error = max_radius_error.max((fit.mean_sample_radius - radius).abs() / radius);
+    }
+    Some((max_axis_line_error, max_radius_error))
+}
+
+/// Native-CAD-only reference checks and deliberately exploratory filtering
+/// statistics for independently fitted spatial tracks.
+fn native_spatial_track_reference(
+    evidence: &MeshEvidence,
+    tracks: &[CurvatureTrack],
+    fits: &[Option<SpatialTrackEvidence>],
+    native_labels: &NativeFaceLabels,
+) -> Value {
+    let mut groups = std::collections::BTreeMap::<String, [usize; 4]>::new();
+    let slope_change_thresholds = [1.0e-6_f64, 0.001, 0.01, 0.05, 0.1, 0.5, 1.0];
+    let mut slope_change_bounded = std::collections::BTreeMap::<String, [usize; 7]>::new();
+    let mut cylinder_evaluable = 0;
+    let mut cylinder_axis_placed = 0;
+    let mut cylinder_radius_matched = 0;
+    let mut cylinder_jointly_matched = 0;
+    let mut original_cylinder_cross_face = 0;
+    let mut cylinder_error_examples = Vec::<Value>::new();
+    for (track, evidence_fit) in tracks.iter().zip(fits) {
+        let Some(fit) = evidence_fit else {
+            continue;
+        };
+        let native = track_native_face_ids(evidence, track, &native_labels.polygon_face_ids);
+        let kinds = native
+            .iter()
+            .map(|&id| native_labels.surface_types[id].as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let kind = if kinds.len() == 1 {
+            kinds.first().copied().unwrap_or("Unknown").to_owned()
+        } else {
+            "MixedNativeSurfaceFamilies".to_owned()
+        };
+        let radial_consistent = fit.relative_max_sample_radial_residual <= 0.01;
+        let plane_consistent =
+            fit.max_support_plane_offset_residual / fit.mean_sample_radius <= 0.01;
+        let row = groups.entry(kind.clone()).or_default();
+        row[0] += 1;
+        row[1] += usize::from(radial_consistent);
+        row[2] += usize::from(radial_consistent && plane_consistent);
+        row[3] += usize::from(fit.axial_stations.len() >= 3);
+        if let Some(change) = fit.max_meridian_slope_change {
+            let bucket = slope_change_bounded.entry(kind.clone()).or_default();
+            for (&threshold, total) in slope_change_thresholds.iter().zip(bucket) {
+                *total += usize::from(change <= threshold);
+            }
+        }
+        if kind != "Cylinder" {
+            continue;
+        }
+        let Some((axis_error, radius_error)) = native_cylinder_spatial_error(
+            fit,
+            &native,
+            &native_labels.analytic_centers,
+            &native_labels.analytic_axes,
+            &native_labels.native_radii,
+        ) else {
+            continue;
+        };
+        cylinder_evaluable += 1;
+        let axis_good = axis_error <= 0.01;
+        let radius_good = radius_error <= 0.01;
+        cylinder_axis_placed += usize::from(axis_good);
+        cylinder_radius_matched += usize::from(radius_good);
+        cylinder_jointly_matched += usize::from(axis_good && radius_good);
+        original_cylinder_cross_face += usize::from(native.len() > 1 && axis_good && radius_good);
+        if cylinder_error_examples.len() < 24 {
+            cylinder_error_examples.push(json!({
+                "distinct_supports":track.distinct_support_count,
+                "original_native_cylinder_faces":native.len(),
+                "original_axis_offset_relative_to_radius":axis_error,
+                "original_radius_error_relative":radius_error,
+                "source_vertex_radial_error_relative":fit.relative_max_sample_radial_residual,
+                "plane_offset_error_relative":
+                    fit.max_support_plane_offset_residual / fit.mean_sample_radius,
+            }));
+        }
+    }
+    let family_report = groups
+        .into_iter()
+        .map(|(kind, counts)| {
+            let bounded = slope_change_bounded.get(&kind).copied().unwrap_or_default();
+            let curvature_bins = slope_change_thresholds
+                .iter()
+                .zip(bounded)
+                .map(|(&threshold, count)| {
+                    json!({
+                        "maximum_meridian_slope_change":threshold, "count_at_or_below":count,
+                    })
+                })
+                .collect::<Vec<_>>();
+            (
+                kind,
+                json!({
+                    "measured":counts[0],
+                    "radial_within_1pct":counts[1],
+                    "radial_and_support_planes_within_1pct":counts[2],
+                    "at_least_three_axial_stations":counts[3],
+                    "meridian_slope_change_histogram":curvature_bins,
+                }),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    json!({
+        "minimum_distinct_supports_measured":8,
+        "exploratory_relative_residual_threshold":0.01,
+        "source_family_track_counts_and_residuals":family_report,
+        "cylinder_original_axis_radius_evaluable":cylinder_evaluable,
+        "cylinder_original_axis_placed_within_1pct_radius":cylinder_axis_placed,
+        "cylinder_original_radius_matched_within_1pct":cylinder_radius_matched,
+        "cylinder_joint_axis_and_radius_matches":cylinder_jointly_matched,
+        "cylinder_joint_matches_across_multiple_native_faces":original_cylinder_cross_face,
+        "sample_source_cylinder_fit_errors":cylinder_error_examples,
+    })
+}
+
 /// Load independently supplied CAD face identities; missing sidecars mean
 /// the caller is analyzing an ordinary unlabeled mesh.
 fn read_native_labels(
@@ -539,23 +791,9 @@ fn read_native_labels(
     let analytic_axes = native_surfaces
         .iter()
         .map(|surface| -> Result<Option<[f64; 3]>, String> {
-            let Some(value) = surface.get("axis") else {
+            let Some(axis) = native_vector3(surface, "axis")? else {
                 return Ok(None);
             };
-            let coordinates = value
-                .as_array()
-                .ok_or_else(|| "native surface axis must be an array".to_owned())?;
-            let [x, y, z] = coordinates.as_slice() else {
-                return Err("native surface axis must have exactly three components".to_owned());
-            };
-            let axis = [
-                x.as_f64()
-                    .ok_or_else(|| "native axis must be a number".to_owned())?,
-                y.as_f64()
-                    .ok_or_else(|| "native axis must be a number".to_owned())?,
-                z.as_f64()
-                    .ok_or_else(|| "native axis must be a number".to_owned())?,
-            ];
             let norm_sq = axis.iter().map(|x| x * x).sum::<f64>();
             if !norm_sq.is_finite() || norm_sq <= 0.0 {
                 return Err("native axis must have finite nonzero length".to_owned());
@@ -563,10 +801,31 @@ fn read_native_labels(
             Ok(Some(axis.map(|x| x / norm_sq.sqrt())))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let analytic_centers = native_surfaces
+        .iter()
+        .map(|surface| native_vector3(surface, "center"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let native_radii = native_surfaces
+        .iter()
+        .map(|surface| -> Result<Option<f64>, String> {
+            let Some(value) = surface.get("radius") else {
+                return Ok(None);
+            };
+            let radius = value
+                .as_f64()
+                .ok_or_else(|| "native CAD radius must be a number".to_owned())?;
+            if !radius.is_finite() || radius <= 0.0 {
+                return Err("native CAD radius must be positive and finite".to_owned());
+            }
+            Ok(Some(radius))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Some(NativeFaceLabels {
         polygon_face_ids: labels,
         surface_types: kinds,
         analytic_axes,
+        analytic_centers,
+        native_radii,
     }))
 }
 
@@ -577,15 +836,19 @@ fn evaluate_native_face_labels(
     path: &Path,
     evidence: &MeshEvidence,
     tracks: &[CurvatureTrack],
+    spatial: &[Option<SpatialTrackEvidence>],
 ) -> Result<Option<Value>, String> {
-    let Some(NativeFaceLabels {
+    let Some(native) = read_native_labels(path, evidence.source_planar_support.len())? else {
+        return Ok(None);
+    };
+    let spatial_reference = native_spatial_track_reference(evidence, tracks, spatial, &native);
+    let NativeFaceLabels {
         polygon_face_ids: labels,
         surface_types: kinds,
         analytic_axes,
-    }) = read_native_labels(path, evidence.source_planar_support.len())?
-    else {
-        return Ok(None);
-    };
+        analytic_centers: _,
+        native_radii: _,
+    } = native;
     let mut native_edges = 0;
     let mut changed_surface_types = 0;
     let mut supported_candidates = 0;
@@ -657,6 +920,7 @@ fn evaluate_native_face_labels(
         "curvature_axis_reference": native_curvature_axis_reference(
             evidence, tracks, &labels, &kinds, &analytic_axes,
         ),
+        "spatial_track_reference": spatial_reference,
         "planar_or_30_degree_union": {
             "selected": union[0],
             "true_native": union[1],
@@ -698,14 +962,27 @@ fn planar_candidate_counts(evidence: &MeshEvidence) -> [usize; 3] {
 fn discover_and_evaluate_curvature(
     path: &Path,
     evidence: &MeshEvidence,
-) -> Result<(Value, Option<Value>), (&'static str, String)> {
+) -> Result<(Value, Value, Option<Value>), (&'static str, String)> {
     let started = Instant::now();
     let tracks = trace_curvature_tracks(evidence, CurvatureTrackOptions::default())
         .map_err(|error| ("curvature", error.to_string()))?;
     let summary = curvature_track_summary(&tracks, started.elapsed().as_secs_f64());
-    let ground_truth = evaluate_native_face_labels(path, evidence, &tracks)
+    let spatial_start = Instant::now();
+    // Explicitly study long candidates first rather than paying the source
+    // vertex fitting cost for every local 4-support observation.
+    let spatial = tracks
+        .iter()
+        .map(|track| {
+            (track.distinct_support_count >= 8)
+                .then(|| measure_curvature_spatial(evidence, track))
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    let spatial_summary =
+        spatial_track_summary(&tracks, &spatial, spatial_start.elapsed().as_secs_f64());
+    let ground_truth = evaluate_native_face_labels(path, evidence, &tracks, &spatial)
         .map_err(|error| ("ground_truth", error))?;
-    Ok((summary, ground_truth))
+    Ok((summary, spatial_summary, ground_truth))
 }
 
 fn analyze_file(path: &Path) -> Value {
@@ -754,7 +1031,7 @@ fn analyze_file(path: &Path) -> Value {
                 bilateral_plane_candidates,
                 supported_region_internal_edges,
             ] = planar_candidate_counts(&evidence);
-            let (track_summary, ground_truth) =
+            let (track_summary, spatial_summary, ground_truth) =
                 match discover_and_evaluate_curvature(path, &evidence) {
                     Ok(result) => result,
                     Err((stage, error)) => {
@@ -779,6 +1056,7 @@ fn analyze_file(path: &Path) -> Value {
                 "parallel_groups": evidence.parallel_bundles.len(),
                 "support_interfaces": support_interface_summary(&evidence),
                 "curvature_tracks": track_summary,
+                "spatial_tracks": spatial_summary,
                 "planar_regions": evidence.planar_supports.len(),
                 "planar_regions_multi_facet": evidence
                     .planar_supports.iter().filter(|region| region.source_face_indices.len() >= 3).count(),
