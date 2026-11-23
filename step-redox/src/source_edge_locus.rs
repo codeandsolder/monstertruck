@@ -588,7 +588,7 @@ pub struct SourcePlanarEdgeAudit {
 
 impl SourcePlanarEdgeAudit {
     /// Applies only to examined B-spline incidence loci, never whole solids.
-    #[must_use]
+    #[must_use = "The boolean result of `checked_bspline_incidences_are_within_tolerance` must be observed to use the predicate."]
     pub fn checked_bspline_incidences_are_within_tolerance(&self) -> bool {
         !self.incidences.is_empty()
             && self.unresolved_curve_edge_incidences == 0

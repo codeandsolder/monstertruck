@@ -277,7 +277,7 @@ impl UnionFind {
     }
 }
 
-#[must_use]
+#[must_use = "The analytic boundary comparison is returned for exact-geometry validation."]
 pub fn compare_analytic_boundaries(
     first_solid_id: u64,
     first_entities: &[EntityInstance],
@@ -336,7 +336,7 @@ pub(crate) fn compare_diagnostics(
     }
 }
 
-#[must_use]
+#[must_use = "The boundary diagnostic is returned for inspection of analytic recovery quality."]
 pub(crate) fn analytic_boundary_diagnostic(
     solid_id: u64,
     entities: &[EntityInstance],

@@ -84,7 +84,7 @@ struct MeridianLine {
     c: f64,
 }
 
-#[must_use]
+#[must_use = "The computed detect edge treatment evidence collection is returned and must be retained or inspected."]
 pub fn detect_edge_treatment_evidence(entities: &[EntityInstance]) -> Vec<EdgeTreatmentEvidence> {
     let index = build_index(entities);
     detect_edge_treatment_evidence_with_index(entities, &index, None)

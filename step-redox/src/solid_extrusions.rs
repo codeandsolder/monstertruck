@@ -83,7 +83,7 @@ struct CanonicalProfile {
     inner_loops: Vec<Vec<RecoveredProfileCurve>>,
 }
 
-#[must_use]
+#[must_use = "The computed detect solid extrusions collection is returned and must be retained or inspected."]
 pub fn detect_solid_extrusions(entities: &[EntityInstance]) -> Vec<RecoveredSolidExtrusion> {
     let index = build_index(entities);
     detect_solid_extrusions_with_index(entities, &index, &brep::manifold_solid_ids(entities))
@@ -95,7 +95,7 @@ pub fn detect_solid_extrusions(entities: &[EntityInstance]) -> Vec<RecoveredSoli
 /// canonical profile. They do not claim the source side faces are ruled
 /// extrusion walls, so callers must separately explain every residual source
 /// face before treating a candidate as whole-solid recovery.
-#[must_use]
+#[must_use = "Detected extrusion core candidates are returned for the recovery decision."]
 pub fn detect_extrusion_core_candidates(
     entities: &[EntityInstance],
 ) -> Vec<RecoveredSolidExtrusion> {
@@ -360,7 +360,7 @@ pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
 /// does not claim that the source side faces are extrusion walls. It is only a
 /// core for a higher-level reconstruction that separately proves and replays
 /// every source-side treatment.
-#[must_use]
+#[must_use = "The optional recover extrusion core from cap faces outcome must be inspected to distinguish a value from absence."]
 pub fn recover_extrusion_core_from_cap_faces(
     solid_id: u64,
     cap_face_ids: [u64; 2],
@@ -381,7 +381,7 @@ pub struct TreatmentHealedExtrusionCoreCandidate {
 ///
 /// This is still only a host candidate: treatment replay and whole-solid
 /// source/rebuild boundary equivalence are required before semantic admission.
-#[must_use]
+#[must_use = "The optional recover treatment healed extrusion core from cap faces outcome must be inspected to distinguish a value from absence."]
 pub fn recover_treatment_healed_extrusion_core_from_cap_faces(
     solid_id: u64,
     cap_face_ids: [u64; 2],

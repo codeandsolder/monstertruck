@@ -129,7 +129,7 @@ impl Default for Options {
 }
 
 impl Options {
-    #[must_use]
+    #[must_use = "The configured output profile is returned; ignoring it loses the profile selection."]
     pub fn for_profile(profile: OutputProfile) -> Self {
         let mut options = Self {
             experimental_recover_straight_bspline_lines: true,

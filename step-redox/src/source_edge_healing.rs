@@ -138,7 +138,7 @@ pub struct HyperbolaHealingCandidate {
 }
 
 impl HyperbolaHealingCandidate {
-    #[must_use]
+    #[must_use = "The native modeling curve is returned and must be retained for geometry construction."]
     pub fn modeling_curve(&self) -> Processor<TrimmedCurve<UnitHyperbola<Point3>>, Matrix4> {
         self.analytic.modeling_curve(self.trim)
     }

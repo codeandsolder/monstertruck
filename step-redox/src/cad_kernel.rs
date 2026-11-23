@@ -20,10 +20,10 @@ impl GeometryPolicy {
     pub const PROJECT_STANDARD_TOLERANCE_MM: f64 =
         DEFAULT_STEP_RECOVERY_TOLERANCES.cad_project_standard_mm;
 
-    #[must_use]
+    #[must_use = "The returned policy configures the requested millimeter tolerance."]
     pub const fn standard_mm(tolerance_mm: f64) -> Self { Self::Standard { tolerance_mm } }
 
-    #[must_use]
+    #[must_use = "The returned policy carries the project's standard geometry tolerances."]
     pub const fn project_standard() -> Self {
         Self::standard_mm(Self::PROJECT_STANDARD_TOLERANCE_MM)
     }
@@ -41,7 +41,7 @@ impl KernelSummary {
     ///
     /// The evaluated value already owns a single native Solid; re-exporting
     /// it to STEP and reparsing entities adds no geometric information.
-    #[must_use]
+    #[must_use = "The returned boolean identifies whether exactly one solid was recovered."]
     pub const fn is_single_solid(self) -> bool {
         self.geometrically_consistent && self.shells == 1 && self.faces != 0
     }
@@ -112,18 +112,18 @@ pub mod monstertruck {
     }
 
     impl MonstertruckKernel {
-        #[must_use]
+        #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
         pub const fn new(policy: GeometryPolicy) -> Self { Self { policy } }
 
-        #[must_use]
+        #[must_use = "The equivalence policy value is returned for subsequent geometric comparisons."]
         pub const fn equivalent() -> Self { Self::new(GeometryPolicy::Equivalent) }
 
-        #[must_use]
+        #[must_use = "The returned policy configures the requested millimeter tolerance."]
         pub const fn standard_mm(tolerance_mm: f64) -> Self {
             Self::new(GeometryPolicy::standard_mm(tolerance_mm))
         }
 
-        #[must_use]
+        #[must_use = "The returned policy carries the project's standard geometry tolerances."]
         pub const fn project_standard() -> Self { Self::new(GeometryPolicy::project_standard()) }
     }
 
