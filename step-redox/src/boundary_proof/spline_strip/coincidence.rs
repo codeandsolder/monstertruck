@@ -364,6 +364,14 @@ mod tests {
             .reduce(f64::max)
             .ok_or_else(|| anyhow::anyhow!("missing precision evidence"))?;
         assert!(maximum <= report.authored_uncertainty_mm);
+
+        let original_utf8 = std::str::from_utf8(original)?;
+        let micron_precision =
+            original_utf8.replacen("LENGTH_MEASURE(0.00001)", "LENGTH_MEASURE(0.000000001)", 1);
+        assert_ne!(micron_precision, original_utf8);
+        let narrow = audit_source_spline_cap_precision(micron_precision.as_bytes(), 0, *solid)?;
+        assert_eq!(narrow.authored_uncertainty_mm, 1.0e-9);
+        assert!(narrow.fully_certified_strip_faces < report.fully_certified_strip_faces);
         eprintln!(
             "manufacturer: {} source strip faces, {} independently bounded caps, max certified {} mm / source {} mm",
             report.fully_certified_strip_faces,
@@ -427,8 +435,9 @@ pub fn audit_source_spline_cap_precision(
     let index = build_index(entities);
     let faces = brep::solid_face_ids(solid_id, entities, &index)
         .context("missing source manifold solid")?;
-    let declared =
-        crate::solid_revolutions::source_tolerance_by_representation_item(entities, &index);
+    let declared = crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
+        entities, &index,
+    );
     let authored_uncertainty_mm = *declared
         .get(&solid_id)
         .context("missing trusted source-declared precision")?;
