@@ -11,11 +11,14 @@ use crate::{
     brep::{self, BSplineSupport, CurveSupport},
     math3::distance,
     step_entities::{cartesian_point, named_entity_parameters},
-    step_graph::{build_index, entity_id, entity_ref_value, simple_record_mut},
+    step_graph::{
+        ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
+    },
 };
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Exchange, Parameter};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -36,6 +39,10 @@ pub struct SourceCapRechartManifest {
     pub solid_id: u64,
     pub data_section: usize,
     pub author_uncertainty_mm: f64,
+    /// Exact original file provenance, including author STEP metadata.
+    pub source_sha256: String,
+    /// Serialized detached proof view, which is distinct from the source.
+    pub proof_sha256: String,
     /// Exact strict analytic proof quantum, not the STEP author's wider budget.
     pub certified_cap_locus_target_mm: f64,
     pub source_boundary_supported: bool,
@@ -184,6 +191,53 @@ fn private_surface_row_curve(
     Some((curve, reversed))
 }
 
+/// Every authoring use of a proposed EDGE_CURVE must lead through standard
+/// oriented face topology to an ADVANCED_FACE in the selected original solid.
+/// A foreign solid or an untracked reference could otherwise inherit the
+/// detached curve change without having independently proven its incidence.
+fn ensure_cap_edge_solely_owned(
+    edge_id: u64,
+    selected_faces: &HashSet<u64>,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    graph: &ReferenceGraph,
+) -> Result<()> {
+    let mut pending = vec![edge_id];
+    for permitted in [
+        &["ORIENTED_EDGE"][..],
+        &["EDGE_LOOP"][..],
+        &["FACE_BOUND", "FACE_OUTER_BOUND"][..],
+        &["ADVANCED_FACE"][..],
+    ] {
+        let mut next = Vec::new();
+        for child in pending {
+            let users = graph
+                .inbound()
+                .get(&child)
+                .context("proposed cap edge has no complete owning face topology")?;
+            ensure!(!users.is_empty(), "unreferenced cap topology node #{child}");
+            for &parent in users {
+                let record = index
+                    .get(&parent)
+                    .and_then(|&i| simple_record(&entities[i]))
+                    .context("cap edge has a non-simple or dangling incoming reference")?;
+                ensure!(
+                    permitted.contains(&record.name.as_str()),
+                    "cap edge #{edge_id} has an unexpected authoring owner #{parent}: {}",
+                    record.name
+                );
+                next.push(parent);
+            }
+        }
+        pending = next;
+    }
+    ensure!(
+        !pending.is_empty() && pending.iter().all(|face| selected_faces.contains(face)),
+        "cap edge #{edge_id} is also referenced outside the selected closed solid"
+    );
+    Ok(())
+}
+
 fn identify_rechart_cap_candidates(
     audit: &crate::boundary_proof::SplineCapPrecisionAudit,
     source: &[EntityInstance],
@@ -255,6 +309,18 @@ fn identify_rechart_cap_candidates(
             cap.source_edge_id,
             (cap.face_id, cap.surface_id, cap.surface_row, cap.bound_mm),
         );
+    }
+    if !candidates.is_empty() {
+        // The audit above has already verified the selected solid's complete
+        // closed-shell topology; its exact members are the only legal owners.
+        let owners = brep::solid_face_ids(audit.solid_id, source, index)
+            .context("original source solid lost its closed-shell members")?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let graph = ReferenceGraph::new(source);
+        for &edge_id in candidates.keys() {
+            ensure_cap_edge_solely_owned(edge_id, &owners, source, index, &graph)?;
+        }
     }
     Ok(candidates)
 }
@@ -441,12 +507,26 @@ pub fn propose_source_cap_rechart(
     } else {
         (Vec::new(), cap_boundary.clone())
     };
+    // The proof view itself must be stable under the same typed STEP parser
+    // that established all source witnesses. Bind the manifest to both full
+    // byte streams so a future comparator cannot silently substitute a file.
+    let rendered = crate::step_io::write_exchange(&exchange)?;
+    let parsed =
+        monstertruck_io::step::load::ParsedStepSource::parse(rendered.as_bytes())?.exchange;
+    ensure!(
+        parsed == exchange,
+        "detached proof STEP serialization changed its typed entity graph"
+    );
+    let source_sha256 = hex::encode(Sha256::digest(source_step));
+    let proof_sha256 = hex::encode(Sha256::digest(rendered.as_bytes()));
     Ok(SourceCapRechartProposal {
         exchange,
         manifest: SourceCapRechartManifest {
             solid_id,
             data_section,
             author_uncertainty_mm: audit.authored_uncertainty_mm,
+            source_sha256,
+            proof_sha256,
             certified_cap_locus_target_mm: strict_bound,
             source_boundary_supported: original_boundary.supported,
             cap_recharted_boundary_supported: cap_boundary.supported,
@@ -555,6 +635,14 @@ mod tests {
             }
         }
         let step = crate::step_io::write_exchange(&proposal.exchange)?;
+        assert_eq!(
+            manifest.source_sha256,
+            hex::encode(Sha256::digest(ORIGINAL))
+        );
+        assert_eq!(
+            manifest.proof_sha256,
+            hex::encode(Sha256::digest(step.as_bytes()))
+        );
         let parsed = ParsedStepSource::parse(step.as_bytes())?.exchange;
         assert_eq!(parsed.data[0].entities.len(), updated.len());
         let again = propose_source_cap_rechart(step.as_bytes(), 0, 3877)?;
@@ -606,6 +694,35 @@ mod tests {
             bail!("bad source poles")
         };
         poles[1] = crate::step_entities::entity_ref(new_pole);
+        let changed = crate::step_io::write_exchange(&exchange)?;
+        assert!(propose_source_cap_rechart(changed.as_bytes(), 0, 3877).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_cap_edges_referenced_from_unproved_foreign_topology() -> Result<()> {
+        let original = propose_source_cap_rechart(ORIGINAL, 0, 3877)?;
+        let candidate_edge = original
+            .manifest
+            .patches
+            .first()
+            .context("expected a source cap to reconcile")?
+            .edge_id;
+        let mut exchange = ParsedStepSource::parse(ORIGINAL)?.exchange;
+        let entities = &mut exchange.data[0].entities;
+        let mut next = entities.iter().map(entity_id).max().unwrap_or(0) + 1;
+        crate::step_entities::push_simple(
+            entities,
+            &mut next,
+            "ORIENTED_EDGE",
+            vec![
+                Parameter::String(String::new()),
+                Parameter::Omitted,
+                Parameter::Omitted,
+                crate::step_entities::entity_ref(candidate_edge),
+                Parameter::Enumeration("T".to_owned()),
+            ],
+        );
         let changed = crate::step_io::write_exchange(&exchange)?;
         assert!(propose_source_cap_rechart(changed.as_bytes(), 0, 3877).is_err());
         Ok(())
