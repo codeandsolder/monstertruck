@@ -20,6 +20,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use step_p21::ast::EntityInstance;
 
+#[cfg(any(test, feature = "cad-kernel-monstertruck"))]
+pub(super) mod coincidence;
 mod embedding;
 mod restriction;
 pub(super) use restriction::{ProfilePosition, complete_profile_cover};
